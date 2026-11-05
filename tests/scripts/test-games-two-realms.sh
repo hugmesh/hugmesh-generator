@@ -1038,6 +1038,13 @@ while queue:
         if "plugin" in src:
             bad(f"[ways] {where}: a config-management plugin source, which this check cannot render")
             continue
+        # The walk renders THIS tree. A source pinned to another branch, tag or commit of
+        # this repository deploys content this check never sees (bootstrap.sh rewrites
+        # `main` to the device's gitops revision as a whole, which keeps them in step).
+        rev = str(src.get("targetRevision") or "HEAD")
+        if rev not in ("main", "HEAD"):
+            bad(f"[ways] {where}: targetRevision {rev!r} renders a revision of this repository this check cannot see (only main/HEAD, the tree under test)")
+            continue
         dpath = repo_dir(src.get("path", ""))
         if dpath is None or not os.path.isdir(dpath):
             bad(f"[ways] {where}: spec.source.path {src.get('path')!r} is not a directory inside this repository")
@@ -1741,6 +1748,8 @@ open(os.path.join(root, A, "50c-games-canary.yaml"), "w").write(app("hugmesh-gam
 expect_red "p3b: an in-repository directory reached only through a path that leaves the repository" "leaves the repository" 'os.makedirs(os.path.join(root, M, "games-canary"))
 open(os.path.join(root, M, "games-canary/kustomization.yaml"), "w").write("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - ../../../../../../../../../../../../../../../../../../../../tmp\n")
 open(os.path.join(root, A, "50c-games-canary.yaml"), "w").write(app("hugmesh-games-canary", "specs/cluster/manifests/games-canary"))'
+expect_red "p8: the p1c copy deployed from another branch of this repository" "renders a revision of this repository this check cannot see" 'canary("registry.hugmesh.net/hugmesh/hugmesh-games/backend", "sha-73a5bc2c6d09")
+open(os.path.join(root, A, "50c-games-canary.yaml"), "w").write(app("hugmesh-games-canary", "specs/cluster/manifests/games-canary").replace("targetRevision: main", "targetRevision: canary"))'
 expect_red "w1: the backend image (no two-realm env) in another namespace, through an existing Application" "hugmesh-backend/Deployment/games-cache" 'add_to("hugmesh-apis", "games-cache.yaml", deployment("games-cache", None, PRE52, None))'
 expect_red "w2: the two-realm environment handed through envFrom to a non-backend image in another namespace" "envFrom ConfigMap games-realms" 'add_to("hugmesh-apis", "games-realms.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: { name: games-realms }\ndata: { APP_TENANCY_ISSUERS: x }\n---\n" + deployment("realms-reader", None, "docker.io/library/alpine:3.20", None, "          envFrom:\n            - configMapRef: { name: games-realms }\n"))'
 expect_red "w3: a workload with no metadata.namespace in an Application with no destination namespace" "every workload has an effective namespace" 'add_to("networkpolicy", "nowhere.yaml", deployment("nowhere", None, "docker.io/library/alpine:3.20", None))'

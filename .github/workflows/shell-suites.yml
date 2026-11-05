@@ -848,7 +848,7 @@ jobs:
           # helm template for this repository's chart), nested and generated ones too,
           # and judges the union by rendered namespace; it exits 2 without helm.
           # MEASURED 2026-11-05 on a Linux host (helm v3.16.3, kubectl, curl, awk):
-          # 116 passed / 0 failed, rc=0, the online verifier and its five controls
+          # 121 passed / 0 failed, rc=0, the online verifier and its five controls
           # among them; the render cache keeps each negative control to one warm walk.
           # kubectl matters MORE than usual here: without it
           # tests/stack/test-mdm-manifests-render.sh exits 0 having rendered and
