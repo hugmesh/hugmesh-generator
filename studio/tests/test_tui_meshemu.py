@@ -10,6 +10,7 @@ cores). The pins below compare each printed hint to the FACADE's own output, so
 "the TUI prints what the GUI runs" is checked against the shared author rather
 than against a copy of its spelling.
 """
+import functools
 import io
 import json
 import os
@@ -19,6 +20,7 @@ import pytest
 
 from hugmesh_studio.core import emulation as emu
 from hugmesh_studio.core import mesh_emulation as me
+from hugmesh_studio.core import platform_info
 from hugmesh_studio.core import qemu_tests
 from hugmesh_studio.tui import app as tui_app
 from hugmesh_studio.tui import journey, meshemu
@@ -29,6 +31,16 @@ SESSION = "20260810-101010-mesh"
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+
+
+@pytest.fixture(autouse=True)
+def _answer_as_linux(monkeypatch):
+    """These pins are the Docker backend's hints, which a native Windows Studio
+    replaces with the WSL2 sentence (test_tui_meshemu_whpx.py); answer as Linux on any
+    host, which also keeps the screen's default backend Docker."""
+    real = platform_info.native_windows_blocker
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(real, osname="posix"))
 
 
 @pytest.fixture
