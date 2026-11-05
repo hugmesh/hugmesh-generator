@@ -30,7 +30,9 @@
 #      knobs; provision.sh skips the full relabel on an overlay root.
 #   G  specs/usr/libexec/live-overlay-relabel EXECUTED (restorecon stubbed): on an
 #      overlay root it relabels exactly the upper layer (merged spellings) + /dev;
-#      on a disk root it does nothing.
+#      on a disk root it does nothing. G2: it is LOUD — a failing restorecon (upper
+#      or /dev), no restorecon, no upperdir all exit non-zero with a FAILED kmsg line
+#      and never print 'relabelled'; no call ever carries -n (dry-run mutant).
 #   H  specs-x86/etc/grub.d/11_selinux_permissive_rescue EXECUTED against a stand-in
 #      10_linux: one flat enforcing=0 entry per kernel, never the default; installed
 #      by the builder. /var/log/wtmp + lastlog exist before the label pass.
@@ -447,6 +449,59 @@ else
     [ ! -e "${HK}/called" ] && ok "hook: a disk root is a no-op" || bad "hook: ran restorecon on a disk root: $(cat "${HK}/called")"
     grep -vE '^[[:space:]]*#' "${HOOK}" | grep -- '-R[^ ]* /\( \|$\)' >/dev/null && bad "hook: a recursive walk of / (copy-up storm)" || ok "hook: no recursive walk of / (it only touches the upper layer)"
     grep -i hugmesh "${HOOK}" >/dev/null && bad "hook carries the brand name (it ships on unaffiliated images too)" || ok "hook: brand-neutral"
+    # ── G2) LOUD ON FAILURE, executed. The #852 hook ended in `exit 0` whatever
+    # restorecon returned and printed 'relabelled N' before xargs' status was known,
+    # so a relabel that failed read exactly like one that worked. Its refute also
+    # left `restorecon -n` (a dry run that relabels nothing) green. Both pinned here.
+    HK2="${TMP}/hook2"; mkdir -p "${HK2}/bin" "${HK2}/toolbin" "${HK2}/upper/etc" "${HK2}/upper/usr/libexec"
+    : > "${HK2}/upper/etc/inittab"; : > "${HK2}/upper/etc/resolv.conf"
+    printf 'LiveOS_rootfs / overlay rw,seclabel,relatime,lowerdir=/run/rootfsbase,upperdir=%s/upper,workdir=/run/ovlwork 0 0\n' "${HK2}" > "${HK2}/m.overlay"
+    printf 'LiveOS_rootfs / overlay rw,seclabel,relatime,lowerdir=/run/rootfsbase,workdir=/run/ovlwork 0 0\n' > "${HK2}/m.noupper"
+    printf '/dev/sda2 / ext4 rw,seclabel,relatime 0 0\n' > "${HK2}/m.disk"
+    # The hook's PATH becomes <stub restorecon>:<these tools> and nothing else, so
+    # "no restorecon" is a real absence and never depends on what this host ships.
+    for t in awk sed tr tail wc find xargs rm cat; do ln -sf "$(type -P "${t}")" "${HK2}/toolbin/${t}"; done
+    # run_hook2 <mounts> <restorecon: ok|fail-upper|fail-dev|absent> -> rc; kmsg -> ${HK2}/kmsg, argv -> ${HK2}/called
+    run_hook2() {
+        rm -f "${HK2}/called" "${HK2}/bin/restorecon"; : > "${HK2}/kmsg"
+        if [ "$2" != absent ]; then
+            printf '#!/bin/sh\necho "$*" >> "%s/called"\ncase "%s:$1" in fail-dev:-RFx|fail-upper:-F) exit 1 ;; esac\nexit 0\n' "${HK2}" "$2" > "${HK2}/bin/restorecon"
+            chmod +x "${HK2}/bin/restorecon"
+        fi
+        sed "s|^PATH=/usr/sbin.*|PATH=${HK2}/bin:${HK2}/toolbin|" "${HOOK}" > "${HK2}/hook.sh"
+        PROC_MOUNTS="$1" KMSG="${HK2}/kmsg" LIST_DIR="${HK2}" sh "${HK2}/hook.sh" >/dev/null 2>&1
+    }
+    n_up="$(cd "${HK2}/upper" && find . -xdev | wc -l)"
+    run_hook2 "${HK2}/m.overlay" ok; rc=$?
+    [ "${rc}" = 0 ] && grep -q "^live-overlay-relabel: relabelled ${n_up} upper-layer path(s) under ${HK2}/upper" "${HK2}/kmsg" \
+        && ok "hook G2: success exits 0 and logs 'relabelled N' with N = the upper layer's entry count (${n_up})" \
+        || bad "hook G2 success: rc=${rc} kmsg: $(cat "${HK2}/kmsg")"
+    grep -E -- '(^| )-[A-Za-z]*n' "${HK2}/called" >/dev/null \
+        && bad "hook G2: a restorecon call carries -n (a dry run relabels NOTHING): $(cat "${HK2}/called")" \
+        || ok "hook G2: no restorecon call carries -n (the dry-run mutant is red)"
+    [ "$(grep -c '^-F ' "${HK2}/called")" -ge 1 ] && [ "$(grep -c '^-RFx /dev$' "${HK2}/called")" = 1 ] \
+        && ok "hook G2: both passes ran (restorecon -F <upper paths>, restorecon -RFx /dev)" || bad "hook G2 calls: $(cat "${HK2}/called")"
+    run_hook2 "${HK2}/m.overlay" fail-upper; rc=$?
+    [ "${rc}" != 0 ] && grep -q '^live-overlay-relabel: FAILED: restorecon returned' "${HK2}/kmsg" && ! grep -q 'relabelled' "${HK2}/kmsg" \
+        && ok "hook G2: restorecon failing on the upper layer -> exit ${rc}, a FAILED line, no 'relabelled'" \
+        || bad "hook G2 fail-upper: rc=${rc} kmsg: $(cat "${HK2}/kmsg")"
+    run_hook2 "${HK2}/m.overlay" fail-dev; rc=$?
+    [ "${rc}" != 0 ] && grep -q '^live-overlay-relabel: FAILED: restorecon returned' "${HK2}/kmsg" && ! grep -q 'relabelled' "${HK2}/kmsg" \
+        && ok "hook G2: restorecon failing on /dev -> exit ${rc}, a FAILED line, no 'relabelled'" \
+        || bad "hook G2 fail-dev: rc=${rc} kmsg: $(cat "${HK2}/kmsg")"
+    run_hook2 "${HK2}/m.overlay" absent; rc=$?
+    [ "${rc}" != 0 ] && grep -q '^live-overlay-relabel: FAILED: .*no restorecon' "${HK2}/kmsg" \
+        && ok "hook G2: an overlay root with no restorecon on PATH -> exit ${rc}, says so" \
+        || bad "hook G2 absent: rc=${rc} kmsg: $(cat "${HK2}/kmsg")"
+    run_hook2 "${HK2}/m.noupper" ok; rc=$?
+    [ "${rc}" != 0 ] && grep -q '^live-overlay-relabel: FAILED: no upperdir=' "${HK2}/kmsg" && [ ! -e "${HK2}/called" ] \
+        && ok "hook G2: an overlay root whose options carry no upperdir= -> exit ${rc}, says so, calls nothing" \
+        || bad "hook G2 noupper: rc=${rc} kmsg: $(cat "${HK2}/kmsg") called: $(cat "${HK2}/called" 2>/dev/null)"
+    run_hook2 "${HK2}/m.disk" ok; rc=$?
+    [ "${rc}" = 0 ] && grep -q 'not an overlay' "${HK2}/kmsg" && [ ! -e "${HK2}/called" ] \
+        && ok "hook G2: a disk root exits 0 and logs why it did nothing" || bad "hook G2 disk: rc=${rc} kmsg: $(cat "${HK2}/kmsg")"
+    grep -vE '^[[:space:]]*#' "${HOOK}" | grep -E 'restorecon[^|]*[[:space:]]-[A-Za-z]*n[A-Za-z]*([[:space:]]|$)' >/dev/null \
+        && bad "hook G2 (static): a restorecon invocation in the source carries -n" || ok "hook G2 (static): no restorecon -n in the source"
 fi
 l_lrinst="$(ln_of 'install -D -m 0755 "\$\{SHARED_SPECS\}/usr/libexec/live-overlay-relabel"')"
 [ -n "${l_lrinst}" ] && [ "${l_lrinst}" -lt "${l_sto}" ] \
@@ -529,6 +584,29 @@ l_wtl="$(ln_of '^[0-9]+:for _lrec in wtmp lastlog; do$')"
     && ok "builder creates /var/log/wtmp and /var/log/lastlog before the label pass (else bootmisc/login make them var_log_t)" \
     || bad "login records not pre-created before the label pass (create=${l_wtmp:-none} loop=${l_wtl:-none} store=${l_sto:-?})"
 grep -q '^    "/var/log/wtmp:wtmp_t"' "${LIB}" && ok "the label gates pin /var/log/wtmp as wtmp_t at every hop" || bad "/var/log/wtmp:wtmp_t is not a core probe"
+# What systemd-tmpfiles-setup would create in "/" (enforcing, 2026-11-04): /srv is
+# shipped, portage's tmpdir entry is masked, both BEFORE the label pass.
+l_srv="$(ln_of '^[0-9]+:install -d -m 0755 "\$\{SYSROOT\}/srv"$')"
+[ -n "${l_srv}" ] && [ "${l_srv}" -lt "${l_sto}" ] \
+    && ok "builder ships /srv before the label pass (systemd home.conf 'q /srv' then never mkdirs in root_t)" \
+    || bad "builder does not ship /srv before the label pass (srv=${l_srv:-none} store=${l_sto:-?})"
+l_ptm="$(ln_of 'install -D -m 0644 "\$\{SHARED_SPECS\}/etc/tmpfiles.d/portage-tmpdir.conf" "\$\{SYSROOT\}/etc/tmpfiles.d/portage-tmpdir.conf"')"
+[ -n "${l_ptm}" ] && [ "${l_ptm}" -lt "${l_sto}" ] \
+    && ok "builder masks portage-tmpdir.conf in /etc/tmpfiles.d before the label pass" \
+    || bad "builder does not install the portage-tmpdir.conf mask before the label pass (mask=${l_ptm:-none} store=${l_sto:-?})"
+PTM="${REPO}/specs/etc/tmpfiles.d/portage-tmpdir.conf"
+[ -f "${PTM}" ] && [ "$(grep -vcE '^[[:space:]]*(#|$)' "${PTM}")" = 0 ] \
+    && ok "specs/etc/tmpfiles.d/portage-tmpdir.conf is a mask (comments only — a live line would re-create /var/tmp/portage)" \
+    || bad "the portage-tmpdir.conf mask is missing or carries a live tmpfiles line"
+grep -q '^    "/srv:var_t"' "${LIB}" && ok "the label gates pin /srv as var_t at every hop" || bad "/srv:var_t is not a core probe"
+# /root: a login mapping in the STORE, between the store install and setfiles, pinned at every hop.
+l_map="$(ln_of 'slx_map_root_login "\$\{SYSROOT\}" "\$\{SLX_TYPE\}" chroot')"
+l_lab1="$(ln_of 'slx_label_tree "\$\{SYSROOT\}" "\$\{SLX_TYPE\}"')"
+[ -n "${l_map}" ] && [ -n "${l_lab1}" ] && [ "${l_sto}" -lt "${l_map}" ] && [ "${l_map}" -lt "${l_lab1}" ] \
+    && ok "builder maps the root login AFTER the store install and BEFORE setfiles (so .homedirs carries /root when the tree is labelled)" \
+    || bad "slx_map_root_login missing or misplaced (store=${l_sto:-?} map=${l_map:-none} setfiles=${l_lab1:-?})"
+grep -qE '^slx_map_root_login\(\)' "${LIB}" && ok "lib defines slx_map_root_login()" || bad "lib lost slx_map_root_login()"
+grep -q '^    "/root:user_home_dir_t"' "${LIB}" && ok "the label gates pin /root as user_home_dir_t at every hop (default_t = 3 login denials per boot)" || bad "/root:user_home_dir_t is not a core probe"
 
 echo
 echo "== selinux sysroot labels: ${P} passed, ${F} failed, ${S} skipped (skips are NOT passes) =="
