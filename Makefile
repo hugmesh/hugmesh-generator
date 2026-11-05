@@ -2017,7 +2017,9 @@ STACK_POISONER_ENV := $(if $(strip $(POISONER)),MEDIA_POISONING_ENABLED='true' M
 # front door's certificate covers. Everything is EMPTY without HEADSCALE=1, so a
 # plain bring-up's STACK_ENV and compose argv do not change (each non-empty value
 # carries its own leading space and is spliced in with none, the
-# STACK_TOR_DOMAINS_FLAGS spelling, so the empty case adds no byte). The overlay -f goes on
+# STACK_TOR_DOMAINS_FLAGS spelling, so the empty case adds no byte). They sit after
+# $(STACK_BRAND_B_PROFILE), not next to the tor profile: the tor guards and the Studio's
+# tests anchor on the exact spelling around $(STACK_TOR_PROFILE) and $(STACK_EGRESS_FLAGS). The overlay -f goes on
 # build/up/logs/ps only: down/halt/clean reap with `--profile headscale` alone (the
 # overlay adds no container or volume of its own, and it names the issuer key file,
 # which a down must not require).
@@ -2237,7 +2239,7 @@ stack-route-access-env: ## ensure tests/stack/.env holds ROUTE_ACCESS_DB_PASSWOR
 	@bash tests/stack/gen-route-access-env.sh
 
 stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 
 # stack-up's LAST step reconciles gateway_route_access (the line right after
 # `up -d`, see stack-route-access-reconcile below): the volume's initdb seeds the
@@ -2252,8 +2254,8 @@ stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_
 # which shells out to `make stack-up`). Guard: tests/stack/test-route-access-reconcile.sh.
 stack-up: stack-route-access-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
 	$(STACK_ENV) POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
@@ -2497,10 +2499,10 @@ stack-tor-mechanism-check: ## OPT-IN, needs the public Tor network + a host tor 
 	HUGMESH_TOR_E2E=1 bash tests/stack/test-tor-onion-mechanism.sh
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
 
 # Re-apply the canonical route-access seed (specs/cluster/manifests/route-access/
 # initdb/20-schema.sql) to the RUNNING stack's route-access-db, in one transaction
