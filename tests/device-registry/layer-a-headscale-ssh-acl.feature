@@ -11,9 +11,11 @@
 # the default-deny that ship NOW, which is the real Layer-A hardening.
 #
 # NOT covered here (needs a LIVE headscale + a running admin-bff /export — see the
-# NEEDS-HEADSCALE matrix in the PR body): that a real control node REJECTS a node
-# self-advertising tag:dev_<otherfp>/tag:dom_<other> (forced-tag override), and
-# that :22 is genuinely unreachable on a booted node for a denied edge.
+# NEEDS-HEADSCALE matrix in the PR body): that :22 is genuinely unreachable on a
+# booted node for a denied edge. That a real headscale REJECTS a self-advertised
+# security tag (because it has no owner — a forced tag does NOT override a
+# different advertised one) is proven against the pinned headscale by
+# test-headscale-security-tag-live.sh.
 
 Feature: Layer-A headscale SSH ACL is generated from the signed device-license export
 
@@ -68,10 +70,12 @@ Feature: Layer-A headscale SSH ACL is generated from the signed device-license e
     And it keeps the 10.244/10.96 data-plane rule
     And it has a single conservative @@TS_SSH_USER@@ ssh accept for the bootstrap window
 
-  Scenario: Server-forced destination tags are not self-applyable (FIX-SERVERTAG)
-    Then tag:dev_*, tag:superadmin (and tag:mesh_*/tag:dom_* when present) are listed in tagOwners as owned by the control "hugmesh" user only
-    And no preauth key is minted that would let a node self-advertise them
-    # the live-rejection of a forged advertise-tags is a NEEDS-HEADSCALE assertion
+  Scenario: Server-forced security tags are not self-applyable (FIX-SERVERTAG)
+    Then tag:superadmin, tag:mesh_<id> and every tag:dev_* (and tag:dom_* when present) are listed in tagOwners with an EMPTY owner list
+    And no user any pre-auth key is minted for owns a security tag
+    # headscale 0.23 grants forced tags PLUS every advertised tag the node's user owns,
+    # so ownership, not forcing, is what refuses a self-advertised security tag.
+    # The live rejection is proven by test-headscale-security-tag-live.sh.
 
   # ── COMPILE-SIDE RECONCILIATION (added 2026-07-30) ─────────────────────────
   # Layer-A has TWO would-be writers of one headscale policy: the node-side
