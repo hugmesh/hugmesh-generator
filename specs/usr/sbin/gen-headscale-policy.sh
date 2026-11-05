@@ -637,17 +637,21 @@ retry_pending() {
 # ONLY through an enabled route (types.Node.CanAccess appends enabled route
 # prefixes to the reachable set; the ACL names no node address), so a node whose
 # routes are not enabled is a node nobody has in its netmap. Auto-approval runs
-# once, at the map request that first advertises the routes — and the control
-# node restarts headscale during provisioning (the policy load, then the CP DNS
-# record), so a node that advertised into a server mid-restart, or before the
-# policy was loaded, stays unapproved for good. provision.sh's backfill for that
-# case called `headscale nodes approve-routes`, a subcommand headscale 0.25 added;
-# on the 0.23.0 the fleet ships it does not exist and the backfill silently did
-# nothing. This converges it every minute: every advertised, not-yet-enabled mesh
-# route of a node that carries tag:hugmesh (valid or forced) is enabled, with the
-# CLI the running headscale has (0.23: `routes list` / `routes enable -r ID`;
-# 0.25+: `nodes approve-routes`). Independent of the signed export: it runs before
-# _init's fail-closed exit, so a bootstrap-policy fleet converges too.
+# at the map request that first advertises the routes. MEASURED 2026-11-04 on
+# the emulated rpi5 pki+backend fleet (headscale 0.23.0): it held — all four mesh
+# routes advertised=true enabled=true, pki primary — so an unapproved route was
+# NOT why that fleet's worker saw no peer (that was the control node's own dead
+# control session; see provision.sh control_self_login_server). What this
+# function fixes for certain: provision.sh's backfill for a node that advertised
+# before the policy was loaded called `headscale nodes approve-routes`, a
+# subcommand headscale 0.25 added; on 0.23.0 it does not exist and the backfill
+# silently did nothing. And it converges the window the control node's own
+# headscale restarts open during provisioning (the policy load, the CP DNS
+# record): every minute, every advertised, not-yet-enabled mesh route of a node
+# that carries tag:hugmesh (valid or forced) is enabled, with the CLI the running
+# headscale has (0.23: `routes list` / `routes enable -r ID`; 0.25+: `nodes
+# approve-routes`). Independent of the signed export: it runs before _init's
+# fail-closed exit, so a bootstrap-policy fleet converges too.
 MESH_ROUTES="${HUGMESH_MESH_ROUTES:-10.244.0.0/16,10.96.0.0/12}"
 approve_mesh_routes() {
     have headscale || return 0
