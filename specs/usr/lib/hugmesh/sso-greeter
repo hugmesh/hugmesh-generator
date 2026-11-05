@@ -146,12 +146,31 @@ def log(msg):
     print("sso-greeter: %s" % msg, file=sys.stderr, flush=True)
 
 
+# The greeter went away (Cancel: lightdm kills the session child that forked us,
+# so our stdout pipe closes and we are reparented). Set by say() on EPIPE and by
+# greeter_gone() on a parent change; the device flow then aborts BEFORE any
+# account, cache or token exists for a session nobody started.
+GREETER_GONE = False
+PARENT_PID = os.getppid()
+
+
 def say(msg):
     """One line to the greeter (pam_exec `stdout` -> PAM_TEXT_INFO)."""
+    global GREETER_GONE
+    if sys.stdout is None:
+        GREETER_GONE = True
+        return
     try:
         print(msg, flush=True)
     except (BrokenPipeError, OSError):
-        pass
+        GREETER_GONE = True
+
+
+def greeter_gone():
+    global GREETER_GONE
+    if not GREETER_GONE and os.getppid() != PARENT_PID:
+        GREETER_GONE = True
+    return GREETER_GONE
 
 
 # ── configuration (strict KEY=VALUE; unknown keys ignored) ───────────────────
@@ -656,6 +675,9 @@ def device_flow(user, conf):
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         time.sleep(interval * POLL_SCALE)
+        if greeter_gone():
+            log("greeter gone (cancelled) while waiting for approval: sign-in abandoned, nothing created")
+            return None, "SSO sign-in cancelled."
         try:
             status, t = post_form(tok_ep, {"grant_type": DEVICE_GRANT, "device_code": dcode,
                                            "client_id": conf["CLIENT_ID"]}, timeout)
@@ -674,6 +696,9 @@ def device_flow(user, conf):
             return None, "SSO sign-in not completed (%s)." % err
         access = t.get("access_token")
         if status == 200 and isinstance(access, str) and access:
+            if greeter_gone():
+                log("greeter gone before the token could be used: sign-in abandoned, nothing created")
+                return None, "SSO sign-in cancelled."
             jwks = load_jwks(conf, disc, timeout)
             if jwks is None:
                 return None, "SSO sign-in unavailable: no signing keys from %s." % issuer_host(conf)
@@ -889,6 +914,10 @@ def cmd_revoke(args):
 
 
 def main(argv):
+    # pam_exec gives its child the PAM environment only (pam_env runs AFTER our
+    # line), so there is no PATH: useradd/usermod/gpasswd live in /usr/sbin and
+    # subprocess would otherwise fall back to /bin:/usr/bin.
+    os.environ.setdefault("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
     if not argv or argv[0] in ("-h", "--help"):
         print("usage: sso-greeter pam-auth | pam-session | probe | status [USER] | list | revoke USER|--all", file=sys.stderr)
         return 2

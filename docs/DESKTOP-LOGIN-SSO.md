@@ -68,9 +68,11 @@ One line on the greeter, then exit 1 so the local path still runs:
 Why stock modules: `pam_exec` streams the helper's stdout to the conversation
 line by line (`pam_info`) while the helper is still polling, prompts once with
 `expose_authtok` and passes the answer on stdin, leaving `PAM_AUTHTOK` set for
-`pam_unix`'s `try_first_pass` (no second prompt). Measured on libpam 1.7.2 with
-`pam_start_confdir`, which `tests/desktop-governance/test-sso-greeter.sh`
-repeats on every run where libpam is present. No C module, no SSSD, nothing to
+the local path (`pam_unix try_first_pass`): one prompt. Measured on libpam
+1.7.2 with `pam_start_confdir` (a second `expose_authtok` stand-in received the
+same bytes with no second prompt), which
+`tests/desktop-governance/test-sso-greeter.sh` repeats on every run where
+libpam is present. No C module, no SSSD, nothing to
 cross-compile.
 
 ## Build flags
@@ -111,6 +113,14 @@ cross-compile.
 * No token or typed password is ever printed, logged or exported; stdout goes to
   the greeter, stderr to lightdm's log. Every `HSG_*` test seam is ignored
   unless `HSG_INSECURE_TEST=1`.
+* Cancel at the greeter: lightdm kills the session child that forked the
+  helper, so the helper is reparented and its stdout pipe closes. It checks
+  both on every poll and abandons the flow before any account, cache record or
+  parked token exists (an approval that arrives afterwards changes nothing).
+* `pam_exec` gives the helper the PAM environment only (no `PATH`, since
+  `pam_env` runs later in the stack); the helper sets
+  `PATH=/usr/sbin:/usr/bin:/sbin:/bin` itself so `useradd`/`usermod`/`gpasswd`
+  resolve.
 * Standalone images never phone home: with SSO off nothing is contacted; with
   SSO on the only traffic is the IdP, at authentication time, after the user
   left the password empty (the opt-in gesture). `probe` is local-only.
@@ -134,7 +144,7 @@ situation (2) on a standalone Frite needs the tailnet joined by hand.
 
 ## Proven offline / to prove on a boot
 
-Offline (`tests/desktop-governance/test-sso-greeter.sh`, 69 checks incl. a
+Offline (`tests/desktop-governance/test-sso-greeter.sh`, 71 checks incl. a
 5-mutation battery; `tests/scripts/test-desktop-sso-bake.sh`, 61 checks incl.
 7 negative controls): everything in this document except the greeter's
 rendering. The libpam leg runs the real `/etc/pam.d/lightdm` with the real

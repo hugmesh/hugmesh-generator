@@ -353,6 +353,24 @@ auth "${HELPER}" '../root' ""; rc=$?
 auth "${HELPER}" alice "" account; rc=$?
 [ "${rc}" -eq 1 ] && [ "$(nreq)" -eq 0 ] && ok "REFUSE: PAM_TYPE other than auth => rc 1, nothing done" || bad "REFUSE: PAM_TYPE=account rc ${rc} requests $(nreq)"
 
+# ── CANCEL: the greeter goes away mid-flow (lightdm kills the session child) ─
+# The helper is orphaned (reparented); the approval that then arrives must NOT
+# create an account, a cache record or a parked token for a session nobody
+# started. The helper is started from a subshell that lives 0.3 s and then
+# exits, so its parent changes while it is polling; the issuer answers ok on
+# the 12th poll (0.05 s each), after the parent is gone.
+new_case true "${ISSUER}"; printf 'pending,pending,pending,pending,pending,pending,pending,pending,pending,pending,pending,ok' > "${SRV}/seq"
+( printf '' | PATH="${CASE}/bin:${PATH}" PAM_USER=alice PAM_TYPE=auth \
+    HSG_INSECURE_TEST=1 HSG_CONF="${CASE}/conf" HSG_STATE_DIR="${CASE}/state" HSG_RUN_DIR="${CASE}/run" \
+    HSG_GOV_DIR="${GOV}" HSG_PASSWD="${CASE}/etc/passwd" HSG_SHADOW="${CASE}/etc/shadow" \
+    HSG_RUNTIME_BASE="${CASE}/runtime" HSG_USERS_CREATED="${CASE}/users.created" HSG_POLL_SCALE=0.05 \
+    python3 "${HELPER}" pam-auth > "${CASE}/out" 2> "${CASE}/err" & sleep 0.3 )   # the subshell IS the parent for 0.3 s, like pam_exec's session child until Cancel; no `timeout` wrapper (it would stay the parent)
+for _ in $(seq 1 100); do grep -q 'greeter gone\|Signed in' "${CASE}/err" "${CASE}/out" 2>/dev/null && break; sleep 0.1; done
+sleep 0.5
+grep -q 'greeter gone (cancelled)' "${CASE}/err" && ! grep -q useradd "${CASE}/log" && [ ! -e "$(CACHE alice)" ] && [ ! -e "$(PARK)" ] \
+    && ok "CANCEL: an orphaned helper abandons the flow — no account, no cache, no parked token" \
+    || bad "CANCEL: err='$(tail -2 "${CASE}/err" | tr '\n' '|')' useradd=$(grep -c useradd "${CASE}/log") cache=$([ -e "$(CACHE alice)" ] && echo yes || echo no) park=$([ -e "$(PARK)" ] && echo yes || echo no)"
+
 # ── LOCAL accounts are never taken over ─────────────────────────────────────
 new_case true "${ISSUER}"; add_local alice
 auth "${HELPER}" alice ""; rc=$?
@@ -494,6 +512,18 @@ if grep -q '^RC 0$' "${PO}"; then
     PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(stack a2 pam_deny.so)" lightdm "hunter2" "${CASE}/env" > "${PO}" 2>/dev/null
     grep -q '^RC [1-9]' "${PO}" && ok "STACK: typed password with a denying local path => still denied (helper grants nothing)" \
         || bad "STACK (a2): $(tr '\n' '|' < "${PO}")"
+    # (a3) ONE prompt: the answer pam_exec collected stays in PAM_AUTHTOK for the
+    # local path. Stand-in: a second `pam_exec expose_authtok` that logs what it
+    # receives — it must get the same bytes WITHOUT prompting again.
+    cat > "${CASE}/authtok-logger" <<EOF
+#!/usr/bin/env bash
+cat > "${CASE}/authtok.seen"
+EOF
+    chmod +x "${CASE}/authtok-logger"
+    PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(stack a3 "pam_exec.so expose_authtok ${CASE}/authtok-logger")" lightdm "hunter2" "${CASE}/env" > "${PO}" 2>/dev/null
+    [ "$(grep -c 'MSG style=1 ' "${PO}")" -eq 1 ] && [ "$(cat "${CASE}/authtok.seen" 2>/dev/null)" = "hunter2" ] && grep -q '^RC 0$' "${PO}" \
+        && ok "STACK: exactly ONE password prompt; the local path receives the same PAM_AUTHTOK (no second prompt)" \
+        || bad "STACK (a3): prompts=$(grep -c 'MSG style=1 ' "${PO}") seen='$(cat "${CASE}/authtok.seen" 2>/dev/null)' $(tr '\n' '|' < "${PO}")"
     # (b) empty password, issuer down: reason shown, denied
     new_case true "${DOWN}"; envfile; helper_cmd "${HELPER}" probe
     PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(stack b pam_deny.so)" lightdm "" "${CASE}/env" > "${PO}" 2>/dev/null
