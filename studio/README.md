@@ -705,6 +705,75 @@ stand-ins; run as the Code folders ones above, with `-g "exports a domain's repo
 full flow, the rename map's format and what a person still has to set up are in
 [docs/GOLIVE-ORG-EXPORT.md](../docs/GOLIVE-ORG-EXPORT.md).
 
+## QEMU for Windows (WHPX)
+
+Every emulation lane of the Studio (the QEMU device tests, the AVC workout, the Playwright
+suite, whole-mesh emulation) is a bash script driving QEMU inside Docker, so a native
+Windows Studio refuses them with the WSL2 sentence. QEMU for Windows is the one lane that
+runs there with no bash, Docker or WSL2: QEMU's own Windows build, accelerated by the
+Windows Hypervisor Platform (`-accel whpx`), driven from Python (`core/qemu_windows.py`).
+
+**Install** once, then restart Windows:
+
+```bat
+winget install --id SoftwareFreedomConservancy.QEMU -e
+REM in an administrator terminal:
+DISM /Online /Enable-Feature /FeatureName:HypervisorPlatform /All
+```
+
+The QEMU installer records its folder in the registry and does not touch `PATH`; the
+Studio looks there (then in `%ProgramFiles%\qemu`, then on `PATH`) for
+`qemu-system-x86_64.exe`, `qemu-img.exe` and the bundled x86 UEFI firmware. Until both are
+in place every face says which one is missing and prints its command.
+
+**What it boots.** ONE x86 device at a time, a thin desktop image or a single node, from a
+build session's `.img` or `.img.xz` (an `.xz` is unpacked once into
+`<work>/native-images`; `<work>` is `<generator>/out/qemu-runs` unless `--work` says
+otherwise). Each start gets a fresh qcow2 overlay, so the image itself is never written.
+The guest has 2 GiB of memory and 2 CPUs by default, and a start is refused when free
+memory cannot hold the guest plus 768 MiB kept for Windows. Ports are forwarded on
+`127.0.0.1` only: **2222** -> ssh, **8443** -> 443, **8080** -> 80. **Headless** (the
+default) writes the serial console to `console.log` in the device's run folder
+(`<work>/native-runs/<label>`); **window** opens the guest's screen in a QEMU window, for
+a thin desktop. Stop powers the guest off over QMP (ACPI power-off, then quit, then a
+kill) and deletes the overlay unless it was kept.
+
+- **GUI:** the **Mesh emulation** page's **Emulation backend** chooser, with **Show
+  desktop window** and **Memory** beside it. Each x86 row's Start, Stop and SSH then use
+  this backend. A native Windows Studio opens on it when QEMU and the hypervisor platform
+  are ready; everywhere else the default stays Docker, and choosing QEMU for Windows on
+  Linux shows why it is not offered there. The QEMU device tests page points here from
+  its WSL2 note.
+- **TUI:** start the journey (`python -m hugmesh_studio.tui`), pick **Start building**,
+  then the **Mesh emulation** card, and press **b** there to switch backend
+  (`--meshemu SESSION` only prints the Docker plan and exits; it has no backend key).
+  The screen spawns nothing: an x86 row shows what a start runs and the CLI line to
+  paste into a Windows terminal.
+- **CLI** (Qt-free; from the MSI use `hugmesh-studio-cli.exe`, the console twin):
+
+```bat
+hugmesh-studio --qemu-windows check
+hugmesh-studio --qemu-windows rows   --session SESSION
+hugmesh-studio --qemu-windows plan   --session SESSION --row x86/standalone-thin
+hugmesh-studio --qemu-windows start  --session SESSION --row x86/standalone-thin --window
+hugmesh-studio --qemu-windows status
+hugmesh-studio --qemu-windows stop   --row x86/standalone-thin
+python -m hugmesh_studio.core.qemu_windows start --img path\to\image.img.xz --mem 2048
+```
+
+`plan` prints exactly what `start` runs. Other options: `--ssh-port`, `--ui-port`,
+`--http-port`, `--smp`, `--work`, `--keep` (keep the overlay after stop), `--json`, and
+`--tcg` (no acceleration, very slow; only when the hypervisor platform cannot be turned
+on). A refusal exits 2 and prints `REFUSED:` with its sentence.
+
+**What stays refused, and why.** ARM and Raspberry Pi rows: WHPX accelerates only x86_64
+guests on an x64 PC, and those rows boot a kernel taken out of the image. Whole-mesh start
+and stop, and a second device while one runs: this backend boots one device at a time.
+The QMP console, the web tunnel, and saving a device's disk or the whole mesh: those are
+the Docker backend's runner. The QEMU device tests, the AVC workout and the Playwright
+suite: they boot and assert through bash scripts. All of these run on Linux, or in a
+Studio inside WSL2, on the Docker backend.
+
 ## Package a Windows .exe
 
 The PyInstaller spec is committed at `packaging/hugmesh-studio.spec`; the MSI, the Flatpak

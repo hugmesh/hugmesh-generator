@@ -313,5 +313,10 @@ jobs:
           tests/test_mesh_token_issue.py
           tests/test_mesh_token_issue_dialog.py
           tests/test_tui_mesh_token.py
+          tests/test_qemu_windows.py
+          tests/test_qemu_windows_cli.py
+          tests/test_pages_mesh_emulation_whpx.py
+          tests/test_tui_meshemu_whpx.py
+          "tests/test_tui_gui_parity.py::test_the_emulation_backend_choices_are_one_tuple_on_every_face"
           "tests/test_windows_packaging_files.py::test_the_spec_freezes_the_entry_shim_as_a_windowed_onedir"
           "tests/test_windows_packaging_files.py::test_windows_also_freezes_a_console_twin_into_the_same_tree"

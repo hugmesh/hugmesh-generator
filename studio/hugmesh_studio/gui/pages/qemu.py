@@ -124,7 +124,7 @@ import threading
 from ..qt import Qt, QtWidgets
 from .. import console
 from ..styles import MUTED, WARN, muted
-from ...core import emulation, qemu_tests
+from ...core import emulation, qemu_tests, qemu_windows
 from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
@@ -717,8 +717,14 @@ class QemuPage(QtWidgets.QWizardPage):
         blocker = qemu_tests.native_blocker()
         if blocker:
             # Docker Desktop being up says nothing here: the lanes are bash scripts.
+            # The one lane that does run natively boots a device and asserts nothing,
+            # so it lives on the Mesh emulation page — pointed at, not offered here.
+            whpx = dict(qemu_windows.BACKENDS)[qemu_windows.BACKEND_WHPX]
             self.docker_note.setText(
-                f'<span style="color:{WARN}">{html.escape(blocker)}</span>')
+                f'<span style="color:{WARN}">{html.escape(blocker)}</span><br>'
+                "To boot ONE x86 device image (a thin desktop or a single node) on "
+                "this PC without WSL2, open Mesh emulation and choose the backend "
+                f"“{html.escape(whpx)}”.")
             self._docker_ok = False
             self._sync_controls()
             return

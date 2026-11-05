@@ -18,6 +18,9 @@
   python -m hugmesh_studio --local-ai-prompt "question"
       # headless: what the local model is doing (the Studio window's Local AI bar, as text),
       # and one question to it; both exit non-zero with a plain sentence when Ollama is down
+  python -m hugmesh_studio --qemu-windows check|rows|plan|start|stop|status [options]
+      # headless, Windows: boot ONE x86 device image under QEMU for Windows (WHPX);
+      # the options are core/qemu_windows.py's own (--session, --row, --img, --mem …)
   python -m hugmesh_studio --generator-dir /path/to/hugmesh-generator
   python -m hugmesh_studio --remember-roles-for-passwordless-login
       # OPT-IN, default OFF: KeyZipPage imports also mirror human-loginable KEYS
@@ -260,6 +263,11 @@ def main(argv=None) -> int:
     ap.add_argument("--mesh-token", nargs=argparse.REMAINDER, metavar="ARGS", default=None,
                     help="issue / show / trust / issuer: run the HugMesh token CLI with the "
                          "rest of the command line (--mesh-token --help for its usage).")
+    # ── QEMU for Windows (WHPX), from a terminal (Qt-free) ───────────────────────
+    # --qemu-windows ACTION [options]: the rest of the line goes to core/qemu_windows.py's
+    # own parser, so the MSI's console twin reaches the same start()/stop() as the GUI.
+    from .core.qemu_windows import add_cli_arguments as _add_qemu_windows_args
+    _add_qemu_windows_args(ap)
     args = ap.parse_args(argv)
 
     if args.mesh_token is not None:
@@ -273,6 +281,12 @@ def main(argv=None) -> int:
         # runner), never a Qt binding.
         from .core.org_export import run_cli as _run_org_export
         return _run_org_export(args, args.generator_dir)
+
+    if args.qemu_windows is not None:
+        # Qt-free path: runs only qemu-img / qemu-system-x86_64 (and taskkill), never a
+        # Qt binding, so it works from hugmesh-studio-cli.exe with no display.
+        from .core.qemu_windows import run_studio_cli as _run_qemu_windows
+        return _run_qemu_windows(args.qemu_windows, args.generator_dir)
 
     if args.login_agent:
         # Qt-free path: the loopback login agent is stdlib-only and blocks in
