@@ -266,8 +266,16 @@ def test_cli_and_module_agree():
 # environment reaches the spawned runner's argv with a stub"). A correct plan
 # that the runner then ignores is the exact bug with no symptom: the GUI label
 # says kind and the suite drives docker.
+#
+# They prove the LINUX handoff to make, so they pin a Linux host: on native Windows
+# run_e2e refuses with the WSL2 sentence before make (tests/test_windows_sweep_c6.py).
 
-def test_run_e2e_hands_the_environment_to_make():
+@pytest.fixture
+def linux_host(monkeypatch):
+    from hugmesh_studio.core import platform_info
+    monkeypatch.setattr(platform_info, "native_windows_blocker", lambda *a, **k: "")
+
+def test_run_e2e_hands_the_environment_to_make(linux_host):
     """Stub the make layer and read back what run_e2e would have spawned."""
     from hugmesh_studio.core.local_stack_node import LocalStackNode
     node = LocalStackNode(REPO)
@@ -291,7 +299,7 @@ def test_run_e2e_hands_the_environment_to_make():
     assert seen["env"]["SNAP_REPORT_DIR"].startswith("test-results")
 
 
-def test_run_e2e_reports_which_environment_it_ran():
+def test_run_e2e_reports_which_environment_it_ran(linux_host):
     """The counts line names the mesh. Without it a log full of results says
     nothing about which of three meshes produced them."""
     from hugmesh_studio.core.local_stack_node import LocalStackNode
@@ -303,7 +311,7 @@ def test_run_e2e_reports_which_environment_it_ran():
     assert any("[e2e/qemu]" in ln for ln in lines), lines
 
 
-def test_the_make_child_really_receives_snap_env(monkeypatch):
+def test_the_make_child_really_receives_snap_env(monkeypatch, linux_host):
     """One layer deeper: the actual subprocess environment. `make` imports the
     environment into its own variable namespace, which is what makes
     `SNAP_ENV=kind make stack-e2e-bdd-env` work from a terminal — so the child's

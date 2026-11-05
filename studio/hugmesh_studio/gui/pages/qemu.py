@@ -240,11 +240,7 @@ class QemuPage(QtWidgets.QWizardPage):
         #: What pressing Next will do. Shown ONLY on the build-first arm, where every
         #: other widget on this page is hidden — this line is then the whole page, so it
         #: cannot live in ``cmd_view``, which that same arm hides.
-        self.chain_note = QtWidgets.QLabel(
-            "The tests will run automatically when the build you configure next "
-            "finishes. Press <b>Next</b> to configure that build — the choice is "
-            "carried to the Build screen as its “after the build, run the QEMU "
-            "emulated-device tests” checkbox, which stays yours to untick there.")
+        self.chain_note = QtWidgets.QLabel(self._chain_note_text())
         self.chain_note.setWordWrap(True)
         self.chain_note.setTextFormat(Qt.TextFormat.RichText)
         self.chain_note.setVisible(False)
@@ -609,6 +605,7 @@ class QemuPage(QtWidgets.QWizardPage):
         return not self._running
 
     def initializePage(self):
+        self.chain_note.setText(self._chain_note_text())
         self._refresh_docker_note()
         self._refresh_kvm_note()
         self._seed_build_mode()
@@ -674,8 +671,26 @@ class QemuPage(QtWidgets.QWizardPage):
             commit_image_mode(self.wiz, self.selected_build_mode())
         if getattr(self.wiz, "qemu_device_tests_owned_by_build", False):
             return True
-        self.wiz.cfg.qemu_device_tests = self.build_first.isChecked()
+        # never carry an opt-in the Build screen will refuse (native Windows)
+        self.wiz.cfg.qemu_device_tests = (self.build_first.isChecked()
+                                          and not qemu_tests.native_blocker())
         return True
+
+    @staticmethod
+    def _chain_note_text() -> str:
+        """What the build-first arm's Next leads to. On native Windows the Build
+        screen disables and unticks the run-the-tests checkbox (the lanes are bash),
+        so promising an automatic run there sent the operator into a whole image
+        build whose tests were then silently dropped."""
+        blocker = qemu_tests.native_blocker()
+        if blocker:
+            return (f'<span style="color:{WARN}">{html.escape(blocker)}</span> '
+                    "<b>Next</b> still configures an image build, but the tests will "
+                    "<b>not</b> run after it here.")
+        return ("The tests will run automatically when the build you configure next "
+                "finishes. Press <b>Next</b> to configure that build — the choice is "
+                "carried to the Build screen as its “after the build, run the QEMU "
+                "emulated-device tests” checkbox, which stays yours to untick there.")
 
     # ── the build-first arm's explicit mode ─────────────────────────────────────
     def selected_build_mode(self) -> str:
@@ -748,7 +763,12 @@ class QemuPage(QtWidgets.QWizardPage):
         .wslconfig stanza turns it on — so saying nothing would strand every Windows
         operator on the slowest possible path with no clue that a fix exists.
         """
-        why = self.wiz.host.kvm_blocker()
+        # Not on native Windows: no run can happen there (docker_note says why), so
+        # advice about how fast one would go — and about a Linux kernel feature — is
+        # noise beside the real refusal. Asked of the host the WIZARD detected (WSL
+        # reports "linux"), so the WSL2 .wslconfig remedy still shows under WSL.
+        host = self.wiz.host
+        why = "" if host.os == "windows" else host.kvm_blocker()
         self.kvm_note.setText(why)
         self.kvm_note.setVisible(bool(why))
 

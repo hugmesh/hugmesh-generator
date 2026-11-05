@@ -26,7 +26,7 @@ _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # orangepi5 = 53 + 8 + 10: its cluster NODE roles (EXPERIMENTAL) read the Raspberry Pi
 # k8s node set (specs-rpi5/portage/packages-k8s.list, 8 atoms) and the node host list
 # (specs-rpi5/portage/packages-node-host.list, 10 atoms) rather than a copy.
-_RAW_TOTALS = {"x86": 151, "rpi5": 73, "jetson": 66, "frite": 52,
+_RAW_TOTALS = {"x86": 151, "rpi5": 73, "jetson": 66, "frite": 54,
                "orangepi5": 71, "orangepizero2": 32, "orangepizero2w": 32}
 
 _CONFIGS = [

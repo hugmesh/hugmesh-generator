@@ -223,7 +223,14 @@ class MeshNode:
         except (OSError, subprocess.SubprocessError) as e:
             return MeshStatus(running=False, detail=str(e))
 
-    def logs(self, tail: int = 200) -> str:
+    def logs(self, tail: int = 200, osname: str | None = None) -> str:
+        # Windows: a cwd that does not exist yet raised WinError 267 ("The directory
+        # name is invalid"), returned as if it were the log, before any start had
+        # made the folder. Same "is it staged?" signal stop() and status() use.
+        # ``osname`` is ``os.name`` unless a test passes another.
+        if (osname or os.name) == "nt" and not os.path.exists(
+                os.path.join(self.workdir, "docker-compose.mesh.yml")):
+            return "The mesh node has not been started yet, so it has no logs."
         try:
             r = subprocess.run(self._compose("logs", "--tail", str(tail)),
                                cwd=self.workdir, env=self._env(),
