@@ -354,8 +354,8 @@ jobs:
           # golden, element for element, and proves the per-run password reaches
           # QEMU only as a secret OBJECT (never argv, never stdout). MEASURED,
           # 2026-11-04, in alpine:3 with this job's apk set (checkout copied in;
-          # busybox grep/sed/diff/cmp): 128 passed / 0 failed. Mutation-tested
-          # on a Gentoo host: 21 planted defects, 21 caught.
+          # busybox grep/sed/diff/cmp): 134 passed / 0 failed. Mutation-tested
+          # on a Gentoo host: 23 planted defects, 23 caught.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh

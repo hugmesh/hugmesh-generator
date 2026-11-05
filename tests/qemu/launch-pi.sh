@@ -521,6 +521,11 @@ case "${DISPLAY_MODE}" in
         [ -n "${DISPLAY_SECRET}" ] \
             || die "--display spice needs --display-secret FILE (the per-run password lives in a file, never on the command line)"
         [ -s "${DISPLAY_SECRET}" ] || die "--display-secret file is missing or empty: ${DISPLAY_SECRET}"
+        # spice-server's ticket is at most 60 bytes and QEMU 7.2 ignores the
+        # set-ticket return, so a longer file would leave the door with NO ticket
+        # and every connection refused, silently. Size only; the bytes are never read.
+        [ "$(wc -c < "${DISPLAY_SECRET}")" -le 60 ] \
+            || die "--display-secret file is longer than SPICE's 60-byte ticket limit: ${DISPLAY_SECRET}"
         [ -n "${DISPLAY_LISTEN}" ] || die "--display-listen must not be empty"
         QEMU_ARGS+=(-object "secret,id=hmdisp,file=${DISPLAY_SECRET},format=raw"
                     -spice "port=${SPICE_PORT},addr=${DISPLAY_LISTEN},password-secret=hmdisp,agent-mouse=on"

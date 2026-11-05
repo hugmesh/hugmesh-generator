@@ -26,8 +26,9 @@
 #      secret file; it must appear in NEITHER the argv NOR the launcher's
 #      stdout/stderr. Only the file's path may be printed.
 #   6. REFUSALS. --display spice without --spice-port / --display-secret, an
-#      empty secret file, display flags without --display, an unknown mode, a
-#      --vnc-socket path over 107 bytes: every one exits non-zero BEFORE QEMU.
+#      empty secret file, a secret over SPICE's 60-byte ticket limit, display
+#      flags without --display, an unknown mode, a --vnc-socket path over 107
+#      bytes: every one exits non-zero BEFORE QEMU.
 #   7. launch-arm.sh --virt-dtb drops -dtb (and only -dtb); --dtb with it refuses.
 #   8. DRIFT GUARD. The display block is the same text in all three launchers
 #      apart from the one DISPLAY_GPU_ARGS line.
@@ -83,6 +84,11 @@ PIKERNEL="${TMP}/kernel_2712.img"; echo pikernel > "${PIKERNEL}"
 CANARY="CANARY-7f3a9c1e5b2d-NEVER-PRINT-ME"
 SECRET="${TMP}/display.secret"; printf '%s' "${CANARY}" > "${SECRET}"; chmod 600 "${SECRET}"
 EMPTYSECRET="${TMP}/empty.secret"; : > "${EMPTYSECRET}"
+# 61 bytes: one over spice-server's ticket limit (QEMU 7.2 would accept the file
+# and then refuse every connection, silently).
+LONGSECRET="${TMP}/long.secret"; head -c 61 /dev/zero | tr '\0' 'a' > "${LONGSECRET}"
+# Exactly 60 bytes is the largest ticket SPICE honours; it must still boot.
+MAXSECRET="${TMP}/max.secret"; head -c 60 /dev/zero | tr '\0' 'b' > "${MAXSECRET}"
 
 LAST_RC=0; LAST_OUT=""; LAST_ARGV=""
 run_launcher() { # run_launcher NAME LAUNCHER [args...] -> LAST_RC, LAST_OUT, LAST_ARGV (file)
@@ -370,6 +376,9 @@ for L in launch-x86.sh launch-arm.sh launch-pi.sh; do
     refuses "${L}: --display spice without --display-secret" "${L}" "${B[@]}" --display spice --spice-port 5930
     refuses "${L}: --display spice with an EMPTY secret file" "${L}" "${B[@]}" --display spice --spice-port 5930 --display-secret "${EMPTYSECRET}"
     refuses "${L}: --display spice with a missing secret file" "${L}" "${B[@]}" --display spice --spice-port 5930 --display-secret "${TMP}/nope.secret"
+    refuses "${L}: --display spice with a 61-byte secret (over SPICE's 60-byte ticket)" "${L}" "${B[@]}" --display spice --spice-port 5930 --display-secret "${LONGSECRET}"
+    run_launcher "max-${L}" "${L}" "${B[@]}" --display spice --spice-port 5930 --display-secret "${MAXSECRET}"
+    eq "${LAST_RC}" "0" "${L}: a 60-byte secret (the SPICE maximum) still boots"
     refuses "${L}: --spice-port without --display"            "${L}" "${B[@]}" --spice-port 5930
     refuses "${L}: --display-secret without --display"        "${L}" "${B[@]}" --display-secret "${SECRET}"
     refuses "${L}: --vnc-socket without --display"            "${L}" "${B[@]}" --vnc-socket "${VSOCK}"
