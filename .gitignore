@@ -196,3 +196,6 @@ tests/stack/.run/
 # one moment, never shared — the tests/stack/.run/ precedent. Deliberately NOT
 # under out/, which is the generator's product tree.
 tests/.ungated-lane/
+
+# The TUI stages the login password here (0600, removed when the build ends).
+/.hugmesh-secrets/
