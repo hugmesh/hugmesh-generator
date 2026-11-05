@@ -941,7 +941,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # control-first boot order; wired in shell-suites.yml's alpine job beside
 # mesh-cluster_test.sh). MEASURED by RUNNING this file on that branch:
 # '209 of 250 suites are named by a pull_request-triggered workflow'.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-209}"
+# 209 -> 210 (denominator 250 -> 251) on fix/desktop-c-frite-builder-medium-format--20261104:
+# tests/scripts/test-frite-install-layout.sh (the Frite raw media + the eMMC install
+# layout, assembled as files; wired in shell-suites.yml's alpine job). MEASURED by RUNNING
+# this file on that branch: '210 of 251 suites are named by a pull_request-triggered workflow'.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-210}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

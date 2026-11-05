@@ -49,9 +49,13 @@ for b in "${REPO}"/build-*-stage4.sh; do
 done
 
 # The pack section of a builder: from its hmr_pack_owner_args call through the
-# fallback tar's final `-cJf "${STAGE4_TARBALL}" .` line (the one with no `||`).
+# fallback tar's final `-cJf "${STAGE4_TARBALL}" .` line (the one with no `||`),
+# or — for a builder that packs with ONE fatal tar and no fallback (the frite
+# builder since the x86 #503 shape: `tar ... || { err; exit 1; }`) — up to its
+# `info "Stage4 tarball: ..."` line, exclusive.
 pack_section() {  # BUILDER -> stdout
     awk '/^hmr_pack_owner_args "\$\{SYSROOT\}"$/ {on=1}
+         on && /^info "Stage4 tarball:/ {exit}
          on {print}
          on && /-cJf "\$\{STAGE4_TARBALL\}" \.$/ {exit}' "$1"
 }
@@ -70,8 +74,12 @@ for b in "${ARM_BUILDERS[@]}"; do
     na="$(printf '%s\n' "${sec}" | grep -c -F '"${HMR_PACK_OWNER_ARGS[@]}"')"
     if [ "${nt}" -eq 2 ] && [ "${na}" -eq 2 ]; then
         ok "${n}: both stage4 tar lines (xattr and fallback) follow hmr_pack_owner_args and use its flags"
+    elif [ "${nt}" -eq 1 ] && [ "${na}" -eq 1 ] \
+         && printf '%s\n' "${sec}" | grep -v '^[[:space:]]*#' | grep -F -- '--xattrs' >/dev/null \
+         && ! printf '%s\n' "${sec}" | grep -v '^[[:space:]]*#' | grep -F '2>/dev/null ||' >/dev/null; then
+        ok "${n}: the single fatal stage4 tar (xattrs on, no silent fallback) follows hmr_pack_owner_args and uses its flags"
     else
-        bad "${n}: pack section has ${nt} tar line(s) and ${na} use(s) of HMR_PACK_OWNER_ARGS (want 2 and 2)"
+        bad "${n}: pack section has ${nt} tar line(s) and ${na} use(s) of HMR_PACK_OWNER_ARGS (want 2 and 2, or one --xattrs tar with no '2>/dev/null ||' fallback)"
     fi
 done
 X86="${REPO}/build-x86-host-stage4.sh"
