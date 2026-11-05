@@ -1845,10 +1845,19 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         try:
             subprocess.Popen(argv, start_new_session=True)
         except OSError as exc:
+            # ``delete-this-file=1`` only fires when a viewer READS the .vv file; a
+            # viewer that never started leaves a 0600 file holding the password in
+            # the runtime dir. Remove it here, and hand back the path-less hint
+            # (the one that names the secret file, not the file just removed).
+            for leftover in (a for a in argv if a.endswith(".vv")):
+                try:
+                    os.unlink(leftover)
+                except OSError:
+                    pass
             self.note.setText(
                 f'<span style="color:{WARN}">Could not open the display viewer: '
                 f"{html.escape(str(exc))}</span> Run it yourself: "
-                f"<tt>{html.escape(hint)}</tt>")
+                f"<tt>{html.escape(qemu_devices.display_hint(dev))}</tt>")
             console.write(self.log, f"[mesh] !! could not open the display viewer: {exc}")
             return
         console.write(self.log, f"[mesh] display: {shlex.join(argv)}")

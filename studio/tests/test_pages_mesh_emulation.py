@@ -2020,11 +2020,13 @@ def test_display_falls_back_to_the_browser_on_the_ip_literal(
     assert spawned[0].kw.get("start_new_session") is True
 
 
-def test_display_launch_failure_is_an_inline_note(wiz, registry, secret_file, viewers,
-                                                  monkeypatch, not_wsl):
+def test_display_launch_failure_is_an_inline_note_and_leaves_no_vv_file(
+        wiz, registry, secret_file, viewers, monkeypatch, not_wsl, tmp_path):
     viewers.add("remote-viewer")
+    seen: list[list[str]] = []
 
     def boom(argv, **kw):
+        seen.append(list(argv))
         raise OSError("remote-viewer: exec format error")
     monkeypatch.setattr(page_mod.subprocess, "Popen", boom)
     page = _page(wiz)
@@ -2033,8 +2035,14 @@ def test_display_launch_failure_is_an_inline_note(wiz, registry, secret_file, vi
     _row(page, "x86/frontend").display_btn.click()
     note = page.note.text()
     assert "Could not open the display viewer" in note and "exec format error" in note
-    assert "remote-viewer" in note, "the command is there to paste"
+    assert "127.0.0.1:22401" in note and secret_file in note, \
+        "the by-hand pointer names the door and the secret's PATH"
     assert _SECRET not in note and _SECRET not in page.log.toPlainText()
+    # delete-this-file=1 only fires when a viewer READS the file; a viewer that never
+    # started must not leave a password-bearing .vv behind in the runtime dir.
+    assert seen and seen[0][1].endswith(".vv")
+    assert not os.path.exists(seen[0][1])
+    assert not [n for n in os.listdir(tmp_path / "rt") if n.endswith(".vv")]
 
 
 def test_display_with_an_unreadable_secret_says_the_path_not_the_value(
