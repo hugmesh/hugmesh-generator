@@ -1204,7 +1204,7 @@ unset -f launch_build save_conf ui_msg ui_password
 
 for _d in "${REPO_DIR}"/.hugmesh-secrets/login.*; do
     [ -d "${_d}" ] || continue
-    printf '%s\n' "${_SECRETS_BEFORE}" | grep -qxF "${_d}" || rm -rf -- "${_d}"
+    printf '%s\n' "${_SECRETS_BEFORE}" | grep -xF "${_d}" >/dev/null || rm -rf -- "${_d}"
 done
 [ "${_SECRETS_PREEXISTED}" = no ] && rmdir "${REPO_DIR}/.hugmesh-secrets" 2>/dev/null
 

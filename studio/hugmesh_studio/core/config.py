@@ -2068,8 +2068,10 @@ def standalone_login_required(cfg) -> bool:
     roles (their builder arm presets it, ``role_presets_standalone``) and a
     desktop-class image carrying the composable ``--standalone`` flag. That image has
     no KEYS stick, no SSO and a LOCKED root, and its first boot (specs/etc/local.d/
-    01-firstboot.start.tmpl, standalone block) creates ``--local-user`` with the hash
-    of ``--local-pass``. With no password it mints a random one-time password and
+    01-firstboot.start.tmpl, local-account block — which applies the hash on EVERY
+    image, standalone or not) creates ``--local-user`` with the hash of
+    ``--local-pass``. Only REQUIRED here: with no password a standalone image mints a
+    random one-time password and
     prints it to /dev/console — behind the graphical greeter, where nobody reads it —
     so the image cannot be logged in to.
 
