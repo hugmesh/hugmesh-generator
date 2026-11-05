@@ -776,6 +776,7 @@ jobs:
             tests/scripts/test-e2e-enumeration-without-credentials.sh
             tests/scripts/test-e2e-reporter-shape.sh
             tests/scripts/test-e2e-toolchain-readiness.sh
+            tests/scripts/test-fe-template-route-parity.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect

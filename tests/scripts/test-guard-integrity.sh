@@ -936,7 +936,17 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     208 of 249 suites are named by a pull_request-triggered workflow
 # and with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
+# 208 -> 209 (denominator 249 -> 250) on 2026-11-04 for fix/fe-template-route-parity-20261104
+# (#559), which adds ONE gated suite: tests/scripts/test-fe-template-route-parity.sh (wired in
+# shell-suites.yml's node job, which has the handlebars engine the suite renders with, AND
+# .gitlab-ci.yml fe-template-route-parity-verify). MEASURED by RUNNING this file with
+# GUARD_PREMERGE=0 on that branch (base origin/main b1b50db4, which measures '208 of 249'):
+#     209 of 250 suites are named by a pull_request-triggered workflow
+# and with the suite on disk but its shell-suites.yml line absent: '208 of 250' + check 3 and
+# check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
+# A branch that also raises this from 208 conflicts here by construction; whichever lands
+# second re-measures (expected 210) per the doctrine above.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-209}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
