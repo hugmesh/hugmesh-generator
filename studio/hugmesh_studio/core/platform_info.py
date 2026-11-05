@@ -68,6 +68,16 @@ WINDOWS_DRIVE_FSTYPES = frozenset({"9p", "drvfs", "virtiofs"})
 #: they are reported too — just with a different remedy than "clone into the VM".
 NETWORK_FSTYPES = frozenset({"cifs", "smb3", "smbfs", "nfs", "nfs4"})
 
+#: What :func:`docker_probe` found.
+DOCKER_OK = "ok"
+DOCKER_MISSING = "missing"      # no docker executable on PATH
+DOCKER_DOWN = "down"            # docker answered, with an error (engine not running)
+DOCKER_TIMEOUT = "timeout"      # docker did not answer within the probe's timeout
+
+#: How long the native-Windows probe waits for `docker info`. Docker Desktop that is
+#: starting, or busy with a build, took 9-30 s to answer on a Windows 11 host.
+WINDOWS_DOCKER_PROBE_TIMEOUT_S = 20
+
 
 @dataclass
 class HostInfo:
@@ -96,6 +106,11 @@ class HostInfo:
     #: /dev/kvm is THERE but this user cannot open it. A different fix (group
     #: membership) from "nested virtualisation is off", so it is kept distinguishable.
     kvm_present_but_denied: bool = False
+    #: WHY has_docker is False, from :func:`docker_probe`: "missing" (no docker
+    #: executable), "down" (it answered with an error), "timeout" (it did not answer in
+    #: time); "" when unknown. Native Windows words its remedy from it: a busy Docker
+    #: Desktop was told to "Install Docker Desktop".
+    docker_state: str = ""
 
     @property
     def can_build_native(self) -> bool:
@@ -243,12 +258,28 @@ class HostInfo:
             return ("Start the daemon (`sudo systemctl start docker`) and make sure your "
                     "user is in the 'docker' group (`sudo usermod -aG docker $USER`, then "
                     "log out and back in).")
+        # The Studio probes once, at start, so each Windows remedy ends in a restart:
+        # nothing re-asks Docker before then.
+        if self.os == "windows" and self.docker_state == DOCKER_TIMEOUT:
+            # not "it is running": docker.exe also took 40 s to give up on a stopped
+            # Docker Desktop on the same host, so the sentence covers both
+            return (f"Docker did not answer `docker info` within "
+                    f"{WINDOWS_DOCKER_PROBE_TIMEOUT_S} s when the Studio started. If "
+                    f"Docker Desktop is not running, start it; if it is still starting, "
+                    f"or busy (a running build slows it down), wait until it says the "
+                    f"engine is running. Then restart the Studio so it checks again.")
+        if self.os == "windows" and self.docker_state == DOCKER_DOWN:
+            return ("docker.exe is installed but the Docker engine does not answer: start "
+                    "Docker Desktop, wait until it says the engine is running, then "
+                    "restart the Studio so it checks again.")
         return "Install Docker Desktop and start it."
 
     def docker_blocker(self) -> str:
         """Symptom + fix, self-contained — for surfaces that show this text alone."""
         if self.has_docker:
             return ""
+        if self.os == "windows" and self.docker_state == DOCKER_TIMEOUT:
+            return self.docker_remedy()     # slow, not unreachable: the remedy says so
         return "The Docker daemon is not reachable from here. " + self.docker_remedy()
 
     # ── KVM / nested virtualisation (the QEMU lane) ─────────────────────────────
@@ -293,7 +324,11 @@ class HostInfo:
             bits.append("Gentoo")
         if self.session != SESSION_NONE:
             bits.append(self.session)
-        bits.append("docker" if self.has_docker else "no-docker")
+        if not self.has_docker and self.os == "windows" and \
+                self.docker_state == DOCKER_TIMEOUT:
+            bits.append(f"docker (did not answer in {WINDOWS_DOCKER_PROBE_TIMEOUT_S} s)")
+        else:
+            bits.append("docker" if self.has_docker else "no-docker")
         if self.has_kvm:
             bits.append("KVM")
         if self.is_root:
@@ -311,16 +346,42 @@ def _is_gentoo() -> bool:
         return False
 
 
-def _docker_ok() -> bool:
-    exe = shutil.which("docker")
+def docker_probe(osname: str | None = None, *, which=None, run=None) -> str:
+    """Can this host reach a Docker daemon? One of the ``DOCKER_*`` states.
+
+    `docker info` is the real "daemon reachable?" check (Windows: Docker Desktop).
+    On native Windows it is run without a console and without pipes, and waits
+    longer: from the windowed MSI each docker.exe got a console of its own, which
+    alone pushed `docker info` past 8 s; the CLI's com.docker.cli.exe child kept a
+    captured pipe open after the timeout killed docker.exe, so the "8 s" ran to
+    20-30 s; and a busy Docker Desktop can take longer than 8 s anyway. A timeout is
+    kept apart from "no docker", so the remedy can say what happened. ``osname`` is
+    ``os.name`` unless a test passes another; ``which``/``run`` are for tests."""
+    which, run = which or shutil.which, run or subprocess.run
+    exe = which("docker")
     if not exe:
-        return False
+        return DOCKER_MISSING
+    if (osname or os.name) != "nt":
+        try:
+            r = run([exe, "info"], capture_output=True, timeout=8)
+        except subprocess.TimeoutExpired:
+            return DOCKER_TIMEOUT
+        except (OSError, subprocess.SubprocessError):
+            return DOCKER_DOWN
+        return DOCKER_OK if r.returncode == 0 else DOCKER_DOWN
     try:
-        # `docker info` is the real "daemon reachable?" check (Windows: Docker Desktop).
-        r = subprocess.run([exe, "info"], capture_output=True, timeout=8)
-        return r.returncode == 0
+        r = run([exe, "info"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=WINDOWS_DOCKER_PROBE_TIMEOUT_S,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+    except subprocess.TimeoutExpired:
+        return DOCKER_TIMEOUT
     except (OSError, subprocess.SubprocessError):
-        return False
+        return DOCKER_DOWN
+    return DOCKER_OK if r.returncode == 0 else DOCKER_DOWN
+
+
+def _docker_ok() -> bool:
+    return docker_probe() == DOCKER_OK
 
 
 def wsl_docker_remedy(is_wsl: bool | None = None, wsl_version: int = 0,
@@ -534,10 +595,12 @@ def detect(builder_image: str = "hugmesh-builder") -> HostInfo:
         is_root = False
     is_wsl, wsl_version = detect_wsl()
     kvm_usable, kvm_denied = _kvm_state()
+    docker_state = docker_probe()
     return HostInfo(
         os=osname,
         is_gentoo=(osname == "linux" and _is_gentoo()),
-        has_docker=_docker_ok(),
+        has_docker=docker_state == DOCKER_OK,
+        docker_state=docker_state,
         has_bash=bool(shutil.which("bash")),
         has_kvm=kvm_usable,
         is_root=is_root,
