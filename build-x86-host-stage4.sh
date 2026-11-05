@@ -40,6 +40,12 @@ source "${SCRIPT_DIR}/scripts/_roles-lib.sh"
 # drop a requested artifact hours in. See scripts/_host-guard-lib.sh.
 # shellcheck source=scripts/_host-guard-lib.sh
 source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
+# Greeter SSO login path for the client roles (desktop_sso_bake / desktop_sso_verify):
+# the lightdm PAM stack with the device-flow helper, the greeter hint, and the baked
+# desktop-governance templates. --skip-sso / --no-sso bake it OFF (the greeter says
+# so); this is what makes SKIP_SSO do something. See scripts/_desktop-sso-lib.sh.
+# shellcheck source=scripts/_desktop-sso-lib.sh
+source "${SCRIPT_DIR}/scripts/_desktop-sso-lib.sh"
 # Per-board binpkg-pool fingerprint guard (shared-binpkg track): the load-bearing
 # SIGILL safety net over directory isolation — REFUSES --usepkg reuse of a pool
 # whose (CHOST + exact CFLAGS/-mcpu + profile) fingerprint != this build's.
@@ -272,6 +278,9 @@ SKIP_TAILSCALE=false
 # Empty = "use the role default"; 'on'/'off' = the user chose explicitly.
 MESH_FORCED=""
 SSO_FORCED=""
+# --sso-issuer URL: the IdP the greeter SSO sign-in uses (https only). Default
+# https://id.<cluster domain>. Implies --with-sso; conflicts with --no-sso.
+SSO_ISSUER=""
 SKIP_KERNEL=false
 SKIP_CLEAN=false
 RESUME=false
@@ -958,6 +967,9 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --home-seed-code-from PATH  Source the repos from a dir/tar (else clone at runtime).
       --with-tailscale | --no-tailscale   Force the tailnet agent ON/OFF (any role).
       --with-sso | --no-sso               Force the Casdoor/OIDC login ON/OFF (any role).
+      --sso-issuer URL      The IdP for the greeter SSO sign-in (https://HOST[/PATH];
+                            default https://id.<domain>). Implies --with-sso. An
+                            admin can change it later: sso-greeter configure.
       --distdir DIR         Reuse a Gentoo distfiles cache from a mounted drive
                             (default: auto-detect /media/*; speeds rebuilds / offline).
       --shared-assets DIR   Fleet-wide asset root: the amd64 stage3 seed cache
@@ -1185,6 +1197,7 @@ while [[ $# -gt 0 ]]; do
         # Composable SSO toggle (wins over a role's default).
         --with-sso) SKIP_SSO=false; SSO_FORCED=on; shift ;;
         --no-sso) SKIP_SSO=true; SSO_FORCED=off; shift ;;
+        --sso-issuer) SSO_ISSUER="${2:-}"; shift 2 ;;
         # ── Home directory: mode + per-user ecryptfs + dockerized stack code ──
         --home-mode) HOME_MODE="$2"; shift 2 ;;
         --home-device) HOME_DEVICE="$2"; shift 2 ;;
@@ -1736,6 +1749,7 @@ if ${UNAFFILIATED}; then
     [ "${HOME_SEED_CODE}" != none ] && { err "--unaffiliated conflicts with --home-seed-code (seeds the HugMesh stack into the home)"; exit 1; }
     [ "${MESH_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-tailscale (the tailnet is HugMesh platform machinery)"; exit 1; }
     [ "${SSO_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-sso (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
+    [ -z "${SSO_ISSUER}" ] || { err "--unaffiliated conflicts with --sso-issuer (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
     { [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; } && { err "--unaffiliated conflicts with --person-role/--domains (person-device identity is platform machinery)"; exit 1; }
     [ -z "${DOMAIN_IDP_SPECS}" ] || { err "--unaffiliated conflicts with --domain-idp (an unaffiliated desktop has no identity provider to choose)"; exit 1; }
     BUNDLE_SOURCE=false
@@ -1752,6 +1766,15 @@ if ${UNAFFILIATED}; then
     # tooling — default it OFF (an explicit --media-data keeps it, neutral-named).
     [ "${MEDIA_DATA_FORCED}" = on ] || MEDIA_DATA=false
     info "UNAFFILIATED plain desktop: no brand identity, no hugmesh-* tooling, no bundled source, no k8s/mesh payload"
+fi
+
+# --sso-issuer names the IdP, so it means SSO ON (also on a standalone desktop,
+# whose default is off); with --no-sso/--skip-sso it is a contradiction.
+if [ -n "${SSO_ISSUER}" ]; then
+    [ "${SSO_FORCED}" = off ] && { err "--sso-issuer conflicts with --no-sso/--skip-sso"; exit 1; }
+    [[ "${SSO_ISSUER}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]] \
+        || { err "--sso-issuer must be https://HOST[:PORT][/PATH] (got '${SSO_ISSUER}')"; exit 1; }
+    SSO_FORCED=on; SKIP_SSO=false
 fi
 
 # ── STANDALONE posture (composable: --standalone onto any client role, or the
@@ -2581,6 +2604,7 @@ if ${PRINT_PLAN}; then
     _plan TOR_ONION          "$(_tor_node_selected && echo "on packages=${TOR_NODE_PACKAGES[*]} services=${TOR_NODE_SERVICES[*]}" || echo off)"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
+    _plan SSO_ISSUER         "$(${SKIP_SSO} && echo none || echo "${SSO_ISSUER:-https://id.${CLUSTER_DOMAIN}}")"
     _plan IDP                "${IDP}"
     _plan IDP_ISSUER         "${IDP_ISSUER:-none}"
     _plan IDP_CLIENT_ID      "${IDP_CLIENT_ID:-none}"
@@ -4263,6 +4287,9 @@ fi   # ! UNAFFILIATED (Layer-B/Layer-A/domain/tor/brand-repo-generator block)
 
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
+# Root-only: the finaliser carries the crypt(3) hash of --local-pass, and a
+# world-readable copy in the image (and on the live ISO) is an offline-crack target.
+chmod go-rwx "${SYSROOT}/etc/local.d/01-firstboot.start"
 # UNAFFILIATED: the shared firstboot loads k8s modules and prints a k8s/headscale/
 # KEYS banner — none of which exists on a plain desktop. Strip those sections from
 # the RENDERED file (anchored ranges; `sysctl --system` and the NVMe note survive)
@@ -4286,7 +4313,7 @@ fi
 # 01-firstboot user is created) and read by the installer for adopt/restore.
 # UNAFFILIATED: same functional machinery under NEUTRAL names — the conf moves to
 # /etc/gentoo/home.conf, the helper installs as /usr/sbin/home-setup, and its
-# internal hugmesh-* literals (conf path, first-login-encrypt dotfile) are
+# internal hugmesh-* literals (conf path; the first-login-encrypt rename is now a no-op) are
 # rewritten on the staged copy. install-x86.sh's staged copy gets the matching
 # conf-path rewrite where the installer ISO is built (below).
 if ${UNAFFILIATED}; then
@@ -4982,6 +5009,19 @@ if ${ROLE_CLIENT}; then
 greeter-session=lightdm-gtk-greeter
 user-session=${_user_session}
 LIGHTDM
+    # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
+    # the Casdoor/OIDC device-flow helper in front of the local password path, the
+    # hint the greeter shows, and (SSO on) the baked desktop-governance templates
+    # (a KEYS-provisioned image is then GOVERNED). SKIP_SSO (--skip-sso / --no-sso /
+    # standalone default) bakes SSO_ENABLED=false: the greeter says SSO is off and
+    # the local password login is untouched. UNAFFILIATED: nothing (plain Gentoo).
+    # Staged pre-emerge so CONFIG_PROTECT keeps the stack; asserted post-emerge.
+    if ! ${UNAFFILIATED}; then
+        desktop_sso_bake "${SYSROOT}" "${SHARED_SPECS}" \
+            "$(${SKIP_SSO} && echo false || echo true)" "${CLUSTER_DOMAIN}" "${BRAND_TITLE}" \
+            "$(${STANDALONE} && echo standalone || echo mesh)" "${SSO_ISSUER}" \
+            || { err "greeter SSO bake failed (see above)"; exit 1; }
+    fi
     # External media-data device (Steam library + gocryptfs Vaults). Default ON,
     # configurable + optional. Render the config + install the boot-time detector
     # that finds the SEPARATE data disk by LABEL or by the marker dirs and mounts
@@ -7187,6 +7227,13 @@ else
     # --skip-clean but printed nothing, so the Clean-sysroot rung silently
     # vanished from the operator's ladder instead of reporting itself skipped.
     banner "SKIPPED sysroot clean (--skip-clean)"
+fi
+
+# ── Greeter SSO stack survived the payload emerge? ─────────────────────────────
+# x11-misc/lightdm installs its own /etc/pam.d/lightdm; CONFIG_PROTECT must have
+# parked it (._cfg0000_lightdm, removed here), not replaced ours. Client roles only.
+if ${ROLE_CLIENT} && ! ${UNAFFILIATED}; then
+    desktop_sso_verify "${SYSROOT}" || { err "greeter SSO stack did not survive the payload emerge — refusing to ship a greeter with no SSO path"; exit 1; }
 fi
 
 # ── 9. Stage4 tarball ──────────────────────────────────────────────

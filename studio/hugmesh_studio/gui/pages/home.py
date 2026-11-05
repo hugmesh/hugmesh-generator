@@ -14,6 +14,7 @@ from ...core import cross_dracut
 from ...core.config import (
     HOME_DESKTOP_FIELDS, PLATFORM_LABELS, ImageConfig, encrypt_root_always,
     external_media_applies, home_options_allowed, image_class, local_login_applies,
+    standalone_login_problem,
 )
 from ...core.worklist import resolve_encrypt_root
 from ._gating import (
@@ -113,8 +114,11 @@ _HOME_MODE_HELP = {
 # Fields whose help sits on their _row() caption wrapper need none of this — no gate
 # ever writes those wrappers' tooltips.
 _ENCRYPTED_HELP = (
-    "Layers per-user eCryptfs on top of the LUKS2 root (--home-encrypted). The home is "
-    "unwrapped by the login password, so it stays encrypted until that user logs in.")
+    "Prepares per-user eCryptfs on top of the LUKS2 root (--home-encrypted): the login "
+    "stack is wired so an eCryptfs home unwraps with the login password. Moving the "
+    "home INTO eCryptfs is not automatic yet: an administrator runs "
+    "'ecryptfs-migrate-home -u <user>' as root while that user is logged out. The "
+    "LUKS2 root already encrypts the whole disk.")
 _SEED_HELP = (
     "Seeds the HugMesh source tree into ~/hugmesh-stack (--home-seed-code). none — "
     "nothing is seeded. repos — the code only. stack — the code plus a docker-compose "
@@ -324,10 +328,31 @@ class HomePage(QtWidgets.QWizardPage):
         self.local_user_note.setWordWrap(True)
         self.local_user_note.setStyleSheet("color: gray;")
         ll.addWidget(self.local_user_note)
+        # The password this account logs in with at the desktop greeter (--local-pass).
+        # Typed TWICE, with a reveal toggle: a single masked entry bakes a typo into the
+        # image silently, and the operator then cannot log in with the password they
+        # believe they set (the 2026-10-30 standalone report). Not the build host's sudo
+        # password — that is the separate "Administrator access" prompt.
         self.local_pass = QtWidgets.QLineEdit()
         self.local_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self.local_pass.setPlaceholderText("hashed at build time; NOT saved to configs")
-        ll.addWidget(_row("Local Password", self.local_pass))
+        self.local_pass.setPlaceholderText(
+            "you log in with this; hashed at build time, never saved")
+        ll.addWidget(_row("Login Password", self.local_pass))
+        self.local_pass_confirm = QtWidgets.QLineEdit()
+        self.local_pass_confirm.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.local_pass_confirm.setPlaceholderText("type the same password again")
+        self.local_pass_confirm_row = _row("Confirm Password", self.local_pass_confirm)
+        ll.addWidget(self.local_pass_confirm_row)
+        self.show_pass = QtWidgets.QCheckBox("Show password")
+        self.show_pass.toggled.connect(self._toggle_show_pass)
+        ll.addWidget(self.show_pass)
+        # Inline refusal (never a modal: validatePage runs headless in tests). Says
+        # why Next is refused: a mismatch, or a standalone image with no password.
+        self.login_err = QtWidgets.QLabel("")
+        self.login_err.setWordWrap(True)
+        self.login_err.setStyleSheet("color: #c62828;")
+        self.login_err.setVisible(False)
+        ll.addWidget(self.login_err)
         lay.addWidget(login)
         # root-disk encryption (installer LUKS2 FDE) + unlock factors — the node-relevant
         # remainder: stays live in ALL modes (in mesh it becomes the worklist
@@ -498,6 +523,12 @@ class HomePage(QtWidgets.QWizardPage):
             rows = [(f"{c.role or 'image'}.{c.platform or 'x86'}", c.platform, base_enc)]
         return cross_dracut.cross_fde_rows(rows)
 
+    def _toggle_show_pass(self, shown: bool) -> None:
+        mode = (QtWidgets.QLineEdit.EchoMode.Normal if shown
+                else QtWidgets.QLineEdit.EchoMode.Password)
+        self.local_pass.setEchoMode(mode)
+        self.local_pass_confirm.setEchoMode(mode)
+
     def initializePage(self):
         c = self.wiz.cfg
         self.mode.setCurrentText(c.home_mode)
@@ -515,6 +546,8 @@ class HomePage(QtWidgets.QWizardPage):
         self.no_vaults.setChecked(c.no_vaults)
         self.local_user.setText(c.local_user)
         self.local_pass.setText(c.local_pass)
+        self.local_pass_confirm.setText(c.local_pass)
+        self.login_err.setVisible(False)
         # ask 21: a STATEMENT, re-asserted every visit. Reading the box back off cfg
         # would let a loaded config that predates this posture (encrypt_root=false)
         # render an unchecked, disabled box that the collect below then overrides — the
@@ -729,7 +762,23 @@ class HomePage(QtWidgets.QWizardPage):
         # ride the shared mesh base onto every node image.
         login_ok = capability_allows_flow(local_login_applies, c, self.wiz)
         c.local_user = self.local_user.text().strip() or c.local_user
+        if login_ok and self.local_pass.text() != self.local_pass_confirm.text():
+            self.login_err.setText(
+                "The two passwords do not match. Type the same password in both "
+                "fields: it is the one you will log in with.")
+            self.login_err.setVisible(True)
+            return False
         c.local_pass = self.local_pass.text() if login_ok else ""
+        # A standalone image's only way in is this account (root locked, no KEYS
+        # stick, no SSO). Refuse here, where the fields are, rather than let the
+        # build produce an image nobody can log in to. BuildDriver.preflight()
+        # repeats the same check for a config that never passed this page.
+        problem = standalone_login_problem(c) if login_ok else ""
+        if problem:
+            self.login_err.setText(problem)
+            self.login_err.setVisible(True)
+            return False
+        self.login_err.setVisible(False)
         # ASK 21/22 — root encryption is ALWAYS enabled, so this is not a read of the
         # widget: it is the posture, asserted. This SUPERSEDES main's checkbox-driven
         # line. encrypt_root_always is False on exactly one platform (jetson, whose
