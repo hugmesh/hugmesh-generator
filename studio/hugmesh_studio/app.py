@@ -92,6 +92,52 @@ def _env_flag(name: str) -> bool:
 REMEMBER_ROLES_ENV = "HUGMESH_REMEMBER_ROLES_FOR_PASSWORDLESS_LOGIN"
 
 
+def utf8_stdio(osname: str | None = None, streams=None) -> None:
+    """Make stdout/stderr UTF-8 on native Windows, as packaging/run_studio.py does for
+    the MSI. Under ``python -m hugmesh_studio`` (and studio/hugmesh-studio.bat) a
+    redirected stream is the ANSI code page (cp1252), so a path with "Ł" or "Иван" in
+    it raised UnicodeEncodeError, which --print-command's ``except ValueError`` then
+    reported as a bad config (exit 2) and --show-session as a traceback. Not gated on
+    isatty() for run_studio.py's reason (NUL is a character device); a console's own
+    writer is UTF-16 inside, so this changes nothing there. A no-op off Windows, and
+    on a stream without ``reconfigure`` (a test's StringIO, the windowed exe's None).
+    ``osname`` is ``os.name`` unless a test passes another."""
+    if (os.name if osname is None else osname) != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr) if streams is None else streams:
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def print_backend(asked: str, default_backend: str, osname: str | None = None) -> str | None:
+    """The backend --print-command/--print-commands print for: None (the host's default)
+    unless ``asked`` names one. On a host that cannot build at all the command is still
+    printed, deterministically: the native one on Linux, but the DOCKER one on native
+    Windows, where a native build (sudo + bash) can never run (build_driver.preflight
+    refuses it) and "cannot build" only means Docker Desktop is stopped or answered
+    `docker info` slower than its timeout, so the printed command flipped between runs.
+    ``osname`` is ``os.name`` unless a test passes another."""
+    backend = None if asked == "auto" else asked
+    if backend is None and default_backend == "none":
+        native_windows = (os.name if osname is None else osname) == "nt"
+        backend = "docker" if native_windows else "native"
+    return backend
+
+
+def _native_print_note(backend: str | None, osname: str | None = None) -> None:
+    """An explicit ``--backend native`` on native Windows still prints (it was asked
+    for), but stderr says why that command cannot run here; stdout stays argv only."""
+    if backend != "native":
+        return
+    from .core import platform_info
+    if platform_info.native_windows_blocker("A native build", osname=osname):
+        print("note: a native build runs sudo and bash on a Gentoo host, which the "
+              "Windows build of the Studio cannot do. Use --backend docker (Docker "
+              "Desktop), or run the Studio inside WSL2.", file=sys.stderr)
+
+
 def main(argv=None) -> int:
     # FIRST thing, before argparse and long before any Qt import: a crash from here
     # on leaves a file behind. Under PyQt6 an unhandled exception in a slot calls
@@ -102,6 +148,9 @@ def main(argv=None) -> int:
     # Second, before anything can spawn a process: the windowed Windows exe would
     # otherwise flash a console window for every docker/kubectl/git probe.
     no_console.install()
+    # Third, before anything prints: a path outside cp1252 must not turn a redirected
+    # print into a traceback or a false "bad input" (a no-op off Windows).
+    utf8_stdio()
     ap = argparse.ArgumentParser(description="HugMesh Image Studio")
     ap.add_argument("--generator-dir", default=_default_generator_dir(),
                     help="path to the hugmesh-generator checkout")
@@ -307,9 +356,9 @@ def main(argv=None) -> int:
         # channel — its sudo prefix is a literal `sudo ` the callers strip (test_headless
         # removeprefix, build-matrix check.sh ${cmdline#sudo }), never `sudo -A`/pkexec.
         driver = BuildDriver(args.generator_dir)
-        backend = None if args.backend == "auto" else args.backend
-        if backend is None and driver.host.default_backend == "none":
-            backend = "native"  # still print a deterministic command on a host that can't build
+        # still print a deterministic command on a host that can't build
+        backend = print_backend(args.backend, driver.host.default_backend)
+        _native_print_note(backend)
         try:
             # ImageConfig.load raises on a worklist envelope (explicit `schema` key) so
             # it can never silently degrade to a default config; the unaffiliated
@@ -346,9 +395,8 @@ def main(argv=None) -> int:
         from .core.config import ImageConfig
         from .core.worklist import load_any, synthesize
         driver = BuildDriver(args.generator_dir)
-        backend = None if args.backend == "auto" else args.backend
-        if backend is None and driver.host.default_backend == "none":
-            backend = "native"
+        backend = print_backend(args.backend, driver.host.default_backend)
+        _native_print_note(backend)
         try:
             if args.config:
                 base, wl = load_any(args.config)
@@ -592,8 +640,7 @@ def main(argv=None) -> int:
                   file=sys.stderr)
             return 2
         if not build_sessions.delete(s, remove_artifacts=args.delete_artifacts):
-            print(f"error: session {s.id} is a build in progress — not deleted",
-                  file=sys.stderr)
+            print(f"error: {build_sessions.not_deleted_reason(s)}", file=sys.stderr)
             return 1
         print(f"deleted session {s.id}"
               + (" (artifacts removed)" if args.delete_artifacts else " (record only)"))

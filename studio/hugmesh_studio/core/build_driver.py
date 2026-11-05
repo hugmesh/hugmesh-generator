@@ -176,6 +176,38 @@ def _host_tool_present(*names: str) -> bool:
     return False
 
 
+def windows_docker_remedy(osname: str | None = None, docker_cli: bool | None = None,
+                          host: HostInfo | None = None) -> str:
+    """How to get a build backend on the native Windows Studio (the MSI), "" elsewhere.
+
+    Docker is its only backend, and Docker Desktop does not start with Windows by
+    default, so the usual cause is an installed but stopped Docker Desktop: the generic
+    "install Docker ... or run on a Gentoo host" told that user to install what they
+    have, plus a host the MSI cannot use. ``host`` lends its probe result (down / timeout
+    have their own wording in HostInfo.docker_remedy); ``docker_cli`` is whether
+    docker.exe is on PATH (probed when None); ``osname`` is ``os.name`` unless a test
+    passes another."""
+    if (osname or os.name) != "nt":
+        return ""
+    alt = ("Or run the Linux build of the Studio inside WSL2, with Docker Desktop's WSL "
+           "integration turned on for that distro.")
+    state = getattr(host, "docker_state", "")
+    if host is not None and state in (platform_info.DOCKER_DOWN, platform_info.DOCKER_TIMEOUT):
+        return host.docker_remedy() + " " + alt
+    if docker_cli is None:
+        docker_cli = (state != platform_info.DOCKER_MISSING
+                      and shutil.which("docker") is not None)
+    # Docker is probed once, at Studio start (wizard.host), and nothing re-asks before a
+    # restart: "check again" alone would show the same blocker forever.
+    if docker_cli:
+        return ("docker.exe is installed but the Docker engine does not answer: start "
+                "Docker Desktop, wait until it says the engine is running, then restart "
+                "the Studio so it checks again. " + alt)
+    return ("docker.exe was not found: install Docker Desktop "
+            "(https://www.docker.com/products/docker-desktop/), start it, then restart "
+            "the Studio so it checks again. " + alt)
+
+
 def docker_limit_args() -> list[str]:
     """The full ``docker run`` resource-limit wrapper for a builder run: CPU, memory
     and GPU, resolved by :mod:`hugmesh_studio.core.resource_limits`.
@@ -873,8 +905,13 @@ class BuildDriver:
         """Return a list of human-readable problems that would stop a build (empty = OK)."""
         backend = backend or self.host.default_backend
         problems: list[str] = []
+        # Only for a host detected as Windows: a WSL host keeps its own remedy (the
+        # per-distro WSL-integration checkbox), and Linux keeps the generic sentence.
+        win_docker = windows_docker_remedy(host=self.host) if self.host.os == "windows" and (
+            backend == "none" or (backend == "docker" and not self.host.has_docker)) else ""
         if backend == "none":
-            problems.append("No build backend: install Docker (any OS) or run on a Gentoo host.")
+            problems.append(("No build backend: " + win_docker) if win_docker else
+                            "No build backend: install Docker (any OS) or run on a Gentoo host.")
         if not os.path.exists(os.path.join(self.generator_dir, cfg.builder_script)):
             problems.append(f"builder script {cfg.builder_script} not found in {self.generator_dir}"
                             + (" (Jetson support is EXPERIMENTAL — hardware validation pending)"
@@ -884,8 +921,12 @@ class BuildDriver:
             # daemon on the Windows side and exposes it per distro, so `docker info`
             # fails with a bare connection error that names neither Docker Desktop nor
             # the WSL-integration checkbox that actually caused it.
-            problems.append("Docker selected but the Docker daemon is not reachable. "
-                            + self.host.docker_remedy())
+            # A timed-out probe is "slow", not "unreachable": its remedy states the
+            # symptom itself (as HostInfo.docker_blocker does).
+            slow = win_docker and self.host.docker_state == platform_info.DOCKER_TIMEOUT
+            problems.append(("Docker selected. " if slow else
+                             "Docker selected but the Docker daemon is not reachable. ")
+                            + (win_docker or self.host.docker_remedy()))
         elif backend == "docker" and not self._image_present():
             problems.append(
                 f"Docker builder image '{self.host.builder_image}' not found — build it "

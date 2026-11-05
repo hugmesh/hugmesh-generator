@@ -15,7 +15,7 @@ import shutil
 import zipfile
 from dataclasses import dataclass, field
 
-from . import local_login_agent
+from . import json_files, local_login_agent
 from .config import field_in_scope, image_class
 from .validate import (
     IdentityValidationError,
@@ -268,21 +268,27 @@ def _apply_domain_conf(path: str, cfg, warnings: list | None = None) -> None:
     """
     warn = warnings if warnings is not None else []
     try:
+        # json_files.decode, not encoding="utf-8": a domain.conf saved by Notepad or
+        # Windows PowerShell 5.1 starts with a BOM (glued onto the first key, so BRAND
+        # silently missed) or is UTF-16 (a decode error that dropped the whole file).
+        with open(path, "rb") as fh:
+            text = json_files.decode(fh.read())
         if path.endswith(".json"):
-            import json
-            with open(path, encoding="utf-8") as fh:
-                d = json.load(fh)
+            d = json.loads(text)
             if not isinstance(d, dict):   # a JSON array/scalar is not a domain config
                 return
         else:
             d = {}
-            with open(path, encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        d[k.strip()] = v.strip().strip('"')
-    except (OSError, ValueError):
+            for line in text.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    d[k.strip()] = v.strip().strip('"')
+    except (OSError, ValueError) as e:
+        # Said, not swallowed: the page reports "domain config" as imported, so a
+        # file that could not be read has to show up in the warnings it prints.
+        warn.append(f"domain config {os.path.basename(path)} could not be read, so no "
+                    f"brand/org/domain was applied from it: {e}")
         return
     # (key, attr, validator) — validator rejects anything not known-safe.
     mapping = (
@@ -375,9 +381,13 @@ def emit_passwordless_login_roles(contents: KeyZipContents, enabled: bool,
     if not os.path.isfile(secrets_path):
         return []
     try:
-        with open(secrets_path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
+        # Same BOM/UTF-16 tolerance as the domain config (see _apply_domain_conf).
+        data = json_files.load(secrets_path)
+    except (OSError, ValueError) as e:
+        # The operator ticked "remember roles"; an unreadable bundle must say so in
+        # the warnings the page prints, not leave the step a silent no-op.
+        contents.warnings.append(f"vault/secrets.json could not be read, so no "
+                                 f"passwordless-login roles were remembered: {e}")
         return []
     if not isinstance(data, dict):
         return []

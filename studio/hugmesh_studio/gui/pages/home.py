@@ -6,6 +6,7 @@ root + unlock factors) plus the local-login group, which stay in ALL modes. The
 external media-data device keeps its own x86-only platform gate."""
 from __future__ import annotations
 
+import os
 from dataclasses import MISSING
 
 from ..qt import QtWidgets
@@ -105,6 +106,67 @@ _HOME_MODE_HELP = {
                "(set 'Home Backup (Restore)' below).",
 }
 
+# ── the "copy a home" hints, per host OS ─────────────────────────────────────────────
+# Every example below is a Linux command run on the machine whose home it is: tar from
+# /home, a bash script that reads Portage's world file. On the native Windows Studio
+# (the MSI) "this machine" has no /home and no Portage, so the Linux wording told the
+# user to archive a home that does not exist. There the hints say where the file has to
+# come from instead; the fields, flags and the preset itself are the same on both.
+_LINUX_HOME_HINTS = {
+    "copy_label": "Copy This Machine's Home Folder…",
+    "copy_tip": (
+        "Preset: sets Home Mode = archive and points you at 'Home Archive (Bake In)' "
+        "(a tarball of an existing home, e.g. tar czf home.tgz -C /home you) and, "
+        "optionally, 'Seed Packages From' (a package list to reinstall your apps)."),
+    "archive_mode": _HOME_MODE_HELP["archive"],
+    "backup_tip": (
+        "For Home Mode 'restore': an encrypted full-home backup made with "
+        "scripts/archive-home.sh --full --encrypt (--home-backup). Type 'auto' to "
+        "detect the backup on any attached USB device at install time."),
+    "archive_tip": (
+        "For Home Mode 'archive': a tarball of an existing home (e.g. tar czf "
+        "home.tgz -C /home you), bundled into the installer ISO and unpacked into "
+        "the new user's home (--include-home-archive)."),
+    "seed_packages_tip": (
+        "A package list appended to the build's package sets (--seed-packages-from) "
+        "— reinstalls this machine's apps in the image. Make one with "
+        "scripts/seed-packages-from-running-system.sh."),
+}
+_WINDOWS_HOME_HINTS = {
+    "copy_label": "Bake In a Linux Home Folder…",
+    "copy_tip": (
+        "Preset: sets Home Mode = archive and points you at 'Home Archive (Bake In)' "
+        "and, optionally, 'Seed Packages From'. A Windows user folder cannot be baked "
+        "in: make the home tarball on the Linux machine whose home it is (there: tar "
+        "czf home.tgz -C /home <user>), copy it here, and pick it below."),
+    "archive_mode": (
+        "archive — bake a home TARBALL straight into the image (set 'Home Archive "
+        "(Bake In)' below). The tarball comes from the Linux machine whose home it "
+        "is; a Windows user folder is not a Linux home."),
+    "backup_tip": (
+        "For Home Mode 'restore': an encrypted full-home backup made on the Linux "
+        "machine whose home it is, with scripts/archive-home.sh --full --encrypt "
+        "(--home-backup). Type 'auto' to detect the backup on any attached USB device "
+        "at install time."),
+    "archive_tip": (
+        "For Home Mode 'archive': a tarball of an existing Linux home, made on that "
+        "Linux machine (there: tar czf home.tgz -C /home <user>) and copied here, e.g. "
+        "C:\\Users\\<you>\\Downloads\\home.tgz. It is bundled into the installer ISO "
+        "and unpacked into the new user's home (--include-home-archive)."),
+    "seed_packages_tip": (
+        "A package list appended to the build's package sets (--seed-packages-from) "
+        "— reinstalls a Gentoo machine's apps in the image. It is made ON that running "
+        "Gentoo system with scripts/seed-packages-from-running-system.sh (it reads "
+        "Portage's world file, so it cannot describe this Windows PC); copy the list "
+        "here and pick it, e.g. C:\\Users\\<you>\\Downloads\\packages.list."),
+}
+
+
+def home_hints(osname: str | None = None) -> dict[str, str]:
+    """The copy-a-home button label and tooltips for this host. ``osname`` is
+    ``os.name`` unless a test passes another; Linux gets its original text."""
+    return dict(_WINDOWS_HOME_HINTS if (osname or os.name) == "nt" else _LINUX_HOME_HINTS)
+
 # ── per-field help for the widgets gate_widgets() itself targets ─────────────────────
 # gate_widgets/gate_widgets_role_class rewrite their target's tooltip on EVERY visit
 # ("" while the field is live), so a tooltip set once in __init__ is wiped on the first
@@ -182,11 +244,9 @@ class HomePage(QtWidgets.QWizardPage):
         # selects archive mode (bake a home tarball INTO the image) and points at the
         # include-home-archive / seed-packages-from fields below. It only nudges the
         # controls — the user still picks the tarball, so nothing runs or copies here.
-        self.copy_home_btn = QtWidgets.QPushButton("Copy This Machine's Home Folder…")
-        self.copy_home_btn.setToolTip(
-            "Preset: sets Home Mode = archive and points you at 'Home Archive (Bake In)' "
-            "(a tarball of an existing home, e.g. tar czf home.tgz -C /home you) and, "
-            "optionally, 'Seed Packages From' (a package list to reinstall your apps).")
+        hints = self._hints = home_hints()
+        self.copy_home_btn = QtWidgets.QPushButton(hints["copy_label"])
+        self.copy_home_btn.setToolTip(hints["copy_tip"])
         self.copy_home_btn.clicked.connect(self._preset_copy_home)
         hl.addWidget(self.copy_home_btn)
         self.device = QtWidgets.QLineEdit()
@@ -202,10 +262,7 @@ class HomePage(QtWidgets.QWizardPage):
         h.addWidget(self.backup, 1); h.addWidget(bbtn)
         self.backup_row = w   # greyed as one unit (line edit + Browse…) per platform
         self.backup_labeled_row = _row("Home Backup (Restore)", w)
-        self.backup_labeled_row.setToolTip(
-            "For Home Mode 'restore': an encrypted full-home backup made with "
-            "scripts/archive-home.sh --full --encrypt (--home-backup). Type 'auto' to "
-            "detect the backup on any attached USB device at install time.")
+        self.backup_labeled_row.setToolTip(hints["backup_tip"])
         hl.addWidget(self.backup_labeled_row)
         self.encrypted = QtWidgets.QCheckBox("Per-user eCryptfs home (on top of LUKS root)")
         self.encrypted.setToolTip(_ENCRYPTED_HELP)
@@ -231,10 +288,7 @@ class HomePage(QtWidgets.QWizardPage):
         h.addWidget(self.include_archive, 1); h.addWidget(abtn)
         self.include_archive_row = w
         self.include_archive_labeled_row = _row("Home Archive (Bake In)", w)
-        self.include_archive_labeled_row.setToolTip(
-            "For Home Mode 'archive': a tarball of an existing home (e.g. tar czf "
-            "home.tgz -C /home you), bundled into the installer ISO and unpacked into "
-            "the new user's home (--include-home-archive).")
+        self.include_archive_labeled_row.setToolTip(hints["archive_tip"])
         hl.addWidget(self.include_archive_labeled_row)
         self.seed_code_from = QtWidgets.QLineEdit()
         sbtn = _file_picker(self, self.seed_code_from, "Seed Home Code From a Local Checkout",
@@ -255,10 +309,7 @@ class HomePage(QtWidgets.QWizardPage):
         h.addWidget(self.seed_packages, 1); h.addWidget(pbtn)
         self.seed_packages_row = w
         self.seed_packages_labeled_row = _row("Seed Packages From", w)
-        self.seed_packages_labeled_row.setToolTip(
-            "A package list appended to the build's package sets (--seed-packages-from) "
-            "— reinstalls this machine's apps in the image. Make one with "
-            "scripts/seed-packages-from-running-system.sh.")
+        self.seed_packages_labeled_row.setToolTip(hints["seed_packages_tip"])
         hl.addWidget(self.seed_packages_labeled_row)
         # Where the group would be, say WHY it is absent: the role-class gate hides the
         # whole box below, and a tooltip on a hidden box explains nothing (issue #230 —
@@ -468,7 +519,9 @@ class HomePage(QtWidgets.QWizardPage):
         lay.addStretch(1)
 
     def _mode_changed(self, _text: str = "") -> None:
-        self.mode_help.setText(_HOME_MODE_HELP.get(self.mode.currentText(), ""))
+        mode = self.mode.currentText()
+        self.mode_help.setText(self._hints["archive_mode"] if mode == "archive"
+                               else _HOME_MODE_HELP.get(mode, ""))
 
     def _sync_unlock_choices(self, c) -> None:
         """Offer the "login" unlock factor only on a desktop-class image (finding 8).

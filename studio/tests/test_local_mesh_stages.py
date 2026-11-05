@@ -490,6 +490,9 @@ def test_a_declined_confirmation_does_not_donate_its_line_to_the_next_run(qapp,
     a stack-clean cancellation that was never part of it."""
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
+    # the confirmation is reached only where clean() can run (not native Windows)
+    monkeypatch.setattr(localmesh_mod.LocalMeshBootstrap, "teardown_refusal",
+                        staticmethod(lambda osname=None: ""))
     monkeypatch.setattr(localmesh_mod.QtWidgets.QMessageBox, "question",
                         staticmethod(lambda *a, **k:
                                      localmesh_mod.QtWidgets.QMessageBox
