@@ -253,7 +253,19 @@ def main(argv=None) -> int:
     # APPLY refuses without --apply. The engine is core/org_export.py.
     from .core.org_export import add_cli_arguments as _add_org_export_args
     _add_org_export_args(ap)
+    # ── HugMesh tokens from a terminal (Qt-free) ────────────────────────────────
+    # Everything after --mesh-token goes to core/mesh_token.py's CLI unchanged, so the
+    # MSI's console twin can issue, show and trust tokens:
+    #   hugmesh-studio-cli --mesh-token issue --mesh west --domain example.org ...
+    ap.add_argument("--mesh-token", nargs=argparse.REMAINDER, metavar="ARGS", default=None,
+                    help="issue / show / trust / issuer: run the HugMesh token CLI with the "
+                         "rest of the command line (--mesh-token --help for its usage).")
     args = ap.parse_args(argv)
+
+    if args.mesh_token is not None:
+        # Qt-free path: mesh_token imports core modules only, never a Qt binding.
+        from .core.mesh_token import main as _mesh_token_main
+        return _mesh_token_main(args.mesh_token)
 
     if args.org_export:
         # Qt-free path: the same plan()/apply() the GUI step and the TUI step call,
