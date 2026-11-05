@@ -255,18 +255,34 @@ class _StatusLine(QtWidgets.QLabel):
     mirrors (the line just above the Actions buttons), so the reason is written next
     to the button that was pressed. A mirror shows itself only while the panel holds
     the actions and there is something to say; see LocalMeshPage._sync_action_status.
+
+    The node probe writes through :meth:`set_probe`, never :meth:`setText`: its
+    "Status: …" line lands a few seconds after page entry and after every verb, and
+    as a plain setText it erased the WSL2 refusal or the verb's FAILED line (with
+    its saved-log path) before anyone read it. A probe line is shown UNDER the last
+    message instead, which stays until the next press writes a new one.
     """
 
     def __init__(self, text: str = ""):
         super().__init__(text)
         self._mirrors: list = []
         self.on_text = None                       # the page's hook, called after each set
+        self._held = text                         # the last message (not a probe line)
 
     def add_mirror(self, label: "QtWidgets.QLabel") -> None:
         self._mirrors.append(label)
         label.setText(self.text())
 
     def setText(self, text) -> None:              # noqa: N802 (Qt)
+        self._held = text
+        self._show(text)
+
+    def set_probe(self, text: str) -> None:
+        """The node-status line: below the held message, never instead of it."""
+        held = self._held
+        self._show(f"{held}\n{text}" if held else text)
+
+    def _show(self, text) -> None:
         super().setText(text)
         for m in self._mirrors:
             try:
@@ -1977,6 +1993,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "first (a few seconds), then opens.")
         self.creds_btn.clicked.connect(self._show_credentials)
         brow.addWidget(self.creds_btn)
+        # The ISSUING side of HugMesh tokens (core/mesh_token.py), for the admin of the
+        # mesh this page created: the dialog opens pre-filled from this page's brand
+        # and own domain, and does its process work (ssh-keygen, docker) off-thread.
+        self.issue_token_btn = QtWidgets.QPushButton("Issue a HugMesh token…")
+        self.issue_token_btn.setToolTip(
+            "Sign a HugMesh token that lets someone's tray join this mesh in one access "
+            "domain, as one role, with or without shell access. The pre-auth key it "
+            "carries is pasted, or minted in the mesh's running headscale container "
+            "when there is one. Signed with this Studio's issuer key for the mesh, "
+            "created on first use.")
+        self.issue_token_btn.clicked.connect(self._issue_token)
+        brow.addWidget(self.issue_token_btn)
         # Runs tests/e2e against the RUNNING stack. Enablement + tooltip are
         # owned by _sync_e2e_gate (test env + stack up + seeded — live probes,
         # never the form's un-applied selection).
@@ -3384,14 +3412,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         Stop is left exactly as it was. Rendering "stopped" while the probe is still out
         would be a claim about the mesh that nothing has established."""
         if not probe_running(self, "_node_probe"):   # in flight = its answer is coming
-            self.status.setText("Status: checking…")
+            self.status.set_probe("Status: checking…")
             probe = own_probe(self, "_node_probe", _StatusProbe(self.node, parent=self))
             probe.result.connect(self._on_node_status)
             probe.start()
         self._sync_e2e_gate()
 
     def _on_node_status(self, running: bool, detail: str):
-        self.status.setText(f"Status: {'running' if running else 'stopped'} ({detail})")
+        self.status.set_probe(f"Status: {'running' if running else 'stopped'} ({detail})")
         if not self._running:
             self.stop_btn.setEnabled(running)
 
@@ -3764,6 +3792,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         """Stop AND reclaim disk. Destructive and slow to undo (the next start is a
         cold build), so it confirms first — and the confirmation says exactly what
         is removed and what is NOT, rather than a generic 'are you sure?'."""
+        # On native Windows clean() refuses anyway: say so BEFORE asking the operator
+        # to confirm a removal that can never run.
+        blocker = LocalMeshBootstrap.teardown_refusal()
+        if blocker:
+            self._refuse(blocker)
+            return
         if QtWidgets.QMessageBox.question(
                 self, "Stop and clean Docker?",
                 "This stops the local mesh and then REMOVES:\n"
@@ -4885,6 +4919,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                      lambda on_line, cancel: node._make(
                          "view-stop", timeout=60, on_line=on_line, cancel=cancel),
                      stream=True)
+
+    def issue_token_prefill(self) -> dict:
+        """What the "Issue a HugMesh token…" dialog opens with: the mesh named after
+        this page's brand (when that is a valid mesh name), the mesh's own domain as
+        the Domains step shows it, and the overlay's login server when one is typed."""
+        from ..mesh_token_issue_dialog import valid_mesh_name
+        brand = (self.brand.currentText() or "").strip().lower()
+        return {"mesh": brand if valid_mesh_name(brand) else "",
+                "domain": self._own_domain_name(),
+                "login_server": self.boot_login_server.text().strip()}
+
+    def _issue_token(self):
+        """Button-driven modal (never from validatePage/itemChanged); held on self so
+        the wrapper is not collected while the dialog is up."""
+        from ..mesh_token_issue_dialog import IssueTokenDialog
+        self._issue_token_dialog = IssueTokenDialog(self, **self.issue_token_prefill())
+        self._issue_token_dialog.exec()
 
     def _show_credentials(self):
         """Probe first, modal from the SLOT (_on_credentials) — never inline.

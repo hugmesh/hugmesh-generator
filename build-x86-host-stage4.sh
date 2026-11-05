@@ -40,6 +40,12 @@ source "${SCRIPT_DIR}/scripts/_roles-lib.sh"
 # drop a requested artifact hours in. See scripts/_host-guard-lib.sh.
 # shellcheck source=scripts/_host-guard-lib.sh
 source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
+# Greeter SSO login path for the client roles (desktop_sso_bake / desktop_sso_verify):
+# the lightdm PAM stack with the device-flow helper, the greeter hint, and the baked
+# desktop-governance templates. --skip-sso / --no-sso bake it OFF (the greeter says
+# so); this is what makes SKIP_SSO do something. See scripts/_desktop-sso-lib.sh.
+# shellcheck source=scripts/_desktop-sso-lib.sh
+source "${SCRIPT_DIR}/scripts/_desktop-sso-lib.sh"
 # Per-board binpkg-pool fingerprint guard (shared-binpkg track): the load-bearing
 # SIGILL safety net over directory isolation — REFUSES --usepkg reuse of a pool
 # whose (CHOST + exact CFLAGS/-mcpu + profile) fingerprint != this build's.
@@ -272,6 +278,9 @@ SKIP_TAILSCALE=false
 # Empty = "use the role default"; 'on'/'off' = the user chose explicitly.
 MESH_FORCED=""
 SSO_FORCED=""
+# --sso-issuer URL: the IdP the greeter SSO sign-in uses (https only). Default
+# https://id.<cluster domain>. Implies --with-sso; conflicts with --no-sso.
+SSO_ISSUER=""
 SKIP_KERNEL=false
 SKIP_CLEAN=false
 RESUME=false
@@ -958,6 +967,9 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --home-seed-code-from PATH  Source the repos from a dir/tar (else clone at runtime).
       --with-tailscale | --no-tailscale   Force the tailnet agent ON/OFF (any role).
       --with-sso | --no-sso               Force the Casdoor/OIDC login ON/OFF (any role).
+      --sso-issuer URL      The IdP for the greeter SSO sign-in (https://HOST[/PATH];
+                            default https://id.<domain>). Implies --with-sso. An
+                            admin can change it later: sso-greeter configure.
       --distdir DIR         Reuse a Gentoo distfiles cache from a mounted drive
                             (default: auto-detect /media/*; speeds rebuilds / offline).
       --shared-assets DIR   Fleet-wide asset root: the amd64 stage3 seed cache
@@ -1185,6 +1197,7 @@ while [[ $# -gt 0 ]]; do
         # Composable SSO toggle (wins over a role's default).
         --with-sso) SKIP_SSO=false; SSO_FORCED=on; shift ;;
         --no-sso) SKIP_SSO=true; SSO_FORCED=off; shift ;;
+        --sso-issuer) SSO_ISSUER="${2:-}"; shift 2 ;;
         # ── Home directory: mode + per-user ecryptfs + dockerized stack code ──
         --home-mode) HOME_MODE="$2"; shift 2 ;;
         --home-device) HOME_DEVICE="$2"; shift 2 ;;
@@ -1742,6 +1755,7 @@ if ${UNAFFILIATED}; then
     [ "${HOME_SEED_CODE}" != none ] && { err "--unaffiliated conflicts with --home-seed-code (seeds the HugMesh stack into the home)"; exit 1; }
     [ "${MESH_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-tailscale (the tailnet is HugMesh platform machinery)"; exit 1; }
     [ "${SSO_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-sso (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
+    [ -z "${SSO_ISSUER}" ] || { err "--unaffiliated conflicts with --sso-issuer (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
     { [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; } && { err "--unaffiliated conflicts with --person-role/--domains (person-device identity is platform machinery)"; exit 1; }
     [ -z "${DOMAIN_IDP_SPECS}" ] || { err "--unaffiliated conflicts with --domain-idp (an unaffiliated desktop has no identity provider to choose)"; exit 1; }
     BUNDLE_SOURCE=false
@@ -1758,6 +1772,15 @@ if ${UNAFFILIATED}; then
     # tooling — default it OFF (an explicit --media-data keeps it, neutral-named).
     [ "${MEDIA_DATA_FORCED}" = on ] || MEDIA_DATA=false
     info "UNAFFILIATED plain desktop: no brand identity, no hugmesh-* tooling, no bundled source, no k8s/mesh payload"
+fi
+
+# --sso-issuer names the IdP, so it means SSO ON (also on a standalone desktop,
+# whose default is off); with --no-sso/--skip-sso it is a contradiction.
+if [ -n "${SSO_ISSUER}" ]; then
+    [ "${SSO_FORCED}" = off ] && { err "--sso-issuer conflicts with --no-sso/--skip-sso"; exit 1; }
+    [[ "${SSO_ISSUER}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]] \
+        || { err "--sso-issuer must be https://HOST[:PORT][/PATH] (got '${SSO_ISSUER}')"; exit 1; }
+    SSO_FORCED=on; SKIP_SSO=false
 fi
 
 # ── STANDALONE posture (composable: --standalone onto any client role, or the
@@ -2587,6 +2610,7 @@ if ${PRINT_PLAN}; then
     _plan TOR_ONION          "$(_tor_node_selected && echo "on packages=${TOR_NODE_PACKAGES[*]} services=${TOR_NODE_SERVICES[*]}" || echo off)"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
+    _plan SSO_ISSUER         "$(${SKIP_SSO} && echo none || echo "${SSO_ISSUER:-https://id.${CLUSTER_DOMAIN}}")"
     _plan IDP                "${IDP}"
     _plan IDP_ISSUER         "${IDP_ISSUER:-none}"
     _plan IDP_CLIENT_ID      "${IDP_CLIENT_ID:-none}"
@@ -4091,6 +4115,12 @@ mkdir -p "${SYSROOT}/etc/default"
 cp "${SPECS_DIR}/etc/default/grub"                    "${SYSROOT}/etc/default/grub"
 grep -q '^GRUB_DISABLE_OS_PROBER=' "${SYSROOT}/etc/default/grub" || \
     echo 'GRUB_DISABLE_OS_PROBER=true' >> "${SYSROOT}/etc/default/grub"
+# SELinux permissive rescue entry in EVERY grub.cfg grub-mkconfig writes (installer,
+# first-boot branding regeneration), not only the hand-written .img and live menus.
+# It re-runs the image's own 10_linux with enforcing=0 appended, so it exists for
+# exactly the kernels the normal entries boot and always sorts after them.
+install -D -m 0755 "${SPECS_DIR}/etc/grub.d/11_selinux_permissive_rescue" \
+    "${SYSROOT}/etc/grub.d/11_selinux_permissive_rescue"
 
 # PARTUUID-token fstab (mounts / + /boot/efi by PARTUUID, plus hardening tmpfs).
 # The .img builder and install-x86.sh substitute __ROOT_PARTUUID__/__ESP_PARTUUID__.
@@ -4286,6 +4316,9 @@ fi   # ! UNAFFILIATED (Layer-B/Layer-A/domain/tor/brand-repo-generator block)
 
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
+# Root-only: the finaliser carries the crypt(3) hash of --local-pass, and a
+# world-readable copy in the image (and on the live ISO) is an offline-crack target.
+chmod go-rwx "${SYSROOT}/etc/local.d/01-firstboot.start"
 # UNAFFILIATED: the shared firstboot loads k8s modules and prints a k8s/headscale/
 # KEYS banner — none of which exists on a plain desktop. Strip those sections from
 # the RENDERED file (anchored ranges; `sysctl --system` and the NVMe note survive)
@@ -4309,7 +4342,7 @@ fi
 # 01-firstboot user is created) and read by the installer for adopt/restore.
 # UNAFFILIATED: same functional machinery under NEUTRAL names — the conf moves to
 # /etc/gentoo/home.conf, the helper installs as /usr/sbin/home-setup, and its
-# internal hugmesh-* literals (conf path, first-login-encrypt dotfile) are
+# internal hugmesh-* literals (conf path; the first-login-encrypt rename is now a no-op) are
 # rewritten on the staged copy. install-x86.sh's staged copy gets the matching
 # conf-path rewrite where the installer ISO is built (below).
 if ${UNAFFILIATED}; then
@@ -4949,6 +4982,17 @@ if grep -qE '^#\s*s0:12345:respawn:/sbin/agetty -L [0-9]+ ttyS0 ' "${SYSROOT}/et
     sed -i -E 's|^#\s*(s0:12345:respawn:/sbin/agetty -L )[0-9]+( ttyS0 vt100)|\1115200\2|' "${SYSROOT}/etc/inittab"
     info "Activated ttyS0 serial getty (115200) in /etc/inittab for serial-console access"
 fi
+# SELinux on the live overlay: pid 1 has just loaded the policy, and dracut already
+# copied paths up (and made the overlay root) with no policy to honour, so they are
+# tmpfs_t and every confined domain is denied { search } on "/". The first sysinit line
+# relabels exactly the upper layer; a disk root is a no-op. See the script's header.
+install -D -m 0755 "${SHARED_SPECS}/usr/libexec/live-overlay-relabel" "${SYSROOT}/usr/libexec/live-overlay-relabel"
+if ! grep -q '^lr::sysinit:/usr/libexec/live-overlay-relabel$' "${SYSROOT}/etc/inittab"; then
+    sed -i 's|^si::sysinit:|lr::sysinit:/usr/libexec/live-overlay-relabel\nsi::sysinit:|' "${SYSROOT}/etc/inittab"
+fi
+_lr="$(grep -n '^lr::sysinit:' "${SYSROOT}/etc/inittab" | head -1 | cut -d: -f1)"; _si="$(grep -n '^si::sysinit:' "${SYSROOT}/etc/inittab" | head -1 | cut -d: -f1)"
+[ -n "${_lr}" ] && [ -n "${_si}" ] && [ "${_lr}" -lt "${_si}" ] \
+    || { err "/etc/inittab: live-overlay-relabel is not the sysinit line before OpenRC (lr=${_lr:-none} si=${_si:-none})"; exit 1; }
 echo "${TIMEZONE}" > "${SYSROOT}/etc/timezone"
 echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
 # CNI + keys-provision state dirs are platform machinery — none on unaffiliated.
@@ -4994,6 +5038,19 @@ if ${ROLE_CLIENT}; then
 greeter-session=lightdm-gtk-greeter
 user-session=${_user_session}
 LIGHTDM
+    # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
+    # the Casdoor/OIDC device-flow helper in front of the local password path, the
+    # hint the greeter shows, and (SSO on) the baked desktop-governance templates
+    # (a KEYS-provisioned image is then GOVERNED). SKIP_SSO (--skip-sso / --no-sso /
+    # standalone default) bakes SSO_ENABLED=false: the greeter says SSO is off and
+    # the local password login is untouched. UNAFFILIATED: nothing (plain Gentoo).
+    # Staged pre-emerge so CONFIG_PROTECT keeps the stack; asserted post-emerge.
+    if ! ${UNAFFILIATED}; then
+        desktop_sso_bake "${SYSROOT}" "${SHARED_SPECS}" \
+            "$(${SKIP_SSO} && echo false || echo true)" "${CLUSTER_DOMAIN}" "${BRAND_TITLE}" \
+            "$(${STANDALONE} && echo standalone || echo mesh)" "${SSO_ISSUER}" \
+            || { err "greeter SSO bake failed (see above)"; exit 1; }
+    fi
     # External media-data device (Steam library + gocryptfs Vaults). Default ON,
     # configurable + optional. Render the config + install the boot-time detector
     # that finds the SEPARATE data disk by LABEL or by the marker dirs and mounts
@@ -7201,6 +7258,13 @@ else
     banner "SKIPPED sysroot clean (--skip-clean)"
 fi
 
+# ── Greeter SSO stack survived the payload emerge? ─────────────────────────────
+# x11-misc/lightdm installs its own /etc/pam.d/lightdm; CONFIG_PROTECT must have
+# parked it (._cfg0000_lightdm, removed here), not replaced ours. Client roles only.
+if ${ROLE_CLIENT} && ! ${UNAFFILIATED}; then
+    desktop_sso_verify "${SYSROOT}" || { err "greeter SSO stack did not survive the payload emerge — refusing to ship a greeter with no SSO path"; exit 1; }
+fi
+
 # ── 9. Stage4 tarball ──────────────────────────────────────────────
 # ── BEGIN shared block: SELinux node-policy modules ───────────────────────────
 # Compile specs/selinux/*.te into .pp ON THE X86 BUILD HOST and install them into
@@ -7259,10 +7323,34 @@ rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
 # files (so they are labelled) and after the patcher left /tmp; before ANY packing.
 # The order store -> config -> setfiles -> gate is mandatory: file_contexts only
 # gains the hugmesh .fc rules once the .pp are in the store.
+# Login records exist BEFORE the label pass, so setfiles gives them their own types
+# (wtmp_t, lastlog_t). Otherwise OpenRC's bootmisc creates wtmp at boot
+# (`[ -e /var/log/wtmp ] || mkutmp /var/log/wtmp`, as initrc_t in a var_log_t dir, so
+# it inherits var_log_t) and login creates lastlog the same way. Measured on the
+# 2026-10-30 backend live ISO under enforcing=1: agetty was denied { write } on
+# /var/log/wtmp (var_log_t) at every respawn, and login was denied creating lastlog
+# in /var/log. getty_t may append wtmp_t and pam may write lastlog_t, so the labels
+# alone fix both. bootmisc keeps an existing wtmp, and so does logrotate's `create`.
+for _lrec in wtmp lastlog; do
+    [ -e "${SYSROOT}/var/log/${_lrec}" ] || : > "${SYSROOT}/var/log/${_lrec}"
+done
+chmod 0664 "${SYSROOT}/var/log/wtmp"; chmod 0644 "${SYSROOT}/var/log/lastlog"
+chroot "${SYSROOT}" chgrp utmp /var/log/wtmp 2>/dev/null \
+    || warn "/var/log/wtmp: no 'utmp' group in the sysroot — left root:root (mkutmp would have set utmp)"
+# What systemd-tmpfiles-setup would otherwise create in "/" at every boot, measured
+# under enforcing (2026-11-04): `q /srv` (systemd home.conf) mkdir'd /srv in root_t
+# and portage-tmpdir.conf created /var/tmp/portage as portage_tmp_t — both denied to
+# systemd_tmpfiles_t, and the denials made the service exit non-zero. Ship /srv so
+# the entry is a no-op, and mask portage's entry: a node never runs portage from a
+# tmpfiles-made directory. Both before the label pass so the shipped paths are
+# labelled (/srv is a core probe: var_t at every pack hop).
+install -d -m 0755 "${SYSROOT}/srv"
+install -D -m 0644 "${SHARED_SPECS}/etc/tmpfiles.d/portage-tmpdir.conf" "${SYSROOT}/etc/tmpfiles.d/portage-tmpdir.conf"
 SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
 SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
-info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> config -> setfiles -> gate)"
+info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> root login mapping -> config -> setfiles -> gate)"
 slx_store_install_modules "${SYSROOT}" "${SLX_TYPE}" chroot \
+    && slx_map_root_login "${SYSROOT}" "${SLX_TYPE}" chroot \
     && slx_write_selinux_config "${SYSROOT}" "${SLX_TYPE}" \
     && slx_label_tree "${SYSROOT}" "${SLX_TYPE}" \
     && slx_write_probe_table "${SYSROOT}" "${SLX_TYPE}" "${SLX_PROBE_TABLE}" \

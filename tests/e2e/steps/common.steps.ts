@@ -224,6 +224,27 @@ Then('the element with test id {string} is not visible', async ({ page }, testId
   await expect(page.getByTestId(testId)).toHaveCount(0);
 });
 
+/**
+ * Choose a radio option by its accessible name, the way a person (or a screen
+ * reader) finds it: the text of the <label> that wraps it. Exact match, so
+ * "Time out" never also matches a longer option that happens to contain it.
+ *
+ * Exists for controls the UI renders ONLY after an action is chosen (owncast and
+ * tube render their TTL field inside @if (action() === 'timeout')). Asserting
+ * such a control on first load can only ever time out (generator#620); a
+ * scenario has to pick the action first, and this is the step that picks it.
+ * check() also fails if the click did not leave the radio checked.
+ */
+When('I choose the radio labelled {string}', async ({ page }, name: string) => {
+  await page.getByRole('radio', { name, exact: true }).check();
+});
+
+/** A form control found by its <label> text, not its test id: proves the label
+ *  is actually wired to the control (for= / wrapping), which a test id cannot. */
+Then('the field labelled {string} is visible', async ({ page }, label: string) => {
+  await expect(page.getByLabel(label, { exact: true })).toBeVisible();
+});
+
 Then('my session holds the role {string}', async ({ page, world, dimensions }, role: string) => {
   const handle = world.has('session')
     ? (world.get<{ username: string }>('session')).username

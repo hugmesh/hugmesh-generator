@@ -44,6 +44,19 @@ bots:
   # Allow common "keeping the internet working" routes (well-known, favicon, robots.txt)
   - import: (data)/common/keep-internet-working.yaml
 
+  # hugmesh-local:begin (everything up to the matching end marker is hugmesh's; with
+  # these lines removed the file is byte-identical to the upstream default policy,
+  # which tests/scripts/test-anubis-env-gate.sh checks against a pinned sha256)
+  # Paths a visitor or a probe must reach without the proof-of-work page: the
+  # standalone login app, the BFF login endpoint and the health probe. Placed after
+  # the deny and good-crawler imports (a deny rule still wins) and before every WEIGH
+  # rule (so the browser-user-agent weight never applies to these paths). The regex is
+  # anchored, so /loginx, /bff/loginx and /actuator/env stay on the normal rules.
+  - name: hugmesh-login-and-health-paths
+    action: ALLOW
+    path_regex: ^(/login(/.*)?|/bff/login|/actuator/health(/.*)?)$
+  # hugmesh-local:end
+
   # # Punish any bot with "bot" in the user-agent string
   # # This is known to have a high false-positive rate, use at your own risk
   # - name: generic-bot-catchall

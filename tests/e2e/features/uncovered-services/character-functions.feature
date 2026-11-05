@@ -77,12 +77,19 @@ Feature: Opening, building, exporting and saving a character in both editors
   # rasterised in the browser. Asserted as PRESENCE, not as a click: a real
   # download in a sandboxed browser context is a harness question, and this file
   # is about the product.
+  #
+  # cs-export-status is the polite live region (role="status") that announces
+  # export and save outcomes. Its text is status(), which is '' until an export
+  # or save runs, and an empty <p> has no box, so Playwright never calls it
+  # "visible" on first load (generator#620). What the product promises before
+  # any action is that the region EXISTS for a screen reader to watch, so it is
+  # asserted attached, here and in the save scenario below.
   @function:export @service:character-studio @role:e2e-user @env:docker
   Scenario: the export controls are offered alongside the validity verdict @role:e2e-user @function:export @service:character-studio @layer:ui @env:docker
     Given I am signed in as the persona for this scenario
     When I open the path "/character-studio"
     Then the element with test id "cs-export-download" is visible
-    And the element with test id "cs-export-status" is visible
+    And the element with test id "cs-export-status" is attached
     And the element with test id "cs-validity" is visible
 
   # ── character-studio: save ────────────────────────────────────────────────
@@ -97,7 +104,7 @@ Feature: Opening, building, exporting and saving a character in both editors
     When I open the path "/character-studio"
     Then the element with test id "cs-set-avatar" is visible
     And the element with test id "cs-use-everywhere" is visible
-    And the element with test id "cs-export-status" is visible
+    And the element with test id "cs-export-status" is attached
 
   # ── character-forge: open ─────────────────────────────────────────────────
   @function:open @service:character-forge @env:docker

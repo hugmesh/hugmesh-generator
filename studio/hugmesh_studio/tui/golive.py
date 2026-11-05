@@ -92,9 +92,21 @@ class GoLiveScreen:
 
     # ── provider ────────────────────────────────────────────────────────────────
     def _lines_provider(self, j) -> list[str]:
-        providers = self._driver(j).providers()
+        driver = self._driver(j)
+        providers = driver.providers()
         out = ["Internal-only -> publicly live. Pick the provider (the driver's own "
                "registry, grouped by exposure model).", ""]
+        blocker = "" if providers else driver.blocker()
+        if blocker:
+            # No providers on native Windows means the driver could not list them there,
+            # so asking whether the driver file is present sent the operator looking for
+            # a file that is there. The GUI's Go Live page says the same sentence
+            # (gui/pages/golive.py). Where providers ARE listed, the screen goes on.
+            out.append(blocker)
+            if self.opts.domain and self._over(j):
+                out += ["", f"domain: {self.opts.domain} (picked from its Brand settings)"]
+            return out + ["", "commands: " + ("b=back to Brand settings" if self._over(j)
+                                              else "q=quit")]
         if not providers:
             return out + ["(the driver's registry listed no providers — is "
                           "specs/usr/sbin/hugmesh-go-live present?)", "",
@@ -118,6 +130,10 @@ class GoLiveScreen:
             j.close_overlay()
             return
         providers = self._driver(j).providers()
+        blocker = "" if providers else self._driver(j).blocker()
+        if blocker:
+            j.status = blocker               # not "no such provider": there are none here
+            return
         try:
             n = int(line)
         except ValueError:

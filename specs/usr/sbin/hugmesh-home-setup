@@ -6,10 +6,10 @@
 # disk or touches anything outside the target user's home + the PAM stack.
 #
 # Responsibilities, by HOME_MODE / flags:
-#   HOME_ENCRYPTED=true  -> wire pam_ecryptfs so ~/.Private unwraps at login, and
-#                           (create/archive/restore) stage a first-login ecryptfs
-#                           migration of the user's home (needs the login password,
-#                           which only exists at login — so it runs then, not now).
+#   HOME_ENCRYPTED=true  -> wire pam_ecryptfs so ~/.Private unwraps at login. The
+#                           migration of an existing home into ~/.Private is NOT
+#                           automatic (see section 1): it needs root, the login
+#                           password and the user logged out at the same time.
 #   HOME_MODE=adopt      -> the installer already mounted the existing home device
 #                           at /home (no format); just fix ownership if needed.
 #   HOME_MODE=restore    -> the installer already decrypted+unpacked the backup.
@@ -31,36 +31,76 @@ USER_HOME="${USER_HOME:-/home/${USER_NAME}}"
 log(){ echo "  [home-setup] $*"; }
 
 # ── 1. Per-user ecryptfs: wire pam_ecryptfs (idempotent) ─────────────────────
+# wire_pam_ecryptfs FILE — add pam_ecryptfs after the LAST line of each of the
+# auth / password / session stacks in FILE. Never directly after pam_unix.
+#
+# WHY "after the last line". Gentoo's pambase system-auth reads
+#     auth  [success=1 new_authtok_reqd=1 ignore=ignore default=bad]  pam_unix.so ...
+#     auth  [default=die]  pam_faillock.so authfail
+#     auth  optional       pam_cap.so
+# `success=1` means "on a correct password, SKIP THE NEXT LINE", and the next line
+# is meant to be the authfail counter. This used to insert
+# `auth optional pam_ecryptfs.so unwrap` right after pam_unix, so a correct password
+# skipped the ecryptfs line and landed on `[default=die] pam_faillock.so authfail`:
+# every correct login failed (PAM_PERM_DENIED, rc=6 against the image's real
+# system-auth on libpam 1.7.2) and counted a faillock failure. lightdm, login, su,
+# sudo and sshd all go through system-auth and root is locked, so the 2026-10-30
+# standalone image had NO working login at all. A line appended after the last
+# line of a stack cannot change where any earlier jump lands, whatever the layout,
+# and an `optional` line reached only on the success path is what pam_ecryptfs wants.
+# The file is rewritten in place (cat >), so its mode and SELinux label survive.
+wire_pam_ecryptfs() {
+    local pf="$1" tmp
+    [ -f "${pf}" ] || return 0
+    grep -q 'pam_ecryptfs\.so' "${pf}" && return 0
+    tmp="$(mktemp "${pf}.XXXXXX")" || return 1
+    if awk '
+        { line[NR] = $0 }
+        /^[[:space:]]*-?auth[[:space:]]/     { la = NR }
+        /^[[:space:]]*-?password[[:space:]]/ { lp = NR }
+        /^[[:space:]]*-?session[[:space:]]/  { lse = NR }
+        END {
+            for (i = 1; i <= NR; i++) {
+                print line[i]
+                if (i == la)  print "auth\t\toptional\tpam_ecryptfs.so unwrap"
+                if (i == lp)  print "password\toptional\tpam_ecryptfs.so"
+                if (i == lse) print "session\t\toptional\tpam_ecryptfs.so unwrap"
+            }
+        }' "${pf}" > "${tmp}"; then
+        cat "${tmp}" > "${pf}"
+        rm -f "${tmp}"
+        return 0
+    fi
+    rm -f "${tmp}"
+    return 1
+}
+
 if [ "${HOME_ENCRYPTED:-false}" = "true" ] && command -v mount.ecryptfs_private >/dev/null 2>&1; then
+    # system-auth only, plus system-login when it carries its OWN pam_unix stack. On
+    # Gentoo system-login `include`s system-auth, so wiring both would run
+    # pam_ecryptfs twice per login.
     for pf in /etc/pam.d/system-auth /etc/pam.d/system-login; do
         [ -f "${pf}" ] || continue
+        if [ "${pf}" = /etc/pam.d/system-login ] && ! grep -q '^[^#]*pam_unix\.so' "${pf}"; then
+            continue
+        fi
         if ! grep -q pam_ecryptfs.so "${pf}"; then
-            sed -i -e '/^auth.*pam_unix\.so/a auth\t\toptional\tpam_ecryptfs.so unwrap' \
-                   -e '/^password.*pam_unix\.so/a password\toptional\tpam_ecryptfs.so' \
-                   -e '/^session.*pam_unix\.so/a session\t\toptional\tpam_ecryptfs.so unwrap' "${pf}"
-            log "wired pam_ecryptfs into ${pf}"
+            wire_pam_ecryptfs "${pf}" && log "wired pam_ecryptfs into ${pf}"
         fi
     done
-    # create/archive/restore: the home content is currently PLAINTEXT-on-LUKS. The
-    # actual ecryptfs migration needs the user's login passphrase, which only exists
-    # when they log in — so arm a one-shot that runs at their first interactive login.
+    # create/archive/restore: the home content is PLAINTEXT-on-LUKS. Migrating it
+    # into a per-user eCryptfs ~/.Private needs the login password, which only
+    # exists at login, AND root, AND the user logged OUT (ecryptfs-migrate-home
+    # refuses a home with open files). The one-shot this used to arm from
+    # ~/.bash_profile ran ecryptfs-migrate-home as the USER, which refuses non-root
+    # ("must be executed with root privileges"), swallowed the error, printed
+    # "Done", and was never sourced by a lightdm/Plasma session anyway. It
+    # encrypted nothing, so it is no longer armed; the PAM wiring above stays, so a
+    # home migrated by an administrator unwraps with the login password.
     case "${HOME_MODE:-create}" in
         create|archive|restore)
             if [ ! -e "${USER_HOME}/.ecryptfs/Private.sig" ]; then
-                cat > "${USER_HOME}/.hugmesh-first-login-encrypt.sh" <<'FL'
-#!/bin/bash
-# One-shot: migrate this home to per-user eCryptfs on first interactive login.
-[ -e "${HOME}/.ecryptfs/Private.sig" ] && { rm -f "${HOME}/.hugmesh-first-login-encrypt.sh"; exit 0; }
-echo "Encrypting your home directory (eCryptfs). You'll be asked for your login password."
-ecryptfs-migrate-home -u "$(id -un)" 2>&1 | sed 's/^/  /' || true
-rm -f "${HOME}/.hugmesh-first-login-encrypt.sh"
-echo "Done — log out and back in to mount your encrypted home."
-FL
-                chmod +x "${USER_HOME}/.hugmesh-first-login-encrypt.sh"
-                # invoke it once from the login shell, then it deletes itself
-                grep -q hugmesh-first-login-encrypt "${USER_HOME}/.bash_profile" 2>/dev/null \
-                    || echo '[ -x "${HOME}/.hugmesh-first-login-encrypt.sh" ] && "${HOME}/.hugmesh-first-login-encrypt.sh"' >> "${USER_HOME}/.bash_profile"
-                log "armed first-login eCryptfs migration for ${USER_NAME}"
+                log "per-user eCryptfs migration is NOT automatic: as root, with ${USER_NAME} logged out, run 'ecryptfs-migrate-home -u ${USER_NAME}'"
             fi
             ;;
     esac
