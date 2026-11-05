@@ -195,9 +195,14 @@ def check_fields(g: MeshGrant, *, now: float | None = None) -> None:
         raise TokenError("invalid", f"The token grants shell access to the role "
                                     f"{g.role!r}; only {' and '.join(SHELL_ROLES)} can "
                                     f"hold shell access, so it is refused.")
+    # The URL lands in TS_EXTRA_ARGS, which the tailscale container word-splits: any
+    # whitespace (or a path carrying it) would smuggle extra `tailscale up` flags in.
+    if not re.fullmatch(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?", g.login_server):
+        raise TokenError("invalid", f"The token's login server {g.login_server!r} must be "
+                                    f"an https:// URL with only a host and optional port.")
     parts = urlsplit(g.login_server)
     host = (parts.hostname or "").lower()
-    if parts.scheme != "https" or not host or parts.username or parts.password:
+    if not host:
         raise TokenError("invalid", f"The token's login server {g.login_server!r} must be "
                                     f"an https:// URL.")
     if host != g.domain and not host.endswith("." + g.domain):

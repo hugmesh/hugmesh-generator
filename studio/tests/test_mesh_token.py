@@ -113,6 +113,10 @@ def test_issue_refuses_shell_for_a_role_that_cannot_hold_it(issuer):
     ({"login_server": "https://hs.evil.net"}, "outside its access domain"),
     ({"login_server": "https://notexample.org"}, "outside its access domain"),
     ({"login_server": "http://hs.example.org"}, "https://"),
+    # TS_EXTRA_ARGS is word-split: a path with a space would smuggle in a flag
+    ({"login_server": "https://hs.example.org/ --advertise-exit-node"}, "only a host"),
+    ({"login_server": "https://hs.example.org\t--ssh"}, "only a host"),
+    ({"login_server": "https://hs.example.org/x?y#z"}, "only a host"),
     ({"role": "root"}, "is not one of"),
 ])
 def test_verify_refuses_a_signed_token_that_grants_too_much(issuer, over, needle):
