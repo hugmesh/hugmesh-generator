@@ -85,7 +85,28 @@ runner polls until `--timeout`. Console output goes to
 | `avc-workload.sh` | The in-guest probe list (one probe per workload the `specs/selinux/*.te` modules confine; presence-gated = role-appropriate). |
 | `avc-report.sh` | Groups a raw AVC harvest by source type → the owning `specs/selinux/*.te` (hermetic text processing). |
 | `avc-workout_test.sh` | Hermetic tests + mutation legs for the whole workout lane (nothing boots; also run by `tests/build-matrix/check.sh`'s smokes). |
+| `display_argv_test.sh` | Hermetic argv assertions for the launchers' display door (below): the no-flag argv of all three launchers pinned to a golden, the door's elements, loopback default, the secret never in argv/stdout, the refusals, `--virt-dtb` (no boot, no QEMU, no root). |
 | `stage4_rootfs_test.sh` | Hermetic tests + mutation legs for the stage4 rootfs lane: `build_rootfs()` driven against fixture tarballs with `mount`/`umount`/`losetup` stubbed to fail loudly, and `assertions.sh`'s rootfs-is-labelled precondition (nothing boots, no root; also run by `tests/build-matrix/check.sh`'s smokes). |
+
+All three launchers also carry the same default-off **display door** (opened by
+the runner for desktop roles in keep-alive mode, or by hand): `--display spice
+--spice-port N --display-secret FILE [--display-listen ADDR] [--vnc-socket PATH]`.
+ONE door: SPICE over TCP on `ADDR:N` (default `127.0.0.1`; `0.0.0.0` is for the
+runner container's own netns only), protected by a per-run password that QEMU
+reads from `FILE` as a secret *object* (`-object secret,file=` +
+`password-secret=`), so it never appears in argv, `ps`, the launch log or the
+launcher's output (only the path is printed: `display: spice on ADDR:N (password
+in FILE)`). The door adds the vdagent `virtserialport` (what lets
+`remote-viewer`/`spicy` resize the guest to the window), `qemu-xhci` +
+`usb-tablet` + `usb-kbd`, and the platform GPU: x86 `-vga none -device virtio-vga`
+(VGA-compatible, so OVMF/GRUB render; it replaces the extra `virtio-gpu-pci`
+that `--gpu` adds), aarch64 `-device virtio-gpu-pci,edid=on`. `--vnc-socket
+PATH` adds a `-vnc unix:PATH,password-secret=` browser (noVNC) fallback that only
+scales (8-char DES auth from the first 8 chars of the same file; opt-in).
+`launch-arm.sh --virt-dtb` omits `-dtb` so QEMU generates the virt DTB, which a
+board DTB cannot replace once PCIe/virtio devices are on the bus. Without
+`--display` the argv is byte-identical to before (`display_argv_test.sh` pins it
+to a golden, element for element).
 
 All three launchers carry the same default-off mesh flags: `--mesh-net SPEC`,
 `--mesh-mac MAC`, `--mesh-id N`. One identical block spells them, so a mixed-arch

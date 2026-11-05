@@ -36,6 +36,12 @@ sys-apps/i2c-tools
 sys-apps/util-linux
 sys-fs/e2fsprogs
 sys-fs/dosfstools
+# flashcp for install-frite.sh --write-uboot-spi: La Frite / Sweet Potato keep
+# u-boot in SPI NOR (/dev/mtd0). The installer gates that write on `command -v
+# flashcp`, so without this atom the branch ALWAYS skipped and nothing could
+# ever (re)flash u-boot from the installed system. Two gates remain by design:
+# the signed FIP blob (uboot/u-boot.bin) and the /dev/mtd0 node.
+sys-fs/mtd-utils
 
 # ── Networking ─────────────────────────────────────────────────────
 net-misc/networkmanager

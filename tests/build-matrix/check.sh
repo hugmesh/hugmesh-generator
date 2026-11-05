@@ -2658,6 +2658,7 @@ run_nongating_smokes() {
                 "calamares-boost-seed:${REPO_DIR}/tests/scripts/test-calamares-boost-seed.sh" \
                 "qt6-keyword-preseeds:${REPO_DIR}/tests/scripts/test-qt6-keyword-preseeds.sh" \
                 "intltool-preseed:${REPO_DIR}/tests/scripts/test-intltool-preseed.sh" \
+                "arm-desktop-package-sets:${REPO_DIR}/tests/scripts/test-arm-desktop-package-sets.sh" \
                 "installer-ui-node-default:${REPO_DIR}/tests/scripts/test-installer-ui-node-default.sh" \
                 "host-selinux-tools:${REPO_DIR}/tests/scripts/test-host-selinux-tools.sh" \
                 "builder-log-paths:${REPO_DIR}/tests/scripts/test-builder-log-paths.sh" \

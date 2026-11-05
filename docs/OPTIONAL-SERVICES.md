@@ -334,13 +334,31 @@ origin/issuer/redirect/website URLs flip while the canonical **image** repo path
   `websiteUrl`/`homepageUrl`;
 - `manifests/casdoor-games/init-job.yaml` — `redirectUris` (`reconcile.py`
   **re-pins** these on every ArgoCD PostSync, so they must be parameterized);
-- `manifests/games/deployment.yaml` — `CASDOOR_ISSUER_URI` (the games BFF
-  enforces this as the expected `iss`).
+- `manifests/games/deployment.yaml` — `CASDOOR_ISSUER_URI`,
+  `APP_TENANCY_ISSUERS`, `APP_TENANCY_JWKS_URIS` and
+  `APP_SECURITY_GAMES_REALM_ISSUERS` (the games BFF validates `iss` against them);
+- `manifests/casdoor-games/ingress.yaml` and `manifests/cloudflared/configmap.yaml`
+  — the published issuer host.
 
-Plus the games **public host**: a be-gateway host route `id: games`
-(`games.<GAMES_DOMAIN>` → `hugmesh-games:8080`), its ingress `extraHosts`
-entry, and the `/games/**` route-access floor — all added in
-`apps/20-gateway-be.yaml` + `20-schema.sql`.
+**The issuer host** is `id.<GAMES_DOMAIN>` for a `GAMES_DOMAIN` in its own zone. On
+the default `games.<CLUSTER_DOMAIN>` it is the single-label
+`games-id.<CLUSTER_DOMAIN>`, because `id.games.<CLUSTER_DOMAIN>` is two labels deep:
+the one-label `*.<CLUSTER_DOMAIN>` wildcard certificate does not cover it.
+
+Plus the games **public host**: `manifests/games-portal` (the
+`hugmesh-games/frontend` portal image) behind its own Ingress at
+`games.<GAMES_DOMAIN>`, straight from ingress-nginx. It deliberately does not go
+through the systems be-gateway, which validates only the systems issuer and would
+401 both a games-realm token and the anonymous catalog browse. A `GAMES_DOMAIN` in
+its own zone also needs DNS records for both hosts, and on the `TUNNEL_TOKEN` path a
+public hostname for each in the Cloudflare tunnel.
+
+**Two realms, one BFF.** A games player signs in with a games-realm account and need
+not be a mesh user. A mesh user with `ROLE_GAMES` / `ROLE_GAMES_ADMIN` reaches games
+through the mesh shell: the fe-gateway forwards the systems custody JWT to the same
+BFF, which trusts both issuers, each with its own in-cluster JWKS, and maps both to
+one domain. Only the games-realm `admin` role makes a games admin; a mesh user needs
+`ROLE_GAMES_ADMIN`.
 
 The chat3d games origin is declared in the manifest too: the `hugmesh-matrix-ui`
 Deployment in `manifests/social-ui/deployment.yaml` carries
@@ -348,9 +366,9 @@ Deployment in `manifests/social-ui/deployment.yaml` carries
 `__HUG_GAMES_URL__`). `[games-origin]` in
 `tests/scripts/cluster_manifest_integrity.py` fails when `apps/50-games.yaml` is
 present in the repo tree and that env is missing or names a different host than
-the route there. It checks the repo tree only: the Deployment is served to the
+the portal Ingress host. It checks the repo tree only: the Deployment is served to the
 cluster from git, so a custom `GAMES_DOMAIN` (or a `CLUSTER_DOMAIN` rebrand) moves
-the live gateway route but does **not** move this env, which stays
+the live Ingress but does **not** move this env, which stays
 `https://games.hugmesh.net`; following it would need a kustomize patch in
 `apps/45-social-ui.yaml`. The env is also present when `games` is not selected.
 The matrix-ui image does not yet turn the env into the window global, so until it
@@ -807,8 +825,7 @@ When a service is **absent**, a user sees:
   **public** `GET /api/federation/capabilities` projection drives logged-out greying. The
   `…/manifest` endpoint stays `authenticated()` and visibility-filtered.
 - **hugmesh-gateway:** `CanonicalSeed.java`'s baked route-access floor carries the
-  `games.<GAMES_DOMAIN>` host floor, in sync with the rows `gate_optional_services`
-  prunes.
+  games rows, in sync with the seed in `20-schema.sql`.
 - **hugmesh.net (host):** the host shell reads install-state at bootstrap (HttpClient to
   the public capabilities endpoint), and `menu.component`'s `enabled()` greys out absent
   services (nav and the data-driven home-services cards).
@@ -976,7 +993,7 @@ tree. The invariants, each with an isolating negative control in the suite:
 | akkoma | single-app | `30-akkoma.yaml` | - | name akkoma -> optional-akkoma |
 | tuwunel | single-app | `30-tuwunel.yaml` | - | name tuwunel -> optional-tuwunel |
 | phpbb | multi-app | `30-phpbb.yaml` | `38-forum-bff-db.yaml`, `39-forum-bff-api.yaml`, `49-forum-ui.yaml` | name phpbb -> optional-phpbb |
-| games | multi-app | `50-games.yaml` | `06-casdoor-games.yaml`, `13c-games-instances.yaml` (ApplicationSet) | name hugmesh-games -> optional-games; sync-wave 2 |
+| games | multi-app | `50-games.yaml` | `06-casdoor-games.yaml`, `50a-games-ui.yaml`, `13c-games-instances.yaml` (ApplicationSet) | name hugmesh-games -> optional-games; sync-wave 2 |
 | owncast | single-app | `52-owncast.yaml` | - | name hugmesh-owncast -> optional-owncast; sync-wave 2 |
 | tube | single-app | `53-tube.yaml` | - | name hugmesh-tube -> optional-tube; sync-wave 2 |
 | character-studio | single-app | `49b-character-studio-ui.yaml` | - | name hugmesh-character-studio-ui -> optional-character-studio |

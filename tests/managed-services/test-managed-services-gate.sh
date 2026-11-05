@@ -196,7 +196,7 @@ grep -q 'region: hugmesh' "${bsl}" && ok "velero: the VSL doc-1 region left unto
 seed casdoor
 MANAGED_SERVICES="postgres-casdoor=pg.example.com:5432" gate_backing_services
 cm="${tree}/manifests/casdoor/app-conf-configmap.yaml"
-grep -q 'host=pg.example.com port=5432' "${cm}" && ok "casdoor: dataSourceName host+port flipped" || bad "casdoor: DSN host not flipped"
+grep -q '@pg.example.com:5432/casdoor?' "${cm}" && ok "casdoor: dataSourceName host+port flipped (postgres:// URL form)" || bad "casdoor: DSN host not flipped"
 grep -q 'sslmode=require' "${cm}" && ok "casdoor: DSN sslmode flipped disable->require" || bad "casdoor: sslmode not flipped"
 [ ! -f "${tree}/manifests/casdoor/pg.yaml" ] && ok "casdoor: bundled pg.yaml pruned" || bad "casdoor: pg.yaml survived"
 grep -q 'pg.yaml' "${tree}/manifests/casdoor/kustomization.yaml" && bad "casdoor: kustomize pg.yaml line survived" || ok "casdoor: kustomize pg.yaml line dropped"
