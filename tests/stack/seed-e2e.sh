@@ -37,7 +37,12 @@
 # service, which bring-up command). It never prints success for something it
 # did not verify. The ONLY soft leg is the second tenant (WARN unless
 # SEED_STRICT=1), because the standard compose stack simply has no brand-B
-# Casdoor — that limitation is documented in docs/LOCAL-STACK.md.
+# Casdoor — that limitation is documented in docs/LOCAL-STACK.md. Leg 1c
+# (opt-in onboarding) is fail-honest too: a persona that cannot sign in is a
+# FAILED onboard, a refusal carrying Casdoor's sign-in-throttle text is named
+# LOCKOUT (password must NOT be rotated; no retry this run), and any FAILED
+# onboard stops the seed non-zero (exit 3 when nothing signed in, 4 when some
+# did) so an e2e run never starts against a half-seeded stack.
 #
 # NOTE for suite authors (documented in docs/LOCAL-STACK.md): the compose
 # social tier is tuwunel + MAINLINE Mastodon — the Matrix half now matches the
@@ -586,10 +591,50 @@ provision_platform() {  # <username> <matrix|mastodon> <jar>
   esac
 }
 
+# ── Casdoor's SIGN-IN THROTTLE, seen from the front door ─────────────────────
+# After a handful of wrong passwords Casdoor BANS the account for a fixed window
+# and refuses EVERY login — the correct password included — with its i18n text
+# "You have entered the wrong password or code too many times, please wait for
+# %d minutes and try again". user-bff relays that as
+#   401 {"error":"invalid_credentials","message":"<Casdoor's own text>"}
+# (SsoAuthController.LoginError), the SAME status a wrong password gets. A
+# reader that only sees the status code therefore reports "wrong password" about
+# an account whose password is perfectly right — and the documented remedy for a
+# uniform 401 here (re-seed, rotate E2E_PASSWORD) is exactly the wrong move: a
+# rotation during the ban changes nothing Casdoor will accept and burns the next
+# run's attempts too. The kind lane's casdoor init Jobs (manifests/casdoor/
+# init-job.yaml LOCKOUT_MARKER) and tests/e2e/specs/helpers.ts
+# (CASDOOR_LOCKOUT_MARKER) key on the same invariant fragment; %d makes the whole
+# sentence unmatchable and the text is translated, so the English fragment is
+# matched case-insensitively and nothing more.
+# Classifying is all this does: it never waits the ban out and never retries. A
+# throttled account is a FINDING (its password must NOT be rotated), and once an
+# account is seen throttled this run makes NO further login attempt for it —
+# every one would be refused anyway and each keeps the ban window hot.
+CASDOOR_LOCKOUT_MARKER="too many times"
+LOCKED_OUT=""   # space-separated usernames seen throttled THIS run (the latch)
+locked_out() { # <username> -> 0 when the account was seen throttled this run
+  case " ${LOCKED_OUT} " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+# <username> <body-file> -> 0 when the refusal body carries Casdoor's throttle text
+login_refusal_is_lockout() {
+  local body
+  body="$(tr -d '\000' < "$2" 2>/dev/null || true)"
+  case "${body,,}" in *"${CASDOOR_LOCKOUT_MARKER}"*) return 0 ;; esac
+  return 1
+}
+
 # rc 0 = onboarded, 2 = deliberately left gated, 1 = attempted and failed.
 onboard_persona() {  # <username>
   local u="$1" jar="${SEED_WORKDIR}/.reg-${1}.cookies" code roles rc=0
   case " ${SEED_REGISTRATION_SKIP} " in *" ${u} "*) return 2 ;; esac
+  # The lockout latch: an account seen throttled this run gets NO second login
+  # attempt (see CASDOOR_LOCKOUT_MARKER above). Counted as failed, never retried.
+  if locked_out "${u}"; then
+    warn "onboard: ${u} is throttled by Casdoor (seen earlier this run) — not attempting another login"
+    return 1
+  fi
   # NEVER onboard an EMAIL-shaped handle. Those are the invite-flow fixtures
   # (mallory@, frank@, rbac-pending@, rbac-approved@ …) that the specs drive through
   # the registration UI themselves — spec 03 registers frank@gmail.com and asserts the
@@ -603,14 +648,26 @@ onboard_persona() {  # <username>
   # `rbac-pending-gmail-com`. A name-list written in either spelling silently misses
   # the other — which is exactly how this regressed.
   case "${u}" in *@*) return 2 ;; esac
-  # Stage 1: a real session cookie, exactly as the browser gets one.
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -c "${jar}" \
+  # Stage 1: a real session cookie, exactly as the browser gets one. The response
+  # BODY is kept (not /dev/null) because a Casdoor lockout and a wrong password
+  # share the status code and differ only there.
+  code="$(curl -s -o "${jar}.body" -w '%{http_code}' --max-time 15 -c "${jar}" \
             -X POST "${FRONT_DOOR}/bff/login" -H 'content-type: application/json' \
             -d "$(jq -nc --arg u "${u}" --arg p "$(persona_password "${u}")" \
                     '{username:$u,password:$p}')" 2>/dev/null || echo 000)"
   # A login that does not return 200 is a REAL failure, not a skip: the persona was
-  # just seeded, so it must be able to log in.
-  [ "${code}" = "200" ] || { warn "onboard: login for ${u} -> ${code}"; rm -f "${jar}"; return 1; }
+  # just seeded, so it must be able to log in. A refusal carrying Casdoor's throttle
+  # text is named as a LOCKOUT (and latched), everything else by its status.
+  if [ "${code}" != "200" ]; then
+    if login_refusal_is_lockout "${u}" "${jar}.body"; then
+      LOCKED_OUT="${LOCKED_OUT} ${u}"
+      echo "[seed-e2e] LOCKOUT: ${u} -> ${code}: Casdoor's sign-in throttle refused the login (\"${CASDOOR_LOCKOUT_MARKER}\"). The account is throttled after repeated wrong passwords, NOT misconfigured: its password must NOT be rotated (a re-seed changes nothing Casdoor will accept inside the ban window). No further login attempts for ${u} this run; wait the window out, then re-run." >&2
+    else
+      warn "onboard: login for ${u} -> ${code}"
+    fi
+    rm -f "${jar}" "${jar}.body"; return 1
+  fi
+  rm -f "${jar}.body"
   # Stage 2: admin-bff's public AuthController, through the gateway, with that
   # cookie — the same call tests/e2e/specs/29-mfa-privileged-floor.spec.ts makes.
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -b "${jar}" -c "${jar}" \
@@ -745,14 +802,26 @@ if [ "${SEED_COMPLETE_REGISTRATION}" = "1" ]; then
     echo "    'reconciled' summary — then a 401 means the FRONT DOOR path, not Casdoor." >&2
     echo "  * uniform 5xx/000/404: the front door ${FRONT_DOOR} or the user-bff behind it is not" >&2
     echo "    serving logins — check the gateway/bff logs, not the identities." >&2
+    if [ -n "${LOCKED_OUT// /}" ]; then
+      echo "  * LOCKOUT lines above (${LOCKED_OUT# }): those accounts are throttled by Casdoor's sign-in" >&2
+      echo "    ban, which refuses the CORRECT password too — do NOT rotate E2E_PASSWORD for them;" >&2
+      echo "    wait the ban window out and re-run." >&2
+    fi
     exit 3
   fi
   if [ "${reg_fail}" -gt 0 ]; then
     log "leg 1c PARTIAL: ${reg_ok} onboarded, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), ${reg_fail} FAILED"
-    # A PARTIAL failure is NOT fatal: leg 1's identities are seeded either way,
-    # and the operator can still complete registration from the UI. Say it
-    # plainly instead — but never under an "OK" label.
-    warn "leg 1c: ${reg_fail} persona(s) could not be fully onboarded (see the WARNs above)"
+    # A PARTIAL failure STOPS the seed (#473 box 4). It used to be non-fatal —
+    # "leg 1's identities are seeded either way, the operator can finish in the
+    # UI" — and that let an e2e run start against a half-seeded stack: the
+    # personas that did not onboard fail their specs much later with a bare 401
+    # or 403 that points nowhere near this leg. Leg 1's identities ARE seeded
+    # and stay seeded (the stamp above is already written), so a re-run after
+    # fixing the named personas costs nothing; continuing would only move the
+    # failure somewhere less honest. Exit 4 is distinct from the uniform-failure
+    # 3 so a caller can tell "nothing signs in" from "these N did not".
+    echo "${PROG}: leg 1c PARTIAL FAILED: ${reg_fail} persona(s) could not be fully onboarded (see the WARN/LOCKOUT lines above) — stopping here rather than continuing against a half-seeded stack." >&2
+    exit 4  # PARTIAL-FAILED-STOP
   else
     log "leg 1c OK: ${reg_ok} onboarded, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), 0 failed"
   fi
