@@ -2134,6 +2134,9 @@ cat > "${SYSROOT}/etc/lightdm/lightdm.conf" <<'LIGHTDM'
 [LightDM]
 [Seat:*]
 greeter-session=lightdm-gtk-greeter
+# lightdm falls back to a compiled-in "lightdm-session" wrapper that Gentoo does not ship;
+# without this line every login authenticates and then the session exits (rc 1) back to the greeter.
+session-wrapper=/etc/lightdm/Xsession
 user-session=LXDE
 LIGHTDM
     # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
