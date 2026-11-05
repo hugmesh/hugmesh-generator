@@ -3562,6 +3562,7 @@ lint:seed-password-reconcile:
   script:
     - bash tests/scripts/test-seed-password-reconcile.sh
     - bash tests/scripts/seed_password_reconcile_mutations.sh
+    - bash tests/stack/test-seed-e2e-lockout.sh
 
 # The e2e password ROTATES per run (2026-10-15): the contract said "random per
 # run", but nothing ever started a new value — the operator's credentials file

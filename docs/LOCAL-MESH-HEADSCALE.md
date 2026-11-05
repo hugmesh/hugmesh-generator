@@ -2,8 +2,7 @@
 
 The local docker mesh (`make stack-up`, [LOCAL-STACK.md](LOCAL-STACK.md)) had no tailnet
 control server, so it could not mint the headscale pre-auth key a HugMesh token carries
-(the HugMesh token format, `docs/HUGMESH-TOKEN.md` from generator PR #862), and no tray node could
-join it.
+([HUGMESH-TOKEN.md](HUGMESH-TOKEN.md)), and no tray node could join it.
 `make stack-up HEADSCALE=1` adds one. With it, admin-bff and the Studio can issue tokens for
 the local mesh, and a tray node can join through the stack's HTTPS front door.
 
@@ -127,7 +126,7 @@ mode, so the rendered device template stays in force.
 The file is gitignored and 0600, and its directory is 0700. `stack-up HEADSCALE=1` runs the
 target first. The target prints only the key's `SHA256:` fingerprint (as `ssh-keygen -lf`
 prints it), which is what a tray asks the operator to confirm the first time
-(the token format's "Trust" rule).
+([HUGMESH-TOKEN.md](HUGMESH-TOKEN.md) "Trust").
 
 Like `stack-certs`, the key is minted once and kept after that. `stack-down` does not remove
 it, so the fingerprint that trays trust stays the same across rebuilds of the mesh. To rotate
@@ -190,6 +189,14 @@ To mint a key the way the guard does, run this from the host:
 docker exec hugmesh-local-hugmesh-headscale-1 \
   headscale preauthkeys create --user hugmesh --tags tag:hugmesh --expiration 1h
 ```
+
+The Studio's `mesh_token.mint_and_issue` (from #862) works against this container unchanged:
+`find_headscale_container` matches its name, and the key is minted with
+`docker exec ... headscale preauthkeys create`. Measured: a token minted and signed with the
+key from `make stack-mesh-token-key` passes `mesh_token.verify`, and Studio's `fingerprint()`
+equals the one the target prints. One gap: the Studio's `DEFAULT_MINT_TAGS` is empty, so by
+default it mints an **untagged** key. For this mesh it should pass the `key-tags` label,
+`tag:hugmesh`.
 
 A node on the host reaches the login server at `https://hs.<domain>:<PUBLIC_HTTPS_PORT>`. That
 needs two things:

@@ -1736,7 +1736,7 @@ TOR_SOCKS_HOST_PORT ?= 9050
 # TOR=1, and a TOR=1 stack with no Tor domain is the one-onion stack it always was.
 TOR_ONION_DOMAINS ?=
 # HEADSCALE=1 — a tailnet control server for the LOCAL docker mesh, so it can mint
-# pre-auth keys and issue HugMesh tokens (the v1 format of generator PR #862) from the web admin
+# pre-auth keys and issue HugMesh tokens (docs/HUGMESH-TOKEN.md) from the web admin
 # UI and the Studio (docs/LOCAL-MESH-HEADSCALE.md). Adds compose.local.yaml's
 # `headscale` profile (hugmesh-headscale: headscale 0.23.0, policy mode file from
 # the DEVICE template, login server https://hs.<domain>:$(PUBLIC_HTTPS_PORT) through
@@ -2205,7 +2205,7 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 	fi
 
 .PHONY: stack-mesh-token-key
-# The local mesh's HugMesh-token ISSUER key (the token format's "Trust" rule, PR #862): an
+# The local mesh's HugMesh-token ISSUER key (docs/HUGMESH-TOKEN.md "Trust"): an
 # ed25519 OpenSSH key in tests/stack/.mesh-token/issuer, gitignored, 0600, mounted
 # read-only into admin-bff ONLY (tests/stack/compose.headscale.yaml). The stack-certs
 # shape: minted once, kept after that, so the fingerprint the trays were told to

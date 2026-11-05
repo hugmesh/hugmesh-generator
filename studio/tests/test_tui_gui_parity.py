@@ -795,3 +795,59 @@ def test_where_a_domains_own_look_shows_is_one_sentence_on_both_faces(
     assert gui == want
     assert want in text
     ed.deleteLater()
+
+
+# ── HugMesh tokens (operator ask 2026-11-04): issuing from the window, text, CLI ───────
+def test_issuing_a_token_offers_the_same_roles_shell_rule_and_lifetime_on_every_face(
+        qapp, monkeypatch, capsys):
+    """The window's "Issue a HugMesh token…" dialog, the text screen and the CLI offer
+    the core's roles, shell access exactly for its shell roles, and the core's longest
+    lifetime — and both faces say the same fingerprint and shell sentences."""
+    import time
+
+    from hugmesh_studio.core import mesh_token as mt
+    from hugmesh_studio.gui import mesh_token_issue_dialog as dmod
+    from hugmesh_studio.tui import mesh_token_step as tstep
+
+    def no_container(runner=None):
+        raise mt.TokenError("tool", "No running headscale container was found.")
+    monkeypatch.setattr(mt, "find_headscale_container", no_container)
+    dlg = dmod.IssueTokenDialog()
+    try:
+        deadline = time.monotonic() + 30
+        while dmod.probe_running(dlg, "_probe") and time.monotonic() < deadline:
+            dlg._probe.wait(100)
+            qapp.processEvents()
+        qapp.processEvents()
+        # roles: the dialog's combo, the screen, the CLI's --role choices, the core
+        gui_roles = tuple(dlg.role.itemText(i) for i in range(dlg.role.count()))
+        with pytest.raises(SystemExit):
+            mt.main(["issue", "--help"])
+        help_text = capsys.readouterr().out
+        cli_roles = tuple(help_text.split("--role {", 1)[1].split("}", 1)[0].split(","))
+        assert gui_roles == tstep.MeshTokenScreen.roles() == cli_roles == mt.ROLES
+        # shell: the dialog's tick box is enabled exactly where the screen allows it,
+        # and both are the core's SHELL_ROLES (the CLI refuses the rest: check_fields)
+        for role in mt.ROLES:
+            dlg.role.setCurrentText(role)
+            assert dlg.shell.isEnabled() is tstep.MeshTokenScreen.shell_allowed(role) \
+                is (role in mt.SHELL_ROLES)
+        assert tuple(mt.SHELL_ROLES) == ("admin", "superadmin")
+        # the longest lifetime: every unit of the dialog tops out at the core's maximum
+        for unit, size in dmod.UNITS:
+            dlg.unit.setCurrentText(unit)
+            assert dlg.lifetime.maximum() * size == mt.MAX_LIFETIME_S
+        j = journey.Journey(GENERATOR_DIR)
+        screen = tstep.MeshTokenScreen()
+        j.open_overlay(screen)
+        days = mt.MAX_LIFETIME_S // 86400
+        j.feed(f"e {days}d")
+        assert screen.lifetime_s == mt.MAX_LIFETIME_S and not j.status
+        j.feed(f"e {days + 1}d")
+        assert screen.lifetime_s == mt.MAX_LIFETIME_S and j.status
+        # the sentences both faces show
+        assert (tstep.TITLE, tstep.FINGERPRINT_NOTE, tstep.SHELL_ONLY_TIP) == \
+            (dmod.TITLE, dmod.FINGERPRINT_NOTE, dmod.SHELL_ONLY_TIP)
+    finally:
+        dlg.close()
+        dlg.deleteLater()
