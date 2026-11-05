@@ -29,7 +29,7 @@ from .branding_icon import (
     ICON_PX as _ICON_PX, brand_icon as _brand_icon, brand_pixmap as _brand_pixmap)
 from ..core import build_sessions
 from ..core import resource_limits as _resource_limits
-from ..core.mesh_node import MeshNode
+from ..core.mesh_token import GrantedMeshNode
 from ..core.local_stack_node import LocalStackNode
 from ..core.state_paths import state_dir
 
@@ -49,6 +49,12 @@ LIMITS_LABEL = "Resource limits…"
 #: setting; see limits_dialog.BLURB for the lanes it does not reach yet.
 LIMITS_SAVED_NOTICE = ("Applies to the next build, stack bring-up or mesh-node start. "
                        "Emulated devices and kind nodes are not limited yet.")
+
+#: Added to the notice when a RUNNING mesh node was restarted under the new limits.
+LIMITS_APPLIED_NOTE = " The running mesh node was restarted under them."
+
+#: The mesh section's entry for importing a shared, signed HugMesh token.
+TOKEN_LABEL = "HugMesh token…"
 
 
 def limits_menu_label(limits=None) -> str:
@@ -238,11 +244,35 @@ class _Section:
         self.start_act = menu.addAction(f"Start {self.label}")
         self.stop_act = menu.addAction(f"Stop {self.label}")
         self.logs_act = menu.addAction(f"View {self.label} logs…")
+        if hasattr(self.node, "grant"):
+            # a node that can run under a shared HugMesh token (core/mesh_token.py)
+            menu.addAction(TOKEN_LABEL).triggered.connect(self._open_token)
         if self.web_url:
             menu.addAction(f"Open {self.label} web UI…").triggered.connect(self._open_web_ui)
         self.start_act.triggered.connect(self._start)
         self.stop_act.triggered.connect(self._stop)
         self.logs_act.triggered.connect(self._logs)
+
+    def _open_token(self) -> None:
+        try:
+            from .mesh_token_dialog import open_mesh_token_dialog
+            open_mesh_token_dialog()
+        except Exception:            # pragma: no cover - never let a dialog kill the tray
+            _log_swallowed("_open_token")
+        self.tray._refresh()
+
+    def grant_note(self) -> tuple[str, str]:
+        """(menu suffix, tooltip) for the node's HugMesh token: " — admin in
+        example.org, shell" for a usable one; a short flag plus the whole reason when
+        the imported token cannot be used; ("", "") without one."""
+        if not hasattr(self.node, "grant"):
+            return "", ""
+        g, why = self.node.grant()
+        if why:
+            return " — token unusable (hover for why)", why
+        if g is None:
+            return "", ""
+        return f" — {g.role} in {g.domain}, {'shell' if g.shell else 'no shell'}", ""
 
     def _open_web_ui(self) -> None:
         webbrowser.open(self.web_url)
@@ -271,8 +301,10 @@ class _Section:
 
     def refresh(self) -> None:
         st = self.node.status()
+        note, why = self.grant_note()
         self.status_act.setText(
-            f"{self.label}: {'running' if st.running else 'stopped'} ({st.detail})")
+            f"{self.label}: {'running' if st.running else 'stopped'} ({st.detail}){note}")
+        self.status_act.setToolTip(why)
         self.start_act.setEnabled(not st.running)
         self.stop_act.setEnabled(st.running)
 
@@ -360,7 +392,28 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
             return
         if saved is not None:
             self.refresh_limits_label()
-            self._notify("Resource limits saved", LIMITS_SAVED_NOTICE)
+            self._notify("Resource limits saved",
+                         LIMITS_SAVED_NOTICE + self.apply_limits_now())
+            self._refresh()
+
+    def apply_limits_now(self) -> str:
+        """Restart every RUNNING node that can take new limits, so a saved setting is
+        obeyed now rather than at some later start. Returns the note for the notice
+        ("" when nothing was running); a failure is reported, never hidden."""
+        notes = []
+        for s in self.sections:
+            apply = getattr(s.node, "apply_limits", None)
+            if apply is None:
+                continue
+            try:
+                if not s.node.status().running:
+                    continue
+                ok, why = apply()
+            except Exception as e:   # pragma: no cover - the notice must still be shown
+                ok, why = False, str(e)
+            notes.append(LIMITS_APPLIED_NOTE if ok else
+                         f" Restarting the running {s.label} under them failed: {why}")
+        return "".join(notes)
 
     # ---- ASK 16: running-builds submenu -------------------------------------------
     def refresh_running_builds(self) -> None:
@@ -448,7 +501,7 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
 
 # ── section factories + single-section wrappers + the ONE-tray factory ────────────────
 def _mesh_section(generator_dir: str) -> _Section:
-    return _Section(MeshNode(generator_dir), label="mesh node")
+    return _Section(GrantedMeshNode(generator_dir), label="mesh node")
 
 
 def _stack_section(generator_dir: str) -> _Section:

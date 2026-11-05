@@ -497,6 +497,45 @@ Tray-only (mesh-node controller):
 python -m hugmesh_studio --tray
 ```
 
+### Sharing a mesh with a signed HugMesh token
+
+A mesh admin can hand someone a single line of text, a **HugMesh token**, that lets that
+person's tray run a mesh node with exactly the rights it grants: an **access domain**, a
+**role** (user, mod, admin or superadmin) and whether **shell access** is allowed. The
+token carries the headscale pre-auth key and login server and is signed with the admin's
+`ssh-ed25519` key through OpenSSH (`ssh-keygen -Y`). OpenSSH ships with Windows 10/11 and
+Linux, so nothing extra is installed.
+
+Issue one (the pre-auth key is read from a file, never the command line):
+
+```sh
+python -m hugmesh_studio.core.mesh_token issue --key ~/.ssh/mesh_issuer \
+  --mesh west --domain example.org --role admin --shell \
+  --login-server https://hs.example.org --authkey-file key.txt --expires 7d
+```
+
+Send the token, and separately send the issuer fingerprint the command prints. In the
+tray, **HugMesh token…** imports it. The first token from a new issuer asks you to
+compare that fingerprint before it is trusted. After that, **Start mesh node** runs the
+node only as the token allows:
+
+- the token is checked again at every start (signature, trusted issuer, not expired);
+- the login server must be inside the token's domain;
+- only admin and superadmin can hold shell access, and the node's Tailscale SSH is on
+  (`--ssh`) only when it is granted, otherwise explicitly off;
+- the `tailscale up` arguments come from the token alone, so a `TS_EXTRA_ARGS` in the
+  environment cannot widen it.
+
+The tray's status line shows the grant (for example *admin in example.org, shell*). Without
+a token, the tray still runs a node on `TS_AUTHKEY`.
+
+The server is still the real gate. Whoever holds a token holds a real pre-auth key, so
+create that key with the domain's and role's tags, and keep shell in the headscale `ssh`
+policy to match.
+
+**Resource limits** saved from the tray apply to a token-run node too. If the mesh node
+is running when you save them, the tray restarts it under the new limits straight away.
+
 Fleet builds (every role for the selected platforms in one run; the GUI front-end to
 `scripts/build-all-roles.sh`). The wizard's Prior-sessions page also reaches it, but that
 button shows only when `HUGMESH_STUDIO_ADVANCED` is set:
