@@ -1089,6 +1089,7 @@ semanage() {
             printf '/root\t-d\tunconfined_u:object_r:user_home_dir_t:s0\n/root/.+\tunconfined_u:object_r:user_home_t:s0\n' >> "${SR_ROOT}/etc/selinux/mcs/contexts/files/file_contexts.homedirs" ;;
     lie)    ;;
     nohome) printf 'root:unconfined_u:s0-s0\n' >> "${SR_ROOT}/etc/selinux/mcs/seusers" ;;
+    nouser) printf '/root\t-d\tunconfined_u:object_r:user_home_dir_t:s0\n' >> "${SR_ROOT}/etc/selinux/mcs/contexts/files/file_contexts.homedirs" ;;
     fail)   echo "semanage: boom" >&2; return 1 ;;
   esac
   return 0
@@ -1107,6 +1108,8 @@ fi
 grep -q '/root -> user_home_dir_t' "${TMP}/rm.out" && ok "root mapping: says what /root maps to" || bad "root mapping: silent on success"
 mk_rootmap "${RM}"; rootmap lie "${RM}" && bad "root mapping: a semanage that exits 0 and writes NOTHING passed (exit code trusted over the store)" \
                                           || ok "root mapping: postcondition is read from seusers, not from semanage's exit status"
+mk_rootmap "${RM}"; rootmap nouser "${RM}" && bad "root mapping passed with a /root line in .homedirs but no root line in seusers" \
+                                             || ok "root mapping: a .homedirs line without the seusers mapping fails (each output is checked on its own)"
 mk_rootmap "${RM}"; rootmap nohome "${RM}" && bad "root mapping passed with no /root line in file_contexts.homedirs" \
                                              || ok "root mapping: seusers updated but no /root line in .homedirs fails (genhomedircon must have run)"
 mk_rootmap "${RM}"; rootmap good "${RM}" default_t && bad "root mapping passed while matchpathcon /root still says default_t" \

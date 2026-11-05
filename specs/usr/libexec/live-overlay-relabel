@@ -28,7 +28,7 @@ export PATH
 say() {
     # kmsg if it is there (it is, on the real boot path); stderr otherwise, so a
     # test harness and an initramfs shell both see the same words.
-    if ! printf 'live-overlay-relabel: %s\n' "$*" > "${KMSG}" 2>/dev/null; then
+    if ! printf 'live-overlay-relabel: %s\n' "$*" >> "${KMSG}" 2>/dev/null; then
         printf 'live-overlay-relabel: %s\n' "$*" >&2
     fi
 }
