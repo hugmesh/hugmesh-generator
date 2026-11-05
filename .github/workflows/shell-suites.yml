@@ -422,6 +422,7 @@ jobs:
             tests/scripts/test-fetch-retry-hardening.sh
             tests/scripts/test-frite-builder-input-validation.sh
             tests/scripts/test-github-auth-lib.sh
+            tests/scripts/test-frite-kernel-emulation-symbols.sh
             tests/scripts/test-guard-integrity.sh
             tests/scripts/test-harbor-robots-ownership.sh
             tests/scripts/test-host-accept-keywords.sh
