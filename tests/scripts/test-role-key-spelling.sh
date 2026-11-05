@@ -1444,14 +1444,24 @@ for e8_b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
         bash -c '
             err() { echo "ERR: $*"; }; info() { echo "INFO: $*"; }
             have_in_sysroot() { local d; for d in usr/bin usr/sbin bin sbin; do [ -e "${SYSROOT}/${d}/$1" ] && return 0; done; return 1; }
-            . "$1"; eval "$2"
+            . "$1"; . "$5"; eval "$2"
             NODE_ROLE=$3; SYSROOT=$4; BUILD_LIVE=false; BUILD_INSTALLER=true; ENCRYPT_ROOT=false
-            opi_assert_stage4_payload; echo "rc=0"' _ "${NRL}" "${e8_fn}" "$1" "$2" 2>&1
+            opi_assert_stage4_payload; echo "rc=0"' _ "${NRL}" "${e8_fn}" "$1" "$2" "${GEN}/scripts/_desktop-sso-lib.sh" 2>&1
         echo "exit=$?"
     }
     rm -rf "${E_TMP}/e8"; e8_mkroot "${E_TMP}/e8/node" ${e8_node_bins}
     e8_mkroot "${E_TMP}/e8/desk" ${e8_desk_bins}; : > "${E_TMP}/e8/desk/etc/init.d/display-manager"
     e8_mkroot "${E_TMP}/e8/desk-nodm" ${e8_desk_bins}
+    # A correct desktop root also carries the greeter SSO stack the builder bakes
+    # (scripts/_desktop-sso-lib.sh) plus what the payload emerge adds under it.
+    for e8_d in desk desk-nodm desk-nosso; do
+        [ "${e8_d}" = desk-nosso ] && { e8_mkroot "${E_TMP}/e8/desk-nosso" ${e8_desk_bins}; : > "${E_TMP}/e8/desk-nosso/etc/init.d/display-manager"; }
+        mkdir -p "${E_TMP}/e8/${e8_d}/etc/lightdm" "${E_TMP}/e8/${e8_d}/lib64/security"
+        printf '[LightDM]\n[Seat:*]\ngreeter-session=lightdm-gtk-greeter\n' > "${E_TMP}/e8/${e8_d}/etc/lightdm/lightdm.conf"
+        : > "${E_TMP}/e8/${e8_d}/usr/bin/python3"; : > "${E_TMP}/e8/${e8_d}/lib64/security/pam_exec.so"; : > "${E_TMP}/e8/${e8_d}/lib64/security/pam_echo.so"
+        [ "${e8_d}" = desk-nosso ] || bash -c '. "$1"; desktop_sso_bake "$2" "$3" true acme.example Acme mesh' _ \
+            "${GEN}/scripts/_desktop-sso-lib.sh" "${E_TMP}/e8/${e8_d}" "${GEN}/specs" >/dev/null 2>&1
+    done
     case "$(e8_run true "${E_TMP}/e8/node")" in
         *"payload assert OK"*"rc=0"*) ok "${e8_b}: node payload assert passes a root with the k8s floor and no desktop" ;;
         *) bad "${e8_b}: node payload assert failed a correct node root: $(e8_run true "${E_TMP}/e8/node" | tr '\n' ' ')" ;;
@@ -1468,6 +1478,14 @@ for e8_b in build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
     case "$(e8_run false "${E_TMP}/e8/desk-nodm")" in
         *"display-manager is missing"*"exit=1"*) ok "${e8_b}: desktop payload assert still refuses a missing display-manager" ;;
         *) bad "${e8_b}: desktop payload assert no longer checks display-manager" ;;
+    esac
+    case "$(e8_run false "${E_TMP}/e8/desk-nosso")" in
+        *"greeter SSO stack did not survive"*"exit=1"*) ok "${e8_b}: desktop payload assert refuses a root whose greeter SSO stack is missing" ;;
+        *) bad "${e8_b}: desktop payload assert does not check the greeter SSO stack" ;;
+    esac
+    case "$(e8_run true "${E_TMP}/e8/node")" in
+        *"greeter SSO"*) bad "${e8_b}: a NODE payload assert runs the desktop SSO check" ;;
+        *) ok "${e8_b}: a node payload assert never runs the desktop SSO check" ;;
     esac
 done
 

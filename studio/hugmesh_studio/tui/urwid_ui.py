@@ -149,8 +149,8 @@ class SessionsReview:
             self.status.set_text(
                 f"deleted session {row.session.id}"
                 + (" and its artifacts." if remove_artifacts else " (record only)."))
-        else:
-            self.status.set_text("not deleted: the session became active again.")
+        elif row is not None:
+            self.status.set_text(build_sessions.not_deleted_reason(row.session))
         self.refresh()
 
     # ── input ────────────────────────────────────────────────────────────────

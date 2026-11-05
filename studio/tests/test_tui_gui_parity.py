@@ -181,6 +181,28 @@ def test_qemu_flow_survives_the_card_removal_on_both_faces(wiz):
     assert j.flags["qemu_selected"] is True
 
 
+def test_the_emulation_backend_choices_are_one_tuple_on_every_face(wiz):
+    """QEMU for Windows beside Docker: the GUI page's chooser, the TUI screen's
+    BACKEND_KEY and the CLI all choose from ``qemu_windows.BACKENDS`` — the same ids,
+    the same labels, in the same order. The CLI side: the WHPX lines the TUI prints
+    name the flag ``qemu_windows.add_cli_arguments`` defines, and that very module."""
+    import argparse
+    from hugmesh_studio.core import qemu_windows as qw
+    from hugmesh_studio.tui import meshemu as tui_meshemu
+    combo = wiz.page(wiz._page_ids["meshemu"]).backend_combo
+    gui = tuple((combo.itemData(i), combo.itemText(i)) for i in range(combo.count()))
+    tui, backend = [], qw.BACKENDS[0][0]
+    for _ in qw.BACKENDS:
+        tui.append((backend, tui_meshemu.backend_label(backend)))
+        backend = tui_meshemu.next_backend(backend)
+    assert gui == tuple(tui) == qw.BACKENDS
+    studio, module = tui_meshemu.WHPX_CLI_PREFIXES
+    ap = argparse.ArgumentParser()
+    qw.add_cli_arguments(ap)
+    assert ap.parse_args([studio[1], "status"]).qemu_windows == ["status"]
+    assert module[-1] == qw.__name__
+
+
 def test_qemu_session_completeness_words_come_from_the_session_itself():
     """Both pickers describe an aborted build with the SESSION's own badge — the
     GUI combo renders ``BuildSession.summary()`` (which embeds it), the TUI
