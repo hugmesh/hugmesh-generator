@@ -136,7 +136,17 @@ hmr_pack_owner_args() {
     # the target's defined ids (passwd/group field 3) and turns every census id the
     # target does not define into a "+ID root:0" map line; it prints
     # "<members> <non-root-owned members>" for the checks and the log below.
-    census="$({ find "${sysroot}" \( -path "${sysroot}/proc" -o -path "${sysroot}/sys" -o -path "${sysroot}/dev" \) -prune \
+    # It walks what the ARCHIVE will carry: every ARM builder's pack lines exclude
+    # ./usr/src, ./var/cache and ./tmp/* (and proc/sys/dev are never packed), so
+    # those are pruned here too. Before this prune the log said "45 of 49203
+    # entries are not root:root" for an rpi5 tarball whose members numbered 49190
+    # with 36 non-root among them (2026-11-04 proof run): the nine extra were
+    # portage-owned entries under var/cache that tar never archived. The number
+    # in the log is now the number a `tar -tv --numeric-owner` of the tarball
+    # gives back (tests/scripts/test-stage4-pack-ownership.sh pins the identity).
+    census="$({ find "${sysroot}" \( -path "${sysroot}/proc" -o -path "${sysroot}/sys" -o -path "${sysroot}/dev" \
+                                     -o -path "${sysroot}/usr/src" -o -path "${sysroot}/var/cache" \
+                                     -o -path "${sysroot}/tmp/*" \) -prune \
                   -o -exec stat -c '%u %g' {} + 2>/dev/null || true; } \
       | awk -v pw="${sysroot}/etc/passwd" -v gr="${sysroot}/etc/group" -v um="${um}" -v gm="${gm}" '
           BEGIN {
@@ -166,7 +176,7 @@ hmr_pack_owner_args() {
     HMR_PACK_OWNER_ARGS=(--numeric-owner)
     if [ "${nu}" -gt 0 ]; then HMR_PACK_OWNER_ARGS+=("--owner-map=${um}"); fi
     if [ "${ng}" -gt 0 ]; then HMR_PACK_OWNER_ARGS+=("--group-map=${gm}"); fi
-    _hmr_info "stage4 ownership: preserving the target's package owners (${kept} of ${members} entries are not root:root); ${nu} uid(s) / ${ng} gid(s) the target does not define are mapped to root"
+    _hmr_info "stage4 ownership: preserving the target's package owners (${kept} of the ${members} entries the tarball carries are not root:root; usr/src, var/cache and tmp/* are not packed and not counted); ${nu} uid(s) / ${ng} gid(s) the target does not define are mapped to root"
     return 0
 }
 

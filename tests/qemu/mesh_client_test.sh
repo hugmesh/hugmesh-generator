@@ -308,6 +308,105 @@ prov provision_tailscale "$(printf '%s' "${TSM}" | jq -c '.tailscale.up_args="--
 [ "$(grep '^tailscale up ' "${CALLS}" | grep -o -- '--timeout' | wc -l)" -eq 1 ] \
     && _ok "E4 an explicit --timeout in up_args wins (no second --timeout)" || _bad "E4 duplicate timeout: $(grep '^tailscale up ' "${CALLS}")"
 
+# ═══ E5/E6. the CONTROL node's own client: loopback login, session kept across the ═══
+# ═══ headscale restart publish_cp_dns_record makes (2026-11-04 proof run)         ═══
+# tailscale 1.78.1 + headscale 0.23.0 on http://10.77.0.13:8080: the restart left the
+# pki node's own client "forcing port 443 dial due to recent noise dial" for six
+# minutes (35x PollNetMap deadline, Online=false). tailscale's controlhttp never
+# starts the plaintext dial once 443 is forced, EXCEPT for a login server on
+# 127.0.0.1/localhost (controlclient/noise.go leaves httpsPort empty there). So the
+# control node logs its own client in over loopback, at headscale's listen port, and
+# after the restart checks the session and restarts tailscaled if it is gone.
+echo "══ E5/E6. provision.sh: the control node's own client (loopback login; regain after the restart) ══"
+CLIB="${WORK}/ctl.sh"
+{
+    echo 'log()  { echo "LOG $*"; }; warn() { echo "WARN $*"; }; have() { command -v "$1" >/dev/null 2>&1; }'
+    echo 'jqm()  { jq -r "$1" "${MANIFEST}" 2>/dev/null; }'
+    echo 'resolve_endpoint() { echo "http://10.77.0.13:8080"; }; resolve_control_endpoint() { echo "http://10.77.0.13:8080"; }'
+    echo 'publish_cp_dns_record() { echo "publish_cp_dns_record" >> "${CALLS}"; rc-service headscale restart; }'
+    echo 'provision_headscale_policy_sync() { echo "provision_headscale_policy_sync" >> "${CALLS}"; }'
+} > "${CLIB}"
+sed -n '/^HEADSCALE_CONFIG=/p' "${PROV}" >> "${CLIB}"
+extract "${PROV}" control_self_login_server "${CLIB}"
+extract "${PROV}" control_client_regain "${CLIB}"
+extract "${PROV}" provision_tailscale "${CLIB}"
+CSTUB="${WORK}/cstub"; mkdir -p "${CSTUB}"
+# tailscale: logs argv; `status --json` answers Online per TS_ONLINE: true | false |
+# after-restart (true only once CALLS records a tailscaled restart).
+cat > "${CSTUB}/tailscale" <<'EOF'
+#!/bin/bash
+echo "tailscale $*" >> "${CALLS}"
+if [ "$1" = status ]; then
+    on=false
+    case "${TS_ONLINE:-false}" in
+        true) on=true ;;
+        after-restart) grep -F -x 'rc-service tailscaled restart' "${CALLS}" >/dev/null && on=true ;;
+    esac
+    printf '{"BackendState":"Running","Self":{"Online":%s}}\n' "${on}"
+fi
+exit 0
+EOF
+printf '#!/bin/bash\necho "rc-service $*" >> "${CALLS}"\nexit 0\n' > "${CSTUB}/rc-service"
+printf '#!/bin/bash\necho "headscale $*" >> "${CALLS}"\nexit "${HS_RC:-0}"\n' > "${CSTUB}/headscale"
+for t in rc-update sleep tailscaled; do printf '#!/bin/bash\n:\n' > "${CSTUB}/${t}"; done
+chmod +x "${CSTUB}"/*
+cprov() {  # FUNC MANIFEST-JSON [HEADSCALE-CONFIG-TEXT] -> CALLS + POUT
+    local d; d="${WORK}/cprov-$RANDOM"; mkdir -p "${d}/keys/tailscale" "${d}/etc/headscale"
+    printf '%s\n' "$2" > "${d}/keys/provision.json"
+    printf 'tskey-fixture-0123\n' > "${d}/keys/tailscale/authkey"
+    [ -n "${3-}" ] && printf '%s\n' "$3" > "${d}/etc/headscale/config.yaml"
+    CALLS="${d}/calls"; : > "${CALLS}"
+    POUT="$(CALLS="${CALLS}" BASE="${d}/keys" MANIFEST="${d}/keys/provision.json" HEADSCALE_CONFIG="${d}/etc/headscale/config.yaml" \
+            TS_ONLINE="${TS_ONLINE:-true}" HS_RC="${HS_RC:-0}" \
+            PATH="${CSTUB}:${PATH}" bash -c 'set -u; . "$1"; mkdir() { command mkdir "$@" 2>/dev/null || true; }; "$2"' _ "${CLIB}" "$1" 2>&1)"
+}
+CTL='{"tailscale":{"enabled":true,"authkey_file":"tailscale/authkey","up_args":"--advertise-tags=tag:hugmesh,tag:pki --accept-routes"},"headscale":{"enabled":true,"server_url":"http://10.77.0.13:8080"}}'
+cprov provision_tailscale "${CTL}" $'server_url: http://10.77.0.13:8080\nlisten_addr: 0.0.0.0:8080\n'
+up="$(grep '^tailscale up ' "${CALLS}")"
+case " ${up} " in
+    *" --login-server http://127.0.0.1:8080 "*) _ok "E5 the control node's OWN client logs in over loopback (http://127.0.0.1:8080), not the address the fleet dials" ;;
+    *) _bad "E5 control node login server: '${up}'" ;;
+esac
+cprov provision_tailscale "${CTL}" $'listen_addr: "0.0.0.0:9090"\n'
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server http://127.0.0.1:9090 "*) _ok "E5 ...at the port headscale's listen_addr names (9090)" ;; *) _bad "E5 listen_addr port ignored: $(grep '^tailscale up ' "${CALLS}")" ;; esac
+cprov provision_tailscale "${CTL}"
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server http://127.0.0.1:8080 "*) _ok "E5 ...and 8080 when no config.yaml is readable" ;; *) _bad "E5 no-config fallback: $(grep '^tailscale up ' "${CALLS}")" ;; esac
+cprov provision_tailscale "$(printf '%s' "${CTL}" | jq -c '.tailscale.login_server="http://mesh.example:8080"')"
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server http://mesh.example:8080 "*) _ok "E5 an explicit .tailscale.login_server still wins on the control node" ;; *) _bad "E5 explicit login_server lost: $(grep '^tailscale up ' "${CALLS}")" ;; esac
+cprov provision_tailscale "$(printf '%s' "${CTL}" | jq -c '.headscale.enabled=false')"
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server http://10.77.0.13:8080 "*) _ok "E5 a WORKER still dials the control node's address (resolve_control_endpoint), never loopback" ;; *) _bad "E5 worker login server: $(grep '^tailscale up ' "${CALLS}")" ;; esac
+# E6 — order and regain. With the session kept (Online true): publish -> headscale
+# restart -> headscale answers -> status checked -> no tailscaled restart.
+TS_ONLINE=true cprov provision_tailscale "${CTL}" $'listen_addr: 0.0.0.0:8080\n'
+n_pub="$(grep -n -x 'publish_cp_dns_record' "${CALLS}" | cut -d: -f1)"
+n_hs="$(grep -n -x 'rc-service headscale restart' "${CALLS}" | cut -d: -f1)"
+n_ls="$(grep -n -x 'headscale nodes list' "${CALLS}" | head -1 | cut -d: -f1)"
+n_st="$(grep -n -x 'tailscale status --json' "${CALLS}" | head -1 | cut -d: -f1)"
+if [ -n "${n_pub}" ] && [ -n "${n_hs}" ] && [ -n "${n_ls}" ] && [ -n "${n_st}" ] && [ "${n_pub}" -lt "${n_hs}" ] && [ "${n_hs}" -lt "${n_ls}" ] && [ "${n_ls}" -lt "${n_st}" ] \
+   && ! grep -F -x 'rc-service tailscaled restart' "${CALLS}" >/dev/null && printf '%s' "${POUT}" | grep -F 'mesh client is Online after the headscale restart' >/dev/null; then
+    _ok "E6 after the CP-record headscale restart the control node waits for headscale, checks its own session, and leaves an Online client alone"
+else
+    _bad "E6 kept-session order (pub ${n_pub:-none} < hs-restart ${n_hs:-none} < nodes-list ${n_ls:-none} < status ${n_st:-none}): $(tr '\n' ';' < "${CALLS}") :: ${POUT}"
+fi
+TS_ONLINE=after-restart cprov provision_tailscale "${CTL}" $'listen_addr: 0.0.0.0:8080\n'
+n_hs="$(grep -n -x 'rc-service headscale restart' "${CALLS}" | cut -d: -f1)"
+n_tr="$(grep -n -x 'rc-service tailscaled restart' "${CALLS}" | cut -d: -f1)"
+if [ -n "${n_hs}" ] && [ -n "${n_tr}" ] && [ "${n_hs}" -lt "${n_tr}" ] \
+   && printf '%s' "${POUT}" | grep -F 'NOT online' >/dev/null && printf '%s' "${POUT}" | grep -F 'mesh client is Online after the tailscaled restart' >/dev/null; then
+    _ok "E6 a session lost to the restart (Online false) -> tailscaled is restarted after headscale, and the regained session is logged"
+else
+    _bad "E6 lost-session regain (hs-restart ${n_hs:-none}, ts-restart ${n_tr:-none}): $(tr '\n' ';' < "${CALLS}") :: ${POUT}"
+fi
+n_before="$(grep -c -x 'tailscale status --json' "${CALLS}")"
+[ "${n_before}" -ge 21 ] && _ok "E6 the Online check is polled (${n_before} status reads across both windows), not a one-shot" || _bad "E6 only ${n_before} status read(s)"
+TS_ONLINE=false cprov provision_tailscale "${CTL}" $'listen_addr: 0.0.0.0:8080\n'
+[ "$(grep -c -x 'rc-service tailscaled restart' "${CALLS}")" -eq 1 ] && printf '%s' "${POUT}" | grep -F 'still not online after the tailscaled restart' >/dev/null \
+    && _ok "E6 a session that never comes back: ONE tailscaled restart, then a warning that names it (bounded, never a loop)" \
+    || _bad "E6 never-online: restarts=$(grep -c -x 'rc-service tailscaled restart' "${CALLS}") :: ${POUT}"
+HS_RC=1 TS_ONLINE=true cprov provision_tailscale "${CTL}" $'listen_addr: 0.0.0.0:8080\n'
+printf '%s' "${POUT}" | grep -F 'headscale did not answer within 60s' >/dev/null && grep -F -x 'tailscale status --json' "${CALLS}" >/dev/null \
+    && _ok "E6 headscale never answering is bounded (30 tries) and the client is still checked" || _bad "E6 headscale-down bound: ${POUT}"
+
 # ═══════ F. NetworkManager must hand over `net` on a slow boot (cluster nodes) ═══════
 echo "══ F. NetworkManager INACTIVE_TIMEOUT (builders) + the in-guest NM grade ══"
 for b in build-rpi5-stage4.sh build-x86-host-stage4.sh; do

@@ -223,6 +223,31 @@ else
     else
         bad "gate (user-owned, real stat): $(printf '%s' "${o}" | tr '\n' ' ')"
     fi
+    # The numbers the census LOGS must be the numbers the tarball CARRIES. The rpi5
+    # make log of 2026-11-04 said "45 of 49203 entries are not root:root" while
+    # `tar -tv` of that tarball listed 49190 members, 36 of them non-root: the census
+    # walked var/cache (portage-owned distfiles) that every ARM pack line excludes.
+    # Here: a fixture with members under the three excluded paths, packed with the
+    # builders' own excludes; the census line and the listing must agree exactly.
+    U4="${WORK}/u-excl"; mk_userfix "${U4}" yes
+    mkdir -p "${U4}/var/cache/distfiles" "${U4}/usr/src/linux" "${U4}/tmp/portage"
+    : > "${U4}/var/cache/distfiles/a.tar"; : > "${U4}/usr/src/linux/Makefile"; : > "${U4}/tmp/portage/x"
+    o="$(argsof "${WORK}/bin-gate" "${U4}")"
+    flags="$(printf '%s\n' "${o}" | sed -n 's/^ARG //p')"
+    mapfile -t fl <<< "${flags}"
+    tar -C "${U4}" "${fl[@]}" --exclude='./usr/src' --exclude='./var/cache' --exclude='./tmp/*' -cJf "${WORK}/u4.tar.xz" . 2>/dev/null
+    lst="$(owners_of "${WORK}/u4.tar.xz")"
+    t_all="$(printf '%s\n' "${lst}" | grep -c .)"
+    t_nonroot="$(printf '%s\n' "${lst}" | awk '$2 != "0/0"' | grep -c .)"
+    c_kept="$(printf '%s\n' "${o}" | sed -n 's/.*package owners (\([0-9]*\) of the \([0-9]*\) entries.*/\1/p' | head -1)"
+    c_all="$(printf '%s\n' "${o}" | sed -n 's/.*package owners (\([0-9]*\) of the \([0-9]*\) entries.*/\2/p' | head -1)"
+    if [ -n "${c_all}" ] && [ "${c_all}" = "${t_all}" ] && [ "${c_kept}" = "${t_nonroot}" ] && [ "${t_all}" -gt 0 ]; then
+        ok "census counts what the tarball carries: ${c_kept} of ${c_all} logged == ${t_nonroot} of ${t_all} listed (usr/src, var/cache, tmp/* pruned like the pack lines)"
+    else
+        bad "census/tarball disagree: logged '${c_kept:-?} of ${c_all:-?}', tar lists ${t_nonroot} of ${t_all} (log: $(printf '%s' "${o}" | grep -F 'stage4 ownership' | tr '\n' ' '))"
+    fi
+    printf '%s\n' "${o}" | grep -F 'not packed and not counted' >/dev/null \
+        && ok "census log says which paths are outside the count" || bad "census log does not name the unpacked paths: $(printf '%s' "${o}" | grep -F 'stage4 ownership')"
 fi
 
 # Runs as ANY user (as root the fixture is simply root's, which the gate passes).
