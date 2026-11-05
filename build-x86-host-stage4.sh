@@ -5063,6 +5063,20 @@ greeter-session=lightdm-gtk-greeter
 session-wrapper=/etc/lightdm/Xsession
 user-session=${_user_session}
 LIGHTDM
+    # Emulated-desktop display (QEMU runner --display spice): the session-side
+    # autofit applier (xrandr --auto on a virtio-gpu/qxl preferred-mode change; the
+    # LXDE session has no output daemon, so without it a viewer resize is a scaled
+    # bitmap) and the boot-time spice-vdagentd starter (only when the SPICE virtio
+    # port exists, so a physical laptop never shows a failed service). Packages come
+    # from packages-desktop.list; the kernel channel bits from kernel/desktop.config.
+    # UNAFFILIATED: same machinery under neutral names (cf. media-detect above).
+    if ${UNAFFILIATED}; then _af_dir="/usr/libexec/gentoo"; _af_desktop="vm-autofit.desktop"; else _af_dir="/usr/libexec/hugmesh"; _af_desktop="hugmesh-vm-autofit.desktop"; fi
+    mkdir -p "${SYSROOT}${_af_dir}" "${SYSROOT}/etc/xdg/autostart" "${SYSROOT}/etc/local.d"
+    cp "${SHARED_SPECS}/usr/libexec/hugmesh/vm-autofit" "${SYSROOT}${_af_dir}/vm-autofit"
+    sed "s|^Exec=/usr/libexec/hugmesh/vm-autofit$|Exec=${_af_dir}/vm-autofit|" \
+        "${SHARED_SPECS}/etc/xdg/autostart/hugmesh-vm-autofit.desktop" > "${SYSROOT}/etc/xdg/autostart/${_af_desktop}"
+    cp "${SHARED_SPECS}/etc/local.d/20-spice-vdagent.start" "${SYSROOT}/etc/local.d/20-spice-vdagent.start"
+    chmod 0755 "${SYSROOT}${_af_dir}/vm-autofit" "${SYSROOT}/etc/local.d/20-spice-vdagent.start"
     # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
     # the Casdoor/OIDC device-flow helper in front of the local password path, the
     # hint the greeter shows, and (SSO on) the baked desktop-governance templates
