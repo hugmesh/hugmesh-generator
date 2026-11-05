@@ -296,22 +296,25 @@ claim_display_ports 22300 hugmesh-qemu-dev-a && _ok "22400 claimed for the row o
 eq "$(cat "${PORTLOCK_DIR}/22400/owner")" "hugmesh-qemu-dev-a" "the claim names the container"
 # A rival already holds 22401's door: the row on 22301 must be refused (and docker
 # publishes 22301 for someone else anyway — the helper is about the DERIVED port).
-mkdir -p "${PORTLOCK_DIR}/22402"; echo some-other-container > "${PORTLOCK_DIR}/22402/owner"
-claim_display_ports 22302 hugmesh-qemu-dev-b && _bad "a door held by a live container was claimed again" || _ok "a door held by another container refuses the row"
+# (High in the range on purpose: this workstation may have REAL devices up on
+# 22300+, whose doors would sit on 22400+; the real port_free below must see
+# only the listener this test plants.)
+mkdir -p "${PORTLOCK_DIR}/22498"; echo some-other-container > "${PORTLOCK_DIR}/22498/owner"
+claim_display_ports 22398 hugmesh-qemu-dev-b && _bad "a door held by a live container was claimed again" || _ok "a door held by another container refuses the row"
 # With the web port armed, a LISTENER on <ssh+200> must refuse the row AND give
 # back the <ssh+100> claim it had just made (a row is one triple, not a mix).
 python3 - "${TMP}/listening" <<'PY' &
 import socket, sys, time
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", 22503)); s.listen(1)
+s.bind(("127.0.0.1", 22597)); s.listen(1)
 open(sys.argv[1], "w").close()
 time.sleep(30)
 PY
 LPID=$!
 for _ in $(seq 40); do [ -e "${TMP}/listening" ] && break; command sleep 0.1; done
 DISPLAY_WEB=true
-claim_display_ports 22303 hugmesh-qemu-dev-c && _bad "a row whose web port is in use was admitted" || _ok "a listener on <ssh+200> refuses the row"
-[ -d "${PORTLOCK_DIR}/22403" ] && _bad "the <ssh+100> claim leaked after the <ssh+200> refusal" || _ok "...and the <ssh+100> claim it made is given back"
+claim_display_ports 22397 hugmesh-qemu-dev-c && _bad "a row whose web port is in use was admitted" || _ok "a listener on <ssh+200> refuses the row"
+[ -d "${PORTLOCK_DIR}/22497" ] && _bad "the <ssh+100> claim leaked after the <ssh+200> refusal" || _ok "...and the <ssh+100> claim it made is given back"
 DISPLAY_WEB=false
 release_display_ports 22300 hugmesh-qemu-dev-a
 [ -d "${PORTLOCK_DIR}/22400" ] && _bad "release_display_ports left the claim" || _ok "release_display_ports drops the row's door claim"
@@ -344,6 +347,13 @@ release_port_for_record "${DEVICES_DIR}/old.json" && _ok "a record from before t
 
 echo
 echo "start_device_row — EXECUTED: the docker run binds 127.0.0.1 for ssh AND the door"
+# From here on the host's real port state is taken out of the picture: a
+# developer box may have real keep-alive devices listening on 22300+ (observed
+# 2026-11-04: two of them), and these legs pin the BINDING and the DERIVATION
+# of the published ports, not which ones happened to be free. The real
+# port_free was exercised above with a planted listener, and devices_test.sh
+# owns the allocator's three exclusions.
+port_free() { return 0; }
 rm -rf "${PORTLOCK_DIR}" "${TMP}/docker-run.argv"; DEV_PORTS_TAKEN=()
 info() { :; }; warn() { echo "WARN: $*" >&2; }
 row="$(start_device_row x86 desktop "${ARTIFACTS}/hugmesh-x86-amd64-desktop-test-1.img")"; rc=$?
