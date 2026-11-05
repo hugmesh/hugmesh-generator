@@ -361,18 +361,18 @@ if ssh_allowed "tag:superadmin" "superadmin" "tag:mesh_west-02 tag:hugmesh"; the
     bad "superadmin must NOT reach a node outside its mesh"
 else ok "node lacks tag:mesh_east-01 -> superadmin DENIED (mesh-membership is the precondition)"; fi
 
-echo "-- Case 18: FORGED TAG — server-assigned dst tags are control-owned, not self-applyable [REAL-LAYER-A] --"
-# A node self-advertising tag:dev_<otherfp> cannot win: the dst tags live in
-# tagOwners under the control 'hugmesh' user only; the LIVE override (forced tag
-# beats --advertise-tags) is a NEEDS-HEADSCALE assertion, but the policy ENCODES
-# the non-self-applyability here.
+echo "-- Case 18: FORGED TAG — security tags are owned by NO user, so not self-applyable [REAL-LAYER-A] --"
+# A node self-advertising tag:dev_<otherfp> or tag:superadmin cannot win ONLY because
+# no user owns those tags: headscale 0.23 grants a node its forced tags PLUS every
+# advertised tag its own user owns, so a forced tag does not cancel a different
+# advertised one. Every pre-auth key is minted for "hugmesh"; had "hugmesh" owned
+# these, any key holder could claim them. The live rejection is proven by
+# tests/device-registry/test-headscale-security-tag-live.sh.
 ownerok=1
-strip "${LA_RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == ["hugmesh"]' >/dev/null 2>&1 || ownerok=0
-strip "${LA_RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == ["hugmesh"]' >/dev/null 2>&1 || ownerok=0
-[ "${ownerok}" = 1 ] && ok "tag:dev_<fpA> + tag:superadmin owned by control 'hugmesh' only -> a node cannot self-advertise a forged dst" \
-                     || bad "server-forced dst tags must be control-owned in tagOwners"
-echo "   ([MODEL] that a LIVE headscale REJECTS a forged --advertise-tags and the"
-echo "    forced tag WINS is NEEDS-HEADSCALE; the non-self-applyable ownership is asserted here.)"
+strip "${LA_RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == []' >/dev/null 2>&1 || ownerok=0
+strip "${LA_RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == []' >/dev/null 2>&1 || ownerok=0
+[ "${ownerok}" = 1 ] && ok "tag:dev_<fpA> + tag:superadmin have an EMPTY owner list -> no node can self-advertise them" \
+                     || bad "security tags must have an EMPTY owner list in tagOwners (an owner is a user whose key holders can claim the tag)"
 
 # ───────────────────────────────────────────────────────────────────────────────
 echo
