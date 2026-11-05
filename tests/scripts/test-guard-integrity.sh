@@ -933,6 +933,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # adds ONE gated suite (tests/scripts/test-games-two-realms.sh, in shell-suites.yml), merged
 # origin/main 8ed37a3c (207 of 248 above). MEASURED by RUNNING this file on the merged tree with
 # GUARD_PREMERGE=0: '208 of 249 suites are named by a pull_request-triggered workflow', ungated SET 41.
+# 208 unchanged, denominator 249 -> 250, on 2026-11-05 when the same branch added
+# tests/casdoor/test-casdoor-render-boot.sh (docker: it boots the real casdoor image on a
+# conf rendered from the manifests), recorded in PREMERGE_UNGATED below with its reason, so
+# only the denominator and the ungated SET (41 -> 42) moved. Also on that date
+# tests/scripts/test-games-two-realms.sh MOVED from shell-suites.yml's debian/python job to
+# its tool-heavy job (curl + kubectl live there): a move, not a listing change, so the 208
+# is the same 208. MEASURED by RUNNING this file: '208 of 250 suites are named by a
+# pull_request-triggered workflow'.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
@@ -1104,6 +1112,21 @@ PREMERGE_UNGATED=(
   # PREMERGE_BASELINE by one.
   tests/build-image-dial-identity.sh
   tests/casdoor/test-jwt-custom-token.sh
+  # Needs a docker daemon: it renders every Casdoor's app.conf with the manifest's own
+  # initContainer script inside casbin/casdoor:3.80.0, then boots that image against
+  # postgres:16-alpine on a password carrying | & / \ ' " $ % # ; ? @ a tab and (after
+  # ALTER USER) a newline, and asserts /api/health plus the seeded catalog. No
+  # shell-suites container job has a daemon (that is why test-jwt-custom-token.sh above
+  # is here too), and the one job that does (host docker) is a listing in
+  # .github/workflows/shell-suites.yml that the change adding this suite (#848) was
+  # permitted to touch only to re-home test-games-two-realms.sh. It exits 2 without
+  # docker, never 0. Gated post-merge by .gitlab-ci.yml's casdoor-render-boot-gate; run
+  # it with `make casdoor-render-boot-check`. The hermetic half (the same render script
+  # under sh, the same hostile values, no containers) IS pre-merge gated inside
+  # tests/scripts/test-games-two-realms.sh. MEASURED 2026-11-05 on a Linux host with
+  # docker: 39 passed / 0 failed, rc=0. TO CLOSE THIS: add the path to the host-docker
+  # job's SUITES list in shell-suites.yml, DELETE this entry, raise PREMERGE_BASELINE by one.
+  tests/casdoor/test-casdoor-render-boot.sh
   # NOT an exemption, a wiring gap: this suite is offline (bash + python3 + PyYAML)
   # and WOULD run in the shell-suites image, but wiring it into
   # .github/workflows/shell-suites.yml is an edit the author of this suite was not

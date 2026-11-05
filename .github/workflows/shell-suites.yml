@@ -570,7 +570,6 @@ jobs:
               tests/scripts/test-first-run-lib.sh
               tests/scripts/test-fragment-route-target.sh
               tests/scripts/test-games-screens-wiring.sh
-              tests/scripts/test-games-two-realms.sh
               tests/scripts/test-gitlab-ci-wellformed.sh
               tests/scripts/test-headscale-oidc-secret-staging.sh
               tests/scripts/test-mfa-raw-jwt-posture.sh
@@ -826,12 +825,27 @@ jobs:
             | tar -xz -C /tmp linux-amd64/helm
           mv /tmp/linux-amd64/helm /usr/local/bin/helm
           curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl
+          # The binary's checksum is pinned HERE, not fetched next to it: a mirror that
+          # served a different v1.31.0 would otherwise verify against its own .sha256.
+          # (sha256 of kubectl v1.31.0 linux/amd64, dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl.sha256,
+          # re-measured 2026-11-05 on the downloaded binary.)
+          echo "7c27adc64a84d1c0cc3dcf7bf4b6e916cc00f3f576a2dbac51b318d926032437  /usr/local/bin/kubectl" | sha256sum -c -
           chmod +x /usr/local/bin/kubectl
       - uses: actions/checkout@v4
       - name: trust the workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: preflight
         run: |
+          # tests/scripts/test-games-two-realms.sh (hugmesh-generator#848) is here, and
+          # NOT in the debian/python job, for curl + kubectl: it asks ghcr.io for the
+          # pinned backend tag's manifest and clones the hugmesh-games commit graph
+          # (curl), renders manifests/games the way ArgoCD will (kubectl kustomize) and
+          # runs the Casdoor render script (awk). In python:3.12-slim with the debian
+          # job's apt line it exits 2 on `FATAL: curl required` before asserting
+          # anything (run 41950923587, job 126994785328), so its online pin verifier had
+          # never once executed in CI. MEASURED 2026-11-05 in python:3.12-slim with THIS
+          # job's apt line + helm + the checksum-verified kubectl, CI=1: 77 passed /
+          # 0 failed, rc=0, the online verifier and its five controls among them.
           # kubectl matters MORE than usual here: without it
           # tests/stack/test-mdm-manifests-render.sh exits 0 having rendered and
           # asserted nothing. If the download above ever silently fails, this job
@@ -853,7 +867,7 @@ jobs:
           # it renders the fe-gateway chart with `vanityDomains[i]` parameters exactly
           # as ArgoCD does, and FAILS (never skips) without helm.
           missing=""
-          for b in bash jq openssl python3 git helm kubectl checkpolicy make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          for b in bash jq openssl python3 git helm kubectl checkpolicy make curl awk; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
           python3 -c "import yaml" || { echo "::error::pyyaml missing"; exit 1; }
           echo "preflight ok"
@@ -871,6 +885,7 @@ jobs:
             tests/scripts/test-tor-onion-ingress.sh
             tests/scripts/test-optional-netpol-autosync.sh
             tests/scripts/test-gateway-vanity-domains.sh
+            tests/scripts/test-games-two-realms.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

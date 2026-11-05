@@ -19,21 +19,38 @@
 #   egress       tier-egress carries the paths both realms need, before anyone carves
 #                it into the manual overlay.
 #   images       the kustomize image names are the published set; the backend image is
-#                judged RENDERED (kubectl kustomize), not by the newTag text: the string
-#                must be exactly what the images: entry composes (no patch replaces it),
-#                the tag is a sha-<12>, a release, or the placeholder that resolves to
-#                nothing (and then no digest may ride along: a runtime pulls by digest
-#                and ignores the tag), never a floating name. For a sha-/release tag the
-#                public registry is asked for the tag's manifest: a pinned digest must
-#                equal it, and the image's revision label must be a hugmesh-games main
-#                commit descending from #52's merge (3ae21def; a release branch counts).
+#                judged as ARGOCD WILL DEPLOY IT: apps/50-games.yaml must render exactly
+#                specs/cluster/manifests/games with no spec.source.kustomize (images,
+#                patches, namePrefix: argocd-repo-server applies those before the build)
+#                and no other path; then every container and initContainer of every
+#                workload in `kubectl kustomize` of that directory is read: the backend
+#                image runs in exactly one container (Deployment hugmesh-games/games),
+#                the two-realm environment is handed to that container only, no second
+#                workload carries app=hugmesh-games (the Services' selector), nothing
+#                pulls from ghcr.io, and that one image is exactly what the images: entry
+#                composes (no patch replaces it), its tag a sha-<12>, a release, or the
+#                placeholder that resolves to nothing (and then no digest may ride along:
+#                a runtime pulls by digest and ignores the tag), never a floating name.
+#                For a sha-/release tag the public registry is asked for the RENDERED
+#                tag's manifest: a pinned digest must equal it, and the image's revision
+#                label must be a hugmesh-games commit descending from #52's merge
+#                (3ae21def; a release branch counts).
+#   scheduling   every nodeSelector in the games tier (games, games-portal,
+#                casdoor-games) names a label the host KEYS profile sets AND the
+#                backend-gpu role's ROLE_LABELS and keys hint carry; a pair nobody sets
+#                is a pod that stays Pending forever.
 #   stores (2)   the keyspace Job is a Sync-phase hook in a wave between the stores and
 #                the BFF: a PostSync hook in the same Application as the pod that needs
 #                the keyspace never runs.
 #   casdoor      no Casdoor app.conf relies on in-app `${ENV||default}` interpolation
 #                (casbin/casdoor does not expand it inside a value; the as-shipped
 #                casdoor-games conf could never connect): every __TOKEN__ in the template
-#                is rendered by a render-app-conf initContainer the pod mounts.
+#                is rendered by a render-app-conf initContainer the pod mounts, and that
+#                initContainer's script is RUN here (sh, the manifest's args, hostile
+#                values carrying | & / \ ' " $ # ; ? @ and spaces): no byte printed, no
+#                token left, every value read back byte for byte (the DB user and
+#                password through the postgres:// URL the way lib/pq decodes it).
+#                tests/casdoor/test-casdoor-render-boot.sh boots the real image on it.
 #   sync         hugmesh-actions' GM mirror into the games realm is OFF: GM_SYNC_ENABLED
 #                is not true, no games-side client in the pod, first tick 100 years out,
 #                no backend -> games egress, no `mesh-*` role seeded, every seeded
@@ -48,10 +65,13 @@
 # Negative controls: each mutation goes on a scratch copy, the copy must really differ,
 # and the analyser must go RED naming the planted defect.
 #
-# bash + python3 + PyYAML + kubectl (for `kubectl kustomize`; no cluster, no docker).
-# Offline, except the pinned-build proof: ghcr.io (anonymous manifest reads) and a
-# commit-graph-only clone of the public hugmesh-games repo. Both are REQUIRED in CI and
-# reported as NOT VERIFIED offline; a placeholder tag needs no call.
+# bash + python3 + PyYAML + kubectl (for `kubectl kustomize`; no cluster, no docker) +
+# curl + awk (the Casdoor render). Offline, except the pinned-build proof: ghcr.io
+# (anonymous manifest reads) and a commit-graph-only clone of the public hugmesh-games
+# repo. Both are REQUIRED in CI and reported as NOT VERIFIED offline; a placeholder tag
+# needs no call. In .github/workflows/shell-suites.yml this suite is in the tool-heavy
+# job, the one with curl and a checksum-verified kubectl (the debian/python image has
+# neither, and this suite exits 2 there rather than skipping).
 # =============================================================================
 set -uo pipefail
 
@@ -62,6 +82,7 @@ command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 required (refusing 
 command -v curl >/dev/null 2>&1 || { echo "FATAL: curl required for the registry reads (refusing to skip)" >&2; exit 2; }
 python3 -c 'import yaml' 2>/dev/null || { echo "FATAL: PyYAML required (refusing to skip)" >&2; exit 2; }
 command -v kubectl >/dev/null 2>&1 || { echo "FATAL: kubectl required for kubectl kustomize (refusing to skip)" >&2; exit 2; }
+command -v awk >/dev/null 2>&1 || { echo "FATAL: awk required to run the Casdoor render (refusing to skip)" >&2; exit 2; }
 export KUBECONFIG=/dev/null
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/games-two-realms.XXXXXX")"
@@ -286,14 +307,89 @@ def split_ref(ref):
     return name, tag, digest
 bi = next((i for i in pk.get("images", []) if i.get("name") == "hugmesh/hugmesh.games-backend"), {})
 composed = f"{bi.get('newName', '')}:{bi.get('newTag', '')}" + (f"@{bi['digest']}" if bi.get("digest") else "")
+
+# One layer up: ArgoCD renders the APPLICATION, not this directory. argocd-repo-server
+# applies spec.source.kustomize (images -> `kustomize edit set image`, patches,
+# namePrefix, ...) before the build, and a path pointing at a parent overlay re-pins
+# whatever it likes, so the only Application this check can vouch for is one that
+# renders exactly this directory with nothing on top.
+GAMES_PATH = "specs/cluster/manifests/games"
+app = next((d for d in docs(f"{C}/apps/50-games.yaml") if d.get("kind") == "Application"), None)
+if app is None:
+    bad("[app] apps/50-games.yaml carries no Application")
+else:
+    aspec = app.get("spec") or {}
+    src = aspec.get("source") or {}
+    check("sources" not in aspec, "[app] one spec.source, no multi-source list")
+    check(src.get("repoURL") == "https://github.com/hugmesh/hugmesh-generator.git" and src.get("targetRevision") == "main",
+          f"[app] the source is this repository's main (repoURL={src.get('repoURL')!r}, targetRevision={src.get('targetRevision')!r})")
+    check(src.get("path") == GAMES_PATH, f"[app] spec.source.path is {GAMES_PATH}, the directory rendered below (got {src.get('path')!r}; a parent overlay re-pins the image behind this check)")
+    extra = sorted(set(src) - {"repoURL", "targetRevision", "path"})
+    check(not extra, f"[app] spec.source carries nothing but repoURL/targetRevision/path (got {extra}): a kustomize images/patches/namePrefix override is applied by argocd-repo-server before the build and never reaches the render below")
+    check(aspec.get("destination", {}).get("namespace") == "hugmesh-games", "[app] deploys into hugmesh-games")
+
+# The whole render, every pod template, every container: the backend image must run
+# in exactly ONE place, the two-realm environment must be handed to that place only,
+# nothing else may stand behind the Services' selector, and nothing may pull from
+# ghcr.io (a second copy of the backend with the two-realm env is the same hole as an
+# unpinned first one).
+BACKEND_NAME = re.compile(r"hugmesh[-.]games[-/]backend|hugmesh\.games-backend")
+TWO_REALM_ENV = {"APP_TENANCY_ISSUERS", "APP_TENANCY_JWKS_URIS", "APP_SECURITY_GAMES_REALM_ISSUERS"}
+def render(path):
+    return [d for d in yaml.safe_load_all(subprocess.run(["kubectl", "kustomize", path], check=True, capture_output=True, text=True, env={**os.environ, "KUBECONFIG": "/dev/null"}).stdout) if d]
+def pod_spec(d):
+    k, spec = d.get("kind"), d.get("spec") or {}
+    if k in ("Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet"):
+        return (spec.get("template") or {}).get("spec")
+    if k == "CronJob":
+        return (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec")
+    if k == "Pod":
+        return spec
+    return None
+def all_containers(ps):
+    for where in ("initContainers", "containers", "ephemeralContainers"):
+        for c in ps.get(where) or []:
+            yield where, c
+rendered, backend_at, two_realm_at, selected, ghcr, rps, walked = "", [], [], [], [], {}, []
 try:
-    rendered_docs = [d for d in yaml.safe_load_all(subprocess.run(["kubectl", "kustomize", f"{M}/games"], check=True, capture_output=True, text=True, env={**os.environ, "KUBECONFIG": "/dev/null"}).stdout) if d]
-    rdep = next(d for d in rendered_docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "hugmesh-games")
-    rendered = next(c for c in rdep["spec"]["template"]["spec"]["containers"] if c["name"] == "games")["image"]
+    rendered_docs = render(f"{M}/games")
+    for d in rendered_docs:
+        ps = pod_spec(d)
+        if ps is None:
+            continue
+        wl = f"{d['kind']}/{d['metadata']['name']}"
+        sel = ((d.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+        tl = (((d.get("spec") or {}).get("template") or {}).get("metadata") or {}).get("labels") or {}
+        if sel.get("app") == "hugmesh-games" or tl.get("app") == "hugmesh-games":
+            selected.append(wl)
+        for where, c in all_containers(ps):
+            img = str(c.get("image", ""))
+            if BACKEND_NAME.search(img):
+                backend_at.append((wl, where, c.get("name"), img))
+            envs = c.get("env") or []
+            if {e.get("name") for e in envs} & TWO_REALM_ENV or any((((e.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == "casdoor-games-app") for e in envs):
+                two_realm_at.append((wl, where, c.get("name"), img))
+            if img.startswith("ghcr.io/"):
+                ghcr.append((wl, where, c.get("name"), img))
+            walked.append(f"{wl}/{where}/{c.get('name')}={img}")
+            if wl == "Deployment/hugmesh-games" and where == "containers" and c.get("name") == "games":
+                rendered = img
+                rps = ps
+    if not rendered:
+        bad("[image] the render has no Deployment hugmesh-games with a container named games")
 except Exception as e:  # a render that fails is a FAIL, never a skip
-    rendered = ""
     bad(f"[image] kubectl kustomize of manifests/games did not yield the BFF image: {e}")
 rname, tag, digest = split_ref(rendered)
+check(backend_at == [("Deployment/hugmesh-games", "containers", "games", rendered)] if rendered else False,
+      f"[image] the backend image runs in exactly one container of the whole render, Deployment hugmesh-games/games (found {backend_at})")
+check(two_realm_at == [("Deployment/hugmesh-games", "containers", "games", rendered)] if rendered else False,
+      f"[image] the two-realm environment (APP_TENANCY_*, the casdoor-games-app client) is handed to that one container and no other (found {two_realm_at})")
+check(selected == ["Deployment/hugmesh-games"], f"[image] exactly one workload carries app=hugmesh-games, the selector of the hugmesh-games and portal `api` Services (found {selected})")
+check(bool(rps) and len(rps.get("containers") or []) == 1 and not rps.get("initContainers") and not rps.get("ephemeralContainers"),
+      "[image] the BFF pod is one container: no second container, no initContainer, no ephemeral container")
+check(not ghcr, f"[image] nothing in the render pulls from ghcr.io; first-party images come through Harbor (found {ghcr})")
+if walked:
+    ok(f"[image] every image walked ({len(walked)}; first-party = registry.hugmesh.net/..., the rest third-party, judged by test-cluster-manifest-integrity.sh): " + "; ".join(walked))
 check(rendered and rendered == composed, f"[image] the RENDERED backend image {rendered!r} is exactly what the images: entry composes ({composed!r}); nothing patches the container image behind the pin")
 check(rname == PFX + "hugmesh-games/backend", f"[image] the rendered backend name is {rname!r}, the published backend under the Harbor host")
 check(tag == PLACEHOLDER or SHA_TAG.match(tag) is not None or RELEASE_TAG.match(tag) is not None,
@@ -302,6 +398,41 @@ if tag == PLACEHOLDER:
     check(not digest, f"[image] no digest rides with the placeholder (rendered {rendered!r}: a runtime pulls by digest and ignores the tag, so the placeholder would resolve to a real, unverified image)")
 else:
     check(not digest or DIGEST.match(digest) is not None, f"[image] the pinned digest {digest!r} is sha256:<64 hex>")
+
+# ── every nodeSelector in the games tier is a label some role actually sets ──────
+# A pair nobody sets is a pod Pending forever, and nothing on a cluster says why. The
+# labels come from the KEYS stick (.hugmesh.node_labels, applied by provision.sh); the
+# shipped example for the x86 host is keys-template/examples/provision.host.json, and
+# the builder's banner + keys hint for backend-gpu (the role that runs the BFF) are
+# the only words an operator building that node ever sees. kubelet's own labels
+# (kubernetes.io/arch, os, hostname) need no stick.
+import json
+hostp = json.load(open(f"{root}/keys-template/examples/provision.host.json"))["hugmesh"]["node_labels"]
+builder = text(f"{root}/build-x86-host-stage4.sh")
+m = re.search(r'^    backend-gpu\)\n(?:.*\n)*?\s*ROLE_LABELS="([^"]+)"', builder, re.M)
+gpu_labels = dict(x.split("=", 1) for x in (m.group(1).split(",") if m else []))
+m = re.search(r'backend-gpu\)\s+echo "      # worker; .*?node_labels \{([^}]*)\}', builder)
+hint = {k.strip(): v.strip().replace('\\"', '"').strip('"') for k, v in (x.split(":", 1) for x in (m.group(1).split(",") if m else []) if ":" in x)}
+KUBELET_OWN = {"kubernetes.io/arch", "kubernetes.io/os", "kubernetes.io/hostname"}
+seen_pairs = set()
+for tier in ("games", "casdoor-games"):  # games renders games-portal too
+    try:
+        tdocs = render(f"{M}/{tier}")
+    except Exception as e:
+        bad(f"[sched] kubectl kustomize of manifests/{tier} failed: {e}")
+        continue
+    for d in tdocs:
+        ps = pod_spec(d)
+        if ps is None:
+            continue
+        wl = f"{d['kind']}/{d['metadata']['name']}"
+        for k, v in (ps.get("nodeSelector") or {}).items():
+            if k in KUBELET_OWN:
+                continue
+            seen_pairs.add((k, str(v)))
+            check(str(hostp.get(k)) == str(v) and gpu_labels.get(k) == str(v) and hint.get(k) == str(v),
+                  f"[sched] {wl} nodeSelector {k}={v}: the host KEYS profile sets {hostp.get(k)!r}, backend-gpu ROLE_LABELS carry {gpu_labels.get(k)!r}, its keys hint says {hint.get(k)!r}")
+check({("hugmesh.net/games", "true"), ("hugmesh.net/compute", "gpu")} <= seen_pairs, f"[sched] the tier pins both hugmesh.net/games=true and hugmesh.net/compute=gpu (seen {sorted(seen_pairs)})")
 
 # ── the keyspace Job runs BEFORE the BFF, inside the same Application ─────────
 # PostSync fires only once every resource is Healthy; the BFF names the keyspace with
@@ -341,10 +472,41 @@ for cdir, cm_name in (("casdoor", "casdoor-app-conf"), ("casdoor-games", "casdoo
         continue
     args = "\n".join(str(a) for a in (init.get("args") or []) + (init.get("command") or []))
     tokens = set(re.findall(r"__[A-Z_]+__", tpl or ""))
-    rendered_tokens = set(re.findall(r"s\|(__[A-Z_]+__)\|", args))
-    check(tokens and tokens == rendered_tokens, f"[casdoor:{cdir}] every template token is rendered by the initContainer (template {sorted(tokens)}, sed {sorted(rendered_tokens)})")
+    named = set(re.findall(r"__[A-Z_]+__", args))
+    check(tokens and tokens == named, f"[casdoor:{cdir}] the initContainer names every template token and no other (template {sorted(tokens)}, script {sorted(named)})")
     ienv = {e["name"] for e in init.get("env") or []}
     check({x.strip("_") for x in tokens} <= ienv, f"[casdoor:{cdir}] the initContainer is handed every token's value (env {sorted(ienv)})")
+    # Run the script. The manifest's own `sh -c <args>`, its two mount paths pointed at a
+    # scratch dir, every token's env set to a value sed could never have carried.
+    import tempfile, urllib.parse
+    if init.get("command") == ["sh", "-c"] and len(init.get("args") or []) == 1 and tpl:
+        with tempfile.TemporaryDirectory() as td:
+            os.makedirs(f"{td}/template"); os.makedirs(f"{td}/rendered")
+            open(f"{td}/template/app.conf.template", "w").write(tpl)
+            script = init["args"][0].replace("/template/app.conf.template", f"{td}/template/app.conf.template").replace("/rendered/app.conf", f"{td}/rendered/app.conf")
+            values = {x.strip("_"): f"v|&/\\'\"$%#;?@ {x.strip('_').lower()} \\1" for x in tokens}
+            r = subprocess.run(["sh", "-c", script], env={**os.environ, **values}, capture_output=True, text=True)
+            out = open(f"{td}/rendered/app.conf", errors="replace").read() if os.path.exists(f"{td}/rendered/app.conf") else ""
+            check(r.returncode == 0, f"[casdoor:{cdir}] the render script exits 0 under sh (rc {r.returncode}: {(r.stderr or r.stdout)[:120]!r})")
+            check(not r.stdout and not r.stderr, f"[casdoor:{cdir}] the render prints nothing ({len(r.stdout) + len(r.stderr)} bytes; a value could be among them)")
+            left = sorted(set(re.findall(r"__[A-Z_]+__", out)))
+            check(out and not left, f"[casdoor:{cdir}] every template token is rendered by the initContainer (left in the output: {left})")
+            dsn = next((l for l in out.splitlines() if l.strip().startswith("dataSourceName")), "")
+            got = {}
+            try:
+                u = urllib.parse.urlsplit(dsn.split("=", 1)[1].strip().strip('"'))
+                user, _, pw = u.netloc.rpartition("@")[0].partition(":")
+                got = {"CASDOOR_DB_USER": urllib.parse.unquote(user, errors="strict"), "CASDOOR_DB_PASSWORD": urllib.parse.unquote(pw, errors="strict")}
+                check(u.scheme == "postgres" and "?" not in u.netloc, f"[casdoor:{cdir}] dataSourceName is a postgres:// URL with the credentials in its userinfo ({dsn.strip()[:40]!r}...)")
+            except Exception as e:
+                bad(f"[casdoor:{cdir}] dataSourceName does not parse as a URL: {e}")
+            for name, want in sorted(values.items()):
+                if name in ("CASDOOR_DB_USER", "CASDOOR_DB_PASSWORD"):
+                    check(got.get(name) == want, f"[casdoor:{cdir}] {name} reads back byte for byte through the URL the way lib/pq decodes it (| & / \\ ' \" $ % # ; ? @ space)")
+                else:
+                    check(f'"{want}"' in out or f"= {want}" in out, f"[casdoor:{cdir}] {name} is rendered literally (| & / \\ ' \" $ % # ; ? @ space)")
+    else:
+        bad(f"[casdoor:{cdir}] the initContainer is not `sh -c <one script>` (command {init.get('command')!r}), so its render cannot be run here")
     imounts = {m["name"]: m["mountPath"] for m in init.get("volumeMounts") or []}
     check(imounts.get("app-conf-template") == "/template" and imounts.get("rendered-conf") == "/rendered" and "/template/app.conf.template" in args and "/rendered/app.conf" in args,
           f"[casdoor:{cdir}] the initContainer reads /template/app.conf.template and writes /rendered/app.conf")
@@ -439,10 +601,12 @@ class NotFound(Exception): pass
 # walks each dead IPv6 address to its full timeout (80 s per blob measured on a host
 # without IPv6 reach) where curl's happy-eyeballs connect takes a second. curl also drops
 # the Authorization header on the cross-host redirect, which the signed blob URL wants.
+# --retry 2: a resolver or connect timeout is transient (seen once in a container run:
+# "Resolving timed out after 10001 milliseconds"); a 404 or a bad digest is not retried.
 def get(url, headers, want_headers=False):
     with tempfile.TemporaryDirectory() as d:
         hf, bf = os.path.join(d, "h"), os.path.join(d, "b")
-        cmd = ["curl", "-sS", "-L", "--connect-timeout", "10", "--max-time", "60", "-D", hf, "-o", bf, "-w", "%{http_code}"]
+        cmd = ["curl", "-sS", "-L", "--connect-timeout", "10", "--max-time", "60", "--retry", "2", "--retry-delay", "3", "-D", hf, "-o", bf, "-w", "%{http_code}"]
         for k, v in headers.items():
             cmd += ["-H", f"{k}: {v}"]
         r = subprocess.run(cmd + [url], capture_output=True, text=True)
@@ -492,13 +656,23 @@ if subprocess.run(["git", "-C", graph, "merge-base", "--is-ancestor", floor, rev
 print(f"{tag}: manifest {dtag[:19]}..., revision {rev[:12]} is at or after #52's merge {floor[:12]}" + (" and the pinned digest equals the tag's" if digest else " (no digest pinned)")); sys.exit(0)
 PY
 }
-read -r TAG DIGEST < <(python3 - "${REPO}/specs/cluster/manifests/games/kustomization.yaml" <<'PY'
-import sys, yaml
-k = yaml.safe_load(open(sys.argv[1]))
-i = next((i for i in k.get("images", []) if i.get("name") == "hugmesh/hugmesh.games-backend"), {})
-print(i.get("newTag") or "-", i.get("digest") or "")
+# The tag and digest come from the RENDERED Deployment, never from the kustomization
+# text: what `kubectl kustomize manifests/games` puts on container `games` is what the
+# cluster pulls (the Application check above is what makes that equality hold).
+read -r TAG DIGEST < <(python3 - "${REPO}/specs/cluster/manifests/games" <<'PY'
+import os, subprocess, sys, yaml
+try:
+    out = subprocess.run(["kubectl", "kustomize", sys.argv[1]], check=True, capture_output=True, text=True, env={**os.environ, "KUBECONFIG": "/dev/null"}).stdout
+    dep = next(d for d in yaml.safe_load_all(out) if d and d["kind"] == "Deployment" and d["metadata"]["name"] == "hugmesh-games")
+    img = next(c for c in dep["spec"]["template"]["spec"]["containers"] if c["name"] == "games")["image"]
+    rest, _, digest = img.partition("@")
+    tag = rest.rpartition(":")[2] if ":" in rest.rsplit("/", 1)[-1] else ""
+    print(tag or "-", digest)
+except Exception as e:
+    print("RENDER-FAILED", "")
 PY
 )
+[ "${TAG}" != "RENDER-FAILED" ] || bad "the rendered backend image could not be read (kubectl kustomize failed)"
 case "${TAG}" in
   needs-hugmesh-games-pr52)
     ok "backend tag is the placeholder: it names no image, so no pre-#52 build can start with the two-realm environment (replace it with the sha- tag AND digest of a main build at or after 3ae21def)";;
@@ -668,6 +842,9 @@ expect_red(){ # $1 label, $2 string the failure must name, $3 python mutation (p
   cp "${REPO}/tests/stack/compose.games.yaml" "${REPO}/tests/stack/compose.local.yaml" "${T}/tests/stack/"
   cp "${REPO}/scripts/gen-cluster-secrets.sh" "${T}/scripts/"
   cp "${REPO}/scripts/release/repos.tsv" "${T}/scripts/release/"
+  mkdir -p "${T}/keys-template/examples"
+  cp "${REPO}/keys-template/examples/provision.host.json" "${T}/keys-template/examples/"
+  cp "${REPO}/build-x86-host-stage4.sh" "${T}/"
   local before after out
   before="$(cd "${T}" && find . -type f -exec cat {} + | sha256sum)"
   python3 - "${T}" <<PYM || { bad "${label}: the mutation script failed"; return; }
@@ -709,9 +886,26 @@ expect_red "the backend pinned to a branch tag" "never a floating name" 'rep(M+"
 expect_red "m1: the placeholder with a digest riding along" "no digest rides with the placeholder" 'rep(M+"games/kustomization.yaml", "newTag: sha-3ae21def10e8", "newTag: needs-hugmesh-games-pr52")'
 expect_red "m3: a JSON6902 patch replaces the container image with ghcr :main" "nothing patches the container image" 'rep(M+"games/kustomization.yaml", "patches:\n", "patches:\n  - target: { kind: Deployment, name: hugmesh-games }\n    patch: |\n      - op: replace\n        path: /spec/template/spec/containers/0/image\n        value: ghcr.io/hugmesh/hugmesh-games/backend:main\n")'
 expect_red "a strategic-merge patch sets an allowed-looking image behind the pin" "nothing patches the container image" 'rep(M+"games/kustomization.yaml", "patches:\n", "patches:\n  - patch: |\n      apiVersion: apps/v1\n      kind: Deployment\n      metadata: { name: hugmesh-games }\n      spec: { template: { spec: { containers: [ { name: games, image: registry.hugmesh.net/hugmesh/hugmesh-games/backend:sha-3ae21def10e8 } ] } } }\n")'
+A = "specs/cluster/apps/"
+expect_red "n1: the Application overrides the image with kustomize.images (ghcr :main)" "spec.source carries nothing but" 'rep("specs/cluster/apps/50-games.yaml", "    path: specs/cluster/manifests/games\n", "    path: specs/cluster/manifests/games\n    kustomize:\n      images:\n        - registry.hugmesh.net/hugmesh/hugmesh-games/backend=ghcr.io/hugmesh/hugmesh-games/backend:main\n")'
+expect_red "n1b: the Application overrides the image to the first-party host, pre-#52 build" "spec.source carries nothing but" 'rep("specs/cluster/apps/50-games.yaml", "    path: specs/cluster/manifests/games\n", "    path: specs/cluster/manifests/games\n    kustomize:\n      images:\n        - registry.hugmesh.net/hugmesh/hugmesh-games/backend=registry.hugmesh.net/hugmesh/hugmesh-games/backend:sha-f111cfe3382d\n")'
+expect_red "n2: the Application carries a JSON6902 image patch" "spec.source carries nothing but" 'rep("specs/cluster/apps/50-games.yaml", "    path: specs/cluster/manifests/games\n", "    path: specs/cluster/manifests/games\n    kustomize:\n      patches:\n        - target: { kind: Deployment, name: hugmesh-games }\n          patch: |-\n            - op: replace\n              path: /spec/template/spec/containers/0/image\n              value: ghcr.io/hugmesh/hugmesh-games/backend:main\n")'
+expect_red "n3: the Application points at a parent overlay that re-pins the image" "spec.source.path is specs/cluster/manifests/games" 'rep("specs/cluster/apps/50-games.yaml", "    path: specs/cluster/manifests/games\n", "    path: specs/cluster/overlays/games-main\n")
+os.makedirs(os.path.join(root, "specs/cluster/overlays/games-main"), exist_ok=True)
+open(os.path.join(root, "specs/cluster/overlays/games-main/kustomization.yaml"), "w").write("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - ../../manifests/games\nimages:\n  - name: registry.hugmesh.net/hugmesh/hugmesh-games/backend\n    newName: ghcr.io/hugmesh/hugmesh-games/backend\n    newTag: main\n    digest: \"\"\n")'
+expect_red "n3b: the Application names another repository" "the source is this repository" 'rep("specs/cluster/apps/50-games.yaml", "    repoURL: https://github.com/hugmesh/hugmesh-generator.git\n", "    repoURL: https://github.com/hugmesh/hugmesh-generator-fork.git\n")'
+expect_red "n4: a second container in the BFF pod runs ghcr :main" "the backend image runs in exactly one container" 'rep(M+"games/kustomization.yaml", "patches:\n", "patches:\n  - target: { kind: Deployment, name: hugmesh-games }\n    patch: |\n      - op: add\n        path: /spec/template/spec/containers/-\n        value:\n          name: games-main\n          image: ghcr.io/hugmesh/hugmesh-games/backend:main\n          ports: [{ name: http2, containerPort: 8081 }]\n")'
+expect_red "n4b: a second container with the two-realm env under a foreign name" "the two-realm environment" 'rep(M+"games/kustomization.yaml", "patches:\n", "patches:\n  - target: { kind: Deployment, name: hugmesh-games }\n    patch: |\n      - op: add\n        path: /spec/template/spec/containers/-\n        value:\n          name: sidecar\n          image: docker.io/library/alpine:3.20\n          env: [{ name: APP_TENANCY_JWKS_URIS, value: \"x\" }]\n")'
+expect_red "n5: a second Deployment under the Services selector app=hugmesh-games" "exactly one workload carries app=hugmesh-games" 'rep(M+"games/kustomization.yaml", "  - deployment.yaml\n", "  - deployment.yaml\n  - deployment-main.yaml\n")
+open(os.path.join(root, M, "games/deployment-main.yaml"), "w").write("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: hugmesh-games-main\n  namespace: hugmesh-games\n  labels: { app: hugmesh-games }\nspec:\n  replicas: 1\n  selector: { matchLabels: { app: hugmesh-games } }\n  template:\n    metadata: { labels: { app: hugmesh-games } }\n    spec:\n      containers:\n        - name: games\n          image: docker.io/library/alpine:3.20\n          ports: [{ name: http, containerPort: 8080 }]\n")'
+expect_red "n6: an initContainer in the BFF pod runs ghcr :main" "the BFF pod is one container" 'rep(M+"games/kustomization.yaml", "patches:\n", "patches:\n  - target: { kind: Deployment, name: hugmesh-games }\n    patch: |\n      - op: add\n        path: /spec/template/spec/initContainers\n        value:\n          - name: warm\n            image: ghcr.io/hugmesh/hugmesh-games/backend:main\n")'
+expect_red "a nodeSelector label no role sets" "the host KEYS profile sets" 'rep(M+"games/bff-db.yaml", "nodeSelector: { hugmesh.net/games: \"true\" }", "nodeSelector: { hugmesh.net/games-tier: \"true\" }")'
+expect_red "the backend-gpu keys hint loses the games label" "its keys hint says" 'rep("build-x86-host-stage4.sh", ", hugmesh.net/games: \x5c\x22true\x5c\x22 }\x22 ;;", " }\x22 ;;")'
+expect_red "the games render handed a raw (unencoded) DB password" "reads back byte for byte through the URL" 'rep(M+"casdoor-games/deployment.yaml", "enc(ENVIRON[\"CASDOOR_DB_PASSWORD\"])", "ENVIRON[\"CASDOOR_DB_PASSWORD\"]")'
+expect_red "the games render back on sed" "the render script exits 0" 'rep(M+"casdoor-games/deployment.yaml", "              LC_ALL=C awk \x27\n", "              sed -e \"s|__CASDOOR_DB_USER__|${CASDOOR_DB_USER}|g\" -e \"s|__CASDOOR_DB_PASSWORD__|${CASDOOR_DB_PASSWORD}|g\" /template/app.conf.template > /rendered/app.conf; exit $?\n              LC_ALL=C awk \x27\n")'
 expect_red "the keyspace Job back to PostSync" "Sync-phase hook" 'rep(M+"games/cassandra-init.yaml", "argocd.argoproj.io/hook: Sync\n", "argocd.argoproj.io/hook: PostSync\n")'
 expect_red "the BFF loses its wave" "waves order" 'rep(M+"games/deployment.yaml", "    argocd.argoproj.io/sync-wave: \"2\"\n", "")'
-expect_red "casdoor-games dataSourceName back on in-app interpolation" "dataSourceName carries no" 'rep(M+"casdoor-games/app-conf-configmap.yaml", "user=__CASDOOR_DB_USER__ password=__CASDOOR_DB_PASSWORD__", "user=${CASDOOR_DB_USER||threewizards} password=${CASDOOR_DB_PASSWORD||}")'
+expect_red "casdoor-games dataSourceName back on in-app interpolation" "dataSourceName carries no" 'rep(M+"casdoor-games/app-conf-configmap.yaml", "postgres://__CASDOOR_DB_USER__:__CASDOOR_DB_PASSWORD__@casdoor-games-pg", "postgres://${CASDOOR_DB_USER||threewizards}:${CASDOOR_DB_PASSWORD||}@casdoor-games-pg")'
 expect_red "casdoor-domain origin back on in-app interpolation" "no app.conf key relies on" 'rep(M+"casdoor-domain/app-conf-configmap.yaml", "origin = \"__CASDOOR_ORIGIN__\"", "origin = \"${CASDOOR_ORIGIN||https://id.hugmesh.net}\"")'
 expect_red "casdoor-games render initContainer removed" "no render-app-conf initContainer" 'rep(M+"casdoor-games/deployment.yaml", "        - name: render-app-conf\n", "        - name: render-something-else\n")'
 expect_red "a template token the initContainer never renders" "every template token is rendered" 'rep(M+"casdoor-domain/app-conf-configmap.yaml", "dbName = casdoor", "dbName = __CASDOOR_DB_NAME__")'

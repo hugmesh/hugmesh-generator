@@ -2,9 +2,11 @@
 # external Postgres (casdoor-games-pg, db "threewizards") instead of the all-in-one
 # image's bundled DB. Mirrors manifests/casdoor/app-conf-configmap.yaml for the
 # SEPARATE games identity provider. Rendered into the real conf/app.conf by the
-# "render-app-conf" initContainer in deployment.yaml (plain sed substitution of the
-# __TOKEN__ placeholders below against env sourced from the ESO Secret
-# casdoor-games-db). NO secrets here.
+# "render-app-conf" initContainer in deployment.yaml (a literal awk replacement of
+# the __TOKEN__ placeholders below against env sourced from the ESO Secret
+# casdoor-games-db; the DB user and password are percent-encoded into the postgres://
+# URL by the renderer, so any password Vault holds reads back as typed). NO
+# secrets here.
 #
 # NOTE: casbin/casdoor does NOT expand beego's "${ENV||default}" syntax inside a
 # value: beego expands it only when the WHOLE value is one such expression. With
@@ -32,7 +34,7 @@ data:
     # MySQL), so dbname= must be set inline here. Credentials rendered in by the
     # initContainer (ESO Secret casdoor-games-db).
     driverName = postgres
-    dataSourceName = "user=__CASDOOR_DB_USER__ password=__CASDOOR_DB_PASSWORD__ host=casdoor-games-pg port=5432 sslmode=disable dbname=threewizards"
+    dataSourceName = "postgres://__CASDOOR_DB_USER__:__CASDOOR_DB_PASSWORD__@casdoor-games-pg:5432/threewizards?sslmode=disable"
     dbName = threewizards
     tableNamePrefix =
     showSql = false

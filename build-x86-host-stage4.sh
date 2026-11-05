@@ -1560,6 +1560,12 @@ ROLE="$(hugmesh_role_validate "${ROLE}" x86)" || exit 1
 ROLE_HEADSCALE=false         # headscale runs in the runlevel (pki/omnibus)
 ROLE_K8S="worker"            # kubeadm join vs init vs single-node
 ROLE_LABELS=""               # informational: node labels the KEYS stick should set
+# hugmesh.net/games=true is the games TIER label (namespaces/namespaces.yaml): the
+# games BFF pins compute=gpu, but casdoor-games, its Postgres and init Job, the games
+# BFF's Postgres and Cassandra, the keyspace Job and the games portal all pin
+# games=true, so a GPU node labelled compute=gpu alone runs the BFF and leaves every
+# one of those Pending. keys-template/examples/provision.host.json sets both;
+# tests/scripts/test-games-two-realms.sh holds this table and the hint below to it.
 ROLE_CLIENT=false            # true for person-device desktop roles (laptop/chromebook/desktop)
 case "${ROLE}" in
     pki)
@@ -1576,14 +1582,14 @@ case "${ROLE}" in
         [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     backend-gpu)
         GPU=true; ROLE_K8S="worker"
-        ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu"
+        ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu,hugmesh.net/games=true"
         # Derives ${BRAND}-backend-gpu like every other node role. (The legacy
         # ${BRAND}-host default was retired 2026-10-30 — see HOSTNAME DEFAULTS in
         # scripts/_roles-lib.sh for why nothing depended on it.)
         [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     omnibus)
         GPU=true; ROLE_HEADSCALE=true; ROLE_K8S="single-node"
-        ROLE_LABELS="hugmesh.net/pki=true,hugmesh.net/backend=true,hugmesh.net/frontend=true,hugmesh.net/compute=gpu"
+        ROLE_LABELS="hugmesh.net/pki=true,hugmesh.net/backend=true,hugmesh.net/frontend=true,hugmesh.net/compute=gpu,hugmesh.net/games=true"
         [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     # ── EDGE-AI (GPU inference) NODE — a backend-gpu worker whose PURPOSE is serving an
     # AI model API to the mesh. Defaults the PROPRIETARY NVIDIA driver + CUDA, bakes
@@ -1594,7 +1600,7 @@ case "${ROLE}" in
     edge-ai)
         GPU=true; ROLE_K8S="worker"; EDGE_AI=true
         [ -z "${GPU_DRIVER}" ] && GPU_DRIVER="nvidia"   # inference wants the proprietary blob (CUDA)
-        ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu,hugmesh.net/edge-ai=true"
+        ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu,hugmesh.net/games=true,hugmesh.net/edge-ai=true"
         [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     # ── CLIENT (person-device) roles — see docs/CLIENT-IMAGES.md (ADR-16/FD-04..08).
     # These are DESKTOPS that join the tailnet + run the UI, NOT k8s nodes: no
@@ -2964,13 +2970,14 @@ _mgd_pg() {  # tree endpoint dbname consumer_manifest db_app db_manifest
     rm -rf "${tree}/${dbman}"
 }
 # Casdoor PG: NO app prune (05-casdoor IS the IdP). Flip host+port+sslmode inside
-# the single libpq dataSourceName string (dbname=casdoor kept), drop the bundled
+# the single dataSourceName postgres:// URL (user:password@HOST:PORT/casdoor?sslmode=;
+# the credentials are __TOKEN__ placeholders the initContainer renders), drop the bundled
 # pg.yaml manifest + its kustomization line. Managed PG enforces TLS -> require.
 _mgd_pg_casdoor() {  # tree endpoint(host[:port])
     local tree="$1" ep="$2" h p
     h="${ep%%:*}"; p="5432"; case "${ep}" in *:*) p="${ep##*:}";; esac
     local cm="${tree}/manifests/casdoor/app-conf-configmap.yaml"
-    [ -f "${cm}" ] && sed -i -E "s#host=[^ ]+ port=[0-9]+#host=${h} port=${p}#; s#sslmode=[a-z-]+#sslmode=require#" "${cm}"
+    [ -f "${cm}" ] && sed -i -E "/dataSourceName/ { s#@[^@:/]+:[0-9]+/#@${h}:${p}/#; s#sslmode=[a-z-]+#sslmode=require#; }" "${cm}"
     rm -f "${tree}/manifests/casdoor/pg.yaml"
     _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" pg.yaml
 }
@@ -8167,9 +8174,9 @@ if ! ${UNAFFILIATED}; then
             pki)         echo "      # control-plane (kubeadm init)" ;;
             backend)     echo "      # worker; label hugmesh.net/backend=true" ;;
             frontend)    echo "      # worker; label hugmesh.net/frontend=true" ;;
-            backend-gpu) echo "      # worker; then edit: hugmesh.role=games, node_labels { hugmesh.net/compute: gpu }" ;;
-            omnibus)     echo "      # single-node CP; all labels (pki/backend/frontend/compute=gpu)" ;;
-            edge-ai)     echo "      # GPU inference worker; node_labels { hugmesh.net/compute: gpu, hugmesh.net/edge-ai: \"true\" }" ;;
+            backend-gpu) echo "      # worker; then edit: hugmesh.role=games, node_labels { hugmesh.net/compute: gpu, hugmesh.net/games: \"true\" }" ;;
+            omnibus)     echo "      # single-node CP; all labels (pki/backend/frontend/compute=gpu/games=true)" ;;
+            edge-ai)     echo "      # GPU inference worker; node_labels { hugmesh.net/compute: gpu, hugmesh.net/games: \"true\", hugmesh.net/edge-ai: \"true\" }" ;;
         esac
     fi
 fi

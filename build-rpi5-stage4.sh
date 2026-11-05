@@ -2045,13 +2045,14 @@ _mgd_pg() {  # tree endpoint dbname consumer_manifest db_app db_manifest
     rm -rf "${tree}/${dbman}"
 }
 # Casdoor PG: NO app prune (05-casdoor IS the IdP). Flip host+port+sslmode inside
-# the single libpq dataSourceName string (dbname=casdoor kept), drop the bundled
+# the single dataSourceName postgres:// URL (user:password@HOST:PORT/casdoor?sslmode=;
+# the credentials are __TOKEN__ placeholders the initContainer renders), drop the bundled
 # pg.yaml manifest + its kustomization line. Managed PG enforces TLS -> require.
 _mgd_pg_casdoor() {  # tree endpoint(host[:port])
     local tree="$1" ep="$2" h p
     h="${ep%%:*}"; p="5432"; case "${ep}" in *:*) p="${ep##*:}";; esac
     local cm="${tree}/manifests/casdoor/app-conf-configmap.yaml"
-    [ -f "${cm}" ] && sed -i -E "s#host=[^ ]+ port=[0-9]+#host=${h} port=${p}#; s#sslmode=[a-z-]+#sslmode=require#" "${cm}"
+    [ -f "${cm}" ] && sed -i -E "/dataSourceName/ { s#@[^@:/]+:[0-9]+/#@${h}:${p}/#; s#sslmode=[a-z-]+#sslmode=require#; }" "${cm}"
     rm -f "${tree}/manifests/casdoor/pg.yaml"
     _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" pg.yaml
 }

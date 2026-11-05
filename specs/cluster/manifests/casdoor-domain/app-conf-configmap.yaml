@@ -1,8 +1,9 @@
 # casdoor-domain app.conf TEMPLATE — points a domain's own Casdoor (issue #47,
 # Domain.idp=own) at its dedicated Postgres (casdoor-domain-pg) and carries the
 # per-domain issuer. Rendered into the real conf/app.conf by the "render-app-conf"
-# initContainer in deployment.yaml (plain sed substitution of the __TOKEN__
-# placeholders below): DB user/password from the ESO Secret casdoor-domain-db, the
+# initContainer in deployment.yaml (a literal awk replacement of the __TOKEN__
+# placeholders below; the DB user and password are percent-encoded into the
+# postgres:// URL by the renderer): DB user/password from the ESO Secret casdoor-domain-db, the
 # issuer from CASDOOR_ORIGIN (<- the casdoor-domain-params ConfigMap, patched per
 # domain by the casdoor-domains ApplicationSet). NO secrets here.
 #
@@ -31,7 +32,7 @@ data:
     # MySQL), so dbname= must be set inline here. Credentials rendered in by the
     # initContainer (ESO Secret casdoor-domain-db).
     driverName = postgres
-    dataSourceName = "user=__CASDOOR_DB_USER__ password=__CASDOOR_DB_PASSWORD__ host=casdoor-domain-pg port=5432 sslmode=disable dbname=casdoor"
+    dataSourceName = "postgres://__CASDOOR_DB_USER__:__CASDOOR_DB_PASSWORD__@casdoor-domain-pg:5432/casdoor?sslmode=disable"
     dbName = casdoor
     tableNamePrefix =
     showSql = false

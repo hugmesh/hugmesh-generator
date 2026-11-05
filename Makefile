@@ -2826,6 +2826,15 @@ builder-unmount-real-check: ## OPT-IN, needs unshare -Urm (a developer host, not
 mesh-node-launcher-parity-check: ## Windows vs Linux mesh-node launchers pass docker identical arguments (bar the TUN pair); Pester in pwsh or the PowerShell image
 	bash tests/docker-mesh-node/test-launcher-parity.sh
 
+# casdoor-render-boot-check: every Casdoor (systems, games, domain) rendered by its OWN
+# initContainer script inside casbin/casdoor:3.80.0 on a hostile DB password (| & / \ ' " $ %
+# # ; ? @ tab, and a newline via ALTER USER), then booted against postgres:16-alpine:
+# /api/health ok, the password in no stream, the seeded catalog present (hugmesh-generator#848).
+# Throwaway containers with unique names, removed on exit. Needs docker; exits 2 without it.
+.PHONY: casdoor-render-boot-check
+casdoor-render-boot-check: ## Every Casdoor boots on the conf its initContainer renders from a hostile Vault password (docker, throwaway)
+	bash tests/casdoor/test-casdoor-render-boot.sh
+
 # build-image-dial-identity-check: the image-gen worker (docker/build-image.sh) run end to end
 # against fake builders and a capturing curl; asserts the ingest body reports the DEVICE_ID /
 # VAULT_REF the BFF handed the Job, sends no k8sSecretName and no host key
