@@ -2771,10 +2771,13 @@ slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
 
 banner "Packaging stage4 tarball"
 STAGE4_TARBALL="${WORK_DIR}/${ART_PREFIX}.stage4.tar.xz"
-tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner --owner=0 --group=0 \
+# Target accounts keep their owners; ids the target does not define map to root
+# (see hmr_pack_owner_args in scripts/_builder-resume-lib.sh).
+hmr_pack_owner_args "${SYSROOT}"
+tar -C "${SYSROOT}" --xattrs-include='*.*' "${HMR_PACK_OWNER_ARGS[@]}" \
     --exclude='./usr/src' --exclude='./var/cache' --exclude='./tmp/*' \
     -cJf "${STAGE4_TARBALL}" . 2>/dev/null || \
-tar -C "${SYSROOT}" --numeric-owner --owner=0 --group=0 \
+tar -C "${SYSROOT}" "${HMR_PACK_OWNER_ARGS[@]}" \
     --exclude='./usr/src' --exclude='./var/cache' --exclude='./tmp/*' \
     -cJf "${STAGE4_TARBALL}" .
 info "Stage4 tarball: ${STAGE4_TARBALL} ($(du -sh "${STAGE4_TARBALL}" | cut -f1))"

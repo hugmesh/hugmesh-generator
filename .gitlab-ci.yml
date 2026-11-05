@@ -3754,6 +3754,7 @@ orphan-guards-verify:
         tests/scripts/test-shared-build-assets.sh
         tests/scripts/test-spec-use-parity.sh
         tests/scripts/test-stack-fetch-repos.sh
+        tests/scripts/test-stage4-pack-ownership.sh
         tests/scripts/test-x86-artifact-integrity.sh
         tests/scripts/test-x86-boot-firewall-snort.sh
         tests/scripts/test-x86-live-root-pack.sh
