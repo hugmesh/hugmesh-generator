@@ -4813,9 +4813,12 @@ class ImageConfig:
         # plane (see _superdomain_args). Empty for cloud/standalone, so every existing
         # ARM cloud/standalone golden stays byte-identical.
         a += self._superdomain_args()
-        # The arm builders have no --with/--no-tailscale pair; mesh is on unless
-        # skipped. A never-set field resolves to the MODE default (cloud/mesh ON,
-        # standalone OFF) so a mesh config that omits the key keeps its mesh.
+        # The arm builders have no --no-tailscale; mesh is on unless skipped.
+        # (They take --with-tailscale, which keeps the tailnet on a --standalone
+        # desktop; it is not emitted here yet, so a Studio standalone ARM build
+        # keeps the no-tailnet default. See docs/DESKTOP-LOGIN-SSO.md.) A never-set
+        # field resolves to the MODE default (cloud/mesh ON, standalone OFF) so a
+        # mesh config that omits the key keeps its mesh.
         if not self.tailscale_enabled():
             a += ["--skip-mesh"]
         a += self._mesh_version_args()

@@ -210,7 +210,7 @@ no-tailnet default. Emitting the flag is a Studio follow-up.
 ## Proven offline / to prove on a boot
 
 Offline (`tests/desktop-governance/test-sso-greeter.sh`, 126 checks;
-`tests/scripts/test-desktop-sso-bake.sh`, 214 checks incl. 41 negative
+`tests/scripts/test-desktop-sso-bake.sh`, 218 checks incl. 41 negative
 controls; its section H RUNS the four ARM desktop builders' `--print-plan` for
 the `--standalone --with-tailscale` matrix, and 20 builder plants turn it red):
 everything in this document except the greeter's rendering. The

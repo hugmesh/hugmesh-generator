@@ -341,12 +341,13 @@ control prov-no-install "${PROV}" '/session-install\.sh\.tmpl"; then/d' pin_prov
 # fetch, no files) and its PLAN_MESH / PLAN_SSO / PLAN_SSO_ISSUER lines read.
 echo "== H. --with-tailscale on a --standalone ARM desktop (executed --print-plan) =="
 mkdir -p "${WORK}/cwd"
+ESC="$(printf '\033')"   # portable: busybox sed (the alpine job) has no \xHH
 # plan_lines BUILDER ARGS... -> "rc=N" then the PLAN_MESH/SSO/SSO_ISSUER lines and
 # any ERROR line, colour codes stripped (no grep -q under pipefail: here-strings).
 plan_lines() {
     local out rc
     out="$(cd "${WORK}/cwd" && timeout 120 bash "$@" --print-plan 2>&1)"; rc=$?
-    out="$(sed 's/\x1b\[[0-9;]*m//g' <<< "${out}")"
+    out="$(sed "s/${ESC}\[[0-9;]*m//g" <<< "${out}")"
     echo "rc=${rc}"
     grep -E '^PLAN_(MESH|SSO|SSO_ISSUER)=|ERROR' <<< "${out}"
 }
@@ -414,6 +415,20 @@ tailnet_control() {  # $1=label $2=builder basename $3=sed-expr $4=extra args (w
     rm -f "${m}"
     if grep -q 'FAIL' <<< "${out}"; then ok "control $1: the tailnet legs go red"; else bad "control $1: tailnet legs stayed green over the mutated copy"; fi
 }
+# Positive control for the mirror tree: the UNMUTATED builder run from it is green,
+# so a red under a plant is the plant, not the tree.
+for e in "${TS_BUILDERS[@]}"; do
+    b="${e%%|*}"; x="${e#*|}"; n="${b#build-}"; n="${n%-stage4.sh}"
+    cp "${REPO}/${b}" "${MTREE}/${b}"
+    # shellcheck disable=SC2086
+    out="$(P=0; F=0; tailnet_legs "${MTREE}/${b}" "${n}" ${x} 2>&1)"
+    rm -f "${MTREE}/${b}"
+    if grep -q 'FAIL' <<< "${out}" || ! grep -q 'PASS' <<< "${out}"; then
+        bad "${n}: the unmutated builder is not green from the mirror tree (controls would be vacuous)"
+    else
+        ok "${n}: the unmutated builder is green from the mirror tree"
+    fi
+done
 for e in "${TS_BUILDERS[@]}"; do
     b="${e%%|*}"; x="${e#*|}"; n="${b#build-}"; n="${n%-stage4.sh}"
     tailnet_control "${n}-no-flag"      "${b}" '/^        --with-tailscale)/d' "${x}"
