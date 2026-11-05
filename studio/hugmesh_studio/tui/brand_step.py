@@ -40,7 +40,8 @@ from __future__ import annotations
 
 import dataclasses
 
-from ..core import brand_look, brand_model, domain_reach, plain_words, reach_apply
+from ..core import (brand_look, brand_model, domain_reach, plain_words, platform_info,
+                    reach_apply)
 from ..core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, SIGNIN_FROM_MESH,
                            SIGNIN_SOURCE_WORDS, Domain, effective_signin,
                            set_domain_signin)
@@ -451,6 +452,9 @@ class BrandView:
         return domain_reach.REACH_INHERIT, ""
 
     def set_egress(self, choice: str, conf: str = "") -> list[str]:
+        # Explorer's "Copy as path" quotes, dropped on native Windows before the path
+        # is checked (the check refused a quoted path); unchanged anywhere else
+        conf = platform_info.unquote_pasted_path(conf or "")
         if self.own:
             why = self.own_way_refusal("egress")
             if why:

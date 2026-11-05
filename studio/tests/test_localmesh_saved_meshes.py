@@ -7,6 +7,7 @@ never touch ~/.hugmesh.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import threading
@@ -21,6 +22,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from hugmesh_studio.core import local_mesh_bootstrap as lmb          # noqa: E402
+from hugmesh_studio.core import platform_info                        # noqa: E402
 from hugmesh_studio.core import saved_meshes as sm                   # noqa: E402
 from hugmesh_studio.core import vaults                               # noqa: E402
 from hugmesh_studio.core.domain_services import normalise_slugs     # noqa: E402
@@ -29,6 +31,8 @@ from hugmesh_studio.core.mesh_node import MeshNode, MeshStatus       # noqa: E40
 from hugmesh_studio.gui.pages import localmesh as localmesh_mod      # noqa: E402
 from hugmesh_studio.gui.pages import _saved_meshes_widget as smw     # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                          # noqa: E402
+
+_REAL_BLOCKER = platform_info.native_windows_blocker
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -84,6 +88,14 @@ class _Stack:
 _PROBE_OK = {"volumes_present": True, "images_present": True, "creds_match": True,
              "mesh_running": False, "source_ok": True, "copies_missing": (),
              "source_drift": (), "volumes_missing": (), "volumes_seen": 3}
+
+
+@pytest.fixture
+def as_linux(monkeypatch):
+    """Answer the page's native-Windows gate as Linux (the test_windows_sweep_c6
+    idiom). Request it BEFORE ``page`` so the page is built under it."""
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname="posix"))
 
 
 @pytest.fixture
@@ -661,7 +673,9 @@ def test_table_has_no_itemChanged_connection():
     assert {"cellClicked", "itemActivated"} <= attrs
 
 
-def test_stop_tooltip_says_volumes_are_kept(qapp, page):
+def test_stop_tooltip_says_volumes_are_kept(qapp, as_linux, page):
+    # as_linux BEFORE page, so the page is built as on Linux: on native Windows the
+    # button is greyed with the WSL2 sentence instead (test_windows_sweep_localmesh)
     tip = page.boot_down_btn.toolTip()
     assert "KEPT" in tip and "stack-halt" in tip
     assert "dropped" not in tip

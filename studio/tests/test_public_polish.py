@@ -104,6 +104,33 @@ def test_no_backend_host_gets_actionable_guidance(qapp):
     wiz.deleteLater()
 
 
+@pytest.mark.parametrize("state", ["down", "timeout"])
+def test_windows_with_docker_installed_is_not_told_to_install_it(qapp, state):
+    """Windows sweep: docker.exe answered with an error (engine stopped) or did not
+    answer in time (Docker Desktop busy). The intro said "Install Docker Desktop" to a
+    user who had it installed; it now gives the host's own remedy for that state."""
+    host = HostInfo(os="windows", is_gentoo=False, has_docker=False, has_bash=False,
+                    has_kvm=False, is_root=False, builder_image="hugmesh-builder",
+                    docker_state=state)
+    wiz = _make_wizard(qapp, host=host)
+    html = _welcome(wiz)._intro_html()
+    assert "Install Docker Desktop" not in html and "can't build images yet" not in html
+    assert "can't build images until Docker answers" in html
+    assert "start Docker Desktop" in html or "Docker Desktop is not running" in html
+    assert "restart the Studio" in html
+    wiz.deleteLater()
+
+
+def test_windows_without_docker_is_still_told_to_install_it(qapp):
+    host = HostInfo(os="windows", is_gentoo=False, has_docker=False, has_bash=False,
+                    has_kvm=False, is_root=False, builder_image="hugmesh-builder",
+                    docker_state="missing")
+    wiz = _make_wizard(qapp, host=host)
+    html = _welcome(wiz)._intro_html()
+    assert "can't build images yet" in html and "Install Docker Desktop" in html
+    wiz.deleteLater()
+
+
 def test_buildable_host_shows_its_backend(qapp):
     wiz = _make_wizard(qapp, host=DOCKER)
     html = _welcome(wiz)._intro_html()

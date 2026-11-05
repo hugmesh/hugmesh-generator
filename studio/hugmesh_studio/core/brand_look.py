@@ -43,7 +43,7 @@ from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from . import brand_images, fonts, platform_preview, theme, theme_presets
+from . import brand_images, fonts, platform_info, platform_preview, theme, theme_presets
 
 __all__ = [
     "LOOK_FIELDS", "LOOK_DEFAULTS", "CFG_FIELDS", "IDENTITY_FIELDS", "PICTURE_FIELDS",
@@ -117,6 +117,12 @@ CFG_FIELDS: dict[str, str] = {
 #: rule of 2026-08-26); every other field is LOOK and stays allowed. Hosts hide these
 #: with the reason shown inline.
 IDENTITY_FIELDS: tuple[str, ...] = ("desktop_logo",)
+
+#: The desktop look fields that hold a FILE PATH (handed to the image builder as-is).
+#: On native Windows a path pasted from Explorer's "Copy as path" arrives in quotes, and
+#: those are dropped on the way in (platform_info.unquote_pasted_path).
+DESKTOP_PATH_FIELDS: tuple[str, ...] = ("wallpaper", "boot_background", "boot_theme",
+                                        "login_screen_background", "desktop_logo")
 
 #: The two web pictures and the picture kind each one is re-encoded as.
 PICTURE_FIELDS: dict[str, str] = {"logo_image": "logo", "login_bg_image": "background"}
@@ -824,6 +830,8 @@ class Look:
         """Write ``value`` to ``field`` unless it is invalid or the finished look would
         not fit its ceilings; on a refusal the record is as it was and the Outcome says
         why, with the numbers."""
+        if field in DESKTOP_PATH_FIELDS and isinstance(value, str):
+            value = platform_info.unquote_pasted_path(value)
         if field in IDENTITY_FIELDS and not self.identity_allowed and value:
             return Outcome(False, self.identity_reason or
                            "This build is unaffiliated: a logo names an organisation, "
@@ -929,7 +937,9 @@ class Look:
         is a sentence naming the reason; the record keeps its previous picture."""
         if field not in PICTURE_FIELDS:
             raise LookError(f"{field} is not a picture field")
-        path = (path or "").strip()
+        # Explorer's "Copy as path" quotes (native Windows only): open() of the quoted
+        # text failed with "Cannot read this file: [Errno 22] Invalid argument"
+        path = platform_info.unquote_pasted_path((path or "").strip())
         if not path:
             return self.try_set(field, "")
         try:
@@ -958,7 +968,7 @@ class Look:
         """Check an uploaded font at pick time (the Themes group's gates) and record
         its path. A path of "" removes it. Licence and source are asked for beside it;
         the stylesheet is not composed without them."""
-        path = (path or "").strip()
+        path = platform_info.unquote_pasted_path((path or "").strip())
         if not path:
             return self.try_set("font_file", "")
         try:

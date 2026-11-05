@@ -326,6 +326,11 @@ RUN emerge --verbose --noreplace \
 # scripts/gen-provision-keys.sh in THIS image (worklist_driver._genkeys_command), and
 # for the pki role that calls scripts/gen-keystores.sh, which refuses without keytool
 # ("ERROR: need keytool") — so every Windows mesh with a pki node ended keys FAILED.
+# WHICH IMAGES NEED IT: only this final (hugmesh-builder) image, and the Studio uses it
+# here only for that keys step of a pki node (backend/frontend/host and the other
+# worker profiles never call gen-keystores.sh). No build-*-stage4.sh image build runs
+# keytool: the ARM builders only COPY gen-keystores.sh into the target sysroot, to run
+# on the device, where its keytool comes from that image, not this one.
 #   dev-java/openjdk-bin — the prebuilt JDK (no hours-long JDK compile); headless-awt
 #                          drops the X11/ALSA/CUPS deps a keytool-only image never uses.
 #                          java-config's /usr/bin/keytool runs the system VM, which the
