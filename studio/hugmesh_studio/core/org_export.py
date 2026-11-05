@@ -191,9 +191,13 @@ BANNED_MARKERS = (
     # a password written into a URL, but only a LITERAL one of 16+ characters: the
     # repositories are full of `user:$(PASSWORD)@host`, `user:${VAR}@host` and
     # `gateway:gateway@host` (placeholders and test logins), and a rule that refused
-    # those would refuse the platform's own manifests
+    # those would refuse the platform's own manifests. A password that is one whole
+    # `__UPPER_CASE__` token is a render-time placeholder too (a Casdoor app.conf holds
+    # `postgres://__CASDOOR_DB_USER__:__CASDOOR_DB_PASSWORD__@host`, filled in by an
+    # initContainer): only the ENTIRE password spelled that way, upper case, right up
+    # to the `@`, so a token glued to a literal, or a lower-case `__...__`, still trips.
     ("URL with a literal password", re.compile(
-        r"://[^/\s:@]+:(?![$<{(%\s])[^\s/@$:]{16,}@")),
+        r"://[^/\s:@]+:(?![$<{(%\s])(?!__[A-Z][A-Z0-9_]*__@)[^\s/@$:]{16,}@")),
     # a header FOLLOWED BY a base64 body: the bytes of a compiled program (an engine's
     # .wasm holds the bare PEM header strings, each followed by a NUL, in its string
     # table) are not a key, and refusing them refused a real repository. NOT anchored to

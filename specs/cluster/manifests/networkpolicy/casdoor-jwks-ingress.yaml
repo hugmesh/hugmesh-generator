@@ -15,7 +15,11 @@
 #     chart was written, and db-ingress.yaml already admits it to route-access-db
 #     and Cassandra in hugmesh-pki; the casdoor hop was the one nobody wrote down;
 #   * owncast-bff-api (manifests/owncast, namespace hugmesh-owncast);
-#   * tube-bff-api (manifests/tube, namespace hugmesh-tube).
+#   * tube-bff-api (manifests/tube, namespace hugmesh-tube);
+#   * the games BFF (manifests/games, namespace hugmesh-games). It accepts BOTH
+#     realms: games-realm tokens are checked against casdoor-games in its own
+#     namespace (no rule needed) and mesh tokens against THIS Casdoor, the key
+#     fetch this rule opens. Without it every mesh /games/api/** call dies.
 #
 # Without a rule the key fetch dies in the CNI: no event, no restart, no pod-side
 # log, and every signed-in call answers 401/500 ("Could not obtain the keys").
@@ -26,10 +30,10 @@
 # the tier-ingress from-set, which would admit every pod in that namespace to every
 # pki pod (cassandra, route-access-db, headscale, harbor, the superadmin gateway).
 #
-# owncast and tube are DEFAULT-OFF optional services; this file still ships through
+# owncast, tube and games are DEFAULT-OFF optional services; this file still ships through
 # the auto-sync networkpolicy app on every cluster, exactly like tier-ingress.yaml's
 # hugmesh-games policy: a from-peer whose namespace does not exist matches nothing,
-# and the bake prunes nothing under manifests/networkpolicy for owncast or tube
+# and the bake prunes nothing under manifests/networkpolicy for them
 # (scripts/_optional-services-lib.sh), so git and the baked tree render the same
 # (tests/scripts/test-optional-netpol-autosync.sh).
 #
@@ -96,5 +100,25 @@ spec:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-tube } }
           podSelector:
             matchLabels: { app: hugmesh-tube }
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+# Games BFF -> systems Casdoor :8000, for the systems-realm half of its
+# APP_TENANCY_JWKS_URIS map (a mesh user's custody JWT forwarded by the fe-gateway).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: games-bff-to-casdoor-jwks
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: casdoor }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }
+          podSelector:
+            matchLabels: { app: hugmesh-games }
       ports:
         - { protocol: TCP, port: 8000 }
