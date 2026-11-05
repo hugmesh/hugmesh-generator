@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from collections import OrderedDict, deque
@@ -40,7 +41,38 @@ log = logging.getLogger("meshbridge.core")
 # one (refresh_room scans in MESH_STATE_TYPES order). Writers (the
 # matrix-ui room-settings section) mint ONLY the canonical type.
 MESH_STATE_TYPE = "net.hugmesh.mesh.bridge"
-LEGACY_MESH_STATE_TYPES = ("systems.hugmesh.mesh.bridge",)
+BUILTIN_LEGACY_MESH_STATE_TYPES = ("systems.hugmesh.mesh.bridge",)
+
+# A mesh that ran under an OLDER brand may still carry the flag under that
+# brand's spelling in its rooms (room state is never rewritten). Such a mesh
+# names those spellings in MESHBRIDGE_LEGACY_STATE_TYPES (comma-separated,
+# oldest last); they are honored on read AFTER the built-in ones and never
+# written. This tree names no brand of its own here: the operator's config does.
+_STATE_TYPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+
+
+def configured_legacy_state_types(raw: str | None) -> tuple[str, ...]:
+    """The extra legacy flag spellings from ``MESHBRIDGE_LEGACY_STATE_TYPES``:
+    trimmed, de-duplicated, in the given order; the canonical and built-in
+    spellings and anything that is not a plain event-type name are dropped."""
+    out: list[str] = []
+    for part in (raw or "").split(","):
+        name = part.strip()
+        if not name:
+            continue
+        if not _STATE_TYPE_RE.match(name):
+            log.warning("MESHBRIDGE_LEGACY_STATE_TYPES: ignoring %r (not an event type name)",
+                        name)
+            continue
+        if name == MESH_STATE_TYPE or name in BUILTIN_LEGACY_MESH_STATE_TYPES or name in out:
+            continue
+        out.append(name)
+    return tuple(out)
+
+
+LEGACY_MESH_STATE_TYPES = (*BUILTIN_LEGACY_MESH_STATE_TYPES,
+                           *configured_legacy_state_types(
+                               os.environ.get("MESHBRIDGE_LEGACY_STATE_TYPES")))
 MESH_STATE_TYPES = (MESH_STATE_TYPE, *LEGACY_MESH_STATE_TYPES)
 MESH_META_KEY = "com.hugmesh.mesh"
 

@@ -50,93 +50,10 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
 # ── A. first boot: the standalone account ──────────────────────────────────────
-# make_root DIR — a throwaway root with the image's group set (no `games`) and the
-# account-tool shims on DIR/bin. The shims keep their state under DIR only.
-make_root() {
-    local r="$1"
-    mkdir -p "${r}/etc" "${r}/bin" "${r}/var/lib"
-    printf '%s\n' 'root:x:0:' 'wheel:x:10:root' 'audio:x:18:' 'video:x:27:' \
-        'usb:x:85:' 'plugdev:x:440:' > "${r}/etc/group"
-    printf '%s\n' 'root:x:0:0:root:/root:/bin/bash' > "${r}/etc/passwd"
-    : > "${r}/etc/sudoers"
-    : > "${r}/log"
-    # getent group|passwd NAME
-    cat > "${r}/bin/getent" <<EOF
-#!/usr/bin/env bash
-db="\$1"; key="\$2"
-grep -E "^\${key}:" "${r}/etc/\${db}"
-EOF
-    cat > "${r}/bin/groupadd" <<EOF
-#!/usr/bin/env bash
-echo "groupadd \$*" >> "${r}/log"
-[ "\${GROUPADD_FAIL:-0}" = 1 ] && exit 10
-g="\${@: -1}"
-echo "\${g}:x:900:" >> "${r}/etc/group"
-EOF
-    # useradd: shadow's rule — every -G group must exist, else exit 6, NO user.
-    cat > "${r}/bin/useradd" <<EOF
-#!/usr/bin/env bash
-echo "useradd \$*" >> "${r}/log"
-if [ "\${USERADD_FAIL_ONCE:-0}" = 1 ] && [ ! -e "${r}/useradd.failed" ]; then
-    : > "${r}/useradd.failed"; echo "useradd: cannot lock /etc/passwd" >&2; exit 1
-fi
-groups=""; user=""
-while [ \$# -gt 0 ]; do
-    case "\$1" in
-        -G) groups="\$2"; shift 2 ;;
-        -s|-u|-g|-d|-c) shift 2 ;;
-        -*) shift ;;
-        *) user="\$1"; shift ;;
-    esac
-done
-IFS=, read -r -a gl <<< "\${groups}"
-for g in "\${gl[@]}"; do
-    grep -qE "^\${g}:" "${r}/etc/group" || { echo "useradd: group '\${g}' does not exist" >&2; exit 6; }
-done
-echo "\${user}:x:1000:1000::/home/\${user}:/bin/bash" >> "${r}/etc/passwd"
-echo "\${user}:\${groups}" > "${r}/groups.\${user}"
-EOF
-    cat > "${r}/bin/id" <<EOF
-#!/usr/bin/env bash
-grep -qE "^\${@: -1}:" "${r}/etc/passwd"
-EOF
-    # chpasswd [-e]: records exactly what it was handed; fails for an unknown user.
-    cat > "${r}/bin/chpasswd" <<EOF
-#!/usr/bin/env bash
-mode=plain; [ "\${1:-}" = -e ] && mode=hash
-line="\$(cat)"
-echo "chpasswd \${mode}" >> "${r}/log"
-[ "\${CHPASSWD_FAIL:-0}" = 1 ] && exit 1
-grep -qE "^\${line%%:*}:" "${r}/etc/passwd" || { echo "chpasswd: user '\${line%%:*}' does not exist" >&2; exit 1; }
-printf '%s\n' "\${line}" > "${r}/shadow.\${mode}"
-EOF
-    for t in passwd chage; do
-        printf '#!/usr/bin/env bash\necho "%s $*" >> "%s/log"\n' "${t}" "${r}" > "${r}/bin/${t}"
-    done
-    for t in locale-gen eselect; do printf '#!/bin/sh\nexit 0\n' > "${r}/bin/${t}"; done
-    printf '#!/bin/sh\nexit 1\n' > "${r}/bin/env-update"   # skips `source /etc/profile`
-    chmod +x "${r}"/bin/*
-}
+# make_root / render / run_fb: shared with studio/tests/test_login_field_reaches_firstboot.py.
+# shellcheck source=tests/scripts/lib/firstboot-harness.sh
+source "${REPO}/tests/scripts/lib/firstboot-harness.sh"
 
-# render ROOT HASH STANDALONE — the real template, rendered the way the builders do,
-# cut before the Kubernetes section (host-mutating), plus the template's own
-# self-delete line, with absolute paths moved under ROOT.
-render() {
-    local r="$1" hash="$2" sa="$3" body tail_line
-    body="$(sed -n '1,/^# ── Kubernetes kernel modules/p' "${TMPL}")"
-    tail_line="$(grep -E 'rm -f /etc/local.d/01-firstboot.start$' "${TMPL}")"
-    printf '%s\n%s\n' "${body}" "${tail_line}" \
-      | sed -e "s|@@STANDALONE@@|${sa}|g" -e 's|@@DEFAULT_USER@@|magus|g' \
-            -e "s|@@LOCAL_PASSHASH@@|${hash}|g" -e 's|@@[A-Z_]*@@|x|g' \
-            -e "s|/var/lib/keys-provision|${r}/var/lib/keys-provision|g" \
-            -e "s|/etc/sudoers|${r}/etc/sudoers|g" \
-            -e "s|/dev/console|${r}/console|g" \
-            -e "s|/etc/local.d/01-firstboot.start|${r}/self|g" > "${r}/self"
-    chmod +x "${r}/self"
-    cp "${r}/self" "${r}/rendered"
-}
-
-run_fb() { local r="$1"; shift; ( cd "${r}" && env "$@" PATH="${r}/bin:${PATH}" bash "${r}/self" ) > "${r}/out" 2>&1; }
 
 HASH6="$(openssl passwd -6 -salt 'Abc.def/123' 'correct horse' 2>/dev/null)"
 case "${HASH6}" in '$6$'*) ;; *) echo "  FAIL openssl passwd -6 unavailable"; exit 1 ;; esac
@@ -202,6 +119,86 @@ pw="$(cut -d: -f2- "${R}/shadow.plain" 2>/dev/null)"
 [ -n "${pw}" ] && grep -qF "pass: ${pw}" "${R}/console" 2>/dev/null \
     && ok "one-time password shown on /dev/console (OpenRC local discards stdout)" \
     || bad "one-time password never reaches the console"
+
+# ── A6+. the Login Password on a NON-standalone image (cloud/mesh desktops) ────
+# The Studio shows the Login Password on cloud/mesh x86 laptops/desktops, rpi5 and
+# jetson desktops, and the standalone-MODE chromebook/frite/orangepi5/-4-lts flows
+# without the box; none of those sets STANDALONE=true. The hash must land there too.
+echo "== A6. STANDALONE=false + password, keyless boot: the hash lands, the account is the login =="
+R="${WORK}/a6"; make_root "${R}"; render "${R}" "${HASH6}" false; run_fb "${R}"
+[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "magus:${HASH6}" ] \
+    && ok "chpasswd -e received exactly magus:<the build-time hash>" \
+    || bad "the build-time hash was dropped on a non-standalone image"
+[ ! -e "${R}/shadow.plain" ] && ok "no random password" || bad "a random password was set although a password was given"
+grep -q 'KEYLESS BOOT' "${R}/out" && bad "keyless random-password fallback ran although a password was given" \
+    || ok "keyless fallback did not run"
+grep -q '^passwd -l root' "${R}/log" && ok "root locked" || bad "root not locked"
+grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && ok "only login on the box -> in wheel (as the fallback was)" \
+    || bad "keyless image: the only account cannot administer the box"
+[ -f "${R}/var/lib/keys-provision/users.created" ] && ok "users.created marked" || bad "users.created not marked"
+[ ! -e "${R}/self" ] && ok "finaliser removed itself" || bad "finaliser left in place"
+
+echo "== A7. STANDALONE=false + password, KEYS provisioned users: an ADDITIONAL account, no wheel =="
+R="${WORK}/a7"; make_root "${R}"; keys_provisioned "${R}"; printf '%%wheel ALL=(ALL) ALL  # hugmesh: governed\n' > "${R}/etc/sudoers"
+sed -i 's/^%wheel/# %wheel/' "${R}/etc/sudoers"
+cp "${R}/etc/sudoers" "${R}/sudoers.before"
+render "${R}" "${HASH6}" false; run_fb "${R}"
+[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "magus:${HASH6}" ] \
+    && ok "hash applied to the additional local account" || bad "hash not applied on a KEYS-provisioned image"
+grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && bad "additional local account was put in wheel" \
+    || ok "additional local account is not in wheel"
+cmp -s "${R}/etc/sudoers" "${R}/sudoers.before" && ok "/etc/sudoers untouched (governance's commented %wheel stays commented)" \
+    || bad "/etc/sudoers changed on a KEYS image: $(diff "${R}/sudoers.before" "${R}/etc/sudoers" | tr '\n' ' ')"
+[ -z "$(ls -A "${R}/etc/sudoers.d" 2>/dev/null)" ] && ok "no sudoers.d grant without --local-admin" \
+    || bad "sudoers.d grant written without --local-admin"
+grep -q '^passwd -l root' "${R}/log" && bad "root re-locked on a KEYS image (KEYS decides root)" || ok "root left to KEYS"
+grep -qE '^alice:' "${R}/etc/passwd" && ok "KEYS user still there" || bad "KEYS user gone"
+grep -q 'KEYLESS BOOT' "${R}/out" && bad "keyless fallback ran on a KEYS image" || ok "keyless fallback did not run"
+
+echo "== A7b. KEYS already created an account with this NAME: KEYS wins, nothing changed =="
+R="${WORK}/a7b"; make_root "${R}"; keys_provisioned "${R}" magus
+render "${R}" "${HASH6}" false; run_fb "${R}"
+[ ! -e "${R}/shadow.hash" ] && [ ! -e "${R}/shadow.plain" ] && ok "KEYS account's password left alone" \
+    || bad "the build-time password overwrote a KEYS-created account's password"
+grep -q 'KEYS provisioning already created magus' "${R}/console" 2>/dev/null && ok "console says why" \
+    || bad "silent skip: the console does not say the Login Password was not applied"
+[ ! -e "${R}/self" ] && ok "finaliser removed itself (nothing to retry)" || bad "finaliser kept for a skip"
+
+echo "== A7c. our own account from a failed attempt is retried, not mistaken for a KEYS one =="
+R="${WORK}/a7c"; make_root "${R}"; keys_provisioned "${R}"
+render "${R}" "${HASH6}" false; run_fb "${R}" CHPASSWD_FAIL=1
+[ -e "${R}/self" ] && ok "kept for a retry after chpasswd failed" || bad "deleted itself after a failed chpasswd"
+render "${R}" "${HASH6}" false; run_fb "${R}"
+[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "magus:${HASH6}" ] && ok "second boot applied the hash" \
+    || bad "second boot treated our own account as a KEYS account and skipped it"
+
+echo "== A8. --local-admin on a KEYS image: sudo via sudoers.d, never the shared %wheel line =="
+R="${WORK}/a8"; make_root "${R}"; keys_provisioned "${R}"
+render "${R}" "${HASH6}" false true; run_fb "${R}"
+grep -qx 'magus ALL=(ALL) ALL' "${R}"/etc/sudoers.d/* 2>/dev/null && ok "sudoers.d grant for magus" \
+    || bad "no sudoers.d grant with --local-admin"
+grep -q '%wheel' "${R}/etc/sudoers" && bad "%wheel line written on a KEYS image" || ok "no %wheel line"
+
+echo "== A9. STANDALONE=false, no password: the keyless fallback is unchanged =="
+R="${WORK}/a9"; make_root "${R}"; render "${R}" "" false; run_fb "${R}"
+grep -q 'KEYLESS BOOT' "${R}/console" 2>/dev/null && ok "keyless fallback banner on the console" \
+    || bad "keyless fallback did not run with no password"
+[ -s "${R}/shadow.plain" ] && ok "random one-time password set" || bad "no random password"
+R="${WORK}/a9k"; make_root "${R}"; keys_provisioned "${R}"; render "${R}" "" false; run_fb "${R}"
+[ ! -e "${R}/shadow.plain" ] && [ ! -e "${R}/shadow.hash" ] && ! grep -qE '^magus:' "${R}/etc/passwd" \
+    && ok "KEYS image, no password: no local account at all" || bad "KEYS image with no password got a local account"
+
+echo "== A10. hugmesh-home-setup's log() reaches the console (OpenRC local discards stdout) =="
+LOGFN="$(sed -n '/^log() {/,/^}/p' "${HOMESETUP}")"
+if [ -z "${LOGFN}" ]; then
+    bad "log() not found in ${HOMESETUP}"
+else
+    LW="${WORK}/hslog"; mkdir -p "${LW}"
+    ( eval "$(printf '%s\n' "${LOGFN}" | sed "s|/dev/console|${LW}/console|g")"
+      log "run ecryptfs-migrate-home -u magus as root" ) > "${LW}/out" 2>&1
+    grep -q 'ecryptfs-migrate-home -u magus' "${LW}/console" 2>/dev/null \
+        && ok "home-setup log line written to the console" || bad "home-setup log() never reaches the console"
+fi
 
 # ── B. home-setup's PAM wiring ─────────────────────────────────────────────────
 echo "== B. pam_ecryptfs wiring keeps every pam_unix jump target =="
@@ -312,6 +309,25 @@ if awk '/^sequence:/ { s = 1 } s && /^[a-z]/ && !/^sequence:/ { s = 0 } s' "${CA
 else
     ok "no 'users' page in the Calamares sequence"
 fi
+
+echo "== C3. every builder renders @@LOCAL_ADMIN@@ (the harness's @@*@@ catch-all would hide a miss) =="
+for b in "${REPO}"/build-*-stage4.sh; do
+    n="$(basename "${b}")"
+    grep -q 's|@@LOCAL_ADMIN@@|' "${b}" && grep -q -- '--local-admin)' "${b}" && grep -q -- '--local-pass-file)' "${b}" \
+        && ok "${n}: --local-admin/--local-pass-file parsed, @@LOCAL_ADMIN@@ rendered" \
+        || bad "${n}: missing --local-admin/--local-pass-file arm or @@LOCAL_ADMIN@@ substitution"
+done
+echo "== C4. a standalone DESKTOP builder refuses a real build with no password =="
+for b in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh build-frite-stage4.sh \
+         build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    grep -q 'standalone desktop build with no --local-pass/--local-pass-file' "${REPO}/${b}" \
+        && ok "${b}: refuses" || bad "${b}: still builds a standalone desktop with no login password"
+done
+for b in build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh \
+         build-orangepi3-lts-stage4.sh; do
+    grep -q 'standalone desktop build with no --local-pass/--local-pass-file' "${REPO}/${b}" \
+        && bad "${b}: headless appliance refuses (its serial console IS the login surface)" || ok "${b}: appliance keeps the console one-time password"
+done
 
 echo
 echo "${P} passed, ${F} failed"

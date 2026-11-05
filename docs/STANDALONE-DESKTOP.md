@@ -171,23 +171,43 @@ nothing until an e-ink panel is attached. The old `FB_AUO_K190X` drivers left
 mainline and are not built.
 
 ### Local user with a password (no SSO)
-`--local-user NAME` + `--local-pass PASS` create a normal user. The build hashes
-the password (yescrypt `$y$` where the build host's libcrypt supports it,
-SHA-512 crypt `$6$` otherwise). **The plaintext is never baked.** With no
-`--local-pass`, first boot mints a random one-time password and prints it once to
-`/dev/console`. `wheel` is the sudo path. `--skip-sso` bakes the Casdoor/OIDC
-greeter sign-in OFF on any client image (auto-on for standalone); the greeter then
-says so, and an administrator can turn it on later with `sso-greeter configure
+`--local-user NAME` + `--local-pass-file FILE` (or `--local-pass PASS`) create a
+normal user. The build hashes the password (yescrypt `$y$` where the build host's
+libcrypt supports it, SHA-512 crypt `$6$` otherwise). **The plaintext is never
+baked.** `--local-pass-file` reads it from a file, which keeps it off every
+process argv (`ps`, `/proc/<pid>/cmdline`, `docker inspect`); the Studio and the
+TUI always pass it that way, through a private 0600 file removed when the build
+ends. `wheel` is the sudo path. `--skip-sso` bakes the Casdoor/OIDC greeter
+sign-in OFF on any client image (auto-on for standalone); the greeter then says
+so, and an administrator can turn it on later with `sso-greeter configure
 --enable --issuer https://...` (see `docs/DESKTOP-LOGIN-SSO.md`). Nothing is
 contacted until that happens and a user chooses SSO at the greeter.
 
-The Studio and the TUI ask for this password twice, and refuse to build a
-standalone image without one: root is locked and there is no KEYS stick or SSO,
-so this account is the only way in. The Calamares installer does not ask for an
-account; the installed system's first boot creates this one. First boot creates
-any supplementary group the image lacks (`games` has no `acct-group` in
-::gentoo), checks every step, and on a failure says so on the console and retries
-on the next boot instead of falling back to a random password.
+**The same Login Password works on every image, not only standalone.** First boot
+applies the hash on standalone, tailnet-only and mesh images alike:
+
+| Image at first boot | Local account |
+|---|---|
+| standalone | the only login; in `wheel`; root locked |
+| not standalone, no KEYS users | replaces the keyless fallback: in `wheel`; root locked |
+| not standalone, KEYS-provisioned users | **additional** account, not in `wheel`, `/etc/sudoers` untouched; `--local-admin` grants sudo through `/etc/sudoers.d` only; a KEYS account with the same name keeps its KEYS password (the console says so) |
+
+With no password on a standalone *desktop*, the Studio, the TUI **and the builder**
+refuse to build: root is locked and there is no KEYS stick or SSO, so this account
+is the only way in, and a one-time password printed to a console behind the
+graphical greeter is no login. The headless appliances (orangepizero2 / -2w /
+-zero3 / -3-lts) still accept no password: their serial console is the login
+surface, so first boot's random one-time password, printed there, is usable. On a
+non-standalone image with no password, a keyless first boot makes the account
+with a random one-time password on the console, as before.
+
+The Studio and the TUI ask for this password twice. A restarted Studio session
+whose build used one asks for it again on the progress page (it is never saved
+with a session or config). The Calamares installer does not ask for an account;
+the installed system's first boot creates this one. First boot creates any
+supplementary group the image lacks (`games` has no `acct-group` in ::gentoo),
+checks every step, and on a failure says so on the console and retries on the
+next boot instead of falling back to a random password.
 
 ### LUKS2 full-disk encryption (installed system)
 The **installer prompts for a system root-unlock passphrase** (distinct from the
