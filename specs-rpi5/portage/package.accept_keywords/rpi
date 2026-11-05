@@ -3,3 +3,13 @@ sys-boot/raspberrypi-firmware ~arm64
 sys-firmware/raspberrypi-wifi-ucode ~arm64
 dev-embedded/raspberrypi-utils ~arm64
 dev-embedded/rpi-eeprom ~arm64
+
+# spice-vdagent (the emulated-desktop display agent in the desktop list) is
+# amd64-stable but only ~arm64. Accept it here. Do NOT add a line for its
+# USE=selinux dependency sec-policy/selinux-vdagent: 2.20260616_p1 is STABLE on
+# arm64 and satisfies ">=selinux-base-policy-2.20260616_p1"; a ~arm64 entry
+# would make portage pick 2.20260922_p1 here (this board's base-policy is
+# ~arm64, so it would resolve) while the SAME line on frite/orangepi walls hours
+# into a build; keep the five boards on one stable module version.
+# tests/scripts/test-vm-display-guest.sh pins both halves.
+app-emulation/spice-vdagent ~arm64

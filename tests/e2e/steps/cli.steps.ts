@@ -293,6 +293,9 @@ PY
     esac
     exit 0
   fi
+  # Real kubectl: --ignore-not-found turns NotFound into exit 0 with no output
+  # (bootstrap-kind.sh step 1a reads the record that way, #529).
+  case "\${args}" in *" --ignore-not-found "*) exit 0 ;; esac
   echo 'Error from server (NotFound): configmaps "hugmesh-kind-halt" not found' >&2
   exit 1
 fi

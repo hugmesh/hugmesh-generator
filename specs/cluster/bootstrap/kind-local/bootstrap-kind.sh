@@ -444,8 +444,10 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 # 1) kind cluster (idempotent)
 # ─────────────────────────────────────────────────────────────────────────
+KIND_REUSED=0
 if kind get clusters 2>/dev/null | grep -x "${CLUSTER_NAME}" >/dev/null; then
   log "kind cluster '${CLUSTER_NAME}' already exists — reusing it"
+  KIND_REUSED=1   # step 1a reads the halt record before anything is applied
 else
   log "Creating kind cluster '${CLUSTER_NAME}' (this checkout mounted read-only for the tokenless local sync path)"
   # The repo mount can only exist if it is declared at CREATE time, and its
@@ -470,6 +472,79 @@ kind export kubeconfig --name "${CLUSTER_NAME}" >/dev/null
 kubectl config use-context "kind-${CLUSTER_NAME}" >/dev/null
 
 kubectl version >/dev/null 2>&1 || { echo "cluster not reachable after kind create/export" >&2; exit 1; }
+
+# ─────────────────────────────────────────────────────────────────────────
+# 1a) A HALTED CLUSTER IS NOT A REUSABLE ONE (hugmesh-generator#529).
+#
+# `make kind-halt` (scripts/kind-halt.sh) leaves the cluster UP and answering —
+# that is the point of it — so `kind get clusters` names it and the reuse branch
+# above takes it. But every Application has had its auto-sync removed and every
+# mesh Deployment/StatefulSet sits at 0 replicas, so nothing this script applies
+# can converge: the vault-0 wait further down is `|| true`, and the run walks on
+# into a pki chain that needs a Vault that is not there. Nothing said "halted";
+# the operator watched a long bring-up that quietly did not work.
+#
+# The halt record is the authority. kind-halt.sh writes it FIRST, before any
+# patch or scale, so a cluster that is halted — or half-halted by a cancelled
+# halt — carries it. This READS IT DIRECTLY and does not branch on
+# `kind-halt.sh status`'s exit code: that verb has its own census and its own
+# exit vocabulary, and a bring-up must not inherit either one's failure modes.
+#
+# THREE ANSWERS, and only one of them proceeds:
+#   * record present           -> REFUSE, naming `make kind-resume`.
+#   * record absent (NotFound) -> reuse, as before.
+#   * the read FAILED          -> REFUSE. An unreadable record is not an absent
+#                                 one; treating it as absent is exactly the
+#                                 conflation kind-halt.sh's own read_record was
+#                                 broken by once (its B2).
+# NotFound is classified by kubectl itself (`--ignore-not-found`: rc 0, no
+# output), not by grepping error prose — a prose match on "not found" would also
+# swallow `error: context "…" not found`, and fail open on it.
+#
+# Only on the REUSE path: a cluster this run just created cannot carry a record.
+# Placed after the reachability check so a stopped-node zombie keeps its own
+# "cluster not reachable" diagnosis. No override: `make kind-resume` is the way
+# past it, and `make kind-down` is the destructive alternative.
+# ─────────────────────────────────────────────────────────────────────────
+if [ "${KIND_REUSED}" = "1" ]; then
+  _halt_cm="${KIND_HALT_STATE_CONFIGMAP:-hugmesh-kind-halt}"   # same reader as scripts/kind-halt.sh
+  _halt_err="$(mktemp)"
+  _halt_out=""
+  _halt_rc=0
+  _halt_out="$(kubectl --context "kind-${CLUSTER_NAME}" -n "${ARGOCD_NS}" \
+                 get configmap "${_halt_cm}" --ignore-not-found -o name \
+                 --request-timeout=30s 2>"${_halt_err}")" || _halt_rc=$?
+  _halt_why="$(head -n 1 "${_halt_err}" | cut -c1-200)"
+  rm -f "${_halt_err}"
+  if [ "${_halt_rc}" -ne 0 ]; then
+    {
+      echo
+      echo "FATAL: could not read the halt record ${ARGOCD_NS}/${_halt_cm} on kind cluster '${CLUSTER_NAME}' (kubectl exit ${_halt_rc})."
+      echo "  ${_halt_why:-kubectl printed nothing on stderr}"
+      echo "  An unreadable record is NOT an absent one: if this cluster was halted with"
+      echo "  \`make kind-halt\`, its workloads are at 0 replicas and its Applications are"
+      echo "  suspended, and a bring-up over it cannot converge. Refusing rather than guessing."
+      echo "  Check:   make kind-halt-status"
+      echo "  Then, if it IS halted:   make kind-resume   and re-run   make kind-up"
+    } >&2
+    exit 1
+  fi
+  if [ -n "${_halt_out}" ]; then
+    {
+      echo
+      echo "FATAL: kind cluster '${CLUSTER_NAME}' is HALTED — ${ARGOCD_NS}/${_halt_cm} holds a halt record."
+      echo "  \`make kind-halt\` scaled every mesh workload to 0 and suspended ArgoCD auto-sync,"
+      echo "  so nothing this bring-up applies would converge (vault-0 would never schedule)."
+      echo "  Remedy:  make kind-resume      (restores the recorded replicas and auto-sync)"
+      echo "           then re-run  make kind-up"
+      echo "  Inspect: make kind-halt-status"
+      echo "  (\`make kind-down && make kind-up\` also works, but DESTROYS the cluster.)"
+    } >&2
+    exit 1
+  fi
+  log "no halt record (${ARGOCD_NS}/${_halt_cm}) — the reused cluster is not halted"
+  unset _halt_cm _halt_err _halt_out _halt_rc _halt_why
+fi
 
 # ─────────────────────────────────────────────────────────────────────────
 # 1b) EGRESS PREFLIGHT — can anything inside this node reach the outside?

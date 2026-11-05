@@ -1,0 +1,23 @@
+#!/bin/sh
+# 20-spice-vdagent.start — start spice-vdagentd only inside a SPICE VM.
+#
+# app-emulation/spice-vdagent ships an OpenRC service, but its start() returns 1
+# when /dev/virtio-ports/com.redhat.spice.0 does not exist — which is every
+# physical laptop and SBC, and every QEMU test run without --display spice. An
+# unconditional `rc-update add spice-vdagent default` would therefore print a
+# red failed service on each of those boots. This hook (run by the `local`
+# service, which every image enables) starts the daemon only when the SPICE
+# channel is actually there. `local` runs after display-manager; that is fine
+# because the in-session client (/usr/bin/spice-vdagent, started by the package's
+# own /etc/xdg/autostart entry) retries the daemon socket every second until it
+# appears (vdagent.c, vdagent_init_async_cb).
+#
+# The two paths are overridable only so tests/scripts/test-vm-display-guest.sh
+# can drive both branches without root (a char device cannot be mknod'ed by a
+# test); the `local` service runs this with a clean environment.
+PORT="${SPICE_VDAGENT_PORT:-/dev/virtio-ports/com.redhat.spice.0}"
+INITD="${SPICE_VDAGENT_INITD:-/etc/init.d/spice-vdagent}"
+[ -c "${PORT}" ] || exit 0
+[ -e "${INITD}" ] || exit 0
+command -v rc-service >/dev/null 2>&1 || exit 0
+rc-service --ifnotstarted spice-vdagent start

@@ -1494,6 +1494,12 @@ kind-halt-status: ## read-only: is the DevOps lane halted, and what did the halt
 kind-halt-check: ## offline: prove kind-halt's refusals bite (stubbed kind/docker/kubectl; touches no cluster)
 	bash tests/scripts/test-kind-halt.sh
 
+# Offline guard for bootstrap-kind.sh's halt-record read (#529): `make kind-up`
+# over a halted cluster must refuse and name `make kind-resume`, an unreadable
+# record must refuse too, and only NotFound may take the reuse path.
+kind-up-halt-check: ## offline: prove kind-up refuses a HALTED cluster (stubbed kind/kubectl/docker; touches no cluster)
+	bash tests/scripts/test-kind-up-halted-refusal.sh
+
 # kind-doctor — the standing "can this cluster actually run the mesh?" check.
 #
 # hugmesh-generator#349: on 2026-09-10 this lane had been dead for two days
@@ -2889,6 +2895,15 @@ builder-unmount-real-check: ## OPT-IN, needs unshare -Urm (a developer host, not
 .PHONY: mesh-node-launcher-parity-check
 mesh-node-launcher-parity-check: ## Windows vs Linux mesh-node launchers pass docker identical arguments (bar the TUN pair); Pester in pwsh or the PowerShell image
 	bash tests/docker-mesh-node/test-launcher-parity.sh
+
+# casdoor-render-boot-check: every Casdoor (systems, games, domain) rendered by its OWN
+# initContainer script inside casbin/casdoor:3.80.0 on a hostile DB password (| & / \ ' " $ %
+# # ; ? @ tab, and a newline via ALTER USER), then booted against postgres:16-alpine:
+# /api/health ok, the password in no stream, the seeded catalog present (hugmesh-generator#848).
+# Throwaway containers with unique names, removed on exit. Needs docker; exits 2 without it.
+.PHONY: casdoor-render-boot-check
+casdoor-render-boot-check: ## Every Casdoor boots on the conf its initContainer renders from a hostile Vault password (docker, throwaway)
+	bash tests/casdoor/test-casdoor-render-boot.sh
 
 # build-image-dial-identity-check: the image-gen worker (docker/build-image.sh) run end to end
 # against fake builders and a capturing curl; asserts the ingest body reports the DEVICE_ID /

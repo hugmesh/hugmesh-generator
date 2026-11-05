@@ -2069,6 +2069,18 @@ greeter-session=lightdm-gtk-greeter
 session-wrapper=/etc/lightdm/Xsession
 user-session=LXDE
 LIGHTDM
+# Emulated-desktop display (QEMU runner --display spice): the session-side
+# autofit applier (xrandr --auto on a virtio-gpu/qxl preferred-mode change) and
+# the boot-time spice-vdagentd starter (only when the SPICE virtio port exists,
+# so a physical board never shows a failed service). Packages come from the
+# desktop list (spice-vdagent + its policy module). No DRM_VIRTIO_GPU in this
+# board's kernel yet, so the applier is dormant until that lands; the files
+# are staged now so the five desktop images stay 1:1.
+mkdir -p "${SYSROOT}/usr/libexec/hugmesh" "${SYSROOT}/etc/xdg/autostart" "${SYSROOT}/etc/local.d"
+cp "${SHARED_SPECS}/usr/libexec/hugmesh/vm-autofit"               "${SYSROOT}/usr/libexec/hugmesh/vm-autofit"
+cp "${SHARED_SPECS}/etc/xdg/autostart/hugmesh-vm-autofit.desktop" "${SYSROOT}/etc/xdg/autostart/hugmesh-vm-autofit.desktop"
+cp "${SHARED_SPECS}/etc/local.d/20-spice-vdagent.start"          "${SYSROOT}/etc/local.d/20-spice-vdagent.start"
+chmod 0755 "${SYSROOT}/usr/libexec/hugmesh/vm-autofit" "${SYSROOT}/etc/local.d/20-spice-vdagent.start"
     # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
     # the device-flow helper in front of the local password path, the greeter hint
     # and (SSO on, mesh posture) the baked desktop-governance templates. Staged

@@ -50,6 +50,16 @@
 # THE FOUR FIXES (vs main's forgeable policy):
 #   [FIX-SERVERTAG]   security tags (tag:dev_<fp>, tag:dom_<domain>,
 #                     tag:mesh_<id>, tag:superadmin) are SERVER-FORCED at
+#                     approval and owned by NOBODY: tagOwners lists them with the
+#                     EMPTY owner list [] (tag:dom_* is simply unlisted). headscale
+#                     0.23 accepts a self-advertised tag when the node's USER is an
+#                     owner, and every node registers as the "hugmesh" user, so an
+#                     owner of ["hugmesh"] made these tags self-advertisable by any
+#                     node (measured on 0.23.0). With [] a self-advertisement lands
+#                     in invalid_tags, while forced tags (preauth-key tags,
+#                     `headscale nodes tag -t`) bypass tagOwners and still apply.
+#                     So the SSH source tag:superadmin and the SSH destinations
+#                     tag:mesh_/tag:dev_ are non-forgeable.
 #                     approval and rendered with an EMPTY owner list in
 #                     tagOwners. headscale 0.23 grants a node its forced tags
 #                     PLUS every advertised tag its user owns (a forced tag does
@@ -212,16 +222,17 @@ fetch_export() {
 render_policy() {
     local export_json="$1" out="$2"
 
-    # Dynamic dst tagOwners: one "tag:dev_<shorthash>" per distinct machineKeyFp
-    # and one "tag:dom_<domain>" per distinct domain. We DERIVE the domain from
-    # the `via`/hostname is NOT reliable (the export carries no domain field), so
-    # tag:dom_* is minted from the operator's license domain ONLY when present;
-    # since the export AuthorizedOperator carries no domain, we mint tag:dom_*
-    # from a best-effort: NONE here (kept for the force-tag step which knows the
-    # node's registry domain). The renderer therefore emits per-NODE tag:dev_*
-    # owners (the load-bearing dst); tag:dom_* owners are added by the force-tag
-    # companion from the registry, not from the export body. So the dynamic
-    # tagOwners suffix here lists ONLY the tag:dev_<fp> family.
+    # Dynamic tagOwners: this mesh's tag:mesh_<id> (the SUPERADMIN rule's dst)
+    # plus one "tag:dev_<shorthash>" per distinct machineKeyFp, every one with the
+    # EMPTY owner list [] [FIX-SERVERTAG]: nobody may self-advertise them, the
+    # force-tagger assigns them. tag:mesh_<id> MUST be listed even though nothing
+    # self-advertises it: headscale 0.23 fails EVERY node's map update ("isn't
+    # owned by a TagOwner and no forced tags are defined") while a rule names an
+    # unlisted tag that no node carries as forced, e.g. before the force-tagger's
+    # first run or when it fails. tag:dom_<domain> gets NO entry: the export
+    # carries no domain field (the force-tag companion takes it from a node-local
+    # hint) and no rule names it, and an unlisted tag is refused when advertised.
+    # So the dynamic suffix lists tag:mesh_<id> and the tag:dev_<fp> family.
     #
     # tag:dev_<fp> uses a short, headscale-safe hash of the FULL machineKeyFp so
     # the ACL string is bounded + charset-clean while staying 1:1 with the fp.

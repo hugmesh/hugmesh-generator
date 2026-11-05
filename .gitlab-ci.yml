@@ -1544,6 +1544,22 @@ lint:outbound-mtls-client:
   script:
     - bash tests/scripts/test-outbound-mtls-client.sh
 
+# admin-bff's mesh-token issuer reads two FILES from Secret admin-bff-mesh-token
+# (ExternalSecret in external-secrets/secretstore.yaml, mounted at
+# /run/secrets/mesh-token/). The feature ships dark and the volume is optional, so
+# a wrong Secret name, key, mount or an unlisted ExternalSecret starts a healthy
+# pod whose issuer file does not exist; nothing says so until the flag flips. This
+# gate ties the Deployment's path env, mount and volume to the ExternalSecret's
+# keys and Vault paths, with a fifteen-mutation control battery. Needs PyYAML.
+lint:admin-bff-mesh-token-secret-refs:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
+
 # For a raw-JWT carrier the mfa_satisfied_at claim is a Casdoor USER Property, so it
 # enters a token only at MINT time. Whether that matters depends on WHO HOLDS the
 # token: a human client that can re-mint (refresh_token / device_code / password)
@@ -2355,6 +2371,17 @@ lint:btf-pahole-pairing:
   script:
     - bash tests/scripts/test-btf-pahole-pairing.sh
 
+# Emulated desktop display: the QEMU runner can only open a desktop image in a window
+# the GUEST re-lays out when its kernel carries virtio-gpu + virtio-input + uinput. This
+# lint pins those symbols in the fragment chain each builder applies (last-wins, deps in
+# the same chain) and keeps docs/CLIENT-IMAGES.md's board table honest both ways. Static.
+lint:virtual-display-kernel:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-virtual-display-kernel.sh
+
 # docs/GROUP-CALL-SFU.md says the server half of group calls is designed, not
 # built. This lint checks that claim, and the repo facts the design reasons from
 # (tuwunel pin, coturn ports, reserved labels), against this checkout, so landing
@@ -2804,6 +2831,30 @@ casdoor-jwt-custom-gate:
         - .gitlab-ci.yml
     # And on the default branch so a merged casdoor change is re-validated before
     # it can ship (the live flip happens off main).
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# verify — every Casdoor (systems, games, domain) boots on the conf its render-app-conf
+# initContainer produces from a password an operator could really have put in Vault
+# (| & / \ ' " $ % # ; ? @ a tab, and a newline via ALTER USER). The first renderer was a
+# sed expression and broke silently on three of those bytes (hugmesh-generator#848).
+# Same idiom as casdoor-jwt-custom-gate: the host docker socket on the privileged x86
+# runner, throwaway containers with unique names, removed on exit. The suite exits 2
+# (never 0) without a daemon, so a runner that lost docker FAILS here rather than
+# passing. Pre-merge, the hermetic half of the same check runs inside
+# tests/scripts/test-games-two-realms.sh (shell-suites.yml, tool-heavy job).
+casdoor-render-boot-gate:
+  stage: verify
+  tags: [hugmesh-x86, privileged]
+  script:
+    - bash tests/casdoor/test-casdoor-render-boot.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/cluster/manifests/casdoor/**/*
+        - specs/cluster/manifests/casdoor-games/**/*
+        - specs/cluster/manifests/casdoor-domain/**/*
+        - tests/casdoor/test-casdoor-render-boot.sh
+        - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 # Domain-registry -> brand-repo bridge (#4) consumer test: the OFFLINE verify +
@@ -3734,6 +3785,7 @@ orphan-guards-verify:
         tests/node-storage/test-bake-coverage.sh
         tests/scripts/test-anubis-env-gate.sh
         tests/scripts/test-appstore-effector-flags.sh
+        tests/scripts/test-arm-desktop-package-sets.sh
         tests/scripts/test-arm-ro-distdir.sh
         tests/scripts/test-binpkg-pool-fingerprint.sh
         tests/scripts/test-builder-log-paths.sh
@@ -3767,6 +3819,7 @@ orphan-guards-verify:
         tests/scripts/test-shared-build-assets.sh
         tests/scripts/test-spec-use-parity.sh
         tests/scripts/test-stack-fetch-repos.sh
+        tests/scripts/test-vm-display-guest.sh
         tests/scripts/test-stage4-pack-ownership.sh
         tests/scripts/test-x86-artifact-integrity.sh
         tests/scripts/test-x86-boot-firewall-snort.sh

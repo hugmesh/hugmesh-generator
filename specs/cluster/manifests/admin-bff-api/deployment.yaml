@@ -53,6 +53,13 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        # fsGroup is what makes the mesh-token Secret volume (defaultMode 0400,
+        # below) readable at all. A secret volume without fsGroup is root:root,
+        # and 0400 root:root is EACCES for uid 1000: the issuer would fail the day
+        # APP_MESH_TOKEN_ENABLED flips, not before. With fsGroup the kubelet makes
+        # those files root:1000 0440, readable by this process's supplementary
+        # group 1000 and by nothing else in the pod (there is nothing else).
+        fsGroup: 1000
         seccompProfile: { type: RuntimeDefault }
         seLinuxOptions:
           type: container_t
@@ -893,6 +900,38 @@ spec:
             # the separate client-cert wave, not this change.
             - { name: SYNAPSE_URL,  value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
             - { name: MASTODON_URL, value: "http://akkoma.hugmesh-backend.svc.cluster.local:4000" }
+            # ── Mesh-token issuer (/bff/admin/mesh-token) — SHIPS DARK ──────────
+            # Issues v1 mesh tokens (docs/HUGMESH-TOKEN.md): an SSHSIG-signed grant
+            # wrapping a single-use headscale pre-auth key that carries ONLY
+            # tag:hugmesh. ADMIN/SUPERADMIN only (/bff/admin/** at the gateway).
+            #
+            # APP_MESH_TOKEN_ENABLED is the literal string "false" on purpose. A
+            # bare @ConditionalOnProperty arms on ANY value other than "false" (the
+            # APPSTORE_BUILDER_ENABLED note above), so a typo here would not ship
+            # dark. Flip it only after BOTH Vault paths behind ExternalSecret
+            # admin-bff-mesh-token are seeded by the operator (hugmesh/mesh-token-
+            # issuer, hugmesh/headscale-admin) and the brand config supplies the
+            # login servers.
+            #
+            # The credentials are FILES, never env: the Secret is mounted at
+            # /run/secrets/mesh-token/ (volume `mesh-token` below, defaultMode 0400,
+            # optional: true) and these two variables point at its keys. An
+            # unseeded Secret mounts empty, so the files are simply absent and the
+            # endpoint answers 503. tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
+            # checks each path against the mount and the ExternalSecret's keys.
+            #
+            # LOGIN SERVERS ARE NOT SET HERE. They are per-domain brand config, so
+            # no APP_MESH_TOKEN_LOGIN_SERVERS entry: the application default is
+            # empty, and a domain with no configured login server cannot be issued
+            # for, so the endpoint stays dark on a cluster whose brand has none.
+            #
+            # headscale runs as a HOST service on the pki node; this is the same
+            # selector-less Service the two headscale keys above already pin.
+            - { name: APP_MESH_TOKEN_ENABLED,                value: "false" }
+            - { name: APP_MESH_TOKEN_ISSUER_KEY_PATH,        value: "/run/secrets/mesh-token/issuerKey" }
+            - { name: APP_MESH_TOKEN_HEADSCALE_API_KEY_PATH, value: "/run/secrets/mesh-token/headscaleApiKey" }
+            - { name: APP_MESH_TOKEN_HEADSCALE_BASE_URL,     value: "http://headscale.hugmesh-pki.svc.cluster.local:8080" }
+            - { name: APP_MESH_TOKEN_HEADSCALE_USER,         value: "hugmesh" }
           # Probes are HTTPS now that server.ssl is enabled. Because client-auth=need
           # rejects the TLS handshake of any caller WITHOUT a client cert, a plain
           # kubelet httpGet (which presents none) would fail — so the probe is an
@@ -930,6 +969,8 @@ spec:
             - { name: stores, mountPath: /stores, readOnly: true }
             # PEM identity, read-only — used by the exec probe's curl client cert.
             - { name: pki,    mountPath: /pki,    readOnly: true }
+            # Mesh-token issuer key + headscale API key (see APP_MESH_TOKEN_* above).
+            - { name: mesh-token, mountPath: /run/secrets/mesh-token, readOnly: true }
       volumes:
         - name: tmp
           emptyDir: {}
@@ -941,3 +982,13 @@ spec:
         - name: stores
           emptyDir:
             medium: Memory
+        # ESO-synced (external-secrets/secretstore.yaml, admin-bff-mesh-token).
+        # optional: true is LOAD-BEARING: both Vault paths are operator-seeded, and
+        # a non-optional secret volume naming an absent Secret holds this pod in
+        # ContainerCreating, letting a dark feature wedge the always-present admin
+        # plane. 0400 + the pod's fsGroup = root:1000 0440 (see securityContext).
+        - name: mesh-token
+          secret:
+            secretName: admin-bff-mesh-token
+            optional: true
+            defaultMode: 0400
