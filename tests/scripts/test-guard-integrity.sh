@@ -999,6 +999,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     208 of 249 suites are named by a pull_request-triggered workflow
 # and with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
+# 207 -> 209 (denominator 248 -> 250) on 2026-11-04 for fix/desktop-d-arm-qemu-harness-for-frite-h-20261104,
+# which adds TWO gated suites: tests/qemu/launch_arm_medium_test.sh and
+# tests/qemu/frite_emmc_layout_test.sh (both wired in shell-suites.yml's alpine job). MEASURED by
+# RUNNING this file on that branch: '209 of 250 suites are named by a pull_request-triggered
+# workflow'. A branch that also raises this from 207 (e.g. the mesh-fleet one) conflicts here by
+# construction; whichever lands second re-measures per the doctrine above.
+# 208 -> 210 (denominator 249 -> 251) when that branch merged origin/main (which carries the
+# #473 bump above): the two launch-arm/frite-emmc suites on top of 208 of 249. MEASURED by
+# RUNNING this file on the merge tree: '210 of 251 suites are named by a pull_request-triggered
+# workflow'.
 # 208 -> 209 (denominator 249 -> 250) on 2026-11-04 for feat/mesh-token-g3-generator-local-stack-hea-20261104
 # (#889), which adds ONE gated suite: tests/stack/test-headscale-local.sh (the HEADSCALE=1
 # local-mesh headscale guard, wired in shell-suites.yml's debian job). It was written against
@@ -1032,6 +1042,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # re-measures per the doctrine above.
 # MERGED (origin/main with #473 + #860 + this branch): 207 + 1 (#473) + 1 (#860) + 2 (this branch)
 # = 211 of 252, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/desktop-d-arm-qemu-harness-for-frite-h-20261104): 213 of 254, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/desktop-a-frite-installer-script-emmc--20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/viewer-guest-packages-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/viewer-harness-launchers-20261104): 212 of 253, MEASURED by running this file on the merged tree.

@@ -727,7 +727,14 @@ info "image : ${IMG}"
 
 # ── stage4 mode: hand off to the pre-existing harness ───────────────────────
 if [ "${MODE}" = "stage4" ]; then
-    [ "${PLATFORM}" = "rpi5" ] || die "stage4 mode is aarch64/Pi-only (run-qemu-test.sh hardcodes qemu-system-aarch64); use --mode golden for ${PLATFORM}"
+    # rpi5-ONLY, and the reason is the LAYOUT, not the arch: run-qemu-test.sh
+    # fabricates a Pi disk (KERNEL_IMG_NAME=kernel_2712.img, RPI_BOOT FAT,
+    # config.txt/cmdline.txt) around the stage4. Frite is aarch64 too, but it
+    # boots extlinux + Image and ships no .img at all — its proof is
+    # tests/qemu/frite-emmc-install.sh on the HOST qemu-system-aarch64: the
+    # emulated eMMC target is QEMU's `emmc` device (>= 9.1), which this runner
+    # image's QEMU 7.2 does not have (it ships sd-card only).
+    [ "${PLATFORM}" = "rpi5" ] || die "stage4 mode is rpi5-only (run-qemu-test.sh fabricates a Pi kernel_2712.img/RPI_BOOT disk around the stage4). For frite run tests/qemu/frite-emmc-install.sh on the host QEMU (its eMMC target needs QEMU >= 9.1; this image has 7.2); use --mode golden for ${PLATFORM} otherwise"
     [ -n "${STAGE4}" ] || STAGE4="$(autodetect_stage4 || true)"
     [ -n "${STAGE4}" ] && [ -f "${STAGE4}" ] || die "no stage4 for ${ROLE} under ${ARTIFACTS}"
     info "stage4: ${STAGE4}"
