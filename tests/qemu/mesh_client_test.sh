@@ -21,8 +21,11 @@
 #      mesh client hardcodes tailscale off again.
 #   B. assert_role_topology follows the manifest: tailscale.enabled=false makes the
 #      unlinked client a SKIP; asked-for (or unknown) and unlinked stays a FAIL.
-#   C. assert_mesh_client: joined + tailnet address, a fleet worker must see AND
-#      ping a peer, a control node with no peers yet is a SKIP, not a pass.
+#   C. assert_mesh_client: joined + tailnet address + a LIVE map session (Self.Online,
+#      and a control node's own headscale listing it online), a fleet worker must see
+#      AND ping a peer, every advertised route is some netmap node's primary route
+#      (the only grant of the product ACL), a control node with no peers yet is a
+#      SKIP, not a pass; an ICMP probe through the filter is recorded, never counted.
 #   D. run-qemu-docker.sh boots control roles FIRST on a shared L2 (the workers wait
 #      on their key), and orders exactly as before without one.
 set -uo pipefail
@@ -182,30 +185,36 @@ case "$1" in
     status) n=0; [ -n "${TS_COUNT:-}" ] && { n="$(cat "${TS_COUNT}" 2>/dev/null || echo 0)"; n=$((n + 1)); echo "${n}" > "${TS_COUNT}"; }
             if [ -n "${TS_JSON_LATE:-}" ] && [ "${n}" -ge "${TS_LATE_AT:-999}" ]; then printf '%s\n' "${TS_JSON_LATE}"; else printf '%s\n' "${TS_JSON}"; fi ;;
     ip)     printf '%s\n' "${TS_IP}" ;;
-    ping)   [ "${TS_PONG:-yes}" = yes ] && echo "pong from peer (${3:-?}) via 10.87.72.11:41641 in 2ms" || { echo "timeout"; false; } ;;
+    ping)   case " $* " in
+                *" --icmp "*) [ "${TS_ICMP_PONG:-no}" = yes ] && echo "pong from peer (icmp) in 3ms" || { echo "timeout"; false; } ;;
+                *)            [ "${TS_PONG:-yes}" = yes ] && echo "pong from peer (${3:-?}) via 10.87.72.11:41641 in 2ms" || { echo "timeout"; false; } ;;
+            esac ;;
 esac
 EOF
 printf '#!/bin/bash\nexit "${RC_TS:-0}"\n' > "${STUB}/rc-service"
 printf '#!/bin/bash\n[ -n "${SLEEP_LOG:-}" ] && echo "sleep $*" >> "${SLEEP_LOG}"\n:\n' > "${STUB}/sleep"
 printf '#!/bin/bash\nprintf "%%s\\n" "${HS_JSON:-[]}"\n' > "${STUB}/headscale"
 chmod +x "${STUB}"/*
-RUN_JSON='{"BackendState":"Running","Peer":{}}'
-PEER_JSON='{"BackendState":"Running","Peer":{"nodekey:a":{"HostName":"hugmesh-pki-qemu","TailscaleIPs":["100.64.0.1","fd7a::1"]}}}'
-WPEER_JSON='{"BackendState":"Running","Peer":{"nodekey:b":{"HostName":"hugmesh-backend-qemu","TailscaleIPs":["100.64.0.2","fd7a::2"]}}}'
-HS_SELF="[{\"name\":\"$(hostname)\",\"given_name\":\"$(hostname)\",\"ip_addresses\":[\"100.64.0.1\"]}]"
-HS_FLEET="[{\"name\":\"$(hostname)\",\"given_name\":\"$(hostname)\",\"ip_addresses\":[\"100.64.0.1\"]},{\"name\":\"hugmesh-backend-qemu\",\"given_name\":\"hugmesh-backend-qemu\",\"ip_addresses\":[\"100.64.0.2\"]}]"
+RUN_JSON='{"BackendState":"Running","Self":{"HostName":"self","Online":true},"Peer":{}}'
+PEER_JSON='{"BackendState":"Running","Self":{"HostName":"self","Online":true},"Peer":{"nodekey:a":{"HostName":"hugmesh-pki-qemu","TailscaleIPs":["100.64.0.1","fd7a::1"]}}}'
+WPEER_JSON='{"BackendState":"Running","Self":{"HostName":"self","Online":true},"Peer":{"nodekey:b":{"HostName":"hugmesh-backend-qemu","TailscaleIPs":["100.64.0.2","fd7a::2"]}}}'
+# headscale's JSON omits a false "online" (protobuf), so an offline node has no key at all.
+HS_SELF="[{\"name\":\"$(hostname)\",\"given_name\":\"$(hostname)\",\"online\":true,\"ip_addresses\":[\"100.64.0.1\"]}]"
+HS_FLEET="[{\"name\":\"$(hostname)\",\"given_name\":\"$(hostname)\",\"online\":true,\"ip_addresses\":[\"100.64.0.1\"]},{\"name\":\"hugmesh-backend-qemu\",\"given_name\":\"hugmesh-backend-qemu\",\"online\":true,\"ip_addresses\":[\"100.64.0.2\"]}]"
 # mesh() runs inside a $(...) capture, so its sleep log is a FIXED path the caller reads.
 SLEEP_LOG="${WORK}/sleep.log"; TS_COUNT="${WORK}/tscount"
-mesh() {  # WANT KEY JSON IP [PONG] [RC]   (env: HS_JSON PEER_WAIT TS_JSON_LATE TS_LATE_AT)
+mesh() {  # WANT KEY JSON IP [PONG] [RC]   (env: HS_JSON PEER_WAIT TS_JSON_LATE TS_LATE_AT ROUTES ICMP_PONG)
     : > "${SLEEP_LOG}"; : > "${TS_COUNT}"
     FIXTURE_ROOT="${FX}" _ts_want="$1" _ts_src="KEYS manifest" _ts_key="$2" TS_JSON="$3" TS_IP="$4" TS_PONG="${5:-yes}" RC_TS="${6:-0}" \
+        _ts_routes="${ROUTES:-}" TS_ICMP_PONG="${ICMP_PONG:-no}" \
         HS_JSON="${HS_JSON:-${HS_SELF}}" HUGMESH_ASSERT_PEER_WAIT="${PEER_WAIT:-0}" TS_JSON_LATE="${TS_JSON_LATE:-}" TS_LATE_AT="${TS_LATE_AT:-999}" \
         SLEEP_LOG="${SLEEP_LOG}" TS_COUNT="${TS_COUNT}" PATH="${STUB}:${PATH}" bash -c 'set -u; . "$1"' _ "${MLIB}" 2>&1
 }
 o="$(mesh true preauth "${RUN_JSON}" 100.64.0.1)"
 printf '%s' "${o}" | grep -F 'PASS  mesh join — tailscale is Running' >/dev/null && printf '%s' "${o}" | grep -F 'tailnet address 100.64.0.1' >/dev/null \
-    && printf '%s' "${o}" | grep -F 'SKIP  mesh peers — no fleet node has registered' >/dev/null && printf '%s' "${o}" | grep -F 'RESULT: 3 passed, 0 failed' >/dev/null \
-    && _ok "C1 a self-joined control node with nothing else registered: Running + 100.x address PASS, no peers yet is a SKIP" || _bad "C1: ${o}"
+    && printf '%s' "${o}" | grep -F 'SKIP  mesh peers — no fleet node has registered' >/dev/null && printf '%s' "${o}" | grep -F 'RESULT: 5 passed, 0 failed' >/dev/null \
+    && printf '%s' "${o}" | grep -F 'PASS  mesh session — this control node' >/dev/null \
+    && _ok "C1 a self-joined control node with nothing else registered: Running + 100.x address + live session (own and headscale's view) PASS, no peers yet is a SKIP" || _bad "C1: ${o}"
 [ "$(grep -c . "${SLEEP_LOG}")" -eq 0 ] && _ok "C1 ...and with no HUGMESH_ASSERT_PEER_WAIT budget it does not wait" || _bad "C1 waited $(grep -c . "${SLEEP_LOG}") time(s) with no budget"
 o="$(mesh true authkey "${PEER_JSON}" 100.64.0.2)"
 printf '%s' "${o}" | grep -F 'PASS  mesh peers — reaches hugmesh-pki-qemu (100.64.0.1)' >/dev/null && printf '%s' "${o}" | grep -F ', 0 failed' >/dev/null \
@@ -236,7 +245,7 @@ printf '%s' "${o}" | grep -F 'FAIL  mesh peers — hugmesh-backend-qemu register
 o="$(HS_JSON="${HS_FLEET}" mesh true preauth "${WPEER_JSON}" 100.64.0.1)"
 printf '%s' "${o}" | grep -F 'PASS  mesh peers — reaches hugmesh-backend-qemu (100.64.0.2)' >/dev/null \
     && _ok "C10 the registered worker in the netmap and answering ping -> PASS (the control node graded after its fleet joined)" || _bad "C10: ${o}"
-o="$(HS_JSON="${HS_FLEET}" PEER_WAIT=30 TS_JSON_LATE="${WPEER_JSON}" TS_LATE_AT=5 mesh true preauth "${RUN_JSON}" 100.64.0.1)"
+o="$(HS_JSON="${HS_FLEET}" PEER_WAIT=30 TS_JSON_LATE="${WPEER_JSON}" TS_LATE_AT=6 mesh true preauth "${RUN_JSON}" 100.64.0.1)"
 printf '%s' "${o}" | grep -F 'PASS  mesh peers — reaches hugmesh-backend-qemu (100.64.0.2)' >/dev/null && [ "$(grep -c -x 'sleep 10' "${SLEEP_LOG}")" -eq 2 ] \
     && _ok "C11 with a budget the control node WAITS (10 s polls) for the worker to reach its netmap, then grades it: PASS after 2 polls" || _bad "C11: sleeps=$(grep -c . "${SLEEP_LOG}") :: ${o}"
 o="$(HS_JSON="${HS_FLEET}" PEER_WAIT=25 mesh true preauth "${RUN_JSON}" 100.64.0.1)"
@@ -248,6 +257,80 @@ printf '%s' "${o}" | grep -F 'SKIP  mesh peers — no fleet node has registered'
 o="$(HS_JSON="${HS_FLEET}" PEER_WAIT=30 mesh true authkey "${RUN_JSON}" 100.64.0.2)"
 printf '%s' "${o}" | grep -F 'FAIL  mesh peers — joined with a fleet key but sees NO peer' >/dev/null && [ "$(grep -c . "${SLEEP_LOG}")" -eq 0 ] \
     && _ok "C12 a WORKER never waits on the registry (its control node joined first by construction)" || _bad "C12 worker waited: ${o}"
+
+# C13-C15 — the node's own MAP SESSION (proof B, 2026-11-04: the control node read
+# BackendState Running and held 100.64.0.1 for six minutes while its tailscaled could
+# not poll headscale; Self.Online was false, headscale listed it online=null, and the
+# worker's netmap stayed empty). Running + an address must not be enough.
+DEAD_JSON='{"BackendState":"Running","Self":{"HostName":"self","Online":false},"Peer":{}}'
+o="$(mesh true preauth "${DEAD_JSON}" 100.64.0.1)"
+printf '%s' "${o}" | grep -F 'PASS  mesh join — tailscale is Running' >/dev/null \
+    && printf '%s' "${o}" | grep -F "FAIL  mesh session — Self.Online is 'false' after 60s" >/dev/null \
+    && [ "$(grep -c -x 'sleep 5' "${SLEEP_LOG}")" -eq 12 ] \
+    && _ok "C13 Running + 100.x address but Self.Online=false -> FAIL after a BOUNDED wait (12 x 5 s)" || _bad "C13: sleeps=$(grep -c . "${SLEEP_LOG}") :: ${o}"
+o="$(TS_JSON_LATE="${RUN_JSON}" TS_LATE_AT=4 mesh true preauth "${DEAD_JSON}" 100.64.0.1)"
+printf '%s' "${o}" | grep -F "PASS  mesh session — this node's map session is live" >/dev/null && [ "$(grep -c -x 'sleep 5' "${SLEEP_LOG}")" -eq 2 ] \
+    && _ok "C14 a session that comes back within the window (the regain) PASSES after 2 polls" || _bad "C14: sleeps=$(grep -c . "${SLEEP_LOG}") :: ${o}"
+HS_OFF="[{\"name\":\"$(hostname)\",\"given_name\":\"$(hostname)\",\"ip_addresses\":[\"100.64.0.1\"]}]"
+o="$(HS_JSON="${HS_OFF}" mesh true preauth "${RUN_JSON}" 100.64.0.1)"
+printf '%s' "${o}" | grep -F 'FAIL  mesh session — this control node'"'"'s own headscale lists it online=false' >/dev/null \
+    && _ok "C15 a control node its own headscale does not list online (the proof-B online=null) -> FAIL" || _bad "C15: ${o}"
+o="$(HS_JSON='[]' mesh true preauth "${RUN_JSON}" 100.64.0.1)"
+printf '%s' "${o}" | grep -F 'lists it online=unregistered' >/dev/null \
+    && _ok "C15 ...and one missing from its own registry says 'unregistered', not a pass" || _bad "C15 unregistered: ${o}"
+o="$(mesh true authkey "${PEER_JSON}" 100.64.0.2)"
+! printf '%s' "${o}" | grep -F 'own headscale' >/dev/null \
+    && _ok "C15 a WORKER is never asked about a headscale it does not run" || _bad "C15 worker asked headscale: ${o}"
+
+# C16 — what the product ACL GRANTS (tag:hugmesh -> 10.244.0.0/16:*, 10.96.0.0/12:*,
+# bootstrap and rendered policy alike): every advertised route is a PRIMARY route of
+# some node in the netmap, this one or a peer.
+MR="10.244.0.0/16,10.96.0.0/12"
+RPEER_JSON='{"BackendState":"Running","Self":{"HostName":"self","Online":true},"Peer":{"nodekey:a":{"HostName":"hugmesh-pki-qemu","TailscaleIPs":["100.64.0.1"],"PrimaryRoutes":["10.244.0.0/16","10.96.0.0/12"]}}}'
+o="$(ROUTES="${MR}" mesh true authkey "${RPEER_JSON}" 100.64.0.2)"
+printf '%s' "${o}" | grep -F 'PASS  mesh routes — 10.244.0.0/16 is served on the tailnet by hugmesh-pki-qemu' >/dev/null \
+    && printf '%s' "${o}" | grep -F 'PASS  mesh routes — 10.96.0.0/12 is served on the tailnet by hugmesh-pki-qemu' >/dev/null \
+    && printf '%s' "${o}" | grep -F ', 0 failed' >/dev/null \
+    && _ok "C16 a worker whose control peer is primary for both mesh routes -> one PASS per route, naming the carrier" || _bad "C16: ${o}"
+RSELF_JSON='{"BackendState":"Running","Self":{"HostName":"hugmesh-pki-qemu","Online":true,"PrimaryRoutes":["10.244.0.0/16","10.96.0.0/12"]},"Peer":{}}'
+o="$(ROUTES="${MR}" mesh true preauth "${RSELF_JSON}" 100.64.0.1)"
+[ "$(printf '%s' "${o}" | grep -c -F 'PASS  mesh routes — ')" -eq 2 ] \
+    && _ok "C16 a control node that is itself the primary (no fleet yet) -> both routes PASS" || _bad "C16 self-primary: ${o}"
+RHALF_JSON='{"BackendState":"Running","Self":{"HostName":"self","Online":true},"Peer":{"nodekey:a":{"HostName":"hugmesh-pki-qemu","TailscaleIPs":["100.64.0.1"],"PrimaryRoutes":["10.244.0.0/16"]}}}'
+o="$(ROUTES="${MR}" mesh true authkey "${RHALF_JSON}" 100.64.0.2)"
+printf '%s' "${o}" | grep -F 'FAIL  mesh routes — no node in this netmap serves 10.96.0.0/12' >/dev/null \
+    && printf '%s' "${o}" | grep -F 'PASS  mesh routes — 10.244.0.0/16' >/dev/null \
+    && _ok "C16 a route no node serves (unapproved, or its advertiser offline) -> FAIL names that route" || _bad "C16 half: ${o}"
+o="$(ROUTES="${MR}" mesh true authkey "${PEER_JSON}" 100.64.0.2)"
+[ "$(printf '%s' "${o}" | grep -c -F 'FAIL  mesh routes — no node in this netmap serves')" -eq 2 ] \
+    && _ok "C16 a peer in the netmap that carries no route -> both routes FAIL (a disco pong is not what the ACL grants)" || _bad "C16 no-routes: ${o}"
+o="$(mesh true authkey "${RPEER_JSON}" 100.64.0.2)"
+! printf '%s' "${o}" | grep -F 'mesh routes' >/dev/null \
+    && _ok "C16 a node that advertises no routes (a client) gets no route grade" || _bad "C16 client graded: ${o}"
+# C17 — the ICMP probe THROUGH the packet filter is recorded, never counted.
+o="$(mesh true authkey "${PEER_JSON}" 100.64.0.2)"
+printf '%s' "${o}" | grep -F 'INFO  mesh peers — ICMP through the packet filter to 100.64.0.1: no pong (expected' >/dev/null \
+    && printf '%s' "${o}" | grep -F ', 0 failed' >/dev/null \
+    && _ok "C17 ICMP filtered by the product ACL -> an INFO line, not a FAIL" || _bad "C17: ${o}"
+o1="$(mesh true authkey "${PEER_JSON}" 100.64.0.2 | grep -F 'RESULT')"; o2="$(ICMP_PONG=yes mesh true authkey "${PEER_JSON}" 100.64.0.2)"
+printf '%s' "${o2}" | grep -F 'ICMP through the packet filter to 100.64.0.1: pong (the ACL admits' >/dev/null \
+    && [ "$(printf '%s' "${o2}" | grep -F 'RESULT')" = "${o1}" ] \
+    && _ok "C17 ...and an ICMP pong changes no count either way" || _bad "C17 pong: ${o1} vs ${o2}"
+
+# C18 — _ts_routes is read from the manifest's own --advertise-routes (the line in
+# assertions.sh, executed against the payload docker-entrypoint.sh writes).
+RLINES="$(grep -E '^ *_ts_routes="\$\(jq|^ *\[\[ "\$\{_ts_routes\}"' "${ASSERT}")"
+[ "$(printf '%s\n' "${RLINES}" | grep -c .)" -eq 2 ] || { echo "could not extract the _ts_routes lines from ${ASSERT}" >&2; exit 2; }
+troutes() { _hs_m="$1" bash -c 'set -u; '"${RLINES}"'; printf "%s" "${_ts_routes}"'; }
+payload backend false "" "" "" 0
+[ "$(troutes "${KS}/provision.json")" = "10.244.0.0/16,10.96.0.0/12" ] \
+    && _ok "C18 a cluster node's manifest -> _ts_routes is its --advertise-routes" || _bad "C18 cluster: '$(troutes "${KS}/provision.json")'"
+payload desktop false "" "" "" 0
+[ "$(troutes "${KS}/provision.json")" = "" ] \
+    && _ok "C18 a desktop client's manifest (accept-routes only) -> no routes to grade" || _bad "C18 desktop: '$(troutes "${KS}/provision.json")'"
+printf '{"tailscale":{"up_args":"--advertise-routes=10.0.0.0/8;reboot --ssh"}}' > "${WORK}/evil.json"
+[ "$(troutes "${WORK}/evil.json")" = "" ] \
+    && _ok "C18 a route list with anything but address characters is dropped" || _bad "C18 evil: '$(troutes "${WORK}/evil.json")'"
 
 # ═════════════════════ D. fleet boot order on a shared L2 ═════════════════════
 echo "══ D. run-qemu-docker.sh boots control roles first on a shared L2 ══"
@@ -522,7 +605,7 @@ printf '%s' "${GOUT}" | grep -F 'approved mesh route 10.244.0.0/16 for hugmesh-b
 ! grep -F 'approve-routes' "${CALLS}" >/dev/null && _ok "G1 ...never calling the 0.25 'nodes approve-routes' on a headscale that has a routes table" || _bad "G1 called approve-routes on 0.23: $(tr '\n' ';' < "${CALLS}")"
 ENABLE_FAIL=11 groutes
 printf '%s' "${GOUT}" | grep -F 'WARN could not enable route 11' >/dev/null && grep -F 'routes enable -r 13' "${CALLS}" >/dev/null \
-    && _ok "G1 a route headscale refuses is warned about and the rest are still enabled" || _bad "G1 enable failure: ${GOUT} :: $(tr '\n' ';' < "${CALLS}")"
+    && _ok "G1 a route headscale will not enable is warned about and the rest are still enabled" || _bad "G1 enable failure: ${GOUT} :: $(tr '\n' ';' < "${CALLS}")"
 HS_NO_ROUTES=1 groutes
 ap="$(grep '^headscale nodes approve-routes -i ' "${CALLS}" | awk '{print $5}' | sort | tr '\n' ' ')"
 [ "${ap}" = "1 2 " ] && grep -F -- '-r 10.244.0.0/16,10.96.0.0/12' "${CALLS}" >/dev/null && ! grep -F 'routes enable' "${CALLS}" >/dev/null \

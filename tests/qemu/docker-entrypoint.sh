@@ -1074,6 +1074,28 @@ esac
 #     (resolve_endpoint would otherwise pick the SLIRP 10.0.2.15 no peer reaches);
 #   * every other row on a fleet rendezvous waits for that control node's key
 #     and login_server and writes them onto its own stick.
+#
+# Which headscale policy that fleet runs (checked 2026-11-04 for PR #858, after a
+# proof run's worker showed peers=0 under the BOOTSTRAP policy and policy-sync
+# logged "MESH_ID empty" / "registry-pub.ed25519 ABSENT"): no stick written here
+# carries a device_registry block, a mesh id or a registry-pub.ed25519, and no
+# PRODUCT stick for a primary role does either. scripts/gen-provision-keys.sh
+# writes KEYS/device-registry/ only for role=mesh-extension, keys-template/
+# provision*.json carry no .mesh.id, and the rendered Layer-A policy also needs a
+# signed export fetched over mTLS from the in-cluster admin-bff
+# (gen-headscale-policy.sh fetch_export), which no first-boot fleet has. A real
+# pki/backend fleet therefore runs the baked bootstrap policy as well; this one
+# lacks nothing a real stick provides. Its acls[] equal the rendered template's
+# (specs/etc/headscale/policy.{bootstrap.hujson,hujson,hujson.tmpl} all grant only
+# tag:hugmesh -> 10.244.0.0/16:*, 10.96.0.0/12:*). No policy grants a node's own
+# 100.64 address, so fleet nodes are in each other's netmap only through those
+# routes, and assertions.sh grades exactly that (assert_mesh_client: "mesh
+# routes"). Follow-up, not changed here: kube-api.<base_domain> is published by
+# publish_cp_dns_record at the control node's TAILNET address, and :6443 there is
+# filtered under every shipped policy; the product reaches the API only because
+# provision_hosts pins cp_dns_name to the pki LAN IP from .nodes[] (this payload
+# has no .nodes[] and nothing here dials the API), so docs/SECURITY.md's "MagicDNS
+# then takes over" does not hold under the shipped ACL.
 TS_TAGS="tag:hugmesh"
 case "${ROLE}" in
     pki|generic|omnibus)           TS_TAGS="tag:hugmesh,tag:pki" ;;

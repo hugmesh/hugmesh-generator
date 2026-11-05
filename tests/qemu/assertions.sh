@@ -117,6 +117,10 @@ _slx_mode_src=""
 _ts_want=unknown
 _ts_src=""
 _ts_key=none
+# _ts_routes: the routes this node ADVERTISES (--advertise-routes in .tailscale.up_args),
+# comma-separated; empty for a client that only accepts routes. assert_mesh_client grades
+# that every one of them is served on the tailnet.
+_ts_routes=""
 _hs_dev="$(blkid -L "${KEYS_LABEL:-KEYS}" 2>/dev/null || true)"
 if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
     _hs_mnt="$(mktemp -d 2>/dev/null || echo '')"
@@ -146,6 +150,8 @@ if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
                 true) _ts_want=true;  _ts_src="KEYS manifest" ;;
                 *)    _ts_want=false; _ts_src="KEYS manifest" ;;
             esac
+            _ts_routes="$(jq -r '.tailscale.up_args // ""' "${_hs_m}" 2>/dev/null | tr ' ' '\n' | sed -n 's/^--advertise-routes=//p' | head -1)"
+            [[ "${_ts_routes}" =~ ^[0-9./,:a-fA-F]*$ ]] || _ts_routes=""
             _ts_akf="$(jq -r '.tailscale.authkey_file // "tailscale/authkey"' "${_hs_m}" 2>/dev/null)"
             case "${_ts_akf}" in /*|*..*) _ts_akf="" ;; esac
             if [ -n "${_ts_akf}" ] && [ -s "$(dirname "${_hs_m}")/${_ts_akf}" ]; then
@@ -509,7 +515,7 @@ echo "-- mesh client (tailscale) --"
 # tests/qemu/mesh_client_test.sh drives it against fixtures with tailscale,
 # rc-service and sleep stubbed on PATH, the assert_tor_node_contract pattern.
 assert_mesh_client() {  # $1 = root prefix ("" on the live guest)
-    local _R _ts_state _ts_i _ts_ip _ts_peer _ts_pip _ts_others
+    local _R _ts_state _ts_i _ts_ip _ts_peer _ts_pip _ts_others _ts_online _ts_hs_online _ts_r _ts_by
     _R="${1-}"
     if [ ! -x "${_R}/usr/sbin/tailscaled" ]; then
         skip "mesh client — no /usr/sbin/tailscaled in this image (no mesh client was built in)"
@@ -540,6 +546,33 @@ assert_mesh_client() {  # $1 = root prefix ("" on the live guest)
                 ok "mesh join — this node holds tailnet address ${_ts_ip}"
             else
                 bad "mesh join — no tailnet (100.64.0.0/10) address ('${_ts_ip}')"
+            fi
+            # The node's own map session. Running + a 100.x address both survive a dead
+            # session: proof B's control node (2026-11-04) read Running and 100.64.0.1 for
+            # six minutes while its tailscaled logged 35x "PollNetMap ... context deadline
+            # exceeded" after keys-provision restarted headscale, headscale listed it with
+            # online=null, and its worker's netmap stayed empty. Self.Online is the control
+            # server's view of this node's live map poll; a control node is also asked its
+            # own headscale. Bounded: keys-provision already waited for the regain.
+            _ts_online=""
+            for _ts_i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                _ts_online="$(tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null)"
+                [ "${_ts_online}" = true ] && break
+                sleep 5
+            done
+            if [ "${_ts_online}" = true ]; then
+                ok "mesh session — this node's map session is live on its control server (Self.Online)"
+            else
+                bad "mesh session — Self.Online is '${_ts_online:-none}' after 60s: the node holds a tailnet address but no live map session, so no peer sees it (a control node's own client stranded by a headscale restart: see /var/log/keys-provision.log 'mesh client' and /var/log/tailscaled.log 'PollNetMap')"
+            fi
+            if [ "${_ts_key}" = preauth ]; then
+                _ts_hs_online="$(headscale nodes list -o json 2>/dev/null \
+                    | jq -r --arg h "$(hostname | tr 'A-Z' 'a-z')" '[.[] | select(((.name // "") | ascii_downcase) == $h or ((.given_name // "") | ascii_downcase) == $h) | (.online // false)] | if length == 0 then "unregistered" else (.[0] | tostring) end' 2>/dev/null)"
+                if [ "${_ts_hs_online}" = true ]; then
+                    ok "mesh session — this control node's own headscale lists it online"
+                else
+                    bad "mesh session — this control node's own headscale lists it online=${_ts_hs_online:-unknown}, not true (its own mesh client is not polling the server it runs)"
+                fi
             fi
             _ts_peer="$(tailscale status --json 2>/dev/null \
                 | jq -r '[(.Peer // {})[] | select((.TailscaleIPs // []) | length > 0)] | .[0] | if . == null then "" else "\(.HostName) \(.TailscaleIPs[0])" end' 2>/dev/null)"
@@ -575,11 +608,37 @@ assert_mesh_client() {  # $1 = root prefix ("" on the live guest)
                 fi
             else
                 _ts_pip="${_ts_peer##* }"
+                # tailscale ping is a DISCO ping: it proves the peer is in the netmap and the
+                # path is live, not that the packet filter passes traffic to it.
                 if tailscale ping -c 10 --timeout 5s "${_ts_pip}" 2>&1 | grep 'pong from' >/dev/null; then
                     ok "mesh peers — reaches ${_ts_peer% *} (${_ts_pip}) over the mesh client (tailscale ping: pong)"
                 else
                     bad "mesh peers — ${_ts_peer% *} (${_ts_pip}) is in the netmap but does not answer tailscale ping"
                 fi
+                # Recorded, not graded: the product ACL (bootstrap and rendered alike) grants
+                # tag:hugmesh only dst 10.244.0.0/16:* and 10.96.0.0/12:*, never a node's own
+                # 100.64 address, so an ICMP ping through the filter is expected to time out.
+                if tailscale ping --icmp -c 3 --timeout 5s "${_ts_pip}" 2>&1 | grep 'pong from' >/dev/null; then
+                    echo "  INFO  mesh peers — ICMP through the packet filter to ${_ts_pip}: pong (the ACL admits node-to-node traffic)"
+                else
+                    echo "  INFO  mesh peers — ICMP through the packet filter to ${_ts_pip}: no pong (expected: the product ACL grants only the pod/service CIDRs)"
+                fi
+            fi
+            # What the product policy DOES grant: tag:hugmesh -> the pod/service CIDRs. A
+            # fleet node is in another's netmap only through an enabled, primary route of
+            # those (headscale 0.23 CanAccess), so every route this node advertises must be
+            # a primary route of some node in its netmap — this one or a peer (headscale
+            # moves the primary to a peer when the first advertiser goes offline).
+            if [ -n "${_ts_routes:-}" ]; then
+                for _ts_r in ${_ts_routes//,/ }; do
+                    _ts_by="$(tailscale status --json 2>/dev/null \
+                        | jq -r --arg r "${_ts_r}" '[(.Self // {}), ((.Peer // {})[])] | map(select(any((.PrimaryRoutes // [])[]; . == $r)) | (.HostName // "?")) | join(",")' 2>/dev/null)"
+                    if [ -n "${_ts_by}" ]; then
+                        ok "mesh routes — ${_ts_r} is served on the tailnet by ${_ts_by} (primary route: the ACL's only grant, and what puts fleet nodes in each other's netmap)"
+                    else
+                        bad "mesh routes — no node in this netmap serves ${_ts_r} as a primary route (not approved, or its only advertiser is offline: see 'headscale routes list' on the control node)"
+                    fi
+                done
             fi
         fi
     fi
