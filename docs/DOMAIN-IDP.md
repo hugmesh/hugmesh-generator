@@ -193,8 +193,13 @@ start applies and that the kind lane does not (`SIGNIN_DOCKER_APPLIED`).
   landed; the `appsetRegistered` ack reuse is still open.
 * per-domain gateway/BFF registry env threading (build-time + runtime rollout;
   the row-restamp gate above).
-* `origin` env-interpolation validation against casbin/casdoor:3.80.0 (the
-  documented fallback: ApplicationSet strategic-merge patch of the whole
-  app.conf blob).
+* ~~`origin` env-interpolation validation against casbin/casdoor:3.80.0~~ —
+  closed the other way: app.conf no longer relies on in-app `${ENV||default}`
+  interpolation at all (casbin/casdoor does not expand it inside a value, and
+  the as-shipped dataSourceName could never connect). The `render-app-conf`
+  initContainer in `manifests/casdoor-domain/deployment.yaml` renders
+  `__CASDOOR_DB_USER__`, `__CASDOOR_DB_PASSWORD__` and `__CASDOOR_ORIGIN__`
+  into the real `conf/app.conf` with sed, the shape `manifests/casdoor` has had
+  since #263.
 * kind-local e2e second domain (bootstrap element + seed-vault-kv.sh +
   verify-seeded-identities second-issuer leg).

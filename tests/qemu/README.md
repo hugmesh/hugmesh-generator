@@ -86,7 +86,28 @@ runner polls until `--timeout`. Console output goes to
 | `avc-workload.sh` | The in-guest probe list (one probe per workload the `specs/selinux/*.te` modules confine; presence-gated = role-appropriate). |
 | `avc-report.sh` | Groups a raw AVC harvest by source type → the owning `specs/selinux/*.te` (hermetic text processing). |
 | `avc-workout_test.sh` | Hermetic tests + mutation legs for the whole workout lane (nothing boots; also run by `tests/build-matrix/check.sh`'s smokes). |
+| `display_argv_test.sh` | Hermetic argv assertions for the launchers' display door (below): the no-flag argv of all three launchers pinned to a golden, the door's elements, loopback default, the secret never in argv/stdout, the refusals, `--virt-dtb` (no boot, no QEMU, no root). |
 | `stage4_rootfs_test.sh` | Hermetic tests + mutation legs for the stage4 rootfs lane: `build_rootfs()` driven against fixture tarballs with `mount`/`umount`/`losetup` stubbed to fail loudly, and `assertions.sh`'s rootfs-is-labelled precondition (nothing boots, no root; also run by `tests/build-matrix/check.sh`'s smokes). |
+
+All three launchers also carry the same default-off **display door** (opened by
+the runner for desktop roles in keep-alive mode, or by hand): `--display spice
+--spice-port N --display-secret FILE [--display-listen ADDR] [--vnc-socket PATH]`.
+ONE door: SPICE over TCP on `ADDR:N` (default `127.0.0.1`; `0.0.0.0` is for the
+runner container's own netns only), protected by a per-run password that QEMU
+reads from `FILE` as a secret *object* (`-object secret,file=` +
+`password-secret=`), so it never appears in argv, `ps`, the launch log or the
+launcher's output (only the path is printed: `display: spice on ADDR:N (password
+in FILE)`). The door adds the vdagent `virtserialport` (what lets
+`remote-viewer`/`spicy` resize the guest to the window), `qemu-xhci` +
+`usb-tablet` + `usb-kbd`, and the platform GPU: x86 `-vga none -device virtio-vga`
+(VGA-compatible, so OVMF/GRUB render; it replaces the extra `virtio-gpu-pci`
+that `--gpu` adds), aarch64 `-device virtio-gpu-pci,edid=on`. `--vnc-socket
+PATH` adds a `-vnc unix:PATH,password-secret=` browser (noVNC) fallback that only
+scales (8-char DES auth from the first 8 chars of the same file; opt-in).
+`launch-arm.sh --virt-dtb` omits `-dtb` so QEMU generates the virt DTB, which a
+board DTB cannot replace once PCIe/virtio devices are on the bus. Without
+`--display` the argv is byte-identical to before (`display_argv_test.sh` pins it
+to a golden, element for element).
 
 All three launchers carry the same default-off mesh flags: `--mesh-net SPEC`,
 `--mesh-mac MAC`, `--mesh-id N`. One identical block spells them, so a mixed-arch
@@ -447,6 +468,50 @@ lives in the studio pytest suite and runs every pass:
 - the bootstrapper's static contract: CRLF, label resolution, pinned winget IDs, consent
   gating, and the DETECT vocabulary, the same tokens this harness asserts
   (`studio/tests/test_bat_bootstrap.py`).
+
+## Frite: install to eMMC and boot from it (`frite-emmc-install.sh`)
+
+The Frite builder emits no `.img`, only LIVE/INSTALLER media (ISO9660 today;
+MBR+FAT is the u-boot-bootable form). `launch-arm.sh` boots such a medium with
+`--medium FILE` (kernel, dmsquash-live initrd and the DEFAULT label's APPEND are
+lifted off it; the medium rides usb-storage behind qemu-xhci like a real stick),
+attaches a raw file as an eMMC with `--emmc FILE` (QEMU `emmc` behind
+`sdhci-pci`, so the guest sees `/dev/mmcblk0` + `mmcblk0boot0/1` exactly like
+La Frite's module), and `--gpu` adds virtio-gpu + USB input so QMP `screendump`
+captures the greeter. Since 2026-11-04 the launcher passes NO `-dtb` by default:
+the board DTB replaced QEMU's own virt device tree and the guest found no
+console, disk or NIC (`--dtb FILE` remains an explicit opt-in).
+
+`frite-emmc-install.sh` is the two-phase proof, on the HOST
+`qemu-system-aarch64` (>= 9.1 for `emmc`; the runner image's 7.2 has only
+`sd-card`), no root:
+
+```sh
+# phase A: boot the installer medium + emulated eMMC + a per-run KEYS stick
+#          (generated password for the greeter, generated ssh key for the
+#          assertions), assert /dev/mmcblk0 is type MMC with boot partitions,
+#          run install-frite.sh unattended against it, power off;
+# between: offline layout check of the eMMC file (user area at +2*boot+rpmb);
+# phase B: boot the eMMC ALONE with its own extlinux APPEND, screendump the
+#          greeter, type the password via QMP send-key, screendump again,
+#          assert openbox/lxsession run as the user.
+bash tests/qemu/frite-emmc-install.sh --medium out/<brand>-frite-la-frite-arm64-desktop-*.installer.iso \
+    --run-dir /path/with/room   # the eMMC file is 8 GiB (sparse)
+
+# the OFFLINE layout test alone (any raw MBR disk, or an emmc backing file with --user-offset):
+bash tests/qemu/frite-emmc-install.sh --check-layout emmc.raw --user-offset 8388608
+```
+
+Named failures, not timeouts: no `/dev/mmcblk0` → the Frite kernel lacks
+`CONFIG_MMC_SDHCI_PCI`; dracut emergency shell → the initramfs did not find the
+medium (`--medium-bus virtio` is the fallback); no `/dev/dri/card0` →
+`CONFIG_DRM_VIRTIO_GPU`. What emulation cannot prove and says so every run: the
+Amlogic boot ROM → SPI-NOR u-boot → eMMC boot order, u-boot's mmc numbering,
+the meson-gxl FDT against the silicon, meson DRM/lima HDMI. Hermetic guards:
+`launch_arm_medium_test.sh` (argv facts over real ISO/MBR/FAT fixtures) and
+`frite_emmc_layout_test.sh` (the layout checker over sfdisk/mformat/mke2fs
+fixtures, one defect per case); `frite_emmc_mutations.sh` breaks production and
+demands both go red.
 
 ## Matrix QEMU e2e (`run-matrix-e2e.sh` — opt-in)
 

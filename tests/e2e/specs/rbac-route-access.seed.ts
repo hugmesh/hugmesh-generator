@@ -12,8 +12,8 @@
 // /bff/user/** profile and password surface the real gateway ALLOWs.
 // Nothing is copied by hand any more.
 //
-// Rows: 164 total — hugmesh-be-gateway 60, hugmesh-fe-gateway 91, hugmesh-pki-gateway 4, hugmesh-superadmin-gateway 9
-// Pattern shapes: literal 24, prefix-glob 137, root-glob 1, segment-glob 2
+// Rows: 158 total — hugmesh-be-gateway 56, hugmesh-fe-gateway 89, hugmesh-pki-gateway 4, hugmesh-superadmin-gateway 9
+// Pattern shapes: literal 24, prefix-glob 131, root-glob 1, segment-glob 2
 //
 // Every seed row is UNSCOPED (no domain) and UNPINNED (no casdoor_user):
 // the INSERT names exactly (gateway, url_pattern, role, allow), which the
@@ -67,10 +67,6 @@ export const ROUTE_ACCESS_SEED: readonly RouteRule[] = [
   { gateway: 'hugmesh-be-gateway', urlPattern: '/bff/image-builds/**', role: 'ROLE_IMAGE_BUILDER', allow: true },
   { gateway: 'hugmesh-be-gateway', urlPattern: '/bff/superadmin/**', role: 'ROLE_SUPERADMIN', allow: true },
   { gateway: 'hugmesh-be-gateway', urlPattern: '/api/admin/**', role: 'ROLE_ADMIN', allow: true },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/games/api/admin/**', role: 'ROLE_GAMES_ADMIN', allow: true },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/games/**', role: 'ROLE_GAMES', allow: true },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/games/**', role: 'ROLE_ADMIN', allow: true },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/games/**', role: 'ROLE_MOD', allow: true },
   { gateway: 'hugmesh-be-gateway', urlPattern: '/bff/superadmin/games-services/**', role: 'ROLE_SUPERADMIN', allow: true },
   { gateway: 'hugmesh-be-gateway', urlPattern: '/bff/games-services/instances/**', role: 'ROLE_GAMES_SERVICES_ADMIN', allow: true },
   { gateway: 'hugmesh-be-gateway', urlPattern: '/bff/games-services/instances/**', role: 'ROLE_GAMES_SERVICES_RUNNER', allow: true },
@@ -135,10 +131,8 @@ export const ROUTE_ACCESS_SEED: readonly RouteRule[] = [
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/api/admin/**', role: 'ROLE_GAMES_ADMIN', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/api/**', role: 'ROLE_GAMES', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/api/**', role: 'ROLE_ADMIN', allow: true },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/api/**', role: 'ROLE_MOD', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/**', role: 'ROLE_GAMES', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/**', role: 'ROLE_ADMIN', allow: true },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/**', role: 'ROLE_MOD', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/admin/games-services/**', role: 'ROLE_GAMES_SERVICES_ADMIN', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/admin/games-services/**', role: 'ROLE_GAMES_SERVICES_RUNNER', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/public/announcements/**', role: 'PUBLIC', allow: true },

@@ -8,8 +8,8 @@
 #
 # IMAGE SOURCE: built from the SIBLING hugmesh-games clone, directory games-ui/
 # (github.com/hugmesh/hugmesh-games — NOT a hugmesh-games-ui repo, which does not
-# exist and must not be created; and NOT hugmesh-games/frontend, which stays the
-# standalone two-realm portal). The games-ui workspace is cloned from the
+# exist and must not be created; and NOT hugmesh-games/frontend, the standalone
+# games-realm portal, manifests/games-portal). The games-ui workspace is cloned from the
 # hugmesh-user-ui skeleton (federation-base.js + federation.config.js, nonce'd-CSP
 # nginx.conf, docker-entrypoint.d/50-hug-theme.sh), built with --base-href=/games/
 # and served by nginxinc/nginx-unprivileged:1.27-alpine on :8080 — the same
@@ -18,14 +18,9 @@
 # is rewritten by the kustomization `images:` transform to the in-cluster Harbor
 # tag.
 #
-# DEFERRED, stated honestly: the CLUSTER games BFF this remote calls
-# (manifests/games/deployment.yaml) still validates the GAMES-realm Casdoor
-# (casdoor-games), while the fe-gateway's bff-exchange mints the SYSTEMS custody
-# JWT the remote rides on. Bridging the cluster BFF to the systems issuer is NOT
-# part of this change: until it lands, the member/admin screens render on kind
-# but every /games/api/** call answers 401, which the screens surface as their
-# "gateway did not accept your session" panel. The compose lane
-# (tests/stack/compose.games.yaml) runs the BFF on the systems issuer today.
+# AUTH: the fe-gateway's bff-exchange forwards the SYSTEMS custody JWT, and the
+# cluster games BFF accepts it alongside its own realm's tokens
+# (manifests/games/deployment.yaml APP_TENANCY_ISSUERS).
 #
 # OPTIONAL service (DEFAULT-OFF, games slug): when the slug is deselected,
 # gate_optional_services() prunes this manifest dir (optional-services.yaml

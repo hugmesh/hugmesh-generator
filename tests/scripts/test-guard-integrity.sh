@@ -938,6 +938,53 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #                                                                         not wired)
 #     208 of 249 suites are named by a pull_request-triggered workflow   (wired)
 # The ungated SET pin is unchanged at 41 — the suite was never in it.
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/desktop-a-frite-installer-script-emmc,
+# which adds ONE gated suite: tests/scripts/test-frite-installer.sh (alpine job). MEASURED by
+# RUNNING this file on that tree (base origin/main db240811, which measures '207 of 248'):
+# '208 of 249 suites are named by a pull_request-triggered workflow'. Sibling desktop fix groups
+# landing the same day each add their own +1; whichever lands second re-measures on the merged
+# tree per the doctrine above.
+# 207 -> 208 (denominator unchanged at 249: the suite was on disk before it was wired) on 2026-11-04 for fix/viewer-guest-packages-20261104: ONE
+# new gated suite, tests/scripts/test-vm-display-guest.sh (the guest half of the resizable
+# emulated-desktop display: spice-vdagent atoms + ARM keywords + x86 kernel channel symbols +
+# the vm-autofit applier executed against a fixture sysfs), wired into shell-suites.yml's
+# debian job AND .gitlab-ci.yml's orphan-guards-verify SUITES. MEASURED by RUNNING this file
+# on that tree (GUARD_PREMERGE=0): '208 of 249 suites are named by a pull_request-triggered
+# workflow'; with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3
+# and check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET unchanged.
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/viewer-harness-launchers-20261104,
+# which adds ONE gated suite: tests/qemu/display_argv_test.sh (wired in shell-suites.yml's
+# alpine job). MEASURED by RUNNING this file on that branch (base origin/main db240811,
+# which measures '207 of 248'): '208 of 249 suites are named by a pull_request-triggered
+# workflow', ungated SET unchanged. A branch that also raises this from 207 (#858 adds
+# tests/qemu/mesh_client_test.sh) conflicts here by construction; whichever lands second
+# re-measures (expected 209) per the doctrine above.
+# 207 -> 208 (denominator +1) on 2026-11-04: tests/scripts/test-frite-kernel-emulation-
+# symbols.sh joined the alpine job — the Frite kernel fragment must carry (and Kconfig
+# must keep) the sdhci-pci / virtio-gpu / virtio-input symbols that let the Frite
+# installer be proven in QEMU (install to an emulated eMMC, boot it to the greeter).
+# MEASURED in alpine:3 with the alpine job's apk set, checkout read-only, --network=none:
+# 24 passed / 0 failed, rc=0 (static tier; the resolution tier reports itself SKIPPED
+# there, no kernel tree), and its 30-mutation battery on a Gentoo host 30 caught / 0
+# survived. Ungated SET pin unchanged.
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/desktop-e-arm-desktop-package-sets-20261104,
+# which adds ONE gated suite: tests/scripts/test-arm-desktop-package-sets.sh (wired in
+# shell-suites.yml's pull_request SUITES, .gitlab-ci.yml and tests/build-matrix/check.sh).
+# MEASURED by RUNNING this file with GUARD_PREMERGE=0 on that tree: '208 of 249 suites are
+# named by a pull_request-triggered workflow', ungated SET unchanged at 41; and with the suite
+# on disk but its shell-suites.yml line absent: '207 of 249' -- so the +1/+1 is this suite.
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 when fix/games-two-realms-20261030, which
+# adds ONE gated suite (tests/scripts/test-games-two-realms.sh, in shell-suites.yml), merged
+# origin/main 8ed37a3c (207 of 248 above). MEASURED by RUNNING this file on the merged tree with
+# GUARD_PREMERGE=0: '208 of 249 suites are named by a pull_request-triggered workflow', ungated SET 41.
+# 208 unchanged, denominator 249 -> 250, on 2026-11-05 when the same branch added
+# tests/casdoor/test-casdoor-render-boot.sh (docker: it boots the real casdoor image on a
+# conf rendered from the manifests), recorded in PREMERGE_UNGATED below with its reason, so
+# only the denominator and the ungated SET (41 -> 42) moved. Also on that date
+# tests/scripts/test-games-two-realms.sh MOVED from shell-suites.yml's debian/python job to
+# its tool-heavy job (curl + kubectl live there): a move, not a listing change, so the 208
+# is the same 208. MEASURED by RUNNING this file: '208 of 250 suites are named by a
+# pull_request-triggered workflow'.
 # 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/emulated-mesh-tailscale-tor-20261104,
 # which adds ONE gated suite: tests/scripts/test-stage4-pack-ownership.sh (the ARM stage4
 # tarball's owners, executed per builder; wired in shell-suites.yml's alpine job AND
@@ -961,6 +1008,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     208 of 249 suites are named by a pull_request-triggered workflow
 # and with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
+# 207 -> 209 (denominator 248 -> 250) on 2026-11-04 for fix/desktop-d-arm-qemu-harness-for-frite-h-20261104,
+# which adds TWO gated suites: tests/qemu/launch_arm_medium_test.sh and
+# tests/qemu/frite_emmc_layout_test.sh (both wired in shell-suites.yml's alpine job). MEASURED by
+# RUNNING this file on that branch: '209 of 250 suites are named by a pull_request-triggered
+# workflow'. A branch that also raises this from 207 (e.g. the mesh-fleet one) conflicts here by
+# construction; whichever lands second re-measures per the doctrine above.
+# 208 -> 210 (denominator 249 -> 251) when that branch merged origin/main (which carries the
+# #473 bump above): the two launch-arm/frite-emmc suites on top of 208 of 249. MEASURED by
+# RUNNING this file on the merge tree: '210 of 251 suites are named by a pull_request-triggered
+# workflow'.
 # 208 -> 209 (denominator 249 -> 250) on 2026-11-04 for feat/mesh-token-g3-generator-local-stack-hea-20261104
 # (#889), which adds ONE gated suite: tests/stack/test-headscale-local.sh (the HEADSCALE=1
 # local-mesh headscale guard, wired in shell-suites.yml's debian job). It was written against
@@ -995,6 +1052,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # MERGED (origin/main with #473 + #860 + this branch): 207 + 1 (#473) + 1 (#860) + 2 (this branch)
 # = 211 of 252, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/viewer-harness-entrypoint-runner-20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/desktop-d-arm-qemu-harness-for-frite-h-20261104): 213 of 254, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/desktop-a-frite-installer-script-emmc--20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/viewer-guest-packages-20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/viewer-harness-launchers-20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/viewer-guest-kernel-20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/desktop-b-frite-kernel-fragment-for-em-20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/desktop-e-arm-desktop-package-sets-20261104): 212 of 253, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/games-two-realms-20261030): 212 of 254, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into feat/mesh-token-g3-generator-local-stack-hea-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into ci/qemu-bdd-spike-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3f3ed7bb into fix/emulated-mesh-tailscale-tor-20261104): 214 of 255, MEASURED by running this file on the merged tree.
@@ -1006,6 +1071,9 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # pull_request-triggered workflow', ungated SET stays 41.
 # MERGED (origin/main fbe7f940 at 211 of 252 + this branch's 2) = 213 of 254, MEASURED by
 # running this file with GUARD_PREMERGE=0 on the merged tree; ungated SET stays 41.
+# MERGED (origin/main 3f3ed7bb into fix/viewer-guest-kernel-20261104): 214 of 255, MEASURED by running this file on the merged tree.
+
+# MERGED (origin/main 3f3ed7bb into fix/games-two-realms-20261030): 214 of 256, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3f3ed7bb into fix/emulated-mesh-tailscale-tor-20261104): 216 of 257, MEASURED by running this file on the merged tree.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-216}"
 
@@ -1178,6 +1246,21 @@ PREMERGE_UNGATED=(
   # PREMERGE_BASELINE by one.
   tests/build-image-dial-identity.sh
   tests/casdoor/test-jwt-custom-token.sh
+  # Needs a docker daemon: it renders every Casdoor's app.conf with the manifest's own
+  # initContainer script inside casbin/casdoor:3.80.0, then boots that image against
+  # postgres:16-alpine on a password carrying | & / \ ' " $ % # ; ? @ a tab and (after
+  # ALTER USER) a newline, and asserts /api/health plus the seeded catalog. No
+  # shell-suites container job has a daemon (that is why test-jwt-custom-token.sh above
+  # is here too), and the one job that does (host docker) is a listing in
+  # .github/workflows/shell-suites.yml that the change adding this suite (#848) was
+  # permitted to touch only to re-home test-games-two-realms.sh. It exits 2 without
+  # docker, never 0. Gated post-merge by .gitlab-ci.yml's casdoor-render-boot-gate; run
+  # it with `make casdoor-render-boot-check`. The hermetic half (the same render script
+  # under sh, the same hostile values, no containers) IS pre-merge gated inside
+  # tests/scripts/test-games-two-realms.sh. MEASURED 2026-11-05 on a Linux host with
+  # docker: 39 passed / 0 failed, rc=0. TO CLOSE THIS: add the path to the host-docker
+  # job's SUITES list in shell-suites.yml, DELETE this entry, raise PREMERGE_BASELINE by one.
+  tests/casdoor/test-casdoor-render-boot.sh
   # NOT an exemption, a wiring gap: this suite is offline (bash + python3 + PyYAML)
   # and WOULD run in the shell-suites image, but wiring it into
   # .github/workflows/shell-suites.yml is an edit the author of this suite was not

@@ -68,7 +68,7 @@ Feature: The function catalogue the coverage matrix is computed from
       | games.launch                    | games            | hugmesh-fe-gateway         | /games/play/chess                                               | derived  |
       | games.member-api                | games            | hugmesh-fe-gateway         | /games/api/games/chess/launch                                   | derived  |
       | games.admin-api                 | games            | hugmesh-fe-gateway         | /games/api/admin/stats                                          | derived  |
-      | games.instance-lifecycle        | games            | hugmesh-be-gateway         | /games/api/instances                                            | derived  |
+      | games.instance-lifecycle        | games            | hugmesh-fe-gateway         | /games/api/instances                                            | derived  |
       | games.server-fleet              | games            | hugmesh-be-gateway         | /games/servers/lobby                                            | derived  |
       | games.admin-console             | games            | hugmesh-fe-gateway         | /games/admin/queue                                              | derived  |
       | games.services-runner           | games            | hugmesh-fe-gateway         | /admin/games-services/runners                                   | derived  |

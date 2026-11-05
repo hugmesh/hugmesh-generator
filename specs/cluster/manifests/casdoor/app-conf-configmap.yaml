@@ -1,8 +1,9 @@
 # Casdoor app.conf TEMPLATE that points Casdoor at the external Postgres
 # (casdoor-pg) instead of the all-in-one image's bundled DB. Rendered into the
 # real conf/app.conf by the "render-app-conf" initContainer in deployment.yaml
-# (plain sed substitution of the __TOKEN__ placeholders below against env vars
-# sourced from the ESO Secrets casdoor-db / casdoor-smtp). NO secrets here.
+# (a literal awk replacement of the __TOKEN__ placeholders below against env vars
+# sourced from the ESO Secrets casdoor-db / casdoor-smtp; the DB user and password are
+# percent-encoded into the postgres:// URL by the renderer). NO secrets here.
 #
 # NOTE: casbin/casdoor does NOT expand beego's documented "${ENV||default}"
 # syntax inside app.conf — confirmed live: with that syntax in place, Casdoor
@@ -27,7 +28,7 @@ data:
     # dataSourceName verbatim (it only appends dbName for MySQL), so dbname= must
     # be set inline here. Credentials rendered in by the initContainer.
     driverName = postgres
-    dataSourceName = "user=__CASDOOR_DB_USER__ password=__CASDOOR_DB_PASSWORD__ host=casdoor-pg port=5432 sslmode=disable dbname=casdoor"
+    dataSourceName = "postgres://__CASDOOR_DB_USER__:__CASDOOR_DB_PASSWORD__@casdoor-pg:5432/casdoor?sslmode=disable"
     dbName = casdoor
     tableNamePrefix =
     showSql = false
