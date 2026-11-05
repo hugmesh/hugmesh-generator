@@ -1805,7 +1805,7 @@ display_viewer_hint() {
   install a viewer:  Gentoo: emerge net-misc/virt-viewer   Debian/Ubuntu: apt install virt-viewer
                      Windows: the virt-viewer MSI (remote-viewer.exe opens the .vv file)
   WSL2: run this from the WSL side with WSLg, or open the .vv/URL on Windows — Docker's
-        127.0.0.1 publish is reachable from Windows through WSL localhost forwarding.
+        127.0.0.1 publish is reachable from Windows through WSL's loopback forwarding.
 EOF
 }
 
