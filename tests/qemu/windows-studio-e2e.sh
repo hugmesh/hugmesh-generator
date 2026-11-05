@@ -186,14 +186,16 @@ SERIAL="${WORK}/serial.log"
 VNC_PORT=$(( (RANDOM % 50) + 10 ))
 KVM=(); [ -e /dev/kvm ] && KVM=(-enable-kvm -cpu host)
 
-echo "  QEMU booting Windows guest; serial -> ${SERIAL}; VNC :${VNC_PORT} (connect to inspect)"
+# The VNC inspection door binds 127.0.0.1 ONLY. A bare ":N" is 0.0.0.0:590N with
+# no password: every host on the LAN could watch (and drive) the Windows guest.
+echo "  QEMU booting Windows guest; serial -> ${SERIAL}; VNC 127.0.0.1:${VNC_PORT} (loopback only; connect to inspect)"
 timeout "${TIMEOUT}" qemu-system-x86_64 \
     "${KVM[@]}" -m 4096 -smp 2 \
     -drive "if=pflash,format=raw,readonly=on,file=${OVMF}" \
     -drive "if=pflash,format=raw,file=${VARS}" \
     -drive "file=${OVERLAY},if=virtio,format=qcow2" \
     -drive "file=${WORK}/payload.fat,format=raw,if=ide" \
-    -display none -serial "file:${SERIAL}" -vnc ":${VNC_PORT}" -no-reboot \
+    -display none -serial "file:${SERIAL}" -vnc "127.0.0.1:${VNC_PORT}" -no-reboot \
     >/dev/null 2>&1 || true   # the guest self-shuts-down on completion (marker-then-verdict)
 
 # ── read the MARKER back off the payload FAT (non-root mtools) and decide the verdict ──
@@ -202,7 +204,7 @@ echo "── verdict ──"
 if ! mcopy -i "${WORK}/payload.fat" "::/studio/MARKER.txt" "${MARKER}" 2>/dev/null; then
     echo "INCONCLUSIVE: no MARKER.txt on the payload disk — the guest Startup hook may not"
     echo "  have run D:\\run-selftest.bat (autologon/Startup not configured?), or Windows"
-    echo "  never reached the desktop within ${TIMEOUT}s. Inspect via VNC :${VNC_PORT} / the"
+    echo "  never reached the desktop within ${TIMEOUT}s. Inspect via VNC 127.0.0.1:${VNC_PORT} / the"
     echo "  serial log:"
     tail -n 25 "${SERIAL}" 2>/dev/null || true
     exit 1

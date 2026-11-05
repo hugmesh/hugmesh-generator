@@ -347,6 +347,15 @@ jobs:
           # tests/scripts/test-builder-unmount-real.sh needs `unshare -Urm` and exits
           # 2 SKIPPED-LOUDLY in this image (measured the same way), so it is NOT
           # listed: see PREMERGE_UNGATED and `make builder-unmount-real-check`.
+          # tests/qemu/display_argv_test.sh (2026-11-04): the launchers' opt-in
+          # display door (--display spice / --display-secret / --vnc-socket /
+          # --virt-dtb). Hermetic: qemu-system-* and qemu-img are PATH stubs that
+          # record argv; it pins the no-flag argv of all three launchers to a
+          # golden, element for element, and proves the per-run password reaches
+          # QEMU only as a secret OBJECT (never argv, never stdout). MEASURED,
+          # 2026-11-04, in alpine:3 with this job's apk set (checkout copied in;
+          # busybox grep/sed/diff/cmp): 134 passed / 0 failed. Mutation-tested
+          # on a Gentoo host: 23 planted defects, 23 caught.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
@@ -402,6 +411,7 @@ jobs:
             tests/qemu/save_test.sh
             tests/qemu/verdict_test.sh
             tests/qemu/qemu-e2e-lane_test.sh
+            tests/qemu/display_argv_test.sh
             tests/requested-atoms-resolvable.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-desktop-package-sets.sh

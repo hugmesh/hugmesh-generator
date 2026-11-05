@@ -929,6 +929,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
 # and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/viewer-harness-launchers-20261104,
+# which adds ONE gated suite: tests/qemu/display_argv_test.sh (wired in shell-suites.yml's
+# alpine job). MEASURED by RUNNING this file on that branch (base origin/main db240811,
+# which measures '207 of 248'): '208 of 249 suites are named by a pull_request-triggered
+# workflow', ungated SET unchanged. A branch that also raises this from 207 (#858 adds
+# tests/qemu/mesh_client_test.sh) conflicts here by construction; whichever lands second
+# re-measures (expected 209) per the doctrine above.
 # 207 -> 208 (denominator +1) on 2026-11-04: tests/scripts/test-frite-kernel-emulation-
 # symbols.sh joined the alpine job — the Frite kernel fragment must carry (and Kconfig
 # must keep) the sdhci-pci / virtio-gpu / virtio-input symbols that let the Frite
@@ -1011,6 +1018,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # re-measures per the doctrine above.
 # MERGED (origin/main with #473 + #860 + this branch): 207 + 1 (#473) + 1 (#860) + 2 (this branch)
 # = 211 of 252, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/viewer-harness-launchers-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/viewer-guest-kernel-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/desktop-b-frite-kernel-fragment-for-em-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/desktop-e-arm-desktop-package-sets-20261104): 212 of 253, MEASURED by running this file on the merged tree.
