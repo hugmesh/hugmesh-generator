@@ -422,6 +422,7 @@ jobs:
             tests/qemu/display_door_test.sh
             tests/qemu/display_argv_test.sh
             tests/requested-atoms-resolvable.sh
+            tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-desktop-package-sets.sh
             tests/scripts/test-arm-ro-distdir.sh
