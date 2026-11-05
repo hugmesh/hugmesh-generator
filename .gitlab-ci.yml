@@ -3878,6 +3878,26 @@ templating-rename-verify:
         - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
+# Per-brand fe-gateway ROUTE PARITY (hugmesh-generator#559): renders
+# templates/apps/20-gateway-fe.yaml.hbs for brands/example.conf with BOTH engines
+# and compares every route, in order, with specs/cluster/apps/20-gateway-fe.yaml
+# (tests/scripts/test-fe-template-route-parity.sh). node because the handlebars
+# engine is half the comparison; the suite exits 2 rather than skipping when
+# handlebars is absent, and the `test -d` below names that cause first.
+fe-template-route-parity-verify:
+  stage: verify
+  image: node:20-alpine
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash coreutils findutils git grep sed python3 py3-yaml
+    - (cd scripts/tooling && npm ci --no-audit --no-fund)
+  script:
+    - test -d scripts/tooling/node_modules/handlebars
+    - bash tests/scripts/test-fe-template-route-parity.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
 # ARCHETYPE TEMPLATE-DRIFT gate, ALL archetypes (scripts/validate-repo-templates-all.sh).
 # docs/MESH-TEMPLATING.md asked for this in Phase 2 — "wire it into CI beside the
 # reserved-prefix guard" — and nobody ever did: the ONLY automated caller of
