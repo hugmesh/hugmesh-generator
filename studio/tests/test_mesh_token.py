@@ -321,7 +321,7 @@ def test_a_new_grant_registers_afresh_instead_of_reusing_the_old_identity(compos
     compose.clear()
     assert node.start()[0]
     assert len(_downs(compose)) == 1                           # downgrade: fresh registration
-    assert node.recorded()["summary"] == "user in example.org, no shell"
+    assert node.recorded()["summary"] == "user in example.org, no SSH in"
 
 
 @pytest.mark.real_stack_probes
@@ -355,12 +355,12 @@ def test_the_tray_shows_what_the_running_node_was_started_with(compose, tmp_path
     holder = {"g": _grant(role="admin", shell=True)}
     node = _node(tmp_path, lambda: holder["g"])
     assert node.start()[0]
-    assert node.tray_note(True) == (" — admin in example.org, shell", "")
+    assert node.tray_note(True) == (" — admin in example.org, SSH in", "")
     holder["g"] = _grant(role="user", shell=False, auth_key="k2")
     note, tip = node.tray_note(True)
-    assert note == " — admin in example.org, shell (restart to apply the current token)"
+    assert note == " — admin in example.org, SSH in (restart to apply the current token)"
     assert "Stop and start" in tip
-    assert node.tray_note(False)[0] == " — user in example.org, no shell"
+    assert node.tray_note(False)[0] == " — user in example.org, no SSH in"
 
 
 @pytest.mark.real_stack_probes
@@ -479,3 +479,48 @@ def test_any_other_start_drops_the_trays_record(compose, tmp_path, monkeypatch):
     assert note == " — started outside this tray (restart to apply)" and tip
     ok, why = node.apply_limits()
     assert not ok and "not started from this tray" in why
+
+
+# ── Linux-session review (#862 items 4-5) ────────────────────────────────────────
+@needs_keygen
+def test_a_validly_signed_but_non_canonical_payload_is_refused(issuer):
+    """The verifier must check the SAME bytes it parses: a payload with the right
+    fields in another serialisation (spaces, key order) is refused, even signed."""
+    mt.trust_issuer(open(issuer + ".pub").read())
+    fields = _fields(_issue(issuer, shell=False))
+    loose = json.dumps(fields, indent=1).encode()                # valid JSON, not canonical
+    data = pathlib.Path(issuer).with_name("loose-payload")
+    data.write_bytes(loose)
+    subprocess.run([KEYGEN, "-Y", "sign", "-f", issuer, "-n", mt.NAMESPACE, str(data)],
+                   check=True, capture_output=True)
+    sig = pathlib.Path(str(data) + ".sig").read_bytes()
+    with pytest.raises(mt.TokenError, match="canonical") as e:
+        mt.verify(f"{mt.FORMAT}.{mt._b64u(loose)}.{mt._b64u(sig)}")
+    assert e.value.kind == "malformed"
+
+
+@pytest.mark.parametrize("stderr,ok", [
+    (b"unknown option -- Y\nusage: ssh-keygen ...", False),        # OpenSSH < 8.0
+    (b"ssh-keygen: illegal option -- Y", False),
+    (b"Unsupported operation for -Y: hugmesh-probe", True),          # 8.0+
+])
+def test_an_openssh_without_sshsig_is_named_not_mistaken_for_forgery(monkeypatch, tmp_path,
+                                                                     stderr, ok):
+    fake = tmp_path / "ssh-keygen"
+    fake.write_text("")
+    monkeypatch.setattr(mt.shutil, "which", lambda name: str(fake))
+    monkeypatch.setattr(mt, "_SSHSIG_SUPPORT", {})
+    monkeypatch.setattr(mt.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a[0], 255, b"", stderr))
+    if ok:
+        assert mt.ssh_keygen() == str(fake)
+    else:
+        with pytest.raises(mt.TokenError, match="older than 8.0") as e:
+            mt.ssh_keygen()
+        assert e.value.kind == "tool"
+
+
+def test_the_grant_wording_says_ssh_in_not_a_shell_elsewhere():
+    assert _grant(shell=True).short() == "admin in example.org, SSH in"
+    assert "accepts SSH from the mesh" in _grant(shell=True).describe()
+    assert "accepts no SSH from the mesh" in _grant(shell=False).describe()

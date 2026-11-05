@@ -56,6 +56,10 @@ LIMITS_APPLIED_NOTE = " The running mesh node was restarted under them."
 #: The mesh section's entry for importing a shared, signed HugMesh token.
 TOKEN_LABEL = "HugMesh token…"
 
+#: The mesh section's entry for SIGNING a token, as the admin of a mesh created with
+#: the Studio (gui/mesh_token_issue_dialog.py).
+ISSUE_TOKEN_LABEL = "Issue a HugMesh token…"
+
 #: How often the tray re-checks that a token-run node may still run. Cheap when no
 #: token record exists (one small file read); a token-run node adds a status probe.
 ENFORCE_EVERY_MS = 60_000
@@ -251,6 +255,7 @@ class _Section:
         if hasattr(self.node, "grant"):
             # a node that can run under a shared HugMesh token (core/mesh_token.py)
             menu.addAction(TOKEN_LABEL).triggered.connect(self._open_token)
+            menu.addAction(ISSUE_TOKEN_LABEL).triggered.connect(self._open_issue_token)
         if self.web_url:
             menu.addAction(f"Open {self.label} web UI…").triggered.connect(self._open_web_ui)
         self.start_act.triggered.connect(self._start)
@@ -265,6 +270,13 @@ class _Section:
             _log_swallowed("_open_token")
         self.enforce()               # a Forget stops a node running under that token
         self.tray._refresh()
+
+    def _open_issue_token(self) -> None:
+        try:
+            from .mesh_token_issue_dialog import open_issue_token_dialog
+            open_issue_token_dialog()
+        except Exception:            # pragma: no cover - never let a dialog kill the tray
+            _log_swallowed("_open_issue_token")
 
     def grant_note(self, running: bool) -> tuple[str, str]:
         """(menu suffix, tooltip) for a node that can run under a HugMesh token — see

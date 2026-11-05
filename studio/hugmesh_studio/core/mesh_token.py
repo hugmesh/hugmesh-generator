@@ -44,6 +44,15 @@ The token makes the tray do exactly what was granted and stops an edited token
 
 Resource limits (tray -> Resource limits) apply to a token-run node exactly as to any
 other: :class:`GrantedMeshNode` inherits MeshNode's limits overlay.
+
+ISSUING (OPERATOR ASK 2026-11-04: "make sure locally created mesh can also generate
+tokens through both the web ui and the gui/tui/cli on all platforms"). The admin of a
+mesh created with the Studio needs no SSH key of their own: :func:`ensure_issuer`
+keeps one ``ssh-ed25519`` issuer key per mesh in the Studio state dir (created on
+first use, trusted by this computer's own tray), and :func:`mint_preauth_key` asks
+the mesh's running headscale container for a single-use pre-auth key, so neither
+the key nor the pre-auth key ever passes through this computer's command line or a
+log.
 """
 from __future__ import annotations
 
@@ -51,6 +60,7 @@ import argparse
 import base64
 import binascii
 import dataclasses
+import getpass
 import hashlib
 import json
 import os
@@ -105,12 +115,15 @@ ENV_NODE_NAME = "HUGMESH_NODE_NAME"
 class TokenError(ValueError):
     """A token that cannot be used. ``kind`` is one of ``malformed``, ``signature``,
     ``untrusted``, ``expired``, ``invalid``, ``tool``; ``str()`` is the sentence the
-    tray shows."""
+    tray shows. ``choices``: the candidates when one must be named (several headscale
+    containers)."""
 
-    def __init__(self, kind: str, message: str, *, issuer: str = ""):
+    def __init__(self, kind: str, message: str, *, issuer: str = "",
+                 choices: tuple[str, ...] = ()):
         super().__init__(message)
         self.kind = kind
         self.issuer = issuer
+        self.choices = tuple(choices)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -131,13 +144,14 @@ class MeshGrant:
 
     def describe(self) -> str:
         """One line for menus and the CLI — never the auth key."""
-        shell = "shell access" if self.shell else "no shell access"
+        shell = ("accepts SSH from the mesh" if self.shell
+                 else "accepts no SSH from the mesh")
         return (f"{self.role} in {self.domain} (mesh {self.mesh}), {shell}, "
                 f"expires {_when(self.expires)}")
 
     def short(self) -> str:
         """The few words the tray's status line has room for."""
-        return f"{self.role} in {self.domain}, {'shell' if self.shell else 'no shell'}"
+        return f"{self.role} in {self.domain}, {'SSH in' if self.shell else 'no SSH in'}"
 
     def identity(self) -> str:
         """What the node's tailnet identity was created from. Two grants with the same
@@ -261,54 +275,419 @@ def ssh_keygen(osname: str | None = None) -> str:
         candidate = os.path.join(root, "System32", "OpenSSH", "ssh-keygen.exe")
         if os.path.isfile(candidate):
             found = candidate
+    if found and not _supports_sshsig(found):
+        raise TokenError("tool", f"This OpenSSH ({found}) is older than 8.0 and cannot sign "
+                                 "or check HugMesh tokens (it has no `ssh-keygen -Y`). "
+                                 "Update OpenSSH.")
     if not found:
-        raise TokenError("tool", "Checking a HugMesh token needs OpenSSH's ssh-keygen, which "
-                                 "was not found. On Windows, add the optional feature "
-                                 "\"OpenSSH Client\" (Settings > System > Optional features).")
+        raise TokenError("tool", "Signing or checking a HugMesh token needs OpenSSH's "
+                                 "ssh-keygen, which was not found. On Windows, add the "
+                                 "optional feature \"OpenSSH Client\" (Settings > System > "
+                                 "Optional features).")
     return found
+
+
+_SSHSIG_SUPPORT: dict[str, bool] = {}
+
+
+def _supports_sshsig(keygen: str) -> bool:
+    """Does this ssh-keygen have ``-Y`` (OpenSSH 8.0+)? Asked once per binary. An old
+    one rejects the option itself; a new one rejects only the made-up operation. Without
+    this, a too-old OpenSSH made every token look forged ("signature does not match")."""
+    if keygen not in _SSHSIG_SUPPORT:
+        try:
+            r = subprocess.run([keygen, "-Y", "hugmesh-probe"], capture_output=True,
+                               timeout=30, **_no_window())
+            text = (r.stderr + r.stdout).decode("utf-8", "replace").lower()
+            _SSHSIG_SUPPORT[keygen] = not re.search(r"(illegal|unknown|invalid) option", text)
+        except (OSError, subprocess.SubprocessError):
+            return True          # cannot tell: let the real call speak for itself
+    return _SSHSIG_SUPPORT[keygen]
 
 
 def _run(argv: list[str], *, stdin: bytes | None = None, cwd: str | None = None):
     return subprocess.run(argv, input=stdin, capture_output=True, cwd=cwd, timeout=30)
 
 
+def _no_window(osname: str | None = None) -> dict:
+    """``creationflags`` for a captured child that must not flash a console window
+    (Windows; the windowed Studio's own hook in no_console does the same, but the
+    GUI/TUI call these directly and must not depend on it)."""
+    if (osname or os.name) != "nt":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+
+
+def _tail(text, lines: int = 3, limit: int = 400) -> str:
+    """The last few lines of a tool's message, for a one-sentence error."""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "replace")
+    kept = [s.strip() for s in (text or "").splitlines() if s.strip()][-lines:]
+    out = " ".join(kept)
+    return out[-limit:] if out else "(no message)"
+
+
 def _payload(g: MeshGrant) -> dict:
     return {"format": FORMAT, **dataclasses.asdict(g)}
 
 
-def issue(*, key_path: str, mesh: str, domain: str, role: str, shell: bool,
-          login_server: str, auth_key: str, lifetime_s: int, node_name: str = "",
-          now: float | None = None, keygen: str | None = None) -> str:
-    """Sign a token with the issuer's ed25519 SSH key (its ``.pub`` must sit beside
-    it). ssh-keygen may prompt for the key's passphrase on the terminal."""
-    now = int(time.time() if now is None else now)
+def _read_pub(key_path: str) -> str:
+    """The issuer public key (``type base64``) of a private key, from its ``.pub``."""
     pub_path = key_path + ".pub"
     try:
         with open(pub_path, encoding="utf-8") as fh:
-            issuer = _issuer_key(fh.read().strip())
+            return _issuer_key(fh.read().strip())
     except OSError as e:
         raise TokenError("tool", f"Could not read the issuer's public key {pub_path}: {e}")
+
+
+def _new_grant(*, issuer: str, mesh: str, domain: str, role: str, shell: bool,
+               login_server: str, auth_key: str, lifetime_s: int, node_name: str,
+               now: int) -> MeshGrant:
     g = MeshGrant(mesh=mesh, domain=domain.lower().strip("."), role=role, shell=bool(shell),
                   login_server=login_server.rstrip("/"), auth_key=auth_key.strip(),
                   expires=now + int(lifetime_s), issued=now, issuer=issuer,
                   node_name=node_name, id=secrets.token_hex(8))
     check_fields(g, now=now)
-    body = _canonical(_payload(g))
-    keygen = keygen or ssh_keygen()
+    return g
+
+
+def _sign(key_path: str, body: bytes, *, keygen: str, interactive: bool,
+          namespace: str = NAMESPACE) -> bytes:
+    """An SSHSIG over ``body``. Interactive: ssh-keygen shares the terminal, so it can
+    ask for the key's passphrase (a captured run would hang on that prompt).
+    Otherwise (GUI/TUI): output captured, no stdin, no console window, and the
+    failure raises ``signature`` with ssh-keygen's own words."""
     with tempfile.TemporaryDirectory(prefix="hugmesh-token-") as tmp:
         data = os.path.join(tmp, "payload")
         with open(data, "wb") as fh:
             fh.write(body)
-        # Not captured: ssh-keygen asks for a passphrase on the terminal when the key
-        # has one, and a captured run would hang on that prompt.
-        r = subprocess.run([keygen, "-Y", "sign", "-f", key_path, "-n", NAMESPACE, data],
-                           timeout=300)
-        if r.returncode != 0:
-            raise TokenError("signature", "ssh-keygen could not sign the token (see its "
-                                          "message above).")
+        argv = [keygen, "-Y", "sign", "-f", key_path, "-n", namespace, data]
+        if interactive:
+            r = subprocess.run(argv, timeout=300)
+            if r.returncode != 0:
+                raise TokenError("signature", "ssh-keygen could not sign the token (see "
+                                              "its message above).")
+        else:
+            try:
+                r = subprocess.run(argv, capture_output=True, stdin=subprocess.DEVNULL,
+                                   timeout=60, **_no_window())
+            except (OSError, subprocess.SubprocessError) as e:
+                raise TokenError("signature", f"ssh-keygen could not sign the token: {e}")
+            if r.returncode != 0:
+                raise TokenError("signature", "ssh-keygen could not sign the token: "
+                                              f"{_tail(r.stderr or r.stdout)}")
         with open(data + ".sig", "rb") as fh:
-            sig = fh.read()
+            return fh.read()
+
+
+def issue(*, key_path: str, mesh: str, domain: str, role: str, shell: bool,
+          login_server: str, auth_key: str, lifetime_s: int, node_name: str = "",
+          now: float | None = None, keygen: str | None = None,
+          interactive: bool = True) -> str:
+    """Sign a token with the issuer's ed25519 SSH key (its ``.pub`` must sit beside
+    it). With ``interactive`` (the CLI) ssh-keygen may prompt for the key's
+    passphrase on the terminal; without it (the GUI/TUI, with a Studio issuer key,
+    which has none) nothing can prompt and a failure carries ssh-keygen's message."""
+    now = int(time.time() if now is None else now)
+    g = _new_grant(issuer=_read_pub(key_path), mesh=mesh, domain=domain, role=role,
+                   shell=shell, login_server=login_server, auth_key=auth_key,
+                   lifetime_s=lifetime_s, node_name=node_name, now=now)
+    body = _canonical(_payload(g))
+    sig = _sign(key_path, body, keygen=keygen or ssh_keygen(), interactive=interactive)
     return f"{FORMAT}.{_b64u(body)}.{_b64u(sig)}"
+
+
+# ── the Studio's own issuer key, one per mesh ───────────────────────────────────────
+ISSUERS_DIR = "mesh-issuers"
+ISSUER_KEY = "issuer_ed25519"
+
+#: The self-check signs in its own namespace, so its throwaway signature can never be
+#: mistaken for a token signature.
+_SELF_CHECK_NAMESPACE = "hugmesh-issuer-self-check@hugmesh.org"
+
+
+def issuer_dir(mesh: str) -> str:
+    """Where the Studio keeps mesh ``mesh``'s issuer key."""
+    if not _MESH_RE.match(mesh or ""):
+        raise TokenError("invalid", f"{mesh!r} is not a valid mesh name (lower-case letters, "
+                                    "digits and -, at most 63).")
+    return os.path.join(state_dir(), ISSUERS_DIR, mesh)
+
+
+def issuer_key_path(mesh: str) -> str:
+    return os.path.join(issuer_dir(mesh), ISSUER_KEY)
+
+
+def ensure_issuer(mesh: str, *, keygen: str | None = None,
+                  osname: str | None = None) -> tuple[str, str, str]:
+    """(private key path, public key line, fingerprint) of the Studio issuer key for
+    ``mesh``, creating it when absent. A newly created key is also TRUSTED on this
+    computer, so the admin's own tray accepts the tokens it signs; an existing key's
+    trust is left as the operator set it.
+
+    Creation is all or nothing: the key is made in a private scratch dir beside its
+    place, self-checked and trusted there, and only then moved into place. A failure
+    on the way leaves no key behind (and no trust), so the next call starts afresh
+    rather than reusing a key that was never checked or trusted."""
+    key = issuer_key_path(mesh)
+    pub = key + ".pub"
+    keygen = keygen or ssh_keygen()
+    osname = osname or os.name
+    if not os.path.isfile(key):
+        os.makedirs(os.path.dirname(key), mode=0o700, exist_ok=True)
+        if os.path.exists(pub):
+            os.remove(pub)          # the public half of a key that is gone
+        _create_issuer(mesh, key, keygen, osname)
+    elif not os.path.isfile(pub):
+        try:
+            r = subprocess.run([keygen, "-y", "-f", key], capture_output=True,
+                               stdin=subprocess.DEVNULL, timeout=60, **_no_window(osname))
+        except (OSError, subprocess.SubprocessError) as e:
+            raise TokenError("tool", f"Could not read the issuer key {key}: {e}")
+        if r.returncode != 0:
+            raise TokenError("tool", f"Could not read the issuer key {key}: "
+                                     f"{_tail(r.stderr)}")
+        with open(pub, "w", encoding="ascii", newline="\n") as fh:
+            fh.write(r.stdout.decode("ascii", "replace").strip() + "\n")
+    with open(pub, encoding="utf-8") as fh:
+        line = fh.read().strip()
+    if not _ISSUER_RE.match(_issuer_key(line)):
+        raise TokenError("tool", f"The issuer key {pub} is not an ssh-ed25519 public key.")
+    return key, line, fingerprint(line)
+
+
+def _create_issuer(mesh: str, key: str, keygen: str, osname: str) -> None:
+    """Make, self-check and trust a new issuer key, then move it to ``key`` (its
+    ``.pub`` first, the private key last: the private key's presence is what says
+    "created"). Any failure removes what was made and drops the trust it was given."""
+    scratch = tempfile.mkdtemp(prefix=".new-", dir=os.path.dirname(key))
+    new = os.path.join(scratch, ISSUER_KEY)
+    trusted = ""
+    try:
+        try:
+            r = subprocess.run([keygen, "-q", "-t", "ed25519", "-N", "", "-C",
+                                f"hugmesh-issuer {mesh}", "-f", new], capture_output=True,
+                               stdin=subprocess.DEVNULL, timeout=60, **_no_window(osname))
+        except (OSError, subprocess.SubprocessError) as e:
+            raise TokenError("tool", f"ssh-keygen could not create the issuer key for mesh "
+                                     f"{mesh}: {e}")
+        if r.returncode != 0 or not os.path.isfile(new) or not os.path.isfile(new + ".pub"):
+            raise TokenError("tool", f"ssh-keygen could not create the issuer key for mesh "
+                                     f"{mesh}: {_tail(r.stderr or r.stdout)}")
+        if osname != "nt":
+            os.chmod(new, 0o600)
+        _self_check(new, keygen, osname)
+        with open(new + ".pub", encoding="utf-8") as fh:
+            line = fh.read().strip()
+        if not _ISSUER_RE.match(_issuer_key(line)):
+            raise TokenError("tool", f"ssh-keygen made an issuer key for mesh {mesh} whose "
+                                     "public half is not an ssh-ed25519 key.")
+        if _issuer_key(line) not in trusted_issuers():
+            trust_issuer(line)
+            trusted = line
+        os.replace(new + ".pub", key + ".pub")
+        os.replace(new, key)
+    except BaseException:
+        if trusted:
+            try:
+                distrust_issuer(trusted)
+            except OSError:
+                pass
+        if not os.path.isfile(key):
+            try:
+                os.remove(key + ".pub")
+            except OSError:
+                pass
+        raise
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _self_check(key: str, keygen: str, osname: str, runner=subprocess.run) -> None:
+    """Sign once with a fresh issuer key, so a key that cannot sign fails HERE with a
+    reason rather than later in a dialog.
+
+    Windows OpenSSH refuses a private key whose ACL lets anyone but the owner, SYSTEM
+    and Administrators read it ("UNPROTECTED PRIVATE KEY FILE" / "Permissions ... are
+    too open"). The per-user state dir normally passes, but a state dir moved under a
+    shared folder inherits wider entries; then the key's inherited ACL is replaced by
+    one entry for this user (icacls /inheritance:r /grant:r USER:F) and it is tried
+    again."""
+    try:
+        _sign(key, b"hugmesh issuer self-check", keygen=keygen, interactive=False,
+              namespace=_SELF_CHECK_NAMESPACE)
+        return
+    except TokenError as e:
+        msg = str(e)
+        if osname != "nt" or not re.search(r"(?i)permission|unprotected|too open", msg):
+            raise TokenError("tool", f"The new issuer key cannot sign: {msg}")
+    try:
+        r = runner(["icacls", key, "/inheritance:r", "/grant:r", f"{getpass.getuser()}:F"],
+                   capture_output=True, stdin=subprocess.DEVNULL, timeout=60,
+                   **_no_window(osname))
+        fixed = r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        fixed = False
+    if not fixed:
+        raise TokenError("tool", f"The new issuer key {key} is readable by other accounts "
+                                 "and its permissions could not be narrowed, so OpenSSH "
+                                 "will not sign with it.")
+    try:
+        _sign(key, b"hugmesh issuer self-check", keygen=keygen, interactive=False,
+              namespace=_SELF_CHECK_NAMESPACE)
+    except TokenError as e:
+        raise TokenError("tool", f"The new issuer key cannot sign: {e}")
+
+
+# ── a pre-auth key from the mesh's own headscale ────────────────────────────────────
+#: Tags a minted pre-auth key asks for by default: none. In the mesh's headscale policy
+#: (specs/etc/headscale/policy.hujson.tmpl, rendered by gen-headscale-policy.sh) every
+#: tag is owned by the control user "hugmesh" alone, and the ones that gate access
+#: (tag:dom_*, tag:dev_*, tag:mesh_*, tag:superadmin) are SERVER-FORCED at approval by
+#: hugmesh-headscale-forcetags — no node may bring them on its key. So no tag is asked
+#: for, and the server tags the node.
+DEFAULT_MINT_TAGS: tuple[str, ...] = ()
+
+#: The headscale user a minted key is for by default: the mesh's control user, the
+#: only user HugMesh's headscale provisioning creates (keys-template/provision.json
+#: "users") and the owner of every tag in its policy. The role is not a headscale user.
+DEFAULT_MINT_USER = "hugmesh"
+
+_TAG_RE = re.compile(r"^tag:[a-z0-9][a-z0-9_-]{0,62}$")
+#: A headscale user or a docker container name; never starts with "-", so it cannot be
+#: read as an option.
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def _docker(argv: list[str], runner, what: str):
+    try:
+        r = (runner or subprocess.run)(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                   timeout=60, **proc_text.TEXT_IO, **_no_window())
+    except FileNotFoundError:
+        raise TokenError("tool", "Minting a pre-auth key needs docker, which was not found.")
+    except (OSError, subprocess.SubprocessError) as e:
+        raise TokenError("tool", f"{what}: {e}")
+    if r.returncode != 0:
+        why = _tail(r.stderr) if (r.stderr or "").strip() else f"exit status {r.returncode}"
+        raise TokenError("tool", f"{what}: {why}")
+    return r
+
+
+#: A container that IS headscale, not one beside it (headscale-ui, headscale-admin):
+#: ``headscale``, or ``<project>-headscale`` / ``<project>_headscale``, with compose's
+#: optional replica number.
+_HEADSCALE_NAME_RE = re.compile(r"^(?:.*[-_])?headscale(?:[-_][0-9]+)?$")
+
+
+def find_headscale_container(runner=None) -> str:
+    """The running headscale container, else ``tool``. ``docker ps --filter
+    name=headscale`` matches substrings, so when it lists several, the one whose name is
+    headscale itself (see ``_HEADSCALE_NAME_RE``) wins over its neighbours; when that
+    still leaves zero or several, the error carries the names in ``choices``."""
+    r = _docker(["docker", "ps", "--filter", "name=headscale", "--format", "{{.Names}}"],
+                runner, "docker could not list the running containers")
+    names = sorted({s.strip() for s in (r.stdout or "").splitlines() if s.strip()})
+    if not names:
+        raise TokenError("tool", "No running headscale container was found (docker ps "
+                                 "--filter name=headscale listed none). Start the mesh, or "
+                                 "name its headscale container.")
+    exact = [n for n in names if _HEADSCALE_NAME_RE.match(n)]
+    if len(names) == 1 or len(exact) == 1:
+        return names[0] if len(names) == 1 else exact[0]
+    raise TokenError("tool", f"Several running containers match headscale "
+                             f"({', '.join(names)}). Name the one to mint the key in.",
+                     choices=tuple(names))
+
+
+def mint_preauth_key(*, user: str, tags=DEFAULT_MINT_TAGS, lifetime_s: int,
+                     container: str = "", runner=None) -> str:
+    """A new single-use headscale pre-auth key for ``user`` that expires after
+    ``lifetime_s``, minted in the RUNNING headscale container ``container`` (found
+    with ``docker ps`` when ""). The key is returned, never printed or logged."""
+    if not _NAME_RE.match(user or ""):
+        raise TokenError("invalid", f"{user!r} is not a headscale user name.")
+    tags = tuple(tags or ())
+    bad = [t for t in tags if not _TAG_RE.match(t)]
+    if bad:
+        raise TokenError("invalid", f"{', '.join(map(repr, bad))} is not a headscale tag "
+                                    "(tag:name, lower-case).")
+    if not 0 < int(lifetime_s) <= MAX_LIFETIME_S:
+        raise TokenError("invalid", "A pre-auth key's lifetime must be between a moment and "
+                                    f"{MAX_LIFETIME_S // 86400} days.")
+    if container and not _NAME_RE.match(container):
+        raise TokenError("invalid", f"{container!r} is not a container name.")
+    container = container or find_headscale_container(runner)
+    argv = ["docker", "exec", container, "headscale", "preauthkeys", "create",
+            "--user", user, "--expiration", f"{int(lifetime_s)}s"]
+    if tags:
+        argv += ["--tags", ",".join(tags)]
+    r = _docker(argv, runner, f"headscale in {container} could not mint a pre-auth key for "
+                              f"the user {user} (does that headscale user exist?)")
+    lines = [s.strip() for s in (r.stdout or "").splitlines() if s.strip()]
+    key = lines[-1] if lines else ""
+    # Never echoed: if this line is not a key, the output may still hold one.
+    if len(key) < 16 or any(c.isspace() for c in key):
+        raise TokenError("tool", f"headscale in {container} did not print a pre-auth key, so "
+                                 "no token was issued.")
+    return key
+
+
+def check_signing(key_path: str, *, keygen: str | None = None,
+                  interactive: bool = False) -> None:
+    """Sign a throwaway with ``key_path`` (in the self-check namespace, so it can never
+    pass as a token), so a key that cannot sign — a mistyped passphrase, an ACL OpenSSH
+    refuses, a timeout — fails BEFORE a pre-auth key is minted for its token."""
+    _read_pub(key_path)
+    _sign(key_path, b"hugmesh issuer self-check", keygen=keygen or ssh_keygen(),
+          interactive=interactive, namespace=_SELF_CHECK_NAMESPACE)
+
+
+def expire_preauth_key(key: str, *, user: str, container: str, runner=None) -> bool:
+    """Expire a pre-auth key this Studio minted but could not put in a token. The key
+    goes to the container on stdin, never onto this computer's command line (it needs
+    a shell in the container, as HugMesh's images have). Returns whether it worked."""
+    script = 'IFS= read -r k && exec headscale preauthkeys expire --user "$1" "$k"'
+    try:
+        r = (runner or subprocess.run)(
+            ["docker", "exec", "-i", container, "sh", "-c", script, "sh", user],
+            input=key + "\n", capture_output=True, text=True, timeout=60,
+            **proc_text.TEXT_IO, **_no_window())
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
+def mint_and_issue(*, key_path: str, user: str = DEFAULT_MINT_USER, container: str = "",
+                   tags=DEFAULT_MINT_TAGS, interactive: bool = False,
+                   keygen: str | None = None, runner=None, **fields) -> tuple[str, str]:
+    """(token, container): mint a single-use pre-auth key and sign a token carrying it.
+    The issuer key is made to sign once FIRST, so the usual signing failures happen
+    before anything exists on the server; if signing still fails after the mint, the
+    minted key is expired, and the error says whether that worked. ``fields`` are
+    :func:`issue`'s (mesh, domain, role, shell, login_server, lifetime_s, node_name),
+    already checked by the caller."""
+    container = container or find_headscale_container(runner)
+    check_signing(key_path, keygen=keygen, interactive=interactive)
+    auth_key = mint_preauth_key(user=user, tags=tags, lifetime_s=fields["lifetime_s"],
+                                container=container, runner=runner)
+    try:
+        return issue(key_path=key_path, auth_key=auth_key, interactive=interactive,
+                     keygen=keygen, **fields), container
+    except BaseException as e:
+        if expire_preauth_key(auth_key, user=user, container=container, runner=runner):
+            after = (f"The pre-auth key minted for it in {container} has been expired, so "
+                     "nothing usable is left on the server.")
+        else:
+            after = (f"The pre-auth key minted for it in {container} (headscale user "
+                     f"{user}) could not be expired and stays usable until it expires: "
+                     f"expire it with headscale preauthkeys list / expire --user {user}.")
+        if isinstance(e, TokenError):
+            raise TokenError(e.kind, f"{e} {after}") from None
+        if isinstance(e, Exception):
+            raise TokenError("signature", f"The token could not be signed: {e}. "
+                                          f"{after}") from None
+        raise                       # Ctrl-C: the key was still expired above
 
 
 def parse(token: str) -> tuple[MeshGrant, bytes, bytes]:
@@ -394,13 +773,24 @@ def _path(name: str) -> str:
 
 def _write_private(path: str, text: str) -> None:
     """Write a file only this user can read (0600 on POSIX; the per-user state dir's
-    ACL on Windows)."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.{os.getpid()}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(text)
-    os.replace(tmp, path)
+    ACL on Windows). The TUI also saves a token to any path the user names, perhaps
+    in a shared folder such as /tmp: so the temporary file has a random name and is
+    created exclusively (mkstemp: O_EXCL, mode 0600), never opened over a file or a
+    symlink someone else put there."""
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp",
+                               dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def trusted_issuers() -> set[str]:
@@ -684,14 +1074,66 @@ def _lifetime(text: str) -> int:
     return int(m.group(1)) * _UNITS[m.group(2)]
 
 
+def _cli_issue(args) -> int:
+    fields = dict(mesh=args.mesh, domain=args.domain, role=args.role, shell=args.shell,
+                  login_server=args.login_server, lifetime_s=args.expires,
+                  node_name=args.node_name)
+    # Every field checked BEFORE an issuer key is created or a pre-auth key is minted,
+    # so a typo in --domain does not leave a minted key behind on the server (and
+    # mint_and_issue makes the key sign once before it mints, for the same reason).
+    _new_grant(issuer="ssh-ed25519 AAAA", auth_key="not-yet-minted", now=int(time.time()),
+               **fields)
+    if args.key:
+        key_path, interactive = args.key, True
+    else:
+        existed = os.path.isfile(issuer_key_path(args.mesh))
+        key_path, _, fp = ensure_issuer(args.mesh)
+        interactive = False         # a Studio issuer key has no passphrase to ask for
+        print(f"Issuer: this Studio's key for mesh {args.mesh}, {fp}"
+              + ("" if existed else " (created now; this computer trusts it)"),
+              file=sys.stderr)
+    container = ""
+    user = args.headscale_user or DEFAULT_MINT_USER
+    if args.mint:
+        if interactive:
+            print("Checking that the key can sign before a pre-auth key is minted: "
+                  "ssh-keygen asks for its passphrase (if it has one) now, and again to "
+                  "sign the token.", file=sys.stderr)
+        token, container = mint_and_issue(
+            key_path=key_path, user=user, container=args.headscale_container,
+            tags=args.tag, interactive=interactive, **fields)
+    else:
+        with open(args.authkey_file, encoding="utf-8") as fh:
+            auth_key = fh.read().strip()
+        token = issue(key_path=key_path, auth_key=auth_key, interactive=interactive,
+                      **fields)
+    print(token)
+    g, _, _ = parse(token)
+    if args.mint:
+        tags = ", ".join(args.tag) if args.tag else "no tags of its own"
+        server = (f"The pre-auth key was minted in {container} for the headscale user "
+                  f"{user}: single-use, expiring with the "
+                  f"token, with {tags}. The server still decides: headscale's "
+                  f"server-forced tags and its ssh policy set what the node may reach, so "
+                  f"keep shell there to match.")
+    else:
+        server = (f"The server still decides: create the pre-auth key with the tags for "
+                  f"{g.domain} and {g.role}, and keep shell in the headscale ssh policy "
+                  f"to match.")
+    print(f"\nGrants: {g.describe()}\nIssuer: {fingerprint(g.issuer)} (give the "
+          f"recipient this fingerprint separately)\n{server}", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="python -m hugmesh_studio.core.mesh_token",
         description="Issue, inspect and trust signed HugMesh tokens.")
     sub = p.add_subparsers(dest="cmd", required=True)
-    i = sub.add_parser("issue", help="sign a token with your ssh-ed25519 issuer key")
-    i.add_argument("--key", required=True, help="the issuer's private ssh-ed25519 key "
-                   "(its .pub must be beside it)")
+    i = sub.add_parser("issue", help="sign a token with an ssh-ed25519 issuer key")
+    i.add_argument("--key", default="", help="the issuer's private ssh-ed25519 key (its "
+                   ".pub must be beside it); default: this Studio's issuer key for the "
+                   "mesh, created on first use")
     i.add_argument("--mesh", required=True)
     i.add_argument("--domain", required=True, help="the access domain")
     i.add_argument("--role", required=True, choices=ROLES)
@@ -699,8 +1141,17 @@ def main(argv: list[str] | None = None) -> int:
                    f"({' or '.join(SHELL_ROLES)} only)")
     i.add_argument("--login-server", required=True, help="https:// headscale URL inside "
                    "the domain")
-    i.add_argument("--authkey-file", required=True, help="file holding the pre-auth key "
-                   "(kept off the command line)")
+    src = i.add_mutually_exclusive_group(required=True)
+    src.add_argument("--authkey-file", help="file holding the pre-auth key (kept off the "
+                     "command line)")
+    src.add_argument("--mint", action="store_true", help="mint a single-use pre-auth key "
+                     "in the mesh's running headscale container (docker exec)")
+    i.add_argument("--headscale-container", default="", help="with --mint: the headscale "
+                   "container (default: the one running container named like headscale)")
+    i.add_argument("--headscale-user", default="", help="with --mint: the headscale user "
+                   f"the key is for (default: {DEFAULT_MINT_USER}, the mesh's control user)")
+    i.add_argument("--tag", action="append", default=[], help="with --mint: a tag the key "
+                   "asks for (repeatable; default none, the server tags the node)")
     i.add_argument("--node-name", default="")
     i.add_argument("--expires", type=_lifetime, default=_lifetime("7d"),
                    help="lifetime such as 12h or 7d (default 7d, at most 90d)")
@@ -708,22 +1159,23 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("token_file", help="file holding the token ('-' for stdin)")
     t = sub.add_parser("trust", help="trust an issuer's ssh-ed25519 public key")
     t.add_argument("pubkey_file")
+    k = sub.add_parser("issuer", help="print this Studio's issuer public key and "
+                       "fingerprint for a mesh (created on first use)")
+    k.add_argument("--mesh", required=True)
     args = p.parse_args(argv)
+    if args.cmd == "issue" and not args.mint and (
+            args.headscale_container or args.headscale_user or args.tag):
+        i.error("--headscale-container, --headscale-user and --tag go with --mint")
     try:
         if args.cmd == "issue":
-            with open(args.authkey_file, encoding="utf-8") as fh:
-                auth_key = fh.read().strip()
-            token = issue(key_path=args.key, mesh=args.mesh, domain=args.domain,
-                          role=args.role, shell=args.shell, login_server=args.login_server,
-                          auth_key=auth_key, lifetime_s=args.expires,
-                          node_name=args.node_name)
-            print(token)
-            g, _, _ = parse(token)
-            print(f"\nGrants: {g.describe()}\nIssuer: {fingerprint(g.issuer)} (give the "
-                  f"recipient this fingerprint separately)\n"
-                  f"The server still decides: create the pre-auth key with the tags for "
-                  f"{g.domain} and {g.role}, and keep shell in the headscale ssh policy "
-                  f"to match.", file=sys.stderr)
+            return _cli_issue(args)
+        if args.cmd == "issuer":
+            existed = os.path.isfile(issuer_key_path(args.mesh))
+            key, line, fp = ensure_issuer(args.mesh)
+            if not existed:
+                print(f"Created the Studio issuer key for mesh {args.mesh} ({key}); this "
+                      f"computer trusts it.", file=sys.stderr)
+            print(f"{line}\n{fp}")
             return 0
         if args.cmd == "show":
             text = (sys.stdin.read() if args.token_file == "-"

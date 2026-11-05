@@ -73,3 +73,55 @@ python -m hugmesh_studio.core.mesh_token issue --key ~/.ssh/mesh_issuer \
   --mesh west --domain example.org --role admin --shell \
   --login-server https://hs.example.org --authkey-file key.txt --expires 7d
 ```
+
+For a mesh created locally with the Studio, the admin needs neither an SSH key nor a
+pre-auth key in hand:
+
+```sh
+# the Studio's own issuer key for the mesh (created on first use, trusted locally)
+python -m hugmesh_studio.core.mesh_token issuer --mesh west
+# sign with it, and mint a single-use pre-auth key in the running headscale container
+python -m hugmesh_studio.core.mesh_token issue --mesh west --domain example.org \
+  --role admin --shell --login-server https://hs.example.org --mint --expires 7d
+```
+
+- Without `--key`, the token is signed with the Studio issuer key kept under the
+  Studio state dir (`mesh-issuers/<mesh>/issuer_ed25519`, no passphrase; mode 0600
+  on Linux and macOS; on Windows its ACL is narrowed to the user if OpenSSH refuses it
+  as readable by others). Creating it also trusts it on this computer. Give recipients
+  the fingerprint that `issuer --mesh` and `issue` print.
+- `--mint` runs `docker exec <container> headscale preauthkeys create --user <user>
+  --expiration <token lifetime>` (single-use). The container is the running container
+  named like `headscale` (when several match, the one that is headscale itself, such as
+  `hugmesh-headscale` beside `headscale-ui`) unless `--headscale-container` names it;
+  the user is `hugmesh`, the mesh's control user and the only user HugMesh's headscale
+  provisioning creates, unless `--headscale-user` names another. The issuer key signs
+  once before the key is minted; if signing still fails after the mint, the minted key
+  is expired (`headscale preauthkeys expire`, the key passed on stdin) and the error
+  says whether that worked. No tags are requested by default:
+  the mesh policy owns every tag and forces the access tags (`tag:dom_*`, `tag:dev_*`,
+  `tag:mesh_*`, `tag:superadmin`) server-side, so the server tags the node. `--tag`
+  asks for one explicitly.
+- The Studio's own command forwards everything after `--mesh-token` to this CLI:
+  `python -m hugmesh_studio --mesh-token issue ...`, `hugmesh-studio --mesh-token
+  issue ...` when installed with pip, and on Windows the MSI's console twin
+  `hugmesh-studio-cli.exe --mesh-token issue ...` (the windowed `hugmesh-studio.exe`
+  prints nothing).
+
+The same issuing is in the Studio's window and text interface, on Linux, Windows and
+macOS alike, over the same core (same field checks before anything is created or
+minted, same Studio issuer key, same `issue()`):
+
+- **GUI**: **Issue a HugMesh token…** in the tray's mesh menu and in the Local mesh
+  Actions box (`studio/hugmesh_studio/gui/mesh_token_issue_dialog.py`). The pre-auth
+  key is pasted into a hidden field (cleared once the token is issued) or minted with
+  **Mint from the local headscale**, for the container under **Headscale container**
+  (the running one found, one picked from several, or a typed name). The dialog shows the token and the issuer fingerprint.
+- **TUI**: `t` on the Local Docker mesh screens
+  (`studio/hugmesh_studio/tui/mesh_token_step.py`). The pre-auth key is read from a
+  file (`k PATH`), never typed on screen. The screen does not start docker: `mint`
+  prints the `--mesh-token issue --mint` command line to run instead (`u USER` and
+  `c NAME` add `--headscale-user` and `--headscale-container`).
+- **The mesh's web admin UI**: an issuer there is being added on the mesh side. It
+  must produce this same v1 format, and should show its issuer fingerprint beside the
+  tokens it hands out (see Trust above).

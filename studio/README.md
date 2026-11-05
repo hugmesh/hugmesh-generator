@@ -500,38 +500,107 @@ python -m hugmesh_studio --tray
 ### Sharing a mesh with a signed HugMesh token
 
 A mesh admin can hand someone a single line of text, a **HugMesh token**, that lets that
-person's tray run a mesh node with exactly the rights it grants: an **access domain**, a
-**role** (user, mod, admin or superadmin) and whether **shell access** is allowed. The
-token carries the headscale pre-auth key and login server and is signed with the admin's
-`ssh-ed25519` key through OpenSSH (`ssh-keygen -Y`). OpenSSH ships with Windows 10/11 and
-Linux, so nothing extra is installed.
+person's tray run a mesh node as it says: an **access domain**, a **role** (user, mod,
+admin or superadmin) and whether **shell access** is granted. Shell access means the
+node accepts SSH sessions from the mesh (Tailscale SSH), as the mesh's SSH policy
+allows; it does not give the holder a shell on other machines. The token carries the headscale pre-auth key and login server and is signed with the admin's
+`ssh-ed25519` key through OpenSSH (`ssh-keygen -Y`). OpenSSH ships with Windows 10/11,
+macOS and Linux, so nothing extra is installed.
 
-Issue one (the pre-auth key is read from a file, never the command line):
+#### Issuing a token for a mesh you created here
+
+The admin of a mesh created with the Studio can issue tokens from the window, the text
+interface or the command line, the same way on Linux, Windows and macOS. All three go
+through `core/mesh_token.py`, and every field is checked before anything is created or
+minted, so a typo never leaves a pre-auth key behind on the server.
+
+- **The Studio's issuer key.** You need no SSH key of your own. The first token for a
+  mesh creates an `ssh-ed25519` issuer key for it in the Studio state dir
+  (`mesh-issuers/<mesh>/issuer_ed25519`, no passphrase; mode 0600 on Linux and macOS,
+  and on Windows narrowed to your account if OpenSSH finds it readable by others) and
+  trusts it on this computer, so your own tray accepts the tokens it signs. Every issued
+  token is shown with that key's `SHA256:` **fingerprint**: send it to the recipient
+  separately from the token, because their tray asks them to compare it.
+- **The pre-auth key** is pasted (the window), read from a file (the text interface and
+  `--authkey-file`), or **minted** in the mesh's running headscale container with
+  `docker exec <container> headscale preauthkeys create --user hugmesh --expiration
+  <token lifetime>`: a single-use key that expires with the token. The container is the
+  running container named like `headscale` (when several match, the one that is
+  headscale itself, such as `hugmesh-headscale` beside `headscale-ui`), and the
+  headscale user is `hugmesh`, the mesh's control user and the only one HugMesh's
+  headscale creates, unless you name others. No tags are asked for: the mesh's
+  headscale policy forces the access tags server-side. The issuer key signs once before
+  the key is minted, and a key minted for a token that then fails to sign is expired
+  straight away. The key is never put on this computer's command line or in a log.
+
+**In the window.** **Issue a HugMesh token…** is in the tray's mesh menu and in the Local
+mesh Actions box (the panel's Local mesh tab). From the Local mesh page it opens with the
+brand as the mesh name, the mesh's own domain as the access domain, and the page's
+**Login server** when one is typed. Pick the role, shell access (admin and superadmin
+only), the lifetime (up to 90 days) and the pre-auth key: a hidden paste field, cleared
+once the token is issued, or **Mint from the local headscale**, offered for the
+container under **Headscale container**: the running headscale container the dialog
+found, one picked from several, or a name you type. **Issue** shows the token, **Copy
+token** and the issuer fingerprint.
+
+**In the text interface.** `t` on the Local Docker mesh screen (its first screen and its
+review) opens the same form: `m NAME`, `d DOMAIN`, `r ROLE`, `s` (shell), `l URL`,
+`e 7d`, `k PATH` (the file holding the pre-auth key, which is never typed on screen),
+`i` signs, `w PATH` saves the token to a file (mode 0600 on Linux and macOS). `mint`
+does not start docker from the screen: it prints the `--mesh-token issue --mint`
+command line, ready to paste into a terminal (`u USER` and `c NAME` set its headscale
+user and container).
+
+**On the command line** (Qt-free):
 
 ```sh
+# this Studio's issuer key for the mesh, and its fingerprint (created on first use)
+python -m hugmesh_studio.core.mesh_token issuer --mesh west
+# mint a single-use pre-auth key in the local headscale, sign with the Studio issuer key
+python -m hugmesh_studio.core.mesh_token issue --mesh west --domain example.org \
+  --role admin --shell --login-server https://hs.example.org --mint --expires 7d
+# or bring your own issuer key and pre-auth key (read from a file, never the command line)
 python -m hugmesh_studio.core.mesh_token issue --key ~/.ssh/mesh_issuer \
   --mesh west --domain example.org --role admin --shell \
   --login-server https://hs.example.org --authkey-file key.txt --expires 7d
 ```
 
-Send the token, and separately send the issuer fingerprint the command prints. In the
+The Studio's own command forwards everything after `--mesh-token` to the same CLI:
+`python -m hugmesh_studio --mesh-token issue …`, `hugmesh-studio --mesh-token issue …`
+when installed with pip, and on Windows the MSI's console twin
+`hugmesh-studio-cli.exe --mesh-token issue …` (the windowed `hugmesh-studio.exe` prints
+nothing). `--mesh-token issue --help` lists every option; `--headscale-container`,
+`--headscale-user` and `--tag` go with `--mint`.
+
+**On the mesh.** An issuer in the mesh's web admin UI is being added on the mesh side.
+It signs the same v1 format ([`docs/HUGMESH-TOKEN.md`](../docs/HUGMESH-TOKEN.md)), so
+the tray treats its tokens the same way.
+
+#### Using a token
+
+Send the token, and separately send the issuer fingerprint. In the
 tray, **HugMesh token…** imports it. The first token from a new issuer asks you to
 compare that fingerprint before it is trusted. After that, **Start mesh node** runs the
 node only as the token allows:
 
 - the token is checked again at every start (signature, trusted issuer, not expired);
 - the login server must be inside the token's domain;
-- only admin and superadmin can hold shell access, and the node's Tailscale SSH is on
-  (`--ssh`) only when it is granted, otherwise explicitly off;
+- only admin and superadmin can hold shell access, and the node's Tailscale SSH server is
+  on (`--ssh`) only when it is granted, otherwise explicitly off;
 - the `tailscale up` arguments come from the token alone, so a `TS_EXTRA_ARGS` in the
-  environment cannot widen it.
+  environment cannot widen it;
+- a node whose token expires, is forgotten, or whose issuer is no longer trusted is
+  stopped (the tray checks every minute).
 
-The tray's status line shows the grant (for example *admin in example.org, shell*). Without
-a token, the tray still runs a node on `TS_AUTHKEY`.
+The tray's status line shows the grant (for example *admin in example.org, SSH in*).
+Without a token, the tray still runs a node on `TS_AUTHKEY`.
 
-The server is still the real gate. Whoever holds a token holds a real pre-auth key, so
-create that key with the domain's and role's tags, and keep shell in the headscale `ssh`
-policy to match.
+**Role and domain are labels; the mesh decides what this node may do.** A pre-auth key
+cannot carry the domain or role tags: the mesh's control node forces the access tags
+(`tag:dom_*`, `tag:mesh_*`, `tag:dev_*`, `tag:superadmin`) itself when it approves the
+node, and its `ssh` policy decides who may open a shell where. The token makes this tray
+run the node exactly as granted and refuses an edited token, but whoever holds a token
+holds a real pre-auth key, so issue tokens only to people you would give that key to.
 
 **Resource limits** saved from the tray apply to a token-run node too. If the mesh node
 is running when you save them, the tray restarts it under the new limits straight away.

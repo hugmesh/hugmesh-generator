@@ -310,5 +310,8 @@ jobs:
           tests/test_windows_polish.py
           tests/test_mesh_token.py
           tests/test_mesh_token_tray.py
+          tests/test_mesh_token_issue.py
+          tests/test_mesh_token_issue_dialog.py
+          tests/test_tui_mesh_token.py
           "tests/test_windows_packaging_files.py::test_the_spec_freezes_the_entry_shim_as_a_windowed_onedir"
           "tests/test_windows_packaging_files.py::test_windows_also_freezes_a_console_twin_into_the_same_tree"

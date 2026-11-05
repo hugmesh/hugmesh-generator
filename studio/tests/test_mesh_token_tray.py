@@ -53,7 +53,7 @@ def test_the_mesh_section_offers_the_token_entry(qapp, monkeypatch):
 def test_the_status_line_says_what_the_token_grants(qapp, monkeypatch):
     tray, sec = _mesh_tray(monkeypatch, lambda: _grant(role="superadmin", shell=False))
     tray._refresh()
-    assert sec.status_act.text().endswith("— superadmin in example.org, no shell")
+    assert sec.status_act.text().endswith("— superadmin in example.org, no SSH in")
 
 
 def test_an_unusable_token_is_flagged_with_the_whole_reason(qapp, monkeypatch):
