@@ -94,14 +94,17 @@ python -m hugmesh_studio.core.mesh_token issue --mesh west --domain example.org 
   --expiration <token lifetime>` (single-use). The container is the running container
   named like `headscale` (when several match, the one that is headscale itself, such as
   `hugmesh-headscale` beside `headscale-ui`) unless `--headscale-container` names it;
-  the user is `hugmesh`, the mesh's control user and the only user HugMesh's headscale
-  provisioning creates, unless `--headscale-user` names another. The issuer key signs
+  the user is `hugmesh`, the mesh's membership user and the only user HugMesh's
+  headscale provisioning creates, unless `--headscale-user` names another. That user
+  owns only the membership tags (`tag:hugmesh` and the role tags); never mint for a
+  user the policy lets own an access tag. The issuer key signs
   once before the key is minted; if signing still fails after the mint, the minted key
   is expired (`headscale preauthkeys expire`, the key passed on stdin) and the error
   says whether that worked. No tags are requested by default:
-  the mesh policy owns every tag and forces the access tags (`tag:dom_*`, `tag:dev_*`,
-  `tag:mesh_*`, `tag:superadmin`) server-side, so the server tags the node. `--tag`
-  asks for one explicitly.
+  the mesh policy gives the access tags (`tag:dom_*`, `tag:dev_*`, `tag:mesh_*`,
+  `tag:superadmin`) no owner and forces them server-side, so the server tags the node.
+  `--tag` asks for a membership or role tag explicitly; an access tag is refused,
+  because headscale forces a key's tags on whoever joins with it.
 - The Studio's own command forwards everything after `--mesh-token` to this CLI:
   `python -m hugmesh_studio --mesh-token issue ...`, `hugmesh-studio --mesh-token
   issue ...` when installed with pip, and on Windows the MSI's console twin
@@ -124,4 +127,8 @@ minted, same Studio issuer key, same `issue()`):
   `c NAME` add `--headscale-user` and `--headscale-container`).
 - **The mesh's web admin UI**: an issuer there is being added on the mesh side. It
   must produce this same v1 format, and should show its issuer fingerprint beside the
-  tokens it hands out (see Trust above).
+  tokens it hands out (see Trust above). If it mints the pre-auth key itself, it mints
+  for the membership user `hugmesh` with no access tag on the key, exactly as `--mint`
+  does: headscale forces a key's tags on whoever joins with it, and the policy keeps
+  the access tags (`tag:superadmin`, `tag:mesh_*`, `tag:dev_*`, `tag:dom_*`) ownerless
+  so that only the control node's force-tag pass can assign them.

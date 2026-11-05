@@ -258,6 +258,28 @@ def test_mint_requests_no_tags_by_default_and_exactly_the_tags_asked_for():
     assert create[2] == "hs" and create[-2:] == ["--tags", "tag:hugmesh,tag:pki"]
 
 
+@pytest.mark.parametrize("tag", ["tag:superadmin", "tag:mesh_east-01", "tag:dev_084628ddb3aa",
+                                 "tag:dom_example-org"])
+def test_mint_refuses_a_tag_that_grants_access_and_mints_nothing(tag):
+    # headscale 0.23 forces a pre-auth key's tags on the node that joins with it, and
+    # forced tags bypass tagOwners: a key carrying one of these would hand its holder
+    # the access the control node alone is meant to assign.
+    fake = FakeDocker()
+    with pytest.raises(mt.TokenError) as e:
+        mt.mint_preauth_key(user="hugmesh", tags=["tag:hugmesh", tag], lifetime_s=60,
+                            container="hs", runner=fake)
+    assert e.value.kind == "invalid" and tag in str(e.value)
+    assert fake.calls == []             # nothing minted
+
+
+@pytest.mark.parametrize("tag", ["tag:superadmins", "tag:meshy", "tag:devices", "tag:domain"])
+def test_mint_security_tag_match_is_exact_not_a_loose_prefix(tag):
+    fake = FakeDocker()
+    mt.mint_preauth_key(user="hugmesh", tags=[tag], lifetime_s=60, container="hs", runner=fake)
+    (create, _), = fake.calls
+    assert create[-2:] == ["--tags", tag]
+
+
 @pytest.mark.parametrize("names, needle", [((), "No running headscale container"),
                                            (("hs-a", "hs-b"), "hs-a, hs-b"),
                                            (("a-headscale", "b-headscale"),
@@ -330,7 +352,7 @@ def test_cli_issue_mint_signs_with_the_studio_issuer(monkeypatch, capsys):
     g = mt.verify(token)
     assert g.auth_key == MINTED and (g.role, g.shell) == ("admin", True)
     create = fake.calls[-1][0]
-    assert create[create.index("--user") + 1] == "hugmesh"   # the control user by default
+    assert create[create.index("--user") + 1] == "hugmesh"   # the membership user by default
     assert create[create.index("--expiration") + 1] == "3600s"     # the token's lifetime
     _, _, fp = mt.ensure_issuer("west")
     assert fp in err and "created now; this computer trusts it" in err

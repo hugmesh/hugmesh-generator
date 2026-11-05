@@ -573,16 +573,24 @@ def _self_check(key: str, keygen: str, osname: str, runner=subprocess.run) -> No
 
 # ── a pre-auth key from the mesh's own headscale ────────────────────────────────────
 #: Tags a minted pre-auth key asks for by default: none. In the mesh's headscale policy
-#: (specs/etc/headscale/policy.hujson.tmpl, rendered by gen-headscale-policy.sh) every
-#: tag is owned by the control user "hugmesh" alone, and the ones that gate access
-#: (tag:dom_*, tag:dev_*, tag:mesh_*, tag:superadmin) are SERVER-FORCED at approval by
-#: hugmesh-headscale-forcetags — no node may bring them on its key. So no tag is asked
-#: for, and the server tags the node.
+#: (specs/etc/headscale/policy.hujson.tmpl, rendered by gen-headscale-policy.sh) the
+#: membership user "hugmesh" owns only the membership tags (tag:hugmesh and the role
+#: tags), and the tags that gate access (tag:superadmin, tag:mesh_*, tag:dev_*,
+#: tag:dom_*) are owned by NO user and SERVER-FORCED at approval by
+#: hugmesh-headscale-forcetags. So no tag is asked for, and the server tags the node.
 DEFAULT_MINT_TAGS: tuple[str, ...] = ()
 
-#: The headscale user a minted key is for by default: the mesh's control user, the
+#: Tags a minted key may never carry. headscale 0.23 turns a pre-auth key's tags into
+#: FORCED tags on the node that joins with it, and forced tags bypass tagOwners, so a
+#: key minted with one of these hands its holder the access that tag grants
+#: (tag:superadmin is the SSH source of the superadmin rule on every node). Only the
+#: control node's force-tag pass assigns them.
+SECURITY_TAG_RE = re.compile(r"^tag:(?:superadmin$|mesh_|dev_|dom_)")
+
+#: The headscale user a minted key is for by default: the mesh's MEMBERSHIP user, the
 #: only user HugMesh's headscale provisioning creates (keys-template/provision.json
-#: "users") and the owner of every tag in its policy. The role is not a headscale user.
+#: "users"). It owns tag:hugmesh and the role tags and nothing that grants access; the
+#: role is not a headscale user. A web or CLI issuer mints for this user too.
 DEFAULT_MINT_USER = "hugmesh"
 
 _TAG_RE = re.compile(r"^tag:[a-z0-9][a-z0-9_-]{0,62}$")
@@ -643,6 +651,12 @@ def mint_preauth_key(*, user: str, tags=DEFAULT_MINT_TAGS, lifetime_s: int,
     if bad:
         raise TokenError("invalid", f"{', '.join(map(repr, bad))} is not a headscale tag "
                                     "(tag:name, lower-case).")
+    forced = [t for t in tags if SECURITY_TAG_RE.match(t)]
+    if forced:
+        raise TokenError("invalid", f"{', '.join(map(repr, forced))} grants access, so a "
+                                    "pre-auth key may not carry it: the key's tags are "
+                                    "forced on whoever joins with it. The mesh's control "
+                                    "node assigns access tags itself.")
     if not 0 < int(lifetime_s) <= MAX_LIFETIME_S:
         raise TokenError("invalid", "A pre-auth key's lifetime must be between a moment and "
                                     f"{MAX_LIFETIME_S // 86400} days.")
@@ -1180,9 +1194,11 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--headscale-container", default="", help="with --mint: the headscale "
                    "container (default: the one running container named like headscale)")
     i.add_argument("--headscale-user", default="", help="with --mint: the headscale user "
-                   f"the key is for (default: {DEFAULT_MINT_USER}, the mesh's control user)")
+                   f"the key is for (default: {DEFAULT_MINT_USER}, the mesh's membership "
+                   "user; never a user that owns an access tag)")
     i.add_argument("--tag", action="append", default=[], help="with --mint: a tag the key "
-                   "asks for (repeatable; default none, the server tags the node)")
+                   "asks for (repeatable; default none, the server tags the node; access "
+                   "tags such as tag:superadmin are refused)")
     i.add_argument("--node-name", default="")
     i.add_argument("--expires", type=_lifetime, default=_lifetime("7d"),
                    help="lifetime such as 12h or 7d (default 7d, at most 90d)")

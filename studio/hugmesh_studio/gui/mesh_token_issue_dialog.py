@@ -171,7 +171,7 @@ class IssueTokenDialog(QtWidgets.QDialog):
         self.hs_user = QtWidgets.QLineEdit()
         self.hs_user.setPlaceholderText(mt.DEFAULT_MINT_USER)
         self.hs_user.setToolTip(f"The headscale user the minted key is for; empty means "
-                                f"{mt.DEFAULT_MINT_USER}, the mesh's control user.")
+                                f"{mt.DEFAULT_MINT_USER}, the mesh's membership user.")
         ur.addWidget(self.hs_user, 1)
         kl.addLayout(ur)
         lay.addWidget(box)

@@ -527,9 +527,11 @@ minted, so a typo never leaves a pre-auth key behind on the server.
   <token lifetime>`: a single-use key that expires with the token. The container is the
   running container named like `headscale` (when several match, the one that is
   headscale itself, such as `hugmesh-headscale` beside `headscale-ui`), and the
-  headscale user is `hugmesh`, the mesh's control user and the only one HugMesh's
+  headscale user is `hugmesh`, the mesh's membership user and the only one HugMesh's
   headscale creates, unless you name others. No tags are asked for: the mesh's
-  headscale policy forces the access tags server-side. The issuer key signs once before
+  headscale policy forces the access tags server-side, and a minted key may not carry
+  one (`tag:superadmin`, `tag:mesh_*`, `tag:dev_*`, `tag:dom_*` are refused), because
+  headscale forces a key's tags on whoever joins with it. The issuer key signs once before
   the key is minted, and a key minted for a token that then fails to sign is expired
   straight away. The key is never put on this computer's command line or in a log.
 
@@ -598,7 +600,8 @@ Without a token, the tray still runs a node on `TS_AUTHKEY`.
 **Role and domain are labels; the mesh decides what this node may do.** A pre-auth key
 cannot carry the domain or role tags: the mesh's control node forces the access tags
 (`tag:dom_*`, `tag:mesh_*`, `tag:dev_*`, `tag:superadmin`) itself when it approves the
-node, and its `ssh` policy decides who may open a shell where. The token makes this tray
+node, and its `ssh` policy decides who may open a shell where. The policy gives those
+tags no owner, so a node that advertises one at join is refused it. The token makes this tray
 run the node exactly as granted and refuses an edited token, but whoever holds a token
 holds a real pre-auth key, so issue tokens only to people you would give that key to.
 

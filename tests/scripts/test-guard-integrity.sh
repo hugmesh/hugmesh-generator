@@ -936,7 +936,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     208 of 249 suites are named by a pull_request-triggered workflow
 # and with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET stays 41.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
+# 208 -> 210 (denominator 249 -> 251) on 2026-11-04 for fix/headscale-security-tag-owners-20261104,
+# which adds TWO gated suites: tests/device-registry/test-headscale-security-tag-owners.sh
+# (shell-suites.yml debian leg 1) and tests/device-registry/test-headscale-security-tag-live.sh
+# (shell-suites.yml host-docker job). MEASURED by RUNNING this file with GUARD_PREMERGE=0 on
+# that branch (base origin/main b1b50db4): '210 of 251 suites are named by a
+# pull_request-triggered workflow', ungated SET stays 41.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-210}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
