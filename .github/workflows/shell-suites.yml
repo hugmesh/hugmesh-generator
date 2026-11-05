@@ -435,6 +435,7 @@ jobs:
             tests/scripts/test-edge-ai-ollama-pin.sh
             tests/scripts/test-fetch-retry-hardening.sh
             tests/scripts/test-frite-builder-input-validation.sh
+            tests/scripts/test-frite-installer.sh
             tests/scripts/test-frite-install-layout.sh
             tests/scripts/test-github-auth-lib.sh
             tests/scripts/test-frite-kernel-emulation-symbols.sh
