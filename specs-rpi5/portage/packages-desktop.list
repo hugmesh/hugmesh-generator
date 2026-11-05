@@ -41,6 +41,36 @@ x11-misc/lightdm-gtk-greeter
 # the desktop image would boot to a bare console.
 gui-libs/display-manager-init
 
+# ── Desktop-governance runtime (SSO `desktop-sudo` claim -> polkit) ─────
+# The SAME runtime specs-x86/portage/packages-desktop.list declares under
+# "SSO-claim sudo runtime" (full rationale there + docs/CLIENT-IMAGES.md).
+# keys-provision's provision_desktop_governance() is shared by every image:
+# on a GOVERNED client (templates baked or on the KEYS USB) it renders the
+# default-deny polkit rules.d gate and the stdlib-only python mapper cron, and
+# strips sudoers/%wheel — so polkit becomes the ONLY escalation route. Both
+# runtimes are declared here so that route is a stated contract of this list,
+# not an accident of the dependency graph:
+#   sys-auth/polkit  — today arrives only through lxde-base/lxsession's
+#                      COMMON_DEPEND; a session-manager swap must not silently
+#                      take the governed image's sole sudo path with it. It must
+#                      be built with elogind session tracking (the ebuild's
+#                      ConsoleKit fallback sees no sessions) — elogind is in the builder's
+#                      CLIENT_USE append for --role desktop.
+#   dev-lang/python  — the mapper's interpreter; present through portage anyway,
+#                      declared for the same reason as on x86.
+# The mapper's 60s floor engine (sys-process/cronie) is in packages.list and in
+# the builder's DEFAULT_SVCS. Pinned by tests/scripts/test-arm-desktop-package-sets.sh.
+sys-auth/polkit
+dev-lang/python
+
+# DELIBERATELY NOT gnome-extra/nm-applet (the x86 list's graphical NM front-end):
+# its hard RDEPEND net-libs/libnma needs gui-libs/gtk-4 UNCONDITIONALLY — the
+# exact chain the per-board package.use already pins libfm[-automount] and
+# pinentry[-gtk] off for, because gtk-4 fails to cross-configure — and its
+# +modemmanager default USE-requires networkmanager[modemmanager], which every
+# ARM spec forces off. Network configuration on this desktop is nmtui/nmcli
+# (networkmanager[+tools]) from x11-terms/xterm. Tracked as a separate issue.
+
 # ── Minimal apps ───────────────────────────────────────────────────
 media-gfx/feh
 app-editors/nano

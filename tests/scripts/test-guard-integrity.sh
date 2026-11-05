@@ -929,7 +929,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
 # and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-207}"
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/desktop-e-arm-desktop-package-sets-20261104,
+# which adds ONE gated suite: tests/scripts/test-arm-desktop-package-sets.sh (wired in
+# shell-suites.yml's pull_request SUITES, .gitlab-ci.yml and tests/build-matrix/check.sh).
+# MEASURED by RUNNING this file with GUARD_PREMERGE=0 on that tree: '208 of 249 suites are
+# named by a pull_request-triggered workflow', ungated SET unchanged at 41; and with the suite
+# on disk but its shell-suites.yml line absent: '207 of 249' -- so the +1/+1 is this suite.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
