@@ -80,6 +80,51 @@ def test_ensure_issuer_creates_and_trusts_once_then_reuses():
     assert mt.ensure_issuer("east")[2] != fp
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes; Windows uses the state dir's ACL")
+def test_every_issuer_folder_it_creates_is_private():
+    """os.makedirs's mode reaches only the LAST directory: mesh-issuers/ itself must be
+    0700 too, not 0755 under the usual umask."""
+    old = os.umask(0o022)
+    try:
+        mt._makedirs_private(mt.issuer_dir("west"))
+    finally:
+        os.umask(old)
+    root = os.path.join(mt.state_dir(), mt.ISSUERS_DIR)
+    for d in (mt.state_dir(), root, mt.issuer_dir("west")):
+        assert os.stat(d).st_mode & 0o777 == 0o700, d
+    # A folder that already existed keeps its mode.
+    os.chmod(root, 0o750)
+    mt._makedirs_private(mt.issuer_dir("east"))
+    assert os.stat(root).st_mode & 0o777 == 0o750
+    assert os.stat(mt.issuer_dir("east")).st_mode & 0o777 == 0o700
+
+
+@needs_keygen
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes; Windows uses the state dir's ACL")
+def test_ensure_issuer_leaves_both_issuer_folders_private():
+    old = os.umask(0o022)
+    try:
+        mt.ensure_issuer("west")
+    finally:
+        os.umask(old)
+    for d in (os.path.join(mt.state_dir(), mt.ISSUERS_DIR), mt.issuer_dir("west")):
+        assert os.stat(d).st_mode & 0o777 == 0o700, d
+
+
+@needs_keygen
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes; Windows uses the state dir's ACL")
+def test_ensure_issuer_makes_folders_an_earlier_build_left_open_private():
+    """An earlier build created mesh-issuers/ 0755 (it lists the mesh names); the key
+    already exists there, so nothing is created, yet both folders end up 0700."""
+    mt.ensure_issuer("west")
+    root = os.path.join(mt.state_dir(), mt.ISSUERS_DIR)
+    for d in (root, mt.issuer_dir("west")):
+        os.chmod(d, 0o755)
+    mt.ensure_issuer("west")
+    for d in (root, mt.issuer_dir("west")):
+        assert os.stat(d).st_mode & 0o777 == 0o700, d
+
+
 @needs_keygen
 def test_a_failed_first_self_check_leaves_no_key_and_no_trust(monkeypatch):
     """Creation is all or nothing: a key whose first self-check fails is not left on
@@ -252,7 +297,7 @@ def test_mint_runs_headscale_in_the_one_running_container_and_returns_the_key():
 def test_mint_requests_no_tags_by_default_and_exactly_the_tags_asked_for():
     assert mt.DEFAULT_MINT_TAGS == ()
     fake = FakeDocker()
-    mt.mint_preauth_key(user="hugmesh", tags=["tag:hugmesh", "tag:pki"], lifetime_s=60,
+    mt.mint_preauth_key(user="joiners", tags=["tag:hugmesh", "tag:pki"], lifetime_s=60,
                         container="hs", runner=fake)
     (create, _), = fake.calls           # a named container is not looked up
     assert create[2] == "hs" and create[-2:] == ["--tags", "tag:hugmesh,tag:pki"]
@@ -278,6 +323,52 @@ def test_mint_security_tag_match_is_exact_not_a_loose_prefix(tag):
     mt.mint_preauth_key(user="hugmesh", tags=[tag], lifetime_s=60, container="hs", runner=fake)
     (create, _), = fake.calls
     assert create[-2:] == ["--tags", tag]
+
+
+@pytest.mark.parametrize("tag", ["tag:a,tag:b", "tag:a,b", "tag:a\n", "tag:a tag:b",
+                                 ",tag:a"])
+def test_a_tag_cannot_smuggle_another_into_the_comma_joined_list(tag):
+    """--tags takes ONE comma-joined argument, so a comma inside a single --tag would
+    ask for a second tag nobody named."""
+    assert not mt._TAG_RE.match(tag)
+    fake = FakeDocker()
+    with pytest.raises(mt.TokenError) as e:
+        mt.mint_preauth_key(user="joiners", tags=[tag], lifetime_s=60, container="hs",
+                            runner=fake)
+    assert e.value.kind == "invalid" and not fake.calls
+
+
+def test_minting_needs_a_named_headscale_user(capsys):
+    """There is no default headscale user: the core, mint_and_issue and the CLI all
+    refuse before anything runs."""
+    assert not hasattr(mt, "DEFAULT_MINT_USER")
+    fake = FakeDocker()
+    for user in ("", None):
+        with pytest.raises(mt.TokenError) as e:
+            mt.mint_preauth_key(user=user, lifetime_s=60, container="hs", runner=fake)
+        assert e.value.kind == "invalid" and mt.NAME_MINT_USER in str(e.value)
+    with pytest.raises(mt.TokenError) as e:
+        mt.mint_and_issue(key_path="k", user="", container="hs", runner=fake,
+                          node_name="", **GRANT)
+    assert mt.NAME_MINT_USER in str(e.value)
+    with pytest.raises(TypeError):
+        mt.mint_and_issue(key_path="k", container="hs", runner=fake, node_name="", **GRANT)
+    assert not fake.calls
+    with pytest.raises(SystemExit):
+        mt.main(CLI + ["--mint"])
+    assert mt.NAME_MINT_USER in capsys.readouterr().err
+    assert not os.path.exists(mt.issuer_dir("west"))
+
+
+@pytest.mark.parametrize("found", ["--privileged", "-hs", "hs x"])
+def test_a_container_name_docker_ps_found_is_checked_like_a_given_one(found):
+    """find_headscale_container's answer gets the same name check as a container the
+    operator named: nothing is exec'd in a "container" that reads as an option."""
+    fake = FakeDocker(names=(found,))
+    with pytest.raises(mt.TokenError) as e:
+        mt.mint_preauth_key(user="joiners", lifetime_s=60, runner=fake)
+    assert e.value.kind == "invalid" and "not a container name" in str(e.value)
+    assert [a[1] for a, _ in fake.calls] == ["ps"]          # nothing exec'd
 
 
 @pytest.mark.parametrize("names, needle", [((), "No running headscale container"),
@@ -346,17 +437,18 @@ CLI = ["issue", "--mesh", "west", "--domain", "example.org", "--role", "admin", 
 def test_cli_issue_mint_signs_with_the_studio_issuer(monkeypatch, capsys):
     fake = FakeDocker()
     monkeypatch.setattr(mt.subprocess, "run", fake)
-    assert mt.main(CLI + ["--mint"]) == 0
+    assert mt.main(CLI + ["--mint", "--headscale-user", "joiners"]) == 0
     out, err = capsys.readouterr()
     token = out.strip()
     g = mt.verify(token)
     assert g.auth_key == MINTED and (g.role, g.shell) == ("admin", True)
     create = fake.calls[-1][0]
-    assert create[create.index("--user") + 1] == "hugmesh"   # the membership user by default
+    assert create[create.index("--user") + 1] == "joiners"   # the user named; no default
     assert create[create.index("--expiration") + 1] == "3600s"     # the token's lifetime
     _, _, fp = mt.ensure_issuer("west")
     assert fp in err and "created now; this computer trusts it" in err
     assert "hugmesh-headscale" in err and "no tags of its own" in err
+    assert mt.SERVER_DECIDES in err and "tags for" not in err
     assert MINTED not in err
     # Second run: the same issuer, not created again.
     assert mt.main(CLI + ["--mint", "--headscale-user", "ops",
@@ -380,8 +472,8 @@ def test_mint_and_issue_checks_the_key_signs_before_minting(monkeypatch):
     monkeypatch.setattr(mt, "_sign", sign)
     fake = FakeDocker()
     with pytest.raises(mt.TokenError) as e:
-        mt.mint_and_issue(key_path="k", container="hs", runner=fake, keygen="ssh-keygen",
-                          node_name="", **GRANT)
+        mt.mint_and_issue(key_path="k", user="joiners", container="hs", runner=fake,
+                          keygen="ssh-keygen", node_name="", **GRANT)
     assert "incorrect passphrase" in str(e.value)
     assert signed == [mt._SELF_CHECK_NAMESPACE] and not fake.calls      # nothing minted
 
@@ -404,11 +496,11 @@ def test_a_key_minted_for_a_token_that_fails_to_sign_is_expired(monkeypatch, exp
         return r
 
     with pytest.raises(mt.TokenError) as e:
-        mt.mint_and_issue(key_path="k", container="hs", runner=runner, node_name="",
-                          **GRANT)
+        mt.mint_and_issue(key_path="k", user="joiners", container="hs", runner=runner,
+                          node_name="", **GRANT)
     (create, _), (expire, kw) = fake.calls
     assert create[:6] == ["docker", "exec", "hs", "headscale", "preauthkeys", "create"]
-    assert expire[:4] == ["docker", "exec", "-i", "hs"] and expire[-1] == "hugmesh"
+    assert expire[:4] == ["docker", "exec", "-i", "hs"] and expire[-1] == "joiners"
     assert MINTED not in " ".join(expire) and kw["input"] == MINTED + "\n"
     msg = str(e.value)
     assert msg.startswith("ssh-keygen could not sign the token: timed out")
@@ -416,16 +508,32 @@ def test_a_key_minted_for_a_token_that_fails_to_sign_is_expired(monkeypatch, exp
     if expired:
         assert "has been expired" in msg
     else:
-        assert "could not be expired and stays usable" in msg and "--user hugmesh" in msg
+        assert "could not be expired and stays usable" in msg and "--user joiners" in msg
 
 
 def test_cli_checks_every_field_before_minting(monkeypatch, capsys):
     fake = FakeDocker()
     monkeypatch.setattr(mt.subprocess, "run", fake)
     bad = [a if a != "example.org" else "elsewhere.org" for a in CLI]
-    assert mt.main(bad + ["--mint"]) == 2
+    assert mt.main(bad + ["--mint", "--headscale-user", "joiners"]) == 2
     assert "outside its access domain" in capsys.readouterr().err
     assert not fake.calls and not os.path.exists(mt.issuer_dir("west"))
+
+
+@pytest.mark.parametrize("extra", [
+    ["--headscale-user", "bad user"],
+    ["--headscale-user", " "],
+    ["--headscale-user", "joiners", "--headscale-container", "hs;rm"],
+    ["--headscale-user", "joiners", "--tag", "Not A Tag"],
+])
+def test_cli_checks_the_mint_options_before_an_issuer_key_is_created(monkeypatch, capsys,
+                                                                     extra):
+    fake = FakeDocker()
+    monkeypatch.setattr(mt.subprocess, "run", fake)
+    with pytest.raises(SystemExit):
+        mt.main(CLI + ["--mint"] + extra)
+    assert "created now" not in capsys.readouterr().err
+    assert not fake.calls and not os.path.exists(os.path.join(mt.state_dir(), mt.ISSUERS_DIR))
 
 
 def test_cli_mint_options_need_mint_and_one_key_source(capsys):
@@ -435,6 +543,8 @@ def test_cli_mint_options_need_mint_and_one_key_source(capsys):
         mt.main(CLI + ["--authkey-file", "k", "--mint"])
     with pytest.raises(SystemExit):
         mt.main(CLI)
+    with pytest.raises(SystemExit):
+        mt.main(CLI + ["--mint"])                   # --headscale-user is required
 
 
 @needs_keygen
@@ -447,7 +557,7 @@ def test_cli_authkey_file_with_an_own_key_still_works(tmp_path, capsys):
     assert mt.main(CLI + ["--key", str(key), "--authkey-file", str(authkey)]) == 0
     out, err = capsys.readouterr()
     g, _, _ = mt.parse(out.strip())
-    assert g.auth_key == MINTED and "tags for example.org and admin" in err
+    assert g.auth_key == MINTED and mt.SERVER_DECIDES in err and "tags" not in err
     assert not os.path.exists(mt.issuer_dir("west"))     # no Studio key made
 
 

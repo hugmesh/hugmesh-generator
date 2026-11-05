@@ -6,8 +6,9 @@
 # tags the control node forces on it and every tag the node advertises whose
 # tagOwners entry names the node's own user. A forced tag does NOT cancel a different
 # advertised one. Every pre-auth key HugMesh mints (keys-provision from
-# provision.json, the Studio's --mint, the web issuer) is for the membership user
-# "hugmesh", so a security tag owned by "hugmesh" is a tag any key holder can claim by
+# provision.json, the Studio's --mint, the web issuer) is for a membership user
+# ("hugmesh" on every provisioned mesh; the Studio has no default and mints for the
+# user the admin names), so a security tag owned by "hugmesh" is a tag any key holder can claim by
 # advertising it. tag:superadmin is the SSH source of the always-emitted superadmin
 # rule (dst tag:mesh_<id>, which every node carries), so claiming it is SSH as the
 # privileged user on every node. The fix is ownership, not forcing: security tags
@@ -17,7 +18,8 @@
 #
 # WHAT IT CHECKS (offline: bash + jq + openssl + awk + git):
 #   1. the set of key-minting users, read from where keys are minted (provision.json
-#      templates, the Studio's DEFAULT_MINT_USER, literal `preauthkeys create --user`
+#      templates, the Studio's DEFAULT_MINT_USER if it has one — else proof that it
+#      refuses to mint for an unnamed user — literal `preauthkeys create --user`
 #      lines in tracked files) — never assumed; an empty set fails (vacuity floor);
 #   2. every shipped policy file + the policy the REAL renderer produces + the shared
 #      Layer-A parity golden: each security tag has an EMPTY owner list, so no
@@ -77,11 +79,19 @@ for f in "${REPO}"/keys-template/provision.json "${REPO}"/keys-template/examples
     jq -r '(.headscale.users // [])[]?, ((.headscale.preauthkeys // [])[]?.user // empty)' "$f" 2>/dev/null >> "${MINTERS}"
 done
 studio_user="$(sed -n 's/^DEFAULT_MINT_USER = "\([^"]*\)".*/\1/p' "${MESH_TOKEN}")"
+# The Studio has no default mint user: mint_preauth_key refuses an unnamed one, so it
+# adds no implicit minter. A default that comes back is read and checked like any other.
+mint_body="$(awk '/^def mint_preauth_key\(/{p=1;next} p&&/^def /{exit} p' "${MESH_TOKEN}" | grep -v -E '^[[:space:]]*#')"
 if [ -n "${studio_user}" ]; then
     echo "${studio_user}" >> "${MINTERS}"
     ok "Studio DEFAULT_MINT_USER read from mesh_token.py (${studio_user})"
+elif grep -q -E '^DEFAULT_MINT_USER\b' "${MESH_TOKEN}"; then
+    bad "DEFAULT_MINT_USER is in ${MESH_TOKEN} but its value could not be read — refusing to guess who the Studio mints for"
+elif grep -q -E '^[[:space:]]+if not user:' <<< "${mint_body}" \
+     && grep -q -E 'raise TokenError\("invalid", f"No headscale user was named' <<< "${mint_body}"; then
+    ok "Studio has no default mint user: mint_preauth_key refuses an unnamed user"
 else
-    bad "could not read DEFAULT_MINT_USER out of ${MESH_TOKEN} — refusing to guess who the Studio mints for"
+    bad "${MESH_TOKEN} has neither a readable DEFAULT_MINT_USER nor a refusal of an unnamed user — refusing to guess who the Studio mints for"
 fi
 # Literal `preauthkeys create --user <name>` in any tracked file (docs, READMEs, test
 # harnesses). -a: one NUL byte would otherwise make grep skip a whole file silently.

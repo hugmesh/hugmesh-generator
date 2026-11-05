@@ -157,9 +157,28 @@ def test_mint_is_disabled_with_the_reason_when_no_headscale_runs(qapp, monkeypat
 
 def test_mint_names_the_container_it_found(qapp, monkeypatch):
     dlg = _dialog(qapp, monkeypatch, container="hugmesh-headscale")
-    assert dlg.mint_radio.isEnabled()
     assert "hugmesh-headscale" in dlg.mint_radio.text()
     assert dlg.container.currentText() == "hugmesh-headscale"
+    dlg.hs_user.setText("joiners")
+    assert dlg.mint_radio.isEnabled()
+
+
+def test_mint_stays_off_until_a_headscale_user_is_named(qapp, monkeypatch, core):
+    """There is no default headscale user: Mint is offered only once one is typed,
+    and the tooltip says which user to name."""
+    dlg = _dialog(qapp, monkeypatch, container="hs")
+    assert dlg.hs_user.text() == "" and dlg.hs_user.isEnabled()
+    assert not dlg.mint_radio.isEnabled()
+    assert dlg.mint_radio.toolTip() == dmod.NAME_USER_TIP == mt.NAME_MINT_USER
+    dlg.hs_user.setText("joiners")
+    assert dlg.mint_radio.isEnabled() and "joiners" in dlg.mint_radio.toolTip()
+    dlg.mint_radio.setChecked(True)
+    dlg.hs_user.setText("")                 # cleared again: back to pasting
+    assert not dlg.mint_radio.isEnabled() and dlg.paste_radio.isChecked()
+    _fill(dlg)
+    dlg.issue_btn.click()
+    _settle(qapp, dlg)
+    assert core["order"] == [] and dlg.status.text() == dmod.NO_KEY
 
 
 def test_several_containers_are_offered_to_pick_from(qapp, monkeypatch, core):
@@ -176,6 +195,7 @@ def test_several_containers_are_offered_to_pick_from(qapp, monkeypatch, core):
     assert dlg.container.currentText() == ""
     assert not dlg.mint_radio.isEnabled()
     assert "Name the one to mint the key in" in dlg.mint_radio.toolTip()
+    dlg.hs_user.setText("joiners")
     dlg.container.setCurrentText("b-hs")
     assert dlg.mint_radio.isEnabled() and "b-hs" in dlg.mint_radio.text()
     _fill(dlg)
@@ -187,6 +207,7 @@ def test_several_containers_are_offered_to_pick_from(qapp, monkeypatch, core):
 
 def test_with_no_container_found_typing_its_name_offers_mint(qapp, monkeypatch, core):
     dlg = _dialog(qapp, monkeypatch)
+    dlg.hs_user.setText("joiners")
     assert dlg.mint_radio.toolTip().startswith("Unavailable: No running headscale")
     assert not dlg.mint_radio.isEnabled()
     dlg.container.setCurrentText("hs")
@@ -246,32 +267,34 @@ def test_copy_puts_the_token_on_the_clipboard(qapp, monkeypatch, core):
     assert dlg.status.text().endswith("Copied to the clipboard.")
 
 
-def test_issue_with_mint_checks_the_issuer_signs_then_mints_for_the_control_user(
+def test_issue_with_mint_checks_the_issuer_signs_then_mints_for_the_named_user(
         qapp, monkeypatch, core):
     dlg = _dialog(qapp, monkeypatch, container="hugmesh-headscale")
     _fill(dlg, role="mod", shell=False)
     dlg.unit.setCurrentText("hours")
     dlg.lifetime.setValue(12)
+    dlg.hs_user.setText("joiners")
     dlg.mint_radio.setChecked(True)
     assert not dlg.auth_key.isEnabled()
     dlg.issue_btn.click()
     _settle(qapp, dlg)
     assert core["order"] == [("ensure", "west"), ("check", "/fake/issuer_ed25519"),
-                             ("mint", "hugmesh"), ("issue", "west")]
-    assert core["mint"] == {"user": "hugmesh", "lifetime_s": 12 * 3600,
+                             ("mint", "joiners"), ("issue", "west")]
+    assert core["mint"] == {"user": "joiners", "lifetime_s": 12 * 3600,
                             "container": "hugmesh-headscale"}
-    assert dlg.hs_user.placeholderText() == "hugmesh"
     assert core["issue"]["auth_key"] == MINTED and core["issue"]["shell"] is False
     assert core["issue"]["interactive"] is False
-    assert "minted in hugmesh-headscale for the headscale user hugmesh" in dlg.status.text()
+    assert "minted in hugmesh-headscale for the headscale user joiners" in dlg.status.text()
+    assert dlg.status.text().endswith(mt.SERVER_DECIDES)
+    assert "tags" not in dlg.status.text()
     assert MINTED not in dlg.status.text()
 
 
 def test_a_named_headscale_user_is_the_one_minted_for(qapp, monkeypatch, core):
     dlg = _dialog(qapp, monkeypatch, container="hs")
     _fill(dlg)
-    dlg.mint_radio.setChecked(True)
     dlg.hs_user.setText("ops")
+    dlg.mint_radio.setChecked(True)
     dlg.issue_btn.click()
     _settle(qapp, dlg)
     assert core["mint"]["user"] == "ops"
@@ -282,6 +305,7 @@ def test_a_bad_field_is_refused_before_anything_is_created_or_minted(
     dlg = _dialog(qapp, monkeypatch, container="hs")
     _fill(dlg)
     dlg.login_server.setText("https://hs.elsewhere.org")
+    dlg.hs_user.setText("joiners")
     dlg.mint_radio.setChecked(True)
     dlg.issue_btn.click()
     _settle(qapp, dlg)

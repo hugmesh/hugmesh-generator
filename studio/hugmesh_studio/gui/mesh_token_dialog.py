@@ -50,7 +50,7 @@ class MeshTokenDialog(QtWidgets.QDialog):
         self.import_btn.clicked.connect(self._import)
         self.forget_btn.clicked.connect(self._forget)
         close.clicked.connect(self.accept)
-        self.forget_btn.setEnabled(bool(mt.stored_token()))
+        self.forget_btn.setEnabled(mt.token_stored())
 
     def _confirm_trust(self, fingerprint: str) -> bool:
         answer = QtWidgets.QMessageBox.question(
@@ -67,7 +67,7 @@ class MeshTokenDialog(QtWidgets.QDialog):
         if g:
             self.paste.clear()
         self.summary.setText(mt.summary())
-        self.forget_btn.setEnabled(bool(mt.stored_token()))
+        self.forget_btn.setEnabled(mt.token_stored())
 
     def _forget(self) -> None:
         mt.forget_token()
