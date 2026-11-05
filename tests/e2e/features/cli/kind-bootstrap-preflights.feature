@@ -53,7 +53,7 @@ Feature: bootstrap-kind.sh fails closed on a broken in-node resolver and on a ha
     And the command output contains "0 failed"
 
   # #510 is fixed on main (issue closed 2026-10-15): the bring-up now refuses
-  # here, so this runs un-fixme'd. #529 below is still open and stays @fixme.
+  # here, so this runs un-fixme'd.
   @issue:generator-510
   Scenario: a node whose resolver cannot resolve refuses, naming the resolver and the name, before anything waits
     Given a stub kind node on PATH whose resolver cannot resolve any name
@@ -63,7 +63,10 @@ Feature: bootstrap-kind.sh fails closed on a broken in-node resolver and on a ha
     And the command output contains "172.18.0.1"
     And the stub node recorded no mutating or waiting kubectl call
 
-  @issue:generator-529 @fixme
+  # #529: bootstrap-kind.sh step 1a reads the halt record on the reuse path and
+  # refuses, naming make kind-resume (offline pin: tests/scripts/
+  # test-kind-up-halted-refusal.sh), so this runs un-fixme'd too.
+  @issue:generator-529
   Scenario: a bring-up over a halted lane refuses and names make kind-resume instead of walking into a reuse that cannot converge
     Given a stub kind node on PATH carrying a halt record
     When I run the kind bootstrap against the stub node
