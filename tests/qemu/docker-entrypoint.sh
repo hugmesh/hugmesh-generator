@@ -1074,6 +1074,28 @@ esac
 #     (resolve_endpoint would otherwise pick the SLIRP 10.0.2.15 no peer reaches);
 #   * every other row on a fleet rendezvous waits for that control node's key
 #     and login_server and writes them onto its own stick.
+#
+# Which headscale policy that fleet runs (checked 2026-11-04 for PR #858, after a
+# proof run's worker showed peers=0 under the BOOTSTRAP policy and policy-sync
+# logged "MESH_ID empty" / "registry-pub.ed25519 ABSENT"): no stick written here
+# carries a device_registry block, a mesh id or a registry-pub.ed25519, and no
+# PRODUCT stick for a primary role does either. scripts/gen-provision-keys.sh
+# writes KEYS/device-registry/ only for role=mesh-extension, keys-template/
+# provision*.json carry no .mesh.id, and the rendered Layer-A policy also needs a
+# signed export fetched over mTLS from the in-cluster admin-bff
+# (gen-headscale-policy.sh fetch_export), which no first-boot fleet has. A real
+# pki/backend fleet therefore runs the baked bootstrap policy as well; this one
+# lacks nothing a real stick provides. Its acls[] equal the rendered template's
+# (specs/etc/headscale/policy.{bootstrap.hujson,hujson,hujson.tmpl} all grant only
+# tag:hugmesh -> 10.244.0.0/16:*, 10.96.0.0/12:*). No policy grants a node's own
+# 100.64 address, so fleet nodes are in each other's netmap only through those
+# routes, and assertions.sh grades exactly that (assert_mesh_client: "mesh
+# routes"). Follow-up, not changed here: kube-api.<base_domain> is published by
+# publish_cp_dns_record at the control node's TAILNET address, and :6443 there is
+# filtered under every shipped policy; the product reaches the API only because
+# provision_hosts pins cp_dns_name to the pki LAN IP from .nodes[] (this payload
+# has no .nodes[] and nothing here dials the API), so docs/SECURITY.md's "MagicDNS
+# then takes over" does not hold under the shipped ACL.
 TS_TAGS="tag:hugmesh"
 case "${ROLE}" in
     pki|generic|omnibus)           TS_TAGS="tag:hugmesh,tag:pki" ;;
@@ -1397,13 +1419,24 @@ if ${KEEP_ALIVE}; then write_device_record assertions; fi
 # always the last attempt's. ConnectTimeout is raised to 15s for this one ssh,
 # and it goes BEFORE ${SSH_OPTS[@]}: ssh keeps the FIRST value it obtains for
 # an option, so appended after the array it would silently lose to the 5.
+# A fleet's CONTROL row asserts minutes before its workers boot and join. Its
+# "mesh peers" check waits, bounded by this many seconds, for a fleet node to
+# register on its headscale and reach its netmap (assertions.sh assert_mesh_client);
+# every other row gets 0 (no wait). `sudo bash -s` drops the environment, so the
+# budget rides as the first line of the streamed script. 600 s sits inside the
+# 900 s assertion wall clock with the rest of the suite's own waits to spare, and
+# a worker on TCG aarch64 joins ~4-5 min after the control row answers ssh
+# (2026-11-04 proof run: control ssh 02:15, worker joined 02:18:58).
+ASSERT_PEER_WAIT=0
+if [ "${HS_ENABLED}" = true ] && [ -n "${MESH_RENDEZVOUS}" ]; then ASSERT_PEER_WAIT="${ASSERT_PEER_WAIT_FLEET:-600}"; fi
+[[ "${ASSERT_PEER_WAIT}" =~ ^[0-9]+$ ]] || ASSERT_PEER_WAIT=0
 set +e
 ASSERT_ATTEMPTS=0
 while :; do
     ASSERT_ATTEMPTS=$((ASSERT_ATTEMPTS + 1))
     timeout -k 30 "${ASSERT_TIMEOUT}" \
         ssh -o ConnectTimeout=15 "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo bash -s' \
-        < <(cat "${QEMU_DIR}/../../scripts/_roles-lib.sh" "${QEMU_DIR}/assertions.sh") \
+        < <(printf 'HUGMESH_ASSERT_PEER_WAIT=%s\n' "${ASSERT_PEER_WAIT}"; cat "${QEMU_DIR}/../../scripts/_roles-lib.sh" "${QEMU_DIR}/assertions.sh") \
         2>&1 | tee "${RUN_DIR}/assertions.log"
     ARC=${PIPESTATUS[0]}
     [ "${ARC}" -eq 255 ] || break
