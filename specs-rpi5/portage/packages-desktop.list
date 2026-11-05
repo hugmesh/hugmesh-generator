@@ -51,3 +51,24 @@ www-client/netsurf
 # ── Fonts (so the lean desktop is legible out of the box) ──────────
 media-fonts/dejavu
 media-fonts/noto
+
+# ── Emulated-desktop display agent (QEMU runner --display spice) ──────────────
+# When the containerised QEMU runner opens this image with a SPICE display, the
+# native viewer (remote-viewer/spicy) resizes the GUEST to its window. The agent
+# gives that session agent-mouse, clipboard and the XRandR path, and the
+# session-side applier (/usr/libexec/hugmesh/vm-autofit, xdg autostart) applies
+# the new preferred mode on a virtio-gpu/qxl hotplug — the lean LXDE session has
+# no output daemon of its own. Both are inert on real hardware: the daemon is
+# started by /etc/local.d/20-spice-vdagent.start ONLY when the SPICE virtio port
+# exists (the stock OpenRC script fails red without it), and the applier exits
+# at once unless the DRM driver is virtio_gpu or qxl.
+#   app-emulation/spice-vdagent  — 0.22.1; USE=selinux (global) pulls the policy
+#                                  module below, which the enforcing image loads
+#                                  with every other installed .pp.
+#   sec-policy/selinux-vdagent   — listed EXPLICITLY so the requested-atom
+#                                  completeness gate asserts it installed; it is
+#                                  stable on amd64 AND arm64 (2.20260616_p1), so
+#                                  it needs NO keyword entry — and must not get
+#                                  one (see the ARM keyword files).
+app-emulation/spice-vdagent
+sec-policy/selinux-vdagent

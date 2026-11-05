@@ -1766,6 +1766,18 @@ if [ "${DESKTOP}" = "light" ]; then
 greeter-session=lightdm-gtk-greeter
 user-session=LXDE
 LIGHTDM
+    # Emulated-desktop display (QEMU runner --display spice): the session-side
+    # autofit applier (xrandr --auto on a virtio-gpu/qxl preferred-mode change) and
+    # the boot-time spice-vdagentd starter (only when the SPICE virtio port exists,
+    # so a physical board never shows a failed service). Packages come from the
+    # desktop list (spice-vdagent + its policy module). No DRM_VIRTIO_GPU in this
+    # board's kernel yet, so the applier is dormant until that lands; the files
+    # are staged now so the five desktop images stay 1:1.
+    mkdir -p "${SYSROOT}/usr/libexec/hugmesh" "${SYSROOT}/etc/xdg/autostart" "${SYSROOT}/etc/local.d"
+    cp "${SHARED_SPECS}/usr/libexec/hugmesh/vm-autofit"               "${SYSROOT}/usr/libexec/hugmesh/vm-autofit"
+    cp "${SHARED_SPECS}/etc/xdg/autostart/hugmesh-vm-autofit.desktop" "${SYSROOT}/etc/xdg/autostart/hugmesh-vm-autofit.desktop"
+    cp "${SHARED_SPECS}/etc/local.d/20-spice-vdagent.start"          "${SYSROOT}/etc/local.d/20-spice-vdagent.start"
+    chmod 0755 "${SYSROOT}/usr/libexec/hugmesh/vm-autofit" "${SYSROOT}/etc/local.d/20-spice-vdagent.start"
 fi
 for svc in "${DEFAULT_SVCS[@]}"; do
     ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true
