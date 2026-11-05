@@ -21,20 +21,152 @@ addressed with T1's ``--only-exact`` instead of ``--only``, which is a SUBSTRING
 filter — restarting ``x86/be`` used to drag be+gpu and be-ha along. The fleet
 stop now carries ``--work`` too, so a mesh booted in a custom work dir is
 stopped against the registry it actually registered in.
+
+QEMU FOR WINDOWS (WHPX): every hint above is the Docker backend's bash runner, which
+a native Windows Studio cannot run — there the Docker backend prints the WSL2
+sentence (``qemu_tests.native_blocker``) INSTEAD of argv nobody could paste.
+:data:`BACKEND_KEY` cycles ``qemu_windows.BACKENDS`` — the TUI twin of the GUI page's
+backend chooser — and under WHPX an x86 row's detail is ``qemu_windows``' own preview
+of what a start runs plus the ``--qemu-windows`` CLI lines, an ARM row is
+``row_refusal``'s sentence, and the whole-mesh verbs give way to the
+one-device-at-a-time sentence. Still nothing spawns: the start is the operator's to
+paste into a Windows terminal.
 """
 from __future__ import annotations
 
+import os
 import shlex
 
 from ..core import emulation as emu
 from ..core import emulation_save
 from ..core import mesh_emulation as me
-from ..core import qemu_devices, qemu_tests
+from ..core import qemu_devices, qemu_tests, qemu_windows
 from ..core.domain_services import session_boot_gate_reason
 from . import model
 
-__all__ = ["MeshEmuScreen", "device_table", "device_detail_lines",
+__all__ = ["MeshEmuScreen", "BACKEND_KEY", "WHPX_ONE_AT_A_TIME", "WHPX_NOT_HERE",
+           "WHPX_CLI_PREFIXES", "backend_label", "next_backend", "default_backend",
+           "native_blocker_lines", "backend_lines", "whpx_cli_args", "whpx_device_table",
+           "whpx_detail_lines", "device_table", "device_detail_lines",
            "plan_summary_lines", "save_hint_lines"]
+
+#: The key that switches the emulation backend, cycling ``qemu_windows.BACKENDS`` —
+#: the TUI twin of the GUI page's chooser. Not "q" (BACK), not "r" (refresh) and not
+#: a digit (a digit opens a device row).
+BACKEND_KEY = "b"
+
+#: Why the whole-mesh verbs are absent under QEMU for Windows — the GUI page greys
+#: its whole-mesh Start/Stop for the same reason.
+WHPX_ONE_AT_A_TIME = ("QEMU for Windows (WHPX) boots ONE x86 device at a time — a thin "
+                      "desktop or a single node — so it has no whole-mesh start or "
+                      "stop: use each x86 row's own start and stop.")
+#: What else this backend does not offer; each is the Docker backend's runner.
+WHPX_NOT_HERE = ("Not on QEMU for Windows (WHPX): ARM rows, the QMP console, the web "
+                 "tunnel and saving a disk or the whole mesh — those are the Docker "
+                 "backend's.")
+
+#: The two spellings of the QEMU for Windows CLI: the Studio's own flag and the module
+#: itself. Both hand everything after them to ``qemu_windows``' own parser.
+WHPX_CLI_PREFIXES = (("hugmesh-studio", "--qemu-windows"),
+                     ("python", "-m", "hugmesh_studio.core.qemu_windows"))
+
+
+def backend_label(backend: str) -> str:
+    return dict(qemu_windows.BACKENDS)[backend]
+
+
+def next_backend(backend: str) -> str:
+    """The backend :data:`BACKEND_KEY` switches to: the next of ``BACKENDS``, wrapping."""
+    ids = [bid for bid, _label in qemu_windows.BACKENDS]
+    return ids[(ids.index(backend) + 1) % len(ids)]
+
+
+def default_backend(osname: str | None = None) -> str:
+    """The GUI page's rule: Docker everywhere, except a native Windows Studio — where
+    the Docker lane is refused with the WSL2 sentence — whose QEMU for Windows can
+    actually boot something."""
+    return (qemu_windows.BACKEND_WHPX
+            if qemu_tests.native_blocker() and not qemu_windows.blocker(osname)
+            else qemu_windows.BACKEND_DOCKER)
+
+
+def native_blocker_lines(switch: str) -> list[str]:
+    """The Docker backend's WSL2 refusal on a native Windows Studio, [] elsewhere.
+
+    ``qemu_tests.native_blocker()`` verbatim — the sentence the GUI and the emulation
+    CLI refuse with — plus where the one lane that does run there lives (``switch``
+    says how to reach it from the screen showing this)."""
+    blocker = qemu_tests.native_blocker()
+    if not blocker:
+        return []
+    return ["! not from this Windows Studio:", "  " + blocker,
+            "  To boot ONE x86 device image (a thin desktop or a single node) on this "
+            f"PC without WSL2: {switch} “{backend_label(qemu_windows.BACKEND_WHPX)}”."]
+
+
+def backend_lines(backend: str, osname: str | None = None) -> list[str]:
+    """Which backend the hints below are for, and whether it can run here."""
+    out = [f"backend   {backend_label(backend)}  ({BACKEND_KEY} = switch)"]
+    if backend != qemu_windows.BACKEND_WHPX:
+        return out + native_blocker_lines(f"press {BACKEND_KEY} for the backend")
+    why = qemu_windows.blocker(osname)
+    if why:
+        out.append("! not ready: " + why)
+    else:
+        install = qemu_windows.find_qemu()
+        out.append(f"ready: QEMU for Windows in {install.dir if install else '?'}, "
+                   "with WHPX acceleration.")
+    return out + [WHPX_ONE_AT_A_TIME]
+
+
+def whpx_cli_args(eplan: emu.EmulationPlan, action: str, label: str = "") -> list[str]:
+    """``ACTION [options]`` for ``qemu_windows``' own parser, addressed at this plan.
+
+    ``--generator-dir`` always (the module's default is the checkout it sits in, the
+    Studio's is its resolved one — neither has to be this screen's), ``--work`` only
+    when the plan's differs from the default both sides compute."""
+    args = [action]
+    if action == "start":
+        args += ["--session", eplan.session_name, "--row", label]
+    elif action == "stop":
+        args += ["--row", label]
+    # Absolute: the line is pasted into a terminal whose folder need not be this one.
+    args += ["--generator-dir", os.path.abspath(eplan.generator_dir)]
+    if eplan.work_dir != qemu_devices.default_work_dir(eplan.generator_dir):
+        args += ["--work", os.path.abspath(eplan.work_dir)]
+    return args
+
+
+def _whpx_join(argv: list[str], osname: str | None) -> str:
+    # qemu_windows' own quoting: cmd.exe's on Windows, a POSIX shell's elsewhere.
+    return qemu_windows._quote(argv, osname)
+
+
+def _whpx_cli_lines(eplan: emu.EmulationPlan, action: str, label: str,
+                    osname: str | None) -> list[str]:
+    args = whpx_cli_args(eplan, action, label)
+    return ["  " + _whpx_join([*prefix, *args], osname) for prefix in WHPX_CLI_PREFIXES]
+
+
+def _whpx_live(plan: me.MeshPlan) -> dict[str, dict]:
+    # qemu_windows.running: a record left by a crash or a reboot is not running.
+    return {rec["label"]: rec for rec in qemu_windows.running(plan.work_dir)}
+
+
+def whpx_device_table(plan: me.MeshPlan,
+                      live: dict[str, dict]) -> tuple[list[str], list[list[str]]]:
+    """(headers, rows) under QEMU for Windows: its registry, nothing else. Only a boot
+    column — this backend boots a device and runs no assertions, so the Docker lane's
+    ssh/provision/web grades would be grades nobody made."""
+    headers = ["#", "device", "role", "platform", "boot", "ssh"]
+    rows: list[list[str]] = []
+    for i, planned in enumerate(plan.devices, 1):
+        rec = live.get(planned.label)
+        boot = ("running" if rec else
+                "refused" if qemu_windows.row_refusal(planned.platform) else "off")
+        rows.append([str(i), planned.label, planned.role, planned.platform, boot,
+                     f"127.0.0.1:{rec['ssh_port']}" if rec else ""])
+    return headers, rows
 
 
 def _results_by_label(plan: me.MeshPlan) -> dict[str, dict]:
@@ -128,15 +260,92 @@ def save_hint_lines(eplan: emu.EmulationPlan) -> list[str]:
     return lines
 
 
+def whpx_detail_lines(eplan: emu.EmulationPlan, planned: me.PlannedDevice,
+                      boot_refusal: str = "", osname: str | None = None) -> list[str]:
+    """One device's detail under QEMU for Windows (WHPX).
+
+    An x86 row: its live record or ``qemu_windows.preview_lines`` (what a start
+    runs) and the ``--qemu-windows`` start/stop CLI lines; an ARM row:
+    ``row_refusal``'s sentence. ``qemu_windows.blocker`` is shown when this host
+    cannot boot it — off Windows that is all there is, since nothing below would
+    run there. ``boot_refusal`` (#637) replaces the preview and the start, exactly as
+    it replaces the Docker backend's start hints."""
+    plan = eplan.mesh
+    assert plan is not None, "whpx_detail_lines needs a DEPLOY plan"
+    lines = [
+        f"device    {planned.label}  ({planned.role} · {planned.platform} · "
+        f"{planned.arch})",
+        f"image     {planned.image}",
+        "",
+    ]
+    why = qemu_windows.blocker(osname)
+    if why:
+        lines.append("! not ready: " + why)
+        if (osname or os.name) != "nt":
+            return lines
+        lines.append("")
+    refusal = qemu_windows.row_refusal(planned.platform)
+    live = _whpx_live(plan)
+    rec = live.get(planned.label)
+    if refusal:
+        lines.append("! refused: " + refusal)
+    elif rec:
+        shown = "desktop window" if rec.get("display") == "window" else "headless"
+        lines += [
+            f"boot      running under QEMU for Windows (pid {rec['pid']}, "
+            f"{rec.get('mem_mb', '?')} MiB, {shown})",
+            f"web       https://127.0.0.1:{rec['ui_port']}/  (its :443, on 127.0.0.1 "
+            "only)",
+            f"console   {os.path.join(str(rec.get('run_dir', '')), 'console.log')}",
+            "ssh in — QEMU for Windows adds no account to the guest, so log in as a "
+            "user this image was built with:",
+            "  " + _whpx_join(qemu_windows.ssh_argv(rec, "<user>"), osname),
+        ]
+    else:
+        lines.append("boot      not running")
+        busy = next(iter(live.values()), None)
+        if busy:
+            lines.append(f"! {busy['label']} is running, and this backend runs one "
+                         "device at a time — stop it first.")
+        if boot_refusal:
+            lines += ["not started from here:", "  ! refused: " + boot_refusal]
+        else:
+            opts = qemu_windows.options_for_row(planned, eplan.work_dir)
+            lines.append("what a start runs (QEMU for Windows' own preview; the QMP "
+                         "port is picked free at start):")
+            lines += ["  " + ln for ln in qemu_windows.preview_lines(opts,
+                                                                     osname=osname)]
+            lines.append(f"start it ({opts.mem_mb} MiB, headless; add --window for a "
+                         "desktop window, --mem N for memory) — paste into a Windows "
+                         "terminal, this screen spawns nothing:")
+            lines += _whpx_cli_lines(eplan, "start", planned.label, osname)
+    if not refusal:
+        lines.append("stop it — ACPI power-off first, a hard kill only if it does "
+                     "not go; the session's image is never written:")
+        lines += _whpx_cli_lines(eplan, "stop", planned.label, osname)
+    lines += ["", WHPX_ONE_AT_A_TIME, WHPX_NOT_HERE,
+              "which device this backend is running:"]
+    lines += _whpx_cli_lines(eplan, "status", "", osname)
+    return lines
+
+
 def device_detail_lines(eplan: emu.EmulationPlan, planned: me.PlannedDevice,
-                        devices: list, boot_refusal: str = "") -> list[str]:
+                        devices: list, boot_refusal: str = "",
+                        backend: str = qemu_windows.BACKEND_DOCKER,
+                        osname: str | None = None) -> list[str]:
     """The per-device detail: identity, section statuses WITH their detail text,
     and the copy-ready command hints (start / ssh / QMP / web tunnel / save).
 
     ``boot_refusal`` (``core.domain_services.session_boot_gate_reason``, #637)
     replaces the two START hints — this device's and the whole mesh's — with the
     refusal: printing the argv the GUI refuses to run would make this face the way
-    around that gate. Stop, ssh, QMP and save stay: none of them boots anything."""
+    around that gate. Stop, ssh, QMP and save stay: none of them boots anything.
+
+    On a native Windows Studio every one of those hints is a bash script it cannot
+    run, so the WSL2 sentence replaces them all (save-mesh refuses with it too).
+    ``backend`` WHPX is :func:`whpx_detail_lines`."""
+    if backend == qemu_windows.BACKEND_WHPX:
+        return whpx_detail_lines(eplan, planned, boot_refusal, osname)
     plan = eplan.mesh
     assert plan is not None, "device_detail_lines needs a DEPLOY plan"
     generator_dir = eplan.generator_dir
@@ -157,6 +366,9 @@ def device_detail_lines(eplan: emu.EmulationPlan, planned: me.PlannedDevice,
         status, detail = sections[section]
         lines.append(f"{section:9s} {status} — {detail}")
     lines.append("")
+    native = native_blocker_lines(f"press {BACKEND_KEY} for the backend")
+    if native:
+        return lines + native
     if dev is not None and dev.is_running and dev.ssh_host_port > 0 and dev.ssh_key:
         lines.append("ssh in:")
         lines.append("  " + shlex.join(emu.ssh_argv(dev, dev.ssh_user)))
@@ -193,6 +405,8 @@ class MeshEmuScreen:
     slug = "meshemu"
     title = "Mesh emulation"
     wants_q = True                       # q navigates BACK through the sub-states
+    #: ``os.name`` unless a test answers as another host (qemu_windows' convention).
+    osname: str | None = None
 
     def __init__(self):
         self._sub = "pick"               # pick | table | detail
@@ -203,6 +417,12 @@ class MeshEmuScreen:
         self._plan: me.MeshPlan | None = None
         self._detail: me.PlannedDevice | None = None
         self._refusal = ""               # #637: the picked session's boot refusal
+        #: A qemu_windows.BACKENDS id; chosen on first entry, then the operator's.
+        self._backend = ""
+
+    @property
+    def _whpx(self) -> bool:
+        return self._backend == qemu_windows.BACKEND_WHPX
 
     def enter(self, j) -> None:
         self._sub = "pick"
@@ -210,6 +430,8 @@ class MeshEmuScreen:
         self._plan = None
         self._detail = None
         self._refusal = ""
+        if not self._backend:
+            self._backend = default_backend(self.osname)
         # which prior sessions hold bootable images — the same discovery the
         # QEMU device-test lane uses (only_with_images: an empty session cannot
         # be emulated and is not offered).
@@ -234,18 +456,31 @@ class MeshEmuScreen:
             return out
         assert self._plan is not None and self._eplan is not None
         if self._sub == "detail" and self._detail is not None:
-            return device_detail_lines(self._eplan, self._detail,
-                                       self._devices(), self._refusal) + \
-                ["", "(r = refresh · q = back to the device list)"]
-        out = plan_summary_lines(self._plan)
+            devices = [] if self._whpx else self._devices()
+            return device_detail_lines(self._eplan, self._detail, devices,
+                                       self._refusal, self._backend, self.osname) + \
+                ["", f"({BACKEND_KEY} = switch backend · r = refresh · "
+                     "q = back to the device list)"]
+        # Under WHPX only the plan line: the front door rides the Docker backend's
+        # web tunnel, which this backend does not have.
+        out = plan_summary_lines(self._plan)[:1] if self._whpx else \
+            plan_summary_lines(self._plan)
+        out += backend_lines(self._backend, self.osname)
         if self._refusal:
             out.append("! refused — this session's devices are not started from "
                        "here: " + self._refusal)
         out.append("")
-        headers, rows = device_table(self._plan, self._devices())
-        out += model.format_table(headers, rows)
+        if self._whpx:
+            headers, rows = whpx_device_table(self._plan, _whpx_live(self._plan))
+            out += model.format_table(headers, rows)
+            refused = sorted({d.platform for d in self._plan.devices
+                              if qemu_windows.row_refusal(d.platform)})
+            out += [f"refused: {qemu_windows.row_refusal(p)}" for p in refused]
+        else:
+            headers, rows = device_table(self._plan, self._devices())
+            out += model.format_table(headers, rows)
         out += ["", "(a NUMBER opens a device's detail + access hints · "
-                    "r = refresh · q = back)"]
+                    f"{BACKEND_KEY} = switch backend · r = refresh · q = back)"]
         return out
 
     def prompt(self, j) -> str:  # noqa: ARG002 — screen-protocol signature
@@ -270,6 +505,12 @@ class MeshEmuScreen:
             # the SAME seam the GUI's Mesh emulation page reads (#637)
             self._refusal = session_boot_gate_reason(self._sessions[row].name)
             self._sub = "table"
+            return
+        if low == BACKEND_KEY:
+            # Table or detail: the next qemu_windows.BACKENDS id. Switching boots and
+            # stops nothing — it changes which backend the hints are for.
+            self._backend = next_backend(self._backend)
+            j.status = f"backend: {backend_label(self._backend)}"
             return
         if self._sub == "detail":
             if low in ("q", "quit", "exit"):

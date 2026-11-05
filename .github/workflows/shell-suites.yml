@@ -364,6 +364,7 @@ jobs:
             tests/desktop-governance/test-desktop-sudo-mapper.sh
             tests/desktop-governance/test-gen-sso-session-start.sh
             tests/desktop-governance/test-provision-desktop-governance.sh
+            tests/desktop-governance/test-sso-greeter.sh
             tests/device-registry/test-registry-allow-deny.sh
             tests/device-registry/test-self-report.sh
             tests/domain-registry/test-domain-reconcile-verify.sh
@@ -414,6 +415,7 @@ jobs:
             tests/scripts/test-catalog-discovery-gate.sh
             tests/scripts/test-cloud-package.sh
             tests/scripts/test-container-image-tags.sh
+            tests/scripts/test-desktop-sso-bake.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh
             tests/scripts/test-e2e-persona-catalogue.sh
@@ -485,6 +487,7 @@ jobs:
             tests/stack/test-optional-services-exclude.sh
             tests/stack/test-optional-services-parity.sh
             tests/stack/test-probe-auth-surface.sh
+            tests/stack/test-seed-e2e-lockout.sh
             tests/stack/test-tls-front.sh
             tests/stack/test-tube-media-signed-gate.sh
           "
@@ -563,6 +566,7 @@ jobs:
               tests/scripts/test-client-connect-routes.sh
               tests/scripts/test-db-connection-budget.sh
               tests/scripts/test-deeplink-remote-coverage.sh
+              tests/desktop-governance/test-sso-greeter.sh
               tests/scripts/test-e2e-shell-nav-entry.sh
               tests/scripts/test-e2e-spec-symbol-resolution.sh
               tests/scripts/test-eso-provider-refs.sh
@@ -576,6 +580,7 @@ jobs:
               tests/scripts/test-mfa-raw-jwt-posture.sh
               tests/scripts/test-mfa-required-rules.sh
               tests/scripts/test-passhash-lib.sh
+              tests/scripts/test-standalone-login-firstboot.sh
               tests/scripts/test-pki-role-san-coverage.sh
               tests/scripts/test-provision-keys-escrow-guard.sh
               tests/scripts/test-python-targets-seed.sh

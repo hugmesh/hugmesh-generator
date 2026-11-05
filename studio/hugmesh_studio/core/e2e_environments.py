@@ -370,7 +370,7 @@ def run_argv(env_id: str, extra_args: "tuple[str, ...] | list[str]" = ()) -> "tu
 def plan(env_id: str, extra_env: "dict[str, str] | None" = None,
          extra_args: "tuple[str, ...] | list[str]" = (),
          ambient: "dict[str, str] | None" = None,
-         boot: bool = False) -> E2EPlan:
+         boot: bool = False, osname: "str | None" = None) -> E2EPlan:
     """Build the full plan for one run, refusals included.
 
     `boot=True` asks this module to also BRING THE MESH UP, and is refused for
@@ -386,9 +386,24 @@ def plan(env_id: str, extra_env: "dict[str, str] | None" = None,
     a live question the harness itself answers, loudly, per scenario - see
     world.ts's environment gate, which skips with a reason naming what to start.
     Duplicating that judgement here would give an operator two answers.
+
+    The one other static refusal is the host itself: on native Windows (the MSI)
+    the argv is `make` running bash recipes, which that build cannot run, so the
+    plan says so (``platform_info.native_windows_blocker``) instead of reporting
+    `runnable: yes` for a command that can only fail. ``osname`` is ``os.name``
+    unless a test passes another.
     """
     env_def = environment(env_id)
     refusals: "list[str]" = []
+    # Imported here, not at the top: tests/scripts/test-e2e-docker-base-url-parity.sh
+    # loads this file on its own, outside the package, where a relative import fails.
+    from . import platform_info
+    # osname only when given: the suite pins the host by swapping in
+    # partial(native_windows_blocker, osname=...), which an explicit None would undo.
+    blocker = (platform_info.native_windows_blocker("The e2e suite", osname=osname)
+               if osname else platform_info.native_windows_blocker("The e2e suite"))
+    if blocker:
+        refusals.append(blocker)
     if boot:
         if env_def.boot_needs_root:
             refusals.append(

@@ -20,6 +20,11 @@ from . import proc_text, resource_limits
 #: the compose argv is exactly what it was before limits reached this lane.
 LIMITS_OVERLAY = "docker-compose.limits.yml"
 
+#: Beside the staged project: which credentials the RUNNING node was started with,
+#: written by the tray's token-aware node (core/mesh_token.py) and dropped by every
+#: other start, so it never describes a node someone else (re)started.
+IDENTITY_FILE = "mesh-identity.json"
+
 #: The services in docker-compose.mesh.yml that the limit is written onto. The mesh
 #: node is ONE container, so it gets the WHOLE budget (unlike the 43-service local
 #: stack, which divides it). No GPU is handed to it: it only carries tailnet traffic.
@@ -166,6 +171,13 @@ class MeshNode:
             return False, ("Set TS_AUTHKEY (a tailnet/headscale auth key) in the "
                            "environment before starting a mesh node.")
         self._stage()
+        # Whatever started the node before, this start replaces it: the tray's record
+        # of which credentials the node runs under (core/mesh_token.py) is now stale.
+        # The tray's own node writes a fresh one after its `up`.
+        try:
+            os.remove(os.path.join(self.workdir, IDENTITY_FILE))
+        except FileNotFoundError:
+            pass
         # RESOURCE LIMITS: the tray's Resource limits setting caps this node too. If
         # the overlay cannot be written the start fails loudly rather than quietly
         # running an unbounded node the dialog said was capped.
@@ -211,7 +223,14 @@ class MeshNode:
         except (OSError, subprocess.SubprocessError) as e:
             return MeshStatus(running=False, detail=str(e))
 
-    def logs(self, tail: int = 200) -> str:
+    def logs(self, tail: int = 200, osname: str | None = None) -> str:
+        # Windows: a cwd that does not exist yet raised WinError 267 ("The directory
+        # name is invalid"), returned as if it were the log, before any start had
+        # made the folder. Same "is it staged?" signal stop() and status() use.
+        # ``osname`` is ``os.name`` unless a test passes another.
+        if (osname or os.name) == "nt" and not os.path.exists(
+                os.path.join(self.workdir, "docker-compose.mesh.yml")):
+            return "The mesh node has not been started yet, so it has no logs."
         try:
             r = subprocess.run(self._compose("logs", "--tail", str(tail)),
                                cwd=self.workdir, env=self._env(),
