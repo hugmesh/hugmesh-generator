@@ -2,13 +2,19 @@
 #
 # The boot media varies by board + flavor (La Frite: SPI u-boot + USB/eMMC root,
 # NO microSD slot; Le Potato: microSD/eMMC). Unlike the RPi5 image, the Frite
-# builder produces ISO/live media + a stage4 tarball — there is NO build_img/.img
-# assembly step here. The LIVE flavor boots a squashfs root ephemerally (this
-# fstab is largely inert there; / is the live overlay). The INSTALLER flavor
-# (install-frite.sh) partitions the target eMMC/SD AT INSTALL TIME and rewrites
-# the LABEL=/PARTUUID device columns below for the medium it actually wrote, so
-# the installed system mounts the right partitions. The placeholder device paths
-# below are replaced at install time; do not rely on them literally.
+# builder's .img files are LIVE / INSTALLER MEDIA (an MBR + one FAT32 partition
+# carrying extlinux, the kernel, the FDT and a squashfs — build_frite_medium in
+# build-frite-stage4.sh), never a disk image of the installed system: this fstab
+# is largely inert on a live boot (/ is the live overlay). The INSTALLED system's
+# layout is made by install-frite.sh AT INSTALL TIME: it partitions the target
+# eMMC/SD (p1 FAT boot, p2 ext4 or LUKS2 root) and rewrites the two LABEL=
+# device columns below to the PARTUUID/UUID of what it actually wrote, so the
+# installed system mounts the right partitions whatever mmcblkN the eMMC is.
+# The two LABEL= lines are the installer's sed anchors (^LABEL=FRITE_BOOT and
+# ^LABEL=FRITE_ROOT, one line each): keep them first in their line, unindented,
+# and keep exactly one of each — tests/scripts/test-frite-install-layout.sh pins
+# that. The placeholder device paths are replaced at install time; do not rely on
+# them literally.
 #
 # <device>         <mount>  <type>   <options>                              <dump> <pass>
 LABEL=FRITE_BOOT   /boot    vfat     defaults,noatime,nosuid,nodev,noexec   0      2
