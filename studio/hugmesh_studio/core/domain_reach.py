@@ -99,10 +99,11 @@ def tailnet_problems(value, where: str) -> list[str]:
     return [f"{where}: ways.tailnet must be yes or no (true/false)"]
 
 
-def egress_problems(value, where: str) -> list[str]:
+def egress_problems(value, where: str, osname: str | None = None) -> list[str]:
     """Why an egress block cannot be saved ([] when it can): an object with a known
     ``mode`` and, for ``vpn`` only, an optional ``conf`` that is an absolute path to a
-    provider file — a pointer, never the key text (no newline, no control character)."""
+    provider file — a pointer, never the key text (no newline, no control character).
+    ``osname`` is ``os.name`` unless a test passes another."""
     if value is None:
         return []
     if not isinstance(value, dict):
@@ -132,6 +133,13 @@ def egress_problems(value, where: str) -> list[str]:
         elif any(ord(c) < 32 or ord(c) == 127 for c in conf):
             out.append(f"{where}: egress conf must be a path on one line (a pointer to "
                        "the provider file, never its contents)")
+        elif (osname or os.name) == "nt" and '"' in conf:
+            # Explorer's "Copy as path" wraps the path in quotes, and a quoted path is
+            # not absolute, so the sentence below called a valid path relative. A
+            # Windows file name cannot hold a quote, so naming the quotes is true.
+            out.append(f"{where}: egress conf {conf!r} has quote marks around it (as "
+                       "Explorer's Copy as path adds); a Windows path cannot contain "
+                       "them, so give the path without the quotes")
         elif not os.path.isabs(os.path.expanduser(conf)):
             out.append(f"{where}: egress conf must be an absolute path, got {conf!r}")
     return out

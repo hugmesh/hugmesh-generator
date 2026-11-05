@@ -36,11 +36,12 @@ WHAT THE TRAY ENFORCES with a verified token (:class:`GrantedMeshNode`):
 
 WHAT IT CANNOT ENFORCE, said plainly: the person holding a token holds a real
 pre-auth key and controls their own machine, so they could run ``tailscale`` by hand
-with it. The authoritative gates stay SERVER-side — the pre-auth key's tags and the
-headscale policy (``specs/usr/sbin/gen-headscale-policy.sh``: server-forced
-``tag:dom_*`` tags, default-deny ``ssh[]``). The issuer CLI says so when it signs.
-The token makes the tray do exactly what was granted and stops an edited token
-(``"shell": true`` pasted in) from being honoured.
+with it. Role and domain are labels; the mesh decides what this node may do. The
+pre-auth key only lets it join. The authoritative gates stay SERVER-side, in the
+mesh's headscale policy (``specs/usr/sbin/gen-headscale-policy.sh``, with its
+default-deny ``ssh[]``). The issuer CLI says so when it signs. The token makes the
+tray do exactly what was granted and stops an edited token (``"shell": true`` pasted
+in) from being honoured.
 
 Resource limits (tray -> Resource limits) apply to a token-run node exactly as to any
 other: :class:`GrantedMeshNode` inherits MeshNode's limits overlay.
@@ -50,9 +51,13 @@ tokens through both the web ui and the gui/tui/cli on all platforms"). The admin
 mesh created with the Studio needs no SSH key of their own: :func:`ensure_issuer`
 keeps one ``ssh-ed25519`` issuer key per mesh in the Studio state dir (created on
 first use, trusted by this computer's own tray), and :func:`mint_preauth_key` asks
-the mesh's running headscale container for a single-use pre-auth key, so neither
-the key nor the pre-auth key ever passes through this computer's command line or a
-log.
+the mesh's running headscale container for a single-use pre-auth key for a headscale
+user the admin names (there is no default: name the headscale user your mesh sets
+aside for joining devices). The minted key is read from headscale's output, never put
+on a command line or in a log; the one exception is expiring a minted key that could
+not be put in a token (:func:`expire_preauth_key` says how briefly it is visible).
+Minting needs a running headscale container; the Studio's local Docker mesh does not
+run one yet, so there a pre-auth key is pasted or read from a file.
 """
 from __future__ import annotations
 
@@ -69,9 +74,11 @@ import re
 import secrets
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from urllib.parse import urlsplit
 
@@ -188,26 +195,150 @@ def _when(ts: int) -> str:
 
 #: A random per-install salt for :func:`secret_digest`, in the Studio state dir.
 SALT_FILE = "mesh-identity-salt"
+#: Beside a damaged salt file: the salt that replaces it (:func:`_load_or_create_salt`).
+SALT_REPAIRED = ".repaired"
 
 
 def secret_digest(secret: str) -> str:
     """A short comparable digest of a value that contains a pre-auth key, for the
     identity record beside the node. Never a fast plain hash of the secret: PBKDF2 with
     a per-install random salt, so the record (which only has to tell "same credentials"
-    from "different credentials" on this computer) gives nothing to brute-force with."""
+    from "different credentials" on this computer) gives nothing to brute-force with.
+
+    A digest compares only with one made under the SAME salt: the record beside the
+    node carries :func:`salt_id`, and a record made under another salt is "cannot
+    tell", never "different" (``GrantedMeshNode._compare``)."""
+    return _pbkdf2(secret, _salt())
+
+
+#: The salt each state dir's salt file held (or, unwritable, was drawn) the first time
+#: this process asked: drawn or loaded ONCE per process, so every digest this process
+#: makes compares with every other, even when the file cannot be written or is
+#: deleted while the tray runs.
+_SALTS: dict[str, bytes] = {}
+_SALT_LOCK = threading.Lock()
+
+
+def _salt() -> bytes:
     path = os.path.join(state_dir(), SALT_FILE)
+    with _SALT_LOCK:
+        salt = _SALTS.get(path)
+        if salt is None:
+            salt = _SALTS[path] = _load_or_create_salt(path)
+        return salt
+
+
+def salt_id() -> str:
+    """A short public name for this process's salt, kept in the identity record so a
+    record made under another salt is recognised as such. A hash of the salt alone
+    (random bytes, no secret in it), in its own domain."""
+    return hashlib.sha256(b"hugmesh-identity-salt\0" + _salt()).hexdigest()[:12]
+
+
+def _read_salt(path: str) -> bytes:
     try:
         with open(path, encoding="ascii") as fh:
             salt = bytes.fromhex(fh.read().strip())
     except (OSError, ValueError):
-        salt = b""
-    if len(salt) < 16:
-        salt = secrets.token_bytes(32)
+        return b""
+    return salt if len(salt) >= 16 else b""
+
+
+def _load_or_create_salt(path: str, *, retries: int = 20, repair: bool = True) -> bytes:
+    """The salt in ``path``, else a new one written there. The file is CREATED
+    EXCLUSIVELY and with its content at once (:func:`_create_salt_file`), so two
+    processes racing to create it cannot both win: the loser re-reads the file and
+    takes the winner's salt. A damaged file is left as it is and the salt goes in a
+    replacement file beside it (``SALT_REPAIRED``), created the same way, so that
+    path has one winner too. An unwritable state dir keeps the new salt for this
+    process only."""
+    salt = _read_salt(path)
+    if salt:
+        return salt
+    repaired = path + SALT_REPAIRED
+    if repair:
+        salt = _read_salt(repaired)     # an earlier process found the file damaged
+        if salt:
+            return salt
+    new = secrets.token_bytes(32)
+    try:
+        _makedirs_private(os.path.dirname(path))
+    except OSError:
+        return new                # an unwritable state dir: this process's salt only
+    made = _create_salt_file(path, new)
+    if made is None:
+        return new                # an unwritable state dir: this process's salt only
+    if not made:
+        # Another process is creating it (or made it a moment ago): take its salt.
+        salt = _await_salt(path, retries)
+        if salt:
+            return salt
+        # Still no salt in it: a damaged file, not a race. Replacing it in place could
+        # not be left to exactly one process, so the salt goes beside it instead.
+        if not repair:
+            return new
+        return _load_or_create_salt(repaired, retries=retries, repair=False)
+    # Ours: read back, so what this process uses is what the file holds.
+    return _await_salt(path, retries) or new
+
+
+def _await_salt(path: str, retries: int) -> bytes:
+    """The salt in ``path``, looking again briefly while it is absent or empty."""
+    for _ in range(max(1, retries)):
+        salt = _read_salt(path)
+        if salt:
+            return salt
+        time.sleep(0.05)
+    return b""
+
+
+def _create_salt_file(path: str, salt: bytes) -> bool | None:
+    """Create ``path`` holding ``salt`` unless a file is already there: written in full
+    to a private temporary file beside it, then hard-linked into place (a link never
+    replaces a file), so no process ever sees it empty or half written. True when it
+    was created, False when a file was there already, None when it cannot be made.
+    Where hard links are not supported it is created exclusively and then written."""
+    text = (salt.hex() + "\n").encode("ascii")
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp",
+                                   dir=os.path.dirname(path))
+    except OSError:
+        return None
+    try:
         try:
-            _write_private(path, salt.hex() + "\n")
+            os.write(fd, text)
+        finally:
+            os.close(fd)
+        os.link(tmp, path)
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        pass                      # no hard links here (or the write failed): see below
+    finally:
+        try:
+            os.remove(tmp)
         except OSError:
-            pass                 # an unwritable state dir: the digest still compares in-process
-    return _pbkdf2(secret, salt)
+            pass
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                     0o600)
+    except FileExistsError:
+        return False
+    except OSError:
+        return None
+    try:
+        try:
+            os.write(fd, text)
+        finally:
+            os.close(fd)
+    except OSError:
+        try:
+            os.remove(path)       # no empty salt file left for the next process
+        except OSError:
+            pass
+        return None
+    return True
 
 
 @functools.lru_cache(maxsize=16)
@@ -465,8 +596,10 @@ def ensure_issuer(mesh: str, *, keygen: str | None = None,
     pub = key + ".pub"
     keygen = keygen or ssh_keygen()
     osname = osname or os.name
+    _tighten_issuer_dirs(mesh, osname)
     if not os.path.isfile(key):
-        os.makedirs(os.path.dirname(key), mode=0o700, exist_ok=True)
+        # mesh-issuers/ AND mesh-issuers/<mesh>/ are private, not just the last one
+        _makedirs_private(os.path.dirname(key), osname)
         if os.path.exists(pub):
             os.remove(pub)          # the public half of a key that is gone
         _create_issuer(mesh, key, keygen, osname)
@@ -486,6 +619,22 @@ def ensure_issuer(mesh: str, *, keygen: str | None = None,
     if not _ISSUER_RE.match(_issuer_key(line)):
         raise TokenError("tool", f"The issuer key {pub} is not an ssh-ed25519 public key.")
     return key, line, fingerprint(line)
+
+
+def _tighten_issuer_dirs(mesh: str, osname: str) -> None:
+    """Make mesh-issuers/ and mesh-issuers/<mesh>/ 0700 on POSIX when they already
+    exist (an earlier build created mesh-issuers/ 0755, which lists the mesh names) and
+    belong to this user. Best effort: a folder it cannot change is left as it is.
+    Windows: the per-user state dir's ACL applies."""
+    if osname == "nt":
+        return
+    for d in (os.path.join(state_dir(), ISSUERS_DIR), issuer_dir(mesh)):
+        try:
+            st = os.lstat(d)
+            if stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and st.st_mode & 0o077:
+                os.chmod(d, 0o700)
+        except OSError:
+            pass
 
 
 def _create_issuer(mesh: str, key: str, keygen: str, osname: str) -> None:
@@ -572,23 +721,19 @@ def _self_check(key: str, keygen: str, osname: str, runner=subprocess.run) -> No
 
 
 # ── a pre-auth key from the mesh's own headscale ────────────────────────────────────
-#: Tags a minted pre-auth key asks for by default: none. In the mesh's headscale policy
-#: (specs/etc/headscale/policy.hujson.tmpl, rendered by gen-headscale-policy.sh) every
-#: tag is owned by the control user "hugmesh" alone, and the ones that gate access
-#: (tag:dom_*, tag:dev_*, tag:mesh_*, tag:superadmin) are SERVER-FORCED at approval by
-#: hugmesh-headscale-forcetags — no node may bring them on its key. So no tag is asked
-#: for, and the server tags the node.
+#: Tags a minted pre-auth key asks for by default: none. Role and domain are labels;
+#: the mesh decides what this node may do. The pre-auth key only lets it join.
 DEFAULT_MINT_TAGS: tuple[str, ...] = ()
 
-#: The headscale user a minted key is for by default: the mesh's control user, the
-#: only user HugMesh's headscale provisioning creates (keys-template/provision.json
-#: "users") and the owner of every tag in its policy. The role is not a headscale user.
-DEFAULT_MINT_USER = "hugmesh"
+#: What every face says when minting has no headscale user. There is no default user:
+#: the admin names it every time (the role is not a headscale user either).
+NAME_MINT_USER = "Name the headscale user your mesh sets aside for joining devices."
 
-_TAG_RE = re.compile(r"^tag:[a-z0-9][a-z0-9_-]{0,62}$")
+#: One tag per entry: no comma, so a value cannot add a second tag to ``--tags a,b``.
+_TAG_RE = re.compile(r"^tag:[a-z0-9][a-z0-9_-]{0,62}\Z")
 #: A headscale user or a docker container name; never starts with "-", so it cannot be
-#: read as an option.
-_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+#: read as an option. (``\Z``, not ``$``: a trailing newline is refused too.)
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 
 
 def _docker(argv: list[str], runner, what: str):
@@ -635,8 +780,11 @@ def mint_preauth_key(*, user: str, tags=DEFAULT_MINT_TAGS, lifetime_s: int,
                      container: str = "", runner=None) -> str:
     """A new single-use headscale pre-auth key for ``user`` that expires after
     ``lifetime_s``, minted in the RUNNING headscale container ``container`` (found
-    with ``docker ps`` when ""). The key is returned, never printed or logged."""
-    if not _NAME_RE.match(user or ""):
+    with ``docker ps`` when ""). The key is returned, never printed or logged.
+    ``user`` must be named: there is no default."""
+    if not user:
+        raise TokenError("invalid", f"No headscale user was named. {NAME_MINT_USER}")
+    if not _NAME_RE.match(user):
         raise TokenError("invalid", f"{user!r} is not a headscale user name.")
     tags = tuple(tags or ())
     bad = [t for t in tags if not _TAG_RE.match(t)]
@@ -649,6 +797,10 @@ def mint_preauth_key(*, user: str, tags=DEFAULT_MINT_TAGS, lifetime_s: int,
     if container and not _NAME_RE.match(container):
         raise TokenError("invalid", f"{container!r} is not a container name.")
     container = container or find_headscale_container(runner)
+    # A FOUND name gets the same check as a given one: docker ps output is not trusted
+    # to be a name that cannot be read as an option.
+    if not _NAME_RE.match(container):
+        raise TokenError("invalid", f"{container!r} is not a container name.")
     argv = ["docker", "exec", container, "headscale", "preauthkeys", "create",
             "--user", user, "--expiration", f"{int(lifetime_s)}s"]
     if tags:
@@ -676,8 +828,12 @@ def check_signing(key_path: str, *, keygen: str | None = None,
 
 def expire_preauth_key(key: str, *, user: str, container: str, runner=None) -> bool:
     """Expire a pre-auth key this Studio minted but could not put in a token. The key
-    goes to the container on stdin, never onto this computer's command line (it needs
-    a shell in the container, as HugMesh's images have). Returns whether it worked."""
+    goes to the container on stdin, so it is not on the ``docker exec`` command line
+    (this needs a shell in the container, as HugMesh's images have). Inside the
+    container it IS an argument of ``headscale preauthkeys expire`` for as long as that
+    runs, and a container's processes are processes of the host running docker, so for
+    that moment the key is visible in that host's process list. It is a key that is
+    being expired, from a run that has just failed. Returns whether it worked."""
     script = 'IFS= read -r k && exec headscale preauthkeys expire --user "$1" "$k"'
     try:
         r = (runner or subprocess.run)(
@@ -689,15 +845,20 @@ def expire_preauth_key(key: str, *, user: str, container: str, runner=None) -> b
     return r.returncode == 0
 
 
-def mint_and_issue(*, key_path: str, user: str = DEFAULT_MINT_USER, container: str = "",
+def mint_and_issue(*, key_path: str, user: str, container: str = "",
                    tags=DEFAULT_MINT_TAGS, interactive: bool = False,
                    keygen: str | None = None, runner=None, **fields) -> tuple[str, str]:
-    """(token, container): mint a single-use pre-auth key and sign a token carrying it.
+    """(token, container): mint a single-use pre-auth key for the headscale ``user``
+    (named by the caller: there is no default) and sign a token carrying it.
     The issuer key is made to sign once FIRST, so the usual signing failures happen
     before anything exists on the server; if signing still fails after the mint, the
     minted key is expired, and the error says whether that worked. ``fields`` are
     :func:`issue`'s (mesh, domain, role, shell, login_server, lifetime_s, node_name),
     already checked by the caller."""
+    if not user:
+        raise TokenError("invalid", f"No headscale user was named. {NAME_MINT_USER}")
+    if not _NAME_RE.match(user):
+        raise TokenError("invalid", f"{user!r} is not a headscale user name.")
     container = container or find_headscale_container(runner)
     check_signing(key_path, keygen=keygen, interactive=interactive)
     auth_key = mint_preauth_key(user=user, tags=tags, lifetime_s=fields["lifetime_s"],
@@ -802,6 +963,25 @@ def _path(name: str) -> str:
     return os.path.join(state_dir(), name)
 
 
+def _makedirs_private(folder: str, osname: str | None = None) -> None:
+    """``os.makedirs(folder)``, with EVERY directory it creates made 0700 on POSIX.
+    makedirs applies its mode to the last directory only (and the umask narrows even
+    that), so ``mesh-issuers/`` would otherwise be created 0755. Directories that
+    already existed keep their mode. Windows: the per-user state dir's ACL applies."""
+    created = []
+    d = os.path.abspath(folder)
+    while not os.path.isdir(d):
+        created.append(d)
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    if (osname or os.name) != "nt":
+        for d in created:
+            os.chmod(d, 0o700)
+
+
 def _write_private(path: str, text: str) -> None:
     """Write a file only this user can read (0600 on POSIX; the per-user state dir's
     ACL on Windows). The TUI also saves a token to any path the user names, perhaps
@@ -855,12 +1035,27 @@ def save_token(token: str) -> MeshGrant:
     return g
 
 
+def token_stored() -> bool:
+    """Whether a token file is kept at all, readable or not (what Forget removes)."""
+    try:
+        return os.path.isfile(_path(TOKEN_FILE))
+    except Exception:            # noqa: BLE001 — a broken state dir is "none stored"
+        return False
+
+
 def stored_token() -> str:
+    """The kept token's text, or "" when none is kept. A file that is not text (a
+    damaged copy, not UTF-8) raises ``malformed``: it is a token that cannot be used,
+    not an absent one, so the tray refuses to start rather than fall back to
+    ``TS_AUTHKEY``, and the token dialog still opens to Forget it."""
     try:
         with open(_path(TOKEN_FILE), encoding="utf-8") as fh:
             return fh.read().strip()
     except OSError:
         return ""
+    except (UnicodeDecodeError, ValueError):
+        raise TokenError("malformed", "The stored HugMesh token file is damaged (it is not "
+                                      "text). Forget it and import the token again.") from None
 
 
 def forget_token() -> None:
@@ -898,13 +1093,14 @@ def import_token(text: str, confirm_trust) -> tuple[MeshGrant | None, str]:
 
 
 def summary() -> str:
-    """What the tray runs a mesh node under now, as one sentence."""
-    if not stored_token():
-        return "No HugMesh token imported. The mesh node uses TS_AUTHKEY, if it is set."
+    """What the tray runs a mesh node under now, as one sentence. Never raises: the
+    token dialog (where Forget lives) opens with it."""
     try:
         g = load_grant()
-    except Exception as e:
+    except Exception as e:       # noqa: BLE001 — a damaged file is still a sentence
         return f"The imported token cannot be used: {e}"
+    if g is None:
+        return "No HugMesh token imported. The mesh node uses TS_AUTHKEY, if it is set."
     return f"Imported: {g.describe()}. Issuer {fingerprint(g.issuer)}."
 
 
@@ -960,13 +1156,61 @@ class GrantedMeshNode(MeshNode):
         except (OSError, ValueError):
             return {}
 
-    def _record(self, g: MeshGrant | None) -> str:
+    @staticmethod
+    def _public(g: MeshGrant | None) -> str:
+        """The NON-secret part of what the node was started with: a hash of the token's
+        signed public fields (its random id included, so two tokens never share it), or
+        "ts_authkey". Unlike ``identity`` it needs no salt, so it still compares when
+        the salt the record was made under is gone."""
+        if g is None:
+            return "ts_authkey"
+        parts = (_issuer_key(g.issuer), g.mesh, g.domain, g.role, str(g.shell),
+                 g.login_server, g.node_name, g.id, str(g.issued), str(g.expires))
+        return "token:" + hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]
+
+    def _compare(self, rec: dict, g: MeshGrant | None) -> bool | None:
+        """Was the node recorded in ``rec`` started with the credentials of ``g``?
+        True / False, or None when this cannot be told: no record, or a record whose
+        digest was made under ANOTHER salt (the salt file was lost, or the state dir
+        cannot be written so each process draws its own). A digest from another salt
+        never reads as "different": that is what used to wipe a node whose credentials
+        had not changed and re-register it with its already-spent single-use key.
+        Then only the public part speaks: a different token (or a switch between token
+        and TS_AUTHKEY) is a change; the same token is the same; a TS_AUTHKEY whose
+        key cannot be compared stays unknown (start() then keeps the record as it was,
+        so a changed key is never re-recorded as the one the node runs under).
+
+        A record from before the salt and the public part were kept is compared by its
+        digest under the current salt (the salt file it was made under is usually still
+        there), then by the token's expiry and issuer it always carried."""
+        if not rec:
+            return None
+        if rec.get("salt") == salt_id():
+            return rec.get("identity") == self._identity(g)
+        public = rec.get("public")
+        if public is None:          # a record from before the public part was kept
+            if "salt" not in rec and rec.get("identity") == self._identity(g):
+                return True
+            if bool(rec.get("token")) != (g is not None):
+                return False
+            if g is not None and (rec.get("expires") != g.expires
+                                  or rec.get("issuer") != _issuer_key(g.issuer)):
+                return False
+            return None
+        if public != self._public(g):
+            return False
+        return True if g is not None else None
+
+    def _record(self, g: MeshGrant | None, keep: dict | None = None) -> str:
         """Write the record; returns "" or why it could not be written. The token's
         expiry and issuer (neither is secret) let enforce() judge the token the node
-        RUNS under, not whichever one is stored now."""
-        rec = {"identity": self._identity(g), "summary": g.short() if g else "TS_AUTHKEY",
-               "token": g is not None}
-        if g is not None:
+        RUNS under, not whichever one is stored now. ``salt`` names the salt the
+        identity digest was made under; ``public`` is :meth:`_public`. ``keep`` writes
+        that earlier record back unchanged instead."""
+        rec = keep or {"identity": self._identity(g), "salt": salt_id(),
+                       "public": self._public(g),
+                       "summary": g.short() if g else "TS_AUTHKEY", "token": g is not None}
+        if g is not None and not keep:
             rec.update(expires=g.expires, issuer=_issuer_key(g.issuer))
         try:
             _write_private(self._identity_path(), json.dumps(rec))
@@ -994,13 +1238,18 @@ class GrantedMeshNode(MeshNode):
         if g is None and not super()._authkey():
             return False, ("Import a HugMesh token first (tray menu > HugMesh token…), "
                            "or set TS_AUTHKEY to a tailnet/headscale auth key.")
-        had = self.recorded().get("identity")
+        rec = self.recorded()
+        same = self._compare(rec, g)
         # Staged first, so the project (and with it the volume) can be addressed even
         # when the workdir was deleted since the last run.
         self._stage()
         # Different credentials than the saved state was made with, or a token run over
-        # state of unknown origin: register afresh, or the old registration stays.
-        if (had != self._identity(g)) if had else (g is not None):
+        # state NO record describes (another lane's start, a deleted workdir): register
+        # afresh, or the old registration stays. A record this tray cannot compare
+        # (made under another salt) keeps the state and is re-recorded below: wiping it
+        # would strand a node whose single-use key is already spent.
+        reset = same is False or (not rec and g is not None)
+        if reset:
             ok, out = self._reset_state()
             if not ok:
                 return False, f"Could not clear the node's previous tailnet identity: {out}"
@@ -1009,18 +1258,30 @@ class GrantedMeshNode(MeshNode):
             ok, out = super().start()
         finally:
             self._active = None
-        if ok:
-            why = self._record(g)
-            if why:
-                out = (f"{out}\n" if out else "") + (
-                    f"(Started, but its credentials could not be recorded: {why})")
+        # MeshNode.start drops the record before its `up`. What the state was made with
+        # is still known, so it is written back whether or not `up` worked: a failed
+        # restart must not leave state that no record describes, which the next start
+        # would wipe and re-register with an already-spent single-use key.
+        if rec and same is None and (g is None or not ok):
+            # Not confirmed (a TS_AUTHKEY under another salt), or the state is untouched
+            # by a failed `up`: the earlier record stands as it was.
+            why = self._record(g, keep=rec)
+        elif ok or reset or same:
+            why = self._record(g)       # the state is now g's (or empty, then g's next)
+        else:
+            why = ""
+        if ok and why:
+            out = (f"{out}\n" if out else "") + (
+                f"(Started, but its credentials could not be recorded: {why})")
         return ok, out
 
     def apply_limits(self) -> tuple[bool, str]:
         """Re-apply the Resource limits to a RUNNING node now (compose recreates the
         container with the rewritten overlay). A stopped node picks them up at its
         next start, so there is nothing to do. A node started under OTHER (or unknown)
-        credentials than the tray holds now is not restarted behind the operator's back."""
+        credentials than the tray holds now is not restarted behind the operator's back.
+        One this tray started whose record it cannot compare (another salt, see
+        :meth:`_compare`) is restarted: start() keeps its state for exactly that case."""
         if not self.status().running:
             return True, "not running"
         rec = self.recorded()
@@ -1028,7 +1289,7 @@ class GrantedMeshNode(MeshNode):
             return False, ("it was not started from this tray, so its credentials are "
                            "unknown; stop and start it to apply the limits")
         g, why = self.grant()
-        if why or rec.get("identity") != self._identity(g):
+        if why or self._compare(rec, g) is False:
             return False, ("it was started under other credentials than the tray holds "
                            "now; stop and start it to apply the limits and the token")
         return self.start()
@@ -1045,7 +1306,7 @@ class GrantedMeshNode(MeshNode):
                         "This node was not started from the tray, so what it runs under "
                         "is unknown. Stop and start it here to run it as the tray says.")
             suffix = f" — {rec.get('summary', '')}"
-            if why or rec.get("identity") != self._identity(g):
+            if why or self._compare(rec, g) is False:
                 return (suffix + " (restart to apply the current token)",
                         why or "The tray holds other credentials than this node was "
                                "started with. Stop and start it to apply them.")
@@ -1097,6 +1358,10 @@ class GrantedMeshNode(MeshNode):
 # ── CLI: issue / show / trust ────────────────────────────────────────────────────────
 _UNITS = {"m": 60, "h": 3600, "d": 86400}
 
+#: Said after every issued token, by the CLI, the window and the text interface.
+SERVER_DECIDES = ("Role and domain are labels; the mesh decides what this node may do. "
+                  "The pre-auth key only lets it join.")
+
 
 def _lifetime(text: str) -> int:
     m = re.fullmatch(r"(\d+)([mhd])", text.strip())
@@ -1124,7 +1389,7 @@ def _cli_issue(args) -> int:
               + ("" if existed else " (created now; this computer trusts it)"),
               file=sys.stderr)
     container = ""
-    user = args.headscale_user or DEFAULT_MINT_USER
+    user = args.headscale_user
     if args.mint:
         if interactive:
             print("Checking that the key can sign before a pre-auth key is minted: "
@@ -1143,14 +1408,10 @@ def _cli_issue(args) -> int:
     if args.mint:
         tags = ", ".join(args.tag) if args.tag else "no tags of its own"
         server = (f"The pre-auth key was minted in {container} for the headscale user "
-                  f"{user}: single-use, expiring with the "
-                  f"token, with {tags}. The server still decides: headscale's "
-                  f"server-forced tags and its ssh policy set what the node may reach, so "
-                  f"keep shell there to match.")
+                  f"{user}: single-use, expiring with the token, with {tags}. "
+                  f"{SERVER_DECIDES}")
     else:
-        server = (f"The server still decides: create the pre-auth key with the tags for "
-                  f"{g.domain} and {g.role}, and keep shell in the headscale ssh policy "
-                  f"to match.")
+        server = SERVER_DECIDES
     print(f"\nGrants: {g.describe()}\nIssuer: {fingerprint(g.issuer)} (give the "
           f"recipient this fingerprint separately)\n{server}", file=sys.stderr)
     return 0
@@ -1179,10 +1440,10 @@ def main(argv: list[str] | None = None) -> int:
                      "in the mesh's running headscale container (docker exec)")
     i.add_argument("--headscale-container", default="", help="with --mint: the headscale "
                    "container (default: the one running container named like headscale)")
-    i.add_argument("--headscale-user", default="", help="with --mint: the headscale user "
-                   f"the key is for (default: {DEFAULT_MINT_USER}, the mesh's control user)")
+    i.add_argument("--headscale-user", default="", help="with --mint, required: the "
+                   "headscale user the key is for (no default). " + NAME_MINT_USER)
     i.add_argument("--tag", action="append", default=[], help="with --mint: a tag the key "
-                   "asks for (repeatable; default none, the server tags the node)")
+                   "asks for (repeatable, one tag each; default none)")
     i.add_argument("--node-name", default="")
     i.add_argument("--expires", type=_lifetime, default=_lifetime("7d"),
                    help="lifetime such as 12h or 7d (default 7d, at most 90d)")
@@ -1197,6 +1458,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "issue" and not args.mint and (
             args.headscale_container or args.headscale_user or args.tag):
         i.error("--headscale-container, --headscale-user and --tag go with --mint")
+    if args.cmd == "issue" and args.mint and not args.headscale_user:
+        i.error(f"--mint needs --headscale-user. {NAME_MINT_USER}")
+    # Checked here too, not only by mint_and_issue: that runs after the issuer key is
+    # created, and nothing is created for a request that cannot be carried out.
+    if args.cmd == "issue" and args.mint:
+        if not _NAME_RE.match(args.headscale_user):
+            i.error(f"{args.headscale_user!r} is not a headscale user name.")
+        if args.headscale_container and not _NAME_RE.match(args.headscale_container):
+            i.error(f"{args.headscale_container!r} is not a container name.")
+        bad = [t for t in args.tag if not _TAG_RE.match(t)]
+        if bad:
+            i.error(f"{', '.join(map(repr, bad))} is not a headscale tag (tag:name, "
+                    "lower-case).")
     try:
         if args.cmd == "issue":
             return _cli_issue(args)
