@@ -530,7 +530,11 @@ minted, so a typo never leaves a pre-auth key behind on the server.
   running container named like `headscale` (when several match, the one that is
   headscale itself, such as `hugmesh-headscale` beside `headscale-ui`). The headscale
   user has no default and must be named every time: name the headscale user your mesh
-  sets aside for joining devices. No tags are asked for. The issuer key signs once
+  sets aside for joining devices (HugMesh's headscale provisioning creates `hugmesh`,
+  a membership user that owns no access tag). No tags are asked for: the mesh's
+  headscale policy forces the access tags server-side, and a minted key may not carry
+  one (`tag:superadmin`, `tag:mesh_*`, `tag:dev_*`, `tag:dom_*` are refused), because
+  headscale forces a key's tags on whoever joins with it. The issuer key signs once
   before the key is minted, and a key minted for a token that then fails to sign is
   expired straight away. A minted key is read from headscale's output, never put on a
   command line or in a log; expiring an unused one passes it to the container on
@@ -603,9 +607,12 @@ The tray's status line shows the grant (for example *admin in example.org, SSH i
 Without a token, the tray still runs a node on `TS_AUTHKEY`.
 
 **Role and domain are labels; the mesh decides what this node may do. The pre-auth key
-only lets it join.** The mesh's `ssh` policy decides who may open a shell where. The
-token makes this tray run the node exactly as granted and refuses an edited token, but
-whoever holds a token holds a real pre-auth key, so issue tokens only to people you
+only lets it join.** It cannot carry the domain or role tags: the mesh's control node
+forces the access tags (`tag:dom_*`, `tag:mesh_*`, `tag:dev_*`, `tag:superadmin`) itself
+when it approves the node, and its `ssh` policy decides who may open a shell where. The
+policy gives those tags no owner, so a node that advertises one at join is refused it.
+The token makes this tray run the node exactly as granted and refuses an edited token,
+but whoever holds a token holds a real pre-auth key, so issue tokens only to people you
 would give that key to.
 
 **Resource limits** saved from the tray apply to a token-run node too. If the mesh node
