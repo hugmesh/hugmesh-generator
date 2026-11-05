@@ -54,3 +54,25 @@ EXPERIMENTAL: the mainline fragment set mirrors the proven Frite/RPi5 flow and
 the upstream Tegra234 defconfig deltas. It has NOT been booted on a physical
 Orin Nano from this repo. Treat every image as needing hardware until the first
 boot is confirmed (then update specs-jetson/README.md).
+
+## Emulation under the QEMU runner: serial only (deliberate)
+
+The containerised QEMU runner opens desktop images through a SPICE door and a
+viewer whose window size the guest follows — but only when the guest kernel
+carries `CONFIG_DRM_VIRTIO_GPU` + `CONFIG_VIRTIO_INPUT` + `CONFIG_INPUT_UINPUT`
+(see docs/CLIENT-IMAGES.md, "Emulated desktop display"). The Jetson fragments are
+left WITHOUT them on purpose:
+
+* the mainline flavor's display is tegra-drm / simple-framebuffer, the board's own
+  silicon; nothing in `tegra234.config` is virt-aware, and the kernel is tuned
+  for a Tegra234 DTB that QEMU's `virt` machine does not provide;
+* the L4T flavor is a hard error today, so there is no second kernel to equip;
+* no Jetson image has ever been booted, on hardware or in QEMU, from this repo —
+  adding a display stack here would advertise a capability nobody can verify.
+
+So under the runner a Jetson desktop image is **serial only**: the runner attaches
+no display device, the device record carries no `display_port`, and the UI says
+`serial only: kernel lacks virtio-gpu` rather than offering a window that would stay
+black. `tests/scripts/test-virtual-display-kernel.sh` pins this: the Jetson row of
+the board table is `serial only` and its fragments must NOT claim virtio-gpu until
+someone boots one and flips the row.
