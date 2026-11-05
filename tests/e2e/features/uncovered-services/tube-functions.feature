@@ -41,20 +41,37 @@ Feature: What each role can actually do inside the Tube console
     And every evidence artefact recorded for this scenario exists on disk
 
   # ── access: TUBE_MANAGE = admin | superadmin ──────────────────────────────
+  #
+  # Two controls on this page are conditional, and asserting either one on first
+  # load for every role asserted a state the UI does not have (generator#620):
+  #
+  #   * tube-access-ttl is the TIME-OUT control. tube-access.component.html
+  #     renders it only inside @if (action() === 'timeout'), and the form opens
+  #     on "Grant use". So it is pinned absent first, then present once "Time
+  #     out" is chosen.
+  #   * tube-access-manage (the Active overrides list) sits inside
+  #     @if (canManageAll()), and canManageAll is isSuperadmin() in
+  #     session.service.ts. An admin gets the write form and NOT the list. The
+  #     <manage> column states that per role, so the admin row is the negative
+  #     half that pins the privilege, the same matched pair owncast's grant-audit
+  #     scenarios use.
   @function:access @env:docker
   Scenario Outline: <role> is offered the tube access controls @role:<role> @function:access @service:tube @layer:ui @env:docker
     Given I am signed in as the persona for this scenario
     When I open the path "/tube/access"
     Then the element with test id "tube-access-user" is visible
-    And the element with test id "tube-access-ttl" is visible
     And the element with test id "tube-access-reason" is visible
     And the element with test id "tube-access-submit" is visible
-    And the element with test id "tube-access-manage" is visible
+    And the element with test id "tube-access-manage" <manage>
+    And the element with test id "tube-access-ttl" is not visible
+    When I choose the radio labelled "Time out"
+    Then the field labelled "Timeout duration (hours)" is visible
+    And the element with test id "tube-access-ttl" is visible
 
     Examples:
-      | role           |
-      | e2e-admin      |
-      | e2e-superadmin |
+      | role           | manage         |
+      | e2e-admin      | is not visible |
+      | e2e-superadmin | is visible     |
 
   # ── budgets: the SAME guard, asserted separately on purpose ───────────────
   #
