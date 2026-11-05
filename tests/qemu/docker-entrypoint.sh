@@ -139,6 +139,16 @@ MESH_NET="${MESH_NET:-}"
 MESH_MAC="${MESH_MAC:-}"
 MESH_IP="${MESH_IP:-}"
 MESH_PREFIX_LEN="${MESH_PREFIX_LEN:-24}"
+# The mesh CLIENT's rendezvous (2026-11-04). The L2 above lets the guests reach each
+# other; joining them to ONE tailnet also needs a key from the control node's own
+# headscale, which exists only once that guest has booted. run-qemu-docker.sh hands
+# every device of one --mesh-net fleet the SAME fresh directory under /work; the
+# control row (pki|generic|omnibus) publishes `authkey` (its reusable preauth key) and
+# `login_server` there once its guest answers ssh, and every other row waits for them
+# (at most MESH_JOIN_WAIT seconds) before writing its KEYS stick. Empty = no fleet:
+# the control node still self-joins its own headscale, a worker gets no key.
+MESH_RENDEZVOUS="${MESH_RENDEZVOUS:-}"
+MESH_JOIN_WAIT="${MESH_JOIN_WAIT:-1800}"
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; YEL=$'\033[0;33m'; RST=$'\033[0m'
 info() { echo "${GREEN}[qemu-docker]${RST} $*"; }
@@ -561,6 +571,18 @@ else
     [[ "${MESH_PREFIX_LEN}" =~ ^[0-9]+$ ]] \
         && [ "${MESH_PREFIX_LEN}" -ge 8 ] && [ "${MESH_PREFIX_LEN}" -le 30 ] \
         || die "--mesh-prefix-len must be 8..30, got '${MESH_PREFIX_LEN}'"
+fi
+# The rendezvous carries a preauth key, so it must be a plain directory under the
+# /work bind mount (shared by this fleet's containers, never the host's /tmp), and
+# it only means something on a shared L2.
+if [ -n "${MESH_RENDEZVOUS}" ]; then
+    [ -n "${MESH_NET}" ] || die "MESH_RENDEZVOUS makes no sense without --mesh-net"
+    case "${MESH_RENDEZVOUS}" in
+        /work/*) ;;
+        *) die "MESH_RENDEZVOUS must be under /work (got: ${MESH_RENDEZVOUS})" ;;
+    esac
+    case "${MESH_RENDEZVOUS}" in *..*) die "MESH_RENDEZVOUS must not contain '..' (got: ${MESH_RENDEZVOUS})" ;; esac
+    [[ "${MESH_JOIN_WAIT}" =~ ^[0-9]+$ ]] || die "MESH_JOIN_WAIT must be a number of seconds (got: ${MESH_JOIN_WAIT})"
 fi
 
 # ── Which logins will exist on the guest ────────────────────────────────────
@@ -1038,13 +1060,94 @@ case "${ROLE}" in
     desktop|laptop|chromebook|standalone-*) K8S_ROLE="none" ;;
 esac
 
+# ── The mesh client (tailscale), shaped like the PRODUCT's KEYS manifest ──────
+# This payload used to say "tailscale": { "enabled": false } for every row. The
+# product never does: keys-template/provision.json and every Studio-generated KEYS
+# stick (e.g. out/sessions/<id>/keys-{pki,backend,frontend}.rpi5/provision.json)
+# carry tailscale.enabled=true. provision_tailscale() honours the flag by DELETING
+# tailscaled from the default runlevel (specs/etc/keys-provision/provision.sh), so
+# the image's correct build-time link vanished at first boot and assertions.sh
+# graded every emulated node "/usr/sbin/tailscaled is installed but tailscaled is
+# MISSING from the default runlevel" — a harness defect reported as an image one
+# (2026-11-01 run, rpi5 pki/backend/frontend), and no emulated mesh could form.
+#
+# Now: enabled=true everywhere (provision_tailscale skips cleanly on an image with
+# no tailscaled binary), the product's role tags and routes as up_args, and a way
+# to actually JOIN —
+#   * a control row (headscale) declares the product's fleet user plus ONE
+#     preauth key, REUSABLE (hugmesh-generator#514: the control node's own
+#     self-join consumes a single-use key, leaving the workers nothing). With a
+#     shared L2 its server_url is its MESH address, the only one peers can dial
+#     (resolve_endpoint would otherwise pick the SLIRP 10.0.2.15 no peer reaches);
+#   * every other row on a fleet rendezvous waits for that control node's key
+#     and login_server and writes them onto its own stick.
+#
+# Which headscale policy that fleet runs (checked 2026-11-04 for PR #858, after a
+# proof run's worker showed peers=0 under the BOOTSTRAP policy and policy-sync
+# logged "MESH_ID empty" / "registry-pub.ed25519 ABSENT"): no stick written here
+# carries a device_registry block, a mesh id or a registry-pub.ed25519, and no
+# PRODUCT stick for a primary role does either. scripts/gen-provision-keys.sh
+# writes KEYS/device-registry/ only for role=mesh-extension, keys-template/
+# provision*.json carry no .mesh.id, and the rendered Layer-A policy also needs a
+# signed export fetched over mTLS from the in-cluster admin-bff
+# (gen-headscale-policy.sh fetch_export), which no first-boot fleet has. A real
+# pki/backend fleet therefore runs the baked bootstrap policy as well; this one
+# lacks nothing a real stick provides. Its acls[] equal the rendered template's
+# (specs/etc/headscale/policy.{bootstrap.hujson,hujson,hujson.tmpl} all grant only
+# tag:hugmesh -> 10.244.0.0/16:*, 10.96.0.0/12:*). No policy grants a node's own
+# 100.64 address, so fleet nodes are in each other's netmap only through those
+# routes, and assertions.sh grades exactly that (assert_mesh_client: "mesh
+# routes"). Follow-up, not changed here: kube-api.<base_domain> is published by
+# publish_cp_dns_record at the control node's TAILNET address, and :6443 there is
+# filtered under every shipped policy; the product reaches the API only because
+# provision_hosts pins cp_dns_name to the pki LAN IP from .nodes[] (this payload
+# has no .nodes[] and nothing here dials the API), so docs/SECURITY.md's "MagicDNS
+# then takes over" does not hold under the shipped ACL.
+TS_TAGS="tag:hugmesh"
+case "${ROLE}" in
+    pki|generic|omnibus)           TS_TAGS="tag:hugmesh,tag:pki" ;;
+    backend|backend-gpu|edge-ai)   TS_TAGS="tag:hugmesh,tag:be" ;;
+    frontend)                      TS_TAGS="tag:hugmesh,tag:fe" ;;
+esac
+TS_UP_ARGS="--advertise-tags=${TS_TAGS} --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false --ssh"
+case "${ROLE}" in
+    desktop|laptop|chromebook|standalone-*) TS_UP_ARGS="--advertise-tags=${TS_TAGS} --accept-routes" ;;
+esac
+TS_LOGIN=""
+HS_EXTRA=""
+if [ "${HS_ENABLED}" = true ]; then
+    HS_EXTRA=', "users": ["hugmesh"], "preauthkeys": [ { "user": "hugmesh", "reusable": true, "ephemeral": false } ]'
+    [ -n "${MESH_NET}" ] && HS_EXTRA+=", \"server_url\": \"http://${MESH_IP}:8080\""
+elif [ -n "${MESH_RENDEZVOUS}" ]; then
+    # Bounded, interruptible wait for the control node's key. Interruptible
+    # because a `docker stop` during it must not burn the stop grace window.
+    step "Waiting up to ${MESH_JOIN_WAIT}s for the fleet's control node to publish a mesh key (${MESH_RENDEZVOUS})"
+    _mw_deadline=$((SECONDS + MESH_JOIN_WAIT))
+    while [ "${SECONDS}" -lt "${_mw_deadline}" ]; do
+        [ -s "${MESH_RENDEZVOUS}/authkey" ] && [ -s "${MESH_RENDEZVOUS}/login_server" ] && break
+        sleep 5 & wait $! 2>/dev/null || true
+    done
+    if [ -s "${MESH_RENDEZVOUS}/authkey" ] && [ -s "${MESH_RENDEZVOUS}/login_server" ]; then
+        mkdir -p "${KEYS_SRC}/tailscale"
+        install -m 0600 "${MESH_RENDEZVOUS}/authkey" "${KEYS_SRC}/tailscale/authkey"
+        TS_LOGIN="$(tr -d '[:space:]' < "${MESH_RENDEZVOUS}/login_server")"
+        [[ "${TS_LOGIN}" =~ ^http://[0-9.]+:[0-9]+$ ]] \
+            || { warn "ignoring a malformed login_server in ${MESH_RENDEZVOUS}: '${TS_LOGIN}'"; TS_LOGIN=""; rm -f "${KEYS_SRC}/tailscale/authkey"; }
+        [ -n "${TS_LOGIN}" ] && info "mesh   : joining the control node's tailnet at ${TS_LOGIN} (key from the fleet rendezvous)"
+    else
+        warn "no mesh key appeared in ${MESH_RENDEZVOUS} within ${MESH_JOIN_WAIT}s — this node boots with tailscaled but cannot join (is the fleet's control row up?)"
+    fi
+fi
+
 cat > "${KEYS_SRC}/provision.json" <<EOF
 {
   "version": 1,
   "hostname": "hugmesh-${ROLE}-qemu",
   "timezone": "UTC",
-  "headscale": { "enabled": ${HS_ENABLED}, "config_file": "headscale/config.yaml" },
-  "tailscale": { "enabled": false },
+  "headscale": { "enabled": ${HS_ENABLED}, "config_file": "headscale/config.yaml"${HS_EXTRA} },
+  "tailscale": { "enabled": true, "authkey_file": "tailscale/authkey", "login_server": "${TS_LOGIN}",
+                 "ssh": true, "mesh_routes": "10.244.0.0/16,10.96.0.0/12",
+                 "up_args": "${TS_UP_ARGS}" },
   "kubernetes": { "role": "${K8S_ROLE}", "bootstrap": false },
   "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.local",
                "gitops": { "enabled": false } }
@@ -1257,6 +1360,39 @@ if ${KEEP_ALIVE}; then
     fi
 fi
 
+# Mesh rendezvous, control side: publish this node's reusable preauth key and its
+# mesh-address login_server for the fleet's other rows (see MESH_RENDEZVOUS above).
+# keys-provision minted the key before sshd started, but a slow first boot is
+# retried for a while. The key is copied guest -> file with no echo: it never
+# appears in a log, and the files are 0600 and handed to the invoking user.
+if [ "${HS_ENABLED}" = true ] && [ -n "${MESH_RENDEZVOUS}" ]; then
+    mkdir -p "${MESH_RENDEZVOUS}"
+    _mr_ok=false
+    for _mr_try in $(seq 1 36); do
+        if ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
+               'sudo cat /var/lib/headscale/preauthkeys/hugmesh.key' \
+               > "${MESH_RENDEZVOUS}/.authkey.part" 2>/dev/null \
+           && [ -s "${MESH_RENDEZVOUS}/.authkey.part" ] \
+           && [[ "$(tr -d '[:space:]' < "${MESH_RENDEZVOUS}/.authkey.part")" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            _mr_ok=true; break
+        fi
+        sleep 5 & wait $! 2>/dev/null || true
+    done
+    if ${_mr_ok}; then
+        chmod 0600 "${MESH_RENDEZVOUS}/.authkey.part"
+        printf 'http://%s:8080\n' "${MESH_IP}" > "${MESH_RENDEZVOUS}/.login_server.part"
+        [ -n "${HOST_UID}" ] && chown "${HOST_UID}:${HOST_GID:-${HOST_UID}}" \
+            "${MESH_RENDEZVOUS}" "${MESH_RENDEZVOUS}/.authkey.part" "${MESH_RENDEZVOUS}/.login_server.part" 2>/dev/null
+        # login_server LAST: a reader keys on both files, and each rename is atomic.
+        mv -f "${MESH_RENDEZVOUS}/.authkey.part" "${MESH_RENDEZVOUS}/authkey"
+        mv -f "${MESH_RENDEZVOUS}/.login_server.part" "${MESH_RENDEZVOUS}/login_server"
+        info "mesh   : published this control node's reusable preauth key + login_server http://${MESH_IP}:8080 for the fleet"
+    else
+        rm -f "${MESH_RENDEZVOUS}/.authkey.part"
+        warn "could not read /var/lib/headscale/preauthkeys/hugmesh.key from the guest — the fleet's other nodes cannot join this tailnet (see guest_var_log_keys-provision.log)"
+    fi
+fi
+
 step "Running assertions.sh in the guest (wall clock: ${ASSERT_TIMEOUT}s)"
 if ${KEEP_ALIVE}; then write_device_record assertions; fi
 # THE ONLY wall clock over the post-boot phase. ${TIMEOUT} bounds the ssh-wait
@@ -1290,13 +1426,24 @@ if ${KEEP_ALIVE}; then write_device_record assertions; fi
 # always the last attempt's. ConnectTimeout is raised to 15s for this one ssh,
 # and it goes BEFORE ${SSH_OPTS[@]}: ssh keeps the FIRST value it obtains for
 # an option, so appended after the array it would silently lose to the 5.
+# A fleet's CONTROL row asserts minutes before its workers boot and join. Its
+# "mesh peers" check waits, bounded by this many seconds, for a fleet node to
+# register on its headscale and reach its netmap (assertions.sh assert_mesh_client);
+# every other row gets 0 (no wait). `sudo bash -s` drops the environment, so the
+# budget rides as the first line of the streamed script. 600 s sits inside the
+# 900 s assertion wall clock with the rest of the suite's own waits to spare, and
+# a worker on TCG aarch64 joins ~4-5 min after the control row answers ssh
+# (2026-11-04 proof run: control ssh 02:15, worker joined 02:18:58).
+ASSERT_PEER_WAIT=0
+if [ "${HS_ENABLED}" = true ] && [ -n "${MESH_RENDEZVOUS}" ]; then ASSERT_PEER_WAIT="${ASSERT_PEER_WAIT_FLEET:-600}"; fi
+[[ "${ASSERT_PEER_WAIT}" =~ ^[0-9]+$ ]] || ASSERT_PEER_WAIT=0
 set +e
 ASSERT_ATTEMPTS=0
 while :; do
     ASSERT_ATTEMPTS=$((ASSERT_ATTEMPTS + 1))
     timeout -k 30 "${ASSERT_TIMEOUT}" \
         ssh -o ConnectTimeout=15 "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo bash -s' \
-        < <(cat "${QEMU_DIR}/../../scripts/_roles-lib.sh" "${QEMU_DIR}/assertions.sh") \
+        < <(printf 'HUGMESH_ASSERT_PEER_WAIT=%s\n' "${ASSERT_PEER_WAIT}"; cat "${QEMU_DIR}/../../scripts/_roles-lib.sh" "${QEMU_DIR}/assertions.sh") \
         2>&1 | tee "${RUN_DIR}/assertions.log"
     ARC=${PIPESTATUS[0]}
     [ "${ARC}" -eq 255 ] || break
@@ -1356,6 +1503,11 @@ done
 timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
     'sudo rc-service headscale status 2>&1; echo "--- rc-update ---"; sudo rc-update show default 2>&1' \
     > "${RUN_DIR}/guest_headscale-status.txt" 2>/dev/null || true
+# The mesh client's own view (2026-11-04): joined or not, its tailnet address, and
+# which peers it sees — the first thing to read when a fleet does not form.
+timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
+    'sudo rc-service tailscaled status 2>&1; echo "--- tailscale status ---"; sudo tailscale status 2>&1; echo "--- tailscale ip ---"; sudo tailscale ip -4 2>&1; echo "--- headscale nodes (control only) ---"; command -v headscale >/dev/null && sudo headscale nodes list 2>&1; echo "--- tor reconcile log ---"; sudo tail -n 40 /var/log/hugmesh-tor-reconcile.log 2>&1' \
+    > "${RUN_DIR}/guest_mesh-status.txt" 2>/dev/null || true
 # NetworkManager state: several boot-time failures (a guest that answers ssh on
 # the slirp NIC but never brings its provisioned connections up, or an rc
 # service stuck in 'starting') are only diagnosable from the NM/OpenRC side,
