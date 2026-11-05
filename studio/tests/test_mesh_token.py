@@ -13,6 +13,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import threading
 import time
 
 import pytest
@@ -537,3 +538,293 @@ def test_the_identity_record_holds_no_key_and_no_plain_hash_of_it(compose, tmp_p
     plain = hashlib.sha256("hskey-secret-value".encode()).hexdigest()
     assert plain[:16] not in text
     assert mt.secret_digest("a") == mt.secret_digest("a") != mt.secret_digest("b")
+    assert node.recorded()["salt"] == mt.salt_id()
+
+
+# ── review round 3 (#862): the identity salt, a damaged token file, the cache ────
+def _new_process():
+    """What a tray restart does to the salt: this process's cached one is gone."""
+    mt._SALTS.clear()
+
+
+@pytest.mark.real_stack_probes
+def test_an_unwritable_state_dir_keeps_one_salt_for_the_whole_process(compose, tmp_path,
+                                                                      monkeypatch):
+    """With no salt file possible, every digest used to draw a NEW salt, so the node's
+    identity changed on every call and each start wiped it (compose down -v) and
+    re-registered with an already-spent single-use key."""
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("")
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(blocker / "state"))
+    _new_process()
+    g = _grant()
+    assert g.identity() == g.identity()
+    assert mt.secret_digest("x") == mt.secret_digest("x") != mt.secret_digest("y")
+    assert not os.path.exists(os.path.join(str(blocker), "state"))
+    node = _node(tmp_path, lambda: g)
+    assert node.start()[0]
+    assert len(_downs(compose)) == 1                  # first token run: no record yet
+    compose.clear()
+    assert node.start()[0]
+    assert not _downs(compose)                        # same grant: state kept
+    assert node.tray_note(True) == (f" — {g.short()}", "")
+    compose.clear()
+    assert node.apply_limits()[0] and not _downs(compose)
+    # A tray restart draws another salt (still nowhere to keep it): the record it
+    # finds cannot be compared by digest, and the same token is not a change.
+    _new_process()
+    compose.clear()
+    assert node.start()[0]
+    assert not _downs(compose)
+    assert node.recorded()["salt"] == mt.salt_id()    # re-recorded under this salt
+
+
+@pytest.mark.real_stack_probes
+@pytest.mark.parametrize("token", [True, False])
+def test_a_lost_salt_never_strands_a_node_whose_credentials_did_not_change(
+        compose, tmp_path, monkeypatch, token):
+    monkeypatch.setenv("TS_AUTHKEY", "operator-key")
+    g = _grant() if token else None
+    node = _node(tmp_path, lambda: g)
+    assert node.start()[0]
+    os.remove(os.path.join(mt.state_dir(), mt.SALT_FILE))
+    _new_process()
+    old = node.recorded()["salt"]
+    assert old != mt.salt_id()                        # a new salt file, a new salt
+    compose.clear()
+    assert node.start()[0]
+    assert not _downs(compose)                        # unknown is kept, never wiped
+    # A token is re-recorded (its public part matched); a TS_AUTHKEY that cannot be
+    # compared keeps its old record, so it never turns into "same".
+    assert node.recorded()["salt"] == (mt.salt_id() if token else old)
+    assert mt.salt_id() != old
+    # Not restarted-behind-the-back material either: limits apply, no nag.
+    os.remove(os.path.join(mt.state_dir(), mt.SALT_FILE))
+    _new_process()
+    compose.clear()
+    assert node.apply_limits()[0] and not _downs(compose)
+    assert "restart to apply" not in node.tray_note(True)[0]
+
+
+@pytest.mark.real_stack_probes
+def test_a_lost_salt_still_sees_a_different_token_as_a_change(compose, tmp_path):
+    """The record's public part (no secret, no salt) still tells two tokens apart."""
+    holder = {"g": _grant(id="aaaa")}
+    node = _node(tmp_path, lambda: holder["g"])
+    assert node.start()[0]
+    os.remove(os.path.join(mt.state_dir(), mt.SALT_FILE))
+    _new_process()
+    holder["g"] = _grant(id="bbbb", role="user", auth_key="another-key")
+    compose.clear()
+    assert node.start()[0]
+    assert len(_downs(compose)) == 1
+    assert "hskey" not in json.dumps(node.recorded()) and "another-key" not in \
+        json.dumps(node.recorded())
+
+
+@pytest.mark.real_stack_probes
+@pytest.mark.parametrize("legacy, downs", [
+    ("same digest", 0),                 # the salt file it was made under is still there
+    ("same expiry and issuer", 0),      # cannot tell: kept, never wiped
+    ("other expiry", 1),                # another token: register afresh
+    ("other issuer", 1),
+    ("was TS_AUTHKEY", 1),
+])
+def test_a_record_from_before_the_salt_was_named_still_tells_a_change(
+        compose, tmp_path, legacy, downs):
+    """A record written before the salt and public part were kept: {identity, summary,
+    token, expires, issuer}. It is compared by its digest under the current salt, then
+    by the expiry and issuer it carries; only when neither decides is it unknown."""
+    g = _grant()
+    node = _node(tmp_path, lambda: g)
+    rec = {"identity": "token:0123", "summary": "x", "token": True, "expires": g.expires,
+           "issuer": mt._issuer_key(g.issuer)}
+    if legacy == "same digest":
+        rec["identity"] = g.identity()
+    elif legacy == "other expiry":
+        rec["expires"] = g.expires - 60
+    elif legacy == "other issuer":
+        rec["issuer"] = "ssh-ed25519 BBBB"
+    elif legacy == "was TS_AUTHKEY":
+        rec = {"identity": "ts_authkey:0123", "summary": "TS_AUTHKEY", "token": False}
+    os.makedirs(node.workdir, exist_ok=True)
+    with open(os.path.join(node.workdir, mesh_node.IDENTITY_FILE), "w",
+              encoding="utf-8") as fh:
+        json.dump(rec, fh)
+    assert node.start()[0]
+    assert len(_downs(compose)) == downs
+    assert node.recorded()["salt"] == mt.salt_id()
+
+
+@pytest.mark.real_stack_probes
+def test_a_failed_restart_keeps_the_record_so_the_next_start_keeps_the_state(
+        compose, tmp_path, monkeypatch):
+    """MeshNode.start drops the record before `up`. A failed `up` (a pull timeout)
+    used to leave no record, so the next Start wiped the unchanged node (down -v) and
+    re-registered it with its already-spent single-use key."""
+    g = _grant()
+    node = _node(tmp_path, lambda: g)
+    assert node.start()[0]
+    rec = node.recorded()
+    fake = mesh_node.subprocess.run
+    fail = {"up": True}
+
+    def up_fails(argv, **kw):
+        if argv[-2:] == ["up", "-d"] and fail["up"]:
+            fake(argv, **kw)
+            return subprocess.CompletedProcess(argv, 1, "", "pull timed out")
+        return fake(argv, **kw)
+
+    monkeypatch.setattr(mesh_node.subprocess, "run", up_fails)
+    compose.clear()
+    ok, out = node.start()                            # e.g. apply_limits' restart
+    assert not ok and "pull timed out" in out
+    assert node.recorded() == rec
+    fail["up"] = False
+    compose.clear()
+    assert node.start()[0]
+    assert not _downs(compose)
+    # A first token run whose `up` fails after its reset: the state is empty or the
+    # grant's, so it is recorded as the grant's and the next Start keeps it.
+    other = mt.GrantedMeshNode(str(GENERATOR), str(tmp_path / "other"), load=lambda: g)
+    fail["up"] = True
+    compose.clear()
+    assert not other.start()[0] and len(_downs(compose)) == 1
+    fail["up"] = False
+    compose.clear()
+    assert other.start()[0] and not _downs(compose)
+
+
+@pytest.mark.real_stack_probes
+def test_a_ts_authkey_that_cannot_be_compared_is_never_recorded_as_the_current_one(
+        compose, tmp_path, monkeypatch):
+    """After a lost salt, a changed TS_AUTHKEY cannot be told from the old one. Its
+    digest used to be recorded as what the node runs under, so every later comparison
+    said "same" although the node kept the old registration."""
+    monkeypatch.setenv("TS_AUTHKEY", "key-for-tailnet-a")
+    node = _node(tmp_path, lambda: None)
+    assert node.start()[0]
+    rec = node.recorded()
+    os.remove(os.path.join(mt.state_dir(), mt.SALT_FILE))
+    _new_process()
+    monkeypatch.setenv("TS_AUTHKEY", "key-for-tailnet-b")
+    compose.clear()
+    assert node.start()[0] and not _downs(compose)    # cannot tell: state kept
+    assert node.recorded() == rec                     # and not recorded as key b's
+    assert node._compare(node.recorded(), None) is None
+
+
+def test_racing_creators_of_the_salt_file_all_take_the_winners_salt(tmp_path, monkeypatch):
+    path = str(tmp_path / "state" / mt.SALT_FILE)
+    # Deterministic: the file appears between this process's look and its create.
+    os.makedirs(os.path.dirname(path))
+    winner = bytes(range(32))
+    with open(path, "w", encoding="ascii") as fh:
+        fh.write(winner.hex() + "\n")
+    real = mt._read_salt
+    looks = []
+
+    def first_look_misses(p):
+        looks.append(p)
+        return b"" if len(looks) == 1 else real(p)
+
+    monkeypatch.setattr(mt, "_read_salt", first_look_misses)
+    assert mt._load_or_create_salt(path) == winner
+    monkeypatch.setattr(mt, "_read_salt", real)
+    # Real threads racing on a fresh file: one salt for all, and it is the file's.
+    path2 = str(tmp_path / "race" / mt.SALT_FILE)
+    gate = threading.Barrier(8)
+    got = []
+
+    def racer():
+        gate.wait()
+        got.append(mt._load_or_create_salt(path2))
+
+    threads = [threading.Thread(target=racer) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(got) == 8 and len(set(got)) == 1
+    assert got[0] == mt._read_salt(path2)
+    # A damaged file (not a race) is left alone: the salt goes in the file beside it,
+    # and that is what every later process takes.
+    with open(path2, "w", encoding="ascii") as fh:
+        fh.write("not hex\n")
+    salt = mt._load_or_create_salt(path2, retries=1)
+    assert len(salt) == 32 and salt == mt._read_salt(path2 + mt.SALT_REPAIRED)
+    assert mt._load_or_create_salt(path2, retries=1) == salt
+
+
+def test_racers_that_find_a_damaged_salt_file_still_take_one_salt(tmp_path):
+    """A creator that died between its create and its write left an empty file. Two
+    processes that both gave up waiting on it used to each replace it, and could each
+    keep their own salt."""
+    path = str(tmp_path / "state" / mt.SALT_FILE)
+    os.makedirs(os.path.dirname(path))
+    open(path, "w").close()
+    gate = threading.Barrier(6)
+    got = []
+
+    def racer():
+        gate.wait()
+        got.append(mt._load_or_create_salt(path, retries=2))
+
+    threads = [threading.Thread(target=racer) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(got) == 6 and len(set(got)) == 1
+    assert got[0] == mt._read_salt(path + mt.SALT_REPAIRED)
+    assert sorted(os.listdir(os.path.dirname(path))) == [
+        mt.SALT_FILE, mt.SALT_FILE + mt.SALT_REPAIRED]  # no temporary file left behind
+
+
+def test_a_token_file_that_is_not_text_is_unusable_not_absent(compose, tmp_path,
+                                                              monkeypatch):
+    """A non-UTF-8 token file used to raise out of summary(), so the token dialog
+    (where Forget is) never opened."""
+    path = os.path.join(mt.state_dir(), mt.TOKEN_FILE)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(b"hugmesh-token-v1.\xff\xfe\x80broken\n")
+    assert mt.token_stored()
+    text = mt.summary()
+    assert text.startswith("The imported token cannot be used:") and "damaged" in text
+    with pytest.raises(mt.TokenError) as e:
+        mt.load_grant()
+    assert e.value.kind == "malformed"
+    # It is not "no token": the tray refuses rather than fall back to TS_AUTHKEY.
+    monkeypatch.setenv("TS_AUTHKEY", "operator-key")
+    node = mt.GrantedMeshNode(str(GENERATOR), str(tmp_path / "node"))
+    ok, why = node.start()
+    assert not ok and "damaged" in why
+    assert not [a for a, _ in compose if a[-2:] == ["up", "-d"]]
+    mt.forget_token()
+    assert not mt.token_stored() and mt.summary().startswith("No HugMesh token imported")
+
+
+@needs_keygen
+def test_the_signature_cache_is_keyed_on_the_payload_and_the_signature(issuer, tmp_path):
+    """A valid token verified first must not let the same payload through with another
+    (corrupted) signature: the cache remembers (payload, signature), not the payload."""
+    mt.trust_issuer(open(issuer + ".pub").read())
+    token = _issue(issuer)
+    g = mt.verify(token)                              # the good pair is cached now
+    head, body, sig = token.split(".")
+    armored = mt._unb64u(sig).decode("ascii").splitlines()
+    i = len(armored) - 2                              # the last base64 line of the blob
+    line = armored[i]
+    k = len(line) // 2
+    armored[i] = line[:k] + ("A" if line[k] != "A" else "B") + line[k + 1:]
+    corrupted = ("\n".join(armored) + "\n").encode("ascii")
+    bad = f"{head}.{body}.{mt._b64u(corrupted)}"
+    assert mt.parse(bad)[1] == mt.parse(token)[1]     # the very same payload bytes
+    with pytest.raises(mt.TokenError) as e:
+        mt.verify(bad)
+    assert e.value.kind == "signature"
+    missing = str(tmp_path / "no-such-ssh-keygen")
+    assert mt.verify(token, keygen=missing) == g      # the good one is still cached
+    with pytest.raises((mt.TokenError, OSError)):
+        mt.verify(bad, keygen=missing)                # never cached as good
