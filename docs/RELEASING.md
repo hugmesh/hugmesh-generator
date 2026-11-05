@@ -275,7 +275,11 @@ appears in, or "not listed".
   only run for commits that touch those paths. The merge phase says so, and does not
   wait.
 - **A stray non-conforming tag** such as host-shell's `v0.3.1-beta` (its run failed) is
-  ignored by the ordering check. Only `X.Y.Z-beta.N` tags count.
+  ignored by the ordering check. Only `X.Y.Z-beta.N` and stable `X.Y.Z` tags count.
+- **NEEDS-BUMP "stable tag vX.Y.Z is published"** (beta channel). The line main's beta
+  belongs to has already shipped as a stable, so `X.Y.Z-beta.N` is never tagged and the
+  advised next beta is the next minor past the newest stable (`X.(Y+1).0-beta.1`), the
+  same move the stable channel's `next` phase makes. Merge that bump on main.
 - **Everything shows REFUSE "cannot read main" or flips between runs.** That is GitHub's
   secondary rate limit, or the egress tunnel is down. Reads retry twice on any error
   other than a 404. Wait a minute and run again.
