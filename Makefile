@@ -929,7 +929,12 @@ prebuild-binaries: ## prebuild a platform's role-union binpkg pool (ARCH=x86|rpi
 	 rm -f "$$_list"
 
 # Extra builder flags threaded to the standalone-desktop targets (the menu / CLI
-# passes e.g. STANDALONE_FLAGS='--local-user alice --local-pass s3cret --nvidia-driver proprietary').
+# passes e.g. STANDALONE_FLAGS='--local-user alice --local-pass-file .hugmesh-secrets/pw --nvidia-driver proprietary').
+# A standalone DESKTOP build (x86-standalone*, rpi-desktop/jetson-desktop/frite/
+# orangepi5/orangepi4-lts with --standalone) REFUSES to start without a login
+# password: --local-pass-file FILE (preferred — a 0600 file under this checkout,
+# readable by the builder natively and in the container at /src; keeps the
+# password off every process argv) or --local-pass PASS (lands in `ps` output).
 # Exported (mirrors CA_KEY_PASS above) so the Docker-dispatch recipes below can
 # forward it via DOCKER_RUN's `-e STANDALONE_FLAGS` instead of re-splicing
 # '$(STANDALONE_FLAGS)' as literal recipe text: a value containing an embedded
@@ -946,7 +951,7 @@ prebuild-binaries: ## prebuild a platform's role-union binpkg pool (ARCH=x86|rpi
 STANDALONE_FLAGS ?=
 export STANDALONE_FLAGS
 
-x86-standalone: ## build BOTH hardened standalone NVIDIA desktops (thin+thick; LUKS FDE installer + all 4 artifacts)
+x86-standalone: ## build BOTH hardened standalone NVIDIA desktops (thin+thick; LUKS FDE installer + all 4 artifacts; REQUIRES STANDALONE_FLAGS='--local-user NAME --local-pass-file FILE')
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86-standalone NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
@@ -955,7 +960,7 @@ else
 	$(chown-artifacts)
 endif
 
-rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop | rpi-omnibus RAM_GB=16  (same vocabulary as x86 now; add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; RAM_GB=N passes --ram-gb (REQUIRED for omnibus); STANDALONE_FLAGS='--standalone --local-user … --local-pass …' for rpi-desktop)
+rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop | rpi-omnibus RAM_GB=16  (same vocabulary as x86 now; add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; RAM_GB=N passes --ram-gb (REQUIRED for omnibus); STANDALONE_FLAGS='--standalone --local-user … --local-pass-file FILE' for rpi-desktop; a standalone desktop refuses to build without a login password)
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make rpi-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' RAM_GB='$(RAM_GB)' $(BRAND_PASS)

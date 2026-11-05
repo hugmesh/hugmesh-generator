@@ -76,6 +76,10 @@ Room state event **`net.hugmesh.mesh.bridge`** (state key `""`, power-level-gate
 `net.hugmesh.vn.scene`). The canonical wire prefix follows the `.net` domain move. On read,
 the bridge also HONORS the legacy post-squash spelling `systems.hugmesh.mesh.bridge`, and
 the canonical one wins when both exist. Only the canonical type is ever written.
+A mesh that ran under an older brand and still has flags under that brand's spelling sets
+`MESHBRIDGE_LEGACY_STATE_TYPES` (comma-separated, for example
+`systems.exampleorg.mesh.bridge`) on the bridge Deployment; those spellings are honored on
+read after the built-in ones, gated by their own power-level entry, and never written.
 
 ```json
 { "enabled": true, "device": "default", "meshChannel": 0 }
