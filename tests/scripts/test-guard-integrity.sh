@@ -929,13 +929,22 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
 # and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for fix/standalone-login-password-20261104
+# (base origin/main 8ed37a3c), which adds ONE gated suite:
+# tests/scripts/test-standalone-login-firstboot.sh, wired in shell-suites.yml's debian job
+# beside test-passhash-lib.sh. MEASURED by RUNNING this file on that tree:
+# '208 of 249 suites are named by a pull_request-triggered workflow', with only this
+# baseline line red. The suite was first run in python:3.12-slim (the debian job's image,
+# openssl + passwd installed as that job does, GITHUB_ACTIONS=true so its libpam layer is
+# REQUIRED): 43 passed, 0 failed.
 # 207 -> 209 (denominator 248 -> 250) on 2026-11-04 for fix/desktop-f-greeter-sso-offline-cache,
 # which adds TWO gated suites: tests/desktop-governance/test-sso-greeter.sh (shell-suites.yml alpine
 # + debian jobs, .gitlab-ci.yml desktop-governance-verify) and tests/scripts/test-desktop-sso-bake.sh
 # (alpine job + the same gitlab job). MEASURED by RUNNING this file on that tree: '209 of 250 suites
 # are named by a pull_request-triggered workflow', ungated SET 41. A branch landing beside it
 # re-measures per the doctrine above.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-209}"
+# MERGED (this branch carries #860): 207 + 1 (#860) + 2 (this branch) = 210 of 251.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-210}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

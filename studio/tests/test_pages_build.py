@@ -22,6 +22,7 @@ from hugmesh_studio.core.config import (ImageConfig, UNAFFILIATED_ROLE,  # noqa:
                                            resolve_installer_ui_default)
 from hugmesh_studio.core.platform_info import HostInfo    # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod       # noqa: E402
+from _helpers import type_login_password  # noqa: E402
 from hugmesh_studio.gui.pages import build as build_mod   # noqa: E402
 from hugmesh_studio.gui.qt import Qt, QtWidgets  # noqa: E402
 
@@ -62,6 +63,7 @@ def advance_to(wiz, page_cls):
         if isinstance(page, page_cls):
             return page
         before = wiz.currentId()
+        type_login_password(page)   # a standalone Home step refuses no password
         wiz.next()
         assert wiz.currentId() != before, \
             f"flow stuck on {type(page).__name__} (validatePage rejected?)"
@@ -671,7 +673,10 @@ def test_build_secure_boot_key_paths_persist_to_saved_configs(wiz, tmp_path):
     build._preview()
     path = tmp_path / "cfg.json"
     warnings = wiz.cfg.save(str(path))
-    assert warnings == []
+    # The standalone walk typed a login password (HomePage requires one), and a
+    # password is exactly what is NOT persisted: that warning is expected. Nothing
+    # about the key PATH may warn.
+    assert [w for w in warnings if not w.startswith("local-pass was NOT saved")] == []
     from hugmesh_studio.core.config import ImageConfig
     assert ImageConfig.load(str(path)).secureboot_key == "/media/KEYS/Keys/kernel_key.pem"
 

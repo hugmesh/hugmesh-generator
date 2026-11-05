@@ -175,8 +175,16 @@ mainline and are not built.
 the password (yescrypt `$y$` where the build host's libcrypt supports it,
 SHA-512 crypt `$6$` otherwise). **The plaintext is never baked.** With no
 `--local-pass`, first boot mints a random one-time password and prints it once to
-the console. `wheel` is the sudo path. `--skip-sso` removes the Casdoor/OIDC
+`/dev/console`. `wheel` is the sudo path. `--skip-sso` removes the Casdoor/OIDC
 desktop login from any client image (auto-on for standalone).
+
+The Studio and the TUI ask for this password twice, and refuse to build a
+standalone image without one: root is locked and there is no KEYS stick or SSO,
+so this account is the only way in. The Calamares installer does not ask for an
+account; the installed system's first boot creates this one. First boot creates
+any supplementary group the image lacks (`games` has no `acct-group` in
+::gentoo), checks every step, and on a failure says so on the console and retries
+on the next boot instead of falling back to a random password.
 
 ### LUKS2 full-disk encryption (installed system)
 The **installer prompts for a system root-unlock passphrase** (distinct from the
@@ -372,9 +380,14 @@ above is identical to x86's.
 | `archive` | Unpack a bundled `$HOME` tarball (`--include-home-archive`) — good for a laptop with no data disk. |
 | `restore` | Decrypt + unpack an **encrypted full-home backup** (`--home-backup FILE\|auto`; `auto` scans attached USBs). |
 
-- `--home-encrypted` layers **per-user eCryptfs on top of the LUKS2 root**
+- `--home-encrypted` prepares **per-user eCryptfs on top of the LUKS2 root**
   (login-password unwrapped), the same double layer this build host uses. It adds
-  the kernel `ecryptfs.config` and `ecryptfs-utils`, and wires `pam_ecryptfs`.
+  the kernel `ecryptfs.config` and `ecryptfs-utils`, and wires `pam_ecryptfs` at
+  the END of each system-auth stack (never straight after pambase's
+  `[success=1 ...] pam_unix.so`, whose skip would then land on
+  `pam_faillock.so authfail` and reject every correct password). Moving the home
+  into eCryptfs is **not automatic**: as root, with the user logged out, run
+  `ecryptfs-migrate-home -u <user>`.
 - **Encrypted backup to a USB:** `scripts/archive-home.sh --user me --full --encrypt --output /run/media/USB/hugmesh-home-backup-me.tar.xz` (gpg AES256 / openssl). `--full` keeps your documents and media and drops only build/cache cruft. `--config-only` is the lean copy for bundling inside an ISO. Restore later with `--home-mode restore --home-backup auto`.
 
 ## Dockerized stack / mesh node in the home
