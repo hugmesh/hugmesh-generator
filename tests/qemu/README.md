@@ -361,6 +361,50 @@ lives in the studio pytest suite and runs every pass:
   gating, and the DETECT vocabulary, the same tokens this harness asserts
   (`studio/tests/test_bat_bootstrap.py`).
 
+## Frite: install to eMMC and boot from it (`frite-emmc-install.sh`)
+
+The Frite builder emits no `.img`, only LIVE/INSTALLER media (ISO9660 today;
+MBR+FAT is the u-boot-bootable form). `launch-arm.sh` boots such a medium with
+`--medium FILE` (kernel, dmsquash-live initrd and the DEFAULT label's APPEND are
+lifted off it; the medium rides usb-storage behind qemu-xhci like a real stick),
+attaches a raw file as an eMMC with `--emmc FILE` (QEMU `emmc` behind
+`sdhci-pci`, so the guest sees `/dev/mmcblk0` + `mmcblk0boot0/1` exactly like
+La Frite's module), and `--gpu` adds virtio-gpu + USB input so QMP `screendump`
+captures the greeter. Since 2026-11-04 the launcher passes NO `-dtb` by default:
+the board DTB replaced QEMU's own virt device tree and the guest found no
+console, disk or NIC (`--dtb FILE` remains an explicit opt-in).
+
+`frite-emmc-install.sh` is the two-phase proof, on the HOST
+`qemu-system-aarch64` (>= 9.1 for `emmc`; the runner image's 7.2 has only
+`sd-card`), no root:
+
+```sh
+# phase A: boot the installer medium + emulated eMMC + a per-run KEYS stick
+#          (generated password for the greeter, generated ssh key for the
+#          assertions), assert /dev/mmcblk0 is type MMC with boot partitions,
+#          run install-frite.sh unattended against it, power off;
+# between: offline layout check of the eMMC file (user area at +2*boot+rpmb);
+# phase B: boot the eMMC ALONE with its own extlinux APPEND, screendump the
+#          greeter, type the password via QMP send-key, screendump again,
+#          assert openbox/lxsession run as the user.
+bash tests/qemu/frite-emmc-install.sh --medium out/<brand>-frite-la-frite-arm64-desktop-*.installer.iso \
+    --run-dir /path/with/room   # the eMMC file is 8 GiB (sparse)
+
+# the OFFLINE layout test alone (any raw MBR disk, or an emmc backing file with --user-offset):
+bash tests/qemu/frite-emmc-install.sh --check-layout emmc.raw --user-offset 8388608
+```
+
+Named failures, not timeouts: no `/dev/mmcblk0` → the Frite kernel lacks
+`CONFIG_MMC_SDHCI_PCI`; dracut emergency shell → the initramfs did not find the
+medium (`--medium-bus virtio` is the fallback); no `/dev/dri/card0` →
+`CONFIG_DRM_VIRTIO_GPU`. What emulation cannot prove and says so every run: the
+Amlogic boot ROM → SPI-NOR u-boot → eMMC boot order, u-boot's mmc numbering,
+the meson-gxl FDT against the silicon, meson DRM/lima HDMI. Hermetic guards:
+`launch_arm_medium_test.sh` (argv facts over real ISO/MBR/FAT fixtures) and
+`frite_emmc_layout_test.sh` (the layout checker over sfdisk/mformat/mke2fs
+fixtures, one defect per case); `frite_emmc_mutations.sh` breaks production and
+demands both go red.
+
 ## Matrix QEMU e2e (`run-matrix-e2e.sh` — opt-in)
 
 This boots the **whole device build matrix**: every `(platform, role, env, board,

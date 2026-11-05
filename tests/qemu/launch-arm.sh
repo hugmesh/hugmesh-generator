@@ -2,23 +2,65 @@
 # launch-arm.sh — boot a golden aarch64 .img for the NON-Pi ARM builders
 # (frite / jetson / orangepi5 / orangepizero2[w] / orangepizero3 / orangepi3-lts /
 # orangepi4-lts) under qemu-system-aarch64 -M virt
-# by loading its kernel DIRECTLY (-kernel Image -dtb <board.dtb> -append 'root=...').
+# by loading its kernel DIRECTLY (-kernel Image -append 'root=...').
 #
 # This is the generalization of launch-pi.sh to the four ARM platforms the Pi
 # launcher never covered. QEMU has NO Amlogic/Rockchip/Tegra/Allwinner machine
 # and ships none of their vendor firmware, so — exactly as with the Pi — we
 # cannot run the real SoC firmware -> u-boot -> kernel chain. Instead we boot the
-# board's own mainline kernel Image + its in-tree DTB against the SAME ext4 .img
-# the board boots from. All four builders emit boot/Image + a board DTB (the same
-# artifacts as the Pi), so the rootfs that boots on real silicon also boots here.
+# board's own mainline kernel Image against the SAME ext4 .img the board boots
+# from. All the builders emit boot/Image (the same artifact as the Pi), so the
+# rootfs that boots on real silicon also boots here.
+#
+# NO -dtb (2026-11-04). This launcher used to hand QEMU the BOARD's DTB
+# (meson-gxl / rk3588 / tegra234 / sun50i). With -kernel, a -dtb REPLACES the
+# device tree QEMU synthesises for -M virt, and the board DTB describes none of
+# virt's hardware: no PL011 at 0x09000000, no PCIe ECAM, no virtio-mmio, no GICv3
+# at virt's addresses. The guest kernel therefore found no console, no disk and no
+# NIC — a launcher defect reported as "experimental board inconclusive". The
+# default is now QEMU's own DT; --dtb FILE is still honoured as an explicit opt-in
+# (with a warning) for anyone booting a DTB that really does describe virt.
+# The board's FDT name stays in the table (BOARD_DTB): the Frite installer proof
+# checks that the medium / the installed FAT carries it, it just never reaches
+# QEMU.
 #
 # This host is x86_64 with NO aarch64 KVM, so the guest runs under TCG (pure
 # emulation) — keep TIMEOUT generous. EXPERIMENTAL boards (frite/jetson/orangepi)
 # may be INCONCLUSIVE under -M virt (no vendor firmware, mainline-only drivers) —
 # the matrix driver treats that as a soft-pass, not a FAIL (see run-matrix-e2e.sh).
 #
-# Per-board (kernel, DTB, -cpu) come from the SAME tables the builders use
+# Per-board (kernel, DTB name, -cpu) come from the SAME tables the builders use
 # (build-<platform>-stage4.sh select_board): the DTB path is the drift-free key.
+#
+# ── Frite media + eMMC target (2026-11-04, operator requirement: "on le frite,
+# make sure installer image can install to the emmc") ──────────────────────
+# The Frite builder emits no .img: its LIVE and INSTALLER flavours are MEDIA
+# (ISO9660 today; a raw MBR+FAT image is the planned u-boot-bootable form) that
+# carry /Image, /initrd.img (dmsquash-live), /extlinux/extlinux.conf and /dtb/.
+#   --medium FILE      boot that medium: kernel + initrd + the DEFAULT label's
+#                      APPEND are lifted off it (ISO via xorriso/bsdtar, MBR+FAT
+#                      via sfdisk+mtools, partitionless FAT via mtools) and the
+#                      medium is attached as usb-storage behind qemu-xhci — the
+#                      same bus a real USB stick lands on (/dev/sda in the guest).
+#                      --medium-bus virtio is the fallback for an initramfs
+#                      without USB storage drivers.
+#   --emmc FILE        attach FILE as an eMMC behind sdhci-pci (QEMU >= 9.1
+#                      `emmc` device, NOT in the runner image's QEMU 7.2): the
+#                      guest sees /dev/mmcblk0 (+ mmcblk0boot0/1, rpmb) exactly
+#                      like La Frite's onboard module. The backing file is
+#                      [boot0][boot1][rpmb][user area] — the user area starts at
+#                      2*--emmc-boot-size + --emmc-rpmb-size (hw/sd/sd.c
+#                      sd_part_offset), which anyone reading the file from the
+#                      host must add. No overlay: the file IS the install target.
+#   --extlinux FILE    take the kernel cmdline from this extlinux.conf (the
+#                      installed eMMC's own /extlinux/extlinux.conf for phase B).
+#   --gpu              virtio-gpu-pci + usb-kbd + usb-tablet so the lightdm
+#                      greeter is drawn and QMP `screendump` captures it
+#                      (-display none stays: the dump comes from the virtual
+#                      framebuffer, no host display needed).
+# Every one of these is default-off: without them the argv is byte-identical to
+# the golden-.img path, minus the -dtb that never belonged there.
+# tests/qemu/frite-emmc-install.sh is the two-phase driver on top of this.
 #
 # ── Shared artifact autodetect convention (mirrors launch-pi.sh / flash-disk.sh) ──
 # One WORK_DIR/platform/board/role selects one artifact everywhere:
@@ -38,9 +80,17 @@ PLATFORM="${PLATFORM:-frite}"  # frite | jetson | orangepi5 | orangepizero2 | or
 BOARD="${BOARD:-}"             # board id (empty on the boardless zero2/zero2w/zero3 platforms)
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 ROLE="${ROLE:-desktop}"
-IMG=""                         # explicit .img (else autodetect)
-KERNEL=""                      # explicit kernel Image (else autodetect)
-DTB=""                         # explicit DTB (else per-board default from the table)
+IMG=""                         # explicit .img (else autodetect; optional with --medium/--emmc)
+KERNEL=""                      # explicit kernel Image (else autodetect / from --medium)
+INITRD=""                      # explicit initramfs (else from --medium's INITRD line)
+DTB=""                         # explicit DTB: ONLY then is -dtb passed (see header)
+MEDIUM=""                      # Frite live/installer medium (ISO9660 or MBR+FAT / FAT)
+MEDIUM_BUS="usb"               # usb (qemu-xhci + usb-storage, like a real stick) | virtio
+EXTLINUX=""                    # take APPEND from this extlinux.conf (phase B: the eMMC's own)
+EMMC=""                        # raw backing file for the sdhci-pci/emmc target
+EMMC_BOOT_SIZE="4194304"       # bytes per eMMC boot partition (La Frite module: 4 MiB)
+EMMC_RPMB_SIZE="0"             # bytes for the RPMB partition (0 = none)
+GPU=false                      # --gpu: virtio-gpu-pci + usb-kbd + usb-tablet
 BUILD_SUBDIR=""                # per-arch build subdir (else per-platform default)
 RUN_DIR=""                     # scratch dir for the overlay/pidfile/console
 KERNEL_IMG_NAME="Image"        # the ARM builders install boot/Image (not kernel_2712.img)
@@ -61,6 +111,7 @@ FOREGROUND=false
 EXTRA_APPEND=""
 KEYS_IMG=""
 QMP_SOCK=""                    # optional QMP unix socket (--qmp); empty keeps -monitor none
+SERIAL_SOCK=""                 # optional unix socket for the guest UART (--serial-sock); empty keeps -serial file:
 # ── Mesh (multi-node) L2 — issue #48, parity with launch-x86.sh, all default-off ─
 # --mesh-net attaches a SECOND virtio NIC on a shared QEMU socket L2 so several
 # emulated nodes see each other (kubeadm init + joins); the slirp user NIC above
@@ -78,9 +129,12 @@ cat <<EOF
 Usage: $0 --platform PLAT [--board BOARD] [OPTIONS]
 
   Boots a golden aarch64 .img for a non-Pi ARM builder under
-  qemu-system-aarch64 -M virt by loading its kernel + DTB directly (QEMU has no
-  Amlogic/Rockchip/Tegra/Allwinner machine / vendor firmware). A per-run qcow2
-  overlay protects the golden image and lets growroot demonstrate expansion.
+  qemu-system-aarch64 -M virt by loading its kernel directly (QEMU has no
+  Amlogic/Rockchip/Tegra/Allwinner machine / vendor firmware; the guest runs on
+  QEMU's own virt device tree, never the board DTB). A per-run qcow2 overlay
+  protects the golden image and lets growroot demonstrate expansion.
+  Frite has no .img: boot its LIVE/INSTALLER medium with --medium and install
+  onto an emulated eMMC with --emmc (see tests/qemu/frite-emmc-install.sh).
 
 Platform / board:
   -p, --platform PLAT  frite | jetson | orangepi5 | orangepizero2 | orangepizero2w | orangepizero3 | orangepi3-lts | orangepi4-lts. Default: ${PLATFORM}
@@ -90,10 +144,29 @@ Platform / board:
 Artifact selection (shared with launch-pi.sh / flash-disk.sh):
   -w, --work-dir DIR   Dir to autodetect the .img/kernel/DTB from. Default: ${WORK_DIR}
   -r, --role ROLE      Role to select. Default: ${ROLE}
-      --img FILE       Explicit golden .img (skips autodetect).
-      --kernel FILE    Explicit kernel Image (default: <work>/<subdir>/{sysroot,isoroot}/boot/${KERNEL_IMG_NAME}).
-      --dtb FILE       Explicit DTB (default: the board's in-tree DTB from the builder table).
+      --img FILE       Explicit golden .img (skips autodetect). Optional with --medium/--emmc.
+      --kernel FILE    Explicit kernel Image (default: <work>/<subdir>/{sysroot,isoroot}/boot/${KERNEL_IMG_NAME},
+                       or /${KERNEL_IMG_NAME} lifted off --medium).
+      --initrd FILE    Explicit initramfs (default: none; with --medium, its INITRD line).
+      --dtb FILE       Pass -dtb FILE. DEFAULT: NO -dtb — QEMU's own virt device tree.
+                       A board DTB passed here replaces that DT and the guest finds
+                       no console/disk/NIC; only for a DTB that describes -M virt.
       --build-subdir D Per-arch build subdir (default: per-platform snap-build-<platform>).
+
+Frite media / eMMC target (all default-off; see the header):
+      --medium FILE    LIVE/INSTALLER medium (ISO9660, MBR+FAT or bare FAT) carrying
+                       /${KERNEL_IMG_NAME}, /initrd.img, /extlinux/extlinux.conf. Boots its
+                       DEFAULT label (APPEND verbatim, FDT line dropped, the board UART
+                       console rewritten to ttyAMA0) with the medium attached read-only.
+      --medium-bus B   usb (default: qemu-xhci + usb-storage => /dev/sda) | virtio (/dev/vdX).
+      --extlinux FILE  Take the kernel cmdline from FILE's DEFAULT label instead of
+                       root=${ROOT_PART} (phase B: the installed eMMC's own extlinux.conf).
+      --emmc FILE      Raw eMMC backing file -> sdhci-pci + emmc (QEMU >= 9.1; host
+                       QEMU, not the runner image). Guest: /dev/mmcblk0 + boot0/1.
+                       Written in place (it is the install target) — no overlay.
+      --emmc-boot-size BYTES   Per-boot-partition size (default ${EMMC_BOOT_SIZE}; 128K-multiple, <= 32640K).
+      --emmc-rpmb-size BYTES   RPMB size (default ${EMMC_RPMB_SIZE}; 128K-multiple, <= 16384K).
+      --gpu            virtio-gpu-pci + usb-kbd + usb-tablet (greeter drawn; QMP screendump).
 
 QEMU / guest:
   -m, --mem MB         Guest RAM. Default: ${MEM}
@@ -120,6 +193,9 @@ Port forwards (host -> guest): --ssh-port/--ui-port/--http-port/--api-port/--hs-
 Lifecycle: -t/--timeout SEC, --keys-img FILE, --foreground, --keep, -h/--help
       --qmp PATH       Listen for QMP on the unix socket PATH (pause/resume/reset/
                        powerdown of the running guest). Omitted => -monitor none.
+      --serial-sock P  Guest UART on the unix socket P (server, no wait; console.log
+                       still written via logfile=). Lets a driver answer the dracut
+                       LUKS prompt. Omitted => -serial file:console.log, as before.
 
 Examples:
   $0 --platform frite --board la-frite --role desktop --foreground
@@ -141,7 +217,15 @@ while [[ $# -gt 0 ]]; do
         -r|--role)         ROLE="$2"; shift 2 ;;
         --img)             IMG="$2"; shift 2 ;;
         --kernel)          KERNEL="$2"; shift 2 ;;
+        --initrd)          INITRD="$2"; shift 2 ;;
         --dtb)             DTB="$2"; shift 2 ;;
+        --medium)          MEDIUM="$2"; shift 2 ;;
+        --medium-bus)      MEDIUM_BUS="$2"; shift 2 ;;
+        --extlinux)        EXTLINUX="$2"; shift 2 ;;
+        --emmc)            EMMC="$2"; shift 2 ;;
+        --emmc-boot-size)  EMMC_BOOT_SIZE="$2"; shift 2 ;;
+        --emmc-rpmb-size)  EMMC_RPMB_SIZE="$2"; shift 2 ;;
+        --gpu)             GPU=true; shift ;;
         --build-subdir)    BUILD_SUBDIR="$2"; shift 2 ;;
         -m|--mem)          MEM="$2"; shift 2 ;;
         --smp)             SMP="$2"; shift 2 ;;
@@ -162,6 +246,7 @@ while [[ $# -gt 0 ]]; do
         --mesh-mac)        MESH_MAC="$2"; shift 2 ;;
         --mesh-id)         MESH_ID="$2"; shift 2 ;;
         --qmp)             QMP_SOCK="$2"; shift 2 ;;
+        --serial-sock)     SERIAL_SOCK="$2"; shift 2 ;;
         --foreground)      FOREGROUND=true; shift ;;
         --keep)            KEEP=true; shift ;;
         -h|--help)         usage 0 ;;
@@ -203,13 +288,109 @@ board_defaults() {
     esac
 }
 board_defaults "${PLATFORM}" "${BOARD}"
-[ -n "${DTB}" ]          || DTB="${DEF_DTB}"
+# The board's FDT NAME (what extlinux's FDT line must point at on the medium /
+# the installed FAT). It is deliberately NOT the -dtb default: see the header.
+BOARD_DTB="${DEF_DTB}"
 [ -n "${QEMU_CPU}" ]     || QEMU_CPU="${DEF_CPU}"
 [ -n "${BUILD_SUBDIR}" ] || BUILD_SUBDIR="${DEF_SUBDIR}"
+
+case "${MEDIUM_BUS}" in usb|virtio) ;; *) die "--medium-bus must be usb or virtio (got: ${MEDIUM_BUS})" ;; esac
 
 # ── Tool checks (arg-parse + autodetect stay usable without these) ──────────
 command -v qemu-system-aarch64 >/dev/null || die "missing qemu-system-aarch64"
 command -v qemu-img            >/dev/null || die "missing qemu-img"
+
+# ── Medium helpers: what kind of medium, and lift one file off it ────────────
+# Format is decided by MAGIC, never by extension: the Frite builder emits
+# .installer.iso today and the u-boot-bootable fix turns that into a raw MBR+FAT
+# .installer.img; both must work here without a rename.
+#   iso : "CD001" at byte 0x8001 (ISO9660 primary volume descriptor)
+#   mbr : 55 AA at 510 and a FAT partition found through sfdisk (regular file ok)
+#   fat : a bare FAT filesystem at offset 0 (minfo accepts it)
+medium_kind() {
+    local f="$1"
+    if [ "$(od -An -c -j 32769 -N 5 "${f}" 2>/dev/null | tr -d ' ')" = "CD001" ]; then
+        echo iso; return 0
+    fi
+    if [ "$(od -An -tx1 -j 510 -N 2 "${f}" 2>/dev/null | tr -d ' ')" = "55aa" ]; then
+        echo mbr; return 0
+    fi
+    if MTOOLS_SKIP_CHECK=1 minfo -i "${f}" >/dev/null 2>&1; then
+        echo fat; return 0
+    fi
+    echo unknown; return 1
+}
+# First FAT partition's byte offset inside an MBR image (sfdisk works on files).
+medium_fat_offset() {
+    local f="$1" start size off
+    while read -r start size; do
+        [ -n "${start}" ] && [ -n "${size}" ] || continue
+        [ "${size}" -gt 0 ] 2>/dev/null || continue
+        off=$((start * 512))
+        MTOOLS_SKIP_CHECK=1 minfo -i "${f}@@${off}" >/dev/null 2>&1 || continue
+        printf '%s\n' "${off}"; return 0
+    done < <(sfdisk -d "${f}" 2>/dev/null \
+        | sed -n 's/.*start=[[:space:]]*\([0-9]\+\).*size=[[:space:]]*\([0-9]\+\).*/\1 \2/p')
+    return 1
+}
+# medium_extract MEDIUM /path/in/medium OUT — exit 1 (and no OUT) when absent.
+medium_extract() {
+    local f="$1" p="$2" out="$3" kind off
+    kind="$(medium_kind "${f}")" || die "cannot tell what ${f} is (not ISO9660, not MBR+FAT, not FAT)"
+    rm -f "${out}"
+    case "${kind}" in
+        iso)
+            if command -v xorriso >/dev/null 2>&1; then
+                xorriso -osirrox on -indev "${f}" -extract "${p}" "${out}" >/dev/null 2>&1 || { rm -f "${out}"; return 1; }
+            elif command -v bsdtar >/dev/null 2>&1; then
+                bsdtar -xOf "${f}" "${p#/}" > "${out}" 2>/dev/null || { rm -f "${out}"; return 1; }
+            else
+                die "reading an ISO9660 medium needs xorriso or bsdtar (libarchive) on PATH"
+            fi
+            ;;
+        mbr)
+            off="$(medium_fat_offset "${f}")" || die "no FAT partition in ${f} (an MBR medium must carry its boot tree on a FAT partition)"
+            MTOOLS_SKIP_CHECK=1 mcopy -n -i "${f}@@${off}" "::${p}" "${out}" 2>/dev/null || { rm -f "${out}"; return 1; }
+            ;;
+        fat)
+            MTOOLS_SKIP_CHECK=1 mcopy -n -i "${f}" "::${p}" "${out}" 2>/dev/null || { rm -f "${out}"; return 1; }
+            ;;
+    esac
+    [ -s "${out}" ] || { rm -f "${out}"; return 1; }
+}
+# extlinux_field FILE FIELD — FIELD (APPEND|INITRD|FDT|LINUX) of the DEFAULT
+# label (or the first label when there is no DEFAULT). Prints nothing if absent.
+extlinux_field() {
+    local f="$1" field="$2"
+    awk -v want="${field}" '
+        BEGIN { IGNORECASE = 1 }
+        /^[[:space:]]*#/ { next }
+        tolower($1) == "default" { def = $2; next }
+        tolower($1) == "label"   { lbl = $2; if (first == "") first = lbl; next }
+        {
+            if (tolower($1) != tolower(want)) next
+            v = $0; sub(/^[[:space:]]*[A-Za-z]+[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+            val[lbl] = v
+        }
+        END {
+            if (def != "" && (def in val)) { print val[def]; exit }
+            if (first != "" && (first in val)) { print val[first]; exit }
+        }' "${f}"
+}
+# The board's UART (ttyAML0 on Amlogic, ttyS2 on Rockchip, ...) does not exist on
+# -M virt. Drop every console=tty<letters><n> token (keeping console=tty1-style
+# VTs) and put console=ttyAMA0 LAST, so /dev/console — where firstboot, dracut
+# and keys-provision print — is the serial log the driver scrapes.
+rewrite_console() {
+    local tok out=""
+    for tok in $1; do
+        case "${tok}" in
+            console=tty[A-Za-z]*) continue ;;
+        esac
+        out="${out:+${out} }${tok}"
+    done
+    printf '%s console=ttyAMA0,115200\n' "${out}"
+}
 
 # ── Resolve the .img (shared autodetect) ────────────────────────────────────
 # Artifact prefixes (build-<platform>-stage4.sh ART_PREFIX): frite/jetson/opi5 are
@@ -228,11 +409,52 @@ autodetect_img() {
         | grep -ivE '(kernel|initramfs|initrd|squashfs)' | head -1 || true
 }
 
-if [ -z "${IMG}" ]; then
+# A medium or an eMMC target is a root of its own: the golden .img is optional
+# then (and still attached when given).
+if [ -z "${IMG}" ] && [ -z "${MEDIUM}" ] && [ -z "${EMMC}" ]; then
     IMG="$(autodetect_img "${WORK_DIR}" "${PLATFORM}" "${BOARD}" "${ROLE}")"
+    [ -n "${IMG}" ] && [ -f "${IMG}" ] || die \
+        "no golden .img found (pass --img, or build one into ${WORK_DIR}; Frite has media, not .img — pass --medium). platform=${PLATFORM} board=${BOARD} role=${ROLE}"
 fi
-[ -n "${IMG}" ] && [ -f "${IMG}" ] || die \
-    "no golden .img found (pass --img, or build one into ${WORK_DIR}). platform=${PLATFORM} board=${BOARD} role=${ROLE}"
+[ -z "${IMG}" ] || [ -f "${IMG}" ] || die "golden .img not found: ${IMG}"
+[ -z "${MEDIUM}" ] || [ -f "${MEDIUM}" ] || die "medium not found: ${MEDIUM}"
+[ -z "${EXTLINUX}" ] || [ -f "${EXTLINUX}" ] || die "extlinux.conf not found: ${EXTLINUX}"
+[ -z "${INITRD}" ] || [ -f "${INITRD}" ] || die "initrd not found: ${INITRD}"
+
+[ -n "${RUN_DIR}" ] || RUN_DIR="${WORK_DIR}/qemu-run-arm"
+OVERLAY="${RUN_DIR}/run.qcow2"
+CONSOLE="${RUN_DIR}/console.log"
+PIDFILE="${RUN_DIR}/qemu.pid"
+mkdir -p "${RUN_DIR}"
+
+# ── Lift the boot tree off the medium (kernel, initrd, extlinux.conf) ────────
+# The medium's own extlinux.conf is the authority on how it boots (root=live:...
+# rd.live.* for the dmsquash-live squashfs); taking it from the file beats
+# re-spelling it here and drifting from the builder.
+MEDIUM_KIND=""
+if [ -n "${MEDIUM}" ]; then
+    MEDIUM_KIND="$(medium_kind "${MEDIUM}")" || die "cannot tell what ${MEDIUM} is (not ISO9660, not MBR+FAT, not FAT)"
+    info "medium : ${MEDIUM} (${MEDIUM_KIND}, bus=${MEDIUM_BUS})"
+    if [ -z "${EXTLINUX}" ]; then
+        medium_extract "${MEDIUM}" "/extlinux/extlinux.conf" "${RUN_DIR}/medium-extlinux.conf" \
+            || die "medium ${MEDIUM} carries no /extlinux/extlinux.conf — not a Frite live/installer medium"
+        EXTLINUX="${RUN_DIR}/medium-extlinux.conf"
+    fi
+    if [ -z "${KERNEL}" ]; then
+        _linux="$(extlinux_field "${EXTLINUX}" LINUX)"; _linux="${_linux:-/${KERNEL_IMG_NAME}}"
+        medium_extract "${MEDIUM}" "${_linux}" "${RUN_DIR}/medium-${KERNEL_IMG_NAME}" \
+            || die "medium ${MEDIUM} carries no ${_linux} (extlinux LINUX line)"
+        KERNEL="${RUN_DIR}/medium-${KERNEL_IMG_NAME}"
+    fi
+    if [ -z "${INITRD}" ]; then
+        _initrd="$(extlinux_field "${EXTLINUX}" INITRD)"
+        if [ -n "${_initrd}" ]; then
+            medium_extract "${MEDIUM}" "${_initrd}" "${RUN_DIR}/medium-initrd.img" \
+                || die "medium ${MEDIUM}: extlinux names INITRD ${_initrd} but the medium has no such file"
+            INITRD="${RUN_DIR}/medium-initrd.img"
+        fi
+    fi
+fi
 
 # ── Resolve the kernel Image (the ARM builders keep it under the per-arch subdir) ──
 if [ -z "${KERNEL}" ]; then
@@ -245,35 +467,53 @@ if [ -z "${KERNEL}" ]; then
 fi
 [ -n "${KERNEL}" ] && [ -f "${KERNEL}" ] || die \
     "kernel ${KERNEL_IMG_NAME} not found under ${WORK_DIR}/${BUILD_SUBDIR}/{sysroot,isoroot}/boot \
-(pass --kernel). QEMU -M virt boots the mainline kernel directly — no vendor firmware chain."
+(pass --kernel, or --medium to lift it off a Frite medium). QEMU -M virt boots the mainline kernel directly — no vendor firmware chain."
 
-# ── Resolve the DTB. The compiled .dtb lives beside the kernel under boot/dtbs/. ──
-if [ ! -f "${DTB}" ]; then
-    kdir="$(dirname "${KERNEL}")"
-    for c in "${kdir}/dtbs/${DTB}" "${kdir}/${DTB}" "${kdir}/dtbs/$(basename "${DTB}")"; do
-        [ -f "${c}" ] && { DTB="${c}"; break; }
-    done
+# ── -dtb is opt-in. An explicit --dtb must exist; the board DTB is never implied. ──
+if [ -n "${DTB}" ]; then
+    [ -f "${DTB}" ] || die "DTB not found: ${DTB} (--dtb is an explicit opt-in; the default is QEMU's own virt device tree)"
+    warn "--dtb ${DTB}: this REPLACES QEMU's -M virt device tree. A board DTB (${BOARD_DTB}) describes none of virt's hardware — expect no console/disk/NIC unless this DTB really describes virt."
 fi
-[ -f "${DTB}" ] || die \
-    "DTB not found: ${DTB} (pass --dtb; expected the board's compiled .dtb beside the kernel under boot/dtbs/)."
 
-[ -n "${RUN_DIR}" ] || RUN_DIR="${WORK_DIR}/qemu-run-arm"
-OVERLAY="${RUN_DIR}/run.qcow2"
-CONSOLE="${RUN_DIR}/console.log"
-PIDFILE="${RUN_DIR}/qemu.pid"
+# ── eMMC target preflight (hw/sd/sd.c rules, checked HERE where the caller sees them) ──
+EMMC_USER_OFFSET=0
+if [ -n "${EMMC}" ]; then
+    [ -f "${EMMC}" ] || die "--emmc backing file not found: ${EMMC}"
+    [ -w "${EMMC}" ] || die "--emmc ${EMMC} is not writable (QEMU rejects a read-only drive on the sd-bus, and it is the install target)"
+    [[ "${EMMC_BOOT_SIZE}" =~ ^[0-9]+$ ]] && [[ "${EMMC_RPMB_SIZE}" =~ ^[0-9]+$ ]] \
+        || die "--emmc-boot-size/--emmc-rpmb-size must be byte counts (got: ${EMMC_BOOT_SIZE} / ${EMMC_RPMB_SIZE})"
+    [ $(( EMMC_BOOT_SIZE % 131072 )) -eq 0 ] && [ "${EMMC_BOOT_SIZE}" -le $(( 255 * 131072 )) ] \
+        || die "--emmc-boot-size ${EMMC_BOOT_SIZE}: QEMU wants a multiple of 128K no larger than 32640K"
+    [ $(( EMMC_RPMB_SIZE % 131072 )) -eq 0 ] && [ "${EMMC_RPMB_SIZE}" -le $(( 128 * 131072 )) ] \
+        || die "--emmc-rpmb-size ${EMMC_RPMB_SIZE}: QEMU wants a multiple of 128K no larger than 16384K"
+    _emmc_bytes="$(stat -c %s "${EMMC}")"
+    EMMC_USER_OFFSET=$(( 2 * EMMC_BOOT_SIZE + EMMC_RPMB_SIZE ))
+    _user=$(( _emmc_bytes - EMMC_USER_OFFSET ))
+    [ "${_user}" -gt 0 ] || die "--emmc ${EMMC} (${_emmc_bytes} bytes) is smaller than its boot+rpmb partitions (${EMMC_USER_OFFSET} bytes)"
+    if [ "${_user}" -gt $(( 2 * 1024 * 1024 * 1024 )) ]; then
+        [ $(( _user % 512 )) -eq 0 ] || die "--emmc user area (${_user} bytes) must be a multiple of 512"
+    else
+        [ $(( _user & (_user - 1) )) -eq 0 ] || die "--emmc user area (${_user} bytes, <= 2 GiB) must be a power of 2"
+    fi
+    qemu-system-aarch64 -device help 2>/dev/null | grep -E '^name "emmc"' >/dev/null \
+        || die "this qemu-system-aarch64 has no 'emmc' device (QEMU >= 9.1; the runner image's 7.2 only has sd-card) — run on the host QEMU"
+    info "emmc   : ${EMMC} (${_emmc_bytes} bytes; boot0/1 ${EMMC_BOOT_SIZE} each, rpmb ${EMMC_RPMB_SIZE}; user area at +${EMMC_USER_OFFSET})"
+fi
 
 info "platform: ${PLATFORM} board:${BOARD:-<none>} role:${ROLE}"
-info "img    : ${IMG}"
+info "img    : ${IMG:-<none>}"
 info "kernel : ${KERNEL}"
-info "dtb    : ${DTB}"
+info "initrd : ${INITRD:-<none>}"
+info "dtb    : ${DTB:-<none: QEMU virt DT> (board FDT name: ${BOARD_DTB})}"
 info "run dir: ${RUN_DIR}"
 
 # ── Per-run qcow2 overlay (keeps the golden .img pristine) ───────────────────
-mkdir -p "${RUN_DIR}"
 rm -f "${OVERLAY}"
-step "Creating qcow2 overlay over the golden image (resized to ${OVERLAY_SIZE})"
-qemu-img create -f qcow2 -b "${IMG}" -F raw "${OVERLAY}" >/dev/null
-qemu-img resize "${OVERLAY}" "${OVERLAY_SIZE}" >/dev/null
+if [ -n "${IMG}" ]; then
+    step "Creating qcow2 overlay over the golden image (resized to ${OVERLAY_SIZE})"
+    qemu-img create -f qcow2 -b "${IMG}" -F raw "${OVERLAY}" >/dev/null
+    qemu-img resize "${OVERLAY}" "${OVERLAY_SIZE}" >/dev/null
+fi
 
 cleanup() {
     [ -f "${PIDFILE}" ] && kill "$(cat "${PIDFILE}")" 2>/dev/null || true
@@ -313,10 +553,27 @@ LSM_APPEND="$(tr ' ' '\n' < "${BOARD_CMDLINE_BASE}" \
     || die "${BOARD_CMDLINE_BASE} carries no lsm=/selinux=/audit= tokens — the image has no asserted security posture to reproduce"
 info "board security posture from cmdline.base: ${LSM_APPEND}"
 
-# ── Kernel cmdline: ext4 root on vda2, PL011/8250 console ─────────────────────
-CMDLINE="root=${ROOT_PART} rootfstype=ext4 rw rootwait console=ttyAMA0,115200 net.ifnames=0 \
+# ── Kernel cmdline ───────────────────────────────────────────────────────────
+# With an extlinux.conf in hand (the medium's, or --extlinux = the installed
+# eMMC's own) its DEFAULT label's APPEND is the cmdline, verbatim but for the
+# board UART -> ttyAMA0 rewrite: it already carries cmdline.base's posture
+# (render_template's APPEND_BASE) plus the root= the image was built to boot —
+# root=live:LABEL=FRITE_INSTALL on a medium, root=PARTUUID=<disk>-02 or
+# root=/dev/mapper/cryptroot rd.luks.* on an installed eMMC. The FDT line is
+# the board's business (u-boot loads it); QEMU never sees it.
+# Otherwise: ext4 root on vda2, PL011 console — the golden-.img path, unchanged.
+if [ -n "${EXTLINUX}" ]; then
+    _append="$(extlinux_field "${EXTLINUX}" APPEND)"
+    [ -n "${_append}" ] || die "${EXTLINUX}: no APPEND line under its DEFAULT label"
+    _fdt="$(extlinux_field "${EXTLINUX}" FDT)"
+    [ -z "${_fdt}" ] || info "extlinux FDT ${_fdt} is the board's (u-boot loads it); not passed to QEMU"
+    CMDLINE="$(rewrite_console "${_append}")"
+    info "cmdline from ${EXTLINUX}"
+else
+    CMDLINE="root=${ROOT_PART} rootfstype=ext4 rw rootwait console=ttyAMA0,115200 net.ifnames=0 \
 ${LSM_APPEND} cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 \
 systemd.unified_cgroup_hierarchy=1 slab_nomerge init_on_alloc=1 randomize_kstack_offset=on"
+fi
 [ -n "${EXTRA_APPEND}" ] && CMDLINE="${CMDLINE} ${EXTRA_APPEND}"
 
 HOSTFWD="user,id=net0"
@@ -329,13 +586,43 @@ HOSTFWD+=",hostfwd=tcp::${HS_PORT}-:8080"
 QEMU_ARGS=(
     -machine "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" -smp "${SMP}" -m "${MEM}"
     -no-reboot
-    -kernel "${KERNEL}" -dtb "${DTB}" -append "${CMDLINE}"
-    -drive "file=${OVERLAY},format=qcow2,if=none,id=hd0"
-    -device virtio-blk-pci,drive=hd0
+    -kernel "${KERNEL}"
+)
+[ -z "${DTB}" ]    || QEMU_ARGS+=(-dtb "${DTB}")
+[ -z "${INITRD}" ] || QEMU_ARGS+=(-initrd "${INITRD}")
+QEMU_ARGS+=(-append "${CMDLINE}")
+if [ -n "${IMG}" ]; then
+    QEMU_ARGS+=(-drive "file=${OVERLAY},format=qcow2,if=none,id=hd0"
+                -device virtio-blk-pci,drive=hd0)
+fi
+QEMU_ARGS+=(
     -netdev "${HOSTFWD}"
     -device virtio-net-pci,netdev=net0
     -pidfile "${PIDFILE}"
 )
+# ONE xhci controller, shared by the USB medium and the --gpu input devices.
+NEED_XHCI=false
+{ [ -n "${MEDIUM}" ] && [ "${MEDIUM_BUS}" = usb ]; } && NEED_XHCI=true
+${GPU} && NEED_XHCI=true
+${NEED_XHCI} && QEMU_ARGS+=(-device qemu-xhci,id=xhci)
+if [ -n "${MEDIUM}" ]; then
+    QEMU_ARGS+=(-drive "file=${MEDIUM},format=raw,if=none,id=medium,readonly=on")
+    case "${MEDIUM_BUS}" in
+        usb)    QEMU_ARGS+=(-device usb-storage,bus=xhci.0,drive=medium,removable=on) ;;
+        virtio) QEMU_ARGS+=(-device virtio-blk-pci,drive=medium) ;;
+    esac
+fi
+if [ -n "${EMMC}" ]; then
+    _emmc_dev="emmc,drive=emmc,boot-partition-size=${EMMC_BOOT_SIZE}"
+    [ "${EMMC_RPMB_SIZE}" -eq 0 ] || _emmc_dev+=",rpmb-partition-size=${EMMC_RPMB_SIZE}"
+    QEMU_ARGS+=(-drive "file=${EMMC},format=raw,if=none,id=emmc"
+                -device sdhci-pci,sd-spec-version=3
+                -device "${_emmc_dev}")
+fi
+if ${GPU}; then
+    QEMU_ARGS+=(-device virtio-gpu-pci -device usb-kbd,bus=xhci.0 -device usb-tablet,bus=xhci.0)
+    info "gpu    : virtio-gpu-pci + usb-kbd + usb-tablet (QMP screendump captures the greeter)"
+fi
 if [ -n "${KEYS_IMG}" ]; then
     [ -f "${KEYS_IMG}" ] || die "keys-img not found: ${KEYS_IMG}"
     QEMU_ARGS+=(-drive "file=${KEYS_IMG},format=raw,if=none,id=keys,readonly=on"
@@ -414,8 +701,19 @@ if ${FOREGROUND}; then
     info "foreground console (Ctrl-A X to quit). Budget ~${TIMEOUT}s for first boot under TCG."
     exec qemu-system-aarch64 "${QEMU_ARGS[@]}" -nographic -serial mon:stdio
 else
+    # --serial-sock: the guest UART on a unix socket (logfile= keeps console.log
+    # byte-for-byte what -serial file: wrote) so a driver can TYPE at the console —
+    # the dracut LUKS passphrase prompt of an --encrypt-root install has no other
+    # input. Without it: -serial file:, exactly as before.
+    if [ -n "${SERIAL_SOCK}" ]; then
+        [ "${#SERIAL_SOCK}" -le 107 ] || die "--serial-sock path is ${#SERIAL_SOCK} bytes; AF_UNIX allows at most 107: ${SERIAL_SOCK}"
+        mkdir -p "$(dirname "${SERIAL_SOCK}")" || die "cannot create the --serial-sock dir for ${SERIAL_SOCK}"
+        SERIAL_ARGS=(-chardev "socket,id=ser0,path=${SERIAL_SOCK},server=on,wait=off,logfile=${CONSOLE}" -serial chardev:ser0)
+    else
+        SERIAL_ARGS=(-serial "file:${CONSOLE}")
+    fi
     qemu-system-aarch64 "${QEMU_ARGS[@]}" \
-        -display none -serial "file:${CONSOLE}" -monitor none -daemonize
+        -display none "${SERIAL_ARGS[@]}" -monitor none -daemonize
     info "QEMU pid $(cat "${PIDFILE}" 2>/dev/null || echo '?'); console -> ${CONSOLE}"
     info "SSH in with:  ssh -p ${SSH_PORT} <user>@localhost"
     info "Stop with  :  kill \$(cat ${PIDFILE})"

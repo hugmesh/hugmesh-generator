@@ -929,7 +929,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
 # and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-207}"
+# 207 -> 209 (denominator 248 -> 250) on 2026-11-04 for fix/desktop-d-arm-qemu-harness-for-frite-h-20261104,
+# which adds TWO gated suites: tests/qemu/launch_arm_medium_test.sh and
+# tests/qemu/frite_emmc_layout_test.sh (both wired in shell-suites.yml's alpine job). MEASURED by
+# RUNNING this file on that branch: '209 of 250 suites are named by a pull_request-triggered
+# workflow'. A branch that also raises this from 207 (e.g. the mesh-fleet one) conflicts here by
+# construction; whichever lands second re-measures per the doctrine above.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-209}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
