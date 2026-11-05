@@ -359,7 +359,8 @@ _DEFAULT = object()
 
 def _device(label, state="running", port=22355, key="/w/keys/id_ed25519",
             users=("tester", "alice"), container=_DEFAULT, qmp="/w/q.sock",
-            started_at="2999-01-01T00:00:00Z"):
+            started_at="2999-01-01T00:00:00Z", display_port=0, display_web_port=0,
+            display_password_file="", display_resize="", display_protocol=""):
     platform, _, role = label.partition("/")
     # A sentinel, not "" or None: container="" is a REAL registry shape (a record
     # written before the container was named) and the save tests below depend on
@@ -370,7 +371,10 @@ def _device(label, state="running", port=22355, key="/w/keys/id_ed25519",
         label=label, platform=platform, role=role, board="",
         container=container,
         ssh_host_port=port, ssh_user="tester", ssh_key=key, users=list(users),
-        qmp=qmp, state=state, started_at=started_at)
+        qmp=qmp, state=state, started_at=started_at,
+        display_protocol=display_protocol or ("spice" if display_port else ""),
+        display_port=display_port, display_web_port=display_web_port,
+        display_password_file=display_password_file, display_resize=display_resize)
 
 
 def _page(wiz):
@@ -1864,6 +1868,216 @@ def test_a_parseable_but_malformed_record_does_not_take_the_page_down(
     assert page.start_btn.isEnabled()
 
 
+
+# ---- the display door: Display beside SSH, loopback + per-run secret, never a modal -----
+
+_SECRET = "cd" * 24
+
+
+@pytest.fixture
+def secret_file(tmp_path):
+    p = tmp_path / "display.secret"
+    p.write_text(_SECRET + "\n", encoding="utf-8")
+    p.chmod(0o600)
+    return str(p)
+
+
+@pytest.fixture
+def viewers(monkeypatch, tmp_path):
+    """Which viewer binaries the core finds, and a private runtime dir for the .vv."""
+    present: set[str] = set()
+    monkeypatch.setattr(qemu_devices, "_viewer_binary",
+                        lambda name: f"/usr/bin/{name}" if name in present else None)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "rt"))
+    (tmp_path / "rt").mkdir()
+    return present
+
+
+@pytest.fixture
+def not_wsl(monkeypatch):
+    monkeypatch.setattr(platform_info, "detect_wsl", lambda: (False, 0))
+
+
+def _desktop(secret_file, **kw):
+    kw.setdefault("display_port", 22401)
+    kw.setdefault("display_resize", "scale")
+    return _device("x86/frontend", display_password_file=secret_file, **kw)
+
+
+def test_display_button_sits_beside_ssh_in_the_actions_strip(wiz):
+    page = _page(wiz)
+    row = _row(page, "rpi5/pki")
+    assert row.display_btn.text() == "Display"
+    assert row.display_btn.parent() is row.ssh_btn.parent(), "same button strip"
+    strip = row.ssh_btn.parent().layout()
+    order = [strip.itemAt(i).widget() for i in range(strip.count())]
+    assert order.index(row.display_btn) == order.index(row.ssh_btn) + 1
+    assert not row.display_btn.isEnabled()
+    assert "not running" in row.display_btn.toolTip()
+
+
+def test_display_is_disabled_for_a_serial_only_device(wiz, registry):
+    page = _page(wiz)
+    registry(_device("rpi5/pki"))                       # no display fields at all
+    page._refresh_reality()
+    row = _row(page, "rpi5/pki")
+    assert row.ssh_btn.isEnabled(), "the row is up: only the display is missing"
+    assert not row.display_btn.isEnabled()
+    tip = row.display_btn.toolTip()
+    assert "serial only" in tip and "virtio-gpu" in tip
+    assert "scale" not in tip
+
+
+def test_display_requires_the_per_run_secret(wiz, registry):
+    page = _page(wiz)
+    registry(_device("x86/frontend", display_port=22401))   # a port, no secret file
+    page._refresh_reality()
+    row = _row(page, "x86/frontend")
+    assert not row.display_btn.isEnabled()
+    assert "secret" in row.display_btn.toolTip()
+
+
+@pytest.mark.parametrize(("resize", "phrase"), [
+    ("guest", "resizes with the window"), ("scale", "scales to the window"),
+    ("", "scales to the window")])
+def test_display_is_enabled_when_running_with_a_door_and_says_what_resizing_does(
+        wiz, registry, secret_file, resize, phrase):
+    page = _page(wiz)
+    registry(_desktop(secret_file, display_resize=resize))
+    page._refresh_reality()
+    row = _row(page, "x86/frontend")
+    assert row.display_btn.isEnabled()
+    tip = row.display_btn.toolTip()
+    assert phrase in tip and "127.0.0.1:22401" in tip
+    assert _SECRET not in tip
+
+
+def test_display_stays_enabled_while_paused_but_not_while_a_verb_runs(
+        wiz, registry, secret_file):
+    page = _page(wiz)
+    registry(_desktop(secret_file))
+    page._refresh_reality()
+    row = _row(page, "x86/frontend")
+    row.run_state = page_mod._RUN_PAUSED
+    page._sync_controls()
+    assert row.display_btn.isEnabled(), "SPICE is served by QEMU: a frozen guest still shows"
+    assert not row.ssh_btn.isEnabled()
+    page._set_running(True)
+    assert not row.display_btn.isEnabled()
+    page._set_running(False)
+    assert row.display_btn.isEnabled()
+
+
+def test_display_opens_remote_viewer_detached_through_a_0600_vv_file(
+        wiz, registry, secret_file, viewers, spawned, not_wsl, tmp_path):
+    viewers.update({"remote-viewer", "spicy", "xdg-open"})
+    page = _page(wiz)
+    registry(_desktop(secret_file, display_web_port=22501))
+    page._refresh_reality()
+    _row(page, "x86/frontend").display_btn.click()
+    assert len(spawned) == 1
+    proc = spawned[0]
+    assert proc.argv[0] == "remote-viewer" and len(proc.argv) == 2
+    assert proc.kw.get("start_new_session") is True
+    vv = proc.argv[1]
+    assert os.path.dirname(vv) == str(tmp_path / "rt")
+    assert os.stat(vv).st_mode & 0o777 == 0o600
+    body = open(vv, encoding="utf-8").read()
+    assert "host=127.0.0.1\n" in body and "port=22401\n" in body
+    assert f"password={_SECRET}\n" in body and "delete-this-file=1\n" in body
+    # the secret went into the file and NOWHERE this page shows or logs
+    assert _SECRET not in page.note.text()
+    assert _SECRET not in page.log.toPlainText()
+    assert "x86/frontend" in page.note.text() and "scales to the window" in page.note.text()
+    assert "remote-viewer" in page.log.toPlainText()
+
+
+def test_display_without_a_viewer_surfaces_the_command_copy_ready(
+        wiz, registry, secret_file, viewers, spawned, not_wsl):
+    page = _page(wiz)
+    registry(_desktop(secret_file))
+    page._refresh_reality()
+    _row(page, "x86/frontend").display_btn.click()
+    assert not spawned
+    note = page.note.text()
+    assert "No SPICE viewer" in note and "virt-viewer" in note
+    assert "127.0.0.1:22401" in note and secret_file in note
+    assert _SECRET not in note and _SECRET not in page.log.toPlainText()
+
+
+def test_display_falls_back_to_the_browser_on_the_ip_literal(
+        wiz, registry, secret_file, viewers, spawned, not_wsl):
+    viewers.update({"spicy", "xdg-open"})                   # spicy is never auto-picked
+    page = _page(wiz)
+    registry(_desktop(secret_file, display_web_port=22501))
+    page._refresh_reality()
+    _row(page, "x86/frontend").display_btn.click()
+    assert len(spawned) == 1
+    assert spawned[0].argv[0] == "xdg-open"
+    url = spawned[0].argv[1]
+    assert url.startswith("http://127.0.0.1:22501/vnc.html?") and "resize=scale" in url
+    assert "localhost" not in url and _SECRET not in url
+    assert spawned[0].kw.get("start_new_session") is True
+
+
+def test_display_launch_failure_is_an_inline_note(wiz, registry, secret_file, viewers,
+                                                  monkeypatch, not_wsl):
+    viewers.add("remote-viewer")
+
+    def boom(argv, **kw):
+        raise OSError("remote-viewer: exec format error")
+    monkeypatch.setattr(page_mod.subprocess, "Popen", boom)
+    page = _page(wiz)
+    registry(_desktop(secret_file))
+    page._refresh_reality()
+    _row(page, "x86/frontend").display_btn.click()
+    note = page.note.text()
+    assert "Could not open the display viewer" in note and "exec format error" in note
+    assert "remote-viewer" in note, "the command is there to paste"
+    assert _SECRET not in note and _SECRET not in page.log.toPlainText()
+
+
+def test_display_with_an_unreadable_secret_says_the_path_not_the_value(
+        wiz, registry, viewers, spawned, not_wsl, tmp_path):
+    viewers.add("remote-viewer")
+    page = _page(wiz)
+    gone = str(tmp_path / "gone.secret")
+    registry(_desktop(gone))
+    page._refresh_reality()
+    row = _row(page, "x86/frontend")
+    assert row.display_btn.isEnabled(), "the record is complete; the file is the problem"
+    row.display_btn.click()
+    assert not spawned
+    assert "Could not prepare the display" in page.note.text()
+    assert "gone.secret" in page.note.text()
+
+
+def test_display_adds_the_wsl2_hint(wiz, registry, secret_file, viewers, spawned,
+                                    monkeypatch):
+    monkeypatch.setattr(platform_info, "detect_wsl", lambda: (True, 2))
+    page = _page(wiz)
+    registry(_desktop(secret_file))
+    page._refresh_reality()
+    _row(page, "x86/frontend").display_btn.click()
+    assert not spawned
+    note = page.note.text()
+    assert "WSLg" in note and "remote-viewer.exe" in note
+    viewers.add("remote-viewer")
+    _row(page, "x86/frontend").display_btn.click()
+    assert len(spawned) == 1
+    assert "WSLg" in page.note.text()
+
+
+def test_display_click_on_a_blocked_row_is_an_inline_refusal(wiz, registry, spawned):
+    page = _page(wiz)
+    registry(_device("rpi5/pki"))
+    page._refresh_reality()
+    page._open_display(_index(page, "rpi5/pki"))        # the belt to the grey button
+    assert not spawned
+    assert "has no display to open" in page.note.text()
+    assert "serial only" in page.note.text()
+
+
 # ---- #647 / #656 rule: the refusal note is LOOKED AT, two styles, 8 pt as well -------
 from _look import (LOOK_CASES, LOOK_IDS, DEFAULT_WINDOW,  # noqa: E402
                    assert_inside, assert_seen_without_scrolling, assert_whole,
@@ -1893,6 +2107,75 @@ def test_look_the_refusal_note_is_drawn_whole_under_the_session_picker(
             assert not page.start_btn.isEnabled()
             assert all(not row.start.isEnabled() for row in page._rows)
             snap(w, "meshemu-refused", style, pt)
+        finally:
+            w.close()
+            w.deleteLater()
+            settle(qapp)
+
+
+@pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
+def test_look_the_display_button_is_drawn_beside_ssh(qapp, fake_generator, style, pt,
+                                                     tmp_path):
+    """The 'look at the UI you built' rule for the Display button: it is drawn whole,
+    beside SSH, lit for a running desktop with a door and grey for a serial-only
+    board — measured on the table's viewport, not assumed from the model."""
+    child_only()
+    gen, _sess, _abort = fake_generator
+    secret = tmp_path / "display.secret"
+    secret.write_text("ef" * 24 + "\n", encoding="utf-8")
+    work = os.path.join(str(gen), qemu_tests.DEFAULT_WORK_SUBDIR)
+    devdir = os.path.join(work, "devices")
+    os.makedirs(devdir, exist_ok=True)
+    for dev in (_device("rpi5/pki"),
+                _device("x86/frontend", display_port=22401, display_resize="scale",
+                        display_password_file=str(secret))):
+        safe = dev.label.replace("/", "_").replace("+", "_")
+        with open(os.path.join(devdir, f"{safe}.json"), "w", encoding="utf-8") as fh:
+            json.dump(dataclasses.asdict(dev), fh)
+    with looking(qapp, style, pt):
+        w = wizard_mod.StudioWizard(str(gen))
+        w.show()
+        try:
+            page = _page(w)
+            page._refresh_reality()
+            settle(qapp)
+            # Measured at whatever size the wizard opened at (the sibling test above
+            # pins DEFAULT_WINDOW; this one is about the table's viewport, which is
+            # narrower than the 12-column table at ANY window size).
+            assert w.width() > 0 and w.height() > 0
+            lit = _row(page, "x86/frontend")
+            grey = _row(page, "rpi5/pki")
+            assert lit.display_btn.isEnabled() and not grey.display_btn.isEnabled()
+            table = page.devices
+            # The 12-column table is wider than the window: bring the actions
+            # column into view the way a person would (scroll sideways), then
+            # measure what the table's viewport shows.
+            table.scrollTo(table.model().index(_index(page, "x86/frontend"),
+                                               page_mod._MCOL_ACTIONS))
+            settle(qapp)
+            vp = table.viewport()
+            for row, what in ((lit, "the lit Display button"),
+                              (grey, "the grey Display button")):
+                btn = row.display_btn
+                assert btn.isVisible(), f"{what} is not visible"
+                need = btn.fontMetrics().horizontalAdvance(btn.text()) + 8
+                assert btn.width() >= need, \
+                    f"{what}: {btn.width()}px wide, its text needs {need}px"
+                assert btn.height() >= 16, f"{what}: {btn.height()}px tall"
+                left = vp.mapFromGlobal(btn.mapToGlobal(btn.rect().topLeft()))
+                right = vp.mapFromGlobal(btn.mapToGlobal(btn.rect().bottomRight()))
+                assert 0 <= left.x() and right.x() + 1 <= vp.width(), \
+                    f"{what}: spans {left.x()}..{right.x() + 1}px of a " \
+                    f"{vp.width()}px table viewport"
+                assert 0 <= left.y() and right.y() + 1 <= vp.height(), \
+                    f"{what}: rows {left.y()}..{right.y() + 1}px of a " \
+                    f"{vp.height()}px table viewport"
+                ssh_right = vp.mapFromGlobal(
+                    row.ssh_btn.mapToGlobal(row.ssh_btn.rect().topRight())).x()
+                assert left.x() > ssh_right, f"{what} is not to the right of SSH"
+            assert "scales to the window" in lit.display_btn.toolTip()
+            assert "serial only" in grey.display_btn.toolTip()
+            snap(w, "meshemu-display", style, pt)
         finally:
             w.close()
             w.deleteLater()

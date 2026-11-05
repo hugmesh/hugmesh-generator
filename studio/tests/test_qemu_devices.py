@@ -658,3 +658,252 @@ def test_save_argv_modes_are_the_two_the_operator_asked_for(tmp_path):
 
     with pytest.raises(ValueError):
         qd.save_argv(gen, dev, "clobber")        # not one of SAVE_MODES
+
+
+# ── the display door ─────────────────────────────────────────────────────────────
+#
+# ONE door: SPICE on host loopback behind a per-run secret, opened by remote-viewer
+# through a 0600 .vv file that deletes itself; noVNC on an IP-literal URL is the
+# browser fallback. The guards below are the ones a mutation battery was run
+# against (see the PR): loopback only, secret required, secret never printed.
+
+SECRET = "ab" * 24                                  # 48 hex chars, what the runner writes
+
+
+@pytest.fixture
+def secret_file(tmp_path):
+    p = tmp_path / "display.secret"
+    p.write_text(SECRET + "\n", encoding="utf-8")   # the writer's trailing newline
+    p.chmod(0o600)
+    return str(p)
+
+
+@pytest.fixture
+def installed(monkeypatch):
+    """Which viewer binaries ``display_argv`` finds — a set the test fills."""
+    present: set[str] = set()
+    monkeypatch.setattr(qd, "_viewer_binary",
+                        lambda name: f"/usr/bin/{name}" if name in present else None)
+    return present
+
+
+def _display_dev(secret_file, **overrides):
+    fields = {"label": "x86/desktop", "platform": "x86", "role": "desktop",
+              "display_protocol": "spice", "display_port": 22401,
+              "display_web_port": 22501, "display_password_file": secret_file,
+              "display_resize": "scale"}
+    fields.update(overrides)
+    return _dev(**fields)
+
+
+def test_display_fields_are_read_tolerantly(tmp_path):
+    """A serial-only record (or an older writer) has none of the five fields."""
+    _write_device(tmp_path, "rpi5/pki")
+    (dev,) = qd.discover_devices(str(tmp_path))
+    assert (dev.display_protocol, dev.display_port, dev.display_web_port,
+            dev.display_password_file, dev.display_resize) == ("", 0, 0, "", "")
+
+    _write_device(tmp_path, "x86/desktop", display_protocol="spice",
+                  display_port="22401", display_web_port=22501,
+                  display_password_file="/host/runs/x86_desktop/display.secret",
+                  display_resize="guest")
+    dev = qd.device_by_label(qd.discover_devices(str(tmp_path)), "x86/desktop")
+    assert dev.display_protocol == "spice"
+    assert dev.display_port == 22401 and dev.display_web_port == 22501
+    assert dev.display_password_file == "/host/runs/x86_desktop/display.secret"
+    assert dev.display_resize == "guest"
+
+    _write_device(tmp_path, "x86/junk", display_port="not-a-port",
+                  display_web_port=None)
+    dev = qd.device_by_label(qd.discover_devices(str(tmp_path)), "x86/junk")
+    assert dev.display_port == 0 and dev.display_web_port == 0
+
+
+def test_display_blocker_names_the_reason(secret_file):
+    assert qd.display_blocker(_display_dev(secret_file)) == ""
+    assert qd.can_display(_display_dev(secret_file))
+
+    stopped = qd.display_blocker(_display_dev(secret_file, state="stopped"))
+    assert "not running" in stopped
+
+    serial = qd.display_blocker(_display_dev(secret_file, display_port=0))
+    assert serial.startswith("serial only") and "virtio-gpu" in serial
+    assert "scale" not in serial, "no picture at all is not 'scale'"
+
+    other = qd.display_blocker(_display_dev(secret_file, display_protocol="vnc"))
+    assert "cannot open" in other
+
+    # The door REQUIRES the secret: a record without one is refused, not opened open.
+    no_secret = qd.display_blocker(_display_dev(secret_file, display_password_file=""))
+    assert "secret" in no_secret and "requires" in no_secret
+
+
+def test_display_is_not_blocked_by_a_missing_protocol_string(secret_file):
+    """An older display-mode record that names the port and secret but no protocol
+    string is still a spice door — the protocol only blocks when it is SOMETHING ELSE."""
+    assert qd.display_blocker(_display_dev(secret_file, display_protocol="")) == ""
+
+
+def test_write_vv_file_is_0600_self_deleting_and_on_loopback(secret_file, tmp_path):
+    dev = _display_dev(secret_file)
+    rt = str(tmp_path / "rt")                       # does not exist yet: created 0700
+    path = qd.write_vv_file(dev, rt)
+    assert os.path.dirname(path) == rt
+    assert os.path.basename(path).startswith("hugmesh-x86_desktop-")
+    assert path.endswith(".vv")
+    assert os.stat(path).st_mode & 0o777 == 0o600
+    assert os.stat(rt).st_mode & 0o777 == 0o700
+    lines = open(path, encoding="utf-8").read().splitlines()
+    assert lines[0] == "[virt-viewer]"
+    assert "type=spice" in lines
+    assert "host=127.0.0.1" in lines
+    assert "port=22401" in lines
+    assert f"password={SECRET}" in lines, "the secret is read from the file, newline stripped"
+    assert "delete-this-file=1" in lines
+    assert "title=hugmesh x86/desktop" in lines
+    assert not any("localhost" in ln for ln in lines)
+
+
+def test_write_vv_file_refuses_a_blocked_device_and_a_bad_secret(secret_file, tmp_path):
+    with pytest.raises(ValueError, match="serial only"):
+        qd.write_vv_file(_display_dev(secret_file, display_port=0), str(tmp_path))
+    with pytest.raises(OSError):
+        qd.write_vv_file(_display_dev(secret_file,
+                                      display_password_file=str(tmp_path / "nope")),
+                         str(tmp_path))
+    empty = tmp_path / "empty.secret"
+    empty.write_text("\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="empty"):
+        qd.write_vv_file(_display_dev(secret_file, display_password_file=str(empty)),
+                         str(tmp_path))
+    assert not [n for n in os.listdir(tmp_path) if n.endswith(".vv")], \
+        "no half-written .vv file survives a refusal"
+
+
+def test_display_argv_auto_prefers_remote_viewer(secret_file, tmp_path, installed):
+    installed.update({"remote-viewer", "spicy", "xdg-open"})
+    argv, hint = qd.display_argv(_display_dev(secret_file), "auto", str(tmp_path))
+    assert argv[0] == "remote-viewer" and len(argv) == 2
+    assert argv[1].endswith(".vv") and os.path.dirname(argv[1]) == str(tmp_path)
+    assert os.stat(argv[1]).st_mode & 0o777 == 0o600
+    assert SECRET not in " ".join(argv) and SECRET not in hint
+    assert argv[1] in hint, "the hint is the same command, copy-ready"
+
+
+def test_display_argv_auto_never_picks_spicy(secret_file, tmp_path, installed):
+    """spicy would take the password on argv; without remote-viewer, auto goes to
+    the browser (URL, no password) and then to nothing — never to spicy."""
+    installed.update({"spicy", "xdg-open"})
+    argv, _hint = qd.display_argv(_display_dev(secret_file), "auto", str(tmp_path))
+    assert argv[0] == "xdg-open"
+    installed.discard("xdg-open")
+    argv, hint = qd.display_argv(_display_dev(secret_file), "auto", str(tmp_path))
+    assert argv is None
+    assert "spicy" not in (hint.split("Then:")[0]), hint
+    assert not [n for n in os.listdir(tmp_path) if n.endswith(".vv")], \
+        "no .vv file is written unless remote-viewer is the one opened"
+
+
+def test_display_argv_browser_fallback_is_an_ip_literal_without_the_password(
+        secret_file, tmp_path, installed):
+    installed.add("xdg-open")
+    argv, hint = qd.display_argv(_display_dev(secret_file), "browser", str(tmp_path))
+    assert argv[0] == "xdg-open"
+    url = argv[1]
+    assert url.startswith("http://127.0.0.1:22501/vnc.html?")
+    assert "host=127.0.0.1" in url and "port=22501" in url
+    assert "resize=scale" in url and "autoconnect=1" in url
+    assert "localhost" not in url, "HSTS is pinned on localhost; an IP literal cannot be"
+    assert "password" not in url and SECRET not in url
+    assert url in hint and SECRET not in hint
+
+
+def test_display_argv_browser_needs_a_web_port(secret_file, tmp_path, installed):
+    installed.add("xdg-open")
+    argv, hint = qd.display_argv(_display_dev(secret_file, display_web_port=0),
+                                 "browser", str(tmp_path))
+    assert argv is None and "--display-web" in hint
+    assert qd.display_url(_display_dev(secret_file, display_web_port=0)) == ""
+
+
+def test_display_argv_with_nothing_installed_says_what_to_install(
+        secret_file, tmp_path, installed):
+    argv, hint = qd.display_argv(_display_dev(secret_file, display_web_port=0),
+                                 "auto", str(tmp_path))
+    assert argv is None
+    assert "virt-viewer" in hint and "net-misc/virt-viewer" in hint
+    assert "remote-viewer.exe" in hint
+    assert "127.0.0.1:22401" in hint
+    assert secret_file in hint, "the PATH of the secret is the operator's pointer"
+    assert SECRET not in hint
+
+
+def test_display_argv_spicy_is_explicit_and_carries_no_secret(
+        secret_file, tmp_path, installed):
+    installed.update({"spicy", "remote-viewer"})
+    argv, hint = qd.display_argv(_display_dev(secret_file), "spicy", str(tmp_path))
+    assert argv[0] == "spicy"
+    assert "-h" in argv and argv[argv.index("-h") + 1] == "127.0.0.1"
+    assert argv[argv.index("-p") + 1] == "22401"
+    assert "-w" not in argv and "--password" not in " ".join(argv)
+    assert SECRET not in " ".join(argv) and SECRET not in hint
+    assert secret_file in hint
+    installed.discard("spicy")
+    argv, hint = qd.display_argv(_display_dev(secret_file), "spicy", str(tmp_path))
+    assert argv is None and "virt-viewer" in hint
+
+
+def test_display_argv_refuses_unknown_viewers_and_blocked_devices(secret_file, tmp_path):
+    with pytest.raises(ValueError, match="unknown display viewer"):
+        qd.display_argv(_display_dev(secret_file), "vnc", str(tmp_path))
+    with pytest.raises(ValueError, match="not running"):
+        qd.display_argv(_display_dev(secret_file, state="stopped"), "auto",
+                        str(tmp_path))
+
+
+@pytest.mark.parametrize("viewer", qd.DISPLAY_VIEWERS)
+@pytest.mark.parametrize("present", [set(), {"spicy"}, {"xdg-open"},
+                                     {"remote-viewer", "spicy", "xdg-open"}])
+def test_no_display_output_ever_carries_the_secret(secret_file, tmp_path, installed,
+                                                   viewer, present):
+    """The one invariant over EVERY viewer and EVERY install state: what comes back
+    to a caller (argv, hint) is safe to print, log and show. Only the 0600 .vv
+    file holds the value."""
+    installed.update(present)
+    argv, hint = qd.display_argv(_display_dev(secret_file), viewer, str(tmp_path))
+    assert SECRET not in hint
+    for arg in argv or []:
+        assert SECRET not in arg
+
+
+def test_viewers_list_prefers_remote_viewer_and_never_auto_picks_spicy():
+    assert qd.VIEWERS[0] == ("remote-viewer", True)
+    assert dict(qd.VIEWERS)["spicy"] is False
+    assert qd.DISPLAY_HOST == "127.0.0.1"
+
+
+def test_display_resize_text_is_honest_per_record(secret_file):
+    assert "resizes with the window" in qd.display_resize_text(
+        _display_dev(secret_file, display_resize="guest"))
+    assert "scales to the window" in qd.display_resize_text(
+        _display_dev(secret_file, display_resize="scale"))
+    assert "scales to the window" in qd.display_resize_text(
+        _display_dev(secret_file, display_resize="")), "unknown is the conservative one"
+
+
+def test_default_runtime_dir_prefers_xdg_runtime_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    assert qd.default_runtime_dir() == str(tmp_path)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "gone"))
+    fallback = qd.default_runtime_dir()
+    assert fallback != str(tmp_path / "gone")
+    assert os.path.basename(fallback).startswith("hugmesh-display-")
+    monkeypatch.delenv("XDG_RUNTIME_DIR")
+    assert qd.default_runtime_dir() == fallback
+
+
+def test_wsl_display_hint():
+    assert qd.wsl_display_hint(False) == ""
+    assert "WSL1" in qd.wsl_display_hint(True, 1)
+    two = qd.wsl_display_hint(True, 2)
+    assert "WSLg" in two and "remote-viewer.exe" in two and "127.0.0.1" in two
