@@ -1,0 +1,52 @@
+# compose.headscale.yaml — admin-bff's half of `make stack-up HEADSCALE=1`.
+#
+# The hugmesh-headscale service itself lives in compose.local.yaml behind the
+# `headscale` profile. What admin-bff needs to issue HugMesh tokens (the
+# pre-auth-key API key, the issuer signing key, the APP_MESH_TOKEN_* settings)
+# lives HERE, in an overlay the Makefile adds with `-f` only under HEADSCALE=1
+# (STACK_HEADSCALE_FLAGS), for two reasons:
+#   * admin-bff is an unprofiled service, so a mount or an env key added to it in
+#     compose.local.yaml would change every plain bring-up, which that file
+#     promises it will not;
+#   * the issuer key is a per-machine file, tests/stack/.mesh-token/issuer
+#     (gitignored, minted by `make stack-mesh-token-key`, which stack-up runs
+#     first under HEADSCALE=1). A bind mount of a path that does not exist makes
+#     Docker create a ROOT-OWNED DIRECTORY there, which `make stack-mesh-token-key`
+#     could then never write. Mounting it only when the knob that mints it is set
+#     keeps that from happening on a plain checkout.
+#
+# THE KEYS NEVER LEAVE THE SERVER. Both are mounted read-only into admin-bff
+# alone: the API key from the headscale-admin-key volume (written 0600 by the
+# headscale entrypoint), the issuer key as a compose file secret at
+# /run/secrets/mesh_token_issuer (0600 on the host; admin-bff's image runs as
+# root, so it can read it). Neither is in an env var, so neither shows in
+# `docker inspect`. In-cluster the same two come from the ExternalSecret
+# admin-bff-mesh-token as a secret volume (docs/LOCAL-MESH-HEADSCALE.md).
+#
+# THE ENV. Values the Makefile knows (domain, port, mesh id) come in through
+# STACK_HEADSCALE_ENV; the defaults below are the same ones, so a hand-run
+#   docker compose -f compose.local.yaml -f compose.headscale.yaml --profile headscale up -d
+# gets the same wiring. APP_REGISTRY_HEADSCALE_ACL_ENABLED is NOT set here and
+# must stay false (its compose default): that leg pushes the policy over the API,
+# which needs headscale's policy mode `database`, and this headscale runs mode
+# `file` (the device's mode), so the rendered device template stays in force.
+services:
+  hugmesh-admin-bff-api:
+    environment:
+      APP_MESH_TOKEN_ENABLED: "true"
+      APP_MESH_TOKEN_HEADSCALE_BASE_URL: http://hugmesh-headscale:8080
+      APP_MESH_TOKEN_HEADSCALE_API_KEY_PATH: /run/hugmesh-headscale/admin-bff.apikey
+      APP_MESH_TOKEN_HEADSCALE_USER: hugmesh
+      APP_MESH_TOKEN_MESH: ${HEADSCALE_MESH_ID:-hugmesh-local}
+      APP_MESH_TOKEN_LOGIN_SERVERS: ${HUGMESH_DOMAIN:-hugmesh.net}=https://hs.${HUGMESH_DOMAIN:-hugmesh.net}:${PUBLIC_HTTPS_PORT:-8488}
+      APP_MESH_TOKEN_ISSUER_KEY_PATH: /run/secrets/mesh_token_issuer
+    volumes:
+      - headscale-admin-key:/run/hugmesh-headscale:ro
+    secrets:
+      - mesh_token_issuer
+    depends_on:
+      hugmesh-headscale: { condition: service_healthy }
+
+secrets:
+  mesh_token_issuer:
+    file: ./.mesh-token/issuer

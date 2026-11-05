@@ -929,7 +929,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
 # and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-207}"
+# 207 -> 208 (denominator 248 -> 249) on 2026-11-04 for feat/mesh-token-g3-generator-local-stack-hea-20261104,
+# which adds ONE gated suite: tests/stack/test-headscale-local.sh (the HEADSCALE=1 local-mesh
+# headscale guard, wired in shell-suites.yml's debian job). MEASURED by RUNNING this file with
+# GUARD_PREMERGE=0 on that branch (base origin/main db240811, which measures '207 of 248'):
+#     208 of 249 suites are named by a pull_request-triggered workflow
+# ungated SET 41; and with the suite on disk but its shell-suites.yml line absent: '207 of 249'
+# + check 3 and check 7 red naming it -- so the +1/+1 is this suite and nothing else. A branch
+# that also raises this from 207 conflicts here by construction; whichever lands second
+# re-measures (expected 209) per the doctrine above.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
