@@ -184,6 +184,97 @@ for m in "${EXEMPLARS[@]}"; do
                             || bad "k8s exemplar ${m}.te MISSING — the enforce-gate could never pass"
 done
 
+# ── B-bootpath) hugmesh_bootpath.te: the shape the #852 refute left unpinned ──
+# Two mutants survived that refute: dropping the optional_policy wrapper around the
+# snort rules (the module would then FAIL TO LOAD on every image without snort
+# policy, and nothing here went red), and granting NetworkManager_t sys_admin
+# (most of root, to a network daemon, for a capability it was measured not to
+# need). Both are structural facts about the .te and are pinned by parsing it.
+echo "-- B-bootpath) hugmesh_bootpath.te: foreign types only inside optional_policy; nothing granted to NetworkManager --"
+BP="${SRC}/hugmesh_bootpath.te"
+# bp_exposed_types <te>: every <name>_t token that appears OUTSIDE every
+# optional_policy(` ... ') block and outside the top-level require { } block.
+# Nesting is tracked for every "(`"-opener (gen_require inside optional_policy
+# closes with the same ') line), so only the optional_policy opener sets the
+# "sheltered" level and only ITS closer clears it.
+cat > "${TMP}/bp-exposed.awk" <<'AWK'
+/optional_policy\(`[[:space:]]*$/ { d++; if (!opt) opt = d; next }
+/\(`[[:space:]]*$/                { d++; next }
+/^[[:space:]]*'\)[[:space:]]*$/   { if (opt == d) opt = 0; if (d > 0) d--; next }
+/^require[[:space:]]*\{/          { r = 1; next }
+r && /^\}/                        { r = 0; next }
+!opt && !r                        { print }
+AWK
+bp_exposed_types() { sed -e 's/#.*//' "$1" | awk -f "${TMP}/bp-exposed.awk" | grep -oE '\b[A-Za-z][A-Za-z0-9_]*_t\b' | sort -u; }
+# bp_own_types <te>: types this module declares, plus the top-level require{} set.
+bp_own_types() {
+    sed -e 's/#.*//' "$1" | awk '/^type [A-Za-z0-9_]+_t;/ { sub(/;/, "", $2); print $2 }'
+    sed -e 's/#.*//' "$1" | awk '/^require[[:space:]]*\{/ { r = 1; next } r && /^\}/ { r = 0 } r && /^[[:space:]]*type / { gsub(/[;,]/, ""); for (i = 2; i <= NF; i++) print $i }'
+}
+if [ ! -f "${BP}" ]; then
+    bad "hugmesh_bootpath.te missing"
+else
+    # NEGATIVE CONTROL for the parser: a synthetic module with one unwrapped foreign
+    # domain and one wrapped must report exactly the unwrapped one.
+    cat > "${TMP}/bp-mut.te" <<'TE'
+policy_module(x, 1.0.0)
+require {
+	type initrc_t;
+}
+type x_runtime_t;
+gen_require(`
+	type snort_t;
+')
+allow snort_t self:packet_socket map;
+manage_dirs_pattern(initrc_t, x_runtime_t, x_runtime_t)
+optional_policy(`
+	gen_require(`
+		type kubelet_t, var_log_t;
+	')
+	allow kubelet_t var_log_t:file append_file_perms;
+')
+TE
+    ctl="$(bp_exposed_types "${TMP}/bp-mut.te" | tr '\n' ' ')"
+    case "${ctl}" in
+        *snort_t*) case "${ctl}" in *kubelet_t*|*var_log_t*) bad "parser control: a WRAPPED type was reported as exposed (${ctl})" ;; *) ok "parser control: an unwrapped snort_t is reported, wrapped kubelet_t/var_log_t are not" ;; esac ;;
+        *) bad "parser control: the unwrapped snort_t was NOT reported (${ctl:-nothing}) — the wrapper check below would be vacuous" ;;
+    esac
+    own="$(bp_own_types "${BP}")"
+    exposed=""
+    for t in $(bp_exposed_types "${BP}"); do printf '%s\n' "${own}" | grep -x "${t}" >/dev/null || exposed="${exposed} ${t}"; done
+    [ -z "${exposed}" ] \
+        && ok "every foreign type in hugmesh_bootpath.te sits inside an optional_policy block (own types: $(printf '%s' "${own}" | tr '\n' ' '))" \
+        || bad "hugmesh_bootpath.te references foreign types OUTSIDE optional_policy — the module would fail to load on an image without that policy:${exposed}"
+    n_opt="$(grep -c '^optional_policy(`$' "${BP}")"
+    [ "${n_opt}" -ge 9 ] && ok "hugmesh_bootpath.te carries ${n_opt} optional_policy blocks (>= 9: cron, snort, kubelet, dockerd, tmpfiles, hwclock, entropyd, NetworkManager, udev)" \
+                         || bad "hugmesh_bootpath.te has only ${n_opt} optional_policy blocks"
+    # NetworkManager: measured 8 x sys_admin + 8 x perfmon on the enforcing boot, every
+    # one a perfmon_capable() fallback inside bpf(BPF_PROG_LOAD) that SUCCEEDED
+    # (SYSCALL success=yes) because the policy already grants capability2 bpf.
+    # Nothing is granted; both are dontaudited; an allow of either is a defect.
+    sed -e 's/#.*//' "${BP}" | grep -E '^[[:space:]]*allow[[:space:]]+NetworkManager_t' >/dev/null \
+        && bad "hugmesh_bootpath.te GRANTS something to NetworkManager_t (measured: nothing it does needs a grant)" \
+        || ok "no allow rule names NetworkManager_t"
+    # Scoped to the boot-path module: hugmesh_node_storage_t legitimately holds
+    # sys_admin (it mounts). A boot-path grant of sys_admin to any foreign domain
+    # is the mutant the #852 refute left green.
+    sed -e 's/#.*//' "${BP}" | grep -E '^[[:space:]]*allow[[:space:]].*\bsys_admin\b' >/dev/null \
+        && bad "hugmesh_bootpath.te allows sys_admin: $(sed -e 's/#.*//' "${BP}" | grep -nE '^[[:space:]]*allow[[:space:]].*\bsys_admin\b' | head -2)" \
+        || ok "hugmesh_bootpath.te allows sys_admin to nobody"
+    sed -e 's/#.*//' "${SRC}"/*.te | grep -E '^[[:space:]]*allow[[:space:]].*\bperfmon\b' >/dev/null \
+        && bad "a specs/selinux module allows perfmon (kernel memory through tracing BPF)" \
+        || ok "no module in specs/selinux allows perfmon"
+    grep -E '^[[:space:]]*dontaudit[[:space:]]+NetworkManager_t[[:space:]]+self:capability[[:space:]]+sys_admin;' "${BP}" >/dev/null \
+        && ok "NetworkManager_t sys_admin is dontaudited (silenced, not granted)" || bad "NetworkManager_t sys_admin dontaudit missing"
+    grep -E '^[[:space:]]*dontaudit[[:space:]]+NetworkManager_t[[:space:]]+self:capability2[[:space:]]+perfmon;' "${BP}" >/dev/null \
+        && ok "NetworkManager_t perfmon is dontaudited (silenced, not granted)" || bad "NetworkManager_t perfmon dontaudit missing"
+    grep -E '^[[:space:]]*fs_getattr_nsfs_files\(udev_t\)' "${BP}" >/dev/null && grep -E '^[[:space:]]*fs_getattr_iso9660_files\(udev_t\)' "${BP}" >/dev/null \
+        && ok "udev_t gets getattr on nsfs_t and iso9660_t files through the refpolicy interfaces (one class, one perm, one type each)" \
+        || bad "udev_t nsfs/iso9660 getattr interfaces missing from hugmesh_bootpath.te"
+    sed -e 's/#.*//' "${BP}" | grep -E '^[[:space:]]*allow[[:space:]]+udev_t' >/dev/null \
+        && bad "hugmesh_bootpath.te carries a raw allow for udev_t (use the narrow interface)" || ok "udev_t has no raw allow rule in hugmesh_bootpath.te"
+fi
+
 # ── fixtures ─────────────────────────────────────────────────────────────────
 # mk_headers <headerdir> <stub|real> <with-container|no-container>
 # Writes a refpolicy HEADER tree in the layout `make install-headers` produces:
@@ -970,7 +1061,74 @@ out="$(run_lib "${S}" "${SP}")"; rc=$?
     || bad "the prune deleted base.pp"
 
 # ── D) the enforce-gate service — static shape ───────────────────────────────
+# ── C-root) slx_map_root_login EXECUTED (chroot/semanage/matchpathcon stubbed) ──
+# /root was default_t on every shipped image because the store's seusers named only
+# __default__ and genhomedircon therefore never wrote a /root line; local_login_t
+# was denied { search } on it three times per login under enforcing. The lib now
+# maps the root login to __default__'s SELinux user and range (semanage, -N) and
+# reads its postconditions from the store's OUTPUTS: seusers, .homedirs, matchpathcon.
+echo "-- C-root) slx_map_root_login executed against a fake store --"
+RM="${TMP}/rootmap"
+mk_rootmap() { # mk_rootmap <sysroot> [with-root]
+    local s="$1"; rm -rf "${s}"; mkdir -p "${s}/etc/selinux/mcs/contexts/files" "${s}/usr/sbin"
+    printf '__default__:unconfined_u:s0-s0\n' > "${s}/etc/selinux/mcs/seusers"
+    printf '/home/[^/]+/.+\tunconfined_u:object_r:user_home_t:s0\n' > "${s}/etc/selinux/mcs/contexts/files/file_contexts.homedirs"
+    if [ "${2:-}" = with-root ]; then
+        printf 'root:unconfined_u:s0-s0\n' >> "${s}/etc/selinux/mcs/seusers"
+        printf '/root\t-d\tunconfined_u:object_r:user_home_dir_t:s0\n' >> "${s}/etc/selinux/mcs/contexts/files/file_contexts.homedirs"
+    fi
+    printf '#!/bin/sh\n' > "${s}/usr/sbin/semanage"; chmod +x "${s}/usr/sbin/semanage"
+    : > "${s}/calls"
+}
+cat > "${TMP}/rootmap-stubs.sh" <<'EOS'
+chroot() { local r="$1"; shift; SR_ROOT="${r}" "$@"; }
+semanage() {
+  echo "semanage $*" >> "${SR_ROOT}/calls"
+  case "${RMODE}" in
+    good)   printf 'root:unconfined_u:s0-s0\n' >> "${SR_ROOT}/etc/selinux/mcs/seusers"
+            printf '/root\t-d\tunconfined_u:object_r:user_home_dir_t:s0\n/root/.+\tunconfined_u:object_r:user_home_t:s0\n' >> "${SR_ROOT}/etc/selinux/mcs/contexts/files/file_contexts.homedirs" ;;
+    lie)    ;;
+    nohome) printf 'root:unconfined_u:s0-s0\n' >> "${SR_ROOT}/etc/selinux/mcs/seusers" ;;
+    fail)   echo "semanage: boom" >&2; return 1 ;;
+  esac
+  return 0
+}
+matchpathcon() { printf 'unconfined_u:object_r:%s:s0\n' "${RTYPE:-user_home_dir_t}"; }
+EOS
+rootmap() { # rootmap <RMODE> <sysroot> [<matchpathcon type>] [<runner>] -> rc; output in ${TMP}/rm.out
+    RMODE="$1" RTYPE="${3:-user_home_dir_t}" bash -c '. "$1"; . "$2"; slx_map_root_login "$3" mcs "$4"' _ "${LIB}" "${TMP}/rootmap-stubs.sh" "$2" "${4:-chroot}" > "${TMP}/rm.out" 2>&1
+}
+mk_rootmap "${RM}"
+if rootmap good "${RM}" && grep -qx 'semanage login -S mcs -N -a -s unconfined_u -r s0-s0 root' "${RM}/calls"; then
+    ok "root mapping: semanage login -S mcs -N -a -s <__default__'s user> -r <its range> root (no policy reload), then passes"
+else
+    bad "root mapping good path: $(cat "${TMP}/rm.out") calls: $(cat "${RM}/calls")"
+fi
+grep -q '/root -> user_home_dir_t' "${TMP}/rm.out" && ok "root mapping: says what /root maps to" || bad "root mapping: silent on success"
+mk_rootmap "${RM}"; rootmap lie "${RM}" && bad "root mapping: a semanage that exits 0 and writes NOTHING passed (exit code trusted over the store)" \
+                                          || ok "root mapping: postcondition is read from seusers, not from semanage's exit status"
+mk_rootmap "${RM}"; rootmap nohome "${RM}" && bad "root mapping passed with no /root line in file_contexts.homedirs" \
+                                             || ok "root mapping: seusers updated but no /root line in .homedirs fails (genhomedircon must have run)"
+mk_rootmap "${RM}"; rootmap good "${RM}" default_t && bad "root mapping passed while matchpathcon /root still says default_t" \
+                                                     || ok "root mapping: matchpathcon /root must answer user_home_dir_t"
+mk_rootmap "${RM}"; rootmap fail "${RM}" && bad "root mapping: a failing semanage passed" || ok "root mapping: a failing semanage fails, loudly"
+mk_rootmap "${RM}" with-root
+if rootmap good "${RM}" && ! grep -q '^semanage' "${RM}/calls"; then ok "root mapping: an existing root line is kept — no second semanage call"
+else bad "root mapping with an existing root line: $(cat "${TMP}/rm.out") calls: $(cat "${RM}/calls")"; fi
+mk_rootmap "${RM}"; : > "${RM}/etc/selinux/mcs/seusers"
+rootmap good "${RM}" && bad "root mapping passed with no __default__ line (nothing to map root to)" || ok "root mapping: a seusers without __default__ fails"
+mk_rootmap "${RM}"; rm -f "${RM}/usr/sbin/semanage"
+rootmap good "${RM}" && bad "root mapping passed with no semanage inside the sysroot" || ok "root mapping: no semanage inside the sysroot fails (never the host's)"
+mk_rootmap "${RM}"; rootmap good "${RM}" user_home_dir_t host && bad "root mapping accepted the host runner" || ok "root mapping: only the chroot runner is accepted"
+
 echo "-- D) specs/etc/init.d/selinux-enforce-gate (static) --"
+grep -qE 'command -v ausearch >/dev/null 2>&1 \|\| return 0' "${SVC}" \
+    && bad "check_avc_clean is vacuous without ausearch ('command -v ausearch || return 0': an image with no audit tools passes the AVC check by construction)" \
+    || ok "check_avc_clean no longer passes by construction when ausearch is absent"
+grep -q 'AUDIT_LOG:=/var/log/audit/audit.log' "${SVC}" && grep -q 'DMESG:=dmesg' "${SVC}" \
+    && ok "check_avc_clean falls back to the audit log, then dmesg (both overridable for the executed leg)" \
+    || bad "check_avc_clean has no audit.log/dmesg fallback knobs"
+grep -E 'grep -Eq ' "${SVC}" >/dev/null && bad "the gate still pipes into grep -q (SIGPIPE under pipefail turns a FOUND into a miss)" || ok "the gate never pipes into grep -q (matches are drained to /dev/null)"
 bash -n "${SVC}" 2>/dev/null && ok "enforce-gate service is valid shell" || bad "enforce-gate does not parse"
 grep -q 'SELINUX_ENFORCE_GATE:=no' "${SVC}" \
     && ok "service defaults SELINUX_ENFORCE_GATE to no in-script (belt AND braces)" \
@@ -1016,8 +1174,8 @@ gate_run() {
       # OpenRC vocabulary
       ebegin() { :; }; eend() { return 0; }
       einfo()  { echo "einfo: $*"; }
-      ewarn()  { echo "ewarn: $*"; }
-      eerror() { echo "eerror: $*"; }
+      ewarn()  { echo "ewarn: $*" >&2; }   # stderr, as OpenRC's is: avc_records() runs in a $(...)
+      eerror() { echo "eerror: $*" >&2; }
       # System tools — ALL stubbed as shell functions so `command -v` finds them
       # and the real /usr/bin/{setenforce,ausearch,...} on this host can never run.
       selinuxenabled() { return "${FX_SELINUX_ENABLED_RC:-0}"; }
@@ -1025,7 +1183,8 @@ gate_run() {
       setenforce()     { echo "setenforce $*" >> "${G}/calls"; return 0; }
       semodule()       { echo "semodule $*" >> "${G}/calls"; printf '%s' "${FX_SEMODULE_L:-}"; return "${FX_SEMODULE_RC:-0}"; }
       restorecon()     { printf '%s' "${FX_RESTORECON_OUT:-}"; return 0; }
-      ausearch()       { printf '%s' "${FX_AUSEARCH_OUT:-}"; return 0; }
+      ausearch()       { printf '%s' "${FX_AUSEARCH_OUT:-}"; return "${FX_AUSEARCH_RC:-0}"; }
+      dmesg()          { printf '%s' "${FX_DMESG_OUT:-}"; return 0; }
       rc-update()      { echo "rc-update $*" >> "${G}/calls"; return 0; }
       # shellcheck disable=SC1090
       source "${SVC}"
@@ -1036,6 +1195,9 @@ gate_run() {
       MODULE_MANIFEST="${G}/manifest"; AUTORELABEL="${G}/autorelabel"
       CONTAINERD_INITD="${G}/containerd-initd"   # absent unless a case creates it
       PROVISION_FAILED="${G}/selinux-load-failed"   # absent unless a case creates it
+      # Where the AVC record is read from: the stub functions above by default; a
+      # case points AUSEARCH/DMESG at a path that does not exist to take them away.
+      AUSEARCH="${FX_AUSEARCH_BIN:-ausearch}"; AUDIT_LOG="${G}/audit.log"; DMESG="${FX_DMESG_BIN:-dmesg}"
       start ) 2>&1
 }
 
@@ -1048,7 +1210,9 @@ gate_fixture() {
     # `semodule -l` output shape: one "name<TAB>version" line per loaded module.
     export FX_SEMODULE_L=$'base\t1.0.0\nhugmesh_authkeys\t1.0.0\nhugmesh_vpn\t1.0.0\n'
     export FX_SEMODULE_RC=0 FX_GETENFORCE=Permissive FX_SELINUX_ENABLED_RC=0
-    export FX_RESTORECON_OUT="" FX_AUSEARCH_OUT=""
+    export FX_RESTORECON_OUT="" FX_AUSEARCH_OUT="" FX_AUSEARCH_RC=0
+    export FX_AUSEARCH_BIN=ausearch FX_DMESG_BIN=dmesg FX_DMESG_OUT=""
+    rm -f "${G}/audit.log"
 }
 gate_flipped()  { grep -q '^setenforce 1' "$1/calls" 2>/dev/null; }
 gate_enforcing() { grep -q '^SELINUX=enforcing' "$1/config" 2>/dev/null; }
@@ -1126,6 +1290,39 @@ gate_blocks "check_mode_sane: already Enforcing"          fx_already_enf
 gate_blocks "check_mode_sane: SELinux disabled"           fx_selinux_off
 gate_blocks "check_modules: container node without the container module" fx_container_node
 gate_blocks "check_provision_ok: first-boot policy load failed (marker present)" fx_provision_failed
+
+# ── D-run10..: check_avc_clean's record SOURCES. Was `command -v ausearch ||
+# return 0`: no audit tools, no AVC check, flip. Every fallback must still be able
+# to block, and NO source at all must block (fail closed), with a positive control
+# for each fallback so "blocks" is not just "the harness cannot flip here".
+AVC_HUG='type=AVC msg=audit(0.0:1): avc: denied { read } scontext=system_u:system_r:hugmesh_authkeys_t:s0 tcontext=system_u:object_r:etc_t:s0'
+DMESG_HUG='[   12.1] audit: type=1400 audit(1.0:9): avc:  denied  { read } for  comm="x" scontext=system_u:system_r:hugmesh_authkeys_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file permissive=0'
+fx_no_ausearch_log_avc()   { export FX_AUSEARCH_BIN=/nonexistent/ausearch; printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+fx_ausearch_err_log_avc()  { export FX_AUSEARCH_RC=2; printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+fx_no_ausearch_dmesg_avc() { export FX_AUSEARCH_BIN=/nonexistent/ausearch FX_DMESG_OUT="${DMESG_HUG}"; }
+fx_no_avc_source()         { export FX_AUSEARCH_BIN=/nonexistent/ausearch FX_DMESG_BIN=/nonexistent/dmesg; }
+gate_blocks "check_avc_clean: no ausearch, audit.log carries a hugmesh AVC"          fx_no_ausearch_log_avc
+gate_blocks "check_avc_clean: ausearch errors out (rc=2), audit.log carries the AVC" fx_ausearch_err_log_avc
+gate_blocks "check_avc_clean: no ausearch, no audit.log, dmesg carries a hugmesh AVC" fx_no_ausearch_dmesg_avc
+gate_blocks "check_avc_clean: no ausearch, no audit.log, no dmesg (fail closed)"     fx_no_avc_source
+G="${TMP}/gavc1"; gate_fixture "${G}"; touch "${G}/marker"; fx_no_avc_source "${G}"
+o="$(gate_run "${G}" yes)"
+printf '%s' "${o}" | grep 'AVC record cannot be read, refusing to flip' >/dev/null \
+    && ok "no AVC source: the gate says the record cannot be read (not 'AVCs outstanding')" || bad "no AVC source, wrong reason: ${o}"
+G="${TMP}/gavc2"; gate_fixture "${G}"; touch "${G}/marker"; export FX_AUSEARCH_BIN=/nonexistent/ausearch; : > "${G}/audit.log"
+o="$(gate_run "${G}" yes)"
+{ gate_flipped "${G}" && printf '%s' "${o}" | grep 'reading .*audit.log directly' >/dev/null; } \
+    && ok "POSITIVE CONTROL: no ausearch + a clean audit.log flips, and says the log was read directly" \
+    || bad "no ausearch + clean audit.log did not flip (the audit.log fallback is fail-closed by accident): ${o}"
+G="${TMP}/gavc3"; gate_fixture "${G}"; touch "${G}/marker"; export FX_AUSEARCH_BIN=/nonexistent/ausearch FX_DMESG_OUT='[ 1.0] SELinux:  Initializing.'
+o="$(gate_run "${G}" yes)"
+{ gate_flipped "${G}" && printf '%s' "${o}" | grep 'kernel ring buffer' >/dev/null; } \
+    && ok "POSITIVE CONTROL: no ausearch, no audit.log, a clean dmesg flips, and says the ring buffer was read" \
+    || bad "dmesg fallback with a clean ring buffer did not flip: ${o}"
+G="${TMP}/gavc4"; gate_fixture "${G}"; touch "${G}/marker"; export FX_AUSEARCH_RC=1
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "ausearch rc=1 (<no matches>) is a clean boot, not an error: flips" || bad "ausearch rc=1 blocked the flip: ${o}"
+gate_fixture "${TMP}/gavc-reset"
 
 # ── E) the first-boot loader half in provision.sh ────────────────────────────
 # The .pp land in the directory provision_selinux() knows about, but its

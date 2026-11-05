@@ -7261,10 +7261,20 @@ done
 chmod 0664 "${SYSROOT}/var/log/wtmp"; chmod 0644 "${SYSROOT}/var/log/lastlog"
 chroot "${SYSROOT}" chgrp utmp /var/log/wtmp 2>/dev/null \
     || warn "/var/log/wtmp: no 'utmp' group in the sysroot — left root:root (mkutmp would have set utmp)"
+# What systemd-tmpfiles-setup would otherwise create in "/" at every boot, measured
+# under enforcing (2026-11-04): `q /srv` (systemd home.conf) mkdir'd /srv in root_t
+# and portage-tmpdir.conf created /var/tmp/portage as portage_tmp_t — both denied to
+# systemd_tmpfiles_t, and the denials made the service exit non-zero. Ship /srv so
+# the entry is a no-op, and mask portage's entry: a node never runs portage from a
+# tmpfiles-made directory. Both before the label pass so the shipped paths are
+# labelled (/srv is a core probe: var_t at every pack hop).
+install -d -m 0755 "${SYSROOT}/srv"
+install -D -m 0644 "${SHARED_SPECS}/etc/tmpfiles.d/portage-tmpdir.conf" "${SYSROOT}/etc/tmpfiles.d/portage-tmpdir.conf"
 SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
 SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
-info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> config -> setfiles -> gate)"
+info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> root login mapping -> config -> setfiles -> gate)"
 slx_store_install_modules "${SYSROOT}" "${SLX_TYPE}" chroot \
+    && slx_map_root_login "${SYSROOT}" "${SLX_TYPE}" chroot \
     && slx_write_selinux_config "${SYSROOT}" "${SLX_TYPE}" \
     && slx_label_tree "${SYSROOT}" "${SLX_TYPE}" \
     && slx_write_probe_table "${SYSROOT}" "${SLX_TYPE}" "${SLX_PROBE_TABLE}" \

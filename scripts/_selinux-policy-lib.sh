@@ -651,6 +651,8 @@ _SLX_CORE_PROBES=(
     "/etc/shadow:shadow_t"
     "/etc/fstab:etc_t"
     "/var/log/wtmp:wtmp_t"   # pre-created by the x86 builder so bootmisc never makes it var_log_t
+    "/root:user_home_dir_t"  # slx_map_root_login: without the root login mapping this is default_t
+    "/srv:var_t"             # shipped by the x86 builder so systemd-tmpfiles' `q /srv` never mkdirs in "/"
 )
 SLX_CENSUS_MIN_PCT="${SLX_CENSUS_MIN_PCT:-99}"
 SLX_DRYRUN_MAX="${SLX_DRYRUN_MAX:-50}"
@@ -772,6 +774,50 @@ slx_store_install_modules() {
     else _slx_fail "store install: file_contexts has NO hugmesh/localpath/otel line — labelling now would leave every hugmesh entrypoint bin_t"; rc=1; fi
     [ "${rc}" -eq 0 ] && _slx_say "store install: ${#mods[@]}/${#mods[@]} manifest modules in the ${type} store"
     return "${rc}"
+}
+
+# ── slx_map_root_login <sysroot> <type> [chroot] ─────────────────────────────
+# THE /root LABEL IS A STORE DECISION, NOT A FILE-CONTEXT LINE. refpolicy labels
+# every home directory through genhomedircon: the store's seusers names a login,
+# libsemanage expands the HOME_DIR template for that login's passwd home into
+# file_contexts.homedirs. The image's seusers carried ONLY `__default__` (the
+# selinux-base default with USE=unconfined), so no /root line was ever written,
+# /root fell through to default_t, and local_login_t was denied { search } on it
+# three times per login under enforcing (measured 2026-11-04). Mapping root to
+# the same SELinux user and range `__default__` already maps everyone to adds
+# the /root lines and changes nothing about who root is. Must run AFTER
+# slx_store_install_modules (the store exists) and BEFORE slx_label_tree (so
+# setfiles reads the regenerated .homedirs). Postconditions are read from the
+# store's outputs (seusers, .homedirs, matchpathcon), never from an exit code.
+slx_map_root_login() {
+    local sysroot="${1:?slx_map_root_login: sysroot required}" type="${2:?type required}" runner="${3:-chroot}"
+    local seusers="${sysroot}/etc/selinux/${type}/seusers"
+    local homedirs="${sysroot}/etc/selinux/${type}/contexts/files/file_contexts.homedirs"
+    local def seuser range out got
+    [ "${runner}" = chroot ] || { _slx_fail "root login mapping: only the chroot runner is supported (got '${runner}')"; return 1; }
+    [ -r "${seusers}" ] || { _slx_fail "root login mapping: ${seusers} missing — is the ${type} store built?"; return 1; }
+    def="$(grep -E '^__default__:' "${seusers}" | head -1)"
+    [ -n "${def}" ] || { _slx_fail "root login mapping: ${seusers} has no __default__ line — cannot tell which SELinux user to map root to"; return 1; }
+    seuser="$(printf '%s' "${def}" | cut -d: -f2)"; range="$(printf '%s' "${def}" | cut -d: -f3-)"
+    [ -n "${seuser}" ] || { _slx_fail "root login mapping: malformed __default__ line '${def}'"; return 1; }
+    if grep -E '^root:' "${seusers}" >/dev/null; then
+        _slx_say "root login mapping: already present ($(grep -E '^root:' "${seusers}" | head -1))"
+    else
+        [ -x "${sysroot}/usr/sbin/semanage" ] || [ -x "${sysroot}/usr/bin/semanage" ] \
+            || { _slx_fail "root login mapping: no semanage inside ${sysroot} (policycoreutils[python] not merged?)"; return 1; }
+        _slx_say "root login mapping: chroot semanage login -S ${type} -N -a -s ${seuser} -r ${range:-s0} root"
+        out="$(chroot "${sysroot}" semanage login -S "${type}" -N -a -s "${seuser}" -r "${range:-s0}" root 2>&1)" || {
+            _slx_fail "root login mapping: semanage failed:"; printf '%s\n' "${out}" | tail -n 10 >&2; return 1; }
+    fi
+    grep -E "^root:${seuser}:" "${seusers}" >/dev/null \
+        || { _slx_fail "root login mapping: ${seusers} still has no 'root:${seuser}:' line after semanage"; return 1; }
+    [ -r "${homedirs}" ] || { _slx_fail "root login mapping: ${homedirs} missing — genhomedircon did not run"; return 1; }
+    grep -E '^/root[[:space:]]' "${homedirs}" >/dev/null \
+        || { _slx_fail "root login mapping: ${homedirs} carries no /root line — genhomedircon ignored the mapping"; return 1; }
+    got="$(chroot "${sysroot}" matchpathcon -n /root 2>/dev/null | cut -d: -f3)" || got=""
+    [ "${got}" = user_home_dir_t ] \
+        || { _slx_fail "root login mapping: matchpathcon /root -> '${got:-<nothing>}', expected user_home_dir_t"; return 1; }
+    _slx_say "root login mapping: /root -> user_home_dir_t ($(grep -cE '^/root' "${homedirs}") .homedirs line(s))"
 }
 
 # ── slx_write_selinux_config <sysroot> <type> ────────────────────────────────
