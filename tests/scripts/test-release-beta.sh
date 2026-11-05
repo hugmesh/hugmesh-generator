@@ -35,6 +35,10 @@
 #      run stops with the settings URL, and nothing is built FROM the gateway;
 #   K  the printed text (dry-run header, Studio line) carries no checkout or temp paths;
 #   W  scripts/release-beta.sh is only a wrapper: it classifies exactly like release.sh;
+#   T  stable tags on the beta channel (#855): once vX.Y.Z is published, a main still on
+#      X.Y.Z-beta.N is NEEDS-BUMP (untagged, or published and moved on), never READY, and the
+#      advised version is the next minor beta past the newest stable, never X.Y.Z-beta.(N+1);
+#      a stable below the beta's line changes nothing;
 #   S  the stable channel: DONE/READY/REFUSE/NEEDS-CUT/NEEDS-PR classification; a repo whose
 #      release workflow lacks the channel markers is refused with the PR to merge; a
 #      release branch that still pins a beta is refused; the cut creates release/X.Y at the
@@ -211,6 +215,8 @@ if pos and pos[0] == "api":
         notfound()
     if rest[:3] == ["git", "matching-refs", "tags"]:
         p = "/".join(rest[3:])
+        if r.get("tags_fail"):                         # a non-404 error (rate limit, egress drop), every retry
+            sys.stderr.write("gh: Bad Gateway (HTTP 502)\n"); sys.exit(1)
         out([{"ref": "refs/tags/" + t} for t in sorted(r.get("tags", {})) if t.startswith(p)])
     if rest == ["git", "refs"] and method == "POST" and fields["ref"].startswith("refs/heads/"):
         b = fields["ref"][len("refs/heads/"):]
@@ -439,6 +445,30 @@ elif scen == "release":
     add(9, "hugmesh-generator", "img", "clients/docker-mesh-node/VERSION", "mesh-node-v", "mesh-node-release.yml", "hugmesh-mesh-node",
         files=gen_files, runs=[run(911, wf_="mesh-node-release.yml", sha="m-hugmesh-generator")])
     pkgs = {"container": {}, "maven": {}}
+elif scen == "stabletag":
+    # the beta channel after a stable has shipped (#855): v0.2.0 is out, main still says 0.2.0-beta.N
+    add(5, "hugmesh-gateway", "img", "pom.xml", "v", "release.yml", "hugmesh-gateway", publishes=["hugmesh-gateway"],
+        files={"pom.xml": pom("0.3.0-beta.1"), ".github/workflows/release.yml": wf()}, runs=[run(501, sha="m-hugmesh-gateway")])
+    # v0.2.0 shipped; main is 0.2.0-beta.3, not tagged, green at HEAD -> must NOT be READY (it would tag a
+    # pre-release of a released version); the advice must move past the stable, never to 0.2.0-beta.4
+    add(8, "fx-stable-untagged", "img", "package.json", "v", "release.yml", "fx-stable-untagged",
+        files={"package.json": pj("0.2.0-beta.3"), ".github/workflows/release.yml": wf()},
+        tags={"v0.2.0": "rb-u", "v0.2.0-beta.2": "old"}, runs=[run(801, sha="m-fx-stable-untagged")])
+    # v0.2.0 shipped; v0.2.0-beta.3 is published and main has 2 commits since -> NEEDS-BUMP, but the
+    # advised version is the next minor beta, not 0.2.0-beta.4
+    add(8, "fx-stable-moved", "img", "package.json", "v", "release.yml", "fx-stable-moved",
+        files={"package.json": pj("0.2.0-beta.3"), ".github/workflows/release.yml": wf()},
+        tags={"v0.2.0": "rb-m", "v0.2.0-beta.3": "t-sm"}, runs=[run(811, br="v0.2.0-beta.3", sha="t-sm")],
+        compare={"v0.2.0-beta.3": {"ahead_by": 2, "commits": ["c1", "c2"]}})
+    # a stable PATCH above the beta's line (v0.2.1 while main says 0.2.0-beta.3): same stop, advice past v0.2.1
+    add(8, "fx-stable-patch", "img", "package.json", "v", "release.yml", "fx-stable-patch",
+        files={"package.json": pj("0.2.0-beta.3"), ".github/workflows/release.yml": wf()},
+        tags={"v0.2.1": "rb-p"}, runs=[run(821, sha="m-fx-stable-patch")])
+    # the stable is BELOW the beta's line (v0.2.0 while main says 0.2.1-beta.1): today's behaviour, READY
+    add(8, "fx-stable-below", "img", "package.json", "v", "release.yml", "fx-stable-below",
+        files={"package.json": pj("0.2.1-beta.1"), ".github/workflows/release.yml": wf()},
+        tags={"v0.2.0": "rb-b"}, runs=[run(831, sha="m-fx-stable-below")])
+    pkgs = {"container": {"hugmesh-gateway": {"visibility": "public", "versions": []}}, "maven": {}}
 elif scen == "stable":
     CW = wf(channels=True)
     def green(i, br, sha): return run(i, br=br, sha=sha)
@@ -911,8 +941,37 @@ grep -a 'Dry run: nothing was created or changed. To run it: scripts/release-bet
 D="$TMP/w2"; fixture mixed "$D"; run_script "$SCRIPT" "$D" --channel gamma
 [ "$(cat "$D/rc")" = 2 ] && ok "--channel gamma is refused (rc 2)" || bad "--channel gamma rc $(cat "$D/rc")"
 
-# ── S: the stable channel ────────────────────────────────────────────────────
-echo "== S stable channel"
+# ── T: stable tags on the beta channel (#855) ────────────────────────────────
+echo "== T a published stable at or above main's beta line stops the beta and moves the advice past it"
+check_stable_tags() { # script -> 0 when the stabletag fixture classifies and advises as expected
+  local s=$1 d="$TMP/t.$RANDOM" r want got rc=0
+  fixture stabletag "$d"; run_script "$s" "$d" --no-studio
+  while read -r r want; do
+    got=$(state_of "$d/out" "$r")
+    if [ "$got" != "$want" ]; then echo "      $r: want $want, got '${got:-<no row>}'"; rc=1; fi
+  done <<'EOF'
+fx-stable-untagged NEEDS-BUMP
+fx-stable-moved NEEDS-BUMP
+fx-stable-patch NEEDS-BUMP
+fx-stable-below READY
+EOF
+  grep -a 'fx-stable-untagged' "$d/out" | grep -a 'stable tag v0.2.0 is published' | grep -a 'bumps package.json to 0.3.0-beta.1' >/dev/null \
+    || { echo "      fx-stable-untagged: the reason must name v0.2.0 and advise 0.3.0-beta.1: $(grep -a fx-stable-untagged "$d/out" | head -1)"; rc=1; }
+  grep -a 'fx-stable-moved' "$d/out" | grep -a '2 commit(s) since it' | grep -a 'bumps package.json to 0.3.0-beta.1' >/dev/null \
+    || { echo "      fx-stable-moved: the NEEDS-BUMP advice must be 0.3.0-beta.1: $(grep -a fx-stable-moved "$d/out" | head -1)"; rc=1; }
+  grep -a 'fx-stable-patch' "$d/out" | grep -a 'stable tag v0.2.1 is published' | grep -a 'bumps package.json to 0.3.0-beta.1' >/dev/null \
+    || { echo "      fx-stable-patch: the reason must name v0.2.1 and advise 0.3.0-beta.1: $(grep -a fx-stable-patch "$d/out" | head -1)"; rc=1; }
+  grep -a 'would tag: fx-stable-below v0.2.1-beta.1 ' "$d/out" >/dev/null \
+    || { echo "      fx-stable-below: a stable below the beta's line must not stop it"; rc=1; }
+  if grep -a '0\.2\.0-beta\.4' "$d/out" >/dev/null; then echo "      0.2.0-beta.4, a pre-release of the shipped v0.2.0, is advised or planned"; rc=1; fi
+  if grep -aE 'would tag: fx-stable-(untagged|patch) v0.2.0-beta.3 ' "$d/out" >/dev/null; then echo "      a pre-release of the shipped v0.2.0 would be tagged"; rc=1; fi
+  if [ -n "$(writes "$d/calls")" ]; then echo "      the dry run wrote something"; rc=1; fi
+  cp "$d/out" "$TMP/last-stabletag.out"
+  return "$rc"
+}
+if check_stable_tags "$SCRIPT"; then ok "T: v0.2.0 published -> main's 0.2.0-beta.3 is NEEDS-BUMP (untagged, moved, and under a v0.2.1 patch), advised past the stable (0.3.0-beta.1, never 0.2.0-beta.4); a stable below the line (0.2.1-beta.1 over v0.2.0) stays READY"
+else bad "T: stable tags on the beta channel"; fi
+
 pyset() { # <state.json> <python statements on st>: edit a fixture in place
   python3 - "$1" "$2" <<'PY'
 import json, sys
@@ -921,6 +980,36 @@ exec(sys.argv[2])
 json.dump(st, open(p, "w"), indent=1)
 PY
 }
+check_tags_unreadable() { # script -> 0 when a failed tag listing is REFUSE, never read as "no tags"
+  local s=$1 d="$TMP/tu.$RANDOM" r want got rc=0
+  fixture stabletag "$d"
+  pyset "$d/state.json" 'for n in ("fx-stable-untagged", "fx-stable-moved", "fx-stable-patch"): R[n]["tags_fail"] = True'
+  run_script "$s" "$d" --no-studio
+  while read -r r want; do
+    got=$(state_of "$d/out" "$r")
+    if [ "$got" != "$want" ]; then echo "      $r: want $want, got '${got:-<no row>}'"; rc=1; fi
+  done <<'EOF'
+fx-stable-untagged REFUSE
+fx-stable-moved REFUSE
+fx-stable-patch REFUSE
+fx-stable-below READY
+EOF
+  for r in fx-stable-untagged fx-stable-moved fx-stable-patch; do
+    grep -aF "cannot read tags: gh api repos/hugmesh/$r/git/matching-refs/tags/v" "$d/out" >/dev/null \
+      || { echo "      $r: the reason must say the tag listing could not be read: $(grep -a "$r" "$d/out" | head -1)"; rc=1; }
+  done
+  if grep -aE 'would tag: fx-stable-(untagged|moved|patch) ' "$d/out" >/dev/null; then echo "      a repo whose tags could not be read would be tagged"; rc=1; fi
+  if grep -a '0\.2\.0-beta\.4' "$d/out" >/dev/null; then echo "      0.2.0-beta.4 is advised or planned"; rc=1; fi
+  grep -a 'would tag: fx-stable-below v0.2.1-beta.1 ' "$d/out" >/dev/null \
+    || { echo "      fx-stable-below (tags readable) must still be planned"; rc=1; }
+  if [ -n "$(writes "$d/calls")" ]; then echo "      the dry run wrote something"; rc=1; fi
+  return "$rc"
+}
+if check_tags_unreadable "$SCRIPT"; then ok "T: a tag listing that fails (non-404, every retry) is REFUSE 'cannot read tags', never READY or tagged; a readable neighbour is untouched"
+else bad "T: an unreadable tag listing must fail closed"; fi
+
+# ── S: the stable channel ────────────────────────────────────────────────────
+echo "== S stable channel"
 check_stable_classification() { # script -> 0 when every stable fixture row classifies as expected, with zero writes
   local s=$1 d="$TMP/sc.$RANDOM" r want got rc=0
   fixture stable "$d"; run_script "$s" "$d" --channel stable --no-studio
@@ -1201,6 +1290,14 @@ mutate stable-studio '/REFUSE --studio \$v on the stable channel/,/return 1/s/re
 mutate stable-version-only 's/^  \[ \${#ONLY\[@\]} -gt 0 \] || die "--version/  true || die "--version/' check_stable_patch
 # S-M11 the bump rewrites only the project version (no org pins)
 mutate stable-bump-pins 's/^        if art in pins:$/        if False:/' check_stable_bump_rules
+# T-M1 the beta channel ignores stable tags again (#855): a shipped line is tagged as a pre-release
+mutate beta-stable-guard 's/^  if \[ -n "\$stable" \] \&\& \[ "\$(vercmp "\$ver" "\$stable")" != gt \]; then$/  if false; then/' check_stable_tags
+# T-M2 next_beta advises X.Y.Z-beta.(N+1) below the newest stable again
+mutate beta-stable-advice 's/^  if \[ -n "\$stable" \] \&\& \[ "\$(vercmp "\$nb" "\$stable")" != gt \]; then next_minor_beta "\$stable"; return; fi$/  :/' check_stable_tags
+# T-M3 a failed tag listing is read as "no tags" again (the refute of #864): the stable guard is skipped
+mutate tags-fail-open '/cannot read tags/s/) || {.*}$/ || true)/' check_tags_unreadable
+# T-M4 the failed read is noted but classification goes on with an empty listing
+mutate tags-fail-noreturn '/cannot read tags/s/; return; }$/; }/' check_tags_unreadable
 
 echo
 echo "== test-release-beta.sh: $pass passed, $fail failed"

@@ -178,11 +178,29 @@ apply_grub_background() {
     # effect now. When staging into a sysroot we only drop the file + default; the
     # image's own grub.cfg is generated later (installed .img) or carries the
     # background_image directive (live ISO).
+    #
+    # ONLY over a grub.cfg that grub-mkconfig itself wrote (its 00_header banner),
+    # and only when the regenerated menu still has a kernel entry. The x86 .img
+    # ships a HAND-WRITTEN grub.cfg (UKI chainload) and an unversioned
+    # /boot/vmlinuz that grub.d/10_linux does not find, so regenerating it at first
+    # boot (04-branding) left a menu with only "UEFI Firmware Settings": the .img
+    # booted once and never again. Generate to a temp file; install it only if it
+    # still boots something.
     if [ -z "${ROOT}" ] && command -v grub-mkconfig >/dev/null 2>&1 \
             && [ -d /boot/grub ] && [ -f /boot/grub/grub.cfg ]; then
-        grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 \
-            && log "GRUB background applied + grub.cfg regenerated" \
-            || warn "grub.cfg regeneration failed (background staged for next grub-mkconfig)"
+        if ! grep -q '^### BEGIN /etc/grub.d/00_header ###' /boot/grub/grub.cfg; then
+            log "GRUB background staged at ${GRUB_BG}; grub.cfg is hand-written, left untouched"
+        else
+            local new_cfg=/boot/grub/grub.cfg.branding.new
+            if grub-mkconfig -o "${new_cfg}" >/dev/null 2>&1 \
+                    && grep -Eq '^[[:space:]]*(linux|linuxefi)[[:space:]]' "${new_cfg}"; then
+                cat "${new_cfg}" > /boot/grub/grub.cfg
+                log "GRUB background applied + grub.cfg regenerated"
+            else
+                warn "grub.cfg regeneration failed or produced no boot entry; kept the existing grub.cfg (background staged for next grub-mkconfig)"
+            fi
+            rm -f "${new_cfg}"
+        fi
     else
         log "GRUB background staged at ${GRUB_BG} (applied at next grub-mkconfig)"
     fi

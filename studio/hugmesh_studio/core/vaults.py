@@ -354,6 +354,24 @@ _REMEDY_START_LANE = (
     "('Start DevOps lane' on the local-mesh page, or `make kind-up`), or point "
     "VAULT_ADDR at an existing Vault.")
 
+#: The route a native Windows Studio CAN use (_host_route): a Vault it reaches itself.
+_WINDOWS_HOST_ROUTE = (
+    "Or point VAULT_ADDR (with VAULT_TOKEN) at an existing Vault this PC can reach; that "
+    "route needs the `vault` CLI installed on Windows.")
+
+
+def _lane_remedy(linux: str, osname: str | None = None, first: str = "") -> str:
+    """``linux`` — a remedy that drives the DevOps lane (its local-mesh buttons, `make
+    kind-*`) — or, in a NATIVE Windows Studio, the WSL2 sentence and the VAULT_ADDR
+    route instead: that Studio refuses every lane verb and cannot run `make`, so the
+    Linux remedy sent the operator to controls that can only refuse. ``first`` goes in
+    front of the Windows text (a step that still works there, such as Refresh).
+    ``osname`` is ``os.name`` unless a test passes another."""
+    from . import platform_info
+    said = platform_info.native_windows_blocker("The DevOps (Kubernetes) lane",
+                                                osname=osname)
+    return f"{first}{said} {_WINDOWS_HOST_ROUTE}" if said else linux
+
 
 @dataclass(frozen=True)
 class VaultRoute:
@@ -435,8 +453,9 @@ def _halt_reason(kubectl: str, ctx: str) -> str:
     return f"the DevOps lane is HALTED (since {when}, record {HALT_NS}/{HALT_CM})"
 
 
-def _kind_route() -> VaultRoute:
-    """vault-0 on the kind lane — each step a read, each failure its own reason."""
+def _kind_route(osname: str | None = None) -> VaultRoute:
+    """vault-0 on the kind lane — each step a read, each failure its own reason.
+    ``osname`` is ``os.name`` unless a test passes another (:func:`_lane_remedy`)."""
     cluster = kind_cluster_name()
     ctx = f"kind-{cluster}"
 
@@ -453,7 +472,7 @@ def _kind_route() -> VaultRoute:
             False,
             detail=(f"Vault is not running: the DevOps (kind) lane is not up — there is "
                     f"no '{cluster}-control-plane' container."),
-            remedy=_REMEDY_START_LANE))
+            remedy=_lane_remedy(_REMEDY_START_LANE, osname)))
 
     kubectl = _kubectl_path()
     if not kubectl:
@@ -461,7 +480,8 @@ def _kind_route() -> VaultRoute:
             False,
             detail="The DevOps lane is up, but kubectl is not installed, so this Studio "
                    "cannot reach Vault on it.",
-            remedy="Press 'Install DevOps prerequisites' on the local-mesh page."))
+            remedy=_lane_remedy("Press 'Install DevOps prerequisites' on the local-mesh "
+                                "page.", osname)))
 
     base = [kubectl, "--context", ctx, _KUBE_REQUEST_TIMEOUT, "-n", VAULT_NS]
     sts = _run(base + ["get", "statefulset", VAULT_STS, "-o", "jsonpath={.spec.replicas}"],
@@ -479,7 +499,8 @@ def _kind_route() -> VaultRoute:
             False,
             detail=(f"The kind cluster's API server did not answer on context {ctx} "
                     f"({_first_line(sts.stderr) or 'kubectl failed'})."),
-            remedy="Run `make kind-doctor`, or restart the lane from the local-mesh page."),
+            remedy=_lane_remedy("Run `make kind-doctor`, or restart the lane from the "
+                                "local-mesh page.", osname)),
             context=ctx, kubectl=kubectl)
 
     if (sts.stdout or "").strip() == "0":
@@ -490,8 +511,9 @@ def _kind_route() -> VaultRoute:
                 detail=(f"Vault is not running: {why}, so its StatefulSet "
                         f"{VAULT_NS}/{VAULT_STS} is scaled to 0 and {VAULT_POD} does not "
                         f"exist. Its data is kept."),
-                remedy=("Press 'Resume DevOps lane' on the local-mesh page's monitor (or "
-                        "run `make kind-resume`), then press Refresh here.")),
+                remedy=_lane_remedy("Press 'Resume DevOps lane' on the local-mesh page's "
+                                    "monitor (or run `make kind-resume`), then press "
+                                    "Refresh here.", osname)),
                 context=ctx, kubectl=kubectl)
         return VaultRoute("", Capability(
             False,
@@ -514,7 +536,8 @@ def _kind_route() -> VaultRoute:
                         f"statefulset {VAULT_STS}`.")), context=ctx, kubectl=kubectl)
         return VaultRoute("", Capability(
             False, detail=f"Could not read {VAULT_POD}: {_first_line(pod.stderr)}",
-            remedy="Press Refresh; if it persists run `make kind-doctor`."),
+            remedy=_lane_remedy("Press Refresh; if it persists run `make kind-doctor`.",
+                                osname, first="Press Refresh. If it persists: ")),
             context=ctx, kubectl=kubectl)
     try:
         doc = json.loads(pod.stdout or "{}")
@@ -555,9 +578,12 @@ def _kind_route() -> VaultRoute:
             False,
             detail=(f"Vault is running and unsealed on {ctx}, but its token Secret "
                     f"{VAULT_NS}/{VAULT_TOKEN_SECRET} is not readable ({why})."),
-            remedy=("That Secret is written by bootstrap-kind.sh when it initialises "
-                    "Vault; without it nothing can authenticate. Re-run the lane's "
-                    "bootstrap, or restore it from the KEYS custody.")),
+            remedy=_lane_remedy(
+                "That Secret is written by bootstrap-kind.sh when it initialises Vault; "
+                "without it nothing can authenticate. Re-run the lane's bootstrap, or "
+                "restore it from the KEYS custody.", osname,
+                first="That Secret is written by bootstrap-kind.sh when it initialises "
+                      "Vault; without it nothing can authenticate. ")),
             context=ctx, kubectl=kubectl)
     return VaultRoute(ROUTE_KIND, Capability(
         True, detail=(f"{VAULT_POD} on {ctx} (running, unsealed; token from Secret "
