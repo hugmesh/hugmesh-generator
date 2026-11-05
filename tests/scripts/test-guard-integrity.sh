@@ -929,7 +929,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that tree: '207 of 248 suites are named by a pull_request-triggered workflow', ungated SET 41;
 # and with the suite on disk but its shell-suites.yml line absent: '206 of 248' + check 3 and
 # check 7 red naming it -- so the +1/+1 is this suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-207}"
+# 207 -> 208 (denominator unchanged at 249: the suite was on disk before it was wired) on 2026-11-04 for fix/viewer-guest-packages-20261104: ONE
+# new gated suite, tests/scripts/test-vm-display-guest.sh (the guest half of the resizable
+# emulated-desktop display: spice-vdagent atoms + ARM keywords + x86 kernel channel symbols +
+# the vm-autofit applier executed against a fixture sysfs), wired into shell-suites.yml's
+# debian job AND .gitlab-ci.yml's orphan-guards-verify SUITES. MEASURED by RUNNING this file
+# on that tree (GUARD_PREMERGE=0): '208 of 249 suites are named by a pull_request-triggered
+# workflow'; with the suite on disk but its shell-suites.yml line absent: '207 of 249' + check 3
+# and check 7 red naming it -- so the +1/+1 is this suite and nothing else. Ungated SET unchanged.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-208}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

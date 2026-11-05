@@ -250,7 +250,7 @@ try_mut "qxl no longer matched"                            "$AUTOFIT" 's/virtio_
 try_mut "current-mode skip removed (racing mode-sets)"     "$AUTOFIT" 's/\[ "$(current_mode "${out}")" = "${mode}" \] \&\& return 0/:/' battery
 try_mut "connected check removed"                          "$AUTOFIT" 's/= "connected" \] || continue/= "nonsense" ] || :/'      battery
 try_mut "--auto dropped from the xrandr call"              "$AUTOFIT" 's/--output "${out}" --auto/--output "${out}"/'            battery
-try_mut "starter: char-device gate removed"                "$STARTER" 's/\[ -c "${PORT}" \] || exit 0/:/'                        starter_battery
+try_mut "starter: char-device gate removed"                "$STARTER" 's/^\[ -c "${PORT}" \] ||/true ||/'                        starter_battery
 try_mut "starter: starts nothing"                          "$STARTER" 's/^rc-service --ifnotstarted spice-vdagent start$/:/'    starter_battery
 echo "  mutations: ${caught} caught / ${survived} survived"
 
