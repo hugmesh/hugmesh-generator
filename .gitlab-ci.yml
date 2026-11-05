@@ -2341,6 +2341,17 @@ lint:btf-pahole-pairing:
   script:
     - bash tests/scripts/test-btf-pahole-pairing.sh
 
+# Emulated desktop display: the QEMU runner can only open a desktop image in a window
+# the GUEST re-lays out when its kernel carries virtio-gpu + virtio-input + uinput. This
+# lint pins those symbols in the fragment chain each builder applies (last-wins, deps in
+# the same chain) and keeps docs/CLIENT-IMAGES.md's board table honest both ways. Static.
+lint:virtual-display-kernel:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-virtual-display-kernel.sh
+
 # docs/GROUP-CALL-SFU.md says the server half of group calls is designed, not
 # built. This lint checks that claim, and the repo facts the design reasons from
 # (tuwunel pin, coturn ports, reserved labels), against this checkout, so landing

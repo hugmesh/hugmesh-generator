@@ -1011,6 +1011,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # re-measures per the doctrine above.
 # MERGED (origin/main with #473 + #860 + this branch): 207 + 1 (#473) + 1 (#860) + 2 (this branch)
 # = 211 of 252, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 3396828f into fix/viewer-guest-kernel-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/desktop-b-frite-kernel-fragment-for-em-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/desktop-e-arm-desktop-package-sets-20261104): 212 of 253, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3396828f into fix/games-two-realms-20261030): 212 of 254, MEASURED by running this file on the merged tree.
@@ -1025,6 +1026,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # pull_request-triggered workflow', ungated SET stays 41.
 # MERGED (origin/main fbe7f940 at 211 of 252 + this branch's 2) = 213 of 254, MEASURED by
 # running this file with GUARD_PREMERGE=0 on the merged tree; ungated SET stays 41.
+# MERGED (origin/main 3f3ed7bb into fix/viewer-guest-kernel-20261104): 214 of 255, MEASURED by running this file on the merged tree.
+
 # MERGED (origin/main 3f3ed7bb into fix/games-two-realms-20261030): 214 of 256, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3f3ed7bb into fix/emulated-mesh-tailscale-tor-20261104): 216 of 257, MEASURED by running this file on the merged tree.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-216}"
