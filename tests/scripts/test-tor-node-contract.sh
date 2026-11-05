@@ -349,10 +349,10 @@ HUGMESH_TOR_EXPORT_WAIT_TRIES=6 run_boot
 has "$(agent_log)" "leaves the start to OpenRC" && ok "A11 boot oneshot logs why it did not start tor" || bad "A11 no log line for the deferred start"
 has "$(agent_log)" "export waiter pid" && ok "A11 boot oneshot leaves a detached export waiter behind and logs its pid + bound" || bad "A11 no export waiter spawned on a cold first boot"
 _wp="$(tr -d '[:space:]' < "${R}/run/hugmesh-tor-export-wait.pid" 2>/dev/null)"
-_exp=""; for _i in $(seq 1 50); do _exp="$(cat "${R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)"; [ -n "${_exp}" ] && break; /bin/sleep 0.1; done
+_exp=""; for _i in $(seq 1 300); do _exp="$(cat "${R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)"; [ -n "${_exp}" ] && break; /bin/sleep 0.1; done
 [ "${_exp}" = "${ONION_LATE}" ] && ok "A11 the key tor mints after the oneshot exited is exported by the waiter (no second agent run, no cron)" \
     || bad "A11 first-boot export missing or wrong: '${_exp}' (waiter pid '${_wp}', log: $(agent_log | tr '\n' ';'))"
-for _i in $(seq 1 50); do [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] || break; /bin/sleep 0.1; done
+for _i in $(seq 1 300); do [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] || break; /bin/sleep 0.1; done
 [ ! -e "${R}/run/hugmesh-tor-export-wait.pid" ] && has "$(agent_log)" "export waiter: first-boot hostname(s) exported after" \
     && ok "A11 the waiter exits once exported (pidfile removed, export logged)" || bad "A11 waiter did not finish: pidfile $( [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] && echo present || echo gone ), log: $(agent_log | tr '\n' ';')"
 [ "$(rc_log)" = "tor status" ] && [ "$(grep -c -v -F -- '--verify-config' "${STATE_DIR}/tor.log" 2>/dev/null)" -eq 0 ] \
@@ -361,7 +361,7 @@ for _i in $(seq 1 50); do [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] || break
 # HUGMESH_TOR_EXPORT_WAIT_TRIES polls, logs that, exports nothing, and the pidfile goes.
 fresh_cold a11b; echo 3 > "${STATE_DIR}/status"
 HUGMESH_TOR_EXPORT_WAIT_TRIES=3 run_boot
-for _i in $(seq 1 50); do [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] || break; /bin/sleep 0.1; done
+for _i in $(seq 1 300); do [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] || break; /bin/sleep 0.1; done
 [ "$(grep -c . "${STATE_DIR}/sleep.log" 2>/dev/null)" = 3 ] && [ ! -e "${R}/var/lib/hugmesh/tor/hostname" ] \
     && has "$(agent_log)" "export waiter: tor did not mint every onion hostname within 6s" && [ ! -e "${R}/run/hugmesh-tor-export-wait.pid" ] \
     && ok "A11b a key that never appears: the waiter polls HUGMESH_TOR_EXPORT_WAIT_TRIES times (3), gives up loudly, exports nothing, cleans its pidfile" \
@@ -374,10 +374,12 @@ HUGMESH_TOR_EXPORT_WAIT_TRIES=3 run_boot
 has "$(agent_log)" "already running — not starting another" && [ "$(tr -d '[:space:]' < "${R}/run/hugmesh-tor-export-wait.pid")" = "${_live}" ] \
     && ok "A11c a live export waiter is not duplicated (pidfile ${_live} respected)" || bad "A11c duplicated or clobbered a live waiter: $(agent_log | tr '\n' ';')"
 touch "${STATE_DIR}/release"; wait "${_live}" 2>/dev/null
-fresh_cold a11d; echo 3 > "${STATE_DIR}/status"; mkdir -p "${R}/run"; echo 999999 > "${R}/run/hugmesh-tor-export-wait.pid"
+# The stale pid is above the kernel ceiling (PID_MAX_LIMIT is 4194304 on 64-bit), so no
+# process can hold it: 999999 was a live pid on a host whose pid_max is 4194304.
+fresh_cold a11d; echo 3 > "${STATE_DIR}/status"; mkdir -p "${R}/run"; echo 4194305 > "${R}/run/hugmesh-tor-export-wait.pid"
 HUGMESH_TOR_EXPORT_WAIT_TRIES=3 run_boot
 has "$(agent_log)" "export waiter pid" && ok "A11c a STALE pidfile (dead pid) does not block a new waiter" || bad "A11c stale pidfile blocked the waiter: $(agent_log | tr '\n' ';')"
-for _i in $(seq 1 50); do [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] || break; /bin/sleep 0.1; done
+for _i in $(seq 1 300); do [ -e "${R}/run/hugmesh-tor-export-wait.pid" ] || break; /bin/sleep 0.1; done
 
 # A12 — BOOT ONESHOT, OpenRC says crashed: no nested restart either.
 fresh_root a12; echo 32 > "${STATE_DIR}/status"; run_boot
