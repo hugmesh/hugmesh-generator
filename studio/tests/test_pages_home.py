@@ -29,6 +29,7 @@ from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip
 from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
 from hugmesh_studio.core.worklist import WorklistEntry  # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
+from _helpers import type_login_password  # noqa: E402
 from hugmesh_studio.gui.pages.home import HomePage, _MEDIA_DEFAULT  # noqa: E402
 from hugmesh_studio.gui.pages.system import SystemPage  # noqa: E402
 from hugmesh_studio.gui.qt import Qt, QtWidgets  # noqa: E402
@@ -69,6 +70,7 @@ def advance_to(wiz, page_cls):
         if isinstance(page, page_cls):
             return page
         before = wiz.currentId()
+        type_login_password(page)   # a standalone Home step refuses no password
         wiz.next()
         assert wiz.currentId() != before, \
             f"flow stuck on {type(page).__name__} (validatePage rejected?)"
@@ -363,6 +365,7 @@ def test_home_encrypt_checkbox_shown_on_encryptable_platform(qapp):
     assert page.encrypt_root.isVisibleTo(page)
     assert not page.no_enc_note.isVisibleTo(page)
     page.encrypt_root.setChecked(True)
+    type_login_password(page)   # standalone Home refuses an empty login password
     assert page.validatePage()
     assert cfg.encrypt_root is True
     assert "--encrypt-root" in cfg.to_cli_args()
@@ -673,6 +676,7 @@ def test_home_seed_stack_code_hidden_and_reset_on_unaffiliated(qapp):
     page = HomePage(SimpleNamespace(cfg=cfg, worklist=None))
     page.initializePage()
     assert not page.seed_row.isVisibleTo(page) and not page.seed.isVisibleTo(page)
+    type_login_password(page)   # standalone Home refuses an empty login password
     assert page.validatePage()
     assert cfg.home_seed_code == \
         ImageConfig.__dataclass_fields__["home_seed_code"].default == "none"
@@ -687,6 +691,7 @@ def test_home_seed_stack_code_stays_on_a_branded_desktop(qapp):
     page.initializePage()
     assert page.seed_row.isVisibleTo(page) and page.seed.isVisibleTo(page)
     page.seed.setCurrentText("stack")
+    type_login_password(page)   # standalone Home refuses an empty login password
     assert page.validatePage()
     assert cfg.home_seed_code == "stack"
     assert ("--home-seed-code", "stack") in flag_pairs(cfg.to_cli_args())
@@ -874,6 +879,7 @@ def test_home_no_longer_carries_the_standalone_posture(qapp):
     page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
     page.initializePage()
     assert not hasattr(page, "standalone"), "the --standalone checkbox is still on HomePage"
+    type_login_password(page)   # standalone Home refuses an empty login password
     assert page.validatePage()
     assert cfg.standalone is True, (
         "HomePage still writes cfg.standalone — a loaded standalone config is silently "

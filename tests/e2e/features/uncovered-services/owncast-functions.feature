@@ -45,15 +45,25 @@ Feature: What each role can actually do inside the Owncast console
     And every evidence artefact recorded for this scenario exists on disk
 
   # ── grant: MANAGE = admin | superadmin ────────────────────────────────────
+  #
+  # The TTL field is the TIME-OUT control, and owncast-grants.component.html
+  # renders it only inside @if (action() === 'timeout'). The form opens on
+  # "Grant broadcast", so on first load the field does not exist at all —
+  # asserting it visible there could only ever time out (generator#620). The
+  # scenario therefore pins BOTH halves: absent under the default action, present
+  # once "Time out" is chosen.
   @function:grant @env:docker
   Scenario Outline: <role> is offered the broadcast grant controls @role:<role> @function:grant @service:owncast @layer:ui @env:docker
     Given I am signed in as the persona for this scenario
     When I open the path "/owncast/grants"
     Then the element with test id "owncast-grants-title" is visible
     And the element with test id "owncast-grants-user" is visible
-    And the element with test id "owncast-grants-ttl" is visible
     And the element with test id "owncast-grants-reason" is visible
     And the element with test id "owncast-grants-submit" is visible
+    And the element with test id "owncast-grants-ttl" is not visible
+    When I choose the radio labelled "Time out"
+    Then the field labelled "Timeout duration (hours)" is visible
+    And the element with test id "owncast-grants-ttl" is visible
 
     Examples:
       | role           |

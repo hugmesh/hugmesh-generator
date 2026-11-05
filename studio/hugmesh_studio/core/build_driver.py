@@ -26,7 +26,8 @@ from collections.abc import Callable, Iterator
 
 from . import askpass, host_resources, platform_info, proc_text, resource_limits
 from . import secret_files, state_paths
-from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations, unaffiliated_image
+from .config import (PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations,
+                     standalone_login_problem, unaffiliated_image)
 from .platform_info import HostInfo, detect
 
 # Config fields holding a HOST path that the builder must be able to READ. Under the docker
@@ -929,6 +930,11 @@ class BuildDriver:
         # + a node role). Catching them here turns a post-dispatch dead-end into a second-0
         # message; the accepted-but-wrong shapes warn instead (see _config_warnings).
         problems += scope_violations(cfg)[0]
+        # A standalone image whose only login was never given a password: the build
+        # would succeed and produce an image nobody can log in to.
+        login = standalone_login_problem(cfg)
+        if login:
+            problems.append(login)
         return problems
 
     def preflight_warnings(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
