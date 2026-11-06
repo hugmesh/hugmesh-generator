@@ -34,7 +34,7 @@ WIN_LOCK = os.path.join(STUDIO_ROOT, "packaging", "wix", "windows-build-requirem
 LINUX_REQS = os.path.join(STUDIO_ROOT, "packaging", "linux-build-requirements.txt")
 
 REPO = "hugmesh/hugmesh-generator"
-VERSION = "0.3.0-beta.1"
+VERSION = "0.4.0-beta.1"
 TAG = f"studio-v{VERSION}"
 IDENTITY = f"https://github.com/{REPO}/.github/workflows/studio-release.yml@refs/tags/{TAG}"
 ISSUER = "https://token.actions.githubusercontent.com"
@@ -319,10 +319,10 @@ def test_release_notes_carry_verify_commands_with_the_signing_identity(tmp_path,
     assert "(beta, pre-release)" in notes
     regexp = re.search(r"--certificate-identity-regexp '([^']+)'", notes).group(1)
     assert re.fullmatch(regexp, IDENTITY), regexp
-    for other in (IDENTITY + "0",  # studio-v0.3.0-beta.10
+    for other in (IDENTITY + "0",  # studio-v0.4.0-beta.10
                   IDENTITY.replace("studio-release.yml", "evil.yml"),
                   IDENTITY.replace("hugmesh-generator", "hugmesh-generatorX"),
-                  IDENTITY.replace("0.3.0", "0x3x0")):
+                  IDENTITY.replace("0.4.0", "0x4x0")):
         assert not re.search(regexp, other), f"{regexp} also matches {other}"
 
 
