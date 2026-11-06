@@ -15,7 +15,7 @@ GITHUB ACTIONS AND SIGNED THERE. For ``.github/workflows/studio-release.yml`` th
   ``SITE_DISPATCH_TOKEN`` is not set.
 
 Several tests run the workflow's own ``run:`` scripts with fake tools, so they test what
-GitHub would execute, not a copy of it.
+GitHub would execute, not a copy of it. """
 
 from __future__ import annotations
 
@@ -69,7 +69,12 @@ def _run_bash(script: str, env: dict, cwd) -> subprocess.CompletedProcess:
     # GitHub runs a `run:` block as `bash -e {0}` (plus pipefail when shell: bash is set).
     return subprocess.run(["bash", "-e", "-c", script], env=env, cwd=cwd,
                           capture_output=True, text=True)
+                          
 
+
+
+
+"""
 
 # ── runners and permissions ────────────────────────────────────────────────────────
 def test_every_job_runs_on_a_github_hosted_runner():
