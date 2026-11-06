@@ -1011,6 +1011,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # Run the gate ONCE now that every widget it touches exists, so
         # 'Generate & start' is armed (and carries its tooltip) from first paint.
         self._sync_boot_gate()
+        # …and the teardown verbs greyed with the WSL2 sentence on native Windows.
+        self._sync_native_windows_gate()
         # Saved meshes (ask C): the last `_mesh_up` the table was re-probed for —
         # a verb that changes what is on disk (stop, clean, start) flips it, and
         # that flip is what re-checks every row's "Restores as" off-thread.
@@ -3394,8 +3396,27 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # boot_start_btn carries its own "why am I disabled?" tooltip, so route it
         # through the one gate rather than the blanket loop above.
         self._sync_boot_gate()
+        self._sync_native_windows_gate()
         self._sync_e2e_gate()
         self._sync_saved_gate()
+
+    def _sync_native_windows_gate(self):
+        """Grey the `make` teardown verbs on NATIVE Windows (the MSI), with the WSL2
+        sentence as the reason. Their core verbs refuse there anyway (stack-halt,
+        stack-clean, stack-m2-bootstrap, kind-down are all bash recipes), so an armed
+        button only led to a refusal — and for the two destructive ones, to a
+        "remove everything?" confirmation first. A mesh this Studio can SEE on the
+        Docker engine was started somewhere that can run those recipes (the Studio
+        inside WSL2, for one), and is stopped there. A no-op anywhere else, so Linux
+        and WSL keep the gates above."""
+        stack = LocalMeshBootstrap.teardown_refusal()
+        if not stack:
+            return
+        lane = platform_info.native_windows_blocker("The DevOps (Kubernetes) lane")
+        for b, why in ((self.boot_down_btn, stack), (self.boot_clean_btn, stack),
+                       (self.m2_btn, stack), (self.devops_down_btn, lane)):
+            b.setEnabled(False)
+            b.setToolTip(f"Disabled: {why}")
 
     # ── JOIN handlers ────────────────────────────────────────────────────────────
     def _refresh_status(self):
@@ -3518,7 +3539,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def _on_mesh_state(self, running: bool, detail: str):
         self._mesh_up = running
-        if running:
+        if running and LocalMeshBootstrap.teardown_refusal():
+            # Native Windows: this Studio can neither start nor stop it (both are
+            # bash recipes), so "stop it first" would advise a press it refuses.
+            self._mesh_state_label.setText(
+                f"Mesh state: RUNNING — {detail}. The Windows build of the Studio "
+                f"cannot stop it (Stop runs `make` and bash scripts); stop it where it "
+                f"was started, such as the Studio inside WSL2.")
+        elif running:
             self._mesh_state_label.setText(
                 f"Mesh state: RUNNING — {detail}. 'Generate && start' would bring up "
                 f"a second time over the live stack; stop it first if you want a "
@@ -3786,6 +3814,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                      stream=True, cancellable=True, verb="up")
 
     def _bootstrap_down(self):
+        # On native Windows down() refuses anyway: say so here, as a refusal, rather
+        # than as a "Stopping the stack" run that can only fail.
+        blocker = LocalMeshBootstrap.teardown_refusal()
+        if blocker:
+            self._refuse(blocker)
+            return
         self._launch("Stopping the stack", self.boot.down)
 
     def _bootstrap_clean(self):
@@ -3827,14 +3861,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         BEFORE the operator commits. Runs off-thread (docker probes can block)."""
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         boot = self.boot
+        # On native Windows the one problem is the WSL2 sentence (available() says it
+        # first), and 'Build maven prereqs (m2)' refuses there too — so no m2 advice.
+        native_windows = bool(LocalMeshBootstrap.teardown_refusal())
 
         def probe():
             problems = boot.preflight()
             if problems:
                 return False, ["[readiness] NOT ready:",
                                *(f"  - {p}" for p in problems),
-                               "[readiness] fix the above; 'Build maven prereqs "
-                               "(m2)' covers the maven-registry one."]
+                               *(() if native_windows else (
+                                   "[readiness] fix the above; 'Build maven prereqs "
+                                   "(m2)' covers the maven-registry one.",))]
             return True, ["[readiness] READY — docker daemon, buildx, disk "
                           "headroom and maven prerequisites all check out."]
 
@@ -3844,6 +3882,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         """The cold-build prerequisite, from the GUI: streams `make
         stack-m2-bootstrap` (org-private maven artifacts built from source into
         the local registry container)."""
+        blocker = LocalMeshBootstrap.teardown_refusal()
+        if blocker:
+            # a bash recipe: refused on native Windows before anything is announced
+            self._refuse(blocker)
+            return
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         boot = self.boot
         self._note("[m2-bootstrap] building the private maven artifacts from "
@@ -3970,6 +4013,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         non-destructive `Halt DevOps lane`, because most of the time that is what
         the operator actually wants and its absence is why this button was being
         pressed at all (#356)."""
+        # On native Windows kind-down refuses anyway: say so BEFORE asking the
+        # operator to confirm a deletion that can never run.
+        blocker = platform_info.native_windows_blocker("The DevOps (Kubernetes) lane")
+        if blocker:
+            self._refuse(blocker)
+            return
         cluster = kind_cluster_name()
         answer = confirm_devops_down(
             self, _DEVOPS_DOWN_CONFIRM_TITLE,
@@ -4004,6 +4053,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         cluster ended up halted with no record of how to put it back.) The note below
         says so, because an operator deciding whether to press Cancel should not have
         to infer it."""
+        blocker = platform_info.native_windows_blocker("The DevOps (Kubernetes) lane")
+        if blocker:
+            self._refuse(blocker)       # before the note promising what Halt does
+            return
         node = self.boot._stack_node()
         self._note("[devops] halting the DevOps lane: suspending ArgoCD auto-sync "
                    "and scaling the mesh workloads to 0. NOTHING is deleted — the "
@@ -4019,6 +4072,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _devops_resume(self):
         """`make kind-resume` — put back exactly what the halt recorded. Never
         "everything": an Application suspended for another reason stays suspended."""
+        blocker = platform_info.native_windows_blocker("The DevOps (Kubernetes) lane")
+        if blocker:
+            self._refuse(blocker)
+            return
         node = self.boot._stack_node()
         self._note("[devops] resuming the DevOps lane: restoring the replica counts "
                    "and the auto-sync the halt recorded (anything suspended for "
@@ -5002,6 +5059,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
         The lane is decided in the WORKER (``stack.status()`` is blocking), never
         here."""
+        # Both lanes' seeders are bash (`make stack-seed`, seed-accounts.sh), so on
+        # native Windows the account can never be created: refuse BEFORE the dialog
+        # asks for a username and password.
+        blocker = platform_info.native_windows_blocker("Adding a user")
+        if blocker:
+            self._refuse(blocker)
+            return
         dlg = AddUserDialog(self.generator_dir, parent=self)
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return

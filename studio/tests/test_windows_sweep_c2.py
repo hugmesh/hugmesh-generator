@@ -159,3 +159,80 @@ def test_real_scan_runs_every_probe():
         reason = s.probe_errors.get(probe, "")
         assert s.scanned(probe) or reason.startswith(("timed out", "failed")), (probe, reason)
     assert s.cpu or "cpu" in s.probe_errors
+
+
+# ── the wizard's HardwarePage: off the GUI thread, and honest about a timeout ─────────
+def _hardware_page():
+    pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding installed")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from hugmesh_studio.gui.qt import QtWidgets
+    from hugmesh_studio.gui.pages.hardware import HardwarePage
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    return app, HardwarePage(wiz=None)
+
+
+def _timed_out_scan():
+    partial = _line("CPU", "AMD Ryzen 7 3700U") + _ok("CPU")
+    exc = subprocess.TimeoutExpired(["powershell"], 45, output=partial)
+    return hw_scan._scan_windows(_FakeRun(exc=exc))
+
+
+def test_a_timed_out_scan_keeps_the_settings_and_says_not_checked():
+    """A timeout used to read 'GPU: none', reset the GPU driver to auto and untick
+    Wi-Fi/Bluetooth the operator had set; the notes were never shown."""
+    _app, page = _hardware_page()
+    page._set_gpu("nvidia")
+    page.wifi.setChecked(True)
+    page.bt.setChecked(True)
+    page._scanned(_timed_out_scan(), "")
+    assert page.gpu.currentText() == "nvidia"
+    assert page.wifi.isChecked() and page.bt.isChecked()
+    text = page.scan_out.text()
+    assert "GPU: not checked" in text and "GPU: none" not in text
+    assert "recommended driver" not in text
+    assert "GPU scan timed out after 45 s" in text
+    assert "Wi-Fi and Bluetooth were not checked" in text
+    assert "CPU: AMD Ryzen 7 3700U" in text
+    assert page.scan_btn.isEnabled()
+
+
+def test_a_scan_that_ran_applies_as_before():
+    # the Linux path never fills probe_errors, so this is its unchanged behaviour
+    _app, page = _hardware_page()
+    page._set_gpu("nvidia")
+    page.wifi.setChecked(True)
+    s = hw_scan._finalize(HwScan(os="linux", cpu="c", cpu_vendor="other"))
+    page._scanned(s, "")
+    assert page.gpu.currentText() == "auto"
+    assert not page.wifi.isChecked() and not page.bt.isChecked()
+    assert page.scan_out.text() == "CPU: c  ·  GPU: none  ·  recommended driver: auto"
+
+
+def test_the_scan_runs_off_the_gui_thread(monkeypatch):
+    import threading
+    app, page = _hardware_page()
+    seen = {}
+
+    def fake_scan():
+        seen["thread"] = threading.get_ident()
+        return hw_scan._finalize(HwScan(os="linux", gpus=[Gpu("amd", "Radeon")]))
+
+    monkeypatch.setattr(hw_scan, "scan", fake_scan)
+    page._scan()
+    assert not page.scan_btn.isEnabled()            # one scan at a time
+    assert "Scanning this machine" in page.scan_out.text()
+    worker = page._scan_worker
+    assert worker is not None and worker.wait(10_000)
+    for _ in range(50):                              # deliver the queued signal
+        app.processEvents()
+        if page.scan_btn.isEnabled():
+            break
+    assert seen["thread"] != threading.get_ident()
+    assert page.gpu.currentText() == "amd-free" and "GPU: Radeon" in page.scan_out.text()
+
+
+def test_a_scan_that_raises_says_so_and_rearms():
+    _app, page = _hardware_page()
+    page._scanned(None, "OSError: boom")
+    assert page.scan_out.text() == "The scan failed: OSError: boom"
+    assert page.scan_btn.isEnabled()

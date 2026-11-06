@@ -15,17 +15,36 @@ and finalises them into the argv. Anything that re-adds a scan trigger elsewhere
 re-opening the duplicate."""
 from __future__ import annotations
 
-from ..qt import QtWidgets
+from ..qt import QtCore, QtWidgets, Signal
 from ...core import hw_scan
 from ...core.config import GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES
 from ._gating import clear_unsupported, gate_widgets
-from ._widgets import _row
+from ._widgets import _row, own_probe
+
+
+class _ScanWorker(QtCore.QThread):
+    """Run ``hw_scan.scan()`` OFF the GUI thread.
+
+    On Windows the scan is one PowerShell start with a 45 s ceiling (a cold start alone
+    measured 6-19 s), and on Linux each ``lspci`` call has a 15 s one; inline, either is
+    a frozen window with no way to cancel or close. The same one-shot probe shape as
+    keyzip._FetchWorker. Emits (scan, error) — exactly one of them set. Never raises:
+    an exception escaping QThread.run would be lost and leave the button greyed."""
+    done = Signal(object, str)
+
+    def run(self):                              # noqa: D102 — QThread contract
+        try:
+            self.done.emit(hw_scan.scan(), "")
+        except Exception as e:                  # noqa: BLE001 — a probe must never die
+            self.done.emit(None, f"{type(e).__name__}: {e}")
 
 
 class HardwarePage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
+        #: the in-flight machine scan (None = idle) — see _scan.
+        self._scan_worker: _ScanWorker | None = None
         self.setTitle("Target hardware")
         self.setSubTitle("Tune the GPU, Wi-Fi/Bluetooth and kernel for the target — "
                          "or scan this machine to autofill them. The machine profile "
@@ -113,14 +132,41 @@ class HardwarePage(QtWidgets.QWizardPage):
             f"'nvidia' driver (the builder hard-errors on this pair).")
 
     def _scan(self):
-        s = hw_scan.scan()
-        self._set_gpu(s.recommended_gpu_driver)
-        self.wifi.setChecked(s.recommend_wifi)
-        self.bt.setChecked(s.recommend_bluetooth)
-        gpus = ", ".join(g.name for g in s.gpus) or "none"
-        self.scan_out.setText(f"CPU: {s.cpu or '?'}  ·  GPU: {gpus}  ·  "
-                              f"recommended driver: {s.recommended_gpu_driver}"
-                              + (f"  ·  Wi-Fi: {s.wifi}" if s.wifi else ""))
+        """Start the machine scan on a worker thread; _scanned applies it."""
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            return
+        self.scan_btn.setEnabled(False)
+        self.scan_out.setText("Scanning this machine … (the window stays responsive)")
+        worker = own_probe(self, "_scan_worker", _ScanWorker())
+        worker.done.connect(self._scanned)
+        worker.start()
+
+    def _scanned(self, s, error: str):
+        """The scan finished (GUI thread). A probe that did not run (s.probe_errors —
+        only ever filled on Windows, e.g. a PowerShell timeout) leaves its fields as
+        they were: 'not checked' is not 'none', so a timed-out GPU probe must not reset
+        the driver to auto, nor a timed-out network probe untick Wi-Fi/Bluetooth."""
+        self.scan_btn.setEnabled(True)
+        if s is None:
+            self.scan_out.setText(f"The scan failed: {error}")
+            return
+        gpu_ok, net_ok = s.scanned("gpu"), s.scanned("network")
+        if gpu_ok or s.gpus:
+            self._set_gpu(s.recommended_gpu_driver)
+        if net_ok:
+            self.wifi.setChecked(s.recommend_wifi)
+            self.bt.setChecked(s.recommend_bluetooth)
+        cpu = s.cpu or ("?" if s.scanned("cpu") else "not checked")
+        gpus = (", ".join(g.name for g in s.gpus)
+                or ("none" if gpu_ok else "not checked"))
+        driver = (f"  ·  recommended driver: {s.recommended_gpu_driver}"
+                  if gpu_ok or s.gpus else "")
+        text = (f"CPU: {cpu}  ·  GPU: {gpus}{driver}"
+                + (f"  ·  Wi-Fi: {s.wifi}" if s.wifi else ""))
+        if s.probe_errors:
+            # the notes name each probe that did not run, why, and what to do instead
+            text += "\n" + "\n".join(s.notes)
+        self.scan_out.setText(text)
 
     def initializePage(self):
         c = self.wiz.cfg
