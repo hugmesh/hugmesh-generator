@@ -73,9 +73,6 @@ def _run_bash(script: str, env: dict, cwd) -> subprocess.CompletedProcess:
 
 
 
-
-"""
-
 # ── runners and permissions ────────────────────────────────────────────────────────
 def test_every_job_runs_on_a_github_hosted_runner():
     for name, job in _jobs().items():
@@ -503,6 +500,3 @@ def test_site_dispatch_sends_releases_updated(tmp_path):
     steps = _jobs()["publish"]["steps"]
     assert steps[-1] is step or steps[-1] == step
     assert "if" not in step
-Blcokgin release removed
-
-"""
