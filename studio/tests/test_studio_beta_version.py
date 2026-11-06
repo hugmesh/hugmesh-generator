@@ -5,9 +5,9 @@ What this pins, and why each one matters:
 * ``__version__`` is ``MAJOR.MINOR.PATCH`` or ``MAJOR.MINOR.PATCH-beta.N``. It feeds the
   installer file names, the About box and the ``studio-v*`` release tag.
 * An MSI cannot carry ``-beta.N``, so ``packaging/wix/msi_version.py`` maps it to a
-  numeric ProductVersion that always goes up (``0.3.0-beta.1`` -> ``0.3.1``, final
-  ``0.3.0`` -> ``0.3.99``). Both the release workflow and ``build-msi-wine.sh`` must
-  hand WiX THAT number: ``-define Version=0.3.0-beta.1`` makes WiX fail the build.
+  numeric ProductVersion that always goes up (``0.4.0-beta.1`` -> ``0.4.1``, final
+  ``0.4.0`` -> ``0.4.99``). Both the release workflow and ``build-msi-wine.sh`` must
+  hand WiX THAT number: ``-define Version=0.4.0-beta.1`` makes WiX fail the build.
 * The release workflow publishes only from a ``studio-v*`` tag ref, marks a beta as a
   pre-release that is never "latest", and runs every job on a GitHub-hosted runner
   (operator rule 2026-10-21: published downloads are built and signed on GitHub's
@@ -76,9 +76,9 @@ def test_version_is_a_beta_scheme_version():
 
 
 def test_version_is_the_0_3_beta_line():
-    # The scheme lowered an unpublished 1.0.0 to the 0.3 line (in daily use, open
+    # The scheme lowered an unpublished 1.0.0 to the 0.4 line (in daily use, open
     # defects). Raising MAJOR/MINOR is a deliberate decision, so it must edit this test.
-    assert _version().startswith("0.3."), _version()
+    assert _version().startswith("0.4."), _version()
 
 
 def test_python_metadata_normalises_the_beta_to_pep440():
@@ -93,12 +93,12 @@ def test_python_metadata_normalises_the_beta_to_pep440():
 
 # ── the MSI ProductVersion mapping ─────────────────────────────────────────────────
 @pytest.mark.parametrize("semver,msi", [
-    ("0.3.0-beta.1", "0.3.1"),
-    ("0.3.0-beta.2", "0.3.2"),
-    ("0.3.0-beta.10", "0.3.10"),
-    ("0.3.0-beta.98", "0.3.98"),
-    ("0.3.0", "0.3.99"),
-    ("0.3.1-beta.1", "0.3.101"),
+    ("0.4.0-beta.1", "0.4.1"),
+    ("0.4.0-beta.2", "0.4.2"),
+    ("0.4.0-beta.10", "0.4.10"),
+    ("0.4.0-beta.98", "0.4.98"),
+    ("0.4.0", "0.4.99"),
+    ("0.4.1-beta.1", "0.4.101"),
     ("1.0.0-beta.1", "1.0.1"),
     ("255.255.654", "255.255.65499"),
 ])
@@ -107,8 +107,8 @@ def test_msi_version_mapping(semver, msi):
 
 
 @pytest.mark.parametrize("bad", [
-    "0.3.0-SNAPSHOT", "0.3.0-rc.1", "0.3.0-beta.0", "0.3.0-beta.99", "0.3.0-beta",
-    "0.3.0+build.1", "0.3", "256.0.0", "0.256.0", "0.3.655", "v0.3.0",
+    "0.4.0-SNAPSHOT", "0.4.0-rc.1", "0.4.0-beta.0", "0.4.0-beta.99", "0.4.0-beta",
+    "0.4.0+build.1", "0.4", "256.0.0", "0.256.0", "0.4.655", "v0.4.0",
 ])
 def test_msi_version_refuses_what_it_cannot_order(bad):
     with pytest.raises(ValueError):
@@ -118,8 +118,8 @@ def test_msi_version_refuses_what_it_cannot_order(bad):
 def test_msi_versions_only_ever_go_up():
     """Windows Installer compares the three fields numerically; a later SemVer must give a
     strictly larger triple, or the newer MSI refuses to replace the older one."""
-    order = ["0.3.0-beta.1", "0.3.0-beta.2", "0.3.0-beta.9", "0.3.0-beta.10", "0.3.0-beta.98",
-             "0.3.0", "0.3.1-beta.1", "0.3.1", "0.4.0-beta.1", "1.0.0-beta.1", "1.0.0"]
+    order = ["0.4.0-beta.1", "0.4.0-beta.2", "0.4.0-beta.9", "0.4.0-beta.10", "0.4.0-beta.98",
+             "0.4.0", "0.4.1-beta.1", "0.4.1", "0.4.0-beta.1", "1.0.0-beta.1", "1.0.0"]
     msi = [tuple(int(x) for x in _mapper().msi_version(v).split(".")) for v in order]
     assert msi == sorted(msi) and len(set(msi)) == len(msi), list(zip(order, msi))
 
@@ -130,8 +130,8 @@ def test_current_version_maps():
 
 def test_mapper_cli(capsys):
     mod = _mapper()
-    assert mod.main(["0.3.0-beta.1"]) == 0 and capsys.readouterr().out == "0.3.1\n"
-    assert mod.main(["0.3.0-SNAPSHOT"]) == 1
+    assert mod.main(["0.4.0-beta.1"]) == 0 and capsys.readouterr().out == "0.4.1\n"
+    assert mod.main(["0.4.0-SNAPSHOT"]) == 1
     assert mod.main([]) == 2
 
 
@@ -213,9 +213,9 @@ def test_version_job_guards_ref_tag_and_snapshot():
     # A hand-pushed tag: inputs.publish is EMPTY on a push event. This combination once
     # exited 1 under `bash -e` (a false `[ ]` inside a `$( )` failed the assignment) and
     # killed the job every build job needs, so a documented release path was dead.
-    ("refs/tags/studio-v0.3.0-beta.2", "push", "", "WILL publish (tag ref; push event)"),
-    ("refs/tags/studio-v0.3.0-beta.2", "workflow_dispatch", "true", "WILL publish (tag ref; workflow_dispatch event, publish=true)"),
-    ("refs/tags/studio-v0.3.0-beta.2", "workflow_dispatch", "false", "WILL NOT publish (tag ref, but publish was not ticked)"),
+    ("refs/tags/studio-v0.4.0-beta.2", "push", "", "WILL publish (tag ref; push event)"),
+    ("refs/tags/studio-v0.4.0-beta.2", "workflow_dispatch", "true", "WILL publish (tag ref; workflow_dispatch event, publish=true)"),
+    ("refs/tags/studio-v0.4.0-beta.2", "workflow_dispatch", "false", "WILL NOT publish (tag ref, but publish was not ticked)"),
     ("refs/heads/main", "workflow_dispatch", "", "WILL NOT publish (refs/heads/main is not a studio-v* tag"),
     ("refs/heads/main", "push", "", "WILL NOT publish (refs/heads/main is not a studio-v* tag"),
 ])
@@ -289,7 +289,7 @@ def test_metainfo_newest_release_is_this_version():
         "the never-published 1.0.0 entry is back: software centres would show 1.0.0")
 
 
-EXISTS = '{"tagName":"studio-v0.3.0-beta.1","assets":[{"updatedAt":"2026-10-23T07:35:52Z"},{"updatedAt":"2026-10-22T10:28:46Z"}]}'
+EXISTS = '{"tagName":"studio-v0.4.0-beta.1","assets":[{"updatedAt":"2026-10-23T07:35:52Z"},{"updatedAt":"2026-10-22T10:28:46Z"}]}'
 
 
 @pytest.mark.parametrize("gh_rc,gh_out,republish,want_rc,want_output,want_text", [
@@ -297,8 +297,8 @@ EXISTS = '{"tagName":"studio-v0.3.0-beta.1","assets":[{"updatedAt":"2026-10-23T0
     (0, EXISTS, "false", 1, "", "--republish"),
     (0, EXISTS, "", 1, "", "--republish"),                       # a push event: no inputs at all
     # the release exists and republish was asked for: go on, loudly
-    (0, EXISTS, "true", 0, "replaced=true\n", "::warning::REPUBLISHING studio-v0.3.0-beta.1: 2 files will be replaced (newest currently from 2026-10-23T07:35:52Z)"),
-    (0, '{"tagName":"studio-v0.3.0-beta.1"}', "true", 0, "replaced=true\n", "::warning::REPUBLISHING"),
+    (0, EXISTS, "true", 0, "replaced=true\n", "::warning::REPUBLISHING studio-v0.4.0-beta.1: 2 files will be replaced (newest currently from 2026-10-23T07:35:52Z)"),
+    (0, '{"tagName":"studio-v0.4.0-beta.1"}', "true", 0, "replaced=true\n", "::warning::REPUBLISHING"),
     # it does not exist: a republish is an error, a normal publish goes on
     (1, "release not found", "true", 1, "", "does not exist; run a normal release"),
     (1, "release not found", "false", 0, "replaced=false\n", ""),
@@ -323,7 +323,7 @@ def test_overwrite_check_fails_closed(tmp_path, gh_rc, gh_out, republish, want_r
     fake.chmod(0o755)
     out_file = tmp_path / "github_output"
     out_file.write_text("")
-    env = {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": "0.3.0-beta.1", "REPUBLISH": republish,
+    env = {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": "0.4.0-beta.1", "REPUBLISH": republish,
            "GITHUB_REPOSITORY": "hugmesh/hugmesh-generator", "GITHUB_OUTPUT": str(out_file)}
     # GitHub runs a `run:` block as `bash -e {0}`.
     proc = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
@@ -339,7 +339,7 @@ def test_release_notes_say_when_files_were_replaced(tmp_path, replaced):
     import subprocess
     steps = _workflow()["jobs"]["publish"]["steps"]
     script = next(s for s in steps if s.get("name") == "Write the release notes")["run"]
-    env = {"PATH": "/usr/bin:/bin", "VERSION": "0.3.0-beta.2", "GITHUB_REPOSITORY": "hugmesh/hugmesh-generator",
+    env = {"PATH": "/usr/bin:/bin", "VERSION": "0.4.0-beta.2", "GITHUB_REPOSITORY": "hugmesh/hugmesh-generator",
            "AUTHENTICODE": "false", "REPLACED": replaced, "GITHUB_SHA": "abc123", "GITHUB_RUN_ID": "42",
            "GITHUB_SERVER_URL": "https://github.com"}
     proc = subprocess.run(["bash", "-e", "-c", script], env=env, cwd=tmp_path, capture_output=True, text=True)
@@ -350,7 +350,7 @@ def test_release_notes_say_when_files_were_replaced(tmp_path, replaced):
         assert "every checksum, signature and attestation changed" in notes
         assert "from abc123 by run https://github.com/hugmesh/hugmesh-generator/actions/runs/42" in notes
         assert "must re-download to verify" in notes
-    assert notes.startswith("HugMesh Image Studio 0.3.0-beta.2 (beta, pre-release).\n")
+    assert notes.startswith("HugMesh Image Studio 0.4.0-beta.2 (beta, pre-release).\n")
     assert "**Windows**" in notes
 
 
@@ -367,21 +367,21 @@ def test_release_version_cli_current_next_validate_compare():
         n = int(_version().rsplit(".", 1)[1])
         assert _rv("next").stdout.strip() == f"{base}-beta.{n + 1}"
         assert _rv("next", "--final").stdout.strip() == base
-    assert _rv("next", "0.3.0").stdout.strip() == "0.3.1-beta.1"
-    assert _rv("validate", "0.3.0-beta.2").returncode == 0
-    for bad in ("0.3.0-rc.1", "0.3.0-SNAPSHOT", "0.3.0+build.1", "0.3.0-beta.0", "0.3.0-beta.99", "v0.3.0"):
+    assert _rv("next", "0.4.0").stdout.strip() == "0.4.1-beta.1"
+    assert _rv("validate", "0.4.0-beta.2").returncode == 0
+    for bad in ("0.4.0-rc.1", "0.4.0-SNAPSHOT", "0.4.0+build.1", "0.4.0-beta.0", "0.4.0-beta.99", "v0.4.0"):
         assert _rv("validate", bad).returncode == 1, bad
-    tags = ["refs/tags/studio-v0.3.0-beta.1", "refs/tags/studio-vgarbage"]
-    assert _rv("validate", "0.3.0-beta.1", "--after-tags", *tags).returncode == 1
-    assert _rv("validate", "0.3.0-beta.2", "--after-tags", *tags).returncode == 0
-    assert _rv("validate", "0.3.0", "--after-tags", *tags).returncode == 0
+    tags = ["refs/tags/studio-v0.4.0-beta.1", "refs/tags/studio-vgarbage"]
+    assert _rv("validate", "0.4.0-beta.1", "--after-tags", *tags).returncode == 1
+    assert _rv("validate", "0.4.0-beta.2", "--after-tags", *tags).returncode == 0
+    assert _rv("validate", "0.4.0", "--after-tags", *tags).returncode == 0
     assert _rv("validate", "0.2.9", "--after-tags", *tags).returncode == 1
-    assert _rv("validate", "0.3.0-beta.2", "--after-tags").returncode == 0, "no tags yet: anything valid goes"
-    order = ["0.3.0-beta.1", "0.3.0-beta.2", "0.3.0-beta.10", "0.3.0", "0.3.1-beta.1", "0.3.1", "0.4.0-beta.1"]
+    assert _rv("validate", "0.4.0-beta.2", "--after-tags").returncode == 0, "no tags yet: anything valid goes"
+    order = ["0.4.0-beta.1", "0.4.0-beta.2", "0.4.0-beta.10", "0.4.0", "0.4.1-beta.1", "0.4.1", "0.4.0-beta.1"]
     for a, b in zip(order, order[1:]):
         assert _rv("compare", a, b).stdout.strip() == "lt", (a, b)
         assert _rv("compare", b, a).stdout.strip() == "gt", (a, b)
-    assert _rv("compare", "0.3.0", "0.3.0").stdout.strip() == "eq"
+    assert _rv("compare", "0.4.0", "0.4.0").stdout.strip() == "eq"
 
 
 def test_bump_version_edits_both_files(tmp_path):
@@ -395,7 +395,7 @@ def test_bump_version_edits_both_files(tmp_path):
     before = ET.parse(METAINFO).getroot().find("releases").findall("release")
     # Targets are derived from the tree, never spelt: the cut's preflight runs this
     # test AFTER bumping the working tree, so a literal target is already present
-    # there from the second cut on (0.3.0-beta.2 in the metainfo once beta.3 is cut).
+    # there from the second cut on (0.4.0-beta.2 in the metainfo once beta.3 is cut).
     target = _rv("next", "--root", str(root)).stdout.strip()
     final = _rv("next", target, "--final").stdout.strip() if "-" in target else _rv("next", target).stdout.strip()
     assert f'<release version="{target.replace("-", "~")}"' not in _read(METAINFO), target
@@ -426,4 +426,4 @@ def test_bump_version_edits_both_files(tmp_path):
     newest = ET.parse(meta).getroot().find("releases").find("release")
     assert newest.get("version") == final.replace("-", "~")
     assert (newest.get("type") == "development") == ("-" in final)
-    assert _rv("bump", "0.3.0-rc.1", "--root", str(root)).returncode == 1
+    assert _rv("bump", "0.4.0-rc.1", "--root", str(root)).returncode == 1
