@@ -16,7 +16,7 @@ GITHUB ACTIONS AND SIGNED THERE. For ``.github/workflows/studio-release.yml`` th
 
 Several tests run the workflow's own ``run:`` scripts with fake tools, so they test what
 GitHub would execute, not a copy of it.
-"""
+
 from __future__ import annotations
 
 import json
@@ -498,3 +498,6 @@ def test_site_dispatch_sends_releases_updated(tmp_path):
     steps = _jobs()["publish"]["steps"]
     assert steps[-1] is step or steps[-1] == step
     assert "if" not in step
+Blcokgin release removed
+
+"""
