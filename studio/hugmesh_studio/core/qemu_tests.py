@@ -40,7 +40,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .platform_info import wsl_docker_remedy
-from . import platform_info, proc_group
+from . import platform_info, proc_group, session_locations
 
 
 def native_blocker() -> str:
@@ -50,7 +50,10 @@ def native_blocker() -> str:
     return platform_info.native_windows_blocker(
         "QEMU device tests and mesh emulation", runs="bash scripts")
 
-#: Where the builders drop per-session artifact dirs, relative to the generator repo.
+#: Where the builders drop per-session artifact dirs, relative to the generator repo,
+#: when no other output folder was chosen. It is the FIRST place searched, not the
+#: only one: core/session_locations.py owns the full list (every folder a build ever
+#: wrote a session into, plus the live config's).
 SESSIONS_SUBDIR = os.path.join("out", "sessions")
 #: The host-side runner this module drives.
 RUNNER_SCRIPT = os.path.join("tests", "qemu", "run-qemu-docker.sh")
@@ -187,6 +190,14 @@ class BuildSession:
     @property
     def platforms(self) -> list[str]:
         return sorted({r.platform for r in self.rows})
+
+    @property
+    def location(self) -> str:
+        """The OUTPUT FOLDER this session lives in (``<out>`` of ``<out>/sessions/<id>``),
+        or the session's own parent for a hand-picked folder of any other shape. What a
+        picker shows so two sessions in two folders are never mistaken for each other."""
+        return (session_locations.root_of(self.path)
+                or os.path.dirname(os.path.normpath(self.path)))
 
     def summary(self) -> str:
         """One line for a picker: what this session can actually be tested with."""
@@ -448,48 +459,57 @@ def expected_image_count(session_path: str) -> int:
     return len(images) if isinstance(images, list) else 0
 
 
-def discover_sessions(generator_dir: str, *, only_with_images: bool = True) -> list[BuildSession]:
-    """Build sessions under ``out/sessions/``, newest first.
+def discover_sessions(generator_dir: str, *, only_with_images: bool = True,
+                      extra_roots=()) -> list[BuildSession]:
+    """Build sessions in EVERY known output folder, newest first.
+
+    The folders are ``<generator>/out``, then ``extra_roots`` (a page passes the live
+    config's output folder), then every folder the per-user registry and the session
+    records name (core/session_locations.py). Before that module, only
+    ``<generator>/out/sessions`` was scanned, so a session built into any other folder
+    was listed on the Sessions page and invisible to every emulation path.
 
     A session dir is minted when a build STARTS, so many hold no artifacts at
     all; ``only_with_images`` keeps those out of a picker whose every entry is
     supposed to be runnable.
     """
-    root = os.path.join(generator_dir, SESSIONS_SUBDIR)
-    if not os.path.isdir(root):
-        return []
-
     sessions: list[BuildSession] = []
-    try:
-        names = os.listdir(root)
-    except OSError:
-        return []
-
-    for name in names:
-        path = os.path.join(root, name)
-        if not os.path.isdir(path):
-            continue
+    seen: set[str] = set()
+    for root in session_locations.sessions_dirs(generator_dir, extra_roots):
         try:
-            mtime = os.path.getmtime(path)
+            names = os.listdir(root)
         except OSError:
-            mtime = 0.0
-        session = BuildSession(path=path, name=name, rows=discover_rows(path), mtime=mtime,
-                               expected_images=expected_image_count(path))
-        if only_with_images and not session.has_images:
             continue
-        sessions.append(session)
+        for name in names:
+            path = os.path.join(root, name)
+            if not os.path.isdir(path):
+                continue
+            key = os.path.normcase(os.path.realpath(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                mtime = 0.0
+            session = BuildSession(path=path, name=name, rows=discover_rows(path),
+                                   mtime=mtime, expected_images=expected_image_count(path))
+            if only_with_images and not session.has_images:
+                continue
+            sessions.append(session)
 
     sessions.sort(key=lambda s: s.mtime, reverse=True)
     return sessions
 
 
-def newest_session(generator_dir: str) -> BuildSession | None:
+def newest_session(generator_dir: str, *, extra_roots=()) -> BuildSession | None:
     """The newest session that actually holds images, or None."""
-    sessions = discover_sessions(generator_dir, only_with_images=True)
+    sessions = discover_sessions(generator_dir, only_with_images=True,
+                                 extra_roots=extra_roots)
     return sessions[0] if sessions else None
 
 
-def default_session(generator_dir: str) -> BuildSession | None:
+def default_session(generator_dir: str, *, extra_roots=()) -> BuildSession | None:
     """The session a picker should preselect: the newest COMPLETE one.
 
     A partial session (a build that aborted mid-fleet) still LISTS — its images are
@@ -498,7 +518,8 @@ def default_session(generator_dir: str) -> BuildSession | None:
     was configured. When every session with images is partial, the newest of them
     is still the answer: runnable-with-a-badge beats nothing.
     """
-    sessions = discover_sessions(generator_dir, only_with_images=True)
+    sessions = discover_sessions(generator_dir, only_with_images=True,
+                                 extra_roots=extra_roots)
     for session in sessions:
         if not session.is_partial:
             return session

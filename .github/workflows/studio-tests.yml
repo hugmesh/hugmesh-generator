@@ -79,6 +79,23 @@ on:
       - 'studio/hugmesh_studio/__init__.py'
       - 'studio/packaging/flatpak/org.hugmesh.ImageStudio.metainfo.xml'
       - 'scripts/release-studio.sh'
+      # The GUARDS themselves, and every file they read by a literal path. On
+      # 2026-11-05/06 test_studio_beta_version.py was hand-edited and then cut from 21
+      # tests to 1 on main through the web UI. Each of those commits touched only
+      # studio/tests/*, so the list above never fired and nothing went red. The 0.4 cut
+      # then ran its guard step on the one remaining test.
+      # studio/tests/test_studio_tests_push_paths.py derives this set from the cut's
+      # guard step and from the files the guards open, and fails if any entry is missing.
+      - '.github/workflows/studio-tests.yml'
+      - 'studio/tests/test_studio_beta_version.py'
+      - 'studio/tests/test_studio_release_signing.py'
+      - 'studio/tests/test_studio_release_cut.py'
+      - 'studio/tests/test_release_studio_script.py'
+      - 'studio/tests/test_studio_tests_push_paths.py'
+      - 'studio/packaging/wix/msi_version.py'
+      - 'studio/packaging/build-msi-wine.sh'
+      - 'studio/packaging/wix/windows-build-requirements.txt'
+      - 'studio/packaging/linux-build-requirements.txt'
   workflow_dispatch: {}
 
 permissions:

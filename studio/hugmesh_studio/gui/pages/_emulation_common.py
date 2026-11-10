@@ -20,11 +20,13 @@ WHAT LIVES HERE, AND THE RULE FOR ADDING TO IT
 ----------------------------------------------
 Only things BOTH faces need, in the SAME shape:
 
-* :func:`populate_sessions` — the session picker, badged. This is the aborted-session
-  default trap: ``out/sessions`` keeps every session a build ever minted, including
+* :func:`populate_sessions` (with :func:`extra_roots` / :func:`searched_text`) — the
+  session picker, badged. This is the aborted-session
+  default trap: a sessions folder keeps every session a build ever minted, including
   the ones whose build died after one image, and a picker that just took the newest
   handed the operator a 1-of-4 "mesh". Both pickers now list every session, mark the
-  PARTIAL ones, and preselect the newest COMPLETE one.
+  PARTIAL ones, and preselect the newest COMPLETE one. Both list sessions from EVERY
+  known output folder (core/session_locations.py), and name the folder.
 * the status vocabulary's COLOURS — one map, so a SUSPECT row cannot read green on
   one screen and amber on the other. The rule the map encodes is
   :data:`NEVER_GREEN`: PASS is the only green verdict there is.
@@ -54,7 +56,7 @@ import subprocess
 
 from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ..styles import MUTED, WARN
-from ...core import emulation, qemu_devices, qemu_tests
+from ...core import emulation, qemu_devices, qemu_tests, session_locations
 
 # ── the status vocabulary, in colour ────────────────────────────────────────────────
 #: PASS green and FAIL/ERROR red are the runner's own two outcomes. Everything else
@@ -195,34 +197,105 @@ def default_session_index(sessions: list[qemu_tests.BuildSession]) -> int:
     return 0 if sessions else -1
 
 
+def extra_roots(wiz) -> tuple[str, ...]:
+    """The live config's output folder, searched before any build has recorded it
+    (a folder chosen a moment ago). Every other folder a session can live in comes
+    from the per-user registry and the session records: core/session_locations.py."""
+    out = getattr(getattr(wiz, "cfg", None), "output_dir", "") or ""
+    return (out,) if isinstance(out, str) and out else ()
+
+
+def searched_text(wiz) -> str:
+    """Which sessions folders a picker looked in, for its empty state: an operator
+    whose sessions live elsewhere sees where we looked instead of guessing."""
+    try:
+        dirs = session_locations.sessions_dirs(wiz.generator_dir, extra_roots(wiz))
+    except RuntimeError:                      # state dir unresolvable
+        dirs = []
+    return ", ".join(dirs) or os.path.join(wiz.generator_dir, "out", "sessions")
+
+
+def session_item_text(session: qemu_tests.BuildSession, default_root: str = "") -> str:
+    """The picker line: ``summary()``, plus the output folder when it is NOT the
+    default ``<generator>/out``. Sessions can live in any output folder the operator
+    chose (core/session_locations.py), and two sessions from two folders must never
+    read as the same thing. The default folder is left implicit so the common case
+    stays one short line."""
+    text = session.summary()
+    where = session.location
+    if where and not (default_root and session_locations.same_path(where, default_root)):
+        text += f"  ·  in {elide_left(where)}"
+    return text
+
+
+def elide_left(path: str, keep: int = 48) -> str:
+    """``path`` cut from the LEFT to ``keep`` characters: the tail of a folder path
+    is the part that tells two folders apart. The full path rides the tooltip."""
+    return path if len(path) <= keep else "…" + path[-(keep - 1):]
+
+
 def populate_sessions(combo: QtWidgets.QComboBox,
-                      sessions: list[qemu_tests.BuildSession]) -> int:
+                      sessions: list[qemu_tests.BuildSession],
+                      default_root: str = "") -> int:
     """Fill a session picker and preselect the newest COMPLETE session.
 
     Signals are blocked throughout: filling a combo emits currentIndexChanged once
     per insertion, and each of those would replan the mesh against a half-built
     list. The caller re-plans ONCE afterwards. Returns the selected index.
+
+    ``default_root`` is ``<generator>/out``: a session anywhere else names its folder
+    in the line itself, and every session names it in the tooltip.
     """
     combo.blockSignals(True)
     try:
+        # A line that names a folder is long. Without this the combo's size hint is
+        # its LONGEST item, which set the whole page's minimum width (measured: 582 px
+        # for a default-folder session, 1182 px with a folder named) and pushed every
+        # page that holds a picker into a horizontal scrollbar.
+        combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(40)
         combo.clear()
         for session in sessions:
-            combo.addItem(session.summary(), session.path)
+            combo.addItem(session_item_text(session, default_root), session.path)
             i = combo.count() - 1
             badge = session.completeness_badge()
+            where = f"\n\nFolder: {session.path}"
             if badge:
                 combo.setItemData(i, QtGui.QBrush(QtGui.QColor(WARN)),
                                   Qt.ItemDataRole.ForegroundRole)
-                combo.setItemData(i, PARTIAL_TOOLTIP.format(badge=badge),
+                combo.setItemData(i, PARTIAL_TOOLTIP.format(badge=badge) + where,
                                   Qt.ItemDataRole.ToolTipRole)
             else:
-                combo.setItemData(i, COMPLETE_TOOLTIP, Qt.ItemDataRole.ToolTipRole)
+                combo.setItemData(i, COMPLETE_TOOLTIP + where,
+                                  Qt.ItemDataRole.ToolTipRole)
         index = default_session_index(sessions)
         if index >= 0:
             combo.setCurrentIndex(index)
     finally:
         combo.blockSignals(False)
+    # The CLOSED picker carries the selected line's tooltip too, under the page's
+    # own help text (captured once, never overwritten). Item tooltips only show in
+    # the open list, and in a narrow window the closed combo clips its line before
+    # the folder's tail (looked at: a 700 px window shows "in …2089/test_a"), so
+    # hovering it is the one way left to read which folder is selected.
+    if combo.property(_BASE_TIP) is None:
+        combo.setProperty(_BASE_TIP, combo.toolTip() or "")
+        combo.currentIndexChanged.connect(lambda _i, c=combo: _sync_picker_tooltip(c))
+    _sync_picker_tooltip(combo)
     return index
+
+
+#: The combo property holding the page's own help tooltip for the picker.
+_BASE_TIP = "hm_base_tooltip"
+
+
+def _sync_picker_tooltip(combo: QtWidgets.QComboBox) -> None:
+    base = combo.property(_BASE_TIP) or ""
+    i = combo.currentIndex()
+    tip = combo.itemData(i, Qt.ItemDataRole.ToolTipRole) if i >= 0 else None
+    selected = f"Selected: {tip}" if isinstance(tip, str) and tip else ""
+    combo.setToolTip("\n\n".join(t for t in (base, selected) if t))
 
 
 def partial_note(session: qemu_tests.BuildSession | None) -> str:

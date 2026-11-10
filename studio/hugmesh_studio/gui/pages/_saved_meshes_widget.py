@@ -50,10 +50,24 @@ from dataclasses import dataclass, field
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
 from ...core import saved_meshes as sm
+from ...core.local_mesh_bootstrap import LocalMeshBootstrap
 from ._emulation_common import make_table, set_cell
 
 #: plain words for :func:`.saved_meshes.unrecorded_fields` in the overwrite note
 _UNRECORDED_WORDS = {"services": "services", "kind_addons": "DevOps add-ons"}
+
+
+def native_windows_running_mesh() -> str:
+    """Why Start/Restore refuse over a running mesh in a NATIVE Windows Studio ("" anywhere
+    else). There 'Stop mesh' is greyed with the WSL2 sentence, so "stop it first" would
+    send the operator to a button that refuses; and Start/Restore are `make` targets as
+    well. The same check as the page's mesh-state label (teardown_refusal)."""
+    if not LocalMeshBootstrap.teardown_refusal():
+        return ""
+    return ("A local mesh is running, and the Windows build of the Studio cannot stop it "
+            "(Stop runs `make` and bash scripts); stop it where it was started, such as "
+            "the Studio inside WSL2. Start and Restore run `make` and bash scripts too, "
+            "so they cannot run in this Studio either.")
 
 # Symbolic column indices only (network.py's rule).
 (_SM_COL_MESH, _SM_COL_SAVED, _SM_COL_ENV, _SM_COL_SERVICES,
@@ -691,7 +705,8 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                      "another mesh's volumes. Load it into the form and use "
                      "'Generate && start', or restore it cold.")
             if self._mesh_up is True:
-                why = "A local mesh is running — stop it first."
+                why = (native_windows_running_mesh()
+                       or "A local mesh is running — stop it first.")
                 gate(self.start_btn, False, why, "")
                 gate(self.restore_btn, False, why, "")
             elif plan.mode == sm.MODE_UNKNOWN:
