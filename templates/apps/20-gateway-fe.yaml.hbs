@@ -72,15 +72,34 @@ spec:
                 key: token
                 optional: true
         routes:
+          # ROUTE PARITY with specs/cluster/apps/20-gateway-fe.yaml (#559): the
+          # same routes, in the same order, with the primary's cluster domain and
+          # service-name prefix replaced by this brand's own. The reasons
+          # for each route and its position are written once, beside the primary
+          # table; read them there. Gated by
+          # tests/scripts/test-fe-template-route-parity.sh, which renders this
+          # file with both engines and compares it to the primary table route by
+          # route (id, path, predicates, uri, filters, order). A route that must
+          # stay primary-only goes on that guard's exclusion list with a reason,
+          # never silently missing from here.
+          #
+          # Spring Cloud Gateway matches FIRST-IN-DECLARED-ORDER, so a more
+          # specific path always sits above the subtree route that would swallow
+          # it: /games/api/** above /games/**, /bff/register/complete above
+          # /bff/register/**, /bff/me/appeal above /bff/me/**, every /bff/<x>
+          # route above the /bff/** catch-all, and /** last.
+          #
+          # SPA deep-link fallback, MUST STAY FIRST: an HTML navigation to an
+          # in-shell remote's path boots the host shell; assets, XHR and
+          # remoteEntry.json (no text/html Accept) fall through to the remote
+          # routes below.
+          - id: remote-deeplink-to-host-shell
+            uri: http://{{BRAND}}-host-shell.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**,/admin/**,/mod/**,/user/**,/games/**
+            header: "Accept, .*text/html.*"
           # Each remote below is its own standalone nginx bundle (own
-          # index.html/remoteEntry.json at its own webroot) — StripPrefix maps
-          # the gateway-prefixed path back to that webroot, same reasoning as
-          # login-ui's comment below. Missing for years: without it, the
-          # host's native-federation loader's remoteEntry.json fetch forwards
-          # with the prefix still attached, nginx's SPA fallback serves
-          # index.html instead (wrong Content-Type/content), and the remote
-          # never actually loads. Live-verified against the compose stack's
-          # identical route table (generator's tests/stack/gateway-routes/fe).
+          # index.html/remoteEntry.json at its own webroot), so StripPrefix maps
+          # the gateway-prefixed path back to that webroot.
           - id: matrix-ui
             uri: http://{{BRAND}}-matrix-ui.{{BRAND}}-frontend.svc.cluster.local:80
             path: /social/matrix/**
@@ -118,11 +137,34 @@ spec:
             path: /user/**
             filters:
               - StripPrefix=1
-          - id: api-docs
-            uri: http://{{BRAND}}-api-docs.{{BRAND}}-frontend.svc.cluster.local:80
-            path: /apidocs/**
+          - id: character-studio-ui
+            uri: http://{{BRAND}}-character-studio-ui.{{BRAND}}-frontend.svc.cluster.local:8080
+            path: /character-studio/**
             filters:
               - StripPrefix=1
+          - id: character-forge-ui
+            uri: http://{{BRAND}}-character-forge-ui.{{BRAND}}-frontend.svc.cluster.local:8080
+            path: /character-forge/**
+            filters:
+              - StripPrefix=1
+          # games-bff (/games/api/**) BEFORE games-ui (/games/**), or the
+          # remote's nginx swallows every API call.
+          - id: games-bff
+            uri: http://{{BRAND}}-games.{{BRAND}}-games.svc.cluster.local:8080
+            path: /games/api/**
+            filters:
+              - StripPrefix=1
+          - id: games-ui
+            uri: http://{{BRAND}}-games-ui.{{BRAND}}-frontend.svc.cluster.local:8080
+            path: /games/**
+            filters:
+              - StripPrefix=1
+          - id: api-docs
+            uri: http://{{BRAND}}-api-docs.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /api-docs/**
+            filters:
+              - StripPrefix=1
+          # Same-origin BFFs, more specific subpaths BEFORE the /bff/** catch-all.
           - id: {{BRAND}}-mod-bff-api
             uri: https://{{BRAND}}-mod-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
             path: /bff/mod/**
@@ -135,19 +177,91 @@ spec:
           - id: {{BRAND}}-forum-bff-api
             uri: https://{{BRAND}}-forum-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
             path: /bff/forum/**
+          - id: {{BRAND}}-wiki-bff-api-admin
+            uri: https://{{BRAND}}-wiki-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/wiki/admin/**
+          - id: {{BRAND}}-wiki-bff-api
+            uri: https://{{BRAND}}-wiki-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/wiki/**
+          - id: {{BRAND}}-mesh-bff-api
+            uri: https://{{BRAND}}-mesh-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/mesh/**
+          - id: {{BRAND}}-character-forge-bff-api
+            uri: https://{{BRAND}}-character-forge-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/character-forge/**
+          # SSO login/session/registration live on user-bff; exact paths, each
+          # above the /bff/** admin-bff catch-all.
+          - id: {{BRAND}}-user-bff-api-login
+            uri: https://{{BRAND}}-user-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/login
+          - id: {{BRAND}}-user-bff-api-password-reset-request
+            uri: https://{{BRAND}}-user-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/password-reset/request
+          - id: {{BRAND}}-user-bff-api-password-reset-confirm
+            uri: https://{{BRAND}}-user-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/password-reset/confirm
+          # CARVE-OUT: registration stage 2 is served by admin-bff, not user-bff.
+          # It MUST sit above /bff/register/** or the subtree route sends the
+          # stage-2 POST to a service that does not implement it (404), and no
+          # account can finish onboarding.
+          - id: {{BRAND}}-admin-bff-api-register-complete
+            uri: https://{{BRAND}}-admin-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/register/complete
+          - id: {{BRAND}}-user-bff-api-register
+            uri: https://{{BRAND}}-user-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/register/**
+          # CARVE-OUT: the ban appeal is served by admin-bff under user-bff's
+          # /bff/me/** prefix. It MUST sit above /bff/me/** or a suspended
+          # account's own appeal 404s.
+          - id: {{BRAND}}-admin-bff-api-me-appeal
+            uri: https://{{BRAND}}-admin-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/me/appeal
+          - id: {{BRAND}}-user-bff-api-me
+            uri: https://{{BRAND}}-user-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/me/**
+          - id: {{BRAND}}-user-bff-api-session
+            uri: https://{{BRAND}}-user-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/session
+          # The POST sign-out alias the clients call; without it sign-out falls
+          # through to admin-bff and is a no-op.
+          - id: {{BRAND}}-user-bff-api-sessionout
+            uri: https://{{BRAND}}-user-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/sessionOut
+          - id: {{BRAND}}-user-bff-api-provision
+            uri: https://{{BRAND}}-user-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/provision/**
           - id: {{BRAND}}-admin-bff-api
             uri: https://{{BRAND}}-admin-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
             path: /bff/**
           - id: remote-fragment
             uri: http://{{BRAND}}-remote-fragment.{{BRAND}}-frontend.svc.cluster.local:80
             path: /_fragments/**
+          # External client protocol surfaces (Matrix / Mastodon clients): before
+          # the host-only vanity route and the /** catch-all, both of which would
+          # otherwise swallow them.
+          - id: matrix-cs-api
+            uri: https://tuwunel-proxy.{{BRAND}}-backend.svc.cluster.local:4443
+            path: /_matrix/**
+          - id: matrix-wellknown
+            uri: https://tuwunel-proxy.{{BRAND}}-backend.svc.cluster.local:4443
+            path: /.well-known/matrix/client,/.well-known/matrix/server
+          - id: mastodon-client-api
+            uri: https://akkoma-proxy.{{BRAND}}-backend.svc.cluster.local:4443
+            path: /api/v1/**,/api/v2/**
+          - id: mastodon-oauth
+            uri: https://akkoma-proxy.{{BRAND}}-backend.svc.cluster.local:4443
+            path: /oauth/**
           - id: be-default
             uri: http://{{BRAND}}-be-gateway.{{BRAND}}-backend.svc.cluster.local:8080
             path: /be/**
             filters:
               - StripPrefix=1
+          # Vanity subdomains: <username>.<cluster domain>. Host-only predicate,
+          # AFTER every path route and BEFORE the /** catch-all. `vanity: true`
+          # marks the route the chart's vanityDomains list extends.
           - id: vanity-subdomain
             host: "*.{{CLUSTER_DOMAIN}}"
+            vanity: true
             uri: https://{{BRAND}}-federation-api.{{BRAND}}-backend.svc.cluster.local:8080
             filters:
               - SetPath=/api/federation/vanity

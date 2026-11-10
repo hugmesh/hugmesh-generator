@@ -134,4 +134,6 @@ def test_enter_continues_to_the_per_domain_services_step_then_the_users_choice()
     j.feed("")
     assert j.slug == "domain_services"
     j.feed("")
+    assert j.slug == "domain_ca_keys"        # the Domain CA keys step
+    j.feed("")
     assert j.slug == "users_choice"

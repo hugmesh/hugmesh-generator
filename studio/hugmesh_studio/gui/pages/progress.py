@@ -65,7 +65,7 @@ from .. import build_supervisor
 from .. import console
 from .. import flag_badges
 from ..tray import write_build_status
-from ...core import build_sessions
+from ...core import build_sessions, domain_ca_keys
 from ...core.build_driver import ElevationRefused, guard_elevation
 from ...core import flash_targets, flash_validate
 from ...core import qemu_tests
@@ -77,6 +77,7 @@ from ...core.emerge_packages import (
 from ...core.progress_parse import ProgressParser, platform_phases, strip_ansi
 from ...core.stage_tracker import StageTracker
 from ...core.worklist_driver import WorklistDriver
+from ._images_mesh import LocalMeshPanel
 from ._widgets import hold_thread, label_finish_as_exit
 
 # Residual control bytes AFTER strip_ansi() — a bare ESC that formed no complete
@@ -589,6 +590,11 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.total_bar.setMinimumHeight(26)
         self.total_bar.setStyleSheet(self._TOTAL_BAR_QSS.format(chunk="#1a73e8"))  # blue
         lay.addWidget(self.total_bar)
+        # THIS MESH (operator ask 2026-11-09): the dispatch save of the node-image
+        # mesh, and its local copy while the images build. Hidden unless the Build
+        # screen asked for either; nothing in it can fail or stop the build.
+        self.local_mesh = LocalMeshPanel()
+        lay.addWidget(self.local_mesh)
 
         # ── NESTED, DRILLABLE job/stage tree (GitHub-Actions style) — replaces the flat
         # QVBoxLayout-of-QFrames. A QTreeWidget (the established Studio idiom, cf.
@@ -1243,6 +1249,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         # Declining aborts honestly: nothing is dispatched, nothing is written
         # (new_session/start never run), the record keeps its prior truth.
         abort = self._collect_missing_held_files(wl)
+        if not abort and generate_keys:
+            abort = self._missing_domain_ca()
         if abort:
             self.log.setPlainText(abort)
             self._all_terminal = True
@@ -1380,6 +1388,19 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.initializePage()
 
     # ---- held-in-memory secret files: the RESTART re-collection gate --------------
+    def _missing_domain_ca(self) -> str:
+        """RESTART: the prior dispatch's Domain CA keys must be held again (same
+        fingerprints) or the restart refuses; never a silent throwaway CA."""
+        sid = getattr(self.wiz, "pending_session_id", None)
+        if not sid:
+            return ""
+        try:
+            prior = build_sessions.load(
+                os.path.join(build_sessions.sessions_dir(), f"{sid}.json"))
+        except (OSError, ValueError):
+            return ""
+        return domain_ca_keys.restart_refusal(getattr(prior, "held_domain_ca", []))
+
     def _collect_missing_held_files(self, wl) -> str:
         """Ensure every secret file the pending session's PRIOR dispatch consumed from
         the vault is in THIS process's vault, prompting the operator to re-select each
@@ -1488,6 +1509,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._manifest_path = ""
         self._keys_done = []
         self.footer.setText("")
+        self.local_mesh.reset()
         self.log_header.setText("Log")
         self.log.setPlainText("")       # the DOCUMENT clears; the widget itself is alive
         self._refresh_log_help()        # back to "no build session yet"
@@ -1588,6 +1610,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._write_status()                  # building 0% -> the tray shows a badge
         if self._session is not None:         # START record: status "running" + pid
             build_sessions.start(self._session)
+        # Save the mesh these images make (and start its local copy) — off-thread and
+        # exception-guarded inside the panel, so neither can delay or fail the build.
+        try:
+            self.local_mesh.begin(self.wiz, self._session)
+        except Exception:                     # noqa: BLE001
+            traceback.print_exc()
         # ASK 16 — hand the run to the process-wide supervisor BEFORE starting it. From
         # here the worker's Qt parent is the supervisor (not this page, not the window)
         # and the supervisor pins the window alive until the run ends, so closing the

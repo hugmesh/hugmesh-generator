@@ -639,6 +639,32 @@ data:
                 "urn:ietf:params:oauth:grant-type:device_code",
             ],
             "expireInHours": 168, "enablePassword": False, "enableSignUp": False,
+            # RFC 8628 needs the "Device login" SIGN-IN METHOD, not just the grant.
+            # casbin/casdoor:3.80.0 /api/device-auth (controllers/auth.go:1519) asks
+            # application.HasSigninMethod("Device login") and otherwise answers
+            # HTTP 200 + error=unauthorized_client "device login is not enabled for
+            # this application" — the grant type above is never even consulted.
+            # Without this key Casdoor fills the list itself on add
+            # (object/application_util.go:171 extendApplicationWithSigninMethods):
+            # enablePassword False => ["Face ID" rule None] and nothing else, so the
+            # sso-greeter / hugmesh-sso-token device flow could never start
+            # (LIVE-REPRODUCED against 3.80.0, see #878). update-application writes
+            # AllCols, so carrying the list here also CONVERGES an app an earlier
+            # run of this Job already stored as ["Face ID"].
+            # rule "All": HasSigninMethod checks the name only; "All" is neither of
+            # the login-page UI rules ("Tab" adds a QR tab to Casdoor's own login
+            # page, "Login page" a QR side panel) — this enables the RFC 8628
+            # endpoint and nothing visible.
+            # "Password" is deliberately NOT listed (enablePassword False above
+            # stays the intent): with a non-empty list, IsPasswordEnabled() is "is
+            # Password in the list", so a user approves the device code on
+            # /login/oauth/device/<user_code> with an EXISTING Casdoor browser
+            # session (quick sign-in), not by typing a password into this public
+            # client's page. The password GRANT is governed by grantTypes alone and
+            # stays off either way.
+            "signinMethods": [
+                {"name": "Device login", "displayName": "Device login", "rule": "All"},
+            ],
             # D6+D8: SAME JWT-Custom allow-list as the systems apps — leak-fix + MFA claim.
             # JWT-Custom still carries the `roles` claim (incl. desktop-sudo) via
             # tokenAttributes, which the desktop-sudo mapper maps to the local desktop-sudo group.

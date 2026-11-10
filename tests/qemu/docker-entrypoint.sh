@@ -382,6 +382,13 @@ reown() {
     chown -R "${HOST_UID}:${HOST_GID:-${HOST_UID}}" \
         "${RUN_DIR}" "${RESULT_DIR}" "${WORK}/images" \
         "${WORK}/.loop-mount.lock" 2>/dev/null || true
+    # ${WORK}/runs itself, NOT recursively. `mkdir -p "${RUN_DIR}"` above creates it
+    # root-owned on a first run, and the -R list hands back only this row's dir
+    # BELOW it, so the operator owned runs/<row> and still could not delete it from
+    # runs/ without sudo (seen 2026-11-10, a GUI-started rpi5/pki run). Not -R:
+    # sibling rows of concurrent containers live under runs/, and each hands back
+    # its own.
+    chown "${HOST_UID}:${HOST_GID:-${HOST_UID}}" "${WORK}/runs" 2>/dev/null || true
 }
 trap reown EXIT
 

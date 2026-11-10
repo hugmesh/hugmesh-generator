@@ -267,8 +267,12 @@ usage() {
 cat <<EOF
 Usage: $0 [OPTIONS]
 
-  --session DIR     build-session dir holding the artifacts.
-                    Default: newest non-empty dir under out/sessions/
+  --session DIR     build-session dir holding the artifacts, or a bare session
+                    NAME looked up in every known output folder.
+                    Default: newest non-empty session in any known output
+                    folder: out/sessions/, plus every folder a Studio build
+                    wrote sessions into (the per-user registry; see
+                    studio/hugmesh_studio/core/session_locations.py)
   --artifacts DIR   explicit artifacts dir (wins over --session)
   --work DIR        writable scratch for decompressed images/overlays/results.
                     Default: ${WORK}
@@ -2104,7 +2108,58 @@ discover_rows() {
 }
 
 # ── Resolve the artifacts dir ───────────────────────────────────────────────
-# A build SESSION is out/sessions/<stamp>/; several are usually empty shells
+# A build SESSION is <out>/sessions/<stamp>/, and <out> is whatever output folder
+# the operator chose: out/ in this checkout by default, anywhere at all otherwise.
+# The list of folders comes from the Studio's per-user registry through
+# core/session_locations.py, the same answer the Studio's pickers, the emulation
+# CLIs and the WHPX backend use. Scanning only out/sessions here made a finished
+# session in another folder unbootable from `make qemu-docker`. Without python3
+# (or with a state dir it cannot read) the answer degrades to out/sessions alone.
+session_dirs() {
+    local found=""
+    if command -v python3 >/dev/null 2>&1; then
+        # -I: no cwd, no PYTHONPATH, no user site; the package comes from THIS checkout.
+        found="$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from hugmesh_studio.core.session_locations import main; sys.exit(main(sys.argv[2:]))' \
+            "${REPO_DIR}/studio" sessions-dirs --generator-dir "${REPO_DIR}" 2>/dev/null)" || found=""
+    fi
+    if [ -n "${found}" ]; then
+        printf '%s\n' "${found}"
+    elif [ -d "${REPO_DIR}/out/sessions" ]; then
+        printf '%s\n' "${REPO_DIR}/out/sessions"
+    fi
+    return 0
+}
+
+# The folders session_dirs searched, for an error message: comma-separated, and
+# never empty. With no known output folder at all (no out/sessions here, and every
+# folder a build ever recorded is away) it used to print "(searched: )", which
+# reads like a bug; say where the default would have been instead.
+searched_text() {
+    local text
+    text="$(session_dirs | paste -sd, -)"
+    if [ -n "${text}" ]; then
+        printf '%s' "${text}"
+    else
+        printf '%s' "${REPO_DIR}/out/sessions (absent), and no other known output folder is there right now"
+    fi
+}
+
+# A bare --session NAME (no slash): the folder of that session in any known
+# output folder, first hit in session_dirs order. Prints nothing when unknown.
+find_session_by_name() {
+    local name="$1" root
+    case "${name}" in ""|.|..|*/*) return 0 ;; esac
+    while IFS= read -r root; do
+        [ -n "${root}" ] || continue
+        if [ -d "${root}/${name}" ]; then
+            printf '%s\n' "${root}/${name}"
+            return 0
+        fi
+    done < <(session_dirs)
+    return 0
+}
+
+# Several sessions are usually empty shells
 # (a session dir is minted at wizard time, before any artifact lands), so
 # "newest" means newest that actually holds an image.
 # "Holds an image" must mean exactly what discover_rows means by it, or this
@@ -2117,20 +2172,31 @@ discover_rows() {
 # (Capture into a variable rather than `| grep -q`: pipefail is set, and a
 # SIGPIPE'd producer makes a FOUND match report failure.)
 newest_session_with_images() {
-    local d rows
+    local d rows root
+    local -a globs=()
+    while IFS= read -r root; do
+        [ -n "${root}" ] && globs+=("${root}"/*/)
+    done < <(session_dirs)
+    [ "${#globs[@]}" -gt 0 ] || return 1
+    # ONE ls over every folder's sessions, so "newest" is newest across all of them.
     while IFS= read -r d; do
         rows="$(discover_rows "${d}")"
         if [ -n "${rows}" ]; then
             printf '%s\n' "${d}"; return 0
         fi
-    done < <(ls -1dt "${REPO_DIR}"/out/sessions/*/ 2>/dev/null)
+    done < <(ls -1dt "${globs[@]}" 2>/dev/null)
     return 1
 }
 
 if [ -z "${ARTIFACTS}" ]; then
+    if [ -n "${SESSION}" ] && [ ! -d "${SESSION}" ]; then
+        named="$(find_session_by_name "${SESSION}")"
+        [ -n "${named}" ] || die "no build session named '${SESSION}' in any known output folder (searched: $(searched_text)) — pass the session's directory, or --artifacts DIR"
+        SESSION="${named}"
+    fi
     if [ -z "${SESSION}" ]; then
         SESSION="$(newest_session_with_images || true)"
-        [ -n "${SESSION}" ] || die "no build session under out/sessions/ holds a bootable image — build first, or pass --artifacts DIR. (A zero-byte .img from a killed build, or a name with no YYYYmmddTHHMMSSZ stamp, does not count.)"
+        [ -n "${SESSION}" ] || die "no build session in any known output folder (searched: $(searched_text)) holds a bootable image — build first, or pass --artifacts DIR. (A zero-byte .img from a killed build, or a name with no YYYYmmddTHHMMSSZ stamp, does not count.)"
     fi
     ARTIFACTS="${SESSION}"
 fi

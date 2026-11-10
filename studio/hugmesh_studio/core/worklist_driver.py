@@ -45,6 +45,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
 from .build_driver import BuildDriver
+from . import domain_ca_keys
 from . import roles
 from .config import (ImageConfig, User, brand_header_fields, image_class,
                      manifest_domain_rows)
@@ -103,6 +104,24 @@ def keys_dir(out_dir: str, entry_id: str) -> str:
     return os.path.join(out_dir, f"keys-{entry_id}")
 
 
+def node_key_profiles(worklist) -> list[str] | None:
+    """The KEYS profile of every NODE image in ``worklist`` (the images the keys step
+    runs for), or None when there is no worklist yet. An entry with no declared
+    profile is skipped here; the keys step itself fails it loudly."""
+    if worklist is None:
+        return None
+    base = worklist.base
+    out = []
+    for e in worklist.entries:
+        if image_class(base.mode, e.role) != "node":
+            continue
+        try:
+            out.append(key_profile(e.role, e.platform))
+        except roles.RoleVocabularyError:
+            continue
+    return out
+
+
 def key_profile(role: str, platform: str = "") -> str:
     """The gen-provision-keys.sh ``--role`` profile for a Studio/builder role id.
 
@@ -132,8 +151,12 @@ class WorklistDriver:
     def __init__(self, generator_dir: str, worklist: WorklistConfig,
                  host: HostInfo | None = None, backend: str | None = None,
                  generate_keys: bool = True, graphical: bool = False,
-                 workdir: str | None = None):
+                 workdir: str | None = None,
+                 ca_store: "domain_ca_keys.DomainCAStore | None" = None):
         self.generator_dir = os.path.abspath(generator_dir)
+        # The Domain CA keys step's in-memory store (None = the process store). An
+        # empty store adds nothing to any gen-provision-keys.sh call.
+        self.ca_store = ca_store
         self.worklist = worklist
         self.host = host or detect()
         self.backend = backend or self.host.default_backend
@@ -403,7 +426,8 @@ class WorklistDriver:
         return self.summary_exit_code()
 
     def _genkeys_command(self, script: str, brand: str, args: list[str],
-                         osname: str | None = None) -> list[str]:
+                         osname: str | None = None,
+                         ca_dir: str | None = None) -> list[str]:
         """argv for ``gen-provision-keys.sh <args>`` (``args`` carries ``--out DIR``).
 
         On native Windows the script cannot be executed directly (WinError 193: it is
@@ -421,10 +445,27 @@ class WorklistDriver:
         # Linux must split a C:\ path the way Windows does.
         parent, name = ntpath.split(ntpath.abspath(args[i]))
         args[i] = f"/keys/{name}"
-        return ["docker", "run", "--rm", "--init",
-                "-v", f"{self.generator_dir}:/src", "-v", f"{parent}:/keys",
+        mounts = ["-v", f"{self.generator_dir}:/src", "-v", f"{parent}:/keys"]
+        if ca_dir:
+            # The Domain CA keys material (a private temp dir) is mounted READ-ONLY
+            # at /ca and every path into it is rewritten; nothing else of it moves.
+            mounts += ["-v", f"{ca_dir}:/ca:ro"]
+            args = [self._ca_arg_in_container(a, ca_dir) for a in args]
+        return ["docker", "run", "--rm", "--init", *mounts,
                 "-e", f"BRAND={brand}", "-w", "/src", self.host.builder_image,
                 "bash", "./" + GENKEYS_SCRIPT.replace(os.sep, "/"), *args]
+
+    @staticmethod
+    def _ca_arg_in_container(arg: str, ca_dir: str) -> str:
+        """A host path into the CA temp dir -> its /ca path (also NAME=PATH)."""
+        name, sep, value = arg.partition("=")
+        target = value if sep else arg
+        prefix = ca_dir.rstrip("\\/")
+        if not (target == prefix or target.startswith(prefix + "\\")
+                or target.startswith(prefix + "/")):
+            return arg
+        mapped = "/ca/" + ntpath.basename(target.replace("/", "\\"))
+        return f"{name}={mapped}" if sep else mapped
 
     def _genkeys_line(self, line: str, out: str, osname: str | None = None) -> str:
         """One line of ``gen-provision-keys.sh`` output as the operator should read it.
@@ -470,6 +511,8 @@ class WorklistDriver:
         res.keys_path = keys_dir_
         script = os.path.join(self.generator_dir, GENKEYS_SCRIPT)
         base = self.worklist.base
+        ca = None
+        profile = ""
         try:
             # INSIDE the try on purpose: key_profile() now RAISES for a role with no
             # declared profile instead of guessing "host". That must fail this one
@@ -484,10 +527,34 @@ class WorklistDriver:
             # one file every node reads to join the mesh. --superdomain is the
             # script's own flag; BRAND is its env knob (and the brands/<BRAND>.conf
             # profile selector the builders use for the same images).
+            profile = key_profile(entry.role, entry.platform)
+            # Domain CA keys: written for THIS call only and removed in the finally
+            # below. The key path reaches the pki profile only (args_for).
+            st = self.ca_store or domain_ca_keys.store()
+            domain_ca_keys.rekey_own(base, st)
+            if profile == domain_ca_keys.KEY_PROFILE:
+                # The go-live checklist gates the KEY: while it is not READY no CA
+                # key is placed, and this pki stick is not made with a throwaway CA
+                # in its place either (the stick fails, with the reason).
+                refusal = domain_ca_keys.placement_refusal(
+                    base, st, node_key_profiles(self.worklist))
+                if refusal:
+                    raise domain_ca_keys.CAImportError(refusal)
+            # Only the pki stick's call ever has the key FILE written.
+            ca = domain_ca_keys.materialize(
+                st, with_key=(profile == domain_ca_keys.KEY_PROFILE))
+            ca_args = ca.args_for(profile) if ca is not None else []
+            if ca is not None and on_line:
+                on_line(i, ("domain CA: this pki stick gets the signing key "
+                            f"({domain_ca_keys.STICK_KEY_PATH}) and the public "
+                            "certificates" if "--ca-key" in ca_args else
+                            f"domain CA: this {profile} stick gets public "
+                            "certificates only"))
             cmd = self._genkeys_command(script, base.brand, [
-                "--role", key_profile(entry.role, entry.platform),
+                "--role", profile,
                 "--out", keys_dir_, "--random",
-                "--superdomain", base.effective_superdomain()], osname)
+                "--superdomain", base.effective_superdomain(), *ca_args], osname,
+                ca_dir=ca.root if ca is not None else None)
             env = dict(os.environ)
             env["BRAND"] = base.brand
             proc = subprocess.Popen(cmd, cwd=self.generator_dir, env=env,
@@ -509,10 +576,25 @@ class WorklistDriver:
                            f"this checkout's Dockerfile.build, which installs one: docker "
                            f"build -f Dockerfile.build -t {self.host.builder_image} . in "
                            f"{self.generator_dir}")
+            if code == 0 and ca is not None:
+                # After the fact: did a CA private key land anywhere it must not?
+                problems = domain_ca_keys.scan_keys_dir(keys_dir_, profile, ca.spki)
+                for p in problems:
+                    if on_line:
+                        on_line(i, f"!! domain CA placement: {p}")
+                if problems:
+                    code = 1
+        except domain_ca_keys.CAImportError as e:
+            if on_line:
+                on_line(i, f"!! keys generation not started: domain CA: {e}")
+            code = 1
         except (OSError, roles.RoleVocabularyError) as e:
             if on_line:
                 on_line(i, f"!! keys generation could not start: {e}")
             code = 1
+        finally:
+            if ca is not None:
+                ca.cleanup()
         res.keys_ok = (code == 0)
         if not res.keys_ok:
             shutil.rmtree(keys_dir_, ignore_errors=True)  # never leave a partial folder

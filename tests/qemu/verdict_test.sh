@@ -975,6 +975,15 @@ grep -q '/work/.loop-mount.lock' "${CHOWN_LOG}" \
 grep -q '/work/results' "${CHOWN_LOG}" \
     && _ok "…without dropping any of the paths reown already handed back" \
     || _bad "reown stopped chowning the result dir"
+# runs/ itself: `mkdir -p "${RUN_DIR}"` creates it root-owned, and handing back only
+# runs/<row> left the operator unable to delete that row without sudo. Exactly one
+# NON-recursive chown of it: a -R would reach sibling rows of concurrent runs.
+grep -qx '1000:1000 /work/runs' "${CHOWN_LOG}" \
+    && _ok "reown() hands back \${WORK}/runs itself, so runs/<row> can be deleted without sudo" \
+    || _bad "\${WORK}/runs stays root-owned: runs/<row> cannot be deleted without sudo"
+grep -qE -- '-R .*/work/runs( |$)' "${CHOWN_LOG}" \
+    && _bad "\${WORK}/runs is chowned recursively, over other runs' rows" \
+    || _ok "…and not recursively, so concurrent runs' rows are left to their own reown"
 # The no-HOST_UID case must stay a complete no-op: the dockerized build passes
 # HOST_UID, a bare `docker run` does not, and chowning to nothing would be worse
 # than leaving it root-owned.

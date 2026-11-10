@@ -991,6 +991,9 @@ class BuildDriver:
                 "A native build runs sudo and bash on a Gentoo host, which the Windows "
                 "build of the Studio cannot do. Choose the docker backend (Docker "
                 "Desktop), or run the Studio inside WSL2.")
+        elif backend == "native" and getattr(self.host, "in_flatpak", False):
+            from . import flatpak_host
+            problems.append(flatpak_host.native_build_blocker())
         elif backend == "native" and not self.host.is_root and not self._can_elevate():
             problems.append(
                 "Native build needs root and no elevation helper is available — install "

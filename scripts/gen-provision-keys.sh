@@ -142,6 +142,12 @@ DIAL_USER="${DIAL_USER:-bff-dial}"  # unprivileged login the BFF dials in AS
 CA_CERT="${CA_CERT:-}"
 CA_KEY="${CA_KEY:-}"
 CA_KEY_PASS="${CA_KEY_PASS:-}"
+# Domain CA keys (Studio step "Domain CA keys"): write the CA key onto the pki stick
+# for Vault, keep kubeadm on its own CA, and add PUBLIC trust certificates to every
+# stick. All three default OFF, so a run without the flags is unchanged.
+CA_KEY_TO_STICK="${CA_KEY_TO_STICK:-false}"
+KUBEADM_CA="${KUBEADM_CA:-true}"
+TRUST_CERTS=()
 
 usage() {
 cat <<EOF
@@ -188,6 +194,22 @@ Options:
                       certs (forwarded to gen-keystores.sh). Default: self-signed.
       --ca-key FILE   Private key for --ca-cert (PEM; may be encrypted).
       --ca-key-pass V Passphrase for --ca-key (prefer CA_KEY_PASS env over this).
+                      On a NON-pki profile --ca-cert is written to the stick as
+                      certs/cluster-ca.crt (the certificate only, re-encoded by
+                      openssl x509, so a combined cert+key file never carries its
+                      key there); --ca-key is ignored there.
+      --ca-key-to-stick  pki profile only: ALSO write the CA private key to
+                      certs/cluster-ca.key (unencrypted, 0600) so first boot hands
+                      the pair to Vault pki_int as its signing CA. Without it Vault
+                      makes a DEV root. (env: CA_KEY_TO_STICK=true)
+      --no-kubeadm-ca Do NOT seed the CA as kubeadm's CA (kubernetes/pki/ca.*):
+                      kubeadm keeps its own CA and the CA key is not copied there.
+                      (env: KUBEADM_CA=false)
+      --trust-cert NAME=FILE  Add a PUBLIC CA certificate to the stick as
+                      certs/NAME.crt (any profile; repeatable). keys-provision puts
+                      every certs/*.crt into the node's trust store. A FILE holding
+                      a private key is refused. NAME: lower-case letters, digits,
+                      '.', '-'; "cluster-ca" is reserved for --ca-cert.
       --keys-src DIR  Existing KEYS tree to copy OPTIONAL mail/OAuth creds FROM
                       (DIR/secrets/mail.json + DIR/secrets/dkim-private.key). If
                       absent, the pki role PROMPTS for mail creds (10s timeout);
@@ -251,6 +273,9 @@ while [[ $# -gt 0 ]]; do
         --ca-cert)     CA_CERT="$2"; shift 2 ;;
         --ca-key)      CA_KEY="$2"; shift 2 ;;
         --ca-key-pass) CA_KEY_PASS="$2"; shift 2 ;;
+        --ca-key-to-stick) CA_KEY_TO_STICK=true; shift ;;
+        --no-kubeadm-ca) KUBEADM_CA=false; shift ;;
+        --trust-cert)  TRUST_CERTS+=("$2"); shift 2 ;;
         --keys-src)    KEYS_SRC="$2"; shift 2 ;;
         --registry-pub) REGISTRY_PUB_FILE="$2"; shift 2 ;;   # Layer-B: baked verifying key (mesh-extension role)
         --vpn-src)     VPN_SRC="$2"; shift 2 ;;               # egress-VPN: provider .conf/.ovpn to stage (own domain)
@@ -268,6 +293,31 @@ done
 for t in openssl ssh-keygen python3; do
     command -v "$t" >/dev/null || { echo "ERROR: missing tool: $t" >&2; exit 1; }
 done
+
+# ── Domain CA trust certificates: check BEFORE anything is built ───────────────
+# Each --trust-cert NAME=FILE must name a public certificate and nothing else.
+_TRUST_NAME_RE='^[a-z0-9]([a-z0-9.-]{0,120}[a-z0-9])?$'
+for _tc in "${TRUST_CERTS[@]}"; do
+    _tn="${_tc%%=*}"; _tf="${_tc#*=}"
+    if [ "${_tn}" = "${_tc}" ] || [ -z "${_tf}" ]; then
+        echo "ERROR: --trust-cert takes NAME=FILE (got '${_tc}')" >&2; exit 1
+    fi
+    [[ "${_tn}" =~ ${_TRUST_NAME_RE} ]] \
+        || { echo "ERROR: --trust-cert name '${_tn}' must be lower-case letters, digits, '.' and '-'" >&2; exit 1; }
+    [ "${_tn}" != "cluster-ca" ] \
+        || { echo "ERROR: --trust-cert name 'cluster-ca' is reserved (use --ca-cert)" >&2; exit 1; }
+    [ -r "${_tf}" ] || { echo "ERROR: --trust-cert file not readable: ${_tf}" >&2; exit 1; }
+    # grep -a: a NUL byte must not make grep skip the file and report "no match".
+    if grep -a -- 'PRIVATE KEY-----' "${_tf}" >/dev/null; then
+        echo "ERROR: --trust-cert ${_tn}: ${_tf} holds a PRIVATE KEY; only public certificates go on every stick" >&2
+        exit 1
+    fi
+    openssl x509 -in "${_tf}" -noout 2>/dev/null \
+        || { echo "ERROR: --trust-cert ${_tn}: ${_tf} is not a PEM X.509 certificate" >&2; exit 1; }
+done
+if [ "${CA_KEY_TO_STICK}" = true ] && { [ -z "${CA_CERT}" ] || [ -z "${CA_KEY}" ]; }; then
+    echo "ERROR: --ca-key-to-stick needs --ca-cert and --ca-key" >&2; exit 1
+fi
 [ -d "${TEMPLATE}" ] || { echo "ERROR: template not found: ${TEMPLATE}" >&2; exit 1; }
 
 # ── Escrow-clobber guard (defense-in-depth) ─────────────────────────────────────
@@ -1052,7 +1102,27 @@ if [ "${ROLE}" = "pki" ]; then
     # are present in /etc/kubernetes/pki BEFORE `kubeadm init`; keys-provision
     # copies kubernetes/pki/* there at first boot. Guarded behind CA-provided;
     # without it the operator-generated kubeadm certs path is unchanged.
-    if [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ]; then
+    if [ "${CA_KEY_TO_STICK}" = true ]; then
+        # Vault pki_int's signing CA: provision_vault (keys-provision) imports
+        # certs/cluster-ca.{crt,key} only when BOTH are on the stick. Written
+        # decrypted (Vault's TLS Secret needs it so), never via argv, 0600.
+        echo "==> Writing the provided CA key to the pki stick for Vault (certs/cluster-ca.key)"
+        ( umask 077
+          openssl pkey -in "${CA_KEY}" ${CA_KEY_PASS:+-passin env:CA_KEY_PASS} \
+              -out "${OUT_DIR}/certs/cluster-ca.key" 2>/dev/null ) \
+            || { echo "ERROR: failed to read the CA key for the pki stick" >&2; exit 1; }
+        chmod 0600 "${OUT_DIR}/certs/cluster-ca.key" 2>/dev/null || true
+        _ca_pub="$(openssl x509 -in "${OUT_DIR}/certs/cluster-ca.crt" -noout -pubkey 2>/dev/null | openssl dgst -sha256 2>/dev/null)"
+        _key_pub="$(openssl pkey -in "${OUT_DIR}/certs/cluster-ca.key" -pubout 2>/dev/null | openssl dgst -sha256 2>/dev/null)"
+        if [ -z "${_ca_pub}" ] || [ "${_ca_pub}" != "${_key_pub}" ]; then
+            rm -f "${OUT_DIR}/certs/cluster-ca.key"
+            echo "ERROR: the CA key does not match certs/cluster-ca.crt; removed it from the stick" >&2
+            exit 1
+        fi
+    fi
+    if [ "${KUBEADM_CA}" = false ] && [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ]; then
+        echo "==> kubeadm keeps its own CA (--no-kubeadm-ca): kubernetes/pki/ca.* not seeded"
+    elif [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ]; then
         echo "==> Seeding the provided CA as the kubeadm control-plane CA (kubernetes/pki/ca.{crt,key})"
         mkdir -p "${OUT_DIR}/kubernetes/pki"
         cat "${CA_CERT}" > "${OUT_DIR}/kubernetes/pki/ca.crt"
@@ -1069,9 +1139,48 @@ if [ "${ROLE}" = "pki" ]; then
         echo "    kubeadm will sign control-plane certs off this CA (external-CA mode)."
     fi
 else
-    echo "  (worker) copy the cluster CA + truststore from the pki node:"
-    echo "    pki:${OUT_DIR}/certs/cluster-ca.crt        -> certs/cluster-ca.crt"
-    echo "    pki:${OUT_DIR}/keystores/truststore.jks    -> keystores/truststore.jks"
+    if [ "${CA_KEY_TO_STICK}" = true ]; then
+        echo "ERROR: --ca-key-to-stick is for --role pki only (a ${ROLE} stick never carries the CA key)" >&2
+        exit 1
+    fi
+    if [ -n "${CA_CERT}" ]; then
+        # The cluster CA CERTIFICATE on a worker stick: openssl x509 re-encodes the
+        # certificate alone, so nothing else in CA_CERT can reach this stick.
+        mkdir -p "${OUT_DIR}/certs"
+        openssl x509 -in "${CA_CERT}" -out "${OUT_DIR}/certs/cluster-ca.crt" 2>/dev/null \
+            || { echo "ERROR: CA cert is not a valid PEM X.509 certificate: ${CA_CERT}" >&2; exit 1; }
+        echo "  (worker) certs/cluster-ca.crt written from the provided CA certificate"
+        [ -z "${CA_KEY}" ] || echo "  (worker) the CA key is NOT written to a ${ROLE} stick (pki only)" >&2
+        echo "  (worker) copy the truststore from the pki node if this node runs Java services:"
+        echo "    pki:${OUT_DIR}/keystores/truststore.jks    -> keystores/truststore.jks"
+    else
+        echo "  (worker) copy the cluster CA + truststore from the pki node:"
+        echo "    pki:${OUT_DIR}/certs/cluster-ca.crt        -> certs/cluster-ca.crt"
+        echo "    pki:${OUT_DIR}/keystores/truststore.jks    -> keystores/truststore.jks"
+    fi
+fi
+
+# ── Domain CA trust certificates (PUBLIC; every profile) ───────────────────────
+for _tc in "${TRUST_CERTS[@]}"; do
+    _tn="${_tc%%=*}"; _tf="${_tc#*=}"
+    mkdir -p "${OUT_DIR}/certs"
+    openssl x509 -in "${_tf}" -out "${OUT_DIR}/certs/${_tn}.crt" 2>/dev/null \
+        || { echo "ERROR: --trust-cert ${_tn}: cannot write certs/${_tn}.crt" >&2; exit 1; }
+    echo "  certs/${_tn}.crt (trusted on this node)"
+done
+
+# ── Placement guard: only the pki stick may carry a CA private key ─────────────
+# certs/ and kubernetes/pki/ are copied onto the node (/etc/ssl/keys,
+# /etc/kubernetes/pki); a worker needs no private key in either.
+if [ "${ROLE}" != "pki" ]; then
+    for _d in certs kubernetes/pki; do
+        [ -d "${OUT_DIR}/${_d}" ] || continue
+        if grep -rla -- 'PRIVATE KEY-----' "${OUT_DIR}/${_d}" >/dev/null; then
+            echo "ERROR: a private key landed in ${_d}/ on a ${ROLE} stick; only the pki stick may carry a CA key:" >&2
+            grep -rla -- 'PRIVATE KEY-----' "${OUT_DIR}/${_d}" >&2 || true
+            exit 1
+        fi
+    done
 fi
 
 echo

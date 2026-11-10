@@ -535,6 +535,16 @@ jobs:
         run: |
           flatpak install --user -y flathub org.kde.Platform//6.11 org.kde.Sdk//6.11
 
+      - name: Write the generator seed the bundle carries
+        # The manifest's two `type: file` sources: a `git archive` of this tag's whole
+        # generator tree and its per-file sha256 list (the Studio places it under the
+        # user's home on first start; core/managed_generator.py). Without this step
+        # flatpak-builder stops at the missing source, which is the point: the 0.4.1
+        # bundle shipped without the scripts the Studio runs.
+        run: |
+          python3 studio/packaging/make_generator_seed.py --force \
+            --out studio/packaging/flatpak/generator-seed
+
       - name: Build the Flatpak
         working-directory: studio/packaging/flatpak
         run: |
@@ -582,6 +592,26 @@ jobs:
             exit 1
           fi
           head -c 400 specs.json; echo
+
+      - name: Smoke-test the bundle (--self-check, the generator tree it carries)
+        working-directory: studio/packaging/flatpak
+        # --print-specs never touches the generator tree, so it passed on bundles that
+        # carried none. --self-check places the bundled tree under the runner's home,
+        # checks every generator path and make target the Studio's own source names
+        # (core/generator_refs.py) and runs `bash -n` on the shipped scripts it names.
+        # Its host-bridge line is reported, not counted: a hosted runner has no session
+        # helper for flatpak-spawn --host.
+        run: |
+          set +e
+          flatpak run --command=hugmesh-studio org.hugmesh.ImageStudio \
+            --self-check --json > self-check.json
+          rc=$?
+          set -e
+          cat self-check.json
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::--self-check failed inside the installed x86_64 bundle (exit $rc)"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
@@ -643,6 +673,16 @@ jobs:
         run: |
           flatpak install --user -y flathub org.kde.Platform//6.11 org.kde.Sdk//6.11
 
+      - name: Write the generator seed the bundle carries
+        # The manifest's two `type: file` sources: a `git archive` of this tag's whole
+        # generator tree and its per-file sha256 list (the Studio places it under the
+        # user's home on first start; core/managed_generator.py). Without this step
+        # flatpak-builder stops at the missing source, which is the point: the 0.4.1
+        # bundle shipped without the scripts the Studio runs.
+        run: |
+          python3 studio/packaging/make_generator_seed.py --force \
+            --out studio/packaging/flatpak/generator-seed
+
       - name: Build the Flatpak
         working-directory: studio/packaging/flatpak
         run: |
@@ -668,6 +708,26 @@ jobs:
             exit 1
           fi
           head -c 400 specs.json; echo
+
+      - name: Smoke-test the bundle (--self-check, the generator tree it carries)
+        working-directory: studio/packaging/flatpak
+        # --print-specs never touches the generator tree, so it passed on bundles that
+        # carried none. --self-check places the bundled tree under the runner's home,
+        # checks every generator path and make target the Studio's own source names
+        # (core/generator_refs.py) and runs `bash -n` on the shipped scripts it names.
+        # Its host-bridge line is reported, not counted: a hosted runner has no session
+        # helper for flatpak-spawn --host.
+        run: |
+          set +e
+          flatpak run --command=hugmesh-studio org.hugmesh.ImageStudio \
+            --self-check --json > self-check.json
+          rc=$?
+          set -e
+          cat self-check.json
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::--self-check failed inside the installed $ARCH bundle (exit $rc)"
+            exit 1
+          fi
 
       - name: Smoke-test the bundle (Qt starts offscreen on the aarch64 wheels)
         working-directory: studio/packaging/flatpak

@@ -87,8 +87,9 @@ def test_down_message_on_windows_installed_and_docker_mode(monkeypatch):
 @pytest.mark.parametrize("installed", [False, True])
 def test_docker_mode_snapshot_on_windows_names_the_container(tmp_path, monkeypatch, installed):
     # Docker mode: the snapshot's host is the Studio's container, so neither installing
-    # nor starting Ollama for Windows is the fix, and the TUI/dock rewrite keeps it.
-    from hugmesh_studio.tui import local_ai as tui_lai
+    # nor starting Ollama for Windows is the fix, and what the TUI/dock show keeps it
+    # (both faces pass the read through odk.adjust_snapshot in Docker mode and rewrite
+    # nothing else).
     monkeypatch.setattr(lai.shutil, "which",
                         lambda name, *a, **k: "ollama" if installed else None)
     env = odk.assistant_env(odk.DOCKER, {lai.STATE_ENV: str(tmp_path / "lai")})
@@ -96,10 +97,12 @@ def test_docker_mode_snapshot_on_windows_names_the_container(tmp_path, monkeypat
     assert snap.host == odk.endpoint(odk.DOCKER, env)
     assert "Ollama container" in snap.fix and "Ollama for Windows" not in snap.fix
     assert "not installed" not in snap.problem and "container" in snap.problem
-    kept = tui_lai.windows_advice(snap.fix, odk.DOCKER, osname="nt")
-    assert "Ollama container" in kept and "Ollama for Windows" not in kept
     # same sentence as the not-answering message in that mode
     assert snap.fix in lai._down_message(env, osname="nt")
+    shown = odk.adjust_snapshot(snap, odk.DOCKER)
+    assert "Docker Ollama" in shown.problem and "not installed" not in shown.problem
+    assert "container" in shown.fix and "Start local assistant" in shown.fix
+    assert "Ollama for Windows" not in shown.fix and "local-ai.sh" not in shown.fix
 
 
 def test_docker_mode_snapshot_on_linux_is_unchanged(tmp_path, monkeypatch):
@@ -173,6 +176,9 @@ def test_utf8_stdio_makes_a_cp1252_stream_utf8_on_windows_only():
 def test_print_command_with_a_non_cp1252_path_prints_it_not_a_false_bad_input(tmp_path, monkeypatch):
     gen = tmp_path / "Łukasz Иван gen"
     gen.mkdir()
+    # --print-command now refuses a folder that is no checkout (it printed a command
+    # that could not run); the marker makes this one a checkout.
+    (gen / "build-x86-host-stage4.sh").write_text("#!/bin/bash\n", encoding="utf-8")
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
     stdout = _cp1252()
     monkeypatch.setattr(sys, "stdout", stdout)

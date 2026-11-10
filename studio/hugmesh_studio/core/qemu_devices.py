@@ -86,6 +86,7 @@ from hugmesh_studio.core.cloud_deploy import TERMINALS
 # live, and a second spelling of "out/sessions" would go stale the day the builders move.
 from hugmesh_studio.core.qemu_tests import (DEFAULT_WORK_SUBDIR, RUNNER_SCRIPT,
                                             SESSIONS_SUBDIR)
+from hugmesh_studio.core import session_locations
 
 #: The SPICE viewers ``display_argv`` can open, most-preferred first — kept here,
 #: beside the TERMINALS import, for the same reason that list is imported rather
@@ -974,8 +975,9 @@ def save_target_refusal(target: str, *, generator_dir: str = "",
     into an artifacts dir leaves ``discover_rows`` returning only the real image. This
     is defence in depth around a shared directory, not a fix for a live path.
 
-    Two directories are checked because there are two ways to name that tree: the
-    ``out/sessions`` root, which is where the builders always write, and an explicit
+    Two kinds of directory are checked because there are two ways to name that tree:
+    every ``<out>/sessions`` root a build writes to (``<generator>/out`` and each
+    output folder core/session_locations.py knows), and an explicit
     ``--artifacts DIR`` the run may have been started with, which can be anywhere.
     Pass whichever the caller knows; both are optional and independent.
 
@@ -1001,10 +1003,19 @@ def save_target_refusal(target: str, *, generator_dir: str = "",
         return (f"refusing to save into the artifacts directory {artifacts_dir}: it "
                 "holds the golden images every run and every session boots from")
     if generator_dir:
-        sessions_root = os.path.join(generator_dir, SESSIONS_SUBDIR)
-        if _within(target, sessions_root):
-            return (f"refusing to save into {sessions_root}: it holds the golden "
-                    "images every run and every session boots from")
+        # EVERY sessions tree, not only <generator>/out/sessions: a build pointed at
+        # another output folder writes its goldens to <that folder>/sessions, and a
+        # guard that only knew the default root got silently narrower for exactly
+        # those sessions. A state dir this process cannot resolve still leaves the
+        # default root protected.
+        try:
+            roots = session_locations.sessions_dirs(generator_dir)
+        except RuntimeError:
+            roots = []
+        for sessions_root in [os.path.join(generator_dir, SESSIONS_SUBDIR), *roots]:
+            if _within(target, sessions_root):
+                return (f"refusing to save into {sessions_root}: it holds the golden "
+                        "images every run and every session boots from")
     if work_dir:
         # PARITY WITH THE RUNNER. run-qemu-docker.sh's save_check_target refuses all
         # of these, and this module is what the GUI checks BEFORE spawning it — so
