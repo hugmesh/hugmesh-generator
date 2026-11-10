@@ -39,6 +39,10 @@
 #     files only (no DNS, registrar, Cloudflare or ACME call), the domain must be a
 #     reserved name (*.invalid, *.test, *.example) and the ingress address must be in
 #     an RFC 5737 documentation range, so nothing this lane writes could ever resolve.
+#     Inside the guest the marker wakes exactly one actor, hugmesh-firewall-reconcile
+#     (a local nft table). hugmesh-go-live-reconcile runs on its own 60 s cron
+#     whether or not this lane runs, talks only to the in-cluster BFF named in
+#     node.env, and is neither triggered by nor relied on here.
 #   * It never answers a prompt it did not expect, and never answers one for the
 #     onion: if the driver ever asks to commit tor-onion this lane types 'n'.
 #   * It never leaves the device public. Once a commit has been typed, an EXIT trap
