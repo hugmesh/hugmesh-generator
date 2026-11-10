@@ -768,7 +768,7 @@ def test_rescan_after_a_stop_and_port_reuse_refuses_the_stale_pick(emu_wiz, gues
     assert not pre.isComplete()
     # and the button a person presses follows: Next is greyed, Next does not move
     from hugmesh_studio.gui.qt import QtWidgets
-    assert not emu_wiz.button(QtWidgets.QWizard.WizardButton.NextButton).isEnabled()
+    assert not _next_enabled(emu_wiz)
 
 
 def test_picking_a_row_again_takes_the_record_as_it_is_now(emu_wiz, guest):
@@ -793,6 +793,51 @@ def test_filling_the_picker_rebinds_without_a_rescan(emu_wiz, guest):
     pre.initializePage()
     assert emu_wiz.driver.target.ssh_port == 22999
     assert pre._rows[pre.target_pick.currentIndex()].ssh_port == 22999
+
+
+def _next_enabled(w) -> bool:
+    from hugmesh_studio.gui.qt import QtWidgets
+    return w.button(QtWidgets.QWizard.WizardButton.NextButton).isEnabled()
+
+
+def test_back_to_preflight_rebinds_a_restarted_device(emu_wiz, guest):
+    """QWizard's Back never calls initializePage on the step it returns to. Coming
+    Back to Preflight after the device restarted must still re-bind it — nobody has
+    to know to click Re-scan — and Next then leads on with the NEW boot."""
+    advance_to(emu_wiz, golive_mod.GoLiveExposurePage)
+    assert emu_wiz.target.ssh_port == 22401
+    _restart(guest)
+    pre = back_to(emu_wiz, golive_mod.GoLivePreflightPage)      # real Back, nothing else
+    assert emu_wiz.target.ssh_port == 22999
+    assert emu_wiz.driver.target.ssh_port == 22999
+    assert emu_wiz.target.started_at == "2026-11-10T09:00:00Z"
+    assert pre._rows[pre.target_pick.currentIndex()].ssh_port == 22999
+    assert emu_wiz.stale_binding() == ""
+    assert "restarted" not in pre.status.toPlainText()
+    assert pre.isComplete()
+    assert _next_enabled(emu_wiz)
+
+
+def test_back_to_preflight_after_a_stop_shuts_next(emu_wiz, guest):
+    """Back after the picked device stopped (and its port went to another device):
+    the step says so and Next stays shut — never the old 'still running' binding."""
+    advance_to(emu_wiz, golive_mod.GoLiveExposurePage)
+    _restart(guest, port=22401, started_at="2026-11-09T20:00:00Z", state="stopped")
+    _restart(guest, label="rpi5/be", role="backend", port=22401)
+    pre = back_to(emu_wiz, golive_mod.GoLivePreflightPage)
+    assert not pre.isComplete()
+    assert not _next_enabled(emu_wiz)
+    assert pre.target_problem.isVisible() and "rpi5/pki" in pre.target_problem.text()
+
+
+def test_preflight_next_is_shut_while_the_pick_is_stale(emu_wiz, guest):
+    """The backstop: whatever path left the picked binding stale (no re-fill ran),
+    Preflight's Next is shut until it is re-bound."""
+    pre = advance_to(emu_wiz, golive_mod.GoLivePreflightPage)
+    assert pre.isComplete()
+    _restart(guest)
+    assert emu_wiz.stale_binding()
+    assert not pre.isComplete()
 
 
 def test_the_flip_refuses_a_device_that_restarted_since_it_was_picked(emu_wiz, guest,

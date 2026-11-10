@@ -276,9 +276,21 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
         js = self.wiz.journal_line()
         self.status.setPlainText(text + (f"\n\n{js}" if js else ""))
 
+    def revisit(self) -> None:
+        """Back to this step from a later one. QWizard's Back never calls
+        initializePage on the step it returns to, so the picked device would keep the
+        binding it was picked with: re-bind it (a restart's new port and boot, or a
+        stop) and re-ask its status, exactly as a fill does."""
+        self._fill_targets()
+        self._refresh()
+
     def isComplete(self):
         # A target that cannot be used stops here, with its sentence above.
         if self.wiz.target_refusal(self.wiz.target):
+            return False
+        # The picked device changed since it was picked (a restart, a stop) and no
+        # fill has re-bound it yet: Next would lead on with the OLD port and boot.
+        if self.wiz.stale_binding():
             return False
         # Native Windows: status_text() is the WSL2 sentence, but the providers are read
         # from the registry, so Next leads to the real provider list and a plan preview;
@@ -1654,10 +1666,28 @@ class GoLiveWizard(QtWidgets.QWizard):
         for p in self._pages:
             self.addPage(p)
         self._page_ids = dict(zip(GOLIVE_PAGE_SLUGS, self.pageIds()))
+        #: the step shown before the current one (-1: none yet) — tells a Back onto
+        #: Preflight from its first showing (which initializePage already filled)
+        self._shown_id = -1
+        self.currentIdChanged.connect(self._page_changed)
         # AFTER the pages: the exposure models are the checkout registry's (this
         # host's driver), never an ssh round trip made while the window is built
         if target:
             self.preselect_target(target)
+
+    def _page_changed(self, page_id: int) -> None:
+        """Arriving on Preflight from a LATER step is a Back: re-bind the picked device
+        there (GoLivePreflightPage.revisit), since QWizard does not re-initialise it."""
+        before, self._shown_id = self._shown_id, page_id
+        pre_id = self._page_ids.get("preflight")
+        if page_id != pre_id or before in (-1, pre_id):
+            return
+        try:                                   # PyQt6 qFatals on a slot raise
+            self.page(pre_id).revisit()
+        except Exception as exc:               # noqa: BLE001 — said inline instead
+            pre = self.page(pre_id)
+            pre.target_problem.setText(f"Could not re-read the target: {exc}")
+            pre.target_problem.setVisible(True)
 
     # ── the TARGET (core.golive_target) ─────────────────────────────────────────────
     def target_rows(self) -> list:
