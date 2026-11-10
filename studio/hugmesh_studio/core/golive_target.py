@@ -698,8 +698,16 @@ def journal_status(work_dir: str, target: GoLiveTarget) -> str:
     j = read_journal(work_dir, target.label)
     if not j:
         return ""
-    what = (f"last {j.get('action', '?')} from this host: {j.get('provider') or '-'} "
-            f"{j.get('domain') or ''} at {j.get('at', '?')}").replace("  ", " ")
+    act = j.get("action", "?")
+    if j.get("confirmed") is None:
+        # The GUI's terminal is detached: this host knows the commit was LAUNCHED, not
+        # whether the operator answered y on the device's TTY.
+        head = (f"{act} launched from this host (the confirmation happened on the "
+                "device's TTY — its status says whether it went through)")
+    else:
+        head = f"last {act} from this host" + ("" if j["confirmed"] else " (not confirmed)")
+    what = (f"{head}: {j.get('provider') or '-'} {j.get('domain') or ''} at "
+            f"{j.get('at', '?')}").replace("  ", " ")
     if reset_by_restart(j, target):
         return (what + f" — reset by a restart (the device booted again at "
                 f"{target.started_at or '?'}, INTERNAL)")

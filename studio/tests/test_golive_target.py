@@ -467,6 +467,10 @@ def test_journal_round_trip_has_no_secret_and_detects_a_restart(tmp_path):
     assert gt.reset_by_restart(j, rebooted)
     assert "reset by a restart" in gt.journal_status(str(tmp_path), rebooted)
     assert not gt.reset_by_restart(None, rebooted)
+    assert gt.journal_status(str(tmp_path), t).startswith("last commit from this host:")
+    gt.write_journal(t, "commit", "byo-domain", "example.invalid")      # GUI: launched
+    said = gt.journal_status(str(tmp_path), t)
+    assert said.startswith("commit launched from this host") and "device's TTY" in said
     assert not gt.reset_by_restart(j, gt.local_target())
 
 
