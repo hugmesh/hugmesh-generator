@@ -1111,7 +1111,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # gated suite, tests/scripts/test-fe-template-route-parity.sh (shell-suites.yml node job)
 # = 233 of 275, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree;
 # ungated SET stays 42.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-233}"
+# 233 -> 235 (denominator 275 -> 277) on 2026-11-10 for fix/x86-udev-door-20261110, which adds
+# TWO gated suites, both in shell-suites.yml's alpine job: tests/qemu/boot_stall_test.sh and
+# tests/scripts/test-udev-coldplug-guard.sh. MEASURED by running this file with
+# GUARD_PREMERGE=0 on that branch (base origin/main fc769fe2): '235 of 277 suites are named by
+# a pull_request-triggered workflow'; with only the two SUITES lines removed: '233 of 277' and
+# checks 3 and 7 red naming both, so the +2/+2 is these two suites and nothing else.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-235}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

@@ -1,0 +1,128 @@
+#!/bin/sh
+# udev-coldplug-guard — re-run a udev coldplug that udevd never heard.
+#
+# Called once per boot by /etc/init.d/udev-coldplug-guard (sysinit runlevel,
+# after udev-trigger, before anything that needs a populated udev database).
+#
+# THE RACE. udev-init-scripts' /etc/init.d/udev starts systemd-udevd with
+# command_background=yes, so start-stop-daemon returns the moment udevd is
+# exec'd. udev-trigger (need udev, nothing else) then runs
+# `udevadm trigger --action=add` at once, and udevadm trigger does not wait for
+# udevd (its --ping is opt-in and the init script does not pass it). In
+# systemd-udevd 260 the kernel uevent netlink socket is bound late: run_udevd()
+# does mac_init() (the SELinux label database), five dlopen()s and only then
+# manager_main(), which sets up the event loop, the control socket and the
+# varlink server BEFORE manager_start_device_monitor() binds the netlink socket.
+# Kernel uevents are netlink multicast, which nobody buffers for a socket that
+# does not exist yet: every "add" written before that bind is gone for good.
+#
+# What a lost coldplug looks like (measured, x86 laptop image, 2026-11-10 display
+# door boot 1 of 2): 382 devices in sysfs, 36 entries in /run/udev/data, zero
+# G: (tag) lines, eth0 never renamed and carrying only the kernel's own
+# properties, /dev/dri/card0 left 0600 root:root. With no "seat" tag elogind's
+# seat0 has no devices (CanGraphical=no), lightdm never starts X, and
+# NetworkManager will not manage a NIC udev never initialised, so the guest has
+# no network and its ssh never answers. All of it was in place at 12:17, two
+# minutes before keys-provision ran at all.
+#
+# WHAT THIS DOES.
+#   1. `udevadm control --ping`: udevd answers a ping only from inside its event
+#      loop, which it enters after the netlink bind. A reply means "udevd is
+#      listening now", which is exactly the barrier udev-trigger lacks.
+#   2. `udevadm settle`, then probe the coldplug canaries: every physical NIC
+#      (/sys/class/net/*/device) and every DRM card node (/sys/class/drm/card*
+#      with a dev file). A canary is initialised when udevadm reports
+#      USEC_INITIALIZED for it; a card must also carry the "seat" tag.
+#   3. Only if a canary is missing: trigger the whole coldplug again
+#      (subsystems, then devices, --action=add, the same two calls udev-trigger
+#      makes) and settle. A second coldplug re-runs RUN+= rules, so it is never
+#      done on a healthy boot.
+#   4. One console line either way. The QEMU runner greps the FAIL line to stop
+#      waiting for an ssh that cannot come (tests/qemu/docker-entrypoint.sh).
+#
+# Exit 0 = every canary initialised (first time, or after the re-trigger).
+# Exit 1 = still missing after the re-trigger: seat0 will have no devices.
+#
+# The same plain udevadm calls udev-trigger makes, so the SELinux shape is the
+# one udev-trigger already has (initrc_t is files_unconfined_type; udevadm
+# transitions to its own domain). Overridable for the hermetic test only:
+#   UCG_SYSFS  sysfs root (default /sys)   UCG_UDEVADM  udevadm binary
+#   UCG_PING_TIMEOUT / UCG_SETTLE_TIMEOUT  seconds (defaults 30 / 60)
+
+set -u
+
+SYSFS="${UCG_SYSFS:-/sys}"
+UDEVADM="${UCG_UDEVADM:-udevadm}"
+PING_TIMEOUT="${UCG_PING_TIMEOUT:-30}"
+SETTLE_TIMEOUT="${UCG_SETTLE_TIMEOUT:-60}"
+TAG="udev-coldplug-guard"
+
+say() { printf '%s: %s\n' "${TAG}" "$*"; }
+
+# canaries — "KIND PATH" per line. net = a NIC backed by a real device (virtual
+# interfaces such as lo/dummy0/sit0 are created by software and prove nothing
+# about the coldplug); seat = a DRM card node (connectors like card0-Virtual-1
+# have no dev file and are skipped).
+canaries() {
+    for _d in "${SYSFS}"/class/net/*; do
+        [ -e "${_d}/device" ] || continue
+        printf 'net %s\n' "${_d}"
+    done
+    for _d in "${SYSFS}"/class/drm/card*; do
+        [ -f "${_d}/dev" ] || continue
+        printf 'seat %s\n' "${_d}"
+    done
+}
+
+# has_line TEXT PREFIX SUBSTRING — some line of TEXT starts with PREFIX and
+# contains SUBSTRING after it. Line-wise on purpose: a substring match over the
+# whole property dump could pair TAGS= on one line with :seat: on another.
+has_line() {
+    printf '%s\n' "$1" | {
+        while IFS= read -r _l; do
+            case "${_l}" in "$2"*"$3"*) exit 0 ;; esac
+        done
+        exit 1
+    }
+}
+
+# missing — print every canary udevd never processed (or, for a card, never
+# tagged for a seat), one per line. Empty output = coldplug reached udevd.
+missing() {
+    canaries | while read -r _kind _path; do
+        _props="$("${UDEVADM}" info --query=property --path="${_path}" 2>/dev/null)" || _props=""
+        _name="${_path#"${SYSFS}"/class/}"
+        if ! has_line "${_props}" "USEC_INITIALIZED=" ""; then
+            printf '%s\n' "${_name}"
+        elif [ "${_kind}" = seat ] && ! has_line "${_props}" "TAGS=" ":seat:"; then
+            printf '%s\n' "${_name}(no seat tag)"
+        fi
+    done
+}
+
+settle() { "${UDEVADM}" settle --timeout="${SETTLE_TIMEOUT}" >/dev/null 2>&1; }
+
+if ! "${UDEVADM}" control --ping --timeout="${PING_TIMEOUT}" >/dev/null 2>&1; then
+    say "udevd did not answer a ping within ${PING_TIMEOUT}s"
+fi
+settle || say "udevadm settle timed out after ${SETTLE_TIMEOUT}s"
+
+_lost="$(missing)"
+if [ -z "${_lost}" ]; then
+    say "ok ($(canaries | wc -l | tr -d ' ') coldplug canaries initialised)"
+    exit 0
+fi
+
+_n="$(printf '%s\n' "${_lost}" | wc -l | tr -d ' ')"
+say "LOST coldplug: ${_n} canary device(s) never reached udevd: $(printf '%s' "${_lost}" | tr '\n' ' '); re-triggering"
+"${UDEVADM}" trigger --type=subsystems --action=add >/dev/null 2>&1
+"${UDEVADM}" trigger --type=devices --action=add >/dev/null 2>&1
+settle || say "udevadm settle timed out after ${SETTLE_TIMEOUT}s"
+
+_lost="$(missing)"
+if [ -z "${_lost}" ]; then
+    say "RECOVERED: the re-trigger initialised every canary"
+    exit 0
+fi
+say "FAIL: still uninitialised after the re-trigger: $(printf '%s' "${_lost}" | tr '\n' ' ')(seat0 will have no devices and NetworkManager will not manage the NIC)"
+exit 1

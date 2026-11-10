@@ -367,6 +367,15 @@ jobs:
           # 2026-11-04, in alpine:3 with this job's apk set (checkout copied in;
           # busybox grep/sed/diff/cmp): 134 passed / 0 failed. Mutation-tested
           # on a Gentoo host: 23 planted defects, 23 caught.
+          # tests/qemu/boot_stall_test.sh and tests/scripts/test-udev-coldplug-guard.sh
+          # (2026-11-10): the lost-udev-coldplug fix. The first drives the REAL
+          # ssh-wait loop of docker-entrypoint.sh (fake ssh, fake clock) over the
+          # captured consoles of a stalled and a healthy x86 display-door boot; the
+          # second runs specs/usr/libexec/udev-coldplug-guard under busybox sh against
+          # a fake sysfs + udevadm and executes the x86 build's sysinit wiring against
+          # a scratch sysroot. MEASURED, 2026-11-10, in alpine:3 with busybox grep:
+          # 25 passed / 0 failed and 44 passed / 0 failed. Mutation-tested on a Gentoo
+          # host: 19 planted defects, 19 caught.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
@@ -426,6 +435,7 @@ jobs:
             tests/qemu/qemu-e2e-lane_test.sh
             tests/qemu/display_door_test.sh
             tests/qemu/display_argv_test.sh
+            tests/qemu/boot_stall_test.sh
             tests/requested-atoms-resolvable.sh
             tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
             tests/scripts/test-anubis-env-gate.sh
@@ -505,6 +515,7 @@ jobs:
             tests/scripts/test-tools-path-lib.sh
             tests/scripts/test-tor-export-sync.sh
             tests/scripts/test-tor-node-contract.sh
+            tests/scripts/test-udev-coldplug-guard.sh
             tests/scripts/test-verify-artifact-neutrality-frite.sh
             tests/scripts/test-vm-display-guest.sh
             tests/scripts/test-virtual-display-kernel.sh

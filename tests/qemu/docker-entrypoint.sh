@@ -79,6 +79,11 @@ TIMEOUT="2400"
 # Wall clock for the POST-boot phase. ${TIMEOUT} only covers the ssh-wait loop;
 # see the timeout(1) wrapper on the assertion ssh below for why this exists.
 ASSERT_TIMEOUT="900"
+# How long the ssh wait keeps going once the guest console shows a login prompt.
+# Init has finished by then, and sshd starts before getty, so a guest that has a
+# login prompt and still no ssh after this long is not slow, it is stalled (see
+# boot_stall_check). 0 = off: wait the full --timeout, as before.
+BOOT_STALL_GRACE="300"
 SSH_PORT="2222"
 UI_PORT="8443"
 SSH_USER="tester"
@@ -218,6 +223,10 @@ Usage: docker run --rm --privileged --device /dev/kvm \\
                    wall clock for the in-guest assertion ssh (SIGTERM, then
                    SIGKILL 30s later). Used verbatim — never clamped.
                    Default: ${ASSERT_TIMEOUT}
+  --boot-stall-grace SEC
+                   stop waiting for ssh this many seconds after the guest
+                   console shows a login prompt, and FAIL the row as a stalled
+                   boot. 0 = wait the full --timeout. Default: ${BOOT_STALL_GRACE}
   --label NAME     result label (default: <platform>/<role>)
   --keep           keep the scratch run dir
   -h, --help
@@ -286,6 +295,7 @@ while [[ $# -gt 0 ]]; do
         --smp)      SMP="$2"; shift 2 ;;
         --timeout)  TIMEOUT="$2"; shift 2 ;;
         --assert-timeout) ASSERT_TIMEOUT="$2"; shift 2 ;;
+        --boot-stall-grace) BOOT_STALL_GRACE="$2"; shift 2 ;;
         --label)    LABEL="$2"; shift 2 ;;
         --keep)     KEEP=true; shift ;;
         --keep-alive)    KEEP_ALIVE=true; shift ;;
@@ -421,6 +431,52 @@ json_str() {
         s="${s//"${c}"/${u}}"
     done
     printf '"%s"' "${s}"
+}
+
+# boot_stall_check CONSOLE NOW — called once per ssh-wait iteration. Returns 0 and
+# sets BOOT_STALL_REASON when the guest console already proves the ssh wait is
+# hopeless; returns 1 (keep waiting) otherwise. Two signals, both read from the
+# console FILE (grep's file argument, never a pipe: these logs are far past the
+# size at which `| grep -q` under pipefail turns a match into a failure):
+#   1. The guest's own verdict. /usr/libexec/udev-coldplug-guard prints
+#      "udev-coldplug-guard: FAIL" when udev's coldplug never reached udevd and
+#      the one in-guest re-trigger did not recover it. seat0 then has no
+#      devices (no X, no greeter) and NetworkManager will not manage the NIC
+#      (no ssh), so the row fails the moment that line appears.
+#   2. A login prompt with no ssh behind it. getty is spawned after the default
+#      runlevel and sshd starts inside it, so once "<host> login:" is on the
+#      console init is over. If ssh still has not answered BOOT_STALL_GRACE
+#      seconds later the row fails, naming what the console shows. This one
+#      covers images built before the guard existed: on 2026-11-10 an x86
+#      display-door boot lost its coldplug, printed its login prompt at 12:20,
+#      and the runner waited out the full 2400s for an ssh that could not come.
+# "NetworkManager has started, but is inactive" is reported but is NOT a signal
+# on its own: OpenRC prints it whenever NM is merely slow to connect, and NM
+# promotes itself to started once a connection lands.
+# State (first time a login prompt was seen) lives in BOOT_STALL_LOGIN_AT, so call
+# this directly, never in $( ): a subshell would forget it every iteration.
+BOOT_STALL_REASON=""
+BOOT_STALL_LOGIN_AT=""
+boot_stall_check() {
+    local console="$1" now="$2"
+    local nm=no lost=no waited=0
+    BOOT_STALL_REASON=""
+    [ -f "${console}" ] || return 1
+    if grep -aq 'udev-coldplug-guard: FAIL' "${console}"; then
+        BOOT_STALL_REASON="udev coldplug never reached udevd and the in-guest re-trigger did not recover it: seat0 has no devices (no X, no greeter) and NetworkManager cannot manage the NIC, so ssh will never answer (console: 'udev-coldplug-guard: FAIL')"
+        return 0
+    fi
+    [ "${BOOT_STALL_GRACE:-0}" -gt 0 ] || return 1
+    if [ -z "${BOOT_STALL_LOGIN_AT}" ]; then
+        grep -aqE '^[A-Za-z0-9._-]+ login:[[:space:]]*$' "${console}" || return 1
+        BOOT_STALL_LOGIN_AT="${now}"
+    fi
+    waited=$((now - BOOT_STALL_LOGIN_AT))
+    [ "${waited}" -ge "${BOOT_STALL_GRACE}" ] || return 1
+    grep -aq 'NetworkManager has started, but is inactive' "${console}" && nm=yes
+    grep -aq 'udev-coldplug-guard: LOST' "${console}" && lost=yes
+    BOOT_STALL_REASON="boot stalled: the guest console has shown a login prompt for ${waited}s (grace ${BOOT_STALL_GRACE}s) and ssh never answered (NetworkManager inactive: ${nm}; udev coldplug lost: ${lost}). On a desktop row this is the lost-coldplug signature: seat0 without devices, no X, no network"
+    return 0
 }
 
 # emit_result STATUS DETAIL [PASS] [FAIL] — one machine-readable row per run, so
@@ -611,6 +667,8 @@ EOF
     || die "--timeout must be a whole number of seconds, got '${TIMEOUT}'"
 [[ "${ASSERT_TIMEOUT}" =~ ^[0-9]+$ ]] \
     || die "--assert-timeout must be a whole number of seconds, got '${ASSERT_TIMEOUT}'"
+[[ "${BOOT_STALL_GRACE}" =~ ^[0-9]+$ ]] \
+    || die "--boot-stall-grace must be a whole number of seconds, got '${BOOT_STALL_GRACE}'"
 
 # ssh_host_port is emitted as a BARE JSON number. Anything non-numeric makes the
 # whole record unparseable, and the Studio skips records it cannot parse — so a
@@ -1560,6 +1618,15 @@ while [ "${SECONDS}" -lt "${deadline}" ]; do
         warn "QEMU exited early"; break
     fi
     if ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" true 2>/dev/null; then up=true; break; fi
+    # Fail fast when the console already proves ssh cannot come (boot_stall_check):
+    # a lost udev coldplug used to cost the full ${TIMEOUT}s here.
+    if boot_stall_check "${CONSOLE}" "${SECONDS}"; then
+        warn "${BOOT_STALL_REASON}"
+        echo "----- last 80 lines of console -----"
+        tail -n 80 "${CONSOLE}" 2>/dev/null || true
+        emit_result FAIL "${BOOT_STALL_REASON}"
+        exit 1
+    fi
     # Background + wait, not a plain sleep: bash defers a trap until the
     # current FOREGROUND child returns, and 5s of deferral is half of docker
     # stop's grace window (see keepalive_wait below for the same pattern).
