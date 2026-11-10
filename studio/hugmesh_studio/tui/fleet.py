@@ -45,6 +45,8 @@ from ..core.config import Domain
 from ..core.platform_info import HostInfo
 from . import model
 from .domain_services_step import DomainServicesScreen
+from .nvd_step import SECRET_PROMPT, NvdCommands
+from .nvd_step import HELP as NVD_HELP
 from .superbrand_step import SuperbrandScreen, session_for
 
 __all__ = ["FleetScreen", "FLEET_KNOBS", "PREVIEW_HOST"]
@@ -82,6 +84,9 @@ class FleetScreen:
             on_back=lambda j: self._goto(j, "domains"),
             lane_note=FLEET_LANE_NOTE,
             brand_session_of=self.brand_session, route="fleet")
+        #: the NVD API key the pen-test's SCA step needs (the GUI's Pen-test harness
+        #: box): ``nvd`` commands on the options stage
+        self.nvd = NvdCommands()
         #: the superbrand step (#654, D8): the same drop-down and design as the window's
         #: Superbrand step, over the same session
         self.brand = SuperbrandScreen(
@@ -132,7 +137,13 @@ class FleetScreen:
     def enter(self, j) -> None:  # noqa: ARG002
         self.stage = "options"
 
+    def secret_input(self, j) -> bool:  # noqa: ARG002
+        """True while the next line is the hidden NVD key (``nvd set``)."""
+        return self.nvd.secret_input()
+
     def prompt(self, j) -> str:
+        if self.nvd.secret_input():
+            return SECRET_PROMPT
         if self.stage == "services":
             return self.services.prompt(j)
         if self.stage == "brand":
@@ -143,6 +154,9 @@ class FleetScreen:
         return getattr(self, f"_lines_{self.stage}")(j)
 
     def feed(self, j, line: str) -> None:
+        if self.nvd.secret_input():
+            self.nvd.feed_secret(j, line)
+            return
         getattr(self, f"_feed_{self.stage}")(j, line.strip())
 
     # ── options ─────────────────────────────────────────────────────────────────
@@ -159,9 +173,13 @@ class FleetScreen:
                        "pki/backend/frontend + x86 pki/backend/frontend/backend-gpu)")
         out += ["", "knobs: " + " ".join(FLEET_KNOBS), "",
                 # the GUI's note under its Tor checkbox — the same words here
-                "with_tor: " + WITH_TOR_NOTE, "",
-                "commands: set NAME VALUE (on/off for switches; - resets) · "
-                f"brand=choose or design the {plain_words.term('superbrand')} · Enter=continue to Domains"]
+                "with_tor: " + WITH_TOR_NOTE, ""]
+        if cfg.pentest or cfg.pentest_only:
+            # the GUI shows its NVD key box once a pen-test is ticked — the same block
+            out += ["pen-test SCA:"] + [f"  {ln}" for ln in NvdCommands.lines()[:-1]] + [""]
+        out += ["commands: set NAME VALUE (on/off for switches; - resets) · "
+                f"brand=choose or design the {plain_words.term('superbrand')} · Enter=continue to Domains",
+                "          " + NVD_HELP]
         return out
 
     def _feed_options(self, j, line: str) -> None:
@@ -170,6 +188,9 @@ class FleetScreen:
             return
         if line.lower() == "brand":
             self._goto(j, "brand")
+            return
+        if self.nvd.handles(line):
+            self.nvd.feed(j, line)
             return
         verb, _, rest = line.partition(" ")
         name, _, value = rest.strip().partition(" ")
@@ -301,6 +322,11 @@ class FleetScreen:
             cmd = self.command(j)
         except IdentityValidationError as e:
             cmd = f"INVALID: {e}"
+        cfg = self.config(j)
+        if cfg.pentest or cfg.pentest_only:
+            # the GUI Review pane's non-blocking note, the same words
+            out += [f"note: {n}" for n in FleetDriver(
+                j.generator_dir, PREVIEW_HOST).advisories(cfg)]
         out += ["", "The TUI does not start the fleet (a run needs root or the docker "
                 "builder image, and the GUI's fleet window records its session). The "
                 "exact command, for a native root builder:",

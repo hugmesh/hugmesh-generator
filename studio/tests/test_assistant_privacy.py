@@ -40,6 +40,8 @@ PLANTED = {
     "state:ssh/id_ed25519": "id",
     "state:anything/.env": "dotenv",
     "state:secret-files/vpn.conf": "secret-files",
+    "state:secrets/nvd_api_key": "nvd-key",
+    "state:secrets/nvd_api_key.meta.json": "nvd-key-meta",
 }
 
 
@@ -85,6 +87,7 @@ def test_every_deny_entry_matches_at_least_one_planted_path(tree):
         "*.kubeconfig": "kubeconfig", "$KUBECONFIG": "kubeconfig", "*.pem": "pem", "*.key": "key",
         "id_*": "id", "/.env": "dotenv", "hugmesh-local-only": "local-only",
         "<secret_files>": "secret-files", "<egress_vpn_conf>": "secret-files",
+        "nvd_api_key": "nvd-key",
     }
     for pattern, _what in ac.DENY_PATHS:
         hit = next((w for k, w in witnesses.items() if k in pattern), None)
@@ -151,6 +154,9 @@ def test_a_denied_file_named_in_a_question_is_refused_in_words(tree):
     ("r2dbc:postgresql://app:s3cret@db/x", "s3cret", "[redacted]@"),
     ("/home/someone/.local/share/hugmesh-local-only/mesh-a/config.json", "mesh-a", "[redacted path]"),
     ("e2e-admin / Sup3rPass!", "Sup3rPass", "e2e-admin / [redacted]"),
+    # OWASP Dependency-Check's echo of the NVD key (first/last 5 characters)
+    ("NvdApiException: Invalid API Key: 33333-" + "*" * 5 + "-77777", "33333",
+     "Invalid API Key: [redacted]"),
 ])
 def test_each_redaction_pattern(line, gone, kept):
     out = ac.redact(line)
