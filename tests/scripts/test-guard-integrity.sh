@@ -1105,7 +1105,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 
 # MERGED (origin/main 3f3ed7bb into fix/games-two-realms-20261030): 214 of 256, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3f3ed7bb into fix/emulated-mesh-tailscale-tor-20261104): 216 of 257, MEASURED by running this file on the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-216}"
+# MERGED (origin/main 7e4a5c14 into fix/fe-template-route-parity-20261104): origin/main alone
+# MEASURES 232 of 274 (the line above says 216; suites merged since were not recorded), and
+# this branch adds ONE gated suite, tests/scripts/test-fe-template-route-parity.sh
+# (shell-suites.yml node job) = 233 of 275, MEASURED by running this file with
+# GUARD_PREMERGE=0 on the merged tree; ungated SET stays 42.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-233}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
