@@ -1105,7 +1105,9 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 
 # MERGED (origin/main 3f3ed7bb into fix/games-two-realms-20261030): 214 of 256, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3f3ed7bb into fix/emulated-mesh-tailscale-tor-20261104): 216 of 257, MEASURED by running this file on the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-216}"
+# MERGED (origin/main 7e4a5c14): 232 of 274, MEASURED by running this file with GUARD_PREMERGE=0 on
+# win/main-red-fix-20261109 (the 2026-11-05 merges each gated suites without moving this line).
+PREMERGE_BASELINE="${GUARD_PREMERGE:-232}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

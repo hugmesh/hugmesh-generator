@@ -10,9 +10,11 @@ Every decision is the core's: the fields are checked by the same ``check_fields`
 CLI and the verifier use (before anything is created or minted, so a typo never leaves
 a minted pre-auth key on the server), the token is signed with the Studio's issuer key
 for the mesh (:func:`core.mesh_token.ensure_issuer`, created and trusted on first use),
-and a minted key comes from :func:`core.mesh_token.mint_preauth_key`. Everything that
-runs a process (the headscale container probe, ssh-keygen, docker exec) runs on a
-QThread, never on the GUI thread.
+and a minted key comes from :func:`core.mesh_token.mint_preauth_key`. The headscale
+user may be left empty: the key is then minted for the default the core picks (the
+container's ``net.hugmesh.headscale.user`` label, else ``hugmesh``), which the field's
+placeholder shows. Everything that runs a process (the headscale container probe and
+its labels, ssh-keygen, docker exec) runs on a QThread, never on the GUI thread.
 
 SECRETS. A pasted pre-auth key sits in a password-echo field and is cleared once a
 token is issued; a minted one never reaches a widget at all, only the token. Neither
@@ -46,8 +48,9 @@ SHELL_ONLY_TIP = (f"Only {' and '.join(mt.SHELL_ROLES)} can hold shell access; t
 NO_KEY = ("Paste the headscale pre-auth key the token should carry, or mint one from "
           "the local headscale.")
 
-#: Mint stays off, with this tooltip, until a headscale user is named (no default).
-NAME_USER_TIP = mt.NAME_MINT_USER
+#: The Headscale user field's tooltip: what an empty field mints for, and when to
+#: name another.
+DEFAULT_USER_TIP = mt.NAME_MINT_USER
 
 CHECKING_TIP = "Checking for a running headscale container…"
 
@@ -104,7 +107,8 @@ class IssueTokenDialog(QtWidgets.QDialog):
         self.resize(620, 560)
         self._probed = False
         self._probe_why = ""
-        self._minted_in = None
+        #: (container, user its label names or "") from the probe
+        self._label_user = ("", "")
         self._issued_text = ""
         self._probe = None
         self._job = None
@@ -172,9 +176,9 @@ class IssueTokenDialog(QtWidgets.QDialog):
         ur = QtWidgets.QHBoxLayout()
         ur.addWidget(QtWidgets.QLabel("Headscale user:"))
         self.hs_user = QtWidgets.QLineEdit()
-        self.hs_user.setPlaceholderText("required to mint")
-        self.hs_user.setToolTip("The headscale user the minted key is for (required: "
-                                "there is no default). " + NAME_USER_TIP)
+        self.hs_user.setPlaceholderText(self.default_user_text())
+        self.hs_user.setToolTip("The headscale user the minted key is for; leave it "
+                                "empty for the default. " + DEFAULT_USER_TIP)
         ur.addWidget(self.hs_user, 1)
         kl.addLayout(ur)
         lay.addWidget(box)
@@ -237,7 +241,7 @@ class IssueTokenDialog(QtWidgets.QDialog):
         return dict(UNITS)[self.unit.currentText()]
 
     def _sync_source(self, *_args) -> None:
-        # The headscale user stays editable: Mint is offered only once it is named.
+        # The headscale user stays editable: it is optional (empty: the default).
         self.auth_key.setEnabled(not self.mint_radio.isChecked())
 
     def lifetime_s(self) -> int:
@@ -249,16 +253,16 @@ class IssueTokenDialog(QtWidgets.QDialog):
             return
 
         def probe():
-            # (the one found or "", the names to offer, why none was picked). Several
-            # without a clear one is not a failure here: the operator picks one under
-            # Headscale container.
+            # (the one found or "", the names to offer, why none was picked, the user
+            # its label names or ""). Several without a clear one is not a failure here:
+            # the operator picks one under Headscale container.
             try:
                 found = mt.find_headscale_container()
-                return found, (found,), ""
             except mt.TokenError as e:
                 if e.choices:
-                    return "", e.choices, str(e)
+                    return "", e.choices, str(e), ""
                 raise
+            return found, (found,), "", mt.headscale_labels(found).get("user", "")
 
         job = own_probe(self, "_probe", _Job(probe, "The headscale container could not be "
                                                     "looked for", parent=self))
@@ -269,7 +273,8 @@ class IssueTokenDialog(QtWidgets.QDialog):
         ok, value = payload
         typed = self.container.currentText().strip()
         if ok:
-            found, names, self._probe_why = value
+            found, names, self._probe_why, label_user = value
+            self._label_user = (found, label_user)
             self.container.addItems([n for n in names if self.container.findText(n) < 0])
             self.container.setCurrentText(typed or found)
         else:
@@ -277,30 +282,41 @@ class IssueTokenDialog(QtWidgets.QDialog):
         self._probed = True
         self._sync_mint()
 
+    def default_user_text(self) -> str:
+        """The Headscale user placeholder: who an empty field mints for. The probed
+        container's label when it is the container named, else the core's default
+        (which a typed container's own label may still override at mint time)."""
+        name = self.container.currentText().strip() if hasattr(self, "container") else ""
+        probed, label_user = self._label_user
+        if label_user and name == probed:
+            return f"default: {label_user} (from {probed}'s label)"
+        return (f"default: {mt.DEFAULT_MINT_USER}, unless the container's label names "
+                "another")
+
     def _sync_mint(self, *_args) -> None:
         """Mint is offered, once the probe has run, for the container named under
-        Headscale container (the one the probe found, one picked, or one typed) AND a
-        headscale user named under Headscale user: there is no default user."""
+        Headscale container (the one the probe found, one picked, or one typed). The
+        headscale user is optional: empty mints for the default the placeholder shows."""
+        self.hs_user.setPlaceholderText(self.default_user_text())
         if not self._probed:
             return
         name = self.container.currentText().strip()
         user = self.hs_user.text().strip()
-        self.mint_radio.setEnabled(bool(name and user))
+        self.mint_radio.setEnabled(bool(name))
         self.mint_radio.setText(f"Mint from the local headscale ({name})" if name
                                 else "Mint from the local headscale")
-        if name and user:
+        if name:
+            who = (f"the headscale user {user}" if user else "the headscale user "
+                   + self.default_user_text().removeprefix("default: "))
             self.mint_radio.setToolTip(
-                f"Mint a single-use pre-auth key for the headscale user {user} in the "
-                f"running container {name} (docker exec … headscale preauthkeys create), "
-                "expiring with the token.")
+                f"Mint a single-use pre-auth key for {who} in the running container "
+                f"{name} (docker exec … headscale preauthkeys create), expiring with the "
+                "token.")
             return
         if self.mint_radio.isChecked():
             self.paste_radio.setChecked(True)
-        if not name:
-            self.mint_radio.setToolTip(f"Unavailable: {self._probe_why}" if self._probe_why
-                                       else NAME_CONTAINER_TIP)
-        else:
-            self.mint_radio.setToolTip(NAME_USER_TIP)
+        self.mint_radio.setToolTip(f"Unavailable: {self._probe_why}" if self._probe_why
+                                   else NAME_CONTAINER_TIP)
 
     # ── issuing ──────────────────────────────────────────────────────────────────
     def _fields(self) -> dict:
@@ -330,35 +346,36 @@ class IssueTokenDialog(QtWidgets.QDialog):
             return
         container = self.container.currentText().strip()
         user = self.hs_user.text().strip()
-        if mint and not user:
-            self._fail(NAME_USER_TIP)
-            return
         if mint and not mt._NAME_RE.match(container):
             self._fail(f"{container!r} is not a container name.")
             return
-        if mint and not mt._NAME_RE.match(user):
+        if mint and user and not mt._NAME_RE.match(user):
             self._fail(f"{user!r} is not a headscale user name.")
             return
 
         def work():
             existed = os.path.isfile(mt.issuer_key_path(fields["mesh"]))
             key_path, _line, fp = mt.ensure_issuer(fields["mesh"])
+            minted_for = None
             if mint:
+                # an empty user (and the tags) resolved from the container's labels,
+                # else hugmesh, so the status names who the key was minted for
+                hs_user, tags = mt.mint_target(user, None, container=container)
                 # signs once before it mints, and expires the key if signing fails after
-                token, _ = mt.mint_and_issue(key_path=key_path, user=user,
+                token, _ = mt.mint_and_issue(key_path=key_path, user=hs_user, tags=tags,
                                              container=container, interactive=False,
                                              **fields)
+                minted_for = (container, hs_user, tags)
             else:
                 token = mt.issue(key_path=key_path, auth_key=pasted, interactive=False,
                                  **fields)
-            return token, fp, not existed
+            return token, fp, not existed, minted_for
 
         self.issue_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
         self.token_view.clear()
         self.fingerprint.setText("")
         self.status.setText("Minting a pre-auth key and signing…" if mint else "Signing…")
-        self._minted_in = (container, user) if mint else None
         job = own_probe(self, "_job", _Job(work, "The token could not be issued",
                                          parent=self))
         job.result.connect(self._on_issued)
@@ -376,7 +393,7 @@ class IssueTokenDialog(QtWidgets.QDialog):
         if not ok:
             self._fail(value)
             return
-        token, fp, created = value
+        token, fp, created, minted_for = value
         self.auth_key.clear()        # it is in the token now; not kept here
         self.token_view.setPlainText(token)
         self.copy_btn.setEnabled(True)
@@ -385,10 +402,11 @@ class IssueTokenDialog(QtWidgets.QDialog):
         except mt.TokenError:        # pragma: no cover - issue() just produced it
             grant = "what was asked"
         minted = ""
-        if self._minted_in:
-            container, user = self._minted_in
+        if minted_for:
+            container, user, tags = minted_for
+            asked = f", asking for {', '.join(tags)}" if tags else ""
             minted = (f" The pre-auth key was minted in {container} for the headscale "
-                      f"user {user}: single-use, expiring with the token.")
+                      f"user {user}{asked}: single-use, expiring with the token.")
         self._issued_text = f"Issued: {grant}.{minted} {mt.SERVER_DECIDES}"
         self.status.setText(self._issued_text)
         self.fingerprint.setText(
@@ -409,4 +427,4 @@ def open_issue_token_dialog(parent=None, **prefill) -> None:
 
 
 __all__ = ["IssueTokenDialog", "open_issue_token_dialog", "known_meshes", "valid_mesh_name",
-           "FINGERPRINT_NOTE", "NAME_USER_TIP", "NO_KEY", "SHELL_ONLY_TIP", "TITLE"]
+           "FINGERPRINT_NOTE", "DEFAULT_USER_TIP", "NO_KEY", "SHELL_ONLY_TIP", "TITLE"]
