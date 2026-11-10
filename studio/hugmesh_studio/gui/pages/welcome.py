@@ -39,6 +39,7 @@ from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from .. import choice_nav
 from ..qt import Qt, QtWidgets
 from ..styles import WARN
+from ...core.platform_info import DOCKER_DOWN, DOCKER_TIMEOUT
 from ._scroll import scrollable
 
 #: The README's getting-started section ("Quick start"), linked from the explainer.
@@ -150,14 +151,21 @@ class WelcomePage(QtWidgets.QWizardPage):
         up-front and how to fix it."""
         host = self.wiz.host
         if host.default_backend == "none":
+            # Native Windows with docker.exe present but the engine stopped or slow to
+            # answer: "Install Docker Desktop" was told to a user whose Docker Desktop
+            # was installed (and running, but busy). docker_remedy() says which.
+            win_engine = host.os == "windows" and host.docker_state in (DOCKER_DOWN,
+                                                                        DOCKER_TIMEOUT)
             return (
                 "This studio assembles and runs a HugMesh image build.<br><br>"
-                f'<b style="color:{WARN}">This machine can\'t build images yet.</b> '
+                + (f'<b style="color:{WARN}">This Studio can\'t build images until '
+                   f'Docker answers.</b> ' if win_engine else
+                   f'<b style="color:{WARN}">This machine can\'t build images yet.</b> ')
                 # Under WSL the generic "install Docker Desktop" line is not the fix —
                 # Docker Desktop is typically already installed and running on the
                 # Windows side, and simply not shared with THIS distro. docker_remedy()
                 # names that checkbox; without it the operator reinstalls a working app.
-                + (_as_html(host.docker_remedy()) if host.is_wsl else
+                + (_as_html(host.docker_remedy()) if host.is_wsl or win_engine else
                    "Install Docker Desktop on Windows or macOS (and start it), or run "
                    "Studio on a Gentoo host to build natively.")
                 + " You can still configure and "

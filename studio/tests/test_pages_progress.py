@@ -1272,7 +1272,11 @@ def test_watch_command_matches_the_host_os(qapp, wiz):
     assert page._watch_command("/o/My Builds/b.log") == "tail -F -n +1 '/o/My Builds/b.log'"
     wiz.host = HostInfo(os="windows", is_gentoo=False, has_docker=True, has_bash=False,
                         has_kvm=False, is_root=False, builder_image="b")
-    assert page._watch_command(r"C:\o\b.log") == 'Get-Content -Wait -Tail 50 "C:\\o\\b.log"'
+    # -LiteralPath (a [ ] in the path is no wildcard) inside single quotes (nothing
+    # expands); C:\o\b.log does not exist, so it waits for the file first, as tail -F does
+    assert page._watch_command(r"C:\o\b.log") == (
+        r"while (-not (Test-Path -LiteralPath 'C:\o\b.log')) { Start-Sleep -Seconds 1 }; "
+        r"Get-Content -LiteralPath 'C:\o\b.log' -Wait -Tail 50")
 
 
 def test_ansi_escapes_never_reach_any_operator_visible_surface(
