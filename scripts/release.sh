@@ -1622,7 +1622,9 @@ offline_report() {
   [ "$n" -gt "$bn" ] || return 0
   for r in "${ROWS[@]}"; do
     selected "$r" && [ "${T_GROUP[$r]}" != maven ] && [ -n "${S_FROM[$r]:-}" ] && [ "${S_FROM[$r]}" != "$best" ] || continue
-    if [ "$VMODE" = literal ]; then hint="the bump moves it to $VSPEC with the rest"
+    if [ "${S_BUMP[$r]:-}" != planned ] && [ "$CHANGED_ONLY" = true ]; then hint="--changed-only leaves it there (nothing since its tag); without --changed-only it moves to ${S_TO[$r]:-the target} with the rest"
+    elif [ "${S_BUMP[$r]:-}" = refused ]; then hint="its bump is refused (below)"
+    elif [ "$VMODE" = literal ]; then hint="the bump moves it to $VSPEC with the rest"
     elif [ "${S_TO[$r]:-}" = "$(next_beta "$best" 2>/dev/null || true)" ]; then hint="$VMODE brings it back onto the line (${S_TO[$r]})"
     else hint="$VMODE keeps it off the line (${S_FROM[$r]} -> ${S_TO[$r]:-?}); to put every repo on ONE version give it: scripts/release.sh $(next_beta "$best" 2>/dev/null || echo X.Y.Z-beta.N) $(selector_text)"; fi
     say "  OFF-LINE $r is at ${S_FROM[$r]} while $bn of the $n selected repos are at $best: $hint"
@@ -1648,7 +1650,7 @@ supersede_scan() {
         continue
       fi
       SUP+=("$r|$n|$h|$u")
-      say "  $([ "$MODE" = dry ] && printf 'would close' || printf 'superseded:') $u ($h, for $old): this run releases ${S_TO[$r]}"
+      say "  $([ "$MODE" = dry ] && printf 'would close' || printf 'superseded:') $u ($h, for $old): $([ "${S_BUMP[$r]:-}" = planned ] && printf 'this run releases' || printf "main already carries") ${S_TO[$r]}"
     done <<<"$out"
   done
   return 0
