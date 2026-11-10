@@ -176,6 +176,9 @@ def test_utf8_stdio_makes_a_cp1252_stream_utf8_on_windows_only():
 def test_print_command_with_a_non_cp1252_path_prints_it_not_a_false_bad_input(tmp_path, monkeypatch):
     gen = tmp_path / "Łukasz Иван gen"
     gen.mkdir()
+    # --print-command now refuses a folder that is no checkout (it printed a command
+    # that could not run); the marker makes this one a checkout.
+    (gen / "build-x86-host-stage4.sh").write_text("#!/bin/bash\n", encoding="utf-8")
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
     stdout = _cp1252()
     monkeypatch.setattr(sys, "stdout", stdout)

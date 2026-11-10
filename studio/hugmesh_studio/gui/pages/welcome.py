@@ -165,7 +165,9 @@ class WelcomePage(QtWidgets.QWizardPage):
                 # Docker Desktop is typically already installed and running on the
                 # Windows side, and simply not shared with THIS distro. docker_remedy()
                 # names that checkbox; without it the operator reinstalls a working app.
-                + (_as_html(host.docker_remedy()) if host.is_wsl or win_engine else
+                # The Flatpak likewise: its remedy says whether the host bridge or the
+                # host's Docker is missing (never "run on Gentoo" to a Gentoo host).
+                + (_as_html(host.docker_remedy()) if host.is_wsl or win_engine or host.in_flatpak else
                    "Install Docker Desktop on Windows or macOS (and start it), or run "
                    "Studio on a Gentoo host to build natively.")
                 + " You can still configure and "
@@ -176,8 +178,11 @@ class WelcomePage(QtWidgets.QWizardPage):
             "This studio assembles and runs a HugMesh image build.<br><br>"
             f"Build backend: <b>{host.default_backend}</b> ({host.summary()})<br><br>"
             f"{self._slow_fs_html()}"
-            "On Gentoo it builds natively; everywhere else (including Windows) it drives "
-            "the dockerized build.")
+            + ("Installed as a Flatpak it drives this computer's Docker; a native "
+               "Gentoo build needs the Studio run from a hugmesh-generator checkout."
+               if host.in_flatpak else
+               "On Gentoo it builds natively; everywhere else (including Windows) it "
+               "drives the dockerized build."))
 
     def _slow_fs_html(self) -> str:
         """The /mnt/c trap, on the FIRST screen — or "" when the repo is on a local disk.

@@ -32,7 +32,7 @@ import argparse
 import os
 import sys
 
-from .core import crashlog, no_console
+from .core import crashlog, flatpak_host, no_console
 
 
 def _default_generator_dir() -> str:
@@ -57,15 +57,25 @@ def _choose_generator_dir(current: str, QtWidgets) -> str:  # noqa: N803
     Only a folder picked here is saved: a ``--generator-dir`` or source-tree value that
     is already a checkout was not chosen in the GUI and must not become later launches'
     default."""
-    from .core import generator_dir
+    from .core import generator_dir, managed_generator
     picked_here = False
     while not generator_dir.is_checkout(current):
         box = QtWidgets.QMessageBox(QtWidgets.QMessageBox.Icon.Information,
                                     "Choose your hugmesh-generator folder",
                                     generator_dir.not_a_checkout_message(current))
+        # An install that carries its own copy (the Flatpak) offers it first: the box
+        # only shows when placing it failed, and the message says why.
+        bundled = (box.addButton("Use the copy that came with this Studio",
+                                 QtWidgets.QMessageBox.ButtonRole.ActionRole)
+                   if managed_generator.seed_dir() else None)
         ok = box.addButton("Choose folder…", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
         box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
         box.exec()
+        if bundled is not None and box.clickedButton() is bundled:
+            placed = managed_generator.ensure()
+            if placed.path and generator_dir.is_checkout(placed.path):
+                current = placed.path       # resolve() finds it by itself: not saved
+            continue
         if box.clickedButton() is not ok:       # exec()'s return differs by binding
             return current
         picked = QtWidgets.QFileDialog.getExistingDirectory(
@@ -82,6 +92,17 @@ def _choose_generator_dir(current: str, QtWidgets) -> str:  # noqa: N803
         except (OSError, RuntimeError, ValueError):
             pass                               # remembered next time or not: never fatal
     return current
+
+
+def _generator_dir_or_say(path: str) -> bool:
+    """--print-command(s): a command for a folder that is no checkout cannot run, so say
+    so on stderr (stdout is the argv channel) instead of printing one and exiting 0."""
+    from .core import generator_dir
+    if generator_dir.is_checkout(path):
+        return True
+    print(f"error: {generator_dir.not_a_checkout_message(path)} (pass --generator-dir)",
+          file=sys.stderr)
+    return False
 
 
 def _env_flag(name: str) -> bool:
@@ -148,6 +169,10 @@ def main(argv=None) -> int:
     # Second, before anything can spawn a process: the windowed Windows exe would
     # otherwise flash a console window for every docker/kubectl/git probe.
     no_console.install()
+    # The Flatpak's twin of that hook, also before anything spawns a process: docker,
+    # make, git, qemu and the generator's scripts live on the HOST, which the sandbox
+    # reaches only through flatpak-spawn --host (a no-op outside the Flatpak).
+    flatpak_host.install()
     # Third, before anything prints: a path outside cp1252 must not turn a redirected
     # print into a traceback or a false "bad input" (a no-op off Windows).
     utf8_stdio()
@@ -201,6 +226,11 @@ def main(argv=None) -> int:
     ap.add_argument("--print-commands", action="store_true",
                     help="headless: print one build command per materialized image for a "
                          "worklist ENVELOPE (or a flat config = one command) and exit")
+    ap.add_argument("--self-check", action="store_true",
+                    help="headless: check that this install can run the generator's "
+                         "scripts (the generator tree, every path the Studio uses in it, "
+                         "and in the Flatpak the route to the host) and exit non-zero "
+                         "when it cannot; --json for automation")
     ap.add_argument("--print-specs", action="store_true",
                     help="headless: print each materialized image's flat ImageConfig JSON "
                          "(one per line, SECRET fields blanked) — the materialization bridge "
@@ -348,6 +378,11 @@ def main(argv=None) -> int:
         from .core.local_login_agent import run as run_login_agent
         return run_login_agent(manifest_path=args.login_manifest, allow_dev_origins=args.dev)
 
+    if args.self_check:
+        # Qt-free path, run by the release workflow inside the built Flatpak.
+        from .core import self_check
+        return self_check.run_cli(args.generator_dir, as_json=args.json)
+
     if args.print_command:
         # Qt-free path: core only — must work with no display and no Qt installed.
         from .core.build_driver import BuildDriver
@@ -360,6 +395,8 @@ def main(argv=None) -> int:
         # graphical stays False (default): this is the headless single-build command
         # channel — its sudo prefix is a literal `sudo ` the callers strip (test_headless
         # removeprefix, build-matrix check.sh ${cmdline#sudo }), never `sudo -A`/pkexec.
+        if not _generator_dir_or_say(args.generator_dir):
+            return 2
         driver = BuildDriver(args.generator_dir)
         # still print a deterministic command on a host that can't build
         backend = print_backend(args.backend, driver.host.default_backend)
@@ -399,6 +436,8 @@ def main(argv=None) -> int:
         from .core.build_driver import BuildDriver
         from .core.config import ImageConfig
         from .core.worklist import load_any, synthesize
+        if not _generator_dir_or_say(args.generator_dir):
+            return 2
         driver = BuildDriver(args.generator_dir)
         backend = print_backend(args.backend, driver.host.default_backend)
         _native_print_note(backend)
