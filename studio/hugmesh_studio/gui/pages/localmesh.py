@@ -164,7 +164,8 @@ from ._mesh_monitor_widget import (MeshDomainWorker, MeshMonitorProbe,
                                    open_in_tor_browser)
 from ._add_user_dialog import AddUserDialog
 from ._code_folders_widget import CodeFoldersWidget
-from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
+from ._saved_meshes_widget import (SavedMeshProbe, SavedMeshesWidget,
+                                   native_windows_running_mesh)
 from ._scroll import scrollable
 from ._widgets import _row, collapsible, label_finish_as_exit, own_probe, probe_running
 from .brand_picker import BrandPicker
@@ -4400,7 +4401,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                                 "Wait for it to finish, or Cancel.")
             return
         if self._mesh_up is True:
-            self._refuse("A local mesh is running — stop it first. Starting "
+            self._refuse(native_windows_running_mesh()
+                         or "A local mesh is running — stop it first. Starting "
                                 "a saved mesh over a live one would bring up a "
                                 "second stack on the same compose project.")
             return

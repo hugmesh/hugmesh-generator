@@ -194,6 +194,61 @@ def test_a_timed_out_scan_keeps_the_settings_and_says_not_checked():
     assert "Wi-Fi and Bluetooth were not checked" in text
     assert "CPU: AMD Ryzen 7 3700U" in text
     assert page.scan_btn.isEnabled()
+    # the page's own control names, never the CLI flags it does not show
+    assert "'GPU driver' was left as it was" in text
+    assert "'Enable Wi-Fi' and 'Enable Bluetooth' were left as they were" in text
+    assert "--" not in text
+
+
+def test_a_gpu_probe_cut_short_after_some_names_is_still_not_checked():
+    """A timeout after one GPU name was printed used to show 'GPU: <name>' and a
+    recommended driver next to 'the GPU was not checked', and applied that driver."""
+    _app, page = _hardware_page()
+    page._set_gpu("nvidia")
+    partial = (_line("CPU", "AMD Ryzen 7 3700U") + _ok("CPU")
+               + _line("GPU", "AMD Radeon Vega 10"))
+    exc = subprocess.TimeoutExpired(["powershell"], 45, output=partial)
+    s = hw_scan._scan_windows(_FakeRun(exc=exc))
+    assert s.gpus and not s.scanned("gpu")
+    page._scanned(s, "")
+    assert page.gpu.currentText() == "nvidia"
+    text = page.scan_out.text()
+    assert "GPU: not checked" in text and "Radeon" not in text
+    assert "recommended driver" not in text
+
+
+def test_fields_changed_during_the_scan_are_kept_and_next_waits(monkeypatch):
+    """The scan runs off the GUI thread, so the operator can edit while it runs: the
+    result must not overwrite those edits, and Next must not commit pre-scan values."""
+    import threading
+    app, page = _hardware_page()
+    release = threading.Event()
+
+    def slow_scan():
+        release.wait(10)
+        # recommends amd-free and no Wi-Fi/Bluetooth
+        return hw_scan._finalize(HwScan(os="linux", gpus=[Gpu("amd", "Radeon")]))
+
+    monkeypatch.setattr(hw_scan, "scan", slow_scan)
+    page._set_gpu("auto")
+    page.bt.setChecked(True)
+    assert page.isComplete()
+    page._scan()
+    assert not page.isComplete()                     # Next waits for the scan
+    page._set_gpu("nvidia")                          # edited while it runs
+    page.wifi.setChecked(True)
+    release.set()
+    worker = page._scan_worker
+    assert worker is not None and worker.wait(10_000)
+    for _ in range(50):                              # deliver the queued signal
+        app.processEvents()
+        if page.isComplete():
+            break
+    assert page.isComplete() and page.scan_btn.isEnabled()
+    assert page.gpu.currentText() == "nvidia" and page.wifi.isChecked()
+    assert not page.bt.isChecked()                   # untouched, so the scan set it
+    assert ("You changed 'GPU driver' and 'Enable Wi-Fi' while the scan ran, so the "
+            "scan left them as you set them.") in page.scan_out.text()
 
 
 def test_a_scan_that_ran_applies_as_before():

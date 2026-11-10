@@ -493,7 +493,13 @@ def test_start_runs_the_records_config_not_the_forms_recollection(qapp, page, mo
     assert "services" in page.saved_meshes.note.text()      # …and says so
 
 
-def test_start_is_refused_while_a_mesh_is_running(qapp, page, monkeypatch):
+@pytest.mark.parametrize("osname", ["posix", "nt"])
+def test_start_is_refused_while_a_mesh_is_running(qapp, page, monkeypatch, osname):
+    # The host is pinned the test_windows_sweep_c6 way, so both halves run anywhere.
+    # On native Windows 'Stop mesh' is greyed with the WSL2 sentence, so "stop it
+    # first" would send the operator to a button that refuses.
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname=osname))
     rec = _record()
     page.initializePage()
     _settle(qapp, page)
@@ -501,10 +507,17 @@ def test_start_is_refused_while_a_mesh_is_running(qapp, page, monkeypatch):
     page._set_verbs_enabled(True)
     calls = _launch_spy(page, monkeypatch)
     page._start_saved(rec, sm.MODE_START)
-    assert calls == [] and "stop it first" in page.status.text()
     _select(page)
-    assert not page.saved_meshes.start_btn.isEnabled()
-    assert "stop it first" in page.saved_meshes.start_btn.toolTip()
+    assert calls == [] and not page.saved_meshes.start_btn.isEnabled()
+    texts = (page.status.text(), page.saved_meshes.start_btn.toolTip(),
+             page.saved_meshes.restore_btn.toolTip())
+    for text in texts:
+        if osname == "nt":
+            assert "cannot stop it" in text and "WSL2" in text, text
+            assert "stop it first" not in text, text
+        else:
+            assert "stop it first" in text, text
+            assert "WSL2" not in text, text
 
 
 def test_rows_state_what_a_restore_gives_back_before_the_click(qapp, page):

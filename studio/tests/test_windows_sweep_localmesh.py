@@ -103,6 +103,27 @@ def test_a_running_mesh_on_linux_keeps_its_sentence(as_linux, page):
     assert "stop it first if you want a clean bring-up" in page._mesh_state_label.text()
 
 
+def _start_saved_over_a_running_mesh():
+    page = _Page()
+    page._running, page._mesh_up = None, True
+    localmesh.LocalMeshPage._start_saved(page, rec=None, mode="start")
+    assert page.launched == [] and page.notes == []
+    (text,) = page.refused
+    return text
+
+
+def test_saved_mesh_start_over_a_running_mesh_on_native_windows_is_not_told_to_stop_it_here(
+        as_native_windows):
+    text = _start_saved_over_a_running_mesh()
+    assert "cannot stop it" in text and "WSL2" in text
+    assert "stop it first" not in text
+
+
+def test_saved_mesh_start_over_a_running_mesh_on_linux_keeps_its_sentence(as_linux):
+    assert _start_saved_over_a_running_mesh().startswith(
+        "A local mesh is running — stop it first. Starting a saved mesh")
+
+
 # ── the handlers: the refusal comes first, nothing else happens ────────────────────
 class _Page:
     """Only what the handlers touch; anything else raises AttributeError."""
