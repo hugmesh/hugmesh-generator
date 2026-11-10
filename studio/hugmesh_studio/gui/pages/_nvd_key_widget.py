@@ -90,6 +90,9 @@ class NvdKeyWidget(QtWidgets.QWidget):
         self._runner = runner
         self._verify_probe = None
         self._push_probe = None
+        #: the last Verify result for a TYPED (unsaved) key: Save carries it over when
+        #: the saved key is that same key, so Verify -> Save needs no second Verify
+        self._typed_result = None
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 4, 0, 0)
 
@@ -234,8 +237,16 @@ class NvdKeyWidget(QtWidgets.QWidget):
             return
         self.key_edit.clear()
         self.show_btn.setChecked(False)
-        self._say(self.status_label, "NVD API key: " + nvd_key.status_line(st)
-                  + " — press Verify to check it with NVD.")
+        res, self._typed_result = self._typed_result, None
+        if res is not None and res.fingerprint == st.fingerprint:
+            try:
+                nvd_key.record_verdict(res)
+                st = nvd_key.status()
+            except OSError:
+                pass
+        tail = "" if st.verified else " — press Verify to check it with NVD."
+        self._say(self.status_label, "NVD API key: " + nvd_key.status_line(st) + tail,
+                  "ok" if st.verified else "")
         self.forget_btn.setEnabled(True)
         self.changed.emit()
 
@@ -279,6 +290,8 @@ class NvdKeyWidget(QtWidgets.QWidget):
             except OSError:
                 pass
             self.changed.emit()
+        if not stored:
+            self._typed_result = res
         tail = "" if stored or not res.ok else " Press Save to keep it."
         self._say(self.status_label, res.line() + tail, "ok" if res.ok else "bad")
         self.forget_btn.setEnabled(nvd_key.status().stored)

@@ -246,3 +246,21 @@ def test_the_tui_and_the_widget_print_the_same_words(qapp, page):
     for gui_text in (w.need_label.text(), w.activation_label.text(), w.empty_label.text(),
                      w.consent_label.text(), nvd_key.REQUEST_URL, nvd_key.GUIDE_URL):
         assert gui_text in tui
+
+
+def test_verify_then_save_keeps_the_verdict(qapp, page):
+    """Typed key -> Verify (accepted) -> Save: stored AND verified, no second Verify."""
+    page.pentest.setChecked(True)
+    w = page.nvd_key
+    w._opener = FakeOpener(NVD_200)
+    w.key_edit.setText(KEY)
+    w.verify_btn.click()
+    assert _wait(qapp, lambda: w.verify_btn.isEnabled())
+    assert "Press Save to keep it" in w.status_label.text()
+    w.save_btn.click()
+    assert nvd_key.status().verified
+    assert "stored, verified" in w.status_label.text()
+    # a DIFFERENT key saved after that Verify is not marked verified
+    w.key_edit.setText("abcdef01-2345-4678-9abc-def012345678")
+    w.save_btn.click()
+    assert not nvd_key.status().verified
