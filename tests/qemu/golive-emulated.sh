@@ -278,13 +278,25 @@ ROLLBACK_PROMPT="Proceed and re-close to internal?"
 # netfilter enforces (the reconcile-owned table). Prints "<status> <nft>", each
 # public|internal|unknown. nft is public only when OUR table is loaded and has no
 # 80/443 drop rule — an absent table is "unknown", never "public".
+#
+# "Loaded" means BOTH: nft exited 0 AND its stdout carries the table's own header at
+# the start of a line. Neither alone is enough. When the table is absent, real nft
+# exits 1 and echoes the command it could not run on stderr:
+#     Error: No such file or directory
+#     list table inet hugmesh_release_gate
+# That echo contains "table inet hugmesh_release_gate", so an unanchored match read a
+# MISSING table as a loaded one with no drop rule, which is "public". And a listing cut
+# off after the header (nft killed, rc != 0) also has no drop rule in it.
 posture() {
-    local out st nf
-    out="$(guest "sudo -n sh -c 'hugmesh-go-live status; echo @@nft@@; nft list table inet ${TABLE}'" 2>&1)"
+    local out st nf nfrc
+    out="$(guest "sudo -n sh -c 'hugmesh-go-live status; echo @@nft@@; nft list table inet ${TABLE}; echo @@nftrc=\$?@@'" 2>&1)"
     st="$(printf '%s\n' "${out}" | sed -n 's/^effective posture:[[:space:]]*\([a-z]*\).*/\1/p' | head -n1)"
     case "${st}" in public|internal) ;; *) st="unknown" ;; esac
-    nf="$(printf '%s\n' "${out}" | sed -n '/^@@nft@@$/,$p')"
-    if ! printf '%s\n' "${nf}" | grep -E "table inet ${TABLE}" >/dev/null; then
+    nfrc="$(printf '%s\n' "${out}" | sed -n 's/^@@nftrc=\([0-9][0-9]*\)@@$/\1/p' | tail -n1)"
+    nf="$(printf '%s\n' "${out}" | sed -n '/^@@nft@@$/,/^@@nftrc=/p')"
+    if [ "${nfrc}" != 0 ]; then
+        nf="unknown"
+    elif ! printf '%s\n' "${nf}" | grep -E "^table inet ${TABLE} \{" >/dev/null; then
         nf="unknown"
     elif printf '%s\n' "${nf}" | grep -E 'tcp dport \{ ?80, ?443 ?\} drop' >/dev/null; then
         nf="internal"

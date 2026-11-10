@@ -373,10 +373,12 @@ jobs:
           # against a throwaway guest root with the REAL hugmesh-go-live driver;
           # it pins loopback-only destinations, plan/commit/rollback argv, commit
           # and rollback on `ssh -tt` with 'y' typed on a pty, and NO -y /
-          # GL_ASSUME_YES / token on any argv. Needs python3 (pty) only. MEASURED,
-          # 2026-11-09, in alpine:3 (bash python3 coreutils; busybox grep/sed):
-          # 85 passed / 0 failed. Mutation-tested on a Gentoo host: 22 planted
-          # defects in the lane, 22 caught.
+          # GL_ASSUME_YES / token on any argv; a rollback that never converges, an
+          # absent/truncated/empty nft table (unknown, never public) and a status/nft
+          # disagreement all fail. Needs python3 (pty) only. MEASURED, 2026-11-10,
+          # in alpine:3 (bash python3 coreutils util-linux; busybox grep/sed):
+          # 115 passed / 0 failed. Mutation-tested on a Gentoo host (round 2):
+          # 18 planted defects in the lane, 17 caught; the survivor is named in the PR.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh

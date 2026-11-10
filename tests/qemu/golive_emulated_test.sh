@@ -23,6 +23,12 @@
 #     key, real domain, slirp/mesh-L2/non-documentation ingress address) or right
 #     after the read-only probe (no driver, already public, stale container);
 #   * a commit that never converges fails AND is rolled back;
+#   * a rollback that never converges fails, writes no verdict, and prints the manual
+#     rollback command (round 2, refuter M8);
+#   * an absent, truncated or empty nft table is "unknown", never "public" — including
+#     real nft's own absent-table error, which echoes "list table inet <name>" on
+#     stderr (round 2, refuter M9; the round-1 lane read that echo as public);
+#   * status and nft must BOTH say the posture: nft alone is not enough (round 2, M3);
 #   * a driver that would accept an onion commit fails the lane, with 'n' typed.
 set -u
 
@@ -65,7 +71,16 @@ exit 0
 SH
 # nft: the table hugmesh-firewall-reconcile renders, from the marker. FAKE_NFT_STUCK=1
 # never converges (a dead cron); FAKE_NFT_LAG=N keeps answering the OLD posture for N
-# reads after it changes, so the lane really has to poll.
+# reads after it changes, so the lane really has to poll. FAKE_NFT_STICKY_PUBLIC=1 goes
+# public and never comes back (a rollback the reconcile never acts on).
+# FAKE_NFT_ABSENT_WHEN_PUBLIC=1: while the marker is down the table is GONE, and this
+# answers exactly what real nft (1.x) does for an absent table — exit 1, and the
+# failed command echoed on stderr, which itself contains "table inet <name>":
+#     Error: No such file or directory
+#     list table inet hugmesh_release_gate
+#                     ^^^^^^^^^^^^^^^^^^^^
+# FAKE_NFT_TRUNCATED_WHEN_PUBLIC=1: the listing stops after the header and nft exits 1.
+# FAKE_NFT_EMPTY_WHEN_PUBLIC=1: nft exits 0 and prints nothing (no table header at all).
 cat > "${FAKEBIN}/nft" <<'SH'
 #!/usr/bin/env bash
 [ "$*" = "list table inet hugmesh_release_gate" ] || { echo "fake nft: unexpected '$*'" >&2; exit 1; }
@@ -73,8 +88,24 @@ etc="${FAKE_GUEST}/etc/hugmesh"
 want=internal
 { [ -e "${etc}/go-live" ] || [ "$(cat "${etc}/release-state" 2>/dev/null)" = public ]; } && want=public
 [ "${FAKE_NFT_STUCK:-0}" = 1 ] && want=internal
+if [ "${want}" = public ] && [ "${FAKE_NFT_ABSENT_WHEN_PUBLIC:-0}" = 1 ]; then
+    echo "Error: No such file or directory" >&2
+    echo "list table inet hugmesh_release_gate" >&2
+    echo "                ^^^^^^^^^^^^^^^^^^^^" >&2
+    exit 1
+fi
+if [ "${want}" = public ] && [ "${FAKE_NFT_TRUNCATED_WHEN_PUBLIC:-0}" = 1 ]; then
+    echo "table inet hugmesh_release_gate {"
+    echo "	chain input {"
+    echo "nft: listing interrupted" >&2
+    exit 1
+fi
+if [ "${want}" = public ] && [ "${FAKE_NFT_EMPTY_WHEN_PUBLIC:-0}" = 1 ]; then
+    exit 0
+fi
 state="${FAKE_LOG_DIR}/nft.state"
 read -r shown reads < "${state}" 2>/dev/null || { shown=internal; reads=0; }
+[ "${FAKE_NFT_STICKY_PUBLIC:-0}" = 1 ] && [ "${shown}" = public ] && want=public
 if [ "${want}" != "${shown}" ]; then
     reads=$((reads + 1))
     [ "${reads}" -gt "${FAKE_NFT_LAG:-0}" ] && { shown="${want}"; reads=0; }
@@ -260,6 +291,68 @@ eq "${RC}" 1 "stuck reconcile: exit 1"
 has "${OUT}" "did not go public within 6s" "stuck reconcile: says it timed out"
 has "${OUT}" "rolling rpi5/pki back to internal" "stuck reconcile: the safety net ran"
 eq "$([ -e "${CASE}/guest/etc/hugmesh/go-live" ] && echo present || echo absent)" absent "stuck reconcile: the marker was removed again"
+
+# Round 2 (refuter M8): the ROLLBACK wait must be real. Once public, nft never shows
+# the drop rule again; the lane must not print "internal again" or write a PASS verdict.
+echo "a rollback that never converges fails, and says the device was left public"
+new_case rbstuck; FAKE_NFT_STICKY_PUBLIC=1 run_lane
+eq "${RC}" 1 "rollback stall: exit 1"
+has "${OUT}" "status=public nft=public" "rollback stall: it did go public first"
+has "${OUT}" "did not return to internal within 6s" "rollback stall: says the rollback timed out"
+has "${OUT}" "DEVICE LEFT PUBLIC: run  ssh -t" "rollback stall: the safety net prints the manual rollback"
+eq "$(printf '%s\n' "${OUT}" | grep -c 'internal again' | tr -d ' ')" 0 "rollback stall: never claims 'internal again'"
+eq "$([ -e "${CASE}/evidence/verdict.txt" ] && echo present || echo absent)" absent "rollback stall: no verdict.txt"
+eq "$([ -e "${CASE}/guest/etc/hugmesh/go-live" ] && echo present || echo absent)" absent "rollback stall: the driver did delete the marker"
+
+# Round 2 (refuter M9, and a real defect): an ABSENT table is "unknown", never "public".
+# The table vanishes as soon as the marker is written; real nft then exits 1 and echoes
+# "list table inet hugmesh_release_gate" on stderr. Before round 2 the lane's unanchored
+# grep matched that echo and read the missing table as public.
+echo "a table that is absent while the marker is down is unknown, never public"
+new_case notable; FAKE_NFT_ABSENT_WHEN_PUBLIC=1 run_lane
+eq "${RC}" 1 "absent table: exit 1"
+has "${OUT}" "status=public nft=unknown" "absent table: nft reads unknown"
+eq "$(printf '%s\n' "${OUT}" | grep -c 'nft=public' | tr -d ' ')" 0 "absent table: nft never reads public"
+has "${OUT}" "did not go public within 6s" "absent table: the public wait times out"
+has "${OUT}" "rolling rpi5/pki back to internal" "absent table: the safety net ran"
+has "${OUT}" "rpi5/pki is internal again" "absent table: and the device is back (the table returns with the drop rule)"
+eq "$([ -e "${CASE}/evidence/verdict.txt" ] && echo present || echo absent)" absent "absent table: no verdict.txt"
+
+echo "a listing cut off after the table header (nft exit 1) is unknown, never public"
+new_case truncated; FAKE_NFT_TRUNCATED_WHEN_PUBLIC=1 run_lane
+eq "${RC}" 1 "truncated listing: exit 1"
+has "${OUT}" "status=public nft=unknown" "truncated listing: nft reads unknown"
+eq "$(printf '%s\n' "${OUT}" | grep -c 'nft=public' | tr -d ' ')" 0 "truncated listing: nft never reads public"
+has "${OUT}" "did not go public within 6s" "truncated listing: the public wait times out"
+
+echo "a successful nft that lists no table header is unknown, never public"
+new_case emptyok; FAKE_NFT_EMPTY_WHEN_PUBLIC=1 run_lane
+eq "${RC}" 1 "empty listing: exit 1"
+has "${OUT}" "status=public nft=unknown" "empty listing: nft reads unknown"
+eq "$(printf '%s\n' "${OUT}" | grep -c 'nft=public' | tr -d ' ')" 0 "empty listing: nft never reads public"
+
+echo "a table that is absent from the start is refused, not treated as public or internal"
+new_case notable0; echo "public 0" > "${CASE}/log/nft.state"
+: > "${CASE}/guest/etc/hugmesh/go-live"; FAKE_NFT_ABSENT_WHEN_PUBLIC=1 run_lane
+eq "${RC}" 2 "absent at start: exit 2"
+has "${OUT}" "status=public nft=unknown" "absent at start: names nft as unknown"
+eq "$(calls_with "hugmesh-go-live commit")$(calls_with "hugmesh-go-live rollback")" 00 "absent at start: never commits or rolls back"
+
+# Round 2 (refuter M3): BOTH witnesses must agree. A driver whose status line never
+# leaves 'internal' while nft goes public must fail the public wait, not pass on nft.
+echo "status and nft disagree: nft alone is not enough"
+sed 's/^\(    echo "effective posture:   \)\$(effective_posture)"$/\1internal"/' "${DRIVER}" > "${TMP}/driver-status-internal"
+if cmp -s "${DRIVER}" "${TMP}/driver-status-internal"; then
+    _bad "could not plant the stuck-status mutation (the driver's 'effective posture:' line moved)"
+else
+    new_case disagree; FAKE_DRIVER_PATH="${TMP}/driver-status-internal" run_lane
+    eq "${RC}" 1 "disagreement: exit 1"
+    has "${OUT}" "status=internal nft=public" "disagreement: the witnesses really disagreed"
+    has "${OUT}" "did not go public within 6s" "disagreement: the public wait times out"
+    eq "$(printf '%s\n' "${OUT}" | grep -c 'PASS public' | tr -d ' ')" 0 "disagreement: never claims public"
+    eq "$([ -e "${CASE}/evidence/verdict.txt" ] && echo present || echo absent)" absent "disagreement: no verdict.txt"
+    eq "$([ -e "${CASE}/guest/etc/hugmesh/go-live" ] && echo present || echo absent)" absent "disagreement: rolled back, marker gone"
+fi
 
 echo "a driver that would commit an onion fails the lane, and 'n' is typed"
 sed '/^    refuse_onion_commit "\${provider}"$/d' "${DRIVER}" > "${TMP}/driver-no-onion-refusal"
