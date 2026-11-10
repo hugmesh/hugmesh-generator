@@ -182,7 +182,19 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-pki-gateway', '/api/auth/**',          'ROLE_USER',      true),  -- public-floor
   ('hugmesh-pki-gateway', '/login/**',             'PUBLIC', true),  -- public
   ('hugmesh-pki-gateway', '/.well-known/**',       'PUBLIC', true),  -- public (OIDC/jwks)
-  ('hugmesh-pki-gateway', '/**',                   'ROLE_SUPERADMIN', true),  -- headscale control-plane (scale.) catch-all -> SUPERADMIN-only; the 3 specific rows above win by most-specific match (bug #15)
+  -- NO bare catch-all row for the pki gateway (decision 79 = B,
+  -- hugmesh-admin-bff-api#57, 2026-09-23; gateway half landed in
+  -- hugmesh-gateway#40, f0faca1). The headscale control plane (the `headscale`
+  -- route in apps/20-gateway-pki.yaml, Host=scale.<domain> with NO Path
+  -- predicate) used to be floored here by a bare double-star -> ROLE_SUPERADMIN
+  -- row (bug #15). That row could not stop a same-brand ROLE_ADMIN or
+  -- ROLE_GAME-MASTER (GatewayRouteAccessFilter forwards both in their own domain
+  -- before any row is read), and the admin API can never recreate it (decision
+  -- 61). The gateway SecurityConfig now requires ROLE_SUPERADMIN for EVERY
+  -- request on the headscale route Host, ahead of PUBLIC_PATHS, so no row is
+  -- needed here. Mirrors CanonicalSeed.pki() and compose/route-access-seed.sql in
+  -- hugmesh-gateway. tests/scripts/cluster_manifest_integrity.py
+  -- [route-access-wildcard] refuses any bare double-star row, with no exceptions.
 
   -- be-gateway (api./matrix./mastodon.hugmesh.net -> APIs/Matrix/Mastodon)
   -- ROLE_MOD moderation surfaces — MORE SPECIFIC than the ROLE_MASTODON /api/v1/**
