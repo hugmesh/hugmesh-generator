@@ -46,7 +46,7 @@ import tarfile
 import tempfile
 from dataclasses import dataclass
 
-from . import state_paths
+from . import flatpak_host, state_paths
 
 #: The seed's file names, as the manifest installs them.
 SEED_ARCHIVE = "generator-seed.tar.gz"
@@ -57,6 +57,16 @@ SEED_SUBDIR = os.path.join("share", "hugmesh-studio")
 
 #: A directory holding the two seed files, for other packagings and for tests.
 SEED_ENV = "HUGMESH_STUDIO_GENERATOR_SEED"
+
+#: The Flatpak's install prefix: the manifest runs ``pip3 install --prefix=/app`` and
+#: installs the seed under it. NOT sys.prefix: the app runs on the runtime's
+#: /usr/bin/python3, so inside the sandbox sys.prefix is /usr (measured on the built
+#: bundle, 2026-11-10), and a seed looked for only there was never found.
+FLATPAK_PREFIX = "/app"
+
+#: The installed ``hugmesh_studio`` package directory. The install prefix is derived from
+#: it (see :func:`install_prefix`); tests point it at a pretend /app layout.
+PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 #: Where the managed copy goes. Set it and nothing else matters (tests set it).
 TARGET_ENV = "HUGMESH_STUDIO_MANAGED_GENERATOR_DIR"
@@ -78,12 +88,48 @@ class Placed:
 last: Placed = Placed()
 
 
+def install_prefix(package_dir: str | None = None) -> str:
+    """The prefix pip installed this package under, read from where the package sits:
+    ``<prefix>/lib*/python3*/site-packages/hugmesh_studio`` (or ``dist-packages``) gives
+    ``<prefix>``. "" when the package is not in such a layout (a source checkout, a
+    PyInstaller bundle), so nothing outside an install is ever searched."""
+    package_dir = PACKAGE_DIR if package_dir is None else package_dir
+    site = os.path.dirname(os.path.normpath(package_dir))
+    if os.path.basename(site) not in ("site-packages", "dist-packages"):
+        return ""
+    pyver = os.path.dirname(site)
+    lib = os.path.dirname(pyver)
+    if not os.path.basename(pyver).startswith("python") \
+            or not os.path.basename(lib).startswith("lib"):
+        return ""
+    return os.path.dirname(lib)
+
+
+def seed_candidates() -> list[str]:
+    """Every directory :func:`seed_dir` looks in, in order, without duplicates:
+    ``$HUGMESH_STUDIO_GENERATOR_SEED``; ``<prefix>/share/hugmesh-studio`` for the prefix
+    the package was installed under (/app in the Flatpak); /app/share/hugmesh-studio
+    when running inside a Flatpak; then under sys.prefix and sys.base_prefix (a venv or
+    a pip install into the interpreter's own prefix)."""
+    candidates = [os.environ.get(SEED_ENV, "").strip()]
+    prefix = install_prefix()
+    if prefix:
+        candidates.append(os.path.join(prefix, SEED_SUBDIR))
+    if flatpak_host.in_flatpak():
+        candidates.append(os.path.join(FLATPAK_PREFIX, SEED_SUBDIR))
+    candidates.append(os.path.join(sys.prefix, SEED_SUBDIR))
+    candidates.append(os.path.join(sys.base_prefix, SEED_SUBDIR))
+    seen: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.append(candidate)
+    return seen
+
+
 def seed_dir() -> str:
     """The directory holding this install's seed, "" when it carries none."""
-    candidates = [os.environ.get(SEED_ENV, "").strip()]
-    candidates.append(os.path.join(sys.prefix, SEED_SUBDIR))
-    for candidate in candidates:
-        if candidate and os.path.isfile(os.path.join(candidate, SEED_ARCHIVE)) \
+    for candidate in seed_candidates():
+        if os.path.isfile(os.path.join(candidate, SEED_ARCHIVE)) \
                 and os.path.isfile(os.path.join(candidate, SEED_META)):
             return candidate
     return ""

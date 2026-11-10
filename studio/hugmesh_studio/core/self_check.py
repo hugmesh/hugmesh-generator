@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 
 from . import flatpak_host, generator_dir, generator_refs, managed_generator
 
@@ -59,8 +58,8 @@ def check(gen_dir: str) -> dict:
                        "commit": meta.get("commit"), "files": len(meta.get("files") or {})}
                       if seed else None)
     if report["in_flatpak"] and not seed:
-        problems.append("this Flatpak carries no generator seed "
-                        f"({os.path.join(sys.prefix, managed_generator.SEED_SUBDIR)})")
+        problems.append("this Flatpak carries no generator seed (looked in "
+                        f"{', '.join(managed_generator.seed_candidates())})")
     if seed:
         placed = managed_generator.last if managed_generator.last.version else \
             managed_generator.ensure()
