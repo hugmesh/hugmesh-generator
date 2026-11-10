@@ -20,7 +20,8 @@ What this pins, and why each one matters:
 * ``packaging/release_version.py`` is the one place that spells the version rules
   (format, ordering, the bump of the two files); the cut workflow and the release
   script call it rather than re-implementing them.
-* The AppStream metadata's newest ``<release>`` is the same version, spelt with ``~``.
+* The AppStream metadata's newest ``<release>`` is the same version, spelt with ``~``,
+  and every older entry sorts strictly below the one above it.
 
 NO VERSION LITERALS. ``.github/workflows/studio-release-cut.yml`` runs this file AFTER
 ``release_version.py bump`` has rewritten the tree, so every expectation here is derived
@@ -29,7 +30,11 @@ that spelt one release line failed every cut that moved the version (eight red c
 2026-11-06), and the file was then hand-cut to one test to get 0.4.1-beta.1 out. The
 mapping and ordering rules are restated below (``_expected_msi``, ``_key``) from the
 docstrings of msi_version.py and release_version.py, so the functions under test never
-supply their own expected values.
+supply their own expected values; ``test_mapper_documents_the_rule_this_file_restates``
+fails first if that docstring rule changes. ``test_guards_hold_after_a_bump`` proves the
+whole set: it bumps a copy of the tree with the real ``release_version.py bump`` (the
+next MINOR, the next MAJOR, that MAJOR's final and the last beta slot) and runs the
+cut's own guard files there.
 """
 from __future__ import annotations
 
@@ -147,6 +152,26 @@ def test_python_metadata_normalises_the_beta_to_pep440():
 
 
 # ── the MSI ProductVersion mapping ─────────────────────────────────────────────────
+def test_mapper_documents_the_rule_this_file_restates():
+    """``_expected_msi`` and ``_LAST_BETA`` restate msi_version.py's docstring. If the rule
+    there changes, this fails first, so the restatement cannot quietly go stale."""
+    doc = _mapper().__doc__
+    assert "build = PATCH * 100 + N" in doc and "PATCH * 100 + 99" in doc, doc
+    assert f"cap of {_LAST_BETA} betas per PATCH" in doc, doc
+    assert _mapper().FINAL_SLOT == _LAST_BETA + 1
+
+
+def test_mapper_docstring_examples_follow_the_rule():
+    """The docstring's worked examples are part of the contract (an operator reads them
+    to predict an MSI's ProductVersion). Each must follow the rule and match the code; a
+    hand-edited example that disagrees with either is red here."""
+    examples = re.findall(r"msi_version\.py (\S+)\s+->\s+(\S+)", _mapper().__doc__)
+    assert len(examples) >= 4, examples
+    for semver, msi in examples:
+        assert _expected_msi(semver) == msi, (semver, msi)
+        assert _mapper().msi_version(semver) == msi, (semver, msi)
+
+
 @pytest.mark.parametrize("semver,msi", [
     (_beta(0, 1), f"{_MAJ}.{_MIN}.1"),
     (_beta(0, 2), f"{_MAJ}.{_MIN}.2"),
@@ -366,6 +391,18 @@ def test_metainfo_newest_release_is_this_version():
             "software centres would show it")
 
 
+def test_metainfo_history_is_strictly_descending():
+    """Newest first, every entry sorts strictly below the one above it (by the documented
+    key, not the code under test). The check above only bounds each entry by __version__;
+    this one also catches a duplicated entry, a bump that inserted an older version under
+    the newest, or a history reordered by hand."""
+    history = [r.get("version").replace("~", "-", 1)
+               for r in ET.parse(METAINFO).getroot().find("releases").findall("release")]
+    assert history and history[0] == _version(), (history[:3], _version())
+    for newer, older in zip(history, history[1:]):
+        assert _key(newer) > _key(older), f"metainfo lists {newer} above {older}, which does not sort below it"
+
+
 _RELEASE_ID = f"studio-v{_version()}"
 EXISTS = ('{"tagName":"' + _RELEASE_ID + '","assets":[{"updatedAt":"2026-10-23T07:35:52Z"},'
           '{"updatedAt":"2026-10-22T10:28:46Z"}]}')
@@ -555,3 +592,62 @@ def test_bump_version_edits_both_files(tmp_path):
     assert newest.get("version") == final.replace("-", "~")
     assert (newest.get("type") == "development") == ("-" in final)
     assert _rv("bump", f"{_BASE}-rc.1", "--root", str(root)).returncode == 1
+
+
+# ── the proof that nothing above names a release line ─────────────────────────────
+# The files "Cut a Studio release" runs in its preflight, after the bump.
+_CUT_GUARDS = ("test_studio_beta_version.py", "test_studio_release_signing.py")
+_SIMULATING = "HUGMESH_STUDIO_GUARD_SIMULATION"
+
+
+def _bump_targets() -> list[str]:
+    """What a cut can move the tree to: the next MINOR, the next MAJOR, that MAJOR's final,
+    and the last beta slot (beta.98, after which `next` has no beta to propose)."""
+    targets = [_beta(0, 1, minor=_MIN + 1), _beta(0, 1, major=_MAJ + 1, minor=0),
+               _final(0, major=_MAJ + 1, minor=0)]
+    last = _beta(_PATCH, _LAST_BETA) if "-" in _version() else _beta(_PATCH + 1, _LAST_BETA)
+    if _key(last) > _key(_version()):
+        targets.append(last)
+    return targets
+
+
+def test_the_cut_runs_these_guard_files():
+    """The simulation below runs _CUT_GUARDS; if the cut's preflight stops running one of
+    them, or starts running another, the simulation is proving the wrong set."""
+    cut = yaml.safe_load(_read(os.path.join(GENERATOR_DIR, ".github", "workflows", "studio-release-cut.yml")))
+    steps = [s for s in cut["jobs"]["preflight"]["steps"]
+             if s.get("name") == "Run the release guard tests against the tree that will execute"]
+    assert len(steps) == 1, [s.get("name") for s in cut["jobs"]["preflight"]["steps"]]
+    ran = set(re.findall(r"studio/tests/(test_\w+\.py)", steps[0]["run"]))
+    assert ran == set(_CUT_GUARDS), sorted(ran)
+
+
+@pytest.mark.skipif(os.environ.get(_SIMULATING) == "1", reason="already inside a simulated bump")
+@pytest.mark.parametrize("target", _bump_targets())
+def test_guards_hold_after_a_bump(tmp_path, target):
+    """Copy what the guards read, bump the copy with the real ``release_version.py bump``
+    (the cut's own step), then run the cut's guard files inside the copy. Any test that
+    spells this release line, or that cannot survive the last beta slot, fails here,
+    before a cut does."""
+    root = tmp_path / "tree"
+    shutil.copytree(os.path.join(GENERATOR_DIR, ".github", "workflows"), root / ".github" / "workflows")
+    shutil.copytree(os.path.join(STUDIO_ROOT, "packaging"), root / "studio" / "packaging")
+    # The whole package: the suite's conftest imports hugmesh_studio.core.
+    shutil.copytree(os.path.join(STUDIO_ROOT, "hugmesh_studio"), root / "studio" / "hugmesh_studio",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    # The cut's guard step runs under the suite's ini (testpaths, markers) and conftest.
+    shutil.copy(os.path.join(STUDIO_ROOT, "pytest.ini"), root / "studio")
+    (root / "studio" / "tests").mkdir()
+    for name in ("conftest.py",) + _CUT_GUARDS:
+        shutil.copy(os.path.join(STUDIO_ROOT, "tests", name), root / "studio" / "tests")
+    bump = subprocess.run([sys.executable, str(root / "studio" / "packaging" / "release_version.py"),
+                           "bump", target, "--root", str(root), "--date", "2026-12-24"],
+                          capture_output=True, text=True)
+    assert bump.returncode == 0, bump.stderr
+    env = dict(os.environ, **{_SIMULATING: "1"})
+    proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rs",
+                           *(f"studio/tests/{name}" for name in _CUT_GUARDS)],
+                          cwd=root, env=env, capture_output=True, text=True, timeout=600)
+    tail = "\n".join(proc.stdout.splitlines()[-40:])
+    assert proc.returncode == 0, f"the guards fail after a bump to {target}:\n{tail}\n{proc.stderr[-2000:]}"
+    assert " passed" in tail and " failed" not in tail, tail

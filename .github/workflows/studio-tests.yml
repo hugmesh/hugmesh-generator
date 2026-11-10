@@ -96,6 +96,9 @@ on:
       - 'studio/packaging/build-msi-wine.sh'
       - 'studio/packaging/wix/windows-build-requirements.txt'
       - 'studio/packaging/linux-build-requirements.txt'
+      # The cut's guard step runs under pytest.ini's options, so an edit to it can
+      # change what the guards do; test_studio_beta_version.py's bump simulation reads it.
+      - 'studio/pytest.ini'
   workflow_dispatch: {}
 
 permissions:
