@@ -354,3 +354,10 @@ jobs:
           tests/test_local_ai_status.py
           tests/test_local_ai_cli.py
           tests/test_assistant_code_edits.py
+          tests/test_session_locations.py
+          tests/test_pages_session_locations.py
+          tests/test_managed_generator.py
+          tests/test_local_ai_models.py
+          tests/test_ollama_docker.py
+          tests/test_local_ai_dock.py
+          tests/test_local_ai_dock_pull.py
