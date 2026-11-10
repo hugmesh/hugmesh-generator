@@ -191,6 +191,29 @@ DISPLAY_ARGS=()
 # the control node still self-joins its own headscale, a worker gets no key.
 MESH_RENDEZVOUS="${MESH_RENDEZVOUS:-}"
 MESH_JOIN_WAIT="${MESH_JOIN_WAIT:-1800}"
+# ── Boot from a save (FG5, 2026-11-09) — default-off ─────────────────────────
+# A CONTAINER path (under /work) to a STANDALONE qcow2 a save wrote
+# (run-qemu-docker.sh --save-device, or core/emulation_save.py's mesh save-set),
+# booted again instead of the golden. Empty = the golden path, byte for byte.
+#
+# What changes, and why each piece is not optional:
+#   * the DISK: the launcher puts this run's overlay over the SAVE (-F qcow2), so
+#     every write lands in the run overlay and the save itself is never written —
+#     the same promise the golden gets. The golden is STILL resolved: the ARM/Pi
+#     kernel is lifted from it (a qcow2 is opaque to sfdisk/mtools), and the
+#     record's "image" keeps naming it so the cache sweep spares it.
+#   * the IDENTITY: the saved disk's accounts were provisioned at FIRST boot
+#     against the ORIGINAL KEYS stick, so the saved login key
+#     (<stem>.id_ed25519) is the only key that opens it. A fresh ssh-keygen and a
+#     fresh KEYS stick (the golden path) would pair the saved system with a key
+#     it never saw: "booted" and unreachable. The saved stick (<stem>.keys.img)
+#     is attached instead and the saved key is copied into this run dir, so the
+#     record's ssh_key and a later re-save both work exactly as for a golden run.
+#   * the RECORD notes it ("boot_save"), so a reader can tell a resumed device
+#     from a fresh one (the go-live journal says "resumed from save").
+# The sibling names are emulation_save.py's KEYS_IMAGE_SUFFIX / LOGIN_KEY_SUFFIX /
+# KEYS_DIR_SUFFIX, spelled from the save's own stem.
+BOOT_SAVE=""
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; YEL=$'\033[0;33m'; RST=$'\033[0m'
 info() { echo "${GREEN}[qemu-docker]${RST} $*"; }
@@ -270,6 +293,14 @@ file — this container never invents an identity):
                    (the L2 has no DHCP). Env: MESH_IP.
   --mesh-prefix-len N   prefix length for that address. Default: ${MESH_PREFIX_LEN}.
                    Env: MESH_PREFIX_LEN.
+
+Boot from a save (golden mode only; default-off):
+  --boot-save QCOW2  a STANDALONE save under /work (what --save-device or a mesh
+                   save wrote). The run overlay goes over the SAVE, which is never
+                   written; the kernel still comes from the golden --img. Needs the
+                   save's siblings <stem>.keys.img and <stem>.id_ed25519 (a mesh
+                   save writes both): the saved disk only opens with the login key
+                   it was provisioned with, so no fresh key or KEYS stick is made.
 EOF
 exit "${1:-0}"
 }
@@ -303,6 +334,7 @@ while [[ $# -gt 0 ]]; do
         --mesh-mac)      MESH_MAC="$2"; shift 2 ;;
         --mesh-ip)       MESH_IP="$2"; shift 2 ;;
         --mesh-prefix-len) MESH_PREFIX_LEN="$2"; shift 2 ;;
+        --boot-save)     BOOT_SAVE="$2"; shift 2 ;;
         -h|--help)  usage 0 ;;
         *)          echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
@@ -549,6 +581,7 @@ write_device_record() {
   "mesh_net": $(json_str "${MESH_NET:-}"),
   "mesh_mac": $(json_str "${MESH_MAC:-}"),
   "mesh_ip": $(json_str "${MESH_IP:-}"),
+  "boot_save": $(json_str "$(host_path "${BOOT_SAVE:-}")"),
   "display_protocol": $(json_str "${DISPLAY_PROTOCOL:-}"),
   "display_port": ${DISPLAY_HOST_PORT:-0},
   "display_web_port": ${DISPLAY_WEB_PORT:-0},
@@ -783,6 +816,37 @@ EXTRA_USERS=("${_extra_ok[@]}")
 if ${KEEP_ALIVE} && [ "${MODE}" = "stage4" ]; then
     die "--keep-alive is golden-mode only (stage4 delegates its qemu to run-qemu-test.sh); re-run with --mode golden"
 fi
+
+# boot_save_siblings SAVE — the save's KEYS image, login key and KEYS dir, one per
+# line, in that order. ONE spelling of emulation_save.py's suffixes, shared by the
+# preflight below and boot_save_restore, so the two cannot disagree about which
+# file "the saved key" is.
+boot_save_siblings() {
+    local stem
+    stem="${1%.qcow2}"
+    printf '%s\n' "${stem}.keys.img" "${stem}.id_ed25519" "${stem}.keys"
+}
+
+# boot_save_check — refused HERE, before the image is resolved (a 20 GB
+# decompress can sit between here and the boot), for the same reason as the
+# stage4 check above. A no-op without --boot-save.
+boot_save_check() {
+    local sib=()
+    [ -n "${BOOT_SAVE}" ] || return 0
+    [ "${MODE}" = "golden" ] \
+        || die "--boot-save is golden-mode only (stage4 fabricates its own throwaway disk)"
+    case "${BOOT_SAVE}" in
+        "${WORK}"/*.qcow2) ;;
+        *) die "--boot-save must be a .qcow2 under ${WORK} (the only writable mount; saves live in ${WORK}/saves), got: ${BOOT_SAVE}" ;;
+    esac
+    case "${BOOT_SAVE}" in *..*) die "--boot-save must not contain '..' (got: ${BOOT_SAVE})" ;; esac
+    [ -f "${BOOT_SAVE}" ] || die "--boot-save ${BOOT_SAVE}: no such file"
+    mapfile -t sib < <(boot_save_siblings "${BOOT_SAVE}")
+    [ -s "${sib[0]}" ] || die "--boot-save: the saved KEYS stick ${sib[0]} is missing — boot-from-save needs a MESH save (core/emulation_save.py writes it); a bare --save-device copy has no stick, and the saved disk does not open with a fresh one"
+    [ -s "${sib[1]}" ] || die "--boot-save: the saved login key ${sib[1]} is missing — the saved disk's accounts only accept the key they were provisioned with"
+    return 0
+}
+boot_save_check
 
 # The three things only the CALLER can know. None is fatal — the record is still
 # written, and every field the caller did supply is still right — but each one
@@ -1099,6 +1163,102 @@ if [ "${MODE}" = "stage4" ]; then
 fi
 
 # ── golden mode ─────────────────────────────────────────────────────────────
+# ── Role facts shared by both boots (fresh KEYS payload, or a restored save) ──
+# Hoisted out of the payload block below (2026-11-09) because a boot-from-save
+# skips that block entirely but still needs both: HS_ENABLED gates the fleet
+# rendezvous publish after ssh, and the canonical ROLE is what the record says.
+# headscale is a ROLE-specific service: the builders link it into the default
+# runlevel ONLY for the identity/control roles — rpi5: pki|generic
+# (build-rpi5-stage4.sh:3842-3845) and x86: pki|omnibus (ROLE_HEADSCALE,
+# build-x86-host-stage4.sh:1239/1256) — and explicitly REMOVE the symlink for
+# every other role (build-rpi5-stage4.sh:3906-3908). A payload that says
+# enabled:true for EVERY role asserts a service the product deliberately does
+# not run on workers, which failed the headscale assertions on all four rpi5
+# rows (matrix triage 2026-08-13). Keep the payload role-accurate instead.
+HS_ENABLED=false
+case "${ROLE}" in
+    pki|generic|omnibus) HS_ENABLED=true ;;
+esac
+
+# ROLE is folded through the ONE vocabulary first (scripts/_roles-lib.sh), so an
+# older spelling reaching this harness (`be+gpu`, `full`, `edge_ai`) classifies as
+# the role it MEANS rather than falling into the worker default by accident.
+ROLE="$(hugmesh_role_canonicalize "${ROLE}" 2>/dev/null || printf '%s' "${ROLE}")"
+
+# boot_save_restore — the boot-from-save half of the identity (see BOOT_SAVE at
+# the top): copy the saved login key and KEYS stick into this run dir, and take
+# the guest's logins from the SAVED users.json, because those are the accounts
+# that exist on the saved disk — not whatever --extra-user says this time.
+boot_save_restore() {
+    local kimg key kdir names n want have sib=()
+    mapfile -t sib < <(boot_save_siblings "${BOOT_SAVE}")
+    kimg="${sib[0]}"; key="${sib[1]}"; kdir="${sib[2]}"
+    step "Restoring the saved login key + KEYS stick ($(basename "${kimg}"), $(basename "${key}"))"
+    SSHKEY="${RUN_DIR}/id_ed25519"
+    rm -f "${SSHKEY}" "${SSHKEY}.pub"
+    install -m 0600 "${key}" "${SSHKEY}" || die "could not copy the saved login key ${key}"
+    if [ -s "${key}.pub" ]; then
+        install -m 0644 "${key}.pub" "${SSHKEY}.pub" || die "could not copy ${key}.pub"
+    else
+        ssh-keygen -y -f "${SSHKEY}" > "${SSHKEY}.pub" || die "could not derive the public half of ${key}"
+    fi
+    KEYS_IMG="${RUN_DIR}/keys.img"
+    cp "${kimg}" "${KEYS_IMG}" || die "could not copy the saved KEYS stick ${kimg}"
+    # The payload dir too, so a re-save of this resumed device carries the SAME
+    # stick forward (emulation_save copies <run>/keys/ and <run>/keys.img).
+    KEYS_SRC="${RUN_DIR}/keys"; rm -rf "${KEYS_SRC}"
+    if [ -d "${kdir}" ]; then
+        cp -a "${kdir}" "${KEYS_SRC}" || die "could not copy the saved KEYS payload ${kdir}"
+    else
+        mkdir -p "${KEYS_SRC}"
+        MTOOLS_SKIP_CHECK=1 mcopy -s -n -i "${KEYS_IMG}" ::* "${KEYS_SRC}/" 2>/dev/null \
+            || warn "no ${kdir} and could not unpack ${kimg} — a re-save of this device will have no KEYS payload dir"
+    fi
+    # The logins: users[].name of the saved users.json, in order. The first one is
+    # the login this script itself uses (SSH_USER) — the golden payload always puts
+    # SSH_USER first, so a save made by this harness keeps "tester" there.
+    names=""
+    if [ -s "${KEYS_SRC}/users.json" ] && command -v jq >/dev/null 2>&1; then
+        names="$(jq -r '.users[]?.name // empty' "${KEYS_SRC}/users.json" 2>/dev/null || true)"
+    fi
+    if [ -n "${names}" ]; then
+        GUEST_USERS=()
+        while IFS= read -r n; do
+            [[ "${n}" =~ ^[a-z_][a-z0-9_-]*$ ]] || { warn "saved users.json: skipping login '${n}' (not a portable login name)"; continue; }
+            GUEST_USERS+=("${n}")
+        done <<< "${names}"
+        [ "${#GUEST_USERS[@]}" -gt 0 ] || die "the saved users.json names no usable login"
+        SSH_USER="${GUEST_USERS[0]}"
+        for want in "${EXTRA_USERS[@]}"; do
+            have=false
+            for n in "${GUEST_USERS[@]}"; do [ "${n}" = "${want}" ] && have=true; done
+            ${have} || warn "--extra-user ${want}: not on the SAVED disk (accounts are created at first boot only); the record lists only the saved logins"
+        done
+    else
+        warn "could not read the saved users.json (no ${KEYS_SRC}/users.json or no jq) — the record lists the requested logins, which may not all exist on the saved disk"
+    fi
+    # The mesh identity is baked into the saved disk: provision_network copied the
+    # stick's mesh0 profile, bound to a MAC, into the guest at first boot. A
+    # second NIC with a DIFFERENT MAC would come up with no address — a mesh member
+    # in name only — so a mismatch is refused, not booted.
+    if [ -n "${MESH_NET}" ]; then
+        local prof saved_mac
+        prof="${KEYS_SRC}/network/mesh0.nmconnection"
+        [ -s "${prof}" ] || die "--boot-save on a shared L2: the saved stick has no network/mesh0.nmconnection, so the saved guest has no address for the mesh NIC — save the device from a --mesh-net fleet, or boot it without --mesh-net"
+        saved_mac="$(sed -n 's/^mac-address=//p' "${prof}" | head -1 | tr 'A-F' 'a-f')"
+        [ "${saved_mac}" = "$(printf '%s' "${MESH_MAC}" | tr 'A-F' 'a-f')" ] \
+            || die "--boot-save: the saved disk's mesh profile is bound to MAC ${saved_mac:-<none>}, but this run hands the mesh NIC ${MESH_MAC} — replan with the SAME identity file the saved fleet used"
+    elif [ -s "${KEYS_SRC}/network/mesh0.nmconnection" ]; then
+        warn "the saved device was on a shared L2 (its stick carries a mesh0 profile) but this run has no --mesh-net: it boots with no mesh NIC and its tailnet peers will be unreachable"
+    fi
+    info "resumed: disk ${BOOT_SAVE} (read-only backing), logins ${GUEST_USERS[*]}"
+}
+
+if [ -n "${BOOT_SAVE}" ]; then
+    boot_save_restore
+else
+# ── Fresh identity (golden boot). Left at column 0 inside this `else` so the
+# golden payload below reads exactly as it did before boot-from-save existed. ──
 # Build the throwaway login key + the FAT32 KEYS disk the first-boot
 # keys-provision engine consumes. Payload shape mirrors run-qemu-test.sh so the
 # SAME assertions.sh applies to both modes.
@@ -1175,19 +1335,6 @@ cat > "${KEYS_SRC}/users.json" <<EOF
 }
 EOF
 
-# headscale is a ROLE-specific service: the builders link it into the default
-# runlevel ONLY for the identity/control roles — rpi5: pki|generic
-# (build-rpi5-stage4.sh:3842-3845) and x86: pki|omnibus (ROLE_HEADSCALE,
-# build-x86-host-stage4.sh:1239/1256) — and explicitly REMOVE the symlink for
-# every other role (build-rpi5-stage4.sh:3906-3908). A payload that says
-# enabled:true for EVERY role asserts a service the product deliberately does
-# not run on workers, which failed the headscale assertions on all four rpi5
-# rows (matrix triage 2026-08-13). Keep the payload role-accurate instead.
-HS_ENABLED=false
-case "${ROLE}" in
-    pki|generic|omnibus) HS_ENABLED=true ;;
-esac
-
 # kubernetes.role, likewise ROLE-ACCURATE rather than a constant (2026-08-26).
 # Every row used to be handed "control-plane", so provision.sh's
 # provision_kubernetes() logged `Kubernetes role: control-plane` on a frontend,
@@ -1214,10 +1361,10 @@ esac
 #     (build-rpi5-stage4.sh:5184) and never joins a cluster (:3896-3897).
 # NOTE generic is a WORKER even though headscale runs on it — that is precisely
 # why this is a second case statement and not another arm of the one above.
-# ROLE is folded through the ONE vocabulary first (scripts/_roles-lib.sh), so an
-# older spelling reaching this harness (`be+gpu`, `full`, `edge_ai`) classifies as
-# the role it MEANS rather than falling into the worker default by accident.
-ROLE="$(hugmesh_role_canonicalize "${ROLE}" 2>/dev/null || printf '%s' "${ROLE}")"
+# ROLE was folded through the ONE vocabulary (scripts/_roles-lib.sh) before this
+# block (see "Role facts shared by both boots" above), so an older spelling
+# reaching this harness (`be+gpu`, `full`, `edge_ai`) classifies as the role it
+# MEANS rather than falling into the worker default by accident.
 K8S_ROLE="worker"
 case "${ROLE}" in
     pki)                                    K8S_ROLE="control-plane" ;;
@@ -1360,6 +1507,13 @@ fi
 KEYS_IMG="${RUN_DIR}/keys.img"
 bash "${QEMU_DIR}/make-test-keys.sh" "${KEYS_SRC}" "${KEYS_IMG}" 64 \
     || die "make-test-keys.sh failed"
+fi   # golden payload vs boot_save_restore
+
+# The disk the launcher boots. The golden ${IMG} stays resolved either way (the
+# kernel above came out of it, and the record names it); a boot-from-save hands
+# the launcher the SAVE, as qcow2, instead.
+LAUNCH_DISK=(--img "${IMG}")
+[ -z "${BOOT_SAVE}" ] || LAUNCH_DISK=(--img "${BOOT_SAVE}" --img-format qcow2)
 
 # ── Boot via the platform's own launcher (unmodified) ───────────────────────
 LAUNCH_RUN_DIR="${RUN_DIR}/launch"
@@ -1430,7 +1584,7 @@ step "Booting ${PLATFORM}/${ROLE} (mem=${MEM}M smp=${SMP})"
 case "${PLATFORM}" in
     rpi5)
         bash "${QEMU_DIR}/launch-pi.sh" \
-            --img "${IMG}" --kernel "${KERNEL}" --keys-img "${KEYS_IMG}" \
+            "${LAUNCH_DISK[@]}" --kernel "${KERNEL}" --keys-img "${KEYS_IMG}" \
             --run-dir "${LAUNCH_RUN_DIR}" --keep \
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
@@ -1443,7 +1597,7 @@ case "${PLATFORM}" in
         # /dev/kvm is passed through when available; launch-x86.sh's accel=kvm:tcg
         # already degrades to TCG on its own if the device is absent/unusable.
         bash "${QEMU_DIR}/launch-x86.sh" \
-            --img "${IMG}" --keys-img "${KEYS_IMG}" \
+            "${LAUNCH_DISK[@]}" --keys-img "${KEYS_IMG}" \
             --run-dir "${LAUNCH_RUN_DIR}" --keep \
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
@@ -1455,7 +1609,7 @@ case "${PLATFORM}" in
     *)
         bash "${QEMU_DIR}/launch-arm.sh" \
             --platform "${PLATFORM}" ${BOARD:+--board "${BOARD}"} \
-            --img "${IMG}" --kernel "${KERNEL}" --keys-img "${KEYS_IMG}" \
+            "${LAUNCH_DISK[@]}" --kernel "${KERNEL}" --keys-img "${KEYS_IMG}" \
             --run-dir "${LAUNCH_RUN_DIR}" --keep \
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \

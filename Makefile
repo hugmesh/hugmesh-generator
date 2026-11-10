@@ -1301,8 +1301,10 @@ _MESH_EMU_ARGS = $(if $(SESSION),--session "$(SESSION)") \
   $(if $(QEMU_JOBS),--jobs $(QEMU_JOBS)) \
   --generator-dir .
 
-mesh-emu-up: ## boot the WHOLE mesh emulated: --keep-alive fan-out over the session, device registry, web front door
-	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation up $(_MESH_EMU_ARGS)
+# FROM_SAVE=<mesh-stamp|dir> boots the saved rows from a mesh save-set instead of
+# the goldens (the saves are never written; see tests/qemu/README.md).
+mesh-emu-up: ## boot the WHOLE mesh emulated: --keep-alive fan-out over the session, device registry, web front door (FROM_SAVE=mesh-<stamp> resumes a save)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation up $(_MESH_EMU_ARGS) $(if $(FROM_SAVE),--from-save "$(FROM_SAVE)")
 
 mesh-emu-status: ## reconciled per-device state + verdicts for the emulated mesh (JSON=1 for machine-readable)
 	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation status $(_MESH_EMU_ARGS) $(if $(filter 1,$(JSON)),--json)

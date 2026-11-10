@@ -542,6 +542,11 @@ class QemuRunOptions:
     #: command preview and its spawn, and it can only emit what it knows about.
     #: Distinct from ``keep`` above, which only preserves per-run scratch dirs.
     keep_alive: bool = False
+    #: BOOT FROM A SAVE: ``(label, save.qcow2)`` pairs, the runner's repeatable
+    #: ``--boot-save LABEL=QCOW2``. Empty (the default) emits nothing. Non-empty
+    #: also means "boot ONLY these rows" — the runner drops every row no pair names
+    #: (a fleet mixing resumed and fresh nodes is refused there, not here).
+    boot_saves: tuple[tuple[str, str], ...] = ()
 
 
 def runner_command(generator_dir: str, opts: QemuRunOptions) -> list[str]:
@@ -582,6 +587,8 @@ def runner_command(generator_dir: str, opts: QemuRunOptions) -> list[str]:
         cmd.append("--keep")
     if opts.keep_alive:
         cmd.append("--keep-alive")
+    for label, save in opts.boot_saves:
+        cmd += ["--boot-save", f"{label}={save}"]
     return cmd
 
 

@@ -245,10 +245,24 @@ class Device:
     display_web_port: int = 0                        # noVNC host port on 127.0.0.1; 0 = none
     display_password_file: str = ""                  # HOST path to the secret, NEVER the value
     display_resize: str = ""                         # "guest" | "scale" — what this image does
+    #: BOOT FROM A SAVE (records written since 2026-11-09): the HOST path of the
+    #: standalone save this device was booted from (run-qemu-docker.sh --boot-save),
+    #: "" for a device booted from its golden image. TOLERANT like the fields above —
+    #: an older record has none and reads as a golden boot, which is what it was.
+    #: The save itself is never written (the run overlay sits over it), so this path
+    #: still holds exactly what was saved, whatever the device has done since.
+    boot_save: str = ""
 
     @property
     def is_running(self) -> bool:
         return self.state not in _DEAD_STATES
+
+    @property
+    def resumed_from_save(self) -> bool:
+        """True when this device booted from a save rather than its golden image —
+        so whatever posture the save carried (a go-live flip, a provisioned cluster)
+        is on the disk again, instead of the golden's first-boot INTERNAL state."""
+        return bool(self.boot_save)
 
 
 def devices_dir(work_dir: str) -> str:
@@ -303,6 +317,7 @@ def _device_from_record(raw: object) -> Device | None:
         display_web_port=display_web_port,
         display_password_file=str(raw.get("display_password_file") or ""),
         display_resize=str(raw.get("display_resize") or ""),
+        boot_save=str(raw.get("boot_save") or ""),
     )
 
 

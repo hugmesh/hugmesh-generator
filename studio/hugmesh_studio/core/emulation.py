@@ -38,6 +38,12 @@ CLI
 the same stdlib subcommand shape as core/emulation_save.py. ``plan`` and ``status``
 take ``--json`` for machine-readable output. The Makefile faces are
 ``mesh-emu-up`` / ``mesh-emu-status`` / ``mesh-emu-down``.
+
+BOOT FROM A SAVE (FG5): ``up --from-save SET`` (and ``plan --from-save SET`` to
+preview it) boots the rows of a mesh save-set from their saved disks instead of
+the golden images — see :func:`plan_from_save`. A go-live flipped inside an
+emulated mesh lasts only while its devices run; saving the mesh and booting it
+back this way is how it survives a restart. The saves are never written.
 """
 from __future__ import annotations
 
@@ -250,6 +256,12 @@ class EmulationPlan:
     rows: list[DeviceRow] = field(default_factory=list)
     mesh: mesh_emulation.MeshPlan | None = None
     epoch: str = ""
+    #: BOOT FROM A SAVE: ``(label, save.qcow2)`` for every row, and the set they
+    #: came from. Empty for a golden plan. Set only by :func:`plan_from_save`,
+    #: which also narrows ``rows`` to exactly the saved labels — the runner boots
+    #: nothing else on a boot-from-save run, so the plan must not claim more.
+    boot_saves: tuple[tuple[str, str], ...] = ()
+    save_set: str = ""
 
     @property
     def labels(self) -> list[str]:
@@ -332,6 +344,57 @@ def plan(generator_dir: str, session, mode, envelope: RunEnvelope | None = None,
                          epoch=_utc_now() if epoch is None else epoch)
 
 
+def plan_from_save(generator_dir: str, save_ref: str,
+                   envelope: RunEnvelope | None = None, *, session=None,
+                   work_dir: str = "", epoch: str | None = None) -> EmulationPlan:
+    """A DEPLOY plan that boots a mesh save-set's rows from their SAVED disks.
+
+    ``save_ref`` is a set name under ``<work>/saves/`` (``mesh-<stamp>``), its
+    directory, or its ``mesh-save.json``. The build session is the one the saved
+    devices were running from (the manifest records it, and the ARM/Pi kernel is
+    still lifted from that golden); ``session`` may name it explicitly, and must
+    then AGREE. An older manifest without the field needs ``session`` — there is
+    deliberately no "newest session" fallback (see :func:`start_device_argv`).
+
+    Every refusal is a ``ValueError`` naming the reason: an incomplete set, a
+    missing disk/stick/key, a session mismatch, or a saved row the session does
+    not have.
+    """
+    work = work_dir or qemu_devices.default_work_dir(generator_dir)
+    sset = emulation_save.load_save_set(work, save_ref)
+    if not work_dir and sset.work_dir:
+        # Saves must sit under the runner's --work (it mounts nothing else), so a
+        # set saved from another work dir is booted against THAT work dir.
+        work = sset.work_dir
+    if session is None or session == "":
+        if not sset.artifacts:
+            raise ValueError(
+                f"save-set {sset.session} predates the manifest's 'artifacts' field, "
+                "so it does not say which build session its devices ran — pass the "
+                "session explicitly (--session)")
+        session = sset.artifacts
+    sess = _as_session(generator_dir, session)
+    if sset.artifacts and (os.path.realpath(sset.artifacts)
+                           != os.path.realpath(sess.path)):
+        raise ValueError(
+            f"save-set {sset.session} was saved from {sset.artifacts}, not "
+            f"{sess.path}; a saved disk boots with the kernel of the build it came "
+            "from — drop --session, or name that one")
+    pl = plan(generator_dir, sess, EmulationMode.DEPLOY, envelope,
+              work_dir=work, epoch=epoch)
+    saved = dict(sset.disks)
+    missing = [lb for lb in saved if pl.row(lb) is None]
+    if missing:
+        raise ValueError(
+            f"save-set {sset.session} holds {', '.join(missing)}, which session "
+            f"{pl.session_name} has no image for (rows: {', '.join(pl.labels)})")
+    return replace(pl,
+                   rows=[r for r in pl.rows if r.label in saved],
+                   boot_saves=tuple((r.label, saved[r.label]) for r in pl.rows
+                                    if r.label in saved),
+                   save_set=sset.session_dir)
+
+
 # ── argv authors ────────────────────────────────────────────────────────────────────
 
 #: RunEnvelope fields that are deliberately NOT forwarded into QemuRunOptions,
@@ -365,7 +428,8 @@ def run_argv(plan: EmulationPlan) -> list[str]:
     opts = _envelope_options(plan.envelope,
                              artifacts_dir=plan.session_path,
                              work_dir=plan.work_dir,
-                             keep_alive=(plan.mode is EmulationMode.DEPLOY))
+                             keep_alive=(plan.mode is EmulationMode.DEPLOY),
+                             boot_saves=tuple(plan.boot_saves))
     return runner_command(plan.generator_dir, opts)
 
 
@@ -400,6 +464,9 @@ def start_device_argv(plan_or_record, label: str = "", *, generator_dir: str = "
                              f"(session {p.session_name}: {', '.join(p.labels)})")
         gen, artifacts, work = p.generator_dir, p.session_path, p.work_dir
         env = envelope or replace(p.envelope, jobs=1)
+        # A per-row Start on a boot-from-save plan restarts that row FROM ITS SAVE:
+        # the same disk the plan previewed, never a silent golden first boot.
+        boot_saves = tuple(pair for pair in p.boot_saves if pair[0] == label)
     else:
         rec = plan_or_record
         lbl = label or str(getattr(rec, "label", "") or "")
@@ -419,8 +486,10 @@ def start_device_argv(plan_or_record, label: str = "", *, generator_dir: str = "
                 "boot a different build than this device came from.")
         work = work_dir or qemu_devices.default_work_dir(gen)
         env = envelope or RunEnvelope(jobs=1)
+        boot_saves = ()
     opts = _envelope_options(env, artifacts_dir=artifacts, work_dir=work,
-                             only_exact=label, keep_alive=True)
+                             only_exact=label, keep_alive=True,
+                             boot_saves=boot_saves)
     return runner_command(gen, opts)
 
 
@@ -941,11 +1010,13 @@ def plan_as_dict(pl: EmulationPlan) -> dict:
                           "mac": planned.mac, "ip": planned.ip,
                           "keys_image": planned.keys_image})
         devices.append(entry)
+    for entry in devices:
+        entry["boot_save"] = dict(pl.boot_saves).get(entry["label"], "")
     return {"mode": pl.mode.value, "session": pl.session_name,
             "session_path": pl.session_path, "work_dir": pl.work_dir,
             "epoch": pl.epoch, "gateway": pl.gateway_label,
             "front_door": pl.front_door, "argv": run_argv(pl),
-            "devices": devices}
+            "save_set": pl.save_set, "devices": devices}
 
 
 def status_as_dict(st: MeshStatus) -> dict:
@@ -958,7 +1029,11 @@ def status_as_dict(st: MeshStatus) -> dict:
                           "ssh_host_port": r.device.ssh_host_port,
                           "artifacts": r.device.artifacts,
                           "image": r.device.image,
-                          "started_at": r.device.started_at})
+                          "started_at": r.device.started_at,
+                          # "" = booted from the golden; else the save it
+                          # resumed from (the go-live journal's "resumed from
+                          # save" reads this, beside started_at).
+                          "boot_save": r.device.boot_save})
         rows.append(entry)
     return {"session": st.plan.session_name, "work_dir": st.plan.work_dir,
             "source": st.source, "rows": rows,
@@ -970,6 +1045,9 @@ def _print_plan(pl: EmulationPlan) -> None:
     print(f"emulation plan : {pl.session_name} [{pl.mode.value}]")
     print(f"  artifacts    : {pl.session_path}")
     print(f"  work dir     : {pl.work_dir}")
+    if pl.save_set:
+        print(f"  from save    : {pl.save_set} (each row boots its saved disk; "
+              "the saves are never written)")
     if pl.mesh:
         print(f"  gateway      : {pl.gateway_label}  front door: {pl.front_door}")
     for row in pl.rows:
@@ -977,6 +1055,9 @@ def _print_plan(pl: EmulationPlan) -> None:
         ports = (f"  ssh:{planned.ssh_port} web:{planned.ui_port} ip:{planned.ip}"
                  if planned else "")
         print(f"  {row.label:<24} {row.basename}{ports}")
+        saved = dict(pl.boot_saves).get(row.label)
+        if saved:
+            print(f"  {'':<24} disk: {saved}")
     print(f"  argv         : {' '.join(shlex.quote(a) for a in run_argv(pl))}")
 
 
@@ -987,6 +1068,8 @@ def _print_status(st: MeshStatus) -> None:
         extra = ""
         if r.device is not None and r.device.ssh_host_port:
             extra = f"  ssh 127.0.0.1:{r.device.ssh_host_port}"
+        if r.device is not None and r.device.resumed_from_save:
+            extra += f"  resumed from save {r.device.boot_save}"
         print(f"  {r.label:<24} [{r.state:<10}] {verdict:<10} {r.detail}{extra}")
     for dev in st.unplanned:
         print(f"  {dev.label:<24} (not in this plan; state {dev.state or 'unknown'})")
@@ -1068,8 +1151,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--overwrite", action="store_true",
                    help="save-mesh: allow replacing files an earlier run of the "
                         "SAME save-set wrote (never the golden images)")
+    p.add_argument("--from-save", default="", metavar="SET",
+                   help="plan/up: boot a mesh save-set's rows from their SAVED "
+                        "disks (a mesh-<stamp> name under <work>/saves, its dir, "
+                        "or its mesh-save.json). The session defaults to the one "
+                        "the set was saved from; the saves are never written")
     args = p.parse_args(argv)
     gen = args.generator_dir
+
+    if args.from_save and args.subcommand not in ("plan", "up"):
+        print("--from-save applies to plan and up only", file=sys.stderr)
+        return 2
 
     if args.subcommand == "down":
         # No session needed: --stop-all-devices sweeps whatever the registry under
@@ -1077,6 +1169,31 @@ def main(argv: list[str] | None = None) -> int:
         work = args.work or qemu_devices.default_work_dir(gen)
         return spawn(mesh_emulation.stop_mesh_argv(gen, work_dir=work), gen,
                      on_line=print)
+
+    if args.from_save:
+        env = RunEnvelope(jobs=args.jobs, mem_mb=args.mem, smp=args.smp,
+                          timeout_s=args.timeout,
+                          assert_timeout_s=args.assert_timeout,
+                          extra_users=tuple(args.extra_user), keep=args.keep,
+                          cache_max_gb=args.cache_max_gb)
+        try:
+            pl = plan_from_save(gen, args.from_save, env,
+                                session=args.session or None, work_dir=args.work)
+        except ValueError as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 1
+        if args.subcommand == "plan":
+            if args.json:
+                json.dump(plan_as_dict(pl), sys.stdout, indent=2)
+                sys.stdout.write("\n")
+            else:
+                _print_plan(pl)
+            return 0
+        rc = spawn(run_argv(pl), gen, on_line=print)
+        _print_status(status(pl))
+        if pl.front_door:
+            print(f"  front door   : {pl.front_door} (via the gateway's web tunnel)")
+        return rc
 
     try:
         sess = (_as_session(gen, args.session) if args.session

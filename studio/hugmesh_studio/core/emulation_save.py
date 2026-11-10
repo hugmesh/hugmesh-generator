@@ -130,6 +130,15 @@ class DeviceSaveResult:
     error: str = ""                                   # blocker / runner failure
     keys_copied: list[str] = field(default_factory=list)
     keys_error: str = ""                              # warning; never flips ok
+    #: Where the saved disk CAME from, for boot-from-save (FG5): the HOST
+    #: artifacts dir and the golden image basename the device was running over,
+    #: and the save it was itself booted from ("" = a golden boot). A resumed
+    #: device still needs its golden — the ARM/Pi kernel is lifted from it — so
+    #: the set has to say which build that was rather than leave the reader to
+    #: guess the newest session (the bug class emulation.start_device_argv refuses).
+    artifacts: str = ""
+    image: str = ""
+    boot_save: str = ""
 
 
 @dataclass
@@ -476,7 +485,8 @@ def save_mesh(generator_dir: str, items=None, *, work_dir: str = "",
     executor = run or _run_argv
     for dev in devices:
         res = DeviceSaveResult(label=dev.label, platform=dev.platform,
-                               role=dev.role)
+                               role=dev.role, artifacts=dev.artifacts,
+                               image=dev.image, boot_save=dev.boot_save)
         results.append(res)
         blocker = qd.save_blocker(dev)
         if blocker:
@@ -541,6 +551,9 @@ def _write_manifest(generator_dir: str, report: MeshSaveReport) -> str:
             "error": r.error,
             "keys_copied": r.keys_copied,
             "keys_error": r.keys_error,
+            "artifacts": r.artifacts,
+            "image": r.image,
+            "boot_save": r.boot_save,
         } for r in report.results],
     }
     tmp = f"{path}.tmp.{os.getpid()}"
@@ -549,6 +562,110 @@ def _write_manifest(generator_dir: str, report: MeshSaveReport) -> str:
         fh.write("\n")
     os.replace(tmp, path)
     return path
+
+
+# ── Reading a set back: boot-from-save (FG5) ─────────────────────────────────────
+
+class SaveSetError(ValueError):
+    """A save-set that cannot be booted from, with the reason in words."""
+
+
+@dataclass(frozen=True)
+class SaveSet:
+    """One mesh save-set as the boot-from-save path needs it: which disk boots
+    which row, and which build those rows came from."""
+    session: str
+    session_dir: str
+    manifest_path: str
+    work_dir: str
+    #: ``(label, host path of the saved .qcow2)`` in the manifest's order — the
+    #: order the mesh was saved in, which is its bring-up order.
+    disks: tuple[tuple[str, str], ...]
+    #: The HOST artifacts dir every saved device was running from; "" when the
+    #: manifest predates the field (then the caller must name the session).
+    artifacts: str
+
+
+def save_set_dir(work_dir: str, ref: str) -> str:
+    """``ref`` -> the set's directory: a path to the dir or to its manifest, or a
+    bare set NAME under ``<work>/saves/``. Never "the newest set": a typo must be
+    an error, not a boot of some other day's mesh."""
+    ref = (ref or "").strip()
+    if not ref:
+        raise SaveSetError("no save-set named (pass a mesh-<stamp> name or its directory)")
+    if os.path.basename(ref) == MANIFEST_NAME and os.path.isfile(ref):
+        return os.path.dirname(os.path.abspath(ref))
+    if os.path.isdir(ref):
+        return os.path.abspath(ref)
+    candidate = mesh_save_dir(work_dir, ref)
+    if os.sep not in ref and os.path.isdir(candidate):
+        return candidate
+    raise SaveSetError(f"no save-set {ref!r}: neither a directory nor a set under "
+                       f"{qd.saves_dir(work_dir)}")
+
+
+def load_save_set(work_dir: str, ref: str) -> SaveSet:
+    """Read ``mesh-save.json`` and refuse every shape boot-from-save cannot boot.
+
+    Refused, each with its reason (the runner re-checks the per-disk ones):
+
+    * a set with a FAILED device — booting the rest would be a mesh one node short
+      of the one that was saved, and the tailnet/cluster state on the survivors
+      still expects it;
+    * a saved disk, or its KEYS stick or login key, missing from the set dir — the
+      saved disk only opens with the key it was provisioned with;
+    * devices saved from DIFFERENT build sessions — one boot uses one session.
+    """
+    sdir = save_set_dir(work_dir, ref)
+    path = os.path.join(sdir, MANIFEST_NAME)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except FileNotFoundError:
+        raise SaveSetError(f"{sdir} has no {MANIFEST_NAME} — not a mesh save-set "
+                           "(make one with `python -m hugmesh_studio.core."
+                           "emulation_save save`)") from None
+    except (OSError, ValueError) as exc:
+        raise SaveSetError(f"could not read {path}: {exc}") from None
+    if not isinstance(rec, dict) or not isinstance(rec.get("devices"), list):
+        raise SaveSetError(f"{path} is not a mesh save manifest (no devices list)")
+    failed = [str(d.get("label") or "?") for d in rec["devices"]
+              if isinstance(d, dict) and not d.get("ok")]
+    if failed:
+        raise SaveSetError(
+            f"save-set {rec.get('session') or sdir} is INCOMPLETE — not saved: "
+            f"{', '.join(failed)}. Booting the rest would resume a mesh missing "
+            "those nodes; save the whole mesh again first.")
+    disks: list[tuple[str, str]] = []
+    artifacts: set[str] = set()
+    problems: list[str] = []
+    for d in rec["devices"]:
+        if not isinstance(d, dict):
+            continue
+        label = str(d.get("label") or "").strip()
+        # The manifest's own target is trusted for its NAME only: the set may have
+        # been moved, so the disk is looked for in the set dir it was read from.
+        target = os.path.join(sdir, os.path.basename(str(d.get("target") or "")
+                                                     or qd.save_basename(label)))
+        stem = target[:-len(qd.SAVE_SUFFIX)] if target.endswith(qd.SAVE_SUFFIX) else target
+        for need in (target, stem + KEYS_IMAGE_SUFFIX, stem + LOGIN_KEY_SUFFIX):
+            if not os.path.isfile(need):
+                problems.append(f"{label}: missing {need}")
+        disks.append((label, target))
+        if d.get("artifacts"):
+            artifacts.add(str(d["artifacts"]))
+    if not disks:
+        raise SaveSetError(f"save-set {sdir} holds no device")
+    if problems:
+        raise SaveSetError("save-set cannot be booted: " + "; ".join(problems))
+    if len(artifacts) > 1:
+        raise SaveSetError("save-set mixes devices from different build sessions "
+                           f"({', '.join(sorted(artifacts))}); one boot uses one session")
+    return SaveSet(session=str(rec.get("session") or os.path.basename(sdir)),
+                   session_dir=sdir, manifest_path=path,
+                   work_dir=str(rec.get("work_dir") or work_dir),
+                   disks=tuple(disks),
+                   artifacts=next(iter(artifacts)) if artifacts else "")
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────────
