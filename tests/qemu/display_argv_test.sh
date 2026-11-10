@@ -404,8 +404,14 @@ run_launcher arm-virt-disp launch-arm.sh "${ARMV[@]}" --virt-dtb "${DISP[@]}"
 eq "${LAST_RC}" "0" "arm --virt-dtb --display spice exits 0"
 has_pair "${LAST_ARGV}" -device virtio-gpu-pci,edid=on && _ok "arm --virt-dtb --display spice: virtio-gpu-pci,edid=on" || _bad "arm --virt-dtb --display spice: gpu missing"
 refuses "arm: --virt-dtb together with --dtb" launch-arm.sh "${ARM[@]}" --virt-dtb
+# #879 made "no board DTB" the DEFAULT (launch_arm_medium_test.sh section 1), so
+# --virt-dtb is now the explicit spelling of what a flagless run already does: the
+# SAME argv, element for element. (This line used to assert a refusal — #875's rule,
+# from before #879 dropped the implied board DTB.)
 run_launcher arm-nodtb launch-arm.sh "${ARMV[@]}"
-if [ "${LAST_RC}" -ne 0 ] && [ ! -f "${LAST_ARGV}" ]; then _ok "arm without --virt-dtb still refuses when the board DTB is absent (unchanged)"; else _bad "arm booted without a DTB and without --virt-dtb"; fi
+eq "${LAST_RC}" "0" "arm without --virt-dtb boots QEMU's own virt DT too (#879 default)"
+golden_a64 "${TMP}/run-arm-nodtb" cortex-a53 "${KERNEL}" > "${TMP}/armnodtb.golden"
+argv_matches_golden "${LAST_ARGV}" "${TMP}/armnodtb.golden" "arm with neither --dtb nor --virt-dtb"
 
 # ── 8) Drift guard: one block, three launchers ───────────────────────────────
 echo "== 8) the display block is identical across the three launchers =="

@@ -504,25 +504,17 @@ fi
 (pass --kernel, or --medium to lift it off a Frite medium). QEMU -M virt boots the mainline kernel directly — no vendor firmware chain."
 
 # ── -dtb is opt-in. An explicit --dtb must exist; the board DTB is never implied. ──
+# MERGE REPAIR (2026-11-09). #875 (--virt-dtb: drop the board DTB on request) and
+# #879 (no board DTB by default, ever) both landed here, and the squash kept #879's
+# opening `if` with #875's whole resolve block nested inside it and no `fi`, so the
+# file stopped parsing and EVERY ARM row died at launch with a bash syntax error.
+# #879's rule is the newer one and the one its header states (NO -dtb by default),
+# so it wins: -dtb only for an explicit --dtb. --virt-dtb keeps working as the
+# spelling of that default, and naming both is still the contradiction #875 refused.
 if [ -n "${DTB}" ]; then
+    ${VIRT_DTB} && die "--dtb and --virt-dtb contradict each other (got --dtb ${DTB})"
     [ -f "${DTB}" ] || die "DTB not found: ${DTB} (--dtb is an explicit opt-in; the default is QEMU's own virt device tree)"
     warn "--dtb ${DTB}: this REPLACES QEMU's -M virt device tree. A board DTB (${BOARD_DTB}) describes none of virt's hardware — expect no console/disk/NIC unless this DTB really describes virt."
-# ── Resolve the DTB. The compiled .dtb lives beside the kernel under boot/dtbs/. ──
-# --virt-dtb skips all of this: QEMU -M virt generates a DTB that describes the
-# machine it actually models (PCIe root, virtio-gpu/xhci/serial), which no board
-# DTB can. An explicit --dtb alongside it is a contradiction, not a preference.
-if ${VIRT_DTB}; then
-    [ "${DTB}" = "${DEF_DTB}" ] || die "--dtb and --virt-dtb contradict each other (got --dtb ${DTB})"
-    DTB=""
-else
-    if [ ! -f "${DTB}" ]; then
-        kdir="$(dirname "${KERNEL}")"
-        for c in "${kdir}/dtbs/${DTB}" "${kdir}/${DTB}" "${kdir}/dtbs/$(basename "${DTB}")"; do
-            [ -f "${c}" ] && { DTB="${c}"; break; }
-        done
-    fi
-    [ -f "${DTB}" ] || die \
-        "DTB not found: ${DTB} (pass --dtb; expected the board's compiled .dtb beside the kernel under boot/dtbs/)."
 fi
 
 # ── eMMC target preflight (hw/sd/sd.c rules, checked HERE where the caller sees them) ──
@@ -554,8 +546,7 @@ info "platform: ${PLATFORM} board:${BOARD:-<none>} role:${ROLE}"
 info "img    : ${IMG:-<none>}"
 info "kernel : ${KERNEL}"
 info "initrd : ${INITRD:-<none>}"
-info "dtb    : ${DTB:-<none: QEMU virt DT> (board FDT name: ${BOARD_DTB})}"
-info "dtb    : ${DTB:-<none: QEMU generates the virt DTB (--virt-dtb)>}"
+info "dtb    : ${DTB:-<none: QEMU generates the virt DTB> (board FDT name: ${BOARD_DTB})}"
 info "run dir: ${RUN_DIR}"
 
 # ── Per-run qcow2 overlay (keeps the golden .img pristine) ───────────────────
@@ -634,12 +625,11 @@ HOSTFWD+=",hostfwd=tcp::${HTTP_PORT}-:80"
 HOSTFWD+=",hostfwd=tcp::${API_PORT}-:6443"
 HOSTFWD+=",hostfwd=tcp::${HS_PORT}-:8080"
 
-# -dtb is present exactly when a board DTB was resolved; --virt-dtb leaves it out
-# so QEMU generates virt's own (the default argv keeps -dtb, byte for byte).
-KERNEL_ARGS=(-kernel "${KERNEL}" -append "${CMDLINE}")
-if [ -n "${DTB}" ]; then
-    KERNEL_ARGS=(-kernel "${KERNEL}" -dtb "${DTB}" -append "${CMDLINE}")
-fi
+# -dtb is present exactly when an explicit --dtb was given (see the DTB block).
+# MERGE REPAIR (2026-11-09): #875's KERNEL_ARGS spelling of the same -kernel/-dtb/
+# -append triple was left in beside #879's, so every ARM argv carried the kernel
+# twice and the golden disk twice — and a medium/eMMC-only boot (no --img) got an
+# overlay disk that was never created. One spelling, #879's, below.
 QEMU_ARGS=(
     -machine "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" -smp "${SMP}" -m "${MEM}"
     -no-reboot
@@ -653,9 +643,6 @@ if [ -n "${IMG}" ]; then
                 -device virtio-blk-pci,drive=hd0)
 fi
 QEMU_ARGS+=(
-    "${KERNEL_ARGS[@]}"
-    -drive "file=${OVERLAY},format=qcow2,if=none,id=hd0"
-    -device virtio-blk-pci,drive=hd0
     -netdev "${HOSTFWD}"
     -device virtio-net-pci,netdev=net0
     -pidfile "${PIDFILE}"
