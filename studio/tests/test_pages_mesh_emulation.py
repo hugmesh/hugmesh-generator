@@ -2248,3 +2248,32 @@ def test_a_front_door_with_no_ssh_channel_is_refused_with_the_core_sentence(
     assert why in page.golive_note.text()
     page._go_live()                                   # even if it were clicked
     assert not opened_go_live
+
+
+def test_the_go_live_button_and_its_note_are_drawn_whole_in_the_window(
+        wiz, registry, tmp_path):
+    """Measured, not just "enabled": the button sits in the front-door row beside a
+    word-wrapping note, which is the shape that squeezes a button's text."""
+    from hugmesh_studio.gui.qt import QtCore
+
+    def rect_in(w):
+        return QtCore.QRect(w.mapTo(wiz, QtCore.QPoint(0, 0)), w.size())
+
+    page = _page(wiz)
+    QtWidgets.QApplication.processEvents()
+    note = page.golive_note                          # greyed: the reason is drawn
+    assert note.isVisible() and wiz.rect().contains(rect_in(note))
+    assert note.heightForWidth(note.width()) <= note.height() + 1
+    registry(_device("x86/frontend", port=22357))
+    page._refresh_reality()
+    QtWidgets.QApplication.processEvents()
+    img = wiz.grab().toImage()
+    out = os.environ.get("GOLIVE_SHOTS_DIR") or str(tmp_path)
+    os.makedirs(out, exist_ok=True)
+    assert img.save(os.path.join(out, "mesh-emulation-go-live-button.png"))
+    btn = page.golive_btn
+    assert btn.isVisible() and btn.isEnabled()
+    assert wiz.rect().contains(rect_in(btn)), (rect_in(btn), wiz.size())
+    assert btn.width() >= btn.fontMetrics().horizontalAdvance(btn.text())
+    # in the front door's row: level with Open web UI
+    assert abs(rect_in(btn).center().y() - rect_in(page.web_btn).center().y()) <= 4
