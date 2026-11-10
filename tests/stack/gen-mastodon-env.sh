@@ -55,7 +55,10 @@ ensure OTP_SECRET        openssl rand -hex 64
 ensure DB_HOST           lit mastodon-db
 ensure DB_USER           lit mastodon
 ensure DB_NAME           lit mastodon
-ensure DB_PASS           lit mastodon
+# NO DB_PASS here (hugmesh-generator#857): compose.real.yaml sets it on every
+# mastodon service from MASTODON_DB_PASSWORD (tests/stack/gen-stack-db-env.sh), and
+# `environment:` beats this env_file, so a DB_PASS an older run left in the file
+# is ignored rather than trusted.
 ensure REDIS_HOST        lit mastodon-redis
 ensure ALTERNATE_DOMAINS lit mastodon-web:3000
 ensure ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY        openssl rand -hex 32

@@ -39,6 +39,20 @@ never be trusted or reused anywhere real. Reporting them is not needed:
   `APP_BFF_CUSTODY_KEY`, `APP_MFA_FACTOR_KEY` and `dev-app-user-bff-secret`. They only
   make the local stack start; a real cluster gets its own values from
   `scripts/gen-cluster-secrets.sh` and the secret store.
+- The `legacy` column of `tests/stack/stack-db-passwords.tsv`: the role-name
+  passwords (`federation`, `adminbff`, `casdoor`, ...) that `tests/stack/compose*.yaml`
+  spelled before 2026-11-04. They are never used for a new database. The local
+  stack's database passwords are no longer in any committed file:
+  `tests/stack/gen-stack-db-env.sh` (run by every `make stack-*` target and by
+  `scripts/stack-up.ps1`) generates one random value per role into the gitignored
+  `tests/stack/.env`, and the compose files read them as `${KEY:?...}`, so a missing
+  value stops compose instead of falling back to a word in the file. The old literal
+  is used only to keep a database volume created before that date working: when
+  such a volume exists and no container is left to read its value from, the
+  script adopts the old literal and warns. `bash tests/stack/gen-stack-db-env.sh
+  --rotate-sql KEY` prints the one-shot `ALTER ROLE` that replaces it without
+  dropping data. `tests/scripts/test-compose-no-literal-passwords.sh` fails on any
+  literal password value in `tests/stack/compose*.yaml`.
 - Token- and key-shaped strings inside tests and fixtures (for example the
   secret-scanner and redaction test cases). They are fake.
 

@@ -78,7 +78,11 @@ WANT_ROWS = {
 WANT_FE_PATTERNS = {"/games/api/admin/**", "/games/api/**", "/games/**"}
 BFF_ENV = {
     "DB_HOST": "games-bff-db", "DB_PORT": "5432", "DB_NAME": "threewizards",
-    "DB_USER": "threewizards", "DB_PASS": "threewizards",
+    # The password is not spelled in the compose file (hugmesh-generator#857): it is
+    # the GAMES_BFF_DB_PASSWORD key of the gitignored tests/stack/.env, which
+    # tests/stack/gen-stack-db-env.sh writes; games-bff-db reads the same key.
+    "DB_USER": "threewizards",
+    "DB_PASS": "${GAMES_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}",
     "CASDOOR_ENDPOINT": "http://casdoor:8000", "CASDOOR_ORGANIZATION": "hugmesh",
     "CASDOOR_CLIENT_ID": "dev-games-client", "CASDOOR_CLIENT_SECRET": "dev-games-secret",
     "CASSANDRA_CONTACT_POINTS": "cassandra:9042", "CASSANDRA_KEYSPACE": "threewizards",
@@ -254,6 +258,8 @@ def check_compose(doc):
     db = s["games-bff-db"]
     if db.get("image") == "postgres:16-alpine" and (db.get("environment") or {}).get("POSTGRES_DB") == "threewizards": ok("[compose] games-bff-db = postgres:16-alpine threewizards")
     else: bad("[compose] games-bff-db shape wrong"); n += 1
+    if str((db.get("environment") or {}).get("POSTGRES_PASSWORD")) == BFF_ENV["DB_PASS"]: ok("[compose] games-bff-db POSTGRES_PASSWORD is the same generated key games-bff reads")
+    else: bad("[compose] games-bff-db POSTGRES_PASSWORD is not the key games-bff's DB_PASS reads"); n += 1
     return n
 
 def check_kind(k):

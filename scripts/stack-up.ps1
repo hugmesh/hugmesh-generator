@@ -167,9 +167,141 @@ function Get-LinesWithoutRaKey([string]$Path) {
   return ,$keep
 }
 
+# >>> stack-db-env (twin of tests/stack/gen-stack-db-env.sh) >>>
+# The per-role DB passwords (hugmesh-generator#857). The compose files read every
+# Postgres role's password and the brokers' SVC_PASSWORD as ${KEY:?...} and spell no
+# value, so a missing key stops ANY compose command on them (up, build, ps, down).
+# Same contract as tests/stack/gen-stack-db-env.sh (which every `make stack-*` runs
+# first); read that script's header. In short: the keys are the rows of
+# tests\stack\stack-db-passwords.tsv; their values live in tests\stack\.env next to
+# every other line (kept); created once, NEVER rotated; a key that is missing while
+# one of its volumes EXISTS adopts the value the row's container was created with,
+# else the row's pre-2026-11-04 literal, with a warning that never prints the value;
+# docker that cannot answer writes nothing and stops; no volume mints 48 hex.
+# -Down ensures the keys (compose needs them to tear down), then strips them.
+$DbTable  = Join-Path $StackDir 'stack-db-passwords.tsv'
+$DbBegin  = '# >>> local stack DB passwords (tests/stack/gen-stack-db-env.sh) >>>'
+$DbEnd    = '# <<< local stack DB passwords <<<'
+$DbSafeRe = '^[A-Za-z0-9._~-]+$'
+
+function Get-StackDbRows {
+  if (-not (Test-Path -LiteralPath $DbTable)) { throw "tests\stack\stack-db-passwords.tsv is missing." }
+  $rows = @()
+  foreach ($l in [System.IO.File]::ReadAllLines($DbTable)) {
+    if (-not $l.Trim() -or $l.StartsWith('#')) { continue }
+    $c = $l.Split("`t")
+    if ($c.Count -ne 5 -or ($c | Where-Object { -not $_ })) { throw "stack-db-passwords.tsv: malformed row for '$($c[0])' (want 5 TAB-separated columns)" }
+    $rows += [pscustomobject]@{ Key = $c[0]; Service = $c[1]; CtrEnv = $c[2]; Volumes = @($c[3].Split(' ') | Where-Object { $_ }); Legacy = $c[4] }
+  }
+  if ($rows.Count -eq 0) { throw 'stack-db-passwords.tsv holds no keys.' }
+  return ,$rows
+}
+function Read-StackEnvKey([string]$Path, [string]$Key) {
+  if (-not (Test-Path -LiteralPath $Path)) { return '' }
+  $re = '^\s*(export\s+)?' + [regex]::Escape($Key) + '\s*=\s*(.*?)\s*$'
+  $v = ''
+  foreach ($l in [System.IO.File]::ReadAllLines($Path)) { if ($l -match $re) { $v = $Matches[2] } }
+  if ($v.Length -ge 2 -and $v[0] -eq $v[-1] -and ('"', "'") -contains [string]$v[0]) { $v = $v.Substring(1, $v.Length - 2) }
+  return $v
+}
+function Get-LinesWithoutDbKeys([string]$Path, $Rows) {
+  $keep = New-Object System.Collections.Generic.List[string]
+  if (-not (Test-Path -LiteralPath $Path)) { return ,$keep }
+  $keyRe = '^\s*(export\s+)?(' + (($Rows | ForEach-Object { [regex]::Escape($_.Key) }) -join '|') + ')\s*='
+  $skip = $false
+  foreach ($l in [System.IO.File]::ReadAllLines($Path)) {
+    if ($l -eq $DbBegin) { $skip = $true; continue }
+    if ($skip) { if ($l -eq $DbEnd) { $skip = $false }; continue }
+    if ($l -match $keyRe) { continue }
+    $keep.Add($l)
+  }
+  return ,$keep
+}
+function Ensure-StackDbEnv {
+  $rows    = Get-StackDbRows
+  $project = if ($env:COMPOSE_PROJECT_NAME) { $env:COMPOSE_PROJECT_NAME } else { 'hugmesh-local' }
+  $vals = @{}; $origins = @{}; $missing = 0
+  foreach ($r in $rows) {
+    $v = Read-StackEnvKey $DotEnv $r.Key
+    if ($v) {
+      if ($v -notmatch $DbSafeRe) { throw "$($r.Key) in tests\stack\.env holds a character outside [A-Za-z0-9._~-]; a connection string would read it differently. Fix the file." }
+      $vals[$r.Key] = $v; continue
+    }
+    $missing++
+    $found = ''
+    foreach ($vol in $r.Volumes) {
+      $savedEap = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      try {
+        $probe = (docker volume inspect "${project}_$vol" 2>&1 | Out-String)
+        $exists = ($LASTEXITCODE -eq 0)
+      } finally { $ErrorActionPreference = $savedEap }
+      if (-not $exists -and $probe -notmatch '(?i)no such volume') {
+        throw "docker could not say whether volume ${project}_$vol exists, so NOTHING was written to tests\stack\.env (a new $($r.Key) would lock an existing volume out). Start Docker Desktop and retry."
+      }
+      if ($exists) { $found = "${project}_$vol"; break }
+    }
+    if ($found) {
+      $fromCtr = ''
+      $savedEap = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      try {
+        $cid = @(docker ps -a -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$($r.Service)" 2>$null) | Select-Object -First 1
+        if ($cid) {
+          $envLine = @(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $cid 2>$null) |
+            Where-Object { $_ -like "$($r.CtrEnv)=*" } | Select-Object -Last 1
+          if ($envLine) { $fromCtr = $envLine.Substring($r.CtrEnv.Length + 1) }
+        }
+      } finally { $ErrorActionPreference = $savedEap }
+      if ($fromCtr) {
+        $v = $fromCtr
+        $origins[$r.Key] = "adopted from the existing $project $($r.Service) container (volume $found predates this key)"
+        Write-Warning "$($r.Key) adopted from the existing $($r.Service) container (volume $found exists)."
+      } else {
+        $v = $r.Legacy
+        $origins[$r.Key] = "adopted: volume $found predates this key and no $($r.Service) container is left (assumed the pre-2026-11-04 compose literal)"
+        Write-Warning "$($r.Key): volume $found exists and no $($r.Service) container carries $($r.CtrEnv); assumed the compose literal used before 2026-11-04."
+      }
+      Write-Warning "The stack keeps working as before. To rotate $($r.Key): -Down (DROPS the data), or ALTER ROLE in the container and edit tests\stack\.env (bash tests/stack/gen-stack-db-env.sh --rotate-sql $($r.Key) prints the steps)."
+    } else {
+      $bytes = New-Object byte[] 24
+      [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+      $v = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+      $origins[$r.Key] = "generated $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+    }
+    if ($v -notmatch $DbSafeRe) { throw "The value resolved for $($r.Key) is empty or outside [A-Za-z0-9._~-]. Nothing was written." }
+    $vals[$r.Key] = $v
+  }
+  if ($missing -gt 0) {
+    $lines = Get-LinesWithoutDbKeys $DotEnv $rows
+    $lines.Add($DbBegin)
+    $lines.Add('# GENERATED, gitignored, never commit. Each value must match what its volume was')
+    $lines.Add('# initialised with: do not edit or delete one while that volume exists (-Down /')
+    $lines.Add('# make stack-down removes both). Other lines in this file are yours and are kept.')
+    foreach ($r in $rows) {
+      $o = if ($origins.ContainsKey($r.Key)) { $origins[$r.Key] } else { 'kept (set outside this script)' }
+      $lines.Add("# $($r.Key): $o")
+      $lines.Add("$($r.Key)=$($vals[$r.Key])")
+    }
+    $lines.Add($DbEnd)
+    Write-EnvAtomic $DotEnv ([string[]]$lines)
+    Write-Host "==> Wrote $missing local stack DB password(s) to tests\stack\.env"
+  }
+  # Passed explicitly as well: an inherited (even empty) variable would beat .env.
+  foreach ($r in $rows) { Set-Item -Path "Env:$($r.Key)" -Value $vals[$r.Key] }
+}
+function Remove-StackDbEnv {
+  if (-not (Test-Path -LiteralPath $DotEnv)) { return }
+  $rest = Get-LinesWithoutDbKeys $DotEnv (Get-StackDbRows)
+  Write-EnvAtomic $DotEnv ([string[]]$rest)
+}
+# <<< stack-db-env <<<
+
 if ($Down) {
   Write-Host '==> Tearing down the local stack (docker compose down -v)'
+  Ensure-StackDbEnv   # compose interpolates the keys even to tear down
   docker compose -f $Compose --profile social --profile tor down -v
+  if ($LASTEXITCODE -eq 0) { Remove-StackDbEnv }
   if ($LASTEXITCODE -eq 0 -and (Test-Path $DotEnv)) {
     $rest = Get-LinesWithoutRaKey $DotEnv
     if (@($rest | Where-Object { $_.Trim() }).Count -gt 0) {
@@ -256,6 +388,9 @@ if ($routeAccessPw -notmatch '^[A-Za-z0-9._~-]+$') {
 # Passed explicitly as well: an inherited (even empty) variable would beat .env.
 $env:ROUTE_ACCESS_DB_PASSWORD = $routeAccessPw
 
+# The per-role DB passwords (see the stack-db-env block above).
+Ensure-StackDbEnv
+
 # ── 1. Clone / update all repos ────────────────────────────────────────────
 Write-Host "==> Cloning all repos into $StackSrc (base=$GitBase ref=$GitRef)"
 New-Item -ItemType Directory -Force -Path $StackSrc | Out-Null
@@ -310,7 +445,7 @@ if ($Social) {
       'LOCAL_DOMAIN=localhost'
       "SECRET_KEY_BASE=$(New-HexSecret)$(New-HexSecret)"
       "OTP_SECRET=$(New-HexSecret)$(New-HexSecret)"
-      'DB_HOST=mastodon-db'; 'DB_USER=mastodon'; 'DB_NAME=mastodon'; 'DB_PASS=mastodon'
+      'DB_HOST=mastodon-db'; 'DB_USER=mastodon'; 'DB_NAME=mastodon'   # DB_PASS: compose.real.yaml sets it from MASTODON_DB_PASSWORD
       'REDIS_HOST=mastodon-redis'
     ) | Set-Content -Path $mastodonEnv -Encoding ascii
   }
