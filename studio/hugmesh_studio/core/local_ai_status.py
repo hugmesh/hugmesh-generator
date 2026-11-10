@@ -608,7 +608,7 @@ def format_status(s: Snapshot) -> str:
     from . import local_ai_models as lam
     pulling = lam.active_line()
     if pulling:
-        lines.append("  download " + pulling)
+        lines.append("  pull     " + pulling)
     beat = "never" if s.heartbeat_age is None else f"{int(s.heartbeat_age)}s ago"
     lines.append(f"  worker   {s.worker}" + (f" (pid {s.worker_pid})" if s.worker_pid else "")
                  + f", last heartbeat {beat}")

@@ -134,7 +134,7 @@ class NoModel(lai.LocalAIError):
         where = where_words(env)
         lead = (f"The model {name} is not pulled into {where}." if gone else
                 f"No model is pulled into {where} yet, so it cannot answer.")
-        super().__init__(f"{lead} By hand: {manual_command(name, env)}")
+        super().__init__(f"{lead} By hand: {manual_command(name, env)}.")
 
 
 def offer_for(env: Optional[dict] = None) -> dict:
