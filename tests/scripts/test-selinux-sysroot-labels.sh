@@ -707,7 +707,7 @@ pv_rel="$(grep -n 'log "Relabelling filesystem' "${PROV}" | head -1 | cut -d: -f
 UV_LINE="$(grep -E '^UKI_VARIANTS=\(' "${X86}" | head -1)"
 [ -n "${UV_LINE}" ] && ok "I3: the builder carries one UKI_VARIANTS table" || bad "I3: no UKI_VARIANTS table in the x86 builder"
 DRB="${TMP}/dracut-uki"; mkdir -p "${DRB}"
-awk '/^if command -v dracut >\/dev\/null && dracut --help 2>\/dev\/null \| grep -q -- .--uefi.; then$/{f=1} f{print} f&&/^fi$/{exit}' "${X86}" > "${DRB}/block.raw"
+awk '/^if command -v dracut >\/dev\/null && dracut --help .*--uefi.; then$/{f=1} f{print} f&&/^fi$/{exit}' "${X86}" > "${DRB}/block.raw"
 if [ ! -s "${DRB}/block.raw" ]; then
     bad "I3: could not cut the dracut --uefi block out of the x86 builder"
 else
@@ -902,7 +902,7 @@ EOS
     [ "${rc}" = 0 ] && [ ! -s "${GT12}/out" ] && ok "I6: grub.d: no 10_linux -> nothing, exit 0" || bad "I6: grub.d without 10_linux rc=${rc}"
     grep -i hugmesh "${GD12}" >/dev/null && bad "I6: grub.d test snippet carries the brand name" || ok "I6: grub.d test snippet is brand-neutral"
 fi
-l_gd12="$(ln_of 'install -D -m 0755 "\$\{SPECS_DIR\}/etc/grub.d/12_selinux_enforcing_test"')"
+l_gd12="$(ln_of '^[0-9]+:install -D -m 0755 "\$\{SPECS_DIR\}/etc/grub.d/12_selinux_enforcing_test"')"
 [ -n "${l_gd12}" ] && [ "${l_gd12}" -lt "${l_sto}" ] && ok "I6: the x86 builder installs 12_selinux_enforcing_test before the label pass" \
     || bad "I6: the x86 builder does not install etc/grub.d/12_selinux_enforcing_test (line=${l_gd12:-none})"
 
@@ -937,13 +937,18 @@ for tmpl in "${REPO}"/specs-*/boot/extlinux.conf.tmpl; do
     # every root= sed the board's installer carries, as written, over the rendered file.
     inst="$(ls "${REPO}/specs-${brd}/installer/"install*.sh 2>/dev/null | head -1)"
     [ -n "${inst}" ] || { [ "${brd}" = jetson ] && ok "I7: jetson: no installer (the root= is rendered at build time)"; continue; }
-    sedx="$(grep -oE 'sed -i -E "s#root=\[\^ \]\+#[^"]*"' "${inst}")"
+    # Every root= sed, whatever its address (a `0,/root=/` address would rewrite only
+    # the first label), and none may hide in a spelling this extraction misses.
+    sedx="$(grep -vE '^[[:space:]]*#' "${inst}" | grep -oE 'sed -i -E "[^"]*root=\[\^ \]\+#[^"]*"')"
     [ -n "${sedx}" ] || { bad "I7: ${brd}: no root= sed found in ${inst##*/}"; continue; }
+    n_sed_lines="$(grep -vE '^[[:space:]]*#' "${inst}" | grep -E 'sed .*root=' | grep -vcE '^[[:space:]]*(grep|echo|printf)')"
+    [ "$(printf '%s\n' "${sedx}" | wc -l)" = "${n_sed_lines}" ] \
+        || bad "I7: ${brd}: ${inst##*/} has ${n_sed_lines} sed line(s) touching root= but only $(printf '%s\n' "${sedx}" | wc -l) were extracted and run"
     while IFS= read -r one; do
         expr="${one#sed -i -E }"; IR="${R}.inst"
         ( ROOT_PARTUUID=PU-02 LUKS_UUID=LU ROOT_ARG='root=PARTUUID=PU-02'
           eval "sed -E ${expr}" ) < "${R}" > "${IR}"
-        want="$(eval "ROOT_PARTUUID=PU-02 LUKS_UUID=LU ROOT_ARG='root=PARTUUID=PU-02'; printf '%s' ${expr}" | sed -E 's/^s#root=\[\^ \]\+#//; s/#$//')"
+        want="$(eval "ROOT_PARTUUID=PU-02 LUKS_UUID=LU ROOT_ARG='root=PARTUUID=PU-02'; printf '%s' ${expr}" | sed -E 's/^.*root=\[\^ \]\+#//; s/#$//')"
         n_new="$(grep -E '^[[:space:]]*APPEND ' "${IR}" | grep -cF -- "${want}")"; n_old="$(grep -E '^[[:space:]]*APPEND ' "${IR}" | grep -c 'root=LABEL=BRD_ROOT')"
         [ "${n_new}" = 3 ] && [ "${n_old}" = 0 ] \
             && ok "I7: ${brd}: installer sed '${want%% *}…' re-points root= on all three labels (default, rescue, test)" \
