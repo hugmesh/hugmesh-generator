@@ -637,6 +637,10 @@ class FleetPage(QtWidgets.QWidget):
                    self.orangepi4lts, self.orangepi4lts_only,
                    self.pentest, self.pentest_only):
             cb.toggled.connect(self._update_group_visibility)
+        # a pen-test TICK (the operator's own click) also brings the NVD key box it
+        # just revealed into view; load()/apply() only call _update_group_visibility
+        for cb in (self.pentest, self.pentest_only):
+            cb.toggled.connect(self._reveal_nvd_key)
         self._update_group_visibility()
         self._goto(STEP_PLATFORMS)
 
@@ -981,6 +985,25 @@ class FleetPage(QtWidgets.QWidget):
             self.pentest.isChecked() or self.pentest_only.isChecked())
         self.nvd_key.setVisible(
             self.pentest.isChecked() or self.pentest_only.isChecked())
+
+    def _reveal_nvd_key(self, on: bool) -> None:
+        """A pen-test tick shows the NVD key box UNDER the checkbox, which sits near
+        the bottom of the Platforms step. Measured 2026-11-10 in a FleetWindow at its
+        own 760x700 (viewport 606 px): after the tick the explanation started 11 px
+        above the fold and the box and both warnings were wholly below it, with
+        nothing saying anything had appeared. Scroll the step so the whole block —
+        the explanation, both links, the box, both warnings and the Save / Verify /
+        Forget row — is in view: the bottom first, then the top, so on a viewport too short for both the top
+        (what the box is for) wins. Run AFTER the layout pass the setVisible only
+        POSTED (the _commit_domains lesson), or ensureWidgetVisible scrolls to the
+        hidden widget's stale geometry."""
+        if not on or not self.nvd_key.isVisible():
+            return
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.LayoutRequest)
+        sa = self.step_scroll(STEP_PLATFORMS)
+        w = self.nvd_key
+        sa.ensureWidgetVisible(w.save_btn, 0, 8)
+        sa.ensureWidgetVisible(w.need_label, 0, 8)
 
     def _nvd_key_changed(self) -> None:
         """The stored NVD key changed (save/forget/verify): re-run the Review pane's

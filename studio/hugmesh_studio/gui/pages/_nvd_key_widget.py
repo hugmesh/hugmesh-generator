@@ -6,14 +6,20 @@ print the same sentences. Inline only — no modal anywhere: Save/Verify/Forget 
 org-secret push report on labels under the box.
 
 * the key box is a password field (``EchoMode.Password``) with a Show toggle; after
-  Save it is cleared, so the key sits in no widget once stored;
+  Save it is emptied with ``setText("")``, which also drops QLineEdit's undo/redo
+  history (``clear()`` keeps it: Show + Ctrl+Z brought all 36 characters back), so the
+  key sits in no widget once stored;
 * the two warnings are permanent (not tooltips): a new key needs NVD's activation
   click, and an empty value is refused;
 * Verify is the only outside call, says so beside the button, runs on a worker
   thread with the button disabled, and reports the verdict in words and colour;
-* the org-secret row runs ``gh secret set NVD_API_KEY --org ORG`` with the value on
-  stdin, refuses an unverified key unless "set anyway" is ticked, and reads the
-  secret's ``updated_at`` back.
+* the org-secret row runs ``gh secret set NVD_API_KEY --org ORG`` with the STORED key
+  on stdin, refuses an unverified key unless "set anyway" is ticked, refuses while the
+  box holds a different key (Save it first, or clear the box), reads the secret's
+  ``updated_at`` back and names the stored key's fingerprint — never the key;
+* every Verify result is bound to the fingerprint it checked: a result that comes
+  back after the stored or typed key changed is reported as stale, not painted onto
+  the new key.
 """
 from __future__ import annotations
 
@@ -173,8 +179,7 @@ class NvdKeyWidget(QtWidgets.QWidget):
         self.org_btn.clicked.connect(self._push)
         orow.addWidget(self.org_btn)
         ol.addLayout(orow)
-        self.set_anyway = QtWidgets.QCheckBox(
-            "set anyway (the stored key's last Verify was not OK)")
+        self.set_anyway = QtWidgets.QCheckBox(nvd_key.set_anyway_text(nvd_key.KeyStatus(False)))
         ol.addWidget(self.set_anyway)
         self.org_note = QtWidgets.QLabel(
             f"Runs gh secret set {nvd_key.SECRET_NAME} --org ORG --visibility all as you "
@@ -215,7 +220,17 @@ class NvdKeyWidget(QtWidgets.QWidget):
         tone = "ok" if st.verified else ("bad" if not st.stored
                                          or st.last_verdict == nvd_key.NOT_ACCEPTED else "")
         self._say(self.status_label, line, tone)
+        self._sync_stored(st)
+
+    def _sync_stored(self, st=None) -> None:
+        """Everything that names the stored key's state besides the status line."""
+        st = st or nvd_key.status()
         self.forget_btn.setEnabled(st.stored)
+        self.set_anyway.setText(nvd_key.set_anyway_text(st))
+        # a verified key needs no override; an unticked, disabled box cannot mislead
+        if st.verified:
+            self.set_anyway.setChecked(False)
+        self.set_anyway.setEnabled(not st.verified)
 
     def _toggle_show(self, on: bool) -> None:
         self.key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Normal if on
@@ -235,8 +250,7 @@ class NvdKeyWidget(QtWidgets.QWidget):
         except OSError as e:
             self._say(self.status_label, f"Not saved — {e.strerror or e}", "bad")
             return
-        self.key_edit.clear()
-        self.show_btn.setChecked(False)
+        self._wipe_box()
         res, self._typed_result = self._typed_result, None
         if res is not None and res.fingerprint == st.fingerprint:
             try:
@@ -245,10 +259,19 @@ class NvdKeyWidget(QtWidgets.QWidget):
             except OSError:
                 pass
         tail = "" if st.verified else " — press Verify to check it with NVD."
-        self._say(self.status_label, "NVD API key: " + nvd_key.status_line(st) + tail,
+        self._say(self.status_label, "NVD API key: " + nvd_key.status_line(st)
+                  + f" (fingerprint {nvd_key.short_fingerprint(st.fingerprint)})" + tail,
                   "ok" if st.verified else "")
-        self.forget_btn.setEnabled(True)
+        self._sync_stored(st)
         self.changed.emit()
+
+    def _wipe_box(self) -> None:
+        """Empty the box so the saved key cannot be got back out of it. ``setText``
+        (not ``clear()``) resets QLineEdit's undo/redo history; ``clear()`` is an
+        undoable edit, so Show + Ctrl+Z restored the whole key in plain text."""
+        self.show_btn.setChecked(False)
+        self.key_edit.setText("")
+        self.key_edit.setModified(False)
 
     def _forget(self) -> None:
         nvd_key.forget()
@@ -284,6 +307,27 @@ class NvdKeyWidget(QtWidgets.QWidget):
         if isinstance(res, Exception):
             self._say(self.status_label, f"Verify failed: {type(res).__name__}", "bad")
             return
+        # bind the verdict to the key it CHECKED: the stored key or the box may have
+        # changed while the request was out (refuter: Verify A, Save B, then A's
+        # "accepted" was painted under B)
+        fp = res.fingerprint
+        if stored:
+            st = nvd_key.status()
+            if fp and st.fingerprint != fp:
+                now = (f"the stored key is now {nvd_key.short_fingerprint(st.fingerprint)}, "
+                       f"{nvd_key.status_line(st)}" if st.stored else "no key is stored now")
+                self._say(self.status_label,
+                          f"That Verify checked key {nvd_key.short_fingerprint(fp)}, which "
+                          f"is no longer the stored key ({now}). Press Verify to check "
+                          "the stored key.")
+                self._sync_stored(st)
+                return
+        elif fp and nvd_key.fingerprint_of(self.key_edit.text()) != fp:
+            self._typed_result = None
+            self._say(self.status_label,
+                      f"That Verify checked key {nvd_key.short_fingerprint(fp)}; the box "
+                      "holds something else now. Press Verify again.")
+            return
         if stored:
             try:
                 nvd_key.record_verdict(res)
@@ -293,8 +337,8 @@ class NvdKeyWidget(QtWidgets.QWidget):
         if not stored:
             self._typed_result = res
         tail = "" if stored or not res.ok else " Press Save to keep it."
-        self._say(self.status_label, res.line() + tail, "ok" if res.ok else "bad")
-        self.forget_btn.setEnabled(nvd_key.status().stored)
+        self._say(self.status_label, res.checked_line() + tail, "ok" if res.ok else "bad")
+        self._sync_stored()
 
     def _push(self) -> None:
         if probe_running(self, "_push_probe"):
@@ -303,7 +347,10 @@ class NvdKeyWidget(QtWidgets.QWidget):
         anyway = self.set_anyway.isChecked()
         # refuse before spawning anything: the same checks push_org_secret makes, so
         # the inline answer is immediate and no worker starts for a refused push
-        refusal = nvd_key.push_refusal(org, set_anyway=anyway)
+        # the push sends the STORED key: a different key (or any text) still in the box
+        # would leave "which key went to GitHub?" unanswered — Save it or clear it first
+        refusal = (nvd_key.typed_conflict(self.key_edit.text())
+                   or nvd_key.push_refusal(org, set_anyway=anyway))
         if refusal:
             self._say(self.org_status, f"Not set — {refusal}", "bad")
             return

@@ -93,7 +93,7 @@ class NvdCommands:
                 return
             res = nvd_key.verify(raw, opener=self.opener)
             nvd_key.record_verdict(res)
-            j.status = res.line()
+            j.status = res.checked_line()
             return
         if verb == "forget":
             j.status = ("NVD API key forgotten." if nvd_key.forget()

@@ -31,6 +31,7 @@ The lanes that need it:
 | Studio Fleet window, pen-test ticked | Studio -> Fleet build -> Pen-test harness | the stored key -> a per-run 0600 copy -> `NVD_API_KEY_FILE` |
 | `make pentest` / `make build-all PENTEST=1` | generator `Makefile` | `NVD_API_KEY_FILE=/path/to/file` |
 | `tests/pentest/dependency-check/run-sca.sh` | the shared wrapper | `NVD_API_KEY_FILE` (preferred) or `NVD_API_KEY` |
+| GitLab `sca` stage in `hugmesh-games` | `hugmesh-games/.gitlab-ci.yml` -> its own `tests/pentest/dependency-check/run-sca.sh` | `NVD_API_KEY` CI variable -> a private `--propertyfile` (hugmesh-games companion PR; before it, `--nvdApiKey` on argv) |
 | each repository's `make pentest-sca` | per-repo `Makefile` | not wired yet (follow-up): runs keyless and its failure is swallowed |
 
 ## 2. Request a key
@@ -105,7 +106,11 @@ Two traps when checking by hand:
   When a fleet run includes the pen-test, the Studio copies the key to a private 0600 file
   for that run only. It passes the **path** to the script as `NVD_API_KEY_FILE`; on the
   Docker leg that path is a read-only mount at `/run/secrets/nvd_api_key`. The copy is
-  deleted when the run ends.
+  deleted when the run ends. Its directory (`$TMPDIR/hugmesh-nvd-*`, 0700) holds an
+  owner lock for the run's whole life, so a copy a crash or a `kill -9` left behind is
+  removed the next time the Studio starts, the same sweep the held-key, domain-CA and
+  login-password copies get. A live run's copy is never touched, and a directory younger
+  than two minutes is left alone.
 - **GitHub:** the organisation secret `NVD_API_KEY`, with visibility **all**. The
   release/CI templates read this name.
 - **GitLab:** a group CI/CD variable `NVD_API_KEY`, **masked** and **protected**. There is
@@ -157,7 +162,11 @@ To set it safely, use one of these:
   `python -m hugmesh_studio.core.nvd_key push-org-secret --org <org>`. These refuse an
   empty or malformed key before running gh, and they pass the value only on gh's stdin.
   They also refuse a key whose last Verify was not accepted, unless you tick
-  "set anyway" (`--yes`).
+  "set anyway" (`--yes`). They always send the **stored** key: the GUI refuses while
+  the key box still holds a different key (press Save first, or clear the box), and the
+  success line names the key it sent by its fingerprint (`from the stored key
+  (fingerprint 534d…657a)`, four and four characters of the PBKDF2 hash, never of the
+  key).
 
 Then confirm the secret was written. The value itself cannot be read back:
 
@@ -188,10 +197,17 @@ The wrappers now say which case you are in:
 ## 8. CI logs show part of the key
 
 Dependency-Check prints the key's **first and last five characters** when NVD refuses it
-(`Invalid API Key: 33333-*****-77777`). The Studio blanks that pattern, and the stored
-key, from every fleet log line, `fleet.log`, the session's error tail and the assistant's
-context. CI logs are not redacted that way. If you share a CI log, treat those ten
-characters as part of the key.
+(`Invalid API Key: 33333-*****-77777`).
+
+- `run-sca.sh` passes everything Dependency-Check prints through a filter that blanks that
+  pattern (`Invalid API Key: [NVD key redacted]`) before it reaches the terminal **or**
+  `<out>/dependency-check.log`, the copy that stays on disk after a local or Studio run.
+  Every other line, and the `Invalid API Key` cause, is kept.
+- The Studio also blanks that pattern, and the stored key, from every fleet log line,
+  `fleet.log`, the session's error tail and the assistant's context.
+- CI jobs that call Dependency-Check directly (the GitLab `sca:dependency-check` and
+  `.pentest-sca` jobs, and the GitHub Actions `sca` job) are **not** redacted that way. If
+  you share a CI log, treat those ten characters as part of the key.
 
 The wrappers no longer put the key on a command line. It used to be passed as
 `--nvdApiKey KEY`, which is readable by every user in `/proc/<pid>/cmdline` and in

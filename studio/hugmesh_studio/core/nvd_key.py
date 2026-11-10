@@ -60,6 +60,7 @@ __all__ = [
     "KeyStatus", "PushResult", "push_refusal", "normalise", "check", "key_path", "meta_path", "save",
     "load", "forget", "status", "status_line", "verify", "classify", "record_verdict",
     "materialize_for_run", "export_line", "info_lines", "redact", "make_redactor", "push_org_secret", "main",
+    "short_fingerprint", "fingerprint_of", "typed_conflict", "set_anyway_text",
 ]
 
 # ── the words every face shows (GUI widget, TUI ``nvd``, CLI) ─────────────────────────
@@ -164,6 +165,21 @@ def _fingerprint(key: str) -> str:
     rightly flags (CodeQL py/weak-sensitive-data-hashing). Cached per key."""
     return hashlib.pbkdf2_hmac("sha256", key.encode("utf-8"),
                                b"hugmesh-studio nvd-api-key fingerprint", 50_000).hex()[:12]
+
+
+def short_fingerprint(fp: str) -> str:
+    """How a face names a key: the first and last 4 hex of its fingerprint (a slow
+    hash — never characters of the key itself), e.g. ``534d…657a``."""
+    fp = fp or ""
+    return f"{fp[:4]}…{fp[-4:]}" if len(fp) > 8 else fp
+
+
+def fingerprint_of(raw) -> str:
+    """The fingerprint of ``raw`` when it is a well-formed key, else ""."""
+    try:
+        return _fingerprint(check(raw))
+    except NvdKeyError:
+        return ""
 
 
 # ── store ─────────────────────────────────────────────────────────────────────────────
@@ -302,6 +318,13 @@ class VerifyResult:
 
     def line(self) -> str:
         return f"{self.label}: {self.sentence}"
+
+    def checked_line(self) -> str:
+        """:meth:`line` plus WHICH key was checked (its short fingerprint), so a label
+        can never be read as being about a different key than the one Verify sent."""
+        if not self.fingerprint:
+            return self.line()
+        return f"{self.line()} (checked key {short_fingerprint(self.fingerprint)})"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -506,6 +529,42 @@ def push_refusal(org: str, raw=None, *, set_anyway: bool = False,
     return ""
 
 
+def typed_conflict(typed, st: Optional[KeyStatus] = None) -> str:
+    """Why "Set org secret" must not run while the key BOX holds ``typed`` ("" when it
+    may): the push always sends the STORED key, so a different key — or any other
+    leftover text — in the box makes "which key went to GitHub?" ambiguous (refuter,
+    2026-11-10: stored A, typed B, push sent A and said only "set"). The same key
+    typed again is fine."""
+    if not (typed or "").strip():
+        return ""
+    st = st or status()
+    stored = (f"the stored key (fingerprint {short_fingerprint(st.fingerprint)})"
+              if st.stored else "no stored key")
+    fp = fingerprint_of(typed)
+    if not fp:
+        return (f"The key box holds unsaved text that is not a key, and the push sends "
+                f"{stored}. Clear the box to push the stored key, or paste a key and "
+                f"press Save first.")
+    if st.stored and fp == st.fingerprint:
+        return ""
+    return (f"The key box holds a different key (fingerprint {short_fingerprint(fp)}) "
+            f"than {stored}. Press Save first to push the typed key, or clear the box "
+            f"to push the stored one.")
+
+
+def set_anyway_text(st: Optional[KeyStatus] = None) -> str:
+    """The "set anyway" tick's wording, from the stored key's REAL state (it used to
+    say "the last Verify was not OK" even when it was)."""
+    st = st or status()
+    if not st.stored:
+        return "set anyway — no key is stored yet"
+    fp = short_fingerprint(st.fingerprint)
+    if st.verified:
+        return (f"set anyway — not needed: the stored key (fingerprint {fp}) passed "
+                f"Verify {st.verified_at[:10] or 'earlier'}")
+    return f"set anyway — the stored key (fingerprint {fp}) has not passed Verify"
+
+
 def push_org_secret(org: str, raw=None, runner=None, *, set_anyway: bool = False,
                     st: Optional[KeyStatus] = None) -> PushResult:
     """``gh secret set NVD_API_KEY --org ORG --visibility all``, the value on STDIN
@@ -517,6 +576,8 @@ def push_org_secret(org: str, raw=None, runner=None, *, set_anyway: bool = False
     if refusal:
         return PushResult(False, refusal)
     key = check(load() if raw is None else raw)
+    which = (f"the stored key (fingerprint {short_fingerprint(_fingerprint(key))})"
+             if raw is None else f"key fingerprint {short_fingerprint(_fingerprint(key))}")
     org = org.strip()
     if runner is None:
         from .org_export import SubprocessRunner
@@ -531,13 +592,13 @@ def push_org_secret(org: str, raw=None, runner=None, *, set_anyway: bool = False
     rb = runner.run(["gh", "api", f"/orgs/{org}/actions/secrets/{SECRET_NAME}",
                      "--jq", ".updated_at,.visibility"], timeout=60)
     if rb.returncode != 0:
-        return PushResult(True, f"gh reported the secret set, but reading it back failed: "
-                          f"{_scrub(rb.err, key)}")
+        return PushResult(True, f"gh reported {SECRET_NAME} set on {org} from {which}, "
+                          f"but reading it back failed: {_scrub(rb.err, key)}")
     parts = [p.strip() for p in rb.text.splitlines() if p.strip()]
     updated = parts[0] if parts else ""
     vis = parts[1] if len(parts) > 1 else ""
     return PushResult(True, f"{SECRET_NAME} set on {org} at {updated or '?'}, visibility "
-                      f"{vis or '?'}.", updated, vis)
+                      f"{vis or '?'}, from {which}.", updated, vis)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────────────

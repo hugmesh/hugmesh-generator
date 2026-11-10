@@ -486,7 +486,8 @@ def test_the_nvd_key_block_is_one_set_of_words_on_both_faces(qapp, monkeypatch):
     # the status line is the same function on both faces
     assert w.status_label.text() == "NVD API key: " + nvd_key.status_line()
     assert "NVD API key: " + nvd_key.status_line() in tui
-    # a verdict: the GUI's status label and the TUI's status both print res.line()
+    # a verdict: the GUI's status label and the TUI's status both print
+    # res.checked_line() (the verdict plus the fingerprint of the key it checked)
     res = nvd_key.classify(404, {"message": "Invalid apiKey."})
     assert res.line().startswith(nvd_key.VERDICT_LABELS[nvd_key.NOT_ACCEPTED] + ": ")
     page.deleteLater()
