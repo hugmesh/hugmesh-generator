@@ -372,7 +372,7 @@ STANDALONE=false        # --standalone : local user, no mesh, LUKS2 FDE on insta
 LOCAL_USER=""           # --local-user NAME : the standalone local login account
 LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
 LOCAL_PASS_FILE=""      # --local-pass-file FILE : the same password read from a file (keeps it off argv)
-LOCAL_ADMIN=false       # --local-admin : the local account may sudo on a KEYS-provisioned image too
+LOCAL_ADMIN=false       # --local-admin : the local login account is an administrator (sudo); without it, it is not, on ANY image
 ENCRYPT_ROOT=false      # --encrypt-root : installer LUKS2-encrypts the target root; auto-on for --standalone
 LUKS_PASS=""            # --luks-pass : OPTIONAL unattended passphrase (lands on the installer ISO — warned)
 
@@ -533,6 +533,9 @@ OPTIONS
     --local-pass PASS    Plaintext; hashed at build (yescrypt, $6$ fallback), never
                           baked raw. Omit it and a random one-time password is
                           minted + printed once at first boot instead.
+    --local-admin         Make the local login account an administrator (sudo).
+                          Without it the account is NOT one on any image, and
+                          root stays locked.
     --encrypt-root        install-orangepi4-lts.sh LUKS2-encrypts the target root
                           and prompts for a passphrase at install time
                           (ON-DEVICE format — see the header note); auto-on
@@ -1324,6 +1327,14 @@ fi
 if ${STANDALONE} && ! ${NODE_ROLE} && [ -z "${LOCAL_PASSHASH}" ]; then
     err "--standalone desktop build with no --local-pass/--local-pass-file: the image would boot to a greeter nobody can log in to (root is locked; no KEYS stick, no SSO). Pass --local-pass-file FILE (preferred: keeps the password off the process list) or --local-pass PASS."
     exit 1
+fi
+
+# ── Admin is opt-in (operator rule: the local login account is not admin unless asked) ──
+# Without --local-admin the local account (or the keyless fallback account) is NOT in
+# wheel and has no sudoers grant; root stays locked. Say so at build time so a box
+# nobody can administer is never a surprise (first boot says it on the console too).
+if ! ${LOCAL_ADMIN}; then
+    warn "No --local-admin: the local login account will NOT be an administrator. On a standalone or keyless (no KEYS stick) boot root is locked, so nobody on the device can use sudo; pass --local-admin to make the local account the administrator (docs/STANDALONE-DESKTOP.md)."
 fi
 
 # ── Stage4 package-set resolver (single source of truth) ──────────────────────
