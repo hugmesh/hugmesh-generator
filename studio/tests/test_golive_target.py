@@ -878,6 +878,12 @@ def test_rebind_takes_the_fresh_record_and_a_vanished_one_is_not_running(tmp_pat
     assert gone.label == t.label and not gone.running
     assert "not running" in gt.refusal(gone, osname="posix")
     assert gt.rebind(gt.local_target(), []) == gt.local_target()
+    # the same label under QEMU for Windows is ANOTHER device: never taken for it
+    whpx = gt.target_from_whpx({"label": t.label, "ssh_port": 22777, "ssh_key": "/k/w",
+                                "ssh_user": "hugmesh"})
+    got = gt.rebind(t, [gt.local_target(), whpx, moved])
+    assert got.kind == gt.KIND_DOCKER and got.ssh_port == 22999
+    assert not gt.rebind(t, [gt.local_target(), whpx]).running
 
 
 def test_binding_change_says_what_moved(tmp_path):

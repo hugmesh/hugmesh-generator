@@ -248,6 +248,8 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
 
     def _picked(self, idx: int) -> None:
         try:                                   # PyQt6 qFatals on a slot raise
+            # a person picked: the "no such device" from opening is answered
+            self.wiz.preselect_problem = ""
             if 0 <= idx < len(self._rows):
                 # the rows were read when the picker was filled: take the device's
                 # record as it is NOW
@@ -262,7 +264,9 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
     def _say_target(self) -> None:
         t = self.wiz.target
         self.target_info.setText(target_note(t))
-        why = self.wiz.target_refusal(t)
+        # opened on a device label that is not in the work dir: the wizard stays on
+        # this host and says so until something is picked (not only before it shows)
+        why = self.wiz.target_refusal(t) or self.wiz.preselect_problem
         self.target_problem.setText(why)
         self.target_problem.setVisible(bool(why))
 
@@ -1611,6 +1615,8 @@ class GoLiveWizard(QtWidgets.QWizard):
             work_dir or qemu_devices.default_work_dir(self.generator_dir))
         #: WHERE every verb runs (golive_target): this host until one is picked
         self.target = golive_target.local_target()
+        #: why the device this wizard was opened on is not the target ("" = it is)
+        self.preselect_problem = ""
         self.driver = GoLiveDriver(self.generator_dir)
         self.opts = GoLiveOptions()
         self.model = ""             # chosen exposure model (mechanism -> model)
@@ -1665,6 +1671,7 @@ class GoLiveWizard(QtWidgets.QWizard):
             if found is None:
                 why = (f"no running device '{target}' in {self.work_dir} — start it on the "
                        "Mesh emulation page, then Re-scan devices")
+                self.preselect_problem = why
                 pre = self._pages[GOLIVE_PAGE_SLUGS.index("preflight")]
                 pre.target_problem.setText(why)
                 pre.target_problem.setVisible(True)

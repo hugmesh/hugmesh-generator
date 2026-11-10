@@ -443,6 +443,13 @@ def test_an_unknown_label_stays_on_this_host_and_says_why(qapp, guest):
         assert w.target.is_local
         pre = w.page(w._page_ids["preflight"])
         assert "no running device 'x86/nope'" in pre.target_problem.text()
+        # still said once the window is up and the step has filled its picker
+        w.show()
+        assert "no running device 'x86/nope'" in pre.target_problem.text()
+        assert pre.target_problem.isVisible()
+        pre.target_pick.setCurrentIndex(0)           # a person picks: answered
+        pre.target_pick.currentIndexChanged.emit(0)
+        assert not pre.target_problem.isVisible()
     finally:
         w.close()
         w.deleteLater()
@@ -850,6 +857,25 @@ def test_open_go_live_does_not_reuse_a_wizard_bound_to_an_old_boot(qapp, guest):
                                        work_dir=guest.work_dir) is w3
     finally:
         for x in {id(v): v for v in (w, w2, w3) if v is not None}.values():
+            x.close()
+            x.deleteLater()
+
+
+def test_open_go_live_by_label_does_not_reuse_a_wizard_whose_device_is_gone(qapp, guest):
+    """The label is looked up in the work dir as it is NOW — not among the wizard's
+    own rows, which always include the device it was opened on."""
+    fake.register(guest, label="rpi5/pki", port=22401)
+    w = golive_mod.open_go_live(GENERATOR_DIR, target="rpi5/pki", work_dir=guest.work_dir)
+    w2 = None
+    try:
+        os.remove(os.path.join(guest.work_dir, "devices", "rpi5_pki.json"))
+        w2 = golive_mod.open_go_live(GENERATOR_DIR, target="rpi5/pki", current=w,
+                                     work_dir=guest.work_dir)
+        assert w2 is not w
+        pre = w2.page(w2._page_ids["preflight"])
+        assert "no running device 'rpi5/pki'" in pre.target_problem.text()
+    finally:
+        for x in {id(v): v for v in (w, w2) if v is not None}.values():
             x.close()
             x.deleteLater()
 
