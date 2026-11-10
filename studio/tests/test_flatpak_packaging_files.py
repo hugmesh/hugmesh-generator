@@ -1480,6 +1480,9 @@ def _scripted_flatpak(tmp_path, validators=True):
         "            *' --command=flatpak-builder '*) exit \"${FAKE_FLATPAK_BUILD_EXIT-0}\" ;;\n"
         "            *' --print-specs')\n"
         "                [ -z \"${FAKE_FLATPAK_SPECS-}\" ] || printf '%s\\n' \"$FAKE_FLATPAK_SPECS\" ;;\n"
+        "            *' --self-check --json')\n"
+        "                printf '%s\\n' \"${FAKE_FLATPAK_SELF_CHECK-}\"\n"
+        "                exit \"${FAKE_FLATPAK_SELF_CHECK_EXIT-0}\" ;;\n"
         "            *' --command=python3 '*)\n"
         "                if [ \"${FAKE_FLATPAK_QT+set}\" = set ]; then printf '%s\\n' \"$FAKE_FLATPAK_QT\"\n"
         "                else cd \"$FAKE_QT_PYTHONPATH\" && \"$FAKE_QT_PYTHON\" -; fi ;;\n"
@@ -1527,7 +1530,8 @@ def _calls(log) -> list[tuple[str, str, str]]:
 #: What a working sandbox answers smoke tests 1 and 3 with. Smoke test 2 is not answered:
 #: the script's own python runs against ``_qt_stub``.
 _SMOKE_OK = {"FAKE_FLATPAK_SPECS": '{"os": "linux"}',
-             "FAKE_FLATPAK_FILES": ""}
+             "FAKE_FLATPAK_FILES": "",
+             "FAKE_FLATPAK_SELF_CHECK": '{"ok": true, "problems": []}'}
 
 #: Stands in for ``hugmesh_studio.gui.qt`` in the sandbox. The script's smoke test 2 is
 #: python that imports it, checks the binding, the platform and a rendered grab, and
@@ -1752,9 +1756,13 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
     assert not [a for a in args if a.startswith("uninstall")], "nothing was installed to uninstall"
     assert f"run --user --command={_manifest_scalar('command')} {APP_ID} --print-specs" in args
     smoke = [a for a in args if a.startswith("run ")]
-    assert "--command=python3" in smoke[-2] and "--nofilesystem=host" in smoke[-2], smoke
-    assert "--command=sh" in smoke[-1] and "--nofilesystem=host" in smoke[-1], smoke
-    assert smoke[-1].endswith(f"/app/share/icons/hicolor/256x256/apps/{APP_ID}.png"), smoke[-1]
+    assert "--command=python3" in smoke[-3] and "--nofilesystem=host" in smoke[-3], smoke
+    assert "--command=sh" in smoke[-2] and "--nofilesystem=host" in smoke[-2], smoke
+    assert smoke[-2].endswith(f"/app/share/icons/hicolor/256x256/apps/{APP_ID}.png"), smoke[-2]
+    # The generator check runs WITH the host filesystem: it places the bundled tree
+    # under the home, where the installed app keeps it.
+    assert smoke[-1] == (f"run --user --command={_manifest_scalar('command')} {APP_ID} "
+                         "--self-check --json"), smoke[-1]
     assert f"ok       {private}/exports/share/applications/{APP_ID}.desktop" in result.stdout
 
     # The wrapper the Builder hands to the host must pin the private directory itself:
@@ -1856,9 +1864,16 @@ def test_script_runs_the_same_commands_as_the_release_workflows_flatpak_job(tmp_
     assert install[0] == "flatpak" and install[1] == "install"
     assert [w for w in script_install[1:-1] if w != "--bundle"] == install[2:-1], (script_install, install)
     assert install[-1].replace("${VERSION}", version) == name == os.path.basename(script_install[-1])
-    run_words = _words_of(workflow_one(lambda ln: ln.startswith("flatpak run "), "smoke test"))
+    run_words = _words_of(workflow_one(
+        lambda ln: ln.startswith("flatpak run ") and "--print-specs" in ln, "smoke test"))
     script_run = next(shlex.split(a) for a in args if a.endswith(" --print-specs"))
     assert [w for w in script_run if w != "--user"] == run_words[1:], (script_run, run_words)
+    # ... and the generator check after it (the bundled tree, --self-check).
+    check_words = _words_of(workflow_one(
+        lambda ln: ln.startswith("flatpak run ") and "--self-check" in ln, "generator check"))
+    script_check = next(shlex.split(a) for a in args if a.endswith(" --self-check --json"))
+    assert [w for w in script_check if w != "--user"] == check_words[1:], (script_check,
+                                                                           check_words)
 
 
 @needs_bash
@@ -2141,3 +2156,28 @@ def test_script_takes_its_facts_from_the_manifest_not_from_itself():
     assert not bare, (
         f"build-flatpak-local.sh holds the runtime version {version!r} as a number of its "
         "own; read it from the manifest")
+
+
+@needs_bash
+@pytest.mark.parametrize("answer, exit_code", [
+    pytest.param('{"ok": false, "problems": ["scripts/x.sh is missing"]}', "1", id="failed"),
+    pytest.param('{"ok": false}', "0", id="exit-0-but-not-ok"),
+    pytest.param("", "0", id="no-output"),
+])
+def test_the_generator_check_refuses_a_bundle_that_cannot_run_the_scripts(tmp_path, answer,
+                                                                          exit_code):
+    """The release workflow's --self-check, run by the script after its smoke tests: a
+    bundle without the generator tree (the 0.4.1 defect) must stop the script."""
+    result, _calls, _private, _out = _scripted_run(
+        tmp_path, FAKE_FLATPAK_SELF_CHECK=answer, FAKE_FLATPAK_SELF_CHECK_EXIT=exit_code)
+    assert result.returncode == 1, result.stdout
+    assert "Generator check" in result.stdout, result.stdout
+    assert "--self-check" in result.stderr, result.stderr
+
+
+def test_the_script_writes_the_seed_before_it_builds():
+    """The manifest's seed sources exist only once make_generator_seed.py has run."""
+    text = _read(SCRIPT)
+    seed = text.find("make_generator_seed.py\" --out \"$flatpak_src/generator-seed\"")
+    build = text.find("--command=flatpak-builder org.flatpak.Builder")
+    assert 0 < seed < build, "build-flatpak-local.sh must write the generator seed before flatpak-builder"

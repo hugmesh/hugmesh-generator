@@ -62,7 +62,7 @@ from .local_services import (
 )
 from .egress_conf import validate_egress_conf
 from .domain_services import tor_domain_entries
-from .local_stack_node import M2_BOOTSTRAP_HINT, LocalStackNode
+from .local_stack_node import _COMPOSE_PROJECT, M2_BOOTSTRAP_HINT, LocalStackNode
 from .mesh_node import MeshNode
 
 # The two credential generators (repo-relative). Reused VERBATIM via subprocess
@@ -711,9 +711,27 @@ class LocalMeshBootstrap:
     + LocalMeshNode. Lives beside LocalMeshNode and imports it — it adds NO compose
     invocation of its own (same discipline as LocalMeshNode)."""
 
-    def __init__(self, generator_dir: str, cfg: LocalMeshBootstrapConfig | None = None):
+    def __init__(self, generator_dir: str, cfg: LocalMeshBootstrapConfig | None = None,
+                 *, project: str = "", host_ports: dict | None = None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.cfg = cfg or LocalMeshBootstrapConfig()
+        # The compose project and extra host ports of the stack node (both default to
+        # the checkout's own mesh, threading nothing new). Set by the node-images lane
+        # (core/images_mesh.py), whose mesh runs beside the checkout's under its own
+        # project; see LocalStackNode.__init__.
+        self.project = project
+        self.host_ports = dict(host_ports or {})
+        # Why this bootstrap must not ACT ("" = it may): set by for_record for a saved
+        # mesh with its own compose project whose worktree or ports are not there
+        # (core/images_mesh.bootstrap_for_record). guard_host_local, start_saved,
+        # restore, down and clean refuse with it first — acting would otherwise mean
+        # acting on the operator's checkout and its hugmesh-local.
+        self.lane_refusal = ""
+        # The stop of such a record whose worktree/ports are gone (set beside
+        # lane_refusal by bootstrap_for_record): down() runs it instead of refusing —
+        # a mesh whose worktree was deleted can still be UP and holding 8000, and it
+        # stops by its own compose project label (images_mesh.AlongsideMesh.stop).
+        self.lane_stop = None
 
     # ---- built from a saved-mesh record (core/saved_meshes.py) -------------------
     @classmethod
@@ -724,6 +742,16 @@ class LocalMeshBootstrap:
         tailnet auth key, which the caller supplies. THE seam `mesh-restore` and the
         localcloud identity import share, so a saved mesh's services selection —
         tor included — is read the same way wherever a record becomes a mesh."""
+        from . import saved_meshes
+        if saved_meshes.is_own_project(rec):
+            # A mesh with its OWN compose project (the node-image flow's
+            # hugmesh-img-<id>): its project, ports and worktree — never the
+            # checkout's hugmesh-local. A part that is gone becomes `lane_refusal`,
+            # never a fall-back to the checkout. (No auth key: it runs as a test
+            # mesh.) Not a raise: for_checkout reads configs through here and folds
+            # an exception into the DEFAULT config.
+            from . import images_mesh
+            return images_mesh.bootstrap_for_record(generator_dir, rec)
         cfg = LocalMeshBootstrapConfig.from_dict(dict(getattr(rec, "config", None) or {}))
         if auth_key:
             cfg.auth_key = auth_key
@@ -853,7 +881,10 @@ class LocalMeshBootstrap:
                               tor_domains=self.tor_domains(),
                               external_idp_domains=self.external_idp_domains(),
                               superbrand_look=self.superbrand_look(),
-                              look_brands=self.look_brands())
+                              look_brands=self.look_brands(),
+                              **({"project": self.project} if self.project else {}),
+                              **({"host_ports": self.host_ports}
+                                 if self.host_ports else {}))
 
     def superbrand_look(self) -> dict:
         """What a domain with a look of its own starts from on the front door: the
@@ -1003,13 +1034,19 @@ class LocalMeshBootstrap:
         else). Those three never reached guard_host_local, so they failed with a raw
         "[WinError 2]" (or advised 'Generate && start', which refuses there too). Public
         so the page refuses 'Stop && clean Docker' BEFORE its destructive
-        confirmation. ``osname`` is ``os.name`` unless a test passes another."""
+        confirmation. ``osname`` is ``os.name`` unless a test passes another — and is
+        passed on only when given: the suite pins the host by swapping in
+        partial(native_windows_blocker, osname=...), which an explicit None would undo."""
+        if osname is None:
+            return platform_info.native_windows_blocker("The local stack")
         return platform_info.native_windows_blocker("The local stack", osname=osname)
 
     def guard_host_local(self) -> tuple[bool, str]:
         """Refuse unless this is a host-local run with docker/compose/make present.
         Reuses LocalStackNode.available() (make + compose + stack file) and, when the
         overlay will attach, MeshNode.available() (the mesh compose template)."""
+        if self.lane_refusal:
+            return False, self.lane_refusal
         if self._in_cluster_pod():
             return False, ("Refusing to bootstrap a from-scratch mesh inside a cluster "
                            "pod — this is a HOST-LOCAL action (docker on the operator's "
@@ -1631,6 +1668,10 @@ class LocalMeshBootstrap:
         if not ok:
             _note(why)
             return False
+        held = self.fixed_port_refusal()
+        if held:
+            _note(held)
+            return False
         problems = self.validate()
         if problems:
             for _ln in ["cannot start:", *(f"  - {p}" for p in problems)]:
@@ -1843,6 +1884,10 @@ class LocalMeshBootstrap:
         if not ok:
             _note(why)
             return False, log
+        held = self.fixed_port_refusal()
+        if held:
+            _note(held)
+            return False, log
         plan = self._live_plan(rec, _note)
         if plan is None:
             return False, log
@@ -1900,6 +1945,11 @@ class LocalMeshBootstrap:
             log.append(line)
             if on_line is not None:
                 on_line(line)
+        # A record with its own compose project whose worktree/ports are gone: refuse
+        # before ANY probe or advice — nothing here may fall back to the checkout.
+        if self.lane_refusal:
+            _note(f"[restore] refused — {self.lane_refusal}")
+            return False, log
         # FIRST on native Windows, as start_saved does: the checks below end in advice
         # ('Generate && start') that refuses there too, and _prepare (the only other
         # place restore meets guard_host_local) comes after them.
@@ -1931,11 +1981,15 @@ class LocalMeshBootstrap:
         # (minutes of docker) only to refuse at the same question below.
         if not (saved_meshes.restore_env(rec).get(SEED_SUPERADMIN_PASSWORD_ENV)
                 or self.read_superadmin().get("password")):
+            remedy = (f"Start it again with `python -m hugmesh_studio.core.images_mesh "
+                      f"start {getattr(rec, 'id', '')} --not-building`, which mints "
+                      "one in its own worktree."
+                      if self._own_project() else
+                      "Load it into the form and use 'Generate && start' to mint one.")
             _note("[restore] refused — no superadmin password is available: the "
                   f"secrets bundle at {self.secrets_json} is not there and this record "
                   "kept no copy (a mesh saved before its first bring-up has none yet). "
-                  "Load it into the form and use 'Generate && start' to mint one. "
-                  "Nothing was started or seeded.")
+                  f"{remedy} Nothing was started or seeded.")
             return False, log
         if not self._prepare(_note, on_line=on_line, cancel=cancel):
             return False, log
@@ -1993,6 +2047,12 @@ class LocalMeshBootstrap:
         volumes are KEPT, see LocalStackNode.stop) + the mesh overlay
         (LocalMeshNode.stop()). ``clean()`` is the one that drops volumes."""
         log: list[str] = []
+        if self.lane_refusal:
+            if callable(self.lane_stop):
+                # the record's own stop: by compose project label, never the
+                # checkout's mesh and never the overlay (PR #937 round 4)
+                return self.lane_stop()
+            return False, [self.lane_refusal]
         blocker = self.teardown_refusal(osname)
         if blocker:
             # One sentence, nothing touched: a mesh seen here was started from the WSL2
@@ -2012,9 +2072,47 @@ class LocalMeshBootstrap:
                                               "nothing was running — no containers to stop"))
         else:
             log.append(f"[stack-down] FAILED: {_tail(msg)}")
-        ok_mesh, msg = self._mesh_node().stop()
+        ok_mesh, msg = self._overlay_stop()
         log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
         return (ok_stack and ok_mesh), log
+
+    def fixed_port_refusal(self) -> str:
+        """Why this mesh cannot come UP now because another mesh holds a FIXED host
+        port it publishes ("" = it can). compose.real.yaml publishes Casdoor on a
+        literal 8000 (and the social tier on 8008/3000/4000) whatever the project,
+        so while another mesh holds one, `make stack-up` creates this project's
+        containers and then dies on the bind. Asked by :meth:`_prepare` (``up``,
+        ``restore``) and :meth:`start_saved` before anything starts — never by
+        :meth:`guard_host_local`, which ``m2_bootstrap`` shares (the maven registry
+        binds none of these ports).
+
+        * own project (a node-image mesh, ``hugmesh-img-<id>``): every holder
+          refuses, except this project's own container (already up);
+        * the checkout's own (hugmesh-local) — PR #937 round 3, the REVERSE
+          collision: a container of ANOTHER project (an img mesh) refuses, naming
+          it and how to stop it; hugmesh-local's own container (already up) and an
+          unnamed holder do not."""
+        from . import images_mesh
+        project = self.project or _COMPOSE_PROJECT
+        if self._own_project():
+            held = images_mesh.fixed_port_refusals(self.cfg, project=project)
+        else:
+            held = images_mesh.checkout_fixed_port_refusals(self.cfg, project)
+        return (f"{project} cannot start now: " + "; ".join(held)) if held else ""
+
+    def _own_project(self) -> bool:
+        """This bootstrap drives a compose project other than the checkout's own (a
+        saved mesh of the node-image flow, ``for_record``)."""
+        return bool(self.project) and self.project != _COMPOSE_PROJECT
+
+    def _overlay_stop(self) -> tuple[bool, str]:
+        """Stop the tailnet overlay — unless this bootstrap drives a mesh with its own
+        compose project: the overlay's project is the fixed ``hugmesh-mesh``, the
+        OPERATOR's, and a mesh beside the checkout's never attached one."""
+        if self._own_project():
+            return True, (f"skipped — {self.project} runs without the tailnet overlay, "
+                          "whose project belongs to this checkout's mesh")
+        return self._mesh_node().stop()
 
     def clean(self, on_line=None, cancel=None,
               osname: str | None = None) -> tuple[bool, list[str]]:
@@ -2023,7 +2121,7 @@ class LocalMeshBootstrap:
         by design (every caller confirms first) — the next bring-up is a cold build.
         Never touches images this stack did not build."""
         log: list[str] = []
-        blocker = self.teardown_refusal(osname)
+        blocker = self.lane_refusal or self.teardown_refusal(osname)
         if blocker:
             # Before the overlay stop too: half a teardown (overlay down, stack left)
             # is worse than none. Streamed as well, since a streaming caller drops the
@@ -2031,7 +2129,7 @@ class LocalMeshBootstrap:
             if on_line is not None:
                 on_line(blocker)
             return False, [blocker]
-        ok_mesh, msg = self._mesh_node().stop()
+        ok_mesh, msg = self._overlay_stop()
         log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
         ok_stack, msg = self._stack_node().clean(on_line=on_line, cancel=cancel)
         log.append(f"[stack-clean] {'ok' if ok_stack else 'FAILED'}: {_tail(msg)}")
@@ -2150,7 +2248,9 @@ def saved_mesh_choice_text(rec) -> str:
         "unchecked": " — not seen running (DevOps lane unchecked)",
         "draft": " — never ran (draft)",
     }.get(state, " — ran")
-    return f"{label}" + (f" — saved {when}" if when else "") + tail
+    origin = getattr(rec, "build_text", lambda: "")()   # "from node images (N images)"
+    return (f"{label}" + (f" — {origin}" if origin else "")
+            + (f" — saved {when}" if when else "") + tail)
 
 
 def tor_carrier_platforms(platforms) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -2419,8 +2519,15 @@ def _saved_mesh_cli(args: argparse.Namespace) -> int:
     boot = LocalMeshBootstrap.for_record(args.generator_dir, rec,
                                          auth_key=_read_authkey(args))
     cfg = boot.cfg
-    plan = saved_meshes.restore_plan(rec, **saved_meshes.probe_state(rec))
     print(f"{rec.id}  {rec.label}")
+    if boot.lane_refusal:
+        # a mesh with its own compose project and no worktree/ports to run it from:
+        # never probed, never started — and never the checkout's hugmesh-local
+        print(f"  [refused] {boot.lane_refusal}")
+        return 1
+    if boot.project and boot.project != _COMPOSE_PROJECT:
+        print(f"  runs as compose project {boot.project} from {boot.generator_dir}")
+    plan = saved_meshes.restore_plan(rec, **saved_meshes.probe_state(rec))
     print(f"  {plan.sentence}")
     for w in plan.warnings:
         print(f"  WARNING: {w}")

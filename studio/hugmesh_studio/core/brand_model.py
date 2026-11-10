@@ -1119,10 +1119,23 @@ def _profile_value_problems(record: BrandRecord) -> list[str]:
     :func:`record_problems` reports, so ``validate`` and ``profile`` cannot disagree.
     The sentence says ASCII: PROFILE_SAFE_RE refuses ö or é, and "letters" alone made
     the refusal of a title like Jörg Mesh contradict itself."""
-    return [f"{k}: ‘{v}’ holds a character a generated profile may not "
-            "carry (ASCII letters A-Z a-z, digits, space and . _ : / @ + , = - only)"
-            for k, v in _profile_values(record).items()
-            if not PROFILE_SAFE_RE.fullmatch(v)]
+    return [p for p in (profile_value_problem(k, v)
+                        for k, v in _profile_values(record).items()) if p]
+
+
+def profile_value_problem(key: str, value: str) -> str:
+    """The sentence for one profile value the generated profile may not carry ("" when
+    it may), prefixed with ``key`` when one is given. Public so the superbrand step
+    refuses such a title AS IT IS TYPED, with the same words the record write uses.
+    ASCII on purpose, not Unicode letters: the builders' own --brand-title checks
+    (_RE_TITLE in the ARM builders, _validate_title in build-x86-host-stage4.sh) admit
+    only ASCII letters, digits, space and . _ -, so accepting "Jörg" here would only
+    move the refusal to the build."""
+    if PROFILE_SAFE_RE.fullmatch(value):
+        return ""
+    return ((f"{key}: " if key else "") + f"‘{value}’ holds a character a generated "
+            "profile may not carry (ASCII letters A-Z a-z, digits, space and "
+            ". _ : / @ + , = - only)")
 
 
 def builder_profile(record: BrandRecord) -> str:

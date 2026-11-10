@@ -9,6 +9,7 @@ the CLI's ``issue --mint`` / ``issuer``, and ``hugmesh-studio --mesh-token``.
 Signing and verifying use the real ``ssh-keygen`` (skipped when absent, like
 test_mesh_token.py). Docker is never run: every docker call goes to a fake runner.
 """
+import json
 import os
 import subprocess
 import sys
@@ -31,13 +32,28 @@ GRANT = dict(mesh="west", domain="example.org", role="admin", shell=True,
 MINTED = "hskey-auth-0123456789abcdef0123456789abcdef"
 
 
-class FakeDocker:
-    """Records docker argv; answers `docker ps` with ``names`` and `headscale
-    preauthkeys create` with ``out``. Anything that is not docker runs for real
-    (ssh-keygen), so the CLI path is exercised end to end."""
+LABEL_PS = ["docker", "ps", "--filter", "label=net.hugmesh.role=headscale", "--format",
+            "{{.Names}}"]
+NAME_PS = ["docker", "ps", "--filter", "name=headscale", "--format", "{{.Names}}"]
+#: The labels the local Docker mesh's headscale carries (tests/stack/compose.local.yaml),
+#: with a user other than the default, so a test can tell the label was read.
+LOCAL_LABELS = {"net.hugmesh.role": "headscale", "net.hugmesh.headscale.user": "members",
+                "net.hugmesh.headscale.login-server": "https://hs.hugmesh.net:8488",
+                "net.hugmesh.headscale.domain": "hugmesh.net",
+                "net.hugmesh.headscale.key-tags": "tag:hugmesh"}
 
-    def __init__(self, names=("hugmesh-headscale",), out=f"\n{MINTED}\n", rc=0, err=""):
+
+class FakeDocker:
+    """Records docker argv; answers `docker ps --filter label=...` with ``labelled``,
+    `docker ps --filter name=headscale` with ``names``, `docker inspect` with
+    ``labels`` (None: a container without labels) and `headscale preauthkeys create`
+    with ``out``. Anything that is not docker runs for real (ssh-keygen), so the CLI
+    path is exercised end to end."""
+
+    def __init__(self, names=("hugmesh-headscale",), out=f"\n{MINTED}\n", rc=0, err="",
+                 labelled=(), labels=None):
         self.names, self.out, self.rc, self.err = names, out, rc, err
+        self.labelled, self.labels = labelled, labels
         self.calls: list[tuple[list[str], dict]] = []
         self._real = subprocess.run
 
@@ -46,8 +62,19 @@ class FakeDocker:
             return self._real(argv, **kw)
         self.calls.append((list(argv), kw))
         if argv[1] == "ps":
-            return subprocess.CompletedProcess(argv, 0, "".join(f"{n}\n" for n in self.names), "")
+            names = self.labelled if argv[3].startswith("label=") else self.names
+            return subprocess.CompletedProcess(argv, 0, "".join(f"{n}\n" for n in names), "")
+        if argv[1] == "inspect":
+            return subprocess.CompletedProcess(argv, 0, json.dumps(self.labels) + "\n", "")
         return subprocess.CompletedProcess(argv, self.rc, self.out, self.err)
+
+    def verbs(self) -> list[str]:
+        return [a[1] if a[1] != "ps" else ("ps-label" if a[3].startswith("label=") else "ps")
+                for a, _ in self.calls]
+
+    def create(self) -> list[str]:
+        (argv, _), = [c for c in self.calls if c[0][1] == "exec"]
+        return argv
 
 
 # ── the Studio issuer key ─────────────────────────────────────────────────────────
@@ -284,8 +311,10 @@ def test_a_key_that_cannot_sign_for_another_reason_is_not_touched(monkeypatch):
 def test_mint_runs_headscale_in_the_one_running_container_and_returns_the_key():
     fake = FakeDocker(out=f"2026-11-04T10:00:00Z WRN something\n\n{MINTED}\n\n")
     assert mt.mint_preauth_key(user="admin", lifetime_s=3600, runner=fake) == MINTED
-    (ps, ps_kw), (create, kw) = fake.calls
-    assert ps == ["docker", "ps", "--filter", "name=headscale", "--format", "{{.Names}}"]
+    (label_ps, _), (ps, ps_kw), (inspect, _), (create, kw) = fake.calls
+    assert label_ps == LABEL_PS and ps == NAME_PS
+    assert inspect == ["docker", "inspect", "--format", "{{json .Config.Labels}}",
+                       "hugmesh-headscale"]
     assert create == ["docker", "exec", "hugmesh-headscale", "headscale", "preauthkeys",
                       "create", "--user", "admin", "--expiration", "3600s"]
     assert "--reusable" not in create
@@ -338,26 +367,145 @@ def test_a_tag_cannot_smuggle_another_into_the_comma_joined_list(tag):
     assert e.value.kind == "invalid" and not fake.calls
 
 
-def test_minting_needs_a_named_headscale_user(capsys):
-    """There is no default headscale user: the core, mint_and_issue and the CLI all
-    refuse before anything runs."""
-    assert not hasattr(mt, "DEFAULT_MINT_USER")
-    fake = FakeDocker()
+# ── the defaults: the headscale container's labels, else hugmesh ─────────────────
+def test_mint_defaults_to_the_user_and_tags_the_containers_labels_name():
+    """The local Docker mesh's headscale says on its labels whom to mint for."""
+    fake = FakeDocker(labelled=("hugmesh-local-hugmesh-headscale-1",), labels=LOCAL_LABELS)
+    assert mt.mint_preauth_key(lifetime_s=60, runner=fake) == MINTED
+    assert fake.verbs() == ["ps-label", "inspect", "exec"]
+    assert fake.calls[1][0] == ["docker", "inspect", "--format", "{{json .Config.Labels}}",
+                                "hugmesh-local-hugmesh-headscale-1"]
+    assert fake.create() == ["docker", "exec", "hugmesh-local-hugmesh-headscale-1",
+                             "headscale", "preauthkeys", "create", "--user", "members",
+                             "--expiration", "60s", "--tags", "tag:hugmesh"]
+    assert mt.headscale_labels("hs", runner=fake) == {"user": "members",
+                                                      "key_tags": ("tag:hugmesh",)}
+
+
+@pytest.mark.parametrize("labels", [None, {}, {"net.hugmesh.role": "headscale"}])
+def test_mint_defaults_to_hugmesh_and_no_tags_without_labels(labels):
+    assert mt.DEFAULT_MINT_USER == "hugmesh" and mt.DEFAULT_MINT_TAGS == ()
+    fake = FakeDocker(labels=labels)
     for user in ("", None):
-        with pytest.raises(mt.TokenError) as e:
-            mt.mint_preauth_key(user=user, lifetime_s=60, container="hs", runner=fake)
-        assert e.value.kind == "invalid" and mt.NAME_MINT_USER in str(e.value)
+        fake.calls.clear()
+        mt.mint_preauth_key(user=user, lifetime_s=60, container="hs", runner=fake)
+        assert fake.verbs() == ["inspect", "exec"]
+        assert fake.create() == ["docker", "exec", "hs", "headscale", "preauthkeys",
+                                 "create", "--user", "hugmesh", "--expiration", "60s"]
+    assert mt.mint_target(container="hs", runner=fake) == ("hugmesh", ())
+
+
+def test_an_explicit_user_and_tags_win_over_the_labels():
+    fake = FakeDocker(labels=LOCAL_LABELS)
+    mt.mint_preauth_key(user="members", lifetime_s=60, container="hs", runner=fake)
+    assert fake.create()[6:8] == ["--user", "members"]
+    assert fake.create()[-2:] == ["--tags", "tag:hugmesh"]     # the label's own user
+    fake.calls.clear()
+    mt.mint_preauth_key(tags=[], lifetime_s=60, container="hs", runner=fake)
+    assert fake.create()[6:8] == ["--user", "members"] and "--tags" not in fake.create()
+    fake.calls.clear()
+    mt.mint_preauth_key(user="ops", tags=["tag:pki"], lifetime_s=60, container="hs",
+                        runner=fake)
+    assert fake.verbs() == ["exec"]                            # nothing left to read
+    assert fake.create()[6:8] == ["--user", "ops"] and fake.create()[-2:] == [
+        "--tags", "tag:pki"]
+
+
+@pytest.mark.parametrize("labels", [LOCAL_LABELS,
+                                    {"net.hugmesh.headscale.key-tags": "tag:hugmesh"}])
+def test_the_key_tags_label_is_only_for_the_labels_own_user(labels):
+    """The key-tags label is written for the label's user, who alone owns those tags;
+    a key's tags are forced on the node, so another user's key never gets them. That
+    covers the hugmesh fallback when the label names no user."""
+    fake = FakeDocker(labels=labels)
+    mt.mint_preauth_key(user="ops", lifetime_s=60, container="hs", runner=fake)
+    create = fake.create()
+    assert create[6:8] == ["--user", "ops"] and "--tags" not in create
+    assert mt.mint_target("ops", None, container="hs", runner=fake) == ("ops", ())
+    expected = ("members", ("tag:hugmesh",)) if "net.hugmesh.headscale.user" in labels \
+        else ("hugmesh", ())
+    assert mt.mint_target(container="hs", runner=fake) == expected
+
+
+@pytest.mark.parametrize("tags", ["tag:hugmesh,tag:superadmin", "tag:mesh_east-01",
+                                  "tag:dev_084628ddb3aa", "tag:hugmesh, tag:dom_example-org",
+                                  "tag:Upper", "tag:a,,tag:b", ""])
+def test_a_key_tags_label_with_an_access_or_bad_tag_is_ignored_whole(tags):
+    """A label that asks for an access tag (or is not a list of tags) is not used at
+    all, not even its harmless part: the key is minted with no tags of its own."""
+    labels = dict(LOCAL_LABELS, **{"net.hugmesh.headscale.key-tags": tags})
+    fake = FakeDocker(labels=labels)
+    assert mt.headscale_labels("hs", runner=fake) == {"user": "members"}
+    fake.calls.clear()
+    mt.mint_preauth_key(lifetime_s=60, container="hs", runner=fake)
+    create = fake.create()
+    assert "--tags" not in create and create[6:8] == ["--user", "members"]
+    assert not any(mt.SECURITY_TAG_RE.match(a) for a in create)
+
+
+@pytest.mark.parametrize("user", ["-x", "a b", "", "x\n", 7])
+def test_a_bad_user_label_is_ignored_for_hugmesh(user):
+    fake = FakeDocker(labels={"net.hugmesh.headscale.user": user})
+    assert mt.headscale_labels("hs", runner=fake) == {}
+    fake.calls.clear()
+    mt.mint_preauth_key(lifetime_s=60, container="hs", runner=fake)
+    assert fake.create()[6:8] == ["--user", "hugmesh"]
+
+
+def test_an_explicit_access_tag_is_refused_whatever_the_labels_say():
+    fake = FakeDocker(labels=LOCAL_LABELS)
     with pytest.raises(mt.TokenError) as e:
-        mt.mint_and_issue(key_path="k", user="", container="hs", runner=fake,
-                          node_name="", **GRANT)
-    assert mt.NAME_MINT_USER in str(e.value)
-    with pytest.raises(TypeError):
-        mt.mint_and_issue(key_path="k", container="hs", runner=fake, node_name="", **GRANT)
+        mt.mint_preauth_key(tags=["tag:superadmin"], lifetime_s=60, container="hs",
+                            runner=fake)
+    assert e.value.kind == "invalid" and "tag:superadmin" in str(e.value)
     assert not fake.calls
-    with pytest.raises(SystemExit):
-        mt.main(CLI + ["--mint"])
-    assert mt.NAME_MINT_USER in capsys.readouterr().err
-    assert not os.path.exists(mt.issuer_dir("west"))
+
+
+@pytest.mark.parametrize("runner", [
+    lambda argv, **kw: (_ for _ in ()).throw(FileNotFoundError("docker")),
+    lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "No such object: hs"),
+    lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "not json\n", ""),
+    lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "null\n", ""),
+    lambda argv, **kw: subprocess.CompletedProcess(argv, 0, '["a"]\n', ""),
+])
+def test_headscale_labels_never_raises(runner):
+    assert mt.headscale_labels("hs", runner=runner) == {}
+
+
+def test_headscale_labels_does_not_inspect_a_name_that_reads_as_an_option():
+    fake = FakeDocker(labels=LOCAL_LABELS)
+    assert mt.headscale_labels("--privileged", runner=fake) == {}
+    assert not fake.calls
+
+
+def test_the_labelled_headscale_container_is_preferred_over_the_name_filter():
+    fake = FakeDocker(labelled=("hm-local-hugmesh-headscale-1",),
+                      names=("a-headscale", "b-headscale"))
+    assert mt.find_headscale_container(runner=fake) == "hm-local-hugmesh-headscale-1"
+    assert [a for a, _ in fake.calls] == [LABEL_PS]           # the name filter not asked
+
+
+@pytest.mark.parametrize("labelled", [(), ("hs-a", "hs-b")])
+def test_without_exactly_one_labelled_container_the_name_filter_decides(labelled):
+    fake = FakeDocker(labelled=labelled, names=("headscale", "headscale-ui"))
+    assert mt.find_headscale_container(runner=fake) == "headscale"
+    assert [a for a, _ in fake.calls] == [LABEL_PS, NAME_PS]
+
+
+@pytest.mark.parametrize("names", [(), ("a-headscale", "b-headscale")])
+def test_several_labelled_containers_are_offered_as_choices(names):
+    fake = FakeDocker(labelled=("hm-b-hs-1", "hm-a-hs-1"), names=names)
+    with pytest.raises(mt.TokenError) as e:
+        mt.find_headscale_container(runner=fake)
+    assert e.value.kind == "tool" and "hm-a-hs-1, hm-b-hs-1" in str(e.value)
+    assert e.value.choices == tuple(sorted(("hm-a-hs-1", "hm-b-hs-1") + names))
+
+
+def test_the_none_found_message_names_both_filters():
+    with pytest.raises(mt.TokenError) as e:
+        mt.find_headscale_container(runner=FakeDocker(names=()))
+    assert "label=net.hugmesh.role=headscale" in str(e.value)
+    assert "name=headscale" in str(e.value) and e.value.choices == ()
 
 
 @pytest.mark.parametrize("found", ["--privileged", "-hs", "hs x"])
@@ -368,7 +516,7 @@ def test_a_container_name_docker_ps_found_is_checked_like_a_given_one(found):
     with pytest.raises(mt.TokenError) as e:
         mt.mint_preauth_key(user="joiners", lifetime_s=60, runner=fake)
     assert e.value.kind == "invalid" and "not a container name" in str(e.value)
-    assert [a[1] for a, _ in fake.calls] == ["ps"]          # nothing exec'd
+    assert fake.verbs() == ["ps-label", "ps"]               # nothing inspected or exec'd
 
 
 @pytest.mark.parametrize("names, needle", [((), "No running headscale container"),
@@ -381,7 +529,7 @@ def test_mint_needs_exactly_one_headscale_container(names, needle):
         mt.mint_preauth_key(user="admin", lifetime_s=60, runner=fake)
     assert e.value.kind == "tool" and needle in str(e.value)
     assert e.value.choices == tuple(sorted(names))    # what the dialog offers to pick
-    assert len(fake.calls) == 1          # nothing minted
+    assert fake.verbs() == ["ps-label", "ps"]          # nothing minted
 
 
 @pytest.mark.parametrize("names, want", [
@@ -475,7 +623,8 @@ def test_mint_and_issue_checks_the_key_signs_before_minting(monkeypatch):
         mt.mint_and_issue(key_path="k", user="joiners", container="hs", runner=fake,
                           keygen="ssh-keygen", node_name="", **GRANT)
     assert "incorrect passphrase" in str(e.value)
-    assert signed == [mt._SELF_CHECK_NAMESPACE] and not fake.calls      # nothing minted
+    assert signed == [mt._SELF_CHECK_NAMESPACE]
+    assert "exec" not in fake.verbs()                       # nothing minted
 
 
 @pytest.mark.parametrize("expired", [True, False])
@@ -498,7 +647,8 @@ def test_a_key_minted_for_a_token_that_fails_to_sign_is_expired(monkeypatch, exp
     with pytest.raises(mt.TokenError) as e:
         mt.mint_and_issue(key_path="k", user="joiners", container="hs", runner=runner,
                           node_name="", **GRANT)
-    (create, _), (expire, kw) = fake.calls
+    (inspect, _), (create, _), (expire, kw) = fake.calls
+    assert inspect[:2] == ["docker", "inspect"]
     assert create[:6] == ["docker", "exec", "hs", "headscale", "preauthkeys", "create"]
     assert expire[:4] == ["docker", "exec", "-i", "hs"] and expire[-1] == "joiners"
     assert MINTED not in " ".join(expire) and kw["input"] == MINTED + "\n"
@@ -543,8 +693,30 @@ def test_cli_mint_options_need_mint_and_one_key_source(capsys):
         mt.main(CLI + ["--authkey-file", "k", "--mint"])
     with pytest.raises(SystemExit):
         mt.main(CLI)
+
+
+@needs_keygen
+@pytest.mark.parametrize("labels, user, tags", [
+    (LOCAL_LABELS, "members", "with tag:hugmesh"),
+    (None, "hugmesh", "with no tags of its own")])
+def test_cli_mint_without_a_user_uses_the_labels_else_hugmesh(monkeypatch, capsys, labels,
+                                                              user, tags):
+    """--headscale-user is optional: the summary names the user and tags it chose."""
+    fake = FakeDocker(labelled=("hm-hs-1",), labels=labels)
+    monkeypatch.setattr(mt.subprocess, "run", fake)
+    assert mt.main(CLI + ["--mint"]) == 0
+    err = capsys.readouterr().err
+    create = fake.create()
+    assert create[2] == "hm-hs-1" and create[create.index("--user") + 1] == user
+    assert f"minted in hm-hs-1 for the headscale user {user}" in err and tags in err
+    assert MINTED not in err
+
+
+def test_cli_help_says_the_default_headscale_user(capsys):
     with pytest.raises(SystemExit):
-        mt.main(CLI + ["--mint"])                   # --headscale-user is required
+        mt.main(["issue", "--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "net.hugmesh.headscale.user label, else hugmesh" in out
 
 
 @needs_keygen

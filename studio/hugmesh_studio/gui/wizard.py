@@ -19,7 +19,8 @@ from ..core.platform_info import detect
 from ..core import platform_info
 from ..core import worklist as worklist_mod
 from .pages import (
-    BrandingPage, BuildPage, DeployPage, DomainServicesPage, DomainsChoicePage,
+    BrandingPage, BuildPage, DeployPage, DomainCAKeysPage, DomainServicesPage,
+    DomainsChoicePage,
     DomainsPage, E2EPage,
     HardwarePage,
     HomePage, IdpPage, KeyZipPage, LaunchPage, LocalCloudNodesPage, LocalMeshPage,
@@ -249,7 +250,7 @@ class StudioWizard(QtWidgets.QWizard):
             E2EPage, QemuPage, MeshEmulationPage, LocalCloudNodesPage,
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
-            DomainsChoicePage, DomainsPage, DomainServicesPage,
+            DomainsChoicePage, DomainsPage, DomainServicesPage, DomainCAKeysPage,
             UsersChoicePage, UsersPage,
             SystemPage, VaultPage, HomePage, BuildPage, LaunchPage, ProgressPage,
         ]

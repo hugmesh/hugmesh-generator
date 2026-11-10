@@ -77,7 +77,7 @@ import time
 
 from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ..flow_layout import flow_box
-from ...core import mesh_controls, mesh_monitor
+from ...core import flatpak_host, mesh_controls, mesh_monitor
 from ...core.mesh_monitor import MonitorSnapshot, unsafe_door_reason
 from ._emulation_common import ReplicaStrip, make_table, set_cell
 from ._widgets import collapsible, own_probe, probe_running
@@ -229,6 +229,11 @@ def open_in_tor_browser(url: str) -> str:
     argv = mesh_controls.tor_browser_argv(url)
     if not argv:
         return mesh_controls.tor_browser_missing_reason()
+    if flatpak_host.in_flatpak():
+        # The launcher is the HOST's (shutil.which answers from the host there), and
+        # QProcess does not go through the subprocess hook. No --env-fd: a desktop
+        # program wants the host session's own environment.
+        argv = flatpak_host.host_argv(argv)
     try:
         ok = QtCore.QProcess.startDetached(argv[0], argv[1:])
         if isinstance(ok, tuple):              # PySide/PyQt return (ok, pid)
