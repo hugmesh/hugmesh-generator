@@ -638,7 +638,12 @@ data:
                 "refresh_token",
                 "urn:ietf:params:oauth:grant-type:device_code",
             ],
-            "expireInHours": 168, "enablePassword": False, "enableSignUp": False,
+            # enablePassword True only says what the signinMethods list below
+            # already does (with a non-empty list casdoor 3.80.0 ignores this flag
+            # and IsPasswordEnabled() is "Password is in the list"). It is NOT the
+            # password GRANT: that is grantTypes above, which stays without
+            # "password" (the contract check fails any seed that adds it).
+            "expireInHours": 168, "enablePassword": True, "enableSignUp": False,
             # RFC 8628 needs the "Device login" SIGN-IN METHOD, not just the grant.
             # casbin/casdoor:3.80.0 /api/device-auth (controllers/auth.go:1519) asks
             # application.HasSigninMethod("Device login") and otherwise answers
@@ -655,15 +660,41 @@ data:
             # the login-page UI rules ("Tab" adds a QR tab to Casdoor's own login
             # page, "Login page" a QR side panel) — this enables the RFC 8628
             # endpoint and nothing visible.
-            # "Password" is deliberately NOT listed (enablePassword False above
-            # stays the intent): with a non-empty list, IsPasswordEnabled() is "is
-            # Password in the list", so a user approves the device code on
-            # /login/oauth/device/<user_code> with an EXISTING Casdoor browser
-            # session (quick sign-in), not by typing a password into this public
-            # client's page. The password GRANT is governed by grantTypes alone and
-            # stays off either way.
+            # "Password" IS listed so the approval page works on a phone or browser
+            # that is not signed in to the IdP yet. With "Device login" alone,
+            # /login/oauth/device/<user_code> renders "To access HugMesh Desktop
+            # (PKCE):" with no input and no button for a fresh browser — a dead
+            # end (LIVE-REPRODUCED against 3.80.0 after #958). The page is
+            # casdoor's LoginPage, which renders THIS application's sign-in
+            # methods (minus "Device login" itself, web/src/auth/LoginPage.js);
+            # signing in there with type=device IS the approval
+            # (controllers/auth.go HandleLoggedIn, ResponseTypeDevice).
+            #   * The user types the IdP password into the IdP's own page on their
+            #     phone/browser. The greeter shows only a URL and a code and never
+            #     sees the password (specs/usr/lib/hugmesh/sso-greeter).
+            #   * MFA still applies: the org's MFA policy (reconcile_org_mfa) is
+            #     enforced by /api/login for every application — a user with MFA
+            #     enrolled gets the second-factor step on this page before the
+            #     device code is approved (controllers/auth.go checkMfaEnable).
+            #   * Scope: casdoor 3.80.0 keys sign-in methods per APPLICATION, not
+            #     per page, so this also gives the PKCE authorize page
+            #     (/login/oauth/authorize?client_id=hugmesh-desktop) a password form
+            #     — which is the ordinary auth-code model (the IdP's page, in a
+            #     browser). Nothing shipped drives that page today: the greeter
+            #     and hugmesh-sso-token both use the device grant.
+            #   * NOT the resource-owner password grant: that is grantTypes, which
+            #     omits "password", so POST /api/login/oauth/access_token
+            #     grant_type=password for this client is refused.
+            # DECLARATIVE, not merged: update-application writes AllCols, so this
+            # list REPLACES whatever is stored (a pre-#958 ["Face ID"], an admin-UI
+            # edit). That is deliberate: this public client's sign-in surface is a
+            # security posture the Job owns, and a literal list is what
+            # tests/scripts/casdoor_reconcile_contract.py (devicelogin) can read
+            # statically — a GET-then-union would be unreadable there and fail
+            # closed.
             "signinMethods": [
                 {"name": "Device login", "displayName": "Device login", "rule": "All"},
+                {"name": "Password", "displayName": "Password", "rule": "All"},
             ],
             # D6+D8: SAME JWT-Custom allow-list as the systems apps — leak-fix + MFA claim.
             # JWT-Custom still carries the `roles` claim (incl. desktop-sudo) via
