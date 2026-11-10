@@ -461,6 +461,38 @@ def test_the_fleet_tor_note_is_one_string_on_both_faces(qapp, monkeypatch):
     page.deleteLater()
 
 
+def test_the_nvd_key_block_is_one_set_of_words_on_both_faces(qapp, monkeypatch):
+    """The NVD API key the pen-test's SCA step needs (core/nvd_key.py): the GUI fleet
+    window's box (shown once a pen-test is ticked) and the TUI fleet options' block
+    (shown once ``set pentest on``) carry the same core strings, line for line; and a
+    Verify verdict reads the same on both (label + sentence, VERDICT_LABELS)."""
+    from hugmesh_studio.core import build_driver, nvd_key
+    from hugmesh_studio.gui.pages import fleet as gui_fleet
+    monkeypatch.setattr(build_driver, "detect",
+                        lambda builder_image="hugmesh-builder": HOST)
+    page = gui_fleet.FleetPage(GENERATOR_DIR)
+    w = page.nvd_key
+    gui_words = [w.need_label.text(), w.activation_label.text(), w.empty_label.text(),
+                 w.consent_label.text()]
+    assert gui_words == [nvd_key.NEED_LINE, nvd_key.ACTIVATION_WARNING,
+                         nvd_key.EMPTY_REFUSED, nvd_key.VERIFY_CONSENT]
+    assert nvd_key.REQUEST_URL in w.request_link.text()
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed("set pentest on")
+    tui = "\n".join(j.lines())
+    for words in gui_words + [nvd_key.REQUEST_URL, nvd_key.GUIDE_URL]:
+        assert words in tui, words
+    # the status line is the same function on both faces
+    assert w.status_label.text() == "NVD API key: " + nvd_key.status_line()
+    assert "NVD API key: " + nvd_key.status_line() in tui
+    # a verdict: the GUI's status label and the TUI's status both print
+    # res.checked_line() (the verdict plus the fingerprint of the key it checked)
+    res = nvd_key.classify(404, {"message": "Invalid apiKey."})
+    assert res.line().startswith(nvd_key.VERDICT_LABELS[nvd_key.NOT_ACCEPTED] + ": ")
+    page.deleteLater()
+
+
 def test_go_live_offers_and_plans_the_same_domains_on_both_faces(qapp, tmp_path,
                                                                   monkeypatch):
     from hugmesh_studio.core.golive_domains import exposure_lines, plan_rows
