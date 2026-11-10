@@ -933,3 +933,137 @@ def test_an_img_record_is_blocked_by_the_running_checkout_mesh_for_its_ports(
     assert not w.restore_btn.isEnabled()
     assert "8000" in w.restore_btn.toolTip()
     assert "own compose project" not in w.table.item(0, smw._SM_COL_RESTORE).text()
+
+
+# ── PR #937 round 4: Stop on a Saved meshes row (a mesh beside a node-image build) ──
+def _stop_spy(monkeypatch):
+    from hugmesh_studio.core import images_mesh
+    seen = []
+
+    def spy(lane):
+        seen.append({"project": lane.project, "record": lane.rec.id})
+        return True, [f"[local mesh] stopped {lane.project}"]
+    monkeypatch.setattr(images_mesh.AlongsideMesh, "stop", spy)
+    return seen
+
+
+def test_round4_stop_on_a_running_img_row_stops_it_through_the_lane(
+        qapp, page, monkeypatch, as_linux):
+    """The reverse-collision refusal on hugmesh-local says "Stop on its row in Saved
+    meshes" — round 3 had no such button. A row of a hugmesh-img-<id> record whose
+    project the probe saw RUNNING (by label) arms Stop; it runs the one stop path
+    (images_mesh.AlongsideMesh.stop) on the record's own project — never this page's
+    boot — and it is armed whether or not the checkout's own mesh is up."""
+    seen = _stop_spy(monkeypatch)
+    rec = _img_record(with_worktree=True)
+    page.probe["answer"] = dict(_PROBE_OK, mesh_running=True)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = False
+    page._set_verbs_enabled(True)
+    _select(page)
+    w = page.saved_meshes
+    assert w.stop_btn.isEnabled(), w.stop_btn.toolTip()
+    assert sm.record_project(rec) in w.stop_btn.toolTip()
+    assert "KEPT" in w.stop_btn.toolTip()
+    # the checkout's mesh being up does not change it (it is a different project)
+    w.set_context(mesh_up=True, busy=False)
+    _select(page)
+    assert w.stop_btn.isEnabled()
+    w.set_context(mesh_up=False, busy=True)
+    _select(page)
+    assert not w.stop_btn.isEnabled() and "verb is running" in w.stop_btn.toolTip()
+    w.set_context(mesh_up=False, busy=False)
+    _select(page)
+    boot_before = page.boot
+    calls = _launch_spy(page, monkeypatch)
+    w.stop_btn.click()
+    _settle(qapp, page)
+    assert calls and calls[0]["label"] == f"Stopping saved mesh {rec.label}"
+    assert seen == [{"project": sm.record_project(rec), "record": rec.id}]
+    assert sm.record_project(rec).startswith("hugmesh-img-")
+    assert page.boot is boot_before and page.boot.project == ""
+
+
+def test_round4_stop_is_off_for_a_stopped_img_row_and_a_checkout_row(
+        qapp, page, monkeypatch, as_linux):
+    seen = _stop_spy(monkeypatch)
+    img = _img_record(with_worktree=True)
+    page.probe["answer"] = dict(_PROBE_OK, mesh_running=False)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = False
+    page._set_verbs_enabled(True)
+    w = page.saved_meshes
+    rows = {w.table.item(i, smw._SM_COL_MESH).text().split(" — ")[0]: i
+            for i in range(w.table.rowCount())}
+    _select(page, rows[img.label])
+    assert not w.stop_btn.isEnabled()
+    assert "Nothing of " + sm.record_project(img) in w.stop_btn.toolTip()
+    # docker did not answer: never armed on a guess
+    for r in w._rows:
+        r.probe = dict(_PROBE_OK, mesh_running=None)
+    _select(page, rows[img.label])
+    assert not w.stop_btn.isEnabled() and "did not say" in w.stop_btn.toolTip()
+    # the checkout's own record: that mesh is stopped with the page's Stop mesh
+    local = _record()
+    w.refresh()
+    _settle(qapp, page)
+    rows = {w.table.item(i, smw._SM_COL_MESH).text().split(" — ")[0]: i
+            for i in range(w.table.rowCount())}
+    for r in w._rows:
+        r.probe = dict(_PROBE_OK, mesh_running=True)
+    _select(page, rows[local.label])
+    assert not w.stop_btn.isEnabled() and "Stop mesh" in w.stop_btn.toolTip()
+    w._stop()                                     # a stray call does nothing
+    assert seen == []
+    # a native Windows Studio greys it with the WSL2 sentence, as it does 'Stop mesh'
+    _select(page, rows[img.label])
+    assert w.stop_btn.isEnabled()
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname="nt"))
+    _select(page, rows[img.label])
+    assert not w.stop_btn.isEnabled() and "WSL2" in w.stop_btn.toolTip()
+    page._stop_saved_own(img)
+    assert seen == [] and "WSL2" in page.status.text()
+
+
+def test_round4_the_stop_button_is_laid_out_in_the_row(qapp, monkeypatch, as_linux):
+    """Geometry of the new control (not just its existence): visible, wide enough for
+    its text, inside the widget, overlapping none of the row's other buttons. A
+    picture goes to $SAVED_MESHES_SHOTS_DIR when it is set, for a person to look at."""
+    _img_record(with_worktree=True)
+    monkeypatch.setattr(sm, "probe_state", lambda rec, project="": dict(
+        _PROBE_OK, mesh_running=True))
+    w = smw.SavedMeshesWidget()
+    w.generator_dir = GENERATOR_DIR
+    w.probe_needed.connect(lambda recs: w.apply_probe(
+        {r.id: dict(sm.probe_state(r), _updated=r.updated) for r in recs}))
+    w.refresh()
+    w.resize(900, 640)
+    w.show()
+    qapp.processEvents()
+    w.table.selectRow(0)
+    w._update_buttons()
+    qapp.processEvents()
+    b = w.stop_btn
+    assert b.isVisible() and b.isEnabled(), b.toolTip()
+    assert b.width() >= b.fontMetrics().horizontalAdvance(b.text()) + 8
+    assert b.height() >= 20
+    top = b.mapTo(w, b.rect().topLeft())
+    rect = b.rect().translated(top)
+    assert w.rect().contains(rect), (rect, w.rect())
+    for other in (w.start_btn, w.restore_btn, w.load_btn, w.reveal_btn):
+        o = other.rect().translated(other.mapTo(w, other.rect().topLeft()))
+        assert not rect.intersects(o), (other.text(), rect, o)
+        assert abs(o.top() - rect.top()) <= 2          # one row of buttons
+    # Stop sits between Restore and Load
+    xs = [x.mapTo(w, x.rect().topLeft()).x()
+          for x in (w.restore_btn, b, w.load_btn)]
+    assert xs == sorted(xs)
+    shots = os.environ.get("SAVED_MESHES_SHOTS_DIR", "")
+    if shots:
+        os.makedirs(shots, exist_ok=True)
+        assert w.grab().save(os.path.join(shots, "saved-meshes-stop.png"))
+    w.close()
+    w.deleteLater()

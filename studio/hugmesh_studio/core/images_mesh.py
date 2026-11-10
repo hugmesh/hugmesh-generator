@@ -69,13 +69,15 @@ import sys
 from dataclasses import dataclass, field
 
 from . import host_resources, resource_limits, saved_meshes, vaults
+from .local_stack_node import IMG_PROJECT_PREFIX
 from .state_paths import state_dir
 
 #: ``SavedMesh.build["source"]`` for a record saved from the node-image flow.
 SOURCE_IMAGES = "images"
 
-#: Compose project prefix of a mesh started beside a node-image build.
-PROJECT_PREFIX = "hugmesh-img-"
+#: Compose project prefix of a mesh started beside a node-image build (one constant,
+#: defined beside the stack node that also needs it).
+PROJECT_PREFIX = IMG_PROJECT_PREFIX
 
 #: Memory a local mesh is expected to take. Measured 2026-11-09: the operator's running
 #: hugmesh-local (51 containers, social + Tor) held ~6.0 GiB. Overridable for a host
@@ -460,25 +462,51 @@ def checkout_fixed_port_refusals(boot_cfg, project: str = vaults.DEFAULT_PROJECT
         who = holder(p)
         if not who or holder_in_project(who, project, project_of):
             continue
+        # WHO holds it (PR #937 round 4): "another local mesh" only for a container
+        # whose compose project label is hugmesh-img-* (or, when docker reports no
+        # label at all, whose compose-made name says so) — anything else is named
+        # and said NOT to be a HugMesh mesh, with no images_mesh remedy
+        label = (container_project if project_of is None else project_of)(who)
+        img_project = (label if label.startswith(PROJECT_PREFIX) else
+                       "" if label else
+                       _img_project_of_name(who))
+        if not img_project:
+            out.append(f"host port {p} is already in use by the container {who}, which "
+                       "is not a HugMesh mesh ("
+                       + (f"its compose project is {label}" if label else
+                          "it belongs to no compose project")
+                       + f") — compose publishes the port as a fixed one{_port_role(p)}, "
+                       f"so {project} cannot run while it is there; stop or move that "
+                       "container first, then start this one. Nothing was started.")
+            continue
         rid = ""
         try:
             pool = saved_meshes.scan()[0] if records is None else records
             for r in pool:
-                rp = saved_meshes.record_project(r)
-                if saved_meshes.is_own_project(r) and holder_in_project(
-                        who, rp, project_of):
+                if saved_meshes.record_project(r) == img_project:
                     rid = r.id
                     break
         except Exception:                # noqa: BLE001 — the hint is optional
             rid = ""
-        remedy = (f"stop it first (`python -m hugmesh_studio.core.images_mesh stop "
-                  f"{rid}`, or Stop on its row in Saved meshes)" if rid else
-                  "stop that mesh first")
+        remedy = (f"stop it first (Stop on its row in Saved meshes, or `python -m "
+                  f"hugmesh_studio.core.images_mesh stop {rid}`)" if rid else
+                  f"stop that mesh first (`docker compose -p {img_project} down` "
+                  "keeps its volumes)")
         out.append(f"host port {p} is already in use by {who}, a container of another "
-                   f"local mesh — compose publishes it as a fixed port{_port_role(p)}, "
-                   f"so {project} cannot run beside it; {remedy}, then start this one. "
-                   "Nothing was started.")
+                   f"local mesh ({img_project}) — compose publishes it as a fixed "
+                   f"port{_port_role(p)}, so {project} cannot run beside it; {remedy}, "
+                   "then start this one. Nothing was started.")
     return out
+
+
+def _img_project_of_name(name: str) -> str:
+    """The ``hugmesh-img-<tail>`` project a compose-made container name
+    (``<project>-<service>-<n>``) carries, or "" — asked only when docker reports no
+    compose label for the container."""
+    if not (name or "").startswith(PROJECT_PREFIX):
+        return ""
+    tail = name[len(PROJECT_PREFIX):].split("-", 1)[0]
+    return PROJECT_PREFIX + tail if tail else ""
 
 
 #: The build backends :func:`plan_alongside` knows the memory cap of.
@@ -615,6 +643,134 @@ def worktree_path(record_id: str, rec: saved_meshes.SavedMesh | None = None) -> 
     return wt or os.path.join(alongside_root(), record_id, "generator")
 
 
+def _worktree_registrations(repo: str) -> list[dict] | None:
+    """``git worktree list --porcelain`` of ``repo`` as one dict per entry (``path``,
+    ``locked``, ``prunable``); None when git cannot say."""
+    try:
+        r = subprocess.run(["git", "-C", repo, "worktree", "list", "--porcelain"],
+                           capture_output=True, text=True, timeout=_CMD_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    out: list[dict] = []
+    for ln in (r.stdout or "").splitlines():
+        if ln.startswith("worktree "):
+            out.append({"path": ln[len("worktree "):], "locked": False,
+                        "prunable": False})
+        elif out and (ln == "locked" or ln.startswith("locked ")):
+            out[-1]["locked"] = True
+        elif out and (ln == "prunable" or ln.startswith("prunable ")):
+            out[-1]["prunable"] = True
+    return out
+
+
+def _same_path(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    na, nb = (os.path.normpath(os.path.abspath(x)) for x in (a, b))
+    return na == nb or os.path.realpath(na) == os.path.realpath(nb)
+
+
+def drop_stale_registration(repo: str, wt: str) -> str:
+    """Remove the ONE registration of ``repo`` whose path is ``wt`` when its directory
+    is gone (``git worktree remove --force <that path>``) and verify that every other
+    registration is still there. Returns what it did ("" = nothing to do).
+
+    Never ``git worktree prune``: that drops EVERY registration whose directory is
+    not reachable right now — another session's worktree on a temporarily unmounted
+    path included. A LOCKED registration is kept (git's own rule for prune); the
+    ``add`` that follows then says why it cannot reuse the path."""
+    before = _worktree_registrations(repo)
+    if not before:
+        return ""
+    mine = [e for e in before if _same_path(e["path"], wt)]
+    if not mine or os.path.exists(wt):
+        return ""
+    entry = mine[0]
+    if entry["locked"]:
+        return f"the registration of {wt} is locked; left as it is"
+    try:
+        subprocess.run(["git", "-C", repo, "worktree", "remove", "--force",
+                        entry["path"]], capture_output=True, text=True,
+                       timeout=_CMD_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"could not drop the stale registration of {wt}: {e}"
+    after = _worktree_registrations(repo) or []
+    others_before = {e["path"] for e in before if e is not entry}
+    others_after = {e["path"] for e in after}
+    if not others_before <= others_after:
+        return ("dropping the stale registration of " + wt + " also lost "
+                + ", ".join(sorted(others_before - others_after)))
+    return f"dropped the stale registration of {wt}"
+
+
+def label_stop_refusal(project: str) -> str:
+    """Why :func:`halt_by_label` must not touch ``project`` ("" = it may): only a
+    node-image mesh's own ``hugmesh-img-<id>`` project, never the checkout's
+    hugmesh-local, the tailnet overlay's hugmesh-mesh, or any other name — whatever
+    a (possibly hand-edited) record says."""
+    p = (project or "").strip()
+    tail = p[len(PROJECT_PREFIX):] if p.startswith(PROJECT_PREFIX) else ""
+    if (not tail or p == vaults.DEFAULT_PROJECT
+            or not all(c.isalnum() or c in "-_" for c in tail)):
+        return (f"refused — {p or '(no project)'} is not a mesh started beside a "
+                f"node-image build ({PROJECT_PREFIX}<id>); a stop by compose project "
+                "never acts on any other project. Nothing was stopped.")
+    return ""
+
+
+def project_running_ids(project: str) -> list[str] | None:
+    """The RUNNING containers of compose project ``project``, by its label (``docker
+    ps``, read-only). None = docker did not answer."""
+    try:
+        r = subprocess.run(["docker", "ps", "-q", "--filter",
+                            f"label=com.docker.compose.project={project}"],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return [x for x in (r.stdout or "").split() if x]
+
+
+def halt_by_label(project: str) -> tuple[bool, list[str]]:
+    """Stop a node-image mesh whose WORKTREE IS GONE, by its compose project label:
+    ``docker compose -p <project> down`` — no compose file needed, no ``-v`` and no
+    ``--rmi``, so exactly what ``make stack-halt`` does (containers go, data volumes
+    and images stay). Only ever a ``hugmesh-img-*`` project (:func:`label_stop_refusal`).
+    Verified afterwards: anything of the project still running is a failure."""
+    why = label_stop_refusal(project)
+    if why:
+        return False, [f"[local mesh] {why}"]
+    before = project_running_ids(project)
+    if before is None:
+        return False, [f"[local mesh] stop FAILED: docker did not answer, so whether "
+                       f"{project} runs is not known. Nothing was stopped."]
+    if not before:
+        return True, [f"[local mesh] nothing to stop: no container of {project} is "
+                      "running"]
+    from .local_stack_node import _compose_base
+    base = _compose_base()
+    if not base:
+        return False, ["[local mesh] stop FAILED: docker compose is not available"]
+    try:
+        r = subprocess.run([*base, "-p", project, "down"], capture_output=True,
+                           text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, [f"[local mesh] stop FAILED: {e}"]
+    after = project_running_ids(project)
+    if r.returncode != 0 or after is None or after:
+        tail = ((r.stderr or "") + (r.stdout or "")).strip()[-400:]
+        return False, [f"[local mesh] stop FAILED for {project}"
+                       + (f" ({len(after)} container(s) still running)" if after else "")
+                       + (f": {tail}" if tail else "")]
+    return True, [f"[local mesh] stopped {project} by its compose project label "
+                  f"({len(before)} container(s); its worktree is gone, so `docker "
+                  f"compose -p {project} down` — no compose file needed); its volumes "
+                  "are kept"]
+
+
 def _cli_start_hint(rec_id: str) -> str:
     return (f"`python -m hugmesh_studio.core.images_mesh start {rec_id} "
             "--not-building` (or tick 'Start this mesh locally' on the node-image "
@@ -698,18 +854,17 @@ class AlongsideMesh:
         (``.git/worktrees/<name>``), and a plain ``add`` at the same path dies with
         "missing but already registered worktree" — which made the refusal's own
         remedy ("Start it again ..., which makes a new one") fail (PR #937 round 3).
-        ``git worktree prune`` first: it drops only registrations whose directory is
-        gone (a locked one is kept), never a worktree that still exists. A prune
-        that fails is not fatal; the add then says what is wrong."""
+        So THIS record's stale registration is dropped first — only that one
+        (:func:`drop_stale_registration`), never an unscoped ``git worktree prune``,
+        which would also drop every other session's registration whose directory is
+        merely unreachable right now (an unmounted eCryptfs home, a detached
+        drive) — PR #937 round 4. A failure there is not fatal; the add then says
+        what is wrong."""
         wt = self.worktree
         if os.path.exists(os.path.join(wt, ".git")):
             return True, f"worktree {wt} (reused)"
         os.makedirs(os.path.dirname(wt), exist_ok=True)
-        try:
-            subprocess.run(["git", "-C", self.generator_dir, "worktree", "prune"],
-                           capture_output=True, text=True, timeout=_CMD_TIMEOUT)
-        except (OSError, subprocess.SubprocessError):
-            pass
+        drop_stale_registration(self.generator_dir, wt)
         try:
             r = subprocess.run(["git", "-C", self.generator_dir, "worktree", "add",
                                 "--detach", wt, "HEAD"], capture_output=True, text=True,
@@ -774,13 +929,20 @@ class AlongsideMesh:
 
     def stop(self) -> tuple[bool, list[str]]:
         """``make stack-halt`` for THIS project only (volumes kept). Never the
-        bootstrap's down(), which also stops the operator's tailnet overlay."""
+        bootstrap's down(), which also stops the operator's tailnet overlay.
+
+        The ONE stop path for a node-image record — the CLI ``stop``, the Saved
+        meshes row's Stop and ``LocalMeshBootstrap.for_record(...).down()`` all come
+        here. With the worktree GONE (deleted, or a draft whose first ``up`` died on
+        a port) its containers may still be up and holding 8000: it stops them by
+        compose project label (:func:`halt_by_label`, which needs no compose file
+        and refuses any project but this record's own ``hugmesh-img-*``) — it used to
+        say "nothing to stop" over a running mesh (PR #937 round 4)."""
         foreign = foreign_record_refusal(self.rec)
         if foreign:
             return False, [f"[local mesh] refused — {foreign}"]
-        if not os.path.isdir(self.worktree):
-            return True, [f"[local mesh] nothing to stop ({self.project} never started "
-                          "here)"]
+        if not os.path.exists(os.path.join(self.worktree, ".git")):
+            return halt_by_label(self.project)
         try:
             node = self.bootstrap()._stack_node()
             before = node.status()
@@ -836,6 +998,9 @@ def bootstrap_for_record(generator_dir: str, rec: saved_meshes.SavedMesh):
     lane = AlongsideMesh(generator_dir, rec)
     boot = lane.bootstrap()
     boot.lane_refusal = lane.refusal()
+    # down() of a record whose worktree/ports are gone still STOPS it — through the
+    # lane's own stop (by compose project label), never through the checkout
+    boot.lane_stop = lane.stop
     return boot
 
 

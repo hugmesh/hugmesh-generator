@@ -727,6 +727,11 @@ class LocalMeshBootstrap:
         # restore, down and clean refuse with it first — acting would otherwise mean
         # acting on the operator's checkout and its hugmesh-local.
         self.lane_refusal = ""
+        # The stop of such a record whose worktree/ports are gone (set beside
+        # lane_refusal by bootstrap_for_record): down() runs it instead of refusing —
+        # a mesh whose worktree was deleted can still be UP and holding 8000, and it
+        # stops by its own compose project label (images_mesh.AlongsideMesh.stop).
+        self.lane_stop = None
 
     # ---- built from a saved-mesh record (core/saved_meshes.py) -------------------
     @classmethod
@@ -2043,6 +2048,10 @@ class LocalMeshBootstrap:
         (LocalMeshNode.stop()). ``clean()`` is the one that drops volumes."""
         log: list[str] = []
         if self.lane_refusal:
+            if callable(self.lane_stop):
+                # the record's own stop: by compose project label, never the
+                # checkout's mesh and never the overlay (PR #937 round 4)
+                return self.lane_stop()
             return False, [self.lane_refusal]
         blocker = self.teardown_refusal(osname)
         if blocker:

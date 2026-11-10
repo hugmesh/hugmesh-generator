@@ -345,7 +345,7 @@ def test_a_failing_start_returns_false_and_never_raises(saved, tmp_path, monkeyp
 
 
 def test_stop_halts_only_this_project_and_never_the_overlay(saved, tmp_path,
-                                                             monkeypatch):
+                                                             monkeypatch, fake_docker):
     from hugmesh_studio.core import mesh_node
     calls = []
     monkeypatch.setattr(LocalMeshBootstrap, "down",
@@ -361,9 +361,10 @@ def test_stop_halts_only_this_project_and_never_the_overlay(saved, tmp_path,
     monkeypatch.setattr(local_stack_node.LocalStackNode, "status",
                         lambda self: local_stack_node.StackStatus(True, "3 container(s)"))
     lane = images_mesh.AlongsideMesh(_scratch_repo(tmp_path), saved)
-    assert lane.stop()[0] is True                       # never started: nothing to do
-    assert calls == []
-    os.makedirs(lane.worktree)
+    # never started: nothing of its project runs (asked by label), nothing to do
+    assert lane.stop()[0] is True
+    assert calls == [] and fake_docker.downs == []
+    os.makedirs(os.path.join(lane.worktree, ".git"))
     ok, lines = lane.stop()
     assert ok, lines
     project = images_mesh.project_for(saved.id)
@@ -486,7 +487,7 @@ def _sentinel_intact(checkout) -> bool:
 
 
 def test_a_draft_img_record_never_reaches_make_or_the_checkout(checkout, makes,
-                                                               capsys):
+                                                               fake_docker, capsys):
     """The round-1 refutation: a hugmesh-img-<id> draft (saved, never started beside a
     build) restored from a saved record ran `make stack-up` + `stack-seed` in the
     operator's checkout on hugmesh-local. Now every acting door refuses with one
@@ -501,10 +502,17 @@ def test_a_draft_img_record_never_reaches_make_or_the_checkout(checkout, makes,
     assert "never been started" in boot.lane_refusal
     assert boot.e2e_credentials_path() != os.path.join(checkout, ".e2e-credentials")
     for verb in (lambda: boot.restore(rec), lambda: boot.start_saved(rec),
-                 boot.up, boot.down, boot.clean):
+                 boot.up, boot.clean):
         ok, lines = verb()
         assert ok is False
         assert any("never been started" in ln for ln in lines), lines
+    # down() is a STOP (PR #937 round 4): a draft whose first `make stack-up` died on
+    # a port can leave hugmesh-img-<id> containers running with no ports recorded, so
+    # it asks docker by the record's own project label — never make, never the
+    # checkout. Nothing of it runs here: nothing is stopped, and it says so.
+    ok, lines = boot.down()
+    assert ok is True and any("nothing to stop" in ln for ln in lines), lines
+    assert fake_docker.downs == []
     assert boot.guard_host_local()[0] is False
     # the CLI door: refused before any probe, rc 1
     rc = lmb.main(["mesh-restore", rec.id, "--generator-dir", checkout])
@@ -933,6 +941,8 @@ def test_round3_cleaning_an_own_project_keeps_the_shared_m2_registry(monkeypatch
         seen.append((self.project, target, list(args or ())))
         return True, "ok"
     monkeypatch.setattr(local_stack_node.LocalStackNode, "_make", fake_make)
+    # no hugmesh-img-* mesh up (round 4 asks docker for the checkout's own clean)
+    monkeypatch.setattr(local_stack_node, "running_img_projects", lambda: [])
     local_stack_node.LocalStackNode(GENERATOR_DIR, project="hugmesh-img-abc").clean()
     local_stack_node.LocalStackNode(GENERATOR_DIR).clean()
     assert seen == [("hugmesh-img-abc", "stack-clean", ["STACK_CLEAN_KEEP_M2=1"]),
@@ -1033,3 +1043,290 @@ def test_round3_m2_bootstrap_is_not_refused_over_the_fixed_ports(monkeypatch):
     monkeypatch.setattr(LocalMeshBootstrap, "overlay_will_attach", lambda self: False)
     assert LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig()) \
         .guard_host_local() == (True, "")
+
+
+# ── 10. PR #937 round 4 ────────────────────────────────────────────────────────
+#  (1) a node-image mesh whose worktree is GONE still stops — by its own compose
+#      project label, through the one stop path (CLI, Saved meshes Stop, down());
+#  (2) the stale-registration fix drops only THIS record's registration;
+#  (3) the reverse refusal says "another local mesh" only for a hugmesh-img-* holder;
+#  (4) STACK_CLEAN_KEEP_M2: only 1/true/yes keep the registry;
+#  (5) hugmesh-local's own clean keeps the registry while an img mesh is up.
+class _FakeDocker:
+    """`docker ps -q --filter label=com.docker.compose.project=<p>` and `docker compose
+    -p <p> down` against an in-memory set of running containers. Every other command
+    runs for real (git in the scratch checkout); any OTHER docker call (a save's
+    `docker volume ls`) answers as a docker that is not there, and is kept apart."""
+
+    def __init__(self, real_run):
+        self.real_run = real_run
+        self.running: dict[str, list[str]] = {}
+        self.downs: list[list[str]] = []
+        self.calls: list[list[str]] = []
+        self.other: list[list[str]] = []
+
+    def __call__(self, argv, *a, **kw):
+        argv = [str(x) for x in argv] if isinstance(argv, (list, tuple)) else argv
+        if not isinstance(argv, list) or argv[:1] != ["docker"]:
+            return self.real_run(argv, *a, **kw)
+        if not (argv[1:3] == ["ps", "-q"] or argv[1:3] == ["compose", "-p"]):
+            self.other.append(argv)
+            return subprocess.CompletedProcess(argv, 1, "", "no docker here")
+        self.calls.append(argv)
+        if argv[1:3] == ["ps", "-q"] and argv[3] == "--filter":
+            proj = argv[4].split("=", 2)[2]
+            out = "\n".join(self.running.get(proj, []))
+            return subprocess.CompletedProcess(argv, 0, out, "")
+        if argv[1:3] == ["compose", "-p"] and argv[4:] == ["down"]:
+            self.downs.append(argv)
+            self.running.pop(argv[3], None)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        raise AssertionError(f"unexpected docker compose call: {argv}")
+
+
+@pytest.fixture
+def fake_docker(monkeypatch):
+    fd = _FakeDocker(subprocess.run)
+    monkeypatch.setattr(subprocess, "run", fd)
+    monkeypatch.setattr(local_stack_node, "_compose_base", lambda: ["docker", "compose"])
+    return fd
+
+
+def _ran_then_worktree_gone(checkout):
+    """An img record that ran beside its build (worktree + ports recorded), whose
+    worktree directory was then deleted while its containers stayed up."""
+    import shutil
+    rec = _img_record(checkout)
+    lane = images_mesh.AlongsideMesh(checkout, rec)
+    ok, msg = lane.prepare_worktree()
+    assert ok, msg
+    rec.lanes["host_ports"] = {"PUBLIC_HOST_PORT": 18090, "PUBLIC_HTTPS_PORT": 18490}
+    saved_meshes.save(rec)
+    shutil.rmtree(lane.worktree)
+    return saved_meshes.find(rec.id)
+
+
+def test_round4_a_gone_worktree_mesh_stops_by_its_label_and_frees_casdoor(
+        checkout, makes, fake_docker, monkeypatch, capsys):
+    """The round-3 refutation: hugmesh-local refused ("stop it first (`images_mesh
+    stop <id>` ...)") while a hugmesh-img mesh held 8000, and that very command, with
+    the worktree deleted, printed "nothing to stop (... never started here)" and
+    stopped nothing — so the refusal stayed. Now the remedy, run verbatim, stops the
+    project by its compose label (`docker compose -p <it> down`, no -v), and the
+    refusal is gone."""
+    import re
+    rec = _ran_then_worktree_gone(checkout)
+    proj = saved_meshes.record_project(rec)
+    fake_docker.running[proj] = ["c-casdoor", "c-gateway"]
+    # 8000 is held exactly while that project runs
+    monkeypatch.setattr(images_mesh, "port_free",
+                        lambda p: not (p == 8000 and fake_docker.running.get(proj)))
+    monkeypatch.setattr(images_mesh, "port_holder", lambda p: f"{proj}-casdoor-1")
+    monkeypatch.setattr(images_mesh, "container_project", lambda name: proj)
+    boot = LocalMeshBootstrap(checkout, LocalMeshBootstrapConfig())
+    why = boot.fixed_port_refusal()
+    assert "another local mesh" in why and "Stop on its row in Saved meshes" in why
+    cmd = re.search(r"`python -m hugmesh_studio\.core\.images_mesh ([^`]+)`",
+                    why).group(1).split()
+    assert cmd == ["stop", rec.id]
+    rc = images_mesh.main(["--generator-dir", checkout, *cmd])
+    out = capsys.readouterr()
+    assert rc == 0, out
+    assert "nothing to stop" not in out.out and "stopped " + proj in out.out
+    assert fake_docker.downs == [["docker", "compose", "-p", proj, "down"]]
+    assert boot.fixed_port_refusal() == ""
+    # never make, never the checkout's project, never the overlay
+    assert not [m for m in makes if m["target"] != "probe_state"]
+    assert not any("hugmesh-local" in " ".join(c) for c in fake_docker.calls)
+    assert _sentinel_intact(checkout)
+
+
+def test_round4_down_of_a_gone_worktree_record_is_the_same_label_stop(checkout, makes,
+                                                                      fake_docker):
+    """Saved meshes / mesh-restore drive a record through for_record: its down() used
+    to refuse with lane_refusal while the containers kept 8000."""
+    rec = _ran_then_worktree_gone(checkout)
+    proj = saved_meshes.record_project(rec)
+    fake_docker.running[proj] = ["c1"]
+    boot = LocalMeshBootstrap.for_record(checkout, rec)
+    assert "is gone" in boot.lane_refusal                # Start/Restore still refuse
+    ok, lines = boot.down()
+    assert ok, lines
+    assert fake_docker.downs == [["docker", "compose", "-p", proj, "down"]]
+    assert not any(m.get("target") == "overlay-stop" for m in makes)
+    # clean still refuses: it needs the worktree's Makefile
+    ok, lines = boot.clean()
+    assert not ok and any("is gone" in ln for ln in lines)
+    # nothing left running: a second stop says so and runs no down
+    ok, lines = images_mesh.AlongsideMesh(checkout, rec).stop()
+    assert ok and any("nothing to stop" in ln for ln in lines)
+    assert len(fake_docker.downs) == 1
+
+
+@pytest.mark.parametrize("project", [
+    "hugmesh-local", "hugmesh-mesh", "", "hugmesh-img-", "hugmesh-img-a b",
+    "hugmesh-img-x;rm", "other-img-abc"])
+def test_round4_a_label_stop_never_names_any_other_project(checkout, fake_docker,
+                                                           project):
+    """Whatever a (hand-edited) record says, the label stop acts on a hugmesh-img-<id>
+    project only — never the checkout's hugmesh-local or the overlay's hugmesh-mesh."""
+    fake_docker.running[project] = ["c1"]
+    assert images_mesh.label_stop_refusal(project)
+    ok, lines = images_mesh.halt_by_label(project)
+    assert not ok and "refused" in lines[0]
+    rec = _img_record(checkout)
+    rec.lanes["compose_project"] = project or "x"
+    if project:
+        ok, lines = images_mesh.AlongsideMesh(checkout, rec).stop()
+        assert not ok
+    assert fake_docker.calls == [] and fake_docker.downs == []
+
+
+def test_round4_a_failed_label_stop_says_so(checkout, fake_docker, monkeypatch):
+    rec = _ran_then_worktree_gone(checkout)
+    proj = saved_meshes.record_project(rec)
+    fake_docker.running[proj] = ["c1"]
+
+    def stuck(argv, *a, **kw):
+        if list(argv)[:2] == ["docker", "compose"]:
+            return subprocess.CompletedProcess(argv, 1, "", "permission denied")
+        return fake_docker(argv, *a, **kw)
+    monkeypatch.setattr(subprocess, "run", stuck)
+    ok, lines = images_mesh.AlongsideMesh(checkout, rec).stop()
+    assert not ok and "FAILED" in lines[0] and "still running" in lines[0]
+
+
+def test_round4_the_stale_registration_fix_drops_only_this_records_one(checkout,
+                                                                       tmp_path):
+    """Round 3 ran an UNSCOPED `git worktree prune` in the operator's checkout: it
+    also dropped every other session's registration whose directory was merely not
+    reachable (an unmounted eCryptfs home). Two missing registrations here — ours and
+    another session's: only ours goes, the other stays registered."""
+    import shutil
+    rec = _img_record(checkout)
+    lane = images_mesh.AlongsideMesh(checkout, rec)
+    ok, msg = lane.prepare_worktree()
+    assert ok, msg
+    other = str(tmp_path / "unmounted" / "another-sessions-worktree")
+    subprocess.run(["git", "-C", checkout, "worktree", "add", "-q", "--detach", other,
+                    "HEAD"], check=True, capture_output=True)
+    shutil.rmtree(lane.worktree)
+    shutil.rmtree(other)
+    regs = _git_worktrees(checkout)
+    assert lane.worktree in regs and other in regs        # both missing, both registered
+    ok, msg = lane.prepare_worktree()
+    assert ok, msg
+    regs = _git_worktrees(checkout)
+    assert other in regs, "another session's registration was pruned"
+    assert regs.count(lane.worktree) == 1 and os.path.isdir(lane.worktree)
+
+
+def test_round4_a_present_registration_is_never_dropped(checkout, tmp_path):
+    other = str(tmp_path / "live-worktree")
+    subprocess.run(["git", "-C", checkout, "worktree", "add", "-q", "--detach", other,
+                    "HEAD"], check=True, capture_output=True)
+    assert images_mesh.drop_stale_registration(checkout, other) == ""
+    assert other in _git_worktrees(checkout) and os.path.isdir(other)
+
+
+@pytest.mark.parametrize("holder,label,mesh", [
+    ("myapp-web-1", "myapp", False),             # another compose project
+    ("lonely-postgres", "", False),              # a plain `docker run` container
+    ("hugmesh-mesh-casdoor-1", "hugmesh-mesh", False),
+    ("hugmesh-img-abc-casdoor-1", "hugmesh-img-abc", True),
+    ("hugmesh-img-abc-casdoor-1", "", True),     # docker reported no label: the name
+])
+def test_round4_the_reverse_refusal_names_a_mesh_only_for_a_hugmesh_img_holder(
+        monkeypatch, holder, label, mesh):
+    monkeypatch.setattr(images_mesh, "port_free", lambda p: p != 8000)
+    monkeypatch.setattr(images_mesh, "port_holder", lambda p: holder)
+    monkeypatch.setattr(images_mesh, "container_project", lambda name: label)
+    why = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig()) \
+        .fixed_port_refusal()
+    assert "8000" in why and holder in why
+    if mesh:
+        assert "another local mesh (hugmesh-img-abc)" in why
+        assert "not a HugMesh mesh" not in why
+    else:
+        assert "another local mesh" not in why
+        assert "not a HugMesh mesh" in why
+        assert "images_mesh stop" not in why and "Saved meshes" not in why
+
+
+def _clean_recipe(*extra):
+    import shutil
+    if not shutil.which("make"):
+        pytest.skip("no make on this host")
+    r = subprocess.run(["make", "-n", "-s", "-C", GENERATOR_DIR, "stack-clean", *extra],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-2000:]
+    return r.stdout
+
+
+@pytest.mark.parametrize("value,kept", [
+    ("1", True), ("true", True), ("yes", True),
+    ("0", False), ("false", False), ("no", False), ("", False)])
+def test_round4_only_1_true_yes_keep_the_registry(value, kept):
+    """Round 3 kept the registry for ANY non-empty value: STACK_CLEAN_KEEP_M2=0 kept it."""
+    out = _clean_recipe(f"STACK_CLEAN_KEEP_M2={value}")
+    assert ("docker rm -f hugmesh-m2-registry" not in out) is kept, out
+    assert (".m2-registry.env" not in out) is kept, out
+    assert "down -v --rmi local" in out
+
+
+@pytest.mark.parametrize("up,keep,says", [
+    (["hugmesh-img-abc"], True, "hugmesh-img-abc is running"),
+    (None, True, "docker could not say"),
+    ([], False, ""),
+])
+def test_round4_hugmesh_locals_clean_keeps_the_registry_while_an_img_mesh_is_up(
+        checkout, makes, monkeypatch, up, keep, says):
+    """'Stop && clean Docker' of the checkout's own hugmesh-local ran `make
+    stack-clean` with no knob — `docker rm -f hugmesh-m2-registry` — while a
+    hugmesh-img mesh beside it was up and building from that registry. Now that part
+    is refused with a sentence and the rest of the clean runs; what the argv does to
+    the recipe is checked with `make -n`."""
+    monkeypatch.setattr(local_stack_node, "running_img_projects", lambda: up,
+                        raising=False)   # so it also runs (and fails) on the round-3 code
+    argv = []
+
+    def spy(self, target, timeout, extra_env=None, on_line=None, cancel=None,
+            args=None):
+        argv.append((self.project, target, list(args or ())))
+        return True, "make output"
+    monkeypatch.setattr(local_stack_node.LocalStackNode, "_make", spy)
+    streamed = []
+    ok, lines = LocalMeshBootstrap(checkout, LocalMeshBootstrapConfig()).clean(
+        on_line=streamed.append)
+    assert ok, lines
+    assert argv == [("hugmesh-local", "stack-clean",
+                     ["STACK_CLEAN_KEEP_M2=1"] if keep else [])]
+    recipe = _clean_recipe(*argv[0][2])
+    assert ("docker rm -f hugmesh-m2-registry" in recipe) is (not keep)
+    assert "down -v --rmi local" in recipe               # the rest of the clean runs
+    if keep:
+        assert any(says in ln and "KEPT" in ln for ln in streamed), streamed
+        # a buffered caller sees it too
+        _ok, msg = local_stack_node.LocalStackNode(checkout).clean()
+        assert says in msg and "make output" in msg
+    else:
+        assert not any("KEPT" in ln for ln in streamed)
+
+
+def test_round4_the_img_project_probe_reads_compose_labels(monkeypatch):
+    """The real probe behind running_img_projects (pinned to [] suite-wide by
+    conftest): hugmesh-img-* labels only, de-duplicated; a docker that does not
+    answer is None (the clean then keeps the registry and says why)."""
+    out = "hugmesh-local\nhugmesh-img-abc\n\nhugmesh-img-abc\nmyapp\nhugmesh-img-z9\n"
+    seen = []
+
+    def fake(argv, *a, **kw):
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, out, "")
+    monkeypatch.setattr(subprocess, "run", fake)
+    assert local_stack_node.probe_running_img_projects() == ["hugmesh-img-abc",
+                                                             "hugmesh-img-z9"]
+    assert seen[0][:2] == ["docker", "ps"] and "-a" not in seen[0]
+    monkeypatch.setattr(subprocess, "run", lambda argv, *a, **kw:
+                        subprocess.CompletedProcess(argv, 1, "", "denied"))
+    assert local_stack_node.probe_running_img_projects() is None

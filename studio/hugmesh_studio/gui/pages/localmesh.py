@@ -1893,6 +1893,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                                          expanded=False)
         self.saved_meshes.section = self.saved_section
         self.saved_meshes.start_requested.connect(self._start_saved)
+        self.saved_meshes.stop_requested.connect(self._stop_saved_own)
         self.saved_meshes.load_requested.connect(self._load_saved)
         self.saved_meshes.probe_needed.connect(self._probe_saved)
         # THE CURRENT MESH (operator, 2026-10-21: "Saved meshes screen does not give
@@ -4517,6 +4518,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                          lambda on_line, cancel: boot.restore(
                              rec, on_line=on_line, cancel=cancel),
                          stream=True, cancellable=True, verb="")
+
+    def _stop_saved_own(self, rec) -> None:
+        """Saved meshes -> Stop of a mesh started beside a node-image build (PR #937
+        round 4): the ONE stop path the CLI ``images_mesh stop <id>`` and
+        ``for_record(...).down()`` share (:meth:`.images_mesh.AlongsideMesh.stop`) —
+        its worktree's ``make stack-halt``, or by compose project label when that
+        worktree is gone. Never this page's ``self.boot`` (the checkout's mesh), never
+        the tailnet overlay; volumes are kept. The row re-probes when it ends."""
+        from ...core import images_mesh
+        label = rec.label or rec.id
+        refusal = (images_mesh.foreign_record_refusal(rec)
+                   or images_mesh.label_stop_refusal(saved_meshes.record_project(rec))
+                   or LocalMeshBootstrap.teardown_refusal())
+        if refusal:
+            self._refuse(f"Cannot stop '{label}': {refusal}")
+            return
+        lane = images_mesh.AlongsideMesh(self.generator_dir, rec)
+        self._note(f"[saved-mesh] stopping '{label}' (compose project {lane.project}) — "
+                   "its data volumes are kept; this checkout's mesh is not touched …")
+        self._launch(f"Stopping saved mesh {label}", lane.stop, verb="")
 
     def _open_vaults(self):
         """Open the Vaults & managed-volumes manager.

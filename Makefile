@@ -2341,14 +2341,16 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 # mesh's compose project (the Studio's node-image lane runs hugmesh-img-<id> from
 # its own worktree, core/images_mesh.py) must not remove the registry the
 # checkout's hugmesh-local builds from. LocalStackNode.clean passes it for any
-# project other than the checkout's own.
+# project other than the checkout's own, and for hugmesh-local itself while any
+# hugmesh-img-* project is up. Only 1/true/yes keep it; 0/false/no/empty remove it.
+STACK_CLEAN_KEEP_M2_ON = $(filter 1 true yes TRUE YES True Yes,$(strip $(STACK_CLEAN_KEEP_M2)))
 stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
 	bash tests/stack/gen-route-access-env.sh --remove
-	$(if $(strip $(STACK_CLEAN_KEEP_M2)),@echo "==> The private-maven registry $(M2_REGISTRY_NAME) is KEPT (STACK_CLEAN_KEEP_M2: another mesh shares it).",@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true)
-	$(if $(strip $(STACK_CLEAN_KEEP_M2)),,@rm -f $(STACK_M2_ENV))
+	$(if $(STACK_CLEAN_KEEP_M2_ON),@echo "==> The private-maven registry $(M2_REGISTRY_NAME) is KEPT (STACK_CLEAN_KEEP_M2: another mesh shares it).",@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true)
+	$(if $(STACK_CLEAN_KEEP_M2_ON),,@rm -f $(STACK_M2_ENV))
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'
 
 # Run the Playwright e2e suite (tests/e2e) against the RUNNING local stack's TLS

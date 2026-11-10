@@ -143,6 +143,35 @@ _M2_PROBE_TIMEOUT_S = 3.0
 # <project>-<service>. These four services resolve PRIVATE maven artifacts at
 # image-build time — a cold build of any of them needs the m2 registry.
 _COMPOSE_PROJECT = "hugmesh-local"
+#: Compose project prefix of a mesh the Studio's node-image lane starts beside a build
+#: (``hugmesh-img-<id>``, core/images_mesh.py imports it from here). The ONLY projects
+#: a label-based stop may ever name, and the ones a clean of hugmesh-local keeps the
+#: shared private-maven registry for while any of them is up.
+IMG_PROJECT_PREFIX = "hugmesh-img-"
+#: The one private-maven registry container per host (Makefile M2_REGISTRY_NAME).
+M2_REGISTRY_CONTAINER = "hugmesh-m2-registry"
+
+
+def running_img_projects() -> list[str] | None:
+    """The ``hugmesh-img-*`` compose projects with a RUNNING container on this host
+    (:func:`probe_running_img_projects`); the one name callers and tests use."""
+    return probe_running_img_projects()
+
+
+def probe_running_img_projects() -> list[str] | None:
+    """The ``hugmesh-img-*`` compose projects with a RUNNING container on this host,
+    by compose label (``docker ps``, read-only). ``None`` = docker did not answer."""
+    try:
+        r = subprocess.run(["docker", "ps", "--format",
+                            '{{.Label "com.docker.compose.project"}}'],
+                           capture_output=True, text=True, **proc_text.TEXT_IO,
+                           timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return sorted({ln.strip() for ln in (r.stdout or "").splitlines()
+                   if ln.strip().startswith(IMG_PROJECT_PREFIX)})
 #: `docker ps` filters that select the RUNNING hugmesh-tor container of the stack — by
 #: compose LABEL (project + service), never by container name.
 _TOR_PS_FILTERS = (
@@ -1960,17 +1989,46 @@ class LocalStackNode:
         blocker = self._native_windows_refusal("The local stack", on_line)
         if blocker:
             return False, blocker
-        return self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel,
-                          args=self._clean_args())
+        args, kept = self._clean_args()
+        if kept and on_line is not None:
+            try:
+                on_line(kept)
+            except Exception:                    # noqa: BLE001 — a viewer never sinks it
+                pass
+        ok, msg = self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel,
+                             args=args)
+        # a buffered caller sees only the return: the sentence leads it there too
+        return ok, (f"{kept}\n{msg}" if kept else msg)
 
-    def _clean_args(self) -> list[str]:
-        """Make variables for `make stack-clean`. A node that is NOT the checkout's own
-        mesh (the node-image lane's ``hugmesh-img-<id>``, run from its own worktree)
-        passes ``STACK_CLEAN_KEEP_M2=1``: the private-maven registry container is ONE
-        per host (``hugmesh-m2-registry``, m2-bootstrap.sh's fixed name) and the
-        checkout's hugmesh-local builds from it, so cleaning a second mesh must never
-        remove it (PR #937 round 3). The default node's argv is unchanged."""
-        return [] if self.project == _COMPOSE_PROJECT else ["STACK_CLEAN_KEEP_M2=1"]
+    def _clean_args(self) -> tuple[list[str], str]:
+        """``(make variables, sentence)`` for `make stack-clean`. The private-maven
+        registry container is ONE per host (``hugmesh-m2-registry``, m2-bootstrap.sh's
+        fixed name) and every mesh on it builds from it, so ``STACK_CLEAN_KEEP_M2=1``
+        keeps it (and its env file):
+
+        * a node that is NOT the checkout's own mesh (the node-image lane's
+          ``hugmesh-img-<id>``) always passes it (PR #937 round 3); the sentence is
+          "" — the Makefile's own echo says it was kept;
+        * the checkout's own hugmesh-local passes it while any ``hugmesh-img-*``
+          project is UP (PR #937 round 4: its build pulls from that registry) — or
+          when docker cannot say whether one is (fail closed: the registry is a
+          rebuildable cache, a build starved of it mid-run is not) — and the
+          sentence says why. With none up the argv is unchanged ([], "")."""
+        if self.project != _COMPOSE_PROJECT:
+            return ["STACK_CLEAN_KEEP_M2=1"], ""
+        up = running_img_projects()
+        if up == []:
+            return [], ""
+        if up is None:
+            why = ("docker could not say whether a mesh started beside a node-image "
+                   f"build ({IMG_PROJECT_PREFIX}*) is running")
+        else:
+            why = (", ".join(up) + (" is" if len(up) == 1 else " are") + " running (a "
+                   "mesh started beside a node-image build) and builds from it")
+        return ["STACK_CLEAN_KEEP_M2=1"], (
+            f"[stack-clean] the private-maven registry {M2_REGISTRY_CONTAINER} is KEPT, "
+            f"not removed: {why}. Everything else of {_COMPOSE_PROJECT} is cleaned; "
+            "clean again once that mesh is stopped to remove the registry too.")
 
     def _project_args(self) -> list[str]:
         """``-p <project>`` for a node that is not the checkout's own mesh; [] for the
