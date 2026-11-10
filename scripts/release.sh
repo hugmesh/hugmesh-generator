@@ -36,7 +36,9 @@
 # above main's beta line is already out), RUNNING (its tag run is
 # in flight), and on the stable channel NEEDS-CUT (release/X.Y does not exist yet: the
 # cut phase creates it) or NEEDS-PR (release/X.Y does not carry X.Y.Z yet: the bump phase
-# opens the version-bump PR).
+# opens the version-bump PR). The verify phase also flags each selected image package's
+# floating tags (:latest, :beta, :X.Y, :main) that are unsigned, unreadable, or a :latest
+# with no stable X.Y.Z, and prints the operator's delete command; it never deletes.
 #
 # Every gh call goes through GH() with GH_TOKEN/GITHUB_TOKEN unset (an exported read-only
 # token shadows the keyring login on this fleet). No secret value is ever read or printed.
@@ -1845,8 +1847,77 @@ phase_site() {
   fi
 }
 
+# ── floating tags ────────────────────────────────────────────────────────────
+# A floating tag (:latest, :beta, :X.Y, :main) is what a pull without a version gets: a bare
+# `docker pull ghcr.io/hugmesh/<image>` means :latest. docs/RELEASING.md: every pushed tag
+# is signed, the floating ones included, and only a stable X.Y.Z moves :latest. So each
+# floating tag must point at a digest whose cosign signature (the tag sha256-<hex>.sig) is
+# in the same package, and :latest must not exist while the package has no stable X.Y.Z
+# (a :latest left over from before the release workflow, unsigned, served to every bare pull,
+# is what 0.4.0-beta.2's verify reported DONE over).
+FLOATING_TAG_RE='^(latest|beta|main|[0-9]+\.[0-9]+)$'
+FLOAT_PY='
+import re, sys
+org, pkg, enc, float_re = sys.argv[1:5]
+FLOAT = re.compile(float_re)
+RELEASE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$")
+STABLE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+rows, tags = [], set()
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if not line:
+        continue
+    vid, digest, tl = (line.split("\t") + ["", ""])[:3]
+    t = [x for x in tl.split(",") if x]
+    rows.append((vid, digest, t))
+    tags.update(t)
+stable = any(STABLE.match(x) for x in tags)
+bad = 0
+for vid, digest, t in rows:
+    fl = [x for x in t if FLOAT.match(x)]
+    if not fl:
+        continue
+    why = []
+    hexd = digest[len("sha256:"):] if digest.startswith("sha256:") else ""
+    if not hexd or "sha256-%s.sig" % hexd not in tags:
+        why.append("UNSIGNED (no sha256-%s.sig in the package)" % (hexd[:12] or "?"))
+    if "latest" in fl and not stable:
+        why.append(":latest while the package has no stable X.Y.Z (a beta never moves :latest)")
+    if not why:
+        continue
+    bad += 1
+    print("             FLOATING ghcr.io/%s/%s:%s -> %s (package version %s, tags %s): %s"
+          % (org, pkg, ",".join(fl), digest[:19], vid, ",".join(t), "; ".join(why)))
+    rel = [x for x in t if RELEASE.match(x)]
+    if rel:
+        print("               it also carries the release tag %s, so do NOT delete the version: fix the tag or the signing in its release run" % ",".join(rel))
+    else:
+        print("               no release tag on it; operator: env -u GH_TOKEN -u GITHUB_TOKEN gh api -X DELETE orgs/%s/packages/container/%s/versions/%s"
+              " (undo within 30 days: gh api -X POST orgs/%s/packages/container/%s/versions/%s/restore)" % (org, enc, vid, org, enc, vid))
+sys.exit(1 if bad else 0)
+'
+# floating_audit image-package -> rc 0 every floating tag is right (or the package does not
+# exist yet), 1 a FLOATING line was printed, 2 the versions are unreadable (fails CLOSED: an
+# unreadable package is never reported clean).
+floating_audit() {
+  local p=$1 enc out rc=0
+  enc=$(printf '%s' "$p" | sed 's#/#%2F#g')
+  out=$(ghs api "/orgs/$ORG/packages/container/$enc/versions?per_page=100" --paginate \
+          --jq '.[]|[(.id|tostring),.name,((.metadata.container.tags // [])|join(","))]|@tsv') || rc=$?
+  case "$rc" in
+    0) ;;
+    4) return 0 ;;
+    *) say "             FLOATING ghcr.io/$ORG/$p: cannot read its package versions, so its floating tags are unchecked"; return 2 ;;
+  esac
+  rc=0
+  printf '%s\n' "$out" | python3 -I -c "$FLOAT_PY" "$ORG" "$p" "$enc" "$FLOATING_TAG_RE" || rc=$?
+  [ "$rc" = 0 ] && return 0
+  [ "$rc" = 1 ] && return 1
+  say "             FLOATING ghcr.io/$ORG/$p: the floating-tag check itself failed (rc $rc)"; return 2
+}
+
 phase_verify() {
-  local r p st=0 vis cont what=artifact
+  local r p st=0 ft=0 vis cont what=artifact
   load_site_map
   cont=$(ghq api "/orgs/$ORG/packages?package_type=container&per_page=100" --paginate --jq '.[]|.name+"="+.visibility' || true)
   say "  state      repo                                   release                where"
@@ -1857,6 +1928,7 @@ phase_verify() {
       if [ "${T_KIND[$r]}" = img ]; then
         vis=$(printf '%s\n' "$cont" | sed -n "s#^$p=##p" | head -1)
         printf '             %-52s [%s] %s\n' "ghcr.io/$ORG/$p:${S_VER[$r]:-?}" "${vis:-not-created-yet}" "$(site_where "$r" "$p")"
+        if selected "$r"; then floating_audit "$p" || ft=$((ft + 1)); fi
       else
         printf '             %-52s %s\n' "maven $p:${S_VER[$r]:-?}" "$(site_where "$r" "$p")"
       fi
@@ -1866,8 +1938,13 @@ phase_verify() {
   studio_facts
   say "  The Studio shows at the top of hugmesh.net/downloads."
   [ ${#ONLY[@]} -eq 0 ] || what="selected artifact"
-  if [ "$st" = 0 ]; then say "== every $what is DONE"; return 0; fi
-  [ "$MODE" = dry ] && return 0
+  if [ "$ft" != 0 ]; then
+    say "== $ft image package(s) have a floating tag (:latest, :beta, :X.Y, :main) that is unsigned, unreadable, or a"
+    say "   :latest with no stable release (FLOATING lines above): a pull without a version gets that image"
+  fi
+  if [ "$st" = 0 ] && [ "$ft" = 0 ]; then say "== every $what is DONE"; return 0; fi
+  if [ "$st" = 0 ]; then say "== every $what is DONE, but its floating tags are not right (above)"; return 1; fi
+  [ "$MODE" = dry ] && { [ "$ft" = 0 ] && return 0; return 1; }
   say "== not everything is DONE (rows above). Re-run: $(resume_cmd preflight)"
   return 1
 }

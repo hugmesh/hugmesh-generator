@@ -151,6 +151,26 @@
 #                          a DaemonSet here, which this script never touches anyway —
 #                          the census does not need to know that to be right.
 #
+# THE LIVE DERIVATION ALONE FORGETS A CONTROLLER THE MOMENT IT GOES DOWN (#561).
+# kyverno deregisters its own webhooks when it stops, so on 2026-09-18, with kyverno
+# at 0 replicas, the derivation no longer named it and kyverno had dropped off its
+# own floor. That is backwards: a downed controller is the case a floor exists for.
+# Decision 82 = C: tier 2 is now the UNION of the live derivation and a STORED
+# last-known floor, the ConfigMap `hugmesh-kind-halt-floor` in kube-system (tier 1,
+# so no halt can scale away its own memory), key `floor.json`.
+#   - Every halt and every resume writes the union back. The halt writes it after its
+#     record's create (the lock) and before the first mutation; resume writes it
+#     after its own reads, and a resume is never failed by the store.
+#   - THE ONLY RETIREMENT RULE: a stored namespace is removed when the namespace no
+#     longer exists in the cluster, and each retirement is logged with that reason.
+#     Never because its workloads are at 0 - that is the case being protected - and
+#     never when the namespace list could not be read.
+#   - A store that cannot be read (or does not parse) is a LOUD fallback to the live
+#     derivation only, recorded in the halt record's `floor_store`, and the store is
+#     NOT written over: it may be the only memory of a controller that is down.
+#   - A namespace on the floor from memory alone is said to be, by name; and if its
+#     workloads are at 0 it is reported floor_unbacked like any other (#544).
+#
 # DAEMONSETS ARE NEVER TOUCHED, in any namespace. A DaemonSet has no replica count
 # to zero; halting one means editing its nodeSelector, which is a mutation this
 # script would then have to reverse exactly. Out of scope, and said out loud in the
@@ -261,6 +281,13 @@ STATE_KEY="halt.json"
 # resolves .data.halt -> .json and returns EMPTY for a key that is plainly there —
 # which read_record then reports as "exists but has no 'halt.json' key" and refuses.
 STATE_KEY_JSONPATH="${STATE_KEY//./\\.}"
+#: THE STORED LAST-KNOWN FLOOR (#561, decision 82 = C). It lives in kube-system,
+#: which is on TIER 1 of the floor, so no halt can scale away the namespace that
+#: holds the memory of what must not be scaled. Not overridable, like the context.
+FLOOR_NS="kube-system"
+FLOOR_CM="hugmesh-kind-halt-floor"
+FLOOR_KEY="floor.json"
+FLOOR_KEY_JSONPATH="${FLOOR_KEY//./\\.}"
 #: How long to let a GitOps parent re-assert a suspend before re-checking. Only a
 #: repo-recursing root (HUGMESH_GITOPS_ROOT_RECURSE=1) or an ApplicationSet can do
 #: that; on this cluster neither applies. Tests set it to 0.
@@ -466,6 +493,46 @@ replace_record() {
      | kc -n "${ARGOCD_NS}" apply -f - >/dev/null 2>&1
 }
 
+# ── the stored last-known floor (#561) ───────────────────────────────────────
+# The same 0 / 1 / 5 contract as read_record, for the same reason: "there is no
+# store yet" (the first halt on this cluster) and "the store could not be read" are
+# different answers, and only the first may be written over. FLOOR_ERR carries the
+# first line of the failure.
+FLOOR_ERR=""
+read_floor_store() {
+  local out
+  local rc
+  local errf
+  errf="${TMPDIR_HALT}/floor-store.err"
+  FLOOR_ERR=""
+  out="$(kc -n "${FLOOR_NS}" get configmap "${FLOOR_CM}" \
+           -o "jsonpath={.data.${FLOOR_KEY_JSONPATH}}" 2>"${errf}")"
+  rc=$?
+  if [ "${rc}" -eq 0 ]; then
+    if [ -z "${out}" ]; then
+      FLOOR_ERR="${FLOOR_NS}/${FLOOR_CM} exists but has no '${FLOOR_KEY}' key"
+      return 5
+    fi
+    printf '%s' "${out}"
+    return 0
+  fi
+  if grep -aF -e 'NotFound' -e 'not found' "${errf}" >/dev/null 2>&1; then
+    return 1
+  fi
+  FLOOR_ERR="$(head -n 1 "${errf}" | cut -c1-200)"
+  return 5
+}
+
+# Create-or-replace, NOT `create`. The halt record's create is the lock; the store
+# is not one. Two halts that both write the union are writing the same facts.
+write_floor_store() {
+  local file
+  file="$1"
+  kc -n "${FLOOR_NS}" create configmap "${FLOOR_CM}" \
+     --from-file="${FLOOR_KEY}=${file}" --dry-run=client -o yaml \
+     | kc -n "${FLOOR_NS}" apply -f - >/dev/null 2>&1
+}
+
 # ── JSON helpers ─────────────────────────────────────────────────────────────
 # Every one of these is a python heredoc taking its input from FILE PATHS in the
 # environment, so nothing the cluster returns is ever expanded by the shell, and
@@ -523,6 +590,263 @@ for ns in sorted(why):
     if len(reasons) > 1:
         head += " (and %d more)" % (len(reasons) - 1)
     sys.stdout.write("%s\t%s\n" % (ns, head))
+PY
+}
+
+# THE UNION (#561, decision 82 = C): the live tier-2 derivation above, plus the
+# stored last-known floor. Inputs are FILE PATHS, as everywhere else:
+#   HALT_LIVE_FLOOR_FILE  admission_floor's TSV                         (required)
+#   HALT_STORE_FILE       the store's JSON, as read_floor_store printed it
+#   HALT_STORE_STATE      present | absent | unreadable
+#   HALT_STORE_ERR        why it was unreadable, when it was
+#   HALT_NS_FILE          `kubectl get namespaces -o json`; EMPTY when that read failed
+# Outputs:
+#   HALT_FLOOR_OUT        the union, in admission_floor's own <ns> TAB <why> format, so
+#                         the skip list and plan_from_json consume it unchanged
+#   HALT_STORE_OUT        the store to write back. Written ONLY when the old store was
+#                         readable or absent - never over a store this run could not read
+#   HALT_FLOOR_STATUS_OUT what happened, for the halt record's `floor_store`
+#   stdout                one human line per add, keep, retirement and fallback
+#
+# THE RETIREMENT RULE, and the only one: a stored entry is removed when its NAMESPACE
+# NO LONGER EXISTS. Not when its workloads are at 0 - a controller at 0 replicas is
+# the very case the store exists for (kyverno on 2026-09-18) - and not when the
+# namespace list could not be read, because a failed read is not an empty cluster.
+# Replica counts are deliberately NOT an input to this function. And a namespace a
+# live Fail webhook still names is never retired, deleted or not: that webhook still
+# denies whatever it gates.
+floor_union() {
+  python3 - <<'PY'
+import datetime, json, os
+
+now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+store_ref = "%s/%s" % (os.environ["HALT_FLOOR_NS"], os.environ["HALT_FLOOR_CM"])
+
+def clean(text):
+    # One line, no tabs: every reason ends up in a TAB-separated row.
+    return " ".join(str(text).split())
+
+live = {}
+with open(os.environ["HALT_LIVE_FLOOR_FILE"]) as fh:
+    for line in fh:
+        line = line.rstrip("\n")
+        if "\t" in line:
+            ns, why = line.split("\t", 1)
+            live[ns] = why
+
+state = os.environ.get("HALT_STORE_STATE", "unreadable")
+error = os.environ.get("HALT_STORE_ERR", "") or None
+stored = {}
+if state == "present":
+    try:
+        with open(os.environ["HALT_STORE_FILE"]) as fh:
+            doc = json.load(fh)
+        stored = doc.get("namespaces")
+        if not isinstance(stored, dict) or not all(isinstance(v, dict) for v in stored.values()):
+            raise ValueError("no 'namespaces' object")
+    except (OSError, ValueError, AttributeError) as exc:
+        # A store that does not parse is UNREADABLE, not absent: absent would let
+        # this run overwrite it, and it may be the only memory of a down controller.
+        state, stored = "unreadable", {}
+        error = "the stored floor does not parse: %s" % clean(exc)[:160]
+elif state != "absent":
+    state = "unreadable"
+
+existing = None
+ns_path = os.environ.get("HALT_NS_FILE", "")
+if ns_path:
+    try:
+        with open(ns_path) as fh:
+            existing = {i["metadata"]["name"] for i in json.load(fh).get("items", [])}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        existing = None
+# A list that parses but does not name the store's OWN namespace is not a reading of
+# this cluster (an empty `items`, a truncated answer): the store was just read from
+# that namespace. Trusting it would retire every stored entry at once, so it is
+# treated exactly like a failed read - it retires nothing.
+if existing is not None and os.environ["HALT_FLOOR_NS"] not in existing:
+    existing = None
+
+floor, new_store, added, retired, from_store = {}, {}, [], [], []
+for ns in sorted(live):
+    old = stored.get(ns) or {}
+    floor[ns] = live[ns]
+    new_store[ns] = {"reason": clean(live[ns]),
+                     "first_stored": old.get("first_stored") or now,
+                     "last_live": now}
+    if state != "unreadable" and ns not in stored:
+        added.append(ns)
+for ns in sorted(stored):
+    if ns in live:
+        continue
+    entry = stored[ns]
+    if existing is not None and ns not in existing:
+        retired.append({"namespace": ns,
+                        "reason": "namespace %s no longer exists in the cluster (stored because it %s; last seen live %s)"
+                                  % (ns, clean(entry.get("reason", "backed a Fail webhook")),
+                                     entry.get("last_live", "?"))})
+        continue
+    new_store[ns] = entry
+    from_store.append(ns)
+    floor[ns] = clean("on the stored last-known floor %s - no live Fail/conversion webhook names it now; "
+                      "last seen live %s, when it %s"
+                      % (store_ref, entry.get("last_live", "?"),
+                         entry.get("reason", "backed a Fail webhook")))
+
+with open(os.environ["HALT_FLOOR_OUT"], "w") as fh:
+    for ns in sorted(floor):
+        fh.write("%s\t%s\n" % (ns, floor[ns]))
+
+writable = state in ("present", "absent")
+if writable:
+    with open(os.environ["HALT_STORE_OUT"], "w") as fh:
+        json.dump({"version": 1, "updated_at": now,
+                   "cluster": os.environ.get("HALT_CLUSTER", "?"),
+                   "namespaces": new_store}, fh, indent=2, sort_keys=True)
+
+status = {
+    "configmap": store_ref,
+    "read": {"present": "ok", "absent": "absent"}.get(state, "unreadable"),
+    "error": error,
+    "live_only": state == "unreadable",
+    "from_store_only": from_store,
+    "added": added,
+    "retired": retired,
+    "retirement_checked": existing is not None,
+    "write_back": writable,
+    # null until the write-back has been attempted; the halt fills it in.
+    "written": None,
+}
+with open(os.environ["HALT_FLOOR_STATUS_OUT"], "w") as fh:
+    json.dump(status, fh, indent=2, sort_keys=True)
+
+if state == "unreadable":
+    print("WARNING: THE LAST-KNOWN FLOOR COULD NOT BE READ (%s): %s" % (store_ref, error or "unknown error"))
+    print("  This floor is the LIVE derivation ONLY. A controller that is already down, and has")
+    print("  deregistered its webhook with it, is NOT protected by memory this time. The store")
+    print("  is left exactly as it is: it is never overwritten with a list this run could not merge.")
+for ns in added:
+    print("floor store: added %s - %s" % (ns, clean(live[ns])))
+for ns in from_store:
+    print("floor store: kept %s on the floor from the stored list (no live webhook names it now)" % ns)
+for r in retired:
+    print("floor store: retired %s - %s" % (r["namespace"], r["reason"]))
+if existing is None and state != "unreadable":
+    print("floor store: the namespace list could not be read, so nothing was retired this run")
+PY
+}
+
+# Compute the union:  <live floor tsv> <out floor tsv> <out status json>. READ-ONLY.
+# Returns non-zero only when the UNION itself could not be computed. A store that
+# could not be read is a loud warning carried in the status, never a refusal: the
+# live derivation is still a floor, and the record says which one it got. The write
+# is a separate step (write_back_floor_store) so the halt can order it after the
+# record's create.
+FLOOR_WRITTEN=""
+refresh_floor_store_plan() {
+  local live
+  local out
+  local status
+  local store_in
+  local store_out
+  local ns_json
+  local state
+  local rc
+  local line
+  live="$1"
+  out="$2"
+  status="$3"
+  store_in="${TMPDIR_HALT}/floor-store.json"
+  store_out="${TMPDIR_HALT}/floor-store.new.json"
+  ns_json="${TMPDIR_HALT}/namespaces.json"
+  FLOOR_WRITTEN=""
+  rm -f "${store_out}"
+
+  read_floor_store >"${store_in}"
+  rc=$?
+  case "${rc}" in
+    0) state="present" ;;
+    1) state="absent" ;;
+    *) state="unreadable" ;;
+  esac
+  # Retirement's only input. A failed read retires nothing (see floor_union).
+  if ! kc get namespaces -o json >"${ns_json}" 2>/dev/null || [ ! -s "${ns_json}" ]; then
+    rm -f "${ns_json}"
+    ns_json=""
+  fi
+  HALT_LIVE_FLOOR_FILE="${live}" HALT_STORE_FILE="${store_in}" HALT_STORE_STATE="${state}" \
+    HALT_STORE_ERR="${FLOOR_ERR}" HALT_NS_FILE="${ns_json}" HALT_CLUSTER="${CLUSTER_NAME}" \
+    HALT_FLOOR_NS="${FLOOR_NS}" HALT_FLOOR_CM="${FLOOR_CM}" \
+    HALT_FLOOR_OUT="${out}" HALT_STORE_OUT="${store_out}" HALT_FLOOR_STATUS_OUT="${status}" \
+    floor_union >"${TMPDIR_HALT}/floor-union.log" || return 1
+  while IFS= read -r line; do info "${line}"; done < "${TMPDIR_HALT}/floor-union.log"
+  return 0
+}
+
+# Write the union refresh_floor_store_plan computed back to the store - if it was
+# allowed to compute one (never over an unreadable store). Never fatal: a failed
+# write leaves THIS run's floor intact, and is loud and recorded.
+write_back_floor_store() {
+  local store_out
+  store_out="${TMPDIR_HALT}/floor-store.new.json"
+  FLOOR_WRITTEN=""
+  if [ -s "${store_out}" ]; then
+    if write_floor_store "${store_out}"; then
+      FLOOR_WRITTEN="true"
+    else
+      FLOOR_WRITTEN="false"
+      info "WARNING: the last-known floor could not be written back to ${FLOOR_NS}/${FLOOR_CM}."
+      info "  This run's floor is unaffected; the NEXT run reads the older store."
+    fi
+  fi
+  return 0
+}
+
+# RESUME's half of "every halt and resume writes the union back" (#561). Resume is
+# the way BACK, and the store is maintenance, so nothing here can fail a resume: a
+# live floor that cannot be derived is said out loud and the store is left exactly as
+# it was, rather than rewritten from half a reading.
+refresh_floor_store_on_resume() {
+  local wh_json
+  local crd_json
+  local live_floor
+  wh_json="${TMPDIR_HALT}/resume-webhooks.json"
+  crd_json="${TMPDIR_HALT}/resume-crds.json"
+  live_floor="${TMPDIR_HALT}/resume-floor-live.tsv"
+  head_ "Refreshing the stored last-known floor (${FLOOR_NS}/${FLOOR_CM})"
+  if ! kc get validatingwebhookconfigurations,mutatingwebhookconfigurations -o json >"${wh_json}" 2>/dev/null \
+     || [ ! -s "${wh_json}" ] \
+     || ! kc get crd -o json >"${crd_json}" 2>/dev/null || [ ! -s "${crd_json}" ] \
+     || ! HALT_WEBHOOKS_FILE="${wh_json}" HALT_CRDS_FILE="${crd_json}" admission_floor >"${live_floor}"; then
+    info "WARNING: the live admission floor could not be derived, so the stored floor was NOT refreshed."
+    info "  It is left exactly as the halt wrote it. This does not affect the resume."
+    return 0
+  fi
+  if ! refresh_floor_store_plan "${live_floor}" "${TMPDIR_HALT}/resume-floor.tsv" \
+         "${TMPDIR_HALT}/resume-floor-status.json"; then
+    info "WARNING: the stored floor could not be combined with the live one; it was NOT refreshed."
+    return 0
+  fi
+  write_back_floor_store
+  if [ "${FLOOR_WRITTEN}" = "true" ]; then
+    info "stored floor written back."
+  fi
+  return 0
+}
+
+# Fill in `floor_store.written` on a halt record held locally.
+note_floor_written() {
+  local record
+  record="$1"
+  [ -n "${FLOOR_WRITTEN}" ] || return 0
+  HALT_RECORD_IN="${record}" HALT_WRITTEN="${FLOOR_WRITTEN}" python3 - <<'PY'
+import json, os
+with open(os.environ["HALT_RECORD_IN"]) as fh:
+    rec = json.load(fh)
+if isinstance(rec.get("floor_store"), dict):
+    rec["floor_store"]["written"] = os.environ["HALT_WRITTEN"] == "true"
+with open(os.environ["HALT_RECORD_IN"], "w") as fh:
+    json.dump(rec, fh, indent=2, sort_keys=True)
 PY
 }
 
@@ -669,6 +993,10 @@ record = {
                          .strftime("%Y-%m-%dT%H:%M:%SZ"),
     "skipped_namespaces": sorted(skip),
     "admission_floor": floor_why,
+    # #561. How the floor above was assembled: whether the stored last-known floor
+    # was read or this halt fell back to the LIVE derivation only, what it added,
+    # kept from memory and retired, and whether the union was written back.
+    "floor_store": load_optional("HALT_FLOOR_STATUS_FILE"),
     # #544. `workloads` is EVERY workload censused, scaled or not, each carrying its
     # own `skipped` reason - so `len(workloads)` is not the number this halt moved,
     # and reading it as one is how "the design says 24 of 27, the record says 39"
@@ -830,12 +1158,38 @@ if skipped:
     print("    DaemonSets are never touched in any namespace (no replica count to restore).")
 
 floor = rec.get("admission_floor") or {}
+fs = rec.get("floor_store") if isinstance(rec.get("floor_store"), dict) else None
 if floor:
     print("")
     print("  Held on the DERIVED admission floor (%d namespace(s)) - censused from this" % len(floor))
-    print("  cluster's own webhook configuration, not from a hardcoded list:")
+    if fs and not fs.get("live_only"):
+        print("  cluster's own webhook configuration, not from a hardcoded list, UNIONED with")
+        print("  the stored last-known floor %s:" % fs.get("configmap", "?"))
+    else:
+        print("  cluster's own webhook configuration, not from a hardcoded list:")
     for ns in sorted(floor):
         print("    %-24s %s" % (ns, floor[ns]))
+
+# #561. A record written before the store existed has no floor_store: say nothing.
+if fs:
+    if fs.get("live_only"):
+        print("")
+        print("  *** THE LAST-KNOWN FLOOR COULD NOT BE READ - THIS HALT'S FLOOR IS LIVE-ONLY ***")
+        print("  %s: %s" % (fs.get("configmap", "?"), fs.get("error") or "unknown error"))
+        print("  A controller that was already down, and had deregistered its webhook with it,")
+        print("  was NOT protected by memory this time. The store was left as it was, unmerged.")
+    elif fs.get("from_store_only"):
+        print("")
+        print("  On the floor from the STORED list only (%d) - no live webhook names them now,"
+              % len(fs["from_store_only"]))
+        print("  which is what a controller that is down looks like: %s"
+              % ", ".join(fs["from_store_only"]))
+    for r in fs.get("retired") or []:
+        print("  Retired from the stored floor: %s - %s" % (r.get("namespace"), r.get("reason")))
+    if not fs.get("retirement_checked", True) and not fs.get("live_only"):
+        print("  The namespace list could not be read, so nothing was retired from the stored floor.")
+    if fs.get("written") is False:
+        print("  WARNING: the stored floor could not be written back; the next run reads the older one.")
 
 # #544. The floor is a claim about what is still RUNNING. When a workload on it is
 # already at 0, that claim is false, and it is false in the direction that hides a
@@ -869,6 +1223,13 @@ if unbacked:
     print("  Consequences, stated rather than implied:")
     print("    - every failurePolicy=Fail webhook backed by those namespaces is UNBACKED")
     print("      right now, so creating or updating a resource it guards is REJECTED;")
+    gone = sorted(set(by_ns) & set((fs or {}).get("from_store_only") or []))
+    if gone:
+        # #561. These are on the floor from MEMORY: no live webhook names them, most
+        # likely because the controller deregistered its own on the way down. Nothing
+        # is rejected today; the Fail webhook returns the moment the controller does.
+        print("      except %s, whose webhook is not registered at all right now (on the" % ", ".join(gone))
+        print("      floor from the stored list) - it returns when the controller comes back;")
     print("    - `make kind-resume` will NOT fix it. These were at 0 when the record was")
     print("      written, so 0 is the count it would restore. Scale them back by hand, or")
     print("      let their ArgoCD Application reconcile once auto-sync is re-armed;")
@@ -953,6 +1314,8 @@ verb_halt() {
   local wh_json
   local crd_json
   local floor_file
+  local live_floor
+  local floor_status
   local plan
   local record
   local existing
@@ -1019,6 +1382,8 @@ with open(os.environ["HALT_RECORD_IN"]) as fh:
     wh_json="${TMPDIR_HALT}/webhooks.json"
     crd_json="${TMPDIR_HALT}/crds.json"
     floor_file="${TMPDIR_HALT}/floor.tsv"
+    live_floor="${TMPDIR_HALT}/floor-live.tsv"
+    floor_status="${TMPDIR_HALT}/floor-status.json"
 
     kc get applications -A -o json >"${apps_json}" 2>/dev/null || \
       die 5 "could not list ArgoCD Applications - refusing rather than halting blind"
@@ -1036,8 +1401,18 @@ with open(os.environ["HALT_RECORD_IN"]) as fh:
       die 5 "could not list CustomResourceDefinitions - refusing rather than scaling a conversion webhook blind"
     [ -s "${crd_json}" ] || die 5 "empty answer listing CustomResourceDefinitions - refusing rather than halting blind"
     if ! HALT_WEBHOOKS_FILE="${wh_json}" HALT_CRDS_FILE="${crd_json}" \
-         admission_floor >"${floor_file}"; then
+         admission_floor >"${live_floor}"; then
       die 5 "could not derive the admission floor from this cluster's webhook configuration - refusing rather than guessing it"
+    fi
+    # #561: the floor this halt honours is the live derivation UNIONED with the
+    # stored last-known floor, so a controller that is already down (and took its
+    # webhook with it) does not drop off its own floor. A store that cannot be read
+    # is a loud fallback to live-only, recorded - never a refusal and never an
+    # overwrite. The write-back happens AFTER the record's create below, so a halt
+    # that loses the lock has still written nothing.
+    head_ "Admission floor - live derivation + stored last-known floor (${FLOOR_NS}/${FLOOR_CM})"
+    if ! refresh_floor_store_plan "${live_floor}" "${floor_file}" "${floor_status}"; then
+      die 5 "could not combine the live admission floor with the stored last-known floor - refusing rather than guessing it"
     fi
 
     # HPAs are INFORMATIONAL: they are named, never touched. A failed read is
@@ -1056,6 +1431,7 @@ with open(os.environ["HALT_RECORD_IN"]) as fh:
          HALT_HPA_FILE="${hpa_json}" \
          HALT_CLUSTER="${CLUSTER_NAME}" HALT_CTX="${KCTX}" HALT_ARGOCD_NS="${ARGOCD_NS}" \
          HALT_SKIP_NS="${skip_ns}" HALT_FLOOR_FILE="${floor_file}" \
+         HALT_FLOOR_STATUS_FILE="${floor_status}" \
          HALT_PLAN="${plan}" HALT_RECORD="${record}" \
          plan_from_json; then
       die 5 "could not build the halt plan from the cluster's own JSON - refusing to act on a reading it could not parse"
@@ -1070,6 +1446,13 @@ with open(os.environ["HALT_RECORD_IN"]) as fh:
     Either the API refused the create, or another halt created the record first (this create is also the lock).
     Check with:  kubectl --context ${KCTX} -n ${ARGOCD_NS} get configmap ${STATE_CM}"
     fi
+
+    # #561: write the union back now that this halt holds the lock - once per halt,
+    # BEFORE the first mutation, so even a partial halt (exit 6) leaves the store
+    # current. Not fatal either way; the outcome rides in the record's floor_store.
+    write_back_floor_store
+    note_floor_written "${record}" || \
+      info "(the floor store's write-back outcome could not be noted in the local record)"
 
     head_ "Halting the DevOps lane - cluster '${CLUSTER_NAME}' (context ${KCTX})"
     say "The cluster, its volumes, its Vault KV and its Casdoor identities are KEPT."
@@ -1299,6 +1682,8 @@ verb_resume() {
     die 5 "could not read the cluster's current state, so this control will not act.
     Restoring blind would stomp a workload someone scaled up by hand while the lane was halted."
   fi
+
+  refresh_floor_store_on_resume
 
   failures=0
   restored_n=0

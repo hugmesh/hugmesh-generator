@@ -261,13 +261,15 @@ def test_mint_prints_the_cli_line_and_runs_nothing(at_token):
     _fill(j)
     j.feed("mint")
     text = _text(j)
-    assert "headscale user (required: u USER)" in text
-    assert "(the running one named like" in text
-    # no default headscale user: no line to run until one is named, and it says so
-    assert step.NAME_USER in text and mt.NAME_MINT_USER in text
-    assert "--mesh-token" not in text and "--headscale-" not in text
+    # no u USER: the line is there at once, without --headscale-user, and the screen
+    # says which default the CLI mints for
+    assert f"headscale user {step.DEFAULT_USER}" in text
+    assert "net.hugmesh.headscale.user label, else hugmesh" in step.DEFAULT_USER
+    assert "(the running one labelled or named like headscale)" in text
+    assert step.MINT_NOTE in text
+    assert step.mint_line(s.fields()) in text and "--headscale-" not in text
     j.feed("i")
-    assert j.status == step.NAME_USER and s.token == ""
+    assert "does not start docker" in j.status and s.token == ""
     j.feed("u ops")
     j.feed("c hugmesh-headscale")
     j.feed("i")
@@ -288,7 +290,8 @@ def test_mint_prints_the_cli_line_and_runs_nothing(at_token):
     assert s.hs_container == "" and "--headscale-container" not in _text(j)
     assert "--headscale-user ops" in _text(j)
     j.feed("u -")
-    assert s.hs_user == "" and "--mesh-token" not in _text(j) and step.NAME_USER in _text(j)
+    assert s.hs_user == "" and "--headscale-user" not in _text(j)
+    assert step.mint_line(s.fields()) in _text(j) and step.DEFAULT_USER in _text(j)
     assert not os.path.exists(mt.issuer_dir("west"))
 
 
@@ -310,6 +313,7 @@ def test_the_printed_mint_line_is_one_the_cli_accepts(at_token, monkeypatch, cap
     assert step.mint_line(s.fields(), user=s.hs_user) in _text(j)
     seen = {}
     monkeypatch.setattr(mt, "find_headscale_container", lambda runner=None: "hs")
+    monkeypatch.setattr(mt, "headscale_labels", lambda name, runner=None: {})
     monkeypatch.setattr(mt, "check_signing", lambda *a, **k: None)
     monkeypatch.setattr(mt, "ensure_issuer",
                         lambda mesh, **k: ("/k", "ssh-ed25519 AAAA", "SHA256:x"))
@@ -369,3 +373,36 @@ def test_the_token_screen_and_its_mint_line_never_import_qt(tmp_path):
     r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
                        cwd=STUDIO, env=env, timeout=120)
     assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("labels, user, tags", [
+    ({"user": "members", "key_tags": ("tag:hugmesh",)}, "members", ("tag:hugmesh",)),
+    ({}, "hugmesh", ())])
+def test_the_mint_line_without_a_user_mints_for_the_default(at_token, monkeypatch, capsys,
+                                                            labels, user, tags):
+    """Without u USER the printed line names no user: the CLI it runs mints for the
+    headscale container's label, else hugmesh, as the screen says."""
+    j, s = at_token
+    _fill(j)
+    j.feed("mint")
+    argv = step.mint_argv(s.fields())
+    assert "--headscale-user" not in argv and step.mint_line(s.fields()) in _text(j)
+    seen = {}
+    monkeypatch.setattr(mt, "find_headscale_container", lambda runner=None: "hs")
+    monkeypatch.setattr(mt, "headscale_labels", lambda name, runner=None: dict(labels))
+    monkeypatch.setattr(mt, "check_signing", lambda *a, **k: None)
+    monkeypatch.setattr(mt, "ensure_issuer",
+                        lambda mesh, **k: ("/k", "ssh-ed25519 AAAA", "SHA256:x"))
+
+    def mint(**kw):
+        seen["mint"] = kw
+        return KEY
+    monkeypatch.setattr(mt, "mint_preauth_key", mint)
+    monkeypatch.setattr(mt, "issue", lambda **kw: "tok")
+    monkeypatch.setattr(mt, "parse", lambda t: (mt.MeshGrant(
+        mesh="west", domain="example.org", role="admin", shell=True,
+        login_server="https://hs.example.org", auth_key=KEY, expires=2, issued=1,
+        issuer="ssh-ed25519 AAAA"), b"", b""))
+    assert mt.main(argv[argv.index("--mesh-token") + 1:]) == 0
+    assert (seen["mint"]["user"], tuple(seen["mint"]["tags"])) == (user, tags)
+    assert f"for the headscale user {user}" in capsys.readouterr().err

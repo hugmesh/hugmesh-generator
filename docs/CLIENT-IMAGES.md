@@ -331,7 +331,46 @@ What each flag needs before it does anything:
    been built. The SSO-sudo leg also stays inert until the SSO token producer
    (FD-07 increment 2, written but never run against a live Casdoor) has run on one.
 
-## Emulated desktop display (QEMU runner `--display spice`)
+## Emulated desktop display (QEMU runner): what each guest kernel can do
+
+The containerised QEMU runner (`tests/qemu/run-qemu-docker.sh`, and the Studio's
+emulate-a-device page) opens a desktop image through ONE door: SPICE on host
+loopback, a per-run password, a native viewer (`remote-viewer`) that sends its
+window size to the guest. Whether the guest can FOLLOW that size (re-layout at the
+new resolution, not a scaled bitmap) is a property of the guest kernel: the QEMU
+`virtio-gpu` device raises a new preferred mode on its DRM connector, and only a
+kernel with `CONFIG_DRM_VIRTIO_GPU` sees it. Input comes in over `virtio-input`
+(and `usb-tablet` behind `qemu-xhci`); the session-side autofit/agent path uses
+`uinput`. The table is the contract `tests/scripts/test-virtual-display-kernel.sh`
+enforces against the kernel FRAGMENTS (never the defconfig, which a version bump
+can change under us):
+
+| Board (desktop image) | Fragment chain that must carry virtio-gpu + virtio-input + uinput | Display under the runner |
+|---|---|---|
+| x86 (laptop / chromebook / desktop / standalone-*) | `specs-x86/kernel/hardened-k8s.config` + `specs-x86/kernel/desktop.config` | guest resize |
+| rpi5 (also rpi4 / rpi3, same fragment) | `specs-rpi5/kernel/hardened-k8s.config` + `specs-rpi5/kernel/desktop.config` | guest resize |
+| frite | `specs-frite/kernel/hardened-desktop.config` | guest resize |
+| orangepi5 | `specs-orangepi5/kernel/hardened-desktop.config` | guest resize |
+| orangepi4-lts | `specs-orangepi4-lts/kernel/hardened-desktop.config` | guest resize |
+| jetson | `specs-jetson/kernel/hardened-node.config` + `specs-jetson/kernel/tegra234.config` | serial only |
+
+"guest resize" means the kernel half is in place; the session half (spice-vdagent
+plus the xrandr autofit applier, which runs only when the DRM driver is
+`virtio_gpu` or `qxl`) is what makes the desktop re-layout. Until the session half is
+proven on a booted image the device record reports `display_resize: scale`
+(client-side scale-to-fit) and the Studio tooltip says so. "serial only" means the
+runner attaches no display for that board and the UI says `serial only: kernel
+lacks virtio-gpu` rather than pretending to scale. The Jetson mainline flavor is
+deliberately left there: tegra-drm is the board's own display, nothing in its
+fragments is virt-aware, and `specs-jetson/kernel/README.md` records the decision.
+
+Adding a symbol to a kernel fragment changes the signed-kernel cache digest
+(`scripts/_kernel-cache-lib.sh`), so every desktop image built BEFORE this table's
+symbols landed boots serial-only under the runner until it is rebuilt. The runner
+cannot tell from the image file; `display_resize` in the device record is the
+honest field.
+
+## Guest-side display pieces (QEMU runner `--display spice`)
 
 When the containerised QEMU runner (`tests/qemu/run-qemu-docker.sh`, or the
 Studio's emulate-a-device page) boots a desktop image with a SPICE display, the
@@ -354,10 +393,12 @@ Honest status of the resize path, per stack:
   path) or hands it to `spice-vdagent` (the agent's XRandR path) is **not yet
   measured** on a built image; both paths are shipped. The runner's device record
   keeps `display_resize=scale` until that measurement lands.
-- **ARM boards (rpi5, frite, orangepi5, orangepi4-lts)** — no `DRM_VIRTIO_GPU`
-  in their kernels today, so there is **no display at all** in the emulator
-  ("serial only"), not a scaling one. The packages and files are staged so the
-  five desktop images stay 1:1; the applier exits at once without a virtual GPU.
+- **ARM boards (rpi5, frite, orangepi5, orangepi4-lts)** — their desktop kernel
+  fragments now request `DRM_VIRTIO_GPU` + `VIRTIO_INPUT` + `INPUT_UINPUT` (the
+  board table above), so the kernel side matches x86 on images built after those
+  symbols landed; older images are still serial-only until rebuilt. Like x86, the
+  resize path itself is **not yet measured** on a built image, so the device record
+  keeps `display_resize=scale`. Jetson stays serial-only (see the table).
 
 `tests/scripts/test-vm-display-guest.sh` pins the wiring and executes both sh
 scripts against a fixture sysfs and PATH stubs (with a built-in mutation battery).

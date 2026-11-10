@@ -162,9 +162,17 @@ flatpak install --user -y flathub org.kde.Platform//6.8
 flatpak install --user ./hugmesh-studio-0.3.0-beta.1-x86_64.flatpak
 ```
 
+The Flatpak carries the hugmesh-generator tree of its own release: with no
+`--generator-dir` and no clone it places that copy in
+`~/.local/share/hugmesh-studio/generator` on first start (an upgrade keeps your `out/`,
+`keys-out/` and `tests/stack/.env` there) and uses it; a clone you name or pick still
+wins. It builds with the host's Docker, which it reaches through `flatpak-spawn --host`;
+native (sudo) builds and writing images to devices need the Studio run from a checkout.
+`flatpak run org.hugmesh.ImageStudio --self-check` says whether all of that works here.
+
 The manifest requests `--filesystem=host` and `--talk-name=org.freedesktop.Flatpak`.
-Those grants are broad. They let the app read your checkout and run host
-`docker`/`qemu`. If you would rather not grant them, run the Studio from a checkout; it
+Those grants are broad. They let the app use a generator tree under your home and run
+host `docker`/`qemu` through `flatpak-spawn --host`. If you would rather not grant them, run the Studio from a checkout; it
 needs no installer.
 
 ### Governed HugMesh desktops

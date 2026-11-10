@@ -300,6 +300,11 @@ def test_ask19_default_domains_choice_lands_on_the_users_choice(wiz):
     assert own.current_domain() == wiz.cfg.cluster_domain
     assert "1 of 1" in own.subTitle()                       # no other domain: no table
     wiz.next()
+    # the Domain CA keys step (2026-11-09 ask: "another section step of the domain
+    # config") closes the domain configuration, then the users choice
+    assert isinstance(wiz.currentPage(), wizard_mod.DomainCAKeysPage), (
+        f"landed on {type(wiz.currentPage()).__name__}, not the Domain CA keys step")
+    wiz.next()
     assert isinstance(wiz.currentPage(), wizard_mod.UsersChoicePage), (
         f"landed on {type(wiz.currentPage()).__name__}, not the users choice screen")
 
@@ -391,6 +396,8 @@ def test_ask8_deselecting_clears_what_was_entered(wiz):
     own = wiz.currentPage()                                   # …the own domain's page stays (#494)
     assert isinstance(own, wizard_mod.DomainServicesPage)
     assert own.current_domain() == wiz.cfg.cluster_domain and "1 of 1" in own.subTitle()
+    wiz.next()
+    assert isinstance(wiz.currentPage(), wizard_mod.DomainCAKeysPage)   # domain CA step
     wiz.next()
     uc = wiz.currentPage()
     assert isinstance(uc, wizard_mod.UsersChoicePage)

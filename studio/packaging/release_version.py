@@ -151,7 +151,12 @@ def current(root: str = GENERATOR_ROOT) -> str:
 def next_version(base: str | None = None, final: bool = False, root: str = GENERATOR_ROOT) -> str:
     """The next beta of the current base (0.3.0-beta.1 -> 0.3.0-beta.2), or with
     --final the base itself (0.3.0). After a final release the next beta is the next
-    PATCH's beta.1 (0.3.0 -> 0.3.1-beta.1)."""
+    PATCH's beta.1 (0.3.0 -> 0.3.1-beta.1).
+
+    The proposal is itself run through parse(), so `next` never prints a version that
+    `validate` would refuse. The MSI mapping caps a PATCH at 98 betas (beta.99 is the
+    final's slot), so after X.Y.Z-beta.98 there is no next beta of X.Y.Z: `next` fails
+    and says to cut the final (`next --final`) or move to the next PATCH's beta.1."""
     version = base or current(root)
     major, minor, patch, fin, n = parse(version)
     if final:
@@ -159,8 +164,16 @@ def next_version(base: str | None = None, final: bool = False, root: str = GENER
             raise VersionError(f"{version} is already a final release")
         return f"{major}.{minor}.{patch}"
     if fin:
-        return f"{major}.{minor}.{patch + 1}-beta.1"
-    return f"{major}.{minor}.{patch}-beta.{n + 1}"
+        proposal = f"{major}.{minor}.{patch + 1}-beta.1"
+    else:
+        proposal = f"{major}.{minor}.{patch}-beta.{n + 1}"
+    try:
+        parse(proposal)
+    except VersionError as exc:
+        hint = "" if fin else (f"; {version} is the last beta of {major}.{minor}.{patch}: cut the final "
+                               f"{major}.{minor}.{patch} (next --final) or {major}.{minor}.{patch + 1}-beta.1")
+        raise VersionError(f"there is no next beta after {version} ({exc}){hint}") from exc
+    return proposal
 
 
 def _release_entry(version: str, date: str, indent: str) -> str:

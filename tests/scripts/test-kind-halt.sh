@@ -112,6 +112,27 @@
 #   M23 halt: `create configmap` -> create|apply, losing the lock
 #   M24 halt: skip the post-scale verification (a denied scale reads as done)
 #
+# #561 (the stored last-known floor, section N, S50-S57) added its own battery, run
+# 2026-11-04 against copies via KIND_HALT_TARGET, each copy verified CHANGED by
+# sha256. All twelve were killed on the first run:
+#   M25a halt: honour the LIVE floor file, not the union         (S50, S51)
+#   M25b union: drop stored-only entries from the floor           (S50, S51)
+#   M26  union: never retire                                      (S53)
+#   M27  union: retire a stored namespace whose workloads are all at 0  (S50)
+#   M28  union: write the store back over an UNREADABLE one       (S54, S54b)
+#   M29  read_floor_store: collapse "unreadable" into "absent"    (S54, S54b)
+#   M30  union: a FAILED namespace read retires everything stored (S53b)
+#   M31  resume: never write the union back                       (S56)
+#   M32  resume: fail when the live floor cannot be derived       (S57)
+#   M33  the live-only fallback is silent                         (S54)
+#   M34  the store lives in the ArgoCD namespace, off tier 1      (S52)
+#   M35  retirements are not logged                               (S53)
+# Re-run 2026-11-09 against the tree as pushed, plus one new mutant; all killed:
+#   M25a, M26, M27 (as above)                                    (S50/S51, S53, S50)
+#   M36  union: trust a namespace list that does not name kube-system (S53c)
+# NOT CLOSED: the fake has no kyverno, so nothing here proves kyverno deregisters
+# its webhooks when it stops; that is the 2026-09-18 live measurement #561 quotes.
+#
 # THE SECOND RUN OF THIS BATTERY WAS NOT CLEAN, and that is why four of the
 # scenarios below exist at all. Against the suite as first written, M06, M13 and M19
 # SURVIVED and M16 matched nothing:
@@ -142,7 +163,7 @@
 # carry prune+selfHeal), pinned as a CALL SEQUENCE by scenario 10, and never
 # exercised against a real controller.
 #
-# 36 scenario fixtures, 48 labelled cases, 136 assertions. The S-numbers are
+# 50 scenario fixtures, 211 assertions (counted 2026-11-09). The S-numbers are
 # stable identifiers (a failure is grepped by them), so they are NOT renumbered
 # when a scenario is inserted — S36b and S37b are later additions that kill a
 # mutant S36 and S37 could not, and they keep their neighbours' names on purpose.
@@ -268,6 +289,17 @@ def bump(name):
     with open(p(name), "w") as fh: fh.write(str(n))
     return n
 
+FLOOR_CM = "hugmesh-kind-halt-floor"
+def cm_name_of(body):
+    for line in body.split("---PAYLOAD---\n", 1)[0].splitlines():
+        if line.strip().startswith("name:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+def persist(body, name):
+    marker = "---PAYLOAD---\n"
+    if marker in body:
+        with open(p(name), "w") as fh: fh.write(body.split(marker, 1)[1])
+
 # THE KILL KNOB. Blocker B1's whole demonstration: the Studio's Cancel button
 # terminates the verb's process GROUP, so the halt can stop between any two calls.
 # The suite runs the halt under setsid, so this kills the halt and not the suite.
@@ -299,6 +331,14 @@ if a[:2] == ["get", "validatingwebhookconfigurations,mutatingwebhookconfiguratio
     if rc: sys.stderr.write("the server could not find the requested resource\n"); sys.exit(rc)
     sys.stdout.write(json.dumps(load("webhooks.json"))); sys.exit(0)
 
+# The namespace list the floor's RETIREMENT rule reads (#561). An entry leaves the
+# stored floor only when its namespace is gone, so this read is the only thing that
+# can ever shrink the store - and a failed read must retire nothing.
+if a[:2] == ["get", "namespaces"]:
+    rc = rc_for("ns_list_rc")
+    if rc: sys.stderr.write("the server could not find the requested resource\n"); sys.exit(rc)
+    sys.stdout.write(json.dumps(load("namespaces.json"))); sys.exit(0)
+
 if a[:2] == ["get", "hpa"] and "-A" in a:
     rc = rc_for("hpa_rc")
     if rc: sys.stderr.write("the server could not find the requested resource\n"); sys.exit(rc)
@@ -326,6 +366,23 @@ if a[0] == "-n":
     ns = a[1]
     rest = a[2:]
 
+    # The LAST-KNOWN FLOOR store (#561) is a second ConfigMap, and the fake routes
+    # by NAME: before it did, every configmap call meant the halt record, so a store
+    # write would have overwritten the record and a store read would have parsed it.
+    # Its own knobs (floor_read_rc, floor_write_rc) and its own namespace log, so S41's
+    # "every record call named devops" stays a claim about the record path alone.
+    if rest[:2] == ["get", "configmap"] and len(rest) > 2 and rest[2] == FLOOR_CM:
+        with open(p("floor_ns.log"), "a") as fh: fh.write(ns + "\n")
+        rc = rc_for("floor_read_rc")
+        if rc:
+            sys.stderr.write("Unable to connect to the server: net/http: TLS handshake timeout\n")
+            sys.exit(rc)
+        if not os.path.exists(p("floor.json")):
+            sys.stderr.write('Error from server (NotFound): configmaps "%s" not found\n' % FLOOR_CM)
+            sys.exit(1)
+        with open(p("floor.json")) as fh: sys.stdout.write(fh.read())
+        sys.exit(0)
+
     if rest[:2] == ["get", "configmap"]:
         # The namespace is CHECKED, not ignored: the previous fake accepted any,
         # so a namespace bug in the record path could not be caught here.
@@ -344,11 +401,15 @@ if a[0] == "-n":
         # The record REWRITE lands here: `create --dry-run=client -o yaml | apply`.
         # The apply must name its own namespace - the previous fake only handled the
         # un-namespaced form, so a missing -n could not be caught by this suite.
-        with open(p("cm_ns.log"), "a") as fh: fh.write(ns + "\n")
         body = sys.stdin.read()
-        marker = "---PAYLOAD---\n"
-        if marker in body:
-            with open(p("record.json"), "w") as fh: fh.write(body.split(marker, 1)[1])
+        if cm_name_of(body) == FLOOR_CM:
+            with open(p("floor_ns.log"), "a") as fh: fh.write(ns + "\n")
+            if rc_for("floor_write_rc"):
+                sys.stderr.write('Error from server (Forbidden): configmaps is forbidden\n'); sys.exit(1)
+            persist(body, "floor.json")
+            print("configmap configured"); sys.exit(0)
+        with open(p("cm_ns.log"), "a") as fh: fh.write(ns + "\n")
+        persist(body, "record.json")
         print("configmap configured"); sys.exit(0)
 
     if rest[:2] == ["delete", "configmap"]:
@@ -357,13 +418,17 @@ if a[0] == "-n":
         print("configmap deleted"); sys.exit(0)
 
     if rest[:2] == ["create", "configmap"]:
-        with open(p("cm_ns.log"), "a") as fh: fh.write(ns + "\n")
+        cm = rest[2]
+        with open(p("floor_ns.log" if cm == FLOOR_CM else "cm_ns.log"), "a") as fh: fh.write(ns + "\n")
         src = [x.split("=", 2)[-1] for x in rest if x.startswith("--from-file=")][0]
         with open(src) as fh: body = fh.read()
         if "--dry-run=client" in rest:
-            # The REWRITE half: render only, the apply below persists it.
-            sys.stdout.write("kind: ConfigMap\n---PAYLOAD---\n" + body)
+            # The REWRITE half: render only, the apply below persists it. The NAME
+            # travels in the rendered YAML, exactly as it does for a real apply.
+            sys.stdout.write("kind: ConfigMap\nmetadata:\n  name: %s\n---PAYLOAD---\n" % cm + body)
             sys.exit(0)
+        if cm == FLOOR_CM:
+            sys.stderr.write("fake kubectl: the floor store is never CREATEd - it is not a lock\n"); sys.exit(94)
         # The CREATE half, and the lock: a real `kubectl create` fails if the
         # object already exists, which is what stops two halts racing.
         if rc_for("cm_create_rc"):
@@ -418,9 +483,7 @@ if a[0] == "-n":
 
 if a[0] == "apply" and "-f" in a:
     body = sys.stdin.read()
-    marker = "---PAYLOAD---\n"
-    if marker in body:
-        with open(p("record.json"), "w") as fh: fh.write(body.split(marker, 1)[1])
+    persist(body, "floor.json" if cm_name_of(body) == FLOOR_CM else "record.json")
     print("configmap configured"); sys.exit(0)
 
 sys.stderr.write("fake kubectl: unexpected call: %s\n" % " ".join(a))
@@ -519,6 +582,15 @@ for i in d["items"]:
     i["metadata"].setdefault("annotations", {})["kubectl.kubernetes.io/last-applied-configuration"] = pad
 json.dump(d, open(p, "w"))'
   fi
+
+  # Every namespace the fixture uses exists. A scenario deletes one by rewriting this.
+  SCEN="${SCEN}" python3 -c '
+import json, os
+names = ["kube-system", "kube-public", "kube-node-lease", "local-path-storage", "devops",
+         "hugmesh-backend", "hugmesh-frontend", "vault", "kyverno", "external-secrets",
+         "ignored-ns"]
+json.dump({"items": [{"metadata": {"name": n}} for n in names]},
+          open(os.path.join(os.environ["SCEN"], "namespaces.json"), "w"))'
 
   cat > "${SCEN}/hpa.json" <<'JSON'
 {"items": [
@@ -623,6 +695,10 @@ if q.startswith("app:"):
     print("MISSING"); sys.exit(0)
 if q.startswith("counts:"):
     print(json.dumps((rec.get("counts") or {}).get(q.split(":", 1)[1]), sort_keys=True)); sys.exit(0)
+if q.startswith("floorstore:"):
+    print(json.dumps((rec.get("floor_store") or {}).get(q.split(":", 1)[1], "NOKEY"), sort_keys=True)); sys.exit(0)
+if q.startswith("floorns:"):
+    print((rec.get("admission_floor") or {}).get(q.split(":", 1)[1], "MISSING")); sys.exit(0)
 if q.startswith("unbacked:"):
     _, ns, name = q.split(":")
     for w in rec.get("workloads", []):
@@ -631,6 +707,63 @@ if q.startswith("unbacked:"):
     print("MISSING"); sys.exit(0)
 print(json.dumps(rec.get(q), sort_keys=True))'
 }
+
+# ── #561 helpers: the stored last-known floor ───────────────────────────────
+# Seed kube-system/hugmesh-kind-halt-floor as if an earlier halt had written it.
+seed_floor_store() { # <ns>...
+  SCEN="${SCEN}" python3 - "$@" <<'PY2'
+import json, os, sys
+ns = {n: {"reason": "backs failurePolicy=Fail webhook (seeded by an earlier halt)",
+          "first_stored": "2026-09-17T00:00:00Z", "last_live": "2026-09-17T00:00:00Z"}
+      for n in sys.argv[1:]}
+json.dump({"version": 1, "updated_at": "2026-09-17T00:00:00Z", "namespaces": ns},
+          open(os.path.join(os.environ["SCEN"], "floor.json"), "w"))
+PY2
+}
+# yes / no for one namespace in the STORE, or ABSENT when there is no store at all.
+floor_has() {
+  SCEN="${SCEN}" HALT_NS="$1" python3 -c '
+import json, os, sys
+path = os.path.join(os.environ["SCEN"], "floor.json")
+if not os.path.exists(path):
+    print("ABSENT"); sys.exit(0)
+d = json.load(open(path))
+print("yes" if os.environ["HALT_NS"] in (d.get("namespaces") or {}) else "no")'
+}
+# Take a namespace's Fail webhook OUT of the live admission configuration - the
+# shape kyverno is in when its controller is down and has deregistered itself.
+drop_webhook_for() {
+  SCEN="${SCEN}" HALT_NS="$1" python3 -c '
+import json, os
+p = os.path.join(os.environ["SCEN"], "webhooks.json")
+d = json.load(open(p))
+d["items"] = [c for c in d["items"]
+              if not any(((w.get("clientConfig") or {}).get("service") or {}).get("namespace") == os.environ["HALT_NS"]
+                         for w in c.get("webhooks", []))]
+json.dump(d, open(p, "w"))'
+}
+add_fail_webhook_for() { # <ns>
+  SCEN="${SCEN}" HALT_NS="$1" python3 -c '
+import json, os
+p = os.path.join(os.environ["SCEN"], "webhooks.json")
+d = json.load(open(p))
+ns = os.environ["HALT_NS"]
+d["items"].append({"kind": "ValidatingWebhookConfiguration", "metadata": {"name": ns + "-validate"},
+                   "webhooks": [{"name": "validate." + ns + ".svc", "failurePolicy": "Fail",
+                                 "clientConfig": {"service": {"namespace": ns, "name": ns + "-svc"}}}]})
+json.dump(d, open(p, "w"))'
+}
+set_replicas() { # <ns> <name> <n>
+  SCEN="${SCEN}" HALT_NS="$1" HALT_NAME="$2" HALT_N="$3" python3 -c '
+import json, os
+p = os.path.join(os.environ["SCEN"], "wl.json")
+d = json.load(open(p))
+for i in d["items"]:
+    if i["metadata"]["name"] == os.environ["HALT_NAME"] and i["metadata"]["namespace"] == os.environ["HALT_NS"]:
+        i["spec"]["replicas"] = int(os.environ["HALT_N"])
+json.dump(d, open(p, "w"))'
+}
+scaled_by_name() { grep -a ' scale ' "${SCEN}/kubectl.log" 2>/dev/null | grep -a -F -- " $1 " >/dev/null; }
 
 make_fakes
 
@@ -1151,6 +1284,151 @@ if [ -z "$(grep -a ' scale ' "${SCEN}/kubectl.log" | grep -a -F 'es-cert-control
 else
   bad "S49 resume issued a scale against a floor workload: $(grep -a ' scale ' "${SCEN}/kubectl.log" | grep -a -F 'es-cert-controller' | head -1)"
 fi
+
+head_ "N. #561: the floor is the UNION of the live derivation and a stored last-known floor"
+
+# #561 / decision 82 = C. The tier-2 floor used to be derived from LIVE webhook
+# state only, and kyverno deregisters its own webhooks when its controller stops.
+# Measured on the operator's cluster 2026-09-18: kyverno at 0 replicas had dropped
+# off its own floor, so the derivation protected the controller exactly while it
+# was up and forgot it the moment it went down - backwards. The floor is now the
+# union of the live derivation and kube-system/hugmesh-kind-halt-floor, which every
+# halt and resume writes back, and which forgets a namespace only when the
+# namespace itself is gone.
+
+# The shape #561 was filed for: kyverno already down, its webhook gone with it,
+# remembered by the store.
+scenario floor-store-remembers-a-down-controller
+set_replicas kyverno kyverno 0
+drop_webhook_for kyverno
+seed_floor_store kyverno external-secrets
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S50 halt with kyverno at 0, no live kyverno webhook, kyverno in the stored floor"
+case "$(record_field floorns:kyverno)" in
+  *last-known*) ok "S50 kyverno STAYS on the floor, and its reason says it came from the stored last-known floor" ;;
+  *) bad "S50 kyverno dropped off its own floor (admission_floor[kyverno] = $(record_field floorns:kyverno))" ;;
+esac
+expect_eq "$(record_field unbacked:kyverno:kyverno)" "true" "S50 …and is reported floor_unbacked: on the floor, at 0, nothing serving it"
+if saw "THE ADMISSION FLOOR IS NOT BACKED"; then ok "S50 the render shouts that the floor is not backed"; else bad "S50 an unbacked stored-floor workload was reported silently"; fi
+expect_eq "$(floor_has kyverno)" "yes" "S50 a controller at 0 replicas is NOT retired from the store (only a deleted namespace is)"
+expect_eq "$(record_field floorstore:read)" '"ok"' "S50 the record says the store was read"
+if scaled_by_name kyverno; then bad "S50 a scale was issued against kyverno"; else ok "S50 no scale was ever issued against kyverno"; fi
+
+# The control: the SAME cluster with no store. If kyverno were floored here too, S50
+# would prove nothing about the store.
+scenario floor-store-control-no-store
+set_replicas kyverno kyverno 0
+drop_webhook_for kyverno
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S50c control: the same cluster with no stored floor"
+expect_eq "$(record_field floorns:kyverno)" "MISSING" "S50c control: without the store kyverno is NOT on the floor - the store is what put it there in S50"
+expect_eq "$(record_field floorstore:read)" '"absent"' "S50c a missing store is 'absent' (first halt), not an error"
+expect_eq "$(floor_has external-secrets)" "yes" "S50c the first halt CREATES the store from the live derivation"
+
+# The case that matters for a RUNNING controller: kyverno up, but its webhook not
+# registered (yet, or any more). Live-only would scale kyverno - and a scale is an
+# UPDATE its own Fail webhook gates for every other namespace.
+scenario floor-store-protects-a-running-controller
+drop_webhook_for kyverno
+seed_floor_store kyverno
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S51 halt with kyverno running, no live kyverno webhook, kyverno in the stored floor"
+expect_eq "$(replicas_of kyverno kyverno)" "1" "S51 the stored floor holds: kyverno is left RUNNING"
+expect_eq "$(replicas_of hugmesh-backend api)" "0" "S51 …and the rest of the halt still happened"
+
+scenario floor-store-adds-a-newly-live-namespace
+seed_floor_store kyverno
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S52 halt with a store that does not know external-secrets yet"
+expect_eq "$(floor_has external-secrets)" "yes" "S52 a newly live webhook namespace is ADDED to the store"
+expect_eq "$(floor_has kyverno)" "yes" "S52 …and the namespace already stored is kept"
+case "$(record_field floorstore:added)" in
+  *external-secrets*) ok "S52 the record names what was added" ;;
+  *) bad "S52 the record does not say external-secrets was added ($(record_field floorstore:added))" ;;
+esac
+if [ -z "$(grep -a -v '^kube-system$' "${SCEN}/floor_ns.log" 2>/dev/null)" ] && [ -s "${SCEN}/floor_ns.log" ]; then
+  ok "S52 every store call named kube-system, which is on tier 1 of the floor"
+else
+  bad "S52 a store call used another namespace: $(grep -a -v '^kube-system$' "${SCEN}/floor_ns.log" 2>/dev/null | head -1)"
+fi
+
+scenario floor-store-retires-a-deleted-namespace
+seed_floor_store kyverno gone-ns
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S53 halt with a stored namespace that no longer exists"
+expect_eq "$(floor_has gone-ns)" "no" "S53 a namespace deleted from the cluster is RETIRED from the store"
+expect_eq "$(record_field floorns:gone-ns)" "MISSING" "S53 …and is not on this halt's floor"
+expect_eq "$(floor_has kyverno)" "yes" "S53 …while a namespace that still exists is kept"
+if saw "retired gone-ns" && saw "no longer exists in the cluster"; then ok "S53 the retirement is LOGGED with its reason"; else bad "S53 the retirement was silent or gave no reason"; fi
+case "$(record_field floorstore:retired)" in
+  *gone-ns*) ok "S53 …and recorded" ;;
+  *) bad "S53 the record does not name the retirement" ;;
+esac
+
+# A failed namespace read is not an empty cluster: it must retire NOTHING.
+scenario floor-store-ns-list-unreadable
+seed_floor_store kyverno gone-ns
+echo 1 > "${SCEN}/ns_list_rc"
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S53b halt when the namespace list cannot be read"
+expect_eq "$(floor_has gone-ns)" "yes" "S53b an unreadable namespace list retires NOTHING"
+if saw "nothing was retired"; then ok "S53b …and says so"; else bad "S53b did not say why nothing was retired"; fi
+
+# A namespace list that PARSES but names nothing (or not even kube-system, where the
+# store itself was just read from) is not a reading of this cluster either. Without
+# this, an empty `items` would retire every stored entry in one halt.
+scenario floor-store-ns-list-empty
+seed_floor_store kyverno gone-ns
+printf '{"items": []}' > "${SCEN}/namespaces.json"
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S53c halt when the namespace list parses but is empty"
+expect_eq "$(floor_has gone-ns)" "yes" "S53c an empty namespace list retires NOTHING"
+if saw "nothing was retired"; then ok "S53c …and says so"; else bad "S53c did not say why nothing was retired"; fi
+expect_eq "$(record_field floorstore:retirement_checked)" "false" "S53c …and the record says retirement was not checked"
+
+scenario floor-store-unreadable
+seed_floor_store kyverno gone-ns
+before="$(sha256sum "${SCEN}/floor.json" | cut -d' ' -f1)"
+echo 1 > "${SCEN}/floor_read_rc"
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S54 an unreadable store does not block the halt - it falls back to the live derivation"
+expect_eq "$(record_field floorstore:read)" '"unreadable"' "S54 the record says the store could not be read"
+expect_eq "$(record_field floorstore:live_only)" "true" "S54 …and that this halt's floor is LIVE-ONLY"
+if saw "LAST-KNOWN FLOOR COULD NOT BE READ"; then ok "S54 the fallback is logged LOUDLY"; else bad "S54 the fallback was quiet"; fi
+expect_eq "$(sha256sum "${SCEN}/floor.json" | cut -d' ' -f1)" "${before}" "S54 the store is NOT overwritten with a live-only list it could not merge"
+run_verb status
+if saw "LAST-KNOWN FLOOR COULD NOT BE READ"; then ok "S54 status carries the same warning, from the record"; else bad "S54 status dropped the live-only warning"; fi
+
+scenario floor-store-malformed
+printf 'this is not json' > "${SCEN}/floor.json"
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S54b a store that does not parse falls back too"
+expect_eq "$(record_field floorstore:read)" '"unreadable"' "S54b …and is recorded as unreadable, not as absent"
+expect_eq "$(cat "${SCEN}/floor.json")" "this is not json" "S54b …and is left as it was for a human to read"
+
+scenario floor-store-write-fails
+echo 1 > "${SCEN}/floor_write_rc"
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S55 a store that cannot be written does not block the halt (this halt's floor is already computed)"
+expect_eq "$(record_field floorstore:written)" "false" "S55 …and the record says the write-back failed"
+if saw "could not be written back"; then ok "S55 …loudly"; else bad "S55 the failed write-back was silent"; fi
+
+scenario floor-store-resume-writes-back
+run_halt; expect_rc 0 "$?" "S56 halt"
+add_fail_webhook_for vault
+run_verb resume; rc=$?
+expect_rc 0 "${rc}" "S56 resume"
+expect_eq "$(floor_has vault)" "yes" "S56 resume ALSO writes the union back: a webhook that came up since the halt is stored"
+expect_eq "$(floor_has kyverno)" "yes" "S56 …keeping what the halt stored"
+
+scenario floor-store-resume-survives-unreadable-webhooks
+run_halt; expect_rc 0 "$?" "S57 halt"
+before="$(sha256sum "${SCEN}/floor.json" | cut -d' ' -f1)"
+echo 1 > "${SCEN}/webhooks_rc"
+run_verb resume; rc=$?
+expect_rc 0 "${rc}" "S57 resume is NOT blocked when the live floor cannot be derived (the store is maintenance, not the way back)"
+expect_eq "$(sha256sum "${SCEN}/floor.json" | cut -d' ' -f1)" "${before}" "S57 …and the store is left alone rather than rewritten from half a reading"
+expect_eq "$(replicas_of hugmesh-backend api)" "2" "S57 …and the resume still restored what was halted"
 
 printf '\n'
 if [ "${FAIL}" -eq 0 ]; then
