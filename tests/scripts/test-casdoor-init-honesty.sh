@@ -225,8 +225,11 @@ echo
 echo "== 2c. device_code applications list the \"Device login\" sign-in method =="
 # casdoor's /api/device-auth checks the SIGN-IN METHOD, not the grant, and refuses
 # with HTTP 200 + unauthorized_client when it is missing (hugmesh-desktop shipped
-# that way: #878). Every seed shape is swept — the cluster manifests, the per-brand
-# IdP template and the local-stack seed — not just the init Jobs above.
+# that way: #878). The approval page must also offer a sign-in (Password) to a
+# phone/browser with no IdP session, or it is a dead end (after #958), and the
+# public device client must never carry the "password" grant. Every seed shape is
+# swept — the cluster manifests, the per-brand IdP template and the local-stack
+# seed — not just the init Jobs above.
 if python3 "${CONTRACT}" devicelogin "${CLUSTER}" "${REPO}/templates" "${REPO}/tests/stack"; then
     ok "(2c) every application granted device_code can actually start a device flow"
 else
@@ -458,7 +461,7 @@ cp "${CLUSTER}/manifests/casdoor/init-data-configmap.yaml" "${SEED_CM}"
 python3 - "${INIT_JOB}" <<'PY'
 import pathlib, re, sys
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
-pat = re.compile(r'^ *"signinMethods": \[\n(?: *\{"name": "Device login".*\n)+ *\],\n', re.M)
+pat = re.compile(r'^ *"signinMethods": \[\n(?: *\{"name": "Device login".*\n)(?: *\{"name": .*\n)* *\],\n', re.M)
 assert len(pat.findall(s)) == 1, "control precondition: the Device login signinMethods block not found once"
 p.write_text(pat.sub("", s))
 PY
@@ -477,6 +480,74 @@ p.write_text(s.replace(needle, '{"name": "Device Login",'))
 PY
 if [ $? -eq 0 ]; then control "the Device login method is misspelled" devicelogin
 else bad "(3) control [Device login misspelled] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
+
+# A control that only checks the exit status can pass for the wrong reason (a
+# mutation that breaks the parse fails every check), so these also require the
+# failure line that names the defect.
+control_says() { # <label> <subcommand> <substring> — staged tree already corrupted
+    local out rc
+    out="$(python3 "${CONTRACT}" "$2" "${STAGE}" 2>&1)"; rc=$?
+    if [ "${rc}" -eq 0 ]; then
+        bad "(3) control [$1]: the corrupted tree still PASSED — $2 is not biting"
+    elif printf '%s\n' "${out}" | grep -F -- "$3" >/dev/null; then
+        ok "(3) control [$1]: caught by \`$2\` ($3)"
+    else
+        bad "(3) control [$1]: \`$2\` failed, but not with \"$3\" — caught for the wrong reason"
+        printf '%s\n' "${out}" | grep FAIL | sed 's/^/      /'
+    fi
+}
+
+# (ncD3-ncD6) a LATER write to signinMethods inside reconcile_desktop_client,
+# after the dict literal. update-application writes AllCols, so each of these is
+# what the Job would store; the sweep used to APPEND every write to the literal's
+# list and passed all four.
+desktop_write() { # <python line(s)> — inserted just before the desktop client's write
+    python3 - "${INIT_JOB}" "$1" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+anchor = ('        verb = write_application(appname, app)\n'
+          '        print(f"  {verb} {appname} (PKCE public client')
+assert s.count(anchor) == 1, "control precondition: the desktop client write not found once"
+p.write_text(s.replace(anchor, "        " + sys.argv[2] + "\n" + anchor))
+PY
+}
+for spec in \
+    'signinMethods reassigned to []|app["signinMethods"] = []|declares NO signinMethods' \
+    'signinMethods reassigned to [Face ID]|app["signinMethods"] = [{"name": "Face ID", "displayName": "Face ID", "rule": "None"}]|carry no usable' \
+    'signinMethods deleted|del app["signinMethods"]|declares NO signinMethods' \
+    'signinMethods popped|app.pop("signinMethods", None)|declares NO signinMethods' \
+    'grantTypes extended with password|app["grantTypes"] = app["grantTypes"] + ["password"]|carry [\x27password\x27]'; do
+    IFS='|' read -r what line says <<<"${spec}"
+    says="$(printf '%b' "${says}")"
+    if desktop_write "${line}"; then control_says "hugmesh-desktop: ${what} after the dict" devicelogin "${says}"
+    else bad "(3) control [${what}] could not be staged"; fi
+    cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
+done
+
+# (ncD7) the password GRANT in the literal itself.
+python3 - "${INIT_JOB}" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+needle = '                "urn:ietf:params:oauth:grant-type:device_code",\n            ],\n'
+assert s.count(needle) == 1, "control precondition: desktop grantTypes tail not found once"
+p.write_text(s.replace(needle, needle.replace('device_code",\n', 'device_code",\n                "password",\n')))
+PY
+if [ $? -eq 0 ]; then control_says "hugmesh-desktop grantTypes list password" devicelogin "carry ['password']"
+else bad "(3) control [password grant in literal] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
+
+# (ncD8) THE DEAD END, restored: "Device login" alone (the #958 shape). The device
+# flow starts, but a phone/browser not signed in to the IdP gets no sign-in form.
+python3 - "${INIT_JOB}" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+needle = '                {"name": "Password", "displayName": "Password", "rule": "All"},\n'
+assert s.count(needle) == 1, "control precondition: the desktop Password method not found once"
+p.write_text(s.replace(needle, ''))
+PY
+if [ $? -eq 0 ]; then control_says "hugmesh-desktop lists Device login without Password" devicelogin "offer no sign-in on the approval page"
+else bad "(3) control [Device login without Password] could not be staged"; fi
 cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
 
 echo
