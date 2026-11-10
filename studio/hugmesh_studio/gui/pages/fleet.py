@@ -88,6 +88,7 @@ from ...core.fleet import (FLEET_LANE_NOTE, JOBS_RANGE, WITH_TOR_NOTE, FleetConf
                            seed_fleet_domains)
 from ...core import plain_words
 from ...tui.superbrand_step import session_for
+from ._nvd_key_widget import NvdKeyWidget
 from ._widgets import _file_picker, _row
 from .brand_picker import BrandPicker
 from .domain_services import DomainServicesWidget
@@ -313,6 +314,13 @@ class FleetPage(QtWidgets.QWidget):
         self.pentest = QtWidgets.QCheckBox("Run the OWASP pen-test harness after the build (PENTEST=1)")
         self.pentest_only = QtWidgets.QCheckBox("Pen-test ONLY, no image builds (PENTEST_ONLY=1)")
         pl.addWidget(self.pentest); pl.addWidget(self.pentest_only)
+        # The NVD API key the SCA step (OWASP Dependency-Check) needs — shown only when
+        # a pen-test is ticked (_update_group_visibility). The shared widget: the
+        # Go-Live org-export step hosts the same one.
+        self.pentest_box = pt_grp
+        self.nvd_key = NvdKeyWidget(pt_grp)
+        self.nvd_key.changed.connect(self._nvd_key_changed)
+        pl.addWidget(self.nvd_key)
         l1.addWidget(pt_grp)
         l1.addStretch(1)
         self.stack.addWidget(_scrolled(p1))
@@ -971,6 +979,14 @@ class FleetPage(QtWidgets.QWidget):
             or self.orangepi4lts_only.isChecked())
         self.pentest_group.setVisible(
             self.pentest.isChecked() or self.pentest_only.isChecked())
+        self.nvd_key.setVisible(
+            self.pentest.isChecked() or self.pentest_only.isChecked())
+
+    def _nvd_key_changed(self) -> None:
+        """The stored NVD key changed (save/forget/verify): re-run the Review pane's
+        preflight so its 'SCA will fail without an NVD API key' note follows."""
+        if self.stack.currentIndex() == STEP_REVIEW:
+            self.refresh_preview()
 
     # ---- preview / run ----------------------------------------------------------
     def _backend(self):
@@ -1001,11 +1017,13 @@ class FleetPage(QtWidgets.QWidget):
             self.problems.setPlainText("")
             return
         problems = self.driver.preflight(cfg, self._backend())
+        # advisories never refuse the run (_start checks preflight() only)
+        notes = "".join(f"\n  note: {n}" for n in self.driver.advisories(cfg))
         if problems:
             self.problems.setPlainText(
-                "Preflight:\n" + "\n".join(f"  - {p}" for p in problems))
+                "Preflight:\n" + "\n".join(f"  - {p}" for p in problems) + notes)
         else:
-            self.problems.setPlainText("Preflight: OK")
+            self.problems.setPlainText("Preflight: OK" + notes)
 
     def _start(self) -> bool:
         try:

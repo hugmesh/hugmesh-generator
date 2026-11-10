@@ -353,11 +353,21 @@ def stage_local_pass(password: str) -> tuple[str, "Callable[[], None]"]:
     only by its owner and root (the builder runs as root), and the caller's cleanup
     removes it when the run ends — success, failure or cancel alike. Same dir/perm
     contract as :func:`materialize`, never under the build workdir."""
-    root = tempfile.mkdtemp(prefix="hugmesh-login-")
+    return stage_secret_file("local-pass", password.encode("utf-8"), prefix="hugmesh-login-")
+
+
+def stage_secret_file(name: str, data: bytes,
+                      prefix: str = "hugmesh-secret-") -> tuple[str, "Callable[[], None]"]:
+    """Write ``data`` to ``<mkdtemp 0700>/<name>`` at 0600 for ONE run and return
+    ``(path, cleanup)``; cleanup removes the whole private dir. The shared shape of
+    :func:`stage_local_pass` and the NVD API key's per-run copy
+    (core/nvd_key.materialize_for_run): a secret a script reads from a FILE so it is
+    never on argv or in a container's env."""
+    root = tempfile.mkdtemp(prefix=prefix)
     os.chmod(root, 0o700)
-    path = os.path.join(root, "local-pass")
+    path = os.path.join(root, name)
     try:
-        _write_0600(path, password.encode("utf-8"))
+        _write_0600(path, data)
     except BaseException:
         shutil.rmtree(root, ignore_errors=True)
         raise

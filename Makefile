@@ -75,6 +75,15 @@ PENTEST_PIPELINE ?= main
 PENTEST_ENVVARS := PENTEST='$(PENTEST)' PENTEST_ONLY='$(PENTEST_ONLY)' \
                    PENTEST_ENV='$(PENTEST_ENV)' PENTEST_SCAN='$(PENTEST_SCAN)' \
                    PENTEST_PIPELINE='$(PENTEST_PIPELINE)'
+# The pen-test's SCA step (OWASP Dependency-Check) NEEDS an activated NVD API key
+# (docs/NVD-API-KEY.md; request one at https://nvd.nist.gov/developers/request-an-api-key).
+# Pass it as a FILE: NVD_API_KEY_FILE=/path/to/0600-file make pentest. Only the PATH
+# travels — after $(SUDO) (sudo's env_reset would drop it before) and, on the Docker
+# leg, as a read-only mount at /run/secrets/nvd_api_key. The key itself never goes on
+# a command line.
+NVD_API_KEY_FILE ?=
+NVD_ENV    := $(if $(strip $(NVD_API_KEY_FILE)),env NVD_API_KEY_FILE='$(abspath $(NVD_API_KEY_FILE))')
+NVD_DOCKER := $(if $(strip $(NVD_API_KEY_FILE)),-v '$(abspath $(NVD_API_KEY_FILE))':/run/secrets/nvd_api_key:ro -e NVD_API_KEY_FILE=/run/secrets/nvd_api_key)
 
 # ── build-all-roles.sh ROLE-SELECTOR env knobs ─────────────────────────────────
 # build-all-roles.sh reads these from the ENVIRONMENT to pick the fleet
@@ -258,7 +267,7 @@ DOCKER_RUN := docker run --rm --privileged \
   -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) \
   -e STANDALONE_FLAGS \
   -e HUGMESH_SELINUX_MODE -e HUGMESH_SELINUX_MODULES -e HUGMESH_SELINUX_TYPE -e HUGMESH_SELINUX_ENFORCE_GATE \
-  $(CA_DOCKER_MOUNTS) $(CA_DOCKER_ENV) $(IMAGE)
+  $(NVD_DOCKER) $(CA_DOCKER_MOUNTS) $(CA_DOCKER_ENV) $(IMAGE)
 
 # ensure-image — auto-build the builder image if it is missing.
 ensure-image: ## auto-build the builder image if it is missing
@@ -307,7 +316,7 @@ ORANGEPIZERO2W_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi-zero2w-stage4.sh -
 ORANGEPIZERO3_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi-zero3-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 ORANGEPI3LTS_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi3-lts-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 ORANGEPI4LTS_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi4-lts-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
-ALL := $(ROLESET_ENVVARS) $(PENTEST_ENVVARS) $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
+ALL := $(ROLESET_ENVVARS) $(PENTEST_ENVVARS) $(BRAND_ENV) $(SUDO) $(NVD_ENV) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
 
 RPI_ROLES := pki backend frontend
 # --ram-gb for a Pi / Orange Pi NODE target, only when RAM_GB is set.
@@ -569,11 +578,12 @@ else
 	$(chown-artifacts)
 endif
 
-pentest: ## run the OWASP pen-test harness only (no image build); PENTEST_SCAN/ENV/PIPELINE knobs
+pentest: ## run the OWASP pen-test harness only (no image build); PENTEST_SCAN/ENV/PIPELINE knobs; SCA needs NVD_API_KEY_FILE
 	@echo "==> Pen-test (build option): env=$(PENTEST_ENV) scan=$(PENTEST_SCAN) pipeline=$(PENTEST_PIPELINE)"
+	@[ -n "$(strip $(NVD_API_KEY_FILE))" ] || echo "==> NOTE: no NVD_API_KEY_FILE — the SCA step (OWASP Dependency-Check) needs an activated NVD API key; see docs/NVD-API-KEY.md"
 	PENTEST_ONLY=1 PENTEST=1 PENTEST_ENV='$(PENTEST_ENV)' PENTEST_SCAN='$(PENTEST_SCAN)' \
 	  PENTEST_PIPELINE='$(PENTEST_PIPELINE)' SKIP_KEYS=1 SKIP_X86=1 \
-	  $(SUDO) ./scripts/build-all-roles.sh -w $(WORK_DIR)
+	  $(SUDO) $(NVD_ENV) ./scripts/build-all-roles.sh -w $(WORK_DIR)
 
 # pentest-seed is the SEED_CMD target env/compose.env + env/local.env invoke
 # (`make -C '$(GEN_DIR)' pentest-seed ...`) from run-pentest.sh's step_seed(). It
