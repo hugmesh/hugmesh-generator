@@ -897,3 +897,12 @@ def test_an_img_record_is_blocked_by_the_running_checkout_mesh_for_its_ports(
     page._start_saved(rec, sm.MODE_RESEED)
     assert calls == [] and seen == []
     assert "8000" in page.status.text() and "stop it first" in page.status.text()
+    # the row: blocked for the ports, and its Restore column does NOT claim that the
+    # record's OWN project is running (only the checkout's mesh is)
+    w = page.saved_meshes
+    w.set_context(mesh_up=False, busy=False)
+    w.set_context(mesh_up=True, busy=False)
+    _select(page)
+    assert not w.restore_btn.isEnabled()
+    assert "8000" in w.restore_btn.toolTip()
+    assert "own compose project" not in w.table.item(0, smw._SM_COL_RESTORE).text()

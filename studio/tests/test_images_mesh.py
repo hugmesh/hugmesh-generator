@@ -462,7 +462,8 @@ def makes(monkeypatch):
                         lambda self: seen.append({"target": "overlay-stop"}) or
                         (True, ""))
     # what the machine says for the record: volumes gone, nothing running — RESEED
-    monkeypatch.setattr(saved_meshes, "probe_state", lambda rec, project="": {
+    monkeypatch.setattr(saved_meshes, "probe_state", lambda rec, project="": seen.append(
+        {"target": "probe_state"}) or {
         "volumes_present": False, "volumes_seen": 0, "volumes_missing": (),
         "images_present": True, "creds_match": False, "mesh_running": False,
         "unanswered": (), "source_ok": True, "source_drift": (),
@@ -543,6 +544,7 @@ def test_an_img_record_restores_only_its_own_project_in_its_own_worktree(
     targets = [m["target"] for m in makes]
     assert "stack-up" in targets and "stack-seed" in targets, targets
     project = images_mesh.project_for(rec.id)
+    makes[:] = [m for m in makes if m["target"] != "probe_state"]
     for m in makes:
         assert m.get("target") != "overlay-stop"
         assert m["cwd"] == wt, m
@@ -613,6 +615,48 @@ def test_the_monitor_lists_and_scales_the_nodes_own_project():
         pytest.skip(refused)
     i = argv.index("-p")
     assert argv[i + 1] == "hugmesh-img-abc"
+
+
+def test_the_monitor_lists_the_nodes_own_project_never_hugmesh_local(monkeypatch):
+    """The compose lane of the Mesh Monitor lists the node's project: `compose ps`
+    carries `-p hugmesh-img-<id>` (the compose file's own name is hugmesh-local), the
+    `docker ps` fallback filters on that project's label, and every row's controls
+    and scale target name it."""
+    from hugmesh_studio.core import mesh_monitor as mm
+    seen = []
+
+    class Node:
+        project = "hugmesh-img-abc"
+        compose_file = "/x/tests/stack/compose.local.yaml"
+        public_https_port, public_host_port, web_url = 18488, 18088, ""
+
+        def status(self):
+            return local_stack_node.StackStatus(True, "1 container(s)")
+
+        def _probe(self, cmd, timeout):
+            seen.append(list(cmd))
+            if "compose" in cmd:
+                return 1, "rejected"            # force the docker-ps fallback too
+            return 0, json.dumps({"Names": "hugmesh-img-abc-hugmesh-fe-gateway-1",
+                                  "State": "running", "Status": "Up",
+                                  "Labels": "com.docker.compose.project=hugmesh-img-abc,"
+                                            "com.docker.compose.service="
+                                            "hugmesh-fe-gateway"})
+
+        def onion_url(self):
+            return ""
+    monkeypatch.setattr(mm.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(mm, "_compose_base", lambda: ["docker", "compose"])
+    lane, units, _notes, _errors = mm._compose_units(
+        Node(), GENERATOR_DIR, None, {}, mm._Budget(30))
+    compose_ps = next(c for c in seen if "compose" in c)
+    assert compose_ps[compose_ps.index("-p") + 1] == "hugmesh-img-abc"
+    docker_ps = next(c for c in seen if "compose" not in c)
+    assert "label=com.docker.compose.project=hugmesh-img-abc" in docker_ps
+    assert "hugmesh-local" not in " ".join(" ".join(c) for c in seen)
+    assert "hugmesh-img-abc" in lane.detail
+    assert units and all(u.namespace == "hugmesh-img-abc" for u in units)
+    assert all(u.scale.namespace == "hugmesh-img-abc" for u in units if u.scale.kind)
 
 
 # ── 8. PR #937 round 2: the memory gate subtracts the cap the build REALLY gets ──

@@ -321,6 +321,36 @@ def test_the_panel_starts_with_the_sessions_backend(qapp, wiz, tmp_path, monkeyp
     assert seen == [(True, "native")]
 
 
+def test_the_panel_refuses_beside_a_native_build_and_creates_nothing(qapp, wiz,
+                                                                      tmp_path,
+                                                                      monkeypatch):
+    """The REAL start (its gate included) on the default native backend: one red line,
+    the reason in the tail, no Stop button, no worktree — the build is untouched."""
+    real = images_mesh.AlongsideMesh.start
+    mi = {"MemTotal": 128 * hr.GIB, "MemAvailable": 120 * hr.GIB}
+
+    def start(self, **kw):
+        return real(self, **kw, meminfo=mi, env={}, is_free=lambda p: True,
+                    holder=lambda p: "")
+    monkeypatch.setattr(images_mesh.AlongsideMesh, "start", start)
+    _launch(wiz, _mesh_cfg(tmp_path))
+    wiz.images_mesh_start_local = True
+    wiz.build_backend = None
+    panel = im_gui.LocalMeshPanel()
+    panel.resize(700, 240)
+    panel.begin(wiz, _Session())
+    panel.show()
+    assert _pump(qapp, lambda: "did NOT start" in panel.run_status.text())
+    assert "native build" in panel.tail.toPlainText()
+    assert "its own ports" not in panel.tail.toPlainText()    # a refusal is reasons
+    assert not panel.stop_btn.isVisible()
+    assert not os.path.exists(panel.lane.worktree)
+    _settle(qapp)
+    for lab in (panel.status, panel.run_status):
+        assert _fully_drawn(lab), lab.text()[:40]
+    _shot(panel, "progress-local-mesh-refused-native.png")
+
+
 def test_start_then_stop_from_the_panel(qapp, wiz, tmp_path, monkeypatch):
     _launch(wiz, _mesh_cfg(tmp_path))
     wiz.images_mesh_start_local = True

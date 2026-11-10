@@ -305,9 +305,14 @@ class AlongsidePlan:
     headroom_bytes: int = 0
 
     def lines(self) -> list[str]:
-        head = ("A local copy of this mesh can start beside the build."
-                if self.ok else "This mesh will NOT start beside the build:")
-        return [head, *(f"  - {r}" for r in self.reasons),
+        """The verdict as log lines. A refusal is its reasons only: the notes (the
+        ports it would take, the first-start image build) describe a start that is
+        not going to happen, and in the progress panel's tail they pushed the reason
+        itself out of view."""
+        if not self.ok:
+            return ["This mesh will NOT start beside the build:",
+                    *(f"  - {r}" for r in self.reasons)]
+        return ["A local copy of this mesh can start beside the build.",
                 *(f"  · {n}" for n in self.notes)]
 
 
