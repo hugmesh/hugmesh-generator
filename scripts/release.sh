@@ -1,47 +1,74 @@
 #!/usr/bin/env bash
-# release.sh — ONE command for a full HugMesh org release, beta or stable (docs/RELEASING.md).
+# release.sh — ONE command for a HugMesh org release: everything, or any part of it, beta
+# or stable (docs/RELEASING.md). A dry run unless --apply; one plain summary at the end.
 #
-#   scripts/release.sh                              # = --channel beta --dry-run: read-only plan
-#   scripts/release-beta.sh ...                     # the same as scripts/release.sh --channel beta ...
-#   scripts/release.sh --channel beta --apply --studio 0.3.0-beta.2
-#                                                   # run every phase in order, asking y/N before each write
-#   scripts/release.sh --apply --merge hugmesh-games#50 --studio next
-#   scripts/release.sh --apply --from java          # resume at a phase (re-running skips DONE work anyway)
-#   scripts/release.sh --apply --only hugmesh-admin-ui   # act on these repos only (repeatable);
-#                                                   # stages with none of them are skipped, never a stop
-#   scripts/release.sh --urls                       # only list the packages that are not public yet
-#   scripts/release.sh --channel stable             # dry run of a stable cut: release/X.Y per repo
-#   scripts/release.sh --channel stable --apply     # cut, bump PRs, tag, next-beta PRs (asks first)
-#   scripts/release.sh --channel stable --version 0.3.1 --only hugmesh-admin-ui
-#                                                   # a patch release on the existing release/0.3
+#   scripts/release.sh 0.5.0-beta.1                 # dry run: bump EVERY selected repo to 0.5.0-beta.1,
+#                                                   # merge, tag in stage order, Studio, site, verify
+#   scripts/release.sh 0.5.0-beta.1 --apply         # do it (asks y/N before each write)
+#   scripts/release.sh 0.5.0-beta.1 --apps --apply  # only the Angular UIs and games
+#   scripts/release.sh 0.4.1-beta.1 --only hugmesh-forum-ui --apply
+#   scripts/release.sh next-beta --maven            # each Maven library to ITS next beta (own lines)
+#   scripts/release.sh next-minor --services        # each selected repo to X.(Y+1).0-beta.1
+#   scripts/release.sh 0.5.0-beta.1 --changed-only  # bump only repos with commits since their tag
+#   scripts/release.sh 0.5.0-beta.1 --studio        # the Studio alone (release-studio.sh)
+#   scripts/release.sh                              # no VERSION: release what each main says, no bump
+#   scripts/release.sh --channel stable [--apply]   # stable cut: release/X.Y per repo
+#   scripts/release.sh 0.3.1 --channel stable --only hugmesh-admin-ui
+#                                                   # a stable patch on the existing release/0.3
+#   make release VERSION=0.5.0-beta.1 WHAT=apps [APPLY=1]    # the same through make
+#
+# VERSION: MAJOR.MINOR.PATCH-beta.N (beta channel), MAJOR.MINOR.PATCH (stable channel: a
+#   patch, the same as --version), next-beta (each row's next beta; a row whose main
+#   version is not tagged yet keeps it) or next-minor (each row to X.(Y+1).0-beta.1).
+#   -rc.N is refused: the org release workflows publish only -beta.N and X.Y.Z tags.
+#   A literal VERSION is never applied to the Maven chain (group maven): every library
+#   keeps its own line, so --maven or --only <a library> with a literal VERSION is
+#   refused with the next-beta/next-minor command, and --all leaves them as they are.
+# Selectors (repeatable, combined as a union; none = --all). The groups are the group
+#   column of scripts/release/repos.tsv, so they never drift from the table:
+#   --all  --maven  --services  --apps  --node  --images (every container image row)
+#   --studio (release-studio.sh)  --site (rebuild hugmesh.net)  --only <repo>
+#   --all includes the Studio and the site; any other selection includes them only when
+#   named. --no-studio / --no-site take them out again.
 #
 # Options: --channel beta|stable (default beta)   --dry-run (default) | --apply
 #   --yes (answer y to every y/N; each action is still printed)
-#   --merge <repo>#<n> (repeatable)   --only <repo> (repeatable)   --from <phase>
-#   --studio <version>|next | --no-studio   --expect <repo>=<version> (repeatable pin)
-#   --version X.Y.Z (stable only, needs --only: a patch release on release/X.Y)
+#   --changed-only (bump only repos with commits since their tag; the default bumps every
+#     selected repo, so a whole release lands on ONE version)
+#   --studio-version <version>|next (the Studio's version; default: VERSION, or main's)
+#   --merge <repo>#<n> (repeatable)   --from <phase>   --expect <repo>=<version> (repeatable)
+#   --version X.Y.Z (stable only: a patch on release/X.Y; needs --only or a group)
+#   --urls (only list the packages that are not public yet)
+#   --studio <version>|next is the old spelling of --studio-version: it keeps every repo
+#     selected. For the Studio alone, write the VERSION first: release.sh 0.5.0-beta.1 --studio
 #
-# Phases, beta:   preflight merge maven apps rerun gateway gateway-access overlays java
+# Phases, beta:   preflight bump merge maven apps rerun gateway gateway-access overlays java
 #                 studio visibility site verify
 # Phases, stable: preflight cut bump merge maven apps rerun gateway gateway-access overlays
 #                 java studio visibility site next verify
 #
-# Versions are never typed here (except a stable patch's --version): each repo's version
-# is read from its version file (scripts/release/repos.tsv says which file). BETA releases
-# main, whose version must be MAJOR.MINOR.PATCH-beta.N. STABLE releases the repo's own
-# release/X.Y branch as X.Y.Z, where X.Y.Z is main's beta with the -beta.N dropped (a cut)
-# or --version (a patch). Every repo is reported as DONE (tag exists and its run is
-# green), READY, REFUSE (with the reason and the next command), NEEDS-BUMP (beta: the
-# published tag IS main's version but main has commits since it, or a stable X.Y.Z at or
-# above main's beta line is already out), RUNNING (its tag run is
-# in flight), and on the stable channel NEEDS-CUT (release/X.Y does not exist yet: the
-# cut phase creates it) or NEEDS-PR (release/X.Y does not carry X.Y.Z yet: the bump phase
-# opens the version-bump PR).
+# BETA with a VERSION: the bump phase works out every selected repo's target, flags rows
+# whose main is already off the common line, and opens ONE draft PR per repo into main on
+# release-bump/<target> (version file, its mirrors, and the org pins of the other repos
+# this run bumps: Maven <parent>/<hugmesh-*.version>/net.hugmesh dependencies and the
+# overlays' gateway pin). Older open chore/release-* and release-bump/* PRs with another
+# target are listed, and closed under --apply with a comment naming the new PR. The merge
+# phase readies and merges the bump PRs (and any --merge) after one y/N, then waits for
+# their push runs; the stages tag in order. Without a VERSION nothing is bumped: each
+# repo's version is read from its version file on main (repos.tsv says which), which must
+# be MAJOR.MINOR.PATCH-beta.N. STABLE releases the repo's own release/X.Y branch as X.Y.Z,
+# where X.Y.Z is main's beta with the -beta.N dropped (a cut) or --version (a patch).
+# Every repo is reported as DONE (tag exists and its run is green), READY, REFUSE (with the
+# reason and the next command), NEEDS-BUMP (beta: the published tag IS main's version but
+# main has commits since it, or a stable X.Y.Z at or above main's beta line is already
+# out), RUNNING (its tag run is in flight), and on the stable channel NEEDS-CUT
+# (release/X.Y does not exist yet: the cut phase creates it) or NEEDS-PR (release/X.Y does
+# not carry X.Y.Z yet: the bump phase opens the version-bump PR).
 #
 # Every gh call goes through GH() with GH_TOKEN/GITHUB_TOKEN unset (an exported read-only
 # token shadows the keyring login on this fleet). No secret value is ever read or printed.
 # Under --dry-run nothing writes: no POST/PATCH/PUT/DELETE, no run rerun, workflow run,
-# pr create/merge/ready or release create (tests/scripts/test-release-beta.sh proves it).
+# pr create/merge/ready/close or release create (tests/scripts/test-release-beta.sh proves it).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -53,14 +80,17 @@ SITE_REPO="$ORG/hugmesh.github.io"
 POLL="${RELEASE_BETA_POLL:-10}"            # seconds between polls
 TRIES="${RELEASE_BETA_TRIES:-30}"          # polls before "no run appeared" (30 x 10 s = 5 min)
 RERUN_MAX_DAYS=30                          # GitHub refuses to re-run a run older than this
-BETA_PHASES=(preflight merge maven apps rerun gateway gateway-access overlays java studio visibility site verify)
+BETA_PHASES=(preflight bump merge maven apps rerun gateway gateway-access overlays java studio visibility site verify)
 STABLE_PHASES=(preflight cut bump merge maven apps rerun gateway gateway-access overlays java studio visibility site next verify)
+GROUP_NAMES="maven services apps node"      # the repos.tsv group column; --images = every img row
 
 usage() { sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
 MODE=dry; YES=false; FROM=preflight; STUDIO=""; URLS_ONLY=false; CHANNEL=beta; PATCH_VERSION=""
 ONLY=(); MERGES=(); declare -A EXPECT=()
 ORIG_ARGS=()
+VSPEC=""; CHANGED_ONLY=false; STUDIO_VER=""; F_ALL=false; F_STUDIO=false; F_SITE=false; NO_STUDIO=false; NO_SITE=false
+declare -A GSEL=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --channel) shift; CHANNEL="${1:?--channel needs beta or stable}" ;;
@@ -73,12 +103,27 @@ while [ $# -gt 0 ]; do
     --only) shift; ONLY+=("${1:?--only needs a repo}"); ORIG_ARGS+=(--only "$1") ;;
     --merge) shift; MERGES+=("${1:?--merge needs <repo>#<number>}"); ORIG_ARGS+=(--merge "$1") ;;
     --from) shift; FROM="${1:?--from needs a phase}" ;;
-    --studio) shift; STUDIO="${1:?--studio needs a version, or next}"; ORIG_ARGS+=(--studio "$1") ;;
-    --no-studio) STUDIO=none; ORIG_ARGS+=("$1") ;;
+    --all) F_ALL=true; ORIG_ARGS+=("$1") ;;
+    --maven|--services|--apps|--node|--images) GSEL[${1#--}]=1; ORIG_ARGS+=("$1") ;;
+    --site) F_SITE=true; ORIG_ARGS+=("$1") ;;
+    --no-site) NO_SITE=true; ORIG_ARGS+=("$1") ;;
+    --studio)
+      # The old --studio <version>|next (kept: the documented one-liner uses it) sets the
+      # Studio's version and leaves every repo selected; a bare --studio is a selector.
+      if [ $# -ge 2 ] && { [ "$2" = next ] || [[ "$2" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; }; then
+        shift; STUDIO="$1"; ORIG_ARGS+=(--studio "$1")
+      else
+        F_STUDIO=true; ORIG_ARGS+=("$1")
+      fi ;;
+    --studio-version) shift; STUDIO_VER="${1:?--studio-version needs a version, or next}"; ORIG_ARGS+=(--studio-version "$1") ;;
+    --no-studio) STUDIO=none; NO_STUDIO=true; ORIG_ARGS+=("$1") ;;
+    --changed-only) CHANGED_ONLY=true; ORIG_ARGS+=("$1") ;;
     --expect) shift; e="${1:?--expect needs <repo>=<version>}"; [[ "$e" == *=* ]] || { echo "release.sh: --expect needs <repo>=<version>, got '$e'" >&2; exit 2; }
               EXPECT[${e%%=*}]="${e#*=}"; ORIG_ARGS+=(--expect "$e") ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "release.sh: unknown argument: $1 (see --help)" >&2; exit 2 ;;
+    -*) echo "release.sh: unknown argument: $1 (see --help)" >&2; exit 2 ;;
+    *) [ -z "$VSPEC" ] || { echo "release.sh: one VERSION only (got '$VSPEC' and '$1')" >&2; exit 2; }
+       VSPEC="$1" ;;
   esac
   shift
 done
@@ -119,12 +164,17 @@ shown() {
   esac
 }
 
-# The exact command that resumes this run at a phase.
+# The exact command that resumes this run at a phase (the plain command, without --from,
+# is "resume_cmd preflight" with the suffix cut).
 resume_cmd() {
-  if [ "$CHANNEL" = beta ]; then printf 'scripts/release-beta.sh --apply'; else printf 'scripts/release.sh --channel %s --apply' "$CHANNEL"; fi
+  printf 'scripts/release.sh'
+  [ -z "$VSPEC" ] || printf ' %q' "$VSPEC"
+  [ "$CHANNEL" = beta ] || printf ' --channel %s' "$CHANNEL"
+  printf ' --apply'
   [ ${#ORIG_ARGS[@]} -eq 0 ] || printf ' %q' "${ORIG_ARGS[@]}"
   printf ' --from %s\n' "$1"
 }
+run_cmd() { resume_cmd preflight | sed 's/ --from preflight$//'; }
 next_phase() { local i; i=$(phase_index "$1"); echo "${PHASES[$((i+1))]:-verify}"; }
 
 phase_index() { local i; for i in "${!PHASES[@]}"; do [ "${PHASES[$i]}" = "$1" ] && { echo "$i"; return 0; }; done; return 1; }
@@ -133,27 +183,90 @@ FROM_I=$(phase_index "$FROM") || die "--from: unknown phase '$FROM' (phases: ${P
 # ── the table ────────────────────────────────────────────────────────────────
 [ -r "$TABLE" ] || die "cannot read the repo table $TABLE"
 ROWS=()
-declare -A T_STAGE=() T_KIND=() T_VFILE=() T_PREFIX=() T_WF=() T_PKGS=() T_MIRRORS=()
-while IFS='|' read -r st repo kind vfile prefix wf pkgs mirrors; do
+declare -A T_STAGE=() T_KIND=() T_VFILE=() T_PREFIX=() T_WF=() T_PKGS=() T_MIRRORS=() T_GROUP=()
+while IFS='|' read -r st repo kind vfile prefix wf pkgs mirrors group; do
   case "$st" in ''|'#'*) continue ;; esac
   case "$st" in [1-9]) ;; *) die "$TABLE: bad stage '$st' for '$repo'" ;; esac
   case "$kind" in mvn|img) ;; *) die "$TABLE: bad kind '$kind' for '$repo'" ;; esac
   [ -n "$repo" ] && [ -n "$vfile" ] && [ -n "$prefix" ] && [ -n "$wf" ] && [ -n "$pkgs" ] || die "$TABLE: incomplete row for '$repo'"
+  case " $GROUP_NAMES " in *" ${group:-?} "*) ;; *) die "$TABLE: '$repo' has group '${group:-}', not one of: $GROUP_NAMES (the 9th column)" ;; esac
+  if [ "$kind" = mvn ] && [ "$group" != maven ] || [ "$kind" != mvn ] && [ "$group" = maven ]; then
+    die "$TABLE: '$repo' is kind $kind in group $group: group maven is exactly the mvn rows"
+  fi
   [ -z "${T_STAGE[$repo]:-}" ] || die "$TABLE: '$repo' is listed twice"
   ROWS+=("$repo")
-  T_STAGE[$repo]=$st; T_KIND[$repo]=$kind; T_VFILE[$repo]=$vfile; T_PREFIX[$repo]=$prefix; T_WF[$repo]=$wf; T_PKGS[$repo]=$pkgs; T_MIRRORS[$repo]=${mirrors:-}
+  T_STAGE[$repo]=$st; T_KIND[$repo]=$kind; T_VFILE[$repo]=$vfile; T_PREFIX[$repo]=$prefix; T_WF[$repo]=$wf; T_PKGS[$repo]=$pkgs; T_MIRRORS[$repo]=${mirrors:-}; T_GROUP[$repo]=$group
 done < "$TABLE"
 [ ${#ROWS[@]} -gt 0 ] || die "$TABLE has no rows"
 for o in "${ONLY[@]}"; do [ -n "${T_STAGE[$o]:-}" ] || die "--only $o: not a repo in $TABLE"; done
 for o in "${!EXPECT[@]}"; do [ -n "${T_STAGE[$o]:-}" ] || die "--expect $o: not a repo in $TABLE"; done
 for m in "${MERGES[@]}"; do [[ "$m" =~ ^[A-Za-z0-9._-]+#[0-9]+$ ]] || die "--merge '$m': expected <repo>#<number>"; done
+
+# ── what this run selects ────────────────────────────────────────────────────
+# No selector at all is --all. --all is every row, the Studio and the site; any other
+# selector selects only what it names (a union).
+SEL_ALL=$F_ALL
+if [ ${#GSEL[@]} -eq 0 ] && [ ${#ONLY[@]} -eq 0 ] && [ "$F_STUDIO" = false ] && [ "$F_SITE" = false ]; then SEL_ALL=true; fi
+SEL_STUDIO=false; SEL_SITE=false
+if [ "$SEL_ALL" = true ] || [ "$F_STUDIO" = true ] || { [ -n "$STUDIO" ] && [ "$STUDIO" != none ]; } || [ -n "$STUDIO_VER" ]; then SEL_STUDIO=true; fi
+[ "$NO_STUDIO" = false ] || SEL_STUDIO=false
+if [ "$SEL_ALL" = true ] || [ "$F_SITE" = true ]; then SEL_SITE=true; fi
+[ "$NO_SITE" = false ] || SEL_SITE=false
+# selector_text -> how this run's selection reads in the summary
+selector_text() {
+  local s=""
+  if [ "$SEL_ALL" = true ]; then s="--all"; else
+    local g; for g in maven services apps node images; do [ -n "${GSEL[$g]:-}" ] && s="$s --$g"; done
+    [ ${#ONLY[@]} -eq 0 ] || s="$s --only ${ONLY[*]}"
+    [ "$F_STUDIO" = true ] && s="$s --studio"
+    [ "$F_SITE" = true ] && s="$s --site"
+  fi
+  printf '%s' "${s# }"
+}
+
+# ── the VERSION ──────────────────────────────────────────────────────────────
+# VMODE: "" (no VERSION: release what main says), literal, next-beta, next-minor
+VMODE=""
+if [ -n "$VSPEC" ]; then
+  case "$VSPEC" in
+    next-beta|next-minor)
+      [ "$CHANNEL" = beta ] || die "$VSPEC is a beta-channel target; a stable cut releases each main's beta as X.Y.Z: scripts/release.sh --channel stable"
+      VMODE=$VSPEC ;;
+    *)
+      if [[ "$VSPEC" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.[1-9][0-9]*$ ]]; then
+        die "$VSPEC: -rc.N is refused: the org release workflows publish only -beta.N (beta) and X.Y.Z (stable) tags and refuse any other v* tag, so it would tag a run that dies in its version job. Use $(printf '%s' "$VSPEC" | sed 's/-rc\./-beta./')"
+      elif [[ "$VSPEC" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta\.[1-9][0-9]*$ ]]; then
+        [ "$CHANNEL" = beta ] || die "$VSPEC is a beta version; the stable channel takes X.Y.Z (a patch: scripts/release.sh X.Y.Z --channel stable --only <repo>)"
+        VMODE=literal
+      elif [[ "$VSPEC" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+        [ "$CHANNEL" = stable ] || die "$VSPEC is a stable version: a stable patch is scripts/release.sh $VSPEC --channel stable --only <repo>, a stable cut is scripts/release.sh --channel stable (it releases each main's beta as X.Y.Z); a beta is $VSPEC-beta.1"
+        [ -z "$PATCH_VERSION" ] || [ "$PATCH_VERSION" = "$VSPEC" ] || die "VERSION $VSPEC and --version $PATCH_VERSION disagree"
+        PATCH_VERSION=$VSPEC
+      else
+        die "VERSION '$VSPEC': expected MAJOR.MINOR.PATCH-beta.N (beta), MAJOR.MINOR.PATCH (stable patch), next-beta or next-minor"
+      fi ;;
+  esac
+fi
+[ "$CHANGED_ONLY" = false ] || [ -n "$VMODE" ] || die "--changed-only needs a VERSION (or next-beta / next-minor): it decides which repos are bumped"
+# A literal VERSION never moves a Maven library: each keeps its own line.
+if [ "$VMODE" = literal ]; then
+  maven_named=()
+  [ -z "${GSEL[maven]:-}" ] || maven_named+=(--maven)
+  for o in "${ONLY[@]}"; do [ "${T_GROUP[$o]}" = maven ] && maven_named+=(--only "$o"); done
+  if [ ${#maven_named[@]} -gt 0 ]; then
+    die "VERSION $VSPEC is never applied to the Maven chain (${maven_named[*]}): every library keeps its own line (build-config, parent, commons and auth-core are versioned independently). Bump them each to their next beta with: scripts/release.sh next-beta ${maven_named[*]}   (or next-minor for a new minor of each)"
+  fi
+fi
+if [ -n "$STUDIO_VER" ] && [ "$STUDIO_VER" != next ]; then
+  [[ "$STUDIO_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]] || die "--studio-version '$STUDIO_VER': expected MAJOR.MINOR.PATCH-beta.N, or next"
+fi
 if [ -n "$STUDIO" ] && [ "$STUDIO" != none ] && [ "$STUDIO" != next ] && [ "$CHANNEL" = beta ]; then
   [[ "$STUDIO" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]] || die "--studio '$STUDIO': expected MAJOR.MINOR.PATCH-beta.N, or next"
 fi
 if [ -n "$PATCH_VERSION" ]; then
   [ "$CHANNEL" = stable ] || die "--version is for --channel stable (a beta's version is always main's version file)"
   [[ "$PATCH_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--version '$PATCH_VERSION': expected MAJOR.MINOR.PATCH"
-  [ ${#ONLY[@]} -gt 0 ] || die "--version $PATCH_VERSION needs --only <repo>: every repository has its own version line, so a patch names the repositories it is for"
+  [ ${#ONLY[@]} -gt 0 ] || [ ${#GSEL[@]} -gt 0 ] || die "--version $PATCH_VERSION needs --only <repo> (or a group): every repository has its own version line, so a patch names the repositories it is for"
 fi
 
 stage_title() {
@@ -186,9 +299,12 @@ rows_in_stage() { local r; for r in "${ROWS[@]}"; do [ "${T_STAGE[$r]}" = "$1" ]
 # Maven chain is in, and `--only <a Java image>` still stops at its own stage when a Maven
 # link it builds on is not published.
 selected() {
-  [ ${#ONLY[@]} -eq 0 ] && return 0
+  [ "$SEL_ALL" = true ] && return 0
+  [ -n "${GSEL[${T_GROUP[$1]:-none}]:-}" ] && return 0
+  [ -n "${GSEL[images]:-}" ] && [ "${T_KIND[$1]:-}" = img ] && return 0
   local o; for o in "${ONLY[@]}"; do [ "$o" = "$1" ] && return 0; done; return 1
 }
+any_row_selected() { local r; for r in "${ROWS[@]}"; do selected "$r" && return 0; done; return 1; }
 stage_has_selected() { local r; for r in $(rows_in_stage "$1"); do selected "$r" && return 0; done; return 1; }
 
 # ── version helpers ──────────────────────────────────────────────────────────
@@ -231,11 +347,21 @@ newest_stable() {
 }
 is_stable() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
-# b64-decoded file at a ref, via the contents API
+# b64-decoded file at a ref, via the contents API. A file over 1 MB comes back from it with
+# encoding "none" and no content (host-shell's package-lock.json is 0.95 MB), so that case
+# is read as the git blob it names instead; an empty answer would read as "not JSON" and
+# refuse the bump, or worse, as an empty file.
 file_at() { # repo ref path
-  local b
-  b=$(ghq api "repos/$ORG/$1/contents/$3?ref=$2" --jq .content) || return 1
-  printf '%s' "$b" | base64 -d 2>/dev/null
+  local b enc
+  b=$(ghq api "repos/$ORG/$1/contents/$3?ref=$2" --jq '(.encoding // "base64")+" "+(.sha // ""), (.content // "")') || return 1
+  enc=$(printf '%s\n' "$b" | head -1)
+  if [ "${enc%% *}" != base64 ]; then
+    [ -n "${enc#* }" ] || return 1
+    b=$(ghq api "repos/$ORG/$1/git/blobs/${enc#* }" --jq .content) || return 1
+    printf '%s' "$b" | base64 -d 2>/dev/null
+    return 0
+  fi
+  printf '%s\n' "$b" | tail -n +2 | base64 -d 2>/dev/null
 }
 
 # parse_version <version file name>  (file body on stdin) -> the version, or nothing
@@ -346,6 +472,11 @@ secret_present() {
 # ONLY reason), S_BUSY (id of a main push run still in flight), S_TAGRUN (the tag's run),
 # S_TAGRERUN (id of a red TAG run that published nothing, so re-running it is the fix).
 declare -A S_STATE=() S_REASON=() S_NOTE=() S_SHA=() S_VER=() S_TAG=() S_RERUN=() S_BUSY=() S_TAGRUN=() S_OLD=() S_TAGRERUN=()
+# The beta bump (a VERSION was given): S_TAGGED 1 when main's version is already tagged,
+# S_STABLE the newest stable X.Y.Z, S_TAGS every tag ref under the prefix; S_FROM main's
+# version at preflight, S_TO this run's target, S_BUMP none|planned|opened|refused,
+# S_BUMPWHY why refused; S_DID what this run did to it (tagged|rerun|would).
+declare -A S_TAGGED=() S_STABLE=() S_TAGS=() S_FROM=() S_TO=() S_BUMP=() S_BUMPWHY=() S_DID=()
 
 # tag_commit repo tag -> prints the COMMIT sha; rc 0 found, 1 absent, 2 cannot tell
 tag_commit() {
@@ -467,6 +598,7 @@ classify_beta() {
   S_REF[$repo]=main
   S_STATE[$repo]=REFUSE; S_REASON[$repo]=""; S_NOTE[$repo]=""; S_SHA[$repo]=""; S_VER[$repo]=""; S_TAG[$repo]=""
   S_RERUN[$repo]=""; S_BUSY[$repo]=""; S_TAGRUN[$repo]=""; S_OLD[$repo]=""; S_TAGRERUN[$repo]=""
+  S_TAGGED[$repo]=0; S_STABLE[$repo]=""; S_TAGS[$repo]=""
 
   sha=$(ghq api "repos/$ORG/$repo/git/ref/heads/main" --jq .object.sha || true)
   if [ -z "$sha" ]; then S_REASON[$repo]="cannot read main: gh api repos/$ORG/$repo/git/ref/heads/main"; return; fi
@@ -484,6 +616,7 @@ classify_beta() {
   # (No tags under the prefix is an empty 200, which is a success here.)
   tags=$(ghq api "repos/$ORG/$repo/git/matching-refs/tags/$prefix" --jq '.[].ref') || { S_REASON[$repo]="cannot read tags: gh api repos/$ORG/$repo/git/matching-refs/tags/$prefix"; return; }
   stable=$(newest_stable "$tags" "$prefix")
+  S_TAGS[$repo]=$tags; S_STABLE[$repo]=$stable
 
   wft=$(file_at "$repo" "$sha" ".github/workflows/$wf" || true)
   facts=$(printf '%s\n' "$wft" | wf_facts)
@@ -493,6 +626,7 @@ classify_beta() {
   rc=0; tc=$(tag_commit "$repo" "$tag") || rc=$?
   if [ "$rc" = 2 ]; then S_REASON[$repo]="cannot tell whether tag $tag exists: $tc"; return; fi
   if [ "$rc" = 0 ]; then
+    S_TAGGED[$repo]=1
     # Published (or being published). A published beta is never re-tagged.
     run=$(ghq run list -R "$ORG/$repo" --workflow "$wf" --branch "$tag" --limit 1 \
           --json databaseId,status,conclusion,createdAt -q '.[]|[(.databaseId|tostring),.status,(.conclusion//""),.createdAt]|join("|")' || true)
@@ -632,6 +766,7 @@ stage_plan_ok() {
   for r in $(rows_in_stage "$1"); do
     published "$r" && continue
     selected "$r" || return 1
+    [ "${S_BUMP[$r]:-}" = planned ] && continue
     case "${S_STATE[$r]:-}" in READY|RUNNING) continue ;; esac
     [ -n "${S_RERUN[$r]:-}" ] || [ -n "${S_BUSY[$r]:-}" ] || [ -n "${S_TAGRERUN[$r]:-}" ] || return 1
   done
@@ -652,6 +787,7 @@ stage_sel_plan_ok() {
   for r in $(rows_in_stage "$1"); do
     selected "$r" || continue
     if published "$r"; then continue; fi
+    [ "${S_BUMP[$r]:-}" = planned ] && continue
     case "${S_STATE[$r]:-}" in READY|RUNNING) continue ;; esac
     [ -n "${S_RERUN[$r]:-}" ] || [ -n "${S_BUSY[$r]:-}" ] || [ -n "${S_TAGRERUN[$r]:-}" ] || return 1
   done
@@ -679,7 +815,7 @@ row_line() {
     DONE|READY|RUNNING|NEEDS-CUT|NEEDS-PR) detail=${S_NOTE[$r]} ;;
     *) detail=${S_REASON[$r]} ;;
   esac
-  printf '  %-10s %-38s %-22s %s%s\n' "${S_STATE[$r]}" "$r" "${S_TAG[$r]:-${S_VER[$r]:-?}}" "$detail" "$(selected "$r" || printf ' [not selected by --only]')"
+  printf '  %-10s %-38s %-22s %s%s\n' "${S_STATE[$r]}" "$r" "${S_TAG[$r]:-${S_VER[$r]:-?}}" "$detail" "$(selected "$r" || printf ' [not selected]')"
 }
 
 # A dry run classifies each row once (in preflight); --apply re-reads before every action.
@@ -748,7 +884,7 @@ stable_tags() {
 # ── bump content (stdlib Python; poms by element path, never by line number) ────
 BUMP_PY=$(cat <<'PYEOF'
 import json, os, re, sys
-# argv: mode (stable|next|check) root spec.json ; prints a JSON result
+# argv: mode (stable|next|to|check) root spec.json ; prints a JSON result
 mode, root, specf = sys.argv[1], sys.argv[2], sys.argv[3]
 spec = json.load(open(specf))
 own = spec.get("own") or ""
@@ -929,11 +1065,49 @@ def changelog(path, text):
     res["notes"].append("%s needs release notes under the new ## %s heading before this PR merges" % (path, own))
     return text[:at] + stub + text[at:]
 
+
+def old_own():
+    """the version the version file carries now (what a jar name still spells)"""
+    text = rd(vfile)
+    if text is None:
+        return None
+    if os.path.basename(vfile) == "pom.xml":
+        masked = re.sub(r"<parent>.*?</parent>", lambda m: " " * len(m.group(0)), text, count=1, flags=re.S)
+        masked = re.sub(r"<!--.*?-->", lambda m: " " * len(m.group(0)), masked, flags=re.S)
+        m = re.search(r"<version>\s*([^<\s]+)\s*</version>", masked)
+        return m.group(1) if m else None
+    if vfile.endswith(".json"):
+        try:
+            v = json.loads(text).get("version")
+        except Exception:
+            return None
+        return v if isinstance(v, str) else None
+    return text.partition("\n")[0].strip() or None
+
+def jarname(path, text):
+    # target/<artifact>-<version>.jar spelled with the version (hugmesh-games' Dockerfiles
+    # and Makefile BACKEND_JAR): every one moves with the version file.
+    if mode == "check":
+        return text
+    old = old_own()
+    if not old:
+        res["left"].append("%s: cannot read the current version from %s, so its jar names cannot move; edit them by hand" % (path, vfile))
+        return None
+    pat = re.compile(r"(-)%s(\.jar)\b" % re.escape(old))
+    if old == own:
+        return text
+    n = len(pat.findall(text))
+    if n == 0:
+        res["left"].append("%s: no <name>-%s.jar to move to %s; edit it by hand (or drop it from the mirrors column)" % (path, old, own))
+        return None
+    res["summary"].append("%s: %d jar name(s) -%s.jar -> -%s.jar" % (path, n, old, own))
+    return pat.sub(lambda m: m.group(1) + own + m.group(2), text)
+
 def handle(path, how):
     text = rd(path)
     if text is None:
         res["missing"].append(path)
-        if how in ("vfile", "readme", "changelog", "gwpin"):
+        if how in ("vfile", "readme", "changelog", "gwpin", "jar"):
             res["left"].append("%s is missing" % path)
         return
     base = os.path.basename(path)
@@ -943,8 +1117,12 @@ def handle(path, how):
         new = readme_version(path, text)
     elif how == "changelog":
         new = changelog(path, text)
+    elif how == "jar":
+        new = jarname(path, text)
     elif base == "pom.xml":
-        new = pom(path, text, how == "vfile")
+        # the version file, or a mirror (another version file, e.g. hugmesh-games' module
+        # poms): its own <version> moves too, and its org pins with it
+        new = pom(path, text, how in ("vfile", "mirror"))
     elif base == "package-lock.json":
         new = jsonfile(path, text, True)
     elif base in ("package.json", "composer.json"):
@@ -962,6 +1140,8 @@ for tok in spec.get("mirrors", []):
         todo.append((tok[: -len(":Version")], "readme"))
     elif tok.endswith(":heading"):
         todo.append((tok[: -len(":heading")], "changelog"))
+    elif tok.endswith(":jar"):
+        todo.append((tok[: -len(":jar")], "jar"))
     else:
         todo.append((tok, "mirror"))
 for p, how in list(todo):
@@ -976,7 +1156,9 @@ PYEOF
 )
 # bump_compute repo ref mode target -> BUMP_JSON (a file): what changes, what is left
 # mode: stable (own -> X.Y.Z, org pins -> their stable), next (own -> next beta, pins ->
-# their next beta), check (report org pins still -beta; changes nothing).
+# their next beta), to (the beta bump phase: own -> this run's target, and the org pins of
+# every other repo this run bumps -> ITS target; pins of repos it leaves alone stay),
+# check (report org pins still -beta; changes nothing).
 BUMP_JSON=""
 bump_compute() {
   local repo=$1 ref=$2 mode=$3 target=$4 dir p r a pins="" imgs="" mir="" tok
@@ -986,7 +1168,7 @@ bump_compute() {
   for tok in ${T_MIRRORS[$repo]//,/ }; do
     case "$tok" in
       gateway-pin) fetch+=(".github/workflows/${T_WF[$repo]}") ;;
-      *:Version|*:heading) fetch+=("${tok%:*}") ;;
+      *:Version|*:heading|*:jar) fetch+=("${tok%:*}") ;;
       *) fetch+=("$tok") ;;
     esac
   done
@@ -1004,6 +1186,7 @@ bump_compute() {
     case "$mode" in
       stable) tv=${S_VER[$r]:-} ;;
       next) [ -n "${S_VER[$r]:-}" ] && is_stable "${S_VER[$r]}" && tv=$(next_minor_beta "${S_VER[$r]}") ;;
+      to) case "${S_BUMP[$r]:-}" in planned|opened) tv=${S_TO[$r]:-} ;; esac ;;
     esac
     [ -n "$tv" ] || continue
     for a in ${T_PKGS[$r]}; do
@@ -1036,11 +1219,25 @@ bump_pr() {
   if [ -z "$(bump_files)" ]; then say "    $repo: $base ${bsha:0:12} already carries $target; no PR needed"; rm -f "$BUMP_JSON"; return 0; fi
   tree=$(ghq api "repos/$ORG/$repo/git/commits/$bsha" --jq .tree.sha) || { say "  STOP $repo: cannot read the tree of $base"; return 1; }
   tf=$(mktemp "${TMPDIR:-/tmp}/release-tree.XXXXXX"); cf=$(mktemp "${TMPDIR:-/tmp}/release-commit.XXXXXX")
-  python3 -I -c '
-import json, sys
+  # One blob per changed file (POST git/blobs, base64), then a tree of their shas: inline
+  # tree content is not meant for a lock file near the 1 MB contents-API limit.
+  local blobs="" p bsh n=0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    python3 -I -c '
+import base64, json, sys
 d = json.load(open(sys.argv[1]))
-print(json.dumps({"base_tree": sys.argv[2], "tree": [{"path": p, "mode": "100644", "type": "blob", "content": c} for p, c in d["changed"].items()]}))' "$BUMP_JSON" "$tree" > "$tf"
-  tree=$(GH api -X POST "repos/$ORG/$repo/git/trees" --input "$tf" --jq .sha) || rc=1
+print(json.dumps({"content": base64.b64encode(d["changed"][sys.argv[2]].encode("utf-8")).decode(), "encoding": "base64"}))' "$BUMP_JSON" "$p" > "$tf"
+    bsh=$(GH api -X POST "repos/$ORG/$repo/git/blobs" --input "$tf" --jq .sha) || { rc=1; break; }
+    blobs="$blobs$p"$'\t'"$bsh"$'\n'; n=$((n+1))
+  done < <(bump_files)
+  if [ "$rc" = 0 ]; then
+    printf '%s' "$blobs" | python3 -I -c '
+import json, sys
+ent = [l.split("\t") for l in sys.stdin.read().splitlines() if l]
+print(json.dumps({"base_tree": sys.argv[1], "tree": [{"path": p, "mode": "100644", "type": "blob", "sha": s} for p, s in ent]}))' "$tree" > "$tf"
+    tree=$(GH api -X POST "repos/$ORG/$repo/git/trees" --input "$tf" --jq .sha) || rc=1
+  fi
   if [ "$rc" = 0 ]; then
     python3 -I -c 'import json, sys; print(json.dumps({"message": sys.argv[1], "tree": sys.argv[2], "parents": [sys.argv[3]]}))' "$title" "$tree" "$bsha" > "$cf"
     commit=$(GH api -X POST "repos/$ORG/$repo/git/commits" --input "$cf" --jq .sha) || rc=1
@@ -1052,7 +1249,7 @@ print(json.dumps({"base_tree": sys.argv[2], "tree": [{"path": p, "mode": "100644
   else
     GH api -X POST "repos/$ORG/$repo/git/refs" -f "ref=refs/heads/$head" -f "sha=$commit" --jq '"    created "+.ref' || { say "  STOP $repo: creating $head failed"; return 1; }
   fi
-  body=$(printf 'Opened by scripts/release.sh --channel stable (hugmesh-generator, docs/RELEASING.md). One mechanical commit:\n\n%s\n' "$(bump_field summary | sed 's/^/- /')")
+  body=$(printf 'Opened by scripts/release.sh%s (hugmesh-generator, docs/RELEASING.md). One mechanical commit:\n\n%s\n' "$([ "$CHANNEL" = stable ] && printf ' --channel stable')" "$(bump_field summary | sed 's/^/- /')")
   if [ -n "$(bump_field notes)" ]; then body=$(printf '%s\n\nBefore merging:\n\n%s\n' "$body" "$(bump_field notes | sed 's/^/- /')"); fi
   body=$(printf '%s\n\nComments and prose that still name a beta version are left for a human. The release script tags this repo only after this PR is merged into %s and its push run there is green.\n' "$body" "$base")
   rm -f "$BUMP_JSON"
@@ -1255,7 +1452,7 @@ phase_cut() {
   done
 }
 
-phase_bump() {
+phase_bump_stable() {
   local st r todo=() refused=0 ref left
   for st in 1 2 3 4 5 6 7 8 9; do
     for r in $(rows_in_stage "$st"); do
@@ -1348,6 +1545,185 @@ studio_stable_needs() {
   say "    studio-release.yml already marks a plain X.Y.Z as a full release (prerelease/make_latest follow the '-')."
 }
 
+# ── the beta bump: one VERSION for every selected repo ───────────────────────
+# A VERSION (literal, next-beta or next-minor) gives each selected row a target. The bump
+# phase opens ONE draft PR per repo whose main is not at its target, into main on
+# release-bump/<target>, through the same API-commit path as the stable bump (no clone,
+# no push); the merge phase merges them in stage order and waits for their push runs.
+BUMP_HEAD=release-bump
+# An open PR whose head is one of these is a version bump (the old local wrapper used
+# chore/release-<version>); one for ANOTHER target than this run's is superseded.
+SUPERSEDE_RE='^(chore/release-|release-bump/)'
+MERGE_I=$(phase_index merge || echo 0)
+
+# changed repo -> rc 0 when the repo has code no published beta carries: main's version is
+# not tagged yet, or it is NEEDS-BUMP (commits since its tag, or a stable shipped its line)
+changed() { [ "${S_TAGGED[$1]:-0}" != 1 ] || [ "${S_STATE[$1]:-}" = NEEDS-BUMP ]; }
+
+# target_of repo -> the version this run moves the repo to (nothing when there is none)
+target_of() {
+  local r=$1 cur=${S_VER[$1]:-}
+  [ -n "$cur" ] || return 0
+  case "$VMODE" in
+    literal)
+      # a literal VERSION never moves a Maven library: each keeps its own line
+      if [ "${T_GROUP[$r]}" = maven ]; then printf '%s' "$cur"; else printf '%s' "$VSPEC"; fi ;;
+    next-beta)
+      if is_stable "$cur"; then next_minor_beta "$cur"
+      elif ! is_beta "$cur"; then return 0
+      elif [ "${S_TAGGED[$r]:-0}" = 1 ] || [ "${S_STATE[$r]}" = NEEDS-BUMP ]; then next_beta "$cur" "${S_STABLE[$r]:-}"
+      else printf '%s' "$cur"; fi ;;   # not released yet: release it as it is
+    next-minor)
+      is_beta "$cur" || is_stable "$cur" || return 0
+      if [ "${S_TAGGED[$r]:-0}" != 1 ] && [ "${S_STATE[$r]}" != NEEDS-BUMP ] && [[ "$cur" =~ ^[0-9]+\.[0-9]+\.0-beta\.1$ ]]; then printf '%s' "$cur"
+      else next_minor_beta "${cur%%-*}"; fi ;;
+  esac
+}
+
+# compute_targets: S_FROM, S_TO, S_BUMP (none|planned|refused) and S_BUMPWHY for every
+# selected row, from the preflight classification. Read-only (one tag lookup per bump).
+compute_targets() {
+  local r cur t rc tc
+  for r in "${ROWS[@]}"; do
+    S_FROM[$r]=${S_VER[$r]:-}; S_TO[$r]=""; S_BUMP[$r]=none; S_BUMPWHY[$r]=""
+    selected "$r" || continue
+    cur=${S_VER[$r]:-}
+    if [ -z "$cur" ]; then S_BUMP[$r]=refused; S_BUMPWHY[$r]="its version cannot be read from ${T_VFILE[$r]} on main (${S_REASON[$r]:-?})"; continue; fi
+    if [ "$CHANGED_ONLY" = true ] && ! changed "$r"; then S_TO[$r]=$cur; continue; fi
+    t=$(target_of "$r")
+    S_TO[$r]=${t:-$cur}
+    [ -n "$t" ] && [ "$t" != "$cur" ] || continue
+    if ! is_beta "$t"; then S_BUMP[$r]=refused; S_BUMPWHY[$r]="its target '$t' is not MAJOR.MINOR.PATCH-beta.N"; continue; fi
+    if { is_beta "$cur" || is_stable "$cur"; } && [ "$(vercmp "$t" "$cur")" != gt ]; then
+      S_BUMP[$r]=refused; S_BUMPWHY[$r]="main is already at $cur, later than $t: a version never goes backwards (give a later VERSION, or leave $r out)"; continue
+    fi
+    if [ -n "${S_STABLE[$r]:-}" ] && [ "$(vercmp "$t" "${S_STABLE[$r]}")" != gt ]; then
+      S_BUMP[$r]=refused; S_BUMPWHY[$r]="stable ${T_PREFIX[$r]}${S_STABLE[$r]} is published, so $t would be a pre-release of a version that has shipped: give $(next_minor_beta "${S_STABLE[$r]}") or later (next-beta does that)"; continue
+    fi
+    rc=0; tc=$(tag_commit "$r" "${T_PREFIX[$r]}$t") || rc=$?
+    case "$rc" in
+      0) S_BUMP[$r]=refused; S_BUMPWHY[$r]="tag ${T_PREFIX[$r]}$t already exists (${tc:0:12}): a published version is never re-tagged; give a later VERSION" ;;
+      1) S_BUMP[$r]=planned ;;
+      *) S_BUMP[$r]=refused; S_BUMPWHY[$r]="cannot tell whether tag ${T_PREFIX[$r]}$t exists: $tc" ;;
+    esac
+  done
+}
+
+# offline_report: the selected non-Maven repos whose main is NOT on the version most of
+# them share (forum-ui stayed at 0.4.0-beta.1 while the rest went to 0.4.0-beta.2).
+offline_report() {
+  local r v best="" n=0 bn=0 hint
+  declare -A cnt=()
+  for r in "${ROWS[@]}"; do
+    selected "$r" && [ "${T_GROUP[$r]}" != maven ] && [ -n "${S_FROM[$r]:-}" ] || continue
+    v=${S_FROM[$r]}; cnt[$v]=$(( ${cnt[$v]:-0} + 1 )); n=$((n+1))
+  done
+  for v in "${!cnt[@]}"; do if [ "${cnt[$v]}" -gt "$bn" ] || { [ "${cnt[$v]}" = "$bn" ] && [ "$(vercmp "$v" "$best")" = gt ]; }; then best=$v; bn=${cnt[$v]}; fi; done
+  [ "$n" -gt "$bn" ] || return 0
+  for r in "${ROWS[@]}"; do
+    selected "$r" && [ "${T_GROUP[$r]}" != maven ] && [ -n "${S_FROM[$r]:-}" ] && [ "${S_FROM[$r]}" != "$best" ] || continue
+    if [ "$VMODE" = literal ]; then hint="the bump moves it to $VSPEC with the rest"
+    elif [ "${S_TO[$r]:-}" = "$(next_beta "$best" 2>/dev/null || true)" ]; then hint="$VMODE brings it back onto the line (${S_TO[$r]})"
+    else hint="$VMODE keeps it off the line (${S_FROM[$r]} -> ${S_TO[$r]:-?}); to put every repo on ONE version give it: scripts/release.sh $(next_beta "$best" 2>/dev/null || echo X.Y.Z-beta.N) $(selector_text)"; fi
+    say "  OFF-LINE $r is at ${S_FROM[$r]} while $bn of the $n selected repos are at $best: $hint"
+  done
+}
+
+SUP=()   # "repo|number|head|url" of the version-bump PRs this run supersedes
+BUMP_BLOCKED=0   # 1 when the bump phase refused, so nothing is opened (all or nothing)
+supersede_scan() {
+  local r out n h u want old
+  SUP=()
+  for r in "${ROWS[@]}"; do
+    selected "$r" && [ -n "${S_TO[$r]:-}" ] || continue
+    want="$BUMP_HEAD/${S_TO[$r]}"
+    if ! out=$(ghq pr list -R "$ORG/$r" --state open --limit 100 --json number,headRefName,url -q '.[]|[(.number|tostring),.headRefName,.url]|join("\t")'); then
+      say "  $r: its open PRs cannot be listed, so an older bump PR there is not looked for"; continue
+    fi
+    while IFS=$'\t' read -r n h u; do
+      [ -n "$n" ] && [[ "$h" =~ $SUPERSEDE_RE ]] || continue
+      old=${h#chore/release-}; old=${old#"$BUMP_HEAD"/}
+      if [ "$old" = "${S_TO[$r]}" ]; then
+        [ "$h" = "$want" ] || say "  $r: $u ($h) bumps to ${S_TO[$r]} too; it is left open (merge one of the two, never both)"
+        continue
+      fi
+      SUP+=("$r|$n|$h|$u")
+      say "  $([ "$MODE" = dry ] && printf 'would close' || printf 'superseded:') $u ($h, for $old): this run releases ${S_TO[$r]}"
+    done <<<"$out"
+  done
+  return 0
+}
+supersede_close() {
+  local e r n h u by
+  [ ${#SUP[@]} -gt 0 ] || return 0
+  confirm "Close ${#SUP[@]} superseded version-bump PR(s), each with a comment naming its replacement?" || { say "  left open"; return 0; }
+  for e in "${SUP[@]}"; do
+    IFS='|' read -r r n h u <<<"$e"
+    if [ -n "${S_PRURL[$r]:-}" ]; then by="Superseded by ${S_PRURL[$r]}"; else by="Superseded: main already carries ${S_TO[$r]}"; fi
+    GH pr close "$n" -R "$ORG/$r" --comment "$by (scripts/release.sh ${S_TO[$r]}): this release is ${S_TO[$r]}, so this bump is not merged." >/dev/null \
+      && say "    closed $u" || say "    could not close $u: close it by hand"
+  done
+}
+
+phase_bump() { if [ "$CHANNEL" = stable ]; then phase_bump_stable; else phase_bump_beta; fi; }
+phase_bump_beta() {
+  local st r todo=() refused=0 left
+  if [ -z "$VMODE" ]; then
+    say "  no VERSION given: nothing is bumped, each repo releases what its main says (scripts/release.sh <VERSION>|next-beta|next-minor bumps first)"; return 0
+  fi
+  any_row_selected || { say "  no repository selected"; return 0; }
+  if [ "$FROM_I" -gt "$MERGE_I" ]; then say "  resumed past the merge phase: nothing is bumped"; return 0; fi
+  say "  target: $VSPEC for $(selector_text)$([ "$CHANGED_ONLY" = true ] && printf ' (--changed-only: only repos with code no published beta carries)')"
+  offline_report
+  for st in 1 2 3 4 5 6 7 8 9; do
+    for r in $(rows_in_stage "$st"); do
+      selected "$r" || continue
+      case "${S_BUMP[$r]:-none}" in
+        refused) refused=1; say "  REFUSE $r: ${S_BUMPWHY[$r]}" ;;
+        planned) todo+=("$r") ;;
+        *)
+          if [ "$VMODE" = literal ] && [ "${T_GROUP[$r]}" = maven ]; then
+            say "  $r: keeps its own line at ${S_FROM[$r]:-?} (a literal VERSION never moves a Maven library; scripts/release.sh next-beta --only $r bumps it)"
+          elif [ "$CHANGED_ONLY" = true ] && ! changed "$r"; then
+            say "  $r: nothing since ${T_PREFIX[$r]}${S_FROM[$r]:-?}; not bumped (--changed-only)"
+          else
+            say "  $r: main already carries ${S_TO[$r]:-${S_FROM[$r]:-?}}"
+          fi ;;
+      esac
+    done
+  done
+  # Work out every bump first; a repo whose bump is not purely mechanical refuses the
+  # run, and nothing is opened while any is (half a version line is worse than none).
+  for r in "${todo[@]}"; do
+    bump_compute "$r" "${S_SHA[$r]}" to "${S_TO[$r]}" || true
+    left=$(bump_field left || true)
+    if [ -n "$left" ]; then
+      refused=1; S_BUMP[$r]=refused; S_BUMPWHY[$r]="its bump to ${S_TO[$r]} is not mechanical"
+      say "  REFUSE $r: its bump to ${S_TO[$r]} is not mechanical:"; printf '%s\n' "$left" | sed 's/^/      /'
+    elif [ "$MODE" = dry ]; then
+      say "  would open a DRAFT PR in $r: $BUMP_HEAD/${S_TO[$r]} -> main (${S_FROM[$r]} -> ${S_TO[$r]}):"
+      bump_field summary | sed 's/^/      /'
+    fi
+    rm -f "$BUMP_JSON"
+  done
+  supersede_scan
+  if [ "$refused" = 1 ]; then
+    BUMP_BLOCKED=1
+    say "  Nothing is opened while a repo is refused: fix it, or leave it out (--only / a group), then: $(resume_cmd bump)"
+    return 1
+  fi
+  [ "$MODE" = dry ] && return 0
+  if [ ${#todo[@]} -gt 0 ]; then
+    confirm "Open ${#todo[@]} draft version-bump PR(s) into main (${todo[*]})?" || { say "  skipped. next: $(resume_cmd bump)"; return 1; }
+    for r in "${todo[@]}"; do
+      bump_pr "$r" main "$BUMP_HEAD/${S_TO[$r]}" to "${S_TO[$r]}" "Release ${S_TO[$r]}" \
+        || { say "  next: $(resume_cmd bump)"; return 1; }
+      if [ -n "${S_PRURL[$r]:-}" ]; then S_BUMP[$r]=opened; else S_BUMP[$r]=none; fi
+    done
+  fi
+  supersede_close
+}
+
 # ── writes (never reached under --dry-run) ───────────────────────────────────
 confirm() { # question -> 0 = go
   if [ "$MODE" != apply ]; then return 1; fi
@@ -1434,6 +1810,7 @@ tag_and_watch() {
     say "  STOP $repo: no $wf run appeared for $tag within $((TRIES * POLL)) s: https://github.com/$ORG/$repo/actions"; return 1
   fi
   watch_run "$repo" "$id" || return 1
+  S_DID[$repo]=tagged
   print_artifacts "$repo" "${S_VER[$repo]}"
 }
 
@@ -1457,19 +1834,20 @@ rerun_tag_run() {
   watch_run "$r" "$id" || { classify "$r"; return 1; }
   classify "$r"; row_line "$r"
   published "$r" || return 1
+  S_DID[$r]=rerun
   print_artifacts "$r" "${S_VER[$r]}"
 }
 
 # tag_stage stage -> 0 when every row of the stage is published afterwards (or would be)
 tag_stage() {
-  local st=$1 r blk ready=() tagrr=() rc=0
+  local st=$1 r blk ready=() tagrr=() bumped=() rc=0
   say
   say "  -- stage $st: $(stage_title "$st")"
+  if ! stage_has_selected "$st"; then
+    say "  >> stage $st: none of its repositories is selected by this run; skipped"; return 0
+  fi
   classify_stage "$st"
   for r in $(rows_in_stage "$st"); do row_line "$r"; done
-  if ! stage_has_selected "$st"; then
-    say "  >> stage $st: none of its repositories is selected by --only; skipped"; return 0
-  fi
   if [ "$MODE" = dry ]; then
     blk=$(blocked_by "$st" plan)
     if [ -n "$blk" ]; then say "  >> stage $st would be BLOCKED: stage(s) $blk will not be published by this run"; return 1; fi
@@ -1479,18 +1857,24 @@ tag_stage() {
   fi
   for r in $(rows_in_stage "$st"); do
     selected "$r" || continue
+    # a dry run plans the tag of the version its bump PR moves main to
+    if [ "$MODE" = dry ] && [ "${S_BUMP[$r]:-}" = planned ]; then bumped+=("$r"); continue; fi
     [ -n "${S_TAGRERUN[$r]:-}" ] && tagrr+=("$r")
     case "${S_STATE[$r]}" in
       READY) ready+=("$r") ;;
       RUNNING)
-        if [ "$MODE" = dry ]; then say "  would watch $r's tag run ${S_TAGRUN[$r]}"
-        else watch_run "$r" "${S_TAGRUN[$r]}" || rc=1; fi ;;
+        if [ "$MODE" = dry ]; then say "  would watch $r's tag run ${S_TAGRUN[$r]}"; S_DID[$r]=would
+        else watch_run "$r" "${S_TAGRUN[$r]}" && S_DID[$r]=watched || rc=1; fi ;;
     esac
+  done
+  for r in "${bumped[@]}"; do
+    say "  would tag: $r ${T_PREFIX[$r]}${S_TO[$r]} once its bump PR is merged and its main push run is green, then watch its ${T_WF[$r]} run"
+    S_DID[$r]=would
   done
   # A tag whose run failed before it published anything: re-run that run (no bump needed).
   if [ ${#tagrr[@]} -gt 0 ]; then
     if [ "$MODE" = dry ]; then
-      for r in "${tagrr[@]}"; do say "  would: gh run rerun ${S_TAGRERUN[$r]} --failed -R $ORG/$r (tag ${S_TAG[$r]}: its run published nothing), then watch it"; done
+      for r in "${tagrr[@]}"; do say "  would: gh run rerun ${S_TAGRERUN[$r]} --failed -R $ORG/$r (tag ${S_TAG[$r]}: its run published nothing), then watch it"; S_DID[$r]=would; done
     else
       if ! confirm "Re-run the failed jobs of ${#tagrr[@]} tag run(s) that published nothing (${tagrr[*]})?"; then
         say "  stage $st skipped by the operator. next: $(resume_cmd "$CUR_PHASE")"; return 1
@@ -1503,17 +1887,18 @@ tag_stage() {
     fi
   fi
   if [ ${#ready[@]} -eq 0 ]; then
-    if stage_sel_published "$st"; then say "  >> stage $st: everything$([ ${#ONLY[@]} -gt 0 ] && printf ' selected') DONE"; return 0; fi
+    if [ "$MODE" = dry ] && [ ${#bumped[@]} -gt 0 ]; then stage_sel_plan_ok "$st"; return; fi
+    if stage_sel_published "$st"; then say "  >> stage $st: everything$([ "$SEL_ALL" = true ] || printf ' selected') DONE"; return 0; fi
     if [ "$MODE" = dry ] && stage_sel_plan_ok "$st"; then
       for r in $(rows_in_stage "$st"); do
-        [ -n "${S_RERUN[$r]:-}${S_BUSY[$r]:-}" ] && selected "$r" && say "  would tag: $r ${S_TAG[$r]} once its main push run is green (rerun phase), at main as it is then"
+        [ -n "${S_RERUN[$r]:-}${S_BUSY[$r]:-}" ] && selected "$r" && { say "  would tag: $r ${S_TAG[$r]} once its main push run is green (rerun phase), at main as it is then"; S_DID[$r]=would; }
       done
       return 0
     fi
     return 1
   fi
   if [ "$MODE" = dry ]; then
-    for r in "${ready[@]}"; do say "  would tag: $r ${S_TAG[$r]} at ${S_SHA[$r]:0:12}, then watch its ${T_WF[$r]} run"; done
+    for r in "${ready[@]}"; do say "  would tag: $r ${S_TAG[$r]} at ${S_SHA[$r]:0:12}, then watch its ${T_WF[$r]} run"; S_DID[$r]=would; done
     stage_sel_plan_ok "$st"; return
   fi
   if ! confirm "Tag ${#ready[@]} repo(s) in stage $st (${ready[*]})?"; then
@@ -1665,7 +2050,8 @@ FAILED=0
 phase_preflight() {
   local st r blk pub cnt
   say "release.sh --channel $CHANNEL: mode=$MODE  $(date -u +%FT%TZ)  table=$(shown "$TABLE")  rows=${#ROWS[@]}"
-  [ ${#ONLY[@]} -gt 0 ] && say "  --only: ${ONLY[*]} (every row is still checked; only these are acted on)"
+  say "  version: ${VSPEC:-none (release what each main says)}$([ "$CHANGED_ONLY" = true ] && printf ', --changed-only')  selection: $(selector_text)  Studio: $([ "$SEL_STUDIO" = true ] && printf yes || printf no)  site: $([ "$SEL_SITE" = true ] && printf yes || printf no)"
+  [ "$SEL_ALL" = true ] || say "  (every row is still checked; only the selected ones are acted on)"
   [ ${#EXPECT[@]} -gt 0 ] && say "  --expect: $(for r in "${!EXPECT[@]}"; do printf '%s=%s ' "$r" "${EXPECT[$r]}"; done)"
   GH auth status >/dev/null 2>&1 || die "gh is not logged in (GH_TOKEN/GITHUB_TOKEN are unset for every call): gh auth login"
   load_org_secrets
@@ -1677,6 +2063,10 @@ phase_preflight() {
     else say "  stable CUT: every repo releases main's beta X.Y.Z-beta.N as X.Y.Z from its own release/X.Y"; fi
   fi
   declare -gA COUNT=([DONE]=0 [READY]=0 [REFUSE]=0 [NEEDS-BUMP]=0 [RUNNING]=0 [NEEDS-CUT]=0 [NEEDS-PR]=0)
+  if ! any_row_selected; then
+    say "  no repository is selected: the repositories are not read"
+    say; studio_facts; return 0
+  fi
   for st in 1 2 3 4 5 6 7 8 9; do
     say
     say "=== stage $st: $(stage_title "$st")"
@@ -1689,20 +2079,46 @@ phase_preflight() {
   studio_facts
   say
   if [ "$CHANNEL" = stable ]; then
-    say "== Summary: DONE=${COUNT[DONE]} READY=${COUNT[READY]} REFUSE=${COUNT[REFUSE]} NEEDS-CUT=${COUNT[NEEDS-CUT]} NEEDS-PR=${COUNT[NEEDS-PR]} RUNNING=${COUNT[RUNNING]}"
+    say "== States: DONE=${COUNT[DONE]} READY=${COUNT[READY]} REFUSE=${COUNT[REFUSE]} NEEDS-CUT=${COUNT[NEEDS-CUT]} NEEDS-PR=${COUNT[NEEDS-PR]} RUNNING=${COUNT[RUNNING]}"
     main_blocks_stable || true
     return 0
   fi
-  say "== Summary: DONE=${COUNT[DONE]} READY=${COUNT[READY]} REFUSE=${COUNT[REFUSE]} NEEDS-BUMP=${COUNT[NEEDS-BUMP]} RUNNING=${COUNT[RUNNING]}"
-  if [ "${COUNT[NEEDS-BUMP]}" -gt 0 ]; then
-    say "   NEEDS-BUMP repos are published at main's version but have unreleased commits, or a stable at or above main's beta line is out; this run leaves them alone. Merge a version bump in each to release them."
+  say "== States: DONE=${COUNT[DONE]} READY=${COUNT[READY]} REFUSE=${COUNT[REFUSE]} NEEDS-BUMP=${COUNT[NEEDS-BUMP]} RUNNING=${COUNT[RUNNING]}"
+  if [ -n "$VMODE" ]; then
+    if [ "$FROM_I" -le "$MERGE_I" ]; then compute_targets; fi
+  elif [ "${COUNT[NEEDS-BUMP]}" -gt 0 ]; then
+    say "   NEEDS-BUMP repos are published at main's version but have unreleased commits, or a stable at or above main's beta line is out; this run leaves them alone. Bump them with: scripts/release.sh <VERSION> (or next-beta), --changed-only for just those"
   fi
 }
 
+# merge_list -> the PRs the merge phase merges, in this order: every --merge, then the bump
+# PRs in stage order (opened by the bump phase, or found again when resumed --from merge)
+MLIST=(); MPLANNED=0
+merge_list() {
+  local st r url
+  MLIST=("${MERGES[@]}"); MPLANNED=0
+  [ "$CHANNEL" = beta ] && [ -n "$VMODE" ] || return 0
+  for st in 1 2 3 4 5 6 7 8 9; do
+    for r in $(rows_in_stage "$st"); do
+      selected "$r" || continue
+      case "${S_BUMP[$r]:-none}" in
+        opened) MLIST+=("$r#${S_PRURL[$r]##*/}") ;;
+        planned)
+          url=$(ghq pr list -R "$ORG/$r" --head "$BUMP_HEAD/${S_TO[$r]}" --state open --json url -q '.[0].url // empty' || true)
+          if [ -n "$url" ]; then S_PRURL[$r]=$url; S_BUMP[$r]=opened; MLIST+=("$r#${url##*/}")
+          elif [ "$MODE" = dry ]; then MPLANNED=$((MPLANNED+1)); say "  would merge $r's bump PR ($BUMP_HEAD/${S_TO[$r]}, opened by the bump phase; marked ready first), then wait for its main push run"
+          else say "  STOP $r: no open bump PR on $BUMP_HEAD/${S_TO[$r]}: the bump phase opens it: $(resume_cmd bump)"; return 1
+          fi ;;
+      esac
+    done
+  done
+}
+
 phase_merge() {
-  local m repo n st draft oid base wft facts pushref pre id
-  if [ ${#MERGES[@]} -eq 0 ]; then say "  no --merge given"; return 0; fi
-  for m in "${MERGES[@]}"; do
+  local m repo n st draft oid base wft facts pushref pre id todo=() merged=() e
+  merge_list || return 1
+  if [ ${#MLIST[@]} -eq 0 ]; then [ "$MPLANNED" -gt 0 ] || say "  no PR to merge$([ -z "$VMODE" ] && printf ' (no --merge given)')"; return 0; fi
+  for m in "${MLIST[@]}"; do
     repo=${m%#*}; n=${m##*#}
     IFS='|' read -r st draft oid base < <(ghq pr view "$n" -R "$ORG/$repo" --json state,isDraft,mergeCommit,baseRefName -q '[.state,(.isDraft|tostring),(.mergeCommit.oid//""),(.baseRefName//"main")]|join("|")' || printf 'UNREADABLE|||main\n')
     base=${base:-main}
@@ -1715,15 +2131,30 @@ phase_merge() {
       say "  would:$([ "$draft" = true ] && printf ' gh pr ready %s -R %s/%s;' "$n" "$ORG" "$repo") gh pr merge $n -R $ORG/$repo --squash --delete-branch, then wait for $base's new push run"
       continue
     fi
-    confirm "Merge $m (squash, delete branch)$([ "$draft" = true ] && printf ', marking it ready first')?" || { say "  skipped $m. next: $(resume_cmd merge)"; return 1; }
+    todo+=("$m|$draft|$base")
+  done
+  [ "$MODE" = dry ] && return 0
+  [ ${#todo[@]} -gt 0 ] || { say "  every PR is merged already"; return 0; }
+  # One question for all of them; they are merged in this order, then every push run is
+  # waited for (they run side by side on GitHub, so the wait is the longest one, not the sum).
+  confirm "Merge ${#todo[@]} PR(s) in this order (squash, delete branch; a draft is marked ready first): $(for e in "${todo[@]}"; do printf '%s ' "${e%%|*}"; done | sed 's/ $//')?" \
+    || { say "  skipped. next: $(resume_cmd merge)"; return 1; }
+  for e in "${todo[@]}"; do
+    IFS='|' read -r m draft base <<<"$e"
+    repo=${m%#*}; n=${m##*#}
     pre=0
     if [ -n "${T_WF[$repo]:-}" ]; then
       pre=$(ghq run list -R "$ORG/$repo" --workflow "${T_WF[$repo]}" --branch "$base" --event push --limit 1 --json databaseId -q '.[].databaseId' || echo 0)
     fi
-    if [ "$draft" = true ]; then GH pr ready "$n" -R "$ORG/$repo" || { say "  STOP $m: gh pr ready failed"; return 1; }; fi
-    GH pr merge "$n" -R "$ORG/$repo" --squash --delete-branch || { say "  STOP $m: gh pr merge failed (checks, review or conflicts): https://github.com/$ORG/$repo/pull/$n"; return 1; }
+    if [ "$draft" = true ]; then GH pr ready "$n" -R "$ORG/$repo" || { say "  STOP $m: gh pr ready failed. next: $(resume_cmd merge)"; return 1; }; fi
+    GH pr merge "$n" -R "$ORG/$repo" --squash --delete-branch || { say "  STOP $m: gh pr merge failed (checks, review or conflicts): https://github.com/$ORG/$repo/pull/$n. next: $(resume_cmd merge)"; return 1; }
     oid=$(ghq pr view "$n" -R "$ORG/$repo" --json mergeCommit -q '.mergeCommit.oid' || true)
     say "  merged $m -> ${oid:0:12}"
+    merged+=("$m|$base|${pre:-0}|$oid")
+  done
+  for e in "${merged[@]}"; do
+    IFS='|' read -r m base pre oid <<<"$e"
+    repo=${m%#*}
     [ -n "${T_WF[$repo]:-}" ] || continue
     wft=$(file_at "$repo" "$base" ".github/workflows/${T_WF[$repo]}" || true)
     facts=$(printf '%s\n' "$wft" | wf_facts)
@@ -1738,7 +2169,7 @@ phase_merge() {
         [ -n "$g" ] || continue
         printf '%s\n' "$files" | grep -a "^${g%%\**}" >/dev/null && hit=yes
       done < <(printf '%s\n' "$facts" | tail -n +2)
-      [ "$hit" = yes ] || { say "  ${T_WF[$repo]} does not build this merge (paths filter): no push run to wait for"; continue; }
+      [ "$hit" = yes ] || { say "  $m: ${T_WF[$repo]} does not build this merge (paths filter): no push run to wait for"; continue; }
     fi
     if id=$(find_new_run "$repo" "${T_WF[$repo]}" "$base" push "${pre:-0}"); then
       watch_run "$repo" "$id" || say "  (the release checks below will report it)"
@@ -1790,37 +2221,75 @@ phase_gateway_access() {
 phase_overlays() { rerun_red 6 || true; tag_stage 6; }
 phase_java() { tag_stage 7; }
 
+# ── the Studio's version ─────────────────────────────────────────────────────
+STUDIO_STATE=""; STUDIO_FROM=""; STUDIO_TO=""
+studio_main_version() {
+  file_at hugmesh-generator main studio/hugmesh_studio/__init__.py 2>/dev/null | sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' | head -1
+}
+studio_released() { ghq release view "studio-v$1" -R "$ORG/hugmesh-generator" --json tagName >/dev/null; }
+# studio_target -> the version this run releases the Studio as; "next" (release-studio.sh
+# proposes it); nothing when main's version is already released and nothing asks for more
+studio_target() {
+  local cur=$STUDIO_FROM
+  if [ -n "$STUDIO_VER" ]; then printf '%s' "$STUDIO_VER"; return; fi
+  if [ -n "$STUDIO" ] && [ "$STUDIO" != none ]; then printf '%s' "$STUDIO"; return; fi
+  case "$VMODE" in
+    literal) printf '%s' "$VSPEC"; return ;;
+    next-beta|next-minor)
+      [ -n "$cur" ] && { is_beta "$cur" || is_stable "$cur"; } || { printf next; return; }
+      if [ "$VMODE" = next-beta ]; then
+        if studio_released "$cur"; then if is_beta "$cur"; then next_beta "$cur"; else next_minor_beta "$cur"; fi; else printf '%s' "$cur"; fi
+      else
+        if ! studio_released "$cur" && [[ "$cur" =~ ^[0-9]+\.[0-9]+\.0-beta\.1$ ]]; then printf '%s' "$cur"; else next_minor_beta "${cur%%-*}"; fi
+      fi
+      return ;;
+  esac
+  # no VERSION: what main says, unless that is out already
+  [ -n "$cur" ] && ! studio_released "$cur" && printf '%s' "$cur"
+  return 0
+}
+
 phase_studio() {
-  local v=$STUDIO rc=0
+  local v rc=0
+  if [ "$SEL_STUDIO" != true ]; then
+    STUDIO_STATE=skipped
+    if [ "$NO_STUDIO" = true ]; then say "  --no-studio: skipped"; else say "  the Studio is not selected by this run (add --studio, or --all)"; fi
+    return 0
+  fi
   if [ "$CHANNEL" = stable ]; then
-    case "$v" in
-      ""|none) say "  the Studio is not part of a stable run yet (it stays on its beta line)"; [ "$v" = none ] || studio_stable_needs; return 0 ;;
-    esac
+    v=${STUDIO_VER:-$STUDIO}
+    if [ -z "$v" ]; then STUDIO_STATE=skipped; say "  the Studio is not part of a stable run yet (it stays on its beta line)"; studio_stable_needs; return 0; fi
+    STUDIO_STATE=refused
     say "  REFUSE --studio $v on the stable channel: scripts/release-studio.sh cannot release a stable Studio yet."
     studio_stable_needs
     return 1
   fi
-  case "$v" in
-    "") say "  no --studio given: the Studio is not released by this run (pass --studio <version>, --studio next, or --no-studio)"; studio_facts; return 0 ;;
-    none) say "  --no-studio: skipped"; return 0 ;;
-  esac
-  if [ "$v" != next ] && ghq release view "studio-v$v" -R "$ORG/hugmesh-generator" --json tagName >/dev/null; then
-    say "  DONE: release studio-v$v exists"; return 0
+  STUDIO_FROM=$(studio_main_version || true)
+  v=$(studio_target)
+  STUDIO_TO=$v
+  if [ -z "$v" ]; then
+    STUDIO_STATE=done; say "  DONE: main's __version__ ${STUDIO_FROM:-?} is released (studio-v${STUDIO_FROM:-?}); give a VERSION or --studio-version to release a new one"; return 0
+  fi
+  if [ "$v" != next ] && studio_released "$v"; then
+    STUDIO_STATE=done; say "  DONE: release studio-v$v exists"; return 0
   fi
   if [ "$MODE" = dry ]; then
     say "  $(shown "$STUDIO_SCRIPT") ${v/next/} --dry-run:"
     if [ "$v" = next ]; then "$STUDIO_SCRIPT" --dry-run --yes 2>&1 | sed 's/^/    | /' || rc=$?
     else "$STUDIO_SCRIPT" "$v" --dry-run 2>&1 | sed 's/^/    | /' || rc=$?; fi
+    if [ "$rc" = 0 ]; then STUDIO_STATE=would; else STUDIO_STATE=refused; fi
     return "$rc"
   fi
-  confirm "Release the Studio ($v) with scripts/release-studio.sh?" || { say "  skipped. next: $(resume_cmd studio)"; return 1; }
+  confirm "Release the Studio ($v) with scripts/release-studio.sh?" || { STUDIO_STATE=refused; say "  skipped. next: $(resume_cmd studio)"; return 1; }
   local args=()
   [ "$v" = next ] || args+=("$v")
   [ "$YES" = true ] && args+=(--yes)
-  "$STUDIO_SCRIPT" "${args[@]}" || { rc=$?; say "  STOP: release-studio.sh exited $rc. Fix what it said, then: $(resume_cmd studio)"; return 1; }
+  "$STUDIO_SCRIPT" "${args[@]}" || { rc=$?; STUDIO_STATE=refused; say "  STOP: release-studio.sh exited $rc. Fix what it said, then: $(resume_cmd studio)"; return 1; }
+  STUDIO_STATE=released
 }
 
 phase_visibility() {
+  any_row_selected || { say "  no repository selected"; return 0; }
   print_nonpublic && return 0
   say "  New GHCR packages are created private. A package can only be made public in the web UI, and that cannot be undone."
   [ "$MODE" = dry ] && return 0
@@ -1830,28 +2299,36 @@ phase_visibility() {
   return 0
 }
 
+SITE_STATE=""
 phase_site() {
   local pre id
+  if [ "$SEL_SITE" != true ]; then
+    SITE_STATE=skipped
+    say "  the site is not selected by this run (add --site, or --all); it refreshes on its own cron within the hour"; return 0
+  fi
   say "  The release->site repository_dispatch needs SITE_DISPATCH_TOKEN, which is unset, so the site only refreshes on its own cron; this asks for it now."
-  if [ "$MODE" = dry ]; then say "  would: gh workflow run pages.yml -R $SITE_REPO, then watch it"; return 0; fi
-  confirm "Rebuild hugmesh.net now (gh workflow run pages.yml -R $SITE_REPO)?" || { say "  skipped: it refreshes within the hour anyway"; return 0; }
+  if [ "$MODE" = dry ]; then SITE_STATE=would; say "  would: gh workflow run pages.yml -R $SITE_REPO, then watch it"; return 0; fi
+  confirm "Rebuild hugmesh.net now (gh workflow run pages.yml -R $SITE_REPO)?" || { SITE_STATE=skipped; say "  skipped: it refreshes within the hour anyway"; return 0; }
   pre=$(ghq run list -R "$SITE_REPO" --workflow pages.yml --limit 1 --json databaseId -q '.[].databaseId' || echo 0)
-  GH workflow run pages.yml -R "$SITE_REPO" || { say "  could not dispatch pages.yml: it refreshes within the hour (cron)"; return 1; }
+  GH workflow run pages.yml -R "$SITE_REPO" || { SITE_STATE=refused; say "  could not dispatch pages.yml: it refreshes within the hour (cron)"; return 1; }
   if id=$(find_new_run hugmesh.github.io pages.yml "" workflow_dispatch "${pre:-0}"); then
-    watch_run hugmesh.github.io "$id" || return 1
+    watch_run hugmesh.github.io "$id" || { SITE_STATE=refused; return 1; }
+    SITE_STATE=rebuilt
     say "  site rebuilt: https://hugmesh.net/downloads"
   else
+    SITE_STATE=dispatched
     say "  the pages.yml run did not appear: https://github.com/$SITE_REPO/actions"
   fi
 }
 
 phase_verify() {
   local r p st=0 vis cont what=artifact
+  if ! any_row_selected; then studio_facts; return 0; fi
   load_site_map
   cont=$(ghq api "/orgs/$ORG/packages?package_type=container&per_page=100" --paginate --jq '.[]|.name+"="+.visibility' || true)
   say "  state      repo                                   release                where"
   for r in "${ROWS[@]}"; do
-    [ "$MODE" = dry ] || classify "$r"
+    if [ "$MODE" != dry ] && selected "$r"; then classify "$r"; fi
     row_line "$r"
     for p in ${T_PKGS[$r]}; do
       if [ "${T_KIND[$r]}" = img ]; then
@@ -1865,11 +2342,68 @@ phase_verify() {
   done
   studio_facts
   say "  The Studio shows at the top of hugmesh.net/downloads."
-  [ ${#ONLY[@]} -eq 0 ] || what="selected artifact"
+  [ "$SEL_ALL" = true ] || what="selected artifact"
   if [ "$st" = 0 ]; then say "== every $what is DONE"; return 0; fi
   [ "$MODE" = dry ] && return 0
   say "== not everything is DONE (rows above). Re-run: $(resume_cmd preflight)"
   return 1
+}
+
+# ── the one summary ──────────────────────────────────────────────────────────
+# print_summary <next command>: one table of every selected repo (and the Studio and the
+# site), then ONE line of counts that ends in the exact next command.
+print_summary() {
+  local next=$1 r from to pr tag run state w="" released=0 done_=0 refused=0 skipped=0 pending=0
+  [ "$MODE" = dry ] && w="would "
+  say
+  say "== Summary ($([ "$MODE" = dry ] && printf 'dry run: nothing was created or changed' || printf 'applied')): scripts/release.sh ${VSPEC:+$VSPEC }$(selector_text) --channel $CHANNEL"
+  printf '  %-38s %-8s %-34s %-12s %-26s %-12s %s\n' repo group "from -> to" "bump PR" tag run state
+  for r in "${ROWS[@]}"; do
+    if ! selected "$r"; then skipped=$((skipped+1)); continue; fi
+    from=${S_FROM[$r]:-${S_MVER[$r]:-${S_VER[$r]:-?}}}
+    to=${S_TO[$r]:-${S_VER[$r]:-?}}
+    tag=${S_TAG[$r]:--}
+    case "${S_BUMP[$r]:-none}" in
+      opened) pr="#${S_PRURL[$r]##*/}" ;;
+      planned) pr="${w}open"; tag="${T_PREFIX[$r]}${S_TO[$r]}" ;;
+      refused) pr=refused ;;
+      *) pr=-; [ -z "${S_PRURL[$r]:-}" ] || pr="#${S_PRURL[$r]##*/}" ;;
+    esac
+    run=${S_TAGRUN[$r]:--}
+    [ "${S_BUMP[$r]:-}" != planned ] || run=-
+    case "${S_DID[$r]:-}" in
+      tagged|rerun|watched) state=released; released=$((released+1)) ;;
+      would) state="would release"; released=$((released+1)) ;;
+      *)
+        if [ "${S_BUMP[$r]:-}" = refused ]; then state="REFUSE (bump)"; refused=$((refused+1))
+        else
+          state=${S_STATE[$r]:-?}
+          case "$state" in
+            DONE) done_=$((done_+1)) ;;
+            REFUSE|NEEDS-BUMP) refused=$((refused+1)) ;;
+            *) pending=$((pending+1)) ;;
+          esac
+        fi ;;
+    esac
+    printf '  %-38s %-8s %-34s %-12s %-26s %-12s %s\n' "$r" "${T_GROUP[$r]}" "$from -> $to" "$pr" "$tag" "$run" "$state"
+  done
+  if [ "$SEL_STUDIO" = true ]; then
+    case "$STUDIO_STATE" in
+      released|would) released=$((released+1)) ;;
+      done) done_=$((done_+1)) ;;
+      refused) refused=$((refused+1)) ;;
+      skipped) ;;
+      *) pending=$((pending+1)) ;;
+    esac
+    printf '  %-38s %-8s %-34s %-12s %-26s %-12s %s\n' "Studio (hugmesh-generator)" studio "${STUDIO_FROM:-?} -> ${STUDIO_TO:-${STUDIO_FROM:-?}}" - "studio-v${STUDIO_TO:-${STUDIO_FROM:-?}}" - "$( [ "$STUDIO_STATE" = would ] && printf 'would release' || printf '%s' "${STUDIO_STATE:-not reached}")"
+  else
+    skipped=$((skipped+1))
+  fi
+  if [ "$SEL_SITE" = true ]; then
+    printf '  %-38s %-8s %-34s %-12s %-26s %-12s %s\n' "hugmesh.net (hugmesh.github.io)" site - - - - "$( [ "$SITE_STATE" = would ] && printf 'would rebuild' || printf '%s' "${SITE_STATE:-not reached}")"
+  fi
+  if [ "$MODE" = dry ]; then w="would release $released"; else w="released $released"; fi
+  say "$w, already done $done_, refused $refused (reasons above), skipped $skipped$([ "$pending" = 0 ] || printf ', waiting %s' "$pending"); next: $next"
 }
 
 # tests/scripts/test-release-beta.sh sources this file for its pure helpers (parse_version,
@@ -1890,16 +2424,19 @@ for i in "${!PHASES[@]}"; do
     FAILED=1
     if [ "$MODE" = apply ]; then
       say
-      say "Stopped in phase '$p'. Fix what it reported above, then resume with:"
-      say "  $(resume_cmd "$p")"
+      say "Stopped in phase '$p'. Fix what it reported above."
       [ "$p" = verify ] || say "To leave it as it is and go on with the next phase: $(resume_cmd "$(next_phase "$p")")"
+      print_summary "$(resume_cmd "$p")"
       exit 1
     fi
     say "  (dry run: phase '$p' would stop here; later phases are shown as if it had succeeded)"
   fi
 done
-say
-if [ "$MODE" = dry ]; then
-  say "Dry run: nothing was created or changed. To run it: $(resume_cmd preflight | sed 's/ --from preflight$//')"
+if [ "$MODE" = dry ] && [ "$BUMP_BLOCKED" = 1 ]; then
+  print_summary "fix the bump refusals above (or leave those repos out with --only / a group: nothing is bumped while one is refused), then: $(run_cmd)"
+elif [ "$MODE" = dry ]; then
+  print_summary "$(run_cmd)"
+else
+  print_summary "none: everything this run selected is released or DONE (check again any time: $(run_cmd | sed 's/ --apply//; s/ --yes//'))"
 fi
 exit 0

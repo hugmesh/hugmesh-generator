@@ -2945,3 +2945,21 @@ KERNEL_TREE ?=
 .PHONY: btf-kconfig-resolve-check
 btf-kconfig-resolve-check: ## resolve the x86 kernel fragment against a real kernel tree (KERNEL_TREE=<clean tree>) and prove BTF survives olddefconfig
 	bash tests/scripts/test-btf-kconfig-resolve.sh "$(KERNEL_TREE)"
+
+# ── org release (docs/RELEASING.md) ───────────────────────────────────────────
+# One command for everything or any part of it; a dry run unless APPLY=1.
+#   make release VERSION=0.5.0-beta.1                 # every repo + Studio + site (dry run)
+#   make release VERSION=0.5.0-beta.1 WHAT=apps APPLY=1
+#   make release VERSION=next-beta WHAT=maven         # each library to its own next beta
+#   make release VERSION=0.4.1-beta.1 ONLY=hugmesh-forum-ui
+# WHAT: all (default) | maven | services | apps | node | images | studio | site (several:
+# WHAT='apps studio'); ONLY: repo names (with no WHAT, only those). CHANNEL=stable for a
+# stable cut (no VERSION) or patch (VERSION=X.Y.Z with ONLY).
+RELEASE_SEL = $(if $(WHAT),$(foreach w,$(WHAT),--$(w)),$(if $(ONLY),,--all)) $(foreach r,$(ONLY),--only $(r))
+.PHONY: release release-plan release-studio
+release: ## org release: VERSION=X.Y.Z-beta.N|next-beta|next-minor WHAT=all|maven|services|apps|node|images|studio|site ONLY='repo ...' (dry run unless APPLY=1)
+	scripts/release.sh $(strip $(VERSION) $(RELEASE_SEL) --channel $(or $(CHANNEL),beta) $(if $(APPLY),--apply))
+release-plan: ## the same as `make release`, always a dry run (APPLY is ignored)
+	scripts/release.sh $(strip $(VERSION) $(RELEASE_SEL) --channel $(or $(CHANNEL),beta))
+release-studio: ## the Studio alone: scripts/release-studio.sh VERSION (dry run unless APPLY=1)
+	scripts/release-studio.sh $(strip $(VERSION) $(if $(APPLY),,--dry-run))

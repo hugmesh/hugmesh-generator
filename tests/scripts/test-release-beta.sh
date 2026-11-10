@@ -104,7 +104,7 @@ def save(): json.dump(st, open(STATE, "w"), indent=1)
 VALUED = {"-R", "--repo", "--workflow", "-w", "--branch", "-b", "--event", "-e", "--limit", "-L",
           "--json", "--jq", "-q", "--status", "-s", "-X", "--method", "-f", "-F", "--field",
           "--raw-field", "--ref", "--interval", "--template", "-t", "--org", "--input", "--pattern", "--dir",
-          "--head", "--base", "--title", "--body", "--search", "--state"}
+          "--head", "--base", "--title", "--body", "--search", "--state", "--comment"}
 opts = {}; fields = {}; pos = []
 i = 0
 while i < len(argv):
@@ -201,8 +201,18 @@ if pos and pos[0] == "api":
         if b not in r.get("branches", {}): notfound()
         r["branches"][b] = fields["sha"]; save()
         out({"ref": "refs/heads/" + b, "object": {"sha": fields["sha"]}})
+    if rest[:2] == ["git", "blobs"] and method == "POST":
+        body = json.load(open(opt("--input"))); bid = "blob-%d" % next_id()
+        st.setdefault("blobs", {})[bid] = base64.b64decode(body["content"]).decode() if body.get("encoding") == "base64" else body["content"]
+        save(); out({"sha": bid})
+    if rest[:2] == ["git", "blobs"] and len(rest) == 3:
+        b = st.get("blobs", {}).get(rest[2])
+        if b is None: notfound()
+        out({"sha": rest[2], "encoding": "base64", "content": base64.b64encode(b.encode()).decode()})
     if rest[:2] == ["git", "trees"] and method == "POST":
         body = json.load(open(opt("--input"))); tid = "tree-%d" % next_id()
+        for e in body.get("tree", []):                 # a blob sha entry reads back as its content
+            if "sha" in e and "content" not in e: e["content"] = st.get("blobs", {})[e["sha"]]
         st.setdefault("trees", {})[tid] = body; save(); out({"sha": tid})
     if rest[:2] == ["git", "commits"] and method == "POST":
         body = json.load(open(opt("--input"))); cid = "commit-%d" % next_id()
@@ -242,7 +252,12 @@ if pos and pos[0] == "api":
         br_ = r.get("branches", {}).get(ref_)
         if isinstance(br_, list): br_ = br_[-1]
         files = r.get("files_at", {}).get(br_ or ref_, r.get("files", {}))
-        if fp in files: out({"content": base64.b64encode(files[fp].encode()).decode()})
+        if fp in files:
+            if fp in r.get("big_files", []):            # over 1 MB: the contents API sends no content
+                bid = "bigblob-%s-%s" % (seg[2], fp.replace("/", "_"))
+                st.setdefault("blobs", {})[bid] = files[fp]; save()
+                out({"encoding": "none", "sha": bid, "content": "", "size": 1048577})
+            out({"encoding": "base64", "sha": "blob-of-" + fp, "content": base64.b64encode(files[fp].encode()).decode()})
         notfound()
     if rest and rest[0] == "compare":
         base = "/".join(rest[1:]).split("...")[0]
@@ -300,8 +315,9 @@ if pos[:2] == ["pr", "list"]:
         if opt("--state", default="open") == "open" and p.get("state") != "OPEN": continue
         q = (opt("--search") or "").replace(" in:title", "")
         if q and q.lower() not in p.get("title", "").lower(): continue
-        rows.append({"number": int(n), "url": "https://example.invalid/%s/pull/%s" % (pos and repo_of(opt("-R")), n), "title": p.get("title", "")})
-    out(rows)
+        rows.append({"number": int(n), "url": "https://example.invalid/%s/pull/%s" % (pos and repo_of(opt("-R")), n), "title": p.get("title", ""),
+                     "headRefName": p.get("headRefName", ""), "baseRefName": p.get("baseRefName", "main"), "isDraft": p.get("isDraft", False), "state": p.get("state")})
+    out(rows[: int(opt("--limit", "-L", default=30))])
 if pos[:2] == ["pr", "create"]:
     r = R(repo_of(opt("-R", "--repo")))
     n = str(next_id())
@@ -314,9 +330,19 @@ if pos[:1] == ["pr"]:
     if pr is None: notfound()
     if pos[1] == "view": out(jsonsel(pr))
     if pos[1] == "ready": pr["isDraft"] = False; save(); sys.exit(0)
+    if pos[1] == "close":
+        if pr["state"] != "OPEN": sys.stderr.write("not open\n"); sys.exit(1)
+        pr["state"] = "CLOSED"; pr["close_comment"] = opt("--comment"); save(); sys.exit(0)
     if pos[1] == "merge":
         if pr["isDraft"]: sys.stderr.write("draft\n"); sys.exit(1)
-        new = pr["merges_to"]
+        new = pr.get("merges_to") or "merged-%s-%s" % (repo_of(opt("-R")), pos[2])
+        head_c = st.get("commits", {}).get(r.get("branches", {}).get(pr.get("headRefName") or "", ""))
+        if head_c:                                      # a PR the script opened: main now carries its tree
+            base_files = dict(r.get("files_at", {}).get(main_sha(r, False), r.get("files", {})))
+            tree = st["trees"][head_c["tree"]]["tree"]
+            for e in tree: base_files[e["path"]] = e["content"]
+            r["files"] = base_files
+            pr.setdefault("files", [e["path"] for e in tree])
         pr["state"] = "MERGED"; pr["mergeCommit"] = {"oid": new}
         r["main"] = [new]; r["main_i"] = 0
         r.setdefault("commit_files", {})[new] = pr.get("files", [])
@@ -371,8 +397,10 @@ def pj(v): return json.dumps({"name": "x", "version": v}, indent=2) + "\n"
 def run(i, wf_="release.yml", br="main", sha="m1", concl="success", status="completed", days=1, ev="push"):
     return {"databaseId": i, "workflow": wf_, "headBranch": br, "headSha": sha, "event": ev, "status": status, "conclusion": concl, "createdAt": ago(days)}
 repos = {}; rows = []
-def add(stage, name, kind, vfile, prefix, wfname, pkgs, mirrors=None, **r):
-    rows.append("|".join([str(stage), name, kind, vfile, prefix, wfname, pkgs] + ([mirrors] if mirrors else [])))
+def add(stage, name, kind, vfile, prefix, wfname, pkgs, mirrors=None, group=None, **r):
+    if group is None:
+        group = "maven" if kind == "mvn" else "node" if "docker-mesh-node" in vfile else "apps" if stage == 8 else "services"
+    rows.append("|".join([str(stage), name, kind, vfile, prefix, wfname, pkgs, mirrors or "", group]))
     r.setdefault("main", ["m-" + name]); r.setdefault("secrets", []); r.setdefault("tag_workflow", wfname)
     repos[name] = r
 gen_files = {"studio/hugmesh_studio/__init__.py": '__version__ = "0.9.0-beta.1"\n'}
@@ -513,6 +541,58 @@ elif scen == "stable":
         branches={"release/0.2": "rb-ui"}, tags={"v0.2.0": "rb-ui", "v0.2.0-beta.3": "m-fx-ui-done"},
         runs=[green(811, "v0.2.0", "rb-ui"), green(812, "v0.2.0-beta.3", "m-fx-ui-done")])
     pkgs = {"container": {"hugmesh-gateway": {"visibility": "public", "versions": []}}, "maven": {}}
+elif scen == "bumpto":
+    # every row DONE at main (its tag on main's HEAD, its tag run and main push run green):
+    # the start of a new release, where scripts/release.sh <VERSION> bumps, merges and tags
+    CW = wf(channels=True)
+    def done(stage, name, kind, vfile, pkgs, files, ver, prefix="v", wfname="release.yml", **kw):
+        files = dict(files); files.setdefault(".github/workflows/" + wfname, CW)
+        add(stage, name, kind, vfile, prefix, wfname, pkgs, files=files,
+            tags=dict({prefix + ver: "m-" + name}, **kw.pop("more_tags", {})),
+            runs=[run(10 * stage + 1, wf_=wfname, br=prefix + ver, sha="m-" + name), run(10 * stage, wf_=wfname, sha="m-" + name)], **kw)
+    done(1, "fx-lib-a", "mvn", "pom.xml", "net.hugmesh.fx-lib-a", {"pom.xml": spom("1.0.0-beta.2")}, "1.0.0-beta.2")
+    done(5, "hugmesh-gateway", "img", "pom.xml", "hugmesh-gateway",
+         {"pom.xml": spom("0.4.0-beta.2", parent=("fx-lib-a", "1.0.0-beta.2"), props=[("fx-lib-a", "1.0.0-beta.2")])}, "0.4.0-beta.2",
+         publishes=["hugmesh-gateway"])
+    done(6, "fx-be", "img", "VERSION", "fx-be", {"VERSION": "0.4.0-beta.2\n",
+         ".github/workflows/release.yml": wf(channels=True, extra="  env:\n    PINNED_GATEWAY_IMAGE: ghcr.io/hugmesh/hugmesh-gateway:0.4.0-beta.2\n")},
+         "0.4.0-beta.2", mirrors="gateway-pin")
+    # its net.hugmesh dependency LAGS fx-lib-a on purpose: a literal VERSION leaves the Maven
+    # chain alone, so it must not move it
+    done(7, "fx-api", "img", "pom.xml", "fx-api",
+         {"pom.xml": spom("0.4.0-beta.2", parent=("fx-lib-a", "1.0.0-beta.2"), deps=[("net.hugmesh", "fx-lib-a", "1.0.0-beta.1")])}, "0.4.0-beta.2")
+    # its lock is over the contents API's 1 MB: read as a git blob; an old wrapper PR is open
+    done(8, "fx-ui", "img", "package.json", "fx-ui", {"package.json": pj("0.4.0-beta.2"), "package-lock.json": lock("0.4.0-beta.2")}, "0.4.0-beta.2",
+         big_files=["package-lock.json"],
+         prs={"5": {"state": "OPEN", "isDraft": False, "mergeCommit": None, "headRefName": "chore/release-0.4.0-beta.1",
+                    "baseRefName": "main", "title": "Release 0.4.0-beta.1"}})
+    # off the line: still at the previous beta while the rest moved on (forum-ui, 0.4.0-beta.2)
+    done(8, "fx-ui-off", "img", "package.json", "fx-ui-off", {"package.json": pj("0.4.0-beta.1"), "package-lock.json": lock("0.4.0-beta.1")}, "0.4.0-beta.1")
+    # composer writes four spaces; a same-target PR from the old wrapper is left open
+    done(9, "fx-php", "img", "composer.json", "fx-php", {"composer.json": json.dumps({"name": "fx/php", "version": "0.4.0-beta.2"}, indent=4) + "\n"},
+         "0.4.0-beta.2", group="services",
+         prs={"8": {"state": "OPEN", "isDraft": True, "mergeCommit": None, "headRefName": "chore/release-0.5.0-beta.1",
+                    "baseRefName": "main", "title": "Release 0.5.0-beta.1"}})
+    # hugmesh-games' shape: one VERSION, module poms, the frontend package (+lock), jar names
+    gpom = lambda v, a: ('<?xml version="1.0"?>\n<project xmlns="http://maven.apache.org/POM/4.0.0">\n  <parent><groupId>org.springframework.boot</groupId>'
+                         '<artifactId>spring-boot-starter-parent</artifactId><version>3.5.0</version></parent>\n'
+                         '  <groupId>net.hugmesh</groupId>\n  <artifactId>%s</artifactId>\n  <version>%s</version>\n'
+                         '  <name>Games &middot; %s</name>\n</project>\n' % (a, v, a))
+    G = "0.4.0-beta.2"
+    done(9, "fx-games", "img", "VERSION", "fx-games/backend fx-games/frontend",
+         {"VERSION": G + "\n", "backend/pom.xml": gpom(G, "hugmesh-gaming-bff"), "rpg-builder/pom.xml": gpom(G, "rpg-builder"),
+          "frontend/package.json": pj(G), "frontend/package-lock.json": lock(G),
+          "backend/Dockerfile": "FROM x AS build\nCOPY --from=build /app/target/hugmesh-gaming-bff-%s.jar app.jar\n" % G,
+          "Makefile": "BACKEND_JAR         = $(BACKEND_DIR)/target/hugmesh-gaming-bff-%s.jar\n" % G},
+         G, group="apps",
+         mirrors="backend/pom.xml,rpg-builder/pom.xml,frontend/package.json,backend/Dockerfile:jar,Makefile:jar")
+    gen_files.update({"clients/docker-mesh-node/VERSION": "0.4.0-beta.2\n",
+                      ".github/workflows/mesh-node-release.yml": wf(channels=True, paths=["clients/docker-mesh-node/**"])})
+    gen_files["studio/hugmesh_studio/__init__.py"] = '__version__ = "0.4.1-beta.1"\n'
+    done(9, "hugmesh-generator", "img", "clients/docker-mesh-node/VERSION", "hugmesh-mesh-node", gen_files, "0.4.0-beta.2",
+         prefix="mesh-node-v", wfname="mesh-node-release.yml", releases=["studio-v0.4.1-beta.1"])
+    pkgs = {"container": {"hugmesh-gateway": {"visibility": "public", "versions": [
+        {"name": "sha256:" + "0" * 64, "metadata": {"container": {"tags": ["0.4.0-beta.2"]}}}]}}, "maven": {}}
 repos["hugmesh.github.io"] = {"main": ["m-site"], "runs": [], "files": {"release-sources.json": json.dumps({
     "images": [{"repo": "hugmesh/fx-ui", "image": "ghcr.io/hugmesh/fx-ui", "group": "ui", "id": "fx-ui"}],
     "packages": [{"repo": "hugmesh/fx-lib-a", "id": "lib-a"}]})}}
@@ -936,8 +1016,8 @@ fixture mixed "$D"; run_script "$SCRIPT" "$D" --channel beta --no-studio
 W2=$(grep -aE '^  (DONE|READY|REFUSE|NEEDS-BUMP|RUNNING) ' "$D/out")
 if [ -n "$W1" ] && [ "$W1" = "$W2" ] && [ "$(printf '%s\n' "$W1" | grep -c .)" -ge 13 ]; then ok "release-beta.sh classifies every row exactly like release.sh --channel beta"
 else bad "the wrapper differs from release.sh --channel beta"; fi
-grep -a 'Dry run: nothing was created or changed. To run it: scripts/release-beta.sh --apply' "$D/out" >/dev/null \
-  && ok "the beta resume command is still scripts/release-beta.sh" || bad "beta resume command: $(grep -a 'To run it' "$D/out")"
+grep -a '^would release .*; next: scripts/release.sh --apply --no-studio$' "$D/out" >/dev/null \
+  && ok "the wrapper's next command is the one direct command, scripts/release.sh --apply (beta is its default channel)" || bad "beta next command: $(grep -a 'next: ' "$D/out" | tail -1)"
 D="$TMP/w2"; fixture mixed "$D"; run_script "$SCRIPT" "$D" --channel gamma
 [ "$(cat "$D/rc")" = 2 ] && ok "--channel gamma is refused (rc 2)" || bad "--channel gamma rc $(cat "$D/rc")"
 
@@ -1228,6 +1308,221 @@ check_stable_readonly() { # the read-only stub really refuses a write (so a dry 
 }
 if check_stable_readonly; then ok "the read-only stub refuses a write (exit 97) and still answers a read"; else bad "read-only stub"; fi
 
+# ── V: the one direct command: scripts/release.sh <VERSION> [selectors] ──────
+echo "== V scripts/release.sh <VERSION>: bump, supersede, merge, tag, one summary"
+summary_lines() { grep -aE '^(would release|released) [0-9]+, already done [0-9]+, refused [0-9]+ \(reasons above\), skipped [0-9]+' "$1"; }
+# tree_file <state.json> <repo> <head branch> <path> -> that file's content in the commit the script made
+tree_file() {
+  python3 - "$@" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1])); r = st["repos"][sys.argv[2]]
+c = st["commits"][r["branches"][sys.argv[3]]]
+files = {e["path"]: e["content"] for e in st["trees"][c["tree"]]["tree"]}
+sys.stdout.write(files.get(sys.argv[4], "<not in the commit>"))
+PY
+}
+check_literal_dry() { # script -> 0 when `release.sh 0.5.0-beta.1 --apps` plans the bumps, flags, supersedes and writes NOTHING
+  local s=$1 d="$TMP/vd.$RANDOM" o
+  fixture bumpto "$d"; run_script "$s" "$d" 0.5.0-beta.1 --apps
+  o="$d/out"
+  [ "$(cat "$d/rc")" = 0 ] || { echo "      rc $(cat "$d/rc")"; return 1; }
+  [ -z "$(writes "$d/calls")" ] && ! grep -a 'WRITE REFUSED' "$o" >/dev/null || { echo "      the dry run wrote: $(writes "$d/calls" | head -2)"; return 1; }
+  ! grep -a "would stop here" "$o" >/dev/null || { echo "      a phase of a clean dry run says it would stop: $(grep -a -B3 'would stop here' "$o" | head -4)"; return 1; }
+  grep -a 'would open a DRAFT PR in fx-ui: release-bump/0.5.0-beta.1 -> main (0.4.0-beta.2 -> 0.5.0-beta.1):' "$o" >/dev/null || { echo "      no fx-ui bump plan"; return 1; }
+  grep -a '      package-lock.json version 0.4.0-beta.2 -> 0.5.0-beta.1; packages\[""\].version 0.4.0-beta.2 -> 0.5.0-beta.1' "$o" >/dev/null \
+    || { echo "      fx-ui's 1 MB lock was not read through its blob"; return 1; }
+  grep -a 'would open a DRAFT PR in fx-ui-off: release-bump/0.5.0-beta.1 -> main (0.4.0-beta.1 -> 0.5.0-beta.1):' "$o" >/dev/null || { echo "      no fx-ui-off bump plan"; return 1; }
+  grep -a 'would open a DRAFT PR in fx-games: release-bump/0.5.0-beta.1 -> main' "$o" >/dev/null || { echo "      no fx-games bump plan"; return 1; }
+  grep -a '^  OFF-LINE fx-ui-off is at 0.4.0-beta.1 while 2 of the 3 selected repos are at 0.4.0-beta.2: the bump moves it to 0.5.0-beta.1 with the rest' "$o" >/dev/null \
+    || { echo "      fx-ui-off not flagged off-line: $(grep -a OFF-LINE "$o")"; return 1; }
+  grep -a '^  would close https://example.invalid/fx-ui/pull/5 (chore/release-0.4.0-beta.1, for 0.4.0-beta.1): this run releases 0.5.0-beta.1' "$o" >/dev/null \
+    || { echo "      the older chore/release-0.4.0-beta.1 PR is not listed as superseded"; return 1; }
+  ! grep -a 'would close .*fx-php' "$o" >/dev/null || { echo "      a PR outside the selection was listed"; return 1; }
+  for r in fx-ui fx-ui-off fx-games; do
+    grep -a "would tag: $r v0.5.0-beta.1 once its bump PR is merged" "$o" >/dev/null || { echo "      $r: no tag planned at the target"; return 1; }
+  done
+  ! grep -aE 'would (open a DRAFT PR|tag:) .*(fx-lib-a|hugmesh-gateway|fx-be|fx-api|fx-php|hugmesh-generator)' "$o" >/dev/null || { echo "      an unselected repo is planned"; return 1; }
+  [ "$(summary_lines "$o" | grep -c .)" = 1 ] || { echo "      not exactly one summary count line"; return 1; }
+  summary_lines "$o" | grep -a '^would release 3, already done 0, refused 0 (reasons above), skipped 7; next: scripts/release.sh 0.5.0-beta.1 --apply --apps$' >/dev/null \
+    || { echo "      summary: $(summary_lines "$o")"; return 1; }
+  [ "$(sed -n '/^== Summary/,$p' "$o" | grep -ac 'next:')" = 1 ] || { echo "      the summary block has more than one next:"; return 1; }
+  grep -aE '^  fx-ui-off +apps +0.4.0-beta.1 -> 0.5.0-beta.1 +would open +v0.5.0-beta.1 +- +would release$' "$o" >/dev/null || { echo "      no fx-ui-off table row"; return 1; }
+}
+if check_literal_dry "$SCRIPT"; then ok "V: 0.5.0-beta.1 --apps (dry): 3 draft bump PRs planned (a 1 MB lock read as its blob), the off-line repo flagged, the older chore/release PR listed as superseded, tags planned at the target, zero writes, ONE summary line ending in the --apply command"
+else bad "V: literal --apps dry run"; fi
+
+check_literal_apply() { # script -> 0 when a whole 0.5.0-beta.1 lands: one PR per non-Maven repo, file content right, superseded closed, merged, tagged
+  local s=$1 d="$TMP/va.$RANDOM" o w r
+  fixture bumpto "$d"; run_script "$s" "$d" 0.5.0-beta.1 --apply --yes --no-studio
+  o="$d/out"; w=$(writes "$d/calls")
+  [ "$(cat "$d/rc")" = 0 ] || { echo "      rc $(cat "$d/rc")"; tail -30 "$o" | sed 's/^/        /'; return 1; }
+  for r in hugmesh-gateway fx-be fx-api fx-ui fx-ui-off fx-php fx-games hugmesh-generator; do
+    printf '%s\n' "$w" | grep -a "pr create -R hugmesh/$r --draft --base main --head release-bump/0.5.0-beta.1 --title Release 0.5.0-beta.1" >/dev/null || { echo "      $r: no draft bump PR"; return 1; }
+    printf '%s\n' "$w" | grep -a "api -X POST repos/hugmesh/$r/git/refs -f ref=refs/tags/$([ "$r" = hugmesh-generator ] && printf mesh-node-v || printf v)0.5.0-beta.1 " >/dev/null || { echo "      $r: not tagged at 0.5.0-beta.1"; return 1; }
+  done
+  ! printf '%s\n' "$w" | grep -a 'fx-lib-a' >/dev/null || { echo "      the Maven library was written to: $(printf '%s\n' "$w" | grep -a fx-lib-a | head -1)"; return 1; }
+  grep -a '  fx-lib-a: keeps its own line at 1.0.0-beta.2' "$o" >/dev/null || { echo "      no keeps-its-own-line note"; return 1; }
+  # the superseded PR is closed with a comment naming its replacement; the same-target one is left open
+  printf '%s\n' "$w" | grep -a 'pr close 5 -R hugmesh/fx-ui --comment Superseded by https://example.invalid/fx-ui/pull/' >/dev/null || { echo "      fx-ui#5 not closed with the new PR named"; return 1; }
+  ! printf '%s\n' "$w" | grep -a 'pr close 8 ' >/dev/null || { echo "      the same-target fx-php#8 was closed"; return 1; }
+  # merged in stage order after their PRs were opened, tags after the merges
+  python3 - "$d/calls" <<'PY' || return 1
+import json, sys
+ev = []
+for line in open(sys.argv[1]):
+    a = json.loads(line)[1:]
+    if a[:2] in (["pr", "create"], ["pr", "merge"]): ev.append((a[1], a[a.index("-R") + 1].split("/")[1]))
+    elif a[:1] == ["api"] and "POST" in a and any("ref=refs/tags/" in x for x in a): ev.append(("tag", [x for x in a if x.endswith("/git/refs")][0].split("/")[2]))
+creates = [r for k, r in ev if k == "create"]; merges = [r for k, r in ev if k == "merge"]
+order = ["hugmesh-gateway", "fx-be", "fx-api", "fx-ui", "fx-ui-off", "fx-php", "fx-games", "hugmesh-generator"]
+assert creates == order, creates
+assert merges == order, merges
+kinds = [k for k, _ in ev]
+assert max(i for i, k in enumerate(kinds) if k == "merge") < min(i for i, k in enumerate(kinds) if k == "tag"), kinds
+PY
+  # every file kind, as committed
+  st="$d/state.json"; H=release-bump/0.5.0-beta.1
+  [ "$(tree_file "$st" fx-be "$H" VERSION)" = "0.5.0-beta.1" ] || { echo "      VERSION: $(tree_file "$st" fx-be "$H" VERSION)"; return 1; }
+  tree_file "$st" fx-be "$H" .github/workflows/release.yml | grep -a '^    PINNED_GATEWAY_IMAGE: ghcr.io/hugmesh/hugmesh-gateway:0.5.0-beta.1$' >/dev/null || { echo "      gateway-pin not moved"; return 1; }
+  tree_file "$st" hugmesh-gateway "$H" pom.xml | python3 -c 'import sys; p = sys.stdin.read()
+assert "<artifactId>x</artifactId>\n  <version>0.5.0-beta.1</version>" in p and "<version>1.0.0-beta.2</version>" in p and "<fx-lib-a.version>1.0.0-beta.2</fx-lib-a.version>" in p, p' || return 1
+  tree_file "$st" fx-api "$H" pom.xml | python3 -c 'import sys; p = sys.stdin.read()
+assert "<version>0.5.0-beta.1</version>" in p and "<artifactId>fx-lib-a</artifactId>\n      <version>1.0.0-beta.1</version>" in p, p' || { echo "      fx-api: a pin of the unbumped Maven chain moved"; return 1; }
+  tree_file "$st" fx-ui "$H" package.json | python3 -c 'import json,sys; assert json.load(sys.stdin)["version"] == "0.5.0-beta.1"' || return 1
+  tree_file "$st" fx-ui "$H" package-lock.json | python3 -c 'import json,sys; d = json.load(sys.stdin); assert d["version"] == d["packages"][""]["version"] == "0.5.0-beta.1", d' || return 1
+  tree_file "$st" fx-php "$H" composer.json | python3 -c 'import sys; t = sys.stdin.read(); assert t == "{\n    \"name\": \"fx/php\",\n    \"version\": \"0.5.0-beta.1\"\n}\n", repr(t)' || { echo "      composer.json not rewritten in its own 4-space shape"; return 1; }
+  [ "$(tree_file "$st" hugmesh-generator "$H" clients/docker-mesh-node/VERSION)" = "0.5.0-beta.1" ] || { echo "      mesh-node VERSION"; return 1; }
+  [ "$(tree_file "$st" fx-games "$H" VERSION)" = "0.5.0-beta.1" ] || return 1
+  for f in backend/pom.xml rpg-builder/pom.xml; do
+    tree_file "$st" fx-games "$H" "$f" | grep -a '^  <version>0.5.0-beta.1</version>$' >/dev/null || { echo "      fx-games $f: own <version> not moved"; return 1; }
+    tree_file "$st" fx-games "$H" "$f" | grep -a '<version>3.5.0</version>' >/dev/null || { echo "      fx-games $f: the foreign parent moved"; return 1; }
+  done
+  tree_file "$st" fx-games "$H" frontend/package-lock.json | python3 -c 'import json,sys; d = json.load(sys.stdin); assert d["version"] == d["packages"][""]["version"] == "0.5.0-beta.1"' || return 1
+  tree_file "$st" fx-games "$H" backend/Dockerfile | grep -a 'COPY --from=build /app/target/hugmesh-gaming-bff-0.5.0-beta.1.jar app.jar' >/dev/null || { echo "      Dockerfile jar name not moved"; return 1; }
+  tree_file "$st" fx-games "$H" Makefile | grep -a 'target/hugmesh-gaming-bff-0.5.0-beta.1.jar$' >/dev/null || { echo "      Makefile BACKEND_JAR not moved"; return 1; }
+  [ "$(summary_lines "$o" | grep -c .)" = 1 ] || { echo "      not exactly one summary count line"; return 1; }
+  summary_lines "$o" | grep -a '^released 8, already done 1, refused 0 (reasons above), skipped 1; next: none' >/dev/null || { echo "      summary: $(summary_lines "$o")"; return 1; }
+}
+if check_literal_apply "$SCRIPT"; then ok "V: 0.5.0-beta.1 --apply: one draft PR per non-Maven repo (pom, VERSION + gateway pin, package.json + lock, composer.json, mesh-node, games' poms + lock + jar names), the Maven chain and its lagging pin untouched, the superseded PR closed naming its replacement, merged in stage order, every repo tagged at 0.5.0-beta.1, 'released 8'"
+else bad "V: literal --apply"; fi
+
+check_next_beta_pins() { # script -> 0 when next-beta bumps each row on its own line and moves the pins of bumped upstreams
+  local s=$1 d="$TMP/vn.$RANDOM" o
+  fixture bumpto "$d"; run_script "$s" "$d" next-beta --no-studio
+  o="$d/out"
+  [ -z "$(writes "$d/calls")" ] || return 1
+  grep -a 'would open a DRAFT PR in fx-lib-a: release-bump/1.0.0-beta.3 -> main (1.0.0-beta.2 -> 1.0.0-beta.3):' "$o" >/dev/null || { echo "      fx-lib-a not on its own next beta"; return 1; }
+  grep -a 'would open a DRAFT PR in hugmesh-gateway: release-bump/0.4.0-beta.3 -> main' "$o" >/dev/null || return 1
+  grep -aE '^      pom.xml:[0-9]+ parent net.hugmesh:fx-lib-a 1.0.0-beta.2 -> 1.0.0-beta.3$' "$o" >/dev/null || { echo "      the gateway's <parent> did not follow fx-lib-a"; return 1; }
+  grep -aE '^      pom.xml:[0-9]+ property <fx-lib-a.version> 1.0.0-beta.2 -> 1.0.0-beta.3$' "$o" >/dev/null || { echo "      the property did not follow"; return 1; }
+  grep -aE '^      pom.xml:[0-9]+ dependency net.hugmesh:fx-lib-a 1.0.0-beta.1 -> 1.0.0-beta.3$' "$o" >/dev/null || { echo "      fx-api's dependency did not follow"; return 1; }
+  grep -aE '^      .github/workflows/release.yml:[0-9]+ FROM pin hugmesh-gateway:0.4.0-beta.2 -> 0.4.0-beta.3$' "$o" >/dev/null || { echo "      the overlay pin did not follow the gateway"; return 1; }
+  grep -a '^  OFF-LINE fx-ui-off is at 0.4.0-beta.1 while .* next-beta keeps it off the line (0.4.0-beta.1 -> 0.4.0-beta.2); to put every repo on ONE version give it: scripts/release.sh 0.4.0-beta.3 --all' "$o" >/dev/null \
+    || { echo "      off-line advice: $(grep -a OFF-LINE "$o")"; return 1; }
+}
+if check_next_beta_pins "$SCRIPT"; then ok "V: next-beta: each repo to ITS next beta (fx-lib-a 1.0.0-beta.3, the gateway 0.4.0-beta.3), and the <parent>, property, dependency and overlay pin follow the bumped upstream; the off-line repo gets the one-version command"
+else bad "V: next-beta"; fi
+
+check_refusals() { # script -> 0 when every VERSION the org cannot release is refused before any write
+  local s=$1 d="$TMP/vr.$RANDOM"
+  fixture bumpto "$d"
+  run_script "$s" "$d" 0.5.0-beta.1 --maven
+  [ "$(cat "$d/rc")" = 2 ] && grep -a 'never applied to the Maven chain (--maven)' "$d/out" >/dev/null \
+    && grep -a 'scripts/release.sh next-beta --maven' "$d/out" >/dev/null && [ ! -s "$d/calls" ] || { echo "      --maven with a literal: rc $(cat "$d/rc"): $(cat "$d/out")"; return 1; }
+  run_script "$s" "$d" 0.5.0-beta.1 --only fx-lib-a
+  [ "$(cat "$d/rc")" = 2 ] && grep -a 'scripts/release.sh next-beta --only fx-lib-a' "$d/out" >/dev/null || { echo "      --only <a library> with a literal"; return 1; }
+  run_script "$s" "$d" 0.5.0-rc.1
+  [ "$(cat "$d/rc")" = 2 ] && grep -a 'refused any other v\* tag\|refuse any other v\* tag' "$d/out" >/dev/null && grep -a 'Use 0.5.0-beta.1' "$d/out" >/dev/null || { echo "      -rc.N: $(cat "$d/out")"; return 1; }
+  run_script "$s" "$d" 0.5.0
+  [ "$(cat "$d/rc")" = 2 ] && grep -a 'is a stable version' "$d/out" >/dev/null || { echo "      a stable X.Y.Z on the beta channel"; return 1; }
+  run_script "$s" "$d" 0.5.0-beta
+  [ "$(cat "$d/rc")" = 2 ] || { echo "      0.5.0-beta accepted"; return 1; }
+  run_script "$s" "$d" --changed-only
+  [ "$(cat "$d/rc")" = 2 ] || { echo "      --changed-only without a VERSION accepted"; return 1; }
+  run_script "$s" "$d" next-beta --channel stable
+  [ "$(cat "$d/rc")" = 2 ] || { echo "      next-beta on the stable channel accepted"; return 1; }
+  # a target that is already published, or behind main: refused, nothing opened
+  fixture bumpto "$d"; pyset "$d/state.json" 'R["fx-ui-off"]["tags"]["v0.5.0-beta.1"] = "old-sha"'
+  run_script "$s" "$d" 0.5.0-beta.1 --apps --apply --yes
+  grep -a 'REFUSE fx-ui-off: tag v0.5.0-beta.1 already exists' "$d/out" >/dev/null || { echo "      a published target was not refused"; return 1; }
+  [ -z "$(writes "$d/calls")" ] && [ "$(cat "$d/rc")" = 1 ] || { echo "      something was written while a repo was refused: $(writes "$d/calls" | head -2)"; return 1; }
+  fixture bumpto "$d"; run_script "$s" "$d" 0.3.0-beta.1 --apps
+  grep -a 'REFUSE fx-ui: main is already at 0.4.0-beta.2, later than 0.3.0-beta.1' "$d/out" >/dev/null || { echo "      a backwards target was not refused"; return 1; }
+  summary_lines "$d/out" | grep -a '; next: fix the bump refusals above (or leave those repos out with --only / a group: nothing is bumped while one is refused), then: scripts/release.sh 0.3.0-beta.1 --apply --apps$' >/dev/null \
+    || { echo "      the dry summary of a refused bump does not say so: $(summary_lines "$d/out")"; return 1; }
+}
+if check_refusals "$SCRIPT"; then ok "V: refused before any write: a literal VERSION on --maven / --only <library> (with the next-beta command), -rc.N, a stable X.Y.Z on beta, a malformed VERSION, --changed-only alone, next-beta on stable, an already-published target, a backwards target"
+else bad "V: refusals"; fi
+
+check_changed_only() { # script -> 0 when --changed-only bumps only the repos with commits since their tag
+  local s=$1 d="$TMP/vc.$RANDOM" o
+  fixture bumpto "$d"
+  pyset "$d/state.json" 'R["fx-ui"]["main"] = ["m-fx-ui-new"]; R["fx-ui"]["compare"] = {"v0.4.0-beta.2": {"ahead_by": 2, "commits": ["c1", "c2"]}}'
+  run_script "$s" "$d" 0.5.0-beta.1 --apps --changed-only
+  o="$d/out"
+  grep -a 'would open a DRAFT PR in fx-ui: release-bump/0.5.0-beta.1' "$o" >/dev/null || { echo "      fx-ui (2 commits since its tag) not bumped"; return 1; }
+  grep -a '  fx-ui-off: nothing since v0.4.0-beta.1; not bumped (--changed-only)' "$o" >/dev/null || { echo "      fx-ui-off bumped"; return 1; }
+  ! grep -a 'would open a DRAFT PR in fx-games' "$o" >/dev/null || return 1
+  [ -z "$(writes "$d/calls")" ]
+}
+if check_changed_only "$SCRIPT"; then ok "V: --changed-only bumps only the repo with commits since its tag (the old wrapper's NEEDS-BUMP set); the default bumps every selected repo"
+else bad "V: --changed-only"; fi
+
+check_resume_merge() { # script -> 0 when a run stopped after the bump resumes --from merge and finds its PRs again
+  local s=$1 d="$TMP/vm.$RANDOM"
+  fixture bumpto "$d"
+  printf 'y\nn\nn\n' > "$d/answers"                       # open the PRs: y; close superseded: n; merge: n
+  STDIN_FILE="$d/answers" run_script "$s" "$d" 0.5.0-beta.1 --apps --apply
+  [ "$(cat "$d/rc")" = 1 ] && grep -a "Stopped in phase 'merge'" "$d/out" >/dev/null || { echo "      did not stop in merge"; return 1; }
+  [ "$(writes "$d/calls" | grep -ac 'pr create')" = 3 ] && ! writes "$d/calls" | grep -a 'pr merge\|pr close' >/dev/null || return 1
+  summary_lines "$d/out" | grep -a '; next: scripts/release.sh 0.5.0-beta.1 --apply --apps --from merge$' >/dev/null || { echo "      next: $(summary_lines "$d/out")"; return 1; }
+  run_script "$s" "$d" 0.5.0-beta.1 --apply --apps --yes --from merge
+  [ "$(cat "$d/rc")" = 0 ] || { echo "      resume rc $(cat "$d/rc")"; return 1; }
+  ! writes "$d/calls" | grep -a 'pr create' >/dev/null || { echo "      the resume opened a PR again"; return 1; }
+  [ "$(writes "$d/calls" | grep -ac 'pr merge')" = 3 ] && [ "$(writes "$d/calls" | grep -ac 'ref=refs/tags/v0.5.0-beta.1')" = 3 ]
+}
+if check_resume_merge "$SCRIPT"; then ok "V: declining the merge stops with 'next: ... --from merge'; that command finds the three open bump PRs again, merges and tags them, and opens nothing new"
+else bad "V: resume --from merge"; fi
+
+check_studio_site_only() { # script -> 0 when --studio alone reads no repository and releases the Studio at VERSION
+  local s=$1 d="$TMP/vs.$RANDOM"
+  fixture bumpto "$d"; run_script "$s" "$d" 0.5.0-beta.1 --studio
+  grep -a 'no repository is selected: the repositories are not read' "$d/out" >/dev/null || return 1
+  grep -a '^  scripts/release-studio.sh 0.5.0-beta.1 --dry-run:' "$d/out" >/dev/null || { echo "      the Studio was not planned at the VERSION"; return 1; }
+  ! grep -a 'repos/hugmesh/fx-ui/' "$d/calls" >/dev/null || { echo "      a repository was read"; return 1; }
+  grep -a 'the site is not selected' "$d/out" >/dev/null || return 1
+  [ -z "$(writes "$d/calls")" ] || return 1
+  fixture bumpto "$d"; run_script "$s" "$d" 0.5.0-beta.1 --studio --studio-version 0.4.2-beta.1
+  grep -a '^  scripts/release-studio.sh 0.4.2-beta.1 --dry-run:' "$d/out" >/dev/null || { echo "      --studio-version ignored"; return 1; }
+}
+if check_studio_site_only "$SCRIPT"; then ok "V: 0.5.0-beta.1 --studio releases only the Studio at 0.5.0-beta.1 (no repository read, site not selected); --studio-version overrides it"
+else bad "V: --studio alone"; fi
+
+check_make_targets() { # -> 0 when the Makefile targets spell the one command
+  command -v make >/dev/null 2>&1 || { echo "      make is not installed here"; return 2; }
+  local o
+  o=$(make -s -n -C "$REPO" release VERSION=0.5.0-beta.1 WHAT=apps 2>&1)
+  [ "$o" = "scripts/release.sh 0.5.0-beta.1 --apps --channel beta" ] || { echo "      release WHAT=apps: $o"; return 1; }
+  o=$(make -s -n -C "$REPO" release VERSION=0.5.0-beta.1 APPLY=1 2>&1)
+  [ "$o" = "scripts/release.sh 0.5.0-beta.1 --all --channel beta --apply" ] || { echo "      release APPLY=1: $o"; return 1; }
+  o=$(make -s -n -C "$REPO" release VERSION=next-beta WHAT='apps studio' ONLY='hugmesh-forum-api hugmesh-gateway' 2>&1)
+  [ "$o" = "scripts/release.sh next-beta --apps --studio --only hugmesh-forum-api --only hugmesh-gateway --channel beta" ] || { echo "      release WHAT+ONLY: $o"; return 1; }
+  o=$(make -s -n -C "$REPO" release ONLY=hugmesh-forum-ui VERSION=0.4.1-beta.1 2>&1)
+  [ "$o" = "scripts/release.sh 0.4.1-beta.1 --only hugmesh-forum-ui --channel beta" ] || { echo "      release ONLY alone must not add --all: $o"; return 1; }
+  o=$(make -s -n -C "$REPO" release-plan VERSION=0.5.0-beta.1 APPLY=1 2>&1)
+  [ "$o" = "scripts/release.sh 0.5.0-beta.1 --all --channel beta" ] || { echo "      release-plan: $o"; return 1; }
+  o=$(make -s -n -C "$REPO" release-studio VERSION=0.5.0-beta.1 2>&1)
+  [ "$o" = "scripts/release-studio.sh 0.5.0-beta.1 --dry-run" ] || { echo "      release-studio: $o"; return 1; }
+  o=$(make -s -n -C "$REPO" release-studio VERSION=0.5.0-beta.1 APPLY=1 2>&1)
+  [ "$o" = "scripts/release-studio.sh 0.5.0-beta.1" ]
+}
+rc=0; check_make_targets || rc=$?
+case "$rc" in
+  0) ok "V: make release / release-plan / release-studio spell scripts/release.sh <VERSION> --<WHAT> --only <r>... --channel <c> [--apply] (release-plan never applies; release-studio is a dry run without APPLY=1)" ;;
+  2) echo "  SKIP make targets: make is not installed (the GitHub shell-suites job has it)" ;;
+  *) bad "V: Makefile release targets" ;;
+esac
+
 # ── M: mutation battery ──────────────────────────────────────────────────────
 echo "== M mutations (break the production guard in a copy; the covering check must go red)"
 mutate() { # name sed-expression check-function
@@ -1287,7 +1582,7 @@ mutate stable-bump-leftover 's/^      refused=1$/      :/' check_stable_bump_lef
 # S-M9 --channel stable --studio falls through to release-studio.sh
 mutate stable-studio '/REFUSE --studio \$v on the stable channel/,/return 1/s/return 1/:/' check_stable_studio
 # S-M10 --version without --only is accepted
-mutate stable-version-only 's/^  \[ \${#ONLY\[@\]} -gt 0 \] || die "--version/  true || die "--version/' check_stable_patch
+mutate stable-version-only 's/^  \[ \${#ONLY\[@\]} -gt 0 \] || \[ \${#GSEL\[@\]} -gt 0 \] || die "--version/  true || die "--version/' check_stable_patch
 # S-M11 the bump rewrites only the project version (no org pins)
 mutate stable-bump-pins 's/^        if art in pins:$/        if False:/' check_stable_bump_rules
 # T-M1 the beta channel ignores stable tags again (#855): a shipped line is tagged as a pre-release
@@ -1299,6 +1594,40 @@ mutate tags-fail-open '/cannot read tags/s/) || {.*}$/ || true)/' check_tags_unr
 # T-M4 the failed read is noted but classification goes on with an empty listing
 mutate tags-fail-noreturn '/cannot read tags/s/; return; }$/; }/' check_tags_unreadable
 
+# V-M1 a literal VERSION is applied to --maven / --only <library> again
+mutate v-maven-literal 's/^  if \[ \${#maven_named\[@\]} -gt 0 \]; then$/  if false; then/' check_refusals
+# V-M2 --all moves the Maven chain to the literal VERSION
+mutate v-maven-own-line "s/^      if \\[ \"\\\${T_GROUP\\[\\\$r\\]}\" = maven \\]; then printf '%s' \"\\\$cur\"; else printf '%s' \"\\\$VSPEC\"; fi ;;\$/      printf '%s' \"\$VSPEC\" ;;/" check_literal_apply
+# V-M3 the supersede scan closes a PR for the SAME target too
+mutate v-supersede-target 's/^      if \[ "\$old" = "\${S_TO\[\$r\]}" \]; then$/      if false; then/' check_literal_apply
+# V-M4 the beta bump phase no longer stops at the dry run (it would open the PRs)
+mutate v-bump-dry '/^phase_bump_beta() {/,/^}/s/^  \[ "\$MODE" = dry \] \&\& return 0$/  :/' check_literal_dry
+# V-M4b ...and confirm() answers yes in a dry run too: the bump would really be written
+mutate v-bump-dry-writes '/^phase_bump_beta() {/,/^}/s/^  \[ "\$MODE" = dry \] \&\& return 0$/  :/; s/^  if \[ "\$MODE" != apply \]; then return 1; fi$/  :/' check_literal_dry
+# V-M5 a "<file>:jar" mirror is ignored (games' Dockerfile/Makefile jar names stay behind)
+mutate v-jar-mirror 's/^    elif how == "jar":$/    elif False:/' check_literal_apply
+# V-M6 a mirror pom.xml keeps its own <version> (games' module poms stay behind)
+mutate v-mirror-pom 's/new = pom(path, text, how in ("vfile", "mirror"))/new = pom(path, text, how == "vfile")/' check_literal_apply
+# V-M7 the to-mode pin map takes every selected row, not just the ones this run bumps
+mutate v-pins-bumped-only 's/^      to) case "\${S_BUMP\[\$r\]:-}" in planned|opened) tv=\${S_TO\[\$r\]:-} ;; esac ;;$/      to) tv=${S_TO[$r]:-} ;;/' check_literal_apply
+# V-M8 the off-line report is silent
+mutate v-offline 's/^  \[ "\$n" -gt "\$bn" \] || return 0$/  return 0/' check_literal_dry
+# V-M9 --changed-only bumps every selected repo
+mutate v-changed-only 's/^    if \[ "\$CHANGED_ONLY" = true \] \&\& ! changed "\$r"; then S_TO\[\$r\]=\$cur; continue; fi$/    :/' check_changed_only
+# V-M10 a file over 1 MB is read from the contents API's empty answer again
+mutate v-blob-fallback 's/^  if \[ "\${enc%% \*}" != base64 \]; then$/  if false; then/' check_literal_dry
+# V-M11 a resumed merge phase no longer finds the open bump PRs
+mutate v-merge-discover 's/^          if \[ -n "\$url" \]; then S_PRURL/          if false; then S_PRURL/' check_resume_merge
+# V-M12 an already-published target is planned anyway
+mutate v-target-published 's/^      0) S_BUMP\[\$r\]=refused; S_BUMPWHY\[\$r\]="tag/      0) S_BUMP[$r]=planned; S_BUMPWHY[$r]="tag/' check_refusals
+# V-M13 a target behind main is planned anyway
+mutate v-target-backwards 's/^    if { is_beta "\$cur" || is_stable "\$cur"; } \&\& \[ "\$(vercmp "\$t" "\$cur")" != gt \]; then$/    if false; then/' check_refusals
+# V-M14 -rc.N is accepted
+mutate v-rc 's/^      if \[\[ "\$VSPEC" =~ ^(0|\[1-9\]\[0-9\]\*)\\.(0|\[1-9\]\[0-9\]\*)\\.(0|\[1-9\]\[0-9\]\*)-rc\\.\[1-9\]\[0-9\]\*\$ \]\]; then$/      if false; then/' check_refusals
+# V-M15 the summary prints its count line twice
+mutate v-one-next 's/^  say "\$w, already done \$done_,\(.*\)"$/  say "$w, already done $done_,\1"; say "$w, already done $done_,\1"/' check_literal_dry
+# V-M16 the merge phase merges the bump PRs out of stage order
+mutate v-stage-order '/^merge_list() {/,/^}/s/^  for st in 1 2 3 4 5 6 7 8 9; do$/  for st in 9 8 7 6 5 4 3 2 1; do/' check_literal_apply
 echo
 echo "== test-release-beta.sh: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

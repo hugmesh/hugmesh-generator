@@ -1,45 +1,109 @@
 # Releasing HugMesh: beta and stable
 
-The whole org release is one script, [`scripts/release.sh`](../scripts/release.sh), run
-from a checkout of `hugmesh-generator` on `main`. `--channel beta` (the default) releases
-every repository's `main`; `--channel stable` releases each repository's own
-`release/X.Y` branch ([Stable releases](#stable-releases)). The beta one-liner is
-unchanged, because `scripts/release-beta.sh` is `scripts/release.sh --channel beta`:
+The whole org release is one command, [`scripts/release.sh`](../scripts/release.sh), run
+from a checkout of `hugmesh-generator` on `main`. Give it the version and, if you want
+less than everything, what to release:
+
+```bash
+git pull --ff-only
+scripts/release.sh 0.5.0-beta.1                    # dry run: everything, read-only
+scripts/release.sh 0.5.0-beta.1 --apply            # do it: bump, merge, tag, Studio, site, verify
+scripts/release.sh 0.5.0-beta.1 --apps --apply     # only the Angular UIs and games
+scripts/release.sh 0.4.1-beta.1 --only hugmesh-forum-ui --apply
+make release VERSION=0.5.0-beta.1 WHAT=apps APPLY=1   # the same through make
+```
+
+With a VERSION it bumps every selected repository's version file to it in one draft PR
+per repository, closes the older bump PRs it replaces, merges the PRs in stage order,
+tags every stage in dependency order, releases the Studio at the same version, rebuilds
+hugmesh.net and verifies the result. It ends with one table and one line:
+
+```
+would release 34, already done 4, refused 0 (reasons above), skipped 0; next: scripts/release.sh 0.5.0-beta.1 --apply
+```
+
+Without a VERSION nothing is bumped: each repository releases what its `main` already
+says, which is what the script did before it could bump. `scripts/release-beta.sh` is
+still `scripts/release.sh --channel beta`, so the old one-liner works unchanged:
 
 ```bash
 git pull --ff-only && scripts/release-beta.sh --apply --studio <studio version>
 ```
 
-On 2026-10-29 that was `--studio 0.3.0-beta.2`. Use `--studio next` to take the next
-beta after the checkout's `__version__`, or `--no-studio` to leave the Studio alone.
+`--channel stable` releases each repository's own `release/X.Y` branch instead
+([Stable releases](#stable-releases)).
 
-Run it bare first. With no flags it is a **dry run**. It reads GitHub and changes nothing.
-It prints every repository's state, what each phase would do, and the web-UI steps
-you will be asked for:
+Run it without `--apply` first. That is a **dry run**: it reads GitHub and changes
+nothing. It prints every repository's state, every bump PR it would open (file by
+file), every tag it would create, and the web-UI steps you will be asked for.
 
-```bash
-scripts/release-beta.sh                         # dry run, read-only
-scripts/release-beta.sh --studio 0.3.0-beta.2   # dry run, including the Studio preflight
-```
-
-`--apply` runs the phases in order and asks `y/N` before every phase that writes: a
-merge, a tag, a re-run, a dispatch. `--yes` answers those prompts for you, and each
-action is still printed, and it is passed on to `release-studio.sh`, so the Studio's
-`Proceed?` is skipped too. The two web-UI steps (gateway package access and package
-visibility) always wait for Enter. `--yes` never answers the gateway step's "Did you
-grant Read?" question either: that is a click in the web UI that no API can see, so under
-`--yes` the script checks the package again and, if it is still not public, stops with
-its settings page (see [the manual steps](#the-two-manual-steps-and-why-they-are-manual)).
+`--apply` runs the phases in order and asks `y/N` before every phase that writes: the
+bump PRs, closing the PRs they replace, the merges (one question for all of them), a
+tag, a re-run, a dispatch. `--yes` answers those prompts for you, and each action is
+still printed, and it is passed on to `release-studio.sh`, so the Studio's `Proceed?` is
+skipped too. The two web-UI steps (gateway package access and package visibility) always
+wait for Enter. `--yes` never answers the gateway step's "Did you grant Read?" question
+either: that is a click in the web UI that no API can see, so under `--yes` the script
+checks the package again and, if it is still not public, stops with its settings page
+(see [the manual steps](#the-two-manual-steps-and-why-they-are-manual)).
 
 The dry-run text names files relative to the checkout, never with a local path, so it
 can be pasted into a PR or a chat as it is.
 
-The script is [`scripts/release.sh`](../scripts/release.sh);
-[`scripts/release-beta.sh`](../scripts/release-beta.sh) only runs it with `--channel beta`.
 The list of what gets released is [`scripts/release/repos.tsv`](../scripts/release/repos.tsv):
-38 repositories in nine dependency stages. That list holds **no version numbers**.
+38 repositories in nine dependency stages and four groups. That list holds **no version
+numbers**.
+
+## The version and the selection
+
+| VERSION | What each selected repository is bumped to |
+|---|---|
+| `X.Y.Z-beta.N` (e.g. `0.5.0-beta.1`, a new minor; `0.4.1-beta.1`, a patch beta) | exactly that, so the whole release lands on **one** version. The Maven chain is the exception (below) |
+| `next-beta` | each repository's own next beta (`0.4.0-beta.2` -> `0.4.0-beta.3`); a repository whose version is not tagged yet keeps it; past a shipped stable `X.Y.Z` it is `X.(Y+1).0-beta.1` |
+| `next-minor` | each repository's `X.(Y+1).0-beta.1` |
+| `X.Y.Z` | stable channel only: a patch on the existing `release/X.Y` (the same as `--version`) |
+| none | nothing is bumped; each repository releases what its `main` says |
+
+`-rc.N` is refused: every org release workflow publishes only `-beta.N` and `X.Y.Z` tags
+and refuses any other `v*` tag, so it would only start a run that dies in its version
+job. A target that is already tagged, behind `main`, or a pre-release of a stable that
+has shipped is refused for that repository, and then nothing is opened at all: half a
+version line is worse than none. Leave the repository out (`--only`, a group) or give a
+later VERSION.
+
+**The Maven chain keeps its own lines.** build-config, parent, commons and auth-core are
+versioned independently (`0.6`, `2.9`, `2.2`, `2.6` on 2026-11-09), so a literal VERSION
+never moves them: `--all` leaves them as they are (each says "keeps its own line"), and
+`--maven` or `--only <library>` with a literal VERSION is refused with the command that
+does bump them, `scripts/release.sh next-beta --maven` (or `next-minor`). When a run
+bumps a library, every other repository it bumps gets its `<parent>`,
+`<hugmesh-*.version>` property and `net.hugmesh` dependency moved to the library's new
+version; a library this run does not bump is never re-pinned. The same holds for the
+gateway and the overlays' `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN`.
+
+**Selectors** combine as a union; none at all is `--all`. The groups are the `group`
+column of `repos.tsv`, so they never drift from the table:
+
+| Selector | Selects |
+|---|---|
+| `--all` (the default) | every repository, the Studio and the site |
+| `--maven` | build-config, parent, commons, auth-core (exactly the `mvn` rows) |
+| `--services` | the gateway, the be/fe/pki overlays, the Java BFF/API images (with actions and remote-fragment), forum-api |
+| `--apps` | the Angular UIs and games |
+| `--node` | the mesh-node image (`clients/docker-mesh-node`) |
+| `--images` | every container image: services, apps and node |
+| `--studio` | the Studio, through `scripts/release-studio.sh` |
+| `--site` | rebuild hugmesh.net |
+| `--only <repo>` (repeatable) | that repository |
+| `--no-studio`, `--no-site` | take them out again |
+
+Any selection other than `--all` includes the Studio and the site only when you name
+them. Every repository is still read and printed; only the selected ones are acted on
+([`--only` and the stages](#resume-and-recovery)). A run that selects no repository at
+all (`scripts/release.sh 0.5.0-beta.1 --studio`) does not read them.
 
 ## How channels work
+
 
 The **tag decides the channel**. A tag with `-beta.N` is a beta; a plain `X.Y.Z` is
 stable. Each repository's release workflow reads the tag and publishes accordingly; this
@@ -63,16 +127,26 @@ independently, so a cut is "each repository's current beta, released as its stab
 
 | Option | Meaning |
 |---|---|
+| `VERSION` (positional) | `X.Y.Z-beta.N`, `next-beta`, `next-minor` (beta), or `X.Y.Z` (stable patch); see [The version and the selection](#the-version-and-the-selection) |
+| `--all`, `--maven`, `--services`, `--apps`, `--node`, `--images`, `--studio`, `--site`, `--only <repo>` | what to release (a union; none = `--all`) |
+| `--no-studio`, `--no-site` | leave the Studio / the site out |
+| `--changed-only` | bump only the repositories with code no published beta carries (commits since their tag, or not tagged yet). The default bumps every selected repository, so a whole release lands on one version |
+| `--studio-version <version>` / `next` | the Studio's version, when it should differ from VERSION |
+| `--studio <version>` / `--studio next` | the old spelling of `--studio-version`: it keeps every repository selected. For the Studio alone write the VERSION first: `scripts/release.sh 0.5.0-beta.1 --studio` |
 | `--channel beta` (default) / `--channel stable` | release `main` as betas / each repository's `release/X.Y` as stables ([Stable releases](#stable-releases)) |
-| `--version X.Y.Z` | stable only, with `--only`: a patch release on the existing `release/X.Y` |
+| `--version X.Y.Z` | stable only, with `--only` or a group: a patch release on the existing `release/X.Y` |
 | `--dry-run` (default) / `--apply` | read-only plan / do it |
 | `--yes` | answer `y` to every `y/N` except "Did you grant Read?" (web-UI pauses still wait for Enter) |
-| `--merge <repo>#<n>` (repeatable) | before releasing: `gh pr ready` (when draft) and `gh pr merge --squash --delete-branch`, then wait for the new main push run (if none appears, it stops there) |
-| `--studio <version>` / `--studio next` / `--no-studio` | release the Studio through `scripts/release-studio.sh` (see below; beta only for now) |
-| `--only <repo>` (repeatable) | act on these repositories only; every repository is still checked, and a stage with none of them is skipped |
+| `--merge <repo>#<n>` (repeatable) | also merge this PR (before the bump PRs): `gh pr ready` when draft, `gh pr merge --squash --delete-branch`, then wait for the new push run (if none appears, it stops there) |
 | `--from <phase>` | resume at a phase (re-running also skips DONE work by itself) |
 | `--expect <repo>=<version>` (repeatable) | refuse that repository unless the version this run would release is exactly this (beta: main's version file; stable: the computed `X.Y.Z`) |
 | `--urls` | only list the packages that are not public yet, with their settings pages |
+
+The `make` targets spell the same command: `make release VERSION=… [WHAT='apps studio']
+[ONLY='repo …'] [CHANNEL=stable] [APPLY=1]` runs `scripts/release.sh VERSION --apps
+--studio --only repo … --channel …` (with no `WHAT`, `--all`, or only the `ONLY` repos);
+`make release-plan …` is the same and never applies; `make release-studio VERSION=…`
+runs `scripts/release-studio.sh VERSION`, as a dry run unless `APPLY=1`.
 
 ## Where versions come from, and what each state means
 
@@ -86,13 +160,15 @@ Each repository's version is read **from its version file on main**:
 
 The version must be `MAJOR.MINOR.PATCH-beta.N`. The release is the tag
 `<prefix><version>`: `v0.3.0-beta.2`, or `mesh-node-v0.1.0-beta.1` for the mesh node.
+With a VERSION the states are those of `main` **before** the bump; the dry run plans the
+tag of the target, and after the merge phase every repository is read again.
 
 | State | Meaning | What to do |
 |---|---|---|
 | `DONE` | the tag exists and its release run is green; main has nothing since it that the workflow builds | nothing |
 | `READY` | the tag is free and every check passed; this run will tag it | nothing |
 | `REFUSE` | something would make the release fail or burn the beta number; the reason and the next command are printed | fix that, run again. One `REFUSE` fixes itself: a tag whose run failed in a preflight step before it published anything says "do NOT bump", and its stage re-runs that run (see [Resume and recovery](#resume-and-recovery)) |
-| `NEEDS-BUMP` | the tag for main's version is already published, but main has *N* commits since it | merge a PR that bumps the version file to `-beta.N+1`, then run again |
+| `NEEDS-BUMP` | the tag for main's version is already published, but main has *N* commits since it | `scripts/release.sh <next version>` (or `next-beta`; `--changed-only` for just these) |
 | `RUNNING` | the tag's run is in progress | the script watches it |
 
 A repository is `READY` only if all of these hold. They are read from the GitHub API,
@@ -120,21 +196,22 @@ on with the next phase). **Goes on** means the run continues with the next phase
 
 | # | Phase | What it does | `n` at its `y/N`, or `q` at its pause |
 |---|---|---|---|
-| 1 | `preflight` | checks the login, org secrets and `RUNS_ON_PUBLISH`, classifies every repository, prints the Studio's state; always runs, read-only | (no prompt) |
-| 2 | `merge` | the `--merge` PRs: ready, squash-merge, wait for the new push run on main, re-check everything | `n`: stops |
-| 3 | `maven` | stages 1-4, the Maven chain build-config -> parent -> commons -> auth-core, one at a time (a failed link stops the chain) | `n`: stops |
-| 4 | `apps` | stage 8 (Angular UIs) and stage 9 (games, forum-api, mesh-node); no Maven dependency | `n`: stops |
-| 5 | `rerun` | the gateway's and the Java images' red **main push runs**: `gh run rerun --failed`, watched. They went red only because commons/auth-core were not published yet | `n`: stops |
-| 6 | `gateway` | tags the gateway base image (stage 5) | `n`: stops |
-| 7 | `gateway-access` | **pause**: the be/fe/pki overlays build `FROM ghcr.io/hugmesh/hugmesh-gateway:<pinned version>`; see below | `q`: stops. `n` at "Did you grant Read?": stops. Under `--yes`, a package still not public after Enter: stops, with its settings page |
-| 8 | `overlays` | re-runs the overlays' red main runs, then tags them (stage 6) | `n` (either prompt): stops |
-| 9 | `java` | tags the Java BFF/API images, actions and remote-fragment (stage 7) | `n`: stops |
-| 10 | `studio` | `scripts/release-studio.sh <version>` | `n`: stops. No at `release-studio.sh`'s own `Proceed?` (asked only without `--yes`): **goes on**, because it exits 0 with "Nothing done." |
-| 11 | `visibility` | **pause**: lists every package that is not public, waits, re-checks | `q`: **goes on** (packages left private stay listed; nothing to undo) |
-| 12 | `site` | `gh workflow run pages.yml -R hugmesh/hugmesh.github.io`, watched | `n`: **goes on** (the site's cron refreshes it within the hour) |
-| 13 | `verify` | every artifact with its state, image visibility, and where it shows on hugmesh.net | (no prompt) |
+| 1 | `preflight` | checks the login, org secrets and `RUNS_ON_PUBLISH`, classifies every repository, works out each selected repository's target, prints the Studio's state; always runs, read-only | (no prompt) |
+| 2 | `bump` | with a VERSION: flags the repositories off the common line, opens ONE draft PR per repository whose `main` is not at its target (`release-bump/<target>` into `main`: version file, mirrors, org pins), then closes the older `chore/release-*` / `release-bump/*` PRs it replaces, each with a comment naming the new PR. Without a VERSION: nothing | `n` at opening: stops. `n` at closing: **goes on** (they stay open) |
+| 3 | `merge` | the `--merge` PRs, then the bump PRs in stage order: one question, then ready, squash-merge, and wait for every new push run on main (they run side by side); re-check everything | `n`: stops |
+| 4 | `maven` | stages 1-4, the Maven chain build-config -> parent -> commons -> auth-core, one at a time (a failed link stops the chain) | `n`: stops |
+| 5 | `apps` | stage 8 (Angular UIs) and stage 9 (games, forum-api, mesh-node); no Maven dependency | `n`: stops |
+| 6 | `rerun` | the gateway's and the Java images' red **main push runs**: `gh run rerun --failed`, watched. They went red only because commons/auth-core were not published yet | `n`: stops |
+| 7 | `gateway` | tags the gateway base image (stage 5) | `n`: stops |
+| 8 | `gateway-access` | **pause**: the be/fe/pki overlays build `FROM ghcr.io/hugmesh/hugmesh-gateway:<pinned version>`; see below | `q`: stops. `n` at "Did you grant Read?": stops. Under `--yes`, a package still not public after Enter: stops, with its settings page |
+| 9 | `overlays` | re-runs the overlays' red main runs, then tags them (stage 6) | `n` (either prompt): stops |
+| 10 | `java` | tags the Java BFF/API images, actions and remote-fragment (stage 7) | `n`: stops |
+| 11 | `studio` | `scripts/release-studio.sh <version>` (VERSION, `--studio-version`, or main's `__version__` when it is not released yet; skipped unless the Studio is selected) | `n`: stops. No at `release-studio.sh`'s own `Proceed?` (asked only without `--yes`): **goes on**, because it exits 0 with "Nothing done." |
+| 12 | `visibility` | **pause**: lists every package that is not public, waits, re-checks | `q`: **goes on** (packages left private stay listed; nothing to undo) |
+| 13 | `site` | `gh workflow run pages.yml -R hugmesh/hugmesh.github.io`, watched (skipped unless the site is selected) | `n`: **goes on** (the site's cron refreshes it within the hour) |
+| 14 | `verify` | every artifact with its state, image visibility, and where it shows on hugmesh.net, then the one summary | (no prompt) |
 
-In phases 3, 4, 6, 8 and 9 the same `n` also declines the re-run of a tag run that
+In phases 4, 5, 7, 9 and 10 the same `n` also declines the re-run of a tag run that
 published nothing (below); that stops too.
 
 Every tag is created with the git refs API on the main SHA that was checked. Right
@@ -147,7 +224,7 @@ carry a different version.
 GitHub has **no API** for either of these. The script prints the exact page, waits for
 Enter, and checks again.
 
-1. **Gateway package access** (phase 7). The overlays' release runs pull the gateway
+1. **Gateway package access** (phase 8). The overlays' release runs pull the gateway
    image with their own `GITHUB_TOKEN`. A new GHCR package is private, so that pull
    fails until you do one of two things:
    - make it **Public**: <https://github.com/orgs/hugmesh/packages/container/hugmesh-gateway/settings>,
@@ -161,9 +238,9 @@ Enter, and checks again.
    for you: it stops with the settings page. Once you have made the package public, or
    granted Read, run the printed `--from gateway-access` command (or `--from overlays`
    when you granted Read, which the script cannot see).
-2. **Package visibility** (phase 11). Every new GHCR package is created private. The
+2. **Package visibility** (phase 12). Every new GHCR package is created private. The
    Downloads page cannot show an image nobody can pull. Making a package public
-   **cannot be undone**, so it is one click per package on its settings page. Phase 11
+   **cannot be undone**, so it is one click per package on its settings page. Phase 12
    (or `--urls`) lists them. Maven packages of a public repository inherit its
    visibility.
 
@@ -208,26 +285,66 @@ Enter, and checks again.
 
 ## Bumping a version for the next beta
 
-1. In the repository, change only its version file: `0.3.0-beta.1` -> `0.3.0-beta.2`.
-   A Maven repository may also need a dependency bump on what it consumes.
-2. Open a PR and merge it. Pass `--merge <repo>#<n>` if you want the script to merge
-   it and wait for the push run.
-3. Run `scripts/release-beta.sh`. The repository moves from `NEEDS-BUMP` (or `DONE`) to
-   `READY`.
+There is nothing to edit by hand any more. The bump is the first thing the release does:
 
-A gateway release also needs each overlay's `PINNED_GATEWAY_IMAGE` (fe-gateway calls it
-`GATEWAY_IMAGE_PIN`) in its `release.yml` raised in a PR. Phase 7 reports a mismatch.
+```bash
+scripts/release.sh 0.4.0-beta.3                 # next beta, every repository on one version
+scripts/release.sh 0.5.0-beta.1                 # a new minor
+scripts/release.sh 0.4.1-beta.1 --apps          # a patch beta of the UIs and games only
+scripts/release.sh 0.4.0-beta.3 --changed-only  # only repositories with commits since their tag
+scripts/release.sh next-beta --maven            # each Maven library to its own next beta
+scripts/release.sh next-minor --services        # each selected repository to X.(Y+1).0-beta.1
+```
+
+Each repository gets ONE draft PR on `release-bump/<target>` into `main`, made through
+the git data API (no clone, no push from your machine). It moves, mechanically:
+
+| Where | What |
+|---|---|
+| the version file (`repos.tsv`) | `pom.xml` (the project's own `<version>`), `package.json` and its `package-lock.json` (`version` and `packages[""].version`), `composer.json`, `VERSION`, `clients/docker-mesh-node/VERSION` |
+| the `mirrors` column | character-forge's `frontend/package.json`; hugmesh-games' three module poms and `frontend/package.json` (+ lock), the six files its `check_version.py` holds to `VERSION`; auth-core's README `**Version**` line. A `<file>:jar` token moves every `<name>-<version>.jar` in that file, for a repository that still spells the version in a jar name (games stopped doing that in hugmesh-games#67) |
+| org pins of the repositories this run bumps | `<parent>`, `<hugmesh-*.version>` properties and `net.hugmesh` dependencies; the overlays' `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN` |
+
+A file over the contents API's 1 MB limit (host-shell's `package-lock.json` is at 0.95 MB)
+is read as its git blob, and every changed file is written as a blob, so a large lock file
+never refuses the bump. A file not in the shape the rules expect refuses the run with the
+file named; nothing is opened while any repository is refused.
+
+Before it opens anything the bump phase prints every selected repository whose `main` is
+**off the line** most of them share (forum-ui stayed at `0.4.0-beta.1` while the rest
+went to `0.4.0-beta.2`). A literal VERSION brings it back; `next-beta` keeps it off and
+says the one-version command. It also lists every open `chore/release-*` or
+`release-bump/*` PR for another target, and under `--apply` closes each with a comment
+naming its replacement. One for the same target from another branch is left open with a
+note: merge one of the two, never both.
+
+The merge phase then readies and merges the bump PRs in stage order and waits for their
+push runs; the tag stages follow. If you stop after the bump, `--from merge` (the printed
+`next:`) finds the open bump PRs again.
 
 ## The Studio
 
 The Studio has its own release path, [`scripts/release-studio.sh`](../scripts/release-studio.sh)
-([`STUDIO-INSTALLERS.md`](STUDIO-INSTALLERS.md)). It dispatches "Cut a Studio release",
-which bumps `__version__` on main, tags `studio-v<version>` and builds the signed MSI,
-Flatpak and tarball. `release-beta.sh` only calls it:
+([`STUDIO-INSTALLERS.md`](STUDIO-INSTALLERS.md)). It preflights the version (well-formed,
+later than every `studio-v*` tag, not released yet) and then dispatches "Cut a Studio
+release", which bumps `__version__` on main, tags `studio-v<version>` and builds the
+signed MSI, Flatpak and tarball. **Cut through it, never by editing `__version__` by
+hand or dispatching the cut workflow from the web UI**: on 2026-11-05 a hand bump of
+`__init__.py` without the metainfo `<release>` entry and two web-UI dispatches with bad
+inputs (`0.4.0-beta`, a republish of a release that did not exist) all failed in ways the
+script's preflight refuses up front.
 
-- `--studio 0.3.0-beta.2` releases that version;
-- `--studio next` lets it propose the next beta from your checkout's `__version__`;
-- `--no-studio` skips it.
+`scripts/release.sh` calls it when the Studio is selected (`--all`, `--studio`):
+
+- with a literal VERSION, the Studio is released at the same version;
+  `--studio-version <version>` gives it another one;
+- with `next-beta` / `next-minor`, at the next beta / minor after main's `__version__`
+  (read from GitHub, not your checkout);
+- with no VERSION, at main's `__version__` if that is not released yet, else nothing;
+- `--studio <version>` / `--studio next` (the old spelling) still work and keep every
+  repository selected; `--no-studio` skips it;
+- `scripts/release.sh 0.5.0-beta.1 --studio` (or `make release-studio VERSION=0.5.0-beta.1`)
+  releases the Studio alone and reads no repository.
 
 In a dry run it calls `release-studio.sh --dry-run`. If release `studio-v<version>`
 already exists, the phase is DONE.
@@ -239,10 +356,56 @@ already exists, the phase is DONE.
 the registry, and what it lists comes from that repository's `release-sources.json`.
 Each release workflow's "notify hugmesh.github.io" step needs the secret
 `SITE_DISPATCH_TOKEN`, which is not set. So the site refreshes only on its own cron
-unless phase 12 dispatches it. Phase 13 prints, per artifact, which Downloads group it
-appears in, or "not listed".
+unless phase 13 dispatches it, which it does when the site is selected (`--all`,
+`--site`). Phase 14 prints, per artifact, which Downloads group it appears in, or "not
+listed".
 
-## Troubleshooting (the real failures from the 2026-10-29 release)
+## Troubleshooting
+
+### What the 0.4.0-beta.2 and 0.4.1 rounds needed by hand (2026-11-05/06), and what does it now
+
+- **Every version bump was typed by hand.** The beta channel could only release what
+  `main` already said, so the bumps came from a local wrapper (`VERSION_TO=… STUDIO=…`)
+  and hand edits, among them `clients/docker-mesh-node/VERSION` 0.1.0-beta.1 ->
+  0.4.0-beta.2 in #920. Now: `scripts/release.sh 0.4.0-beta.2`.
+- **forum-ui stayed at 0.4.0-beta.1** while the other 33 image repositories went to 0.4.0-beta.2: the
+  wrapper bumped only the repositories with commits since their tag. Now the default
+  bumps every selected repository, the bump phase prints `OFF-LINE <repo>` before it
+  opens anything, and `--changed-only` is the old behaviour when you want it.
+- **Eleven `chore/release-0.4.0-beta.1` PRs stayed open** after the 0.4.0-beta.2 PRs
+  merged (be-gateway, fe-gateway, admin-bff-api, federation-api, forum-bff-api,
+  character-forge, actions, admin-ui, character-studio-ui, api-docs, forum-api). Now the
+  bump phase lists every `chore/release-*` / `release-bump/*` PR for another target and
+  closes it under `--apply`, with a comment naming the PR that replaces it.
+- **hugmesh-games' version guard** (`scripts/check_version.py`) needs its three module
+  poms and `frontend/package.json` + lock to move with `VERSION` (and, until
+  hugmesh-games#67 made the jar names version-free, its Dockerfiles and Makefile too).
+  They are its `mirrors` now, so the bump is one mechanical commit the guard accepts.
+- **The Studio cut was refused for every 0.4 version.** Its cut runs `studio/tests`
+  after the bump, and one test asserted the version starts with `0.3.`, so any 0.4+
+  version failed; the hand fixes (a blanket `0.3` -> `0.4` sed over version-independent
+  fixtures, then deleting 20 of 21 tests) broke more runs. A test that pins MAJOR.MINOR
+  is a release blocker by construction: a test may check the version's *shape* and that
+  it sorts after the newest `studio-v*` tag, never its value. (The restore of those tests
+  is a separate change.)
+- **`__init__.py` bumped by hand without the metainfo `<release>` entry**: the cut saw
+  "no bump needed" and the metainfo test failed; nothing could heal it from the web UI.
+  Cut with `scripts/release-studio.sh` (or `scripts/release.sh <VERSION> --studio`),
+  which validates first and lets the cut do the bump.
+- **Cut runs dispatched from the web UI with bad input** (`0.4.0-beta`; a republish of a
+  release that did not exist). `release-studio.sh` refuses both before dispatching.
+- **`-rc.N`** is refused by every org release workflow (the tag names no channel);
+  `scripts/release.sh` refuses it before anything runs.
+- **"REFUSE <repo>: tag vX already exists"** in the bump phase: that version is published
+  for that repository (its number is burned). Give a later VERSION, or leave it out with
+  `--only` / a group. Nothing is opened while any selected repository is refused.
+- **"main is already at A, later than B"**: the VERSION is behind that repository;
+  versions never go backwards.
+- **A bump PR is open but the run stopped** (you said `n` at the merge, or a merge
+  failed): run the printed `next:` command (`--from merge`); it finds the open
+  `release-bump/<target>` PRs again and skips the merged ones.
+
+### The 2026-10-29 release
 
 - **Gateway and every Java image REFUSE: "last main push run ... is failure".** Their
   main runs failed because `hugmesh-commons` / `hugmesh-auth-core` were not on GitHub
@@ -356,7 +519,7 @@ A repository is `READY` for stable only if all of these hold, read from the GitH
 
 - **A selected repository whose `main` is `NEEDS-BUMP`.** It has commits that no
   published beta carries, so its "current beta" is not what `main` is. `cut` and `bump`
-  stop for every selected repository until that beta is released (`scripts/release-beta.sh`)
+  stop for every selected repository until that beta is released (`scripts/release.sh`)
   or the repository is left out with `--only`.
 - **A cut over a beta that is not `DONE`.** The cut releases what the beta released.
 - **A bump that is not mechanical.** If any selected repository would keep a beta pin
@@ -381,7 +544,7 @@ second one. What moves:
 | `pom.xml` | the project's own `<version>`; every `<parent>`, dependency, plugin or extension with `groupId` `net.hugmesh` whose artifact a row of `repos.tsv` publishes, to that artifact's stable from the same run; every `<artifact>.version` property of such an artifact. Found by element, never by line number. Comments are left alone |
 | `package.json` | `version`, and its `package-lock.json` (`version` and `packages[""].version`) |
 | `composer.json`, `VERSION` | the version |
-| `repos.tsv` `mirrors` column | `frontend/package.json` (character-forge), `README.md:Version` and `CHANGELOG.md:heading` (auth-core), `gateway-pin` (the be/fe/pki `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN`, to the gateway's stable) |
+| `repos.tsv` `mirrors` column | `frontend/package.json` (character-forge), `README.md:Version` and `CHANGELOG.md:heading` (auth-core), `gateway-pin` (the be/fe/pki `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN`, to the gateway's stable), hugmesh-games' module poms and `frontend/package.json` |
 
 Left for a person, and said in the PR: auth-core's `CHANGELOG.md` gets a `## X.Y.Z`
 heading with a TODO line where the release notes go (its metadata test needs the prose),
@@ -456,10 +619,26 @@ job runs before anything else. Run it locally with
 
 `tests/scripts/test-release-beta.sh` runs it against a recording `gh` stub. It proves:
 
+- the one direct command: `scripts/release.sh 0.5.0-beta.1 --apps` plans one draft bump
+  PR per selected repository (a lock file over 1 MB read as its blob), flags the
+  repository off the line, lists the older `chore/release-*` PR it supersedes, plans the
+  tags at the target and writes nothing; `--apply` writes every file kind (pom with
+  parent and pins, `package.json` + lock, `VERSION`, `composer.json` in its own 4-space
+  shape, the gateway pin, the mesh-node `VERSION`, a games-shaped repository's module poms,
+  lock and `:jar` names), leaves the Maven chain and a pin of it alone, closes the superseded PR naming
+  its replacement and leaves a same-target one open, merges in stage order, tags every
+  repository and prints exactly one summary line with one `next:`; `next-beta` moves each
+  repository on its own line and the pins of the bumped upstreams with it;
+  `--changed-only` bumps only the repository with commits; `--from merge` finds the open
+  bump PRs again; a literal VERSION with `--maven` or `--only <library>`, `-rc.N`, a
+  stable `X.Y.Z` on beta, a published or backwards target are refused before any write;
+  `--studio` alone reads no repository; the `make` targets spell the command;
+
 - a dry run makes zero write calls, on both channels. That is checked twice: the stub
   refuses every write (exit 97) whenever the script runs without `--apply`, and the call
   log is searched for writes afterwards;
-- `scripts/release-beta.sh` classifies every row exactly like `release.sh --channel beta`;
+- `scripts/release-beta.sh` classifies every row exactly like `release.sh --channel beta`,
+  and its `next:` is the one direct command;
 - the stable channel: every state (`NEEDS-CUT`, `NEEDS-PR`, `READY`, `DONE`, `REFUSE`), the
   channel-marker refusal with the PR to merge, the beta-pin refusal, the cut at the
   checked `main` SHA (and its refusal over a `NEEDS-BUMP` main or a `main` that moved),
