@@ -34,6 +34,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import posixpath
 import socket
 import subprocess
 import time
@@ -283,9 +284,10 @@ def detect_gpu(runner: Optional[Runner] = None, *, exists=os.path.exists,
             runtimes = parsed if isinstance(parsed, dict) else {}
         except ValueError:
             runtimes = {}
-    # inside the Flatpak the host's /etc is under /run/host (--filesystem=host)
+    # inside the Flatpak the host's /etc is under /run/host (--filesystem=host);
+    # these are the Linux daemon's paths, so joined with "/" on every OS
     cdi = [p for d in ("/etc/cdi", "/var/run/cdi", "/run/host/etc/cdi")
-           for p in globber(os.path.join(d, "*.y*ml"))
+           for p in globber(posixpath.join(d, "*.y*ml"))
            if "nvidia" in os.path.basename(p).lower()]
     if "nvidia" in runtimes or cdi:
         how = "the nvidia runtime" if "nvidia" in runtimes else "a CDI spec"

@@ -39,6 +39,14 @@ FAKE_SECRETS = {
 }
 
 
+#: The --env-fd handover (flatpak_host._env_memfd) is Linux-only: inside the Flatpak it is
+#: a memfd; its tempfile fallback is unlinked while open, which native Windows refuses
+#: (WinError 32). The code path is gated on /.flatpak-info, so a Windows Studio never
+#: reaches it; the tests outside the Flatpak still run there.
+flatpak_env_fd = pytest.mark.skipif(
+    os.name == "nt", reason="Flatpak (Linux-only) --env-fd handover; never reached on Windows")
+
+
 @pytest.fixture
 def inside_flatpak(monkeypatch):
     # /.flatpak-info does not exist on the test host; both module APIs read it through
@@ -77,6 +85,7 @@ def _assert_no_secret(argv, forwarded):
     assert not [a for a in argv if a.startswith("--env=")], argv
 
 
+@flatpak_env_fd
 def test_starting_the_assistant_from_the_flatpak_puts_no_secret_on_any_argv(
         tmp_path, checkout, inside_flatpak, monkeypatch):
     seen = []
@@ -115,6 +124,7 @@ def test_starting_the_assistant_from_the_flatpak_puts_no_secret_on_any_argv(
     assert fd in kwargs["pass_fds"]
 
 
+@flatpak_env_fd
 def test_docker_mode_start_from_the_flatpak_forwards_the_containers_address_only(
         tmp_path, checkout, inside_flatpak, monkeypatch):
     seen = []
@@ -155,6 +165,7 @@ def test_outside_the_flatpak_the_script_inherits_the_environment_as_before(
     assert kw["env"]["X"] == "1" and "pass_fds" not in kw
 
 
+@flatpak_env_fd
 def test_docker_commands_from_the_flatpak_run_on_the_host_with_no_secret(
         tmp_path, inside_flatpak, monkeypatch):
     seen = []

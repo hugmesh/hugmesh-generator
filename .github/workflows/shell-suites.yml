@@ -415,6 +415,7 @@ jobs:
             tests/node-storage/test-pool-entrypoint.sh
             tests/node-storage/test-provision-pool.sh
             tests/pentest/test-dast-honesty.sh
+            tests/pentest/test-run-sca-nvd-key.sh
             tests/phone/test-make-phone-face.sh
             tests/phone/test-mdm-providers.sh
             tests/posix-sh-no-arrays.sh
