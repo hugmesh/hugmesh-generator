@@ -256,7 +256,7 @@ function Ensure-StackDbEnv {
       if ($fromCtr) {
         $v = $fromCtr
         $origins[$r.Key] = "adopted from the existing $project $($r.Service) container (volume $found predates this key)"
-        Write-Warning "$($r.Key) adopted from the existing $($r.Service) container (volume $found exists)."
+        Write-Warning "$($r.Key) adopted from the existing $($r.Service) container (volume $found exists). The stack keeps working as before."
       } else {
         $v = $r.Legacy
         $origins[$r.Key] = "adopted: volume $found predates this key and no $($r.Service) container is left (assumed the pre-2026-11-04 compose literal)"
