@@ -416,18 +416,14 @@ def diagnose(pr: Probe, agent: str = "claude", model: str = "",
                      "servers, not this PC.)" if cloud else "")
             out.append(Problem(
                 "no_models", "The server answers, but no model is pulled." + extra,
-                f"Pull one that can use tools, for example `ollama pull "
-                f"{PREFERRED_MODEL}` (docs section 4), then press Re-check.",
-                _doc("4-pick-a-model", osname)))
+                _download_fix(pr), _doc("4-pick-a-model", osname)))
         elif not pr.usable_models:
             names = ", ".join(m.name for m in local[:4]) + (", ..." if len(local) > 4 else "")
             out.append(Problem(
                 "no_tools_model",
                 f"None of the pulled models ({names}) has the tools capability, which "
                 "an agent needs to read files and run commands.",
-                f"Pull one that does, for example `ollama pull {PREFERRED_MODEL}` "
-                "(docs section 4), then press Re-check.",
-                _doc("4-pick-a-model", osname)))
+                _download_fix(pr), _doc("4-pick-a-model", osname)))
         elif model:
             chosen = next((m for m in pr.models if m.name == model), None)
             if chosen is None:
@@ -467,13 +463,26 @@ def diagnose(pr: Probe, agent: str = "claude", model: str = "",
     return out
 
 
+def _download_fix(pr: Probe) -> str:
+    """How to get a model that can use tools onto THIS server: the panel's Download
+    button, or the by-hand pull for the instance it is (never ``ollama pull`` for the
+    Studio's Docker Ollama, which would fill the system store instead)."""
+    from . import local_ai_models as lam
+    name = lam.RECOMMENDED.name
+    by_hand = lam.manual_command(name, {"OLLAMA_HOST": pr.server})
+    return (f"Download one that can use tools: Download {name} "
+            f"({lam.size_words(lam.RECOMMENDED.bytes)}) on this card or in the chat, or by "
+            f"hand `{by_hand}` (docs section 4); then press Re-check.")
+
+
 def choose_defaults(pr: Probe, agent: str = "", model: str = "") -> "tuple[str, str]":
     """``(agent, model)``. Anything passed in is kept if it is usable.
 
     Agent: claude (what the doc verified), else the first installed one, else claude
     (so the problem names the command to install). Model: ``hugmesh-agent`` when
-    pulled; else the first of the doc's models that is pulled with tools; else the
-    first pulled model with tools; else ""."""
+    pulled; else the model the person downloaded or chose in the panel (the ``model``
+    setting) when it is pulled with tools; else the first of the doc's models that is
+    pulled with tools; else the first pulled model with tools; else ""."""
     if agent not in AGENTS:
         installed = [a for a in AGENTS if pr.agents.get(a)]
         agent = "claude" if (not installed or pr.agents.get("claude")) else installed[0]
@@ -483,6 +492,10 @@ def choose_defaults(pr: Probe, agent: str = "", model: str = "") -> "tuple[str, 
     for name in usable:
         if _base(name) == PREPARED_MODEL:
             return agent, name
+    from . import local_ai_models as lam
+    saved = lam.saved_choice()                # the one the person downloaded or chose
+    if saved and saved in usable:
+        return agent, saved
     for wanted in DOC_MODELS:
         for name in usable:
             if name == wanted or (":" not in wanted and _base(name) == wanted):

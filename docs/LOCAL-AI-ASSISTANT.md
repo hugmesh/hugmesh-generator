@@ -157,6 +157,47 @@ section 2, when none answers).
 
 ## 4. Pick a model
 
+### The first model: the Studio downloads one for you (asked first)
+
+A fresh Ollama, the system one or the Studio's own in Docker, has **no model**, and
+starting it does not download one. When the assistant finds none it says so and offers
+a download with the size and the free space, and nothing is fetched until you say yes:
+
+| Model | Download | Why it is offered |
+|---|---|---|
+| `qwen3:1.7b` | 1.4 GB | the default offer: small and quick, even without a GPU; can use tools |
+| `qwen3:0.6b` | 523 MB | the smallest, for a machine short of memory |
+| `qwen3:8b` | 5.2 GB | better answers; wants a GPU with 8 GB (Tier A below) |
+
+* **Studio window**: the Assistant tab shows **Download qwen3:1.7b (1.4 GB, N GB free)**
+  and **Other model…**; a progress bar and **Cancel download** replace them while it
+  runs, and the question you asked is asked again once the model is in. The local agent
+  card has the same button.
+* **Text UI**: on the Local AI screen type `pull` (or `pull qwen3:0.6b`), then `y`. The
+  line under the screen shows the progress; `cancel` stops it.
+* **Command line**: `scripts/local-ai.sh pull [MODEL] [--yes]`.
+
+The download goes into the Ollama the assistant uses: in Docker mode that is the
+container's `hugmesh-studio-ollama-models` volume (by hand:
+`docker exec hugmesh-studio-ollama ollama pull qwen3:1.7b`), never the system store.
+Cancel keeps what arrived, and the next download resumes. A download that would leave
+less than 1 GB free is refused before it starts. The model you download becomes the
+assistant's choice (`LOCAL_AI_MODEL` still wins when set).
+
+Measured on 2026-11-09 with no GPU (28 CPU threads): `qwen3:1.7b` took about 14 s for
+its first short answer, under 1 s once loaded, and about 29 s for a fully grounded
+question; `qwen3:0.6b` about 10 s for the first.
+
+**The Flatpak** has no `docker` and no `ollama` inside its sandbox: the Studio runs
+those on the host with `flatpak-spawn --host` and talks to Ollama over loopback HTTP,
+so both the system Ollama and the Studio's Docker one work from it. A host command gets
+only the settings it needs (`OLLAMA_HOST`, `LOCAL_AI_MODEL`, `HUGMESH_LOCAL_AI_DIR` and
+the rest of `HOST_ASSISTANT_ENV` in `studio/hugmesh_studio/core/ollama_docker.py`), and
+gets them through `--env-fd`, never on its command line, where every user of the machine
+could read them: no token, password or API key in the Studio's environment crosses to
+the host. An installed Studio ships no checkout, so the queue worker
+(`scripts/local-ai.sh`) does not start there; the chat does not need it.
+
 Sizes, context windows and tags below are from the Ollama library pages on
 **2026-10-07** (<https://ollama.com/library>). The library changes weekly: before you
 pull, look at `https://ollama.com/library?sort=newest` and at the model's page, and
@@ -609,9 +650,11 @@ loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) a
   `python -m hugmesh_studio --local-ai-prompt "question"`; both exit non-zero with a
   plain sentence when Ollama is down.
 * **One model.** The window, the text screen and the command line all ask the model
-  `LOCAL_AI_MODEL` names (else `qwen3:8b` when it is pulled, else the first pulled
-  model), never whatever happens to be loaded, so the same question goes to the same
-  model whichever face you type it into.
+  `LOCAL_AI_MODEL` names (else the model you downloaded or chose last when it is
+  pulled, else `qwen3:8b`, else `qwen3:1.7b`, else the first pulled model), never
+  whatever happens to be loaded, so the same question goes to the same model whichever
+  face you type it into. With nothing pulled, every face offers the download of
+  section 4 instead of asking.
 
 ### 11.3 How this is kept honest
 

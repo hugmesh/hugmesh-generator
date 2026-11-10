@@ -234,15 +234,49 @@ page rendered to an image); the xcb and Wayland platform plugins both load all t
 libraries (they fail only at "no display", which is what a test with no display should
 see).
 
-It cannot build an image. Inside the sandbox `PATH` is `/app/bin:/usr/bin` and holds no
-`docker`, `kubectl`, `git` or `qemu`, and nothing in the Studio's code calls
-`flatpak-spawn --host`, so it detects no backend even though the host has Docker
-(`default_backend = 'none'`, `has_docker = False`) and the welcome page says "This
-machine can't build images yet ... Detected: OS=linux · x11 · no-docker". The permission
-that would allow it is granted and works (`flatpak-spawn --host which docker` finds
-`/usr/bin/docker` from inside); the application does not use it. Until the Studio wraps
-its host tools with `flatpak-spawn --host`, the Flatpak is a way to configure and
-preview a build, and a build still has to be run from a checkout.
+It could not build an image (up to 0.4.1). Inside the sandbox `PATH` is
+`/app/bin:/usr/bin` and holds no `docker`, `kubectl`, `git` or `qemu`, nothing in the
+Studio called `flatpak-spawn --host`, and the bundle carried none of the generator's
+scripts, so a fresh install stopped at "<home> is not a hugmesh-generator checkout" and,
+given a checkout, said "This machine can't build images yet" on a host running Docker.
+
+### Since the fix: the generator tree and the host route
+
+Two changes, measured on 2026-11-09 by running the changed Studio code inside the
+installed 0.4.1 Flatpak (`flatpak run --system --env=PYTHONPATH=<changed package>`)
+on a Gentoo host with Docker 29.9.0:
+
+* **The bundle carries the generator tree.** `studio/packaging/make_generator_seed.py`
+  writes a `git archive` of the whole repository at the release commit
+  (`generator-seed.tar.gz`, about 40 MB, 3254 files) and its per-file sha256 list
+  (`generator-seed.json`) into `studio/packaging/flatpak/generator-seed/`, which the
+  manifest installs to `/app/share/hugmesh-studio/`. The release workflow and
+  `build-flatpak-local.sh` both write it before `flatpak-builder` runs. On its first
+  start of a release the Studio places it in `~/.local/share/hugmesh-studio/generator`
+  (`core/managed_generator.py`; the real home, never `$XDG_DATA_HOME`, which the sandbox
+  redirects into `~/.var/app`). An upgrade replaces the release's files and deletes the
+  ones it dropped, and never touches a file the release did not ship (`out/`,
+  `keys-out/`, `tests/stack/.env`). An operator's own clone (`$HUGMESH_GENERATOR_DIR`,
+  the working directory, the folder picked in the GUI) still wins. Measured: placed in
+  1.1 s, and the resolved generator dir, `--self-check` and a `docker run -v
+  <managed copy>:/src` from inside the sandbox all worked.
+* **Host tools go through `flatpak-spawn --host`** (`core/flatpak_host.py`, installed
+  at start the way `core/no_console.py` is on Windows): docker, make, git, qemu,
+  kubectl and the generator's scripts run on the host, with the environment passed
+  through `--env-fd` (never on the host command line) and the working directory with
+  `--directory`; `shutil.which` answers from the host; `TMPDIR` points under the real
+  home because the sandbox's /tmp is not the host's. Measured: `detect()` reports
+  `Flatpak · Gentoo · docker · KVM`, `default_backend = 'docker'`.
+
+What stays unavailable from the Flatpak, and the Studio says so where it applies: the
+native (sudo) backend (the askpass helper lives inside the sandbox, and a signal sent to
+`flatpak-spawn` reaches only the first host process, measured), and writing an image to
+a device (no block device nodes, no losetup, no root). A `subprocess` timeout kills
+`flatpak-spawn` with SIGKILL, which cannot be forwarded, so a timed-out host command keeps
+running on the host. `hugmesh-studio --self-check [--json]` reports the state of all of it;
+the release workflow runs it inside the built bundle, and
+`tests/test_flatpak_generator_seed.py` fails a pull request in which the Studio names a
+generator path or make target the seed does not ship.
 
 It is large. The installed app is 675 MB, of which PySide6's wheels are 625 MB (real
 bytes, symlinks not counted twice), and the Python side loads *their* Qt
