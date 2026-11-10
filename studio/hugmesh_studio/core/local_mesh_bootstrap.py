@@ -711,9 +711,16 @@ class LocalMeshBootstrap:
     + LocalMeshNode. Lives beside LocalMeshNode and imports it — it adds NO compose
     invocation of its own (same discipline as LocalMeshNode)."""
 
-    def __init__(self, generator_dir: str, cfg: LocalMeshBootstrapConfig | None = None):
+    def __init__(self, generator_dir: str, cfg: LocalMeshBootstrapConfig | None = None,
+                 *, project: str = "", host_ports: dict | None = None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.cfg = cfg or LocalMeshBootstrapConfig()
+        # The compose project and extra host ports of the stack node (both default to
+        # the checkout's own mesh, threading nothing new). Set by the node-images lane
+        # (core/images_mesh.py), whose mesh runs beside the checkout's under its own
+        # project; see LocalStackNode.__init__.
+        self.project = project
+        self.host_ports = dict(host_ports or {})
 
     # ---- built from a saved-mesh record (core/saved_meshes.py) -------------------
     @classmethod
@@ -853,7 +860,10 @@ class LocalMeshBootstrap:
                               tor_domains=self.tor_domains(),
                               external_idp_domains=self.external_idp_domains(),
                               superbrand_look=self.superbrand_look(),
-                              look_brands=self.look_brands())
+                              look_brands=self.look_brands(),
+                              **({"project": self.project} if self.project else {}),
+                              **({"host_ports": self.host_ports}
+                                 if self.host_ports else {}))
 
     def superbrand_look(self) -> dict:
         """What a domain with a look of its own starts from on the front door: the
@@ -2150,7 +2160,9 @@ def saved_mesh_choice_text(rec) -> str:
         "unchecked": " — not seen running (DevOps lane unchecked)",
         "draft": " — never ran (draft)",
     }.get(state, " — ran")
-    return f"{label}" + (f" — saved {when}" if when else "") + tail
+    origin = getattr(rec, "build_text", lambda: "")()   # "from node images (N images)"
+    return (f"{label}" + (f" — {origin}" if origin else "")
+            + (f" — saved {when}" if when else "") + tail)
 
 
 def tor_carrier_platforms(platforms) -> tuple[tuple[str, ...], tuple[str, ...]]:

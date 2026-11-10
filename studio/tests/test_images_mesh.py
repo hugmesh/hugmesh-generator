@@ -1,0 +1,400 @@
+"""The node-image flow's mesh: save it before the build, start it locally while the
+images build (core/images_mesh.py + the projection in core/local_mesh_domains.py).
+
+Operator ask (2026-11-09): "when someone makes a mesh in the mesh node images studio
+path, they should have the option to save that mesh before proceeding to the build as
+well as starting that mesh locally as the build proceeds".
+
+Pure core — no Qt. Every docker/proc probe the gate makes is passed in as a fake, so
+the verdicts here are the same on any host; the one real-host check (the gate on
+whatever this machine runs) only asserts it never raises.
+"""
+from __future__ import annotations
+
+import copy
+import json
+import os
+import subprocess
+
+import pytest
+
+from hugmesh_studio.core import images_mesh, local_stack_node, saved_meshes
+from hugmesh_studio.core import host_resources as hr
+from hugmesh_studio.core.config import DOMAIN_IDP_OWN, Domain, ImageConfig, User
+from hugmesh_studio.core.local_mesh_bootstrap import (LocalMeshBootstrap,
+                                                      LocalMeshBootstrapConfig,
+                                                      saved_mesh_choice_text)
+from hugmesh_studio.core.local_mesh_domains import (apply_imported_domains,
+                                                    apply_imported_tor,
+                                                    bootstrap_config_from_images,
+                                                    imported_mesh_domains)
+from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry
+
+GIB = hr.GIB
+GENERATOR_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
+    __file__))))
+
+
+def _images_cfg() -> ImageConfig:
+    """A node-image mesh as the GUI walk leaves it: an apex, two added domains (one
+    with its own Tor front door, one with its own sign-in), the own domain's services
+    walked, Tor on, a superadmin account."""
+    c = ImageConfig(mode="mesh", brand="acme", cluster_domain="acme.org")
+    c.domains = [Domain(name="chat.acme.org", title="Chat",
+                        optional_services=["tuwunel"], tor=True),
+                 Domain(name="forum.acme.org", title="Forum",
+                        optional_services=["phpbb"])]
+    c.additional_domains = True
+    c.cluster_domain_services = ["owncast"]
+    c.domain_services_reviewed = ["acme.org", "chat.acme.org", "forum.acme.org"]
+    c.tor_onion_service = True
+    c.users = [User(username="root-of-acme", roles=["superadmin"])]
+    return c
+
+
+def _worklist(cfg) -> WorklistConfig:
+    return WorklistConfig(base=cfg, entries=[
+        WorklistEntry(role="mesh", platform="x86"),
+        WorklistEntry(role="pki", platform="rpi5")])
+
+
+def _meminfo(total_gib: float, avail_gib: float) -> dict:
+    return {"MemTotal": int(total_gib * GIB), "MemAvailable": int(avail_gib * GIB),
+            "SwapTotal": 0, "SwapFree": 0}
+
+
+def _all_free(_port: int) -> bool:
+    return True
+
+
+# ── 1. the projection: ImageConfig -> LocalMeshBootstrapConfig ─────────────────────
+def test_projection_round_trips_through_the_636_import():
+    """Projecting the image config and importing it back (the #636 path "Create nodes
+    for local cloud" uses) gives the same domains, own-domain services, reviewed
+    markers and Tor — the projection is the import's inverse."""
+    cfg = _images_cfg()
+    boot = bootstrap_config_from_images(cfg, _worklist(cfg))
+    # through JSON, as a saved record is: the reload after a restart is the same object
+    boot = LocalMeshBootstrapConfig.from_dict(json.loads(json.dumps(boot.to_dict())))
+    back = ImageConfig(mode="mesh", cluster_domain=boot.cluster_domain)
+    md = imported_mesh_domains(boot)
+    added = apply_imported_domains(back, md)
+    apply_imported_tor(back, boot.effective_with_tor(), False)
+    assert added == ["chat.acme.org", "forum.acme.org"]
+    assert [(d.name, d.title, d.optional_services, d.tor) for d in back.domains] == \
+        [(d.name, d.title, d.optional_services, d.tor) for d in cfg.domains]
+    assert back.cluster_domain_services == cfg.cluster_domain_services
+    assert sorted(back.domain_services_reviewed) == sorted(cfg.domain_services_reviewed)
+    assert back.tor_onion_service is True
+    assert boot.brand == "acme" and boot.superadmin_username == "root-of-acme"
+
+
+def test_projection_carries_own_signin_and_leaves_cfg_untouched():
+    cfg = _images_cfg()
+    cfg.domains.append(Domain(name="own.acme.org", idp=DOMAIN_IDP_OWN))
+    before = copy.deepcopy(cfg.to_dict())
+    argv = cfg.to_cli_args()
+    boot = bootstrap_config_from_images(cfg)
+    assert boot.own_idp_domains == ("own.acme.org",)
+    assert cfg.to_dict() == before, "the projection wrote into the image config"
+    assert cfg.to_cli_args() == argv, "the builder argv changed"
+
+
+def test_projection_of_an_untouched_flow_records_no_domain_rows():
+    """A flow that never added a domain or walked its own services records () —
+    the same emission neutrality bootstrap_domain_records keeps."""
+    boot = bootstrap_config_from_images(ImageConfig(mode="mesh"))
+    assert boot.domains == () and boot.domain_services_reviewed == ()
+    assert boot.services == () and boot.with_tor is False
+
+
+def test_projection_runs_only_mesh_plane_slugs_from_the_mesh_wide_list():
+    cfg = ImageConfig(mode="mesh", optional_services=["tuwunel", "wiki"], anubis="on")
+    boot = bootstrap_config_from_images(cfg)
+    assert boot.services == ("anubis", "wiki")      # tuwunel is a per-domain slug
+
+
+# ── 2. the record: save, overwrite, reload ────────────────────────────────────────
+def test_save_writes_a_draft_record_that_reloads_after_a_restart():
+    cfg = _images_cfg()
+    res = images_mesh.save(GENERATOR_DIR, cfg, _worklist(cfg), label="acme mesh")
+    assert res.ok, res.message
+    rec = res.record
+    # "after a restart": nothing in memory, a fresh read of the file
+    again = saved_meshes.load(rec.path())
+    assert again.label == "acme mesh"
+    assert again.build == {"source": "images", "session_id": "",
+                           "worklist_ids": ["mesh.x86", "pki.rpi5"]}
+    assert again.build_text() == "from node images (2 images)"
+    assert again.run_state() == "draft", "a save before any run must be a draft"
+    assert again.lanes["compose_project"] == images_mesh.project_for(again.id)
+    assert again.lanes["compose_project"] != "hugmesh-local"
+    assert "auth_key" in again.blanked_secrets
+    boot = LocalMeshBootstrap.for_record(GENERATOR_DIR, again).cfg
+    assert [d["name"] for d in boot.domains] == ["acme.org", "chat.acme.org",
+                                                  "forum.acme.org"]
+    assert "from node images (2 images)" in saved_mesh_choice_text(again)
+
+
+def test_second_save_and_dispatch_save_overwrite_one_record():
+    cfg = _images_cfg()
+    first = images_mesh.save(GENERATOR_DIR, cfg, _worklist(cfg)).record
+    cfg.domains[0].title = "Chat (renamed)"
+    second = images_mesh.save(GENERATOR_DIR, cfg, _worklist(cfg), record_id=first.id)
+    assert second.ok and second.record.id == first.id
+    assert second.record.label == first.label          # an empty name keeps the name
+    # dispatch: the session id joins the SAME record
+    third = images_mesh.save(GENERATOR_DIR, cfg, _worklist(cfg), record_id=first.id,
+                             session_id="20261110-010101-abcdef")
+    assert third.record.id == first.id
+    # a RESTART of that session (no record id in hand) finds it by the session
+    fourth = images_mesh.save(GENERATOR_DIR, cfg, None,
+                              session_id="20261110-010101-abcdef")
+    assert fourth.record.id == first.id
+    assert fourth.record.build["worklist_ids"] == ["mesh.x86", "pki.rpi5"]
+    recs, bad = saved_meshes.scan()
+    assert [r.id for r in recs] == [first.id] and not bad
+    assert recs[0].config["domains"][1]["title"] == "Chat (renamed)"
+
+
+def test_a_taken_name_is_refused_and_nothing_is_written():
+    cfg = _images_cfg()
+    images_mesh.save(GENERATOR_DIR, cfg, None, label="taken")
+    res = images_mesh.save(GENERATOR_DIR, cfg, None, label="Taken ")
+    assert not res.ok and "already called" in res.message
+    assert len(saved_meshes.scan()[0]) == 1
+
+
+def test_a_record_without_the_build_key_still_loads():
+    rec = saved_meshes.SavedMesh(id=saved_meshes.new_id(), label="old")
+    d = rec.to_dict()
+    d.pop("build")
+    loaded = saved_meshes.SavedMesh.from_dict(d)
+    assert loaded.build == {} and loaded.build_text() == ""
+    d["build"] = "junk"
+    assert saved_meshes.SavedMesh.from_dict(d).build == {}
+
+
+def test_save_never_raises(monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("docker exploded")
+    monkeypatch.setattr(saved_meshes, "capture", boom)
+    res = images_mesh.save(GENERATOR_DIR, _images_cfg(), None)
+    assert not res.ok and "docker exploded" in res.message
+
+
+# ── 3. the gate ────────────────────────────────────────────────────────────────
+def _boot(**kw):
+    return bootstrap_config_from_images(ImageConfig(mode="mesh", **kw))
+
+
+def test_gate_refuses_while_another_mesh_holds_casdoor_8000():
+    plan = images_mesh.plan_alongside(
+        _boot(), building=False, meminfo=_meminfo(64, 60), env={},
+        is_free=lambda p: p != 8000, holder=lambda p: "hugmesh-local-casdoor-1")
+    assert not plan.ok
+    assert any("8000" in r and "hugmesh-local-casdoor-1" in r for r in plan.reasons)
+
+
+def test_gate_checks_the_social_ports_only_with_the_social_tier():
+    social = bootstrap_config_from_images(ImageConfig(
+        mode="mesh", cluster_domain="a.org",
+        domains=[Domain(name="m.a.org", optional_services=["tuwunel"])]))
+    free_but_3000 = lambda p: p != 3000   # noqa: E731
+    assert not images_mesh.plan_alongside(social, building=False,
+                                          meminfo=_meminfo(64, 60), env={},
+                                          is_free=free_but_3000,
+                                          holder=lambda p: "").ok
+    assert images_mesh.plan_alongside(_boot(), building=False, meminfo=_meminfo(64, 60),
+                                      env={}, is_free=free_but_3000,
+                                      holder=lambda p: "").ok
+
+
+def test_gate_refuses_on_the_31gib_host_while_the_build_holds_its_cap():
+    """The measured host: 31 GiB, the build's default cap ~23 GiB, the operator's
+    mesh using ~6 GiB — no room for a second mesh while the build runs."""
+    plan = images_mesh.plan_alongside(_boot(), building=True,
+                                      meminfo=_meminfo(31.1, 24.0), env={},
+                                      is_free=_all_free, holder=lambda p: "")
+    assert not plan.ok
+    assert any("not enough memory" in r for r in plan.reasons)
+
+
+def test_gate_allows_a_big_host_and_names_its_ports():
+    plan = images_mesh.plan_alongside(_boot(), building=True,
+                                      meminfo=_meminfo(128, 120), env={},
+                                      is_free=_all_free, holder=lambda p: "")
+    assert plan.ok, plan.reasons
+    assert set(plan.ports) == {"PUBLIC_HOST_PORT", "PUBLIC_HTTPS_PORT",
+                               "TOR_SOCKS_HOST_PORT", "ANUBIS_HOST_PORT"}
+    assert 8088 not in plan.ports.values() and 8488 not in plan.ports.values()
+
+
+def test_gate_refuses_an_uncapped_build_and_own_casdoor_domains():
+    plan = images_mesh.plan_alongside(_boot(), building=True,
+                                      meminfo=_meminfo(128, 120),
+                                      env={hr.MEMORY_ENV: "off"},
+                                      is_free=_all_free, holder=lambda p: "")
+    assert not plan.ok and any("without a memory cap" in r for r in plan.reasons)
+    own = bootstrap_config_from_images(ImageConfig(
+        mode="mesh", domains=[Domain(name="o.example.org", idp=DOMAIN_IDP_OWN)]))
+    plan = images_mesh.plan_alongside(own, building=False, meminfo=_meminfo(128, 120),
+                                      env={}, is_free=_all_free, holder=lambda p: "")
+    assert not plan.ok and any("own Casdoor" in r for r in plan.reasons)
+
+
+def test_gate_estimate_is_overridable():
+    env = {images_mesh.MESH_MEMORY_ENV: "1g"}
+    plan = images_mesh.plan_alongside(_boot(), building=False, meminfo=_meminfo(8, 6),
+                                      env=env, is_free=_all_free, holder=lambda p: "")
+    assert plan.ok and plan.need_bytes == GIB
+
+
+def test_free_ports_skip_taken_ones():
+    ports = images_mesh.free_ports(lambda p: p not in (18088, 18089))
+    assert ports["PUBLIC_HOST_PORT"] == 18090
+
+
+def test_gate_on_this_host_never_raises():
+    plan = images_mesh.plan_alongside(_boot(), building=True)
+    assert isinstance(plan.ok, bool) and plan.lines()
+
+
+# ── 4. start / stop beside the build ───────────────────────────────────────────
+@pytest.fixture
+def saved():
+    cfg = _images_cfg()
+    return images_mesh.save(GENERATOR_DIR, cfg, _worklist(cfg)).record
+
+
+def test_a_refused_start_starts_nothing_and_creates_no_worktree(saved, monkeypatch):
+    called = []
+    monkeypatch.setattr(LocalMeshBootstrap, "up",
+                        lambda *a, **k: called.append("up") or (True, []))
+    lane = images_mesh.AlongsideMesh(GENERATOR_DIR, saved)
+    lines = []
+    ok, _ = lane.start(building=True, on_line=lines.append,
+                       meminfo=_meminfo(31.1, 24.0), env={}, is_free=_all_free,
+                       holder=lambda p: "")
+    assert not ok and not called
+    assert not os.path.exists(lane.worktree)
+    assert any("not enough memory" in ln for ln in lines)
+
+
+def _scratch_repo(tmp_path) -> str:
+    repo = tmp_path / "gen"
+    repo.mkdir()
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+    for cmd in (["git", "init", "-q"], ["git", "commit", "-q", "--allow-empty", "-m", "x"]):
+        subprocess.run(cmd, cwd=repo, check=True, env=env)
+    return str(repo)
+
+
+def test_a_gated_start_runs_in_its_own_project_worktree_and_ports(saved, tmp_path,
+                                                                    monkeypatch):
+    repo = _scratch_repo(tmp_path)
+    seen = {}
+
+    def fake_up(self, on_line=None, cancel=None):
+        node = self._stack_node()
+        env = node._build_env(write_overlays=False)
+        seen.update(gen=self.generator_dir, project=node.project, env=env,
+                    cfg=self.cfg)
+        return True, []
+    monkeypatch.setattr(LocalMeshBootstrap, "up", fake_up)
+    lane = images_mesh.AlongsideMesh(repo, saved)
+    ok, lines = lane.start(building=True, meminfo=_meminfo(128, 120), env={},
+                           is_free=_all_free, holder=lambda p: "")
+    assert ok, lines
+    assert os.path.isdir(os.path.join(lane.worktree, ".git")) or \
+        os.path.isfile(os.path.join(lane.worktree, ".git"))
+    assert seen["gen"] == lane.worktree != repo
+    assert seen["project"] == images_mesh.project_for(saved.id)
+    env = seen["env"]
+    assert env["COMPOSE_PROJECT_NAME"] == seen["project"]
+    assert env["PUBLIC_HOST_PORT"] == "18088" and env["PUBLIC_HTTPS_PORT"] == "18488"
+    assert env["FRONT_DOOR"] == "http://localhost:18088"
+    assert env["STACK_NO_CLONE"] == "1"           # the source tree is never reset
+    assert seen["cfg"].env == "test" and seen["cfg"].auth_key == ""
+    assert seen["cfg"].out_dir.startswith(lane.worktree)
+    rec = saved_meshes.load(saved.path())
+    assert rec.lanes["host_ports"]["PUBLIC_HOST_PORT"] == 18088
+    assert rec.run_state() == "ran"
+
+
+def test_a_failing_start_returns_false_and_never_raises(saved, tmp_path, monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("compose fell over")
+    monkeypatch.setattr(LocalMeshBootstrap, "up", boom)
+    lane = images_mesh.AlongsideMesh(_scratch_repo(tmp_path), saved)
+    ok, lines = lane.start(building=False, meminfo=_meminfo(128, 120), env={},
+                           is_free=_all_free, holder=lambda p: "")
+    assert not ok and any("compose fell over" in ln for ln in lines)
+
+
+def test_stop_halts_only_this_project_and_never_the_overlay(saved, tmp_path,
+                                                             monkeypatch):
+    from hugmesh_studio.core import mesh_node
+    calls = []
+    monkeypatch.setattr(LocalMeshBootstrap, "down",
+                        lambda *a, **k: calls.append("bootstrap.down") or (True, []))
+    monkeypatch.setattr(mesh_node.MeshNode, "stop",
+                        lambda *a, **k: calls.append("overlay.stop") or (True, ""))
+
+    def fake_stop(node):
+        calls.append(("stack.stop", node.project,
+                      node._build_env(write_overlays=False)["COMPOSE_PROJECT_NAME"]))
+        return True, ""
+    monkeypatch.setattr(local_stack_node.LocalStackNode, "stop", fake_stop)
+    monkeypatch.setattr(local_stack_node.LocalStackNode, "status",
+                        lambda self: local_stack_node.StackStatus(True, "3 container(s)"))
+    lane = images_mesh.AlongsideMesh(_scratch_repo(tmp_path), saved)
+    assert lane.stop()[0] is True                       # never started: nothing to do
+    assert calls == []
+    os.makedirs(lane.worktree)
+    ok, lines = lane.stop()
+    assert ok, lines
+    project = images_mesh.project_for(saved.id)
+    assert calls == [("stack.stop", project, project)]
+
+
+# ── 5. the stack node's project parameter ─────────────────────────────────────
+def test_default_stack_node_env_is_unchanged():
+    env = local_stack_node.LocalStackNode(GENERATOR_DIR)._build_env(write_overlays=False)
+    assert "COMPOSE_PROJECT_NAME" not in env or \
+        env["COMPOSE_PROJECT_NAME"] == os.environ.get("COMPOSE_PROJECT_NAME")
+    assert local_stack_node.LocalStackNode(GENERATOR_DIR)._project_args() == []
+
+
+def test_other_project_moves_every_published_port():
+    node = local_stack_node.LocalStackNode(
+        GENERATOR_DIR, project="hugmesh-img-abc",
+        host_ports={"PUBLIC_HOST_PORT": 18088, "PUBLIC_HTTPS_PORT": 18488,
+                    "TOR_SOCKS_HOST_PORT": 19050, "ANUBIS_HOST_PORT": 18923})
+    env = node._build_env(write_overlays=False)
+    assert env["COMPOSE_PROJECT_NAME"] == "hugmesh-img-abc"
+    assert (env["PUBLIC_HOST_PORT"], env["PUBLIC_HTTPS_PORT"], env["TOR_SOCKS_HOST_PORT"],
+            env["ANUBIS_HOST_PORT"]) == ("18088", "18488", "19050", "18923")
+    assert node.web_url == "https://localhost:18488"
+    assert node._project_args() == ["-p", "hugmesh-img-abc"]
+    assert "label=com.docker.compose.project=hugmesh-img-abc" in \
+        local_stack_node._tor_ps_filters(node.project)
+
+
+# ── 6. CLI parity ──────────────────────────────────────────────────────────────
+def test_cli_saves_a_worklist_and_gates_it(tmp_path, capsys):
+    cfg = _images_cfg()
+    path = tmp_path / "wl.json"
+    path.write_text(json.dumps(_worklist(cfg).to_dict()), encoding="utf-8")
+    rc = images_mesh.main(["--generator-dir", GENERATOR_DIR, "save", str(path),
+                           "--label", "from the cli"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    rid = out.strip().splitlines()[-1].split("id: ", 1)[1]
+    rec = saved_meshes.find(rid)
+    assert rec.label == "from the cli" and rec.build["worklist_ids"] == ["mesh.x86",
+                                                                          "pki.rpi5"]
+    rc = images_mesh.main(["--generator-dir", GENERATOR_DIR, "gate", rid])
+    assert rc in (0, 1)
+    assert "beside the build" in capsys.readouterr().out

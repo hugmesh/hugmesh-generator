@@ -610,7 +610,11 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         if not rec.same_checkout(self.generator_dir, self.hostname):
             tip += ("\n\nThis record is from ANOTHER checkout or host — it points "
                     "at another mesh's volumes, so Start is disabled here.")
-        set_cell(self.table, i, _SM_COL_MESH, rec.label or rec.id, tooltip=tip)
+        origin = rec.build_text()          # "from node images (N images)" or ""
+        if origin:
+            tip += f"\n\nSaved {origin}: build session {rec.build.get('session_id') or '—'}."
+        set_cell(self.table, i, _SM_COL_MESH,
+                 (rec.label or rec.id) + (f" — {origin}" if origin else ""), tooltip=tip)
         # The LAST save, as the node-image picker shows it: an Overwrite keeps
         # `created` and moves `updated` (saved-meshes skeptic 3 — the two screens
         # disagreed about when the same record was saved).

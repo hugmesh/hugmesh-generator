@@ -282,6 +282,12 @@ class LocalStackNode:
         # unchanged. A second mesh beside the checkout's needs every published port
         # of its own (compose.local.yaml publishes exactly these four).
         self.host_ports = {str(k): str(v) for k, v in (host_ports or {}).items()}
+        # the two front doors are named on this node too (web_url, the plan), so a
+        # port given here moves them as well — one value, never two that disagree
+        if "PUBLIC_HOST_PORT" in self.host_ports:
+            public_host_port = int(self.host_ports["PUBLIC_HOST_PORT"])
+        if "PUBLIC_HTTPS_PORT" in self.host_ports:
+            public_https_port = int(self.host_ports["PUBLIC_HTTPS_PORT"])
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
         self.social = social
@@ -1365,8 +1371,8 @@ class LocalStackNode:
         if not base or not os.path.exists(self.compose_file):
             return ""
         try:
-            r = subprocess.run([*base, "-f", self.compose_file, "ps", "-q",
-                                "hugmesh-fe-gateway"],
+            r = subprocess.run([*base, *self._project_args(), "-f", self.compose_file,
+                                "ps", "-q", "hugmesh-fe-gateway"],
                                cwd=self.generator_dir, capture_output=True,
                                text=True, **proc_text.TEXT_IO, timeout=30)
             cid = r.stdout.strip().splitlines()[0].strip() if r.stdout.strip() else ""

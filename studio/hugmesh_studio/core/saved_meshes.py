@@ -237,6 +237,13 @@ class SavedMesh:
     #: own ``follows``. An older record of the same mesh then claims no domain code
     #: copy the newer mesh dropped (core/domain_workspaces.saved_mesh_claims).
     follows: list = field(default_factory=list)
+    #: The node-image build this mesh was saved from, when it was (``{}`` for every
+    #: mesh saved on the local-mesh page): ``{source: "images", session_id,
+    #: worklist_ids: [...]}`` (core/images_mesh.py). The images' per-node settings —
+    #: role, platform, board, encryption, users' passwords — have no place on a
+    #: Docker mesh's config; they stay in that build session's record, and this is
+    #: the pointer to it. Additive: an older Studio drops the key on load.
+    build: dict = field(default_factory=dict)
 
     def path(self) -> str:
         return os.path.join(meshes_dir(), f"{self.id}.json")
@@ -295,6 +302,12 @@ class SavedMesh:
     def domain_lines(self) -> list[str]:
         """One plain line per domain the record carries (:func:`domain_lines_of`)."""
         return domain_lines_of(self.config)
+
+    def build_text(self) -> str:
+        """``"from node images (N images)"`` for a mesh saved from the node-image flow
+        (:attr:`build`), ``""`` otherwise — the one wording the table, the picker and
+        the CLI use."""
+        return build_text_of(self.build)
 
     def brand_text(self) -> str:
         env = str(self.config.get("env") or "test")
@@ -494,6 +507,15 @@ def domain_lines_of(config: dict) -> list[str]:
             parts.append("its own Tor front door")
         out.append(f"{name} — " + "; ".join(parts))
     return out
+
+
+def build_text_of(build) -> str:
+    """See :meth:`SavedMesh.build_text`. Never raises on a hand-edited value."""
+    if not isinstance(build, dict) or build.get("source") != "images":
+        return ""
+    ids = build.get("worklist_ids")
+    n = len(ids) if isinstance(ids, list) else 0
+    return f"from node images ({n} image{'' if n == 1 else 's'})"
 
 
 def config_for_record(cfg) -> dict:
