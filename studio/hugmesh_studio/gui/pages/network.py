@@ -201,6 +201,12 @@ _HELP_SKIP_TAILSCALE = (
     "That is a headscale-only posture — a control node that SERVES the tailnet "
     "rather than joining it as a peer. It is not the same as declining to join the "
     "mesh, which is the Tailnet + SSO checkbox above.")
+_HELP_HEADSCALE_PUBLIC_DERP = (
+    "Emit --headscale-public-derp: ALSO hand the mesh Tailscale's public DERP relay "
+    "map. Off by default — the control node's headscale runs its own built-in relay, "
+    "so the mesh starts and relays with no internet and sends nothing to Tailscale's "
+    "servers. Turn this on only for a mesh that wants Tailscale's relays as a fallback "
+    "across the internet; the built-in relay stays in the map either way.")
 # ASK 5, "rename orchestration superdomain to tailscale root domain". The operator's
 # term is the one on screen everywhere now — but the value does TWO jobs in the
 # builders and the second one has to be said somewhere or the Users page's
@@ -739,6 +745,10 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.skip_tailscale = QtWidgets.QCheckBox(
             "Skip the Tailscale agent (headscale-only posture)")
         cp.addWidget(self.skip_tailscale)
+        # DERP relay: built-in (offline-first) by default; the public map is an opt-in.
+        self.headscale_public_derp = QtWidgets.QCheckBox(
+            "Also use Tailscale's public relays (default: built-in relay only)")
+        cp.addWidget(self.headscale_public_derp)
         # Tailscale root domain (spec 5): the permanently-internal <brand>.internal
         # every mesh node joins (manifest + KEYS channel, plus the WS-SUPER-B builder
         # bake: --superdomain on a mesh build writes <etc>/superdomain + the headscale
@@ -1293,6 +1303,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.headscale_version.setText(c.headscale_version)
         self.tailscale_version.setText(c.tailscale_version)
         self.skip_tailscale.setChecked(c.skip_tailscale)
+        self.headscale_public_derp.setChecked(c.headscale_public_derp)
         # superdomain: editable in mesh (explicit text, empty = derived); a read-only
         # derived display in cloud (never write the derived value back to the config).
         mesh = c.mode == "mesh"
@@ -1887,6 +1898,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             (self.headscale_version_row, _HELP_HEADSCALE_VERSION),
             (self.tailscale_version_row, _HELP_TAILSCALE_VERSION),
             (self.skip_tailscale, _HELP_SKIP_TAILSCALE),
+            (self.headscale_public_derp, _HELP_HEADSCALE_PUBLIC_DERP),
             (self.superdomain_row, _HELP_SUPERDOMAIN),
             (self.egress_field_row, _HELP_EGRESS),
             (self.egress_locked, _HELP_EGRESS_LOCKED),
@@ -1988,6 +2000,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.headscale_version = self.headscale_version.text().strip()
         c.tailscale_version = self.tailscale_version.text().strip()
         c.skip_tailscale = self.skip_tailscale.isChecked()
+        c.headscale_public_derp = self.headscale_public_derp.isChecked()
         # superdomain is user-set ONLY in mesh (editable); in cloud the field shows the
         # DERIVED value read-only — never write it back (would pin the derived string).
         if c.mode == "mesh":

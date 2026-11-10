@@ -269,6 +269,11 @@ DEFAULT_USER_PASS="hugmesh"
 ROOT_PASS="hugmesh"
 SEED_STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64-hardened-openrc.txt"
 HEADSCALE_VERSION="0.23.0"
+# Opt-in: ALSO list Tailscale's public DERP map in headscale. Default OFF: the pki
+# node's headscale runs its embedded relay only, so the mesh starts and relays
+# offline (docs/HEADSCALE-DERP.md). --headscale-public-derp or env/brand.conf
+# HEADSCALE_PUBLIC_DERP=true bakes /etc/hugmesh/headscale-public-derp.
+HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
@@ -697,6 +702,9 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --user-password PASS  Default: ${DEFAULT_USER_PASS}
       --root-password PASS  Default: ${ROOT_PASS}
       --headscale-version V Default: ${HEADSCALE_VERSION}
+      --headscale-public-derp  Also list Tailscale's public DERP map in headscale.
+                            Default OFF: the embedded relay only, offline-first
+                            (docs/HEADSCALE-DERP.md). (env/brand.conf: HEADSCALE_PUBLIC_DERP=true)
       --tailscale-version V Default: ${TAILSCALE_VERSION}
       --seed-url URL        amd64 stage3 index URL.
       --enable-wifi         Re-enable WiFi (DISABLED by default: rfkill block +
@@ -1118,6 +1126,7 @@ while [[ $# -gt 0 ]]; do
         --user-password) DEFAULT_USER_PASS="$2"; shift 2 ;;
         --root-password) ROOT_PASS="$2"; shift 2 ;;
         --headscale-version) HEADSCALE_VERSION="$2"; shift 2 ;;
+        --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
         --tailscale-version) TAILSCALE_VERSION="$2"; shift 2 ;;
         --seed-url) SEED_STAGE3_URL="$2"; shift 2 ;;
         --enable-wifi) ENABLE_WIFI=true; shift ;;
@@ -1294,6 +1303,12 @@ while [[ $# -gt 0 ]]; do
         *) err "Unknown option: $1"; usage 1 ;;
     esac
 done
+# --headscale-public-derp / HEADSCALE_PUBLIC_DERP: one spelling, checked before any work.
+case "${HEADSCALE_PUBLIC_DERP}" in
+    true|1|yes|on)   HEADSCALE_PUBLIC_DERP=true ;;
+    false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
+    *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
+esac
 
 # Comma tolerance: accept "akkoma,tuwunel" (the CSV spelling GUIs/configs tend to
 # emit) as well as the native space-separated list — normalized HERE, right after
@@ -4947,6 +4962,16 @@ echo "${ENV}"            > "${SYSROOT}/etc/hugmesh/env"
 if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/hugmesh/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/hugmesh/headscale-url"
+fi
+# Public Tailscale DERP map opt-in (default OFF: headscale's embedded relay only).
+# keys-provision reads the marker at first boot; provision.json .headscale.public_derp
+# outranks it either way.
+if [ "${HEADSCALE_PUBLIC_DERP}" = true ]; then
+    mkdir -p "${SYSROOT}/etc/hugmesh"
+    echo true > "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+    info "Baked HEADSCALE_PUBLIC_DERP=true -> /etc/hugmesh/headscale-public-derp (public Tailscale DERP map opted in)"
+else
+    rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
 fi
 # Mesh secrets store (#224): the Vault connection facts keys-provision seeds ESO
 # from when the KEYS manifest has no .vault block. "" = byte no-op; client = warn.
