@@ -542,6 +542,28 @@ slx_stage_node_policy() {
     slx_ship_enforce_gate "${sysroot}" "${shared_specs}"
 }
 
+# ── slx_ship_bootpath_files <sysroot> <shared_specs> ─────────────────────────
+# What systemd-tmpfiles-setup would otherwise create in "/" at EVERY boot, measured
+# under enforcing on the x86 live ISO (2026-11-04): `q /srv` (systemd home.conf)
+# mkdir'd /srv in root_t, and portage-tmpdir.conf created /var/tmp/portage as
+# portage_tmp_t. Both were denied to systemd_tmpfiles_t, and the denials made the
+# service exit non-zero. Ship /srv so the entry is a no-op, and mask portage's
+# entry (specs/etc/tmpfiles.d/portage-tmpdir.conf is an empty mask; same name in
+# /etc wins): a node never runs portage from a tmpfiles-made directory.
+# EVERY builder calls this, before its label pass (x86, Frite) or before packing
+# (the first-boot-labelled ARM images, whose relabel then covers the shipped
+# paths). It used to be inline in build-x86-host-stage4.sh only, so every ARM
+# image kept both denials (#863 refute, blocker 3).
+slx_ship_bootpath_files() {
+    local sysroot="${1:?slx_ship_bootpath_files: sysroot required}" shared_specs="${2:?shared_specs required}"
+    local mask="${shared_specs}/etc/tmpfiles.d/portage-tmpdir.conf"
+    [ -f "${mask}" ] || { _slx_fail "boot-path files: ${mask} missing"; return 1; }
+    install -d -m 0755 "${sysroot}/srv" || { _slx_fail "boot-path files: cannot create ${sysroot}/srv"; return 1; }
+    install -D -m 0644 "${mask}" "${sysroot}/etc/tmpfiles.d/portage-tmpdir.conf" \
+        || { _slx_fail "boot-path files: cannot install the portage-tmpdir.conf mask"; return 1; }
+    _slx_say "boot-path files: /srv shipped, /etc/tmpfiles.d/portage-tmpdir.conf masks portage's tmpfiles entry"
+}
+
 # ── slx_ship_enforce_gate <sysroot> <shared_specs> ───────────────────────────
 # Ship specs/etc/init.d/selinux-enforce-gate the way sibling OpenRC services are
 # shipped (cp + chmod +x into ${SYSROOT}/etc/init.d, mirroring the
@@ -652,7 +674,7 @@ _SLX_CORE_PROBES=(
     "/etc/fstab:etc_t"
     "/var/log/wtmp:wtmp_t"   # pre-created by the x86 builder so bootmisc never makes it var_log_t
     "/root:user_home_dir_t"  # slx_map_root_login: without the root login mapping this is default_t
-    "/srv:var_t"             # shipped by the x86 builder so systemd-tmpfiles' `q /srv` never mkdirs in "/"
+    "/srv:var_t"             # slx_ship_bootpath_files ships it so systemd-tmpfiles' `q /srv` never mkdirs in "/"
 )
 SLX_CENSUS_MIN_PCT="${SLX_CENSUS_MIN_PCT:-99}"
 SLX_DRYRUN_MAX="${SLX_DRYRUN_MAX:-50}"

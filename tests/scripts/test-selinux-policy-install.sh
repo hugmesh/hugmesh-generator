@@ -1528,6 +1528,65 @@ else
     bad "(selinux-load-failed pair)"; bad "(selinux-built pair)"
 fi
 
+# ── E-root) provision.sh's FIRST-BOOT root login mapping, EXECUTED (#863 refute,
+# blocker 3). The x86 and Frite builders map root in the store at build time; the
+# other ARM images build their store at first boot, so provision_selinux() maps it
+# there. Without it /root stays default_t and local_login_t is denied at every console
+# login. semanage/selinux_provision_failed/log/warn are stubbed; the function runs as
+# shipped, against a fixture /etc/selinux/<type>/seusers (path rewritten to a scratch root).
+echo "-- E-root) provision_selinux's first-boot root login mapping, executed --"
+PR="${TMP}/provroot"; mkdir -p "${PR}"
+awk '/^selinux_map_root_login\(\) \{/{f=1} f{print} f&&/^}/{exit}' "${PROV}" | sed "s#/etc/selinux/#${PR}/etc/selinux/#g" > "${PR}/fn.sh"
+if ! grep -q 'semanage login' "${PR}/fn.sh"; then
+    bad "E-root: could not cut selinux_map_root_login() out of provision.sh"
+else
+    # prov_rootmap <case> <aware> <seusers content|ABSENT> <semanage: ok|fail|noop|absent> -> rc; outputs in ${PR}/<case>/
+    prov_rootmap() {
+        local d="${PR}/$1"; rm -rf "${d}"; mkdir -p "${d}/etc/selinux/mcs"
+        [ "$3" = ABSENT ] || printf '%b' "$3" > "${d}/etc/selinux/mcs/seusers"
+        sed "s#${PR}/etc/selinux/#${d}/etc/selinux/#g" "${PR}/fn.sh" > "${d}/fn.sh"
+        ( log()  { echo "log: $*"; }; warn() { echo "warn: $*"; }
+          selinux_provision_failed() { echo "FAILED-MARKER: $*" >> "${d}/marker"; }
+          have() { [ "$1" = semanage ] && [ "${SEM}" != absent ]; }
+          semanage() { echo "semanage $*" >> "${d}/calls"
+                       case "${SEM}" in
+                           ok)   printf 'root:%s:%s\n' "$6" "$8" >> "${d}/etc/selinux/mcs/seusers"; return 0 ;;
+                           noop) return 0 ;;
+                           *)    echo "ValueError: Could not add login mapping for root" >&2; return 1 ;;
+                       esac; }
+          SEM="$4"; . "${d}/fn.sh"; selinux_map_root_login mcs "$2" ) > "${d}/out" 2>&1
+    }
+    SEU='__default__:user_u:s0\nsystem_u:system_u:s0-s0:c0.c1023\n'
+    prov_rootmap map 1 "${SEU}" ok; rc=$?
+    grep -E '^semanage login -S mcs -a -s user_u -r s0 root$' "${PR}/map/calls" >/dev/null && grep -q '^root:user_u:s0$' "${PR}/map/etc/selinux/mcs/seusers" \
+        && [ ! -e "${PR}/map/marker" ] && [ "${rc}" = 0 ] \
+        && ok "E-root: an unmapped store gets 'semanage login -a -s <__default__ user> -r <its range> root', postcondition read back" \
+        || bad "E-root: mapping did not happen: rc=${rc} calls=$(cat "${PR}/map/calls" 2>/dev/null) out=$(cat "${PR}/map/out")"
+    prov_rootmap already 1 "root:staff_u:s0\n${SEU}" ok; rc=$?
+    [ ! -e "${PR}/already/calls" ] && [ ! -e "${PR}/already/marker" ] && grep -q 'already mapped' "${PR}/already/out" \
+        && ok "E-root: an existing root: line (x86/Frite build-time mapping) is left alone — no semanage call" \
+        || bad "E-root: re-mapped an already-mapped root: $(cat "${PR}/already/calls" 2>/dev/null)"
+    prov_rootmap nosem 1 "${SEU}" absent
+    grep -q 'FAILED-MARKER: root login mapping: no semanage' "${PR}/nosem/marker" 2>/dev/null \
+        && ok "E-root: selinux-aware image with no semanage -> the selinux-load-failed marker (the gate refuses to flip)" \
+        || bad "E-root: no semanage on an aware image was not recorded: $(cat "${PR}/nosem/out")"
+    prov_rootmap semfail 1 "${SEU}" fail
+    grep -q 'FAILED-MARKER: root login mapping: semanage login failed: ValueError' "${PR}/semfail/marker" 2>/dev/null \
+        && ok "E-root: semanage failing -> recorded with semanage's own words" \
+        || bad "E-root: a failing semanage was not recorded: $(cat "${PR}/semfail/out")"
+    prov_rootmap semnoop 1 "${SEU}" noop
+    grep -q "FAILED-MARKER: root login mapping: .*still has no 'root:user_u:' line" "${PR}/semnoop/marker" 2>/dev/null \
+        && ok "E-root: semanage exits 0 but writes nothing -> the read-back postcondition records it (exit status is not trusted)" \
+        || bad "E-root: a no-op semanage passed: $(cat "${PR}/semnoop/out")"
+    prov_rootmap noseusers 1 ABSENT ok
+    grep -q 'FAILED-MARKER: root login mapping: .*seusers missing' "${PR}/noseusers/marker" 2>/dev/null \
+        && ok "E-root: no seusers in the store -> recorded" || bad "E-root: missing seusers not recorded: $(cat "${PR}/noseusers/out")"
+    prov_rootmap unaware 0 "${SEU}" absent
+    [ ! -e "${PR}/unaware/marker" ] && grep -q 'warn: SELinux: root login mapping: no semanage' "${PR}/unaware/out" \
+        && ok "E-root: on an image never built selinux-aware it only warns (no marker), like the rest of provision_selinux" \
+        || bad "E-root: unaware image: marker=$([ -e "${PR}/unaware/marker" ] && echo y || echo n) out=$(cat "${PR}/unaware/out")"
+fi
+
 # ── F) the store is now populated AT BUILD TIME (#503) ───────────────────────
 # slx_stage_node_policy still only compiles + stages the .pp; the x86 builder then
 # installs them into the store (slx_store_install_modules) BEFORE labelling, so a

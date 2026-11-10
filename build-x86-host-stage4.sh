@@ -1872,6 +1872,14 @@ else
     SB_CERT_O="HugMesh Systems"; SB_CERT_CN="HugMesh Secure Boot"
     SB_ETC_DIR="/etc/hugmesh/secureboot"; SB_EFI_VENDOR="hugmesh"
 fi
+# The UKIs built per kernel, "<name suffix>:<cmdline extra>" ("none" = no extra). The
+# first is the default (Secure Boot) UKI, ${UKI_NAME}; the other two are its SELinux
+# twins, ${UKI_NAME%.efi}<suffix>.efi, signed the same way and chainloaded by their
+# own .img menu entries (rescue: enforcing=0; trial: enforcing=1). One table, read by
+# the dracut loop in the kernel chroot, the sign step, the kernel-cache key and
+# build_img, so a variant cannot exist in one place and be missing in another.
+UKI_VARIANTS=(":none" "-selinux-rescue:enforcing=0" "-selinux-enforcing-test:enforcing=1")
+UKI_VARIANTS_CHROOT="${UKI_VARIANTS[*]}"
 
 # ── modprobe.d drop-in NAMES (the last two hugmesh-* files an unaffiliated image
 # could still acquire). --unaffiliated's usage text promises "no hugmesh-* tools or
@@ -4143,6 +4151,10 @@ grep -q '^GRUB_DISABLE_OS_PROBER=' "${SYSROOT}/etc/default/grub" || \
 # exactly the kernels the normal entries boot and always sorts after them.
 install -D -m 0755 "${SPECS_DIR}/etc/grub.d/11_selinux_permissive_rescue" \
     "${SYSROOT}/etc/grub.d/11_selinux_permissive_rescue"
+# Its sibling: one SELinux enforcing (test) entry per kernel (enforcing=1, this boot
+# only), so an INSTALLED node can try enforcing without editing /etc/selinux/config.
+install -D -m 0755 "${SPECS_DIR}/etc/grub.d/12_selinux_enforcing_test" \
+    "${SYSROOT}/etc/grub.d/12_selinux_enforcing_test"
 
 # PARTUUID-token fstab (mounts / + /boot/efi by PARTUUID, plus hardening tmpfs).
 # The .img builder and install-x86.sh substitute __ROOT_PARTUUID__/__ESP_PARTUUID__.
@@ -6628,6 +6640,9 @@ kernel_cache_inputs() {
         # ships the PREVIOUS UKI — which is exactly how a missing root= could survive a
         # rebuild that was performed to add it (2026-08-13).
         printf 'uki-cmdline-prefix=%s\n' "root=LABEL=${ROOT_LABEL} ro"
+        # The SELinux UKI twins (#863 refute): a cache entry from before them holds only
+        # the default UKI, so a hit would hand the sign step nothing to sign as rescue.
+        printf 'uki-variants=%s\n' "${UKI_VARIANTS_CHROOT}"
         for d in "${SYSROOT}"/var/db/pkg/sys-kernel/dracut-* \
                  "${SYSROOT}"/var/db/pkg/sys-apps/systemd-utils-*; do
             [ -d "${d}" ] && printf 'pkg=%s\n' "$(basename -- "${d}")"
@@ -7048,15 +7063,28 @@ fi
 # build-time constant that build_img passes to 'mkfs.ext4 -L', so it is stable and
 # known now. dracut already carries the ext4 driver (--add-drivers below) to mount it.
 CMDLINE="root=LABEL=${ROOT_LABEL} ro \$(. /etc/default/grub 2>/dev/null; printf '%s' "\${GRUB_CMDLINE_LINUX:-lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1}")"
+# THREE UKIs, one per SELinux boot mode. A signed UKI's cmdline is FIXED: systemd-stub
+# ignores the load options GRUB would pass under Secure Boot, so the only way to boot the
+# signed chain permissive (a node whose enforcing policy breaks its boot) or as an
+# enforcing trial is a UKI that carries that cmdline itself, signed like the default
+# (#863 refute, blockers 3 and 4). The kernel takes the LAST enforcing= on the cmdline,
+# and libselinux lets it override /etc/selinux/config. The variant suffixes are the
+# UKI_VARIANTS table at the top level (the sign step and build_img read the same table).
+# A variant that fails is a WARN here like the default; the sign step refuses to seal a
+# default UKI without its rescue twin.
 if command -v dracut >/dev/null && dracut --help 2>/dev/null | grep -q -- '--uefi'; then
-    dracut --force --no-hostonly --uefi \
-        --add crypt \
-        --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net dm_crypt" \
-        --kernel-cmdline "\${CMDLINE}" \
-        --kernel-image /boot/vmlinuz \
-        --kver "\${KVER}" "/boot/${UKI_NAME%.efi}-unsigned.efi" \
-        && echo "[build-x86] UKI built: /boot/${UKI_NAME%.efi}-unsigned.efi" \
-        || echo "[build-x86] WARN: dracut --uefi failed; UKI not built (secure boot chain needs manual rebuild)"
+    for _uv in ${UKI_VARIANTS_CHROOT}; do
+        _suffix="\${_uv%%:*}"; _extra="\${_uv#*:}"; [ "\${_extra}" = none ] && _extra=""
+        _out="/boot/${UKI_NAME%.efi}\${_suffix}-unsigned.efi"
+        dracut --force --no-hostonly --uefi \
+            --add crypt \
+            --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net dm_crypt" \
+            --kernel-cmdline "\${CMDLINE}\${_extra:+ \${_extra}}" \
+            --kernel-image /boot/vmlinuz \
+            --kver "\${KVER}" "\${_out}" \
+            && echo "[build-x86] UKI built: \${_out} (cmdline extra: \${_extra:-none})" \
+            || echo "[build-x86] WARN: dracut --uefi failed for \${_out}; UKI not built (secure boot chain needs manual rebuild)"
+    done
 else
     echo "[build-x86] INFO: dracut --uefi not available; UKI skipped (add 'uefi' USE to sys-kernel/dracut)"
 fi
@@ -7128,9 +7156,29 @@ if [ -n "${SECUREBOOT_KEY}" ] && [ -f "${SECUREBOOT_KEY}" ]; then
     [ -f "${SBCRT}" ] && openssl x509 -inform PEM -outform DER -in "${SBCRT}" -out "${SBCER}" 2>/dev/null || true
     info "Secure Boot: signing UKI with the provided KEYS key (${SECUREBOOT_KEY})"
 fi
+# uki_variant_paths <variant> — set _uv_u/_uv_s (unsigned/signed path) for one
+# UKI_VARIANTS entry.
+uki_variant_paths() {
+    local suffix="${1%%:*}"
+    _uv_u="${SYSROOT}/boot/${UKI_NAME%.efi}${suffix}-unsigned.efi"
+    _uv_s="${SYSROOT}/boot/${UKI_NAME%.efi}${suffix}.efi"
+}
+# The SELinux twins must exist whenever the default does. Without the rescue UKI the
+# signed chain has NO permissive entry, and the default UKI is .img entry 0 (#863
+# refute, blocker 3). A missing twin used to be impossible to notice; now it stops
+# the build before anything is signed or sealed.
+if [ -f "${UKI_UNSIGNED}" ]; then
+    for _uv in "${UKI_VARIANTS[@]}"; do
+        uki_variant_paths "${_uv}"
+        [ -s "${_uv_u}" ] || { err "UKI twin missing: ${_uv_u} (the default UKI was built; its SELinux variant '${_uv}' was not — see the dracut WARN above)"; exit 1; }
+    done
+fi
 if ! ${SECURE_BOOT}; then
-    warn "Secure Boot DISABLED (--no-secure-boot): UKI left unsigned (chain won't verify)."
-    [ -f "${UKI_UNSIGNED}" ] && { cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; rm -f "${UKI_UNSIGNED}"; }
+    warn "Secure Boot DISABLED (--no-secure-boot): UKIs left unsigned (chain won't verify)."
+    for _uv in "${UKI_VARIANTS[@]}"; do
+        uki_variant_paths "${_uv}"
+        [ -f "${_uv_u}" ] && { cp "${_uv_u}" "${_uv_s}"; rm -f "${_uv_u}"; }
+    done
 elif command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
     mkdir -p "${SBDIR}"
     if [ ! -f "${SBKEY}" ]; then
@@ -7148,12 +7196,15 @@ elif command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
                 && info "EFI db.auth enrollment payload generated at ${SBDIR}/db.auth"
         fi
     fi
-    info "Signing UKI with org Secure Boot key"
-    sbsign --key "${SBKEY}" --cert "${SBCRT}" \
-        --output "${UKI_SIGNED}" "${UKI_UNSIGNED}" \
-        && info "Signed UKI: ${UKI_SIGNED}" \
-        || { warn "sbsign failed; copying unsigned UKI (not verifiable under Secure Boot)"; cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; }
-    rm -f "${UKI_UNSIGNED}"
+    info "Signing UKIs with org Secure Boot key (default + SELinux rescue + enforcing trial)"
+    for _uv in "${UKI_VARIANTS[@]}"; do
+        uki_variant_paths "${_uv}"
+        sbsign --key "${SBKEY}" --cert "${SBCRT}" \
+            --output "${_uv_s}" "${_uv_u}" \
+            && info "Signed UKI: ${_uv_s}" \
+            || { warn "sbsign failed; copying unsigned UKI ${_uv_u##*/} (not verifiable under Secure Boot)"; cp "${_uv_u}" "${_uv_s}"; }
+        rm -f "${_uv_u}"
+    done
     # Install org cert into the rootfs for keys-provision mokutil enrollment.
     # SB_ETC_DIR comes from the boot-chain identity fold (UNAFFILIATED keeps the
     # functional enrollment certs under the neutral /etc/gentoo dir); the ESP and
@@ -7165,8 +7216,11 @@ elif command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
     [ -f "${SBDIR}/db.auth" ] && cp "${SBDIR}/db.auth" "${SYSROOT}${SB_ETC_DIR}/db.auth"
     info "Org Secure Boot cert installed to sysroot ${SB_ETC_DIR}/"
 elif [ -f "${UKI_UNSIGNED}" ]; then
-    warn "sbsign not found on build host (install app-crypt/sbsigntools); UKI unsigned — Secure Boot chain won't verify"
-    cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; rm -f "${UKI_UNSIGNED}"
+    warn "sbsign not found on build host (install app-crypt/sbsigntools); UKIs unsigned — Secure Boot chain won't verify"
+    for _uv in "${UKI_VARIANTS[@]}"; do
+        uki_variant_paths "${_uv}"
+        cp "${_uv_u}" "${_uv_s}"; rm -f "${_uv_u}"
+    done
 fi
 
 # ── 8. Clean ───────────────────────────────────────────────────────
@@ -7376,15 +7430,11 @@ done
 chmod 0664 "${SYSROOT}/var/log/wtmp"; chmod 0644 "${SYSROOT}/var/log/lastlog"
 chroot "${SYSROOT}" chgrp utmp /var/log/wtmp 2>/dev/null \
     || warn "/var/log/wtmp: no 'utmp' group in the sysroot — left root:root (mkutmp would have set utmp)"
-# What systemd-tmpfiles-setup would otherwise create in "/" at every boot, measured
-# under enforcing (2026-11-04): `q /srv` (systemd home.conf) mkdir'd /srv in root_t
-# and portage-tmpdir.conf created /var/tmp/portage as portage_tmp_t — both denied to
-# systemd_tmpfiles_t, and the denials made the service exit non-zero. Ship /srv so
-# the entry is a no-op, and mask portage's entry: a node never runs portage from a
-# tmpfiles-made directory. Both before the label pass so the shipped paths are
-# labelled (/srv is a core probe: var_t at every pack hop).
-install -d -m 0755 "${SYSROOT}/srv"
-install -D -m 0644 "${SHARED_SPECS}/etc/tmpfiles.d/portage-tmpdir.conf" "${SYSROOT}/etc/tmpfiles.d/portage-tmpdir.conf"
+# /srv + the portage-tmpdir.conf mask (what systemd-tmpfiles-setup would otherwise
+# create in "/" at every boot; see the lib). Before the label pass so the shipped
+# paths are labelled (/srv is a core probe: var_t at every pack hop).
+slx_ship_bootpath_files "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "could not ship the SELinux boot-path files (/srv, portage-tmpdir.conf mask)"; exit 1; }
 SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
 SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
 info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> root login mapping -> config -> setfiles -> gate)"
@@ -7666,6 +7716,18 @@ build_img() {
         mkdir -p "${root_mnt}/boot/efi/EFI/Linux"
         cp "${uki_src}" "${root_mnt}/boot/efi/EFI/Linux/${UKI_NAME}"
         info "UKI installed to ESP: EFI/Linux/${UKI_NAME}"
+        # Its SELinux twins (rescue enforcing=0, trial enforcing=1), signed in the same
+        # step. Entry 0 of this .img is the default UKI; without the rescue twin on the
+        # ESP the signed chain has no permissive way back (#863 refute, blocker 3).
+        local _uv _uv_name
+        for _uv in "${UKI_VARIANTS[@]}"; do
+            _uv_name="${UKI_NAME%.efi}${_uv%%:*}.efi"
+            [ "${_uv_name}" = "${UKI_NAME}" ] && continue
+            [ -s "${SYSROOT}/boot/${_uv_name}" ] \
+                || { err "UKI twin ${SYSROOT}/boot/${_uv_name} missing next to ${UKI_NAME} — refusing to seal an .img whose Secure Boot chain has no SELinux ${_uv#*:} entry"; exit 1; }
+            cp "${SYSROOT}/boot/${_uv_name}" "${root_mnt}/boot/efi/EFI/Linux/${_uv_name}"
+            info "UKI installed to ESP: EFI/Linux/${_uv_name} (SELinux ${_uv#*:})"
+        done
         # Org cert and db.auth: keys-provision enrolls via mokutil on first boot.
         # SB_ETC_DIR/SB_EFI_VENDOR come from the boot-chain identity fold — the
         # same fold the stager used — so UNAFFILIATED certs (staged under the
@@ -7745,6 +7807,8 @@ build_img() {
             echo "    chainloader /EFI/Linux/${UKI_NAME}"
             echo "}"
         fi
+        # The default entries above stay entries 0 (UKI) and 1 (GRUB+vmlinuz); every
+        # SELinux entry is APPENDED below them, so default=0 never lands on one.
         echo "menuentry \"${BRAND_TITLE} (${ROLE})\" {"
         echo "    search --no-floppy --fs-uuid --set=root ${root_fsuuid}"
         if [ -n "${vmlinuz}" ]; then
@@ -7761,6 +7825,36 @@ build_img() {
             echo "menuentry \"${BRAND_TITLE} (${ROLE}) — SELinux permissive rescue\" {"
             echo "    search --no-floppy --fs-uuid --set=root ${root_fsuuid}"
             echo "    linux /boot/${vmlinuz} root=PARTUUID=${root_uuid} ro ${cmdline} enforcing=0"
+            [ -n "${initrd}" ] && echo "    initrd /boot/${initrd}"
+            echo "}"
+        fi
+        # The signed chain's own SELinux entries (#863 refute, blockers 3 and 4): a UKI's
+        # cmdline is fixed, so each mode is its own signed UKI, chainloaded like entry 0.
+        # These work with Secure Boot ON; the GRUB+vmlinuz entries need it off.
+        if [ -f "${root_mnt}/boot/efi/EFI/Linux/${UKI_NAME}" ]; then
+            local _uv _uv_name _uv_title
+            for _uv in "${UKI_VARIANTS[@]}"; do
+                _uv_name="${UKI_NAME%.efi}${_uv%%:*}.efi"
+                [ "${_uv_name}" = "${UKI_NAME}" ] && continue
+                case "${_uv#*:}" in
+                    enforcing=0) _uv_title="Secure Boot UKI, SELinux permissive rescue" ;;
+                    enforcing=1) _uv_title="Secure Boot UKI, SELinux enforcing (test)" ;;
+                    *) err "UKI_VARIANTS entry '${_uv}' has no .img menu title"; exit 1 ;;
+                esac
+                echo "menuentry \"${BRAND_TITLE} (${ROLE}) — ${_uv_title}\" {"
+                echo "    search --no-floppy --fs-uuid --set=root ${esp_fsuuid}"
+                echo "    chainloader /EFI/Linux/${_uv_name}"
+                echo "}"
+            done
+        fi
+        # The installed .img's enforcing trial on the GRUB+vmlinuz path: boots enforcing
+        # ONCE, without touching /etc/selinux/config (the next plain boot is permissive
+        # again). The live ISO has had this entry since #846; the .img had none, so the
+        # installed path was never booted enforcing (#863 refute, blocker 4).
+        if [ -n "${vmlinuz}" ]; then
+            echo "menuentry \"${BRAND_TITLE} (${ROLE}) — SELinux enforcing (test)\" {"
+            echo "    search --no-floppy --fs-uuid --set=root ${root_fsuuid}"
+            echo "    linux /boot/${vmlinuz} root=PARTUUID=${root_uuid} ro ${cmdline} enforcing=1"
             [ -n "${initrd}" ] && echo "    initrd /boot/${initrd}"
             echo "}"
         fi

@@ -3130,6 +3130,38 @@ selinux_provision_failed() {
     echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" >> "${SELINUX_FAIL_MARKER}"
 }
 
+# selinux_map_root_login <type> — map the root login to __default__'s SELinux user and
+# range, so genhomedircon writes a /root line and the relabel below gives /root
+# user_home_dir_t. The refpolicy store's seusers names only __default__; with no
+# root: line /root labels default_t and local_login_t is denied { search } on it at
+# every console login (3 of the 25 boot-path AVCs #863 answered). The x86 and Frite
+# builders map it at BUILD time (slx_map_root_login in scripts/_selinux-policy-lib.sh);
+# the other ARM images build their store HERE, at first boot, so they map it here
+# (#863 refute, blocker 3). Idempotent: an existing root: line is left alone.
+# A failed mapping on a selinux-aware image is recorded like a failed load: the
+# enforce-gate must not flip a node whose console login enforcing would deny.
+selinux_map_root_login() {
+    local type="$1" aware="$2" seusers="/etc/selinux/$1/seusers" def seuser range err
+    _rootmap_fail() {
+        if [ "${aware}" = 1 ]; then selinux_provision_failed "root login mapping: $*"; else warn "SELinux: root login mapping: $*"; fi
+    }
+    [ -r "${seusers}" ] || { _rootmap_fail "${seusers} missing — /root stays default_t"; return 0; }
+    if grep -E '^root:' "${seusers}" >/dev/null; then
+        log "SELinux: root login already mapped ($(grep -E '^root:' "${seusers}" | head -1))"
+        return 0
+    fi
+    def="$(grep -E '^__default__:' "${seusers}" | head -1)"
+    seuser="$(printf '%s' "${def}" | cut -d: -f2)"; range="$(printf '%s' "${def}" | cut -d: -f3-)"
+    [ -n "${seuser}" ] || { _rootmap_fail "${seusers} has no usable __default__ line ('${def}')"; return 0; }
+    have semanage || { _rootmap_fail "no semanage on this image (sys-apps/selinux-python) — /root stays default_t"; return 0; }
+    log "SELinux: mapping the root login: semanage login -S ${type} -a -s ${seuser} -r ${range:-s0} root"
+    err="$(semanage login -S "${type}" -a -s "${seuser}" -r "${range:-s0}" root 2>&1)" \
+        || { _rootmap_fail "semanage login failed: $(printf '%s' "${err}" | tr '\n' ' ')"; return 0; }
+    grep -E "^root:${seuser}:" "${seusers}" >/dev/null \
+        || { _rootmap_fail "${seusers} still has no 'root:${seuser}:' line after semanage"; return 0; }
+    log "SELinux: root login mapped to ${seuser} (${range:-s0}); the relabel gives /root user_home_dir_t"
+}
+
 provision_selinux() {
     local aware=0
     selinux_image_aware && aware=1
@@ -3270,6 +3302,9 @@ EOF
             warn "SELinux mode=enforcing AND hugmesh node policy loaded: those modules' INFERRED-WIDE rules have not been narrowed against a real AVC pass. Prefer permissive + /etc/init.d/selinux-enforce-gate."
     fi
     # ── END hugmesh node-policy load ──
+    # After the store is built and loaded, BEFORE the relabel: the mapping changes
+    # file_contexts.homedirs, which the relabel then applies to /root.
+    selinux_map_root_login "${type}" "${aware}"
     log "Relabelling filesystem (this can take a while)"
     local relabel_ok=1
     # LIVE OVERLAY ROOT: SKIP THE FULL WALK (#503, D3). On the live ISO / is a tmpfs

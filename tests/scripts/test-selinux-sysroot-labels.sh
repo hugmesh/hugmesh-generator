@@ -382,8 +382,9 @@ n_enf="$(grep -c 'enforcing=1' <<<"${live_menu}")"; n_res="$(grep -c 'enforcing=
 grep -q 'SELinux enforcing (test)' <<<"${live_menu}" && grep -q 'SELinux permissive rescue' <<<"${live_menu}" && [ "${n_enf}" = 1 ] && [ "${n_res}" = 1 ] \
     && ok "B6: live menu has exactly one 'SELinux enforcing (test)' (enforcing=1) and one 'permissive rescue' (enforcing=0)" || bad "B6: live opt-in entries missing (enforcing=1 x${n_enf}, enforcing=0 x${n_res})"
 img_menu="$(awk '/^    mkdir -p "\$\{root_mnt\}\/boot\/grub"$/{f=1} f{print} f&&/> "\$\{root_mnt\}\/boot\/grub\/grub.cfg"/{exit}' "${X86}")"
-grep -q 'set default=0' <<<"${img_menu}" && grep -q 'SELinux permissive rescue' <<<"${img_menu}" && [ "$(grep -c 'enforcing=0' <<<"${img_menu}")" = 1 ] \
-    && ok "B6: .img grub.cfg keeps default=0 and appends one permissive rescue entry" || bad "B6: .img rescue entry missing or default changed"
+# (static cheap pin; the entry COUNTS are asserted on an executed grub.cfg in section I5)
+grep -q 'set default=0' <<<"${img_menu}" && grep -q 'SELinux permissive rescue' <<<"${img_menu}" && grep -q 'SELinux enforcing (test)' <<<"${img_menu}" \
+    && ok "B6: .img grub.cfg keeps default=0 and appends permissive rescue + enforcing (test) entries" || bad "B6: .img rescue/test entries missing or default changed"
 grep -vE '^[[:space:]]*#' "${GRUBDEF}" | grep 'enforcing=' >/dev/null && bad "B6: specs-x86/etc/default/grub now forces enforcing=" || ok "B6: specs-x86/etc/default/grub carries no enforcing= (default stays permissive)"
 # B7: the false "UNLABELED at pack time" comment is gone
 grep -q 'sysroot is UNLABELED at pack time' "${X86}" && bad "B7: builder still claims the sysroot is unlabelled at pack time" || ok "B7: builder comment no longer claims an unlabelled pack"
@@ -623,15 +624,12 @@ l_wtl="$(ln_of '^[0-9]+:for _lrec in wtmp lastlog; do$')"
     || bad "login records not pre-created before the label pass (create=${l_wtmp:-none} loop=${l_wtl:-none} store=${l_sto:-?})"
 grep -q '^    "/var/log/wtmp:wtmp_t"' "${LIB}" && ok "the label gates pin /var/log/wtmp as wtmp_t at every hop" || bad "/var/log/wtmp:wtmp_t is not a core probe"
 # What systemd-tmpfiles-setup would create in "/" (enforcing, 2026-11-04): /srv is
-# shipped, portage's tmpdir entry is masked, both BEFORE the label pass.
-l_srv="$(ln_of '^[0-9]+:install -d -m 0755 "\$\{SYSROOT\}/srv"$')"
+# shipped, portage's tmpdir entry is masked, both BEFORE the label pass. Shipped by
+# slx_ship_bootpath_files (executed in section I); here only its x86 placement.
+l_srv="$(ln_of '^[0-9]+:slx_ship_bootpath_files "\$\{SYSROOT\}" "\$\{SHARED_SPECS\}"')"
 [ -n "${l_srv}" ] && [ "${l_srv}" -lt "${l_sto}" ] \
-    && ok "builder ships /srv before the label pass (systemd home.conf 'q /srv' then never mkdirs in root_t)" \
-    || bad "builder does not ship /srv before the label pass (srv=${l_srv:-none} store=${l_sto:-?})"
-l_ptm="$(ln_of 'install -D -m 0644 "\$\{SHARED_SPECS\}/etc/tmpfiles.d/portage-tmpdir.conf" "\$\{SYSROOT\}/etc/tmpfiles.d/portage-tmpdir.conf"')"
-[ -n "${l_ptm}" ] && [ "${l_ptm}" -lt "${l_sto}" ] \
-    && ok "builder masks portage-tmpdir.conf in /etc/tmpfiles.d before the label pass" \
-    || bad "builder does not install the portage-tmpdir.conf mask before the label pass (mask=${l_ptm:-none} store=${l_sto:-?})"
+    && ok "x86 builder ships /srv + the portage-tmpdir.conf mask (slx_ship_bootpath_files) before the label pass" \
+    || bad "x86 builder does not call slx_ship_bootpath_files before the label pass (call=${l_srv:-none} store=${l_sto:-?})"
 PTM="${REPO}/specs/etc/tmpfiles.d/portage-tmpdir.conf"
 [ -f "${PTM}" ] && [ "$(grep -vcE '^[[:space:]]*(#|$)' "${PTM}")" = 0 ] \
     && ok "specs/etc/tmpfiles.d/portage-tmpdir.conf is a mask (comments only — a live line would re-create /var/tmp/portage)" \
@@ -645,6 +643,362 @@ l_lab1="$(ln_of 'slx_label_tree "\$\{SYSROOT\}" "\$\{SLX_TYPE\}"')"
     || bad "slx_map_root_login missing or misplaced (store=${l_sto:-?} map=${l_map:-none} setfiles=${l_lab1:-?})"
 grep -qE '^slx_map_root_login\(\)' "${LIB}" && ok "lib defines slx_map_root_login()" || bad "lib lost slx_map_root_login()"
 grep -q '^    "/root:user_home_dir_t"' "${LIB}" && ok "the label gates pin /root as user_home_dir_t at every hop (default_t = 3 login denials per boot)" || bad "/root:user_home_dir_t is not a core probe"
+
+# ══ I) #863 refute, blockers 3 and 4: every image carries a permissive rescue AND an
+# enforcing (test) entry, and the boot-path fixes ship on every builder. Executed
+# against fixtures wherever the code can run off-target; the remaining pins are
+# placement checks on comment-stripped source.
+echo "-- I) SELinux rescue/trial entries + boot-path files on every builder (#863 refute) --"
+ALL_BUILDERS=()
+for b in "${REPO}"/build-*-stage4.sh; do ALL_BUILDERS+=("${b}"); done
+[ "${#ALL_BUILDERS[@]}" = 10 ] && ok "I: ten stage4 builders found" || bad "I: expected 10 stage4 builders, found ${#ALL_BUILDERS[@]}"
+
+# I1) slx_ship_bootpath_files EXECUTED, then its call site in EVERY builder.
+BP="${TMP}/bootpath"; mkdir -p "${BP}/sysroot" "${BP}/specs/etc/tmpfiles.d"
+cp "${REPO}/specs/etc/tmpfiles.d/portage-tmpdir.conf" "${BP}/specs/etc/tmpfiles.d/"
+( . "${LIB}"; slx_ship_bootpath_files "${BP}/sysroot" "${BP}/specs" ) >/dev/null 2>&1; rc=$?
+[ "${rc}" = 0 ] && [ -d "${BP}/sysroot/srv" ] && cmp -s "${BP}/sysroot/etc/tmpfiles.d/portage-tmpdir.conf" "${REPO}/specs/etc/tmpfiles.d/portage-tmpdir.conf" \
+    && ok "I1: slx_ship_bootpath_files ships /srv and the exact portage-tmpdir.conf mask" \
+    || bad "I1: slx_ship_bootpath_files rc=${rc}, /srv=$([ -d "${BP}/sysroot/srv" ] && echo y || echo n)"
+rm -f "${BP}/specs/etc/tmpfiles.d/portage-tmpdir.conf"
+( . "${LIB}"; slx_ship_bootpath_files "${BP}/sysroot2" "${BP}/specs" ) >/dev/null 2>&1; rc=$?
+[ "${rc}" != 0 ] && ok "I1: a missing mask source fails the call (rc=${rc}), never a silent partial ship" || bad "I1: a missing mask source returned 0"
+for b in "${ALL_BUILDERS[@]}"; do
+    bn="${b##*/}"; bnc="${TMP}/${bn}.nc"; grep -nvE '^[[:space:]]*#' "${b}" > "${bnc}"
+    l_call="$({ grep -E -m1 '^[0-9]+:slx_ship_bootpath_files "\$\{SYSROOT\}" "\$\{SHARED_SPECS\}"' "${bnc}" || true; } | cut -d: -f1)"
+    l_fail="$({ grep -E -m1 '^[0-9]+:    \|\| \{ err "could not ship the SELinux boot-path files' "${bnc}" || true; } | cut -d: -f1)"
+    # The first point the sysroot is frozen: the build-time label store (x86, Frite),
+    # else the stage4 tarball pack.
+    l_frz="$({ grep -E -m1 '^[0-9]+:slx_store_install_modules "\$\{SYSROOT\}"' "${bnc}" || true; } | cut -d: -f1)"
+    [ -n "${l_frz}" ] || l_frz="$({ grep -E -m1 '^[0-9]+:STAGE4(_TARBALL)?="\$\{WORK_DIR\}' "${bnc}" || true; } | cut -d: -f1)"
+    [ -n "${l_call}" ] && [ -n "${l_fail}" ] && [ "${l_fail}" = $((l_call + 1)) ] && [ -n "${l_frz}" ] && [ "${l_call}" -lt "${l_frz}" ] \
+        && ok "I1: ${bn} ships /srv + the tmpfiles mask (fatal on failure) before its sysroot is labelled/packed" \
+        || bad "I1: ${bn}: slx_ship_bootpath_files call=${l_call:-none} fail-line=${l_fail:-none} frozen-at=${l_frz:-?}"
+done
+
+# I2) The root login mapping on every image: x86 + Frite at build time (in the label
+# chain, between store install and setfiles), the first-boot-labelled ARM images in
+# provision_selinux (executed in test-selinux-policy-install.sh, section E-root).
+FRITE="${REPO}/build-frite-stage4.sh"; FNC="${TMP}/frite.nc"; grep -nvE '^[[:space:]]*#' "${FRITE}" > "${FNC}"
+f_ln() { { grep -E -m1 -- "$1" "${FNC}" || true; } | cut -d: -f1; }
+f_sto="$(f_ln 'slx_store_install_modules "\$\{SYSROOT\}" "\$\{SLX_TYPE\}" chroot')"
+f_map="$(f_ln 'slx_map_root_login "\$\{SYSROOT\}" "\$\{SLX_TYPE\}" chroot')"
+f_lab="$(f_ln 'slx_label_tree "\$\{SYSROOT\}" "\$\{SLX_TYPE\}"')"
+[ -n "${f_sto}" ] && [ -n "${f_map}" ] && [ -n "${f_lab}" ] && [ "${f_sto}" -lt "${f_map}" ] && [ "${f_map}" -lt "${f_lab}" ] \
+    && ok "I2: Frite maps the root login after its store install and before setfiles (in the qemu chroot chain)" \
+    || bad "I2: Frite root login mapping missing or misplaced (store=${f_sto:-?} map=${f_map:-none} setfiles=${f_lab:-?})"
+for b in "${ALL_BUILDERS[@]}"; do
+    bn="${b##*/}"
+    if grep -vE '^[[:space:]]*#' "${b}" | grep -E 'slx_store_install_modules "\$\{SYSROOT\}"' >/dev/null; then
+        grep -vE '^[[:space:]]*#' "${b}" | grep -E 'slx_map_root_login "\$\{SYSROOT\}"' >/dev/null \
+            && ok "I2: ${bn} builds its store at build time and maps the root login there" \
+            || bad "I2: ${bn} builds its store at build time but never maps the root login (/root stays default_t)"
+    fi
+done
+pv_end="$(grep -n '# ── END hugmesh node-policy load ──' "${PROV}" | head -1 | cut -d: -f1)"
+pv_map="$(grep -nE '^[[:space:]]+selinux_map_root_login "\$\{type\}" "\$\{aware\}"$' "${PROV}" | head -1 | cut -d: -f1)"
+pv_rel="$(grep -n 'log "Relabelling filesystem' "${PROV}" | head -1 | cut -d: -f1)"
+[ -n "${pv_end}" ] && [ -n "${pv_map}" ] && [ -n "${pv_rel}" ] && [ "${pv_end}" -lt "${pv_map}" ] && [ "${pv_map}" -lt "${pv_rel}" ] \
+    && ok "I2: provision_selinux maps the root login after the node-policy load and before the relabel (first-boot ARM images)" \
+    || bad "I2: provision_selinux root mapping missing or misplaced (load-end=${pv_end:-?} map=${pv_map:-none} relabel=${pv_rel:-?})"
+
+# I3) x86: the dracut UKI loop, EXECUTED. The block lives in an unquoted <<CHROOT
+# heredoc, so expand it host-side exactly as bash would, then run it with a dracut stub.
+UV_LINE="$(grep -E '^UKI_VARIANTS=\(' "${X86}" | head -1)"
+[ -n "${UV_LINE}" ] && ok "I3: the builder carries one UKI_VARIANTS table" || bad "I3: no UKI_VARIANTS table in the x86 builder"
+DRB="${TMP}/dracut-uki"; mkdir -p "${DRB}"
+awk '/^if command -v dracut >\/dev\/null && dracut --help 2>\/dev\/null \| grep -q -- .--uefi.; then$/{f=1} f{print} f&&/^fi$/{exit}' "${X86}" > "${DRB}/block.raw"
+if [ ! -s "${DRB}/block.raw" ]; then
+    bad "I3: could not cut the dracut --uefi block out of the x86 builder"
+else
+    ( eval "${UV_LINE}"; UKI_VARIANTS_CHROOT="${UKI_VARIANTS[*]}"; UKI_NAME=hugmesh.efi
+      eval "cat <<CHROOT_X
+$(cat "${DRB}/block.raw")
+CHROOT_X" ) > "${DRB}/block.sh"
+    cat > "${DRB}/run.sh" <<'EOS'
+set -eo pipefail
+dracut() { if [ "$1" = --help ]; then echo "  --uefi  create a UEFI executable"; return 0; fi
+           local a out cmd; for a in "$@"; do out="${a}"; done
+           while [ $# -gt 0 ]; do [ "$1" = --kernel-cmdline ] && cmd="$2"; shift; done
+           printf '%s\t%s\n' "${out}" "${cmd}" >> "${CALLS}"; }
+CMDLINE="root=LABEL=SNAP_ROOT ro lsm=lockdown,yama,selinux,bpf selinux=1 audit=1"; KVER=6.18.52-gentoo
+EOS
+    cat "${DRB}/block.sh" >> "${DRB}/run.sh"
+    CALLS="${DRB}/calls" bash "${DRB}/run.sh" > "${DRB}/out" 2>&1; rc=$?
+    n_calls="$(wc -l < "${DRB}/calls" 2>/dev/null || echo 0)"
+    def_cmd="$(awk -F'\t' '$1=="/boot/hugmesh-unsigned.efi"{print $2}' "${DRB}/calls" 2>/dev/null)"
+    res_cmd="$(awk -F'\t' '$1=="/boot/hugmesh-selinux-rescue-unsigned.efi"{print $2}' "${DRB}/calls" 2>/dev/null)"
+    enf_cmd="$(awk -F'\t' '$1=="/boot/hugmesh-selinux-enforcing-test-unsigned.efi"{print $2}' "${DRB}/calls" 2>/dev/null)"
+    B="root=LABEL=SNAP_ROOT ro lsm=lockdown,yama,selinux,bpf selinux=1 audit=1"
+    [ "${rc}" = 0 ] && [ "${n_calls}" = 3 ] && [ "${def_cmd}" = "${B}" ] && [ "${res_cmd}" = "${B} enforcing=0" ] && [ "${enf_cmd}" = "${B} enforcing=1" ] \
+        && ok "I3: the kernel chroot builds three UKIs: default (no enforcing=), -selinux-rescue (enforcing=0 last), -selinux-enforcing-test (enforcing=1 last)" \
+        || bad "I3: dracut UKI loop rc=${rc} calls=${n_calls}: $(cat "${DRB}/calls" 2>/dev/null) $(cat "${DRB}/out")"
+fi
+kci="$(awk '/^kernel_cache_inputs\(\) \{/{f=1} f{print} f&&/^}/{exit}' "${X86}" | grep -vE '^[[:space:]]*#')"
+grep -F "printf 'uki-variants=%s\\n' \"\${UKI_VARIANTS_CHROOT}\"" <<<"${kci}" >/dev/null \
+    && ok "I3: the kernel-cache key carries the UKI variant table (a pre-twin cache entry cannot HIT and skip the twins)" \
+    || bad "I3: kernel_cache_inputs does not fold in UKI_VARIANTS_CHROOT"
+
+# I4) x86: the Secure Boot sign step, EXECUTED with sbsign stubbed, for every branch.
+SGB="${TMP}/sign"; mkdir -p "${SGB}"
+awk '/^SBDIR="\$\{WORK_DIR\}\/secureboot"$/{f=1} /^# ── 8\. Clean/{exit} f{print}' "${X86}" > "${SGB}/block.sh"
+grep -q 'uki_variant_paths' "${SGB}/block.sh" || bad "I4: could not cut the sign step (no uki_variant_paths in it)"
+# sign_run <case> <secure_boot> <sbsign: stub|absent> <unsigned twins present: all|no-rescue|none> -> rc; dir ${SGB}/<case>
+sign_run() {
+    local d="${SGB}/$1"; rm -rf "${d}"; mkdir -p "${d}/sysroot/boot" "${d}/work/secureboot" "${d}/bin"
+    : > "${d}/work/secureboot/sb.key"; : > "${d}/work/secureboot/sb.crt"; : > "${d}/work/secureboot/sb.cer"
+    case "$4" in
+        all)       for n in hugmesh hugmesh-selinux-rescue hugmesh-selinux-enforcing-test; do echo "uki ${n}" > "${d}/sysroot/boot/${n}-unsigned.efi"; done ;;
+        no-rescue) for n in hugmesh hugmesh-selinux-enforcing-test; do echo "uki ${n}" > "${d}/sysroot/boot/${n}-unsigned.efi"; done ;;
+        none) ;;
+    esac
+    # A private PATH: the tools the step uses and, for "stub", an sbsign that signs by
+    # prefixing SIGNED. Never the host's sbsign/openssl.
+    for t in cp rm mkdir cat sh; do ln -sf "$(type -P "${t}")" "${d}/bin/${t}"; done
+    [ "$3" = stub ] && { printf '#!/bin/sh\nwhile [ $# -gt 2 ]; do [ "$1" = --output ] && o="$2"; shift; done\n{ echo SIGNED; cat "$2"; } > "$o"; echo "$o" >> "%s/sbsign.calls"\n' "${d}" > "${d}/bin/sbsign"; chmod +x "${d}/bin/sbsign"; }
+    ( set -e
+      info() { :; }; warn() { :; }; err() { echo "ERR: $*" >&2; }
+      PATH="${d}/bin"
+      eval "${UV_LINE}"; UKI_NAME=hugmesh.efi
+      SYSROOT="${d}/sysroot"; WORK_DIR="${d}/work"; SECUREBOOT_KEY=""; SECUREBOOT_CERT=""
+      SECURE_BOOT="$2"; SB_ETC_DIR=/etc/hugmesh/secureboot; ORG=x; BRAND=x; SB_CERT_CN=x; SB_CERT_O=x
+      . "${SGB}/block.sh" ) > "${d}/out" 2>&1
+}
+sign_run sb true stub all; rc=$?
+d="${SGB}/sb"; okc=0
+for n in hugmesh hugmesh-selinux-rescue hugmesh-selinux-enforcing-test; do
+    [ "$(head -1 "${d}/sysroot/boot/${n}.efi" 2>/dev/null)" = SIGNED ] && [ ! -e "${d}/sysroot/boot/${n}-unsigned.efi" ] && okc=$((okc+1))
+done
+[ "${rc}" = 0 ] && [ "${okc}" = 3 ] && [ "$(wc -l < "${d}/sbsign.calls")" = 3 ] \
+    && ok "I4: Secure Boot ON: all three UKIs are signed with the org key (sbsign x3), unsigned copies removed" \
+    || bad "I4: sign step rc=${rc}, signed=${okc}/3: $(cat "${d}/out")"
+sign_run norescue true stub no-rescue; rc=$?
+[ "${rc}" != 0 ] && grep -q 'UKI twin missing: .*hugmesh-selinux-rescue-unsigned.efi' "${SGB}/norescue/out" && [ ! -e "${SGB}/norescue/sysroot/boot/hugmesh.efi" ] \
+    && ok "I4: a default UKI without its rescue twin stops the build BEFORE anything is signed" \
+    || bad "I4: missing rescue twin: rc=${rc}, out: $(cat "${SGB}/norescue/out")"
+sign_run nosb false stub all; rc=$?
+d="${SGB}/nosb"; okc=0
+for n in hugmesh hugmesh-selinux-rescue hugmesh-selinux-enforcing-test; do [ -f "${d}/sysroot/boot/${n}.efi" ] && [ ! -e "${d}/sysroot/boot/${n}-unsigned.efi" ] && okc=$((okc+1)); done
+[ "${rc}" = 0 ] && [ "${okc}" = 3 ] && [ ! -e "${d}/sbsign.calls" ] \
+    && ok "I4: --no-secure-boot: all three UKIs land under their final names (unsigned, as the default does)" \
+    || bad "I4: --no-secure-boot: rc=${rc} landed=${okc}/3: $(cat "${d}/out")"
+sign_run nosbsign true absent all; rc=$?
+d="${SGB}/nosbsign"; okc=0
+for n in hugmesh hugmesh-selinux-rescue hugmesh-selinux-enforcing-test; do [ -f "${d}/sysroot/boot/${n}.efi" ] && [ ! -e "${d}/sysroot/boot/${n}-unsigned.efi" ] && okc=$((okc+1)); done
+[ "${rc}" = 0 ] && [ "${okc}" = 3 ] \
+    && ok "I4: no sbsign on the host: all three UKIs land under their final names (the default's posture)" \
+    || bad "I4: no sbsign: rc=${rc} landed=${okc}/3: $(cat "${d}/out")"
+sign_run nouki true stub none; rc=$?
+[ "${rc}" = 0 ] && [ -z "$(ls "${SGB}/nouki/sysroot/boot")" ] \
+    && ok "I4: no UKI built at all (dracut without --uefi): the twin check does not fire, nothing is invented" \
+    || bad "I4: no UKI at all: rc=${rc} boot=$(ls "${SGB}/nouki/sysroot/boot") out: $(cat "${SGB}/nouki/out")"
+
+# I5) x86 .img: the ESP install loop and the hand-written grub.cfg, EXECUTED.
+IMB="${TMP}/img"; mkdir -p "${IMB}"
+awk '/^    local uki_src="\$\{SYSROOT\}\/boot\/\$\{UKI_NAME\}"$/{f=1} f{print} f&&/No signed UKI at/{g=1} g&&/^    fi$/{exit}' "${X86}" > "${IMB}/esp.sh"
+awk '/^    local cmdline=""$/{f=1} f{print} f&&/> "\$\{root_mnt\}\/boot\/grub\/grub.cfg"$/{exit}' "${X86}" > "${IMB}/grub.sh"
+[ -s "${IMB}/esp.sh" ] && [ -s "${IMB}/grub.sh" ] || bad "I5: could not cut the ESP/grub.cfg blocks out of build_img"
+# img_run <case> <uki_name> <twins: all|no-rescue|none> -> rc; grub.cfg at ${IMB}/<case>/root/boot/grub/grub.cfg
+img_run() {
+    local d="${IMB}/$1"; rm -rf "${d}"; mkdir -p "${d}/sysroot/boot" "${d}/root/boot/efi" "${d}/root/etc/default"
+    printf 'GRUB_CMDLINE_LINUX="lsm=lockdown,yama,selinux,bpf selinux=1 audit=1"\n' > "${d}/root/etc/default/grub"
+    local base="${2%.efi}"
+    case "$3" in
+        all)       for n in "${base}" "${base}-selinux-rescue" "${base}-selinux-enforcing-test"; do echo x > "${d}/sysroot/boot/${n}.efi"; done ;;
+        no-rescue) for n in "${base}" "${base}-selinux-enforcing-test"; do echo x > "${d}/sysroot/boot/${n}.efi"; done ;;
+    esac
+    { echo 'img_fn() {'; cat "${IMB}/esp.sh" "${IMB}/grub.sh"; echo '}'; } > "${d}/fn.sh"
+    ( info() { :; }; warn() { :; }; err() { echo "ERR: $*" >&2; }
+      eval "${UV_LINE}"; UKI_NAME="$2"; SYSROOT="${d}/sysroot"; root_mnt="${d}/root"
+      SB_ETC_DIR=/nonexistent; SB_EFI_VENDOR=x; BRAND_TITLE="Brand"; ROLE=backend
+      esp_fsuuid=ESP-UUID; root_fsuuid=ROOT-UUID; root_uuid=ROOT-PARTUUID; vmlinuz=vmlinuz-6.18.52; initrd=initramfs-6.18.52.img
+      . "${d}/fn.sh"; img_fn ) > "${d}/out" 2>&1
+}
+img_run uki hugmesh.efi all; rc=$?
+G5="${IMB}/uki/root/boot/grub/grub.cfg"
+if [ "${rc}" != 0 ] || [ ! -s "${G5}" ]; then
+    bad "I5: build_img's ESP/grub blocks did not run: rc=${rc} $(cat "${IMB}/uki/out")"
+else
+    # entry index (0-based) of the first menuentry whose block matches <ERE>
+    entry_of() { awk -v re="$1" '/^menuentry /{n++} n>0 && $0 ~ re {print n-1; exit}' "${G5}"; }
+    n_ent="$(grep -c '^menuentry ' "${G5}")"
+    e_def="$(entry_of 'chainloader /EFI/Linux/hugmesh[.]efi$')"
+    e_ures="$(entry_of 'chainloader /EFI/Linux/hugmesh-selinux-rescue[.]efi$')"
+    e_uenf="$(entry_of 'chainloader /EFI/Linux/hugmesh-selinux-enforcing-test[.]efi$')"
+    e_lres="$(entry_of 'linux .* enforcing=0$')"; e_lenf="$(entry_of 'linux .* enforcing=1$')"
+    grep -q '^set default=0$' "${G5}" && [ "${e_def}" = 0 ] \
+        && ok "I5: .img default=0 is still the plain Secure Boot UKI" || bad "I5: default entry moved (default UKI is entry ${e_def:-none}): $(cat "${G5}")"
+    [ -n "${e_ures}" ] && [ "${e_ures}" -gt 1 ] && [ -f "${IMB}/uki/root/boot/efi/EFI/Linux/hugmesh-selinux-rescue.efi" ] \
+        && ok "I5: a signed-chain PERMISSIVE RESCUE entry (chainloads hugmesh-selinux-rescue.efi, installed on the ESP), appended after the defaults" \
+        || bad "I5: no UKI rescue entry after the defaults (entry=${e_ures:-none}): $(cat "${G5}")"
+    [ -n "${e_uenf}" ] && [ "${e_uenf}" -gt 1 ] && [ -f "${IMB}/uki/root/boot/efi/EFI/Linux/hugmesh-selinux-enforcing-test.efi" ] \
+        && ok "I5: a signed-chain ENFORCING (test) entry (chainloads hugmesh-selinux-enforcing-test.efi), appended" \
+        || bad "I5: no UKI enforcing (test) entry (entry=${e_uenf:-none})"
+    [ -n "${e_lres}" ] && [ -n "${e_lenf}" ] && [ "${e_lres}" -gt 1 ] && [ "${e_lenf}" -gt 1 ] \
+        && [ "$(grep -c 'enforcing=0$' "${G5}")" = 1 ] && [ "$(grep -c 'enforcing=1$' "${G5}")" = 1 ] \
+        && ok "I5: GRUB+vmlinuz: one permissive rescue (enforcing=0) and one enforcing (test) (enforcing=1) entry, both appended" \
+        || bad "I5: GRUB+vmlinuz rescue/test entries wrong (rescue=${e_lres:-none} test=${e_lenf:-none})"
+    awk '/^menuentry /{n++} n==2' "${G5}" | grep 'enforcing=' >/dev/null \
+        && bad "I5: the plain GRUB+vmlinuz entry (1) carries enforcing=" || ok "I5: entries 0 and 1 carry no enforcing= (default boots stay permissive-by-config)"
+    for t in 'Secure Boot UKI, SELinux permissive rescue' 'Secure Boot UKI, SELinux enforcing (test)' '— SELinux permissive rescue' '— SELinux enforcing (test)'; do
+        grep -F "${t}" "${G5}" >/dev/null || bad "I5: no menu title containing '${t}'"
+    done
+    [ "${n_ent}" = 6 ] && ok "I5: six entries in all (UKI, plain, rescue, UKI rescue, UKI test, test)" || bad "I5: ${n_ent} menu entries, want 6: $(grep '^menuentry' "${G5}")"
+fi
+img_run noukirescue hugmesh.efi no-rescue; rc=$?
+[ "${rc}" != 0 ] && grep -q 'UKI twin .*hugmesh-selinux-rescue.efi missing' "${IMB}/noukirescue/out" \
+    && ok "I5: build_img refuses to seal an .img whose default UKI has no rescue twin" \
+    || bad "I5: missing rescue twin at build_img: rc=${rc} $(cat "${IMB}/noukirescue/out")"
+img_run nouki hugmesh.efi none; rc=$?
+G5n="${IMB}/nouki/root/boot/grub/grub.cfg"
+[ "${rc}" = 0 ] && ! grep -q chainloader "${G5n}" && [ "$(grep -c 'enforcing=0$' "${G5n}")" = 1 ] && [ "$(grep -c 'enforcing=1$' "${G5n}")" = 1 ] \
+    && ok "I5: no UKI at all: no chainloader entries, the GRUB+vmlinuz rescue and test entries remain" \
+    || bad "I5: no-UKI .img: rc=${rc} $(cat "${G5n}" 2>/dev/null) $(cat "${IMB}/nouki/out")"
+img_run neutral gentoo.efi all; rc=$?
+[ "${rc}" = 0 ] && grep -q 'chainloader /EFI/Linux/gentoo-selinux-rescue.efi$' "${IMB}/neutral/root/boot/grub/grub.cfg" \
+    && ! grep -qi hugmesh "${IMB}/neutral/root/boot/grub/grub.cfg" \
+    && ok "I5: UNAFFILIATED: the twins follow UKI_NAME (gentoo-selinux-rescue.efi), no brand string" \
+    || bad "I5: unaffiliated twins: rc=${rc} $(grep chainloader "${IMB}/neutral/root/boot/grub/grub.cfg" 2>/dev/null)"
+
+# I6) x86 installed via install-x86.sh (grub-mkconfig): 12_selinux_enforcing_test,
+# EXECUTED against the same kind of stand-in 10_linux as section H.
+GD12="${REPO}/specs-x86/etc/grub.d/12_selinux_enforcing_test"
+if [ ! -x "${GD12}" ]; then
+    bad "I6: specs-x86/etc/grub.d/12_selinux_enforcing_test is missing or not executable"
+else
+    GT12="${TMP}/grubd12"; mkdir -p "${GT12}"; cp "${GD12}" "${GT12}/"
+    cat > "${GT12}/10_linux" <<'EOS'
+#!/bin/sh
+echo "Found linux image: /boot/vmlinuz-6.18.52-gentoo" >&2
+for k in 6.18.52-gentoo 6.18.51-gentoo; do
+  if [ "${GRUB_DISABLE_SUBMENU}" != true ] && [ "${k}" = 6.18.52-gentoo ]; then
+    echo "menuentry 'Gentoo GNU/Linux' --class os \$menuentry_id_option 'gnulinux-simple-abc' {"
+    echo "	linux /boot/vmlinuz-${k} root=UUID=abc ro ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}"; echo "}"
+    echo "submenu 'Advanced options for Gentoo GNU/Linux' \$menuentry_id_option 'gnulinux-advanced-abc' {"
+  fi
+  echo "menuentry 'Gentoo GNU/Linux, with Linux ${k}' --class os \$menuentry_id_option 'gnulinux-${k}-advanced-abc' {"
+  [ "${GRUB_SAVEDEFAULT}" = true ] && echo "	savedefault"
+  echo "	linux /boot/vmlinuz-${k} root=UUID=abc ro ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}"; echo "}"
+  [ "${GRUB_DISABLE_RECOVERY}" != true ] && { echo "menuentry 'Gentoo GNU/Linux, with Linux ${k} (recovery mode)' {"; echo "	linux /boot/vmlinuz-${k} single"; echo "}"; }
+done
+[ "${GRUB_DISABLE_SUBMENU}" != true ] && echo "}"
+exit 0
+EOS
+    chmod +x "${GT12}/10_linux"
+    GRUB_CMDLINE_LINUX="selinux=1 audit=1 enforcing=0" GRUB_CMDLINE_LINUX_DEFAULT="quiet" GRUB_SAVEDEFAULT=true \
+        sh "${GT12}/12_selinux_enforcing_test" > "${GT12}/out" 2> "${GT12}/err"
+    n_me="$(grep -c '^menuentry ' "${GT12}/out")"
+    n_t="$(grep -c "^menuentry '[^']* (SELinux enforcing (test))' .*-selinux-enforcing-test' {" "${GT12}/out")"
+    [ "${n_me}" = 2 ] && [ "${n_t}" = 2 ] && ok "I6: grub.d: one enforcing (test) entry per kernel (2/2), titled and id'd as such" \
+        || bad "I6: grub.d: want 2 test entries, got menuentry=${n_me} titled=${n_t}: $(cat "${GT12}/out")"
+    [ "$(grep -c '^[[:space:]]*linux ' "${GT12}/out")" = 2 ] && [ "$(grep -c -- ' enforcing=1$' "${GT12}/out")" = 2 ] \
+        && ok "I6: grub.d: every test linux line ENDS in enforcing=1 (the kernel takes the last)" \
+        || bad "I6: grub.d: enforcing=1 not last on every linux line: $(grep 'linux ' "${GT12}/out")"
+    grep -Eq '^submenu|recovery mode|savedefault|gnulinux-simple' "${GT12}/out" \
+        && bad "I6: grub.d: emitted a submenu / recovery / savedefault / the plain entry" || ok "I6: grub.d: flat test entries only"
+    [ ! -s "${GT12}/err" ] && ok "I6: grub.d: quiet on stderr" || bad "I6: grub.d stderr: $(cat "${GT12}/err")"
+    rm "${GT12}/10_linux"
+    sh "${GT12}/12_selinux_enforcing_test" > "${GT12}/out" 2>&1; rc=$?
+    [ "${rc}" = 0 ] && [ ! -s "${GT12}/out" ] && ok "I6: grub.d: no 10_linux -> nothing, exit 0" || bad "I6: grub.d without 10_linux rc=${rc}"
+    grep -i hugmesh "${GD12}" >/dev/null && bad "I6: grub.d test snippet carries the brand name" || ok "I6: grub.d test snippet is brand-neutral"
+fi
+l_gd12="$(ln_of 'install -D -m 0755 "\$\{SPECS_DIR\}/etc/grub.d/12_selinux_enforcing_test"')"
+[ -n "${l_gd12}" ] && [ "${l_gd12}" -lt "${l_sto}" ] && ok "I6: the x86 builder installs 12_selinux_enforcing_test before the label pass" \
+    || bad "I6: the x86 builder does not install etc/grub.d/12_selinux_enforcing_test (line=${l_gd12:-none})"
+
+# I7) ARM extlinux images (Frite, Jetson, six Orange Pis): render each template, then
+# run that board's OWN installer root= seds over it.
+for tmpl in "${REPO}"/specs-*/boot/extlinux.conf.tmpl; do
+    brd="${tmpl#"${REPO}"/specs-}"; brd="${brd%%/*}"
+    R="${TMP}/ext-${brd}.conf"
+    # every @@X_APPEND@@ gets a realistic medium cmdline, every other token a dummy
+    sed -E -e 's/@@[A-Z0-9]+_APPEND@@/console=ttyS0 lsm=lockdown,yama,selinux selinux=1 audit=1 root=LABEL=BRD_ROOT/g' \
+           -e 's/@@[A-Z0-9]+_INITRD_LINE@@/    INITRD \/initrd.img/g' -e 's/@@[A-Za-z0-9_]+@@/X/g' "${tmpl}" > "${R}"
+    def="$(sed -n 's/^DEFAULT[[:space:]]\{1,\}//p' "${R}" | head -1)"
+    # label_field <label> <KEY> -> the value of KEY inside LABEL <label>
+    label_field() { awk -v L="$1" -v K="$2" '$1=="LABEL"{cur=$2; next} cur==L && $1==K {sub(/^[[:space:]]*[A-Z]+[[:space:]]+/,""); print; exit}' "${R}"; }
+    d_app="$(label_field "${def}" APPEND)"; d_lin="$(label_field "${def}" LINUX)"; d_fdt="$(label_field "${def}" FDT)"; d_ini="$(label_field "${def}" INITRD)"
+    r_lbl="$(awk '$1=="LABEL"{l=$2} $1=="APPEND" && / enforcing=0$/{print l; exit}' "${R}")"
+    t_lbl="$(awk '$1=="LABEL"{l=$2} $1=="APPEND" && / enforcing=1$/{print l; exit}' "${R}")"
+    if [ -z "${def}" ] || [ -z "${d_app}" ]; then bad "I7: ${brd}: no DEFAULT label / APPEND in the rendered template"; continue; fi
+    case " ${d_app} " in *" enforcing="*) bad "I7: ${brd}: the DEFAULT label's APPEND carries enforcing=" ;; *) ok "I7: ${brd}: DEFAULT ${def} unchanged (no enforcing=)" ;; esac
+    if [ -n "${r_lbl}" ] && [ -n "${t_lbl}" ] && [ "${r_lbl}" != "${def}" ] && [ "${t_lbl}" != "${def}" ] \
+       && [ "$(label_field "${r_lbl}" APPEND)" = "${d_app} enforcing=0" ] && [ "$(label_field "${t_lbl}" APPEND)" = "${d_app} enforcing=1" ] \
+       && [ "$(label_field "${r_lbl}" LINUX)" = "${d_lin}" ] && [ "$(label_field "${t_lbl}" LINUX)" = "${d_lin}" ] \
+       && [ "$(label_field "${r_lbl}" FDT)" = "${d_fdt}" ] && [ "$(label_field "${t_lbl}" FDT)" = "${d_fdt}" ] \
+       && [ "$(label_field "${r_lbl}" INITRD)" = "${d_ini}" ] && [ "$(label_field "${t_lbl}" INITRD)" = "${d_ini}" ]; then
+        ok "I7: ${brd}: a permissive rescue (${r_lbl}) and an enforcing (test) (${t_lbl}) label, same kernel/FDT/initrd/cmdline as the default + one token"
+    else
+        bad "I7: ${brd}: rescue/test labels missing or diverge from the default (rescue=${r_lbl:-none} test=${t_lbl:-none}): $(grep -E '^(LABEL|    (APPEND|LINUX|FDT|INITRD))' "${R}")"
+    fi
+    grep -E '^MENU TITLE ' "${R}" >/dev/null && ok "I7: ${brd}: MENU TITLE present (U-Boot's pxe parser sets prompt=1 on it, so the menu is offered)" \
+        || bad "I7: ${brd}: no MENU TITLE: U-Boot would boot the default without offering the SELinux labels"
+    # The installers re-point root= (PARTUUID / LUKS mapper / Frite's ROOT_ARG). Run
+    # every root= sed the board's installer carries, as written, over the rendered file.
+    inst="$(ls "${REPO}/specs-${brd}/installer/"install*.sh 2>/dev/null | head -1)"
+    [ -n "${inst}" ] || { [ "${brd}" = jetson ] && ok "I7: jetson: no installer (the root= is rendered at build time)"; continue; }
+    sedx="$(grep -oE 'sed -i -E "s#root=\[\^ \]\+#[^"]*"' "${inst}")"
+    [ -n "${sedx}" ] || { bad "I7: ${brd}: no root= sed found in ${inst##*/}"; continue; }
+    while IFS= read -r one; do
+        expr="${one#sed -i -E }"; IR="${R}.inst"
+        ( ROOT_PARTUUID=PU-02 LUKS_UUID=LU ROOT_ARG='root=PARTUUID=PU-02'
+          eval "sed -E ${expr}" ) < "${R}" > "${IR}"
+        want="$(eval "ROOT_PARTUUID=PU-02 LUKS_UUID=LU ROOT_ARG='root=PARTUUID=PU-02'; printf '%s' ${expr}" | sed -E 's/^s#root=\[\^ \]\+#//; s/#$//')"
+        n_new="$(grep -E '^[[:space:]]*APPEND ' "${IR}" | grep -cF -- "${want}")"; n_old="$(grep -E '^[[:space:]]*APPEND ' "${IR}" | grep -c 'root=LABEL=BRD_ROOT')"
+        [ "${n_new}" = 3 ] && [ "${n_old}" = 0 ] \
+            && ok "I7: ${brd}: installer sed '${want%% *}…' re-points root= on all three labels (default, rescue, test)" \
+            || bad "I7: ${brd}: installer sed left ${n_old} label(s) on the medium root= (new root on ${n_new}/3)"
+    done <<<"${sedx}"
+done
+
+# I8) Raspberry Pi (no boot menu): the rescue/trial FILES, derived from the final
+# cmdline.txt/config.txt. The builder's and the installer's functions EXECUTED on one
+# fixture; both must agree byte for byte.
+RPI="${REPO}/build-rpi5-stage4.sh"; RPII="${REPO}/specs-rpi5/installer/install.sh"
+for src in "${RPI}" "${RPII}"; do
+    tag="$(basename "${src}")"; RD="${TMP}/rpi-${tag}"; mkdir -p "${RD}"
+    awk '/^rpi_selinux_boot_variants\(\) \{/{f=1} f{print} f&&/^}/{exit}' "${src}" > "${RD}/fn.sh"
+    printf 'console=serial0,115200 root=PARTUUID=abcd-02 rootfstype=ext4 rootwait selinux=1 audit=1\n' > "${RD}/cmdline.txt"
+    printf '[all]\narm_boost=1\n# initramfs disk-initrd.img followkernel\n' > "${RD}/config.txt"
+    ( err() { echo "ERR: $*" >&2; }; . "${RD}/fn.sh"; rpi_selinux_boot_variants "${RD}" ) > "${RD}/out" 2>&1; rc=$?
+    B='console=serial0,115200 root=PARTUUID=abcd-02 rootfstype=ext4 rootwait selinux=1 audit=1'
+    [ "${rc}" = 0 ] && [ "$(cat "${RD}/cmdline-rescue.txt")" = "${B} enforcing=0" ] && [ "$(cat "${RD}/cmdline-enforcing-test.txt")" = "${B} enforcing=1" ] \
+        && [ "$(cat "${RD}/cmdline.txt")" = "${B}" ] \
+        && ok "I8: ${tag}: cmdline-rescue.txt / cmdline-enforcing-test.txt = the final cmdline.txt + enforcing=0/1; cmdline.txt untouched" \
+        || bad "I8: ${tag}: rc=${rc} rescue='$(cat "${RD}/cmdline-rescue.txt" 2>/dev/null)' test='$(cat "${RD}/cmdline-enforcing-test.txt" 2>/dev/null)' $(cat "${RD}/out")"
+    head -3 "${RD}/tryboot.txt" 2>/dev/null | cmp -s - "${RD}/config.txt" && [ "$(tail -1 "${RD}/tryboot.txt")" = 'cmdline=cmdline-enforcing-test.txt' ] \
+        && [ "$(tail -2 "${RD}/tryboot.txt" | head -1)" = '[all]' ] && ! grep -q '^cmdline=' "${RD}/config.txt" \
+        && ok "I8: ${tag}: tryboot.txt = config.txt + an [all] cmdline=cmdline-enforcing-test.txt (config.txt itself never selects a SELinux cmdline)" \
+        || bad "I8: ${tag}: tryboot.txt wrong: $(cat "${RD}/tryboot.txt" 2>/dev/null)"
+    printf 'root=PARTUUID=abcd-02 enforcing=1\n' > "${RD}/cmdline.txt"
+    ( err() { echo "ERR: $*" >&2; }; . "${RD}/fn.sh"; rpi_selinux_boot_variants "${RD}" ) > "${RD}/out2" 2>&1; rc=$?
+    [ "${rc}" != 0 ] && ok "I8: ${tag}: refuses a cmdline.txt that already carries enforcing= (a stale rescue would boot enforcing)" \
+        || bad "I8: ${tag}: accepted a cmdline.txt with enforcing= already on it"
+done
+for f in cmdline-rescue.txt cmdline-enforcing-test.txt tryboot.txt; do
+    cmp -s "${TMP}/rpi-build-rpi5-stage4.sh/${f}" "${TMP}/rpi-install.sh/${f}" || bad "I8: builder and installer derive different ${f}"
+done
+cmp -s "${TMP}/rpi-build-rpi5-stage4.sh/tryboot.txt" "${TMP}/rpi-install.sh/tryboot.txt" && ok "I8: builder and installer functions produce identical files"
+RNC="${TMP}/rpi.nc"; grep -nvE '^[[:space:]]*#' "${RPI}" > "${RNC}"
+r_ln() { { grep -E -- "$1" "${RNC}" || true; } | cut -d: -f1; }
+r_ren="$(r_ln 'render_template "\$\{SPECS_DIR\}/boot/cmdline.txt.tmpl"  "\$\{SYSROOT\}/boot/cmdline.txt"' | head -1)"
+r_sys="$(r_ln 'rpi_selinux_boot_variants "\$\{SYSROOT\}/boot"' | head -1)"
+r_fst="$(r_ln '"\$\{root_mnt\}/etc/fstab"$' | tail -1)"
+r_cml="$(r_ln '"\$\{root_mnt\}/boot/cmdline.txt"' | tail -1)"
+r_img="$(r_ln 'rpi_selinux_boot_variants "\$\{root_mnt\}/boot"' | head -1)"
+r_tar="$(r_ln 'local fs_tar=' | head -1)"
+[ -n "${r_ren}" ] && [ -n "${r_sys}" ] && [ "${r_sys}" -gt "${r_ren}" ] && [ "${r_sys}" -lt $((r_ren + 4)) ] \
+    && ok "I8: rpi5 builder derives the SELinux boot files right after rendering cmdline.txt into the sysroot (the stage4/installer source)" \
+    || bad "I8: rpi5 sysroot derivation missing/misplaced (render=${r_ren:-?} derive=${r_sys:-none})"
+[ -n "${r_img}" ] && [ -n "${r_cml}" ] && [ -n "${r_fst}" ] && [ "${r_img}" -gt "${r_cml}" ] && [ "${r_img}" -gt "${r_fst}" ] && [ "${r_img}" -lt "${r_tar}" ] \
+    && ok "I8: rpi5 build_img re-derives them AFTER its last cmdline.txt/fstab rewrite and before the fs tarball" \
+    || bad "I8: rpi5 build_img derivation missing/misplaced (last-cmdline-edit=${r_cml:-?} fstab=${r_fst:-?} derive=${r_img:-none} tar=${r_tar:-?})"
+i_der="$(grep -n '^rpi_selinux_boot_variants /mnt/rpi-boot$' "${RPII}" | head -1 | cut -d: -f1)"
+i_last="$(grep -nE '/mnt/rpi-boot/(cmdline|config)\.txt' "${RPII}" | grep -vE '^[0-9]+:[[:space:]]*#' | tail -1 | cut -d: -f1)"
+i_sync="$(grep -n '^sync$' "${RPII}" | head -1 | cut -d: -f1)"
+[ -n "${i_der}" ] && [ -n "${i_last}" ] && [ -n "${i_sync}" ] && [ "${i_der}" -gt "${i_last}" ] && [ "${i_der}" -lt "${i_sync}" ] \
+    && ok "I8: rpi5 installer re-derives them after its last cmdline.txt/config.txt edit (NVMe/LUKS root=) and before sync" \
+    || bad "I8: rpi5 installer derivation missing/misplaced (last-edit=${i_last:-?} derive=${i_der:-none} sync=${i_sync:-?})"
 
 echo
 echo "== selinux sysroot labels: ${P} passed, ${F} failed, ${S} skipped (skips are NOT passes) =="

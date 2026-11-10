@@ -29,6 +29,29 @@ CLIENT_ROLE_MARKER="${SCRIPT_DIR}/client-role"    # presence => --role desktop i
 ENCRYPT=false; [ -f "${ENCRYPT_MARKER}" ] && ENCRYPT=true
 LUKS_PASS=""
 
+# rpi_selinux_boot_variants <bootdir> — the SAME function as build-rpi5-stage4.sh's
+# (the shell-suite runs both on one fixture and requires identical output). The Pi
+# firmware has no boot menu, so the SELinux permissive rescue and the enforcing trial
+# are files on the FAT boot partition, DERIVED from the final cmdline.txt/config.txt:
+# cmdline-rescue.txt (enforcing=0), cmdline-enforcing-test.txt (enforcing=1) and
+# tryboot.txt (config.txt + cmdline=cmdline-enforcing-test.txt; Pi 4/5 read it for
+# ONE boot after `reboot "0 tryboot"`). This installer rewrites root= below, so it
+# re-derives them after its last edit — or the rescue would boot the card's root=.
+rpi_selinux_boot_variants() {
+    local b="${1:?rpi_selinux_boot_variants: boot dir required}" base
+    [ -s "${b}/cmdline.txt" ] && [ -s "${b}/config.txt" ] \
+        || { echo "ERROR: rpi_selinux_boot_variants: ${b} has no cmdline.txt/config.txt" >&2; return 1; }
+    base="$(tr -d '\n' < "${b}/cmdline.txt")"
+    case " ${base} " in
+        *" enforcing="*) echo "ERROR: rpi_selinux_boot_variants: ${b}/cmdline.txt already carries enforcing= ('${base}')" >&2; return 1 ;;
+    esac
+    printf '%s enforcing=0\n' "${base}" > "${b}/cmdline-rescue.txt" || return 1
+    printf '%s enforcing=1\n' "${base}" > "${b}/cmdline-enforcing-test.txt" || return 1
+    { cat "${b}/config.txt" \
+      && printf '\n# tryboot.txt: config.txt for ONE boot after `reboot "0 tryboot"` (SELinux\n# enforcing trial). Regenerated from config.txt at build/install time.\n[all]\ncmdline=cmdline-enforcing-test.txt\n'; } \
+        > "${b}/tryboot.txt" || return 1
+}
+
 if [ $# -lt 1 ]; then
     cat <<USAGE
 Usage: $0 [--encrypt|--no-encrypt] [--luks-pass PASS] /dev/sdX        (SD card)
@@ -211,6 +234,10 @@ if ${ENCRYPT}; then
     # needed: the mapper name is a install-time constant, not partition-specific.
     sed -i -E 's#^/dev/(mmcblk0p2|nvme0n1p2)([[:space:]])#/dev/mapper/cryptroot\2#' /mnt/rpi-root/etc/fstab
 fi
+
+# AFTER the last cmdline.txt/config.txt edit above (NVMe root=, LUKS root=, the
+# initramfs comment-out): the SELinux rescue/trial files must boot THIS install's root.
+rpi_selinux_boot_variants /mnt/rpi-boot
 
 sync
 umount /mnt/rpi-boot /mnt/rpi-root 2>/dev/null || true

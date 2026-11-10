@@ -1,0 +1,29 @@
+#!/bin/sh
+# 12_selinux_enforcing_test — grub-mkconfig snippet: one "SELinux enforcing (test)"
+# entry (enforcing=1) for every kernel 10_linux boots.
+#
+# WHY. The live ISO has an enforcing (test) entry and the hand-written .img grub.cfg
+# now has one, but a node installed by install-x86.sh (or whose grub.cfg the
+# first-boot branding hook regenerated) boots from a grub-mkconfig grub.cfg. Without
+# this snippet the installed path has no way to try enforcing for ONE boot without
+# rewriting /etc/selinux/config, so it was never booted enforcing (#863 refute,
+# blocker 4). The flip itself stays the enforce-gate's job; this entry is the trial.
+#
+# HOW. Exactly 11_selinux_permissive_rescue's method: run the image's own 10_linux
+# again with grub-mkconfig's environment, so kernels, root=, LUKS tokens and initrds
+# match the normal entries, and change only three things:
+#   - GRUB_CMDLINE_LINUX_DEFAULT gains a trailing enforcing=1 (the kernel takes the
+#     LAST enforcing=);
+#   - flat entries (no submenu, no recovery), each titled "... (SELinux enforcing
+#     (test))" with its own menuentry id and no savedefault, so neither GRUB_DEFAULT
+#     nor a saved entry can land on one;
+#   - 10_linux's own "Found linux image" lines are not repeated on stderr.
+# Sorts after 10_linux and after the rescue snippet: the default entry is unchanged.
+set -e
+lin="$(dirname "$0")/10_linux"
+[ -x "${lin}" ] || exit 0
+GRUB_DISABLE_SUBMENU=true GRUB_DISABLE_RECOVERY=true GRUB_TOP_LEVEL='' GRUB_ACTUAL_DEFAULT='' GRUB_SAVEDEFAULT='' \
+GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT:-} enforcing=1" \
+    "${lin}" 2>/dev/null \
+    | sed -e "s/^\([[:space:]]*menuentry '[^']*\)'/\1 (SELinux enforcing (test))'/" \
+          -e "s/\([$]menuentry_id_option '[^']*\)'/\1-selinux-enforcing-test'/"

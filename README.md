@@ -57,6 +57,12 @@ _As of 2026-08-05, except the kind SSO e2e bullets, re-measured 2026-10-14. Stat
   deliberate: the node-policy `.te` rules are still tagged `INFERRED-WIDE` and
   can only be narrowed against a real AVC pass. See
   [`docs/selinux-module-loading.md`](docs/selinux-module-loading.md).
+  Every image carries a **SELinux permissive rescue** and a one-boot **SELinux
+  enforcing (test)** entry: GRUB entries on the x86 `.img` (signed UKI twins
+  for Secure Boot as well as GRUB+vmlinuz), `grub.d` snippets for installed
+  x86 nodes, extra `LABEL`s in every extlinux board's menu, and on the Pi
+  `cmdline-rescue.txt` (add `cmdline=cmdline-rescue.txt` to `config.txt`)
+  plus a `tryboot.txt` trial (`reboot "0 tryboot"`).
 - **✅ SELinux node policy compiled + loaded (all ten builders)** — the hugmesh
   node-policy modules are compiled against the *sysroot's* refpolicy headers,
   installed into every image and loaded at first boot from
