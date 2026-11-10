@@ -30,6 +30,8 @@
 #      flags without --display, an unknown mode, a --vnc-socket path over 107
 #      bytes: every one exits non-zero BEFORE QEMU.
 #   7. launch-arm.sh --virt-dtb drops -dtb (and only -dtb); --dtb with it refuses.
+#      Since #879 the virt DT is also the DEFAULT, so neither flag boots the same
+#      argv as --virt-dtb (no board DTB is ever implied).
 #   8. DRIFT GUARD. The display block is the same text in all three launchers
 #      apart from the one DISPLAY_GPU_ARGS line.
 #   9. windows-studio-e2e.sh's inspection VNC binds 127.0.0.1, not a bare :N.
@@ -404,8 +406,13 @@ run_launcher arm-virt-disp launch-arm.sh "${ARMV[@]}" --virt-dtb "${DISP[@]}"
 eq "${LAST_RC}" "0" "arm --virt-dtb --display spice exits 0"
 has_pair "${LAST_ARGV}" -device virtio-gpu-pci,edid=on && _ok "arm --virt-dtb --display spice: virtio-gpu-pci,edid=on" || _bad "arm --virt-dtb --display spice: gpu missing"
 refuses "arm: --virt-dtb together with --dtb" launch-arm.sh "${ARM[@]}" --virt-dtb
+# Neither --dtb nor --virt-dtb: #879 made QEMU's virt DT the default, so this
+# boots, with exactly the --virt-dtb argv (the board DTB is never implied).
 run_launcher arm-nodtb launch-arm.sh "${ARMV[@]}"
-if [ "${LAST_RC}" -ne 0 ] && [ ! -f "${LAST_ARGV}" ]; then _ok "arm without --virt-dtb still refuses when the board DTB is absent (unchanged)"; else _bad "arm booted without a DTB and without --virt-dtb"; fi
+eq "${LAST_RC}" "0" "arm with neither --dtb nor --virt-dtb exits 0 (virt DT is the default)"
+if has_elem "${LAST_ARGV}" -dtb; then _bad "arm default: -dtb in argv (a board DTB was implied)"; else _ok "arm default: no -dtb"; fi
+golden_a64 "${TMP}/run-arm-nodtb" cortex-a53 "${KERNEL}" > "${TMP}/armn.golden"
+argv_matches_golden "${LAST_ARGV}" "${TMP}/armn.golden" "arm default (no --dtb)"
 
 # ── 8) Drift guard: one block, three launchers ───────────────────────────────
 echo "== 8) the display block is identical across the three launchers =="

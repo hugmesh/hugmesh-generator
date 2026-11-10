@@ -104,8 +104,10 @@ in FILE)`). The door adds the vdagent `virtserialport` (what lets
 that `--gpu` adds), aarch64 `-device virtio-gpu-pci,edid=on`. `--vnc-socket
 PATH` adds a `-vnc unix:PATH,password-secret=` browser (noVNC) fallback that only
 scales (8-char DES auth from the first 8 chars of the same file; opt-in).
-`launch-arm.sh --virt-dtb` omits `-dtb` so QEMU generates the virt DTB, which a
-board DTB cannot replace once PCIe/virtio devices are on the bus. Without
+`launch-arm.sh --virt-dtb` names the virt DTB QEMU generates (a board DTB cannot
+describe virt's PCIe/virtio devices). That is already the default since #879 (no
+`-dtb` unless `--dtb FILE`); the flag makes it explicit and refuses a
+contradicting `--dtb`. Without
 `--display` the argv is byte-identical to before (`display_argv_test.sh` pins it
 to a golden, element for element).
 

@@ -1,0 +1,13 @@
+FAIL|KVM is available to the runner|Given the pinned image is present and matches its pinned sha256
+SKIPPED|KVM is available to the runner|Given the host exposes /dev/kvm as a character device
+SKIPPED|KVM is available to the runner|Then the runner user can open /dev/kvm for reading and writing
+SKIPPED|KVM is available to the runner|And the CPU advertises hardware virtualisation
+SKIPPED|KVM is available to the runner|And qemu-system-x86_64 starts a machine with -accel kvm
+FAIL|a tiny x86 image boots under KVM to a login prompt on serial within 90 seconds|Given the pinned image is present and matches its pinned sha256
+SKIPPED|a tiny x86 image boots under KVM to a login prompt on serial within 90 seconds|When the image is booted with -accel kvm on q35 with UEFI firmware and a serial log
+SKIPPED|a tiny x86 image boots under KVM to a login prompt on serial within 90 seconds|Then the serial console shows a login prompt within 90 seconds
+SKIPPED|a tiny x86 image boots under KVM to a login prompt on serial within 90 seconds|And the boot time is recorded as "kvm"
+FAIL|the boot is accelerated (KVM in use, not TCG)|Given the pinned image is present and matches its pinned sha256
+SKIPPED|the boot is accelerated (KVM in use, not TCG)|Given the guest from the previous scenario is still running under "kvm"
+SKIPPED|the boot is accelerated (KVM in use, not TCG)|When the QEMU monitor is asked "info kvm"
+SKIPPED|the boot is accelerated (KVM in use, not TCG)|Then the monitor answers "kvm support: enabled"
