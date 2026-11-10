@@ -151,6 +151,11 @@ def main(argv=None) -> int:
     # Third, before anything prints: a path outside cp1252 must not turn a redirected
     # print into a traceback or a false "bad input" (a no-op off Windows).
     utf8_stdio()
+    # Inside the Flatpak, the local assistant's state is the folder the HOST's
+    # scripts/local-ai.sh writes, not the sandbox's private XDG_STATE_HOME: every face
+    # (the panel, the text UI's status line, the --local-ai-* flags) reads it from here.
+    from .core import ollama_docker
+    ollama_docker.host_env_defaults(os.environ)
     ap = argparse.ArgumentParser(description="HugMesh Image Studio")
     ap.add_argument("--generator-dir", default=_default_generator_dir(),
                     help="path to the hugmesh-generator checkout")
