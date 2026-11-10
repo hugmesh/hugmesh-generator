@@ -412,6 +412,9 @@ def test_the_text_screen_cancels_a_download_and_refuses_one_that_will_not_fit(en
 # ── the Flatpak ──────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(os.name == "nt", reason=(
+    "Flatpak (Linux-only): the host's state folder is a POSIX path, os.path is ntpath on "
+    "Windows"))
 def test_a_flatpak_studio_reads_the_hosts_state_folder(monkeypatch):
     monkeypatch.setattr(flatpak_host, "in_flatpak", lambda *a, **k: True)
     sandbox = {"HOME": "/home/me", "XDG_STATE_HOME": "/home/me/.var/app/org.hugmesh.ImageStudio/.local/state"}
