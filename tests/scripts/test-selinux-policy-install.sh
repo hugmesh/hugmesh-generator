@@ -1152,9 +1152,13 @@ grep -qE 'for m in base container otel_collector localpath_provisioner' "${SVC}"
 grep -q 'Refusing to flip' "${SVC}" \
     && ok "a manifest-less (pre-wiring) image refuses to flip" \
     || bad "service does not refuse to flip without a manifest"
-grep -q 'hugmesh_authkeys_t' "${SVC}" \
-    && ok "check_avc_clean covers the hugmesh domains this wiring now loads" \
-    || bad "check_avc_clean does not cover the hugmesh domains"
+# check_avc_clean used to carry a domain list (container/kernel_t/init_t/hugmesh_*)
+# and ignore every denial outside it (#863 refute, blocker 2). It must not come back:
+# the gate counts every denial. (Executed below in D-run-scope; this is the cheap pin.)
+awk '/^check_avc_clean\(\)/{f=1} f{print} f&&/^}/{exit}' "${SVC}" | grep -vE '^[[:space:]]*#' \
+    | grep -E '(scontext|tcontext)=|hugmesh_authkeys_t|container_t' >/dev/null \
+    && bad "check_avc_clean filters on a domain list again (denials outside it would not block)" \
+    || ok "check_avc_clean carries no domain list (every denial counts)"
 
 # ── D-run) the enforce-gate's start() actually EXECUTED ──────────────────────
 # The static block above is greps and line numbers; it constrains nothing about
@@ -1186,7 +1190,13 @@ gate_run() {
       setenforce()     { echo "setenforce $*" >> "${G}/calls"; return 0; }
       semodule()       { echo "semodule $*" >> "${G}/calls"; printf '%s' "${FX_SEMODULE_L:-}"; return "${FX_SEMODULE_RC:-0}"; }
       restorecon()     { printf '%s' "${FX_RESTORECON_OUT:-}"; return 0; }
-      ausearch()       { printf '%s' "${FX_AUSEARCH_OUT:-}"; return "${FX_AUSEARCH_RC:-0}"; }
+      # ausearch: records on stdout, its verdict on stderr, its args in calls. Without
+      # --input-logs a real ausearch reads STDIN when stdin is a pipe (is_pipe(0)) and
+      # answers "<no matches>"; the stub models that, so dropping the flag is red.
+      ausearch()       { echo "ausearch $*" >> "${G}/calls"
+                         case " $* " in *" --input-logs "*) ;; *) printf '<no matches>\n' >&2; return 1 ;; esac
+                         printf '%s' "${FX_AUSEARCH_OUT:-}"; printf '%s' "${FX_AUSEARCH_ERR:-}" >&2
+                         return "${FX_AUSEARCH_RC:-0}"; }
       dmesg()          { printf '%s' "${FX_DMESG_OUT:-}"; return 0; }
       rc-update()      { echo "rc-update $*" >> "${G}/calls"; return 0; }
       # shellcheck disable=SC1090
@@ -1201,6 +1211,10 @@ gate_run() {
       # Where the AVC record is read from: the stub functions above by default; a
       # case points AUSEARCH/DMESG at a path that does not exist to take them away.
       AUSEARCH="${FX_AUSEARCH_BIN:-ausearch}"; AUDIT_LOG="${G}/audit.log"; DMESG="${FX_DMESG_BIN:-dmesg}"
+      AVC_SCRATCH_DIR="${G}"
+      # The allow-list is a plain assignment in the shipped file (empty); a case may
+      # set FX_AVC_ALLOW_ERE to exercise a populated one.
+      [ -n "${FX_AVC_ALLOW_ERE+x}" ] && AVC_ALLOW_ERE="${FX_AVC_ALLOW_ERE}"
       start ) 2>&1
 }
 
@@ -1213,8 +1227,10 @@ gate_fixture() {
     # `semodule -l` output shape: one "name<TAB>version" line per loaded module.
     export FX_SEMODULE_L=$'base\t1.0.0\nhugmesh_authkeys\t1.0.0\nhugmesh_vpn\t1.0.0\n'
     export FX_SEMODULE_RC=0 FX_GETENFORCE=Permissive FX_SELINUX_ENABLED_RC=0
-    export FX_RESTORECON_OUT="" FX_AUSEARCH_OUT="" FX_AUSEARCH_RC=0
+    # ausearch's real answer on a clean boot: nothing on stdout, rc=1, "<no matches>".
+    export FX_RESTORECON_OUT="" FX_AUSEARCH_OUT="" FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR=$'<no matches>\n'
     export FX_AUSEARCH_BIN=ausearch FX_DMESG_BIN=dmesg FX_DMESG_OUT=""
+    unset FX_AVC_ALLOW_ERE
     rm -f "${G}/audit.log"
 }
 gate_flipped()  { grep -q '^setenforce 1' "$1/calls" 2>/dev/null; }
@@ -1274,7 +1290,7 @@ fx_module_absent() { export FX_SEMODULE_L=$'base\t1.0.0\n'; }
 fx_semodule_fail() { export FX_SEMODULE_RC=1; }
 fx_autorelabel()   { touch "$1/autorelabel"; }
 fx_mislabel()      { export FX_RESTORECON_OUT='Would relabel /mnt/data/local-path from a to b'; }
-fx_avc()           { export FX_AUSEARCH_OUT='type=AVC msg=audit(0.0:1): avc: denied { read } scontext=system_u:system_r:hugmesh_authkeys_t:s0 tcontext=system_u:object_r:etc_t:s0'; }
+fx_avc()           { export FX_AUSEARCH_RC=0 FX_AUSEARCH_ERR='' FX_AUSEARCH_OUT='type=AVC msg=audit(0.0:1): avc: denied { read } scontext=system_u:system_r:hugmesh_authkeys_t:s0 tcontext=system_u:object_r:etc_t:s0'; }
 fx_already_enf()   { export FX_GETENFORCE=Enforcing; }
 fx_selinux_off()   { export FX_SELINUX_ENABLED_RC=1; }
 # A container image additionally requires the `container` module — which the
@@ -1322,9 +1338,104 @@ o="$(gate_run "${G}" yes)"
 { gate_flipped "${G}" && printf '%s' "${o}" | grep 'kernel ring buffer' >/dev/null; } \
     && ok "POSITIVE CONTROL: no ausearch, no audit.log, a clean dmesg flips, and says the ring buffer was read" \
     || bad "dmesg fallback with a clean ring buffer did not flip: ${o}"
-G="${TMP}/gavc4"; gate_fixture "${G}"; touch "${G}/marker"; export FX_AUSEARCH_RC=1
+G="${TMP}/gavc4"; gate_fixture "${G}"; touch "${G}/marker"; export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR=$'<no matches>\n'
 o="$(gate_run "${G}" yes)"
-gate_flipped "${G}" && ok "ausearch rc=1 (<no matches>) is a clean boot, not an error: flips" || bad "ausearch rc=1 blocked the flip: ${o}"
+gate_flipped "${G}" && ok "ausearch rc=1 with '<no matches>' on stderr is a clean boot, not an error: flips" || bad "ausearch rc=1 <no matches> blocked the flip: ${o}"
+grep -E '^ausearch .*--input-logs' "${G}/calls" >/dev/null \
+    && ok "the gate calls ausearch with --input-logs (a piped stdin would otherwise be searched instead of the logs)" \
+    || bad "ausearch was not called with --input-logs: $(grep '^ausearch' "${G}/calls")"
+grep -E '^ausearch .*(--raw|(^| )-r( |$))' "${G}/calls" >/dev/null \
+    && bad "ausearch is called --raw: raw mode never prints '<no matches>', so a clean boot can no longer be told from an error" \
+    || ok "ausearch is not called --raw (the '<no matches>' discriminator survives)"
+
+# ── D-run-ausearch: rc=1 is NOT "clean" by itself (#863 refute, blocker 1). audit 4.x
+# returns 1 for "<no matches>" AND for an unopenable log ("Error opening ...") and for
+# parameter errors ("Invalid ..."). The old `rc <= 1 => clean` flipped a node whose
+# audit log could not be read. Each untrusted answer must fall through to audit.log /
+# dmesg, and with neither, refuse.
+AS_EOPEN=$'Error opening /var/log/audit/audit.log (Permission denied)\n'
+AS_EINVAL=$'Invalid message type - AVCX\n'
+fx_as_eopen_log_avc()   { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}"; printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+fx_as_einval_log_avc()  { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EINVAL}"; printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+fx_as_empty_log_avc()   { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR=''; printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+fx_as_both_log_avc()    { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}<no matches>"$'\n'; printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+fx_as_eopen_nosrc()     { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}" FX_DMESG_BIN=/nonexistent/dmesg; }
+fx_as_einval_nosrc()    { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EINVAL}" FX_DMESG_BIN=/nonexistent/dmesg; }
+fx_as_partial_log_avc() { export FX_AUSEARCH_RC=0 FX_AUSEARCH_ERR=$'Error opening /var/log/audit/audit.log.1 (Permission denied)\n' \
+                                 FX_AUSEARCH_OUT='type=USER_AVC msg=audit(0.0:2): pid=1 uid=0 msg='"'"'avc:  received policyload notice (seqno=2)'"'"
+                          printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+gate_blocks "ausearch rc=1 'Error opening' (log unreadable): falls back, audit.log carries the AVC" fx_as_eopen_log_avc
+gate_blocks "ausearch rc=1 'Invalid ...' (parameter error): falls back, audit.log carries the AVC" fx_as_einval_log_avc
+gate_blocks "ausearch rc=1 with EMPTY stderr (no '<no matches>'): falls back, audit.log carries the AVC" fx_as_empty_log_avc
+gate_blocks "ausearch rc=1 '<no matches>' next to 'Error opening': not trusted, audit.log carries the AVC" fx_as_both_log_avc
+gate_blocks "ausearch rc=1 'Error opening', no audit.log, no dmesg: fail closed" fx_as_eopen_nosrc
+gate_blocks "ausearch rc=1 'Invalid ...', no audit.log, no dmesg: fail closed" fx_as_einval_nosrc
+gate_blocks "ausearch rc=0 with an 'Error opening' for a rotated log (partial read): falls back, audit.log carries the AVC" fx_as_partial_log_avc
+G="${TMP}/gas1"; gate_fixture "${G}"; touch "${G}/marker"; export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}"; : > "${G}/audit.log"
+o="$(gate_run "${G}" yes)"
+{ gate_flipped "${G}" && printf '%s' "${o}" | grep 'without a clean' >/dev/null && printf '%s' "${o}" | grep 'reading .*audit.log directly' >/dev/null; } \
+    && ok "POSITIVE CONTROL: ausearch 'Error opening' + a clean, readable audit.log flips, and says it fell back and why" \
+    || bad "ausearch 'Error opening' with a clean audit.log: no flip or no fallback message (the fallback is closed by accident): ${o}"
+gate_fixture "${TMP}/gavc-reset"
+
+# ── D-run-scope: EVERY boot-path denial counts (#863 refute, blocker 2). The check
+# used to match only container/kernel_t/init_t/hugmesh_* scontexts, so the 25 #852
+# denials (NetworkManager_t, systemd_tmpfiles_t, local_login_t, udev_t) were all
+# outside it and that boot would have FLIPPED. Records in the shapes they were
+# measured in (ausearch, dmesg).
+REC_NM='type=AVC msg=audit(1793853137.1:40): avc:  denied  { sys_admin } for  pid=812 comm="NetworkManager" capability=21  scontext=system_u:system_r:NetworkManager_t:s0 tcontext=system_u:system_r:NetworkManager_t:s0 tclass=capability permissive=1'
+REC_TMPF='type=AVC msg=audit(1793853137.2:26): avc:  denied  { use } for  pid=1083 comm=systemd-tmpfile path=/dev/console scontext=system_u:system_r:systemd_tmpfiles_t:s0 tcontext=system_u:system_r:init_t:s0 tclass=fd permissive=1'
+REC_LOGIN='type=AVC msg=audit(1793853137.3:51): avc:  denied  { search } for  pid=1502 comm="login" name="root" dev="sda2" ino=12 scontext=system_u:system_r:local_login_t:s0 tcontext=system_u:object_r:default_t:s0 tclass=dir permissive=1'
+REC_UDEV='type=AVC msg=audit(1793853137.4:27): avc:  denied  { getattr } for  pid=1141 comm="udevadm" path="/run/netns" scontext=system_u:system_r:udev_t:s0 tcontext=system_u:object_r:nsfs_t:s0 tclass=file permissive=1'
+REC_UAVC_DENY="type=USER_AVC msg=audit(1793853137.5:60): pid=700 uid=101 auid=4294967295 ses=4294967295 subj=system_u:system_r:system_dbusd_t:s0 msg='avc:  denied  { send_msg } for msgtype=method_call interface=org.freedesktop.DBus scontext=system_u:system_r:NetworkManager_t:s0 tcontext=system_u:system_r:system_dbusd_t:s0 tclass=dbus permissive=1 exe=\"/usr/bin/dbus-daemon\"'"
+REC_UAVC_LOAD="type=USER_AVC msg=audit(1793853137.6:61): pid=700 uid=101 auid=4294967295 ses=4294967295 subj=system_u:system_r:system_dbusd_t:s0 msg='avc:  received policyload notice (seqno=2)  exe=\"/usr/bin/dbus-daemon\"'"
+REC_GRANTED='type=AVC msg=audit(1793853137.7:62): avc:  granted  { read } for  pid=900 comm="x" scontext=system_u:system_r:hugmesh_vpn_runner_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file'
+DMESG_TMPF='[    3.21] audit: type=1400 audit(1793853120.1:5): avc:  denied  { write } for  pid=402 comm="systemd-tmpfile" name="/" dev="sda2" scontext=system_u:system_r:systemd_tmpfiles_t:s0 tcontext=system_u:object_r:root_t:s0 tclass=dir permissive=1'
+fx_rec() { export FX_AUSEARCH_RC=0 FX_AUSEARCH_ERR='' FX_AUSEARCH_OUT="$1"; }
+fx_nm()        { fx_rec "${REC_NM}"; }
+fx_tmpfiles()  { fx_rec "${REC_TMPF}"; }
+fx_login()     { fx_rec "${REC_LOGIN}"; }
+fx_udev()      { fx_rec "${REC_UDEV}"; }
+fx_uavc_deny() { fx_rec "${REC_UAVC_DENY}"; }
+fx_dmesg_only() { export FX_DMESG_OUT="${DMESG_TMPF}"; }   # ausearch clean (<no matches>), the denial only in the ring buffer
+fx_log_tmpf()  { export FX_AUSEARCH_BIN=/nonexistent/ausearch; printf '%s\n' "${REC_TMPF}" > "$1/audit.log"; }
+gate_blocks "scope: a NetworkManager_t denial (outside the old domain list)" fx_nm
+gate_blocks "scope: a systemd_tmpfiles_t denial (outside the old domain list)" fx_tmpfiles
+gate_blocks "scope: a local_login_t denial (outside the old domain list)" fx_login
+gate_blocks "scope: a udev_t denial (outside the old domain list)" fx_udev
+gate_blocks "scope: a USER_AVC denial (dbus)" fx_uavc_deny
+gate_blocks "scope: ausearch clean, the denial only in dmesg (early boot, dropped from the backlog)" fx_dmesg_only
+gate_blocks "scope: no ausearch, a systemd_tmpfiles_t denial in audit.log" fx_log_tmpf
+# Positive controls for the record filter: records that are NOT denials must not block.
+G="${TMP}/gsc1"; gate_fixture "${G}"; touch "${G}/marker"; fx_rec "${REC_UAVC_LOAD}"
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "POSITIVE CONTROL: a USER_AVC 'received policyload notice' (dbus, every boot) is not a denial: flips" \
+    || bad "a policyload notice blocked the flip (the filter keys on record type, not on the decision): ${o}"
+G="${TMP}/gsc2"; gate_fixture "${G}"; touch "${G}/marker"; fx_rec "${REC_GRANTED}"
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "POSITIVE CONTROL: an 'avc: granted' (auditallow instrument) is not a denial: flips" \
+    || bad "an avc: granted record blocked the flip: ${o}"
+G="${TMP}/gsc3"; gate_fixture "${G}"; touch "${G}/marker"; fx_nm "${G}"
+o="$(gate_run "${G}" yes)"
+printf '%s' "${o}" | grep -F 'NetworkManager_t' >/dev/null \
+    && ok "a blocked flip names the denial it blocked on" || bad "the gate blocked without showing the record: ${o}"
+# The allow-list: empty today, and an empty list must not filter anything (`grep -vE ''`
+# drops every line). A populated list filters only its own pattern.
+grep -E "^AVC_ALLOW_ERE=''\$" "${SVC}" >/dev/null \
+    && ok "the shipped allow-list is empty and a plain assignment (conf.d cannot widen it)" \
+    || bad "the shipped AVC_ALLOW_ERE is not the empty plain assignment: $(grep -n 'AVC_ALLOW_ERE=' "${SVC}")"
+G="${TMP}/gal1"; gate_fixture "${G}"; touch "${G}/marker"; fx_udev "${G}"; export FX_AVC_ALLOW_ERE='scontext=[^ ]*:udev_t:.* tcontext=[^ ]*:nsfs_t:'
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "allow-list: a populated entry lets ITS record through (the mechanism works)" \
+    || bad "allow-list: a matching entry did not let the record through: ${o}"
+G="${TMP}/gal2"; gate_fixture "${G}"; touch "${G}/marker"; fx_rec "${REC_UDEV}"$'\n'"${REC_NM}"; export FX_AVC_ALLOW_ERE='scontext=[^ ]*:udev_t:.* tcontext=[^ ]*:nsfs_t:'
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && bad "allow-list: an entry for udev_t also let a NetworkManager_t denial through: ${o}" \
+    || ok "allow-list: an entry for one record does not let another through"
+G="${TMP}/gal3"; gate_fixture "${G}"; touch "${G}/marker"; fx_udev "${G}"; export FX_AVC_ALLOW_ERE=''
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && bad "allow-list: an EMPTY list let a denial through (grep -vE '' drops every line)" \
+    || ok "allow-list: an empty list filters nothing"
 gate_fixture "${TMP}/gavc-reset"
 
 # ── E) the first-boot loader half in provision.sh ────────────────────────────
