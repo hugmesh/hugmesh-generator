@@ -532,7 +532,17 @@ class WorklistDriver:
             # below. The key path reaches the pki profile only (args_for).
             st = self.ca_store or domain_ca_keys.store()
             domain_ca_keys.rekey_own(base, st)
-            ca = domain_ca_keys.materialize(st)
+            if profile == domain_ca_keys.KEY_PROFILE:
+                # The go-live checklist gates the KEY: while it is not READY no CA
+                # key is placed, and this pki stick is not made with a throwaway CA
+                # in its place either (the stick fails, with the reason).
+                refusal = domain_ca_keys.placement_refusal(
+                    base, st, node_key_profiles(self.worklist))
+                if refusal:
+                    raise domain_ca_keys.CAImportError(refusal)
+            # Only the pki stick's call ever has the key FILE written.
+            ca = domain_ca_keys.materialize(
+                st, with_key=(profile == domain_ca_keys.KEY_PROFILE))
             ca_args = ca.args_for(profile) if ca is not None else []
             if ca is not None and on_line:
                 on_line(i, ("domain CA: this pki stick gets the signing key "
@@ -574,6 +584,10 @@ class WorklistDriver:
                         on_line(i, f"!! domain CA placement: {p}")
                 if problems:
                     code = 1
+        except domain_ca_keys.CAImportError as e:
+            if on_line:
+                on_line(i, f"!! keys generation not started: domain CA: {e}")
+            code = 1
         except (OSError, roles.RoleVocabularyError) as e:
             if on_line:
                 on_line(i, f"!! keys generation could not start: {e}")

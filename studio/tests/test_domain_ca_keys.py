@@ -391,8 +391,8 @@ def test_materialized_files_are_private_and_only_pki_gets_the_key(chain):
             assert "--ca-key" not in a and "--ca-key-to-stick" not in a
             assert a[:2] == ["--ca-cert", m.signing_cert]
         names = [n for n, _p in m.trust]
-        assert names == ["mesh.example-root-ca", "chat.example-ca",
-                         "chat.example-root-ca"]
+        assert names == ["cluster-root-ca", "ca.chat.example",
+                         "root-ca.chat.example"]
     finally:
         m.cleanup()
     assert not os.path.exists(m.root)
@@ -450,7 +450,7 @@ def test_a_pkcs12_bundling_another_root_cannot_swap_the_held_root(chain, tmp_pat
     assert lines[0].startswith("READY")
     m = dca.materialize(st)
     try:
-        roots = [p for n, p in m.trust if n == f"{OWN}-root-ca"]
+        roots = [p for n, p in m.trust if n == dca.OWN_ROOT_TRUST_NAME]
         assert open(roots[0], "rb").read() == tca.pem(chain.root)
     finally:
         m.cleanup()
@@ -529,13 +529,16 @@ def test_a_signing_ca_on_the_roots_own_key_pair_is_refused(chain, tmp_path):
     _refused(lambda: dca.import_signing(st, OWN, True, cert_path=tp, key_path=kp),
              "root CA's own key pair", "root CA key is never taken")
     assert st.get(OWN).key_pem == b""
-    # the other order: the twin first (no root held yet), then the root
+    # the other order: the twin first (no root held yet). Round 3: it is refused
+    # at once, because the twin is signed by its OWN key (the root key it carries),
+    # whatever its names say; the root-later order is pinned for a key that is NOT
+    # self-signed by test_a_cross_certificate_of_another_domains_root_*
     st2 = _st()
-    dca.import_signing(st2, OWN, True, cert_path=tp, key_path=kp)
-    msg = _refused(lambda: dca.import_root(st2, OWN, True, chain.root_path),
-                   "root CA's own key pair")
+    msg = _refused(lambda: dca.import_signing(st2, OWN, True, cert_path=tp,
+                                              key_path=kp),
+                   "self-signed", "root CA key is never taken")
     assert "rotate" not in msg            # not a rotation: this key is never taken
-    assert st2.get(OWN).root_pem == b""
+    assert st2.entries() == ()
 
 
 def test_chain_problem_never_passes_a_root_as_its_own_signing_ca(chain):

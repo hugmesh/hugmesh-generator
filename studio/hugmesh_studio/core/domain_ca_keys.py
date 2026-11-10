@@ -48,12 +48,43 @@ Safety rules (each one pinned by a test):
   key that does not match its certificate, a certificate that is not a CA, an
   expired or not-yet-valid certificate, a weak key or signature, a certificate that
   does not parse, and a signing CA that the given root did not issue;
-* a ROOT key is never taken, on any path: a self-signed signing CA, the held root
-  offered as the signing CA, and a signing CA on the root's own key pair are all
-  refused (there is no opt-in);
-* the held root is fixed until the domain's CA is removed: a root bundled with a
-  signing import (PKCS#12 or a combined PEM) must be the held root, byte for byte,
-  exactly as :func:`import_root` refuses another root.
+* THE ROOT-KEY INVARIANT (one function, :func:`root_key_invariant_problem`; there
+  is no opt-in): the signing key held for the mesh's own domain is never
+
+  - a key whose public half (SPKI) equals the public half of ANY held root, of ANY
+    domain (the mesh's own or an extra one), whatever the certificates around it
+    say: a cross-certificate of another domain's root is the classic shape; and
+  - the key of a certificate that is self-signed BY SIGNATURE: the certificate's
+    own public key verifies its signature, whatever its issuer and subject names
+    say (a "signing CA" that names a root as issuer but is signed by its own key
+    is that root's key under another name).
+
+  It is checked on :func:`import_signing`, re-checked on :func:`import_root` for
+  ANY domain (so the reverse order -- the key first, the matching root later, even
+  under another domain -- is refused too), and re-checked by :func:`materialize`
+  and :meth:`MaterializedCA.args_for` as the last gate before a key file is
+  written or a key path reaches an argv;
+* the held root is fixed until the domain's CA is removed, in every state (with
+  or without a signing CA held): :func:`import_root` refuses a different root,
+  and a root bundled with a signing import (PKCS#12 or a combined PEM) must be the
+  held root, byte for byte;
+* the KEYS generation places the signing key only when the go-live checklist
+  (:func:`readiness`) is READY: a not-ready checklist fails the pki stick's keys
+  step with the reason (:func:`placement_refusal`), it never builds that stick with
+  a throwaway CA in place of the imported one;
+* each domain's public certificates land on the sticks under names that cannot
+  collide (:func:`trust_name`): ``root-ca.<domain>`` / ``ca.<domain>`` for another
+  domain, ``cluster-root-ca`` for the mesh's own root. ``cluster-ca`` (the signing
+  CA) and ``signing-ca`` (the temp key file) are reserved, and a colliding or
+  over-long name is refused at import (:func:`trust_name_problem`).
+
+KNOWN LIMIT (I4): a cross-certificate of a root that is held NOWHERE in this Studio
+is undetectable. If the operator imports, for the mesh's own domain, a certificate
+issued by the mesh's root that carries another (offline) root's public key, and the
+private key of that other root, nothing here can tell that key is a root key: its
+certificate is a normal intermediate, signed by another key, and the root it really
+belongs to was never shown to the Studio. Import every root you trust (on its own
+domain row) and the invariant above refuses such a key, in either order.
 
 python-cryptography is OPTIONAL for the Studio (not in requirements.txt; the MSI is
 a PyInstaller freeze without it). Without it a CA key cannot be checked, so this step
@@ -296,11 +327,49 @@ def _validity_problem(cert, what: str, now: _dt.datetime | None) -> str:
 
 
 def _self_signed(cert) -> bool:
+    """A ROOT by name AND signature (issuer == subject, its own key signed it): what
+    :func:`import_root` accepts and what a bundle's root is recognised by. For "may
+    this key be taken", use :func:`_signed_by_own_key`, which ignores the names."""
     if cert.issuer != cert.subject:
         return False
     try:
         cert.verify_directly_issued_by(cert)
     except Exception:
+        return False
+    return True
+
+
+def _signed_by_own_key(cert) -> bool:
+    """True when ``cert``'s OWN public key verifies its signature, whatever its issuer
+    and subject names say: such a certificate is a root (the key signed itself),
+    even when it names another CA as its issuer.
+
+    ``verify_directly_issued_by`` cannot answer this: it refuses on issuer != subject
+    before it looks at the signature, which is exactly the shape that hid a root key
+    under a "signing CA" name (PR #938 round 3, finding 2). Only a bad signature reads
+    as "no"; an algorithm this code cannot verify raises (a swallowed exception must
+    not read as "not a root"), and the import turns that into a refusal."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, padding, rsa
+    pub = cert.public_key()
+    sig, tbs = cert.signature, cert.tbs_certificate_bytes
+    params = cert.signature_algorithm_parameters
+    try:
+        if isinstance(pub, rsa.RSAPublicKey):
+            if not isinstance(params, (padding.PKCS1v15, padding.PSS)):
+                return False            # signed by a non-RSA key: not by this one
+            pub.verify(sig, tbs, params, cert.signature_hash_algorithm)
+        elif isinstance(pub, ec.EllipticCurvePublicKey):
+            if not isinstance(params, ec.ECDSA):
+                return False
+            pub.verify(sig, tbs, params)
+        elif isinstance(pub, (ed25519.Ed25519PublicKey, ed448.Ed448PublicKey)):
+            if params is not None:
+                return False
+            pub.verify(sig, tbs)
+        else:
+            raise ValueError(f"cannot verify a {type(pub).__name__} signature")
+    except InvalidSignature:
         return False
     return True
 
@@ -327,14 +396,12 @@ def root_key_problem(signing, root=None) -> str:
         return (f"this is the root certificate itself ({_cn(root)}), not a signing CA: "
                 f"{_ROOT_KEY_NEVER}. Import an intermediate the root issued as the "
                 "signing CA")
-    if _self_signed(signing):
-        return (f"the signing CA ({_cn(signing)}) is self-signed, so it is a root: "
-                f"{_ROOT_KEY_NEVER}. Import it with Root certificate, and an "
-                "intermediate it issued as the signing CA")
     if root is not None and _spki(signing.public_key()) == _spki(root.public_key()):
         return (f"the signing CA ({_cn(signing)}) holds the root CA's own key pair "
                 f"({_cn(root)}): {_ROOT_KEY_NEVER}. Import an intermediate with its "
                 "own key")
+    if _signed_by_own_key(signing):
+        return _self_signed_refusal(signing)
     return ""
 
 
@@ -367,6 +434,15 @@ def chain_problem(signing, root) -> str:
 def _sha256():
     from cryptography.hazmat.primitives import hashes
     return hashes.SHA256()
+
+
+def _self_signed_refusal(signing) -> str:
+    named = ("" if signing.issuer == signing.subject else
+             f", although it names {signing.issuer.rfc4514_string()} as its issuer")
+    return (f"the signing CA ({_cn(signing)}) is self-signed: its own key signed "
+            f"it{named}, so it is a root: {_ROOT_KEY_NEVER}. Import it with Root "
+            "certificate, and an intermediate it issued, with its own key, as the "
+            "signing CA")
 
 
 # ── the held record ──────────────────────────────────────────────────────────────
@@ -470,6 +546,131 @@ def store() -> DomainCAStore:
         return _STORE
 
 
+# ── THE root-key invariant (one place; every path calls it) ─────────────────────
+def _entry_label(e) -> str:
+    if e.own:
+        return (f"this mesh's own domain ({e.domain})" if e.domain
+                else "this mesh's own domain")
+    return e.domain
+
+
+def root_key_invariant_problem(entries) -> str:
+    """"" when the set of held ``entries`` (the store as it is, or as an import
+    would leave it) keeps the module's root-key invariant, else the refusal.
+
+    For every entry holding a signing KEY:
+
+    * its certificate must not be signed by its own key (:func:`_signed_by_own_key`,
+      names ignored): such a certificate is a root;
+    * the key's public half -- and the certificate's, which an import already ties
+      to it -- must not equal the public half of ANY held root, of ANY domain.
+
+    :func:`import_signing` and :func:`import_root` call this with the entries the
+    import WOULD leave (so neither order slips through), and :func:`materialize`
+    calls it on the store itself before writing anything."""
+    from cryptography.hazmat.primitives import serialization
+    entries = tuple(entries)
+    roots = [(e, e.root_cert()) for e in entries if e.root_pem]
+    for e in entries:
+        if not e.key_pem:
+            continue
+        sc = e.signing_cert()
+        if sc is None:
+            return (f"{_entry_label(e)} holds a signing key without its certificate; "
+                    "remove the domain's CA and import it again")
+        if _signed_by_own_key(sc):
+            return _self_signed_refusal(sc)
+        key = serialization.load_pem_private_key(e.key_pem, password=None)
+        held = {_spki(key.public_key()), _spki(sc.public_key())}
+        for re_, rc in roots:
+            if _spki(rc.public_key()) in held:
+                where = ("this domain" if re_.domain == e.domain and re_.own == e.own
+                         else _entry_label(re_))
+                return (f"the signing key for {_entry_label(e)} is the key of the "
+                        f"root CA held for {where} ({_cn(rc)}): {_ROOT_KEY_NEVER}, "
+                        "whichever domain holds that root and whatever certificate "
+                        "carries its key. Import an intermediate with its own key "
+                        "as the signing CA")
+    return ""
+
+
+def _with(st: DomainCAStore, entry: DomainCA) -> tuple[DomainCA, ...]:
+    """The entries ``st`` would hold after ``put(entry)``."""
+    return tuple(e for e in st.entries() if e.domain != entry.domain) + (entry,)
+
+
+# ── the names each domain's certificates get on a stick ─────────────────────────
+#: Names a per-domain trust certificate may never take: gen-provision-keys.sh writes
+#: --ca-cert as certs/cluster-ca.crt (and refuses a --trust-cert of that name), and
+#: materialize() writes the signing CA and key as signing-ca.{crt,key}.
+RESERVED_TRUST_NAMES = ("cluster-ca", "signing-ca")
+#: The mesh's own root (the own signing CA is --ca-cert, i.e. cluster-ca).
+OWN_ROOT_TRUST_NAME = "cluster-root-ca"
+#: gen-provision-keys.sh's own --trust-cert NAME rule (_TRUST_NAME_RE), mirrored so a
+#: name it would refuse at build time is refused at import instead.
+_SCRIPT_TRUST_NAME = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,120}[a-z0-9])?$")
+
+
+def trust_name(domain: str, own: bool, kind: str) -> str:
+    """The certs/<name>.crt a domain's PUBLIC certificate gets on every stick.
+
+    ``kind`` is ``"ca"`` (another domain's signing CA) or ``"root-ca"``. Another
+    domain's names put the kind FIRST and a '.' after it: ``ca.<domain>`` and
+    ``root-ca.<domain>``. A kind holds no '.', so the first '.' splits a name back
+    into (kind, domain) exactly: two domains can never share a name (the old
+    ``<domain>-<kind>`` made 'x' + root and 'x-root' + signing both
+    ``x-root-ca``). The own root is ``cluster-root-ca`` (no '.', so no other
+    domain's name can equal it), and no name with a '.' equals a reserved one."""
+    if own:
+        return OWN_ROOT_TRUST_NAME
+    return f"{kind}.{domain}"
+
+
+def _trust_names(entries) -> list[tuple[str, str]]:
+    """(name, label) for every certificate :func:`materialize` would write as a
+    trust certificate, in its order."""
+    out = []
+    for e in sorted(entries, key=lambda x: (not x.own, x.domain)):
+        if not e.own and e.signing_pem:
+            out.append((trust_name(e.domain, False, "ca"), _entry_label(e)))
+        if e.root_pem and e.root_pem != e.signing_pem:
+            out.append((trust_name(e.domain, e.own, "root-ca"), _entry_label(e)))
+    return out
+
+
+def trust_name_problem(entries) -> str:
+    """"" when every trust certificate of ``entries`` gets its own, valid file name
+    on the sticks, else the refusal (a collision would overwrite one domain's CA
+    with another's on every stick, or stop the build)."""
+    seen: dict[str, str] = {}
+    for name, label in _trust_names(entries):
+        if name in RESERVED_TRUST_NAMES:
+            return (f"the domain name {label!r} would put its certificate at "
+                    f"certs/{name}.crt, a name reserved for the mesh's own signing "
+                    "CA; rename the domain on the Domains step")
+        if not _SCRIPT_TRUST_NAME.match(name):
+            return (f"the domain name {label!r} is too long for a certificate file "
+                    f"name on the sticks (certs/{name}.crt); KEYS generation takes "
+                    "at most 122 characters")
+        if name in seen:
+            return (f"the domains {seen[name]!r} and {label!r} would both put a "
+                    f"certificate at certs/{name}.crt on every stick; rename one of "
+                    "them on the Domains step")
+        seen[name] = label
+    return ""
+
+
+def _admit(st: DomainCAStore, entry: DomainCA) -> DomainCA:
+    """The ONE gate every import passes before anything is held: the root-key
+    invariant and the trust-file names, over the store as the import would leave
+    it."""
+    after = _with(st, entry)
+    for prob in (root_key_invariant_problem(after), trust_name_problem(after)):
+        if prob:
+            raise CAImportError(prob)
+    return st.put(entry)
+
+
 # ── the rows a face shows ────────────────────────────────────────────────────────
 def own_domain(cfg) -> str:
     return (getattr(cfg, "cluster_domain", "") or "").strip()
@@ -520,15 +721,15 @@ def _check_signing(domain, own, signing, key, root, now) -> list[str]:
     if key is not None and _spki(key.public_key()) != _spki(signing.public_key()):
         probs.insert(0, "the private key does not belong to this signing CA "
                         "certificate (their public keys differ)")
+    if probs:                           # before the signature checks: a key type
+        raise CAImportError(probs[0])   # they cannot verify is refused by name here
     rk = root_key_problem(signing, root)
     if rk:
-        probs.append(rk)
-    elif root is not None:
+        raise CAImportError(rk)
+    if root is not None:
         cp = chain_problem(signing, root)
         if cp:
-            probs.append(cp)
-    if probs:
-        raise CAImportError(probs[0])
+            raise CAImportError(cp)
     warns = []
     days = (_not_after(signing) - _now(now)).days
     if days < EXPIRY_WARN_DAYS:
@@ -667,7 +868,7 @@ def import_signing(st: DomainCAStore, domain: str, own: bool, *,
                      key_pem=_pkcs8(key) if key is not None else b"",
                      root_name=root_name if root is not None else "",
                      signing_name=name, warnings=tuple(warns))
-    return st.put(entry)
+    return _admit(st, entry)
 
 
 _EXTRA_KEY_REFUSAL = (
@@ -696,6 +897,17 @@ def import_root(st: DomainCAStore, domain: str, own: bool, cert_path: str, *,
     if probs:
         raise CAImportError(probs[0])
     prior = st.get(domain)
+    held_root = prior.root_cert() if prior is not None and prior.root_pem else None
+    if (held_root is not None
+            and held_root.fingerprint(_sha256()) != root.fingerprint(_sha256())):
+        # Fixed in EVERY state, a signing CA held or not: replacing a root silently
+        # would change what every stick trusts (PR #938 round 3, finding 3).
+        raise CAImportError(
+            f"this domain already holds a root ({_cn(held_root)}, sha256 "
+            f"{held_root.fingerprint(_sha256()).hex()[:16]}); this is another root "
+            f"({_cn(root)}, sha256 {root.fingerprint(_sha256()).hex()[:16]}), even "
+            "where the names match. The held root changes only by removal"
+            + ROTATE_HINT)
     warns: list[str] = []
     if prior and prior.signing_pem:
         rk = root_key_problem(prior.signing_cert(), root)
@@ -711,7 +923,9 @@ def import_root(st: DomainCAStore, domain: str, own: bool, cert_path: str, *,
                      root_name=os.path.basename(cert_path),
                      signing_name=prior.signing_name if prior else "",
                      warnings=tuple(warns))
-    return st.put(entry)
+    # ANY domain's root: a key held for the mesh's own domain must not be this
+    # root's key, whichever row the root is imported on (the reverse order).
+    return _admit(st, entry)
 
 
 def remove(st: DomainCAStore, domain: str) -> bool:
@@ -869,9 +1083,27 @@ def row_cells(cfg, st: DomainCAStore | None = None,
 
 
 # ── placement on the sticks ──────────────────────────────────────────────────────
-def _trust_name(domain: str, kind: str) -> str:
-    base = domain or "mesh"
-    return f"{base}-{kind}"
+def placement_refusal(cfg, st: DomainCAStore | None = None, profiles=None,
+                      now: _dt.datetime | None = None) -> str:
+    """"" when the held signing key may be placed on a pki stick, else why not (one
+    sentence, both faces and the build log).
+
+    The go-live checklist IS the gate: while :func:`readiness` is not READY, the
+    KEYS generation places no CA key. It does not fall back to a throwaway CA for
+    that stick either (that is the silent failure this step exists to end): the pki
+    stick's keys step fails with this sentence. A step with no key held (untouched,
+    or certificates only) is not gated: there is no key to place."""
+    st = st or store()
+    own = st.own()
+    if own is None or not own.key_pem:
+        return ""
+    checks = readiness(cfg, st, profiles, now)
+    if ready_to_go_live(checks):
+        return ""
+    failing = "; ".join(f"{c.domain}: {c.text}" for c in checks if not c.ok)
+    return (f"the {STEP_TITLE} checklist is NOT ready to go live ({failing}), so the "
+            "signing key was not placed and this pki stick was not made. Fix the "
+            f"items on the {STEP_TITLE} step, then build again.")
 
 
 @dataclass
@@ -881,7 +1113,10 @@ class MaterializedCA:
     signing_cert: str = ""
     signing_key: str = ""
     trust: list[tuple[str, str]] = field(default_factory=list)   # (name, path)
+    #: the held signing key's public half (written or not): what scan_keys_dir hunts
     spki: tuple[bytes, ...] = ()
+    #: every held root's public half: args_for's last gate
+    root_spki: tuple[bytes, ...] = ()
     #: the dir's owner lock (held until cleanup; the startup sweep reads it)
     _owner: "PrivateDir | None" = field(default=None, repr=False)
 
@@ -893,11 +1128,16 @@ class MaterializedCA:
 
     def args_for(self, profile: str) -> list[str]:
         """gen-provision-keys.sh arguments for one KEYS profile. The key path is
-        passed to the pki profile ONLY; every profile gets the public certificates."""
+        passed to the pki profile ONLY; every profile gets the public certificates.
+        Last gate: a key whose public half is a held root's is never passed on."""
         args: list[str] = []
         if self.signing_cert:
             args += ["--ca-cert", self.signing_cert]
             if profile == KEY_PROFILE and self.signing_key:
+                if not self.spki or set(self.spki) & set(self.root_spki):
+                    raise CAImportError(
+                        f"the signing key is a held root's key: {_ROOT_KEY_NEVER}; "
+                        "it was not passed to the KEYS generation")
                 args += ["--ca-key", self.signing_key, "--ca-key-to-stick",
                          "--no-kubeadm-ca"]
         for name, path in self.trust:
@@ -914,34 +1154,47 @@ def has_material(st: DomainCAStore | None = None) -> bool:
     return any(e.signing_pem or e.root_pem for e in st.entries())
 
 
-def materialize(st: DomainCAStore | None = None) -> MaterializedCA | None:
+def materialize(st: DomainCAStore | None = None, *,
+                with_key: bool = True) -> MaterializedCA | None:
     """Write the held material for one run (None when nothing is held, so an untouched
     step changes no argv). Files are 0600 under a 0700 ``mkdtemp`` dir that holds its
     owner lock, never under the build workdir; callers ``cleanup()`` in a ``finally``,
-    and a dir a killed Studio left behind is removed by the next startup sweep."""
+    and a dir a killed Studio left behind is removed by the next startup sweep.
+
+    ``with_key=False`` writes the public certificates only (a non-pki stick never
+    needs the key file to exist). Before anything is written, the root-key invariant
+    and the trust-file names are checked again over the store as it is now
+    (:class:`CAImportError`; no dir is made)."""
     st = st or store()
     if not has_material(st):
         return None
+    entries = st.entries()
+    for prob in (root_key_invariant_problem(entries), trust_name_problem(entries)):
+        if prob:
+            raise CAImportError(prob)
     owner = PrivateDir("hugmesh-domain-ca-")
     root = owner.path
     m = MaterializedCA(root=root, _owner=owner)
     try:
         spki = []
-        for e in sorted(st.entries(), key=lambda x: (not x.own, x.domain)):
+        m.root_spki = tuple(_spki(e.root_cert().public_key())
+                            for e in entries if e.root_pem)
+        for e in sorted(entries, key=lambda x: (not x.own, x.domain)):
             if e.own and e.signing_pem:
                 m.signing_cert = os.path.join(root, "signing-ca.crt")
                 _write_0600(m.signing_cert, e.signing_pem)
                 if e.key_pem:
-                    m.signing_key = os.path.join(root, "signing-ca.key")
-                    _write_0600(m.signing_key, e.key_pem)
                     spki.append(_spki(e.signing_cert().public_key()))
+                    if with_key:
+                        m.signing_key = os.path.join(root, "signing-ca.key")
+                        _write_0600(m.signing_key, e.key_pem)
             elif e.signing_pem:
-                name = _trust_name(e.domain, "ca")
+                name = trust_name(e.domain, False, "ca")
                 p = os.path.join(root, f"{name}.crt")
                 _write_0600(p, e.signing_pem)
                 m.trust.append((name, p))
             if e.root_pem and e.root_pem != e.signing_pem:
-                name = _trust_name(e.domain, "root-ca")
+                name = trust_name(e.domain, e.own, "root-ca")
                 p = os.path.join(root, f"{name}.crt")
                 _write_0600(p, e.root_pem)
                 m.trust.append((name, p))

@@ -125,7 +125,7 @@ def test_the_ca_key_reaches_the_pki_stick_only(tmp_path, monkeypatch):
         from cryptography import x509
         assert x509.load_pem_x509_certificate(cert).public_bytes(
             serialization.Encoding.DER) == signing_der, folder
-        assert os.path.isfile(os.path.join(folder, "certs", "mesh.example-root-ca.crt"))
+        assert os.path.isfile(os.path.join(folder, "certs", "cluster-root-ca.crt"))
         assert not os.path.exists(os.path.join(folder, "kubernetes", "pki", "ca.key"))
         found = _keys_with_spki(folder, spki)
         if profile == "pki":
@@ -226,7 +226,7 @@ def test_windows_docker_mounts_the_ca_dir_read_only_and_maps_its_paths(tmp_path)
         tail = cmd[cmd.index("hugmesh-builder") + 1:]
         assert m.root not in " ".join(tail)
         assert "/ca/signing-ca.key" in tail and "/ca/signing-ca.crt" in tail
-        assert "mesh.example-root-ca=/ca/mesh.example-root-ca.crt" in tail
+        assert "cluster-root-ca=/ca/cluster-root-ca.crt" in tail
     finally:
         m.cleanup()
 

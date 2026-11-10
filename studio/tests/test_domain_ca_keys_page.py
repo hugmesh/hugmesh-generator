@@ -145,6 +145,47 @@ def test_a_refusal_is_inline_and_holds_nothing(wiz, monkeypatch, tmp_path):
     assert page.note.text() == "Nothing to remove."
 
 
+def test_another_domains_root_key_is_an_inline_refusal_drawn_whole(wiz, qapp,
+                                                                   monkeypatch,
+                                                                   tmp_path):
+    """PR #938 round 3, finding 1, on screen: a cross-certificate carrying ANOTHER
+    domain's root key is refused under the buttons, whole, and nothing is held.
+    HUGMESH_LOOK_SHOTS=DIR saves the screenshot a reviewer looks at."""
+    from hugmesh_studio.core.config import Domain
+    page = _to_page(wiz)
+    wiz.cfg.domains = [Domain(name="x.example")]
+    page.refresh()
+    ro_key, rx_key = tca.key(), tca.key()
+    ro = tca.cert(ro_key, "m Root CA")
+    rx = tca.cert(rx_key, "x Root CA")
+    cross = tca.cert(rx_key, "x Root CA", issuer_key=ro_key, issuer_cert=ro,
+                     path_length=0)
+    page.table.selectRow(1)
+    _picks(monkeypatch, tca.write(tmp_path, "rx.crt", tca.pem(rx)))
+    page.import_root.click()
+    page.table.selectRow(0)
+    _picks(monkeypatch, tca.write(tmp_path, "ro.crt", tca.pem(ro)))
+    page.import_root.click()
+    _picks(monkeypatch, tca.write(tmp_path, "c.crt", tca.pem(cross)),
+           tca.write(tmp_path, "rx.key", tca.key_pem(rx_key)))
+    page.passphrase.setText("typed but unused")
+    page.import_files.click()
+    note = page.note.text()
+    assert note.startswith("Not imported: the signing key for this mesh's own domain")
+    assert "x.example" in note and "root CA key is never taken" in note
+    assert page.passphrase.text() == ""
+    own = dca.store().own()
+    assert own is not None and own.key_pem == b"" and own.signing_pem == b""
+    assert _cells(page)[0][3] == "-"
+    settle(qapp, 5)
+    shots = os.environ.get("HUGMESH_LOOK_SHOTS", "")
+    if shots:
+        os.makedirs(shots, exist_ok=True)
+        wiz.grab().save(os.path.join(shots, "domain-ca-keys-refusal-cross-root.png"))
+    assert_page_fits_its_window(page)
+    assert_whole(page.note, "the refusal under the buttons")
+
+
 def test_without_cryptography_the_buttons_are_off_and_say_why(wiz, monkeypatch):
     page = _to_page(wiz)
     page.crypto_note = "no cryptography here"

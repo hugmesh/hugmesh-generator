@@ -16,7 +16,8 @@ Typical contents for the HugMesh cluster:
 
 The Studio's **Domain CA keys** step (or `gen-provision-keys.sh --ca-cert`) writes
 `cluster-ca.crt` onto every stick, and `--trust-cert NAME=FILE` adds a root or another
-domain's CA as `NAME.crt`. Only the pki stick gets `cluster-ca.key`
+domain's CA as `NAME.crt` (the Studio names them `cluster-root-ca.crt` for the mesh's
+root and `root-ca.<domain>.crt` / `ca.<domain>.crt` for another domain). Only the pki stick gets `cluster-ca.key`
 (`--ca-key-to-stick`); a worker stick with any private key here is refused.
 
 keys-provision builds the Java truststore from `certs/cluster-ca.crt` and every
