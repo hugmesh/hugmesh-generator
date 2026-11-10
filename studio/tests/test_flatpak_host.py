@@ -280,3 +280,26 @@ def test_detect_reads_the_host_through_the_bridge(monkeypatch, tmp_path):
     host = platform_info.detect()
     assert host.host_bridge_error == "no helper" and not host.has_docker and not host.has_kvm
     assert host.default_backend == "none"
+
+
+def test_tor_browser_is_started_on_the_host(monkeypatch):
+    """QProcess.startDetached does not go through the subprocess hook, and inside the
+    Flatpak the launcher shutil.which found is the HOST's, so it is started through
+    flatpak-spawn --host (with the host session's own environment)."""
+    widget = pytest.importorskip("hugmesh_studio.gui.pages._mesh_monitor_widget")
+    started = []
+
+    class _Process:
+        @staticmethod
+        def startDetached(program, args):
+            started.append([program, *args])
+            return True
+
+    monkeypatch.setattr(widget.QtCore, "QProcess", _Process)
+    monkeypatch.setattr(widget.mesh_controls, "tor_browser_argv",
+                        lambda url: ["/usr/bin/torbrowser-launcher", url])
+    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda *a, **k: True)
+    assert widget.open_in_tor_browser("http://abc.onion/") == ""
+    assert started[0][:2] == ["flatpak-spawn", "--host"]
+    assert started[0][-2:] == ["/usr/bin/torbrowser-launcher", "http://abc.onion/"]
+    assert not any(a.startswith("--env-fd") for a in started[0])

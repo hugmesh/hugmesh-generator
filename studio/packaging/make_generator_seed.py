@@ -166,7 +166,11 @@ def make(out: str, repo: str = DEFAULT_REPO, ref: str = "HEAD", force: bool = Fa
         missing = sorted(set(wanted) - set(hashes))[:5]
         raise SeedError(f"git archive and git ls-tree disagree (extra {extra}, missing "
                         f"{missing}); is there an export-ignore attribute?")
-    meta = {"version": version, "commit": commit, "dirty": dirty, "files": hashes}
+    # "top": the REPOSITORY's top level, EXCLUDE included, so --self-check still looks
+    # for a path under a directory the seed was cut from (core/self_check.py).
+    top = sorted(_git(repo, "ls-tree", "--name-only", ref).split())
+    meta = {"version": version, "commit": commit, "dirty": dirty, "top": top,
+            "excluded": list(EXCLUDE), "files": hashes}
     meta_partial = os.path.join(out, META + ".partial")
     with open(meta_partial, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=1, sort_keys=True)

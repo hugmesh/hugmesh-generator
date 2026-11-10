@@ -82,12 +82,23 @@ def check(gen_dir: str) -> dict:
                 shipped.add(os.path.relpath(os.path.join(directory, name), gen_dir)
                             .replace(os.sep, "/"))
     shipped_dirs = _dirs_of(shipped)
-    top = {rel.split("/", 1)[0] for rel in shipped}
+    # The repository's top level as the seed recorded it (a directory cut from the seed
+    # still counts), else what is on disk.
+    top = set(meta.get("top") or ()) | {rel.split("/", 1)[0] for rel in shipped}
     refs = generator_refs.scan(top)
     missing, checked, scripts = [], 0, []
     for rel in sorted(refs.paths):
-        if rel in NOT_GENERATOR_PATHS or not _present(rel, shipped, shipped_dirs):
-            continue                      # runtime state, or not a generator path
+        if rel in NOT_GENERATOR_PATHS:
+            continue
+        if not _present(rel, shipped, shipped_dirs):
+            first = rel.split("/", 1)[0]
+            cut = [c for c in meta.get("excluded") or () if rel == c or rel.startswith(c + "/")]
+            if meta.get("files") and (cut or (first not in shipped_dirs
+                                              and first not in shipped)):
+                # the seed was cut (make_generator_seed.EXCLUDE) under a path the
+                # Studio uses
+                missing.append(rel)
+            continue                      # runtime state the Studio writes
         checked += 1
         if not os.path.exists(os.path.join(gen_dir, rel)):
             missing.append(rel)

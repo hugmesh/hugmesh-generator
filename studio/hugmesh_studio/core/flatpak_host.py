@@ -68,7 +68,9 @@ HOST_TOOLS = (
     "docker", "docker-compose", "make", "git", "gh", "kubectl", "kind", "helm",
     "qemu-system-*", "qemu-img", "remote-viewer", "spicy",
     "ssh", "scp", "ssh-keygen", "lsblk", "lspci", "losetup", "shred", "pgrep",
-    "sudo", "pkexec", "ollama", "torbrowser-launcher", "npx", "npm", "node",
+    "sudo", "pkexec", "ollama", "npx", "npm", "node",
+    # mesh_controls.TOR_BROWSER_COMMANDS
+    "torbrowser-launcher", "torbrowser", "tor-browser", "start-tor-browser",
     # local_agent opens one of these to run a command in a terminal the operator sees
     "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "kitty",
     "alacritty", "foot", "xterm",
@@ -207,7 +209,7 @@ def _env_memfd(env: dict[str, str]) -> int:
 
 def _wrap_popen(original):
     def __init__(self, args, *pargs, **kwargs):
-        if kwargs.get("shell") or isinstance(args, (str, bytes)) or pargs \
+        if kwargs.get("shell") or isinstance(args, (str, bytes, os.PathLike)) or pargs \
                 or kwargs.get("executable") or not runs_on_host(list(args)):
             original(self, args, *pargs, **kwargs)
             return

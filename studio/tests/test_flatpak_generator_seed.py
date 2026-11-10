@@ -230,3 +230,18 @@ def test_naming_a_script_that_does_not_exist_turns_the_guard_red(tmp_path, seed_
     assert not _ignored("tests/qemu/run-qemu-renamed.sh")
     defined = generator_refs.makefile_targets(_read(os.path.join(REPO, "Makefile")))
     assert "stack-renamed" in refs.make_targets and "stack-renamed" not in defined
+
+
+def test_the_runtime_self_check_sees_a_seed_cut_short(tmp_path, monkeypatch):
+    """--self-check runs where the PR guard cannot: in the built bundle. A seed with a
+    whole directory cut (tests/qemu, the emulation lanes' runner) must fail it there."""
+    monkeypatch.setattr(seedmaker, "EXCLUDE", ("tests/qemu",))
+    seed = tmp_path / "seed"
+    seedmaker.make(str(seed), REPO, force=True, log=open(os.devnull, "w"))
+    monkeypatch.setenv(managed_generator.SEED_ENV, str(seed))
+    monkeypatch.setenv(managed_generator.TARGET_ENV, str(tmp_path / "generator"))
+    monkeypatch.setattr(managed_generator, "last", managed_generator.Placed())
+    placed = managed_generator.ensure()
+    assert placed.error == ""
+    report = self_check.check(placed.path)
+    assert "tests/qemu/run-qemu-docker.sh" in report["missing_paths"], report["problems"]
