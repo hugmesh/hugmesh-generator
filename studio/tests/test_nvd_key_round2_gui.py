@@ -359,3 +359,34 @@ def test_set_anyway_wording_follows_the_stored_key(qapp, box):
     assert "not needed" in w.set_anyway.text() and fp in w.set_anyway.text()
     assert "was not OK" not in w.set_anyway.text()
     assert not w.set_anyway.isEnabled()
+
+
+def test_org_row_wording_fits_in_the_real_window(qapp, window, shots):
+    """The longer set-anyway wording and the box-conflict refusal, rendered in the
+    FleetWindow at its own 760x700: the tick's text is not clipped and the refusal
+    label is tall enough for its wrapped text."""
+    from hugmesh_studio.gui.pages.fleet import STEP_PLATFORMS
+    win = window(760, 700)
+    page = win.page
+    sa = page.step_scroll(STEP_PLATFORMS)
+    w = page.nvd_key
+    _verified_store(KEY_A)
+    page.pentest.setChecked(True)
+    w.refresh()
+    w.org_tick.setChecked(True)
+    w.org_edit.setText("acme")
+    w._runner = _Gh()
+    w.key_edit.setText(KEY_B)
+    w.org_btn.click()
+    _settle(qapp)
+    sa.ensureWidgetVisible(w.org_status, 0, 8)
+    _settle(qapp)
+    for lab, name in ((w.set_anyway, "set_anyway"), (w.org_status, "org_status")):
+        assert lab.isVisible() and lab.width() > 0 and lab.height() > 0, name
+        assert sa.viewport().rect().contains(_viewport_rect(sa, lab)), name
+    assert w.set_anyway.width() >= w.set_anyway.sizeHint().width(), "set-anyway text clipped"
+    need = w.org_status.heightForWidth(w.org_status.width())
+    assert w.org_status.height() >= need - 1, "refusal text clipped"
+    assert "not needed" in w.set_anyway.text() and not w.set_anyway.isEnabled()
+    assert w.org_status.text().startswith("Not set")
+    assert win.grab().save(os.path.join(shots, "nvd-r2-org-row-conflict-760x700.png"))
