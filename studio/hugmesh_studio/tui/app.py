@@ -123,7 +123,8 @@ def main(argv=None, *, inp=None, out=None) -> int:
         if not plain.print_meshemu(out if out is not None else sys.stdout,
                                    args.generator_dir, args.meshemu):
             print(f"error: no artifact session named {args.meshemu!r} with "
-                  f"bootable images under {args.generator_dir}/out/sessions",
+                  f"bootable images in any known output folder ({args.generator_dir}/out "
+                  f"or a folder a Studio build wrote sessions into)",
                   file=err)
             return 2
         return 0

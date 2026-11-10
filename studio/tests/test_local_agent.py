@@ -315,12 +315,12 @@ def test_nothing_installed_names_every_missing_piece_in_the_order_to_fix_them():
 def test_a_server_with_no_models_and_one_with_no_tools_model_are_different_problems():
     none = la.probe(ENV, which=which_all({"ollama", "claude"}), fetch=FakeServer([]))
     (p,) = la.diagnose(none)
-    assert p.code == "no_models" and "ollama pull qwen3:8b" in p.fix
+    assert p.code == "no_models" and "ollama pull qwen3:1.7b" in p.fix and "Download" in p.fix
     plain = la.probe(ENV, which=which_all({"ollama", "claude"}), fetch=FakeServer(
         [tools_entry("embed:1", caps=("embedding",)), tools_entry("chat:2", caps=("completion",))]))
     (q,) = la.diagnose(plain)
     assert q.code == "no_tools_model" and "tools capability" in q.what
-    assert "embed:1" in q.what and "ollama pull qwen3:8b" in q.fix
+    assert "embed:1" in q.what and "ollama pull qwen3:1.7b" in q.fix
 
 
 def test_a_missing_agent_command_names_the_command_and_the_launcher():

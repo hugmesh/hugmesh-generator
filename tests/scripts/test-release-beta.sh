@@ -49,6 +49,10 @@
 #      the tag goes on the release branch's re-read SHA; patches must be the next patch on
 #      an existing release branch; the next-beta PR goes to main; Studio stable is refused;
 #      every stable dry run makes zero writes;
+#   V  the verify phase audits every selected image package's floating tags (:latest, :beta,
+#      :X.Y, :main): an unsigned one (no sha256-<hex>.sig) and a :latest on a package with no
+#      stable X.Y.Z are flagged, an unreadable listing fails closed, the plain "every artifact
+#      is DONE" is never printed over them, and --apply stops in verify;
 #   M  the guards are mutation-tested: each is broken in a copy of the script, the check
 #      that covers it must go red, and the copy must really differ from the original.
 #
@@ -180,7 +184,10 @@ if pos and pos[0] == "api":
             kind = seg[3]; name = urllib.parse.unquote(seg[4])
             p = st.get("packages", {}).get(kind, {}).get(name)
             if p is None: notfound()
-            if len(seg) == 6 and seg[5] == "versions": out(p.get("versions", []))
+            if len(seg) == 6 and seg[5] == "versions":
+                if p.get("versions_fail"):                 # a non-404 error (rate limit, egress drop), every retry
+                    sys.stderr.write("gh: Bad Gateway (HTTP 502)\n"); sys.exit(1)
+                out(p.get("versions", []))
             out({"name": name, "visibility": p["visibility"]})
         notfound()
     if seg[0] != "repos": notfound()
@@ -513,6 +520,32 @@ elif scen == "stable":
         branches={"release/0.2": "rb-ui"}, tags={"v0.2.0": "rb-ui", "v0.2.0-beta.3": "m-fx-ui-done"},
         runs=[green(811, "v0.2.0", "rb-ui"), green(812, "v0.2.0-beta.3", "m-fx-ui-done")])
     pkgs = {"container": {"hugmesh-gateway": {"visibility": "public", "versions": []}}, "maven": {}}
+elif scen == "floating":
+    # every row is a DONE beta; only their GHCR packages' floating tags differ (0.4.0-beta.2's verify gap)
+    def done(name, v):
+        add(8, name, "img", "package.json", "v", "release.yml", name,
+            files={"package.json": pj(v), ".github/workflows/release.yml": wf()},
+            tags={"v" + v: "m-" + name}, runs=[run(len(repos) + 1, br="v" + v, sha="m-" + name)])
+    def ver(i, h, tags): return {"id": i, "name": "sha256:" + h * 64, "metadata": {"container": {"tags": tags}}}
+    def sig(i, h, of): return ver(i, h, ["sha256-%s.sig" % (of * 64)])
+    for n in ("fx-ui-clean", "fx-ui-stale", "fx-ui-latest-signed", "fx-ui-stable", "fx-ui-unreadable"): done(n, "0.4.0-beta.2")
+    pkgs = {"container": {
+        # the healthy beta package: :beta and :main signed, no :latest
+        "fx-ui-clean": {"visibility": "public", "versions": [
+            ver(11, "a", ["0.4.0-beta.2", "sha-aaaaaaaaaaaa", "beta"]), sig(12, "b", "a"),
+            ver(13, "c", ["main"]), sig(14, "d", "c")]},
+        # the defect: a :latest from before the release workflow, unsigned, on a package with no stable
+        "fx-ui-stale": {"visibility": "public", "versions": [
+            ver(21, "a", ["0.4.0-beta.2", "beta"]), sig(22, "b", "a"),
+            ver(1353013551, "f", ["latest", "60b63df"])]},
+        # signed, but :latest on a package that never shipped a stable X.Y.Z
+        "fx-ui-latest-signed": {"visibility": "public", "versions": [
+            ver(31, "a", ["0.4.0-beta.2", "beta", "latest"]), sig(32, "b", "a")]},
+        # a stable line: :0.3 and :latest signed (fine); :beta on 0.4.0-beta.2 unsigned (flagged, never deleted)
+        "fx-ui-stable": {"visibility": "public", "versions": [
+            ver(41, "a", ["0.3.0", "0.3", "latest"]), sig(42, "b", "a"),
+            ver(43, "c", ["0.4.0-beta.2", "beta"])]},
+        "fx-ui-unreadable": {"visibility": "public", "versions_fail": True}}, "maven": {}}
 repos["hugmesh.github.io"] = {"main": ["m-site"], "runs": [], "files": {"release-sources.json": json.dumps({
     "images": [{"repo": "hugmesh/fx-ui", "image": "ghcr.io/hugmesh/fx-ui", "group": "ui", "id": "fx-ui"}],
     "packages": [{"repo": "hugmesh/fx-lib-a", "id": "lib-a"}]})}}
@@ -1008,6 +1041,77 @@ EOF
 if check_tags_unreadable "$SCRIPT"; then ok "T: a tag listing that fails (non-404, every retry) is REFUSE 'cannot read tags', never READY or tagged; a readable neighbour is untouched"
 else bad "T: an unreadable tag listing must fail closed"; fi
 
+# ── V: the verify phase audits the floating tags ─────────────────────────────
+echo "== V verify flags unsigned floating tags and a :latest with no stable release"
+check_floating() { # script -> 0 when verify flags every bad floating tag, passes the good ones, and never says plain DONE
+  local s=$1 d="$TMP/v.$RANDOM" rc=0 l
+  fixture floating "$d"; run_script "$s" "$d" --no-studio
+  for r in fx-ui-clean fx-ui-stale fx-ui-latest-signed fx-ui-stable fx-ui-unreadable; do
+    [ "$(state_of "$d/out" "$r")" = DONE ] || { echo "      $r: want DONE, got '$(state_of "$d/out" "$r")'"; rc=1; }
+  done
+  if grep -a 'FLOATING' "$d/out" | grep -a 'fx-ui-clean' >/dev/null; then echo "      fx-ui-clean (signed :beta and :main, no :latest) was flagged"; rc=1; fi
+  if grep -a 'FLOATING ghcr.io/hugmesh/fx-ui-stable:' "$d/out" | grep -a 'latest' >/dev/null; then
+    echo "      fx-ui-stable's signed :0.3/:latest (a stable 0.3.0 exists) was flagged"; rc=1; fi
+  if grep -a '== every artifact is DONE$' "$d/out" >/dev/null; then echo "      verify still says every artifact is DONE"; rc=1; fi
+  grep -a '== every artifact is DONE, but its floating tags are not right' "$d/out" >/dev/null || { echo "      no floating-tag verdict"; rc=1; }
+  grep -a '== 4 image package(s) have a floating tag' "$d/out" >/dev/null || { echo "      the count of flagged packages is not 4"; rc=1; }
+  grep -a "phase 'verify' would stop here" "$d/out" >/dev/null || { echo "      the dry run does not say verify would stop"; rc=1; }
+  if [ -n "$(writes "$d/calls")" ]; then echo "      the dry run wrote something"; rc=1; fi
+  cp "$d/out" "$TMP/last-floating.out"
+  return "$rc"
+}
+check_floating_unsigned() { # script -> 0 when an unsigned floating tag is flagged, with delete advice only where no release tag would go
+  local s=$1 rc=0 O
+  check_floating "$s" >/dev/null || true; O="$TMP/last-floating.out"
+  grep -aF 'FLOATING ghcr.io/hugmesh/fx-ui-stale:latest -> sha256:ffffffffffff (package version 1353013551, tags latest,60b63df): UNSIGNED' "$O" >/dev/null \
+    || { echo "      fx-ui-stale's unsigned :latest is not flagged UNSIGNED"; rc=1; }
+  grep -aF 'gh api -X DELETE orgs/hugmesh/packages/container/fx-ui-stale/versions/1353013551 (undo within 30 days' "$O" >/dev/null \
+    || { echo "      no delete command (with its restore) for the stale version"; rc=1; }
+  grep -aF 'FLOATING ghcr.io/hugmesh/fx-ui-stable:beta -> sha256:cccccccccccc' "$O" | grep -a 'UNSIGNED' >/dev/null \
+    || { echo "      fx-ui-stable's unsigned :beta is not flagged"; rc=1; }
+  grep -aF 'it also carries the release tag 0.4.0-beta.2, so do NOT delete' "$O" >/dev/null \
+    || { echo "      the unsigned :beta on a release version is not marked do-not-delete"; rc=1; }
+  if grep -aF 'versions/43' "$O" >/dev/null; then echo "      a delete is advised for a version carrying a release tag"; rc=1; fi
+  return "$rc"
+}
+check_floating_latest() { # script -> 0 when a SIGNED :latest on a package with no stable X.Y.Z is still flagged
+  local s=$1 rc=0 O
+  check_floating "$s" >/dev/null || true; O="$TMP/last-floating.out"
+  grep -aF 'FLOATING ghcr.io/hugmesh/fx-ui-latest-signed:beta,latest -> sha256:aaaaaaaaaaaa' "$O" \
+    | grep -aF ':latest while the package has no stable X.Y.Z' >/dev/null || { echo "      a signed :latest with no stable is not flagged"; rc=1; }
+  if grep -aF 'fx-ui-latest-signed' "$O" | grep -a 'UNSIGNED' >/dev/null; then echo "      the signed :latest is called unsigned"; rc=1; fi
+  grep -aF 'FLOATING ghcr.io/hugmesh/fx-ui-stale:latest' "$O" | grep -aF ':latest while the package has no stable X.Y.Z' >/dev/null \
+    || { echo "      the stale :latest lacks the no-stable reason"; rc=1; }
+  return "$rc"
+}
+check_floating_unreadable() { # script -> 0 when an unreadable package versions listing is flagged, never clean
+  local s=$1
+  check_floating "$s" >/dev/null || true
+  grep -aF 'FLOATING ghcr.io/hugmesh/fx-ui-unreadable: cannot read its package versions' "$TMP/last-floating.out" >/dev/null
+}
+check_floating_apply() { # script -> 0 when --apply stops in verify (rc 1, resume --from verify) and --only a clean repo passes
+  local s=$1 d="$TMP/va.$RANDOM"
+  fixture floating "$d"; run_script "$s" "$d" --apply --yes --from verify --no-studio
+  [ "$(cat "$d/rc")" = 1 ] || return 1
+  grep -a "Stopped in phase 'verify'" "$d/out" >/dev/null || return 1
+  grep -a 'scripts/release-beta.sh --apply --yes --no-studio --from verify' "$d/out" >/dev/null || return 1
+  [ -z "$(writes "$d/calls")" ] || return 1
+  fixture floating "$d"; run_script "$s" "$d" --apply --yes --from verify --no-studio --only fx-ui-clean
+  [ "$(cat "$d/rc")" = 0 ] || return 1
+  grep -a '== every selected artifact is DONE$' "$d/out" >/dev/null || return 1
+  ! grep -a 'FLOATING' "$d/out" >/dev/null
+}
+if check_floating "$SCRIPT"; then ok "V: verify flags 4 packages' floating tags, passes the signed ones, and never prints plain 'every artifact is DONE'"
+else bad "V: floating-tag verdict"; fi
+if check_floating_unsigned "$SCRIPT"; then ok "V: an unsigned :latest/:beta is UNSIGNED; delete (with restore) only for a version with no release tag"
+else bad "V: unsigned floating tags"; fi
+if check_floating_latest "$SCRIPT"; then ok "V: a signed :latest on a package with no stable X.Y.Z is flagged"
+else bad "V: :latest with no stable"; fi
+if check_floating_unreadable "$SCRIPT"; then ok "V: an unreadable versions listing (non-404, every retry) is flagged, never clean"
+else bad "V: unreadable versions must fail closed"; fi
+if check_floating_apply "$SCRIPT"; then ok "V: --apply stops in verify with the --from verify resume; --only a clean repo is DONE, rc 0"
+else bad "V: --apply floating verdict"; fi
+
 # ── S: the stable channel ────────────────────────────────────────────────────
 echo "== S stable channel"
 check_stable_classification() { # script -> 0 when every stable fixture row classifies as expected, with zero writes
@@ -1298,6 +1402,20 @@ mutate beta-stable-advice 's/^  if \[ -n "\$stable" \] \&\& \[ "\$(vercmp "\$nb"
 mutate tags-fail-open '/cannot read tags/s/) || {.*}$/ || true)/' check_tags_unreadable
 # T-M4 the failed read is noted but classification goes on with an empty listing
 mutate tags-fail-noreturn '/cannot read tags/s/; return; }$/; }/' check_tags_unreadable
+# V-M1 the signature test is dropped: an unsigned floating tag passes
+mutate floating-sig 's/^    if not hexd or "sha256-%s.sig" % hexd not in tags:$/    if False:/' check_floating_unsigned
+# V-M2 a :latest on a package with no stable X.Y.Z passes again
+mutate floating-latest 's/^    if "latest" in fl and not stable:$/    if False:/' check_floating_latest
+# V-M3 an unreadable versions listing is read as "no floating tags" (fail open)
+mutate floating-unreadable '/cannot read its package versions/s/^    \*) say .*/    *) return 0 ;;/' check_floating_unreadable
+# V-M4 verify prints "every artifact is DONE" over flagged floating tags again
+mutate floating-verdict 's/^  if \[ "\$st" = 0 \] \&\& \[ "\$ft" = 0 \]; then/  if [ "$st" = 0 ]; then/' check_floating
+# V-M5 the audit is never called
+mutate floating-call 's/^        if selected "\$r"; then floating_audit/        if false; then floating_audit/' check_floating
+# V-M6 the delete advice ignores the release tags on a version
+mutate floating-norelease 's/^    if rel:$/    if False:/' check_floating_unsigned
+# V-M7 apply no longer stops in verify on a floating problem alone
+mutate floating-apply 's/^  if \[ "\$st" = 0 \]; then say "== every \$what is DONE, but its floating tags are not right (above)"; return 1; fi$/  if [ "$st" = 0 ]; then say "== every $what is DONE, but its floating tags are not right (above)"; return 0; fi/' check_floating_apply
 
 echo
 echo "== test-release-beta.sh: $pass passed, $fail failed"
