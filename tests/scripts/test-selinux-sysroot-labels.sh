@@ -497,6 +497,44 @@ else
     [ "${rc}" != 0 ] && grep -q '^live-overlay-relabel: FAILED: no upperdir=' "${HK2}/kmsg" && [ ! -e "${HK2}/called" ] \
         && ok "hook G2: an overlay root whose options carry no upperdir= -> exit ${rc}, says so, calls nothing" \
         || bad "hook G2 noupper: rc=${rc} kmsg: $(cat "${HK2}/kmsg") called: $(cat "${HK2}/called" 2>/dev/null)"
+    # ── G3) the merged-path rewrite FAILING (#863 refute, blocker 5). The hook is
+    # /bin/sh with no pipefail; `sed -z ... | xargs -0 -r restorecon -F || rc=$?`
+    # saw only xargs' status, so a dead sed meant an empty list, `xargs -r` ran
+    # nothing, returned 0, and the hook logged "relabelled N" over a tmpfs_t upper
+    # layer. Swap the real sed in the hook's PATH for a stub and run it for real.
+    # run_hook2_sed <sed stub body> -> rc; same outputs as run_hook2.
+    run_hook2_sed() {
+        rm -f "${HK2}/toolbin/sed"
+        # Only the hook's `sed -z` (the merged-path rewrite) meets the stub; its other
+        # sed (the upperdir= parse) still runs the real one.
+        printf '#!/bin/sh\nif [ "$1" = -z ]; then\n%s\nfi\nexec %s "$@"\n' "$1" "$(type -P sed)" > "${HK2}/toolbin/sed"
+        chmod +x "${HK2}/toolbin/sed"
+        run_hook2 "${HK2}/m.overlay" ok; local r=$?
+        rm -f "${HK2}/toolbin/sed"; ln -sf "$(type -P sed)" "${HK2}/toolbin/sed"
+        return "${r}"
+    }
+    # run_hook2's own `sed "s|^PATH=..."` runs in this shell, not in the hook's PATH,
+    # so it never meets the stub. Upper-layer restorecon calls are the '-F <path>' lines.
+    run_hook2_sed 'exit 4'; rc=$?
+    [ "${rc}" != 0 ] && grep -q '^live-overlay-relabel: FAILED: sed could not rewrite' "${HK2}/kmsg" && ! grep -q 'relabelled' "${HK2}/kmsg" \
+        && ! grep -q '^-F ' "${HK2}/called" 2>/dev/null \
+        && ok "hook G3: sed failing (exit 4) -> exit ${rc}, a FAILED line naming sed, no 'relabelled', no upper-layer restorecon" \
+        || bad "hook G3 sed-fails: rc=${rc} kmsg: $(cat "${HK2}/kmsg") called: $(cat "${HK2}/called" 2>/dev/null)"
+    # A sed that exits 0 but writes a SHORT list (the ENOSPC/partial-write shape): the
+    # entry counts disagree, so the hook must refuse rather than relabel part of it.
+    run_hook2_sed 'printf "/\000"; exit 0'; rc=$?
+    [ "${rc}" != 0 ] && grep -q '^live-overlay-relabel: FAILED: the merged path list has 1 entries' "${HK2}/kmsg" && ! grep -q 'relabelled' "${HK2}/kmsg" \
+        && ! grep -q '^-F ' "${HK2}/called" 2>/dev/null \
+        && ok "hook G3: sed exits 0 with a short list (1 of ${n_up}) -> exit ${rc}, FAILED on the count mismatch, no upper-layer restorecon" \
+        || bad "hook G3 short-list: rc=${rc} kmsg: $(cat "${HK2}/kmsg") called: $(cat "${HK2}/called" 2>/dev/null)"
+    # Positive control for G3: the real sed restored, the same fixture relabels again.
+    run_hook2 "${HK2}/m.overlay" ok; rc=$?
+    [ "${rc}" = 0 ] && grep -q "relabelled ${n_up} upper-layer" "${HK2}/kmsg" \
+        && ok "hook G3 control: with the real sed back the same fixture succeeds (the stub, not the fixture, made G3 red)" \
+        || bad "hook G3 control: rc=${rc} kmsg: $(cat "${HK2}/kmsg")"
+    grep -vE '^[[:space:]]*#' "${HOOK}" | grep -E 'sed[^|]*\|[[:space:]]*xargs' >/dev/null \
+        && bad "hook G3 (static): a 'sed ... | xargs' pipe is back (only xargs' status is seen under /bin/sh)" \
+        || ok "hook G3 (static): no 'sed ... | xargs' pipe in the source"
     run_hook2 "${HK2}/m.disk" ok; rc=$?
     [ "${rc}" = 0 ] && grep -q 'not an overlay' "${HK2}/kmsg" && [ ! -e "${HK2}/called" ] \
         && ok "hook G2: a disk root exits 0 and logs why it did nothing" || bad "hook G2 disk: rc=${rc} kmsg: $(cat "${HK2}/kmsg")"
