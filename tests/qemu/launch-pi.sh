@@ -68,6 +68,7 @@ KEEP=false                     # keep RUN_DIR (and overlay) on exit
 FOREGROUND=false               # -nographic in the foreground instead of -daemonize
 EXTRA_APPEND=""                # extra kernel cmdline appended verbatim
 KEYS_IMG=""                    # optional FAT32 "KEYS" disk (provisioning tests)
+NO_EGRESS=false                # --no-egress: slirp restrict=on + every hostfwd on 127.0.0.1
 QMP_SOCK=""                    # optional QMP unix socket (--qmp); empty keeps -monitor none
 # ── Mesh (multi-node) L2 — issue #48, parity with launch-x86.sh, all default-off ─
 # --mesh-net attaches a SECOND virtio NIC on a shared QEMU socket L2 so several
@@ -153,6 +154,9 @@ Port forwards (host -> guest):
 Lifecycle:
   -t, --timeout SEC    Boot/SSH wait budget (info only here). Default: ${TIMEOUT}
       --keys-img FILE  Attach a FAT32 "KEYS" disk (provisioning tests).
+      --no-egress      No network egress for the guest (slirp restrict=on) and every
+                       port forward bound to 127.0.0.1. Use it whenever the KEYS disk
+                       carries REAL keys or credentials.
       --qmp PATH       Listen for QMP on the unix socket PATH (pause/resume/reset/
                        powerdown of the running guest). Omitted => -monitor none.
       --foreground     Run -nographic attached to this terminal (no -daemonize).
@@ -189,6 +193,7 @@ while [[ $# -gt 0 ]]; do
         --hs-port)         HS_PORT="$2"; shift 2 ;;
         -t|--timeout)      TIMEOUT="$2"; shift 2 ;;
         --keys-img)        KEYS_IMG="$2"; shift 2 ;;
+        --no-egress)       NO_EGRESS=true; shift ;;
         --mesh-net)        MESH_NET="$2"; shift 2 ;;
         --mesh-mac)        MESH_MAC="$2"; shift 2 ;;
         --mesh-id)         MESH_ID="$2"; shift 2 ;;
@@ -471,12 +476,22 @@ lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1 cgroup_enable
 systemd.unified_cgroup_hierarchy=1 slab_nomerge init_on_alloc=1 randomize_kstack_offset=on"
 [ -n "${EXTRA_APPEND}" ] && CMDLINE="${CMDLINE} ${EXTRA_APPEND}"
 
+# --no-egress: the guest reaches NOTHING but its own forwards (slirp restrict=on:
+# no DNS answers, no outbound connections), and every forward is bound to
+# 127.0.0.1 instead of all host interfaces. For any boot whose KEYS disk carries
+# real keys or credentials: those must never reach the internet, and the guest's
+# ports must not be reachable from the LAN. Without the flag the argv is unchanged.
+HF_BIND=""
 HOSTFWD="user,id=net0"
-HOSTFWD+=",hostfwd=tcp::${SSH_PORT}-:22"
-HOSTFWD+=",hostfwd=tcp::${UI_PORT}-:443"
-HOSTFWD+=",hostfwd=tcp::${HTTP_PORT}-:80"
-HOSTFWD+=",hostfwd=tcp::${API_PORT}-:6443"
-HOSTFWD+=",hostfwd=tcp::${HS_PORT}-:8080"
+if ${NO_EGRESS}; then
+    HOSTFWD+=",restrict=on"
+    HF_BIND="127.0.0.1"
+fi
+HOSTFWD+=",hostfwd=tcp:${HF_BIND}:${SSH_PORT}-:22"
+HOSTFWD+=",hostfwd=tcp:${HF_BIND}:${UI_PORT}-:443"
+HOSTFWD+=",hostfwd=tcp:${HF_BIND}:${HTTP_PORT}-:80"
+HOSTFWD+=",hostfwd=tcp:${HF_BIND}:${API_PORT}-:6443"
+HOSTFWD+=",hostfwd=tcp:${HF_BIND}:${HS_PORT}-:8080"
 
 QEMU_ARGS=(
     -machine "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" -smp "${SMP}" -m "${MEM}"
@@ -568,6 +583,18 @@ else
         *:*) MESH_NETDEV="socket,id=mesh0,mcast=${MESH_NET}" ;;
         *)   die "--mesh-net wants ADDR:PORT (mcast) or mcast=A:P/listen=H:P/connect=H:P (got: ${MESH_NET})" ;;
     esac
+    # --no-egress keeps the mesh L2 on this host too: multicast on the loopback
+    # interface only, and a listen=/connect= peer only on 127.0.0.1. The default
+    # multicast form otherwise puts guest frames on the host's LAN.
+    if ${NO_EGRESS}; then
+        case "${MESH_NETDEV}" in
+            *,mcast=*,localaddr=127.0.0.1|*,mcast=*,localaddr=127.0.0.1,*) ;;
+            *,mcast=*,localaddr=*) die "--no-egress: --mesh-net multicast must use localaddr=127.0.0.1 (got: ${MESH_NET})" ;;
+            *,mcast=*) MESH_NETDEV="${MESH_NETDEV},localaddr=127.0.0.1" ;;
+            *,listen=127.0.0.1:*|*,connect=127.0.0.1:*) ;;
+            *) die "--no-egress: --mesh-net listen=/connect= must use 127.0.0.1 (got: ${MESH_NET})" ;;
+        esac
+    fi
     [ -n "${MESH_MAC}" ] && [ -n "${MESH_ID}" ] \
         && die "give --mesh-mac OR --mesh-id, not both"
     if [ -z "${MESH_MAC}" ]; then
