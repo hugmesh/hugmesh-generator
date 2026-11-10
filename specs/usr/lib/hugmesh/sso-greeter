@@ -665,9 +665,20 @@ def off_reason(conf):
     return "SSO sign-in is not enabled on this device (an administrator can turn it on: sso-greeter configure --enable --issuer https://...)."
 
 
-def compose_hint(conf, user=None):
+def failed_line(conf, failed):
+    """The line the NEXT attempt shows if this one is refused (see cmd_pam_auth)."""
+    who = (" as '%s'" % failed) if valid_username(failed) else ""
+    if enabled(conf) and issuer_ok(conf):
+        return "Sign-in%s failed: the password was not accepted, or SSO did not finish. Try again." % who
+    return "Sign-in%s failed: the password was not accepted. Try again." % who
+
+
+def compose_hint(conf, user=None, failed=None):
     lines = []
     brand = conf.get("BRAND_TITLE") or "HugMesh"
+    if failed is not None:
+        # FIRST, so it is what the eye lands on in the greeter's message area.
+        lines.append(failed_line(conf, failed))
     if enabled(conf) and issuer_ok(conf):
         lines.append("Leave the password empty to sign in with %s SSO (%s); or type your local password." % (brand, issuer_host(conf)))
     else:
@@ -699,13 +710,13 @@ def pending_users():
     return out
 
 
-def write_hint(conf, user=None):
+def write_hint(conf, user=None, failed=None):
     try:
         os.makedirs(RUN_DIR, mode=0o755, exist_ok=True)
         tmp = HINT_FILE + ".%d.tmp" % os.getpid()
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         with os.fdopen(fd, "w") as f:
-            f.write(compose_hint(conf, user))
+            f.write(compose_hint(conf, user, failed))
         os.replace(tmp, HINT_FILE)
     except OSError as e:
         log("hint not written: %s" % e)
@@ -818,7 +829,47 @@ def finish_online(user, conf, token, claims, offline_password):
 
 
 # ── pam-auth ─────────────────────────────────────────────────────────────────
+# THE FAILURE NOTICE. lightdm-gtk-greeter (2.0.9, authentication_complete_cb)
+# prints its own "Your password is incorrect" ONLY when the message area is empty
+# or already an error. Our hint is a PAM_TEXT_INFO line (pam_echo), so the area is
+# never empty, the greeter took the hint for a PAM module's own explanation, and a
+# wrong password just cleared the box with nothing said (2026-11-09 prover, four
+# frames 0.7 s apart). The greeter then restarts the conversation for the same
+# user, and the first thing that conversation shows is pam_echo's hint, which
+# would replace any message anyway. So the one place a failure notice survives is
+# the hint the NEXT conversation reads, and PAM gives a module no way to run only
+# when the rest of the stack failed (`include` lines are inlined, and a `substack`
+# is followed on success and failure alike).
+#
+# Hence: every attempt ARMS the notice before the local path runs (this
+# conversation's hint was already shown, so only a retry can read it), and every
+# success DISARMS it: an SSO sign-in here before returning 0, a local one through
+# `sso-greeter pam-ok` on the auth line after the include, which pambase reaches
+# only on success (a wrong password ends the stack at `[default=die]
+# pam_faillock.so authfail`). The greeter-setup-script `probe` writes a clean hint
+# for every new greeter. If some other system-auth ever let a failure reach
+# pam-ok, the notice would just be cleared again: today's silence, never a false
+# success, and never a different PAM verdict (pam-ok is `optional`).
 def cmd_pam_auth():
+    rc = pam_auth_attempt()
+    if rc == 0:
+        disarm_failure_notice()
+    return rc
+
+
+def disarm_failure_notice():
+    user = os.environ.get("PAM_USER", "")
+    write_hint(load_conf(), user if valid_username(user) else None)
+
+
+def cmd_pam_ok():
+    """The local path authenticated: take the armed failure notice back down."""
+    if os.environ.get("PAM_TYPE", "auth") == "auth":
+        disarm_failure_notice()
+    return 0
+
+
+def pam_auth_attempt():
     if os.environ.get("PAM_TYPE", "auth") != "auth":
         return 1
     user = os.environ.get("PAM_USER", "")
@@ -829,7 +880,9 @@ def cmd_pam_auth():
     if typed.endswith("\n"):
         typed = typed[:-1]
     conf = load_conf()
-    write_hint(conf, user if valid_username(user) else None)
+    # Armed: what a RETRY shows if this attempt is refused (see above).
+    write_hint(conf, user if valid_username(user) else None,
+               failed=user if valid_username(user) else "")
     if not enabled(conf) or not issuer_ok(conf):
         if typed == "":
             say(off_reason(conf) + " " + FALLBACK_LINE)
@@ -1105,7 +1158,7 @@ def main(argv):
     # subprocess would otherwise fall back to /bin:/usr/bin.
     os.environ.setdefault("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: sso-greeter pam-auth | pam-session | probe | status [USER] | list | revoke USER|--all | configure ...", file=sys.stderr)
+        print("usage: sso-greeter pam-auth | pam-ok | pam-session | probe | status [USER] | list | revoke USER|--all | configure ...", file=sys.stderr)
         return 2
     cmd, rest = argv[0], argv[1:]
     try:
@@ -1113,6 +1166,8 @@ def main(argv):
             return cmd_pam_auth()
         if cmd == "pam-session":
             return cmd_pam_session()
+        if cmd == "pam-ok":
+            return cmd_pam_ok()
         if cmd == "probe":
             return cmd_probe()
         if cmd == "status":

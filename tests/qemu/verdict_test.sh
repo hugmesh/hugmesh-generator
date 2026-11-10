@@ -161,6 +161,26 @@ echo "${got}" | grep '^FAIL|assertion ssh could not connect (ssh attempts: 3)' >
     && _ok "rc=255 after retries names the transport and records the attempt count" \
     || _bad "rc=255 detail wrong (got: ${got})"
 
+# A nonzero exit with NO RESULT line means assertions.sh never ran. It used to
+# fall into the generic branch and print "? assertions failed" over a 0/0 row
+# (2026-11-09 prover, x86 laptop-user: a governed client desktop's sudo wanted a
+# password, so `sudo bash -s` died before the first assertion).
+got="$(run_verdict 1 1 'sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper' 'sudo: a password is required')"
+echo "${got}" | grep '^FAIL|assertions could not run (sudo on the guest refused the harness user tester, rc=1)|0|0$' >/dev/null \
+    && _ok "rc=1 + sudo's password refusal and no RESULT line => 'assertions could not run', naming sudo" \
+    || _bad "a sudo refusal is still graded as failed assertions (got: ${got})"
+echo "${got}" | grep 'assertions failed' >/dev/null \
+    && _bad "…and it still says 'assertions failed' although none ran" \
+    || _ok "…and it no longer claims assertions failed"
+got="$(run_verdict 1 1 'bash: line 1: something went wrong')"
+echo "${got}" | grep '^FAIL|assertions could not run (no RESULT line, rc=1)|0|0$' >/dev/null \
+    && _ok "rc=1 with no RESULT line and no sudo message => 'assertions could not run (no RESULT line)'" \
+    || _bad "rc=1 without a RESULT line is not reported as could-not-run (got: ${got})"
+# The RESULT line still wins over a stray sudo message anywhere in the log.
+got="$(run_verdict 1 1 'sudo: a password is required' '== RESULT: 30 passed, 3 failed ==')"
+eq "$(echo "${got}" | head -1)" "FAIL|assertions failed|30|3" \
+   "rc=1 WITH a RESULT line stays the ordinary FAIL even if the log mentions sudo"
+
 # Retry wiring is inline (not a function): pin the two load-bearing spellings.
 grep -q 'ssh -o ConnectTimeout=15 "\${SSH_OPTS\[@\]}"' "${ENTRYPOINT}" \
     && _ok "assertion ssh raises ConnectTimeout to 15 BEFORE SSH_OPTS (first -o wins)" \
@@ -970,6 +990,115 @@ grep -qE -- '-R .*/work/runs( |$)' "${CHOWN_LOG}" \
   source "${RF}"; reown )
 eq "$(wc -c < "${CHOWN_LOG}" | tr -d ' ')" "0" \
    "with no HOST_UID, reown() still chowns nothing at all"
+
+# ── 12d. The harness's logins can sudo on a GOVERNED client desktop ───────
+# On a desktop-governance-governed image (cloud/mesh laptop, desktop, chromebook)
+# provision.sh strips wheel, suppresses the 10-<name> sudoers.d grant and
+# comments out %wheel, so `ssh tester@guest 'sudo bash -s'` asked for a password
+# and the row came back FAIL 0/0 (2026-11-09 prover). The harness now ships a
+# TEST-ONLY run[] hook on its synthetic stick. Driven here through provision.sh's
+# REAL provision_run_hooks, with the real hook, and the real governance sweep.
+echo
+echo "harness sudo hook — test payload only, applied after governance"
+PROVISION="${HERE}/../../specs/etc/keys-provision/provision.sh"
+[ -f "${PROVISION}" ] || { echo "cannot find ${PROVISION}" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 \
+    || { echo "SKIP-FATAL: jq not on PATH — provision_run_hooks cannot read the manifest" >&2; exit 2; }
+HKF="${TMP}/harness-hook-fns.sh"; : > "${HKF}"
+extract_heredoc_fn "${ENTRYPOINT}" write_harness_sudo_hook "${HKF}"
+HK_PATH="$(sed -n 's/^HARNESS_SUDO_HOOK="\(.*\)"$/\1/p' "${ENTRYPOINT}")"
+[ -n "${HK_PATH}" ] || { echo "could not read HARNESS_SUDO_HOOK from ${ENTRYPOINT}" >&2; exit 2; }
+PRF="${TMP}/provision-run-hooks.sh"; : > "${PRF}"
+extract "${PROVISION}" provision_run_hooks "${PRF}"
+
+HK_KEYS="${TMP}/hk-keys"; HK_SUDOERS="${TMP}/hk-sudoers.d"
+hook_run() { # hook_run USERS... -> fresh HK_KEYS stick, hook run into HK_SUDOERS; prints the provision log
+    rm -rf "${HK_KEYS}" "${HK_SUDOERS}"; mkdir -p "${HK_KEYS}"
+    ( set -uo pipefail
+      # shellcheck disable=SC2034  # read by the sourced write_harness_sudo_hook
+      HARNESS_SUDO_HOOK="${HK_PATH}"
+      # shellcheck disable=SC1090
+      source "${HKF}"
+      write_harness_sudo_hook "${HK_KEYS}" "$@" ) || return 1
+    printf '{ "run": ["%s"] }\n' "${HK_PATH}" > "${HK_KEYS}/provision.json"
+    ( set -uo pipefail
+      # shellcheck disable=SC2034  # BASE is read by the sourced provision_run_hooks
+      BASE="${HK_KEYS}"; MANIFEST="${HK_KEYS}/provision.json"
+      jqm() { jq -r "$1" "${MANIFEST}" 2>/dev/null; }
+      jqe() { jq -e "$1" "${MANIFEST}" >/dev/null 2>&1; }
+      log() { echo "LOG: $*"; }; warn() { echo "WARN: $*"; }
+      export HUGMESH_TEST_SUDOERS_DIR="${HK_SUDOERS}"
+      # shellcheck disable=SC1090
+      source "${PRF}"; provision_run_hooks ) 2>&1
+}
+out="$(hook_run tester alice)"
+HKD="${HK_SUDOERS}/zz-hugmesh-test-harness"
+[ -f "${HKD}" ] \
+    && _ok "the real provision_run_hooks runs the harness hook off the stick and the drop-in lands" \
+    || _bad "no drop-in after provision_run_hooks (log: ${out})"
+grep -qx 'tester ALL=(ALL) NOPASSWD: ALL' "${HKD}" 2>/dev/null \
+    && _ok "…granting the ssh user NOPASSWD, the only form 'sudo bash -s' over a non-tty ssh can use" \
+    || _bad "the drop-in does not give tester NOPASSWD: $(cat "${HKD}" 2>/dev/null)"
+grep -qx 'alice ALL=(ALL) NOPASSWD: ALL' "${HKD}" 2>/dev/null \
+    && _ok "…and every --extra-user login the harness created" \
+    || _bad "an --extra-user login is missing from the drop-in"
+eq "$(grep -cvE '^(#|$)' "${HKD}" 2>/dev/null)" "2" "…and nobody else: exactly one rule per harness login"
+eq "$(stat -c %a "${HKD}" 2>/dev/null)" "440" "the drop-in is 0440, the mode sudo requires"
+eq "$(find "${HK_SUDOERS}" -name '*.tmp' | wc -l | tr -d ' ')" "0" "no half-written temp file is left beside it"
+if command -v visudo >/dev/null 2>&1; then
+    visudo -cqf "${HKD}" && _ok "visudo accepts the drop-in" || _bad "visudo rejects the drop-in"
+else
+    echo "  note visudo not on PATH here: syntax leg not run (the hook itself skips the check the same way)"
+fi
+
+# Why the hook, and why it must run AFTER governance: the governance sweep from
+# provision_desktop_governance(), run over the same drop-in, comments it out. That
+# is what happened to the static grant, so the ORDER in main() is load-bearing.
+GOVB="${TMP}/gov-sweep.sh"
+sed -n '/^    if \[ -d \/etc\/sudoers.d \]; then$/,/^    fi$/p' "${PROVISION}" \
+    | sed "s#/etc/sudoers.d#${HK_SUDOERS}#g" > "${GOVB}"
+grep -q 'hugmesh: sudo is SSO-claim gated' "${GOVB}" \
+    || { echo "could not extract the governance sudoers.d sweep from ${PROVISION}" >&2; exit 2; }
+# Sourced inside a function: the block declares `local sdf base`.
+( log() { :; }; warn() { :; }
+  # shellcheck disable=SC1090
+  gov_sweep() { source "${GOVB}"; }; gov_sweep )
+if [ -f "${HKD}" ] && ! grep -qx 'tester ALL=(ALL) NOPASSWD: ALL' "${HKD}" \
+   && grep -q '^# tester ALL=(ALL) NOPASSWD: ALL.*hugmesh: sudo is SSO-claim gated' "${HKD}"; then
+    _ok "control: the real governance sweep DOES neutralise the drop-in, so it must land after the sweep"
+else
+    _bad "control: the governance sweep did not comment out the drop-in as expected: $(cat "${HKD}" 2>/dev/null || echo missing)"
+fi
+gov_ln="$(sed -n '/^main() {/,/^}/p' "${PROVISION}" | grep -n '^[[:space:]]*provision_desktop_governance\b' | head -1 | cut -d: -f1)"
+hook_ln="$(sed -n '/^main() {/,/^}/p' "${PROVISION}" | grep -n '^[[:space:]]*provision_run_hooks\b' | head -1 | cut -d: -f1)"
+if [ -n "${gov_ln}" ] && [ -n "${hook_ln}" ] && [ "${hook_ln}" -gt "${gov_ln}" ]; then
+    _ok "provision.sh main() runs provision_run_hooks (line +${hook_ln}) after provision_desktop_governance (+${gov_ln})"
+else
+    _bad "provision.sh main() no longer runs the run[] hooks after governance (gov=${gov_ln:-none} hooks=${hook_ln:-none}): the harness sudo drop-in would be swept"
+fi
+# A re-provision re-runs the sweep and then the hook: the hook overwrites.
+out="$(hook_run tester)"
+grep -qx 'tester ALL=(ALL) NOPASSWD: ALL' "${HKD}" \
+    && _ok "re-running the hook after a sweep restores the rule" \
+    || _bad "the hook does not restore its rule on a re-run"
+
+# The synthetic manifest really lists the hook (comment-stripped: the WHY block
+# above names it in prose).
+grep -q '"run": \["\${HARNESS_SUDO_HOOK}"\]' "${NC12}" \
+    && _ok "the harness provision.json lists the hook in run[]" \
+    || _bad "the harness provision.json does not list the hook: provision.sh will never run it"
+grep -q '^write_harness_sudo_hook "\${KEYS_SRC}" "\${GUEST_USERS\[@\]}"' "${NC12}" \
+    && _ok "…and the entrypoint writes it onto the stick for every harness login" \
+    || _bad "the entrypoint never calls write_harness_sudo_hook for \${GUEST_USERS[@]}"
+# TEST payloads only: no production KEYS writer may carry it.
+REPO_ROOT="$(cd "${HERE}/../.." && pwd)"
+leak="$(grep -rlF 'zz-hugmesh-test-harness' "${REPO_ROOT}/scripts" "${REPO_ROOT}/keys-template" \
+            "${REPO_ROOT}/specs" "${REPO_ROOT}/studio" 2>/dev/null \
+            | sed "s#^${REPO_ROOT}/##" | grep -v '/tests/' || true)"
+hook_run 'bad name' >/dev/null 2>&1 \
+    && _bad "write_harness_sudo_hook accepted a login name with a space" \
+    || _ok "write_harness_sudo_hook refuses a name that is not a plain login name"
+eq "${leak}" "" "no production KEYS writer (scripts/, keys-template/, specs/, studio/) carries the harness sudo drop-in"
 
 echo
 printf '%s: %d passed, %d failed\n' "$(basename "$0")" "${PASS}" "${FAIL}"

@@ -29,6 +29,13 @@
 #   SESSION    pam-session open_session moves the parked token into
 #              <runtime>/<uid>/hugmesh/oidc-token.src (0600, owner) and removes
 #              the park; close_session removes a leftover park.
+#   FAILNOTE   a refused attempt leaves "Sign-in as 'X' failed ..." at the top of the
+#              hint the greeter's RETRY shows first (lightdm-gtk-greeter 2.0.9
+#              prints nothing of its own while our INFO hint is on screen): pam-auth
+#              arms it, a local success takes it down through `pam-ok` after the
+#              include, an SSO success inside the helper; through the REAL pambase
+#              chain a wrong password keeps it, a right one or SSO does not; plus
+#              5 planted defects (helper and stack), each caught.
 #   HINT       probe writes the hint (how to use SSO / SSO off / a first-boot
 #              one-time password went to the console) and never a hash.
 #   STACK      specs/etc/pam.d/lightdm, executed through libpam with the REAL
@@ -491,6 +498,33 @@ new_case false "${ISSUER}"; helper_cmd "${HELPER}" probe
 grep -q 'SSO sign-in is not enabled on this device' "${CASE}/run/hint" && grep -q 'sso-greeter configure' "${CASE}/run/hint" \
     && ok "HINT: SSO off => the hint says so and how an administrator turns it on" || bad "HINT off: $(cat "${CASE}/run/hint")"
 
+# ── FAILNOTE: a refused attempt is announced on the retry ─────────────────────
+echo "== FAILNOTE: the retry says the last attempt failed =="
+FAILRE="^Sign-in as 'alice' failed: the password was not accepted"
+new_case true "${ISSUER}"; add_local alice
+auth "${HELPER}" alice "wrong"; rc=$?
+[ "${rc}" -eq 1 ] && head -1 "${CASE}/run/hint" | grep "${FAILRE}, or SSO did not finish. Try again.$" >/dev/null \
+    && ok "FAILNOTE: a typed password handed to the local path ARMS the notice, first line of the hint, naming the user" \
+    || bad "FAILNOTE arm: rc ${rc} hint: $(cat "${CASE}/run/hint" 2>/dev/null)"
+grep -q 'Leave the password empty to sign in with Acme Desktops SSO' "${CASE}/run/hint" \
+    && ok "FAILNOTE: …and the usual instructions stay below it" || bad "FAILNOTE: the instructions were dropped: $(cat "${CASE}/run/hint")"
+PAM_USER=alice PAM_TYPE=setcred helper_cmd "${HELPER}" pam-ok
+grep -q "${FAILRE}" "${CASE}/run/hint" && ok "FAILNOTE: pam-ok outside the auth phase changes nothing" || bad "FAILNOTE: pam-ok disarmed on PAM_TYPE=setcred"
+PAM_USER=alice PAM_TYPE=auth helper_cmd "${HELPER}" pam-ok; rc=$?
+[ "${rc}" -eq 0 ] && ! grep -q 'failed' "${CASE}/run/hint" && grep -q 'Leave the password empty' "${CASE}/run/hint" \
+    && ok "FAILNOTE: pam-ok (a local success) disarms it and exits 0" || bad "FAILNOTE pam-ok: rc ${rc} hint: $(cat "${CASE}/run/hint")"
+auth "${HELPER}" alice "wrong"; helper_cmd "${HELPER}" probe
+! grep -q 'failed' "${CASE}/run/hint" && ok "FAILNOTE: a new greeter (probe) starts clean" || bad "FAILNOTE: probe kept the notice: $(cat "${CASE}/run/hint")"
+new_case true "${ISSUER}"; auth "${HELPER}" alice ""; rc=$?
+[ "${rc}" -eq 0 ] && ! grep -q 'failed' "${CASE}/run/hint" \
+    && ok "FAILNOTE: an SSO sign-in (rc 0) leaves no notice behind" || bad "FAILNOTE SSO: rc ${rc} hint: $(cat "${CASE}/run/hint")"
+new_case false "${ISSUER}"; add_local alice; auth "${HELPER}" alice "wrong"
+head -1 "${CASE}/run/hint" | grep "${FAILRE}. Try again.$" >/dev/null \
+    && ok "FAILNOTE: with SSO off the notice does not mention SSO" || bad "FAILNOTE off: $(cat "${CASE}/run/hint")"
+new_case true "${ISSUER}"; auth "${HELPER}" "Bad/Name" "x"
+head -1 "${CASE}/run/hint" | grep "^Sign-in failed: the password was not accepted" >/dev/null && ! grep -q 'Bad/Name' "${CASE}/run/hint" \
+    && ok "FAILNOTE: an invalid user name is never echoed into the hint" || bad "FAILNOTE badname: $(cat "${CASE}/run/hint")"
+
 # ── STACK: the real /etc/pam.d/lightdm through libpam with the real helper ──
 echo "== STACK: specs/etc/pam.d/lightdm executed through libpam =="
 PAMPY="${WORK}/pam.py"
@@ -621,7 +655,7 @@ order_confdir() {  # $1=label $2=lightdm-stack-file $3=system-auth-file -> confd
     # (1.7.0-5) resolves a bare `include NAME` against /etc/pam.d even under
     # pam_start_confdir, where Gentoo's resolves it in the confdir. An absolute
     # include is the same stack on both.
-    sed -e "s#/usr/lib/hugmesh/sso-greeter#${HELPER}#g" -e "s#/run/hugmesh/sso-greeter/hint#${CASE}/run/hint#" \
+    sed -e "s#/usr/lib/hugmesh/sso-greeter#${STACK_HELPER:-${HELPER}}#g" -e "s#/run/hugmesh/sso-greeter/hint#${CASE}/run/hint#" \
         -e "s#^\([a-z]*[[:space:]]*include[[:space:]]*\)system-local-login#\1${d}/system-local-login#" "$2" > "${d}/lightdm"
     grep -q "include[[:space:]]*${d}/system-local-login" "${d}/lightdm" || echo "  NOTE order_confdir: no include rewritten in $2" >&2
     printf 'auth\t\tinclude\t\t%s/system-login\naccount\t\tinclude\t\t%s/system-login\npassword\tinclude\t\t%s/system-login\nsession\t\tinclude\t\t%s/system-login\n' "${d}" "${d}" "${d}" "${d}" > "${d}/system-local-login"
@@ -658,10 +692,28 @@ if [ -f "${PAMFIX}" ] && [ -n "${WFN}" ] && ${PAM_OK}; then
     grep -q '^RC 0$' "${PO}" && [ "$(grep -c 'MSG style=1 ' "${PO}")" -eq 1 ] && grep -q ecryptfs-unwrap-reached "${CASE}/order.mark" && [ "$(nreq)" -eq 0 ] \
         && ok "ORDER: local password through the real include chain => ONE prompt, rc 0, pam_ecryptfs unwrap reached, no request" \
         || bad "ORDER L1: $(tr '\n' '|' < "${PO}") mark='$(cat "${CASE}/order.mark")' requests $(nreq)"
+    [ -s "${CASE}/run/hint" ] && ! grep -q 'failed' "${CASE}/run/hint" \
+        && ok "FAILNOTE ORDER: a correct local password reaches pam-ok after the include: no notice left armed" \
+        || bad "FAILNOTE ORDER L1: notice left armed after a SUCCESS: $(cat "${CASE}/run/hint" 2>/dev/null)"
     # L2: wrong local password: denied (the helper grants nothing, faillock path dies).
     new_case true "${ISSUER}"; add_local alice; order_env
     PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir l2 "${STACK_SRC}" "${WORK}/system-auth.wired")" lightdm "wrong" "${CASE}/env" > "${PO}" 2>/dev/null
     grep -q '^RC [1-9]' "${PO}" && ok "ORDER: wrong local password through the chain => denied" || bad "ORDER L2: $(tr '\n' '|' < "${PO}")"
+    head -1 "${CASE}/run/hint" | grep "^Sign-in as 'alice' failed" >/dev/null \
+        && ok "FAILNOTE ORDER: a wrong password ends at pambase's faillock die, so the notice stays ARMED for the retry" \
+        || bad "FAILNOTE ORDER L2: notice missing after a refused attempt: $(cat "${CASE}/run/hint" 2>/dev/null)"
+    # The retry, through the same chain, as the greeter runs it: the notice is
+    # the FIRST thing said, before the password prompt; the right password then
+    # signs in and pam-ok takes the notice down.
+    PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir l2r "${STACK_SRC}" "${WORK}/system-auth.wired")" lightdm "hunter2" "${CASE}/env" > "${PO}" 2>/dev/null
+    first="$(grep -m1 '^MSG ' "${PO}")"
+    case "${first}" in
+        "MSG style=4 Sign-in as 'alice' failed"*) ok "FAILNOTE ORDER: the retry shows 'Sign-in as alice failed' first, before the prompt" ;;
+        *) bad "FAILNOTE ORDER retry: first message was '${first}'" ;;
+    esac
+    grep -q '^RC 0$' "${PO}" && ! grep -q 'failed' "${CASE}/run/hint" \
+        && ok "FAILNOTE ORDER: the right password on the retry signs in and pam-ok disarms the notice" \
+        || bad "FAILNOTE ORDER retry: $(tr '\n' '|' < "${PO}") hint: $(cat "${CASE}/run/hint" 2>/dev/null)"
     # S1: an SSO sign-in: success=done ends auth BEFORE system-auth, so neither the
     # password check nor faillock nor the ecryptfs unwrap runs for it.
     new_case true "${ISSUER}"; order_env
@@ -669,6 +721,9 @@ if [ -f "${PAMFIX}" ] && [ -n "${WFN}" ] && ${PAM_OK}; then
     grep -q '^RC 0$' "${PO}" && ! grep -q ecryptfs-unwrap-reached "${CASE}/order.mark" && grep -q useradd "${CASE}/log" \
         && ok "ORDER: SSO sign-in through the chain => rc 0, account created, system-auth (faillock, ecryptfs) never reached" \
         || bad "ORDER S1: $(tr '\n' '|' < "${PO}") mark='$(cat "${CASE}/order.mark")'"
+    [ -s "${CASE}/run/hint" ] && ! grep -q 'failed' "${CASE}/run/hint" \
+        && ok "FAILNOTE ORDER: an SSO sign-in (success=done, pam-ok never reached) leaves no notice armed" \
+        || bad "FAILNOTE ORDER S1: notice left armed after an SSO success: $(cat "${CASE}/run/hint" 2>/dev/null)"
     # Control: the pre-#860 placement (ecryptfs right after pam_unix) breaks the
     # local login through this same chain — the leg can see PAM order.
     sed '/^auth.*pam_unix\.so/a auth\t\toptional\tpam_ecryptfs.so unwrap' "${PAMFIX}" > "${WORK}/system-auth.old"
@@ -955,6 +1010,42 @@ if ${PAM_OK}; then
     stack_mut exec-required 's/\[success=done default=ignore\]\tpam_exec/required\tpam_exec/'
     stack_mut exec-die      's/\[success=done default=ignore\]/[success=done default=die]/'
     stack_mut no-done       's/\[success=done default=ignore\]/[success=ok default=ignore]/'
+
+    # The failure notice, through the REAL pambase chain (its die is what keeps
+    # the notice armed): wrong password => denied AND notice; right password =>
+    # signed in AND no notice; SSO => signed in AND no notice.
+    if [ -n "${WFN}" ] && [ -f "${WORK}/system-auth.wired" ]; then
+        chk_fail_notice() {  # STACKFILE [HELPER] -> 0 iff all three hold
+            local sf="$1" PO
+            local STACK_HELPER="${2:-${HELPER}}"
+            new_case true "${ISSUER}"; add_local alice; order_env
+            PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir fn1 "${sf}" "${WORK}/system-auth.wired")" lightdm "wrong" "${CASE}/env" > "${PO}" 2>/dev/null
+            grep -q '^RC [1-9]' "${PO}" && head -1 "${CASE}/run/hint" | grep "^Sign-in as 'alice' failed" >/dev/null || return 1
+            new_case true "${ISSUER}"; add_local alice; order_env
+            PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir fn2 "${sf}" "${WORK}/system-auth.wired")" lightdm "hunter2" "${CASE}/env" > "${PO}" 2>/dev/null
+            grep -q '^RC 0$' "${PO}" && [ -s "${CASE}/run/hint" ] && ! grep -q 'failed' "${CASE}/run/hint" || return 1
+            new_case true "${ISSUER}"; order_env
+            PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir fn3 "${sf}" "${WORK}/system-auth.wired")" lightdm "" "${CASE}/env" > "${PO}" 2>/dev/null
+            grep -q '^RC 0$' "${PO}" && [ -s "${CASE}/run/hint" ] && ! grep -q 'failed' "${CASE}/run/hint"
+        }
+        chk_fail_notice "${STACK_SRC}" && ok "GUARD fail_notice: holds on the real stack + helper" || bad "GUARD fail_notice: FAILS on the real stack + helper"
+        notice_stack_mut() {  # $1=label $2=sed-expr over the stack
+            local m="${WORK}/stackmut-$1"
+            sed -e "$2" "${STACK_SRC}" > "${m}"
+            if cmp -s "${STACK_SRC}" "${m}"; then bad "FAILNOTE battery $1: the plant changed nothing (vacuous control)"; return; fi
+            chk_fail_notice "${m}" && bad "FAILNOTE battery $1: stayed GREEN on the planted stack" || ok "FAILNOTE battery $1: chk_fail_notice goes red"
+        }
+        notice_helper_mut() {  # $1=label $2=sed-expr over the helper
+            local m
+            m="$(mutate "notice-$1" "$2")" || return
+            chk_fail_notice "${STACK_SRC}" "${m}" && bad "FAILNOTE battery $1: stayed GREEN on the planted helper" || ok "FAILNOTE battery $1: chk_fail_notice goes red"
+        }
+        notice_stack_mut  no-pam-ok      '/pam_exec\.so quiet \/usr\/lib\/hugmesh\/sso-greeter pam-ok$/d'
+        notice_stack_mut  pam-ok-first   '/sso-greeter pam-ok$/d; /^auth[[:space:]]*include[[:space:]]*system-local-login/i auth\t\toptional\tpam_exec.so quiet /usr/lib/hugmesh/sso-greeter pam-ok'
+        notice_helper_mut no-arm         's/^               failed=user if valid_username(user) else "")$/               )/'
+        notice_helper_mut ok-no-disarm   '/^def cmd_pam_ok():/,/^    return 0$/ s/^        disarm_failure_notice()$/        pass/'
+        notice_helper_mut sso-no-disarm  '/^def cmd_pam_auth():/,/^    return rc$/ s/^        disarm_failure_notice()$/        pass/'
+    fi
 fi
 
 echo

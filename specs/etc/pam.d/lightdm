@@ -22,6 +22,17 @@
 #                 typed password for a local account.
 #   3. the stock  system-local-login -> system-login -> system-auth chain
 #                 (pam_nologin, faillock, pam_unix, pam_ecryptfs where wired).
+#   4. pam_exec   `sso-greeter pam-ok`, the failure notice's off switch. Before
+#                 the local path runs, step 2 ARMS the hint the greeter's NEXT
+#                 attempt will show with "Sign-in as 'X' failed ...", because
+#                 lightdm-gtk-greeter 2.0.9 prints no "incorrect password" of its
+#                 own while our INFO hint is on screen and the retry's hint would
+#                 replace it anyway. A wrong password never gets here (pambase
+#                 ends the stack at `[default=die] pam_faillock.so authfail`), so
+#                 the retry shows the notice; a correct one reaches this line and
+#                 it takes the notice down. `optional`, always exit 0: it cannot
+#                 change the verdict. An SSO sign-in ends at step 2's
+#                 `success=done` and the helper disarms the notice itself.
 #
 # What `success=done` skips for an SSO login: pam_nologin (so /etc/nologin does
 # not block an SSO sign-in — put a `pam_nologin.so` line above the exec line if
@@ -38,6 +49,7 @@
 auth		optional	pam_echo.so file=/run/hugmesh/sso-greeter/hint
 auth		[success=done default=ignore]	pam_exec.so quiet stdout expose_authtok /usr/lib/hugmesh/sso-greeter pam-auth
 auth		include		system-local-login
+auth		optional	pam_exec.so quiet /usr/lib/hugmesh/sso-greeter pam-ok
 account		include		system-local-login
 password	include		system-local-login
 session		include		system-local-login
