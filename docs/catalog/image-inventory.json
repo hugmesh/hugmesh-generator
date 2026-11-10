@@ -783,8 +783,8 @@
   "images": [
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -840,8 +840,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -897,7 +897,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -954,7 +954,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -1011,7 +1011,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -1068,7 +1068,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -1125,8 +1125,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -1182,8 +1182,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -1239,7 +1239,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -1296,7 +1296,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -1353,7 +1353,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -1410,7 +1410,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -1467,8 +1467,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -1524,8 +1524,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -1581,7 +1581,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -1638,7 +1638,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -1695,7 +1695,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -1752,7 +1752,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -6120,8 +6120,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -6177,8 +6177,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -6234,7 +6234,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -6292,7 +6292,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -6350,7 +6350,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -6406,7 +6406,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "la-frite",
@@ -6462,8 +6462,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -6519,8 +6519,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -6576,7 +6576,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -6634,7 +6634,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -6692,7 +6692,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -6748,7 +6748,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "le-potato",
@@ -6804,8 +6804,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -6861,8 +6861,8 @@
     },
     {
       "artifacts": [
-        "installer.iso",
-        "live.iso",
+        "installer.img",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -6918,7 +6918,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -6976,7 +6976,7 @@
     },
     {
       "artifacts": [
-        "installer.iso",
+        "installer.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -7034,7 +7034,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",
@@ -7090,7 +7090,7 @@
     },
     {
       "artifacts": [
-        "live.iso",
+        "live.img",
         "stage4.tar.xz"
       ],
       "board": "sweet-potato",

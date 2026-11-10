@@ -63,6 +63,14 @@ NO_COMPOSE_TWIN = {
     # three that DO have compose twins, so it inherits their probe shape
     # verbatim; [gateway-probe-401] renders it explicitly all the same.
     "hugmesh-superadmin-gateway",
+    # The games BFF (manifests/games). Its compose service lives in the games
+    # overlay as hugmesh-games-bff (tests/stack/compose.games.yaml), not in
+    # compose.local.yaml, and carries no healthcheck. CHECKED in hugmesh-games
+    # backend SecurityConfig: INFRA_PROBES_PUBLIC permitAll()s /actuator/health
+    # and /actuator/health/** on server.port 8080 (no separate management port),
+    # so an unauthenticated httpGet is right. Upstream knowledge, not evidence
+    # from this tree, as with mesh-bff above.
+    "hugmesh-games",
 }
 
 WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet")

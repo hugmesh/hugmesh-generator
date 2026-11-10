@@ -191,9 +191,13 @@ BANNED_MARKERS = (
     # a password written into a URL, but only a LITERAL one of 16+ characters: the
     # repositories are full of `user:$(PASSWORD)@host`, `user:${VAR}@host` and
     # `gateway:gateway@host` (placeholders and test logins), and a rule that refused
-    # those would refuse the platform's own manifests
+    # those would refuse the platform's own manifests. A password that is one whole
+    # `__UPPER_CASE__` token is a render-time placeholder too (a Casdoor app.conf holds
+    # `postgres://__CASDOOR_DB_USER__:__CASDOOR_DB_PASSWORD__@host`, filled in by an
+    # initContainer): only the ENTIRE password spelled that way, upper case, right up
+    # to the `@`, so a token glued to a literal, or a lower-case `__...__`, still trips.
     ("URL with a literal password", re.compile(
-        r"://[^/\s:@]+:(?![$<{(%\s])[^\s/@$:]{16,}@")),
+        r"://[^/\s:@]+:(?![$<{(%\s])(?!__[A-Z][A-Z0-9_]*__@)[^\s/@$:]{16,}@")),
     # a header FOLLOWED BY a base64 body: the bytes of a compiled program (an engine's
     # .wasm holds the bare PEM header strings, each followed by a NUL, in its string
     # table) are not a key, and refusing them refused a real repository. NOT anchored to
@@ -1261,14 +1265,34 @@ def _rmtree(path: str, *, ignore_errors: bool = False, osname: str | None = None
         shutil.rmtree(path, onerror=clear_and_retry)
 
 
-#: Characters and device names a Windows path component cannot hold.
+#: Characters and device names a Windows path component cannot hold: the reserved
+#: names Microsoft lists, the console's CONIN$/CONOUT$, COM0/LPT0 and the superscript
+#: ports among them. Git for Windows' `git add` cannot index CONIN$, LPT0 or COM¹, so
+#: with protectNTFS off for git archive they planned clean and failed at apply.
 _WIN_BAD_CHARS = re.compile(r'[<>:"\\|?*\x00-\x1f]')
-_WIN_DEVICES = re.compile(r"(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?", re.IGNORECASE)
+_WIN_DEVICES = re.compile(r"(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(\..*)?",
+                          re.IGNORECASE)
 
 
 def _windows_cannot_hold(name: str) -> bool:
     return any(_WIN_BAD_CHARS.search(part) or part.endswith((".", " "))
                or _WIN_DEVICES.fullmatch(part) for part in name.split("/") if part)
+
+
+def _ntfs_git_alias(name: str) -> bool:
+    """A component NTFS can read as the .git folder (its 8.3 name). core.protectNTFS
+    kept it out of the tar; with that check off for git archive it is refused here,
+    as `git add` would refuse it at apply."""
+    return any(part.lower() == "git~1" for part in name.split("/"))
+
+
+#: How git names the path it refused to read ("error: invalid path 'a:b.txt'").
+_GIT_INVALID_PATH = re.compile(r"^error: invalid path '(.*)'$", re.MULTILINE)
+
+
+def _git_refused_path(err: str) -> str:
+    m = _GIT_INVALID_PATH.search(err or "")
+    return m.group(1) if m else ""
 
 
 #: NTFS's upcase table on ASCII: a-z to A-Z, nothing else.
@@ -1322,10 +1346,37 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
     os.makedirs(workdir)
     # the bytes as committed: Git for Windows defaults core.autocrlf=true, which made
     # git archive hand every text file over with CRLF line endings
-    r = runner.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf",
-                    "archive", "--format=tar", ref], cwd=path, timeout=1800)
+    argv = ["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf"]
+    if windows:
+        # Git for Windows' core.protectNTFS refused the WHOLE tree over one name
+        # Windows cannot hold (aux.txt, what?.txt, a trailing dot), so one such file
+        # failed the plan of every repository with a raw git error. git archive writes
+        # no file: the names are judged member by member below, which refuses just
+        # this repository with the sentence that says why
+        argv += ["-c", "core.protectNTFS=false"]
+    r = runner.run([*argv, "archive", "--format=tar", ref], cwd=path, timeout=1800)
     if r.returncode != 0:
-        raise RuntimeError(f"git archive {ref} failed in {path}: {r.err.strip()}")
+        refused = _git_refused_path(r.err) if windows else ""
+        if not refused:
+            raise RuntimeError(f"git archive {ref} failed in {path}: {r.err.strip()}")
+        # a ':' in a name Git for Windows refuses whatever protectNTFS says: the tree
+        # cannot be read here at all, so nothing is extracted and the repository is
+        # refused (ls-tree reads names without that check, to list every one)
+        ls = runner.run(["git", "ls-tree", "-r", "-z", "--name-only", ref], cwd=path)
+        names = [n for n in ls.text.split("\0") if n and _windows_cannot_hold(n)] \
+            if ls.returncode == 0 else []
+        if refused not in names:
+            names.insert(0, refused)
+        if meta is not None:
+            meta["executables"] = []
+            # only a ':' stops git reading the tree; aux.txt or CON beside it would be
+            # read, and are named for what they are (the note asks to rename them all)
+            meta["lost"] = [(n, "a name Git for Windows refuses to read"
+                             if n == refused or ":" in n else "a name Windows cannot hold")
+                            for n in names]
+            meta["refused"] = refused
+            meta["unreadable"] = True
+        return []
     files: list[str] = []
     executables: list[str] = []
     lost: list[tuple[str, str]] = []          # (name, why)
@@ -1343,6 +1394,9 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
                 continue
             if windows and _windows_cannot_hold(member.name):
                 lost.append((member.name, "a name Windows cannot hold"))
+                continue
+            if windows and _ntfs_git_alias(member.name):
+                lost.append((member.name, "a name Windows reads as the .git folder"))
                 continue
             if not _member_stays_inside(workdir, member):
                 if windows and not member.isdir():
@@ -1474,6 +1528,19 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
     rp.workdir = workdir
     meta: dict = {}
     files = _snapshot(runner, rp.source_path, rp.ref, rp.workdir, meta, osname=osname)
+    if meta.get("unreadable"):
+        # nothing was extracted, so the exclude list cannot help: git refuses the
+        # tree before any path in it is left out
+        rp.windows_lost = [f"{rel}: {why}" for rel, why in meta["lost"]]
+        rp.action = REFUSED_ON_WINDOWS
+        shown = "; ".join(rp.windows_lost[:5]) + (" ..." if len(rp.windows_lost) > 5 else "")
+        these = "this file" if len(rp.windows_lost) == 1 else "these files"
+        rp.notes.append(f"Git for Windows cannot read this repository at all (it refuses "
+                        f"the name {meta.get('refused') or meta['lost'][0][0]}), so it "
+                        f"cannot be exported from here: {shown}. Export it from the "
+                        f"Studio inside WSL2 (or Linux), or rename {these} in the "
+                        f"source repository.")
+        return rp
     exclude_globs = list(cfg.rename_map.get("exclude") or [])
     # an entry the export drops anyway (CLAUDE.md as a link to AGENTS.md, a link
     # under node_modules/, anything the rename map excludes) is no loss: Linux does
@@ -1836,22 +1903,31 @@ def _restore_executables(runner, calls, rp: RepoPlan, wd: str, env) -> None:
 
 
 def _commit_snapshot(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
-                     message: str, push_dir: str) -> tuple[str, str]:
+                     message: str, push_dir: str,
+                     osname: str | None = None) -> tuple[str, str]:
     """One fresh commit in the work tree, copied object by object into ``push_dir``
     (a bare repository only this export writes) after every object was checked
     against its name and scanned; ``(commit, tree)``. The push runs from
-    ``push_dir``, so it can send the scanned objects and nothing else."""
+    ``push_dir``, so it can send the scanned objects and nothing else. ``osname`` is
+    ``os.name`` unless a test passes another."""
     env = _git_env(cfg, stamp)
     wd = rp.workdir
     if os.path.isdir(os.path.join(wd, ".git")):
         _rmtree(os.path.join(wd, ".git"))
-    for argv in (["git", "init", "-q", "-b", "main"],
-                 # --force: no ignore rule may apply. The snapshot's own .gitignore and
-                 # the person's global core.excludesFile would otherwise leave tracked
-                 # files out of the commit while the plan still counted them
-                 ["git", "-c", "core.autocrlf=false", "add", "-A", "--force"],
-                 ["git", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty",
-                  "-m", message]):
+    steps = [["git", "init", "-q", "-b", "main"]]
+    if (osname or os.name) == "nt":
+        # Python wrote a path past 260 characters where Windows long paths are on, and
+        # Git for Windows (core.longpaths unset by default) skipped it in `add` with
+        # exit 0: the plan counted the file, apply refused a count that named no
+        # cause. Set in the work repository only, which this export just made
+        steps.append(["git", "config", "core.longpaths", "true"])
+    steps += [# --force: no ignore rule may apply. The snapshot's own .gitignore and
+              # the person's global core.excludesFile would otherwise leave tracked
+              # files out of the commit while the plan still counted them
+              ["git", "-c", "core.autocrlf=false", "add", "-A", "--force"],
+              ["git", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty",
+               "-m", message]]
+    for argv in steps:
         r = _run_checked(runner, calls, argv, cwd=wd, env=env, stage="add" in argv)
         if r.returncode != 0:
             raise RuntimeError(f"{shlex.join(argv)} failed in {wd}: {r.err.strip()}")

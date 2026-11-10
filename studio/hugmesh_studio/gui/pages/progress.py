@@ -70,6 +70,7 @@ from ...core.build_driver import ElevationRefused, guard_elevation
 from ...core import flash_targets, flash_validate
 from ...core import qemu_tests
 from ...core import secret_files
+from ...core.config import standalone_login_problem
 from ...core.emerge_packages import (
     EmergePackageParser, GROUP_UNKNOWN, PackageProgress, STEP_DONE, STEP_FAILED,
     STEP_QUEUED, find_package_log)
@@ -92,6 +93,33 @@ def _display_safe(line: str) -> str:
     paints a BOX (the operator's 2026-07-17 report). Idempotent and lossless for real
     text — it only removes bytes that could never render."""
     return _C0_RE.sub("", strip_ansi(line))
+
+
+# PowerShell treats all four of these as a single quote inside a '...' string, and a
+# quote in that string is escaped by doubling it (CodeGeneration's own rule).
+_PS_SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
+
+
+def powershell_quote(text: str) -> str:
+    """``text`` as a PowerShell single-quoted literal: nothing in it expands ($name,
+    backtick escapes), unlike the double-quoted form."""
+    return "'" + "".join(ch * 2 if ch in _PS_SINGLE_QUOTES else ch for ch in text) + "'"
+
+
+def powershell_follow_command(path: str, *, exists: bool = True) -> str:
+    """The Windows twin of ``tail -F -n +1 PATH`` for the log help and its Copy button.
+
+    -LiteralPath, not the positional -Path: -Path is a wildcard, so an output dir such
+    as ``D:\\Builds [2026]`` resolved to nothing and PowerShell then even rejected -Wait
+    ("A parameter cannot be found that matches parameter name 'Wait'"). Get-Content
+    also fails on a file that does not exist yet, where tail -F waits for it; a queued
+    image's log is created only when its build starts, so that case waits first."""
+    q = powershell_quote(path)
+    follow = f"Get-Content -LiteralPath {q} -Wait -Tail 50"
+    if exists:
+        return follow
+    return (f"while (-not (Test-Path -LiteralPath {q})) {{ Start-Sleep -Seconds 1 }}; "
+            + follow)
 
 
 # THE flash confirmation (#337). A module-level override point on purpose: headless tests
@@ -500,6 +528,48 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.configure_view_btn.clicked.connect(self._open_view_config)
         view_row.addWidget(self.configure_view_btn)
         lay.addLayout(view_row)
+
+        # ── RESTART: re-enter the Login Password IN PLACE (PR #860 round 1) ──────────
+        # The login password is never saved (SECRET_FIELDS), so a restarted session
+        # whose dispatch carried one comes back with it EMPTY. That used to end at
+        # "Preflight FAILED" for a standalone image (the operator had to Redo the whole
+        # walk) and, for the cloud/mesh desktops, silently built an image whose local
+        # account had no build-time password. Ask for it here, inline (never a modal:
+        # this runs from initializePage), and dispatch once it is typed twice.
+        self.relogin = QtWidgets.QGroupBox("Login Password needed to restart")
+        rl = QtWidgets.QVBoxLayout(self.relogin)
+        self.relogin_note = QtWidgets.QLabel(
+            "This build used a Login Password — the password the image's local account "
+            "logs in with. It is never saved with a session or config, so type it again "
+            "to restart. Nothing has been dispatched yet.")
+        self.relogin_note.setWordWrap(True)
+        rl.addWidget(self.relogin_note)
+        form = QtWidgets.QFormLayout()
+        self.relogin_pass = QtWidgets.QLineEdit()
+        self.relogin_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.relogin_pass.setPlaceholderText("you log in with this; hashed at build time")
+        self.relogin_confirm = QtWidgets.QLineEdit()
+        self.relogin_confirm.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.relogin_confirm.setPlaceholderText("type the same password again")
+        form.addRow("Login Password", self.relogin_pass)
+        form.addRow("Confirm Password", self.relogin_confirm)
+        rl.addLayout(form)
+        self.relogin_err = QtWidgets.QLabel("")
+        self.relogin_err.setWordWrap(True)
+        self.relogin_err.setStyleSheet("color: #c62828;")
+        rl.addWidget(self.relogin_err)
+        brow = QtWidgets.QHBoxLayout()
+        brow.addStretch(1)
+        self.relogin_btn = QtWidgets.QPushButton("Start build")
+        self.relogin_btn.setEnabled(False)
+        self.relogin_btn.clicked.connect(self._relogin_submit)
+        brow.addWidget(self.relogin_btn)
+        rl.addLayout(brow)
+        self.relogin_pass.textChanged.connect(self._relogin_sync)
+        self.relogin_confirm.textChanged.connect(self._relogin_sync)
+        self.relogin_confirm.returnPressed.connect(self._relogin_submit)
+        self.relogin.setVisible(False)
+        lay.addWidget(self.relogin)
 
         # ── OVERALL / TOTAL progress (across the WHOLE worklist) — a prominent block
         # ABOVE the per-image rows. It is a pure READER of the existing
@@ -1066,11 +1136,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         `tail -F`, not `tail -f`: a queued/pre-dispatch job has no log file yet, and
         `tail -f` exits on a missing file while `-F` retries by name — so the command is
         copy-paste-correct BEFORE the job starts. `-n +1` starts at the top, so the
-        terminal shows the same stream from the beginning. Windows has no tail at all.
+        terminal shows the same stream from the beginning. Windows has no tail at all:
+        see powershell_follow_command.
         """
         host = getattr(self.wiz, "host", None)
         if getattr(host, "os", "linux") == "windows":
-            return f'Get-Content -Wait -Tail 50 "{path}"'
+            return powershell_follow_command(path, exists=os.path.isfile(path))
         return f"tail -F -n +1 {shlex.quote(path)}"
 
     def _refresh_log_help(self) -> None:
@@ -1178,6 +1249,15 @@ class ProgressPage(QtWidgets.QWizardPage):
             self.completeChanged.emit()
             self._sync_back_button()
             return
+        # RESTART Login Password re-entry (see the panel in __init__): in place, before
+        # anything is dispatched or written.
+        self.relogin.setVisible(False)
+        if self._login_pass_needed(wl):
+            self._show_relogin(
+                "This build used a Login Password — the password the image's local "
+                "account logs in with. It is never saved with a session or config, so "
+                "type it again to restart. Nothing has been dispatched yet.")
+            return
         # per-session artifact dir + durable record: the id BuildPage minted for its
         # preview (pending_session_id) is consumed here so preview == dispatch; a
         # RESTART pins an existing id so the SAME record/workdir is reused. Nothing is
@@ -1211,6 +1291,19 @@ class ProgressPage(QtWidgets.QWizardPage):
                                 "var", "log", "portage", "build"))
         self._select_row(0)
         self._refresh_overall()             # seed the K-of-N label before the run starts
+        if problems and not getattr(wl.base, "local_pass", "") and any(
+                standalone_login_problem(cfg) and "Login Password" in standalone_login_problem(cfg)
+                for _e, cfg in materialized):
+            # The one preflight refusal the operator can fix right here: a standalone
+            # image whose login password is missing (a reloaded config or session).
+            others = [p for p in problems
+                      if not any(p == standalone_login_problem(cfg) for _e, cfg in materialized)]
+            if not others:
+                self._show_relogin(
+                    "This standalone image's only login is the local account, and its "
+                    "Login Password is not set (it is never saved with a session or "
+                    "config). Type it to start the build.")
+                return
         if problems:
             # never launch a build preflight says cannot run (the Review page already gates
             # its Build button on the same check; this defends the direct/back-nav path).
@@ -1230,6 +1323,61 @@ class ProgressPage(QtWidgets.QWizardPage):
         for w in warnings:
             self.log.appendPlainText(f"WARNING: {w}")
         self._start_worker()
+
+    # ---- RESTART: the Login Password, re-entered in place ---------------------------
+    def _login_pass_needed(self, wl) -> bool:
+        """True when the pending session's PRIOR dispatch carried a Login Password
+        (its record's ``blanked_secrets`` names ``local_pass``) and this restart's
+        worklist has none: the password is never persisted, so without asking the
+        restart would dead-end on preflight (standalone) or quietly build an image
+        whose local account has no build-time password (cloud/mesh desktops)."""
+        if getattr(wl.base, "local_pass", ""):
+            return False
+        sid = getattr(self.wiz, "pending_session_id", None)
+        if not sid:
+            return False
+        try:
+            prior = build_sessions.load(
+                os.path.join(build_sessions.sessions_dir(), f"{sid}.json"))
+        except (OSError, ValueError):
+            return False
+        return "local_pass" in (getattr(prior, "blanked_secrets", None) or [])
+
+    def _show_relogin(self, why: str) -> None:
+        self.relogin_note.setText(why)
+        self.relogin_err.setText("")
+        self.relogin_pass.clear()
+        self.relogin_confirm.clear()
+        self.relogin.setVisible(True)
+        self.log.setPlainText("Waiting for the Login Password (above) — nothing has been "
+                              "dispatched.")
+        self._all_terminal = True                  # Back stays usable while waiting
+        self.completeChanged.emit()
+        self._sync_back_button()
+        self.relogin_pass.setFocus()
+
+    def _relogin_sync(self) -> None:
+        a, b = self.relogin_pass.text(), self.relogin_confirm.text()
+        ok = bool(a) and a == b
+        self.relogin_btn.setEnabled(ok)
+        self.relogin_err.setText("" if ok or not b else
+                                 "The two passwords do not match.")
+
+    def _relogin_submit(self) -> None:
+        a = self.relogin_pass.text()
+        if not a or a != self.relogin_confirm.text():
+            self._relogin_sync()
+            return
+        wl = getattr(self.wiz, "worklist", None)
+        if wl is None:
+            return
+        # The login password lives on the worklist BASE (materialize copies it onto
+        # each entry — system.default_user_is_local_user's note), like the walk sets it.
+        wl.base.local_pass = a
+        self.relogin_pass.clear()
+        self.relogin_confirm.clear()
+        self.relogin.setVisible(False)
+        self.initializePage()
 
     # ---- held-in-memory secret files: the RESTART re-collection gate --------------
     def _collect_missing_held_files(self, wl) -> str:

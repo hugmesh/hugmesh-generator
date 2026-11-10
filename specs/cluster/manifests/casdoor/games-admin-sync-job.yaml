@@ -25,12 +25,16 @@
 # the games realm. The games realm is a SEPARATE, INDEPENDENT Casdoor (manifests/
 # casdoor-games, org "threewizards") with its OWN native users/roles (GitHub-OAuth
 # players, player / uploader / mod / publisher / play-* roles) that need NOT exist in
-# systems — and vice versa. The ONE thing auto-synced systems -> games is a DIFFERENT,
-# scheduled hugmesh-actions job (manifests/hugmesh-apis): it mirrors EXACTLY this
-# role's membership, ROLE_GAMES_ADMIN (systems) -> admin (games). So the pipeline is:
+# systems — and vice versa. Nothing is auto-synced systems -> games today: the
+# hugmesh-actions GM sync (manifests/hugmesh-apis/deployment.yaml) is OFF
+# (GM_SYNC_ENABLED=false, no games-side client, first tick 100 years out), and when it
+# is turned on it may target only a `mesh-*` role the games realm does not own, never
+# the realm's `admin`. So the pipeline is:
 #   (1) THIS Job:  ROLE_GAMES_ADMIN = ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD)   [systems-only]
-#   (2) actions:   ROLE_GAMES_ADMIN (systems)            -> admin (games)     [cross-realm]
-# Net effect: only admins/mods who hold the games role in systems become games admins.
+#   (2) fe-gateway: ROLE_GAMES_ADMIN admits /games/api/admin/** with the MESH token;
+#       the games BFF trusts the systems issuer for that (manifests/games/deployment.yaml).
+# Net effect: only admins/mods who hold the games role in systems administer games as
+# mesh users; a games-realm admin is the realm's own `admin` role, granted in casdoor-games.
 # Granting a normal user plain ROLE_GAMES does NOT auto-create a games login; that
 # on-demand provisioning is a separate admin-UI hugmesh-action (future), not this Job.
 #

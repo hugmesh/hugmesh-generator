@@ -171,12 +171,43 @@ nothing until an e-ink panel is attached. The old `FB_AUO_K190X` drivers left
 mainline and are not built.
 
 ### Local user with a password (no SSO)
-`--local-user NAME` + `--local-pass PASS` create a normal user. The build hashes
-the password (yescrypt `$y$` where the build host's libcrypt supports it,
-SHA-512 crypt `$6$` otherwise). **The plaintext is never baked.** With no
-`--local-pass`, first boot mints a random one-time password and prints it once to
-the console. `wheel` is the sudo path. `--skip-sso` removes the Casdoor/OIDC
-desktop login from any client image (auto-on for standalone).
+`--local-user NAME` + `--local-pass-file FILE` (or `--local-pass PASS`) create a
+normal user. The build hashes the password (yescrypt `$y$` where the build host's
+libcrypt supports it, SHA-512 crypt `$6$` otherwise). **The plaintext is never
+baked.** `--local-pass-file` reads it from a file, which keeps it off every
+process argv (`ps`, `/proc/<pid>/cmdline`, `docker inspect`); the Studio and the
+TUI always pass it that way, through a private 0600 file removed when the build
+ends. `wheel` is the sudo path. `--skip-sso` bakes the Casdoor/OIDC greeter
+sign-in OFF on any client image (auto-on for standalone); the greeter then says
+so, and an administrator can turn it on later with `sso-greeter configure
+--enable --issuer https://...` (see `docs/DESKTOP-LOGIN-SSO.md`). Nothing is
+contacted until that happens and a user chooses SSO at the greeter.
+
+**The same Login Password works on every image, not only standalone.** First boot
+applies the hash on standalone, tailnet-only and mesh images alike:
+
+| Image at first boot | Local account |
+|---|---|
+| standalone | the only login; in `wheel`; root locked |
+| not standalone, no KEYS users | replaces the keyless fallback: in `wheel`; root locked |
+| not standalone, KEYS-provisioned users | **additional** account, not in `wheel`, `/etc/sudoers` untouched; `--local-admin` grants sudo through `/etc/sudoers.d` only; a KEYS account with the same name keeps its KEYS password (the console says so) |
+
+With no password on a standalone *desktop*, the Studio, the TUI **and the builder**
+refuse to build: root is locked and there is no KEYS stick or SSO, so this account
+is the only way in, and a one-time password printed to a console behind the
+graphical greeter is no login. The headless appliances (orangepizero2 / -2w /
+-zero3 / -3-lts) still accept no password: their serial console is the login
+surface, so first boot's random one-time password, printed there, is usable. On a
+non-standalone image with no password, a keyless first boot makes the account
+with a random one-time password on the console, as before.
+
+The Studio and the TUI ask for this password twice. A restarted Studio session
+whose build used one asks for it again on the progress page (it is never saved
+with a session or config). The Calamares installer does not ask for an account;
+the installed system's first boot creates this one. First boot creates any
+supplementary group the image lacks (`games` has no `acct-group` in ::gentoo),
+checks every step, and on a failure says so on the console and retries on the
+next boot instead of falling back to a random password.
 
 ### LUKS2 full-disk encryption (installed system)
 The **installer prompts for a system root-unlock passphrase** (distinct from the
@@ -271,6 +302,10 @@ cluster node roles, which refuse `--standalone`). So `--standalone` alone is eno
 
 `--standalone` cascades `SKIP_MESH=true SKIP_TAILSCALE=true` on every platform,
 as on x86. Neither route depends on a mesh, tailnet or Casdoor SSO.
+`--with-tailscale` keeps the tailnet client on a standalone desktop, as on x86, so
+the greeter SSO can reach an IdP over a tailnet (situation 2 in
+[DESKTOP-LOGIN-SSO.md](DESKTOP-LOGIN-SSO.md#situations)). The image stays
+standalone and ungoverned.
 
 ### LUKS2 install model: cross-host vs. on-device
 
@@ -372,9 +407,14 @@ above is identical to x86's.
 | `archive` | Unpack a bundled `$HOME` tarball (`--include-home-archive`) — good for a laptop with no data disk. |
 | `restore` | Decrypt + unpack an **encrypted full-home backup** (`--home-backup FILE\|auto`; `auto` scans attached USBs). |
 
-- `--home-encrypted` layers **per-user eCryptfs on top of the LUKS2 root**
+- `--home-encrypted` prepares **per-user eCryptfs on top of the LUKS2 root**
   (login-password unwrapped), the same double layer this build host uses. It adds
-  the kernel `ecryptfs.config` and `ecryptfs-utils`, and wires `pam_ecryptfs`.
+  the kernel `ecryptfs.config` and `ecryptfs-utils`, and wires `pam_ecryptfs` at
+  the END of each system-auth stack (never straight after pambase's
+  `[success=1 ...] pam_unix.so`, whose skip would then land on
+  `pam_faillock.so authfail` and reject every correct password). Moving the home
+  into eCryptfs is **not automatic**: as root, with the user logged out, run
+  `ecryptfs-migrate-home -u <user>`.
 - **Encrypted backup to a USB:** `scripts/archive-home.sh --user me --full --encrypt --output /run/media/USB/hugmesh-home-backup-me.tar.xz` (gpg AES256 / openssl). `--full` keeps your documents and media and drops only build/cache cruft. `--config-only` is the lean copy for bundling inside an ISO. Restore later with `--home-mode restore --home-backup auto`.
 
 ## Dockerized stack / mesh node in the home
@@ -387,6 +427,13 @@ stack locally (`stack`) or join a tailnet as a dockerized mesh node (`mesh`):
 ## Mesh / SSO toggles, distfiles, live ISO
 
 - `--with/--no-tailscale`, `--with/--no-sso` — force the tailnet agent or the Casdoor login ON or OFF on any role.
+  `--with/--no-sso` now bakes the greeter SSO path (`/etc/pam.d/lightdm` +
+  `/usr/lib/hugmesh/sso-greeter`, `SSO_ENABLED` in `/etc/hugmesh/sso-greeter.conf`)
+  instead of only changing a plan line; with SSO off the greeter says so and the
+  local password login is untouched. The Frite, RPi5, Jetson and Orange Pi 4 LTS / 5
+  builders take the same flags, plus `--sso-issuer URL` to name the IdP. See
+  `docs/DESKTOP-LOGIN-SSO.md` for the user flow, the offline cache and what a boot
+  must still prove.
 - `--distdir DIR` (or auto-detect `/media/*`) — reuse a Gentoo distfiles cache from a mounted drive (safe on a read-only USB), to skip re-downloads or build offline.
 - `--live-toram` (default) — the live ISO gets a **Copy to RAM (removable)** boot entry, so you can pull the stick after boot.
 

@@ -40,6 +40,12 @@ source "${SCRIPT_DIR}/scripts/_roles-lib.sh"
 # drop a requested artifact hours in. See scripts/_host-guard-lib.sh.
 # shellcheck source=scripts/_host-guard-lib.sh
 source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
+# Greeter SSO login path for the client roles (desktop_sso_bake / desktop_sso_verify):
+# the lightdm PAM stack with the device-flow helper, the greeter hint, and the baked
+# desktop-governance templates. --skip-sso / --no-sso bake it OFF (the greeter says
+# so); this is what makes SKIP_SSO do something. See scripts/_desktop-sso-lib.sh.
+# shellcheck source=scripts/_desktop-sso-lib.sh
+source "${SCRIPT_DIR}/scripts/_desktop-sso-lib.sh"
 # Per-board binpkg-pool fingerprint guard (shared-binpkg track): the load-bearing
 # SIGILL safety net over directory isolation — REFUSES --usepkg reuse of a pool
 # whose (CHOST + exact CFLAGS/-mcpu + profile) fingerprint != this build's.
@@ -272,6 +278,9 @@ SKIP_TAILSCALE=false
 # Empty = "use the role default"; 'on'/'off' = the user chose explicitly.
 MESH_FORCED=""
 SSO_FORCED=""
+# --sso-issuer URL: the IdP the greeter SSO sign-in uses (https only). Default
+# https://id.<cluster domain>. Implies --with-sso; conflicts with --no-sso.
+SSO_ISSUER=""
 SKIP_KERNEL=false
 SKIP_CLEAN=false
 RESUME=false
@@ -381,6 +390,8 @@ CAPABLE=false           # --capable : pull the "most capable" Plasma desktop set
                         #   (packages-desktop-capable.list); auto-on for standalone-thick
 LOCAL_USER=""           # --local-user NAME : the standalone local login account
 LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
+LOCAL_PASS_FILE=""      # --local-pass-file FILE : the same password read from a file (keeps it off argv)
+LOCAL_ADMIN=false       # --local-admin : the local account may sudo on a KEYS-provisioned image too
 # ── UNAFFILIATED plain desktop (a standalone with ZERO HugMesh affiliation) ──
 # Everything --standalone drops, PLUS: neutral identity strings through the whole
 # boot/installer chain (GRUB titles, ISO volids, UKI name, installer text — all
@@ -958,6 +969,9 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --home-seed-code-from PATH  Source the repos from a dir/tar (else clone at runtime).
       --with-tailscale | --no-tailscale   Force the tailnet agent ON/OFF (any role).
       --with-sso | --no-sso               Force the Casdoor/OIDC login ON/OFF (any role).
+      --sso-issuer URL      The IdP for the greeter SSO sign-in (https://HOST[/PATH];
+                            default https://id.<domain>). Implies --with-sso. An
+                            admin can change it later: sso-greeter configure.
       --distdir DIR         Reuse a Gentoo distfiles cache from a mounted drive
                             (default: auto-detect /media/*; speeds rebuilds / offline).
       --shared-assets DIR   Fleet-wide asset root: the amd64 stage3 seed cache
@@ -1185,6 +1199,7 @@ while [[ $# -gt 0 ]]; do
         # Composable SSO toggle (wins over a role's default).
         --with-sso) SKIP_SSO=false; SSO_FORCED=on; shift ;;
         --no-sso) SKIP_SSO=true; SSO_FORCED=off; shift ;;
+        --sso-issuer) SSO_ISSUER="${2:-}"; shift 2 ;;
         # ── Home directory: mode + per-user ecryptfs + dockerized stack code ──
         --home-mode) HOME_MODE="$2"; shift 2 ;;
         --home-device) HOME_DEVICE="$2"; shift 2 ;;
@@ -1240,6 +1255,8 @@ while [[ $# -gt 0 ]]; do
         --capable) CAPABLE=true; shift ;;
         --local-user) LOCAL_USER="$2"; shift 2 ;;
         --local-pass|--local-user-password) LOCAL_USER_PASS="$2"; shift 2 ;;
+        --local-pass-file)    LOCAL_PASS_FILE="$2"; case "$2" in /*) ;; *) LOCAL_PASS_FILE="${PWD}/$2" ;; esac; shift 2 ;;
+        --local-admin)        LOCAL_ADMIN=true; shift ;;
         # ── GPU driver matrix (all common cards; free default) ──
         --gpu-driver) GPU_DRIVER="$2"; shift 2 ;;
         --nvidia) GPU_DRIVER="nvidia"; shift ;;                           # alias: proprietary NVIDIA
@@ -1560,6 +1577,12 @@ ROLE="$(hugmesh_role_validate "${ROLE}" x86)" || exit 1
 ROLE_HEADSCALE=false         # headscale runs in the runlevel (pki/omnibus)
 ROLE_K8S="worker"            # kubeadm join vs init vs single-node
 ROLE_LABELS=""               # informational: node labels the KEYS stick should set
+# hugmesh.net/games=true is the games TIER label (namespaces/namespaces.yaml): the
+# games BFF pins compute=gpu, but casdoor-games, its Postgres and init Job, the games
+# BFF's Postgres and Cassandra, the keyspace Job and the games portal all pin
+# games=true, so a GPU node labelled compute=gpu alone runs the BFF and leaves every
+# one of those Pending. keys-template/examples/provision.host.json sets both;
+# tests/scripts/test-games-two-realms.sh holds this table and the hint below to it.
 ROLE_CLIENT=false            # true for person-device desktop roles (laptop/chromebook/desktop)
 case "${ROLE}" in
     pki)
@@ -1576,14 +1599,14 @@ case "${ROLE}" in
         [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     backend-gpu)
         GPU=true; ROLE_K8S="worker"
-        ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu"
+        ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu,hugmesh.net/games=true"
         # Derives ${BRAND}-backend-gpu like every other node role. (The legacy
         # ${BRAND}-host default was retired 2026-10-30 — see HOSTNAME DEFAULTS in
         # scripts/_roles-lib.sh for why nothing depended on it.)
         [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     omnibus)
         GPU=true; ROLE_HEADSCALE=true; ROLE_K8S="single-node"
-        ROLE_LABELS="hugmesh.net/pki=true,hugmesh.net/backend=true,hugmesh.net/frontend=true,hugmesh.net/compute=gpu"
+        ROLE_LABELS="hugmesh.net/pki=true,hugmesh.net/backend=true,hugmesh.net/frontend=true,hugmesh.net/compute=gpu,hugmesh.net/games=true"
         [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     # ── EDGE-AI (GPU inference) NODE — a backend-gpu worker whose PURPOSE is serving an
     # AI model API to the mesh. Defaults the PROPRIETARY NVIDIA driver + CUDA, bakes
@@ -1594,7 +1617,7 @@ case "${ROLE}" in
     edge-ai)
         GPU=true; ROLE_K8S="worker"; EDGE_AI=true
         [ -z "${GPU_DRIVER}" ] && GPU_DRIVER="nvidia"   # inference wants the proprietary blob (CUDA)
-        ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu,hugmesh.net/edge-ai=true"
+        ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu,hugmesh.net/games=true,hugmesh.net/edge-ai=true"
         [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     # ── CLIENT (person-device) roles — see docs/CLIENT-IMAGES.md (ADR-16/FD-04..08).
     # These are DESKTOPS that join the tailnet + run the UI, NOT k8s nodes: no
@@ -1736,6 +1759,7 @@ if ${UNAFFILIATED}; then
     [ "${HOME_SEED_CODE}" != none ] && { err "--unaffiliated conflicts with --home-seed-code (seeds the HugMesh stack into the home)"; exit 1; }
     [ "${MESH_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-tailscale (the tailnet is HugMesh platform machinery)"; exit 1; }
     [ "${SSO_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-sso (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
+    [ -z "${SSO_ISSUER}" ] || { err "--unaffiliated conflicts with --sso-issuer (Casdoor SSO is HugMesh platform machinery)"; exit 1; }
     { [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; } && { err "--unaffiliated conflicts with --person-role/--domains (person-device identity is platform machinery)"; exit 1; }
     [ -z "${DOMAIN_IDP_SPECS}" ] || { err "--unaffiliated conflicts with --domain-idp (an unaffiliated desktop has no identity provider to choose)"; exit 1; }
     BUNDLE_SOURCE=false
@@ -1752,6 +1776,15 @@ if ${UNAFFILIATED}; then
     # tooling — default it OFF (an explicit --media-data keeps it, neutral-named).
     [ "${MEDIA_DATA_FORCED}" = on ] || MEDIA_DATA=false
     info "UNAFFILIATED plain desktop: no brand identity, no hugmesh-* tooling, no bundled source, no k8s/mesh payload"
+fi
+
+# --sso-issuer names the IdP, so it means SSO ON (also on a standalone desktop,
+# whose default is off); with --no-sso/--skip-sso it is a contradiction.
+if [ -n "${SSO_ISSUER}" ]; then
+    [ "${SSO_FORCED}" = off ] && { err "--sso-issuer conflicts with --no-sso/--skip-sso"; exit 1; }
+    [[ "${SSO_ISSUER}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]] \
+        || { err "--sso-issuer must be https://HOST[:PORT][/PATH] (got '${SSO_ISSUER}')"; exit 1; }
+    SSO_FORCED=on; SKIP_SSO=false
 fi
 
 # ── STANDALONE posture (composable: --standalone onto any client role, or the
@@ -2202,6 +2235,12 @@ fi
 # (yescrypt $y$, SHA-512 crypt $6$ fallback) and bake only the hash into the
 # firstboot template. The local user name doubles as the firstboot
 # DEFAULT_USER so the two paths agree.
+# --local-pass-file: the login password arrives in a 0600 file (Studio/TUI), never
+# on argv. Read it here, before hashing; the file itself is the caller's to remove.
+if [ -n "${LOCAL_PASS_FILE}" ]; then
+    LOCAL_USER_PASS="$(ph_read_pass_file "${LOCAL_PASS_FILE}")" \
+        || { err "--local-pass-file ${LOCAL_PASS_FILE}: missing, unreadable or larger than 4096 bytes"; exit 1; }
+fi
 LOCAL_PASSHASH=""
 if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
     [ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"
@@ -2217,7 +2256,7 @@ if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
             *)      info "Standalone local user '${DEFAULT_USER}': password hashed at build time (SHA-512 crypt fallback — build-host libcrypt lacks yescrypt; plaintext not baked)." ;;
         esac
     else
-        ${STANDALONE} && warn "Standalone build with no --local-pass: a RANDOM one-time password is minted at first boot (printed once to console)."
+        ${STANDALONE} && warn "Standalone build with no --local-pass: a real build refuses this on a desktop (no login would exist behind the greeter)."
     fi
 fi
 
@@ -2581,6 +2620,7 @@ if ${PRINT_PLAN}; then
     _plan TOR_ONION          "$(_tor_node_selected && echo "on packages=${TOR_NODE_PACKAGES[*]} services=${TOR_NODE_SERVICES[*]}" || echo off)"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
+    _plan SSO_ISSUER         "$(${SKIP_SSO} && echo none || echo "${SSO_ISSUER:-https://id.${CLUSTER_DOMAIN}}")"
     _plan IDP                "${IDP}"
     _plan IDP_ISSUER         "${IDP_ISSUER:-none}"
     _plan IDP_CLIENT_ID      "${IDP_CLIENT_ID:-none}"
@@ -2592,6 +2632,17 @@ if ${PRINT_PLAN}; then
     _plan PACKAGES_ADD       "${PACKAGES_ADD}"
     _plan PACKAGES_DROP      "${PACKAGES_DROP}"
     exit 0
+fi
+
+# ── A standalone DESKTOP needs its login password (real builds only) ──────────
+# Root is locked and there is no KEYS stick or SSO, so the --local-pass account is
+# the only way in, and its first-boot random one-time password goes to a console
+# that sits behind the graphical greeter. The Studio and the TUI refuse this
+# before dispatch; this is the same refusal for the CLI/Makefile path. After
+# --print-plan, so the plan channel (and matrix.tsv) still describe the config.
+if ${STANDALONE} && ${ROLE_CLIENT} && [ -z "${LOCAL_PASSHASH}" ]; then
+    err "--standalone desktop build with no --local-pass/--local-pass-file: the image would boot to a greeter nobody can log in to (root is locked; no KEYS stick, no SSO). Pass --local-pass-file FILE (preferred: keeps the password off the process list) or --local-pass PASS."
+    exit 1
 fi
 
 [ "$(id -u)" -eq 0 ] || { err "Run as root (chroot emerge + ISO build need it)."; exit 1; }
@@ -2709,6 +2760,7 @@ render_template() {
         -e "s|@@CLIENT_USE@@|${CLIENT_USE}|g" -e "s|@@INPUT_DEVICES@@|${INPUT_DEVICES}|g" \
         -e "s|@@INSTALL_MASK@@|${INSTALL_MASK}|g" \
         -e "s|@@STANDALONE@@|${STANDALONE}|g" -e "s|@@LOCAL_PASSHASH@@|${LOCAL_PASSHASH}|g" \
+        -e "s|@@LOCAL_ADMIN@@|${LOCAL_ADMIN}|g" \
         -e "s|@@MEDIA_DATA@@|${MEDIA_DATA}|g" -e "s|@@MEDIA_MOUNT@@|${_mmount}|g" \
         -e "s|@@MEDIA_LABEL@@|${_mlabel}|g" -e "s|@@MEDIA_MARKERS@@|${_mmarkers}|g" \
         -e "s|@@STEAM_DIR@@|${_sdir}|g" -e "s|@@STEAM_DELIVERY@@|${STEAM_DELIVERY}|g" \
@@ -2964,13 +3016,14 @@ _mgd_pg() {  # tree endpoint dbname consumer_manifest db_app db_manifest
     rm -rf "${tree}/${dbman}"
 }
 # Casdoor PG: NO app prune (05-casdoor IS the IdP). Flip host+port+sslmode inside
-# the single libpq dataSourceName string (dbname=casdoor kept), drop the bundled
+# the single dataSourceName postgres:// URL (user:password@HOST:PORT/casdoor?sslmode=;
+# the credentials are __TOKEN__ placeholders the initContainer renders), drop the bundled
 # pg.yaml manifest + its kustomization line. Managed PG enforces TLS -> require.
 _mgd_pg_casdoor() {  # tree endpoint(host[:port])
     local tree="$1" ep="$2" h p
     h="${ep%%:*}"; p="5432"; case "${ep}" in *:*) p="${ep##*:}";; esac
     local cm="${tree}/manifests/casdoor/app-conf-configmap.yaml"
-    [ -f "${cm}" ] && sed -i -E "s#host=[^ ]+ port=[0-9]+#host=${h} port=${p}#; s#sslmode=[a-z-]+#sslmode=require#" "${cm}"
+    [ -f "${cm}" ] && sed -i -E "/dataSourceName/ { s#@[^@:/]+:[0-9]+/#@${h}:${p}/#; s#sslmode=[a-z-]+#sslmode=require#; }" "${cm}"
     rm -f "${tree}/manifests/casdoor/pg.yaml"
     _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" pg.yaml
 }
@@ -3109,35 +3162,50 @@ parameterize_games_domain() {
     local tree="${SYSROOT}/var/lib/hugmesh/cluster"
     [ -d "${tree}" ] || return 0
     local f n=0
+    # The games-realm issuer host. A GAMES_DOMAIN in its own zone gets id.<GAMES_DOMAIN>.
+    # The default games.<primary> gets the single-label games-id.<primary>, because
+    # id.games.<primary> is two labels deep: the *.<primary> wildcard certificate does
+    # not cover it and no wildcard route or tunnel rule matches it.
+    local gid
+    case "${GAMES_DOMAIN}" in
+        games.hugmesh.net|"games.${CLUSTER_DOMAIN:-hugmesh.net}") gid="games-id.${GAMES_DOMAIN#games.}" ;;
+        *) gid="id.${GAMES_DOMAIN}" ;;
+    esac
     # GAMES_DOMAIN is allowlisted ([a-z0-9.-]) at parse; escape it against the sed
     # replacement metacharacters (\ & |) for defense-in-depth — matching how every other
     # rendered field is handled, so this stays injection-proof if the validator is ever
     # loosened. (The '#'-delimited sink below is also safe: the allowlist excludes '#'.)
     local gd_e; gd_e="$(_sed_rep_escape "${GAMES_DOMAIN}")"
+    local gid_e; gid_e="$(_sed_rep_escape "${gid}")"
     # URL-SCHEME-ANCHORED: only rewrite hugmesh.games when it is a HOST (right
     # after the // of https://...), so the games-realm origin/issuer/redirect/website
     # URLs flip to ${GAMES_DOMAIN} while the canonical IMAGE repo paths
     # (hugmesh/hugmesh.games-backend, .../hugmesh.games/backend) are
-    # left untouched. id.hugmesh.games -> id.${GAMES_DOMAIN}; bare host -> ${GAMES_DOMAIN}.
+    # left untouched. id.hugmesh.games -> the issuer host above; bare host -> ${GAMES_DOMAIN}.
     while IFS= read -r -d '' f; do
-        if grep -q '//id\.hugmesh\.games\|//hugmesh\.games' "${f}" 2>/dev/null; then
+        if grep -q '//id\.hugmesh\.games\|//hugmesh\.games\|: id\.hugmesh\.games$' "${f}" 2>/dev/null; then
             sed -i -E \
-                -e "s|//id\\.hugmesh\\.games|//id.${gd_e}|g" \
+                -e "s|//id\\.hugmesh\\.games|//${gid_e}|g" \
+                -e "s#^([[:space:]-]*(host|hostname): )id\\.hugmesh\\.games\$#\\1${gid_e}#" \
                 -e "s|//hugmesh\\.games|//${gd_e}|g" \
                 "${f}"
             n=$((n+1))
         fi
     done < <(find "${tree}" -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.sql' \) -print0 2>/dev/null)
     info "Games domain: parameterized games host URLs -> ${GAMES_DOMAIN} in ${n} file(s)"
-    # The games PUBLIC host literal (gateway-be route host + ingress extraHost) is
+    # The games PUBLIC host literal (the portal Ingress + the tunnel rule) is
     # "games.hugmesh.net" so it composes with the hugmesh.net ->
     # CLUSTER_DOMAIN rebrand into games.<CLUSTER_DOMAIN> = the DEFAULT GAMES_DOMAIN.
     # If the operator set a CUSTOM GAMES_DOMAIN (e.g. the real <brand>.games TLD),
     # the host must follow it instead of the subdomain default — rewrite it here,
     # BEFORE rebrand (which would otherwise only map the hugmesh.net suffix).
     if [ "${GAMES_DOMAIN}" != "games.hugmesh.net" ]; then
-        local be="${tree}/apps/20-gateway-be.yaml"
-        [ -f "${be}" ] && sed -i -E "s#games\\.hugmesh\\.net#${gd_e}#g" "${be}"
+        local hf
+        for hf in "${tree}/manifests/games-portal/ingress.yaml" "${tree}/manifests/cloudflared/configmap.yaml"; do
+            if [ -f "${hf}" ]; then
+                sed -i -E "s#games\\.hugmesh\\.net#${gd_e}#g" "${hf}"
+            fi
+        done
         info "Games domain: custom GAMES_DOMAIN — games host rewritten to ${GAMES_DOMAIN}"
     fi
 }
@@ -3195,6 +3263,13 @@ gate_env_apps() {
             [ -f "${gw}" ] && sed -i -E 's/^([[:space:]]*className: )nginx$/\1nginx-internal/' "${gw}"
         done
         info "RELEASE_STATE=internal: be/fe gateways repointed className nginx -> nginx-internal"
+        # The games portal and the games-realm issuer have their own Ingresses.
+        local gi
+        for gi in "${cluster}/manifests/games-portal/ingress.yaml" "${cluster}/manifests/casdoor-games/ingress.yaml"; do
+            if [ -f "${gi}" ]; then
+                sed -i -E 's/^([[:space:]]*ingressClassName: )nginx$/\1nginx-internal/' "${gi}"
+            fi
+        done
 
         # c) tier-ingress.yaml's backend/frontend admit-lists currently let
         #    the PUBLIC ingress-nginx namespace in; with the public
@@ -4263,6 +4338,9 @@ fi   # ! UNAFFILIATED (Layer-B/Layer-A/domain/tor/brand-repo-generator block)
 
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
+# Root-only: the finaliser carries the crypt(3) hash of --local-pass, and a
+# world-readable copy in the image (and on the live ISO) is an offline-crack target.
+chmod go-rwx "${SYSROOT}/etc/local.d/01-firstboot.start"
 # UNAFFILIATED: the shared firstboot loads k8s modules and prints a k8s/headscale/
 # KEYS banner — none of which exists on a plain desktop. Strip those sections from
 # the RENDERED file (anchored ranges; `sysctl --system` and the NVMe note survive)
@@ -4286,7 +4364,7 @@ fi
 # 01-firstboot user is created) and read by the installer for adopt/restore.
 # UNAFFILIATED: same functional machinery under NEUTRAL names — the conf moves to
 # /etc/gentoo/home.conf, the helper installs as /usr/sbin/home-setup, and its
-# internal hugmesh-* literals (conf path, first-login-encrypt dotfile) are
+# internal hugmesh-* literals (conf path; the first-login-encrypt rename is now a no-op) are
 # rewritten on the staged copy. install-x86.sh's staged copy gets the matching
 # conf-path rewrite where the installer ISO is built (below).
 if ${UNAFFILIATED}; then
@@ -4980,8 +5058,38 @@ if ${ROLE_CLIENT}; then
 [LightDM]
 [Seat:*]
 greeter-session=lightdm-gtk-greeter
+# lightdm falls back to a compiled-in "lightdm-session" wrapper that Gentoo does not ship;
+# without this line every login authenticates and then the session exits (rc 1) back to the greeter.
+session-wrapper=/etc/lightdm/Xsession
 user-session=${_user_session}
 LIGHTDM
+    # Emulated-desktop display (QEMU runner --display spice): the session-side
+    # autofit applier (xrandr --auto on a virtio-gpu/qxl preferred-mode change; the
+    # LXDE session has no output daemon, so without it a viewer resize is a scaled
+    # bitmap) and the boot-time spice-vdagentd starter (only when the SPICE virtio
+    # port exists, so a physical laptop never shows a failed service). Packages come
+    # from packages-desktop.list; the kernel channel bits from kernel/desktop.config.
+    # UNAFFILIATED: same machinery under neutral names (cf. media-detect above).
+    if ${UNAFFILIATED}; then _af_dir="/usr/libexec/gentoo"; _af_desktop="vm-autofit.desktop"; else _af_dir="/usr/libexec/hugmesh"; _af_desktop="hugmesh-vm-autofit.desktop"; fi
+    mkdir -p "${SYSROOT}${_af_dir}" "${SYSROOT}/etc/xdg/autostart" "${SYSROOT}/etc/local.d"
+    cp "${SHARED_SPECS}/usr/libexec/hugmesh/vm-autofit" "${SYSROOT}${_af_dir}/vm-autofit"
+    sed "s|^Exec=/usr/libexec/hugmesh/vm-autofit$|Exec=${_af_dir}/vm-autofit|" \
+        "${SHARED_SPECS}/etc/xdg/autostart/hugmesh-vm-autofit.desktop" > "${SYSROOT}/etc/xdg/autostart/${_af_desktop}"
+    cp "${SHARED_SPECS}/etc/local.d/20-spice-vdagent.start" "${SYSROOT}/etc/local.d/20-spice-vdagent.start"
+    chmod 0755 "${SYSROOT}${_af_dir}/vm-autofit" "${SYSROOT}/etc/local.d/20-spice-vdagent.start"
+    # Greeter SSO login path (scripts/_desktop-sso-lib.sh): /etc/pam.d/lightdm with
+    # the Casdoor/OIDC device-flow helper in front of the local password path, the
+    # hint the greeter shows, and (SSO on) the baked desktop-governance templates
+    # (a KEYS-provisioned image is then GOVERNED). SKIP_SSO (--skip-sso / --no-sso /
+    # standalone default) bakes SSO_ENABLED=false: the greeter says SSO is off and
+    # the local password login is untouched. UNAFFILIATED: nothing (plain Gentoo).
+    # Staged pre-emerge so CONFIG_PROTECT keeps the stack; asserted post-emerge.
+    if ! ${UNAFFILIATED}; then
+        desktop_sso_bake "${SYSROOT}" "${SHARED_SPECS}" \
+            "$(${SKIP_SSO} && echo false || echo true)" "${CLUSTER_DOMAIN}" "${BRAND_TITLE}" \
+            "$(${STANDALONE} && echo standalone || echo mesh)" "${SSO_ISSUER}" \
+            || { err "greeter SSO bake failed (see above)"; exit 1; }
+    fi
     # External media-data device (Steam library + gocryptfs Vaults). Default ON,
     # configurable + optional. Render the config + install the boot-time detector
     # that finds the SEPARATE data disk by LABEL or by the marker dirs and mounts
@@ -7189,6 +7297,13 @@ else
     banner "SKIPPED sysroot clean (--skip-clean)"
 fi
 
+# ── Greeter SSO stack survived the payload emerge? ─────────────────────────────
+# x11-misc/lightdm installs its own /etc/pam.d/lightdm; CONFIG_PROTECT must have
+# parked it (._cfg0000_lightdm, removed here), not replaced ours. Client roles only.
+if ${ROLE_CLIENT} && ! ${UNAFFILIATED}; then
+    desktop_sso_verify "${SYSROOT}" || { err "greeter SSO stack did not survive the payload emerge — refusing to ship a greeter with no SSO path"; exit 1; }
+fi
+
 # ── 9. Stage4 tarball ──────────────────────────────────────────────
 # ── BEGIN shared block: SELinux node-policy modules ───────────────────────────
 # Compile specs/selinux/*.te into .pp ON THE X86 BUILD HOST and install them into
@@ -7261,15 +7376,45 @@ done
 chmod 0664 "${SYSROOT}/var/log/wtmp"; chmod 0644 "${SYSROOT}/var/log/lastlog"
 chroot "${SYSROOT}" chgrp utmp /var/log/wtmp 2>/dev/null \
     || warn "/var/log/wtmp: no 'utmp' group in the sysroot — left root:root (mkutmp would have set utmp)"
+# What systemd-tmpfiles-setup would otherwise create in "/" at every boot, measured
+# under enforcing (2026-11-04): `q /srv` (systemd home.conf) mkdir'd /srv in root_t
+# and portage-tmpdir.conf created /var/tmp/portage as portage_tmp_t — both denied to
+# systemd_tmpfiles_t, and the denials made the service exit non-zero. Ship /srv so
+# the entry is a no-op, and mask portage's entry: a node never runs portage from a
+# tmpfiles-made directory. Both before the label pass so the shipped paths are
+# labelled (/srv is a core probe: var_t at every pack hop).
+install -d -m 0755 "${SYSROOT}/srv"
+install -D -m 0644 "${SHARED_SPECS}/etc/tmpfiles.d/portage-tmpdir.conf" "${SYSROOT}/etc/tmpfiles.d/portage-tmpdir.conf"
 SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
 SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
-info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> config -> setfiles -> gate)"
+info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> root login mapping -> config -> setfiles -> gate)"
 slx_store_install_modules "${SYSROOT}" "${SLX_TYPE}" chroot \
+    && slx_map_root_login "${SYSROOT}" "${SLX_TYPE}" chroot \
     && slx_write_selinux_config "${SYSROOT}" "${SLX_TYPE}" \
     && slx_label_tree "${SYSROOT}" "${SLX_TYPE}" \
     && slx_write_probe_table "${SYSROOT}" "${SLX_TYPE}" "${SLX_PROBE_TABLE}" \
     && slx_label_gate "${SYSROOT}" sysroot "${SLX_PROBE_TABLE}" --census \
     || { err "SELinux build-time labelling failed (see above) — refusing to pack an unlabelled image (every process would run kernel_t)."; exit 1; }
+
+# ── NetworkManager: wait for the link before handing over `net` (cluster nodes) ──
+# Written HERE, after every emerge, so net-misc/networkmanager's own conf.d (which
+# ships INACTIVE_TIMEOUT=1) cannot overwrite it. With a 1s `nm-online` window a slow
+# boot (an emulated TCG node; a loaded or cold board) marks NetworkManager INACTIVE,
+# and the dispatcher hook that should flip it to started later did not (observed on
+# the 2026-11-04 QEMU rpi5 runs: nmcli `connected/full`, OpenRC still `inactive`
+# minutes later). Every `need net` service — containerd, kubelet, the host-firewall
+# reconcile, hugmesh-tor-reconcile — then silently never starts that boot. A cluster
+# node is useless without its network, so it waits for it; a client desktop keeps
+# the stock 1s (an offline laptop must not stall its boot).
+if ! ${ROLE_CLIENT}; then
+    mkdir -p "${SYSROOT}/etc/conf.d"
+    printf '%s\n' \
+        '# Written by the HugMesh builder (cluster-node roles): wait up to 60s for a' \
+        '# connection before marking NetworkManager started, so every `need net` service' \
+        '# (containerd, kubelet, the host firewall, tor) starts on a slow boot too.' \
+        'INACTIVE_TIMEOUT=60' > "${SYSROOT}/etc/conf.d/NetworkManager"
+    info "NetworkManager: INACTIVE_TIMEOUT=60 (cluster node — need-net services wait for the link)"
+fi
 
 banner "Packaging stage4 tarball"
 # The role tag IS the role. It only ever translated because `be+gpu` carried a `+`
@@ -8176,9 +8321,9 @@ if ! ${UNAFFILIATED}; then
             pki)         echo "      # control-plane (kubeadm init)" ;;
             backend)     echo "      # worker; label hugmesh.net/backend=true" ;;
             frontend)    echo "      # worker; label hugmesh.net/frontend=true" ;;
-            backend-gpu) echo "      # worker; then edit: hugmesh.role=games, node_labels { hugmesh.net/compute: gpu }" ;;
-            omnibus)     echo "      # single-node CP; all labels (pki/backend/frontend/compute=gpu)" ;;
-            edge-ai)     echo "      # GPU inference worker; node_labels { hugmesh.net/compute: gpu, hugmesh.net/edge-ai: \"true\" }" ;;
+            backend-gpu) echo "      # worker; then edit: hugmesh.role=games, node_labels { hugmesh.net/compute: gpu, hugmesh.net/games: \"true\" }" ;;
+            omnibus)     echo "      # single-node CP; all labels (pki/backend/frontend/compute=gpu/games=true)" ;;
+            edge-ai)     echo "      # GPU inference worker; node_labels { hugmesh.net/compute: gpu, hugmesh.net/games: \"true\", hugmesh.net/edge-ai: \"true\" }" ;;
         esac
     fi
 fi

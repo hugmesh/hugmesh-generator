@@ -461,24 +461,57 @@ ui_password() {
     printf '%s' "${val:-${def}}"
 }
 
-# arm_secrets_prompt LABEL — masked, non-persisted --local-pass/--luks-pass
+# ui_password_confirmed TITLE TEXT [DEFAULT] -> a LOGIN password, typed twice.
+# A single masked entry bakes a typo in silently: the image then refuses the
+# password the operator believes they set. On a mismatch nothing changes (DEFAULT
+# is returned) and the operator is told so. Cancel on either box = DEFAULT.
+ui_password_confirmed() {
+    local title="$1" text="$2" def="${3:-}" p1 p2 none=$'\001'
+    p1="$(ui_password "${title}" "${text}" "${none}")"
+    [ "${p1}" = "${none}" ] && { printf '%s' "${def}"; return 0; }
+    p2="$(ui_password "${title}" "Type the same password again to confirm" "${none}")"
+    [ "${p2}" = "${none}" ] && { printf '%s' "${def}"; return 0; }
+    if [ "${p1}" != "${p2}" ]; then
+        ui_msg "${title}" "The two passwords did not match. Nothing was changed." >&2
+        printf '%s' "${def}"; return 0
+    fi
+    printf '%s' "${p1}"
+}
+
+# arm_secrets_prompt LABEL [required] — masked, non-persisted --local-pass/--luks-pass
 # entry point for the 8 platforms whose --standalone posture has no dedicated
 # screen of its own (rpi5 desktop / frite / jetson desktop / orangepi5 /
 # orangepizero2 / orangepizero2w / orangepizero3 / orangepi3-lts / orangepi4-lts — unlike x86, which has standalone_screen()). Without this,
 # the only way to set these secrets on those platforms is typing them into
 # the unmasked, persisted "Extra builder flags" field — see
 # _arm_standalone_flags() for how these fold into STANDALONE_FLAGS instead.
+#
+# "required" (the DESKTOP images: rpi5/jetson desktop, frite with a desktop,
+# orangepi5, orangepi4-lts): the login password is the local account the desktop
+# greeter logs in with on every image (standalone, tailnet-only and mesh — first
+# boot applies it either way), so a blank one is refused the way standalone_screen
+# refuses it; returns 1 (the caller does not build) when the operator leaves
+# without one. The headless appliances keep blank = a one-time password on their
+# serial console, which IS their login surface.
 arm_secrets_prompt() {
-    local label="$1" choice
+    local label="$1" required="${2:-}" choice unset_txt
+    unset_txt='(unset -> random at first boot)'
+    [ "${required}" = required ] && unset_txt='(unset — REQUIRED to build)'
     while :; do
-        choice="$(ui_menu "${label}: standalone secrets" "Only takes effect together with --standalone (via a role that forces it, or typed into Extra builder flags). Masked input; never saved to ${CONF_FILE}." \
-            pass "Local password ..... $([ -n "${ARM_LOCAL_PASS}" ] && echo '(set)' || echo '(unset -> random at first boot)')" \
+        choice="$(ui_menu "${label}: login & secrets" "The Login Password is the local account's desktop login (first boot applies it on standalone, tailnet-only and mesh images). Masked input; never saved to ${CONF_FILE}." \
+            pass "Local password ..... $([ -n "${ARM_LOCAL_PASS}" ] && echo '(set)' || echo "${unset_txt}")" \
             luks "Unattended LUKS pass $([ -n "${ARM_LUKS_PASS}" ] && echo '(set — advanced)' || echo '(prompts at build/install — recommended)')" \
-            done "‹ done")" || return 0
+            done "‹ done")" || choice=done
         case "${choice}" in
-            pass) ARM_LOCAL_PASS="$(ui_password "Password" "Local login password (blank = random one-time at first boot)" "${ARM_LOCAL_PASS}")" ;;
+            pass) ARM_LOCAL_PASS="$(ui_password_confirmed "Password" "Local login password$([ "${required}" = required ] && echo ' (you log in with this at the desktop greeter; hashed at build time, never saved)' || echo ' (blank = random one-time at first boot, shown once on the console)')" "${ARM_LOCAL_PASS}")" ;;
             luks) ARM_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase (ADVANCED; blank = prompt at build/install)" "${ARM_LUKS_PASS}")" ;;
-            *) return 0 ;;
+            *)
+                if [ "${required}" = required ] && [ -z "${ARM_LOCAL_PASS}" ]; then
+                    ui_msg "Login required" "Set the 'Local password' before building ${label}: it is the account you log in with at the desktop greeter. Without it the image's only login is a one-time password printed to a console that sits behind the greeter."
+                    ui_yesno "Login required" "Go back and set the password? (No = do not build)" || return 1
+                    continue
+                fi
+                return 0 ;;
         esac
     done
 }
@@ -610,6 +643,29 @@ _redacted_run_make() {
     printf '%s' "${arr[*]}"
 }
 
+# _stage_login_pass VALUE — the login password goes to the builder as a FILE
+# (--local-pass-file), never as --local-pass on argv: `make … STANDALONE_FLAGS=…`
+# and the builder's own argv are world-readable in /proc/<pid>/cmdline for the
+# whole build, and the docker hop also leaves them in `docker inspect`. VALUE is
+# written 0600 into a 0700 dir under the checkout, and LOGIN_PASS_REL is set to its
+# path RELATIVE to the checkout: the same spelling resolves for a native make (cwd =
+# the checkout) and inside the builder container (whose /src is the checkout), so
+# no extra mount is needed. Runs in the PARENT shell (build_make_cmd), never in a
+# $(...) — the dir it records must survive into launch_build, which removes it when
+# the detached build ends. Blank VALUE -> LOGIN_PASS_REL="" (no flag).
+LOGIN_PASS_DIR=""; LOGIN_PASS_REL=""
+_stage_login_pass() {
+    local v="$1"
+    LOGIN_PASS_REL=""
+    [ -n "${v}" ] || return 0
+    if [ -z "${LOGIN_PASS_DIR}" ] || [ ! -d "${LOGIN_PASS_DIR}" ]; then
+        ( umask 077; mkdir -p "${REPO_DIR}/.hugmesh-secrets" ) || return 1
+        LOGIN_PASS_DIR="$(umask 077; mktemp -d "${REPO_DIR}/.hugmesh-secrets/login.XXXXXX")" || { LOGIN_PASS_DIR=""; return 1; }
+    fi
+    ( umask 077; printf '%s' "${v}" > "${LOGIN_PASS_DIR}/local-pass" ) || return 1
+    LOGIN_PASS_REL=".hugmesh-secrets/${LOGIN_PASS_DIR##*/}/local-pass"
+}
+
 # _arm_standalone_flags — compose STANDALONE_FLAGS for the 9 ARM single-role
 # targets (rpi-%/frite/jetson-%/orangepi5/orangepizero2/orangepizero2w/
 # orangepizero3/orangepi3-lts/orangepi4-lts): folds the masked
@@ -619,7 +675,7 @@ _redacted_run_make() {
 # ordering (STANDALONE_FLAGS block above).
 _arm_standalone_flags() {
     local bf=""
-    [ -n "${ARM_LOCAL_PASS}" ] && bf+=" --local-pass $(_shell_quote "${ARM_LOCAL_PASS}")"
+    [ -n "${ARM_LOCAL_PASS}" ] && [ -n "${LOGIN_PASS_REL}" ] && bf+=" --local-pass-file ${LOGIN_PASS_REL}"
     [ -n "${ARM_LUKS_PASS}" ]  && bf+=" --luks-pass $(_shell_quote "${ARM_LUKS_PASS}")"
     [ -n "${OPT_EXTRA_FLAGS}" ] && bf+=" ${OPT_EXTRA_FLAGS}"
     printf '%s' "${bf# }"
@@ -633,6 +689,11 @@ build_make_cmd() {
     local target="$1" desc="$2" roles_total="$3"
     RUN_DESC="${desc}"; RUN_ROLES_TOTAL="${roles_total}"
     RUN_MAKE=("${target}")
+    # The login password for THIS target, as a private file (see _stage_login_pass).
+    case "${target}" in
+        x86-standalone*) _stage_login_pass "${SA_LOCAL_PASS}" ;;
+        *)               _stage_login_pass "${ARM_LOCAL_PASS}" ;;
+    esac
     # standalone-unaffiliated: the role PRESETS a neutral (brand-free) identity and
     # the builder HARD-ERRORS on any brand/branding/seed-code flag — so this menu
     # must never emit them for that one target (not even the BRAND= profile
@@ -812,10 +873,10 @@ build_make_cmd() {
     case "${target}" in x86-*)
         local bf=""
         # Standalone hardened NVIDIA desktop: the collected desktop options.
-        # NOTE: --local-pass lands in the process argv (visible to `ps` on this box);
-        # acceptable on a single-user build host. The builder hashes it immediately and
-        # never bakes the plaintext. The LUKS root passphrase is NOT passed here unless
-        # the user opts into an unattended one — the installer prompts at install time.
+        # The login password rides --local-pass-file (_stage_login_pass), never argv.
+        # The builder hashes it immediately and never bakes the plaintext. The LUKS
+        # root passphrase is NOT passed here unless the user opts into an unattended
+        # one — the installer prompts at install time.
         if [[ "${target}" == x86-standalone* ]]; then
             bf+=" --gpu-driver ${OPT_SA_GPU}"
             bf+=" --steam ${OPT_SA_STEAM}"
@@ -823,7 +884,7 @@ build_make_cmd() {
             # match the media data device by FS LABEL (only meaningful with media ON)
             [ "${OPT_SA_MEDIA}" = yes ] && [ -n "${OPT_SA_MEDIA_LABEL}" ] && bf+=" --media-label $(_word "${OPT_SA_MEDIA_LABEL}")"
             [ -n "${OPT_SA_USER}" ] && bf+=" --local-user $(_shell_quote "${OPT_SA_USER}")"
-            [ -n "${SA_LOCAL_PASS}" ] && bf+=" --local-pass $(_shell_quote "${SA_LOCAL_PASS}")"
+            [ -n "${SA_LOCAL_PASS}" ] && [ -n "${LOGIN_PASS_REL}" ] && bf+=" --local-pass-file ${LOGIN_PASS_REL}"
             [ -n "${SA_LUKS_PASS}" ]  && bf+=" --luks-pass $(_shell_quote "${SA_LUKS_PASS}")"
             [ "${OPT_SA_KEYFILE}" != none ] && bf+=" --unlock-keyfile ${OPT_SA_KEYFILE}"
             [ "${OPT_SA_YUBIKEY}" != none ] && bf+=" --unlock-yubikey ${OPT_SA_YUBIKEY}"
@@ -1019,9 +1080,14 @@ launch_build() {
     say "launching: ${launch[*]:-} make $(_redacted_run_make "${RUN_MAKE[@]}")"
     (
         cd "${REPO_DIR}" || exit 1
-        exec "${launch[@]}" setsid nohup make "${RUN_MAKE[@]}" \
+        # The staged login-password dir (if any) is removed when make ends —
+        # success, failure or stop — by the wrapper, which owns it from here on.
+        exec "${launch[@]}" setsid nohup bash -c \
+            'd="$1"; shift; make "$@"; rc=$?; [ -n "${d}" ] && rm -rf -- "${d}"; exit "${rc}"' \
+            build-menu "${LOGIN_PASS_DIR}" "${RUN_MAKE[@]}" \
             > "${runlog}" 2>&1 < /dev/null
     ) &
+    LOGIN_PASS_DIR=""; LOGIN_PASS_REL=""   # the running build owns that dir now
     local pid=$!
     printf '%s\n' "${pid}" > "${PID_FILE}"
     {
@@ -1666,7 +1732,7 @@ single_role_screen() {
             # --standalone only composes onto --role desktop — the masked secrets
             # prompt is only meaningful there (a cluster-node role would just
             # ignore/reject --local-pass/--luks-pass).
-            [ "${role}" = desktop ] && arm_secrets_prompt "Pi ${role} (${OPT_RPI_BOARD})"
+            if [ "${role}" = desktop ]; then arm_secrets_prompt "Pi ${role} (${OPT_RPI_BOARD})" required || return 0; fi
             save_conf
             build_make_cmd "rpi-${role}" "Pi ${role} (${OPT_RPI_BOARD}, ${OPT_PATH}, ENV=${OPT_ENV})" 1
             launch_build ;;
@@ -1721,7 +1787,7 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
             [ "${kflavor}" = back ] && return 0
             OPT_JETSON_KFLAVOR="${kflavor}"
             # --standalone only composes onto --role desktop, same reasoning as rpi5.
-            [ "${role}" = desktop ] && arm_secrets_prompt "Jetson ${role} (${OPT_JETSON_BOARD})"
+            if [ "${role}" = desktop ]; then arm_secrets_prompt "Jetson ${role} (${OPT_JETSON_BOARD})" required || return 0; fi
             save_conf
             build_make_cmd "jetson-${role}" "Jetson ${role} (${OPT_JETSON_BOARD}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
             launch_build ;;
@@ -1764,7 +1830,7 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
                 back "‹ back")" || return 0
             [ "${flavor}" = back ] && return 0
             OPT_ORANGEPI5_FLAVOR="${flavor}"
-            arm_secrets_prompt "Orange Pi 5 ${board}"
+            arm_secrets_prompt "Orange Pi 5 ${board}" required || return 0
             save_conf
             build_make_cmd orangepi5 "Orange Pi 5 ${board} (${flavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
             launch_build ;;
@@ -1889,7 +1955,7 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
                 back "‹ back")" || return 0
             [ "${wflavor}" = back ] && return 0
             OPT_ORANGEPI4LTS_FLAVOR="${wflavor}"
-            arm_secrets_prompt "Orange Pi 4 LTS light desktop"
+            arm_secrets_prompt "Orange Pi 4 LTS light desktop" required || return 0
             save_conf
             build_make_cmd orangepi4-lts "Orange Pi 4 LTS light desktop (${wflavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
             launch_build ;;
@@ -1921,7 +1987,7 @@ standalone_screen() {
         [ "${unaff}" = yes ] && home_l="mode=${OPT_HOME_MODE:-default} enc=${OPT_HOME_ENCRYPTED}   (no source seed)"
         local -a items=(
             user    "Local user ......... ${OPT_SA_USER}"
-            pass    "Local password ..... $([ -n "${SA_LOCAL_PASS}" ] && echo '(set)' || echo '(unset → random at first boot)')"
+            pass    "Local password ..... $([ -n "${SA_LOCAL_PASS}" ] && echo '(set)' || echo '(unset — REQUIRED to build)')"
             gpu     "GPU driver ......... ${OPT_SA_GPU}"
             steam   "Steam delivery ..... ${OPT_SA_STEAM}  (library on /media/Steam)"
             media   "Media data ......... ${media_l}"
@@ -1947,7 +2013,7 @@ standalone_screen() {
         choice="$(ui_menu "Standalone ${weight}" "${prompt}" "${items[@]}")" || return 0
         case "${choice}" in
             user)    OPT_SA_USER="$(ui_input "User" "Local login user name" "${OPT_SA_USER}")" ;;
-            pass)    SA_LOCAL_PASS="$(ui_password "Password" "Password for ${OPT_SA_USER} (blank = random one-time at first boot)" "${SA_LOCAL_PASS}")" ;;
+            pass)    SA_LOCAL_PASS="$(ui_password_confirmed "Password" "Login password for ${OPT_SA_USER} (you log in with this at the desktop greeter; hashed at build time, never saved)" "${SA_LOCAL_PASS}")" ;;
             gpu)     OPT_SA_GPU="$(ui_menu "GPU driver" "Video card / driver (FREE = open, no EULA — the default):" \
                          all-free "All free (any GPU; NVIDIA=nouveau) — default" \
                          nvidia-free "NVIDIA free (nouveau)" \
@@ -1982,6 +2048,13 @@ standalone_screen() {
             egress)  OPT_SA_EGRESS="$(ui_input "Egress VPN" "Path to a WireGuard .conf / OpenVPN .ovpn (empty = none)" "${OPT_SA_EGRESS}")" ;;
             luks)    SA_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase into the installer ISO (ADVANCED; blank = installer prompts at install)" "${SA_LUKS_PASS}")" ;;
             build)   save_conf
+                     # A standalone image has no KEYS stick and no SSO: this password
+                     # IS the only way in (root is locked). Refuse rather than build an
+                     # image whose login is a random one-time password on a console.
+                     if [ -z "${OPT_SA_USER}" ] || [ -z "${SA_LOCAL_PASS}" ]; then
+                         ui_msg "Login required" "Set the local user and its password (the 'Local password' item) before building. A standalone image has no other login: root is locked and there is no KEYS stick or SSO."
+                         continue
+                     fi
                      if [ "${unaff}" = yes ]; then
                          build_make_cmd "x86-${role}" "x86 ${role} UNAFFILIATED plain Gentoo desktop (${OPT_PATH}, ENV=${OPT_ENV})" 1
                      else
@@ -2449,7 +2522,7 @@ frite_screen() {
         back "‹ back")" || return 0
     [ "${desk}" = back ] && return 0
     OPT_FRITE_DESKTOP="${desk}"
-    arm_secrets_prompt "Frite ${board}"
+    if [ "${OPT_FRITE_DESKTOP}" = none ]; then arm_secrets_prompt "Frite ${board}"; else arm_secrets_prompt "Frite ${board}" required || return 0; fi
     save_conf
     build_make_cmd frite "Frite ${board} (${flavor}, desktop=${OPT_FRITE_DESKTOP})" 1
     launch_build

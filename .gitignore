@@ -54,6 +54,9 @@ tests/stack/.looks/
 # Per-domain OWN-Casdoor compose overlay (issue #47; Studio core/own_casdoor.py
 # writes it, the Makefile wildcard-includes it behind the `own-casdoor` profile).
 tests/stack/.compose.own-domains.yaml
+# The local mesh's HugMesh-token ISSUER private key (make stack-mesh-token-key,
+# HEADSCALE=1). A signing key: never commit it, never copy it off this machine.
+tests/stack/.mesh-token/
 
 # Generated per stack bring-up from the Studio's resource-limit setting
 # (hugmesh_studio/core/stack_limits.py). Machine-specific by definition —
@@ -193,3 +196,6 @@ tests/stack/.run/
 # one moment, never shared — the tests/stack/.run/ precedent. Deliberately NOT
 # under out/, which is the generator's product tree.
 tests/.ungated-lane/
+
+# The TUI stages the login password here (0600, removed when the build ends).
+/.hugmesh-secrets/

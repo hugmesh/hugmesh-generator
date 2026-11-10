@@ -217,10 +217,10 @@ export const FUNCTIONS: MeshFunction[] = [
     driveability: 'ui', blockedBy: '',
     note: 'Since 2026-10-28 the fe gateway proxies /games/** to the `games` federation '
         + 'remote (hugmesh-games/games-ui, fe route games-ui) behind a ROLE_GAMES floor '
-        + '(+ROLE_ADMIN/ROLE_MOD supersets) — the host shell mounts its GAMES_ROUTES at '
+        + '(+ROLE_ADMIN superset) — the host shell mounts its GAMES_ROUTES at '
         + '/games (games-catalog, games-card-<slug>, games-play-frame). Before that the '
         + 'fe side had NO /games/** row and /games was a guarded local placeholder. The '
-        + 'be-gateway /games/** trio still governs the standalone PORTAL door.',
+        + 'standalone PORTAL has its own Ingress and no gateway row; the BFF enforces auth.',
   },
   {
     service: 'games', id: 'admin', name: 'reach the derived games-admin mount',

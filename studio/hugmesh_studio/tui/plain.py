@@ -108,8 +108,9 @@ def _delete_flow(inp: IO[str], out: IO[str], row: model.SessionRow) -> None:
         _say(out, f"deleted session {s.id}"
                   + (" and its artifacts." if remove_artifacts else " (record only)."))
     else:
-        # delete() re-checks activity itself; honour its refusal verbatim.
-        _say(out, "not deleted: the session became active again.")
+        # delete() re-checks activity itself (and on native Windows keeps a session
+        # whose tree could not be fully removed); say which refusal it was.
+        _say(out, build_sessions.not_deleted_reason(s))
 
 
 def print_meshemu(out: IO[str], generator_dir: str, session_name: str) -> bool:

@@ -93,3 +93,23 @@ def test_a_failed_restart_is_reported_not_hidden(qapp, monkeypatch):
     monkeypatch.setattr(type(sec.node), "apply_limits",
                         lambda self: (False, "docker said no"))
     assert "not restarted under them: docker said no" in tray.apply_limits_now()
+
+
+def test_the_token_dialog_opens_over_a_damaged_token_file_and_forgets_it(qapp):
+    """A token file that is not UTF-8 text used to raise out of summary(), so the
+    dialog that holds Forget never opened."""
+    from hugmesh_studio.gui.mesh_token_dialog import MeshTokenDialog
+    path = os.path.join(mt.state_dir(), mt.TOKEN_FILE)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(b"\xff\xfe\x80 not a token\n")
+    dlg = MeshTokenDialog()
+    try:
+        assert "cannot be used" in dlg.summary.text() and "damaged" in dlg.summary.text()
+        assert dlg.forget_btn.isEnabled()
+        dlg.forget_btn.click()
+        assert not os.path.exists(path)
+        assert dlg.summary.text().startswith("No HugMesh token imported")
+        assert not dlg.forget_btn.isEnabled()
+    finally:
+        dlg.deleteLater()

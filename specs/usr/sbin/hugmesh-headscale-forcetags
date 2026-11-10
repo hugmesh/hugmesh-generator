@@ -4,16 +4,36 @@
 # binary live). Invoked by gen-headscale-policy.sh after a verified export is
 # applied (and may be run standalone after node approval).
 #
-# WHY (FIX-SERVERTAG): on main, tags are SELF-APPLIED at join
+# WHY (FIX-SERVERTAG): tags are SELF-APPLIED at join
 # (--advertise-tags=tag:hugmesh). A node could therefore advertise
-# tag:dev_<otherfp> / tag:dom_<otherdomain> and MASQUERADE as a different SSH
-# destination. Forced tags set via `headscale nodes tag` OVERRIDE
-# --advertise-tags, so once the control node force-assigns a node's
-# tag:dev_<fp> / tag:dom_<domain> / tag:mesh_<id>, the node can no longer
-# self-advertise a DIFFERENT one. That makes the SSH dst (which the generated
-# policy keys on these tags) NON-FORGEABLE. tag:hugmesh stays self-applied
+# tag:dev_<otherfp> / tag:dom_<otherdomain> / tag:superadmin and MASQUERADE as a
+# different SSH destination or source. Forced tags do NOT override what a node
+# advertises: headscale 0.23 counts a node's forced tags AND every advertised tag
+# the policy accepts (measured on 0.23.0 by
+# tests/device-registry/test-headscale-tag-ownership.sh). What stops the forgery
+# is the policy: those tags carry the EMPTY owner list [] in tagOwners (tag:dom_*
+# is unlisted), so an advertised one lands in invalid_tags, while the tags forced
+# here bypass tagOwners and apply. That makes the SSH dst and the superadmin src
+# NON-FORGEABLE. tag:hugmesh stays self-applied and owned by "hugmesh"
 # (data-plane membership only — CIDR rule + route auto-approval, NOT a :22
-# src/dst).
+# src/dst). `headscale nodes tag -t` REPLACES the node's forced-tag list, so the
+# key's forced tag:hugmesh is dropped here; nodes keep tag:hugmesh through their
+# own --advertise-tags.
+# WHY (FIX-SERVERTAG): tags are SELF-APPLIED at join (--advertise-tags=...).
+# A node that could validly advertise tag:dev_<otherfp> / tag:dom_<otherdomain> /
+# tag:superadmin would MASQUERADE as a different SSH destination or source.
+#
+# Forcing alone does NOT prevent that. headscale 0.23 gives a node the UNION of
+# its forced tags and every advertised tag whose tagOwners entry names the
+# node's own user; forcing tag:mesh_<id> on a node leaves an advertised
+# tag:superadmin standing (measured against headscale 0.23.0 with a stock
+# tailscale 1.78.1 client). What makes the security tags non-forgeable is the
+# POLICY: gen-headscale-policy.sh renders tag:superadmin, tag:mesh_<id> and
+# tag:dev_<fp> with an EMPTY owner list, so an advertised one is always
+# invalid. This script is then the ONLY way a node gets one: `headscale nodes
+# tag` does not consult tagOwners. Never give a security tag an owner to "help"
+# this script — it does not need one. tag:hugmesh stays self-applied (data-plane
+# membership only — CIDR rule + route auto-approval, NOT a :22 src/dst).
 #
 # WHAT IT FORCES, per node:
 #   * tag:mesh_<MESH_ID>  on EVERY approved node in this mesh — including
@@ -35,9 +55,10 @@
 #       superadmin OPERATOR (laptop/console) identity, a deliberate control-node
 #       admin action keyed to a known machine. List those machine keys (one per
 #       line) in /etc/hugmesh/registry/superadmin-machines.txt to have this
-#       script force tag:superadmin on them. RESIDUAL: until OIDC, the trust in
-#       tag:superadmin's SOURCE is only as strong as this manual list + the
-#       reusable preauth key the operator joined with (documented advisory).
+#       script force tag:superadmin on them. That list is the ONLY way a node
+#       gets tag:superadmin (the policy gives it no owner, so advertising it is
+#       refused). RESIDUAL: until OIDC, the trust in tag:superadmin's SOURCE is
+#       only as strong as this manual list and the machine key it names.
 #
 # THE HIGHEST-RISK CONTRACT (shared with Layer-B): the registry machine_key_fp
 # MUST be byte-identical to what `headscale nodes list -o json` reports for the

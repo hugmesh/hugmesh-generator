@@ -118,6 +118,10 @@ columns are the design target; see the status note under the table.
 | `edge-ai-analysis` (task-oriented analysis API in front of edge-ai — optional, default-off) | per-app SA | `s0:c87` | — | (non-Java: no JKS) |
 | `character-studio` (ui) | per-app SA | `s0:c74` | — | — |
 | `games-ui` (the `games` federation remote — optional, games slug) | per-app SA | `s0:c88` | — | — |
+| `games-bff-db` (the games BFF's Postgres — optional, games slug) | (pod default SA) | `s0:c89` | (DB) | (non-Java: PEM, no JKS) |
+| `games-cassandra` (the games BFF's session store — optional, games slug) | (pod default SA) | `s0:c90` | (DB) | (non-Java: PEM, no JKS) |
+| `games-portal` (the standalone games site — optional, games slug) | (pod default SA) | `s0:c91` | — | — |
+| `games-cassandra-init` (the keyspace Job for games-cassandra — optional, games slug) | (pod default SA) | `s0:c92` | — | — |
 | `image-builder` (app-image Kaniko build pods) | (per-build) | `s0:c75` | (build pod) | (non-Java: no JKS) |
 | `edge-ai-tts` (Piper TTS) | per-app SA | `s0:c72` | — | (non-Java: no JKS) |
 | meshbridge (Meshtastic ↔ Matrix bridge — optional, default-off) | `sa-meshbridge` | `s0:c76` | (Casdoor machine client — manual, see meshbridge ESO) | (non-Java: no JKS) |
@@ -385,7 +389,7 @@ headscale so the rewritten file is the one in force.
   --advertise-tags=...`, which comes from `.tailscale.up_args` in `provision.json`
   (`keys-template/provision.json`, `keys-template/examples/`). `tagOwners` restricts
   those tags to the `hugmesh` headscale user (the preauth-key owner), so only
-  enrolled nodes can claim them. With OIDC join, the Casdoor `hugmesh/headscale`
+  enrolled nodes can claim them. That user owns **only** these membership tags. With OIDC join, the Casdoor `hugmesh/headscale`
   group gates enrolment (`allowed_groups`, matching the group's real
   `<owner>/<name>` claim shape — see `keys-template/headscale/config.yaml`) — two
   independent membership layers.
@@ -403,9 +407,14 @@ headscale so the rewritten file is the one in force.
   `headscale/policy.hujson` (that wins). On the control node, `gen-headscale-policy.sh`
   (Layer A of the device-license registry) re-renders it from
   `policy.hujson.tmpl` after the first signature-verified registry export, with
-  one `ssh` edge per permitted operator and server-forced destination tags
+  one `ssh` edge per permitted operator and server-forced security tags
   (`tag:dev_*`, `tag:dom_*`, `tag:mesh_*`, `tag:superadmin`, set by
-  `hugmesh-headscale-forcetags`, which no node can self-advertise). See
+  `hugmesh-headscale-forcetags`). Every policy gives these tags an **empty owner
+  list**, and that is what stops a node self-advertising them: headscale 0.23 grants a
+  node its forced tags plus every advertised tag its own user owns, so a security tag
+  owned by `hugmesh` could be claimed by anyone holding a pre-auth key.
+  keys-provision refuses to load a KEYS-stick policy that gives one an owner, and a
+  key minted by the Studio may not carry one (headscale forces a key's tags at join). See
   [`docs/DEVICE-REGISTRY-KEY-ROTATION.md`](DEVICE-REGISTRY-KEY-ROTATION.md).
   `specs/etc/headscale/policy.hujson` is a reference copy that the builders no
   longer bake; neither it nor `keys-template/headscale/policy.hujson` carries the

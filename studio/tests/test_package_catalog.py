@@ -13,6 +13,14 @@ from hugmesh_studio.core.config import ImageConfig, ROLE_CHOICES, image_class
 _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # raw (non-deduped) per-platform atom totals — pinned to the tree (design 2.8 counts).
+# x86 153 / rpi5 77 / jetson 68 / frite 57 / orangepi5 75 since e425be8d (#865, ARM
+# desktop-governance runtime) added sys-auth/polkit and dev-lang/python to the rpi5,
+# jetson, orangepi5 and orangepi4-lts desktop lists (+2 each) and sys-fs/mtd-utils
+# (flashcp for install-frite.sh --write-uboot-spi) to the frite base list (+1). #865 moved
+# neither this dict nor the catalog JSON, and c0062353 (#876, the emulated-desktop display
+# work) merged three minutes later pinning its own +2 (app-emulation/spice-vdagent and
+# sec-policy/selinux-vdagent on every desktop list) from a base without #865, so main went
+# red until both were re-pinned and the JSON re-emitted together.
 # x86 = 151 since #530 (desktop-gov SSSD) added dev-lang/python and sys-auth/polkit to
 # specs-x86/portage/packages-desktop.list. It was 149 before that, when the boot-chain
 # work (#307) added sys-apps/systemd-utils to packages.list.
@@ -23,11 +31,11 @@ _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # glib[introspection] chain does not cross-compile (the real build died in glib's
 # in-source gobject-introspection bootstrap), so the atom was removed behind a
 # paper-trail comment and tests/requested-atoms-resolvable.sh pins the exclusion.
-# orangepi5 = 53 + 8 + 10: its cluster NODE roles (EXPERIMENTAL) read the Raspberry Pi
-# k8s node set (specs-rpi5/portage/packages-k8s.list, 8 atoms) and the node host list
+# orangepi5 = 57 (packages 33 + desktop 23 + live 1) + 8 + 10: its cluster NODE roles
+# (EXPERIMENTAL) read the Raspberry Pi k8s node set (specs-rpi5/portage/packages-k8s.list, 8 atoms) and the node host list
 # (specs-rpi5/portage/packages-node-host.list, 10 atoms) rather than a copy.
-_RAW_TOTALS = {"x86": 151, "rpi5": 73, "jetson": 66, "frite": 52,
-               "orangepi5": 71, "orangepizero2": 32, "orangepizero2w": 32}
+_RAW_TOTALS = {"x86": 153, "rpi5": 77, "jetson": 68, "frite": 57,
+               "orangepi5": 75, "orangepizero2": 32, "orangepizero2w": 32}
 
 _CONFIGS = [
     ("x86 omnibus node", ImageConfig(mode="mesh", role="omnibus", platform="x86")),

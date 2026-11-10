@@ -15,8 +15,8 @@ GITHUB ACTIONS AND SIGNED THERE. For ``.github/workflows/studio-release.yml`` th
   ``SITE_DISPATCH_TOKEN`` is not set.
 
 Several tests run the workflow's own ``run:`` scripts with fake tools, so they test what
-GitHub would execute, not a copy of it.
-"""
+GitHub would execute, not a copy of it. """
+
 from __future__ import annotations
 
 import json
@@ -34,7 +34,7 @@ WIN_LOCK = os.path.join(STUDIO_ROOT, "packaging", "wix", "windows-build-requirem
 LINUX_REQS = os.path.join(STUDIO_ROOT, "packaging", "linux-build-requirements.txt")
 
 REPO = "hugmesh/hugmesh-generator"
-VERSION = "0.3.0-beta.1"
+VERSION = "0.4.0-beta.2"
 TAG = f"studio-v{VERSION}"
 IDENTITY = f"https://github.com/{REPO}/.github/workflows/studio-release.yml@refs/tags/{TAG}"
 ISSUER = "https://token.actions.githubusercontent.com"
@@ -69,6 +69,8 @@ def _run_bash(script: str, env: dict, cwd) -> subprocess.CompletedProcess:
     # GitHub runs a `run:` block as `bash -e {0}` (plus pipefail when shell: bash is set).
     return subprocess.run(["bash", "-e", "-c", script], env=env, cwd=cwd,
                           capture_output=True, text=True)
+                          
+
 
 
 # ── runners and permissions ────────────────────────────────────────────────────────
@@ -322,7 +324,7 @@ def test_release_notes_carry_verify_commands_with_the_signing_identity(tmp_path,
     for other in (IDENTITY + "0",  # studio-v0.3.0-beta.10
                   IDENTITY.replace("studio-release.yml", "evil.yml"),
                   IDENTITY.replace("hugmesh-generator", "hugmesh-generatorX"),
-                  IDENTITY.replace("0.3.0", "0x3x0")):
+                  IDENTITY.replace("0.4.0", "0x4x0")):
         assert not re.search(regexp, other), f"{regexp} also matches {other}"
 
 

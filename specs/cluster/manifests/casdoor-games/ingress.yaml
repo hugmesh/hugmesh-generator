@@ -1,0 +1,26 @@
+# casdoor-games Ingress — the PUBLISHED half of the games issuer. Browsers reach the
+# Casdoor signup and login UI here, and GitHub calls back here. Same shape as
+# manifests/casdoor-domain/ingress.yaml, and the BFF's key fetch stays in-cluster.
+#
+# parameterize_games_domain() rewrites the host in lockstep with the `origin` in
+# app-conf-configmap.yaml and every issuer literal. A games-deselected build prunes the
+# directory. className nginx is the public posture; RELEASE_STATE=internal rewrites it
+# to nginx-internal in gate_env_apps().
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: casdoor-games
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: id.hugmesh.games
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: casdoor-games
+                port: { name: http }

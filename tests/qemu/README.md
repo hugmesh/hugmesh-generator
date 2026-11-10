@@ -72,7 +72,8 @@ runner polls until `--timeout`. Console output goes to
 | `launch-pi.sh` | Boot a Pi **golden `.img`** under `-M virt` with a KEYS disk (`--kernel` loaded directly — QEMU has no BCM2712 model; it takes no `--stage4`, that is `run-qemu-test.sh`'s input). |
 | `launch-arm.sh` | Boot a non-Pi ARM `.img` (frite/jetson/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts/orangepi4-lts) under `-M virt` (kernel+DTB direct). |
 | `run-qemu-docker.sh` | Containerized device tests: one `--privileged` container per platform/role row against a build session's artifacts; `--keep-alive` leaves the devices running and registers them for the Studio; `--save-device`, `--stop-all-devices`. Needs `docker` group membership, not `sudo`. |
-| `docker-entrypoint.sh` | Runs inside the `hugmesh-qemu-runner` container (`docker/Dockerfile.qemu-runner`): one container, one emulated device. |
+| `docker-entrypoint.sh` | Runs inside the `hugmesh-qemu-runner` container (`docker/Dockerfile.qemu-runner`): one container, one emulated device. `--display auto\|spice\|none` opens a password-locked SPICE door onto a desktop row (see "Opening a desktop image's display"). |
+| `display_door_test.sh` | Hermetic guard for that door: the host side binds `127.0.0.1` only (the real `docker run` argv is executed against a fake docker), the per-run secret is 0600/48-hex and never printed or put on argv, the flags are wired into all three launcher calls, and `--open-display` writes a self-deleting `.vv`. Mutation-tested (see the file header). |
 | `run-matrix-e2e.sh` | Opt-in matrix driver: walk `matrix.tsv`, boot each cell + assert size/load. |
 | `mesh-cluster.sh` | Opt-in 3-node k8s cluster: CP `kubeadm init` + two pinned-token joins over a shared QEMU mcast L2 (issue #48). `--identities FILE` takes the nodes' MAC/IP/L2 from the planner. |
 | `mesh-identities.sh` | **Sourced, not run.** The one reader of the planner's identity file, shared by `mesh-cluster.sh` and `run-qemu-docker.sh` (parse + per-row sanity; each lane keeps its own policy). |
@@ -85,7 +86,28 @@ runner polls until `--timeout`. Console output goes to
 | `avc-workload.sh` | The in-guest probe list (one probe per workload the `specs/selinux/*.te` modules confine; presence-gated = role-appropriate). |
 | `avc-report.sh` | Groups a raw AVC harvest by source type → the owning `specs/selinux/*.te` (hermetic text processing). |
 | `avc-workout_test.sh` | Hermetic tests + mutation legs for the whole workout lane (nothing boots; also run by `tests/build-matrix/check.sh`'s smokes). |
+| `display_argv_test.sh` | Hermetic argv assertions for the launchers' display door (below): the no-flag argv of all three launchers pinned to a golden, the door's elements, loopback default, the secret never in argv/stdout, the refusals, `--virt-dtb` (no boot, no QEMU, no root). |
 | `stage4_rootfs_test.sh` | Hermetic tests + mutation legs for the stage4 rootfs lane: `build_rootfs()` driven against fixture tarballs with `mount`/`umount`/`losetup` stubbed to fail loudly, and `assertions.sh`'s rootfs-is-labelled precondition (nothing boots, no root; also run by `tests/build-matrix/check.sh`'s smokes). |
+
+All three launchers also carry the same default-off **display door** (opened by
+the runner for desktop roles in keep-alive mode, or by hand): `--display spice
+--spice-port N --display-secret FILE [--display-listen ADDR] [--vnc-socket PATH]`.
+ONE door: SPICE over TCP on `ADDR:N` (default `127.0.0.1`; `0.0.0.0` is for the
+runner container's own netns only), protected by a per-run password that QEMU
+reads from `FILE` as a secret *object* (`-object secret,file=` +
+`password-secret=`), so it never appears in argv, `ps`, the launch log or the
+launcher's output (only the path is printed: `display: spice on ADDR:N (password
+in FILE)`). The door adds the vdagent `virtserialport` (what lets
+`remote-viewer`/`spicy` resize the guest to the window), `qemu-xhci` +
+`usb-tablet` + `usb-kbd`, and the platform GPU: x86 `-vga none -device virtio-vga`
+(VGA-compatible, so OVMF/GRUB render; it replaces the extra `virtio-gpu-pci`
+that `--gpu` adds), aarch64 `-device virtio-gpu-pci,edid=on`. `--vnc-socket
+PATH` adds a `-vnc unix:PATH,password-secret=` browser (noVNC) fallback that only
+scales (8-char DES auth from the first 8 chars of the same file; opt-in).
+`launch-arm.sh --virt-dtb` omits `-dtb` so QEMU generates the virt DTB, which a
+board DTB cannot replace once PCIe/virtio devices are on the bus. Without
+`--display` the argv is byte-identical to before (`display_argv_test.sh` pins it
+to a golden, element for element).
 
 All three launchers carry the same default-off mesh flags: `--mesh-net SPEC`,
 `--mesh-mac MAC`, `--mesh-id N`. One identical block spells them, so a mixed-arch
@@ -182,6 +204,92 @@ needs ≥25 G free on `/`, and `df -h /` on this workstation showed 3.4 G free o
 2026-10-07. When it is run, watch multicast delivery across the bridge. If the host
 bridge filters it, the same guests work with the point-to-point `listen=`/`connect=`
 SPEC, which the launchers already accept.
+
+## Opening a desktop image's display (`--open-display`)
+
+A `--keep-alive` **desktop** row (x86 and ARM boards, light and full: every role the
+entrypoint files under `kubernetes.role: none` — `desktop|laptop|chromebook|standalone-*`)
+gets a **display door**: QEMU's SPICE server, locked with a per-run random password
+held in a file. A test run gets none, and a test run's QEMU argv is byte-identical to
+before.
+
+```bash
+tests/qemu/run-qemu-docker.sh --keep-alive --only-exact x86/standalone-thick
+#   LABEL   CONTAINER   SSH               DISPLAY
+#   x86/... hugmesh-... 127.0.0.1:22300   127.0.0.1:22400 (open: run-qemu-docker.sh --open-display x86/standalone-thick)
+tests/qemu/run-qemu-docker.sh --open-display x86/standalone-thick            # a window
+tests/qemu/run-qemu-docker.sh --open-display x86/standalone-thick --viewer print
+```
+
+**One door, three ways in.**
+
+| viewer | how it opens | resize |
+|---|---|---|
+| `remote-viewer` (virt-viewer; the default when installed) | a 0600 `.vv` file in `$XDG_RUNTIME_DIR` with `delete-this-file=1`; the password never touches argv | sends a monitors-config on every window resize: the **guest re-lays out** when the image supports it (record `display_resize: "guest"`), otherwise scale-to-fit |
+| `spicy` (spice-gtk) | started with host/port only; it **prompts** for the password (spice-gtk would otherwise take it on argv) | same as above |
+| browser (noVNC) | `--display-web` at start publishes `127.0.0.1:<ssh+200>`; `--viewer browser` opens `http://127.0.0.1:PORT/vnc.html?...&resize=scale` | **scale-to-fit only** |
+
+The door is on from the moment QEMU launches, so the firmware and the boot are
+visible too — not only the logged-in desktop.
+
+**Resize, honestly.** `display_resize` in the device record says what an image is
+*known* to do: `"guest"` (virtio-gpu + an in-guest applier that adopts the viewer's
+preferred mode) or `"scale"`. It is `"scale"` for every row until that image's
+guest-side proof lands; `DISPLAY_RESIZE=guest` in the runner's environment then
+flips it for every row of that run (it is a statement about the images, not a
+per-row option). Whether QEMU 7.2 turns a SPICE monitors-config into a
+virtio-gpu mode change with no agent, or whether `spice-vdagent` must relay it, is
+**unverified** here; VNC never resizes the guest. An ARM board whose kernel lacks
+`DRM_VIRTIO_GPU` shows a black window: the door opens, the guest draws nothing —
+that is a guest-kernel fact this harness cannot see, so the record does not claim
+otherwise.
+
+**What the host sees, and why it is safe.**
+
+- Inside the container SPICE listens on `0.0.0.0:5930` — the container's own network
+  namespace. It is reachable by the runner's publish and, on a `--mesh-net` bridge,
+  by sibling containers, which is exactly why the password is **required**.
+- `run-qemu-docker.sh` publishes it as `-p 127.0.0.1:<ssh+100>:5930` (22400-22499) and
+  the noVNC port as `-p 127.0.0.1:<ssh+200>:6080` (22500-22599). Never `0.0.0.0`,
+  never a bare `-p PORT:`. The derived ports ride the ssh port's claim/retry loop: a
+  clash on any of the three moves the whole row to the next ssh port, and
+  `--stop-device`/`--stop-all-devices` release all three.
+- The secret is 48 hex chars from `/dev/urandom` (under SPICE's 60-char limit, no
+  base64 `+`), written under `umask 077`, chowned 0600 to `HOST_UID` beside the ssh
+  key before the record that names it is published. QEMU reads it through
+  `-object secret` + `password-secret=` — never `password=` on argv, which `ps` and
+  the tee'd `launch.log` would show. The record carries `display_password_file`
+  (the HOST path) and never the value; `display_door_test.sh` plants a sentinel and
+  greps every output for it.
+- The browser URL is an **IP literal**. The product's gateway pins HSTS on
+  `localhost`, after which Chrome hard-blocks every `http://localhost` door; HSTS
+  cannot attach to `127.0.0.1`, and this fallback never goes through the gateway.
+- VNC auth is 8-char DES (QEMU uses the first 8 characters of the same secret), so
+  the browser fallback is **opt-in** (`--display-web`) and loopback only. The runner
+  image ships no `websockify`/noVNC; with `--display-web` the entrypoint warns and
+  skips the fallback until `docker/Dockerfile.qemu-runner` grows them.
+
+**Where the flags go.** The entrypoint hands the launcher `--display spice
+--display-listen 0.0.0.0 --spice-port 5930 --display-secret FILE` (and `--virt-dtb`
+on non-Pi ARM: a board DTB cannot describe the `virt` machine's PCIe, so without it
+the virtio-gpu is invisible to the guest; `--vnc-socket PATH` with `--display-web`).
+Those flags are the launchers' half of this change. `--display auto` probes the
+mounted launcher for them first — a launcher without them boots the row **headless
+with a WARN** instead of dying on `Unknown arg`; `--display spice` refuses outright.
+
+**Studio.** The mesh-emulation page gets a **Display** button per row (enabled when
+the record has `display_port > 0` and the device is running; its tooltip reads
+`display_resize`). It calls the Qt-free `core/qemu_devices.display_argv()` — the same
+`.vv`/prompt/URL rules as `--open-display`, launched with
+`Popen(start_new_session=True)`. No Studio flag is needed to boot with a display.
+
+**Windows/WSL2 and Wayland.** `remote-viewer` and `spicy` are GTK3 and native on
+Wayland (the page sets no window geometry; `move()` no-ops there). Docker in WSL2
+publishes `127.0.0.1:P` and WSL's localhost forwarding makes it reachable from
+Windows: the Studio inside WSL2 launches the Linux `remote-viewer` through WSLg;
+without WSLg, open the `.vv` with Windows virt-viewer (`remote-viewer.exe`) or the
+noVNC URL in a Windows browser. Install hints when no viewer exists: Gentoo
+`net-misc/virt-viewer`, Debian `virt-viewer`, Windows the virt-viewer MSI.
 
 ## SELinux AVC workout (`avc-workout.sh`, issue #45)
 
@@ -360,6 +468,50 @@ lives in the studio pytest suite and runs every pass:
 - the bootstrapper's static contract: CRLF, label resolution, pinned winget IDs, consent
   gating, and the DETECT vocabulary, the same tokens this harness asserts
   (`studio/tests/test_bat_bootstrap.py`).
+
+## Frite: install to eMMC and boot from it (`frite-emmc-install.sh`)
+
+The Frite builder emits no `.img`, only LIVE/INSTALLER media (ISO9660 today;
+MBR+FAT is the u-boot-bootable form). `launch-arm.sh` boots such a medium with
+`--medium FILE` (kernel, dmsquash-live initrd and the DEFAULT label's APPEND are
+lifted off it; the medium rides usb-storage behind qemu-xhci like a real stick),
+attaches a raw file as an eMMC with `--emmc FILE` (QEMU `emmc` behind
+`sdhci-pci`, so the guest sees `/dev/mmcblk0` + `mmcblk0boot0/1` exactly like
+La Frite's module), and `--gpu` adds virtio-gpu + USB input so QMP `screendump`
+captures the greeter. Since 2026-11-04 the launcher passes NO `-dtb` by default:
+the board DTB replaced QEMU's own virt device tree and the guest found no
+console, disk or NIC (`--dtb FILE` remains an explicit opt-in).
+
+`frite-emmc-install.sh` is the two-phase proof, on the HOST
+`qemu-system-aarch64` (>= 9.1 for `emmc`; the runner image's 7.2 has only
+`sd-card`), no root:
+
+```sh
+# phase A: boot the installer medium + emulated eMMC + a per-run KEYS stick
+#          (generated password for the greeter, generated ssh key for the
+#          assertions), assert /dev/mmcblk0 is type MMC with boot partitions,
+#          run install-frite.sh unattended against it, power off;
+# between: offline layout check of the eMMC file (user area at +2*boot+rpmb);
+# phase B: boot the eMMC ALONE with its own extlinux APPEND, screendump the
+#          greeter, type the password via QMP send-key, screendump again,
+#          assert openbox/lxsession run as the user.
+bash tests/qemu/frite-emmc-install.sh --medium out/<brand>-frite-la-frite-arm64-desktop-*.installer.iso \
+    --run-dir /path/with/room   # the eMMC file is 8 GiB (sparse)
+
+# the OFFLINE layout test alone (any raw MBR disk, or an emmc backing file with --user-offset):
+bash tests/qemu/frite-emmc-install.sh --check-layout emmc.raw --user-offset 8388608
+```
+
+Named failures, not timeouts: no `/dev/mmcblk0` → the Frite kernel lacks
+`CONFIG_MMC_SDHCI_PCI`; dracut emergency shell → the initramfs did not find the
+medium (`--medium-bus virtio` is the fallback); no `/dev/dri/card0` →
+`CONFIG_DRM_VIRTIO_GPU`. What emulation cannot prove and says so every run: the
+Amlogic boot ROM → SPI-NOR u-boot → eMMC boot order, u-boot's mmc numbering,
+the meson-gxl FDT against the silicon, meson DRM/lima HDMI. Hermetic guards:
+`launch_arm_medium_test.sh` (argv facts over real ISO/MBR/FAT fixtures) and
+`frite_emmc_layout_test.sh` (the layout checker over sfdisk/mformat/mke2fs
+fixtures, one defect per case); `frite_emmc_mutations.sh` breaks production and
+demands both go red.
 
 ## Matrix QEMU e2e (`run-matrix-e2e.sh` — opt-in)
 

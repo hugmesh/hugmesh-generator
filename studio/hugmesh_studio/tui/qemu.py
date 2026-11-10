@@ -43,9 +43,10 @@ import shlex
 from ..core import emulation as emu
 from ..core import qemu_devices, qemu_tests
 from ..core.domain_services import session_boot_gate_reason
-from . import model
+from . import meshemu, model
 
 __all__ = ["QemuScreen", "COMPLETE_BADGE", "MAKE_TARGET", "VERDICT_LEGEND",
+           "native_lines",
            "BUILD_FIRST_KEY", "IMAGE_MODE_IDS", "image_mode_choices",
            "build_first_lines",
            "session_badge", "session_lines", "default_session_index", "plan_for",
@@ -165,6 +166,17 @@ def planned_table(plan: emu.EmulationPlan) -> tuple[list[str], list[list[str]]]:
     return headers, rows
 
 
+def native_lines() -> list[str]:
+    """The WSL2 refusal on a native Windows Studio, [] elsewhere: every hint of this
+    screen is a bash script (the runner, its --only-exact boot, the AVC launcher)
+    that the Windows build cannot run, so it replaces them, as the GUI page greys
+    every lane. The one lane that does run there boots a device and asserts nothing,
+    so it lives on the Mesh emulation screen — pointed at, not offered here (the GUI
+    QEMU page's note says the same)."""
+    return meshemu.native_blocker_lines(
+        f"open Mesh emulation and press {meshemu.BACKEND_KEY} there for the backend")
+
+
 def refused_boot_lines(boot_refusal: str) -> list[str]:
     """What a boot hint becomes when the session is REFUSED (#637): the refusal
     itself, never a command to paste — handing over the argv the GUI refuses to run
@@ -179,10 +191,11 @@ def run_hint_lines(plan: emu.EmulationPlan, boot_refusal: str = "") -> list[str]
     The argv is ``emulation.run_argv`` VERBATIM — this module builds no command of
     its own, which is what keeps the printed hint and the GUI's spawn identical.
     ``boot_refusal`` (``core.domain_services.session_boot_gate_reason``, #637)
-    replaces both with the refusal.
+    replaces both with the refusal; a native Windows Studio, with the WSL2 sentence.
     """
-    if boot_refusal:
-        return refused_boot_lines(boot_refusal)
+    native = native_lines()
+    if boot_refusal or native:
+        return (refused_boot_lines(boot_refusal) if boot_refusal else []) + native
     return [
         f"run the whole TEST matrix for {plan.session_name} — boot every row, "
         "assert, power off (paste into a shell; this screen spawns nothing):",
@@ -271,8 +284,10 @@ def row_detail_lines(plan: emu.EmulationPlan, st: emu.MeshStatus,
         lines.append(f"registry  container {dev.container or '-'} · booted "
                      f"{dev.started_at or '-'} · ssh port "
                      f"{dev.ssh_host_port or 'not published'}")
-    if boot_refusal:                  # #637: both per-row hints BOOT the row
-        return lines + [""] + refused_boot_lines(boot_refusal)
+    native = native_lines()           # both per-row hints are bash scripts
+    if boot_refusal or native:        # #637: both per-row hints BOOT the row
+        return lines + [""] + (refused_boot_lines(boot_refusal) if boot_refusal
+                               else []) + native
     lines += [
         "",
         "boot JUST this row and keep it up (artifacts and work dir pinned; "

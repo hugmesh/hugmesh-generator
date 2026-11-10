@@ -142,9 +142,12 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
         self.status.setPlainText(self.wiz.driver.status_text())
 
     def isComplete(self):
-        # Native Windows: status_text() is the WSL2 sentence, and Next would lead to a
-        # provider page with nothing on it.
-        return not self.wiz.driver.blocker() and super().isComplete()
+        # Native Windows: status_text() is the WSL2 sentence, but the providers are read
+        # from the registry, so Next leads to the real provider list and a plan preview;
+        # the verbs that run the bash driver refuse with that same sentence. Only a host
+        # with NO provider at all (no registry) stops here. Other hosts: unchanged.
+        d = self.wiz.driver
+        return (not d.blocker() or bool(d.providers())) and super().isComplete()
 
 
 class GoLiveExposurePage(QtWidgets.QWizardPage):

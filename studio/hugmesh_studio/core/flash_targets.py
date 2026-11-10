@@ -326,13 +326,19 @@ def flash_argv(target: FlashTarget, *, generator_dir: str, role: str, arch: str,
 # Classified by the EXACT suffixes the builders emit (evidence: each builder's _ARTS
 # summary + artifact-path assignments):
 #   x86:            <brand>-x86-amd64-<role>-<env>-<ts>.img / .live.iso / .installer.iso
-#   frite/opi5/opz2:                       <prefix>.live.iso / .installer.iso  (no .img)
+#   opi5/opz2:                             <prefix>.live.iso / .installer.iso  (no .img)
+#   frite:          <prefix>.live.img / .installer.img — raw MBR+FAT32 media, because
+#                   u-boot distro-boot has no ISO9660 driver (#881); --medium-iso adds
+#                   the old .live.iso / .installer.iso twin.
 #   rpi5:           <prefix>.img (+ a plain .iso that carries NO flavour suffix)
 #   jetson:         <prefix>.img
 # x86 secure-boot re-signs emit "<name>.live-sb.iso" / "<name>.installer-sb.iso" — the
 # (-sb)? alternation keeps them in their flavour class. A plain ".iso" classifies as ""
 # (unflavoured): it is only reachable through the "auto" pick, never mis-sold as
-# live/installer.
+# live/installer. The .live/.installer arms take BOTH containers (iso|img) and sit
+# AHEAD of the plain "img" arm: a frite <prefix>.live.img ends in ".img", so with the
+# arms in any other order (or iso-only) it classified as "img" and a live/installer
+# pick for a frite device found nothing to write.
 FLAVOR_AUTO = "auto"
 # ``(\.xz)?`` on every arm, because --compress DEFAULTS ON (config.py ImageConfig.
 # compress = True) and x86/rpi5/jetson compress IMG_PATH while frite/orangepi*
@@ -341,8 +347,8 @@ FLAVOR_AUTO = "auto"
 # skipped — #337: a Pi/Jetson node build emits nothing BUT <name>.img.xz, so the whole
 # flash path went dark on the default settings.
 _FLAVOR_RES: tuple[tuple[str, re.Pattern], ...] = (
-    ("installer", re.compile(r"\.installer(-sb)?\.iso(\.xz)?$", re.IGNORECASE)),
-    ("live", re.compile(r"\.live(-sb)?\.iso(\.xz)?$", re.IGNORECASE)),
+    ("installer", re.compile(r"\.installer(-sb)?\.(iso|img)(\.xz)?$", re.IGNORECASE)),
+    ("live", re.compile(r"\.live(-sb)?\.(iso|img)(\.xz)?$", re.IGNORECASE)),
     ("img", re.compile(r"\.img(\.xz)?$", re.IGNORECASE)),
 )
 # an artifact scripts/flash-disk.sh must stream through `xz -dc` instead of dd'ing raw.
@@ -365,8 +371,8 @@ _PLATFORM_FLAVORS = {
 FLAVOR_LABELS = {
     FLAVOR_AUTO: "auto — newest built (.img preferred)",
     "img": "OS image (.img — boots as the installed system)",
-    "live": "live USB (.live.iso)",
-    "installer": "install USB (.installer.iso)",
+    "live": "live USB (.live.iso / .live.img)",
+    "installer": "install USB (.installer.iso / .installer.img)",
 }
 
 

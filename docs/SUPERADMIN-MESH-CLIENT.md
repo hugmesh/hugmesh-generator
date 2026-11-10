@@ -109,9 +109,10 @@ To give the newly joined device SSH reach, do this on the control node:
    hugmesh-headscale-forcetags
    ```
 
-   It force-assigns `tag:superadmin` on every machine key in the allowlist. Once set,
-   the tag **overrides** any `--advertise-tags` the node sent, so nobody can forge
-   the SSH destination.
+   It force-assigns `tag:superadmin` on every machine key in the allowlist. Forced
+   tags bypass `tagOwners`; a node that only *advertises* `tag:superadmin` gets it in
+   `invalid_tags`, because the policy lists `tag:superadmin` with the empty owner list
+   `[]`. So nobody can forge the SSH source.
 
 ## Why the allowlist step is deliberately manual (not a bug)
 
@@ -119,7 +120,9 @@ v1 **deliberately leaves** the `superadmin-machines.txt` step manual. It is the
 control that keeps `tag:superadmin` **non-forgeable** (hardening ref:
 **FIX-SERVERTAG**). Before the hardening, nodes applied their own tags at join
 (`--advertise-tags=tag:...`), so any node could advertise `tag:superadmin` and pose as
-a privileged SSH destination. Forcing the tag from a **manual allowlist that only the
+a privileged SSH source. Until 2026-11-04 the policy still listed `tag:superadmin` as
+owned by `hugmesh`, the user every node registers as, so the advertisement was
+accepted; it is now owned by nobody (`[]`). Forcing the tag from a **manual allowlist that only the
 control node holds**, keyed to a **known machine**, closes that hole. Filling the
 allowlist from anything the joining node asserts would reopen it. So OIDC mesh-join
 (Step 1) is automated. Binding SSH reach to a specific operator machine (Step 2)

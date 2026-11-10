@@ -1121,7 +1121,7 @@ def _der_parse_error(der: bytes) -> str:
     return ""
 
 
-def ca_cert_error(path: str) -> str:
+def ca_cert_error(path: str, osname: str | None = None) -> str:
     """The ONE fail-closed rule for ONE base CA certificate file: "" when the file is
     a PEM certificate, else a LAY-USER sentence naming what is wrong.
 
@@ -1135,9 +1135,18 @@ def ca_cert_error(path: str) -> str:
     importable (see :func:`_der_parse_error`). Without that optional wheel a
     well-framed non-certificate is accepted, and the row then reads "could not read
     its fields" instead — honest, but weaker. It is never a TRUST decision either
-    way: nothing here copies the PEM into an image."""
+    way: nothing here copies the PEM into an image.
+
+    ``osname`` is ``os.name`` unless a test passes another."""
     if not path:
         return "no certificate file given"
+    if (osname or os.name) == "nt" and '"' in path:
+        # Explorer's "Copy as path" wraps the path in quotes. A Windows file name
+        # cannot hold one, so the sentence below ("moved, or a directory") was untrue
+        # for a file that is right there; name the quotes instead.
+        return (f"{os.path.basename(path.replace(chr(34), '')) or path}: the path has "
+                "quote marks around it (as Explorer's Copy as path adds); a Windows "
+                "path cannot contain them, so give it without the quotes")
     if not os.path.isfile(path):
         return (f"{os.path.basename(path) or path}: not a readable file "
                 "(moved, or a directory)")
@@ -1169,12 +1178,14 @@ def ca_cert_error(path: str) -> str:
             "(a DER/.der or PKCS#12 file needs converting to PEM first)")
 
 
-def describe_ca_cert(path: str) -> str:
+def describe_ca_cert(path: str, *, osname: str | None = None,
+                     frozen: bool | None = None) -> str:
     """A one-line 'subject · expires YYYY-MM-DD' for a PEM the caller already checked
     with :func:`ca_cert_error`, or a short honest stand-in when it cannot be read.
 
     python-cryptography is OPTIONAL (not in studio/requirements.txt): without it the
-    PEM is still structurally verified and the line says so instead of guessing."""
+    PEM is still structurally verified and the line says so instead of guessing.
+    ``osname``/``frozen`` are ``os.name``/``sys.frozen`` unless a test passes others."""
     try:
         with open(path, "rb") as fh:
             blocks = _pem_der_blocks(fh.read(CA_CERT_MAX_BYTES + 1)
@@ -1187,6 +1198,15 @@ def describe_ca_cert(path: str) -> str:
     try:
         from cryptography import x509                      # optional, see docstring
     except ImportError:
+        if frozen is None:
+            frozen = bool(getattr(sys, "frozen", False))
+        if frozen and (osname or os.name) == "nt":
+            # The MSI is a PyInstaller freeze without cryptography, and a frozen exe
+            # never imports from a Python the user could pip-install into, so
+            # "install python-cryptography" was advice nobody could follow there.
+            return f"PEM certificate, {len(blocks[0])} bytes DER{extra} " \
+                   "(this Windows build of the Studio does not include " \
+                   "python-cryptography, so it cannot show subject and expiry)"
         return f"PEM certificate, {len(blocks[0])} bytes DER{extra} " \
                "(install python-cryptography to show subject and expiry)"
     try:
@@ -1320,6 +1340,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "superdomain": _ALL_PLATFORMS,
     # local account (compose without --standalone on ARM too, G28).
     "local_user": _ALL_PLATFORMS, "local_pass": _ALL_PLATFORMS,
+    "local_admin": _ALL_PLATFORMS,
     # node fallback creds (x86 only; rpi5's are deprecated no-ops).
     "user_password": _X86, "root_password": _X86,
     # standalone / capable / unaffiliated.
@@ -2058,6 +2079,57 @@ def local_login_applies(cfg: "ImageConfig") -> bool:
     collects the secret only while the surface applies."""
     return (image_class(cfg.mode, cfg.role) == "desktop"
             or field_in_scope("standalone", cfg))
+
+
+def standalone_login_required(cfg) -> bool:
+    """Is the build-time local password the ONLY way into this image?
+
+    True where the builder sets ``STANDALONE=true`` on a DESKTOP: the x86 standalone-*
+    roles (their builder arm presets it, ``role_presets_standalone``) and a
+    desktop-class image carrying the composable ``--standalone`` flag. That image has
+    no KEYS stick, no SSO and a LOCKED root, and its first boot (specs/etc/local.d/
+    01-firstboot.start.tmpl, local-account block — which applies the hash on EVERY
+    image, standalone or not) creates ``--local-user`` with the hash of
+    ``--local-pass``. Only REQUIRED here: with no password a standalone image mints a
+    random one-time password and
+    prints it to /dev/console — behind the graphical greeter, where nobody reads it —
+    so the image cannot be logged in to.
+
+    NOT the headless ``--standalone`` appliances (orangepizero2/-2w/-zero3/-3-lts):
+    their console IS the login surface (serial), so the one-time password printed
+    there is a usable first login and they keep building without one.
+
+    Tolerant ``getattr``: pages hand this ImageConfigs and worklist rows alike."""
+    role = getattr(cfg, "role", "") or ""
+    if role_presets_standalone(role):
+        return True
+    return (bool(getattr(cfg, "standalone", False))
+            and image_class(getattr(cfg, "mode", "") or "", role) == "desktop")
+
+
+def standalone_login_problem(cfg) -> str:
+    """Why this config must not be BUILT as it stands, or "" when it may.
+
+    The blocking half of ``standalone_login_required``: a standalone image with no
+    local user or no local password would boot to a greeter nobody can pass (the
+    2026-10-30 standalone-thick x86 session, whose password was lost on top of this,
+    is the operator report this guards). Rendered by HomePage inline and returned by
+    BuildDriver.preflight(), which is what the Review page's Continue button and
+    ProgressPage's dispatch both refuse on — so a config loaded from disk, whose
+    ``local_pass`` was blanked when it was saved (SECRET_FIELDS), is refused too."""
+    if not standalone_login_required(cfg):
+        return ""
+    if not (getattr(cfg, "local_user", "") or "").strip():
+        return ("This standalone image has no login account: set Local User on the "
+                "'Home Folder, Encryption, and Login' step. Root is locked and there is no KEYS stick "
+                "or SSO, so that account is the only way in.")
+    if not getattr(cfg, "local_pass", ""):
+        return ("Set the Login Password on the 'Home Folder, Encryption, and Login' step: it is the "
+                "password you log in with on this standalone image. It is not saved "
+                "with the config, so a reloaded config needs it typed again. Root is "
+                "locked and there is no KEYS stick or SSO, so without it nobody can "
+                "log in.")
+    return ""
 
 
 def external_media_applies(cfg: "ImageConfig") -> bool:
@@ -3515,6 +3587,7 @@ class ImageConfig:
     user: str = ""                     # -u/--user baked default account name (all; distinct from --local-user)
     local_user: str = field(default_factory=default_local_user)  # the INVOKING user, not a baked operator name
     local_pass: str = ""               # --local-pass (SECRET — never saved; live cmd only)
+    local_admin: bool = False          # --local-admin: the local account may sudo on a KEYS-provisioned image
     user_password: str = ""            # --user-password node FALLBACK cred (SECRET; x86)
     root_password: str = ""            # --root-password node FALLBACK cred (SECRET; x86)
     standalone: bool = False           # --standalone (arm64 only; x86 gets it via role name)
@@ -4764,9 +4837,12 @@ class ImageConfig:
         # plane (see _superdomain_args). Empty for cloud/standalone, so every existing
         # ARM cloud/standalone golden stays byte-identical.
         a += self._superdomain_args()
-        # The arm builders have no --with/--no-tailscale pair; mesh is on unless
-        # skipped. A never-set field resolves to the MODE default (cloud/mesh ON,
-        # standalone OFF) so a mesh config that omits the key keeps its mesh.
+        # The arm builders have no --no-tailscale; mesh is on unless skipped.
+        # (They take --with-tailscale, which keeps the tailnet on a --standalone
+        # desktop; it is not emitted here yet, so a Studio standalone ARM build
+        # keeps the no-tailnet default. See docs/DESKTOP-LOGIN-SSO.md.) A never-set
+        # field resolves to the MODE default (cloud/mesh ON, standalone OFF) so a
+        # mesh config that omits the key keeps its mesh.
         if not self.tailscale_enabled():
             a += ["--skip-mesh"]
         a += self._mesh_version_args()
@@ -4782,6 +4858,8 @@ class ImageConfig:
             a += ["--local-user", self.local_user]
             if self.local_pass:
                 a += ["--local-pass", self.local_pass]
+                if self.local_admin:
+                    a += ["--local-admin"]
         if self.enable_wifi:
             a += ["--enable-wifi"]
         if self.enable_bluetooth:
@@ -5215,8 +5293,12 @@ class ImageConfig:
         a: list[str] = ["--role", roles.builder_role(self.role, "x86"),
                         "--env", self.env, "--local-user", self.local_user]
         if self.local_pass:
-            # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS)
+            # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS).
+            # A Studio/TUI DISPATCH moves it to a 0600 file (--local-pass-file); see
+            # build_driver._swap_local_pass.
             a += ["--local-pass", self.local_pass]
+            if self.local_admin:
+                a += ["--local-admin"]
         a += self._identity_args()
         if not unaffiliated:
             a += self._brand_args()
