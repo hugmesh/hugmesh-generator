@@ -41,7 +41,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
-from . import pid_probe, roles, secret_files
+from . import pid_probe, roles, secret_files, session_locations
 from .config import PLATFORM_FIELD_SUPPORT, SECRET_FIELDS
 from .state_paths import state_dir
 from .worklist import WorklistConfig
@@ -448,6 +448,12 @@ def start(s: BuildSession) -> None:
     s.runs.append(s.started)
     s.restarts = max(0, len(s.runs) - 1)
     save(s)
+    # Remember the OUTPUT FOLDER too, so the emulation lane (which scans folders,
+    # not records) finds this session wherever the operator pointed the build.
+    # Paths only, best-effort, never fatal: see core/session_locations.py.
+    root = session_locations.root_of(s.workdir) if s.workdir else ""
+    if root:
+        session_locations.record_root(root)
 
 
 def update_image(s: BuildSession, index: int, *, status: str,
@@ -645,7 +651,9 @@ def delete(s: BuildSession, *, remove_artifacts: bool = False,
     try/except (an already-gone file is success, never a crash). The artifact dir is
     rmtree'd ONLY when ``remove_artifacts`` is set AND ``s.workdir`` passes the
     :func:`_is_session_workdir` shape-check, so a poisoned workdir can never rmtree an
-    arbitrary path. Returns True once the record is gone.
+    arbitrary path. Returns True once the record is gone. When the tree is KEPT, its
+    output folder is recorded in the session-root registry first, so the images stay
+    findable without the record (core/session_locations.py).
 
     On native Windows the tree goes FIRST, and when part of it cannot be removed (a
     file another program holds open) the record is KEPT and False is returned: every
@@ -657,10 +665,20 @@ def delete(s: BuildSession, *, remove_artifacts: bool = False,
         return False
     wants_tree = (remove_artifacts and _is_session_workdir(s.workdir, s.id)
                   and os.path.isdir(s.workdir))
+    keeps_tree = not wants_tree
     if (osname or os.name) == "nt":
         if wants_tree and not _rmtree(s.workdir, osname=osname):
             return False
         wants_tree = False
+    if keeps_tree:
+        # The images stay; this record is about to stop naming their folder. For a
+        # session dispatched before the session-root registry existed, the record is
+        # the ONLY witness, so hand the folder to the registry first, or the images
+        # become unfindable by every emulation picker and runner the moment the record
+        # goes (core/session_locations.py). Best-effort and paths only, as at start().
+        root = session_locations.root_of(s.workdir) if s.workdir else ""
+        if root:
+            session_locations.record_root(root)
     try:
         os.remove(s.path())
     except OSError:

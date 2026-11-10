@@ -118,6 +118,7 @@ from __future__ import annotations
 
 import dataclasses
 import html
+import os
 import shlex
 import threading
 
@@ -774,8 +775,10 @@ class QemuPage(QtWidgets.QWizardPage):
 
     # ── population ──────────────────────────────────────────────────────────────
     def _reload_sessions(self):
-        self._sessions = qemu_tests.discover_sessions(self.wiz.generator_dir)
-        common.populate_sessions(self.session_combo, self._sessions)
+        self._sessions = qemu_tests.discover_sessions(
+            self.wiz.generator_dir, extra_roots=common.extra_roots(self.wiz))
+        common.populate_sessions(self.session_combo, self._sessions,
+                                 os.path.join(self.wiz.generator_dir, "out"))
         if not self._sessions:
             # Said on source_note, NOT rows_label: rows_label lives in session_box,
             # which the build-first arm hides — and _source_changed blanks it — so this
@@ -785,9 +788,11 @@ class QemuPage(QtWidgets.QWizardPage):
             # control that was checked and (until the setFinalPage fix in
             # _source_changed) could not be acted on either.
             self.source_note.setText(
-                f'<span style="color:{WARN}">No build session under out/sessions/ holds a '
-                "bootable image yet</span>, so there is nothing here to boot — <b>Build "
-                "new images first</b> is preselected below. Press <b>Next</b> to "
+                f'<span style="color:{WARN}">No build session in any known output folder '
+                "holds a bootable image yet</span> (searched: "
+                f"{html.escape(common.searched_text(self.wiz))}), so there is nothing "
+                "here to boot — <b>Build new images first</b> is preselected below. "
+                "Press <b>Next</b> to "
                 "configure that build here, or run one of the generator's "
                 "<tt>build-*-stage4.sh</tt> scripts outside Studio and come back.")
             self.source_note.setVisible(True)
