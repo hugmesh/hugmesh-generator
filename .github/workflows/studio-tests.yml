@@ -318,6 +318,7 @@ jobs:
           tests/test_native_windows_gates.py
           tests/test_windows_binary_writes.py
           tests/test_default_local_user.py
+          tests/test_golive_target.py
           tests/test_no_console.py
           tests/test_localmesh_run_log_private.py
           tests/test_build_sessions.py
@@ -357,3 +358,10 @@ jobs:
           tests/test_local_ai_status.py
           tests/test_local_ai_cli.py
           tests/test_assistant_code_edits.py
+          tests/test_session_locations.py
+          tests/test_pages_session_locations.py
+          tests/test_managed_generator.py
+          tests/test_local_ai_models.py
+          tests/test_ollama_docker.py
+          tests/test_local_ai_dock.py
+          tests/test_local_ai_dock_pull.py

@@ -257,7 +257,10 @@ class Runner:
     :class:`RunResult` and never raises on a non-zero exit."""
 
     def run(self, argv: list[str], *, cwd: str | None = None,
-            env: dict[str, str] | None = None, timeout: int = 600) -> RunResult:
+            env: dict[str, str] | None = None, timeout: int = 600,
+            input: bytes | None = None) -> RunResult:
+        """``input`` (bytes) is the child's whole stdin — the one channel a secret
+        value may ride (``gh secret set`` reads its value there); None = not given."""
         raise NotImplementedError
 
 
@@ -267,7 +270,7 @@ class SubprocessRunner(Runner):
     push, and the person's own ``gh auth login`` (the keyring) is the credential
     both ``gh`` and git's ``gh auth git-credential`` helper fall back to."""
 
-    def run(self, argv, *, cwd=None, env=None, timeout=600) -> RunResult:
+    def run(self, argv, *, cwd=None, env=None, timeout=600, input=None) -> RunResult:
         full = dict(os.environ)
         full.pop("GH_TOKEN", None)
         full.pop("GITHUB_TOKEN", None)
@@ -277,8 +280,12 @@ class SubprocessRunner(Runner):
         # caller's env can turn it back on.
         full["GIT_TERMINAL_PROMPT"] = "0"
         try:
+            # stdin: exactly the given bytes when there are any (a secret's value);
+            # otherwise unchanged from before ``input`` existed
+            stdin_kw = {"input": input} if input is not None else {}
             r = subprocess.run(argv, cwd=cwd, env=full, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, timeout=timeout, check=False)
+                               stderr=subprocess.PIPE, timeout=timeout, check=False,
+                               **stdin_kw)
         except (OSError, subprocess.SubprocessError) as exc:
             return RunResult(127, b"", str(exc).encode())
         return RunResult(r.returncode, r.stdout or b"", r.stderr or b"")

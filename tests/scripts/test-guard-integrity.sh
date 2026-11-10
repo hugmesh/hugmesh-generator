@@ -1111,12 +1111,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # gated suite, tests/scripts/test-fe-template-route-parity.sh (shell-suites.yml node job)
 # = 233 of 275, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree;
 # ungated SET stays 42.
-# MERGED (origin/main 3a4018a3 into feat/golive-emulated-fg3-harness-proof-lane-go-li-20261104):
+# 233 -> 234 on 2026-11-10 (feat/studio-nvd-key-20261110): +1 gated, +1 total —
+# tests/pentest/test-run-sca-nvd-key.sh, named by shell-suites.yml and .gitlab-ci.yml's
+# lint:run-sca-nvd-key. PREMERGE_UNGATED is untouched. Measured by running this file.
+# MERGED (origin/main 40d2883e into feat/golive-emulated-fg3-harness-proof-lane-go-li-20261104):
 # this branch adds ONE gated suite, tests/qemu/golive_emulated_test.sh (shell-suites.yml alpine
-# job) = 234 of 276, MEASURED by running this file on the merged tree; with that one
-# shell-suites.yml line removed it measures 233 of 276 and checks 3 and 7 name the suite, so the
+# job) = 235 of 277, MEASURED by running this file on the merged tree; with that one
+# shell-suites.yml line removed it measures 234 of 277 and checks 3 and 7 name the suite, so the
 # +1 is this suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-234}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-235}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

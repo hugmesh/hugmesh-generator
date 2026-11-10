@@ -138,6 +138,10 @@
 #         PENTEST_SCAN  = baseline (default) | full             (run-pentest --scan)
 #         PENTEST_PIPELINE = main (default) | games             (run-pentest --pipeline)
 # PENTEST_ONLY=1 runs ONLY the pen-test (skips the image builds + keys).
+# The SCA step (OWASP Dependency-Check) NEEDS an activated NVD API key:
+#   NVD_API_KEY_FILE=/path/to/0600-file (preferred; the Studio passes its per-run
+#   copy this way) or NVD_API_KEY. Request one at
+#   https://nvd.nist.gov/developers/request-an-api-key — see docs/NVD-API-KEY.md.
 #
 # Tor v3 onion NODE service (net-vpn/tor + hugmesh-tor-reconcile) — OPT-IN, fleet-wide:
 #   WITH_TOR=1 ./scripts/build-all-roles.sh   # every CLUSTER-NODE image of the run carries it

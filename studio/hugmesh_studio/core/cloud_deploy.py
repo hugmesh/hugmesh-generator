@@ -77,6 +77,12 @@ _TERMINALS = (
     ("x-terminal-emulator", ("-e",)),
     ("konsole", ("-e",)),
     ("gnome-terminal", ("--",)),
+    # Stock GNOME on Wayland ships neither gnome-terminal nor x-terminal-emulator any
+    # more: Ptyxis (Fedora/Ubuntu default) and GNOME Console (kgx). Both take
+    # ``-- COMMAND ARGS`` — read off `ptyxis --help-all` (48.5) and `kgx --help-all`
+    # (gnome-console 48.1) on a real install, not assumed.
+    ("ptyxis", ("--",)),
+    ("kgx", ("--",)),
     ("xfce4-terminal", ("-x",)),
     ("alacritty", ("-e",)),
     ("kitty", ("--",)),
@@ -86,8 +92,8 @@ _TERMINALS = (
 
 # Public alias: core/qemu_devices.py opens a terminal for a device login and must use
 # the SAME list, order and exec-arg convention rather than become a third copy of it
-# (the phone/go-live drivers were already the second). Values and behaviour unchanged
-# — _TERMINALS stays the name this module's own code reads.
+# (the phone driver is still the second; the go-live driver imports this one).
+# _TERMINALS stays the name this module's own code reads.
 TERMINALS = _TERMINALS
 
 _REPO_ROOT = os.path.abspath(

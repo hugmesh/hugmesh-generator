@@ -88,6 +88,7 @@ from ...core.fleet import (FLEET_LANE_NOTE, JOBS_RANGE, WITH_TOR_NOTE, FleetConf
                            seed_fleet_domains)
 from ...core import plain_words
 from ...tui.superbrand_step import session_for
+from ._nvd_key_widget import NvdKeyWidget
 from ._widgets import _file_picker, _row
 from .brand_picker import BrandPicker
 from .domain_services import DomainServicesWidget
@@ -313,6 +314,13 @@ class FleetPage(QtWidgets.QWidget):
         self.pentest = QtWidgets.QCheckBox("Run the OWASP pen-test harness after the build (PENTEST=1)")
         self.pentest_only = QtWidgets.QCheckBox("Pen-test ONLY, no image builds (PENTEST_ONLY=1)")
         pl.addWidget(self.pentest); pl.addWidget(self.pentest_only)
+        # The NVD API key the SCA step (OWASP Dependency-Check) needs — shown only when
+        # a pen-test is ticked (_update_group_visibility). The shared widget: the
+        # Go-Live org-export step hosts the same one.
+        self.pentest_box = pt_grp
+        self.nvd_key = NvdKeyWidget(pt_grp)
+        self.nvd_key.changed.connect(self._nvd_key_changed)
+        pl.addWidget(self.nvd_key)
         l1.addWidget(pt_grp)
         l1.addStretch(1)
         self.stack.addWidget(_scrolled(p1))
@@ -629,6 +637,10 @@ class FleetPage(QtWidgets.QWidget):
                    self.orangepi4lts, self.orangepi4lts_only,
                    self.pentest, self.pentest_only):
             cb.toggled.connect(self._update_group_visibility)
+        # a pen-test TICK (the operator's own click) also brings the NVD key box it
+        # just revealed into view; load()/apply() only call _update_group_visibility
+        for cb in (self.pentest, self.pentest_only):
+            cb.toggled.connect(self._reveal_nvd_key)
         self._update_group_visibility()
         self._goto(STEP_PLATFORMS)
 
@@ -971,6 +983,33 @@ class FleetPage(QtWidgets.QWidget):
             or self.orangepi4lts_only.isChecked())
         self.pentest_group.setVisible(
             self.pentest.isChecked() or self.pentest_only.isChecked())
+        self.nvd_key.setVisible(
+            self.pentest.isChecked() or self.pentest_only.isChecked())
+
+    def _reveal_nvd_key(self, on: bool) -> None:
+        """A pen-test tick shows the NVD key box UNDER the checkbox, which sits near
+        the bottom of the Platforms step. Measured 2026-11-10 in a FleetWindow at its
+        own 760x700 (viewport 606 px): after the tick the explanation started 11 px
+        above the fold and the box and both warnings were wholly below it, with
+        nothing saying anything had appeared. Scroll the step so the whole block —
+        the explanation, both links, the box, both warnings and the Save / Verify /
+        Forget row — is in view: the bottom first, then the top, so on a viewport too short for both the top
+        (what the box is for) wins. Run AFTER the layout pass the setVisible only
+        POSTED (the _commit_domains lesson), or ensureWidgetVisible scrolls to the
+        hidden widget's stale geometry."""
+        if not on or not self.nvd_key.isVisible():
+            return
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.LayoutRequest)
+        sa = self.step_scroll(STEP_PLATFORMS)
+        w = self.nvd_key
+        sa.ensureWidgetVisible(w.save_btn, 0, 8)
+        sa.ensureWidgetVisible(w.need_label, 0, 8)
+
+    def _nvd_key_changed(self) -> None:
+        """The stored NVD key changed (save/forget/verify): re-run the Review pane's
+        preflight so its 'SCA will fail without an NVD API key' note follows."""
+        if self.stack.currentIndex() == STEP_REVIEW:
+            self.refresh_preview()
 
     # ---- preview / run ----------------------------------------------------------
     def _backend(self):
@@ -1001,11 +1040,13 @@ class FleetPage(QtWidgets.QWidget):
             self.problems.setPlainText("")
             return
         problems = self.driver.preflight(cfg, self._backend())
+        # advisories never refuse the run (_start checks preflight() only)
+        notes = "".join(f"\n  note: {n}" for n in self.driver.advisories(cfg))
         if problems:
             self.problems.setPlainText(
-                "Preflight:\n" + "\n".join(f"  - {p}" for p in problems))
+                "Preflight:\n" + "\n".join(f"  - {p}" for p in problems) + notes)
         else:
-            self.problems.setPlainText("Preflight: OK")
+            self.problems.setPlainText("Preflight: OK" + notes)
 
     def _start(self) -> bool:
         try:
