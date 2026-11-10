@@ -24,17 +24,15 @@ tie its load-bearing claims to code that exists, so the page cannot quietly drif
   is checked by RUNNING the driver offline in a sandbox, not by reading it;
 * what a Save copies (the disk through blockdev-backup, no guest RAM) is what the Save
   path and its buttons say;
-* when core.golive_target is in the tree (FG1), every string and shape the section
-  quotes from it (token staging, the guest out-dir, the commit argv, the Funnel
-  refusal, the reachability labels, the journal wording, the probe's reads) is checked
-  against it. Before then the section must keep its "specification" status callout.
+* every string and shape the section quotes from core.golive_target (FG1: token
+  staging, the guest out-dir, the commit argv, the Funnel refusal, the reachability
+  labels, the journal wording, the probe's reads) is checked against it, and the
+  status callout says which parts have landed.
 
 Qt-free: it reads files, imports core modules and runs the driver with bash only.
 """
 from __future__ import annotations
 
-import dataclasses
-import importlib
 import os
 import re
 import shutil
@@ -374,18 +372,8 @@ def test_what_a_save_copies_matches_the_save_path(section: str):
                                          "emulation_save.py")
 
 
-# ── the section against core.golive_target, once it is in the tree ───────────────
-def _golive_target():
-    try:
-        return importlib.import_module("hugmesh_studio.core.golive_target")
-    except ModuleNotFoundError as e:
-        if e.name != "hugmesh_studio.core.golive_target":
-            raise
-        return None
-
-
-#: What the flow quotes from core.golive_target. The doc side is checked here on every
-#: tree; the code side in test_section_matches_the_golive_target_core once FG1 is in.
+# ── what the flow quotes from core.golive_target ───────────────────────────────────
+#: The doc side; test_section_matches_the_golive_target_core holds the code side.
 JOURNAL_WORDS = ("*commit launched from this host*", "*last commit from this host*",
                  "under `refused`", "*did NOT go through*")
 PROBE_READS = ("command -v hugmesh-go-live", "/etc/hugmesh/cluster-domain",
@@ -404,11 +392,20 @@ def test_flow_quotes_the_core_wording(section: str):
     assert REACH_LINE in flat
 
 
-def test_section_is_a_spec_until_the_core_lands(section: str):
-    # Both branches assert something: no golive_target means the page must SAY it is
-    # a specification; with it, the next test holds every quoted string to the code.
-    if _golive_target() is None:
-        assert "> **Status: specification." in section
+# ── the section against core.golive_target (FG1, merged as #927) ──────────────────
+def test_status_callout_says_what_has_landed(section: str):
+    flat = _flat(section)
+    assert "**Status: specification." not in flat, "FG1 is in the tree; the callout is stale"
+    assert ("The target model, the ssh path and the CLI "
+            "(`hugmesh_studio.core.golive_target`, group FG1) are in the tree.") in flat
+    # The faces are not: the wizard has no target picker on this tree yet. When FG2
+    # lands, this goes red on purpose, and the callout must be updated with it.
+    page = _read("studio", "hugmesh_studio", "gui", "pages", "golive.py")
+    if "target_pick" not in page:
+        assert "The GUI and TUI faces (group FG2) and the proof lane (group FG3) are not yet" in flat
+    else:
+        assert "faces (group FG2) and the proof lane (group FG3) are not yet" not in flat, (
+            "FG2's target picker is in the tree: update the status callout")
 
 
 def _fake_target(gt, tmp_path):
@@ -421,9 +418,7 @@ def _fake_target(gt, tmp_path):
 
 
 def test_section_matches_the_golive_target_core(tmp_path, section: str):
-    gt = _golive_target()
-    if gt is None:
-        pytest.skip("core.golive_target is not in this tree; the spec callout is checked")
+    from hugmesh_studio.core import golive_target as gt
     t = _fake_target(gt, tmp_path)
 
     # token staging, the guest out dir, and --keys-dir never passed

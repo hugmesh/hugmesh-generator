@@ -263,11 +263,12 @@ root path.
 
 ## Go live from an emulated mesh
 
-> **Status: specification. It ships with the emulated-target work:** the target model
-> and the ssh path (`hugmesh_studio.core.golive_target`, group FG1), the GUI and TUI
-> faces, and the proof lane (group FG3). Until those merge, Studio's wizard drives only
-> **This host**, as the [architecture table](#architecture--one-shared-driver-thin-front-ends)
-> says. Read this section as the contract those changes are held to.
+> **Status: partly landed.** The target model, the ssh path and the CLI
+> (`hugmesh_studio.core.golive_target`, group FG1) are in the tree. The GUI and TUI
+> faces (group FG2) and the proof lane (group FG3) are not yet. Until the faces merge,
+> Studio's wizard drives only **This host**, as the
+> [architecture table](#architecture--one-shared-driver-thin-front-ends) says. Read the
+> GUI, TUI and proof-lane parts of this section as the contract those changes are held to.
 
 A mesh you boot under QEMU from Studio's mesh-emulation page (or `meshemu` in the TUI)
 can be taken live, from the Studio GUI and from the CLI, on Linux (X11 and Wayland), on
