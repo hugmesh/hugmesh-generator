@@ -315,7 +315,8 @@ class DeviceTable(QtWidgets.QGroupBox):
         combo = QtWidgets.QComboBox()
         combo.setToolTip(
             "WHICH built artifact is written: the OS .img, the live USB "
-            "(.live.iso) or the install USB (.installer.iso). Only what this "
+            "(.live.iso, or .live.img on frite) or the install USB (.installer.iso, "
+            "or .installer.img on frite). Only what this "
             "image's platform actually builds is offered; 'auto' takes the newest "
             "built (.img preferred). The xz-compressed form a --compress build "
             "leaves (.img.xz / .iso.xz) counts as the same flavour — flash-disk.sh "

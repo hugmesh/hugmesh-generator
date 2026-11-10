@@ -15,6 +15,11 @@
   // strings appear EXACTLY ONCE each (at their splice point) — they are NOT
   // repeated in prose (an awk gsub would otherwise corrupt these comments). The
   // two markers are:
+  //   * the tagOwners-dynamic marker — this mesh's tag:mesh_<MESH_ID> plus one
+  //       per-node tag:dev_<fp>, each with the EMPTY owner list [] (NEVER
+  //       self-applyable; they are SERVER-FORCED via hugmesh-headscale-forcetags
+  //       at approval). tag:dom_<domain> gets no entry: no rule names it, and an
+  //       unlisted tag is already refused when a node advertises it.
   //   * the tagOwners-dynamic marker — tag:mesh_<MESH_ID> plus one
   //       tag:dev_<fp> per export node, each with an EMPTY owner list (no user
   //       may self-apply them; they are SERVER-FORCED via
@@ -26,6 +31,18 @@
   //       users:[<ssh user>]).
   //
   // The FOUR FIXES embodied here:
+  //   [FIX-SERVERTAG]  security tags (tag:superadmin, tag:mesh_*, tag:dev_*)
+  //                    are server-forced and listed with the EMPTY owner list
+  //                    [] in tagOwners. headscale 0.23 accepts a self-advertised
+  //                    tag when the node's USER is listed as its owner, and every
+  //                    node registers as the "hugmesh" user, so an owner of
+  //                    ["hugmesh"] let ANY node claim the tag (measured: a node
+  //                    advertising tag:superadmin got valid_tags=[tag:superadmin]
+  //                    and became an SSH principal of the superadmin rule on
+  //                    every tag:mesh_ node). With [] nobody owns them, so a
+  //                    self-advertisement lands in invalid_tags; forced tags
+  //                    (preauth-key tags and `headscale nodes tag -t`) bypass
+  //                    tagOwners and still apply.
   //   [FIX-SERVERTAG]  security tags are server-forced and OWNED BY NO USER in
   //                    tagOwners (empty owner list), so no node can self-
   //                    advertise them. See "Who may apply which tags" below.
@@ -42,6 +59,14 @@
   // hujson = JSON + comments + trailing commas; headscale parses it natively.
 
   // ── Who may apply which tags ──────────────────────────────────────────────
+  // tag:hugmesh and the role tags (pki/be/fe/host) stay self-applied, so they
+  // stay owned by "hugmesh" (data-plane membership: CIDR rule + route
+  // auto-approval ONLY; tag:hugmesh is NO LONGER a :22 src/dst). This matters
+  // after approval too: `headscale nodes tag -t` REPLACES the forced-tag list,
+  // so once hugmesh-headscale-forcetags runs, a node keeps tag:hugmesh only
+  // through its own --advertise-tags. tag:superadmin is owned by NOBODY ([])
+  // and is force-assigned to superadmin OPERATOR machines only. The dynamic
+  // tag:mesh_/tag:dev_ entries (also []) are spliced at the marker below.
   // Two classes, and they must never share an owner:
   //
   //   MEMBERSHIP tags — tag:hugmesh + the role tags tag:pki/be/fe/host. Owned

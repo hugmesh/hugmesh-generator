@@ -6,9 +6,17 @@
 # that need NOT exist in the systems Casdoor. Runs in the hugmesh-games namespace on
 # its OWN external Postgres (casdoor-games-pg, db "threewizards").
 #
-# The ONLY cross-realm coupling is the scheduled hugmesh-actions job that mirrors the
-# systems ROLE_GAMES_ADMIN set into this realm's "admin" role (one-way systems->games);
-# everything else here is independent of hugmesh.net.
+# Nothing in hugmesh.net writes into this realm: the hugmesh-actions GM sync that
+# could mirror a systems role into a games role is OFF (manifests/hugmesh-apis/
+# deployment.yaml), and this realm's admin comes only from its own `admin` role. The
+# one coupling is the other way round: the games BFF (manifests/games) also trusts the
+# systems issuer, so a mesh user reaches games through the fe-gateway with the mesh
+# token.
+#
+# app.conf is RENDERED by the render-app-conf initContainer below (sed over the
+# __TOKEN__ template in app-conf-configmap.yaml), the shape #263 gave the systems
+# Casdoor: casbin/casdoor does not expand "${ENV||default}" inside a value, and the
+# as-shipped ConfigMap made both pinned images exit 2 at boot (see that file).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,6 +38,42 @@ spec:
         seLinuxOptions:
           type: container_t
           level: "s0:c35"
+      initContainers:
+        # Casdoor doesn't expand beego's "${ENV||default}" syntax inside app.conf
+        # (see app-conf-configmap.yaml). Render the real conf/app.conf here instead,
+        # into an emptyDir the main container mounts read-only. Reuses the casdoor
+        # image itself (busybox sh + awk) so no extra image needs pulling. The values
+        # come from Vault and may carry anything an operator typed there, so the
+        # render is a literal replacement, never a sed expression.
+        - name: render-app-conf
+          image: casbin/casdoor:3.80.0
+          command: ["sh", "-c"]
+          args:
+            - |
+              # A literal index()/substr() replacement in awk: nothing in a value is a
+              # pattern, a delimiter or a backreference (sed's s|a|b|g broke on `|`, `&`
+              # and `\` in a Vault value and rendered a wrong conf silently). The DB user
+              # and password go into a postgres:// URL percent-encoded (RFC 3986 userinfo:
+              # every byte but A-Za-z0-9-._~), which both xorm's DSN reader and lib/pq
+              # decode, so any value Vault holds -- spaces, quotes, `#`, a newline --
+              # reaches Postgres as typed. LC_ALL=C keeps awk on bytes.
+              LC_ALL=C awk '
+                function rep(s, tok, val,   out, i) { out = ""; while ((i = index(s, tok)) > 0) { out = out substr(s, 1, i - 1) val; s = substr(s, i + length(tok)) } return out s }
+                function enc(v,   out, i, c) { out = ""; for (i = 1; i <= length(v); i++) { c = substr(v, i, 1); out = out ((c ~ /^[A-Za-z0-9._~-]$/) ? c : sprintf("%%%02X", ord[c])) } return out }
+                BEGIN { for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i }
+                { line = $0
+                  line = rep(line, "__CASDOOR_DB_USER__", enc(ENVIRON["CASDOOR_DB_USER"]))
+                  line = rep(line, "__CASDOOR_DB_PASSWORD__", enc(ENVIRON["CASDOOR_DB_PASSWORD"]))
+                  print line }
+              ' /template/app.conf.template > /rendered/app.conf
+          env:
+            - name: CASDOOR_DB_USER
+              valueFrom: { secretKeyRef: { name: casdoor-games-db, key: username } }
+            - name: CASDOOR_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: casdoor-games-db, key: password } }
+          volumeMounts:
+            - { name: app-conf-template, mountPath: /template, readOnly: true }
+            - { name: rendered-conf, mountPath: /rendered }
       containers:
         - name: casdoor
           image: casbin/casdoor:3.80.0
@@ -38,8 +82,8 @@ spec:
           env:
             - name: RUNNING_IN_DOCKER
               value: "true"
-            # External Postgres credentials — interpolated into conf/app.conf
-            # (casdoor-games-app-conf). Materialized by ESO from Vault.
+            # External Postgres credentials — rendered into conf/app.conf by the
+            # render-app-conf initContainer above. Materialized by ESO from Vault.
             - name: CASDOOR_DB_USER
               valueFrom: { secretKeyRef: { name: casdoor-games-db, key: username } }
             - name: CASDOOR_DB_PASSWORD
@@ -56,11 +100,10 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
           volumeMounts:
-            # app.conf override that points Casdoor at the external Postgres
-            # (casdoor-games-pg). NOTE: the conf path is image-version-specific
-            # (casbin/casdoor reads conf/app.conf from its workdir) — validate
-            # against the deployed image.
-            - { name: app-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
+            # app.conf rendered by the render-app-conf initContainer above. NOTE: the
+            # conf path is image-version-specific (casbin/casdoor reads conf/app.conf
+            # from its workdir) — validate against the deployed image.
+            - { name: rendered-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
             # Declarative seed (threewizards org / role catalog / seed users), mirrored
             # from the hugmesh.games init_data.json.tpl. Casdoor reads this on boot
             # ONLY because app-conf-configmap.yaml sets `initDataFile` to this exact
@@ -72,10 +115,12 @@ spec:
             limits:   { cpu: "1",  memory: 768Mi }
       volumes:
         # DB state lives in casdoor-games-pg (external Postgres); this configMap
-        # just points Casdoor at it.
-        - name: app-conf
+        # template (rendered by the initContainer above) just points Casdoor at it.
+        - name: app-conf-template
           configMap:
             name: casdoor-games-app-conf
+        - name: rendered-conf
+          emptyDir: {}
         - name: init-data
           configMap:
             name: casdoor-games-init-data

@@ -536,10 +536,17 @@ provision_network() {
     mkdir -p "${nm_dir}"
 
     # Copy any *.nmconnection profiles verbatim
+    local _nm_ids=() _nm_f _nm_id
     if ls "${BASE}/network/"*.nmconnection >/dev/null 2>&1; then
         cp -f "${BASE}/network/"*.nmconnection "${nm_dir}/"
         chmod 0600 "${nm_dir}/"*.nmconnection
         log "Installed NetworkManager connection profile(s)"
+        for _nm_f in "${BASE}/network/"*.nmconnection; do
+            _nm_id="$(sed -n 's/^id=//p' "${_nm_f}" 2>/dev/null | head -1)"
+            # A profile that opts out of autoconnect is staged, not activated.
+            grep -qix 'autoconnect=false' "${_nm_f}" 2>/dev/null && continue
+            [ -n "${_nm_id}" ] && _nm_ids+=("${_nm_id}")
+        done
     fi
 
     # Convenience: synthesise a Wi-Fi profile from JSON
@@ -603,6 +610,31 @@ EOF
         fi
         log "Configured Wi-Fi for SSID ${ssid}"
     fi
+    nm_apply_profiles "${_nm_ids[@]+"${_nm_ids[@]}"}"
+}
+
+# nm_apply_profiles [ID...] — make the profiles just written LIVE on this boot.
+# NetworkManager is already running by now (keys-provision `use net`), and it does
+# NOT watch keyfiles (NM 1.58 in the image): a profile copied above was invisible
+# until the next reboot. The headscale join and the kubeadm join run later in THIS
+# boot over exactly such a KEYS-supplied static profile (a mesh NIC on an L2 with no
+# DHCP), so a worker dialled a control server through a NIC with no address — and
+# `tailscale up` waited on it forever, before sshd. Reload, then bring each profile
+# up, bounded (an absent interface must not stall provisioning). Best-effort.
+nm_apply_profiles() {
+    have nmcli || return 0
+    nmcli general status >/dev/null 2>&1 || return 0
+    nmcli connection reload 2>/dev/null \
+        && log "NetworkManager reloaded its connection profiles" \
+        || { warn "nmcli connection reload failed — new profiles apply at next boot"; return 0; }
+    local _id
+    for _id in "$@"; do
+        if nmcli --wait 20 connection up id "${_id}" >/dev/null 2>&1; then
+            log "NetworkManager profile '${_id}' is up"
+        else
+            warn "NetworkManager profile '${_id}' did not come up within 20s (no such interface yet?) — left to autoconnect"
+        fi
+    done
 }
 
 # ── Arbitrary certificates / files ─────────────────────────────────
@@ -923,15 +955,21 @@ provision_headscale() {
     # that registered before the policy was loaded. autoApprovers makes this a
     # no-op for nodes that join afterwards. Routes/CIDRs mirror
     # kubernetes/kubeadm-config.yaml (podSubnet/serviceSubnet).
-    local mesh_routes id
+    # The approval itself lives in gen-headscale-policy.sh (approve_mesh_routes:
+    # headscale 0.23 has `routes list`/`routes enable -r ID`, not the 0.25
+    # `nodes approve-routes` this used to call, which silently did nothing on the
+    # shipped version), and the same function runs on the 60s policy-sync cron,
+    # so a node that advertised while headscale was mid-restart converges too.
+    approve_mesh_routes_now
+}
+
+# Run the renderer's mesh-route approval once, now (see provision_headscale).
+approve_mesh_routes_now() {
+    local mesh_routes
     mesh_routes="$(jqm '.tailscale.mesh_routes // "10.244.0.0/16,10.96.0.0/12"')"
     [ -n "${mesh_routes}" ] && [ "${mesh_routes}" != "null" ] || mesh_routes="10.244.0.0/16,10.96.0.0/12"
-    if headscale nodes list -o json >/dev/null 2>&1; then
-        for id in $(headscale nodes list -o json 2>/dev/null | jq -r '.[].id' 2>/dev/null); do
-            [ -n "${id}" ] && [ "${id}" != "null" ] || continue
-            headscale nodes approve-routes -i "${id}" -r "${mesh_routes}" 2>/dev/null \
-                && log "Approved routes ${mesh_routes} for headscale node ${id}" || true
-        done
+    if [ -x /usr/sbin/gen-headscale-policy.sh ]; then
+        HUGMESH_MESH_ROUTES="${mesh_routes}" /usr/sbin/gen-headscale-policy.sh --approve-routes 2>/dev/null || true
     fi
 }
 
@@ -989,7 +1027,85 @@ open(p, "w").write("".join(out))
 PY
     chown headscale:headscale /etc/headscale/config.yaml 2>/dev/null || true
     log "Published MagicDNS CP record ${cpname} -> ${tip}"
+    # headscale 0.23 reads dns.extra_records at startup only (SIGHUP reloads the
+    # policy, not the config), so this is a restart, not a reload — and it happens
+    # under this node's own tailscaled session. control_client_regain (called by
+    # provision_tailscale right after this) checks that session survived.
     rc-service headscale restart 2>/dev/null || warn "headscale reload after CP DNS record failed"
+}
+
+# ── The control node's own mesh client ─────────────────────────────
+# Where the CONTROL node's own tailscaled logs in: headscale on loopback, at the
+# port config.yaml's listen_addr names (8080 unless the image changed it).
+#
+# Why loopback and not resolve_endpoint (the LAN / mesh address the FLEET dials).
+# Observed 2026-11-04 (rpi5 pki, tailscale 1.78.1 against headscale 0.23.0 on
+# http://10.77.0.13:8080): publish_cp_dns_record restarts headscale a few seconds
+# after this node's `tailscale up`; the client's next control dial logs
+# "controlhttp: forcing port 443 dial due to recent noise dial", then 35x
+# "PollNetMap: Post https://10.77.0.13:8080/machine/map: ... context deadline
+# exceeded" over six minutes, Online=false, and headscale lists the node offline.
+# tailscale's control/controlhttp/client.go (v1.78.1): Dialer.forceNoise443() is
+# true whenever the previous noise dial was "recent" (HealthTracker, < 2 min, and
+# every retry re-stamps it), and dialHost() then never starts the plaintext
+# attempt ("if !forceTLS || u443 == nil { go try(u80) }") and, with only the 443
+# attempt failed, waits for the context deadline. headscale serves no :443, so
+# the client never reconnects until tailscaled is restarted.
+# control/controlclient/noise.go (same tag) derives the ports from the login
+# server URL: an explicit http://IP:PORT gets httpsPort=443 — unless the host is
+# "127.0.0.1" or "localhost", where httpsPort is left empty (NoPort), u443 is nil
+# and the plaintext dial is always started. So the control node's own client,
+# logged in over loopback, cannot be stranded by a headscale restart — and the
+# restarts the product makes (publish_cp_dns_record above, the policy load in
+# provision_headscale, gen-headscale-policy.sh on every rendered change) stop
+# costing the control node its session. The FLEET still dials the address
+# resolve_endpoint gives; that is a worker-side exposure to the same lockout
+# and is documented, not changed, here.
+HEADSCALE_CONFIG="${HEADSCALE_CONFIG:-/etc/headscale/config.yaml}"
+control_self_login_server() {
+    local port="" la
+    la="$(sed -n 's/^listen_addr:[[:space:]]*//p' "${HEADSCALE_CONFIG}" 2>/dev/null | head -1 | tr -d "\"' ")"
+    port="${la##*:}"
+    [[ "${port}" =~ ^[0-9]{1,5}$ ]] || port=8080
+    printf 'http://127.0.0.1:%s' "${port}"
+}
+
+# After the headscale restart publish_cp_dns_record makes: wait for headscale to
+# answer again, then make sure this node's own client is back on it. A client that
+# does not report Online within the window is restarted (a fresh tailscaled has
+# no "recent noise dial" and dials the plaintext port again — see above) and
+# re-checked. Bounded at every step; keys-provision runs before sshd.
+control_client_regain() {
+    have tailscale || return 0
+    local i online="" hs_ok=false
+    for ((i = 0; i < 30; i++)); do
+        headscale nodes list >/dev/null 2>&1 && { hs_ok=true; break; }
+        sleep 2
+    done
+    ${hs_ok} || warn "headscale did not answer within 60s of its restart — checking the mesh client anyway"
+    for ((i = 0; i < 20; i++)); do
+        online="$(tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null)"
+        [ "${online}" = true ] && break
+        sleep 3
+    done
+    if [ "${online}" = true ]; then
+        log "control node's mesh client is Online after the headscale restart"
+        return 0
+    fi
+    warn "control node's mesh client is NOT online 60s after the headscale restart — restarting tailscaled (tailscale 1.78 keeps forcing a port-443 control dial after a recent failure until the daemon restarts)"
+    rc-service tailscaled restart >/dev/null 2>&1 || { warn "tailscaled restart failed"; return 0; }
+    online=""
+    for ((i = 0; i < 20; i++)); do
+        online="$(tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null)"
+        [ "${online}" = true ] && break
+        sleep 3
+    done
+    if [ "${online}" = true ]; then
+        log "control node's mesh client is Online after the tailscaled restart"
+    else
+        warn "control node's mesh client is still not online after the tailscaled restart (see 'tailscale status'; the fleet's workers cannot see a peer that is offline on the control server)"
+    fi
+    return 0
 }
 
 # ── Tailscale client ───────────────────────────────────────────────
@@ -1028,14 +1144,17 @@ provision_tailscale() {
     fi
     login="$(jqm '.tailscale.login_server // ""')"
     # Local-first: if no explicit login_server, derive the control server URL.
-    # On the CONTROL node (headscale enabled) that is its own resolve_endpoint
-    # (configured override else its own LAN IP). On a WORKER / additional CP it
-    # is resolve_control_endpoint -> the PKI node (override / brand HEADSCALE_URL
-    # / the pki node's LAN IP from .nodes[]), never the worker's own LAN IP. So a
-    # pre-public-domain worker still reaches the control server over the LAN.
+    # On the CONTROL node (headscale enabled) its OWN client logs in over
+    # loopback (control_self_login_server: the headscale listen port on
+    # 127.0.0.1); the endpoint peers dial (resolve_endpoint: override / LAN IP)
+    # still goes into headscale's server_url and the fleet's sticks. On a WORKER
+    # / additional CP it is resolve_control_endpoint -> the PKI node (override /
+    # brand HEADSCALE_URL / the pki node's LAN IP from .nodes[]), never the
+    # worker's own LAN IP. So a pre-public-domain worker still reaches the
+    # control server over the LAN.
     if [ -z "${login}" ] || [ "${login}" = "null" ]; then
         if [ "$(jqm '.headscale.enabled // false')" = "true" ]; then
-            login="$(resolve_endpoint)"
+            login="$(control_self_login_server)"
         else
             login="$(resolve_control_endpoint)"
         fi
@@ -1044,6 +1163,14 @@ provision_tailscale() {
     up_args="$(jqm '.tailscale.up_args // ""')"
     if [ -n "${authkey}" ]; then
         local cmd=(tailscale up --authkey "${authkey}")
+        # BOUNDED. keys-provision runs before sshd, and `tailscale up` with no
+        # --timeout blocks until the node is Running — so a control server that is
+        # unreachable at first boot (down, or a NIC not yet up) froze the whole boot
+        # with no way in. tailscaled keeps the prefs and keeps trying after this
+        # returns. .tailscale.up_timeout overrides; an explicit --timeout in up_args wins.
+        local ts_to; ts_to="$(jqm '.tailscale.up_timeout // "120s"')"
+        [[ "${ts_to}" =~ ^[0-9]+[smh]$ ]] || ts_to="120s"
+        [[ " ${up_args} " == *" --timeout"* ]] || cmd+=(--timeout "${ts_to}")
         [ -n "${login}" ] && [ "${login}" != "null" ] && cmd+=(--login-server "${login}")
         # shellcheck disable=SC2206
         [ -n "${up_args}" ] && [ "${up_args}" != "null" ] && cmd+=(${up_args})
@@ -1066,9 +1193,14 @@ provision_tailscale() {
 
     # On the control (headscale) node, now that we are on the tailnet, publish
     # the stable MagicDNS control-plane record so additional CPs / workers /
-    # autodiscovering nodes can resolve the API endpoint over the mesh.
+    # autodiscovering nodes can resolve the API endpoint over the mesh. That
+    # publish restarts headscale under this node's own client, so the client's
+    # control session is checked (and the daemon restarted if it lost it) right
+    # after — see control_client_regain.
     if [ "$(jqm '.headscale.enabled // false')" = "true" ] && have headscale; then
         publish_cp_dns_record
+        control_client_regain
+        approve_mesh_routes_now
         # Layer-A: wire the headscale-policy renderer + server-forced-tag pass +
         # boot/cron sync (CENTRALIZED on the control node ONLY). The socket + mesh
         # are up now, so the first best-effort render can apply immediately if the

@@ -1,0 +1,76 @@
+# Headscale configuration for the LOCAL docker mesh (`make stack-up HEADSCALE=1`).
+#
+# RENDERED at container start by tests/stack/headscale/entrypoint.sh into
+# /etc/headscale/config.yaml. It mirrors the node's specs/etc/headscale/config.yaml
+# (policy mode file, the same prefixes, sqlite, the unix socket) with three
+# deliberate differences, each because the local mesh is not a node:
+#   * server_url is the HTTPS front door's hs. name, https://hs.<domain>:<port>.
+#     TLS ends at hugmesh-https-front (tests/stack/tls-front/default.conf, the
+#     `server_name ~^hs\.` block), so headscale itself listens plain on :8080
+#     inside the compose network and publishes no host port.
+#   * the embedded DERP server is ON (region 999) and the public DERP map is OFF
+#     (urls: []): the local mesh must not depend on the internet, and headscale
+#     0.23 refuses to start with an empty DERP map.
+#   * the policy is the DEVICE template rendered with this mesh's id (the
+#     entrypoint says how), so the local mesh enforces the device rules.
+#
+# The server_url marker is replaced by the entrypoint with a value it has already
+# validated against a strict character set; a leftover marker stops the container.
+# (The marker spelling appears exactly once, at its splice point, so the check
+# for a leftover cannot trip on prose.)
+
+server_url: @@HS_SERVER_URL@@
+
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+policy:
+  mode: file
+  path: /etc/headscale/policy.hujson
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: "hugmesh-local"
+    region_name: "HugMesh local mesh"
+    stun_listen_addr: "0.0.0.0:3478"
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+  urls: []
+  paths: []
+  auto_update_enabled: false
+  update_frequency: 24h
+
+disable_check_updates: true
+ephemeral_node_inactivity_timeout: 30m
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+
+log:
+  level: info
+  format: text
+
+dns:
+  magic_dns: true
+  base_domain: headnet.internal
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 9.9.9.9
+
+unix_socket: /run/headscale/headscale.sock
+unix_socket_permission: "0770"

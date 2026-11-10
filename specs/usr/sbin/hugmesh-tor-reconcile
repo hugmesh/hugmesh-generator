@@ -46,10 +46,13 @@
 # `tor` into the default runlevel, so OpenRC starts it right after this oneshot
 # returns, reading the torrc just written. The boot sequence is therefore:
 #   oneshot: dirs + verified torrc, export any hostname already minted (every boot
-#            after the first) -> OpenRC starts tor (one daemon) -> the cron.d
+#            after the first); on a FIRST boot (nothing minted yet) it leaves a
+#            detached, bounded export waiter behind (`--export-wait`, see below)
+#            -> OpenRC starts tor (one daemon) -> tor mints the keypair(s) ->
+#            the waiter exports the hostname(s) within seconds -> the cron.d
 #            `@reboot` entry (a delay, then this agent WITHOUT RC_SVCNAME) finds tor
-#            running and the torrc unchanged, waits for the first-boot keypair and
-#            exports it. The 24h entry re-asserts all of it daily.
+#            running, the torrc unchanged and the export done (it is the backstop
+#            if tor was slow). The 24h entry re-asserts all of it daily.
 #
 # ROUTING. Every onion publishes HiddenServicePort 443 -> UPSTREAM (HTTPS). The
 # default UPSTREAM is 127.0.0.1:443: correct on the ONE node that runs the cluster's
@@ -169,6 +172,89 @@ if [ -r "${R}${DOMAINS_FILE}" ]; then
     done < "${R}${DOMAINS_FILE}"
 fi
 
+# Every onion this node serves has its hostname minted (tor writes it when it first
+# loads the HiddenServiceDir, seconds after it starts).
+_all_minted() {
+    [ -s "${R}${HS_DIR}/hostname" ] || return 1
+    local _s
+    for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
+        [ -s "${R}${HS_DOMAIN_ROOT}/${_s}/hostname" ] || return 1
+    done
+    return 0
+}
+_export() {  # SRC DEST LABEL
+    if [ -s "$1" ]; then
+        install -m 0644 "$1" "$2" 2>/dev/null || cp -f "$1" "$2" 2>/dev/null || true
+        log "$3 onion hostname: $(cat "$2" 2>/dev/null)"
+    else
+        log "$3 onion hostname not yet present (tor still bootstrapping); will export next run"
+    fi
+}
+_export_all() {
+    _export "${R}${HS_DIR}/hostname" "${R}${EXPORT_DIR}/hostname" "primary"
+    local _s
+    for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
+        _export "${R}${HS_DOMAIN_ROOT}/${_s}/hostname" "${R}${EXPORT_DIR}/${_s}.hostname" "domain '${_s}'"
+    done
+}
+
+# ── The first-boot export waiter (`hugmesh-tor-reconcile --export-wait`) ──────────
+# The boot oneshot runs BEFORE tor (it must: tor reads the torrc it writes), so on
+# the first boot no keypair exists when it exits and it cannot export a hostname.
+# Until 2026-11-04 the first export was the cron's `@reboot root sleep 90` run,
+# so for the first ~2-4 minutes of a node's life /var/lib/hugmesh/tor/hostname
+# did not exist (the QEMU proof run graded both rpi5 nodes "no v3 onion ... nothing
+# was minted or exported" and passed them 3-5 minutes later). Now the oneshot
+# leaves THIS behind, detached (its own session, no inherited fds, so it holds
+# neither OpenRC's service lock nor the boot's console): a bounded poll that
+# exports every hostname the moment tor has minted them. HUGMESH_TOR_EXPORT_WAIT_TRIES
+# x 2 s bounds it (default 60 = two minutes, generous for a cold TCG boot); if tor
+# never mints, it logs that and exits, and the @reboot cron run remains the
+# backstop. It never touches tor or the torrc. One waiter at a time: its pid is in
+# ${R}/run/hugmesh-tor-export-wait.pid and a live one is not duplicated.
+EXPORT_WAIT_TRIES="${HUGMESH_TOR_EXPORT_WAIT_TRIES:-60}"
+EXPORT_WAIT_PIDFILE="${R}/run/hugmesh-tor-export-wait.pid"
+if [ "${1:-}" = "--export-wait" ]; then
+    _fd=3
+    while [ "${_fd}" -le 30 ]; do eval "exec ${_fd}>&-"; _fd=$((_fd + 1)); done
+    mkdir -p "${R}/run" 2>/dev/null || true
+    printf '%s\n' "$$" > "${EXPORT_WAIT_PIDFILE}" 2>/dev/null || true
+    _i=0
+    while [ "${_i}" -lt "${EXPORT_WAIT_TRIES}" ]; do
+        _all_minted && break
+        sleep 2
+        _i=$((_i + 1))
+    done
+    if _all_minted; then
+        _export_all
+        log "export waiter: first-boot hostname(s) exported after ${_i} poll(s)"
+    else
+        log "export waiter: tor did not mint every onion hostname within $((EXPORT_WAIT_TRIES * 2))s — giving up; the @reboot cron run exports it"
+    fi
+    rm -f "${EXPORT_WAIT_PIDFILE}" 2>/dev/null || true
+    exit 0
+fi
+_spawn_export_waiter() {
+    local _old _pid
+    mkdir -p "${R}/run" 2>/dev/null || true
+    _old="$(tr -d '[:space:]' < "${EXPORT_WAIT_PIDFILE}" 2>/dev/null)"
+    case "${_old}" in
+        ''|*[!0-9]*) ;;
+        *) if kill -0 "${_old}" 2>/dev/null; then
+               log "an export waiter (pid ${_old}) is already running — not starting another"
+               return 0
+           fi ;;
+    esac
+    if command -v setsid >/dev/null 2>&1; then
+        setsid "${BASH}" "${BASH_SOURCE[0]}" --export-wait </dev/null >/dev/null 2>&1 &
+    else
+        ( trap '' HUP INT TERM; exec "${BASH}" "${BASH_SOURCE[0]}" --export-wait </dev/null >/dev/null 2>&1 ) &
+    fi
+    _pid=$!
+    disown "${_pid}" 2>/dev/null || true
+    log "first boot: no onion hostname is minted yet (tor starts after this oneshot) — export waiter pid ${_pid} exports it as soon as tor publishes it (bounded: $((EXPORT_WAIT_TRIES * 2))s)"
+}
+
 # 1) State dirs, owned by the distro tor user (Tor refuses a world-readable HS dir).
 if ! id "${TOR_USER}" >/dev/null 2>&1; then
     log "tor user missing — net-vpn/tor not installed? leaving onion service inert"
@@ -188,6 +274,17 @@ fi
 chown "${TOR_USER}:${TOR_USER}" "${_owned[@]}" 2>/dev/null || true
 chmod 0700 "${_owned[@]}" 2>/dev/null || true
 chmod 0700 "${R}${EXPORT_DIR}" 2>/dev/null || true
+# The PARENT of every directory above, at net-vpn/tor's own `fowners tor:tor` +
+# `fperms 750`. Tor setuids to ${TOR_USER} BEFORE it checks its DataDirectory, so a
+# root:root 0750 /var/lib/tor makes `tor --verify-config` (the candidate check
+# below, and OpenRC's checkconfig) fail with "Couldn't access private data
+# directory" — the reconcile then keeps the stock torrc and tor never starts.
+# Every ARM image shipped exactly that until 2026-11-04: its stage4 tarball forced
+# every owner to root (hmr_pack_owner_args in scripts/_builder-resume-lib.sh).
+# Re-asserted on every run so an image packed that way still converges.
+mkdir -p "${R}$(dirname "${DATA_DIR}")" 2>/dev/null || true
+chown "${TOR_USER}:${TOR_USER}" "${R}$(dirname "${DATA_DIR}")" 2>/dev/null || true
+chmod 0750 "${R}$(dirname "${DATA_DIR}")" 2>/dev/null || true
 
 # 2) Render the managed torrc to a CANDIDATE, verify it, install only if it differs.
 _cand="$(mktemp "${R}${TORRC}.hugmesh.XXXXXX" 2>/dev/null)" || {
@@ -302,15 +399,8 @@ case "${_st}" in
 esac
 
 # Give Tor a moment to mint keypairs on a cold first boot, then export hostnames —
-# only when tor is live: waiting on a stopped tor (the boot oneshot) buys nothing.
-_all_minted() {
-    [ -s "${R}${HS_DIR}/hostname" ] || return 1
-    local _s
-    for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
-        [ -s "${R}${HS_DOMAIN_ROOT}/${_s}/hostname" ] || return 1
-    done
-    return 0
-}
+# only when tor is live: waiting on a stopped tor (the boot oneshot) buys nothing
+# here; the boot oneshot leaves the export waiter below behind instead.
 _i=0
 ${TOR_UP} || _i="${WAIT_TRIES}"
 while [ "${_i}" -lt "${WAIT_TRIES}" ]; do
@@ -320,18 +410,7 @@ while [ "${_i}" -lt "${WAIT_TRIES}" ]; do
 done
 
 # 4) Export the stable .onion hostnames (the ONLY artefacts that leave the node).
-_export() {  # SRC DEST LABEL
-    if [ -s "$1" ]; then
-        install -m 0644 "$1" "$2" 2>/dev/null || cp -f "$1" "$2" 2>/dev/null || true
-        log "$3 onion hostname: $(cat "$2" 2>/dev/null)"
-    else
-        log "$3 onion hostname not yet present (tor still bootstrapping); will export next run"
-    fi
-}
-_export "${R}${HS_DIR}/hostname" "${R}${EXPORT_DIR}/hostname" "primary"
-for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
-    _export "${R}${HS_DOMAIN_ROOT}/${_s}/hostname" "${R}${EXPORT_DIR}/${_s}.hostname" "domain '${_s}'"
-done
+_export_all
 # Withdraw the export of a domain no longer listed (its KEY stays, see above) so no
 # consumer keeps advertising an onion this node has stopped serving.
 for _f in "${R}${EXPORT_DIR}"/*.hostname; do
@@ -341,6 +420,12 @@ for _f in "${R}${EXPORT_DIR}"/*.hostname; do
     for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do [ "${_s}" = "${_b}" ] && _keep=true; done
     ${_keep} || { rm -f "${_f}"; log "withdrew the export for unlisted Tor domain '${_b}'"; }
 done
+
+# 5) The boot oneshot on a first boot: tor has not minted the keypair(s) yet (it
+# starts after this returns), so leave the detached export waiter behind.
+if ${BOOT_ONESHOT} && ! _all_minted; then
+    _spawn_export_waiter
+fi
 
 log "reconcile complete (upstream=${UPSTREAM}, domains=${#DOMAIN_SLUGS[@]})"
 exit 0

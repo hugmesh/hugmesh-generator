@@ -81,6 +81,16 @@ QMP_SOCK=""                    # optional QMP unix socket (--qmp); empty keeps -
 MESH_NET=""                    # ADDR:PORT (mcast) | mcast=A:P | listen=H:P | connect=H:P
 MESH_MAC=""                    # explicit MAC for the mesh NIC (unique per node on the L2)
 MESH_ID=""                     # small node index 1..255 deriving the default MAC
+# ── Display door (opt-in) — all default-off ──────────────────────────────────
+# --display spice opens ONE door: SPICE over TCP on DISPLAY_LISTEN:SPICE_PORT,
+# protected by a per-run password that QEMU reads from a FILE as a secret OBJECT.
+# Never password= : that shows in `ps` and in the tee'd launch.log. Without
+# --display the QEMU argv stays byte-identical (tests/qemu/display_argv_test.sh).
+DISPLAY_MODE="none"            # none | spice
+DISPLAY_LISTEN="127.0.0.1"     # -spice addr=; 0.0.0.0 is only sane INSIDE the runner container
+SPICE_PORT=""                  # -spice port= (required with --display spice)
+DISPLAY_SECRET=""              # FILE holding the per-run password (required with --display spice)
+VNC_SOCK=""                    # optional -vnc unix:PATH browser (noVNC) fallback, same secret
 
 usage() {
 cat <<EOF
@@ -121,6 +131,19 @@ Mesh (multi-node) networking — issue #48; all default-off:
       --mesh-mac MAC   MAC for the mesh NIC (must be unique per node on the L2).
       --mesh-id N      Node index 1..255 deriving the default MAC
                        52:54:00:6d:65:NN. Give --mesh-mac OR --mesh-id, not both.
+
+Display door (a window that RESIZES the guest; all default-off):
+      --display MODE   none (default) | spice. spice adds -vga none + virtio-vga
+                       (VGA-compatible, so OVMF/GRUB show too), the vdagent
+                       virtserialport, qemu-xhci + usb-tablet + usb-kbd, and
+                       the SPICE server. Open it with remote-viewer / spicy.
+      --display-listen ADDR  -spice addr=. Default: ${DISPLAY_LISTEN} (0.0.0.0 is
+                       for the runner container's OWN netns only).
+      --spice-port N   -spice port= (required with --display spice).
+      --display-secret FILE  File holding the per-run password, handed to QEMU
+                       as a secret OBJECT (required; never on the command line).
+      --vnc-socket PATH  Also serve VNC on the unix socket PATH (noVNC browser
+                       fallback: scale-only, 8-char DES auth from the same file).
 
 Port forwards (host -> guest):
       --ssh-port PORT  host -> guest 22.   Default: ${SSH_PORT}
@@ -170,6 +193,11 @@ while [[ $# -gt 0 ]]; do
         --mesh-mac)      MESH_MAC="$2"; shift 2 ;;
         --mesh-id)       MESH_ID="$2"; shift 2 ;;
         --qmp)           QMP_SOCK="$2"; shift 2 ;;
+        --display)       DISPLAY_MODE="$2"; shift 2 ;;
+        --display-listen) DISPLAY_LISTEN="$2"; shift 2 ;;
+        --spice-port)    SPICE_PORT="$2"; shift 2 ;;
+        --display-secret) DISPLAY_SECRET="$2"; shift 2 ;;
+        --vnc-socket)    VNC_SOCK="$2"; shift 2 ;;
         --gpu)           GPU_DEV=true; shift ;;
         --foreground)    FOREGROUND=true; shift ;;
         --keep)          KEEP=true; shift ;;
@@ -328,9 +356,67 @@ fi
 # Optional virtio-GPU so client/desktop images can bring up Xorg (modesetting) +
 # the lightdm greeter; node images don't need it (serial console only).
 if ${GPU_DEV}; then
-    QEMU_ARGS+=(-device virtio-gpu-pci)
-    info "gpu    : virtio-gpu attached (desktop/greeter rendering)"
+    if [ "${DISPLAY_MODE}" = "spice" ]; then
+        # The display door brings its own VGA-compatible virtio-vga below; a second
+        # virtio-gpu-pci would give the guest two heads and the viewer a blank one.
+        info "gpu    : --gpu folded into the display door's virtio-vga (no extra virtio-gpu-pci)"
+    else
+        QEMU_ARGS+=(-device virtio-gpu-pci)
+        info "gpu    : virtio-gpu attached (desktop/greeter rendering)"
+    fi
 fi
+# Optional display door. ONE door: SPICE over TCP on DISPLAY_LISTEN:SPICE_PORT,
+# protected by a per-run password that QEMU reads from DISPLAY_SECRET as a secret
+# OBJECT (-object secret,file=), so the password never appears in argv, ps, the
+# launch log or this script's output — only the file's PATH is printed. The
+# vdagent virtserialport is what lets remote-viewer / spicy RESIZE the guest to
+# the window (monitors-config); -vnc unix: is the opt-in browser (noVNC)
+# fallback, which only scales. The daemonized launch below keeps -display none:
+# SPICE/VNC are servers, not a local -display. x86 gets -vga none + virtio-vga
+# (VGA-compatible, so OVMF GOP and GRUB render too); aarch64 gets
+# virtio-gpu-pci,edid=on. Default-off: without --display the QEMU argv is
+# byte-identical to before these flags existed (tests/qemu/display_argv_test.sh).
+# Identical across launch-x86.sh / launch-arm.sh / launch-pi.sh apart from
+# DISPLAY_GPU_ARGS, which is the per-platform line right above the case.
+DISPLAY_GPU_ARGS=(-vga none -device virtio-vga)
+case "${DISPLAY_MODE}" in
+    none)
+        [ -z "${SPICE_PORT}" ] && [ -z "${DISPLAY_SECRET}" ] && [ -z "${VNC_SOCK}" ] \
+            || die "--spice-port/--display-secret/--vnc-socket make no sense without --display spice"
+        ;;
+    spice)
+        [[ "${SPICE_PORT}" =~ ^[0-9]+$ ]] && [ "${SPICE_PORT}" -ge 1 ] && [ "${SPICE_PORT}" -le 65535 ] \
+            || die "--display spice needs --spice-port N (1..65535; got: '${SPICE_PORT}')"
+        [ -n "${DISPLAY_SECRET}" ] \
+            || die "--display spice needs --display-secret FILE (the per-run password lives in a file, never on the command line)"
+        [ -s "${DISPLAY_SECRET}" ] || die "--display-secret file is missing or empty: ${DISPLAY_SECRET}"
+        # spice-server's ticket is at most 60 bytes and QEMU 7.2 ignores the
+        # set-ticket return, so a longer file would leave the door with NO ticket
+        # and every connection refused, silently. Size only; the bytes are never read.
+        [ "$(wc -c < "${DISPLAY_SECRET}")" -le 60 ] \
+            || die "--display-secret file is longer than SPICE's 60-byte ticket limit: ${DISPLAY_SECRET}"
+        [ -n "${DISPLAY_LISTEN}" ] || die "--display-listen must not be empty"
+        QEMU_ARGS+=(-object "secret,id=hmdisp,file=${DISPLAY_SECRET},format=raw"
+                    -spice "port=${SPICE_PORT},addr=${DISPLAY_LISTEN},password-secret=hmdisp,agent-mouse=on"
+                    -device virtio-serial-pci
+                    -chardev spicevmc,id=vdagent,name=vdagent
+                    -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
+                    -device qemu-xhci -device usb-tablet -device usb-kbd
+                    "${DISPLAY_GPU_ARGS[@]}")
+        info "display: spice on ${DISPLAY_LISTEN}:${SPICE_PORT} (password in ${DISPLAY_SECRET})"
+        if [ -n "${VNC_SOCK}" ]; then
+            mkdir -p "$(dirname "${VNC_SOCK}")" || die "cannot create the --vnc-socket dir for ${VNC_SOCK}"
+            # Same AF_UNIX sun_path limit as --qmp below: QEMU rejects longer paths
+            # and, daemonized, the error would only ever reach the launch log.
+            [ "${#VNC_SOCK}" -le 107 ] || die \
+                "--vnc-socket path is ${#VNC_SOCK} bytes; AF_UNIX allows at most 107: ${VNC_SOCK}"
+            QEMU_ARGS+=(-object "secret,id=hmvnc,file=${DISPLAY_SECRET},format=raw"
+                        -vnc "unix:${VNC_SOCK},password-secret=hmvnc")
+            info "display: vnc fallback on unix:${VNC_SOCK} (first 8 chars of the same password; scale-only)"
+        fi
+        ;;
+    *) die "--display must be none or spice (got: ${DISPLAY_MODE})" ;;
+esac
 # Optional shared mesh L2 (issue #48 PR B) — a SECOND virtio NIC on a QEMU
 # socket netdev so several emulated nodes form one broadcast domain (kubeadm
 # init on one node, kubeadm join from the others; tests/qemu/mesh-cluster.sh is

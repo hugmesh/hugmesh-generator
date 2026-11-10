@@ -148,7 +148,8 @@ def _installer_iso_note(platform: str) -> str:
                 "This builder has no per-artifact ISO flags — its media is the "
                 "\"Flavor\" dropdown on the \"Target machine & image type\" step "
                 "(live | installer | both), whose default, both, already builds an "
-                "installer ISO.")
+                "installer medium (an .installer.iso, or on frite a raw "
+                ".installer.img that u-boot can boot).")
     # jetson, and only jetson: build-jetson-stage4.sh contains no installer.iso at all.
     return (f"Not available on the {p} builder: only the x86 builder parses "
             "--installer-iso. This platform's builder produces no installer ISO.")

@@ -25,23 +25,37 @@ spec:
       initContainers:
         # Casdoor doesn't expand beego's "${ENV||default}" syntax inside
         # app.conf (confirmed live — see app-conf-configmap.yaml). Render the
-        # real conf/app.conf here via plain sed substitution instead, into an
-        # emptyDir the main container mounts read-only. Reuses the casdoor
-        # image itself (already has sh/sed) so no extra image needs pulling.
+        # real conf/app.conf here instead, into an emptyDir the main container
+        # mounts read-only. Reuses the casdoor image itself (busybox sh + awk) so
+        # no extra image needs pulling. An SMTP password or a DB password from
+        # Vault may carry `|`, `&` or `\`, which a sed expression would read as
+        # a delimiter or a backreference, so the render is a literal replacement.
         - name: render-app-conf
           image: casbin/casdoor:3.80.0
           command: ["sh", "-c"]
           args:
             - |
-              sed \
-                -e "s|__CASDOOR_DB_USER__|${CASDOOR_DB_USER}|g" \
-                -e "s|__CASDOOR_DB_PASSWORD__|${CASDOOR_DB_PASSWORD}|g" \
-                -e "s|__CASDOOR_SMTP_HOST__|${CASDOOR_SMTP_HOST}|g" \
-                -e "s|__CASDOOR_SMTP_PORT__|${CASDOOR_SMTP_PORT}|g" \
-                -e "s|__CASDOOR_SMTP_USER__|${CASDOOR_SMTP_USER}|g" \
-                -e "s|__CASDOOR_SMTP_PASSWORD__|${CASDOOR_SMTP_PASSWORD}|g" \
-                -e "s|__CASDOOR_SMTP_FROM__|${CASDOOR_SMTP_FROM}|g" \
-                /template/app.conf.template > /rendered/app.conf
+              # A literal index()/substr() replacement in awk: nothing in a value is a
+              # pattern, a delimiter or a backreference (sed's s|a|b|g broke on `|`, `&`
+              # and `\` in a Vault value and rendered a wrong conf silently). The DB user
+              # and password go into a postgres:// URL percent-encoded (RFC 3986 userinfo:
+              # every byte but A-Za-z0-9-._~), which both xorm's DSN reader and lib/pq
+              # decode, so any value Vault holds -- spaces, quotes, `#`, a newline --
+              # reaches Postgres as typed. LC_ALL=C keeps awk on bytes.
+              LC_ALL=C awk '
+                function rep(s, tok, val,   out, i) { out = ""; while ((i = index(s, tok)) > 0) { out = out substr(s, 1, i - 1) val; s = substr(s, i + length(tok)) } return out s }
+                function enc(v,   out, i, c) { out = ""; for (i = 1; i <= length(v); i++) { c = substr(v, i, 1); out = out ((c ~ /^[A-Za-z0-9._~-]$/) ? c : sprintf("%%%02X", ord[c])) } return out }
+                BEGIN { for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i }
+                { line = $0
+                  line = rep(line, "__CASDOOR_DB_USER__", enc(ENVIRON["CASDOOR_DB_USER"]))
+                  line = rep(line, "__CASDOOR_DB_PASSWORD__", enc(ENVIRON["CASDOOR_DB_PASSWORD"]))
+                  line = rep(line, "__CASDOOR_SMTP_HOST__", ENVIRON["CASDOOR_SMTP_HOST"])
+                  line = rep(line, "__CASDOOR_SMTP_PORT__", ENVIRON["CASDOOR_SMTP_PORT"])
+                  line = rep(line, "__CASDOOR_SMTP_USER__", ENVIRON["CASDOOR_SMTP_USER"])
+                  line = rep(line, "__CASDOOR_SMTP_PASSWORD__", ENVIRON["CASDOOR_SMTP_PASSWORD"])
+                  line = rep(line, "__CASDOOR_SMTP_FROM__", ENVIRON["CASDOOR_SMTP_FROM"])
+                  print line }
+              ' /template/app.conf.template > /rendered/app.conf
           env:
             - name: CASDOOR_DB_USER
               valueFrom: { secretKeyRef: { name: casdoor-db, key: username } }
