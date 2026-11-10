@@ -482,7 +482,6 @@ jobs:
             tests/scripts/test-password-reset-front-door.sh
             tests/scripts/test-platform-key-spelling.sh
             tests/scripts/test-portage-config-sync.sh
-            tests/scripts/test-prod-gate-env-apps.sh
             tests/scripts/test-provision-manifest-injection.sh
             tests/scripts/test-publish-images.sh
             tests/scripts/test-qt6-keyword-preseeds.sh
@@ -618,6 +617,7 @@ jobs:
               tests/scripts/test-passhash-lib.sh
               tests/scripts/test-standalone-login-firstboot.sh
               tests/scripts/test-pki-role-san-coverage.sh
+              tests/scripts/test-prod-gate-env-apps.sh
               tests/scripts/test-provision-keys-escrow-guard.sh
               tests/scripts/test-python-targets-seed.sh
               tests/scripts/test-run-ungated-lane.sh
