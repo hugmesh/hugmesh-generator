@@ -56,6 +56,7 @@ The docs for the image/infra layer. State key used throughout:
 - [`USERNAME-CONFUSABLE.md`](USERNAME-CONFUSABLE.md) — confusable-username defenses.
 - [`DEVICE-REGISTRY-KEY-ROTATION.md`](DEVICE-REGISTRY-KEY-ROTATION.md) — device-license registry + key rotation.
 - [`PENTEST-SCHEDULES.md`](PENTEST-SCHEDULES.md) — continuous OWASP pen-test CI stage.
+- [`NVD-API-KEY.md`](NVD-API-KEY.md) — the free NVD API key OWASP Dependency-Check (every SCA job, the Studio's fleet pen-test, `make pentest`) needs: request it, ACTIVATE it from NVD's email, verify it, store it in the Studio, and set the `NVD_API_KEY` org secret without storing an empty value.
 
 ## Optional services & platform features
 

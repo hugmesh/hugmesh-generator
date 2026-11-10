@@ -341,6 +341,42 @@ def test_polling_runs_off_the_window_thread_and_never_blocks_it(qapp):
     dock.close()
 
 
+_QUIT_DURING_PROBE = r"""
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+from hugmesh_studio.gui.qt import QtCore, QtWidgets
+from hugmesh_studio.gui.pages import _local_agent_widget as law
+app = QtWidgets.QApplication(["quit-during-probe"])
+def slow_probe():
+    time.sleep(3)                      # an Ollama that does not answer: the probe waits
+    raise RuntimeError("never delivered")
+card = law.LocalAgentWidget(sys.argv[2], prober=slow_probe)
+card.show()                            # the first probe starts when the card is shown
+QtCore.QTimer.singleShot(200, app.quit)
+rc = app.exec()
+print("busy at quit:", card._busy(), flush=True)
+sys.exit(rc)
+"""
+
+
+def test_quitting_while_the_agent_card_probes_exits_cleanly(tmp_path):
+    """The Studio quits while the agent card in the panel is still probing: the process
+    must exit 0, not die in finalization. The probe used to be a QThread, and a QThread
+    destroyed while it runs is a qFatal (``QThread: Destroyed while thread is still
+    running``): on Windows, where the default probe of a stopped Ollama takes 2 s, every
+    quit inside that window ended in 0xC0000409, and so did this file under pytest after
+    all its tests had passed. A real process, because only interpreter exit shows it."""
+    import subprocess
+    import sys
+    script = tmp_path / "quit_during_probe.py"
+    script.write_text(_QUIT_DURING_PROBE, encoding="utf-8")
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    done = subprocess.run([sys.executable, str(script), STUDIO_ROOT, GENERATOR_DIR],
+                          capture_output=True, text=True, timeout=120, env=env)
+    assert "busy at quit: True" in done.stdout, (done.stdout, done.stderr)   # it did race
+    assert done.returncode == 0, (done.returncode, done.stdout, done.stderr)
+
+
 def test_only_one_read_is_in_flight_at_a_time(qapp):
     n, gate = [], threading.Event()
     dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=lambda: n.append(1) or gate.wait(3) or make_snapshot(),

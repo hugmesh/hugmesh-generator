@@ -37,12 +37,13 @@ from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from .. import choice_nav
 from ._scroll import scrollable
 from ..wizard import _file_picker, _row
+from ._nvd_key_widget import NvdKeyWidget
 from ._widgets import label_finish_as_exit
 from ...core.golive_domains import (NO_EXPORT_DOMAINS_NOTE, NO_EXTRA_DOMAINS_NOTE,
                                     baked_domains, export_candidates,
                                     export_step_applies, exposure_lines, plan_rows)
 from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
-from ...core import org_export
+from ...core import nvd_key, org_export
 from ...core.progress_parse import ProgressParser, track_phases
 from ...tui import brand_step
 
@@ -764,6 +765,14 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         self.cmd.setToolTip("The same export in PowerShell." if shell == "PowerShell"
                             else "The same export from a terminal.")
         lay.addWidget(_row(shell, self.cmd))
+        # The exported repositories carry the SCA jobs (OWASP Dependency-Check), so the
+        # new org needs NVD_API_KEY too — the same box as the Fleet window's, with the
+        # org-secret row preset to the picked domain's org (core/nvd_key.export_line).
+        self.nvd_line = QtWidgets.QLabel(nvd_key.export_line())
+        self.nvd_line.setWordWrap(True)
+        lay.addWidget(self.nvd_line)
+        self.nvd_key = NvdKeyWidget(self)
+        lay.addWidget(self.nvd_key)
         self.candidates: list = []
         self.plan = None
         self.result = None
@@ -851,6 +860,8 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         try:
             c = self.candidates[idx] if 0 <= idx < len(self.candidates) else None
             if c is not None:
+                self.nvd_line.setText(nvd_key.export_line(c.org))
+                self.nvd_key.org_edit.setText(c.org)
                 self.source_dir.setText(c.source_dir if c.source_mode == "existing" else "")
                 # a generic config file's own choices seed the pickers, so the plan
                 # made here is the plan the file describes (the pickers stay editable)
