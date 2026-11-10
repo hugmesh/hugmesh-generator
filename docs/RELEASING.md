@@ -132,7 +132,24 @@ on with the next phase). **Goes on** means the run continues with the next phase
 | 10 | `studio` | `scripts/release-studio.sh <version>` | `n`: stops. No at `release-studio.sh`'s own `Proceed?` (asked only without `--yes`): **goes on**, because it exits 0 with "Nothing done." |
 | 11 | `visibility` | **pause**: lists every package that is not public, waits, re-checks | `q`: **goes on** (packages left private stay listed; nothing to undo) |
 | 12 | `site` | `gh workflow run pages.yml -R hugmesh/hugmesh.github.io`, watched | `n`: **goes on** (the site's cron refreshes it within the hour) |
-| 13 | `verify` | every artifact with its state, image visibility, and where it shows on hugmesh.net | (no prompt) |
+| 13 | `verify` | every artifact with its state, image visibility, and where it shows on hugmesh.net; then each selected image package's **floating tags** (see below) | (no prompt). A floating-tag problem stops it like a row that is not `DONE` |
+
+`verify` also reads every selected image package's versions and checks its floating
+tags (`:latest`, `:beta`, `:X.Y`, `:main`), the tags a pull without a version gets (a bare
+`docker pull ghcr.io/hugmesh/<image>` is `:latest`). It prints a `FLOATING` line for:
+
+- a floating tag whose digest has no cosign signature in the package (no
+  `sha256-<hex>.sig` tag): "Every pushed image tag is signed" above, the floating ones
+  included;
+- a `:latest` on a package that has no stable `X.Y.Z` yet: a beta never moves `:latest`;
+- a package whose versions cannot be read (it fails closed, like the tag listing).
+
+When the version carries no release tag, the line gives the operator's
+`gh api -X DELETE .../versions/<id>` and its 30-day `POST .../restore` undo. When it
+carries one (`X.Y.Z` or `X.Y.Z-beta.N`), it says not to delete it, because that would
+delete the release too. The script itself never deletes a package version. While a
+`FLOATING` line is printed, `verify` never says "every artifact is DONE", and under
+`--apply` it stops (resume with `--from verify`).
 
 In phases 3, 4, 6, 8 and 9 the same `n` also declines the re-run of a tag run that
 published nothing (below); that stops too.
@@ -290,6 +307,12 @@ appears in, or "not listed".
 - **The `RUNS_ON_PUBLISH` warning.** That org variable sends release jobs to a
   self-hosted runner, which public repositories cannot use, so the jobs queue forever.
   Unset it before releasing.
+- **`FLOATING ghcr.io/hugmesh/<ui>:latest ... UNSIGNED; :latest while the package has no
+  stable X.Y.Z`** (found after 0.4.0-beta.2). Ten UI packages still carried a `:latest`
+  pushed on 2026-10-07, before the release workflow existed: unsigned, no provenance, and
+  what a bare `docker pull` got instead of the beta. Each such version carried only
+  `:latest` and an old short-SHA tag, so the printed `DELETE` is the fix; undo within 30
+  days with the printed `restore`.
 - **`release-studio.sh` stops with "already exists".** That Studio version is out. Pick
   a later one, or use `--no-studio`.
 
@@ -477,6 +500,9 @@ job runs before anything else. Run it locally with
 - under `--yes` the gateway-access question is never answered: the run stops with the
   settings page. Without `--yes` it is asked;
 - the dry-run text carries no checkout or temp paths;
+- `verify` flags an unsigned floating tag, a `:latest` with no stable release and an
+  unreadable package, passes signed ones, never prints the plain DONE line over them,
+  advises a delete only for a version without a release tag, and stops `--apply`;
 - the stage order of a full `--apply`;
 - a mutation battery over those guards, beta and stable. Each guard is broken in a copy
   of the script, and the check that covers it must go red.

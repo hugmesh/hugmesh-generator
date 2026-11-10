@@ -239,7 +239,12 @@ def test_docker_mode_rewrites_the_wrong_advice_in_a_snapshot():
     assert "Docker Ollama is not answering" in snap.problem and "Start local assistant" in snap.fix
     snap = lai.Snapshot(taken=0.0, ollama_up=True, models=[])
     odk.adjust_snapshot(snap, odk.DOCKER)
-    assert odk.pull_command(lai.DEFAULT_MODEL) in snap.fix
+    # the offer names the container's own pull; a bare `ollama pull` would fill the
+    # SYSTEM store and leave the container empty
+    from hugmesh_studio.core import local_ai_models as lam
+    assert odk.pull_command(lam.RECOMMENDED.name) in snap.fix
+    assert snap.offer["docker"] is True and snap.offer["model"] == lam.RECOMMENDED.name
+    assert "; by hand: ollama pull" not in snap.fix
     untouched = lai.Snapshot(taken=0.0, problem="p", fix="f")
     assert odk.adjust_snapshot(untouched, odk.SYSTEM).problem == "p"
 

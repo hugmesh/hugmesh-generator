@@ -21,8 +21,10 @@ What is deliberately different:
   would spawn a container is printed as a copy-ready command). With ``mint`` the screen
   prints the ``--mesh-token issue --mint`` line that mints the single-use pre-auth key in
   the mesh's running headscale container and signs, in one run, on the command line.
-  The line is printed only once a headscale user is named (``u USER``): there is no
-  default user. Signing alone (``ssh-keygen -Y sign``, a second or so) does run here.
+  The headscale user is optional (``u USER`` adds ``--headscale-user``): without it the
+  CLI mints for the container's ``net.hugmesh.headscale.user`` label, else ``hugmesh``,
+  and the screen says so. Signing alone (``ssh-keygen -Y sign``, a second or so) does
+  run here.
 * THE PRE-AUTH KEY is never typed into this screen: the line would stay on the screen
   and in the terminal's scrollback. It is read from a file (``k PATH``), as the CLI's
   ``--authkey-file`` reads it, at the moment of signing, and is not kept afterwards.
@@ -37,7 +39,7 @@ from typing import Callable, Optional
 from ..core import mesh_token as mt
 
 __all__ = ["MeshTokenScreen", "TITLE", "FINGERPRINT_NOTE", "SHELL_ONLY_TIP",
-           "NO_KEY", "MINT_NOTE", "NAME_USER", "lifetime_text", "mint_argv", "mint_line"]
+           "NO_KEY", "MINT_NOTE", "DEFAULT_USER", "lifetime_text", "mint_argv", "mint_line"]
 
 #: The dialog's title, word for word (test_tui_gui_parity pins it).
 TITLE = "Issue a HugMesh token"
@@ -58,12 +60,13 @@ NO_KEY = ("Give the file holding the headscale pre-auth key the token should car
 
 MINT_NOTE = ("This screen does not start docker. Run this line in a terminal: it mints a "
              "single-use pre-auth key in the mesh's running headscale container (the one "
-             "named like headscale unless c NAME names it), expiring with the token, for "
-             "the headscale user named with u USER, and prints the signed token. Nothing "
-             "secret is on it.")
+             "labelled or named like headscale unless c NAME names it), expiring with the "
+             "token, for the headscale user shown above, and prints the signed token. "
+             "Nothing secret is on it.")
 
-#: Said instead of the mint line until a headscale user is named (there is no default).
-NAME_USER = f"Not ready: a headscale user must be named (u USER). {mt.NAME_MINT_USER}"
+#: The headscale user row while u USER names none: which default the line mints for.
+DEFAULT_USER = (f"default: the container's {mt.HEADSCALE_USER_LABEL} label, else "
+                f"{mt.DEFAULT_MINT_USER} (u USER names another)")
 
 DEFAULT_LIFETIME_S = 7 * 86400
 
@@ -204,16 +207,14 @@ class MeshTokenScreen:
                f"{mt.MAX_LIFETIME_S // 86400}d)",
                f"  pre-auth key   {key}"]
         if self.source == "mint":
-            out.append(f"  headscale user {self.hs_user or '(required: u USER)'}")
-            out.append(f"  headscale container "
-                       f"{self.hs_container or '(the running one named like headscale)'}")
+            out.append(f"  headscale user {self.hs_user or DEFAULT_USER}")
+            found = "(the running one labelled or named like headscale)"
+            out.append(f"  headscale container {self.hs_container or found}")
         out.append("")
         if self.source == "mint":
             why = self.problem()
             if why:
                 out += [f"Not ready: {why}", ""]
-            elif not self.hs_user:
-                out += [NAME_USER, ""]
             else:
                 out += [MINT_NOTE, "  " + mint_line(self.fields(), user=self.hs_user,
                                                     container=self.hs_container), ""]
@@ -223,8 +224,8 @@ class MeshTokenScreen:
         out += ["commands: m NAME=mesh · d DOMAIN=access domain · r N|ROLE=role · s=shell "
                 "access on/off · l URL=login server (https://host[:port]) · e 7d|12h="
                 "lifetime · k PATH=the pre-auth key's file · mint=mint it instead (prints "
-                "the command) · u USER|-=headscale user for mint · c NAME|-=headscale container "
-                "for mint · i=issue (sign) · "
+                "the command) · u USER|-=headscale user for mint (optional) · "
+                "c NAME|-=headscale container for mint · i=issue (sign) · "
                 "w PATH=save the issued token to a file · b=back",
                 "The pre-auth key is never typed here (it would stay on the screen): put "
                 "it in a file and give the path, as the CLI's --authkey-file does."]
@@ -314,7 +315,7 @@ class MeshTokenScreen:
     def _issue(self, j) -> None:
         self._clear_result()
         if self.source == "mint":
-            why = self.problem() or (NAME_USER if not self.hs_user else "")
+            why = self.problem()
             j.status = (why or "This screen does not start docker: run the line above in "
                                "a terminal to mint the key and sign.")
             return

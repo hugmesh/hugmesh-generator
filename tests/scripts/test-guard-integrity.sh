@@ -1105,16 +1105,18 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 
 # MERGED (origin/main 3f3ed7bb into fix/games-two-realms-20261030): 214 of 256, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3f3ed7bb into fix/emulated-mesh-tailscale-tor-20261104): 216 of 257, MEASURED by running this file on the merged tree.
-# 216 -> 233 (denominator 275) on 2026-11-09 for feat/golive-emulated-fg3-harness-proof-lane-go-li-20261104,
-# which adds ONE gated suite: tests/qemu/golive_emulated_test.sh (the go-live-on-an-emulated-device
-# proof lane, wired in shell-suites.yml's alpine job beside display_argv_test.sh). The pin had
-# already DRIFTED on main before this branch: origin/main 7e4a5c14 measures '232 of 274' against
-# the recorded 216 (this check was red there), so the 16 suites merged since the 216 pin are
-# absorbed here, not added by this branch. MEASURED by RUNNING this file on this branch:
-#     233 of 275 suites are named by a pull_request-triggered workflow
-# and with the suite on disk but its shell-suites.yml line absent: '232 of 275' + check 3 and
-# check 7 red naming it -- so the +1/+1 is this suite and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-233}"
+# MERGED (origin/main 7e4a5c14): 232 of 274, MEASURED by running this file with GUARD_PREMERGE=0 on
+# win/main-red-fix-20261109 (the 2026-11-05 merges each gated suites without moving this line).
+# MERGED (origin/main 3214d8f6 into fix/fe-template-route-parity-20261104): this branch adds ONE
+# gated suite, tests/scripts/test-fe-template-route-parity.sh (shell-suites.yml node job)
+# = 233 of 275, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree;
+# ungated SET stays 42.
+# MERGED (origin/main 3a4018a3 into feat/golive-emulated-fg3-harness-proof-lane-go-li-20261104):
+# this branch adds ONE gated suite, tests/qemu/golive_emulated_test.sh (shell-suites.yml alpine
+# job) = 234 of 276, MEASURED by running this file on the merged tree; with that one
+# shell-suites.yml line removed it measures 233 of 276 and checks 3 and 7 name the suite, so the
+# +1 is this suite and nothing else.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-234}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

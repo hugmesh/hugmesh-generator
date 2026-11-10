@@ -14,7 +14,8 @@ none of which any Python test could see before this file:
   * no ``xz -T0 -9`` literal may survive on the --compress path. One left behind is a
     knob that moves and changes nothing — the worst failure mode a setting can have,
     because it looks like it worked;
-  * the ALWAYS-ON ``xz -T0 -6`` sites (the stage4 archive and fs.tar.xz) must stay at 6.
+  * the ALWAYS-ON ``xz -T0 -6`` sites (the x86 and frite stage4 archives and the
+    fs.tar.xz sites) must stay at 6.
     That was a deliberate scope decision, not an oversight: those run with or without
     --compress, so re-pointing them at COMPRESS_LEVEL would change what a build with no
     compression flags at all emits. The count is pinned so the decision cannot be
@@ -40,7 +41,10 @@ for _p, _f in BUILDER_SCRIPTS.items():
 
 # The always-on archive compressions, which --compress-level deliberately does NOT own.
 # x86: stage4 + fs.tar, one each since their silent no-xattr tar fallbacks went (#503).
-_ALWAYS_ON_XZ6 = {"x86": 2, "rpi5": 2}          # stage4 + fs.tar / fs.tar x2
+# frite: the stage4 pack, since ba4e13ab (#858) replaced its `-cJf || -cJf` no-xattr
+# fallback with ONE fatal xattr tar through -I 'xz -T0 -6' (the x86 #503 port; -cJf was
+# already xz preset 6, so the level is unchanged -- only now it is a countable literal).
+_ALWAYS_ON_XZ6 = {"x86": 2, "rpi5": 2, "frite": 1}   # stage4 + fs.tar / fs.tar x2 / stage4
 
 
 def test_every_builder_parses_compress_level():
@@ -82,8 +86,10 @@ def test_no_hardcoded_xz_9_survives_on_the_compress_path():
 
 def test_every_compress_path_xz_call_uses_the_level():
     """Counted, not merely absent: x86/rpi5/jetson compress the .img (one site each),
-    the seven flavor builders compress the live + installer ISOs (two sites each)."""
-    expected = {"x86": 1, "rpi5": 1, "jetson": 1}
+    the six Orange Pi flavor builders compress the live + installer media (two sites each),
+    and frite compresses its live + installer .img plus, under --medium-iso, the live +
+    installer ISOs (four sites, the ISO pair added by ba4e13ab / #858)."""
+    expected = {"x86": 1, "rpi5": 1, "jetson": 1, "frite": 4}
     for platform in _TEXT:
         want = expected.get(platform, 2)
         got = len(re.findall(r'xz -T0 "-\$\{COMPRESS_LEVEL\}"', _TEXT[platform]))

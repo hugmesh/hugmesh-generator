@@ -1368,6 +1368,19 @@ def _config_domain(service: str, profiles: dict, hints: DomainHints | None
                                f"on their Domain services steps — shared by them")
 
 
+def _node_project(node) -> str:
+    """The compose project ``node`` drives: its ``project`` (a saved mesh with its own
+    project — the node-image flow's ``hugmesh-img-<id>`` — is listed, controlled and
+    scaled under THAT name), else the checkout's own ``hugmesh-local``."""
+    return str(getattr(node, "project", "") or "").strip() or _COMPOSE_PROJECT
+
+
+def _project_args(project: str) -> list[str]:
+    """``-p <project>`` for any project but the checkout's own, whose argv stays what
+    it was (the compose file's ``name:`` decides)."""
+    return [] if project == _COMPOSE_PROJECT else ["-p", project]
+
+
 def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budget, *,
                    kind_ports=(KIND_HTTPS_PORT_DEFAULT,),
                    hints: DomainHints | None = None,
@@ -1375,6 +1388,7 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
                    ) -> tuple[LaneState, list[MeshUnit], list[str], list[str]]:
     notes: list[str] = []
     errors: list[str] = []
+    project = _node_project(node)
     if not shutil.which("docker"):
         return (LaneState(None, error="docker is not installed — the compose lane "
                                       "cannot be read"), [], notes, errors)
@@ -1399,8 +1413,8 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
         # from a 43-container mesh, and — the part that matters — a service that
         # DIED non-zero vanished from the table while the title kept reading N/N
         # ready; the exited/dead branch below was unreachable.
-        rc, out = _probe(node, [*base, "-f", compose_file, "ps", "--all",
-                                "--format", "json"],
+        rc, out = _probe(node, [*base, *_project_args(project), "-f", compose_file,
+                                "ps", "--all", "--format", "json"],
                          budget.bounded(COMPOSE_PS_TIMEOUT_S))
         if rc == 0:
             rows = _parse_compose_ps(out)
@@ -1410,7 +1424,7 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
             rows = None
     if rows is None and budget.remaining() > 1:
         rc, out = _probe(node, ["docker", "ps", "--all", "--filter",
-                                f"label=com.docker.compose.project={_COMPOSE_PROJECT}",
+                                f"label=com.docker.compose.project={project}",
                                 "--format", "{{json .}}"],
                          budget.bounded(COMPOSE_PS_TIMEOUT_S))
         if rc != 0:
@@ -1562,21 +1576,21 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
                     domain_onions:
                 refusals = tuple((v, _SHARED_TOR_REFUSAL)
                                  for v in ("start", "stop", "restart"))
-            control = UnitControl("container", name, _COMPOSE_PROJECT, refusals,
+            control = UnitControl("container", name, project, refusals,
                                   service=service, depends_on=_depends_on(labels))
         else:
             control = UnitControl()
         units.append(MeshUnit(
             domain=domain, shared_by=shared_by, domain_why=domain_why,
             control=control,
-            lane="compose", namespace=_COMPOSE_PROJECT, name=name or service,
+            lane="compose", namespace=project, name=name or service,
             owner=service, phase=phase, ready=ready, reason=reason, state=state,
             cluster_path=cluster_path, external="; ".join(external_bits), door=door,
             detail=udetail,
             # The compose SERVICE is the scalable thing; a container is one instance
             # of it. A row with no service label came from `docker ps` on the project
             # label alone and there is nothing to name in `--scale`.
-            scale=(ScaleTarget("compose-service", service, _COMPOSE_PROJECT, refused="")
+            scale=(ScaleTarget("compose-service", service, project, refused="")
                    if service else
                    ScaleTarget(refused="this container carries no compose service "
                                        "label, so there is no service to scale"))))
@@ -1584,7 +1598,7 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
             units.extend(_domain_onion_units(units[-1], domain_onions))
     if not units:
         notes.append("the compose project reports running but listed zero containers")
-    bits = [f"project {_COMPOSE_PROJECT}", f"{containers} container(s)"]
+    bits = [f"project {project}", f"{containers} container(s)"]
     if detail and "container" not in detail:      # status() already counts them
         bits.append(detail)
     return LaneState(True, detail=" · ".join(bits)), units, notes, errors
@@ -1893,7 +1907,7 @@ def scale_argv(unit: MeshUnit, replicas: int, *, generator_dir: str,
         # default brand while its siblings refuse the unregistered ones — so the scale
         # loads the same file. "" (every stack with no Tor domain) adds nothing.
         overlay = str(getattr(node, "tor_domains_overlay", "") or "")
-        return ([*base, "-p", _COMPOSE_PROJECT, "-f", compose_file,
+        return ([*base, "-p", _node_project(node), "-f", compose_file,
                  *(("-f", overlay) if overlay else ()), "up", "-d",
                  "--no-deps", "--no-recreate", "--scale", f"{target.name}={n}",
                  target.name], "")
@@ -1929,7 +1943,7 @@ def scale(generator_dir: str, node, unit: MeshUnit, replicas: int, *,
         ensure = getattr(node, "ensure_route_access_env", None)
         if callable(ensure):
             try:
-                ready, note = ensure(project=_COMPOSE_PROJECT)
+                ready, note = ensure(project=_node_project(node))
             except Exception as exc:                  # noqa: BLE001 — folded on purpose
                 ready, note = False, f"{type(exc).__name__}: {exc}"
             if not ready:
@@ -1952,7 +1966,7 @@ def scale(generator_dir: str, node, unit: MeshUnit, replicas: int, *,
         if unit.scale.kind == "compose-service" and "Timeout" in text:
             why += (f" — this waited {int(timeout_s)}s. If this service's image is not "
                     f"built yet, `up` is BUILDING it and is still running in the "
-                    f"background; watch `docker compose -p {_COMPOSE_PROJECT} logs` "
+                    f"background; watch `docker compose -p {_node_project(node)} logs` "
                     f"or bring the stack up first, then scale.")
         return False, why
     if unit.scale.kind == "compose-service":

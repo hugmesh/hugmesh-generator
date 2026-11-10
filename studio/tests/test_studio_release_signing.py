@@ -15,8 +15,16 @@ GITHUB ACTIONS AND SIGNED THERE. For ``.github/workflows/studio-release.yml`` th
   ``SITE_DISPATCH_TOKEN`` is not set.
 
 Several tests run the workflow's own ``run:`` scripts with fake tools, so they test what
-GitHub would execute, not a copy of it. """
+GitHub would execute, not a copy of it.
 
+The version in every fixture is ``__version__``, read from the tree, never a literal.
+"Cut a Studio release" runs this file AFTER ``release_version.py bump``, so the fixtures
+name the tag that is about to be published. A literal here was hand-edited repeatedly
+in November 2026 (0.3.0-beta.1 -> 0.4.0-beta.2, and the forged-identity case with it);
+test_studio_beta_version.py's ``test_guards_hold_after_a_bump`` runs this file after a
+simulated bump to the next MINOR and MAJOR, so a literal that only works on today's
+version (as ``replace("0.4.0", "0x4x0")`` did) is red there before it is red in a cut.
+"""
 from __future__ import annotations
 
 import json
@@ -34,7 +42,14 @@ WIN_LOCK = os.path.join(STUDIO_ROOT, "packaging", "wix", "windows-build-requirem
 LINUX_REQS = os.path.join(STUDIO_ROOT, "packaging", "linux-build-requirements.txt")
 
 REPO = "hugmesh/hugmesh-generator"
-VERSION = "0.4.0-beta.2"
+
+
+def _current_version() -> str:
+    with open(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"), encoding="utf-8") as handle:
+        return re.search(r'(?m)^__version__ = "([^"]+)"', handle.read()).group(1)
+
+
+VERSION = _current_version()
 TAG = f"studio-v{VERSION}"
 IDENTITY = f"https://github.com/{REPO}/.github/workflows/studio-release.yml@refs/tags/{TAG}"
 ISSUER = "https://token.actions.githubusercontent.com"
@@ -69,8 +84,6 @@ def _run_bash(script: str, env: dict, cwd) -> subprocess.CompletedProcess:
     # GitHub runs a `run:` block as `bash -e {0}` (plus pipefail when shell: bash is set).
     return subprocess.run(["bash", "-e", "-c", script], env=env, cwd=cwd,
                           capture_output=True, text=True)
-                          
-
 
 
 # ── runners and permissions ────────────────────────────────────────────────────────
@@ -318,13 +331,16 @@ def test_release_notes_carry_verify_commands_with_the_signing_identity(tmp_path,
         assert f"`hugmesh-studio-{VERSION}-{arch}.flatpak`" in notes, arch
         assert f"flatpak install --user ./hugmesh-studio-{VERSION}-{arch}.flatpak" in notes, arch
     assert "**Linux aarch64**" in notes and "**Linux x86_64**" in notes
-    assert "(beta, pre-release)" in notes
+    assert ("(beta, pre-release)" in notes) == ("-" in VERSION)
     regexp = re.search(r"--certificate-identity-regexp '([^']+)'", notes).group(1)
     assert re.fullmatch(regexp, IDENTITY), regexp
-    for other in (IDENTITY + "0",  # studio-v0.3.0-beta.10
+    # Forgeries derived from the identity, never from a spelt version: a literal such as
+    # replace("0.4.0", ...) silently stops forging anything once __version__ moves.
+    for other in (IDENTITY + "0",  # a longer tag: X.Y.Z-beta.1 -> X.Y.Z-beta.10
                   IDENTITY.replace("studio-release.yml", "evil.yml"),
                   IDENTITY.replace("hugmesh-generator", "hugmesh-generatorX"),
-                  IDENTITY.replace("0.4.0", "0x4x0")):
+                  IDENTITY.replace(VERSION, VERSION.replace(".", "x"))):  # "." must be literal
+        assert other != IDENTITY, "a forgery that equals the identity proves nothing"
         assert not re.search(regexp, other), f"{regexp} also matches {other}"
 
 

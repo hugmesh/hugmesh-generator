@@ -90,14 +90,6 @@ def _pinned(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def posix_sentences(monkeypatch):
-    """Pin the Linux/WSL wording on any host. On native Windows the panel replaces its
-    scripts/local-ai.sh lines and advice with what runs there (see
-    test_windows_sweep_c4.py); these tests are about the scripts/local-ai.sh wording."""
-    monkeypatch.setattr(tui_local_ai, "native_windows_note", lambda osname=None: "")
-
-
-@pytest.fixture
 def shell(qapp):
     sh = shell_mod.StudioShell(GENERATOR_DIR)
     yield sh
@@ -285,7 +277,6 @@ def test_a_long_status_shortens_itself_and_pushes_nothing_out(shell, qapp):
     assert dock.sizeHint().width() < 700 and dock.minimumSizeHint().width() < TINY.width()
 
 
-@pytest.mark.usefixtures("posix_sentences")
 def test_a_problem_is_shown_in_words_with_the_fix(shell, qapp):
     wiz = open_at(shell, qapp, SMALLEST)
     dock = wiz.local_ai_dock
@@ -678,7 +669,6 @@ def test_stop_ends_a_running_answer(qapp):
     dock.close()
 
 
-@pytest.mark.usefixtures("posix_sentences")
 def test_a_failed_prompt_says_why_and_the_dock_stays_usable(qapp):
     def prompt_fn(text, history, on_chunk, should_stop):
         raise lai.LocalAIError("Ollama is not answering on 127.0.0.1:11434. Start it with scripts/local-ai.sh up")
@@ -713,7 +703,6 @@ def test_start_runs_off_the_window_thread_and_reports_inline(qapp):
     dock.close()
 
 
-@pytest.mark.usefixtures("posix_sentences")
 def test_when_it_cannot_start_the_work_window_opens_with_the_exact_command(qapp):
     def start_fn():
         return lai.StartResult(False, "scripts/local-ai.sh is missing.", "/x/scripts/local-ai.sh start")
@@ -723,7 +712,12 @@ def test_when_it_cannot_start_the_work_window_opens_with_the_exact_command(qapp)
     dock.start_btn.click()
     assert wait_for(qapp, lambda: dock.work_window is not None and dock.work_window.isVisible())
     assert "/x/scripts/local-ai.sh start" in dock.note.text()
-    assert "local-ai.sh start" in dock.work_window.commands.text()
+    if os.name == "nt":
+        # native Windows: the window's run-it-yourself lines are the bash script, which
+        # that build cannot run; it says so (and what works) instead of listing them
+        assert lai.windows_worker_note() == dock.work_window.commands.text()
+    else:
+        assert "local-ai.sh start" in dock.work_window.commands.text()
     dock.work_window.close()
     dock.close()
 
@@ -737,7 +731,13 @@ def test_a_start_that_raises_is_reported_not_swallowed(qapp):
     dock.start_btn.click()
     assert wait_for(qapp, lambda: dock.start_btn.isEnabled())
     assert "boom" in dock.note.text()
-    dock.work_window.close()
+    if os.name == "nt":
+        # no command to run yourself there (start is the bash script): none is named and
+        # no window opens to show one, as when the start refuses in words
+        assert "local-ai.sh" not in dock.note.text() and dock.work_window is None
+    else:
+        assert "local-ai.sh start" in dock.note.text()
+        dock.work_window.close()
     dock.close()
 
 

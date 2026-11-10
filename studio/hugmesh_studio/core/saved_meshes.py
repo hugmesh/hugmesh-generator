@@ -237,6 +237,13 @@ class SavedMesh:
     #: own ``follows``. An older record of the same mesh then claims no domain code
     #: copy the newer mesh dropped (core/domain_workspaces.saved_mesh_claims).
     follows: list = field(default_factory=list)
+    #: The node-image build this mesh was saved from, when it was (``{}`` for every
+    #: mesh saved on the local-mesh page): ``{source: "images", session_id,
+    #: worklist_ids: [...]}`` (core/images_mesh.py). The images' per-node settings —
+    #: role, platform, board, encryption, users' passwords — have no place on a
+    #: Docker mesh's config; they stay in that build session's record, and this is
+    #: the pointer to it. Additive: an older Studio drops the key on load.
+    build: dict = field(default_factory=dict)
 
     def path(self) -> str:
         return os.path.join(meshes_dir(), f"{self.id}.json")
@@ -295,6 +302,21 @@ class SavedMesh:
     def domain_lines(self) -> list[str]:
         """One plain line per domain the record carries (:func:`domain_lines_of`)."""
         return domain_lines_of(self.config)
+
+    def compose_project(self) -> str:
+        """The compose project this record's mesh runs under (:func:`record_project`)."""
+        return record_project(self)
+
+    def own_project(self) -> bool:
+        """True when the mesh runs under a compose project OTHER than the checkout's
+        own (:func:`is_own_project`)."""
+        return is_own_project(self)
+
+    def build_text(self) -> str:
+        """``"from node images (N images)"`` for a mesh saved from the node-image flow
+        (:attr:`build`), ``""`` otherwise — the one wording the table, the picker and
+        the CLI use."""
+        return build_text_of(self.build)
 
     def brand_text(self) -> str:
         env = str(self.config.get("env") or "test")
@@ -494,6 +516,34 @@ def domain_lines_of(config: dict) -> list[str]:
             parts.append("its own Tor front door")
         out.append(f"{name} — " + "; ".join(parts))
     return out
+
+
+def record_project(rec) -> str:
+    """The compose project a saved mesh runs under: ``lanes.compose_project``, else
+    the checkout's own (:data:`vaults.DEFAULT_PROJECT` — every record saved on the
+    local-mesh page, and every record older than the field). Never raises."""
+    lanes = getattr(rec, "lanes", None)
+    lanes = lanes if isinstance(lanes, dict) else {}
+    return str(lanes.get("compose_project") or "").strip() or vaults.DEFAULT_PROJECT
+
+
+def is_own_project(rec) -> bool:
+    """A record whose mesh runs under its OWN compose project (the node-image flow's
+    ``hugmesh-img-<id>``, core/images_mesh.py), never this checkout's
+    ``hugmesh-local``. Every consumer that ACTS on a record (start, restore, stop,
+    the monitor) must drive that project, its own host ports and its own worktree —
+    and refuse, never fall back to the checkout's mesh, when one of them is gone
+    (``LocalMeshBootstrap.for_record``)."""
+    return record_project(rec) != vaults.DEFAULT_PROJECT
+
+
+def build_text_of(build) -> str:
+    """See :meth:`SavedMesh.build_text`. Never raises on a hand-edited value."""
+    if not isinstance(build, dict) or build.get("source") != "images":
+        return ""
+    ids = build.get("worklist_ids")
+    n = len(ids) if isinstance(ids, list) else 0
+    return f"from node images ({n} image{'' if n == 1 else 's'})"
 
 
 def config_for_record(cfg) -> dict:
@@ -1167,7 +1217,14 @@ def _credential_pointers(rec: SavedMesh, boot, *, copy: bool) -> dict:
     """Paths, hashes, mtimes — and, only when ``copy`` is set, 0600 copies in the
     record's own side dir. NEVER a value."""
     gen = rec.generator_dir
-    e2e_path = os.path.join(gen, E2E_CREDENTIALS_BASENAME)
+    # The credential file of the mesh ``boot`` drives: the run-state file in the
+    # directory `make stack-seed` runs in. For a mesh of the checkout that is
+    # ``<checkout>/.e2e-credentials`` (unchanged); for a mesh with its own compose
+    # project it is ITS worktree's — pointing at the checkout's file made a record of
+    # another mesh claim the operator's live password file as its own (creds_match).
+    e2e_fn = getattr(boot, "e2e_credentials_path", None)
+    e2e_path = (str(e2e_fn()) if callable(e2e_fn) else "") or os.path.join(
+        gen, E2E_CREDENTIALS_BASENAME)
     secrets_path = str(getattr(boot, "secrets_json", "") or os.path.join(
         gen, "keys-out", "vault", "secrets.json"))
 
@@ -1250,8 +1307,7 @@ def probe_state(rec: SavedMesh, *, project: str = "") -> dict:
     "gather here, decide there" — the same shape ``emulation_save.plan_mesh_save``
     uses, and what lets the decision be unit-tested with no docker at all.
     """
-    proj = project or str((rec.lanes or {}).get("compose_project")
-                          or vaults.DEFAULT_PROJECT)
+    proj = project or record_project(rec)
     want = rec.volume_names()
     try:
         live = {v.name for v in vaults.list_volumes(proj, strict=True)}
@@ -1389,8 +1445,12 @@ def restore_plan(rec: SavedMesh, *, volumes_present: bool | None = None,
               "promises.",
             tuple(warn), vol_text)
     if mesh_running:
+        own = record_project(rec)
         return RestorePlan(
             MODE_BLOCKED,
+            (f"Blocked — this mesh's own compose project {own} is running right now. "
+             "Stop it first; starting it again over itself brings up a second copy "
+             "on the same compose project.") if is_own_project(rec) else
             "Blocked — a local mesh is running right now. Stop it first; starting "
             "a saved mesh over a live one brings up a second stack on the same "
             "compose project.",
@@ -1466,12 +1526,16 @@ def restore_plan(rec: SavedMesh, *, volumes_present: bool | None = None,
             tuple(warn), vol_text)
     saved_sha = str(((rec.credentials or {}).get("e2e_file") or {}).get("sha256") or "")
     if not n and not saved_sha:
+        mint = (f"starting it beside a build (`python -m hugmesh_studio.core.images_mesh "
+                f"start {rec.id} --not-building`) mints them in its own worktree"
+                if is_own_project(rec) else
+                "'Load into the form' and 'Generate && start' mint them")
         return RestorePlan(
             MODE_RESEED,
             f"Restore (reseed): {gone}, and no credential files existed when it was "
             "saved — this brings it up empty and seeds it with the credential files "
             "on disk NOW. With none there it refuses before starting anything; "
-            "'Load into the form' and 'Generate && start' mint them.",
+            f"{mint}.",
             tuple(warn), vol_text)
     return RestorePlan(
         MODE_RESEED,

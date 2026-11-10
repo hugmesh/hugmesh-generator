@@ -372,7 +372,16 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
         self.start_btn = QtWidgets.QPushButton("Start local agent chat")
         self.copy_btn = QtWidgets.QPushButton("Copy command")
         self.recheck_btn = QtWidgets.QPushButton("Re-check")
-        for b in (self.start_btn, self.copy_btn, self.recheck_btn):
+        # Shown on a no-model problem when the panel gave the card a way to download
+        # (set_downloader): the same pull as the chat's Download button.
+        from ...core import local_ai_models as lam
+        self.download_btn = QtWidgets.QPushButton(
+            f"Download {lam.RECOMMENDED.name} ({lam.size_words(lam.RECOMMENDED.bytes)})")
+        self.download_btn.setToolTip("Download a small model that can use tools into the "
+                                     "Ollama the assistant uses; the chat shows the progress.")
+        self.download_btn.setVisible(False)
+        self._downloader: "Optional[Callable[[str], object]]" = None
+        for b in (self.start_btn, self.copy_btn, self.recheck_btn, self.download_btn):
             row.addWidget(b)
         lay.addWidget(box)
         self.copy_btn.setToolTip("Copies the lines that make the no-remote copy and start "
@@ -394,6 +403,7 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
         self.start_btn.clicked.connect(self._start)
         self.copy_btn.clicked.connect(self._copy)
         self.recheck_btn.clicked.connect(self.recheck)
+        self.download_btn.clicked.connect(self._download)
         self.lane_box.currentIndexChanged.connect(lambda _i: self._sync())
         self.app_box.currentIndexChanged.connect(lambda _i: self._on_app_changed())
         self.agent_box.currentIndexChanged.connect(lambda _i: self._on_agent_changed())
@@ -406,6 +416,17 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
 
     def set_launcher(self, launcher: "Callable[[la.Plan], la.LaunchResult]") -> None:
         self._launcher = launcher
+
+    def set_downloader(self, downloader: "Optional[Callable[[str], object]]") -> None:
+        """``downloader(model)`` starts a model download (the panel's), or None while
+        one is running or there is no panel: the card's Download button follows it."""
+        self._downloader = downloader
+        self._sync()
+
+    def _download(self) -> None:
+        from ...core import local_ai_models as lam
+        if self._downloader is not None:
+            self._downloader(lam.RECOMMENDED.name)
 
     def _env(self) -> "Optional[dict]":
         try:
@@ -591,6 +612,10 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
                                   "window running the agent there.")
         self.copy_btn.setEnabled(not probe_running(self, "_work_job"))
         self.recheck_btn.setEnabled(not probe_running(self, "_probe_job"))
+        first_code = (self.problems() or [None])[0]
+        self.download_btn.setVisible(
+            self._downloader is not None and first_code is not None
+            and first_code.code in ("no_models", "no_tools_model"))
 
     # ── Start ────────────────────────────────────────────────────────────────────
     def _snapshot(self) -> "_Snapshot":

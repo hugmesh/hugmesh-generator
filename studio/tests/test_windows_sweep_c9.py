@@ -314,3 +314,103 @@ def test_e2e_plan_off_windows_is_unchanged(env_id):
     p = e2e_environments.plan(env_id, ambient={}, osname="posix")
     assert p.runnable and p.refusals == ()
     assert p.argv == ("make", e2e_environments.RUN_TARGET)
+
+
+# ── quoted paths: the quotes come off at input, on native Windows only ─────────────
+
+_REAL_UNQUOTE = platform_info.unquote_pasted_path
+
+
+def _unquote_as(monkeypatch, osname):
+    monkeypatch.setattr(platform_info, "unquote_pasted_path",
+                        functools.partial(_REAL_UNQUOTE, osname=osname))
+
+
+def test_unquote_pasted_path_drops_explorer_quotes_on_windows_only():
+    assert platform_info.unquote_pasted_path(QUOTED, osname="nt") == QUOTED[1:-1]
+    assert platform_info.unquote_pasted_path(f"  {QUOTED} ", osname="nt") == QUOTED[1:-1]
+    assert platform_info.unquote_pasted_path(QUOTED, osname="posix") == QUOTED
+    # not ONE quoted path: left for the check to name
+    for text in (r'"C:\a" "C:\b"', r'"C:\a', r'C:\a"', '"', r'C:\plain'):
+        assert platform_info.unquote_pasted_path(text, osname="nt") == text
+
+
+def test_a_quoted_egress_conf_is_stored_without_its_quotes_on_windows(monkeypatch):
+    from hugmesh_studio.tui.brand_step import BrandView
+
+    class _View:
+        own = False
+
+        def _set_ways(self, **kw):
+            self.ways = kw
+            return []
+
+    _unquote_as(monkeypatch, "nt")
+    view = _View()
+    assert BrandView.set_egress(view, "vpn", QUOTED) == []
+    assert view.ways == {"egress": {"mode": "vpn", "conf": QUOTED[1:-1]}}
+    _unquote_as(monkeypatch, "posix")
+    BrandView.set_egress(view, "vpn", QUOTED)
+    assert view.ways["egress"]["conf"] == QUOTED          # Linux: as typed, as before
+
+
+def test_a_quoted_ca_path_in_the_text_screen_is_added_on_windows(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from hugmesh_studio.tui.journey import VaultScreen
+    from ca_fixtures import CA_ROOT_PEM
+    pem = tmp_path / "ca.pem"
+    # A real certificate: where `cryptography` is installed (Linux CI) the screen
+    # parses the X.509 body, and a dummy block is rightly refused there.
+    pem.write_text(CA_ROOT_PEM, encoding="utf-8")
+    _unquote_as(monkeypatch, "nt")
+    j = SimpleNamespace(cfg=ImageConfig(), status="")
+    VaultScreen._feed_certificate(j, "c", f'"{pem}"')
+    assert j.cfg.base_ca_certs == [str(pem)], j.status
+    assert j.status.startswith("added ca.pem")
+
+
+def test_a_quoted_picture_path_loads_on_windows(tmp_path, monkeypatch):
+    from hugmesh_studio.core import brand_look
+    from test_look_model import png_bytes
+    pic = tmp_path / "logo J\u00f6rg.png"
+    pic.write_bytes(png_bytes(16, 16))
+    _unquote_as(monkeypatch, "nt")
+    out = brand_look.Look().load_picture("logo_image", f'"{pic}"')
+    assert out.ok and out.text.startswith("Accepted:"), out.text
+    look = brand_look.Look()
+    assert look.try_set("desktop_logo", f'"{pic}"').ok
+    assert look.get("desktop_logo") == str(pic)
+
+
+def test_a_quoted_picture_path_is_left_alone_off_windows(tmp_path, monkeypatch):
+    from hugmesh_studio.core import brand_look
+    _unquote_as(monkeypatch, "posix")
+    look = brand_look.Look()
+    assert look.try_set("desktop_logo", '"/srv/logo.png"').ok
+    assert look.get("desktop_logo") == '"/srv/logo.png"'
+
+
+# ── the superbrand title is refused AS IT IS TYPED, in the ASCII words ──────────────
+
+def test_a_non_ascii_title_is_refused_when_typed_on_the_image_route():
+    import types
+    from hugmesh_studio.tui.superbrand_step import session_for
+    gen = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    s = session_for(types.SimpleNamespace(), "image", ImageConfig(), os.path.dirname(gen))
+    said = s.set_identity("title", "J\u00f6rg Mesh")
+    assert "ASCII letters A-Z a-z" in said and said.startswith("title: ")
+    assert s.sb.title == ""                               # a refused value changes nothing
+    assert s.set_identity("title", "Joerg Mesh") == "" and s.sb.title == "Joerg Mesh"
+
+
+def test_the_docker_route_still_takes_a_non_ascii_title():
+    import types
+    from hugmesh_studio.core.config import Domain
+    from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
+    from hugmesh_studio.core.local_mesh_domains import LocalMeshDomains
+    from hugmesh_studio.tui.superbrand_step import session_for
+    gen = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    boot = LocalMeshBootstrapConfig(env="test")
+    state = LocalMeshDomains(domains=[Domain(name="hugmesh.net")], own_name="hugmesh.net")
+    s = session_for(types.SimpleNamespace(), "docker", (boot, state), gen)
+    assert s.set_identity("title", "J\u00f6rg Mesh") == ""  # its start takes any title

@@ -20,9 +20,11 @@ from datetime import datetime
 
 from ..qt import QtCore, QtGui, QtWidgets
 from .. import console
+from ..styles import WARN
 from . import build_window
 from ...core import build_sessions
 from ...core import secret_files
+from ...core import session_locations
 from ...core.domain_services import restart_gate_reason
 
 # status id -> (symbol, colour) — the ProgressPage glyph/colour language, extended
@@ -326,14 +328,40 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         return (self.wiz.cfg.output_dir
                 or os.path.join(self.wiz.generator_dir, "out"))
 
+    def _out_roots(self) -> list[str]:
+        """Every output folder to look for pre-session ``wl-*`` trees in: the live
+        config's first, then each folder a build has written sessions into
+        (core/session_locations.py). Only the live folder was scanned before, so an
+        unmanaged build in a folder the operator had since switched away from fell off
+        this page. Reads only: a folder that is away right now (an unplugged drive) is
+        not listed, and is NOT forgotten either. This refresh used to prune such
+        registry entries, which after a record-only delete lost the folder's images
+        for good (core/session_locations.py, "ABSENCE IS NOT DELETION")."""
+        out = self._default_out()
+        try:
+            # No generator_dir: <generator>/out is scanned when it IS the live
+            # folder or a build recorded it, not merely because it exists.
+            found = session_locations.roots("", (out,))
+        except RuntimeError:                 # state dir unresolvable: live folder only
+            found = []
+        ordered = [out] + [r for r in found if not session_locations.same_path(r, out)]
+        return ordered
+
+    def _unmanaged(self) -> list:
+        found = []
+        for out in self._out_roots():
+            found += build_sessions.discover_unmanaged(out)
+        found.sort(key=lambda u: u.mtime, reverse=True)
+        return found
+
     def refresh(self) -> None:
         """Rebuild the rows from disk: session records newest-first, then unmanaged
-        wl-*.* dirs under the default out dir, then unreadable record files. Hides the
-        whole groupbox when there is nothing to show (first-run Sessions screen unchanged)."""
+        wl-*.* dirs in every known output folder (``_out_roots``), then unreadable
+        record files. Hides the whole groupbox when there is nothing to show
+        (first-run Sessions screen unchanged)."""
         sessions, unreadable = build_sessions.scan()
         rows = [_RowData("session", session=s) for s in sessions]
-        rows += [_RowData("unmanaged", unmanaged=u)
-                 for u in build_sessions.discover_unmanaged(self._default_out())]
+        rows += [_RowData("unmanaged", unmanaged=u) for u in self._unmanaged()]
         rows += [_RowData("unreadable", path=p) for p in unreadable]
         self._row_data = rows
         self.setVisible(bool(rows))
@@ -351,9 +379,8 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             nxt.setToolTip("The next action available for this build.")
             self.table.setItem(i, 3, nxt)
             self.table.setItem(i, 4, QtWidgets.QTableWidgetItem(r.images_text()))
-            loc = QtWidgets.QTableWidgetItem(self._elide(r.location))
-            loc.setToolTip(r.location)
-            self.table.setItem(i, 5, loc)
+            self.table.setItem(i, 5, self._location_item(
+                r.location, is_folder=r.kind != "unreadable"))
         self.table.resizeColumnsToContents()
         self._apply_filter()
         self._update_buttons()
@@ -386,6 +413,31 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
                 print("sessions_widget: swallowed exception in _rebind_build_windows",
                       file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)
+
+    #: The Location cell's prefix for a folder that is not there right now.
+    MISSING_MARK = "(folder missing) "
+
+    @classmethod
+    def _location_item(cls, location: str, *,
+                       is_folder: bool = True) -> QtWidgets.QTableWidgetItem:
+        """The Location cell. A folder that is not there right now (deleted, or on a
+        drive that is not plugged in) is SAID to be missing, in the warning colour,
+        instead of being shown like any other path: the row is still build history
+        (Next offers a new build), and its images are found again if the drive
+        returns, because the session-root registry never forgets a folder for being
+        away (core/session_locations.py). An unreadable row's location is its record
+        FILE, never a folder, so it is never marked."""
+        if not is_folder or not location or os.path.isdir(location):
+            item = QtWidgets.QTableWidgetItem(cls._elide(location))
+            item.setToolTip(location)
+            return item
+        item = QtWidgets.QTableWidgetItem(cls.MISSING_MARK + cls._elide(location))
+        item.setForeground(QtGui.QBrush(QtGui.QColor(WARN)))
+        item.setToolTip(
+            f"{location}\n\nThis folder is not there right now: it was deleted, or it "
+            "is on a drive that is not plugged in. If the drive comes back, its images "
+            "are listed for emulation again.")
+        return item
 
     @staticmethod
     def _elide(path: str, keep: int = 46) -> str:

@@ -209,8 +209,10 @@ class WarnGate:
 # the model whole.
 _PATH_CHARS = r"[^\s`'\"<>()\[\]{},;|]"
 # a folder name with a space: the next word belongs to the path when it holds a separator
-# (/mnt/big disk/out/build.log, C:\Users\Jane Doe\x), and is not a URL or and/or
-_PATH_CONT = (r"(?:[ ]+(?!and/or\b)(?![^\s]*://)(?![/\\])" + _PATH_CHARS + r"*[\\/]"
+# (/mnt/big disk/out/build.log, C:\Users\Jane Doe\x), and is not a URL or and/or, nor a
+# path of its own (/x, \\server, C:\x: `/* C:\Users\<user>\x */` once swallowed the
+# drive path into the comment's "/*" and kept the user name)
+_PATH_CONT = (r"(?:[ ]+(?!and/or\b)(?![^\s]*://)(?![/\\])(?![A-Za-z]:[\\/])" + _PATH_CHARS + r"*[\\/]"
               + _PATH_CHARS + r"*)*")
 _ABS_PATH_RE = re.compile(
     r"(?P<posix>(?<![\w.~/\\\-])/" + _PATH_CHARS + r"+" + _PATH_CONT + r")"
