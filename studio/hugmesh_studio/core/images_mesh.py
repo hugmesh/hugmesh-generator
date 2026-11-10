@@ -63,12 +63,14 @@ import argparse
 import copy
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 
-from . import host_resources, resource_limits, saved_meshes, vaults
+from . import host_resources, platform_info, resource_limits, saved_meshes, vaults
 from .local_stack_node import IMG_PROJECT_PREFIX
 from .state_paths import state_dir
 
@@ -368,16 +370,22 @@ def _gib(b: int) -> str:
     return f"{b / host_resources.GIB:.1f} GiB"
 
 
-def container_project(name: str) -> str:
-    """The compose project label of container ``name`` ("" when docker cannot say)."""
+def container_project(name: str) -> str | None:
+    """The compose project label of container ``name``: "" when docker ANSWERED and
+    the container carries no compose project label (a plain ``docker run``), None
+    when docker did not say (no answer, an error, or an empty reply) — two different
+    facts a refusal must not merge (#937 refute, round 4: an unanswered inspect was
+    reported as "not a HugMesh mesh")."""
     try:
         r = subprocess.run(["docker", "inspect", "-f",
                             '{{index .Config.Labels "com.docker.compose.project"}}',
                             name], capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
-        return ""
+        return None
     out = (r.stdout or "").strip()
-    return out if r.returncode == 0 and out != "<no value>" else ""
+    if r.returncode != 0 or not out:
+        return None
+    return "" if out == "<no value>" else out
 
 
 def holder_in_project(name: str, project: str, project_of=None) -> bool:
@@ -467,6 +475,20 @@ def checkout_fixed_port_refusals(boot_cfg, project: str = vaults.DEFAULT_PROJECT
         # Anything else (another project, no compose label at all) is named and
         # said NOT to be a HugMesh mesh, with no images_mesh remedy.
         label = (container_project if project_of is None else project_of)(who)
+        if label is None:
+            # docker did not say (#937 refute, round 4): stated as unknown, never as
+            # "not a HugMesh mesh" — a real hugmesh-img-* container always carries
+            # its label, so it may well be one; both remedies are named
+            out.append(f"host port {p} is already in use by the container {who}, and "
+                       "docker did not say who holds it (no compose project came back "
+                       "for it), so whether it is another local mesh is not known — "
+                       f"compose publishes the port as a fixed one{_port_role(p)}, so "
+                       f"{project} cannot run while it is there. If it is a mesh "
+                       "started beside a node-image build, stop it (Stop on its row in "
+                       "Saved meshes, or `python -m hugmesh_studio.core.images_mesh "
+                       "stop <id>`); otherwise stop or move that container. Then start "
+                       "this one. Nothing was started.")
+            continue
         img_project = label if label.startswith(PROJECT_PREFIX) else ""
         if not img_project:
             out.append(f"host port {p} is already in use by the container {who}, which "
@@ -723,12 +745,42 @@ def project_running_ids(project: str) -> list[str] | None:
     return [x for x in (r.stdout or "").split() if x]
 
 
-def halt_by_label(project: str) -> tuple[bool, list[str]]:
+def teardown_blocker(osname: str | None = None) -> str:
+    """Why a stop of a node-image mesh cannot run in a NATIVE Windows Studio (the
+    MSI), "" anywhere else: the same sentence as
+    ``LocalMeshBootstrap.teardown_refusal`` (a mesh seen from there was started by
+    the WSL2 Studio on the same Docker engine, and that Studio is the one to stop
+    it). ``osname`` is passed on only when given, so a test that pins the host by
+    swapping ``platform_info.native_windows_blocker`` is not undone by a None."""
+    if osname is None:
+        return platform_info.native_windows_blocker("The local stack")
+    return platform_info.native_windows_blocker("The local stack", osname=osname)
+
+
+def _compose_env_without_project_files() -> dict[str, str]:
+    """This process's environment minus every ``COMPOSE_*`` variable: a stop by
+    project name must not pick up a ``COMPOSE_FILE``, ``COMPOSE_PROFILES`` or
+    ``COMPOSE_ENV_FILES`` the Studio happened to inherit."""
+    return {k: v for k, v in os.environ.items() if not k.upper().startswith("COMPOSE_")}
+
+
+def halt_by_label(project: str, osname: str | None = None) -> tuple[bool, list[str]]:
     """Stop a node-image mesh whose WORKTREE IS GONE, by its compose project label:
     ``docker compose -p <project> down`` — no compose file needed, no ``-v`` and no
     ``--rmi``, so exactly what ``make stack-halt`` does (containers go, data volumes
-    and images stay). Only ever a ``hugmesh-img-*`` project (:func:`label_stop_refusal`).
-    Verified afterwards: anything of the project still running is a failure."""
+    and images stay). Only ever a ``hugmesh-img-*`` project (:func:`label_stop_refusal`),
+    and never from a native Windows Studio (:func:`teardown_blocker`).
+    Verified afterwards: anything of the project still running — or docker no
+    longer answering — is a failure.
+
+    It runs from a fresh EMPTY directory that is also its ``--project-directory``,
+    with no ``COMPOSE_*`` variable in its environment: compose looks for a
+    compose.yaml (in the working directory and its parents) and an ``.env`` (in the
+    project directory), so a stray file in the Studio's own working directory could
+    otherwise be loaded into a stop that needs none (#937 refute, round 4)."""
+    blocker = teardown_blocker(osname)
+    if blocker:
+        return False, [f"[local mesh] {blocker}"]
     why = label_stop_refusal(project)
     if why:
         return False, [f"[local mesh] {why}"]
@@ -743,11 +795,15 @@ def halt_by_label(project: str) -> tuple[bool, list[str]]:
     base = _compose_base()
     if not base:
         return False, ["[local mesh] stop FAILED: docker compose is not available"]
+    empty = tempfile.mkdtemp(prefix="hugmesh-compose-noproject-")
     try:
-        r = subprocess.run([*base, "-p", project, "down"], capture_output=True,
-                           text=True, timeout=300)
+        r = subprocess.run([*base, "--project-directory", empty, "-p", project, "down"],
+                           cwd=empty, env=_compose_env_without_project_files(),
+                           capture_output=True, text=True, timeout=300)
     except (OSError, subprocess.SubprocessError) as e:
         return False, [f"[local mesh] stop FAILED: {e}"]
+    finally:
+        shutil.rmtree(empty, ignore_errors=True)
     after = project_running_ids(project)
     if r.returncode != 0 or after is None or after:
         tail = ((r.stderr or "") + (r.stdout or "")).strip()[-400:]
@@ -916,7 +972,7 @@ class AlongsideMesh:
             note(f"[local mesh] FAILED: {e}")
             return False, log
 
-    def stop(self) -> tuple[bool, list[str]]:
+    def stop(self, osname: str | None = None) -> tuple[bool, list[str]]:
         """``make stack-halt`` for THIS project only (volumes kept). Never the
         bootstrap's down(), which also stops the operator's tailnet overlay.
 
@@ -930,8 +986,13 @@ class AlongsideMesh:
         foreign = foreign_record_refusal(self.rec)
         if foreign:
             return False, [f"[local mesh] refused — {foreign}"]
+        # the native Windows gate, on EVERY stop path (worktree or label): the CLI
+        # `images_mesh stop` reached halt_by_label ungated (#937 refute, round 4)
+        blocker = teardown_blocker(osname)
+        if blocker:
+            return False, [f"[local mesh] {blocker}"]
         if not os.path.exists(os.path.join(self.worktree, ".git")):
-            return halt_by_label(self.project)
+            return halt_by_label(self.project, osname)
         try:
             node = self.bootstrap()._stack_node()
             before = node.status()

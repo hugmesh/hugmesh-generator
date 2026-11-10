@@ -2023,13 +2023,19 @@ class LocalStackNode:
         if up is None:
             why = ("docker could not say whether a mesh started beside a node-image "
                    f"build ({IMG_PROJECT_PREFIX}*) is running")
+            once = "once you know no such mesh is running"
+        elif len(up) == 1:
+            why = (f"{up[0]} is running (a mesh started beside a node-image build) and "
+                   "builds from it")
+            once = "once that mesh is stopped"
         else:
-            why = (", ".join(up) + (" is" if len(up) == 1 else " are") + " running (a "
-                   "mesh started beside a node-image build) and builds from it")
+            why = (", ".join(up[:-1]) + f" and {up[-1]} are running (meshes started "
+                   "beside node-image builds) and build from it")
+            once = "once those meshes are stopped"
         return ["STACK_CLEAN_KEEP_M2=1"], (
             f"[stack-clean] the private-maven registry {M2_REGISTRY_CONTAINER} is KEPT, "
             f"not removed: {why}. Everything else of {_COMPOSE_PROJECT} is cleaned; "
-            "clean again once that mesh is stopped to remove the registry too.")
+            f"clean again {once} to remove the registry too.")
 
     def _project_args(self) -> list[str]:
         """``-p <project>`` for a node that is not the checkout's own mesh; [] for the
