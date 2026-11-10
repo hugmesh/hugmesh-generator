@@ -2048,14 +2048,17 @@ STACK_ROUTE_ACCESS_ENV := ROUTE_ACCESS_DB_PASSWORD="$$(bash tests/stack/gen-rout
 # The compose files read ${KEY:?...} and spell no value, so a missing key stops ANY
 # compose command on them with a message naming tests/stack/gen-stack-db-env.sh.
 # Same two steps as the route-access key above:
-#   1. stack-db-env (a prerequisite of EVERY target that runs compose on these
-#      files, read-only ones included: compose interpolates the whole file before
-#      it applies profiles, so even `ps`/`logs`/`down` need the keys) runs the
-#      resolver: create-if-missing, never rotate, and for a volume that already
-#      exists ADOPT the value its container was created with (or the pre-#857
-#      literal), so an existing stack keeps working unchanged. The first make
-#      target run after pulling this change does that adoption, while the old
-#      containers still exist to be read.
+#   1. stack-db-env (a prerequisite of every target that builds, creates, stops or
+#      writes to the stack: build, up, halt, down, clean, route-access-reconcile)
+#      runs the resolver: create-if-missing, never rotate, and for a volume that
+#      already exists ADOPT the value its container was created with (or the
+#      pre-#857 literal), so an existing stack keeps working unchanged. Halt/down
+#      need it too: compose interpolates the whole file before it applies
+#      profiles, so even a teardown needs every key. The READ-ONLY targets
+#      (stack-ps, stack-logs, stack-onion) do not run it, as with the route-access
+#      key: looking at a stack never mints or adopts a password. Before any
+#      ensuring target has run they stop with compose's "required variable ...
+#      run tests/stack/gen-stack-db-env.sh" (stack-onion reports "not running").
 #   2. STACK_DB_ENV passes each key explicitly (an --env-file disables .env), READ
 #      ONLY. A value the operator EXPORTED wins, exactly as it would for compose.
 # stack-down/stack-clean strip the keys (--remove) AFTER `down -v` drops the volumes.
@@ -2489,7 +2492,7 @@ stack-e2e-list: ## enumerate the e2e specs as JSON without running them (no stac
 # Studio (core/local_mesh_bootstrap.py) and docs/SERVE-YOUR-MESH.md already cite
 # this target by name; it did not exist until now.
 STACK_ONION_FILE := tests/stack/tor-onion/hostname
-stack-onion: stack-db-env ## print the local mesh's Tor .onion address (needs `make stack-up TOR=1`)
+stack-onion: ## print the local mesh's Tor .onion address (needs `make stack-up TOR=1`)
 	@f='$(STACK_ONION_FILE)'; \
 	if [ ! -s "$$f" ]; then \
 	  echo "stack-onion: no onion is published ($$f is absent or empty) — hugmesh-tor is not running. Start it: make stack-up TOR=1" >&2; exit 1; \
@@ -2540,10 +2543,10 @@ stack-e2e-tor-domains: ## run the per-domain onion sign-in (#582) over brand B's
 stack-tor-mechanism-check: ## OPT-IN, needs the public Tor network + a host tor binary: prove a v3 onion round-trips over Tor (no docker)
 	HUGMESH_TOR_E2E=1 bash tests/stack/test-tor-onion-mechanism.sh
 
-stack-logs: stack-db-env ## tail logs from the running local stack
+stack-logs: ## tail logs from the running local stack
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
-stack-ps: stack-db-env ## list the local stack's containers + status
+stack-ps: ## list the local stack's containers + status
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
 
 # Re-apply the canonical route-access seed (specs/cluster/manifests/route-access/

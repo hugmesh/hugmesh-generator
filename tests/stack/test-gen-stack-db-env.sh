@@ -32,8 +32,9 @@
 #       is a table key and every table key is read; each row's service sets its
 #       ctr_env from that same key and mounts the row's volume (so adoption reads
 #       the right container); no ${KEY:-literal} fallback is left;
-#   (8) the Makefile: every target that runs compose on these files depends on the
-#       stack-db-env ensure step; STACK_ENV passes every key; stack-down/stack-clean
+#   (8) the Makefile: every target that builds, creates, stops or writes to the
+#       stack depends on the stack-db-env ensure step, and the read-only ones
+#       (ps/logs/onion) do not; STACK_ENV passes every key; stack-down/stack-clean
 #       strip the keys only AFTER `down -v`; BEHAVIOURALLY a resolver failure stops
 #       make stack-up before compose runs, and compose gets exactly the file's value;
 #   (9) with docker compose installed: compose.local.yaml renders with a generated
@@ -290,22 +291,38 @@ MK="${REPO}/Makefile"
 wiring="$(python3 - "${MK}" <<'PY'
 import re, sys
 s = open(sys.argv[1], encoding="utf-8").read()
-users, missing = 0, []
+# A target that runs compose on the stack files with any verb but ps/logs, or the
+# route-access reconcile (it writes to the running stack), must ensure the keys;
+# a read-only one (ps/logs only) must not, so looking never mints or adopts.
+users, missing, readers, extra = 0, [], 0, []
 for m in re.finditer(r"^([A-Za-z0-9_.-]+):([^=\n][^\n]*)\n((?:\t[^\n]*\n|[ \t]*#[^\n]*\n)*)", s, re.M):
     name, prereqs, body = m.group(1), m.group(2).split("##")[0].split(), m.group(3)
     if name.startswith("."):
         continue
     rec = [ln for ln in body.splitlines() if ln.startswith("\t")]
-    if any("$(STACK_ENV)" in ln and "$(COMPOSE_CMD)" in ln and "$(STACK_COMPOSE)" in ln for ln in rec):
+    comp = [ln for ln in rec if "$(STACK_ENV)" in ln and "$(COMPOSE_CMD)" in ln and "$(STACK_COMPOSE)" in ln]
+    recon = any("$(STACK_ENV)" in ln and "route-access-reconcile.sh" in ln for ln in rec)
+    if not comp and not recon:
+        continue
+    readonly = comp and not recon and all(re.search(r"\s(ps|logs)(\s|$)", ln) for ln in comp)
+    if readonly:
+        readers += 1
+        if "stack-db-env" in prereqs:
+            extra.append(name)
+    else:
         users += 1
         if "stack-db-env" not in prereqs:
             missing.append(name)
 print(users)
 print(" ".join(missing))
+print(readers)
+print(" ".join(extra))
 PY
 )"
 nu="$(sed -n 1p <<<"${wiring}")"; miss="$(sed -n 2p <<<"${wiring}")"
-if [ "${nu}" -ge 7 ] && [ -z "${miss}" ]; then ok "every target that runs compose on the stack files (${nu}) depends on stack-db-env"; else bad "compose targets: ${nu}; missing the stack-db-env prerequisite: ${miss:-?}"; fi
+nr="$(sed -n 3p <<<"${wiring}")"; extra="$(sed -n 4p <<<"${wiring}")"
+if [ "${nu}" -ge 6 ] && [ -z "${miss}" ]; then ok "every target that builds, creates, stops or writes to the stack (${nu}) depends on stack-db-env"; else bad "ensuring targets: ${nu}; missing the stack-db-env prerequisite: ${miss:-?}"; fi
+if [ "${nr}" -ge 3 ] && [ -z "${extra}" ]; then ok "none of the ${nr} read-only targets (ps/logs/onion) runs the resolver"; else bad "read-only targets: ${nr}; run the resolver anyway: ${extra:-?}"; fi
 if awk '/^stack-db-env:/{s=1;next} s&&/^\t/{sub(/^\t/,"");print;exit}' "${MK}" | grep -E '^@?bash tests/stack/gen-stack-db-env\.sh$' >/dev/null; then ok "stack-db-env runs the resolver as its own (status-checked) recipe line"; else bad "stack-db-env does not run the resolver as a plain recipe line"; fi
 if command -v make >/dev/null 2>&1; then
   up="$(cd "${REPO}" && timeout 60 make -n -o stack-clone -o stack-certs -o stack-m2-check -o stack-mastodon-env -o stack-route-access-env stack-up 2>/dev/null)"

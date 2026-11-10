@@ -43,11 +43,14 @@ REF = re.compile(
     r"|\$[A-Za-z_][A-Za-z0-9_]*"                 # $VAR (shell inside a command)
 )
 # A value: a quoted string, or a run of ${...} groups and characters up to a flow
-# separator. Used for mapping entries.
-MAP_VALUE = r"(\"(?:[^\"\\]|\\.)*\"|'[^']*'|(?:\$\{[^}]*\}|[^,}\s#])(?:\$\{[^}]*\}|[^,}#])*)?"
+# separator. Used for mapping entries. TOK and the character classes beside it are
+# DISJOINT (a `$` is consumed only by TOK), so no input can be split two ways and
+# the match stays linear (CodeQL py/redos flagged the overlapping first version).
+TOK = r"\$\{[^}]*\}|\$(?!\{)"
+MAP_VALUE = r"(\"(?:[^\"\\]|\\.)*\"|'[^']*'|(?:" + TOK + r"|[^,}\s#$])(?:" + TOK + r"|[^,}#$])*)?"
 MAP_RE = re.compile(r"(?<![A-Za-z0-9_.$-])[\"']?(" + NAME + r")[\"']?\s*:(?:\s+|$)" + MAP_VALUE, re.I)
-ASSIGN_RE = re.compile(r"(?<![A-Za-z0-9_.$-])(" + NAME + r")=(\"(?:[^\"\\]|\\.)*\"|'[^']*'|(?:\$\{[^}]*\}|[^\s\"'])*)", re.I)
-URL_RE = re.compile(r"://([^/\s:@\"']+):((?:\$\{[^}]*\}|[^@\s/\"'])+)@")
+ASSIGN_RE = re.compile(r"(?<![A-Za-z0-9_.$-])(" + NAME + r")=(\"(?:[^\"\\]|\\.)*\"|'[^']*'|(?:" + TOK + r"|[^\s\"'$])*)", re.I)
+URL_RE = re.compile(r"://([^/\s:@\"']+):((?:" + TOK + r"|[^@\s/\"'$])+)@")
 
 
 def strip_comment(line):

@@ -18,11 +18,12 @@
 # before being added to the debian job's first leg: 22 passed / 0 failed and
 # 54 passed / 0 failed / 2 skipped (docker compose and pwsh are absent in this
 # image; the static key-parity section pins what the compose render would), rc=0
-# both. A 13-mutation battery against the real tree (literal put back, ${VAR:-x}
+# both. A 14-mutation battery against the real tree (literal put back, ${VAR:-x}
 # default, rotate, no adoption, docker-down read as no volume, a dropped key row, a
-# wrong volume, a mismatched key, a leaked value, the Makefile and stack-up.ps1
-# ensure steps removed) was 13 caught / 0 survived. Both are NEGATIVE guards,
-# hence debian, not alpine.
+# wrong volume, a mismatched key, a leaked value, the Makefile ensure step dropped
+# from stack-up/stack-halt or added to read-only stack-ps, --remove dropped from
+# stack-down, stack-up.ps1's ensure-before-down removed) was 14 caught / 0
+# survived. Both are NEGATIVE guards, hence debian, not alpine.
 #
 # MEASURED, 2026-09-06: tests/scripts/test-e2e-shell-nav-entry.sh was executed in
 # python:3.12-slim (the debian job's own image) with the checkout mounted READ-ONLY
