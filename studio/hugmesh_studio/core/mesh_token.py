@@ -51,13 +51,15 @@ tokens through both the web ui and the gui/tui/cli on all platforms"). The admin
 mesh created with the Studio needs no SSH key of their own: :func:`ensure_issuer`
 keeps one ``ssh-ed25519`` issuer key per mesh in the Studio state dir (created on
 first use, trusted by this computer's own tray), and :func:`mint_preauth_key` asks
-the mesh's running headscale container for a single-use pre-auth key for a headscale
-user the admin names (there is no default: name the headscale user your mesh sets
-aside for joining devices). The minted key is read from headscale's output, never put
-on a command line or in a log; the one exception is expiring a minted key that could
-not be put in a token (:func:`expire_preauth_key` says how briefly it is visible).
-Minting needs a running headscale container; the Studio's local Docker mesh does not
-run one yet, so there a pre-auth key is pasted or read from a file.
+the mesh's running headscale container for a single-use pre-auth key. The headscale
+user defaults to the one the container's ``net.hugmesh.headscale.user`` label names,
+else the membership user ``hugmesh``, which owns no access tag (see
+:func:`headscale_labels`); the admin may name another. The minted key is read from
+headscale's output, never put on a command line or in a log; the one exception is
+expiring a minted key that could not be put in a token (:func:`expire_preauth_key`
+says how briefly it is visible). Minting needs a running headscale container, such as
+the one the Studio's local Docker mesh runs; without one a pre-auth key is pasted or
+read from a file.
 """
 from __future__ import annotations
 
@@ -721,14 +723,28 @@ def _self_check(key: str, keygen: str, osname: str, runner=subprocess.run) -> No
 
 
 # ── a pre-auth key from the mesh's own headscale ────────────────────────────────────
-#: Tags a minted pre-auth key asks for by default: none. Role and domain are labels;
-#: the mesh decides what this node may do. The pre-auth key only lets it join. In the
-#: mesh's headscale policy (specs/etc/headscale/policy.hujson.tmpl, rendered by
+#: Tags a minted pre-auth key asks for when the headscale container's
+#: ``net.hugmesh.headscale.key-tags`` label names none (the local Docker mesh's label
+#: names the membership tag tag:hugmesh): none. Role and domain are labels; the mesh
+#: decides what this node may do. The pre-auth key only lets it join. In the mesh's
+#: headscale policy (specs/etc/headscale/policy.hujson.tmpl, rendered by
 #: gen-headscale-policy.sh) the membership user "hugmesh" owns only the membership tags
 #: (tag:hugmesh and the role tags), and the tags that gate access (tag:superadmin,
 #: tag:mesh_*, tag:dev_*, tag:dom_*) are owned by NO user and SERVER-FORCED at approval
-#: by hugmesh-headscale-forcetags. So no tag is asked for, and the server tags the node.
+#: by hugmesh-headscale-forcetags. So no access tag is ever asked for, and the server
+#: tags the node.
 DEFAULT_MINT_TAGS: tuple[str, ...] = ()
+
+#: The headscale user a minted key is for when neither the admin nor the headscale
+#: container's ``net.hugmesh.headscale.user`` label names one: the membership user
+#: HugMesh's headscale provisioning creates (keys-template/provision.json "users", and
+#: the local Docker mesh's headscale), which owns no access tag.
+DEFAULT_MINT_USER = "hugmesh"
+
+#: The labels a HugMesh headscale container carries (tests/stack/compose.local.yaml).
+HEADSCALE_ROLE_LABEL = "net.hugmesh.role=headscale"
+HEADSCALE_USER_LABEL = "net.hugmesh.headscale.user"
+HEADSCALE_KEY_TAGS_LABEL = "net.hugmesh.headscale.key-tags"
 
 #: Tags a minted key may never carry. headscale 0.23 turns a pre-auth key's tags into
 #: FORCED tags on the node that joins with it, and forced tags bypass tagOwners, so a
@@ -737,11 +753,13 @@ DEFAULT_MINT_TAGS: tuple[str, ...] = ()
 #: control node's force-tag pass assigns them.
 SECURITY_TAG_RE = re.compile(r"^tag:(?:superadmin$|mesh_|dev_|dom_)")
 
-#: What every face says when minting has no headscale user. There is no default user:
-#: the admin names it every time (the role is not a headscale user either). The user
-#: HugMesh's headscale provisioning creates for this is the membership user "hugmesh"
-#: (keys-template/provision.json "users"), which owns nothing that grants access.
-NAME_MINT_USER = "Name the headscale user your mesh sets aside for joining devices."
+#: What every face says about the headscale user a minted key is for: the default, and
+#: when to name another (never a user that owns an access tag; the role is not a
+#: headscale user either).
+NAME_MINT_USER = (f"Default: the user the headscale container's {HEADSCALE_USER_LABEL} "
+                  f"label names, else {DEFAULT_MINT_USER}, the membership user, which owns "
+                  "no access tag. Name another only if your mesh sets one aside for "
+                  "joining devices.")
 
 #: One tag per entry: no comma, so a value cannot add a second tag to ``--tags a,b``.
 _TAG_RE = re.compile(r"^tag:[a-z0-9][a-z0-9_-]{0,62}\Z")
@@ -771,36 +789,70 @@ _HEADSCALE_NAME_RE = re.compile(r"^(?:.*[-_])?headscale(?:[-_][0-9]+)?$")
 
 
 def find_headscale_container(runner=None) -> str:
-    """The running headscale container, else ``tool``. ``docker ps --filter
-    name=headscale`` matches substrings, so when it lists several, the one whose name is
-    headscale itself (see ``_HEADSCALE_NAME_RE``) wins over its neighbours; when that
-    still leaves zero or several, the error carries the names in ``choices``."""
+    """The running headscale container, else ``tool``. The one running container
+    labelled ``net.hugmesh.role=headscale`` (as the local Docker mesh's is) wins; when
+    none or several are, ``docker ps --filter name=headscale`` is asked. That matches
+    substrings, so when it lists several, the one whose name is headscale itself (see
+    ``_HEADSCALE_NAME_RE``) wins over its neighbours; when that still leaves zero or
+    several, the error carries the names in ``choices``, the labelled ones included."""
+    r = _docker(["docker", "ps", "--filter", f"label={HEADSCALE_ROLE_LABEL}", "--format",
+                 "{{.Names}}"], runner, "docker could not list the running containers")
+    labelled = sorted({s.strip() for s in (r.stdout or "").splitlines() if s.strip()})
+    if len(labelled) == 1:
+        return labelled[0]
     r = _docker(["docker", "ps", "--filter", "name=headscale", "--format", "{{.Names}}"],
                 runner, "docker could not list the running containers")
     names = sorted({s.strip() for s in (r.stdout or "").splitlines() if s.strip()})
-    if not names:
+    if not names and not labelled:
         raise TokenError("tool", "No running headscale container was found (docker ps "
-                                 "--filter name=headscale listed none). Start the mesh, or "
-                                 "name its headscale container.")
+                                 f"--filter label={HEADSCALE_ROLE_LABEL} and --filter "
+                                 "name=headscale listed none). Start the mesh, or name its "
+                                 "headscale container.")
     exact = [n for n in names if _HEADSCALE_NAME_RE.match(n)]
     if len(names) == 1 or len(exact) == 1:
         return names[0] if len(names) == 1 else exact[0]
+    # Several labelled ones are choices too, whatever their names.
+    choices = tuple(sorted(set(labelled) | set(names)))
     raise TokenError("tool", f"Several running containers match headscale "
-                             f"({', '.join(names)}). Name the one to mint the key in.",
-                     choices=tuple(names))
+                             f"({', '.join(choices)}). Name the one to mint the key in.",
+                     choices=choices)
 
 
-def mint_preauth_key(*, user: str, tags=DEFAULT_MINT_TAGS, lifetime_s: int,
-                     container: str = "", runner=None) -> str:
-    """A new single-use headscale pre-auth key for ``user`` that expires after
-    ``lifetime_s``, minted in the RUNNING headscale container ``container`` (found
-    with ``docker ps`` when ""). The key is returned, never printed or logged.
-    ``user`` must be named: there is no default."""
-    if not user:
-        raise TokenError("invalid", f"No headscale user was named. {NAME_MINT_USER}")
-    if not _NAME_RE.match(user):
+def headscale_labels(container: str, runner=None) -> dict:
+    """What the HugMesh labels on the headscale container ``container`` say about
+    minting: ``{"user": "hugmesh", "key_tags": ("tag:hugmesh",)}``, each only when its
+    label is there AND valid (a headscale user name; membership tags, one per comma,
+    none of them a tag that grants access). Read with ``docker inspect``. Never raises:
+    a container without these labels, or one docker cannot inspect, gives ``{}``, and an
+    invalid label is left out whole, never half used."""
+    if not isinstance(container, str) or not _NAME_RE.match(container):
+        return {}
+    try:
+        r = _docker(["docker", "inspect", "--format", "{{json .Config.Labels}}", container],
+                    runner, f"docker could not inspect {container}")
+        labels = json.loads((r.stdout or "").strip() or "null")
+    except (TokenError, ValueError):
+        return {}
+    if not isinstance(labels, dict):
+        return {}
+    out: dict = {}
+    user = labels.get(HEADSCALE_USER_LABEL)
+    if isinstance(user, str) and _NAME_RE.match(user):
+        out["user"] = user
+    raw = labels.get(HEADSCALE_KEY_TAGS_LABEL)
+    if isinstance(raw, str):
+        tags = tuple(t.strip() for t in raw.split(","))
+        if all(_TAG_RE.match(t) and not SECURITY_TAG_RE.match(t) for t in tags):
+            out["key_tags"] = tags
+    return out
+
+
+def _check_mint_user(user) -> None:
+    if not isinstance(user, str) or not _NAME_RE.match(user):
         raise TokenError("invalid", f"{user!r} is not a headscale user name.")
-    tags = tuple(tags or ())
+
+
+def _check_mint_tags(tags: tuple[str, ...]) -> None:
     bad = [t for t in tags if not _TAG_RE.match(t)]
     if bad:
         raise TokenError("invalid", f"{', '.join(map(repr, bad))} is not a headscale tag "
@@ -811,16 +863,65 @@ def mint_preauth_key(*, user: str, tags=DEFAULT_MINT_TAGS, lifetime_s: int,
                                     "pre-auth key may not carry it: the key's tags are "
                                     "forced on whoever joins with it. The mesh's control "
                                     "node assigns access tags itself.")
+
+
+def _check_container(container) -> None:
+    if not isinstance(container, str) or not _NAME_RE.match(container):
+        raise TokenError("invalid", f"{container!r} is not a container name.")
+
+
+def mint_target(user: str = "", tags=None, *, container: str,
+                runner=None) -> tuple[str, tuple[str, ...]]:
+    """(user, tags) a key minted in ``container`` is for: ``user`` and ``tags`` when
+    given (checked: an access tag is refused), else what the container's labels say
+    (:func:`headscale_labels`), else :data:`DEFAULT_MINT_USER` and
+    :data:`DEFAULT_MINT_TAGS`. The key-tags label is used only for a key minted for the
+    label's own user; any other user with tags left out gets :data:`DEFAULT_MINT_TAGS`.
+    The labels are read only when something is left out."""
+    user = user or ""
+    if user:
+        _check_mint_user(user)
+    if tags is not None:
+        tags = tuple(tags)
+        _check_mint_tags(tags)
+    _check_container(container)
+    if not user or tags is None:
+        labels = headscale_labels(container, runner)
+        user = user or labels.get("user") or DEFAULT_MINT_USER
+        if tags is None:
+            # The key-tags label is written for the label's own user (only that user
+            # owns those tags in the policy, and a key's tags are forced on the node),
+            # so it applies only to a key minted for that user.
+            tags = (labels.get("key_tags", DEFAULT_MINT_TAGS)
+                    if labels.get("user") and user == labels["user"] else DEFAULT_MINT_TAGS)
+    # what the labels gave gets the same checks as given values
+    _check_mint_user(user)
+    _check_mint_tags(tags)
+    return user, tags
+
+
+def mint_preauth_key(*, user: str = "", tags=None, lifetime_s: int,
+                     container: str = "", runner=None) -> str:
+    """A new single-use headscale pre-auth key that expires after ``lifetime_s``,
+    minted in the RUNNING headscale container ``container`` (found with ``docker ps``
+    when ""), for ``user`` with ``tags``. Either left out ("" / None) comes from
+    :func:`mint_target`: the container's labels, else ``hugmesh`` and no tags. The key
+    is returned, never printed or logged."""
+    if user:
+        _check_mint_user(user)
+    if tags is not None:
+        tags = tuple(tags)
+        _check_mint_tags(tags)
     if not 0 < int(lifetime_s) <= MAX_LIFETIME_S:
         raise TokenError("invalid", "A pre-auth key's lifetime must be between a moment and "
                                     f"{MAX_LIFETIME_S // 86400} days.")
-    if container and not _NAME_RE.match(container):
-        raise TokenError("invalid", f"{container!r} is not a container name.")
+    if container:
+        _check_container(container)
     container = container or find_headscale_container(runner)
-    # A FOUND name gets the same check as a given one: docker ps output is not trusted
-    # to be a name that cannot be read as an option.
-    if not _NAME_RE.match(container):
-        raise TokenError("invalid", f"{container!r} is not a container name.")
+    # A FOUND name gets the same check as a given one (mint_target makes it before it
+    # reads labels): docker ps output is not trusted to be a name that cannot be read
+    # as an option.
+    user, tags = mint_target(user, tags, container=container, runner=runner)
     argv = ["docker", "exec", container, "headscale", "preauthkeys", "create",
             "--user", user, "--expiration", f"{int(lifetime_s)}s"]
     if tags:
@@ -865,21 +966,26 @@ def expire_preauth_key(key: str, *, user: str, container: str, runner=None) -> b
     return r.returncode == 0
 
 
-def mint_and_issue(*, key_path: str, user: str, container: str = "",
-                   tags=DEFAULT_MINT_TAGS, interactive: bool = False,
+def mint_and_issue(*, key_path: str, user: str = "", container: str = "",
+                   tags=None, interactive: bool = False,
                    keygen: str | None = None, runner=None, **fields) -> tuple[str, str]:
     """(token, container): mint a single-use pre-auth key for the headscale ``user``
-    (named by the caller: there is no default) and sign a token carrying it.
+    with ``tags`` (either left out comes from :func:`mint_target`: the container's
+    labels, else ``hugmesh`` and no tags) and sign a token carrying it.
     The issuer key is made to sign once FIRST, so the usual signing failures happen
     before anything exists on the server; if signing still fails after the mint, the
     minted key is expired, and the error says whether that worked. ``fields`` are
     :func:`issue`'s (mesh, domain, role, shell, login_server, lifetime_s, node_name),
     already checked by the caller."""
-    if not user:
-        raise TokenError("invalid", f"No headscale user was named. {NAME_MINT_USER}")
-    if not _NAME_RE.match(user):
-        raise TokenError("invalid", f"{user!r} is not a headscale user name.")
+    if user:
+        _check_mint_user(user)
+    if tags is not None:
+        tags = tuple(tags)
+        _check_mint_tags(tags)
+    if container:
+        _check_container(container)
     container = container or find_headscale_container(runner)
+    user, tags = mint_target(user, tags, container=container, runner=runner)
     check_signing(key_path, keygen=keygen, interactive=interactive)
     auth_key = mint_preauth_key(user=user, tags=tags, lifetime_s=fields["lifetime_s"],
                                 container=container, runner=runner)
@@ -1408,16 +1514,20 @@ def _cli_issue(args) -> int:
         print(f"Issuer: this Studio's key for mesh {args.mesh}, {fp}"
               + ("" if existed else " (created now; this computer trusts it)"),
               file=sys.stderr)
-    container = ""
-    user = args.headscale_user
+    container, user, tags = "", "", ()
     if args.mint:
+        # the defaults (the container's labels, else hugmesh) resolved here, so the
+        # summary below names the user and tags the key was minted for
+        container = args.headscale_container or find_headscale_container()
+        user, tags = mint_target(args.headscale_user, args.tag or None,
+                                 container=container)
         if interactive:
             print("Checking that the key can sign before a pre-auth key is minted: "
                   "ssh-keygen asks for its passphrase (if it has one) now, and again to "
                   "sign the token.", file=sys.stderr)
         token, container = mint_and_issue(
-            key_path=key_path, user=user, container=args.headscale_container,
-            tags=args.tag, interactive=interactive, **fields)
+            key_path=key_path, user=user, container=container,
+            tags=tags, interactive=interactive, **fields)
     else:
         with open(args.authkey_file, encoding="utf-8") as fh:
             auth_key = fh.read().strip()
@@ -1426,9 +1536,9 @@ def _cli_issue(args) -> int:
     print(token)
     g, _, _ = parse(token)
     if args.mint:
-        tags = ", ".join(args.tag) if args.tag else "no tags of its own"
+        asked = ", ".join(tags) if tags else "no tags of its own"
         server = (f"The pre-auth key was minted in {container} for the headscale user "
-                  f"{user}: single-use, expiring with the token, with {tags}. "
+                  f"{user}: single-use, expiring with the token, with {asked}. "
                   f"{SERVER_DECIDES}")
     else:
         server = SERVER_DECIDES
@@ -1459,12 +1569,16 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("--mint", action="store_true", help="mint a single-use pre-auth key "
                      "in the mesh's running headscale container (docker exec)")
     i.add_argument("--headscale-container", default="", help="with --mint: the headscale "
-                   "container (default: the one running container named like headscale)")
-    i.add_argument("--headscale-user", default="", help="with --mint, required: the "
-                   "headscale user the key is for (no default; never a user that owns an "
-                   "access tag). " + NAME_MINT_USER)
+                   "container (default: the one running container labelled "
+                   f"{HEADSCALE_ROLE_LABEL}, else the one named like headscale)")
+    i.add_argument("--headscale-user", default="", help="with --mint: the headscale user "
+                   "the key is for (default: the headscale container's "
+                   f"{HEADSCALE_USER_LABEL} label, else {DEFAULT_MINT_USER}; never a user "
+                   "that owns an access tag)")
     i.add_argument("--tag", action="append", default=[], help="with --mint: a tag the key "
-                   "asks for (repeatable, one tag each; default none, the server tags the "
+                   "asks for (repeatable, one tag each; default: the headscale container's "
+                   f"{HEADSCALE_KEY_TAGS_LABEL} label for that label's own user, else none, "
+                   "and the server tags the "
                    "node; access tags such as tag:superadmin are refused)")
     i.add_argument("--node-name", default="")
     i.add_argument("--expires", type=_lifetime, default=_lifetime("7d"),
@@ -1480,12 +1594,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "issue" and not args.mint and (
             args.headscale_container or args.headscale_user or args.tag):
         i.error("--headscale-container, --headscale-user and --tag go with --mint")
-    if args.cmd == "issue" and args.mint and not args.headscale_user:
-        i.error(f"--mint needs --headscale-user. {NAME_MINT_USER}")
     # Checked here too, not only by mint_and_issue: that runs after the issuer key is
     # created, and nothing is created for a request that cannot be carried out.
     if args.cmd == "issue" and args.mint:
-        if not _NAME_RE.match(args.headscale_user):
+        if args.headscale_user and not _NAME_RE.match(args.headscale_user):
             i.error(f"{args.headscale_user!r} is not a headscale user name.")
         if args.headscale_container and not _NAME_RE.match(args.headscale_container):
             i.error(f"{args.headscale_container!r} is not a container name.")
