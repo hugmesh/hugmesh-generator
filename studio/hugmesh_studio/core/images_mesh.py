@@ -6,7 +6,12 @@ path, they should have the option to save that mesh before proceeding to the bui
 well as starting that mesh locally as the build proceeds".
 
 ONE RECORD TYPE. "Saved" means a :class:`.saved_meshes.SavedMesh` — the same record
-the Saved meshes table lists and the local Docker mesh starts from. The node-image
+the Saved meshes table lists. Its ``lanes.compose_project`` is its OWN
+(:func:`project_for`), so every consumer of the record — ``LocalMeshBootstrap.for_record``
+(the CLI ``mesh-restore``, the table's Start/Restore), ``mesh_monitor`` — drives that
+project from the record's worktree and ports (:func:`bootstrap_for_record`), and
+REFUSES while either is missing (a draft that never started beside a build): it never
+falls back to the checkout's ``hugmesh-local``. The node-image
 configuration becomes its ``config`` through ONE projection
 (:func:`.local_mesh_domains.bootstrap_config_from_images`, the inverse of the #636
 import), and the build it came from is a pointer (``SavedMesh.build``), because the
@@ -37,8 +42,10 @@ fixed 8008/3000/4000, and the test issuer every token carries is
 mesh holds it this lane refuses and names the container holding it
 (:func:`plan_alongside`). Domains with their own Casdoor publish fixed 8001+ the same
 way, and are refused for the same reason. And it refuses when the memory the build
-has reserved leaves too little for a mesh — the build is what the operator asked for,
-and a mesh beside it must never starve it.
+is CAPPED at leaves too little for a mesh, or when the build has no cap — the build is
+what the operator asked for, and a mesh beside it must never starve it. The cap is the
+one the build really runs under (:func:`build_memory_cap`): a native build has none;
+a Docker build has ``resource_limits.effective()`` (env, saved GUI setting, auto).
 
 A FAILED LOCAL START NEVER FAILS THE BUILD. Every entry point here returns
 ``(ok, lines)`` and catches its own errors; the GUI runs it on its own thread and
@@ -396,9 +403,9 @@ def plan_alongside(boot_cfg, *, building: bool, backend: str | None = None,
                 + (" (Casdoor, the sign-in every token names)" if p == 8000 else
                    " (the social tier)")
                 + ", so two local meshes cannot run at once; stop the other mesh "
-                  "first and start this one again (tick 'Start this mesh locally', "
-                  "or `python -m hugmesh_studio.core.images_mesh start <record id> "
-                  "--not-building`)")
+                  "first, then start this one (tick 'Start this mesh locally' for a "
+                  "build, or with no build running `python -m "
+                  "hugmesh_studio.core.images_mesh start <record id> --not-building`)")
     own = tuple(getattr(boot_cfg, "own_idp_domains", ()) or ())
     if own:
         plan.reasons.append(
