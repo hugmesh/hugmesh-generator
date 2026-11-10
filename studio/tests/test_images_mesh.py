@@ -1395,6 +1395,20 @@ def test_followup_the_cli_stop_and_halt_by_label_refuse_on_native_windows(
     assert fake_docker.calls == [] and fake_docker.downs == []
 
 
+def test_followup_a_stop_with_its_worktree_present_is_gated_too(checkout, makes,
+                                                                fake_docker):
+    """AlongsideMesh.stop's own gate: the worktree path (`make stack-halt` in it) is
+    refused on native Windows as well, not only the label path."""
+    rec = _img_record(checkout)
+    lane = images_mesh.AlongsideMesh(checkout, rec)
+    ok, msg = lane.prepare_worktree()
+    assert ok, msg
+    ok, lines = lane.stop(osname="nt")
+    assert not ok and "WSL2" in lines[0], lines
+    assert not [m for m in makes if m["target"] != "probe_state"], makes
+    assert fake_docker.calls == []
+
+
 def test_followup_halt_by_label_with_no_docker_answer_stops_nothing(monkeypatch):
     """Mutation R2: 'docker did not answer' must never read as 'nothing to stop'."""
     monkeypatch.setattr(images_mesh, "project_running_ids", lambda p: None)
