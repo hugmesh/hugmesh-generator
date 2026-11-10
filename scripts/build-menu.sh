@@ -1593,7 +1593,7 @@ options_screen() {
             fritefleet "Frite in full fleet . ${frite_fleet_l}   (adds Frite to full fleet; FRITE=1)" \
             jetsonfleet "Jetson in full fleet  ${jetson_fleet_l}   (adds Jetson to full fleet; JETSON=1)" \
             orangepi5fleet "Orange Pi 5 in fleet  ${orangepi5_fleet_l}   (adds Orange Pi 5 to full fleet; ORANGEPI5=1; EXPERIMENTAL)" \
-            pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only)" \
+            pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only; SCA needs NVD_API_KEY_FILE — nvd.nist.gov/developers/request-an-api-key)" \
             edge-ai  "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (backend-gpu/omnibus; edge-ai role always on)" \
             services "Optional services ... ${OPT_SERVICES:-<default: akkoma,tuwunel,phpbb>}" \
             managed  "Managed backing svcs  ${OPT_MANAGED_SERVICES:-<all self-hosted>}   (point a datastore at a hosted cloud endpoint; default self-hosted)" \

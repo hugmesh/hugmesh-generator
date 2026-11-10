@@ -36,6 +36,7 @@ the export then reports as `unchanged`.
 | `PACKAGES_READ_TOKEN` | secret | a classic token with `read:packages`: lets Maven resolve the exported library chain from this organisation's package registry (GitHub's own job token cannot read another repository's package). The Java jobs fail early and say so when it is missing |
 | `PACKAGES_READ_ACTOR` | secret | the user name that goes with that token (optional; the workflow's actor is used when unset) |
 | `RUNS_ON` | variable | a JSON runner spec for a self-hosted runner (optional) |
+| `NVD_API_KEY` | organisation secret | not read by this repository: the exported repositories' SCA jobs (OWASP Dependency-Check) need an activated NVD API key, and fail with exit 13 without one. Set it on the organisation with visibility all; an empty value is stored without an error, so check it is not empty first (hugmesh-generator `docs/NVD-API-KEY.md`) |
 
 ## Regenerating
 

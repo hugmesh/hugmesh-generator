@@ -11,6 +11,7 @@ it without a TTY and without urwid installed.
 """
 from __future__ import annotations
 
+import getpass
 import sys
 from typing import IO
 
@@ -34,6 +35,26 @@ def _prompt(inp: IO[str], out: IO[str], prompt: str) -> str | None:
     line = inp.readline()
     if line == "":
         _say(out)                     # keep the transcript readable after EOF
+        return None
+    return line.strip()
+
+
+def _secret_prompt(inp: IO[str], out: IO[str], prompt: str) -> str | None:
+    """One HIDDEN line (the NVD API key): getpass on a real terminal, so nothing is
+    echoed; a scripted/piped stdin is read as a plain line and still not echoed.
+    ``None`` on EOF, like :func:`_prompt`."""
+    isatty = getattr(inp, "isatty", None)
+    if inp is sys.stdin and callable(isatty) and isatty():
+        try:
+            return getpass.getpass(prompt)
+        except EOFError:
+            _say(out)
+            return None
+    out.write(prompt)
+    out.flush()
+    line = inp.readline()
+    _say(out)
+    if line == "":
         return None
     return line.strip()
 
@@ -153,7 +174,10 @@ def run_journey(inp: IO[str] | None = None, out: IO[str] | None = None, *,
         for line in j.lines():
             _say(out, line)
         _say(out, local_ai.plain_status_line())
-        answer = _prompt(inp, out, j.prompt())
+        if j.secret_input():
+            answer = _secret_prompt(inp, out, j.prompt())
+        else:
+            answer = _prompt(inp, out, j.prompt())
         if answer is None:
             return 0
         j.feed(answer)

@@ -250,6 +250,8 @@ def test_docker_mode_rewrites_the_wrong_advice_in_a_snapshot():
 
 
 def test_starting_in_docker_mode_runs_the_container_first_then_the_worker_against_it():
+    """The Linux/WSL order, pinned on every OS (osname="posix"): a native Windows Studio
+    starts no worker at all (test_on_native_windows_docker_mode_starts_the_container_and_no_bash)."""
     order = []
 
     def starter(runner, environ):
@@ -266,21 +268,21 @@ def test_starting_in_docker_mode_runs_the_container_first_then_the_worker_agains
             ("worker", env["OLLAMA_HOST"], env.get("HUGMESH_AGENT_CONTEXT"))) or lai.StartResult(True, "s")
         res = odk.start_assistant(GENERATOR_DIR, odk.DOCKER, environ={"PATH": "/bin"},
                                   extra_env={"HUGMESH_AGENT_CONTEXT": "/x/ctx.md"},
-                                  starter=starter, ready=ready)
+                                  starter=starter, ready=ready, osname="posix")
         assert res.ok
         assert order == [("container", "127.0.0.1:11435"), ("ready", "127.0.0.1:11435"),
                          ("worker", "127.0.0.1:11435", "/x/ctx.md")]
         order.clear()
         res = odk.start_assistant(GENERATOR_DIR, odk.SYSTEM, environ={"OLLAMA_HOST": "127.0.0.1:7"},
-                                  starter=starter, ready=ready)
+                                  starter=starter, ready=ready, osname="posix")
         assert order == [("worker", "127.0.0.1:7", None)], "system mode started a container"
         order.clear()
         res = odk.start_assistant(GENERATOR_DIR, odk.DOCKER, environ={},
                                   starter=lambda r, environ: odk.StartOutcome(False, "no docker"),
-                                  ready=ready)
+                                  ready=ready, osname="posix")
         assert not res.ok and "no docker" in res.message and order == []
         res = odk.start_assistant(GENERATOR_DIR, odk.DOCKER, environ={}, starter=starter,
-                                  ready=lambda e, t: False, ready_timeout=3)
+                                  ready=lambda e, t: False, ready_timeout=3, osname="posix")
         assert not res.ok and "did not answer" in res.message
         assert not [o for o in order if o[0] == "worker"], "the worker started on a dead server"
     finally:
@@ -497,7 +499,11 @@ def test_the_panel_start_button_gives_the_worker_the_chosen_instance_and_the_con
     the button is how the queue worker gets its OLLAMA_HOST and its project context, so
     a click in each mode must hand the worker start the chosen instance's address, the
     context file (with where the local sources are) and the checkouts folder. Docker
-    mode also starts the container on that address first; system mode never does."""
+    mode also starts the container on that address first; system mode never does.
+
+    A native Windows Studio cannot run the worker (bash: local_ai_status.windows_refusal),
+    so there Docker mode starts the container on the chosen address, waits for it, and
+    says the queue worker stays off: the press must reach no worker start."""
     from hugmesh_studio.gui import _local_ai_dock as dock_mod
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
     monkeypatch.setenv("HUGMESH_LOCAL_AI_DIR", str(tmp_path / "local-ai"))
@@ -521,6 +527,17 @@ def test_the_panel_start_button_gives_the_worker_the_chosen_instance_and_the_con
         assert dock.start_btn.isVisible() and dock.start_btn.isEnabled()
         dock.start_btn.click()
         end = time.monotonic() + 15
+        if os.name == "nt" and mode == odk.DOCKER:
+            while "queue worker was not started" not in dock._message \
+                    and time.monotonic() < end:
+                qapp.processEvents()
+                time.sleep(0.02)
+            assert "queue worker was not started" in dock._message, (dock._message, calls)
+            assert "WSL2" in dock._message and not dock._message_warn
+            assert calls[:2] == [("container", "127.0.0.1:12998"),
+                                 ("ready", "127.0.0.1:12998")], calls
+            assert not [c for c in calls if c[0] == "worker"], "the bash worker was started"
+            return
         while not [c for c in calls if c[0] == "worker"] and time.monotonic() < end:
             qapp.processEvents()
             time.sleep(0.02)
@@ -546,7 +563,10 @@ def test_the_panel_start_button_gives_the_worker_the_chosen_instance_and_the_con
 def test_the_run_it_yourself_lines_name_the_chosen_instance(qapp, monkeypatch, tmp_path):
     """Dock skeptic 2: in Docker mode the printed commands pointed at the system Ollama;
     run in a terminal, `local-ai.sh start` would then move the worker OFF the Docker
-    instance while the panel still said Docker. Each face prints the chosen one."""
+    instance while the panel still said Docker. Each face prints the chosen one.
+
+    A native Windows Studio prints no such line on either face: each is the bash script,
+    which it cannot run, so both say local_ai_status.windows_worker_note() instead."""
     from hugmesh_studio.gui import _local_ai_dock as dock_mod
     from hugmesh_studio.tui import local_ai as tui_local_ai
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
@@ -559,6 +579,22 @@ def test_the_run_it_yourself_lines_name_the_chosen_instance(qapp, monkeypatch, t
     screen = tui_local_ai.LocalAIScreen(generator_dir=GENERATOR_DIR,
                                         snapshot_fn=lambda: lai.Snapshot(taken=0.0))
     text = "\n".join(screen.lines(None))
+    note = lai.windows_worker_note()
+    if os.name == "nt":
+        assert note and note in text and script not in text, text
+        win = dock_mod.LocalWorkWindow(GENERATOR_DIR,
+                                       snapshot_fn=lambda: lai.Snapshot(taken=0.0),
+                                       auto_poll=False)
+        try:
+            for mode in (odk.DOCKER, odk.SYSTEM):
+                odk.set_mode(mode)
+                win.show_snapshot(lai.Snapshot(taken=0.0))
+                assert win.commands.text() == note, (mode, win.commands.text())
+        finally:
+            win.close()
+        assert script not in "\n".join(screen.lines(None))
+        return
+    assert not note
     assert f"OLLAMA_HOST=127.0.0.1:12997 {script} todo" in text, text
     win = dock_mod.LocalWorkWindow(GENERATOR_DIR, snapshot_fn=lambda: lai.Snapshot(taken=0.0),
                                    auto_poll=False)
