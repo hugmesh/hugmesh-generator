@@ -314,7 +314,8 @@ class MaterializedSecretFiles:
 #: Every prefix a private key/password dir is minted under in TMPDIR. A run removes
 #: its own dir in a ``finally``; a SIGKILL, a power cut or a hard crash skips that,
 #: and before this the plaintext stayed there for good (PR #938 review, finding 4).
-PRIVATE_DIR_PREFIXES = ("hugmesh-held-keys-", "hugmesh-domain-ca-", "hugmesh-login-")
+PRIVATE_DIR_PREFIXES = ("hugmesh-held-keys-", "hugmesh-domain-ca-", "hugmesh-login-",
+                        "hugmesh-nvd-", "hugmesh-secret-")
 #: The lock file inside each dir. Its lock is held by the creating process for the
 #: dir's whole life, and the OS drops it when that process dies, however it dies.
 OWNER_LOCK = ".owner.lock"
@@ -492,10 +493,23 @@ def stage_local_pass(password: str) -> tuple[str, "Callable[[], None]"]:
     only by its owner and root (the builder runs as root), and the caller's cleanup
     removes it when the run ends — success, failure or cancel alike. Same dir/perm
     contract as :func:`materialize`, never under the build workdir."""
-    owner = PrivateDir("hugmesh-login-")
-    path = os.path.join(owner.path, "local-pass")
+    return stage_secret_file("local-pass", password.encode("utf-8"), prefix="hugmesh-login-")
+
+
+def stage_secret_file(name: str, data: bytes,
+                      prefix: str = "hugmesh-secret-") -> tuple[str, "Callable[[], None]"]:
+    """Write ``data`` to ``<PrivateDir 0700>/<name>`` at 0600 for ONE run and return
+    ``(path, cleanup)``; cleanup removes the whole private dir. The shared shape of
+    :func:`stage_local_pass` and the NVD API key's per-run copy
+    (core/nvd_key.materialize_for_run): a secret a script reads from a FILE so it is
+    never on argv or in a container's env. The dir holds its owner lock for its life,
+    so a run that dies by SIGKILL leaves a dir :func:`sweep_stale_private_dirs`
+    removes on the next start — ``prefix`` must be one of
+    :data:`PRIVATE_DIR_PREFIXES` for that to happen."""
+    owner = PrivateDir(prefix)
+    path = os.path.join(owner.path, name)
     try:
-        _write_0600(path, password.encode("utf-8"))
+        _write_0600(path, data)
     except BaseException:
         owner.remove()
         raise
