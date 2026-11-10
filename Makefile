@@ -2336,13 +2336,19 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 # purpose: no `docker system prune`, so nothing outside the local mesh is touched.
 # The m2 cache is a rebuildable artifact (`make stack-m2-bootstrap` re-creates it
 # from source), which is why it goes with the images rather than surviving.
+# STACK_CLEAN_KEEP_M2=1 keeps the registry container and its env file: the
+# container is ONE per host (m2-bootstrap.sh's fixed name), so a clean of a SECOND
+# mesh's compose project (the Studio's node-image lane runs hugmesh-img-<id> from
+# its own worktree, core/images_mesh.py) must not remove the registry the
+# checkout's hugmesh-local builds from. LocalStackNode.clean passes it for any
+# project other than the checkout's own.
 stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
 	bash tests/stack/gen-route-access-env.sh --remove
-	@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true
-	@rm -f $(STACK_M2_ENV)
+	$(if $(strip $(STACK_CLEAN_KEEP_M2)),@echo "==> The private-maven registry $(M2_REGISTRY_NAME) is KEPT (STACK_CLEAN_KEEP_M2: another mesh shares it).",@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true)
+	$(if $(strip $(STACK_CLEAN_KEEP_M2)),,@rm -f $(STACK_M2_ENV))
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'
 
 # Run the Playwright e2e suite (tests/e2e) against the RUNNING local stack's TLS

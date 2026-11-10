@@ -1960,7 +1960,17 @@ class LocalStackNode:
         blocker = self._native_windows_refusal("The local stack", on_line)
         if blocker:
             return False, blocker
-        return self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel)
+        return self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel,
+                          args=self._clean_args())
+
+    def _clean_args(self) -> list[str]:
+        """Make variables for `make stack-clean`. A node that is NOT the checkout's own
+        mesh (the node-image lane's ``hugmesh-img-<id>``, run from its own worktree)
+        passes ``STACK_CLEAN_KEEP_M2=1``: the private-maven registry container is ONE
+        per host (``hugmesh-m2-registry``, m2-bootstrap.sh's fixed name) and the
+        checkout's hugmesh-local builds from it, so cleaning a second mesh must never
+        remove it (PR #937 round 3). The default node's argv is unchanged."""
+        return [] if self.project == _COMPOSE_PROJECT else ["STACK_CLEAN_KEEP_M2=1"]
 
     def _project_args(self) -> list[str]:
         """``-p <project>`` for a node that is not the checkout's own mesh; [] for the

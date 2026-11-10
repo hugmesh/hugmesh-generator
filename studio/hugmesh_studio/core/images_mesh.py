@@ -126,6 +126,39 @@ def for_session(session_id: str) -> saved_meshes.SavedMesh | None:
     return None
 
 
+def foreign_record_refusal(rec) -> str:
+    """Why this module must not ACT on ``rec`` ("" when it may): every verb here —
+    ``save --record``, ``gate``, ``start``, ``stop`` and :class:`AlongsideMesh` itself —
+    drives a record the node-image flow made, i.e. one with its OWN compose project
+    (:func:`.saved_meshes.is_own_project`) AND ``build.source == "images"``.
+
+    PR #937 round 3: ``start <id>`` of a record saved on the local-mesh page (the
+    checkout's hugmesh-local) rewrote its ``lanes.compose_project`` to
+    ``hugmesh-img-<id>`` — plus a worktree and ports — even when the start failed,
+    and ``save --record <id>`` did the same through ``capture``. From then on every
+    consumer drove that record as a mesh it never was. A fresh images record is the
+    only one this module may create; anything else is refused with this sentence
+    and nothing is written."""
+    if rec is None:
+        return ""
+    label = getattr(rec, "label", "") or getattr(rec, "id", "") or "this record"
+    build = rec.build if isinstance(getattr(rec, "build", None), dict) else {}
+    if not saved_meshes.is_own_project(rec):
+        return (f"'{label}' is this checkout's own mesh "
+                f"({saved_meshes.record_project(rec)}), not one saved from the "
+                "node-image flow — the node-image commands never start, stop, gate or "
+                "overwrite it. Use the Local mesh page's Saved meshes table (or "
+                "`python -m hugmesh_studio.core.local_mesh_bootstrap mesh-restore "
+                f"{getattr(rec, 'id', '')}`). Nothing was written.")
+    if build.get("source") != SOURCE_IMAGES:
+        return (f"'{label}' runs as its own compose project "
+                f"{saved_meshes.record_project(rec)} but was not saved from the "
+                "node-image flow (its build source is "
+                f"{build.get('source') or 'not recorded'!r}), so the node-image "
+                "commands do not act on it. Nothing was written.")
+    return ""
+
+
 def derived_label(cfg, worklist=None) -> str:
     """The name a Save offers when none is typed (the saved-meshes derivation of the
     projected configuration)."""
@@ -167,6 +200,12 @@ def save(generator_dir: str, cfg, worklist=None, *, label: str = "",
             prior = next((r for r in records if r.id == record_id), None)
         if prior is None and session_id:
             prior = for_session(session_id)
+        # never overwrite a record this flow did not make (a hugmesh-local record
+        # named by --record): capture would rewrite its compose project to
+        # hugmesh-img-<id>. Refused BEFORE any write.
+        foreign = foreign_record_refusal(prior)
+        if foreign:
+            return SaveResult(False, foreign)
         rid = prior.id if prior is not None else saved_meshes.new_id()
         typed = (label or "").strip()
         if typed:
@@ -327,36 +366,118 @@ def _gib(b: int) -> str:
     return f"{b / host_resources.GIB:.1f} GiB"
 
 
-def fixed_port_refusals(boot_cfg, *, is_free=None, holder=None) -> list[str]:
+def container_project(name: str) -> str:
+    """The compose project label of container ``name`` ("" when docker cannot say)."""
+    try:
+        r = subprocess.run(["docker", "inspect", "-f",
+                            '{{index .Config.Labels "com.docker.compose.project"}}',
+                            name], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    out = (r.stdout or "").strip()
+    return out if r.returncode == 0 and out != "<no value>" else ""
+
+
+def holder_in_project(name: str, project: str, project_of=None) -> bool:
+    """Whether container ``name`` belongs to compose project ``project``: its compose
+    label when docker answers, else compose's own naming (``<project>-<service>-<n>``)."""
+    if not name or not project:
+        return False
+    project_of = container_project if project_of is None else project_of
+    label = project_of(name)
+    if label:
+        return label == project
+    return name.startswith(project + "-")
+
+
+def _fixed_ports_of(boot_cfg) -> list[int]:
+    try:
+        social = bool(boot_cfg.effective_social())
+    except Exception:                    # noqa: BLE001
+        social = False
+    return list(FIXED_PORTS) + (list(SOCIAL_FIXED_PORTS) if social else [])
+
+
+def _port_role(p: int) -> str:
+    return (" (Casdoor, the sign-in every token names)" if p == 8000 else
+            " (the social tier)")
+
+
+def fixed_port_refusals(boot_cfg, *, is_free=None, holder=None, project: str = "",
+                        project_of=None) -> list[str]:
     """One sentence per FIXED host port this mesh publishes that something already
     holds (8000 always — Casdoor; 8008, 3000, 4000 with the social tier), naming the
     container holding it. ``[]`` = all free. The probes default to this module's
     :func:`port_free` / :func:`port_holder`, looked up at call time.
 
     Shared by :func:`plan_alongside` (before a start beside a build) and by
-    ``LocalMeshBootstrap.guard_host_local`` for every bootstrap of a mesh with its own
-    compose project (a saved record's Start/Restore): with the checkout's mesh up,
-    `make stack-up` in the worktree would otherwise create containers and then die
-    on Casdoor's port."""
+    ``LocalMeshBootstrap.fixed_port_refusal`` for every bootstrap of a mesh with its
+    own compose project (a saved record's Start/Restore): with the checkout's mesh
+    up, `make stack-up` in the worktree would otherwise create containers and then
+    die on Casdoor's port. ``project`` (that bootstrap's own) skips a port its OWN
+    container holds — the mesh is already up, and a re-up does not bind it twice."""
     is_free = port_free if is_free is None else is_free
     holder = port_holder if holder is None else holder
-    try:
-        social = bool(boot_cfg.effective_social())
-    except Exception:                    # noqa: BLE001
-        social = False
     out: list[str] = []
-    for p in list(FIXED_PORTS) + (list(SOCIAL_FIXED_PORTS) if social else []):
+    for p in _fixed_ports_of(boot_cfg):
         if not is_free(p):
             who = holder(p)
+            if project and holder_in_project(who, project, project_of):
+                # held by THIS mesh's own container (it is already up): a re-up of
+                # the same project does not bind the port twice
+                continue
             out.append(
                 f"host port {p} is already in use" + (f" by {who}" if who else "")
                 + " — compose publishes it as a fixed port"
-                + (" (Casdoor, the sign-in every token names)" if p == 8000 else
-                   " (the social tier)")
+                + _port_role(p)
                 + ", so two local meshes cannot run at once; stop the other mesh "
                   "first, then start this one (tick 'Start this mesh locally' for a "
                   "build, or with no build running `python -m "
                   "hugmesh_studio.core.images_mesh start <record id> --not-building`)")
+    return out
+
+
+def checkout_fixed_port_refusals(boot_cfg, project: str = vaults.DEFAULT_PROJECT, *,
+                                 is_free=None, holder=None, project_of=None,
+                                 records=None) -> list[str]:
+    """The REVERSE collision (PR #937 round 3): one sentence per fixed host port the
+    checkout's own mesh (``project``, hugmesh-local) publishes that a container of
+    ANOTHER compose project holds — a mesh started beside a build
+    (``hugmesh-img-<id>``), most likely. Without it a start/restore of hugmesh-local
+    ran ``make stack-up``, created its containers and died on Casdoor's bind.
+
+    Deliberately narrower than :func:`fixed_port_refusals`: a port held by
+    hugmesh-local's OWN container (it is already up — a warm re-up or a restore of
+    the running mesh) is not a collision, and a holder docker cannot name (not a
+    container, or docker unreadable) is not refused on a guess — the checkout's own
+    mesh was never gated on that and ``make stack-up`` still says what failed."""
+    is_free = port_free if is_free is None else is_free
+    holder = port_holder if holder is None else holder
+    out: list[str] = []
+    for p in _fixed_ports_of(boot_cfg):
+        if is_free(p):
+            continue
+        who = holder(p)
+        if not who or holder_in_project(who, project, project_of):
+            continue
+        rid = ""
+        try:
+            pool = saved_meshes.scan()[0] if records is None else records
+            for r in pool:
+                rp = saved_meshes.record_project(r)
+                if saved_meshes.is_own_project(r) and holder_in_project(
+                        who, rp, project_of):
+                    rid = r.id
+                    break
+        except Exception:                # noqa: BLE001 — the hint is optional
+            rid = ""
+        remedy = (f"stop it first (`python -m hugmesh_studio.core.images_mesh stop "
+                  f"{rid}`, or Stop on its row in Saved meshes)" if rid else
+                  "stop that mesh first")
+        out.append(f"host port {p} is already in use by {who}, a container of another "
+                   f"local mesh — compose publishes it as a fixed port{_port_role(p)}, "
+                   f"so {project} cannot run beside it; {remedy}, then start this one. "
+                   "Nothing was started.")
     return out
 
 
@@ -399,7 +520,7 @@ def build_memory_cap(backend: str | None, env=None, meminfo: dict | None = None,
 def plan_alongside(boot_cfg, *, building: bool, backend: str | None = None,
                    limits: "resource_limits.ResourceLimits | None" = None,
                    meminfo: dict | None = None,
-                   env=None, is_free=port_free, holder=port_holder) -> AlongsidePlan:
+                   env=None, is_free=None, holder=None) -> AlongsidePlan:
     """Whether the mesh ``boot_cfg`` describes can start beside a node-image build on
     this host, and with which ports. PURE given its probes (``meminfo``, ``is_free``,
     ``holder`` — the tests pass fakes); the defaults read /proc and bind-test.
@@ -419,6 +540,10 @@ def plan_alongside(boot_cfg, *, building: bool, backend: str | None = None,
     — a gate that guesses the cap is the gate that let a mesh starve a build.
     """
     env = os.environ if env is None else env
+    # the probes are looked up at CALL time (a def-time default could not be
+    # replaced by a caller patching this module, and the CLI passes none)
+    is_free = port_free if is_free is None else is_free
+    holder = port_holder if holder is None else holder
     mi = host_resources.read_meminfo() if meminfo is None else meminfo
     plan = AlongsidePlan(ok=True)
     plan.reasons.extend(fixed_port_refusals(boot_cfg, is_free=is_free, holder=holder))
@@ -567,11 +692,24 @@ class AlongsideMesh:
                                   host_ports=host_ports)
 
     def prepare_worktree(self) -> tuple[bool, str]:
-        """``git worktree add --detach`` of the checkout's HEAD (reused when present)."""
+        """``git worktree add --detach`` of the checkout's HEAD (reused when present).
+
+        A worktree whose DIRECTORY was deleted is still registered in the checkout
+        (``.git/worktrees/<name>``), and a plain ``add`` at the same path dies with
+        "missing but already registered worktree" — which made the refusal's own
+        remedy ("Start it again ..., which makes a new one") fail (PR #937 round 3).
+        ``git worktree prune`` first: it drops only registrations whose directory is
+        gone (a locked one is kept), never a worktree that still exists. A prune
+        that fails is not fatal; the add then says what is wrong."""
         wt = self.worktree
         if os.path.exists(os.path.join(wt, ".git")):
             return True, f"worktree {wt} (reused)"
         os.makedirs(os.path.dirname(wt), exist_ok=True)
+        try:
+            subprocess.run(["git", "-C", self.generator_dir, "worktree", "prune"],
+                           capture_output=True, text=True, timeout=_CMD_TIMEOUT)
+        except (OSError, subprocess.SubprocessError):
+            pass
         try:
             r = subprocess.run(["git", "-C", self.generator_dir, "worktree", "add",
                                 "--detach", wt, "HEAD"], capture_output=True, text=True,
@@ -585,10 +723,15 @@ class AlongsideMesh:
 
     def start(self, *, building: bool, backend: str | None = None, on_line=None,
               cancel=None, limits=None, meminfo: dict | None = None, env=None,
-              is_free=port_free, holder=port_holder) -> tuple[bool, list[str]]:
+              is_free=None, holder=None) -> tuple[bool, list[str]]:
         """Gate, then bring the mesh up beside the build. Never raises. ``backend``
         is the build's backend (``docker``/``native``) while ``building`` — the gate
-        refuses without it (:func:`plan_alongside`)."""
+        refuses without it (:func:`plan_alongside`).
+
+        Refuses a record this flow did not make (:func:`foreign_record_refusal`)
+        before anything else. The record is written ONLY after a successful ``up``
+        (its project, ports and worktree, then "ran"): a refused or failed start
+        leaves the record file byte-identical."""
         log: list[str] = []
 
         def note(line: str) -> None:
@@ -599,6 +742,10 @@ class AlongsideMesh:
                 except Exception:        # noqa: BLE001 — a viewer never sinks the start
                     pass
         try:
+            foreign = foreign_record_refusal(self.rec)
+            if foreign:
+                note(f"[local mesh] refused — {foreign}")
+                return False, log
             plan = plan_alongside(self.boot_config(), building=building,
                                   backend=backend, limits=limits, meminfo=meminfo,
                                   env=env, is_free=is_free, holder=holder)
@@ -611,12 +758,14 @@ class AlongsideMesh:
             if not ok:
                 return False, log
             boot = self.bootstrap(plan.ports)
-            self._record_lanes(plan.ports)
             ok, _lines = boot.up(on_line=note, cancel=cancel)
             note(f"[local mesh] {'up' if ok else 'FAILED'} — compose project "
                  f"{self.project}" + (f", front door {boot._stack_node().web_url}"
                                       if ok else ""))
             if ok:
+                # only now does the record learn where it runs: a failed start must
+                # not leave it naming ports/a project nothing came up on
+                self._record_lanes(plan.ports, save=False)
                 self._mark_ran()
             return ok, log
         except Exception as e:           # noqa: BLE001 — never fails the build
@@ -626,6 +775,9 @@ class AlongsideMesh:
     def stop(self) -> tuple[bool, list[str]]:
         """``make stack-halt`` for THIS project only (volumes kept). Never the
         bootstrap's down(), which also stops the operator's tailnet overlay."""
+        foreign = foreign_record_refusal(self.rec)
+        if foreign:
+            return False, [f"[local mesh] refused — {foreign}"]
         if not os.path.isdir(self.worktree):
             return True, [f"[local mesh] nothing to stop ({self.project} never started "
                           "here)"]
@@ -648,7 +800,7 @@ class AlongsideMesh:
         except Exception as e:           # noqa: BLE001
             return f"{self.project}: unknown ({e})"
 
-    def _record_lanes(self, ports: dict) -> None:
+    def _record_lanes(self, ports: dict, *, save: bool = True) -> None:
         self.rec.lanes = dict(self.rec.lanes or {})
         self.rec.lanes["compose_project"] = self.project
         self.rec.lanes["host_ports"] = dict(ports)
@@ -658,7 +810,8 @@ class AlongsideMesh:
             f"Runs beside its node-image build as compose project {self.project} from "
             f"the worktree {self.worktree} (ports: " + ", ".join(
                 f"{k}={v}" for k, v in ports.items()) + ").")
-        saved_meshes.save(self.rec)
+        if save:
+            saved_meshes.save(self.rec)
 
     def _mark_ran(self) -> None:
         self.rec.last_seen = dict(self.rec.last_seen or {})
@@ -739,6 +892,13 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("record")
     args = ap.parse_args(argv)
     if args.verb == "save":
+        if args.record:
+            # the same refusal save() makes, said here as a refusal (rc 2, stderr):
+            # --record naming a record this flow did not make writes nothing
+            foreign = foreign_record_refusal(saved_meshes.find(args.record))
+            if foreign:
+                print(f"refused — {foreign}", file=sys.stderr)
+                return 2
         try:
             cfg, wl = _load_cfg(args.config)
         except (OSError, ValueError, TypeError) as e:
@@ -753,6 +913,11 @@ def main(argv: list[str] | None = None) -> int:
     rec = saved_meshes.find(args.record)
     if rec is None:
         print(f"no saved mesh with id {args.record!r}", file=sys.stderr)
+        return 2
+    foreign = foreign_record_refusal(rec)
+    if foreign:
+        # refused before the lane is even built: nothing probed, nothing written
+        print(f"refused — {foreign}", file=sys.stderr)
         return 2
     lane = AlongsideMesh(args.generator_dir, rec)
     if args.verb == "gate":

@@ -1042,15 +1042,6 @@ class LocalMeshBootstrap:
         overlay will attach, MeshNode.available() (the mesh compose template)."""
         if self.lane_refusal:
             return False, self.lane_refusal
-        if self._own_project():
-            # A mesh with its own compose project still publishes compose.real.yaml's
-            # FIXED ports (Casdoor 8000, the social tier): while another mesh holds
-            # one, `make stack-up` would create this project's containers and then
-            # fail on the bind. Refuse first, naming the holder.
-            from . import images_mesh
-            held = images_mesh.fixed_port_refusals(self.cfg)
-            if held:
-                return False, (f"{self.project} cannot start now: " + "; ".join(held))
         if self._in_cluster_pod():
             return False, ("Refusing to bootstrap a from-scratch mesh inside a cluster "
                            "pod — this is a HOST-LOCAL action (docker on the operator's "
@@ -1672,6 +1663,10 @@ class LocalMeshBootstrap:
         if not ok:
             _note(why)
             return False
+        held = self.fixed_port_refusal()
+        if held:
+            _note(held)
+            return False
         problems = self.validate()
         if problems:
             for _ln in ["cannot start:", *(f"  - {p}" for p in problems)]:
@@ -1884,6 +1879,10 @@ class LocalMeshBootstrap:
         if not ok:
             _note(why)
             return False, log
+        held = self.fixed_port_refusal()
+        if held:
+            _note(held)
+            return False, log
         plan = self._live_plan(rec, _note)
         if plan is None:
             return False, log
@@ -2067,6 +2066,30 @@ class LocalMeshBootstrap:
         ok_mesh, msg = self._overlay_stop()
         log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
         return (ok_stack and ok_mesh), log
+
+    def fixed_port_refusal(self) -> str:
+        """Why this mesh cannot come UP now because another mesh holds a FIXED host
+        port it publishes ("" = it can). compose.real.yaml publishes Casdoor on a
+        literal 8000 (and the social tier on 8008/3000/4000) whatever the project,
+        so while another mesh holds one, `make stack-up` creates this project's
+        containers and then dies on the bind. Asked by :meth:`_prepare` (``up``,
+        ``restore``) and :meth:`start_saved` before anything starts — never by
+        :meth:`guard_host_local`, which ``m2_bootstrap`` shares (the maven registry
+        binds none of these ports).
+
+        * own project (a node-image mesh, ``hugmesh-img-<id>``): every holder
+          refuses, except this project's own container (already up);
+        * the checkout's own (hugmesh-local) — PR #937 round 3, the REVERSE
+          collision: a container of ANOTHER project (an img mesh) refuses, naming
+          it and how to stop it; hugmesh-local's own container (already up) and an
+          unnamed holder do not."""
+        from . import images_mesh
+        project = self.project or _COMPOSE_PROJECT
+        if self._own_project():
+            held = images_mesh.fixed_port_refusals(self.cfg, project=project)
+        else:
+            held = images_mesh.checkout_fixed_port_refusals(self.cfg, project)
+        return (f"{project} cannot start now: " + "; ".join(held)) if held else ""
 
     def _own_project(self) -> bool:
         """This bootstrap drives a compose project other than the checkout's own (a

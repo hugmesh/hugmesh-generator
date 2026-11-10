@@ -761,3 +761,275 @@ def test_cli_gate_says_which_backend_it_gated(saved_limits, tmp_path, capsys):
                            "--backend", "native"])
     out = capsys.readouterr().out
     assert rc == 1 and "native build" in out
+
+
+# ── 9. PR #937 round 3 ─────────────────────────────────────────────────────────
+#  (1) every images_mesh verb refuses a record it did not make, writing nothing,
+#      and a failed start leaves its own record byte-identical;
+#  (2) the "worktree is gone" remedy really starts the mesh (stale registration);
+#  (3) cleaning an own-project mesh never removes the shared m2 registry;
+#  (4) the REVERSE collision: hugmesh-local refuses while an img mesh holds 8000.
+def _record_bytes(rec) -> bytes:
+    with open(rec.path(), "rb") as fh:
+        return fh.read()
+
+
+def _checkout_record(checkout, **lanes) -> saved_meshes.SavedMesh:
+    """A record saved on the local-mesh page: the checkout's own hugmesh-local."""
+    rec = saved_meshes.SavedMesh(id=saved_meshes.new_id(), label="operator mesh",
+                                 generator_dir=checkout,
+                                 config=LocalMeshBootstrapConfig().to_dict(),
+                                 lanes=dict(lanes))
+    assert saved_meshes.save(rec)
+    return rec
+
+
+@pytest.fixture
+def no_host_gate(monkeypatch):
+    """The start gate says yes on any host (this one may run hugmesh-local on 8000
+    and be short of memory) and every git/make a start would run is recorded: the
+    ONLY thing between a verb and a write is the code under test."""
+    monkeypatch.setattr(images_mesh, "plan_alongside", lambda *a, **k:
+                        images_mesh.AlongsidePlan(ok=True, ports={
+                            "PUBLIC_HOST_PORT": 18088, "PUBLIC_HTTPS_PORT": 18488,
+                            "TOR_SOCKS_HOST_PORT": 19050,
+                            "ANUBIS_HOST_PORT": 18923}))
+    ups = []
+    monkeypatch.setattr(LocalMeshBootstrap, "up", lambda self, **k: ups.append(
+        self.generator_dir) or (False, ["[stack-up] FAILED: no docker here"]))
+    return ups
+
+
+@pytest.mark.parametrize("lanes", [{}, {"compose_project": "hugmesh-local"}],
+                         ids=["no-project", "hugmesh-local"])
+def test_round3_every_images_verb_refuses_a_checkout_record_and_writes_nothing(
+        checkout, no_host_gate, tmp_path, capsys, lanes):
+    """The round-2 refutation: `images_mesh start <default id> --not-building`
+    rewrote a hugmesh-local record's compose project to hugmesh-img-<id> (+worktree,
+    ports) even when the start FAILED, and `save --record <default id>` did the same.
+    Now gate/start/stop/save --record each refuse with a sentence, rc 2, and the
+    record file is byte-identical; no worktree is made, no up runs."""
+    rec = _checkout_record(checkout, **lanes)
+    before = _record_bytes(rec)
+    cfg_path = tmp_path / "images.json"
+    cfg_path.write_text(json.dumps(_images_cfg().to_dict()), encoding="utf-8")
+    verbs = (["gate", rec.id, "--not-building"], ["start", rec.id, "--not-building"],
+             ["stop", rec.id], ["save", str(cfg_path), "--record", rec.id])
+    for verb in verbs:
+        rc = images_mesh.main(["--generator-dir", checkout, *verb])
+        err = capsys.readouterr()
+        assert rc == 2, (verb, err)
+        assert "this checkout's own mesh" in err.err + err.out, (verb, err)
+        assert _record_bytes(rec) == before, verb
+    assert no_host_gate == []
+    assert not os.path.exists(images_mesh.worktree_path(rec.id))
+    assert len(saved_meshes.scan()[0]) == 1           # save made no new record either
+    # save() itself refuses too (the GUI's Save strip and the dispatch save call it)
+    res = images_mesh.save(checkout, _images_cfg(), None, record_id=rec.id)
+    assert not res.ok and "this checkout's own mesh" in res.message
+    assert _record_bytes(rec) == before and len(saved_meshes.scan()[0]) == 1
+    # the lane itself refuses too (the GUI builds it directly)
+    lane = images_mesh.AlongsideMesh(checkout, saved_meshes.find(rec.id))
+    ok, lines = lane.start(building=False)
+    assert not ok and any("this checkout's own mesh" in ln for ln in lines)
+    ok, lines = lane.stop()
+    assert not ok and any("this checkout's own mesh" in ln for ln in lines)
+    assert _record_bytes(rec) == before and no_host_gate == []
+    assert _sentinel_intact(checkout)
+
+
+def test_round3_a_record_not_saved_from_images_is_refused_too(checkout, no_host_gate,
+                                                              capsys):
+    """Its own compose project but no images build pointer (hand-made, or another
+    flow): the node-image verbs do not act on it either."""
+    rec = _checkout_record(checkout, compose_project="hugmesh-other")
+    before = _record_bytes(rec)
+    assert images_mesh.foreign_record_refusal(rec)
+    rc = images_mesh.main(["--generator-dir", checkout, "start", rec.id,
+                           "--not-building"])
+    assert rc == 2 and "not saved from the node-image flow" in capsys.readouterr().err
+    assert _record_bytes(rec) == before and no_host_gate == []
+    # ...while a record this flow made is accepted
+    assert images_mesh.foreign_record_refusal(_img_record(checkout)) == ""
+
+
+@pytest.mark.parametrize("failure", ["returns-false", "raises"])
+def test_round3_a_failed_start_leaves_the_images_record_byte_identical(
+        checkout, monkeypatch, failure):
+    rec = _img_record(checkout)
+    before = _record_bytes(rec)
+
+    def up(self, on_line=None, cancel=None):
+        if failure == "raises":
+            raise RuntimeError("compose fell over")
+        return False, ["[stack-up] FAILED"]
+    monkeypatch.setattr(LocalMeshBootstrap, "up", up)
+    lane = images_mesh.AlongsideMesh(checkout, rec)
+    ok, _lines = lane.start(building=False, meminfo=_meminfo(128, 120), env={},
+                            is_free=_all_free, holder=lambda p: "")
+    assert not ok
+    assert os.path.exists(os.path.join(lane.worktree, ".git"))   # it got that far
+    assert _record_bytes(rec) == before
+    assert "host_ports" not in saved_meshes.find(rec.id).lanes
+
+
+def _git_worktrees(repo) -> list[str]:
+    out = subprocess.run(["git", "-C", repo, "worktree", "list", "--porcelain"],
+                         capture_output=True, text=True, check=True).stdout
+    return [ln.split(" ", 1)[1] for ln in out.splitlines() if ln.startswith("worktree ")]
+
+
+def test_round3_the_gone_worktree_remedy_really_starts_the_mesh(checkout, tmp_path,
+                                                                monkeypatch, capsys):
+    """Deleting a record's worktree directory leaves it REGISTERED in the checkout;
+    the refusal says "Start it again with `... start <id> --not-building`, which
+    makes a new one", and that command died in `git worktree add` ("missing but
+    already registered worktree"). Run here, verbatim, it now makes the worktree and
+    reaches the bring-up — and another worktree of the checkout that still exists
+    is untouched (prune drops only registrations whose directory is gone)."""
+    import re
+    import shutil
+    rec = _img_record(checkout)
+    lane = images_mesh.AlongsideMesh(checkout, rec)
+    ok, msg = lane.prepare_worktree()
+    assert ok, msg
+    rec.lanes["host_ports"] = {"PUBLIC_HOST_PORT": 18090, "PUBLIC_HTTPS_PORT": 18490}
+    saved_meshes.save(rec)
+    other = str(tmp_path / "someone-elses-worktree")
+    subprocess.run(["git", "-C", checkout, "worktree", "add", "-q", "--detach", other,
+                    "HEAD"], check=True, capture_output=True)
+    shutil.rmtree(lane.worktree)
+    refusal = LocalMeshBootstrap.for_record(checkout, rec).lane_refusal
+    assert "is gone" in refusal
+    cmd = re.search(r"`python -m hugmesh_studio\.core\.images_mesh ([^`]+)`",
+                    refusal).group(1).split()
+    assert cmd[:2] == ["start", rec.id]
+    # the host gate says yes (this host may hold 8000 / be short of memory)
+    monkeypatch.setattr(images_mesh, "port_free", lambda p: True)
+    monkeypatch.setenv(images_mesh.MESH_MEMORY_ENV, "1")
+    ups = []
+    monkeypatch.setattr(LocalMeshBootstrap, "up", lambda self, **k: ups.append(
+        self.generator_dir) or (True, []))
+    rc = images_mesh.main(["--generator-dir", checkout, *cmd])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "git worktree add failed" not in out
+    assert ups == [lane.worktree]
+    assert os.path.exists(os.path.join(lane.worktree, ".git"))
+    assert LocalMeshBootstrap.for_record(checkout, saved_meshes.find(rec.id)) \
+        .lane_refusal == ""
+    assert other in _git_worktrees(checkout) and os.path.isdir(other)
+
+
+def test_round3_cleaning_an_own_project_keeps_the_shared_m2_registry(monkeypatch):
+    """`make stack-clean` ends with `docker rm -f hugmesh-m2-registry` — ONE container
+    per host, the one the checkout's hugmesh-local builds from. A clean of a
+    hugmesh-img-<id> mesh passes STACK_CLEAN_KEEP_M2=1; the checkout's own clean is
+    unchanged."""
+    seen = []
+
+    def fake_make(self, target, timeout, extra_env=None, on_line=None, cancel=None,
+                  args=None):
+        seen.append((self.project, target, list(args or ())))
+        return True, "ok"
+    monkeypatch.setattr(local_stack_node.LocalStackNode, "_make", fake_make)
+    local_stack_node.LocalStackNode(GENERATOR_DIR, project="hugmesh-img-abc").clean()
+    local_stack_node.LocalStackNode(GENERATOR_DIR).clean()
+    assert seen == [("hugmesh-img-abc", "stack-clean", ["STACK_CLEAN_KEEP_M2=1"]),
+                    ("hugmesh-local", "stack-clean", [])]
+
+
+def test_round3_an_own_project_records_clean_carries_the_keep_knob(checkout, makes,
+                                                                   monkeypatch):
+    """The whole path: Saved meshes -> Stop && clean of an img record."""
+    rec = _img_record(checkout)
+    os.makedirs(os.path.join(rec.lanes["worktree"], ".git"))
+    rec.lanes["host_ports"] = {"PUBLIC_HOST_PORT": 18090}
+    saved_meshes.save(rec)
+    argv = []
+    orig = local_stack_node.LocalStackNode._make
+
+    def spy(self, target, timeout, extra_env=None, on_line=None, cancel=None,
+            args=None):
+        argv.append((self.generator_dir, target, list(args or ())))
+        return orig(self, target, timeout, extra_env, on_line, cancel, args)
+    monkeypatch.setattr(local_stack_node.LocalStackNode, "_make", spy)
+    ok, lines = LocalMeshBootstrap.for_record(checkout, rec).clean()
+    assert ok, lines
+    assert argv == [(rec.lanes["worktree"], "stack-clean", ["STACK_CLEAN_KEEP_M2=1"])]
+
+
+def test_round3_the_makefile_keep_knob_drops_the_registry_removal():
+    """What the knob does to the recipe (`make -n`: printed, never run)."""
+    import shutil
+    if not shutil.which("make"):
+        pytest.skip("no make on this host")
+
+    def recipe(*extra):
+        r = subprocess.run(["make", "-n", "-s", "-C", GENERATOR_DIR, "stack-clean",
+                            *extra], capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, r.stderr[-2000:]
+        return r.stdout
+    plain = recipe()
+    kept = recipe("STACK_CLEAN_KEEP_M2=1")
+    assert "docker rm -f hugmesh-m2-registry" in plain
+    assert "rm -f tests/stack/.m2-registry.env" in plain
+    assert "docker rm -f hugmesh-m2-registry" not in kept
+    assert ".m2-registry.env" not in kept
+    assert "down -v --rmi local" in kept                # the project's own clean stays
+
+
+def test_round3_hugmesh_local_refuses_while_an_img_mesh_holds_casdoor(checkout, makes,
+                                                                      monkeypatch):
+    """The REVERSE collision: with a hugmesh-img-<id> mesh up on 8000, a start or
+    restore of the checkout's own hugmesh-local refused nothing up front — `make
+    stack-up` created its containers and died on the bind. Now up / start_saved /
+    restore refuse before any `make`, naming the holder and how to stop it."""
+    img = _img_record(checkout)
+    holder = images_mesh.project_for(img.id) + "-casdoor-1"
+    monkeypatch.setattr(images_mesh, "port_free", lambda p: p != 8000)
+    monkeypatch.setattr(images_mesh, "port_holder", lambda p: holder)
+    monkeypatch.setattr(images_mesh, "container_project", lambda name: "")
+    rec = _checkout_record(checkout)
+    boot = LocalMeshBootstrap(checkout, LocalMeshBootstrapConfig())
+    assert not boot._own_project()
+    why = boot.fixed_port_refusal()
+    assert "8000" in why and holder in why
+    assert f"images_mesh stop {img.id}" in why
+    for verb in (boot.up, lambda: boot.start_saved(rec), lambda: boot.restore(rec)):
+        ok, lines = verb()
+        assert ok is False
+        assert any(holder in ln and "8000" in ln for ln in lines), lines
+    assert not [m for m in makes if m["target"] != "probe_state"], makes
+    assert _sentinel_intact(checkout)
+
+
+@pytest.mark.parametrize("holder,label", [
+    ("hugmesh-local-casdoor-1", ""),             # the checkout's own mesh, already up
+    ("hugmesh-casdoor", "hugmesh-local"),        # ditto, by its compose label
+    ("", ""),                                     # not a container docker can name
+])
+def test_round3_hugmesh_local_is_not_refused_over_its_own_casdoor(monkeypatch, holder,
+                                                                  label):
+    """A warm re-up or restore of the RUNNING hugmesh-local finds 8000 held by its
+    own Casdoor: that is not a collision, and an unnamed holder is not refused on
+    a guess."""
+    monkeypatch.setattr(images_mesh, "port_free", lambda p: p != 8000)
+    monkeypatch.setattr(images_mesh, "port_holder", lambda p: holder)
+    monkeypatch.setattr(images_mesh, "container_project", lambda name: label)
+    boot = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig())
+    assert boot.fixed_port_refusal() == ""
+
+
+def test_round3_m2_bootstrap_is_not_refused_over_the_fixed_ports(monkeypatch):
+    """The fixed-port check lives in _prepare/start_saved, not in guard_host_local:
+    building the maven registry binds none of those ports."""
+    monkeypatch.setattr(images_mesh, "port_free", lambda p: False)
+    monkeypatch.setattr(images_mesh, "port_holder", lambda p: "hugmesh-img-zzz-casdoor-1")
+    monkeypatch.setattr(images_mesh, "container_project", lambda name: "")
+    monkeypatch.setattr(local_stack_node.LocalStackNode, "available",
+                        lambda self: (True, ""))
+    monkeypatch.setattr(LocalMeshBootstrap, "_in_cluster_pod", lambda self: False)
+    monkeypatch.setattr(LocalMeshBootstrap, "overlay_will_attach", lambda self: False)
+    assert LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig()) \
+        .guard_host_local() == (True, "")
