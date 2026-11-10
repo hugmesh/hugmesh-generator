@@ -19,6 +19,7 @@ pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding (PySide6/PyQt
 
 from hugmesh_studio.core import images_mesh, saved_meshes  # noqa: E402
 from hugmesh_studio.core import host_resources as hr  # noqa: E402
+from hugmesh_studio.core import resource_limits as rl  # noqa: E402
 from hugmesh_studio.core.config import Domain, ImageConfig, User  # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
 from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry  # noqa: E402
@@ -181,11 +182,17 @@ def test_ticking_start_shows_the_gate_verdict(qapp, wiz, tmp_path, monkeypatch):
     """A 31 GiB host while the build holds its cap: the strip says the local copy
     would NOT start, and that the build runs either way."""
     real = images_mesh.plan_alongside
-    monkeypatch.setattr(images_mesh, "plan_alongside", lambda boot, building: real(
-        boot, building=building, env={},
-        meminfo={"MemTotal": int(31.1 * hr.GIB), "MemAvailable": 24 * hr.GIB},
-        is_free=lambda p: True, holder=lambda p: ""))
+    mi = {"MemTotal": int(31.1 * hr.GIB), "MemAvailable": 24 * hr.GIB}
+    seen = []
+
+    def fake(boot, building, backend=None):
+        seen.append(backend)
+        return real(boot, building=building, backend=backend, env={}, meminfo=mi,
+                    limits=rl.auto_limits(nproc=8, meminfo=mi),
+                    is_free=lambda p: True, holder=lambda p: "")
+    monkeypatch.setattr(images_mesh, "plan_alongside", fake)
     page = _launch(wiz, _mesh_cfg(tmp_path))
+    wiz.build_backend = "docker"                 # the Build screen's backend choice
     page.mesh_strip.start_cb.setChecked(True)
     assert wiz.images_mesh_start_local is True
     assert _pump(qapp, lambda: page.mesh_strip._gate_probe is None
@@ -202,6 +209,37 @@ def test_ticking_start_shows_the_gate_verdict(qapp, wiz, tmp_path, monkeypatch):
     _shot(wiz, "launch-start-refused.png")
     page.mesh_strip.autosave_cb.setChecked(False)
     assert wiz.images_mesh_autosave is False
+    assert seen == ["docker"]                    # the build's backend reached the gate
+
+
+def test_the_gate_refuses_beside_a_native_build_whatever_the_memory(qapp, wiz,
+                                                                    tmp_path,
+                                                                    monkeypatch):
+    """PR #937 round 2: the default backend on a Gentoo host is NATIVE, which runs with
+    no memory cap at all (build_driver: native has no cgroup cap). The gate used to
+    subtract HUGMESH_BUILD_MEMORY's auto value anyway and say a 128 GiB host 'fits'.
+    The strip now hands the gate the wizard's backend, and a native build refuses."""
+    real = images_mesh.plan_alongside
+    mi = {"MemTotal": 128 * hr.GIB, "MemAvailable": 120 * hr.GIB}
+    seen = []
+
+    def fake(boot, building, backend=None):
+        seen.append(backend)
+        return real(boot, building=building, backend=backend, env={}, meminfo=mi,
+                    is_free=lambda p: True, holder=lambda p: "")
+    monkeypatch.setattr(images_mesh, "plan_alongside", fake)
+    page = _launch(wiz, _mesh_cfg(tmp_path))
+    wiz.build_backend = None                     # "auto": the host default
+    assert wiz.host.default_backend == "native"
+    page.mesh_strip.start_cb.setChecked(True)
+    assert _pump(qapp, lambda: page.mesh_strip._gate_probe is None
+                 and "NOT start" in page.mesh_strip.gate.text())
+    assert seen == ["native"]
+    assert "native build" in page.mesh_strip.gate.text()
+    assert "no memory cap" in page.mesh_strip.gate.text()
+    _settle(qapp)
+    assert _fully_drawn(page.mesh_strip.gate)
+    _shot(wiz, "launch-start-refused-native.png")
 
 
 # ── ProgressPage panel ─────────────────────────────────────────────────────────
@@ -255,6 +293,32 @@ def test_a_failed_local_start_is_a_line_not_a_failed_build(qapp, wiz, tmp_path,
     assert not panel.stop_btn.isVisible()          # the gate refused: nothing to stop
     assert panel.status.text().count("acme") == 1  # the name is said once
     _shot(panel, "progress-local-mesh-refused.png")
+
+
+def test_the_panel_starts_with_the_sessions_backend(qapp, wiz, tmp_path, monkeypatch):
+    """The dispatch-time start gates on the backend the build was DISPATCHED with
+    (the session's), so the cap it subtracts is the one the build really has."""
+    _launch(wiz, _mesh_cfg(tmp_path))
+    wiz.images_mesh_start_local = True
+    wiz.build_backend = None
+    seen = []
+
+    def start(self, *, building, backend=None, on_line=None, cancel=None, **_k):
+        seen.append((building, backend))
+        return False, []
+    monkeypatch.setattr(images_mesh.AlongsideMesh, "start", start)
+
+    class _DockerSession(_Session):
+        backend = "docker"
+    panel = im_gui.LocalMeshPanel()
+    panel.begin(wiz, _DockerSession())
+    assert _pump(qapp, lambda: bool(seen))
+    assert seen == [(True, "docker")]
+    seen.clear()
+    panel2 = im_gui.LocalMeshPanel()
+    panel2.begin(wiz, _Session())                # no session backend: the host's
+    assert _pump(qapp, lambda: bool(seen))
+    assert seen == [(True, "native")]
 
 
 def test_start_then_stop_from_the_panel(qapp, wiz, tmp_path, monkeypatch):

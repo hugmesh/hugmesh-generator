@@ -62,7 +62,7 @@ from .local_services import (
 )
 from .egress_conf import validate_egress_conf
 from .domain_services import tor_domain_entries
-from .local_stack_node import M2_BOOTSTRAP_HINT, LocalStackNode
+from .local_stack_node import _COMPOSE_PROJECT, M2_BOOTSTRAP_HINT, LocalStackNode
 from .mesh_node import MeshNode
 
 # The two credential generators (repo-relative). Reused VERBATIM via subprocess
@@ -721,6 +721,12 @@ class LocalMeshBootstrap:
         # project; see LocalStackNode.__init__.
         self.project = project
         self.host_ports = dict(host_ports or {})
+        # Why this bootstrap must not ACT ("" = it may): set by for_record for a saved
+        # mesh with its own compose project whose worktree or ports are not there
+        # (core/images_mesh.bootstrap_for_record). guard_host_local, start_saved,
+        # restore, down and clean refuse with it first — acting would otherwise mean
+        # acting on the operator's checkout and its hugmesh-local.
+        self.lane_refusal = ""
 
     # ---- built from a saved-mesh record (core/saved_meshes.py) -------------------
     @classmethod
@@ -731,6 +737,16 @@ class LocalMeshBootstrap:
         tailnet auth key, which the caller supplies. THE seam `mesh-restore` and the
         localcloud identity import share, so a saved mesh's services selection —
         tor included — is read the same way wherever a record becomes a mesh."""
+        from . import saved_meshes
+        if saved_meshes.is_own_project(rec):
+            # A mesh with its OWN compose project (the node-image flow's
+            # hugmesh-img-<id>): its project, ports and worktree — never the
+            # checkout's hugmesh-local. A part that is gone becomes `lane_refusal`,
+            # never a fall-back to the checkout. (No auth key: it runs as a test
+            # mesh.) Not a raise: for_checkout reads configs through here and folds
+            # an exception into the DEFAULT config.
+            from . import images_mesh
+            return images_mesh.bootstrap_for_record(generator_dir, rec)
         cfg = LocalMeshBootstrapConfig.from_dict(dict(getattr(rec, "config", None) or {}))
         if auth_key:
             cfg.auth_key = auth_key
@@ -1020,6 +1036,8 @@ class LocalMeshBootstrap:
         """Refuse unless this is a host-local run with docker/compose/make present.
         Reuses LocalStackNode.available() (make + compose + stack file) and, when the
         overlay will attach, MeshNode.available() (the mesh compose template)."""
+        if self.lane_refusal:
+            return False, self.lane_refusal
         if self._in_cluster_pod():
             return False, ("Refusing to bootstrap a from-scratch mesh inside a cluster "
                            "pod — this is a HOST-LOCAL action (docker on the operator's "
@@ -1910,6 +1928,11 @@ class LocalMeshBootstrap:
             log.append(line)
             if on_line is not None:
                 on_line(line)
+        # A record with its own compose project whose worktree/ports are gone: refuse
+        # before ANY probe or advice — nothing here may fall back to the checkout.
+        if self.lane_refusal:
+            _note(f"[restore] refused — {self.lane_refusal}")
+            return False, log
         # FIRST on native Windows, as start_saved does: the checks below end in advice
         # ('Generate && start') that refuses there too, and _prepare (the only other
         # place restore meets guard_host_local) comes after them.
@@ -1941,11 +1964,15 @@ class LocalMeshBootstrap:
         # (minutes of docker) only to refuse at the same question below.
         if not (saved_meshes.restore_env(rec).get(SEED_SUPERADMIN_PASSWORD_ENV)
                 or self.read_superadmin().get("password")):
+            remedy = (f"Start it again with `python -m hugmesh_studio.core.images_mesh "
+                      f"start {getattr(rec, 'id', '')} --not-building`, which mints "
+                      "one in its own worktree."
+                      if self._own_project() else
+                      "Load it into the form and use 'Generate && start' to mint one.")
             _note("[restore] refused — no superadmin password is available: the "
                   f"secrets bundle at {self.secrets_json} is not there and this record "
                   "kept no copy (a mesh saved before its first bring-up has none yet). "
-                  "Load it into the form and use 'Generate && start' to mint one. "
-                  "Nothing was started or seeded.")
+                  f"{remedy} Nothing was started or seeded.")
             return False, log
         if not self._prepare(_note, on_line=on_line, cancel=cancel):
             return False, log
@@ -2003,6 +2030,8 @@ class LocalMeshBootstrap:
         volumes are KEPT, see LocalStackNode.stop) + the mesh overlay
         (LocalMeshNode.stop()). ``clean()`` is the one that drops volumes."""
         log: list[str] = []
+        if self.lane_refusal:
+            return False, [self.lane_refusal]
         blocker = self.teardown_refusal(osname)
         if blocker:
             # One sentence, nothing touched: a mesh seen here was started from the WSL2
@@ -2022,9 +2051,23 @@ class LocalMeshBootstrap:
                                               "nothing was running — no containers to stop"))
         else:
             log.append(f"[stack-down] FAILED: {_tail(msg)}")
-        ok_mesh, msg = self._mesh_node().stop()
+        ok_mesh, msg = self._overlay_stop()
         log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
         return (ok_stack and ok_mesh), log
+
+    def _own_project(self) -> bool:
+        """This bootstrap drives a compose project other than the checkout's own (a
+        saved mesh of the node-image flow, ``for_record``)."""
+        return bool(self.project) and self.project != _COMPOSE_PROJECT
+
+    def _overlay_stop(self) -> tuple[bool, str]:
+        """Stop the tailnet overlay — unless this bootstrap drives a mesh with its own
+        compose project: the overlay's project is the fixed ``hugmesh-mesh``, the
+        OPERATOR's, and a mesh beside the checkout's never attached one."""
+        if self._own_project():
+            return True, (f"skipped — {self.project} runs without the tailnet overlay, "
+                          "whose project belongs to this checkout's mesh")
+        return self._mesh_node().stop()
 
     def clean(self, on_line=None, cancel=None,
               osname: str | None = None) -> tuple[bool, list[str]]:
@@ -2033,7 +2076,7 @@ class LocalMeshBootstrap:
         by design (every caller confirms first) — the next bring-up is a cold build.
         Never touches images this stack did not build."""
         log: list[str] = []
-        blocker = self.teardown_refusal(osname)
+        blocker = self.lane_refusal or self.teardown_refusal(osname)
         if blocker:
             # Before the overlay stop too: half a teardown (overlay down, stack left)
             # is worse than none. Streamed as well, since a streaming caller drops the
@@ -2041,7 +2084,7 @@ class LocalMeshBootstrap:
             if on_line is not None:
                 on_line(blocker)
             return False, [blocker]
-        ok_mesh, msg = self._mesh_node().stop()
+        ok_mesh, msg = self._overlay_stop()
         log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
         ok_stack, msg = self._stack_node().clean(on_line=on_line, cancel=cancel)
         log.append(f"[stack-clean] {'ok' if ok_stack else 'FAILED'}: {_tail(msg)}")
@@ -2431,8 +2474,15 @@ def _saved_mesh_cli(args: argparse.Namespace) -> int:
     boot = LocalMeshBootstrap.for_record(args.generator_dir, rec,
                                          auth_key=_read_authkey(args))
     cfg = boot.cfg
-    plan = saved_meshes.restore_plan(rec, **saved_meshes.probe_state(rec))
     print(f"{rec.id}  {rec.label}")
+    if boot.lane_refusal:
+        # a mesh with its own compose project and no worktree/ports to run it from:
+        # never probed, never started — and never the checkout's hugmesh-local
+        print(f"  [refused] {boot.lane_refusal}")
+        return 1
+    if boot.project and boot.project != _COMPOSE_PROJECT:
+        print(f"  runs as compose project {boot.project} from {boot.generator_dir}")
+    plan = saved_meshes.restore_plan(rec, **saved_meshes.probe_state(rec))
     print(f"  {plan.sentence}")
     for w in plan.warnings:
         print(f"  WARNING: {w}")

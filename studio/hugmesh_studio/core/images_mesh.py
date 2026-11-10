@@ -61,7 +61,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
-from . import host_resources, saved_meshes
+from . import host_resources, resource_limits, saved_meshes, vaults
 from .state_paths import state_dir
 
 #: ``SavedMesh.build["source"]`` for a record saved from the node-image flow.
@@ -179,7 +179,14 @@ def save(generator_dir: str, cfg, worklist=None, *, label: str = "",
         stub = prior if prior is not None else saved_meshes.SavedMesh(
             id=rid, last_seen={"compose_running": False, "kind_running": False})
         project = project_for(rid)
-        boot = LocalMeshBootstrap(generator_dir, boot_cfg, project=project)
+        # ...and the bootstrap capture reads credential pointers through is the one
+        # this mesh RUNS as: its own worktree (keys-out/, .e2e-credentials), never
+        # the operator's checkout, whose live password file a record of THIS mesh
+        # would otherwise claim (creds_match against hugmesh-local's file). The
+        # record is still filed under the checkout (rec.generator_dir), so the
+        # Saved meshes table and the node-image picker list it there.
+        wt = worktree_path(rid, prior)
+        boot = LocalMeshBootstrap(wt, boot_cfg, project=project)
         rec = saved_meshes.capture(generator_dir, boot_cfg, boot._stack_node(), boot,
                                    label=typed, project=project, overwrite=stub,
                                    kind_running=False)
@@ -197,6 +204,10 @@ def save(generator_dir: str, cfg, worklist=None, *, label: str = "",
             for k in ("host_ports", "worktree"):
                 if k in prior.lanes:
                     rec.lanes[k] = prior.lanes[k]
+        # where this mesh runs (deterministic per record): every consumer of the
+        # record reads it from here (LocalMeshBootstrap.for_record) and refuses
+        # while it does not exist — a draft never falls back to the checkout
+        rec.lanes.setdefault("worktree", wt)
         rec.notes.insert(0, (
             f"Saved from the node-image flow ({len(ref['worklist_ids'])} image(s)). "
             "This record is the mesh those images "
@@ -304,7 +315,45 @@ def _gib(b: int) -> str:
     return f"{b / host_resources.GIB:.1f} GiB"
 
 
-def plan_alongside(boot_cfg, *, building: bool, meminfo: dict | None = None,
+#: The build backends :func:`plan_alongside` knows the memory cap of.
+BACKEND_DOCKER = "docker"
+BACKEND_NATIVE = "native"
+
+
+def build_memory_cap(backend: str | None, env=None, meminfo: dict | None = None,
+                     limits: "resource_limits.ResourceLimits | None" = None
+                     ) -> tuple[bool, str | None, str]:
+    """``(known, cap, why)``: the memory cap a node-image build on ``backend`` will
+    ACTUALLY run under — the value the builder's argv carries, not a re-derivation.
+
+    * ``docker`` -> ``resource_limits.effective().memory`` (env knob, then the
+      operator's SAVED GUI setting, then the auto formula) — exactly what
+      ``build_driver.docker_limit_args()`` puts on ``docker run``. ``None`` = the
+      setting is "all memory": no cap.
+    * ``native`` -> no cap, ever: the native builder runs on the host under sudo,
+      outside any cgroup (build_driver: "native has no cgroup cap").
+    * anything else (unknown, ``none``, not passed) -> not known; the gate refuses.
+    """
+    b = (backend or "").strip().lower()
+    if b == BACKEND_NATIVE:
+        return True, None, "a native build runs on the host with no memory cap"
+    if b == BACKEND_DOCKER:
+        env = os.environ if env is None else env
+        lim = limits if limits is not None else resource_limits.effective(
+            env=env, meminfo=meminfo)
+        if lim.memory is None:
+            return True, None, ("the Docker build's memory limit is 'all memory' "
+                                "(the Studio's resource limits, or "
+                                f"{host_resources.MEMORY_ENV}=off), so it has no cap")
+        return True, str(lim.memory), f"the Docker build is capped at {lim.memory}"
+    return False, None, ("which backend the build runs on is not known"
+                         + (f" ({backend!r})" if backend else "")
+                         + ", so neither is its memory cap")
+
+
+def plan_alongside(boot_cfg, *, building: bool, backend: str | None = None,
+                   limits: "resource_limits.ResourceLimits | None" = None,
+                   meminfo: dict | None = None,
                    env=None, is_free=port_free, holder=port_holder) -> AlongsidePlan:
     """Whether the mesh ``boot_cfg`` describes can start beside a node-image build on
     this host, and with which ports. PURE given its probes (``meminfo``, ``is_free``,
@@ -317,6 +366,12 @@ def plan_alongside(boot_cfg, *, building: bool, meminfo: dict | None = None,
     * the memory left after the host reserve and — while ``building`` — the build's
       own memory cap is less than a mesh takes (:func:`mesh_memory_bytes`), or the
       build has no cap at all (it may then use every byte).
+
+    THE BUILD'S CAP is the one it will really get (:func:`build_memory_cap`): a
+    ``native`` build has none, a ``docker`` one has ``resource_limits.effective()``
+    (``limits`` overrides it for a caller that already resolved it). A caller that
+    does not say which ``backend`` the build runs on is refused while ``building``
+    — a gate that guesses the cap is the gate that let a mesh starve a build.
     """
     env = os.environ if env is None else env
     mi = host_resources.read_meminfo() if meminfo is None else meminfo
@@ -336,13 +391,17 @@ def plan_alongside(boot_cfg, *, building: bool, meminfo: dict | None = None,
                 + (" (Casdoor, the sign-in every token names)" if p == 8000 else
                    " (the social tier)")
                 + ", so two local meshes cannot run at once; stop the other mesh "
-                  "first, or start this one from the Saved meshes table after it")
+                  "first and start this one again (tick 'Start this mesh locally', "
+                  "or `python -m hugmesh_studio.core.images_mesh start <record id> "
+                  "--not-building`)")
     own = tuple(getattr(boot_cfg, "own_idp_domains", ()) or ())
     if own:
         plan.reasons.append(
             "domain(s) with their own Casdoor (" + ", ".join(own) + ") publish fixed "
-            "host ports 8001 and up, which cannot be moved for a second mesh — start it "
-            "from the Saved meshes table instead")
+            "host ports 8001 and up, which cannot be moved for a second mesh. It "
+            "cannot run beside anything; to run it as this checkout's own mesh, "
+            "'Load into the form' in the Saved meshes table and use 'Generate && "
+            "start' (that is hugmesh-local, and only once nothing else runs there)")
     need = mesh_memory_bytes(env)
     total = int(mi.get("MemTotal", 0) or 0)
     avail = int(mi.get("MemAvailable", 0) or 0)
@@ -352,21 +411,25 @@ def plan_alongside(boot_cfg, *, building: bool, meminfo: dict | None = None,
                             "a mesh beside the build cannot be shown to fit")
     else:
         head = avail - host_resources.HOST_RESERVE_BYTES
+        uncapped = False
         if building:
-            flag = host_resources.build_memory_flag(env=env, meminfo=mi)
-            if flag is None:
+            known, flag, why = build_memory_cap(backend, env=env, meminfo=mi,
+                                                limits=limits)
+            cap = _size_bytes(flag) if flag else 0
+            if not known or flag is None or cap <= 0:
+                uncapped = True
                 plan.reasons.append(
-                    f"the build runs without a memory cap ({host_resources.MEMORY_ENV} "
-                    "is off), so it may use all of this host's memory — a mesh beside "
-                    "it could starve it")
+                    (f"{why} — it may use all of this host's memory, so a mesh "
+                     "beside it could starve it" if known and flag is None else
+                     f"the build's memory cap ({flag}) cannot be read, so a mesh "
+                     "beside it cannot be shown to fit" if known else
+                     f"{why} — a mesh beside it cannot be shown to fit"))
                 head = 0
             else:
-                cap = _size_bytes(flag)
                 head -= cap
-                plan.notes.append(f"the build may use up to {_gib(cap)} "
-                                  f"({host_resources.MEMORY_ENV})")
+                plan.notes.append(f"the build may use up to {_gib(cap)} ({why})")
         plan.headroom_bytes = max(0, head)
-        if head < need and not any("memory cap" in r for r in plan.reasons):
+        if head < need and not uncapped:
             plan.reasons.append(
                 f"not enough memory: {_gib(max(0, head))} left "
                 f"({_gib(avail)} available − {_gib(host_resources.HOST_RESERVE_BYTES)} "
@@ -391,19 +454,60 @@ def alongside_root() -> str:
     return os.path.join(state_dir(), "alongside")
 
 
+def worktree_path(record_id: str, rec: saved_meshes.SavedMesh | None = None) -> str:
+    """The generator worktree a record's mesh runs from: the one the record names
+    (``lanes.worktree``), else ``<state>/alongside/<id>/generator``."""
+    lanes = (rec.lanes if rec is not None and isinstance(rec.lanes, dict) else {})
+    wt = str(lanes.get("worktree") or "")
+    return wt or os.path.join(alongside_root(), record_id, "generator")
+
+
+def _cli_start_hint(rec_id: str) -> str:
+    return (f"`python -m hugmesh_studio.core.images_mesh start {rec_id} "
+            "--not-building` (or tick 'Start this mesh locally' on the node-image "
+            "Build screen)")
+
+
 class AlongsideMesh:
     """The saved mesh ``rec``, run beside a build from its own worktree and project."""
 
     def __init__(self, generator_dir: str, rec: saved_meshes.SavedMesh):
         self.generator_dir = os.path.abspath(generator_dir)
         self.rec = rec
-        self.project = str((rec.lanes or {}).get("compose_project") or "")
-        if not self.project.startswith(PROJECT_PREFIX):
-            self.project = project_for(rec.id)
+        # the record's own project when it names one; never the checkout's
+        self.project = (saved_meshes.record_project(rec)
+                        if saved_meshes.is_own_project(rec) else project_for(rec.id))
 
     @property
     def worktree(self) -> str:
-        return os.path.join(alongside_root(), self.rec.id, "generator")
+        return worktree_path(self.rec.id, self.rec)
+
+    def refusal(self) -> str:
+        """Why this record's mesh cannot be STARTED, RESTORED or STOPPED from a saved
+        record right now ("" when it can): it runs only from its own worktree, on
+        its own project and ports, and a draft that never started beside a build
+        has neither a worktree nor ports. Acting anyway would mean acting on the
+        checkout — ``make stack-up``/``stack-seed`` on hugmesh-local, writing the
+        checkout's ``.e2e-credentials`` — which this refusal exists to rule out."""
+        label = self.rec.label or self.rec.id
+        wt = self.worktree
+        head = (f"'{label}' runs as its own compose project {self.project} from its "
+                f"own worktree, never as this checkout's "
+                f"{vaults.DEFAULT_PROJECT}")
+        hint = _cli_start_hint(self.rec.id)
+        if not os.path.exists(os.path.join(wt, ".git")):
+            if not (self.rec.lanes or {}).get("host_ports"):
+                return (f"{head}, and it has never been started, so it has no worktree "
+                        f"or ports of its own yet. Start it with {hint}. Nothing was "
+                        "started or seeded.")
+            return (f"{head}, and that worktree ({wt}) is gone. Start it again with "
+                    f"{hint}, which makes a new one. Nothing was started or seeded.")
+        ports = (self.rec.lanes or {}).get("host_ports") or {}
+        if not isinstance(ports, dict) or "PUBLIC_HOST_PORT" not in ports:
+            return (f"{head}, and the record names no host ports of its own (the "
+                    "checkout's defaults belong to hugmesh-local). Start it with "
+                    f"{hint}, which picks free ones. Nothing was started or seeded.")
+        return ""
 
     def _source_dir(self) -> str:
         src = self.rec.source if isinstance(self.rec.source, dict) else {}
@@ -451,10 +555,12 @@ class AlongsideMesh:
                            + (r.stderr or r.stdout).strip()[-400:])
         return True, f"worktree {wt} (new, at the checkout's HEAD)"
 
-    def start(self, *, building: bool, on_line=None, cancel=None,
-              meminfo: dict | None = None, env=None,
+    def start(self, *, building: bool, backend: str | None = None, on_line=None,
+              cancel=None, limits=None, meminfo: dict | None = None, env=None,
               is_free=port_free, holder=port_holder) -> tuple[bool, list[str]]:
-        """Gate, then bring the mesh up beside the build. Never raises."""
+        """Gate, then bring the mesh up beside the build. Never raises. ``backend``
+        is the build's backend (``docker``/``native``) while ``building`` — the gate
+        refuses without it (:func:`plan_alongside`)."""
         log: list[str] = []
 
         def note(line: str) -> None:
@@ -465,7 +571,8 @@ class AlongsideMesh:
                 except Exception:        # noqa: BLE001 — a viewer never sinks the start
                     pass
         try:
-            plan = plan_alongside(self.boot_config(), building=building, meminfo=meminfo,
+            plan = plan_alongside(self.boot_config(), building=building,
+                                  backend=backend, limits=limits, meminfo=meminfo,
                                   env=env, is_free=is_free, holder=holder)
             for ln in plan.lines():
                 note(ln)
@@ -532,7 +639,37 @@ class AlongsideMesh:
         saved_meshes.save(self.rec)
 
 
+def bootstrap_for_record(generator_dir: str, rec: saved_meshes.SavedMesh):
+    """The bootstrap a saved record of a mesh with its OWN compose project runs as —
+    what :meth:`.local_mesh_bootstrap.LocalMeshBootstrap.for_record` returns for it:
+    its project, its recorded host ports (and the seeder's front door on them), its
+    worktree as the generator dir, and the config this lane runs (a test mesh, keys
+    under the worktree, the checkout's source tree never cloned or reset).
+
+    NEVER the checkout: when the worktree or the ports are not there the bootstrap
+    still names the record's project and worktree, and carries
+    :meth:`AlongsideMesh.refusal` as ``lane_refusal`` — every acting entry point
+    (``guard_host_local``, ``start_saved``, ``restore``, ``down``, ``clean``) refuses
+    with that sentence, while read-only callers (the node-image picker) still get
+    the record's config."""
+    lane = AlongsideMesh(generator_dir, rec)
+    boot = lane.bootstrap()
+    boot.lane_refusal = lane.refusal()
+    return boot
+
+
 # ── CLI (parity with the GUI's Save strip and the progress page) ───────────────
+def host_default_backend() -> str:
+    """The backend a build on this host runs on when none is chosen — the same
+    ``HostInfo.default_backend`` the GUI's dispatch falls back to. "" when the
+    probe fails (the gate then refuses: the cap is not known)."""
+    try:
+        from .platform_info import detect
+        return str(detect().default_backend or "")
+    except Exception:                    # noqa: BLE001 — unknown, and the gate says so
+        return ""
+
+
 def _load_cfg(path: str):
     from .config import ImageConfig
     with open(path, encoding="utf-8") as fh:
@@ -557,12 +694,19 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--label", default="")
     s.add_argument("--record", default="", help="overwrite this record id")
     s.add_argument("--session", default="", help="the build session it belongs to")
+    backend_help = ("the backend the build runs on (docker = capped by the Studio's "
+                    "resource limits, native = no cap); default: this host's default "
+                    "backend")
     g = sub.add_parser("gate", help="say whether a saved mesh can start beside a build")
     g.add_argument("record")
     g.add_argument("--not-building", action="store_true")
+    g.add_argument("--backend", choices=(BACKEND_DOCKER, BACKEND_NATIVE), default="",
+                   help=backend_help)
     st = sub.add_parser("start", help="start a saved mesh beside a build")
     st.add_argument("record")
     st.add_argument("--not-building", action="store_true")
+    st.add_argument("--backend", choices=(BACKEND_DOCKER, BACKEND_NATIVE), default="",
+                    help=backend_help)
     sp = sub.add_parser("stop", help="stop a saved mesh started beside a build")
     sp.add_argument("record")
     args = ap.parse_args(argv)
@@ -584,11 +728,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     lane = AlongsideMesh(args.generator_dir, rec)
     if args.verb == "gate":
-        plan = plan_alongside(lane.boot_config(), building=not args.not_building)
+        plan = plan_alongside(lane.boot_config(), building=not args.not_building,
+                              backend=args.backend or host_default_backend())
         print("\n".join(plan.lines()))
         return 0 if plan.ok else 1
     if args.verb == "start":
-        ok, _ = lane.start(building=not args.not_building, on_line=print)
+        ok, _ = lane.start(building=not args.not_building,
+                           backend=args.backend or host_default_backend(),
+                           on_line=print)
         return 0 if ok else 1
     ok, lines = lane.stop()
     print("\n".join(lines))

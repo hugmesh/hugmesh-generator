@@ -92,6 +92,16 @@ _CANNOT_RESTORE = (
     "clean (its key volume is gone).")
 
 
+def _own_project_refusal(generator_dir: str, rec) -> str:
+    """Why a saved mesh with its own compose project cannot be started/restored from
+    this table now ("" when it can): file checks only (worktree, recorded ports)."""
+    try:
+        from ...core import images_mesh
+        return images_mesh.AlongsideMesh(generator_dir, rec).refusal()
+    except Exception as e:                    # noqa: BLE001 — refuse, never raise
+        return f"this mesh's own worktree could not be checked ({e})"
+
+
 class SavedMeshProbe(QtCore.QThread):
     """Ask docker/git what is TRUE for each record, off the GUI thread.
 
@@ -575,7 +585,11 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                 # as "nothing running" and offered Restore over a mesh that may be up;
                 # the page's own `_mesh_up` False is no better evidence (its status()
                 # also reports running=False when docker raises).
-                if self._mesh_up is True:
+                # ONLY for a record of the checkout's own project: a mesh with its
+                # own compose project (node-image flow) is "running" when ITS project
+                # is (the probe asked that); the checkout's mesh blocks it for another
+                # reason, which _render_row states.
+                if self._mesh_up is True and not sm.is_own_project(r.rec):
                     kw["mesh_running"] = True
                 r.plan = sm.restore_plan(r.rec, **kw)
             elif probe:
@@ -694,10 +708,18 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                      f"({rec.generator_dir} on {rec.hostname or '?'}) — it points at "
                      "another mesh's volumes. Load it into the form and use "
                      "'Generate && start', or restore it cold.")
+            own = sm.is_own_project(rec)
+            lane_why = _own_project_refusal(self.generator_dir, rec) if own else ""
             if self._mesh_up is True:
-                why = "A local mesh is running — stop it first."
+                why = ("This checkout's mesh is running and holds the fixed ports "
+                       f"(Casdoor's 8000) that {sm.record_project(rec)} also publishes "
+                       "— stop it first." if own else
+                       "A local mesh is running — stop it first.")
                 gate(self.start_btn, False, why, "")
                 gate(self.restore_btn, False, why, "")
+            elif lane_why:
+                gate(self.start_btn, False, lane_why, "")
+                gate(self.restore_btn, False, lane_why, "")
             elif plan.mode == sm.MODE_UNKNOWN:
                 gate(self.start_btn, False, plan.sentence, "")
                 gate(self.restore_btn, False, plan.sentence, "")

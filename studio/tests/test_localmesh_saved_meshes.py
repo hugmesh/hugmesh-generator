@@ -804,3 +804,96 @@ def test_the_saved_column_shows_the_last_save_after_an_overwrite(qapp, page):
     plain = table.item(rows["fresh one"], smw._SM_COL_SAVED).text()
     assert "re-saved" not in plain and plain == sm.load(fresh.path()).updated[:16] \
         .replace("T", " ")
+
+
+# ── PR #937 round 2: a saved mesh with its OWN compose project (node-image flow) ──
+def _img_record(with_worktree: bool):
+    """A record saved by the node-image flow (compose project hugmesh-img-<id>), as a
+    draft or as one that ran beside its build (worktree + ports recorded)."""
+    from hugmesh_studio.core import images_mesh
+    from hugmesh_studio.core.config import ImageConfig
+    cfg = ImageConfig(mode="mesh", brand="acme", cluster_domain="acme.org")
+    rec = images_mesh.save(GENERATOR_DIR, cfg).record
+    assert sm.is_own_project(rec)
+    if with_worktree:
+        os.makedirs(os.path.join(rec.lanes["worktree"], ".git"))
+        rec.lanes["host_ports"] = {"PUBLIC_HOST_PORT": 18090,
+                                   "PUBLIC_HTTPS_PORT": 18490}
+        sm.save(rec)
+    return rec
+
+
+def _spy_restore(monkeypatch):
+    seen = []
+
+    def spy(self, rec, on_line=None, cancel=None):
+        seen.append({"project": self.project, "gen": self.generator_dir,
+                     "refusal": self.lane_refusal})
+        return True, ["[done]"]
+    monkeypatch.setattr(lmb.LocalMeshBootstrap, "restore", spy)
+    monkeypatch.setattr(lmb.LocalMeshBootstrap, "start_saved", spy)
+    # (this test tree has no .stack-src; what is under test is WHERE it runs)
+    monkeypatch.setattr(lmb.LocalMeshBootstrap, "validate", lambda self: [])
+    return seen
+
+
+def test_restore_of_a_draft_img_record_is_refused_and_never_drives_hugmesh_local(
+        qapp, page, monkeypatch):
+    """Round-1 refutation: with hugmesh-local halted, 'Restore (reseed)' of a
+    hugmesh-img-<id> draft ran boot.restore on the CHECKOUT's default project. Now it
+    is refused with one sentence and nothing is launched."""
+    seen = _spy_restore(monkeypatch)
+    rec = _img_record(with_worktree=False)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = False
+    page._set_verbs_enabled(True)
+    boot_before = page.boot
+    calls = _launch_spy(page, monkeypatch)
+    page._start_saved(rec, sm.MODE_RESEED)
+    assert calls == [] and seen == []
+    assert "never been started" in page.status.text()
+    assert sm.record_project(rec) in page.status.text()
+    assert page.boot is boot_before                     # the form's mesh untouched
+    # the row says so before any click
+    page.probe["answer"] = dict(_PROBE_OK, volumes_present=False)
+    page.saved_meshes.refresh()
+    _settle(qapp, page)
+    _select(page)
+    w = page.saved_meshes
+    assert not w.restore_btn.isEnabled() and not w.start_btn.isEnabled()
+    assert "never been started" in w.restore_btn.toolTip()
+
+
+def test_restore_of_an_img_record_runs_its_own_project_in_its_own_worktree(
+        qapp, page, monkeypatch):
+    seen = _spy_restore(monkeypatch)
+    rec = _img_record(with_worktree=True)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = False
+    page._set_verbs_enabled(True)
+    boot_before = page.boot
+    calls = _launch_spy(page, monkeypatch)
+    page._start_saved(rec, sm.MODE_RESEED)
+    assert calls and calls[0]["label"].startswith("Restoring saved mesh"), \
+        page.status.text()
+    _settle(qapp, page)
+    assert seen == [{"project": sm.record_project(rec), "gen": rec.lanes["worktree"],
+                     "refusal": ""}]
+    assert sm.record_project(rec).startswith("hugmesh-img-")
+    assert page.boot is boot_before and page.boot.project == ""
+
+
+def test_an_img_record_is_blocked_by_the_running_checkout_mesh_for_its_ports(
+        qapp, page, monkeypatch):
+    seen = _spy_restore(monkeypatch)
+    rec = _img_record(with_worktree=True)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = True
+    page._set_verbs_enabled(True)
+    calls = _launch_spy(page, monkeypatch)
+    page._start_saved(rec, sm.MODE_RESEED)
+    assert calls == [] and seen == []
+    assert "8000" in page.status.text() and "stop it first" in page.status.text()

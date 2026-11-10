@@ -62,6 +62,20 @@ class _CallThread(QtCore.QThread):
         self.done.emit(out)
 
 
+def build_backend(wiz, session=None) -> str:
+    """The backend the build runs (or will run) on — the expression ProgressPage
+    dispatches with (``wiz.build_backend or wiz.host.default_backend``), the
+    session's recorded backend first once there is one. The memory gate needs it:
+    a native build has no memory cap, a docker one has the Studio's resource limit
+    (core/images_mesh.build_memory_cap). "" when nothing says (the gate refuses)."""
+    try:
+        b = (getattr(session, "backend", None) or getattr(wiz, "build_backend", None)
+             or getattr(getattr(wiz, "host", None), "default_backend", None) or "")
+        return str(b)
+    except Exception:                         # noqa: BLE001 — unknown; the gate refuses
+        return ""
+
+
 def is_images_mesh_flow(wiz) -> bool:
     """The node-image MESH flow (ModePage "Mesh node", or "Create nodes for local
     cloud"): the only flow whose images make a mesh worth saving."""
@@ -200,11 +214,12 @@ class ImagesMeshStrip(QtWidgets.QGroupBox):
             return
         from ...core.local_mesh_domains import bootstrap_config_from_images
         cfg = self.wiz.cfg
+        backend = build_backend(self.wiz)
         self.gate.setText("Checking whether this host can run it beside the build…")
         self.gate.setStyleSheet(muted())
         self.gate.show()
         t = _CallThread(lambda: images_mesh.plan_alongside(
-            bootstrap_config_from_images(cfg), building=True))
+            bootstrap_config_from_images(cfg), building=True, backend=backend))
         t.done.connect(self._gate_done)
         own_probe(self, "_gate_probe", t)
         t.start()
@@ -294,6 +309,7 @@ class LocalMeshPanel(QtWidgets.QGroupBox):
         local copy. Never raises and never touches the build."""
         try:
             self.wiz = wiz
+            self.backend = build_backend(wiz, session)
             autosave = bool(getattr(wiz, "images_mesh_autosave", True))
             start = bool(getattr(wiz, "images_mesh_start_local", False))
             if not is_images_mesh_flow(wiz) or not (autosave or start):
@@ -351,8 +367,10 @@ class LocalMeshPanel(QtWidgets.QGroupBox):
         self.stop_btn.show()
         self.stop_btn.setEnabled(True)
         lane, cancel = self.lane, self._cancel
-        t = _CallThread(lambda on_line: lane.start(building=True, on_line=on_line,
-                                                    cancel=cancel), streams=True)
+        backend = getattr(self, "backend", "") or build_backend(self.wiz)
+        t = _CallThread(lambda on_line: lane.start(building=True, backend=backend,
+                                                    on_line=on_line, cancel=cancel),
+                        streams=True)
         t.line.connect(self._line)
         t.done.connect(self._start_done)
         self._start_thread = hold_thread(t)

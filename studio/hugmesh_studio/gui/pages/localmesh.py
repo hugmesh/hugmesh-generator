@@ -4342,10 +4342,25 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self._refuse(f"Still running: {self._running_label or 'a verb'}. "
                                 "Wait for it to finish, or Cancel.")
             return
+        own_project = saved_meshes.is_own_project(rec)
         if self._mesh_up is True:
-            self._refuse("A local mesh is running — stop it first. Starting "
-                                "a saved mesh over a live one would bring up a "
-                                "second stack on the same compose project.")
+            self._refuse(
+                f"This checkout's mesh ({vaults.DEFAULT_PROJECT}) is "
+                "running — stop it first. "
+                + (f"'{rec.label or rec.id}' runs as its own compose project "
+                   f"{saved_meshes.record_project(rec)}, but it publishes the same "
+                   "fixed ports (Casdoor's 8000), so the two cannot run at once."
+                   if own_project else
+                   "Starting a saved mesh over a live one would bring up a second "
+                   "stack on the same compose project."))
+            return
+        if own_project:
+            # A mesh with its OWN compose project (the node-image flow's
+            # hugmesh-img-<id>): driven through for_record — its project, its ports,
+            # its worktree — and never through this page's form or `self.boot`,
+            # which drive this checkout's hugmesh-local. A worktree or ports that are
+            # gone refuse here with one sentence; nothing falls back to the checkout.
+            self._start_own_project_saved(rec, mode)
             return
         # THE PER-DOMAIN SERVICES GATE (#494/#495), SECOND DOOR. Saved meshes ->
         # Start/Restore brings a docker mesh up on the same compose project
@@ -4404,6 +4419,40 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                          stream=True, cancellable=True, verb="")
         else:
             self._note(f"[saved-mesh] restoring '{label}' — bringing the stack up "
+                       "and seeding it again; credentials are NOT re-minted …")
+            self._launch(f"Restoring saved mesh {label}",
+                         lambda on_line, cancel: boot.restore(
+                             rec, on_line=on_line, cancel=cancel),
+                         stream=True, cancellable=True, verb="")
+
+    def _start_own_project_saved(self, rec, mode: str) -> None:
+        """Start/Restore of a saved mesh with its own compose project (see
+        :meth:`_start_saved`). The form, ``self.boot`` and ``_loaded_record_id`` are
+        left alone: this page's verbs keep driving the checkout's mesh."""
+        cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
+        refusal = self._saved_domain_services_refusal(rec, cfg)
+        if refusal:
+            self._refuse(refusal)
+            return
+        boot = LocalMeshBootstrap.for_record(self.generator_dir, rec)
+        if boot.lane_refusal:
+            self._refuse("Cannot start the saved mesh: " + boot.lane_refusal)
+            return
+        problems = boot.validate()
+        if problems:
+            self._refuse("Cannot start the saved mesh: " + "; ".join(problems))
+            return
+        label = rec.label or rec.id
+        where = f"compose project {boot.project}, worktree {boot.generator_dir}"
+        if mode == saved_meshes.MODE_START:
+            self._note(f"[saved-mesh] starting '{label}' ({where}) — reattaching its "
+                       "data volumes; nothing is re-minted or re-seeded …")
+            self._launch(f"Starting saved mesh {label}",
+                         lambda on_line, cancel: boot.start_saved(
+                             rec, on_line=on_line, cancel=cancel),
+                         stream=True, cancellable=True, verb="")
+        else:
+            self._note(f"[saved-mesh] restoring '{label}' ({where}) — bringing it up "
                        "and seeding it again; credentials are NOT re-minted …")
             self._launch(f"Restoring saved mesh {label}",
                          lambda on_line, cancel: boot.restore(

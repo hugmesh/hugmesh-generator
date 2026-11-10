@@ -20,6 +20,7 @@ import pytest
 
 from hugmesh_studio.core import images_mesh, local_stack_node, saved_meshes
 from hugmesh_studio.core import host_resources as hr
+from hugmesh_studio.core import resource_limits as rl
 from hugmesh_studio.core.config import DOMAIN_IDP_OWN, Domain, ImageConfig, User
 from hugmesh_studio.core.local_mesh_bootstrap import (LocalMeshBootstrap,
                                                       LocalMeshBootstrapConfig,
@@ -65,6 +66,11 @@ def _meminfo(total_gib: float, avail_gib: float) -> dict:
 
 def _all_free(_port: int) -> bool:
     return True
+
+
+def _auto(mi: dict) -> rl.ResourceLimits:
+    """The Docker build's limits on a host with NO saved setting: the auto formula."""
+    return rl.auto_limits(nproc=8, meminfo=mi)
 
 
 # ── 1. the projection: ImageConfig -> LocalMeshBootstrapConfig ─────────────────────
@@ -213,16 +219,18 @@ def test_gate_checks_the_social_ports_only_with_the_social_tier():
 def test_gate_refuses_on_the_31gib_host_while_the_build_holds_its_cap():
     """The measured host: 31 GiB, the build's default cap ~23 GiB, the operator's
     mesh using ~6 GiB — no room for a second mesh while the build runs."""
-    plan = images_mesh.plan_alongside(_boot(), building=True,
-                                      meminfo=_meminfo(31.1, 24.0), env={},
+    mi = _meminfo(31.1, 24.0)
+    plan = images_mesh.plan_alongside(_boot(), building=True, backend="docker",
+                                      limits=_auto(mi), meminfo=mi, env={},
                                       is_free=_all_free, holder=lambda p: "")
     assert not plan.ok
     assert any("not enough memory" in r for r in plan.reasons)
 
 
 def test_gate_allows_a_big_host_and_names_its_ports():
-    plan = images_mesh.plan_alongside(_boot(), building=True,
-                                      meminfo=_meminfo(128, 120), env={},
+    mi = _meminfo(128, 120)
+    plan = images_mesh.plan_alongside(_boot(), building=True, backend="docker",
+                                      limits=_auto(mi), meminfo=mi, env={},
                                       is_free=_all_free, holder=lambda p: "")
     assert plan.ok, plan.reasons
     assert set(plan.ports) == {"PUBLIC_HOST_PORT", "PUBLIC_HTTPS_PORT",
@@ -231,11 +239,11 @@ def test_gate_allows_a_big_host_and_names_its_ports():
 
 
 def test_gate_refuses_an_uncapped_build_and_own_casdoor_domains():
-    plan = images_mesh.plan_alongside(_boot(), building=True,
+    plan = images_mesh.plan_alongside(_boot(), building=True, backend="docker",
                                       meminfo=_meminfo(128, 120),
                                       env={hr.MEMORY_ENV: "off"},
                                       is_free=_all_free, holder=lambda p: "")
-    assert not plan.ok and any("without a memory cap" in r for r in plan.reasons)
+    assert not plan.ok and any("no cap" in r and "starve" in r for r in plan.reasons)
     own = bootstrap_config_from_images(ImageConfig(
         mode="mesh", domains=[Domain(name="o.example.org", idp=DOMAIN_IDP_OWN)]))
     plan = images_mesh.plan_alongside(own, building=False, meminfo=_meminfo(128, 120),
@@ -256,8 +264,9 @@ def test_free_ports_skip_taken_ones():
 
 
 def test_gate_on_this_host_never_raises():
-    plan = images_mesh.plan_alongside(_boot(), building=True)
-    assert isinstance(plan.ok, bool) and plan.lines()
+    for backend in ("docker", "native", None):
+        plan = images_mesh.plan_alongside(_boot(), building=True, backend=backend)
+        assert isinstance(plan.ok, bool) and plan.lines()
 
 
 # ── 4. start / stop beside the build ───────────────────────────────────────────
@@ -273,8 +282,9 @@ def test_a_refused_start_starts_nothing_and_creates_no_worktree(saved, monkeypat
                         lambda *a, **k: called.append("up") or (True, []))
     lane = images_mesh.AlongsideMesh(GENERATOR_DIR, saved)
     lines = []
-    ok, _ = lane.start(building=True, on_line=lines.append,
-                       meminfo=_meminfo(31.1, 24.0), env={}, is_free=_all_free,
+    mi = _meminfo(31.1, 24.0)
+    ok, _ = lane.start(building=True, backend="docker", limits=_auto(mi),
+                       on_line=lines.append, meminfo=mi, env={}, is_free=_all_free,
                        holder=lambda p: "")
     assert not ok and not called
     assert not os.path.exists(lane.worktree)
@@ -304,8 +314,9 @@ def test_a_gated_start_runs_in_its_own_project_worktree_and_ports(saved, tmp_pat
         return True, []
     monkeypatch.setattr(LocalMeshBootstrap, "up", fake_up)
     lane = images_mesh.AlongsideMesh(repo, saved)
-    ok, lines = lane.start(building=True, meminfo=_meminfo(128, 120), env={},
-                           is_free=_all_free, holder=lambda p: "")
+    mi = _meminfo(128, 120)
+    ok, lines = lane.start(building=True, backend="docker", limits=_auto(mi),
+                           meminfo=mi, env={}, is_free=_all_free, holder=lambda p: "")
     assert ok, lines
     assert os.path.isdir(os.path.join(lane.worktree, ".git")) or \
         os.path.isfile(os.path.join(lane.worktree, ".git"))
@@ -398,3 +409,287 @@ def test_cli_saves_a_worklist_and_gates_it(tmp_path, capsys):
     rc = images_mesh.main(["--generator-dir", GENERATOR_DIR, "gate", rid])
     assert rc in (0, 1)
     assert "beside the build" in capsys.readouterr().out
+
+
+# ── 7. PR #937 round 2: a record with its own project is NEVER driven as the ───────
+#       checkout's hugmesh-local (for_record, mesh-restore, start_saved, down/clean)
+_SENTINEL = "E2E_PASSWORD=operator-live-mesh-do-not-touch\n"
+
+
+@pytest.fixture
+def checkout(tmp_path):
+    """A scratch generator checkout standing in for the operator's: a git repo with
+    the operator's live ``.e2e-credentials`` in it."""
+    repo = _scratch_repo(tmp_path)
+    os.makedirs(os.path.join(repo, ".stack-src"))
+    with open(os.path.join(repo, ".e2e-credentials"), "w", encoding="utf-8") as fh:
+        fh.write(_SENTINEL)
+    return repo
+
+
+@pytest.fixture
+def makes(monkeypatch):
+    """Every `make` a LocalStackNode would run, recorded instead of run — with the
+    directory it runs in, its compose project and the env it would export. The host
+    probes in front of it say yes, so the ONLY thing between a record and a `make`
+    is the code under test."""
+    seen: list[dict] = []
+
+    def fake_make(self, target, timeout, extra_env=None, on_line=None, cancel=None,
+                  args=None):
+        env = self._build_env(extra_env, write_overlays=False)
+        seen.append({"target": target, "cwd": self.generator_dir,
+                     "project": self.project,
+                     "COMPOSE_PROJECT_NAME": env.get("COMPOSE_PROJECT_NAME", ""),
+                     "PUBLIC_HOST_PORT": env.get("PUBLIC_HOST_PORT", ""),
+                     "FRONT_DOOR": env.get("FRONT_DOOR", "")})
+        return True, "ok"
+    LSN = local_stack_node.LocalStackNode
+    monkeypatch.setattr(LSN, "_make", fake_make)
+    monkeypatch.setattr(LSN, "available", lambda self: (True, ""))
+    monkeypatch.setattr(LSN, "preflight", lambda self: [])
+    monkeypatch.setattr(LSN, "cold_build_expected", lambda self: False)
+    monkeypatch.setattr(LSN, "_write_looks", lambda self: None)
+    monkeypatch.setattr(LSN, "status",
+                        lambda self: local_stack_node.StackStatus(False, "not started"))
+    monkeypatch.setattr(LocalMeshBootstrap, "preflight", lambda self: [])
+    monkeypatch.setattr(LocalMeshBootstrap, "validate", lambda self: [])
+    monkeypatch.setattr(LocalMeshBootstrap, "_await_onion", lambda self, *a, **k: "")
+    monkeypatch.setattr(LocalMeshBootstrap, "read_superadmin",
+                        lambda self: {"username": "sa", "password": "pw"})
+    from hugmesh_studio.core import mesh_node
+    monkeypatch.setattr(mesh_node.MeshNode, "stop",
+                        lambda self: seen.append({"target": "overlay-stop"}) or
+                        (True, ""))
+    # what the machine says for the record: volumes gone, nothing running — RESEED
+    monkeypatch.setattr(saved_meshes, "probe_state", lambda rec, project="": {
+        "volumes_present": False, "volumes_seen": 0, "volumes_missing": (),
+        "images_present": True, "creds_match": False, "mesh_running": False,
+        "unanswered": (), "source_ok": True, "source_drift": (),
+        "copies_missing": ()})
+    return seen
+
+
+def _img_record(checkout):
+    cfg = _images_cfg()
+    res = images_mesh.save(checkout, cfg, _worklist(cfg))
+    assert res.ok, res.message
+    return res.record
+
+
+def _sentinel_intact(checkout) -> bool:
+    with open(os.path.join(checkout, ".e2e-credentials"), encoding="utf-8") as fh:
+        return fh.read() == _SENTINEL
+
+
+def test_a_draft_img_record_never_reaches_make_or_the_checkout(checkout, makes,
+                                                               capsys):
+    """The round-1 refutation: a hugmesh-img-<id> draft (saved, never started beside a
+    build) restored from a saved record ran `make stack-up` + `stack-seed` in the
+    operator's checkout on hugmesh-local. Now every acting door refuses with one
+    sentence and no `make` runs anywhere."""
+    from hugmesh_studio.core import local_mesh_bootstrap as lmb
+    rec = _img_record(checkout)
+    assert saved_meshes.is_own_project(rec)
+    assert rec.compose_project() == images_mesh.project_for(rec.id)
+    boot = LocalMeshBootstrap.for_record(checkout, rec)
+    assert boot.project == images_mesh.project_for(rec.id)
+    assert os.path.abspath(boot.generator_dir) != os.path.abspath(checkout)
+    assert "never been started" in boot.lane_refusal
+    assert boot.e2e_credentials_path() != os.path.join(checkout, ".e2e-credentials")
+    for verb in (lambda: boot.restore(rec), lambda: boot.start_saved(rec),
+                 boot.up, boot.down, boot.clean):
+        ok, lines = verb()
+        assert ok is False
+        assert any("never been started" in ln for ln in lines), lines
+    assert boot.guard_host_local()[0] is False
+    # the CLI door: refused before any probe, rc 1
+    rc = lmb.main(["mesh-restore", rec.id, "--generator-dir", checkout])
+    out = capsys.readouterr().out
+    assert rc == 1 and "[refused]" in out and "never been started" in out
+    assert makes == []
+    assert _sentinel_intact(checkout)
+
+
+def test_an_img_record_whose_worktree_is_gone_refuses(checkout, makes):
+    rec = _img_record(checkout)
+    rec.lanes["host_ports"] = {"PUBLIC_HOST_PORT": 18088, "PUBLIC_HTTPS_PORT": 18488}
+    saved_meshes.save(rec)
+    boot = LocalMeshBootstrap.for_record(checkout, rec)
+    assert "is gone" in boot.lane_refusal
+    ok, lines = boot.restore(rec)
+    assert not ok and any("is gone" in ln for ln in lines)
+    assert makes == [] and _sentinel_intact(checkout)
+
+
+def test_an_img_record_restores_only_its_own_project_in_its_own_worktree(
+        checkout, makes, capsys):
+    """With its worktree and ports recorded (it ran beside a build), mesh-restore of
+    a hugmesh-img-<id> record runs `make stack-up` + `stack-seed` IN THAT WORKTREE,
+    exporting ITS project and ports — never in the checkout, never on hugmesh-local,
+    and the checkout's .e2e-credentials is not read or written."""
+    from hugmesh_studio.core import local_mesh_bootstrap as lmb
+    rec = _img_record(checkout)
+    wt = rec.lanes["worktree"]
+    os.makedirs(os.path.join(wt, ".git"))
+    rec.lanes["host_ports"] = {"PUBLIC_HOST_PORT": 18090, "PUBLIC_HTTPS_PORT": 18490,
+                               "TOR_SOCKS_HOST_PORT": 19051, "ANUBIS_HOST_PORT": 18924}
+    saved_meshes.save(rec)
+    # the record's credential pointer is ITS worktree's file, not the operator's
+    assert rec.credentials["e2e_file"]["path"] == os.path.join(wt, ".e2e-credentials")
+    rc = lmb.main(["mesh-restore", rec.id, "--generator-dir", checkout])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    targets = [m["target"] for m in makes]
+    assert "stack-up" in targets and "stack-seed" in targets, targets
+    project = images_mesh.project_for(rec.id)
+    for m in makes:
+        assert m.get("target") != "overlay-stop"
+        assert m["cwd"] == wt, m
+        assert m["project"] == project and m["COMPOSE_PROJECT_NAME"] == project, m
+        assert m["PUBLIC_HOST_PORT"] == "18090"
+        assert m["FRONT_DOOR"] == "http://localhost:18090"
+    assert _sentinel_intact(checkout)
+
+
+def test_stopping_an_img_record_never_stops_the_overlay_or_the_checkout(checkout,
+                                                                        makes):
+    rec = _img_record(checkout)
+    os.makedirs(os.path.join(rec.lanes["worktree"], ".git"))
+    rec.lanes["host_ports"] = {"PUBLIC_HOST_PORT": 18090}
+    saved_meshes.save(rec)
+    stops = []
+    monkey_stop = lambda self: stops.append((self.generator_dir, self.project)) \
+        or (True, "")                                      # noqa: E731
+    local_stack_node.LocalStackNode.stop, orig = monkey_stop, \
+        local_stack_node.LocalStackNode.stop
+    try:
+        ok, lines = LocalMeshBootstrap.for_record(checkout, rec).down()
+    finally:
+        local_stack_node.LocalStackNode.stop = orig
+    assert ok, lines
+    assert stops == [(rec.lanes["worktree"], images_mesh.project_for(rec.id))]
+    assert not any(m.get("target") == "overlay-stop" for m in makes)
+
+
+def test_a_checkout_record_still_runs_in_the_checkout(checkout, makes):
+    """The default lane is unchanged: a record saved on the local-mesh page (no
+    project, or hugmesh-local) drives the checkout, with no project exported."""
+    rec = saved_meshes.SavedMesh(id=saved_meshes.new_id(), label="plain",
+                                 generator_dir=checkout,
+                                 config=LocalMeshBootstrapConfig().to_dict())
+    assert not saved_meshes.is_own_project(rec)
+    boot = LocalMeshBootstrap.for_record(checkout, rec)
+    assert boot.generator_dir == os.path.abspath(checkout)
+    assert boot.project == "" and boot.lane_refusal == ""
+    rec.lanes = {"compose_project": "hugmesh-local"}
+    assert not saved_meshes.is_own_project(rec)
+
+
+def test_restore_plan_names_the_records_own_project_when_it_runs(checkout):
+    rec = _img_record(checkout)
+    plan = saved_meshes.restore_plan(rec, volumes_present=True, images_present=True,
+                                     mesh_running=True)
+    assert plan.mode == saved_meshes.MODE_BLOCKED
+    assert images_mesh.project_for(rec.id) in plan.sentence
+
+
+def test_the_monitor_lists_and_scales_the_nodes_own_project():
+    """mesh_monitor drives the project of the node it is given: a scale of a
+    hugmesh-img-<id> node can never land on hugmesh-local."""
+    from hugmesh_studio.core import mesh_monitor as mm
+    node = local_stack_node.LocalStackNode(GENERATOR_DIR, project="hugmesh-img-abc",
+                                           host_ports={"PUBLIC_HOST_PORT": 18088})
+    assert mm._node_project(node) == "hugmesh-img-abc"
+    assert mm._node_project(local_stack_node.LocalStackNode(GENERATOR_DIR)) == \
+        "hugmesh-local"
+    unit = mm.MeshUnit(lane="compose", namespace="hugmesh-img-abc", name="x",
+                       owner="hugmesh-fe-gateway", phase="Running", ready=True,
+                       reason="", state="ok",
+                       scale=mm.ScaleTarget("compose-service", "hugmesh-fe-gateway",
+                                            "hugmesh-img-abc", refused=""))
+    argv, refused = mm.scale_argv(unit, 2, generator_dir=GENERATOR_DIR, node=node)
+    if refused:                         # no docker compose on this host
+        pytest.skip(refused)
+    i = argv.index("-p")
+    assert argv[i + 1] == "hugmesh-img-abc"
+
+
+# ── 8. PR #937 round 2: the memory gate subtracts the cap the build REALLY gets ──
+def test_gate_refuses_beside_a_native_build_even_on_a_big_host():
+    """Native builds run on the host under sudo with NO cgroup cap; the gate used to
+    subtract HUGMESH_BUILD_MEMORY's auto value anyway and say ok on 128 GiB."""
+    plan = images_mesh.plan_alongside(_boot(), building=True, backend="native",
+                                      meminfo=_meminfo(128, 120), env={},
+                                      is_free=_all_free, holder=lambda p: "")
+    assert not plan.ok
+    assert any("native build" in r and "no memory cap" in r for r in plan.reasons)
+
+
+def test_gate_refuses_when_the_backend_is_not_said():
+    plan = images_mesh.plan_alongside(_boot(), building=True,
+                                      meminfo=_meminfo(128, 120), env={},
+                                      is_free=_all_free, holder=lambda p: "")
+    assert not plan.ok and any("backend" in r for r in plan.reasons)
+    # not building: the build's backend does not matter
+    assert images_mesh.plan_alongside(_boot(), building=False,
+                                      meminfo=_meminfo(128, 120), env={},
+                                      is_free=_all_free, holder=lambda p: "").ok
+
+
+@pytest.fixture
+def saved_limits(tmp_path, monkeypatch):
+    """The operator's SAVED GUI resource limits, in a throwaway config dir."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.delenv(hr.MEMORY_ENV, raising=False)
+    return lambda **kw: rl.save(rl.ResourceLimits(**kw))
+
+
+def test_gate_reads_a_saved_all_memory_setting_as_no_cap(saved_limits):
+    """Saved 'all memory' -> `docker run` gets no --memory; the gate used to read
+    HUGMESH_BUILD_MEMORY's auto value instead and report ~20 GiB of headroom."""
+    saved_limits(cpus=4.0, memory=None)
+    assert rl.effective(env={}).memory is None
+    plan = images_mesh.plan_alongside(_boot(), building=True, backend="docker",
+                                      meminfo=_meminfo(128, 120), env={},
+                                      is_free=_all_free, holder=lambda p: "")
+    assert not plan.ok
+    assert any("all memory" in r and "no cap" in r for r in plan.reasons)
+
+
+def test_gate_subtracts_a_saved_115g_cap(saved_limits):
+    saved_limits(cpus=4.0, memory="115g")
+    plan = images_mesh.plan_alongside(_boot(), building=True, backend="docker",
+                                      meminfo=_meminfo(128, 120), env={},
+                                      is_free=_all_free, holder=lambda p: "")
+    assert not plan.ok and any("not enough memory" in r for r in plan.reasons)
+    assert plan.headroom_bytes == 120 * GIB - hr.HOST_RESERVE_BYTES - 115 * GIB
+
+
+def test_gate_env_cap_wins_over_the_saved_setting(saved_limits):
+    saved_limits(cpus=4.0, memory=None)
+    plan = images_mesh.plan_alongside(_boot(), building=True, backend="docker",
+                                      meminfo=_meminfo(128, 120),
+                                      env={hr.MEMORY_ENV: "20g"},
+                                      is_free=_all_free, holder=lambda p: "")
+    assert plan.ok, plan.reasons
+    assert plan.headroom_bytes == 120 * GIB - hr.HOST_RESERVE_BYTES - 20 * GIB
+
+
+def test_gate_cap_matches_what_the_docker_build_argv_carries(saved_limits):
+    """One source: the cap the gate subtracts is the --memory build_driver puts on
+    `docker run`."""
+    from hugmesh_studio.core import build_driver
+    saved_limits(cpus=4.0, memory="17g")
+    argv = build_driver.docker_limit_args()
+    assert argv[argv.index("--memory") + 1] == "17g"
+    assert images_mesh.build_memory_cap("docker", env={})[1] == "17g"
+
+
+def test_cli_gate_says_which_backend_it_gated(saved_limits, tmp_path, capsys):
+    cfg = _images_cfg()
+    rid = images_mesh.save(GENERATOR_DIR, cfg, _worklist(cfg)).record.id
+    rc = images_mesh.main(["--generator-dir", GENERATOR_DIR, "gate", rid,
+                           "--backend", "native"])
+    out = capsys.readouterr().out
+    assert rc == 1 and "native build" in out
