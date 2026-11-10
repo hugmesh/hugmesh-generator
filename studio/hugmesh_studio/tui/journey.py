@@ -1003,6 +1003,15 @@ class BuildScreen:
         out.append("The TUI does not run builds yet — save this configuration "
                    "and build it in the GUI (python -m hugmesh_studio) or "
                    "headlessly (python -m hugmesh_studio --print-commands).")
+        if cfg.mode == "mesh":
+            # the GUI Build screen's "Save this mesh" strip (core/images_mesh.py): the
+            # mesh these images make, kept in the Saved meshes list as a draft
+            saved = getattr(j, "saved_mesh_id", "")
+            out.append("  saved mesh  " + (saved if saved else "not saved yet"))
+            out.append("")
+            out.append("commands: s PATH=save the config · m [NAME]=save this mesh to "
+                       "Saved meshes · q=finish")
+            return out
         out.append("")
         out.append("commands: s PATH=save the config · q=finish")
         return out
@@ -1029,10 +1038,21 @@ class BuildScreen:
                 return
             j.status = f"saved to {path}" + ("".join(f"\n! {w}" for w in warnings))
             return
+        if verb.lower() == "m" and j.cfg.mode == "mesh":
+            from ..core import images_mesh
+            res = images_mesh.save(j.generator_dir, j.cfg, j.worklist,
+                                   label=arg.strip(),
+                                   record_id=getattr(j, "saved_mesh_id", "") or "")
+            if res.ok and res.record is not None:
+                j.saved_mesh_id = res.record.id
+            j.status = ("saved mesh: " if res.ok else "mesh not saved: ") + res.message
+            return
         if line == "" or verb.lower() in ("q", "quit", "exit"):
             j.done = True
             return
-        j.status = "commands: s PATH=save the config · q=finish"
+        j.status = ("commands: s PATH=save the config · m [NAME]=save this mesh · "
+                    "q=finish" if j.cfg.mode == "mesh"
+                    else "commands: s PATH=save the config · q=finish")
 
 
 # ── the journey itself ──────────────────────────────────────────────────────────────
