@@ -305,9 +305,14 @@ def test_removal_and_rotation(chain, tmp_path):
                                         key_path=rotated.key_path), "not issued by")
     _refused(lambda: dca.import_root(st, OWN, True, rotated.root_path),
              "remove this domain's CA first")
-    # ...unless the new root comes IN the import (a PKCS#12 or a combined file)
+    # ...and so does a new root that comes IN the import (a PKCS#12 or a combined
+    # file): the same rule on every path (PR #938 review, finding 1)
+    _refused(lambda: dca.import_signing(st, OWN, True, p12_path=rotated.p12_path(None)),
+             "remove this domain's CA first")
+    assert st.records() == old
+    assert dca.remove(st, OWN)
     e = dca.import_signing(st, OWN, True, p12_path=rotated.p12_path(None))
-    assert e.root_pem == tca.pem(rotated.root)
+    assert e.root_pem == tca.pem(rotated.root)       # after removal, a bundle sets it
     assert dca.remove(st, OWN)
     _import_ok(st, rotated)
     assert len(st.entries()) == 1 and st.records() != old
@@ -348,10 +353,12 @@ def test_no_pki_stick_in_the_worklist_is_not_ready(chain):
     assert any("no stick would carry the key" in c.text for c in checks)
 
 
-def test_expiring_soon_is_flagged_not_ready(tmp_path):
+def test_expiring_soon_is_flagged_not_ready(chain, tmp_path):
     k = tca.key()
-    c = tca.cert(k, "soon", days=(-1, 10))
+    c = tca.cert(k, "soon", days=(-1, 10), issuer_key=chain.root_key,
+                 issuer_cert=chain.root)
     st = _st()
+    dca.import_root(st, OWN, True, chain.root_path)
     dca.import_signing(st, OWN, True, cert_path=tca.write(tmp_path, "c.crt", tca.pem(c)),
                        key_path=tca.write(tmp_path, "c.key", tca.key_pem(k)))
     checks = dca.readiness(_cfg(), st)
@@ -419,3 +426,165 @@ def test_now_is_respected_for_validity(chain):
     later = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=4000)
     _refused(lambda: dca.import_root(_st(), OWN, True, chain.root_path, now=later),
              "expired")
+
+
+# ── the held root cannot be swapped by a bundle (PR #938 review, finding 1) ──────
+def _same_name_other_root(tmp_path):
+    """A second chain whose root has the SAME subject as ``tca.Chain(tmp_path)``'s
+    (tag "t") but its own key: only the fingerprint tells them apart."""
+    d = tmp_path / "r2"
+    d.mkdir()
+    return tca.Chain(d, tag="t")
+
+
+def test_a_pkcs12_bundling_another_root_cannot_swap_the_held_root(chain, tmp_path):
+    st = _st()
+    _import_ok(st, chain)
+    r2 = _same_name_other_root(tmp_path)
+    assert r2.root.subject == chain.root.subject
+    held = st.get(OWN)
+    _refused(lambda: dca.import_signing(st, OWN, True, p12_path=r2.p12_path(None)),
+             "not the root held for this domain", "remove this domain's CA first")
+    assert st.get(OWN) == held                       # nothing changed on refusal
+    lines = dca.readiness_lines(_cfg(), st, ["pki"])
+    assert lines[0].startswith("READY")
+    m = dca.materialize(st)
+    try:
+        roots = [p for n, p in m.trust if n == f"{OWN}-root-ca"]
+        assert open(roots[0], "rb").read() == tca.pem(chain.root)
+    finally:
+        m.cleanup()
+
+
+def test_a_combined_pem_bundling_another_root_cannot_swap_the_held_root(chain,
+                                                                      tmp_path):
+    st = _st()
+    _import_ok(st, chain)
+    r2 = _same_name_other_root(tmp_path)
+    both = tca.write(tmp_path, "both-r2.pem", tca.pem(r2.signing) + r2.key_text()
+                     + tca.pem(r2.root))
+    _refused(lambda: dca.import_signing(st, OWN, True, cert_path=both, key_path=both),
+             "not the root held for this domain", "remove this domain's CA first")
+    assert st.get(OWN).root_pem == tca.pem(chain.root)
+    # an extra domain is held to the same rule (certificates only, same swap)
+    dca.import_root(st, "chat.example", False, chain.root_path)
+    _refused(lambda: dca.import_signing(st, "chat.example", False,
+                                        p12_path=r2.p12_path(None)),
+             "remove this domain's CA first")
+    # a root held ON ITS OWN (no signing CA yet) is just as fixed
+    st2 = _st()
+    dca.import_root(st2, OWN, True, chain.root_path)
+    _refused(lambda: dca.import_signing(st2, OWN, True, p12_path=r2.p12_path(None)),
+             "remove this domain's CA first")
+    assert st2.get(OWN).signing_pem == b""
+
+
+def test_a_bundle_carrying_the_held_root_itself_is_accepted(chain):
+    st = _st()
+    dca.import_root(st, OWN, True, chain.root_path)
+    e = dca.import_signing(st, OWN, True, p12_path=chain.p12_path(None))
+    assert e.root_pem == tca.pem(chain.root) and e.key_pem
+
+
+# ── a root key is never taken, on any path (finding 2) ───────────────────────────
+def test_the_held_root_offered_as_the_signing_ca_is_refused(chain):
+    st = _st()
+    dca.import_root(st, OWN, True, chain.root_path)
+    root_key = tca.write(chain.dir, "root.key", tca.key_pem(chain.root_key))
+    _refused(lambda: dca.import_signing(st, OWN, True, cert_path=chain.root_path,
+                                        key_path=root_key),
+             "this is the root certificate itself", "root CA key is never taken")
+    assert st.get(OWN).key_pem == b"" and st.get(OWN).signing_pem == b""
+    # and in a PKCS#12 (the root as the bundle's own certificate)
+    p = tca.p12(chain.dir, "root.p12", chain.root_key, chain.root)
+    _refused(lambda: dca.import_signing(st, OWN, True, p12_path=p),
+             "root CA key is never taken")
+    assert st.get(OWN).key_pem == b""
+
+
+def test_a_self_signed_signing_ca_is_refused(tmp_path):
+    k = tca.key()
+    c = tca.cert(k, "self")
+    cp = tca.write(tmp_path, "self.crt", tca.pem(c))
+    kp = tca.write(tmp_path, "self.key", tca.key_pem(k))
+    st = _st()
+    _refused(lambda: dca.import_signing(st, OWN, True, cert_path=cp, key_path=kp),
+             "self-signed", "root CA key is never taken")
+    _refused(lambda: dca.import_signing(st, "chat.example", False, cert_path=cp),
+             "self-signed")
+    assert st.entries() == ()
+    # its place is the root slot, which takes the certificate only
+    assert dca.import_root(st, OWN, True, cp).root_pem == tca.pem(c)
+
+
+def test_a_signing_ca_on_the_roots_own_key_pair_is_refused(chain, tmp_path):
+    # issued BY the root, under another name, but holding the root's key pair: its
+    # key IS the root key, whatever the certificate around it says
+    twin = tca.cert(chain.root_key, "t Twin CA", issuer_key=chain.root_key,
+                    issuer_cert=chain.root, path_length=0)
+    tp = tca.write(tmp_path, "twin.crt", tca.pem(twin))
+    kp = tca.write(tmp_path, "twin.key", tca.key_pem(chain.root_key))
+    st = _st()
+    dca.import_root(st, OWN, True, chain.root_path)
+    _refused(lambda: dca.import_signing(st, OWN, True, cert_path=tp, key_path=kp),
+             "root CA's own key pair", "root CA key is never taken")
+    assert st.get(OWN).key_pem == b""
+    # the other order: the twin first (no root held yet), then the root
+    st2 = _st()
+    dca.import_signing(st2, OWN, True, cert_path=tp, key_path=kp)
+    msg = _refused(lambda: dca.import_root(st2, OWN, True, chain.root_path),
+                   "root CA's own key pair")
+    assert "rotate" not in msg            # not a rotation: this key is never taken
+    assert st2.get(OWN).root_pem == b""
+
+
+def test_chain_problem_never_passes_a_root_as_its_own_signing_ca(chain):
+    assert "the root certificate itself" in dca.chain_problem(chain.root, chain.root)
+    assert dca.chain_problem(chain.signing, chain.root) == ""
+
+
+# ── a malformed certificate is a refusal, never a crash (finding 3) ──────────────
+def _malformed(tmp_path):
+    k = tca.key()
+    c = tca.malformed_basic_constraints(k, "malformed")
+    return (tca.write(tmp_path, "bad.crt", tca.pem(c)),
+            tca.write(tmp_path, "bad.key", tca.key_pem(k)), k, c)
+
+
+def test_a_malformed_extension_is_refused_on_every_import_path(chain, tmp_path):
+    cp, kp, k, c = _malformed(tmp_path)
+    st = _st()
+    _refused(lambda: dca.import_root(st, OWN, True, cp), "does not parse")
+    _refused(lambda: dca.import_signing(st, OWN, True, cert_path=cp, key_path=kp),
+             "does not parse")
+    _refused(lambda: dca.import_signing(st, "chat.example", False, cert_path=cp),
+             "does not parse")
+    _refused(lambda: dca.import_signing(st, OWN, True,
+                                        p12_path=tca.p12(tmp_path, "bad.p12", k, c)),
+             "does not parse")
+    # as the root bundled after a good signing CA: refused (whichever check meets
+    # it first), never a bare exception
+    both = tca.write(tmp_path, "both-bad.pem", tca.pem(chain.signing)
+                     + chain.key_text() + tca.pem(c))
+    _refused(lambda: dca.import_signing(st, OWN, True, cert_path=both, key_path=both))
+    assert st.entries() == ()
+
+
+def test_the_cli_refuses_a_malformed_certificate_with_exit_2(tmp_path, capsys):
+    cp, kp, _k, _c = _malformed(tmp_path)
+    assert dca.cli_main(["check", "--domain", OWN, "--root", cp]) == 2
+    assert dca.cli_main(["check", "--domain", OWN, "--cert", cp, "--key", kp]) == 2
+    out = capsys.readouterr()
+    assert out.out.count("refused:") == 2 and "does not parse" in out.out
+    assert "Traceback" not in out.out + out.err
+
+
+# ── the extra-domain root slot (now the only place a self-signed CA goes) ───────
+def test_an_extra_domain_with_only_a_root_says_what_it_adds(chain):
+    st = _st()
+    dca.import_root(st, "chat.example", False, chain.root_path)
+    cfg = _cfg("chat.example")
+    lines = dca.readiness_lines(cfg, st)
+    assert any("root CA t Root CA" in ln and "certificate only" in ln for ln in lines)
+    assert not any("no CA imported (optional)" in ln for ln in lines)
+    assert dca.row_cells(cfg, st)[1][4] == "ready"

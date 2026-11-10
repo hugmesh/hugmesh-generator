@@ -109,3 +109,26 @@ class Chain:
         return self.signing_key.public_key().public_bytes(
             serialization.Encoding.DER,
             serialization.PublicFormat.SubjectPublicKeyInfo)
+
+
+def malformed_basic_constraints(subject_key, cn: str):
+    """A self-signed certificate whose basicConstraints is not valid DER. It parses as
+    a certificate; touching ``.extensions`` raises a bare ValueError."""
+    from cryptography.x509.oid import ExtensionOID
+    b = (x509.CertificateBuilder()
+         .subject_name(_name(cn)).issuer_name(_name(cn))
+         .public_key(subject_key.public_key())
+         .serial_number(x509.random_serial_number())
+         .not_valid_before(NOW - dt.timedelta(days=1))
+         .not_valid_after(NOW + dt.timedelta(days=365))
+         .add_extension(x509.UnrecognizedExtension(ExtensionOID.BASIC_CONSTRAINTS,
+                                                   b"\x00junk"), critical=True))
+    return b.sign(subject_key, hashes.SHA256())
+
+
+def p12(dirpath, name: str, key_, cert_, extra=None, passphrase=None) -> str:
+    data = pkcs12.serialize_key_and_certificates(
+        b"bundle", key_, cert_, list(extra) if extra else None,
+        serialization.BestAvailableEncryption(passphrase.encode())
+        if passphrase else serialization.NoEncryption())
+    return write(dirpath, name, data)

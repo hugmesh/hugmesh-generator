@@ -37,14 +37,23 @@ Safety rules (each one pinned by a test):
 * a key is decrypted IN MEMORY at import; the passphrase is a local variable of
   :func:`import_signing` and is never stored, written, logged or put on argv/env;
 * the unencrypted key lives only in this process (:class:`DomainCAStore`) and, for
-  one build run, in a 0600 file under a 0700 temp dir (:func:`materialize`);
+  one build run, in a 0600 file under a 0700 temp dir (:func:`materialize`) that
+  holds its owner lock; a dir whose owner died without its ``finally`` (a SIGKILL)
+  is removed by the next Studio's startup sweep
+  (:func:`secret_files.sweep_stale_private_dirs`);
 * the store's persistable form (:meth:`DomainCA.record`) carries fingerprints only;
 * the pki stick is the only stick a CA key is written to, and
   :func:`scan_keys_dir` checks every generated KEYS folder after the fact;
 * validation REFUSES (it does not warn and proceed like gen-keystores.sh does): a
   key that does not match its certificate, a certificate that is not a CA, an
-  expired or not-yet-valid certificate, a weak key or signature, and a signing CA
-  that the given root did not issue.
+  expired or not-yet-valid certificate, a weak key or signature, a certificate that
+  does not parse, and a signing CA that the given root did not issue;
+* a ROOT key is never taken, on any path: a self-signed signing CA, the held root
+  offered as the signing CA, and a signing CA on the root's own key pair are all
+  refused (there is no opt-in);
+* the held root is fixed until the domain's CA is removed: a root bundled with a
+  signing import (PKCS#12 or a combined PEM) must be the held root, byte for byte,
+  exactly as :func:`import_root` refuses another root.
 
 python-cryptography is OPTIONAL for the Studio (not in requirements.txt; the MSI is
 a PyInstaller freeze without it). Without it a CA key cannot be checked, so this step
@@ -57,15 +66,15 @@ driver all call this module.
 from __future__ import annotations
 
 import datetime as _dt
+import functools
 import hashlib
 import os
 import re
 import shutil
-import tempfile
 import threading
 from dataclasses import dataclass, field, replace
 
-from .secret_files import MAX_HELD_BYTES, _write_0600
+from .secret_files import MAX_HELD_BYTES, PrivateDir, _write_0600
 
 # ── face-independent text (both faces render these exact strings) ─────────────────
 STEP_SLUG = "domain_ca_keys"
@@ -304,10 +313,37 @@ def ca_cert_problems(cert, what: str, now: _dt.datetime | None = None) -> list[s
     return [p for p in out if p]
 
 
+#: The tail every "this would change the domain's root" refusal ends with.
+ROTATE_HINT = (". To rotate to a new CA, remove this domain's CA first, then import "
+               "the new one")
+_ROOT_KEY_NEVER = "a root CA key is never taken (the root stays offline)"
+
+
+def root_key_problem(signing, root=None) -> str:
+    """"" unless taking ``signing`` (and its key) would take a ROOT key: ``signing``
+    is the root itself, is self-signed (so it is a root), or sits on the root's own
+    key pair under another certificate."""
+    if root is not None and signing.fingerprint(_sha256()) == root.fingerprint(_sha256()):
+        return (f"this is the root certificate itself ({_cn(root)}), not a signing CA: "
+                f"{_ROOT_KEY_NEVER}. Import an intermediate the root issued as the "
+                "signing CA")
+    if _self_signed(signing):
+        return (f"the signing CA ({_cn(signing)}) is self-signed, so it is a root: "
+                f"{_ROOT_KEY_NEVER}. Import it with Root certificate, and an "
+                "intermediate it issued as the signing CA")
+    if root is not None and _spki(signing.public_key()) == _spki(root.public_key()):
+        return (f"the signing CA ({_cn(signing)}) holds the root CA's own key pair "
+                f"({_cn(root)}): {_ROOT_KEY_NEVER}. Import an intermediate with its "
+                "own key")
+    return ""
+
+
 def chain_problem(signing, root) -> str:
-    """"" when ``signing`` is ``root`` or was directly issued by it, else the refusal."""
-    if signing.fingerprint(_sha256()) == root.fingerprint(_sha256()):
-        return ""
+    """"" when ``signing`` was directly issued by ``root`` (and is not the root, nor
+    on its key), else the refusal."""
+    rk = root_key_problem(signing, root)
+    if rk:
+        return rk
     if signing.issuer != root.subject:
         return (f"the signing CA ({_cn(signing)}) was not issued by this root "
                 f"({_cn(root)}): its issuer is {signing.issuer.rfc4514_string()}")
@@ -484,7 +520,10 @@ def _check_signing(domain, own, signing, key, root, now) -> list[str]:
     if key is not None and _spki(key.public_key()) != _spki(signing.public_key()):
         probs.insert(0, "the private key does not belong to this signing CA "
                         "certificate (their public keys differ)")
-    if root is not None:
+    rk = root_key_problem(signing, root)
+    if rk:
+        probs.append(rk)
+    elif root is not None:
         cp = chain_problem(signing, root)
         if cp:
             probs.append(cp)
@@ -498,18 +537,57 @@ def _check_signing(domain, own, signing, key, root, now) -> list[str]:
     return warns
 
 
+_UNPARSEABLE = ("a certificate in this file has a field or extension that does not "
+                "parse ({}), so it cannot be checked and was not taken")
+
+
+def _parse_error(exc: Exception) -> bool:
+    """A failure to PARSE a certificate's contents, as opposed to a bug: cryptography
+    parses extensions lazily and raises a bare ValueError (or one of these) on the
+    first touch, deep inside any check."""
+    if isinstance(exc, ValueError):
+        return True
+    try:
+        from cryptography import x509
+        from cryptography.exceptions import UnsupportedAlgorithm
+    except ImportError:
+        return False
+    return isinstance(exc, (x509.DuplicateExtension, x509.UnsupportedGeneralNameType,
+                            UnsupportedAlgorithm))
+
+
+def _refuses_unparseable(fn):
+    """Every import surfaces a malformed certificate as :class:`CAImportError` (a lay
+    refusal: the CLI exits 2, the faces show it inline), never a bare exception."""
+    @functools.wraps(fn)
+    def wrapper(*a, **kw):
+        try:
+            return fn(*a, **kw)
+        except CAImportError:
+            raise
+        except Exception as e:      # noqa: BLE001 - narrowed by _parse_error
+            if not _parse_error(e):
+                raise
+            raise CAImportError(_UNPARSEABLE.format(type(e).__name__)) from None
+    return wrapper
+
+
 def _check_domain(domain: str, own: bool) -> None:
     if not own and not _DNS_NAME.match(domain or ""):
         raise CAImportError(f"{domain!r} is not a domain name")
 
 
+@_refuses_unparseable
 def import_signing(st: DomainCAStore, domain: str, own: bool, *,
                    cert_path: str = "", key_path: str = "", p12_path: str = "",
                    passphrase: str | None = None,
                    now: _dt.datetime | None = None) -> DomainCA:
     """Import a domain's signing CA from a certificate file (+ key file for the own
     domain) or a PKCS#12 file, validate it against the domain's root (when one is
-    set) and hold it. Raises :class:`CAImportError`; nothing is held on refusal."""
+    set) and hold it. A root bundled in the file is used only when no root is held,
+    or when it IS the held root (same DER fingerprint): the held root changes only by
+    removing the domain's CA, as :func:`import_root` enforces. Raises
+    :class:`CAImportError`; nothing is held on refusal."""
     _need_crypto()
     _check_domain(domain, own)
     prior = st.get(domain)
@@ -558,10 +636,19 @@ def import_signing(st: DomainCAStore, domain: str, own: bool, *,
         for c in certs[1:]:
             if bundled is None and _self_signed(c):
                 bundled, bundled_name = c, os.path.basename(cert_path)
-    if bundled is not None:
+    held_root = prior.root_cert() if prior is not None and prior.root_pem else None
+    if (bundled is not None and held_root is not None
+            and bundled.fingerprint(_sha256()) != held_root.fingerprint(_sha256())):
+        raise CAImportError(
+            f"this file bundles a root ({_cn(bundled)}, sha256 "
+            f"{bundled.fingerprint(_sha256()).hex()[:16]}) that is not the root held "
+            f"for this domain ({_cn(held_root)}, sha256 "
+            f"{held_root.fingerprint(_sha256()).hex()[:16]}), even where the names "
+            "match" + ROTATE_HINT)
+    if held_root is not None:
+        root, root_name = held_root, prior.root_name
+    elif bundled is not None:
         root, root_name = bundled, bundled_name
-    elif prior is not None and prior.root_pem:
-        root, root_name = prior.root_cert(), prior.root_name
     else:
         root, root_name = None, ""
     if not own:
@@ -571,7 +658,7 @@ def import_signing(st: DomainCAStore, domain: str, own: bool, *,
         rp = ca_cert_problems(root, "root CA certificate", now)
         if rp:
             raise CAImportError(rp[0])
-    if root is None and not _self_signed(signing):
+    if root is None:
         warns.append("the signing CA is an intermediate: import the root certificate "
                      "it chains to so every node can trust the chain")
     entry = DomainCA(domain=domain, own=own,
@@ -589,6 +676,7 @@ _EXTRA_KEY_REFUSAL = (
     "domain's certificates without the key.")
 
 
+@_refuses_unparseable
 def import_root(st: DomainCAStore, domain: str, own: bool, cert_path: str, *,
                 now: _dt.datetime | None = None) -> DomainCA:
     """Set a domain's ROOT certificate. A file carrying a private key is refused
@@ -610,10 +698,12 @@ def import_root(st: DomainCAStore, domain: str, own: bool, cert_path: str, *,
     prior = st.get(domain)
     warns: list[str] = []
     if prior and prior.signing_pem:
+        rk = root_key_problem(prior.signing_cert(), root)
+        if rk:
+            raise CAImportError(rk)
         cp = chain_problem(prior.signing_cert(), root)
         if cp:
-            raise CAImportError(cp + ". To rotate to a new CA, remove this domain's "
-                                     "CA first, then import the new one")
+            raise CAImportError(cp + ROTATE_HINT)
         warns = [w for w in prior.warnings if "intermediate" not in w]
     entry = DomainCA(domain=domain, own=own, root_pem=_pem(root),
                      signing_pem=prior.signing_pem if prior else b"",
@@ -696,6 +786,11 @@ def readiness(cfg, st: DomainCAStore | None = None, profiles=None,
                              "signing key not held: import it again (keys are never "
                              "saved, so a Studio restart forgets them)"))
         else:
+            if e is not None and e.root_pem and not e.signing_pem:
+                rc = e.root_cert()
+                out.append(Check(label, True, f"root CA {_cn(rc)} (certificate only), "
+                                 + _expiry_text(rc, now) + ": every stick trusts it"))
+                continue
             if e is None or not e.signing_pem:
                 out.append(Check(label, True,
                                  "no CA imported (optional): this domain adds no "
@@ -707,10 +802,6 @@ def readiness(cfg, st: DomainCAStore | None = None, profiles=None,
         rc = e.root_cert()
         if rc is not None:
             out.append(Check(label, True, f"chains to root {_cn(rc)}"))
-        elif _self_signed(e.signing_cert()):
-            out.append(Check(label, True, "the signing CA is itself the root "
-                             "(self-signed); an offline root with an intermediate is "
-                             "the recommended model"))
         else:
             out.append(Check(label, False, "intermediate without its root: import the "
                              "root certificate so every node can trust the chain"))
@@ -771,7 +862,7 @@ def row_cells(cfg, st: DomainCAStore | None = None,
             key = "not taken (certificates only)"
         checks = [c for c in readiness(cfg, st, profiles) if c.domain == label]
         status = "ready" if ready_to_go_live(checks) else "not ready"
-        if not own and not (e and e.signing_pem):
+        if not own and not (e and (e.signing_pem or e.root_pem)):
             status = "optional"
         rows.append([label, root, signing, key, status])
     return rows
@@ -791,9 +882,14 @@ class MaterializedCA:
     signing_key: str = ""
     trust: list[tuple[str, str]] = field(default_factory=list)   # (name, path)
     spki: tuple[bytes, ...] = ()
+    #: the dir's owner lock (held until cleanup; the startup sweep reads it)
+    _owner: "PrivateDir | None" = field(default=None, repr=False)
 
     def cleanup(self) -> None:
-        shutil.rmtree(self.root, ignore_errors=True)
+        if self._owner is not None:
+            self._owner.remove()
+        else:
+            shutil.rmtree(self.root, ignore_errors=True)
 
     def args_for(self, profile: str) -> list[str]:
         """gen-provision-keys.sh arguments for one KEYS profile. The key path is
@@ -820,14 +916,15 @@ def has_material(st: DomainCAStore | None = None) -> bool:
 
 def materialize(st: DomainCAStore | None = None) -> MaterializedCA | None:
     """Write the held material for one run (None when nothing is held, so an untouched
-    step changes no argv). Files are 0600 under a 0700 ``mkdtemp`` dir, never under the
-    build workdir; callers ``cleanup()`` in a ``finally``."""
+    step changes no argv). Files are 0600 under a 0700 ``mkdtemp`` dir that holds its
+    owner lock, never under the build workdir; callers ``cleanup()`` in a ``finally``,
+    and a dir a killed Studio left behind is removed by the next startup sweep."""
     st = st or store()
     if not has_material(st):
         return None
-    root = tempfile.mkdtemp(prefix="hugmesh-domain-ca-")
-    os.chmod(root, 0o700)
-    m = MaterializedCA(root=root)
+    owner = PrivateDir("hugmesh-domain-ca-")
+    root = owner.path
+    m = MaterializedCA(root=root, _owner=owner)
     try:
         spki = []
         for e in sorted(st.entries(), key=lambda x: (not x.own, x.domain)):
@@ -850,7 +947,7 @@ def materialize(st: DomainCAStore | None = None) -> MaterializedCA | None:
                 m.trust.append((name, p))
         m.spki = tuple(spki)
     except BaseException:
-        shutil.rmtree(root, ignore_errors=True)
+        owner.remove()
         raise
     return m
 

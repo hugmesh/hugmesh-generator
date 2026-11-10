@@ -226,6 +226,10 @@ class DomainCAKeysPage(QtWidgets.QWizardPage):
         except dca.CAImportError as err:
             self._done(f"Not imported: {err}.")
             return
+        finally:
+            # whatever happened (an unexpected error included), the passphrase does
+            # not stay in the field
+            self.passphrase.clear()
         extra = ("" if not e.warnings else " Note: " + "; ".join(e.warnings) + ".")
         self._done(f"Imported for {e.domain or 'this mesh'}: "
                    f"{e.signing_name or e.root_name}.{extra}")

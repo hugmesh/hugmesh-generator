@@ -271,3 +271,39 @@ def test_tui_imports_with_a_passphrase_file_and_refuses_inline(tmp_path):
     assert j.status.startswith("removed") and dca.store().entries() == ()
     j.feed("")
     assert j.slug == "users_choice"
+
+
+# ── a malformed certificate is an inline refusal (PR #938 review, finding 3) ─────
+def test_a_malformed_certificate_is_an_inline_refusal_and_clears_the_passphrase(
+        wiz, monkeypatch, tmp_path):
+    page = _to_page(wiz)
+    k = tca.key()
+    bad = tca.write(tmp_path, "bad.crt",
+                    tca.pem(tca.malformed_basic_constraints(k, "malformed")))
+    kp = tca.write(tmp_path, "bad.key", tca.key_pem(k))
+    page.table.selectRow(0)
+    for handler, picks in ((page._import_files, (bad, kp)),
+                           (page._import_root, (bad,)),
+                           (page._import_p12, (tca.p12(tmp_path, "bad.p12", k,
+                                                       tca.malformed_basic_constraints(
+                                                           k, "malformed"),
+                                                       passphrase="typed-passphrase"),
+                                               ))):
+        page.passphrase.setText("typed-passphrase")
+        _picks(monkeypatch, *picks)
+        handler()                     # called directly: a raise reaches the test
+        assert page.note.text().startswith("Not imported:"), page.note.text()
+        assert "does not parse" in page.note.text()
+        assert page.passphrase.text() == ""
+        assert dca.store().entries() == ()
+
+
+def test_an_unexpected_error_still_clears_the_passphrase(wiz):
+    page = _to_page(wiz)
+    page.passphrase.setText("typed-passphrase")
+
+    def boom():
+        raise RuntimeError("not a refusal")
+    with pytest.raises(RuntimeError):
+        page._run(boom)
+    assert page.passphrase.text() == ""

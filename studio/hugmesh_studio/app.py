@@ -670,6 +670,11 @@ def main(argv=None) -> int:
         return run_askpass(argv, allow_gui=bool(args.askpass_gui and not args.askpass_no_gui))
 
     # GUI
+    # First, before any window or build: remove the private key/password temp dirs a
+    # killed Studio left in TMPDIR (their owner lock is free). A live Studio's dirs
+    # hold their lock and are never touched.
+    from .core import secret_files as _secret_files
+    _secret_files.startup_sweep()
     from . import __version__, advanced_mode
     from .gui.qt import QtWidgets, BINDING  # noqa: N806
     from .gui.branding_icon import brand_icon
