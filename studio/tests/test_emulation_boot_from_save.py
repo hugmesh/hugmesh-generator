@@ -335,3 +335,21 @@ def test_cli_from_save_refusals(gen_session, tmp_path, capsys):
     assert em.main(["up", "--generator-dir", gen, "--work", work,
                     "--from-save", "mesh-typo"]) == 1
     assert "REFUSED: no save-set" in capsys.readouterr().err
+
+
+def test_a_set_saved_from_a_shared_l2_fleet_is_refused_by_name(gen_session, tmp_path):
+    """The facade boots no --mesh-net, and each saved disk's mesh0 profile is bound
+    to its mesh MAC — resumed here, the fleet would have no mesh NIC and a dead
+    tailnet. Refuse, naming the runner invocation that brings the L2 back."""
+    gen, sess = gen_session
+    work = str(tmp_path / "work")
+    report = _saved_set(gen, sess, work,
+                        **{"rpi5/pki": {"mesh_net": "mcast=239.77.0.1:5000",
+                                        "mesh_mac": "52:54:00:aa:bb:01",
+                                        "mesh_ip": "10.77.0.10"}})
+    rec = json.load(open(report.manifest_path, encoding="utf-8"))
+    assert {d["label"]: d["mesh_net"] for d in rec["devices"]}["rpi5/pki"] \
+        == "mcast=239.77.0.1:5000"
+    with pytest.raises(ValueError, match=r"shared-L2 fleet \(rpi5/pki ran with "
+                                         r"--mesh-net\).*--identities FILE"):
+        em.plan_from_save(gen, f"mesh-{STAMP}", work_dir=work)

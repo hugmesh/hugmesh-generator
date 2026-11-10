@@ -139,6 +139,9 @@ class DeviceSaveResult:
     artifacts: str = ""
     image: str = ""
     boot_save: str = ""
+    #: The shared-L2 SPEC the device ran on ("" = none). A resume must bring the
+    #: same L2 back: the saved disk's mesh0 profile is bound to its mesh MAC.
+    mesh_net: str = ""
 
 
 @dataclass
@@ -486,7 +489,8 @@ def save_mesh(generator_dir: str, items=None, *, work_dir: str = "",
     for dev in devices:
         res = DeviceSaveResult(label=dev.label, platform=dev.platform,
                                role=dev.role, artifacts=dev.artifacts,
-                               image=dev.image, boot_save=dev.boot_save)
+                               image=dev.image, boot_save=dev.boot_save,
+                               mesh_net=dev.mesh_net)
         results.append(res)
         blocker = qd.save_blocker(dev)
         if blocker:
@@ -554,6 +558,7 @@ def _write_manifest(generator_dir: str, report: MeshSaveReport) -> str:
             "artifacts": r.artifacts,
             "image": r.image,
             "boot_save": r.boot_save,
+            "mesh_net": r.mesh_net,
         } for r in report.results],
     }
     tmp = f"{path}.tmp.{os.getpid()}"
@@ -584,6 +589,8 @@ class SaveSet:
     #: The HOST artifacts dir every saved device was running from; "" when the
     #: manifest predates the field (then the caller must name the session).
     artifacts: str
+    #: Labels of saved devices that ran on a shared L2 (``--mesh-net``).
+    on_mesh_net: tuple[str, ...] = ()
 
 
 def save_set_dir(work_dir: str, ref: str) -> str:
@@ -638,6 +645,7 @@ def load_save_set(work_dir: str, ref: str) -> SaveSet:
             "those nodes; save the whole mesh again first.")
     disks: list[tuple[str, str]] = []
     artifacts: set[str] = set()
+    on_mesh: list[str] = []
     problems: list[str] = []
     for d in rec["devices"]:
         if not isinstance(d, dict):
@@ -654,6 +662,8 @@ def load_save_set(work_dir: str, ref: str) -> SaveSet:
         disks.append((label, target))
         if d.get("artifacts"):
             artifacts.add(str(d["artifacts"]))
+        if d.get("mesh_net"):
+            on_mesh.append(label)
     if not disks:
         raise SaveSetError(f"save-set {sdir} holds no device")
     if problems:
@@ -665,7 +675,8 @@ def load_save_set(work_dir: str, ref: str) -> SaveSet:
                    session_dir=sdir, manifest_path=path,
                    work_dir=str(rec.get("work_dir") or work_dir),
                    disks=tuple(disks),
-                   artifacts=next(iter(artifacts)) if artifacts else "")
+                   artifacts=next(iter(artifacts)) if artifacts else "",
+                   on_mesh_net=tuple(on_mesh))
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────────

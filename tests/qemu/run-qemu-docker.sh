@@ -2311,6 +2311,14 @@ run_row() {
     local label="${platform}/${role}"
     local safe; safe="$(echo "${label}" | tr '/+' '__')"
     local name="hugmesh-qemu-${safe}-$$"
+    # This row's --boot-save, as docker-run argv (empty = the golden). `declare -p`
+    # FIRST: tests drive this function extracted, without the global, and an
+    # undeclared array's "rpi5/pki" subscript would be evaluated as ARITHMETIC
+    # under set -u — a crash instead of a golden boot.
+    local bs_args=()
+    if declare -p BOOT_SAVE_CPATH >/dev/null 2>&1 && [ -n "${BOOT_SAVE_CPATH[${label}]:-}" ]; then
+        bs_args=(--boot-save "${BOOT_SAVE_CPATH[${label}]}")
+    fi
     local log="${WORK}/${safe}.log"
 
     # --privileged: losetup -P inside. Container-local networking only, so the
@@ -2334,7 +2342,7 @@ run_row() {
         --mem "${MEM}" --smp "${SMP}" --timeout "${TIMEOUT}" \
         ${ASSERT_TIMEOUT:+--assert-timeout "${ASSERT_TIMEOUT}"} \
         --label "${label}" $( ${KEEP} && echo --keep ) \
-        ${BOOT_SAVE_CPATH[${label}]:+--boot-save "${BOOT_SAVE_CPATH[${label}]}"} \
+        "${bs_args[@]}" \
         > "${log}" 2>&1
     local rc=$?
     if [ "${rc}" -eq 0 ]; then
@@ -2620,12 +2628,20 @@ start_device_row() {
     # The display door's -p/-e lines, filled per candidate port (they derive
     # from it). Empty only with --display none.
     local display_args=()
+    # This row's --boot-save, as docker-run argv (empty = the golden). `declare -p`
+    # FIRST: tests drive this function extracted, without the global, and an
+    # undeclared array's "rpi5/pki" subscript would be evaluated as ARITHMETIC
+    # under set -u — a crash instead of a golden boot.
+    local bs_args=()
+    if declare -p BOOT_SAVE_CPATH >/dev/null 2>&1 && [ -n "${BOOT_SAVE_CPATH[${label}]:-}" ]; then
+        bs_args=(--boot-save "${BOOT_SAVE_CPATH[${label}]}")
+    fi
 
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -xF "${name}" >/dev/null; then
         # "Leave it alone" is a success for a plain start (the device is up), but a
         # boot-from-save asked for a SPECIFIC disk, and the running one is not it.
-        if [ -n "${BOOT_SAVE_CPATH[${label}]:-}" ]; then
-            warn "${label} is already up as ${name}, NOT from the save it was asked to boot (${BOOT_SAVE_FOR[${label}]}) — --stop-device '${label}' first"
+        if [ "${#bs_args[@]}" -gt 0 ]; then
+            warn "${label} is already up as ${name}, NOT from the save it was asked to boot (${bs_args[1]}) — --stop-device '${label}' first"
             return 1
         fi
         warn "${label} is already up as ${name} — leaving it alone (--stop-device '${label}' first to replace it)"
@@ -2741,7 +2757,7 @@ start_device_row() {
             --mem "${MEM}" --smp "${SMP}" --timeout "${TIMEOUT}" \
             ${ASSERT_TIMEOUT:+--assert-timeout "${ASSERT_TIMEOUT}"} \
             --label "${label}" --keep --keep-alive \
-            ${BOOT_SAVE_CPATH[${label}]:+--boot-save "${BOOT_SAVE_CPATH[${label}]}"} \
+            "${bs_args[@]}" \
             "${EXTRA_USER_ARGS[@]}" 2>&1)"
         rc=$?
         if [ "${rc}" -eq 0 ]; then

@@ -137,7 +137,8 @@ DISPLAY_LISTEN="127.0.0.1"     # -spice addr=; 0.0.0.0 is only sane INSIDE the r
 SPICE_PORT=""                  # -spice port= (required with --display spice)
 DISPLAY_SECRET=""              # FILE holding the per-run password (required with --display spice)
 VNC_SOCK=""                    # optional -vnc unix:PATH browser (noVNC) fallback, same secret
-# --virt-dtb omits -dtb so QEMU generates the virt machine's own DTB. A board DTB
+# --virt-dtb omits -dtb so QEMU generates the virt machine's own DTB — since #879
+# that is the default anyway, and the flag is its explicit spelling. A board DTB
 # describes the board's SoC, not virt's PCIe root and the virtio devices on it,
 # so a display-mode boot (virtio-gpu, xhci, virtio-serial) needs the generated one.
 VIRT_DTB=false
@@ -223,8 +224,10 @@ Display door (a window that RESIZES the guest; all default-off):
                        as a secret OBJECT (required; never on the command line).
       --vnc-socket PATH  Also serve VNC on the unix socket PATH (noVNC browser
                        fallback: scale-only, 8-char DES auth from the same file).
-      --virt-dtb       Omit -dtb so QEMU generates the virt DTB (a board DTB
-                       cannot describe virt's PCIe/virtio; display mode needs this).
+      --virt-dtb       QEMU generates the virt DTB (a board DTB cannot describe
+                       virt's PCIe/virtio). This is already the default (no -dtb
+                       unless --dtb names one); the flag is kept as its explicit
+                       spelling and still refuses alongside --dtb.
 
 Port forwards (host -> guest): --ssh-port/--ui-port/--http-port/--api-port/--hs-port
 Lifecycle: -t/--timeout SEC, --keys-img FILE, --foreground, --keep, -h/--help

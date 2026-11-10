@@ -280,9 +280,40 @@ out="$( ( set -u; info() { :; }; die() { echo "DIE: $*"; exit 1; }; MODE="golden
 eq "${out}" "ROW 0|rpi5|pki|t|a" "without --boot-save the rows are untouched"
 grep -q '^\s*boot_save_preflight$' "${RUNNER}" && grep -q '^\s*boot_save_filter_rows$' "${RUNNER}" \
     && _ok "the runner calls the preflight and the row filter" || _bad "boot-save preflight/filter defined but never called"
-grep -qF '${BOOT_SAVE_CPATH[${label}]:+--boot-save "${BOOT_SAVE_CPATH[${label}]}"}' "${RUNNER}" \
-    && [ "$(grep -cF '${BOOT_SAVE_CPATH[${label}]:+--boot-save' "${RUNNER}")" = 2 ] \
-    && _ok "both docker-run sites (test run + keep-alive) forward --boot-save" || _bad "a docker-run site does not forward --boot-save"
+# Both docker-run sites forward it: drive each row starter, extracted, against a
+# recording `docker`, once with this row's save and once WITHOUT the global at all
+# (the shape display_door_test/loop_preflight_test extract it in).
+for fn in run_row start_device_row; do
+    sed -n "/^${fn}() {/,/^}/p" "${RUNNER}" > "${TMP}/${fn}.sh"
+    grep -q "^${fn}() {" "${TMP}/${fn}.sh" || { echo "could not extract ${fn}" >&2; exit 2; }
+done
+row_argv() { # row_argv FN WITH_GLOBAL -> the recorded `docker run` argv, one per line
+    ( set -u
+      DOCKER_LOG="${TMP}/docker.argv"; : > "${DOCKER_LOG}"
+      docker() { if [ "$1" = run ]; then printf '%s\n' "$@" > "${DOCKER_LOG}"; echo cid; fi; return 0; }
+      info() { :; }; warn() { :; }; step() { :; }; safe_label() { echo "${1//[\/+]/_}"; }
+      claim_port() { return 0; }; claim_display_ports() { return 0; }; release_port() { :; }
+      release_display_ports() { :; }; display_publish_args() { :; }; candidate_ports() { echo 22300; }
+      container_is_running() { return 0; }; sleep() { :; }
+      WORK="${TMP}/w-row"; mkdir -p "${WORK}"; ARTIFACTS="/a"; REPO_DIR="/r"; IMAGE_TAG="t"; MODE="golden"; MEM=1; SMP=1; TIMEOUT=1
+      ASSERT_TIMEOUT=""; KEEP=false; KVM_ARGS=(); EXTRA_USER_ARGS=(); MESH_NET=""; DEVICES_DIR="${TMP}/dd"
+      DEV_NAME_PREFIX="p-"; DEV_PORT_MIN=22300; DEV_PORT_MAX=22399; GUEST_SSH_PORT=2222; DEV_PORTS_TAKEN=()
+      DISPLAY_MODE=none; RESULT_DIR="${TMP}"; GREEN=""; RED=""; RST=""
+      if [ "$2" = yes ]; then declare -A BOOT_SAVE_CPATH=([rpi5/pki]="/work/saves/s/rpi5_pki.qcow2") BOOT_SAVE_FOR=([rpi5/pki]="/w/saves/s/rpi5_pki.qcow2"); fi
+      source "${TMP}/$1.sh"
+      "$1" rpi5 pki /a/x.img >/dev/null 2>&1
+      cat "${DOCKER_LOG}" )
+}
+for fn in run_row start_device_row; do
+    got="$(row_argv "${fn}" yes)"
+    if awk 'p && $0 == "/work/saves/s/rpi5_pki.qcow2" {f=1} {p = ($0 == "--boot-save")} END {exit f?0:1}' <<< "${got}"; then
+        _ok "${fn}: docker run forwards --boot-save /work/... for a saved row"
+    else _bad "${fn}: --boot-save not forwarded (argv: $(tr '\n' ' ' <<< "${got}"))"; fi
+    got="$(row_argv "${fn}" no)"
+    if [ -n "${got}" ] && ! grep -qxF -- --boot-save <<< "${got}"; then
+        _ok "${fn}: without the global it still runs, golden, with no --boot-save"
+    else _bad "${fn}: crashed or forwarded a save with no BOOT_SAVE_CPATH declared (argv: $(tr '\n' ' ' <<< "${got}"))"; fi
+done
 
 echo
 echo "docker-entrypoint.sh --boot-save — restore the SAVED identity, never mint one"

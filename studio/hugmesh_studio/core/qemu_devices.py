@@ -252,6 +252,9 @@ class Device:
     #: The save itself is never written (the run overlay sits over it), so this path
     #: still holds exactly what was saved, whatever the device has done since.
     boot_save: str = ""
+    #: The shared-L2 SPEC this device was booted on (``--mesh-net``), "" when it
+    #: had no mesh NIC. Read tolerantly; the entrypoint has written it since #48.
+    mesh_net: str = ""
 
     @property
     def is_running(self) -> bool:
@@ -318,6 +321,7 @@ def _device_from_record(raw: object) -> Device | None:
         display_password_file=str(raw.get("display_password_file") or ""),
         display_resize=str(raw.get("display_resize") or ""),
         boot_save=str(raw.get("boot_save") or ""),
+        mesh_net=str(raw.get("mesh_net") or ""),
     )
 
 

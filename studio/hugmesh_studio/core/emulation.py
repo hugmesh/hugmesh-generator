@@ -362,6 +362,19 @@ def plan_from_save(generator_dir: str, save_ref: str,
     """
     work = work_dir or qemu_devices.default_work_dir(generator_dir)
     sset = emulation_save.load_save_set(work, save_ref)
+    if sset.on_mesh_net:
+        # This facade's run boots no shared L2 (run_argv never emits --mesh-net),
+        # and each saved disk's mesh0 profile is bound to its mesh MAC: resumed
+        # here, the fleet would come up with no mesh NIC and a dead tailnet, and
+        # the only sign would be a WARN inside each container's log. Refuse, and
+        # name the invocation that does bring the L2 back.
+        raise ValueError(
+            f"save-set {sset.session} was saved from a shared-L2 fleet "
+            f"({', '.join(sset.on_mesh_net)} ran with --mesh-net); this command "
+            "boots no mesh NIC. Resume it with the runner and the SAME identity "
+            "file: tests/qemu/run-qemu-docker.sh --keep-alive --mesh-net auto "
+            "--identities FILE " + " ".join(
+                f"--boot-save {lb}={disk}" for lb, disk in sset.disks))
     if not work_dir and sset.work_dir:
         # Saves must sit under the runner's --work (it mounts nothing else), so a
         # set saved from another work dir is booted against THAT work dir.

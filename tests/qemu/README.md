@@ -639,6 +639,11 @@ PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation plan --from-save mesh
   mesh NIC MAC that differs from the one the saved disk was bound to.
 - The device record names its source (`"boot_save"`), and `mesh-emu-status` shows
   "resumed from save".
+- `assertions.sh` still runs on a resumed guest. Its checks are written for a FIRST boot,
+  so a resumed row can grade FAIL. Under `--keep-alive` the device stays up either way.
+- A set saved from a shared-L2 fleet (`--mesh-net`) is refused by `--from-save`, which
+  boots no mesh NIC. Resume it with the runner and the same identity file:
+  `run-qemu-docker.sh --keep-alive --mesh-net auto --identities FILE --boot-save …`.
 
 Tests: `tests/qemu/save_test.sh` (launchers, runner, entrypoint) and
 `studio/tests/test_emulation_boot_from_save.py`.
