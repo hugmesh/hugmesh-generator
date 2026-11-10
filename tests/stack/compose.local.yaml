@@ -1992,6 +1992,8 @@ services:
       HUGMESH_DOMAIN: ${HUGMESH_DOMAIN:-hugmesh.net}
       PUBLIC_HTTPS_PORT: ${PUBLIC_HTTPS_PORT:-8488}
       HEADSCALE_MESH_ID: ${HEADSCALE_MESH_ID:-hugmesh-local}
+      # Embedded DERP only by default; "true" ALSO lists Tailscale's public map.
+      HEADSCALE_PUBLIC_DERP: ${HEADSCALE_PUBLIC_DERP:-false}
     labels:
       net.hugmesh.role: headscale
       net.hugmesh.headscale.user: hugmesh

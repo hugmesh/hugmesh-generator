@@ -119,6 +119,16 @@ FOREIGN_MESH_TRUST_SRC="${FOREIGN_MESH_TRUST_SRC:-}"
 # internal zone. Precedence: built-in (<brand>.internal) < env/brand.conf < CLI flag.
 SUPERDOMAIN="${SUPERDOMAIN:-}"
 
+# ── headscale DERP relay: public Tailscale map OPT-IN (default OFF) ─────────────
+# The pki node's headscale runs its EMBEDDED DERP relay with no public map, so the
+# mesh starts and relays offline (docs/HEADSCALE-DERP.md). HEADSCALE_PUBLIC_DERP=true
+# (env/brand.conf) or --headscale-public-derp stamps provision.json
+# .headscale.public_derp=true, and keys-provision then ALSO lists Tailscale's public
+# map. Left unset, the key is not written, so an image baked with the builders'
+# --headscale-public-derp keeps its own choice. Precedence: built-in (off) <
+# env/brand.conf < CLI flag.
+HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
+
 # ── In-UI SSH-terminal key model: per-device sshd HOST + BFF DIAL keypairs ──────
 # The in-UI SSH terminal lets the BFF dial a device over the tailnet to drive an
 # operator console. That needs TWO per-device keypairs minted here, off-image-build:
@@ -247,6 +257,10 @@ Options:
       --no-device-ssh In-UI SSH terminal: skip generating the per-device sshd HOST
                       keypair + BFF DIAL keypair + ingest metadata (default: ON —
                       each image is one device). (env: GEN_DEVICE_SSH=false)
+      --headscale-public-derp  ALSO list Tailscale's public DERP map in the pki
+                      node's headscale (provision.json .headscale.public_derp=true).
+                      Default OFF: headscale's embedded relay only, so the mesh starts
+                      and relays offline. (env/brand.conf: HEADSCALE_PUBLIC_DERP=true)
   -h, --help          Show this help.
 
   Mail/OAuth creds are OPTIONAL and ABSENT BY DEFAULT. NONINTERACTIVE=1 (or
@@ -281,6 +295,7 @@ while [[ $# -gt 0 ]]; do
         --vpn-src)     VPN_SRC="$2"; shift 2 ;;               # egress-VPN: provider .conf/.ovpn to stage (own domain)
         --vpn-domain)  VPN_DOMAIN="$2"; shift 2 ;;            # egress-VPN: the node's own brand domain
         --foreign-mesh-trust) FOREIGN_MESH_TRUST_SRC="$2"; shift 2 ;;  # Phase 7: foreign-mesh PUBLIC verifying keys to stage
+        --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;  # ALSO list the public Tailscale DERP map (default: embedded relay only)
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;          # mesh MagicDNS base_domain (permanently internal); default <BRAND>.internal
         --device-id)   DEVICE_ID="$2"; shift 2 ;;            # in-UI SSH terminal: per-device Vault-seed path segment
         --dial-user)   DIAL_USER="$2"; shift 2 ;;            # in-UI SSH terminal: unprivileged login the BFF dials as
@@ -289,6 +304,12 @@ while [[ $# -gt 0 ]]; do
         *)             echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
 done
+
+case "${HEADSCALE_PUBLIC_DERP}" in
+    true|1|yes|on)     HEADSCALE_PUBLIC_DERP=true ;;
+    false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
+    *) echo "ERROR: HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')" >&2; exit 1 ;;
+esac
 
 for t in openssl ssh-keygen python3; do
     command -v "$t" >/dev/null || { echo "ERROR: missing tool: $t" >&2; exit 1; }
@@ -460,6 +481,21 @@ PY
     echo "    -> ${PROV} (.mesh.magic_dns_domain + .mesh.cp_dns_name)"
     echo "    -> ${OUT_DIR}/kubernetes/kubeadm-config.yaml (controlPlaneEndpoint + certSANs)"
     echo "    permanently internal — never go-live-flipped (distinct from cluster_domain)"
+fi
+
+# ── headscale DERP: public Tailscale map opt-in -> provision.json ──────────────
+# Only an opt-in is stamped (see HEADSCALE_PUBLIC_DERP above): an absent key lets a
+# builder-baked /etc/hugmesh/headscale-public-derp marker decide at first boot.
+if [ "${HEADSCALE_PUBLIC_DERP}" = true ] && [ -f "${PROV}" ]; then
+    python3 - "${PROV}" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault("headscale", {})["public_derp"] = True
+json.dump(d, open(p, "w"), indent=2)
+open(p, "a").write("\n")
+PY
+    echo "==> headscale DERP: public Tailscale DERP map OPTED IN -> ${PROV} (.headscale.public_derp=true)"
 fi
 
 # ── Layer-B device-license registry: per-node identity + verifying key ─────────

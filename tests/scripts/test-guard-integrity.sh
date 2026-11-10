@@ -1124,7 +1124,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # branch's 2 = 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
 # MERGED (origin/main 3e020b2b into fix/compose-db-passwords-20261104): main 234 of 276 + this
 # branch's 2 = 236 of 278, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-236}"
+# 236 -> 238 (feat/headscale-embedded-derp-20261110): +2 gated, +2 total —
+# tests/scripts/test-headscale-embedded-derp.sh (shell-suites.yml debian job) and
+# tests/scripts/test-headscale-embedded-derp-live.sh (the docker job). PREMERGE_UNGATED
+# is untouched. MEASURED by running this file on the branch rebased onto origin/main 64e3e42f.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

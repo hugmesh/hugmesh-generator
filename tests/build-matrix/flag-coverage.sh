@@ -215,6 +215,7 @@ SAMPLES = {
     "headscale_version": [{"headscale_version": "0.23"}],
     "tailscale_version": [{"tailscale_version": "1.60"}],
     "skip_tailscale": [{"skip_tailscale": True}],
+    "headscale_public_derp": [{"headscale_public_derp": True}],
     "gpu_driver": [{"gpu_driver": "nvidia"}], "nvidia_cuda": [{"nvidia_cuda": True}],
     "kernel_builtin": [{"kernel_builtin": True}],
     "enable_wifi": [{"enable_wifi": True}], "enable_bluetooth": [{"enable_bluetooth": True}],
