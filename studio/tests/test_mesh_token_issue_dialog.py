@@ -4,9 +4,10 @@ from the tray's mesh section and the Local mesh page.
 Operator ask (2026-11-04): "make sure locally created mesh can also generate tokens
 through both the web ui and the gui/tui/cli on all platforms". The core it drives is
 tested in test_mesh_token_issue.py; here: the role gates shell access, Mint is only
-offered when a headscale container is running, Issue checks every field before it
-creates or mints anything, and the token, the issuer fingerprint and the sentence
-about sending the fingerprint separately are what the operator sees.
+offered when a headscale container is running (the headscale user is optional: the
+placeholder shows the default its labels name, else hugmesh), Issue checks every field
+before it creates or mints anything, and the token, the issuer fingerprint and the
+sentence about sending the fingerprint separately are what the operator sees.
 
 Headless (QT_QPA_PLATFORM=offscreen). Docker is never run: the container probe and
 the mint are monkeypatched. One test signs for real with ssh-keygen (skipped when
@@ -62,9 +63,15 @@ def _settle(qapp, dlg, timeout_s=30.0):
     pytest.fail("the dialog's background work did not finish")
 
 
-def _dialog(qapp, monkeypatch, container=None, **prefill):
+LABELS = {"user": "members", "key_tags": ("tag:hugmesh",)}
+
+
+def _dialog(qapp, monkeypatch, container=None, labels=None, **prefill):
     monkeypatch.setattr(mt, "find_headscale_container",
                         (lambda runner=None: container) if container else _no_container)
+    # docker inspect is never run: the labels of whichever container is asked about
+    monkeypatch.setattr(mt, "headscale_labels",
+                        lambda name, runner=None: dict(labels or {}))
     dlg = dmod.IssueTokenDialog(**prefill)
     _settle(qapp, dlg)
     return dlg
@@ -105,6 +112,7 @@ def core(monkeypatch):
     def mint(**kw):
         seen["order"].append(("mint", kw["user"]))
         seen["mint"] = {k: kw[k] for k in ("user", "lifetime_s", "container")}
+        seen["tags"] = kw["tags"]
         return MINTED
 
     def issue(**kw):
@@ -159,26 +167,66 @@ def test_mint_names_the_container_it_found(qapp, monkeypatch):
     dlg = _dialog(qapp, monkeypatch, container="hugmesh-headscale")
     assert "hugmesh-headscale" in dlg.mint_radio.text()
     assert dlg.container.currentText() == "hugmesh-headscale"
-    dlg.hs_user.setText("joiners")
-    assert dlg.mint_radio.isEnabled()
+    assert dlg.hs_user.text() == "" and dlg.mint_radio.isEnabled()
 
 
-def test_mint_stays_off_until_a_headscale_user_is_named(qapp, monkeypatch, core):
-    """There is no default headscale user: Mint is offered only once one is typed,
-    and the tooltip says which user to name."""
-    dlg = _dialog(qapp, monkeypatch, container="hs")
+def test_mint_is_offered_with_no_user_typed_and_mints_for_the_labels_user(
+        qapp, monkeypatch, core):
+    """The headscale user is optional: the placeholder shows the user the found
+    container's label names, and an empty field mints for it, with the label's tags."""
+    dlg = _dialog(qapp, monkeypatch, container="hs", labels=LABELS)
     assert dlg.hs_user.text() == "" and dlg.hs_user.isEnabled()
-    assert not dlg.mint_radio.isEnabled()
-    assert dlg.mint_radio.toolTip() == dmod.NAME_USER_TIP == mt.NAME_MINT_USER
-    dlg.hs_user.setText("joiners")
-    assert dlg.mint_radio.isEnabled() and "joiners" in dlg.mint_radio.toolTip()
-    dlg.mint_radio.setChecked(True)
-    dlg.hs_user.setText("")                 # cleared again: back to pasting
-    assert not dlg.mint_radio.isEnabled() and dlg.paste_radio.isChecked()
+    assert dlg.hs_user.placeholderText() == "default: members (from hs's label)"
+    assert mt.NAME_MINT_USER in dlg.hs_user.toolTip() == (
+        "The headscale user the minted key is for; leave it empty for the default. "
+        + dmod.DEFAULT_USER_TIP)
+    assert dlg.mint_radio.isEnabled()
+    assert "the headscale user members (from hs's label)" in dlg.mint_radio.toolTip()
     _fill(dlg)
+    dlg.mint_radio.setChecked(True)
     dlg.issue_btn.click()
     _settle(qapp, dlg)
-    assert core["order"] == [] and dlg.status.text() == dmod.NO_KEY
+    assert core["mint"]["user"] == "members" and core["tags"] == ("tag:hugmesh",)
+    assert ("minted in hs for the headscale user members, asking for tag:hugmesh"
+            in dlg.status.text())
+
+
+def test_without_labels_an_empty_user_mints_for_hugmesh(qapp, monkeypatch, core):
+    dlg = _dialog(qapp, monkeypatch, container="hs")
+    assert dlg.hs_user.placeholderText().startswith(f"default: {mt.DEFAULT_MINT_USER},")
+    assert dlg.mint_radio.isEnabled()
+    _fill(dlg)
+    dlg.mint_radio.setChecked(True)
+    dlg.issue_btn.click()
+    _settle(qapp, dlg)
+    assert core["mint"]["user"] == "hugmesh" and core["tags"] == ()
+    assert "for the headscale user hugmesh:" in dlg.status.text()
+
+
+def test_the_placeholder_names_the_label_only_for_the_container_it_came_from(
+        qapp, monkeypatch):
+    dlg = _dialog(qapp, monkeypatch, container="hs", labels=LABELS)
+    dlg.container.setCurrentText("other-hs")
+    assert dlg.hs_user.placeholderText().startswith(f"default: {mt.DEFAULT_MINT_USER},")
+    dlg.container.setCurrentText("hs")
+    assert "members" in dlg.hs_user.placeholderText()
+
+
+def test_a_typed_user_wins_over_the_labels(qapp, monkeypatch, core):
+    dlg = _dialog(qapp, monkeypatch, container="hs", labels=LABELS)
+    _fill(dlg)
+    dlg.hs_user.setText("ops")
+    assert "the headscale user ops" in dlg.mint_radio.toolTip()
+    dlg.mint_radio.setChecked(True)
+    dlg.hs_user.setText("bad user")
+    dlg.issue_btn.click()
+    _settle(qapp, dlg)
+    assert "is not a headscale user name" in dlg.status.text() and core["order"] == []
+    dlg.hs_user.setText("ops")
+    dlg.issue_btn.click()
+    _settle(qapp, dlg)
+    # the key-tags label is the label user's (members), never forced on another user
+    assert core["mint"]["user"] == "ops" and core["tags"] == ()
 
 
 def test_several_containers_are_offered_to_pick_from(qapp, monkeypatch, core):
