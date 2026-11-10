@@ -54,7 +54,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
-from . import emulation_save, mesh_emulation, qemu_devices, qemu_tests
+from . import emulation_save, mesh_emulation, qemu_devices, qemu_tests, session_locations
 # Re-exports: the single argv authors for the verbs the cores already own. The
 # facade adds NO second spelling of any of these — a GUI that imports only this
 # module still runs the exact argv the owning core's tests pin.
@@ -280,22 +280,28 @@ def _utc_now() -> str:
 def _as_session(generator_dir: str, session) -> BuildSession:
     """Coerce a BuildSession, a session path, or a session NAME into a BuildSession.
 
-    A name is resolved under ``out/sessions/`` — and only there. There is
-    deliberately no "else take the newest" here: the caller-facing defaulting
-    lives in ``qemu_tests.default_session`` (newest COMPLETE), and a typo'd name
-    must be an error, not a silent run of some other session's images.
+    A name is resolved in EVERY known output folder (core/session_locations.py:
+    ``<generator>/out`` first, then each folder a build has written sessions into).
+    It used to be ``out/sessions/`` only, which made ``--session <id>`` and the WHPX
+    backend refuse a finished session the operator had built into another folder.
+    There is deliberately no "else take the newest" here: the caller-facing
+    defaulting lives in ``qemu_tests.default_session`` (newest COMPLETE), and a
+    typo'd name must be an error, not a silent run of some other session's images.
     """
     if isinstance(session, BuildSession):
         return session
     path = str(session or "")
     if not os.path.isdir(path):
-        candidate = os.path.join(generator_dir, qemu_tests.SESSIONS_SUBDIR, path)
-        if path and os.path.isdir(candidate):
+        candidate = session_locations.find_session_dir(generator_dir, path) if path else ""
+        if candidate:
             path = candidate
         else:
+            searched = session_locations.sessions_dirs(generator_dir) or [
+                os.path.join(generator_dir, qemu_tests.SESSIONS_SUBDIR)]
             raise ValueError(
                 f"no such build session: {session!r} is neither a directory nor a "
-                f"name under {os.path.join(generator_dir, qemu_tests.SESSIONS_SUBDIR)}")
+                f"session name in any known output folder (searched: "
+                f"{', '.join(searched)})")
     return BuildSession(path=path,
                         name=os.path.basename(os.path.normpath(path)),
                         rows=qemu_tests.discover_rows(path),
@@ -307,7 +313,7 @@ def plan(generator_dir: str, session, mode, envelope: RunEnvelope | None = None,
     """The plan for one session in one lane — pure arithmetic, boots nothing.
 
     ``session`` may be a ``qemu_tests.BuildSession``, a session directory, or a
-    session name under ``out/sessions/``. ``mode`` may be an :class:`EmulationMode`
+    session name in any known output folder. ``mode`` may be an :class:`EmulationMode`
     or its string value. DEPLOY plans additionally run ``mesh_emulation.plan_mesh``
     (which validates port/identity ranges and may raise ValueError for an
     oversized session, exactly as before — this facade adds no second limit).
@@ -1027,7 +1033,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--generator-dir", default=_REPO_ROOT,
                    help="the hugmesh-generator checkout (default: this one)")
     p.add_argument("--session", default="",
-                   help="build session: a name under out/sessions or a path "
+                   help="build session: a name in any known output folder, or a path "
                         "(default: the newest COMPLETE session)")
     p.add_argument("--work", default="",
                    help="runner --work dir (default: <generator>/out/qemu-runs)")
@@ -1085,8 +1091,9 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 1
     if sess is None:
-        print("no build session with images under out/sessions — build images "
-              "first, or pass --session", file=sys.stderr)
+        print("no build session with images in any known output folder "
+              f"({', '.join(session_locations.roots(gen)) or gen + '/out'}) — "
+              "build images first, or pass --session", file=sys.stderr)
         return 1
     if sess.is_partial:
         print(f"note: session {sess.name} is {sess.completeness_badge()}",

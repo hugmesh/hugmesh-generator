@@ -954,8 +954,10 @@ def _start_case(case, monkeypatch):
 
     def no_bash(*a, **k):
         raise OSError(2, "No such file or directory", "bash")
+    # osname pinned: left to os.name, a Windows run took the native refusal above and
+    # never reached the Linux spawn this case is about
     monkeypatch.setattr(odk, "start_assistant",
-                        lambda gen, mode, **k: _REAL_START(gen, spawn=no_bash))
+                        lambda gen, mode, **k: _REAL_START(gen, spawn=no_bash, osname="posix"))
     return None
 
 

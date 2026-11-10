@@ -101,7 +101,7 @@ def test_the_note_is_right_that_gen_provision_keys_tells_the_operator_to_copy_th
     to copy onto the stick from the pki node — not something it mints for a client.
     Pinned against the script: it prints that instruction (the "Add:" line and the
     pki -> certs/cluster-ca.crt copy line) and never writes certs/cluster-ca.crt itself
-    on a client stick.
+    on a client stick unless it was GIVEN the CA certificate (then it writes that).
 
     Whether keys-provision then IMPORTS that file for a client stick is the engine's
     side of the note (issue #588): the text pin above cannot see it, and the executing
@@ -119,9 +119,16 @@ def test_the_note_is_right_that_gen_provision_keys_tells_the_operator_to_copy_th
         "— the note's clause about it is stale")
     assert re.search(r'^\s*echo .*pki:.*certs/cluster-ca\.crt\s+->\s+certs/cluster-ca\.crt',
                      src, re.M), "the pki -> certs/cluster-ca.crt copy instruction is gone"
-    assert not re.search(r'^\s*(cp|openssl|cat) .*certs/cluster-ca\.crt', src, re.M), (
-        "gen-provision-keys.sh now WRITES certs/cluster-ca.crt itself — the note should "
-        "say so instead of telling the operator to copy it")
+    # It writes certs/cluster-ca.crt on a non-pki stick in exactly ONE place: from a
+    # provided CA certificate (the Domain CA keys step passes --ca-cert), re-encoded by
+    # openssl x509 so only the certificate lands. The note says both halves.
+    writes = re.findall(r'^\s*(?:cp|openssl|cat) .*certs/cluster-ca\.crt.*$', src, re.M)
+    assert len(writes) == 1 and writes[0].strip().startswith(
+        'openssl x509 -in "${CA_CERT}" -out "${OUT_DIR}/certs/cluster-ca.crt"'), writes
+    worker = src[src.index('if [ -n "${CA_CERT}" ]; then\n        # The cluster CA CERTIFICATE'):]
+    assert worker.index("openssl x509") < worker.index("else"), (
+        "the worker-stick write is no longer inside the CA_CERT branch")
+    assert "writes there when it is given the CA certificate" in CLIENT_CA_INHERITANCE_NOTE
 
 
 # ── 2. the decision, on both faces ───────────────────────────────────────────────────

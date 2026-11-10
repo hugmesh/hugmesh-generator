@@ -7,6 +7,7 @@ never touch ~/.hugmesh.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import threading
@@ -21,6 +22,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from hugmesh_studio.core import local_mesh_bootstrap as lmb          # noqa: E402
+from hugmesh_studio.core import platform_info                        # noqa: E402
 from hugmesh_studio.core import saved_meshes as sm                   # noqa: E402
 from hugmesh_studio.core import vaults                               # noqa: E402
 from hugmesh_studio.core.domain_services import normalise_slugs     # noqa: E402
@@ -29,6 +31,8 @@ from hugmesh_studio.core.mesh_node import MeshNode, MeshStatus       # noqa: E40
 from hugmesh_studio.gui.pages import localmesh as localmesh_mod      # noqa: E402
 from hugmesh_studio.gui.pages import _saved_meshes_widget as smw     # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                          # noqa: E402
+
+_REAL_BLOCKER = platform_info.native_windows_blocker
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -84,6 +88,14 @@ class _Stack:
 _PROBE_OK = {"volumes_present": True, "images_present": True, "creds_match": True,
              "mesh_running": False, "source_ok": True, "copies_missing": (),
              "source_drift": (), "volumes_missing": (), "volumes_seen": 3}
+
+
+@pytest.fixture
+def as_linux(monkeypatch):
+    """Answer the page's native-Windows gate as Linux (the test_windows_sweep_c6
+    idiom). Request it BEFORE ``page`` so the page is built under it."""
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname="posix"))
 
 
 @pytest.fixture
@@ -481,7 +493,13 @@ def test_start_runs_the_records_config_not_the_forms_recollection(qapp, page, mo
     assert "services" in page.saved_meshes.note.text()      # …and says so
 
 
-def test_start_is_refused_while_a_mesh_is_running(qapp, page, monkeypatch):
+@pytest.mark.parametrize("osname", ["posix", "nt"])
+def test_start_is_refused_while_a_mesh_is_running(qapp, page, monkeypatch, osname):
+    # The host is pinned the test_windows_sweep_c6 way, so both halves run anywhere.
+    # On native Windows 'Stop mesh' is greyed with the WSL2 sentence, so "stop it
+    # first" would send the operator to a button that refuses.
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname=osname))
     rec = _record()
     page.initializePage()
     _settle(qapp, page)
@@ -489,10 +507,17 @@ def test_start_is_refused_while_a_mesh_is_running(qapp, page, monkeypatch):
     page._set_verbs_enabled(True)
     calls = _launch_spy(page, monkeypatch)
     page._start_saved(rec, sm.MODE_START)
-    assert calls == [] and "stop it first" in page.status.text()
     _select(page)
-    assert not page.saved_meshes.start_btn.isEnabled()
-    assert "stop it first" in page.saved_meshes.start_btn.toolTip()
+    assert calls == [] and not page.saved_meshes.start_btn.isEnabled()
+    texts = (page.status.text(), page.saved_meshes.start_btn.toolTip(),
+             page.saved_meshes.restore_btn.toolTip())
+    for text in texts:
+        if osname == "nt":
+            assert "cannot stop it" in text and "WSL2" in text, text
+            assert "stop it first" not in text, text
+        else:
+            assert "stop it first" in text, text
+            assert "WSL2" not in text, text
 
 
 def test_rows_state_what_a_restore_gives_back_before_the_click(qapp, page):
@@ -661,7 +686,9 @@ def test_table_has_no_itemChanged_connection():
     assert {"cellClicked", "itemActivated"} <= attrs
 
 
-def test_stop_tooltip_says_volumes_are_kept(qapp, page):
+def test_stop_tooltip_says_volumes_are_kept(qapp, as_linux, page):
+    # as_linux BEFORE page, so the page is built as on Linux: on native Windows the
+    # button is greyed with the WSL2 sentence instead (test_windows_sweep_localmesh)
     tip = page.boot_down_btn.toolTip()
     assert "KEPT" in tip and "stack-halt" in tip
     assert "dropped" not in tip
@@ -804,3 +831,239 @@ def test_the_saved_column_shows_the_last_save_after_an_overwrite(qapp, page):
     plain = table.item(rows["fresh one"], smw._SM_COL_SAVED).text()
     assert "re-saved" not in plain and plain == sm.load(fresh.path()).updated[:16] \
         .replace("T", " ")
+
+
+# ── PR #937 round 2: a saved mesh with its OWN compose project (node-image flow) ──
+def _img_record(with_worktree: bool):
+    """A record saved by the node-image flow (compose project hugmesh-img-<id>), as a
+    draft or as one that ran beside its build (worktree + ports recorded)."""
+    from hugmesh_studio.core import images_mesh
+    from hugmesh_studio.core.config import ImageConfig
+    cfg = ImageConfig(mode="mesh", brand="acme", cluster_domain="acme.org")
+    rec = images_mesh.save(GENERATOR_DIR, cfg).record
+    assert sm.is_own_project(rec)
+    if with_worktree:
+        os.makedirs(os.path.join(rec.lanes["worktree"], ".git"))
+        rec.lanes["host_ports"] = {"PUBLIC_HOST_PORT": 18090,
+                                   "PUBLIC_HTTPS_PORT": 18490}
+        sm.save(rec)
+    return rec
+
+
+def _spy_restore(monkeypatch):
+    seen = []
+
+    def spy(self, rec, on_line=None, cancel=None):
+        seen.append({"project": self.project, "gen": self.generator_dir,
+                     "refusal": self.lane_refusal})
+        return True, ["[done]"]
+    monkeypatch.setattr(lmb.LocalMeshBootstrap, "restore", spy)
+    monkeypatch.setattr(lmb.LocalMeshBootstrap, "start_saved", spy)
+    # (this test tree has no .stack-src; what is under test is WHERE it runs)
+    monkeypatch.setattr(lmb.LocalMeshBootstrap, "validate", lambda self: [])
+    return seen
+
+
+def test_restore_of_a_draft_img_record_is_refused_and_never_drives_hugmesh_local(
+        qapp, page, monkeypatch):
+    """Round-1 refutation: with hugmesh-local halted, 'Restore (reseed)' of a
+    hugmesh-img-<id> draft ran boot.restore on the CHECKOUT's default project. Now it
+    is refused with one sentence and nothing is launched."""
+    seen = _spy_restore(monkeypatch)
+    rec = _img_record(with_worktree=False)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = False
+    page._set_verbs_enabled(True)
+    boot_before = page.boot
+    calls = _launch_spy(page, monkeypatch)
+    page._start_saved(rec, sm.MODE_RESEED)
+    assert calls == [] and seen == []
+    assert "never been started" in page.status.text()
+    assert sm.record_project(rec) in page.status.text()
+    assert page.boot is boot_before                     # the form's mesh untouched
+    # the row says so before any click
+    page.probe["answer"] = dict(_PROBE_OK, volumes_present=False)
+    page.saved_meshes.refresh()
+    _settle(qapp, page)
+    _select(page)
+    w = page.saved_meshes
+    assert not w.restore_btn.isEnabled() and not w.start_btn.isEnabled()
+    assert "never been started" in w.restore_btn.toolTip()
+
+
+def test_restore_of_an_img_record_runs_its_own_project_in_its_own_worktree(
+        qapp, page, monkeypatch):
+    seen = _spy_restore(monkeypatch)
+    rec = _img_record(with_worktree=True)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = False
+    page._set_verbs_enabled(True)
+    boot_before = page.boot
+    calls = _launch_spy(page, monkeypatch)
+    page._start_saved(rec, sm.MODE_RESEED)
+    assert calls and calls[0]["label"].startswith("Restoring saved mesh"), \
+        page.status.text()
+    _settle(qapp, page)
+    assert seen == [{"project": sm.record_project(rec), "gen": rec.lanes["worktree"],
+                     "refusal": ""}]
+    assert sm.record_project(rec).startswith("hugmesh-img-")
+    assert page.boot is boot_before and page.boot.project == ""
+
+
+def test_an_img_record_is_blocked_by_the_running_checkout_mesh_for_its_ports(
+        qapp, page, monkeypatch):
+    seen = _spy_restore(monkeypatch)
+    rec = _img_record(with_worktree=True)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = True
+    page._set_verbs_enabled(True)
+    calls = _launch_spy(page, monkeypatch)
+    page._start_saved(rec, sm.MODE_RESEED)
+    assert calls == [] and seen == []
+    assert "8000" in page.status.text() and "stop it first" in page.status.text()
+    # the row: blocked for the ports, and its Restore column does NOT claim that the
+    # record's OWN project is running (only the checkout's mesh is)
+    w = page.saved_meshes
+    w.set_context(mesh_up=False, busy=False)
+    w.set_context(mesh_up=True, busy=False)
+    _select(page)
+    assert not w.restore_btn.isEnabled()
+    assert "8000" in w.restore_btn.toolTip()
+    assert "own compose project" not in w.table.item(0, smw._SM_COL_RESTORE).text()
+
+
+# ── PR #937 round 4: Stop on a Saved meshes row (a mesh beside a node-image build) ──
+def _stop_spy(monkeypatch):
+    from hugmesh_studio.core import images_mesh
+    seen = []
+
+    def spy(lane):
+        seen.append({"project": lane.project, "record": lane.rec.id})
+        return True, [f"[local mesh] stopped {lane.project}"]
+    monkeypatch.setattr(images_mesh.AlongsideMesh, "stop", spy)
+    return seen
+
+
+def test_round4_stop_on_a_running_img_row_stops_it_through_the_lane(
+        qapp, page, monkeypatch, as_linux):
+    """The reverse-collision refusal on hugmesh-local says "Stop on its row in Saved
+    meshes" — round 3 had no such button. A row of a hugmesh-img-<id> record whose
+    project the probe saw RUNNING (by label) arms Stop; it runs the one stop path
+    (images_mesh.AlongsideMesh.stop) on the record's own project — never this page's
+    boot — and it is armed whether or not the checkout's own mesh is up."""
+    seen = _stop_spy(monkeypatch)
+    rec = _img_record(with_worktree=True)
+    page.probe["answer"] = dict(_PROBE_OK, mesh_running=True)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = False
+    page._set_verbs_enabled(True)
+    _select(page)
+    w = page.saved_meshes
+    assert w.stop_btn.isEnabled(), w.stop_btn.toolTip()
+    assert sm.record_project(rec) in w.stop_btn.toolTip()
+    assert "KEPT" in w.stop_btn.toolTip()
+    # the checkout's mesh being up does not change it (it is a different project)
+    w.set_context(mesh_up=True, busy=False)
+    _select(page)
+    assert w.stop_btn.isEnabled()
+    w.set_context(mesh_up=False, busy=True)
+    _select(page)
+    assert not w.stop_btn.isEnabled() and "verb is running" in w.stop_btn.toolTip()
+    w.set_context(mesh_up=False, busy=False)
+    _select(page)
+    boot_before = page.boot
+    calls = _launch_spy(page, monkeypatch)
+    w.stop_btn.click()
+    _settle(qapp, page)
+    assert calls and calls[0]["label"] == f"Stopping saved mesh {rec.label}"
+    assert seen == [{"project": sm.record_project(rec), "record": rec.id}]
+    assert sm.record_project(rec).startswith("hugmesh-img-")
+    assert page.boot is boot_before and page.boot.project == ""
+
+
+def test_round4_stop_is_off_for_a_stopped_img_row_and_a_checkout_row(
+        qapp, page, monkeypatch, as_linux):
+    seen = _stop_spy(monkeypatch)
+    img = _img_record(with_worktree=True)
+    page.probe["answer"] = dict(_PROBE_OK, mesh_running=False)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = False
+    page._set_verbs_enabled(True)
+    w = page.saved_meshes
+    rows = {w.table.item(i, smw._SM_COL_MESH).text().split(" — ")[0]: i
+            for i in range(w.table.rowCount())}
+    _select(page, rows[img.label])
+    assert not w.stop_btn.isEnabled()
+    assert "Nothing of " + sm.record_project(img) in w.stop_btn.toolTip()
+    # docker did not answer: never armed on a guess
+    for r in w._rows:
+        r.probe = dict(_PROBE_OK, mesh_running=None)
+    _select(page, rows[img.label])
+    assert not w.stop_btn.isEnabled() and "did not say" in w.stop_btn.toolTip()
+    # the checkout's own record: that mesh is stopped with the page's Stop mesh
+    local = _record()
+    w.refresh()
+    _settle(qapp, page)
+    rows = {w.table.item(i, smw._SM_COL_MESH).text().split(" — ")[0]: i
+            for i in range(w.table.rowCount())}
+    for r in w._rows:
+        r.probe = dict(_PROBE_OK, mesh_running=True)
+    _select(page, rows[local.label])
+    assert not w.stop_btn.isEnabled() and "Stop mesh" in w.stop_btn.toolTip()
+    w._stop()                                     # a stray call does nothing
+    assert seen == []
+    # a native Windows Studio greys it with the WSL2 sentence, as it does 'Stop mesh'
+    _select(page, rows[img.label])
+    assert w.stop_btn.isEnabled()
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname="nt"))
+    _select(page, rows[img.label])
+    assert not w.stop_btn.isEnabled() and "WSL2" in w.stop_btn.toolTip()
+    page._stop_saved_own(img)
+    assert seen == [] and "WSL2" in page.status.text()
+
+
+def test_round4_the_stop_button_is_laid_out_in_the_row(qapp, monkeypatch, as_linux):
+    """Geometry of the new control (not just its existence): visible, wide enough for
+    its text, inside the widget, overlapping none of the row's other buttons. A
+    picture goes to $SAVED_MESHES_SHOTS_DIR when it is set, for a person to look at."""
+    _img_record(with_worktree=True)
+    monkeypatch.setattr(sm, "probe_state", lambda rec, project="": dict(
+        _PROBE_OK, mesh_running=True))
+    w = smw.SavedMeshesWidget()
+    w.generator_dir = GENERATOR_DIR
+    w.probe_needed.connect(lambda recs: w.apply_probe(
+        {r.id: dict(sm.probe_state(r), _updated=r.updated) for r in recs}))
+    w.refresh()
+    w.resize(900, 640)
+    w.show()
+    qapp.processEvents()
+    w.table.selectRow(0)
+    w._update_buttons()
+    qapp.processEvents()
+    b = w.stop_btn
+    assert b.isVisible() and b.isEnabled(), b.toolTip()
+    assert b.width() >= b.fontMetrics().horizontalAdvance(b.text()) + 8
+    assert b.height() >= 20
+    top = b.mapTo(w, b.rect().topLeft())
+    rect = b.rect().translated(top)
+    assert w.rect().contains(rect), (rect, w.rect())
+    for other in (w.start_btn, w.restore_btn, w.load_btn, w.reveal_btn):
+        o = other.rect().translated(other.mapTo(w, other.rect().topLeft()))
+        assert not rect.intersects(o), (other.text(), rect, o)
+        assert abs(o.top() - rect.top()) <= 2          # one row of buttons
+    # Stop sits between Restore and Load
+    xs = [x.mapTo(w, x.rect().topLeft()).x()
+          for x in (w.restore_btn, b, w.load_btn)]
+    assert xs == sorted(xs)
+    shots = os.environ.get("SAVED_MESHES_SHOTS_DIR", "")
+    if shots:
+        os.makedirs(shots, exist_ok=True)
+        assert w.grab().save(os.path.join(shots, "saved-meshes-stop.png"))
+    w.close()
+    w.deleteLater()

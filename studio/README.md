@@ -526,14 +526,19 @@ minted, so a typo never leaves a pre-auth key behind on the server.
   `docker exec <container> headscale preauthkeys create --user <user> --expiration
   <token lifetime>`: a single-use key that expires with the token. Pasting a key or
   reading it from a file always works; minting needs a running headscale container,
-  and the Studio's local Docker mesh does not run one yet. The container is the
-  running container named like `headscale` (when several match, the one that is
-  headscale itself, such as `hugmesh-headscale` beside `headscale-ui`). The headscale
-  user has no default and must be named every time: name the headscale user your mesh
-  sets aside for joining devices (HugMesh's headscale provisioning creates `hugmesh`,
-  a membership user that owns no access tag). No tags are asked for: the mesh's
-  headscale policy forces the access tags server-side, and a minted key may not carry
-  one (`tag:superadmin`, `tag:mesh_*`, `tag:dev_*`, `tag:dom_*` are refused), because
+  such as the one the Studio's local Docker mesh runs. The container is the one running
+  container labelled `net.hugmesh.role=headscale` (the local Docker mesh's headscale),
+  else the running container named like `headscale` (when several match, the one that
+  is headscale itself, such as `hugmesh-headscale` beside `headscale-ui`). The headscale
+  user defaults to the one that container's `net.hugmesh.headscale.user` label names,
+  else `hugmesh` (on the local Docker mesh it is `hugmesh` either way): the membership
+  user, which owns no access tag. Name another only if your mesh sets one aside for
+  joining devices. The key asks for the tags the container's
+  `net.hugmesh.headscale.key-tags` label names (`tag:hugmesh` on the local Docker mesh)
+  when it is minted for that label's user, else none; a label naming an access tag is
+  ignored. The mesh's headscale policy
+  forces the access tags server-side, and a minted key may not carry one
+  (`tag:superadmin`, `tag:mesh_*`, `tag:dev_*`, `tag:dom_*` are refused), because
   headscale forces a key's tags on whoever joins with it. The issuer key signs once
   before the key is minted, and a key minted for a token that then fails to sign is
   expired straight away. A minted key is read from headscale's output, never put on a
@@ -548,17 +553,18 @@ brand as the mesh name, the mesh's own domain as the access domain, and the page
 only), the lifetime (up to 90 days) and the pre-auth key: a hidden paste field, cleared
 once the token is issued, or **Mint from the local headscale**, offered for the
 container under **Headscale container** (the running headscale container the dialog
-found, one picked from several, or a name you type) once **Headscale user** is filled
-in: it is required, and Mint stays off until it is. **Issue** shows the token, **Copy
-token** and the issuer fingerprint.
+found, one picked from several, or a name you type). **Headscale user** is optional: its
+placeholder shows the default (the found container's label, else `hugmesh`), and an
+empty field mints for it. **Issue** shows the token, **Copy token** and the issuer
+fingerprint.
 
 **In the text interface.** `t` on the Local Docker mesh screen (its first screen and its
 review) opens the same form: `m NAME`, `d DOMAIN`, `r ROLE`, `s` (shell), `l URL`,
 `e 7d`, `k PATH` (the file holding the pre-auth key, which is never typed on screen),
 `i` signs, `w PATH` saves the token to a file (mode 0600 on Linux and macOS). `mint`
 does not start docker from the screen: it prints the `--mesh-token issue --mint`
-command line, ready to paste into a terminal, once `u USER` names the headscale user
-(required; `c NAME` sets its headscale container).
+command line, ready to paste into a terminal. `u USER` names the headscale user
+(optional: the default is below) and `c NAME` its headscale container.
 
 **On the command line** (Qt-free):
 
@@ -566,10 +572,9 @@ command line, ready to paste into a terminal, once `u USER` names the headscale 
 # this Studio's issuer key for the mesh, and its fingerprint (created on first use)
 python -m hugmesh_studio.core.mesh_token issuer --mesh west
 # mint a single-use pre-auth key in a running headscale container, sign with the Studio
-# issuer key (--headscale-user is required with --mint)
+# issuer key (the headscale user defaults to the container's label, else hugmesh)
 python -m hugmesh_studio.core.mesh_token issue --mesh west --domain example.org \
-  --role admin --shell --login-server https://hs.example.org --mint \
-  --headscale-user <user> --expires 7d
+  --role admin --shell --login-server https://hs.example.org --mint --expires 7d
 # or bring your own issuer key and pre-auth key (read from a file, never the command line)
 python -m hugmesh_studio.core.mesh_token issue --key ~/.ssh/mesh_issuer \
   --mesh west --domain example.org --role admin --shell \
@@ -581,7 +586,7 @@ The Studio's own command forwards everything after `--mesh-token` to the same CL
 when installed with pip, and on Windows the MSI's console twin
 `hugmesh-studio-cli.exe --mesh-token issue …` (the windowed `hugmesh-studio.exe` prints
 nothing). `--mesh-token issue --help` lists every option; `--headscale-container`,
-`--headscale-user` (required there) and `--tag` go with `--mint`.
+`--headscale-user` and `--tag` go with `--mint` and override the defaults above.
 
 **On the mesh.** An issuer in the mesh's web admin UI is being added on the mesh side.
 It signs the same v1 format ([`docs/HUGMESH-TOKEN.md`](../docs/HUGMESH-TOKEN.md)), so

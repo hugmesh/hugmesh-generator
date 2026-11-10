@@ -759,6 +759,12 @@ class BrandSession:
             if (only and only != field) or not value:
                 continue
             problem = check(value)
+            if not problem and field == "title" and not self.host.docker_start:
+                # The record write refuses a title the builder profile cannot carry
+                # (ASCII only, like the builders' own --brand-title rule); say so now,
+                # not at Save, so "Jörg Mesh" is not accepted here and refused later.
+                # The Docker route's start takes any title, as record_problems says.
+                problem = brand_model.profile_value_problem("", value)
             if problem:
                 out.append(f"{IDENTITY_LABELS[field].lower()}: {problem}")
         return out

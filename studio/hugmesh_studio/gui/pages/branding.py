@@ -60,6 +60,7 @@ import html
 from ..qt import QtWidgets
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ...core import plain_words
+from ...core.platform_info import unquote_pasted_path
 from ...tui.brand_step import LOOK_POINTER
 from ...tui.superbrand_step import session_for
 from ...core.branding_themes import theme_set_problem
@@ -574,12 +575,16 @@ class BrandingPage(QtWidgets.QWizardPage):
         else:
             # custom-branding channel: blank the preset, collect the eight fields.
             c.theme = ""
-            c.branding_dir = self.fields["branding_dir"].text().strip()
-            c.wallpaper = self.fields["wallpaper"].text().strip()
-            c.grub_background = self.fields["grub_background"].text().strip()
-            c.grub_theme = self.fields["grub_theme"].text().strip()
-            c.login_background = self.fields["login_background"].text().strip()
-            c.brand_logo = self.fields["brand_logo"].text().strip()
+
+            def path(key):
+                # Explorer's "Copy as path" quotes come off (native Windows only)
+                return unquote_pasted_path(self.fields[key].text().strip())
+            c.branding_dir = path("branding_dir")
+            c.wallpaper = path("wallpaper")
+            c.grub_background = path("grub_background")
+            c.grub_theme = path("grub_theme")
+            c.login_background = path("login_background")
+            c.brand_logo = path("brand_logo")
             c.color_scheme = self.fields["color_scheme"].text().strip()
             c.accent_color = self.accent.text().strip()
         c.brand_locked = self.locked.isChecked()

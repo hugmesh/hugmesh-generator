@@ -14,6 +14,8 @@ MERGES into what is there, so one setting never wipes another.
                            "" means the default (core/agent_context.py)
     tips_hidden     bool   the person hid the per-page tip strip (core/assistant_tips.py)
     last_tip_slug   str    the page whose tip was last shown (so a reopen rotates)
+    model           str    the model the person downloaded or chose for the assistant
+                           (core/local_ai_models); used when it is pulled
 
 Nothing secret is ever written here: the file is a convenience, and a reader that
 gets garbage falls back to the defaults.
@@ -28,7 +30,7 @@ from . import state_paths
 __all__ = ["FILE_NAME", "KEYS", "settings_path", "load", "update", "get"]
 
 #: Every key the file may hold, for the docs and the tests.
-KEYS = ("expanded", "tab", "ollama", "checkouts_dir", "tips_hidden", "last_tip_slug")
+KEYS = ("expanded", "tab", "ollama", "checkouts_dir", "tips_hidden", "last_tip_slug", "model")
 
 #: The dock's file name since it was first written; kept so an existing choice survives.
 FILE_NAME = "local-ai-dock.json"
