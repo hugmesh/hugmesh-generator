@@ -410,6 +410,21 @@ class _Budget:
         return max(1, int(min(float(want), max(self.remaining(), 0.0))))
 
 
+def _read_probe(node, cmd: list[str], timeout: int) -> tuple[int, str]:
+    """A READ-ONLY compose call (``compose ps``): ``node._read_probe`` when the node
+    has one — the same env plus placeholders for the local-stack DB keys
+    (hugmesh-generator#857), which a `${KEY:?}` compose file needs even to list its
+    containers — else ``node._probe``. Never for a verb that creates containers."""
+    reader = getattr(node, "_read_probe", None)
+    if not callable(reader):
+        return _probe(node, cmd, timeout)
+    try:
+        rc, out = reader(cmd, timeout=timeout)
+        return int(rc), str(out or "")
+    except Exception as exc:                          # noqa: BLE001 — folded on purpose
+        return 1, f"{type(exc).__name__}: {exc}"
+
+
 def _probe(node, cmd: list[str], timeout: int) -> tuple[int, str]:
     """``node._probe`` with every failure folded — a stand-in node without ``_probe``
     (tests, a stub) reports as a failed read rather than an exception."""
@@ -1413,9 +1428,9 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
         # from a 43-container mesh, and — the part that matters — a service that
         # DIED non-zero vanished from the table while the title kept reading N/N
         # ready; the exited/dead branch below was unreachable.
-        rc, out = _probe(node, [*base, *_project_args(project), "-f", compose_file,
-                                "ps", "--all", "--format", "json"],
-                         budget.bounded(COMPOSE_PS_TIMEOUT_S))
+        rc, out = _read_probe(node, [*base, *_project_args(project), "-f", compose_file,
+                                     "ps", "--all", "--format", "json"],
+                              budget.bounded(COMPOSE_PS_TIMEOUT_S))
         if rc == 0:
             rows = _parse_compose_ps(out)
         if rows is None or (rc != 0):
@@ -1951,6 +1966,21 @@ def scale(generator_dir: str, node, unit: MeshUnit, replicas: int, *,
                                f"the route-access-db password could not be prepared "
                                f"(tests/stack/gen-route-access-env.sh): "
                                f"{(note or 'no output')[:400]}")
+        # The same for the per-role DB passwords (hugmesh-generator#857): the compose
+        # files read them as ${KEY:?}, so a tree whose .env lacks them cannot even
+        # interpolate the file. The resolver adopts an existing volume's value.
+        ensure_db = getattr(node, "ensure_stack_db_env", None)
+        if callable(ensure_db):
+            try:
+                ready, db_note = ensure_db(project=_node_project(node))
+            except Exception as exc:                  # noqa: BLE001 — folded on purpose
+                ready, db_note = False, f"{type(exc).__name__}: {exc}"
+            if not ready:
+                return False, (f"scaling {unit.scale.describe()} to {replicas} refused: "
+                               f"the local stack's DB passwords could not be prepared "
+                               f"(tests/stack/gen-stack-db-env.sh): "
+                               f"{(db_note or 'no output')[:400]}")
+            note = note or db_note
     rc, out = _probe(node, argv, max(1, int(timeout_s)))
     what = unit.scale.describe()
     text = (out or "").strip()

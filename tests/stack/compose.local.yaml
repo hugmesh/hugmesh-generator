@@ -26,7 +26,16 @@
 # ${KEY:?...} from the gitignored tests/stack/.env, which tests/stack/gen-stack-db-env.sh
 # fills (keys: stack-db-passwords.tsv; every `make stack-*` and scripts/stack-up.ps1
 # run it first). A missing key stops ANY compose command on this file (config, up,
-# ps, down) with a message naming that script. An existing volume keeps the value it
+# ps, down) with a message naming that script. That is ${VAR:?}, not the
+# route-access-env-check pattern below, on purpose: a failed `up` still CREATES the
+# dependents with the empty value baked in, which for these keys would recreate a
+# running database's container with an empty password, and adoption would then read
+# that empty value back. ${VAR:?} refuses before compose touches anything. The cost
+# is that `ps`/`logs` need the keys too, so the read-only paths (`make stack-ps`,
+# `stack-logs`, `stack-onion`, the Studio's status/log/Mesh Monitor reads) pass a
+# fixed placeholder for a key that is not set yet; they create nothing, so it never
+# reaches a container. A hand-run `docker compose ps` needs the script run once
+# (any ensuring `make stack-*` target does it). An existing volume keeps the value it
 # was initialised with: the script ADOPTS it rather than mint a new one. Guard:
 # tests/scripts/test-compose-no-literal-passwords.sh. The route-access-db OWNER
 # password is handled separately, as before: ROUTE_ACCESS_DB_PASSWORD lives in the

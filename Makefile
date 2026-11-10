@@ -2056,16 +2056,23 @@ STACK_ROUTE_ACCESS_ENV := ROUTE_ACCESS_DB_PASSWORD="$$(bash tests/stack/gen-rout
 #      need it too: compose interpolates the whole file before it applies
 #      profiles, so even a teardown needs every key. The READ-ONLY targets
 #      (stack-ps, stack-logs, stack-onion) do not run it, as with the route-access
-#      key: looking at a stack never mints or adopts a password. Before any
-#      ensuring target has run they stop with compose's "required variable ...
-#      run tests/stack/gen-stack-db-env.sh" (stack-onion reports "not running").
+#      key: looking at a stack never mints or adopts a password (see 3).
 #   2. STACK_DB_ENV passes each key explicitly (an --env-file disables .env), READ
 #      ONLY. A value the operator EXPORTED wins, exactly as it would for compose.
+#   3. The READ-ONLY targets run compose with STACK_READ_ENV instead: the same env,
+#      except that a DB key neither exported nor in the file is passed as a fixed
+#      placeholder (STACK_DB_READ_ENV). `ps`/`logs` interpolate the whole file but
+#      create nothing, so the value goes nowhere; it only gets past ${KEY:?}, and
+#      looking at a stack works before any ensuring target has run (the operator's
+#      state the day #857 lands). Never used by a target that can create, stop or
+#      write; the Studio's status/logs reads do the same (stack_db_read_env).
 # stack-down/stack-clean strip the keys (--remove) AFTER `down -v` drops the volumes.
 # Keys: tests/stack/stack-db-passwords.tsv. Guards: tests/stack/test-gen-stack-db-env.sh,
 # tests/scripts/test-compose-no-literal-passwords.sh.
 STACK_DB_KEYS := $(shell bash tests/stack/gen-stack-db-env.sh --keys 2>/dev/null)
 STACK_DB_ENV  := $(foreach k,$(STACK_DB_KEYS),$(k)="$${$(k):-$$(bash tests/stack/gen-stack-db-env.sh --read $(k))}" )
+STACK_DB_READ_PLACEHOLDER := read-only-placeholder-not-a-password
+STACK_DB_READ_ENV := $(foreach k,$(STACK_DB_KEYS),$(k)="$${$(k):-$$(bash tests/stack/gen-stack-db-env.sh --read $(k) | grep . || echo $(STACK_DB_READ_PLACEHOLDER))}" )
 STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_DB_ENV)$(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_DOMAINS_ENV)$(STACK_HEADSCALE_ENV) \
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
@@ -2080,6 +2087,8 @@ STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_DB_ENV)$(STACK_BRAND_B_ENV)$(STACK
              MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV)$(STACK_ANUBIS_ENV)$(STACK_TOR_ENV) \
              EGRESS_VPN_CONF='$(abspath $(EGRESS_VPN_CONF))' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
+# STACK_ENV with the DB keys' read-only spelling (see STACK_DB_READ_ENV above).
+STACK_READ_ENV := $(subst $(STACK_DB_ENV),$(STACK_DB_READ_ENV),$(STACK_ENV))
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
 STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
 # Alternative-backend profiles (phpBB / Akkoma). Separate from STACK_PROFILE so
@@ -2511,7 +2520,7 @@ stack-onion: ## print the local mesh's Tor .onion address (needs `make stack-up 
 	  echo "stack-onion: $$f does not hold a v3 onion hostname (56 base32 chars + .onion): '$$onion'" >&2; exit 1; \
 	fi; \
 	if command -v docker >/dev/null 2>&1; then \
-	  running="$$($(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile tor ps -q --status running hugmesh-tor 2>/dev/null)"; \
+	  running="$$($(STACK_READ_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile tor ps -q --status running hugmesh-tor 2>/dev/null)"; \
 	  if [ -z "$$running" ]; then \
 	    echo "stack-onion: $$f names $$onion but hugmesh-tor is NOT running — a stale readout from a container that died without cleaning up. Start it: make stack-up TOR=1" >&2; exit 1; \
 	  fi; \
@@ -2552,10 +2561,10 @@ stack-tor-mechanism-check: ## OPT-IN, needs the public Tor network + a host tor 
 	HUGMESH_TOR_E2E=1 bash tests/stack/test-tor-onion-mechanism.sh
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
+	$(STACK_READ_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
+	$(STACK_READ_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
 
 # Re-apply the canonical route-access seed (specs/cluster/manifests/route-access/
 # initdb/20-schema.sql) to the RUNNING stack's route-access-db, in one transaction

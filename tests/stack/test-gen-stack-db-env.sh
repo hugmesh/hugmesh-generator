@@ -154,6 +154,12 @@ if [[ "${fbf}" =~ ^[0-9a-f]{48}$ ]]; then ok "a key whose volume does not exist 
 nwarn="$(grep -c '^WARNING' "${WORK}/err3")"
 if [ "${nwarn}" -eq 3 ] && ! grep -qF "${ctr_pw}" "${WORK}/err3" "${WORK}/out3"; then ok "3 adoption warnings on stderr, none carries the value"; else bad "warnings: ${nwarn} (want 3), or a value was echoed"; fi
 if grep -q -- '--rotate-sql' "${WORK}/err3"; then ok "the warning names the rotation one-shot"; else bad "the warning does not say how to rotate"; fi
+# A legacy-literal adoption is only right for a pre-2026-11-04 volume: a later volume
+# whose .env line was lost gets locked out, so that warning must not promise the
+# stack keeps working, and must say to restore the value (measured in the PR #929
+# review: a minted volume + a lost .env adopted the literal and auth failed).
+n_restore="$(grep -c 'put that value back' "${WORK}/err3")"; n_keeps="$(grep -c 'keeps working as before' "${WORK}/err3")"
+if [ "${n_restore}" -eq 2 ] && [ "${n_keeps}" -eq 1 ]; then ok "the 2 legacy-literal adoptions say to restore a lost generated value; only the container adoption says the stack keeps working"; else bad "restore hints ${n_restore} (want 2), 'keeps working' ${n_keeps} (want 1, the container adoption)"; fi
 if grep -q '^# FEDERATION_DB_PASSWORD: adopted from the existing' "${E3}" && grep -q '^# ADMIN_BFF_DB_PASSWORD: adopted: volume' "${E3}"; then ok "the file records where each adopted value came from"; else bad "adoption origin not recorded"; fi
 E3p="${WORK}/proj.env"
 STUB_PROJECT=hugmesh-real STACK_DB_PROJECT=hugmesh-real STUB_VOLUMES="hugmesh-real_casdoor-pg" STUB_CTR_casdoor_db="${ctr_pw}" \
@@ -294,14 +300,18 @@ s = open(sys.argv[1], encoding="utf-8").read()
 # A target that runs compose on the stack files with any verb but ps/logs, or the
 # route-access reconcile (it writes to the running stack), must ensure the keys;
 # a read-only one (ps/logs only) must not, so looking never mints or adopts.
-users, missing, readers, extra = 0, [], 0, []
+# A read-only one passes STACK_READ_ENV (placeholders for unset keys, so `ps`/`logs`
+# get past ${KEY:?} before the resolver ever ran); nothing else may, since a
+# placeholder must never reach a container.
+users, missing, readers, extra, notread, leaked = 0, [], 0, [], [], []
+ENVS = ("$(STACK_ENV)", "$(STACK_READ_ENV)")
 for m in re.finditer(r"^([A-Za-z0-9_.-]+):([^=\n][^\n]*)\n((?:\t[^\n]*\n|[ \t]*#[^\n]*\n)*)", s, re.M):
     name, prereqs, body = m.group(1), m.group(2).split("##")[0].split(), m.group(3)
     if name.startswith("."):
         continue
     rec = [ln for ln in body.splitlines() if ln.startswith("\t")]
-    comp = [ln for ln in rec if "$(STACK_ENV)" in ln and "$(COMPOSE_CMD)" in ln and "$(STACK_COMPOSE)" in ln]
-    recon = any("$(STACK_ENV)" in ln and "route-access-reconcile.sh" in ln for ln in rec)
+    comp = [ln for ln in rec if any(e in ln for e in ENVS) and "$(COMPOSE_CMD)" in ln and "$(STACK_COMPOSE)" in ln]
+    recon = any(any(e in ln for e in ENVS) and "route-access-reconcile.sh" in ln for ln in rec)
     if not comp and not recon:
         continue
     readonly = comp and not recon and all(re.search(r"\s(ps|logs)(\s|$)", ln) for ln in comp)
@@ -309,20 +319,29 @@ for m in re.finditer(r"^([A-Za-z0-9_.-]+):([^=\n][^\n]*)\n((?:\t[^\n]*\n|[ \t]*#
         readers += 1
         if "stack-db-env" in prereqs:
             extra.append(name)
+        if any("$(STACK_READ_ENV)" not in ln for ln in comp):
+            notread.append(name)
     else:
         users += 1
         if "stack-db-env" not in prereqs:
             missing.append(name)
+        if any("$(STACK_READ_ENV)" in ln for ln in rec):
+            leaked.append(name)
 print(users)
 print(" ".join(missing))
 print(readers)
 print(" ".join(extra))
+print(" ".join(notread))
+print(" ".join(leaked))
 PY
 )"
 nu="$(sed -n 1p <<<"${wiring}")"; miss="$(sed -n 2p <<<"${wiring}")"
 nr="$(sed -n 3p <<<"${wiring}")"; extra="$(sed -n 4p <<<"${wiring}")"
 if [ "${nu}" -ge 6 ] && [ -z "${miss}" ]; then ok "every target that builds, creates, stops or writes to the stack (${nu}) depends on stack-db-env"; else bad "ensuring targets: ${nu}; missing the stack-db-env prerequisite: ${miss:-?}"; fi
 if [ "${nr}" -ge 3 ] && [ -z "${extra}" ]; then ok "none of the ${nr} read-only targets (ps/logs/onion) runs the resolver"; else bad "read-only targets: ${nr}; run the resolver anyway: ${extra:-?}"; fi
+notread="$(sed -n 5p <<<"${wiring}")"; leaked="$(sed -n 6p <<<"${wiring}")"
+if [ "${nr}" -ge 3 ] && [ -z "${notread}" ]; then ok "every read-only target runs compose with STACK_READ_ENV (a missing key does not blind ps/logs/onion)"; else bad "read-only targets without STACK_READ_ENV: ${notread:-?}"; fi
+if [ -z "${leaked}" ]; then ok "no target that builds, creates, stops or writes uses STACK_READ_ENV (a placeholder never reaches a container)"; else bad "STACK_READ_ENV used by a writing target: ${leaked}"; fi
 if awk '/^stack-db-env:/{s=1;next} s&&/^\t/{sub(/^\t/,"");print;exit}' "${MK}" | grep -E '^@?bash tests/stack/gen-stack-db-env\.sh$' >/dev/null; then ok "stack-db-env runs the resolver as its own (status-checked) recipe line"; else bad "stack-db-env does not run the resolver as a plain recipe line"; fi
 if command -v make >/dev/null 2>&1; then
   up="$(cd "${REPO}" && timeout 60 make -n -o stack-clone -o stack-certs -o stack-m2-check -o stack-mastodon-env -o stack-route-access-env stack-up 2>/dev/null)"
@@ -367,6 +386,27 @@ EOF
   f8="$(val "${E8}" FEDERATION_DB_PASSWORD 2>/dev/null)"; s8="$(val "${E8}" SVC_PASSWORD 2>/dev/null)"
   if [ "${rc}" -eq 0 ] && [[ "${f8}" =~ ^[0-9a-f]{48}$ ]] && [ "$(cat "${L8}")" = "${f8} ${s8}" ]; then ok "compose got exactly the file's values, even with EMPTY ones exported in the shell"; else bad "key present: rc=${rc}, compose log $(wc -l < "${L8}") line(s)"; fi
   if grep -qF "${f8:-no-value}" "${WORK}/make8.out"; then bad "make's output echoes a password value"; else ok "make's own output never contains a value"; fi
+  # The read-only targets on a .env WITHOUT the keys (the operator's state the day
+  # #857 lands: only ROUTE_ACCESS_DB_PASSWORD is there). Before round 2 compose got
+  # empty values and ps/logs stopped on ${KEY:?}; now it gets the placeholder, and
+  # nothing is minted.
+  E8r="${WORK}/read.env"; printf 'ROUTE_ACCESS_DB_PASSWORD=abc123\n' > "${E8r}"; : > "${L8}"
+  PH="$(sed -n 's/^STACK_DB_READ_PLACEHOLDER := //p' "${MK}")"
+  for tgt in stack-ps stack-logs; do
+    (cd "${REPO}" && STACK_DB_ENV_FILE="${E8r}" DOCKER="${WORK}/bin/docker" STUB_VOLUMES=down \
+       COMPOSE_STUB_LOG="${L8}" FEDERATION_DB_PASSWORD= SVC_PASSWORD= \
+       timeout 60 make --no-print-directory "${tgt}" COMPOSE_CMD="${WORK}/bin/compose-stub" >/dev/null 2>&1); rc=$?
+    got="$(tail -1 "${L8}")"
+    if [ "${rc}" -eq 0 ] && [ -n "${PH}" ] && [ "${got}" = "${PH} ${PH}" ] && [ "$(cat "${E8r}")" = "ROUTE_ACCESS_DB_PASSWORD=abc123" ]; then
+      ok "${tgt} on a .env without the keys: compose gets the placeholder for each, the file is untouched, docker is never asked"
+    else
+      bad "${tgt} on a .env without the keys: rc=${rc}, compose saw '${got:-nothing}' (want '${PH:-?} ${PH:-?}'), file now $(wc -l < "${E8r}") line(s)"
+    fi
+  done
+  : > "${L8}"
+  (cd "${REPO}" && STACK_DB_ENV_FILE="${E8}" COMPOSE_STUB_LOG="${L8}" FEDERATION_DB_PASSWORD= SVC_PASSWORD= \
+     timeout 60 make --no-print-directory stack-ps COMPOSE_CMD="${WORK}/bin/compose-stub" >/dev/null 2>&1); rc=$?
+  if [ "${rc}" -eq 0 ] && [ "$(cat "${L8}")" = "${f8} ${s8}" ]; then ok "stack-ps on a .env WITH the keys passes the file's values, not the placeholder"; else bad "stack-ps with keys: rc=${rc}, compose log '$(head -c 40 "${L8}")'"; fi
 else
   bad "make is not installed — section 8 asserted nothing"
 fi

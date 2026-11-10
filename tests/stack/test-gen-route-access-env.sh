@@ -312,7 +312,9 @@ for m in re.finditer(r"^([A-Za-z0-9_.-]+):([^=\n][^\n]*)\n((?:\t[^\n]*\n|[ \t]*#
     if name.startswith("."):
         continue
     rec = [ln for ln in body.splitlines() if ln.startswith("\t")]
-    if not any("$(STACK_ENV)" in ln for ln in rec):
+    # STACK_READ_ENV (the read-only targets, hugmesh-generator#857) is STACK_ENV with
+    # placeholder DB keys; it carries this key the same way.
+    if not any("$(STACK_ENV)" in ln or "$(STACK_READ_ENV)" in ln for ln in rec):
         continue
     if any(re.search(r"\$\(COMPOSE_CMD\).*\s(up|run|create)(\s|$)", ln) for ln in rec):
         creators += 1

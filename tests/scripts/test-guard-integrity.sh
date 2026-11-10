@@ -1117,7 +1117,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/stack/test-gen-stack-db-env.sh. Its base, origin/main 7e4a5c14, already
 # MEASURED 232 of 274 against the recorded 216 (the check was red on main); 234 of 276
 # MEASURED by running this file on the branch.
-# MERGED (origin/main fc769fe2 into fix/compose-db-passwords-20261104): main 233 of 275 + this
+# MERGED (origin/main 1c1da933 into fix/compose-db-passwords-20261104): main 233 of 275 + this
 # branch's 2 = 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-235}"
 

@@ -261,8 +261,9 @@ function Ensure-StackDbEnv {
         $v = $r.Legacy
         $origins[$r.Key] = "adopted: volume $found predates this key and no $($r.Service) container is left (assumed the pre-2026-11-04 compose literal)"
         Write-Warning "$($r.Key): volume $found exists and no $($r.Service) container carries $($r.CtrEnv); assumed the compose literal used before 2026-11-04."
+        Write-Warning "That is right only for a volume created before 2026-11-04. A volume created later was given a generated value: if tests\stack\.env lost it (or this is a second checkout), put that value back in the file instead, or every service using $($r.Key) will fail to sign in."
       }
-      Write-Warning "The stack keeps working as before. To rotate $($r.Key): -Down (DROPS the data), or ALTER ROLE in the container and edit tests\stack\.env (bash tests/stack/gen-stack-db-env.sh --rotate-sql $($r.Key) prints the steps)."
+      Write-Warning "To rotate $($r.Key): -Down (DROPS the data), or ALTER ROLE in the container and edit tests\stack\.env (bash tests/stack/gen-stack-db-env.sh --rotate-sql $($r.Key) prints the steps)."
     } else {
       $bytes = New-Object byte[] 24
       [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)

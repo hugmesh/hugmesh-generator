@@ -20,7 +20,9 @@
 # FAIL LOUD. compose interpolates the WHOLE file before it applies profiles, so a
 # missing key stops EVERY compose command on these files (up, config, ps, down) with
 # "required variable KEY is missing a value: run tests/stack/gen-stack-db-env.sh".
-# No container is ever created with an empty or default password.
+# No container is ever created with an empty or default password. The read-only
+# paths (make stack-ps/logs/onion, the Studio's status/log reads) pass a placeholder
+# for a key that is not set yet instead of running this script: looking never mints.
 #
 # THE FILE IS SHARED, SO THIS SCRIPT OWNS ITS KEYS, NOT THE FILE. Every write keeps
 # every other line (the operator's overrides, gen-route-access-env.sh's block) and
@@ -310,6 +312,7 @@ for i in "${!K_KEY[@]}"; do
       val="${FROM_CTR}"
       ORIGINS[$i]="adopted from the existing ${PROJECT} ${K_SVC[$i]} container (volume ${found} predates this key)"
       echo "WARNING: ${key} adopted from the existing ${K_SVC[$i]} container (volume ${found} exists)." >&2
+      echo "         The stack keeps working as before." >&2
     else
       val="${K_LEGACY[$i]}"
       ORIGINS[$i]="adopted: volume ${found} predates this key and no ${K_SVC[$i]} container is left (assumed the pre-2026-11-04 compose literal)"
@@ -319,9 +322,13 @@ for i in "${!K_KEY[@]}"; do
         why="no ${K_SVC[$i]} container is left to read it from"
       fi
       echo "WARNING: ${key}: volume ${found} exists and ${why};" >&2
-      echo "         assumed the compose literal used before 2026-11-04." >&2
+      echo "         assumed the compose literal used before 2026-11-04. That is right only" >&2
+      echo "         for a volume created before that date. A volume created later was" >&2
+      echo "         given a generated value: if ${ENV_FILE##*/} lost it (or this is a second" >&2
+      echo "         checkout), put that value back in the file instead, or every service" >&2
+      echo "         using ${key} will fail to sign in." >&2
     fi
-    echo "         The stack keeps working as before. To rotate it: bash tests/stack/${ME} --rotate-sql ${key}" >&2
+    echo "         To rotate it: bash tests/stack/${ME} --rotate-sql ${key}" >&2
   else
     val="$(mint)"
     ORIGINS[$i]="generated $(date -u +%Y-%m-%dT%H:%M:%SZ)"

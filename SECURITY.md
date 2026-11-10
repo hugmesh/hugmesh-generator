@@ -43,10 +43,14 @@ never be trusted or reused anywhere real. Reporting them is not needed:
   passwords (`federation`, `adminbff`, `casdoor`, ...) that `tests/stack/compose*.yaml`
   spelled before 2026-11-04. They are never used for a new database. The local
   stack's database passwords are no longer in any committed file:
-  `tests/stack/gen-stack-db-env.sh` (run by every `make stack-*` target and by
-  `scripts/stack-up.ps1`) generates one random value per role into the gitignored
-  `tests/stack/.env`, and the compose files read them as `${KEY:?...}`, so a missing
-  value stops compose instead of falling back to a word in the file. The old literal
+  `tests/stack/gen-stack-db-env.sh` (run by every `make stack-*` target that builds,
+  creates, stops or writes, and by `scripts/stack-up.ps1`) generates one random value
+  per role into the gitignored `tests/stack/.env`, and the compose files read them as
+  `${KEY:?...}`, so a missing value stops compose instead of falling back to a word in
+  the file. The read-only paths (`make stack-ps`, `stack-logs`, `stack-onion`, and
+  the Studio's status, log and Mesh Monitor reads) pass a fixed placeholder for a key
+  that is not set yet: `ps` and `logs` create no container, so it never reaches one.
+  The old literal
   is used only to keep a database volume created before that date working: when
   such a volume exists and no container is left to read its value from, the
   script adopts the old literal and warns. `bash tests/stack/gen-stack-db-env.sh
