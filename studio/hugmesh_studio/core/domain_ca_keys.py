@@ -348,7 +348,9 @@ def _signed_by_own_key(cert) -> bool:
     before it looks at the signature, which is exactly the shape that hid a root key
     under a "signing CA" name (PR #938 round 3, finding 2). Only a bad signature reads
     as "no"; an algorithm this code cannot verify raises (a swallowed exception must
-    not read as "not a root"), and the import turns that into a refusal."""
+    not read as "not a root"), and the import turns that into a refusal. Needs
+    python-cryptography >= 41 (``signature_algorithm_parameters``); the step's CI
+    installs it unpinned."""
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, padding, rsa
     pub = cert.public_key()
@@ -645,9 +647,11 @@ def trust_name_problem(entries) -> str:
     seen: dict[str, str] = {}
     for name, label in _trust_names(entries):
         if name in RESERVED_TRUST_NAMES:
+            what = ("the mesh's own signing CA" if name == "cluster-ca" else
+                    "the signing CA file the keys step writes")
             return (f"the domain name {label!r} would put its certificate at "
-                    f"certs/{name}.crt, a name reserved for the mesh's own signing "
-                    "CA; rename the domain on the Domains step")
+                    f"certs/{name}.crt, a name reserved for {what}; rename the "
+                    "domain on the Domains step")
         if not _SCRIPT_TRUST_NAME.match(name):
             return (f"the domain name {label!r} is too long for a certificate file "
                     f"name on the sticks (certs/{name}.crt); KEYS generation takes "

@@ -11,6 +11,7 @@ the test's temp dir (tests/_throwaway_ca.py).
 """
 import os
 import shutil
+import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -50,6 +51,23 @@ def _refused(fn, *needles):
     for n in needles:
         assert n in str(e.value), str(e.value)
     return str(e.value)
+
+
+def _materialize_refused(st, *needles):
+    """materialize() must refuse; were it to return (a regression), its temp dir of
+    throwaway key material is still removed before the test fails."""
+    made = []
+
+    def call():
+        m = dca.materialize(st)
+        made.append(m)
+        return m
+    try:
+        return _refused(call, *needles)
+    finally:
+        for m in made:
+            if m is not None:
+                m.cleanup()
 
 
 class _Cross:
@@ -145,9 +163,9 @@ def test_materialize_and_args_for_are_the_last_gate(tmp_path):
     st.put(dca.DomainCA(domain=OWN, own=True, root_pem=tca.pem(x.ro),
                         signing_pem=tca.pem(x.c), key_pem=tca.key_pem(x.rx_key)))
     st.put(dca.DomainCA(domain=X, own=False, root_pem=tca.pem(x.rx)))
-    before = set(os.listdir(os.environ.get("TMPDIR") or "/tmp"))
-    _refused(lambda: dca.materialize(st), "root CA key is never taken")
-    after = set(os.listdir(os.environ.get("TMPDIR") or "/tmp"))
+    before = set(os.listdir(tempfile.gettempdir()))
+    _materialize_refused(st, "root CA key is never taken")
+    after = set(os.listdir(tempfile.gettempdir()))
     assert not [d for d in after - before if d.startswith("hugmesh-domain-ca-")]
     # args_for refuses on its own data too (a hand-made MaterializedCA)
     m = dca.MaterializedCA(root=str(tmp_path), signing_cert="s.crt",
@@ -184,7 +202,7 @@ def test_a_signing_ca_signed_by_its_own_key_is_refused_with_no_root_held(tmp_pat
     # a direct put past the import: materialize still writes nothing
     st.put(dca.DomainCA(domain=OWN, own=True, signing_pem=tca.pem(xc),
                         key_pem=tca.key_pem(r1_key)))
-    _refused(lambda: dca.materialize(st), "self-signed")
+    _materialize_refused(st, "self-signed")
 
 
 def test_a_real_intermediate_is_not_mistaken_for_self_signed(tmp_path):
