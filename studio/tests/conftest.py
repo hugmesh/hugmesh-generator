@@ -766,9 +766,40 @@ def _guard_enabled() -> bool:
     return os.environ.get(LEAK_GUARD_ENV, "1").strip().lower() not in ("0", "off", "false", "no")
 
 
+#: The Windows UI font family (and the symbol face its fallback glyphs come from).
+_WINDOWS_UI_FONTS = ("segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "segoeuiz.ttf",
+                     "seguisym.ttf")
+
+
+def _windows_offscreen_fonts() -> None:
+    """Give Qt's ``offscreen`` platform real fonts on native Windows.
+
+    On Linux the offscreen plugin finds the system fonts through fontconfig. On Windows
+    it reads ``$QT_QPA_FONTDIR`` (default: a ``fonts`` folder beside Qt) and finds
+    nothing, so every glyph is a box about 12 px wide: "Start local assistant" measured
+    266 px there against 117 px under the real ``windows`` platform the MSI uses, and the
+    layout tests failed on metrics no Windows user sees. Pointing it at the whole of
+    C:\\Windows\\Fonts makes "Sans Serif" resolve to the alphabetically first face
+    (Agency FB, a narrow display font), so a copy of the Segoe UI family alone, the
+    Windows UI font, is used instead. A value already set wins."""
+    if os.name != "nt" or os.environ.get("QT_QPA_FONTDIR"):
+        return
+    system = os.path.join(os.environ.get("WINDIR") or r"C:\Windows", "Fonts")
+    here = os.path.join(tempfile.gettempdir(), "hugmesh-studio-test-fonts")
+    try:
+        os.makedirs(here, exist_ok=True)
+        for name in _WINDOWS_UI_FONTS:
+            if not os.path.isfile(os.path.join(here, name)):
+                shutil.copyfile(os.path.join(system, name), os.path.join(here, name))
+    except OSError:
+        here = system                    # real (if not the UI) metrics beat boxes
+    os.environ["QT_QPA_FONTDIR"] = here
+
+
 def pytest_configure(config):
     """Install the never-elevate spy, redirect HOME (and the XDG dirs derived from it)
     to a throwaway tree, and take the before-picture the leak guard compares against."""
+    _windows_offscreen_fonts()
     _install_never_elevate_popen()
     if _guard_enabled():
         _BASELINE.update(_inventory(_REAL_HUGMESH))

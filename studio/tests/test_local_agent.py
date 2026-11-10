@@ -44,6 +44,15 @@ TOKEN_NAMES = ("GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "NPM_TOKEN", "DOCKER_
                "KUBECONFIG", "VAULT_TOKEN", "CASDOOR_CLIENT_SECRET")
 SECRET = "s3cr3t-value-that-must-never-appear"
 
+#: The "run for real" tests execute the POSIX launch lines through `bash --noprofile
+#: --norc` with a `#!/bin/sh` stand-in `ollama` made executable by mode bits and a
+#: ':'-separated PATH. None of that exists on native Windows (there `bash` is the WSL
+#: launcher, or nothing), and the Studio offers no window there: launch() returns the
+#: "windows" reason, pinned by test_windows_and_macos_say_plainly_that_the_window_is_not_offered.
+POSIX_SHELL = pytest.mark.skipif(
+    os.name == "nt", reason="runs the POSIX launch lines through bash with a #!/bin/sh "
+    "stand-in and a ':'-separated PATH; native Windows has no POSIX shell to run them")
+
 
 # ── helpers ──────────────────────────────────────────────────────────────────────
 def tools_entry(name, caps=("completion", "tools"), **extra):
@@ -219,11 +228,26 @@ def test_the_number_of_show_calls_is_bounded():
 def test_a_server_that_does_not_answer_is_server_down(exc):
     pr = la.probe(ENV, which=which_all({"ollama", "claude"}), fetch=FakeServer(down=exc))
     assert not pr.server_up and pr.ollama_path
-    (p,) = la.diagnose(pr, "claude")
+    (p,) = la.diagnose(pr, "claude", osname="posix")
     assert p.code == "server_down"
     assert "127.0.0.1:11434" in p.what and "not answering" in p.what
     assert str(exc) in p.what                       # the reason is shown, not hidden
     assert "ollama serve" in p.fix and "OLLAMA_HOST=127.0.0.1:11434" in p.fix
+
+
+def test_on_native_windows_the_server_fix_is_powershell_or_the_ollama_app():
+    """The POSIX fix (setsid, ~/.cache, a trailing `&`) cannot be typed into PowerShell;
+    on Windows the same loopback-only, 32k-context server is started the Windows way."""
+    pr = la.probe(ENV, which=which_all({"ollama", "claude"}),
+                  fetch=FakeServer(down=ConnectionRefusedError("connection refused")))
+    (p,) = la.diagnose(pr, "claude", osname="nt")
+    assert p.code == "server_down" and "connection refused" in p.what
+    assert "$env:OLLAMA_HOST='127.0.0.1:11434'" in p.fix and "ollama serve" in p.fix
+    assert "$env:OLLAMA_CONTEXT_LENGTH=32768" in p.fix
+    assert "Ollama app from the Start menu" in p.fix and "32k" in p.fix
+    assert not [w for w in ("setsid", "~/.cache", "2>&1") if w in p.fix]
+    # the MSI ships no checkout: "More:" names the doc's URL, not docs/ on disk
+    assert p.doc.startswith("https://") and p.doc.endswith("#3-start-the-server"), p.doc
 
 
 @pytest.mark.parametrize("fake", [FakeServer(tags_status=500),
@@ -324,7 +348,12 @@ def test_a_source_that_cannot_be_copied_is_a_problem_too(tmp_path):
     assert [p.code for p in probs] == ["source"] and "does not exist" in probs[0].what
 
 
-def test_every_problem_points_at_a_real_heading_of_the_doc():
+@pytest.mark.parametrize("osname", ["posix", "nt"])
+def test_every_problem_points_at_a_real_heading_of_the_doc(osname):
+    # posix: the repository path beside the code; nt: the same doc as a URL, since an
+    # MSI install has no checkout holding docs/
+    from hugmesh_studio.core import local_ai_status as lai
+    base = lai.DOC_URL if osname == "nt" else la.DOC_PATH
     with open(DOC, encoding="utf-8") as fh:
         text = fh.read()
     anchors = set()
@@ -334,19 +363,20 @@ def test_every_problem_points_at_a_real_heading_of_the_doc():
             slug = re.sub(r"[^\w\s-]", "", m.group(1).lower()).strip().replace(" ", "-")
             anchors.add(slug)
     problems = []
-    problems += la.diagnose(la.Probe(), "claude", "")
-    problems += la.diagnose(la.Probe("/x", server_up=True), "claude", "")
+    problems += la.diagnose(la.Probe(), "claude", "", osname=osname)
+    problems += la.diagnose(la.Probe("/x", server_up=True), "claude", "", osname=osname)
     problems += la.diagnose(la.Probe("/x", server_up=True,
-                                     models=(la.ModelInfo("a", False),)), "claude", "")
-    problems += la.diagnose(good_probe(), "nope", "")
+                                     models=(la.ModelInfo("a", False),)),
+                            "claude", "", osname=osname)
+    problems += la.diagnose(good_probe(), "nope", "", osname=osname)
     problems += la.diagnose(good_probe(), "claude", "gone",
-                            source=la.SourceInfo("/p", False, "x"))
+                            source=la.SourceInfo("/p", False, "x"), osname=osname)
     assert {p.code for p in problems} >= {"ollama_missing", "server_down", "no_models",
                                           "no_tools_model", "agent_unknown", "source",
                                           "agent_missing"}
     for p in problems:
         path, _hash, anchor = p.doc.partition("#")
-        assert path == la.DOC_PATH
+        assert path == base
         assert anchor in anchors, (p.code, anchor)
 
 
@@ -532,7 +562,9 @@ def test_in_the_own_tree_mode_the_named_command_carries_the_source_variables(sou
     Studio sets them), so it would build ./.stack-src after resetting it. The brief
     must name the form that builds the person's tree, and the variables must be ones
     the Makefile and the script really honour."""
-    root = os.path.dirname(source)
+    # shell-quoted exactly as the brief writes it: a bare word for a POSIX temp path,
+    # quoted for one with backslashes (a Windows path)
+    root = shlex.quote(os.path.dirname(source))
     kind = plan_for(source, state, lane=la.LANE_KIND).brief
     assert f"STACK_SRC={root} STACK_NO_CLONE=1 make kind-images ONLY=hugmesh-user-bff-api" in kind
     docker = plan_for(source, state, lane=la.LANE_DOCKER).brief
@@ -586,6 +618,7 @@ def test_the_brief_is_written_beside_the_copy_not_inside_it(source, state):
 
 
 # ── the command, run for real ────────────────────────────────────────────────────
+@POSIX_SHELL
 def test_the_window_command_hands_the_agent_no_token_even_from_a_profile_and_a_server(
         source, state, tmp_path):
     """Run the exact string a terminal would run, through bash --noprofile --norc, with
@@ -793,6 +826,7 @@ def _standin_environ(tmp_path):
     return dict(noisy_environ(), PATH=f"{bindir}:/usr/bin:/bin", HOME=str(tmp_path)), out
 
 
+@POSIX_SHELL
 def test_the_lines_shown_after_the_copy_exists_run_clean_in_bash(source, state, tmp_path):
     """The card shows LaunchResult.command only after the copy was made. Run exactly that
     text against the made copy: it must exit 0, print no git failure, and start the
@@ -817,6 +851,7 @@ def test_the_lines_shown_after_the_copy_exists_run_clean_in_bash(source, state, 
     assert res.command == f"cd {shlex.quote(plan.cwd)} &&\n{plan.run_line}\n"
 
 
+@POSIX_SHELL
 def test_the_copy_command_text_makes_the_copy_and_launches_when_none_exists(
         source, state, tmp_path):
     """The other direction: paste_text is for a person with NO copy yet (the Copy button
@@ -862,6 +897,7 @@ def _run_in(own, script, environ):
                           timeout=60)
 
 
+@POSIX_SHELL
 def test_pasted_lines_whose_clone_fails_change_nothing_in_the_folder_they_run_in(
         source, state, tmp_path, bystander):
     """The skeptic's reproduction: the source is gone, git clone fails, and the lines
@@ -879,6 +915,7 @@ def test_pasted_lines_whose_clone_fails_change_nothing_in_the_folder_they_run_in
     assert not os.path.exists(plan.scratch.dest)
 
 
+@POSIX_SHELL
 def test_pasted_lines_for_an_existing_copy_stop_when_the_copy_is_gone(
         source, state, tmp_path, bystander):
     environ, seen = _standin_environ(tmp_path)
@@ -895,6 +932,7 @@ def test_pasted_lines_for_an_existing_copy_stop_when_the_copy_is_gone(
         assert not os.path.exists(seen)
 
 
+@POSIX_SHELL
 @pytest.mark.parametrize("agent,prompt_form", [("claude", True), ("opencode", False)])
 def test_the_window_command_does_not_start_the_agent_when_the_copy_is_missing(
         source, state, tmp_path, bystander, agent, prompt_form):
@@ -1032,15 +1070,24 @@ def test_windows_and_macos_say_plainly_that_the_window_is_not_offered(plan):
 
 
 def test_the_default_spawner_reports_a_real_exit_and_a_real_still_running(tmp_path, monkeypatch):
-    fast = tmp_path / "refuse"
-    fast.write_text("#!/bin/sh\nexit 3\n")
-    slow = tmp_path / "linger"
-    slow.write_text("#!/bin/sh\nsleep 5\n")
-    for f in (fast, slow):
-        f.chmod(f.stat().st_mode | stat.S_IXUSR)
+    env = {"PATH": "/usr/bin:/bin"}
+    if os.name == "nt":
+        # Windows cannot execute a #!/bin/sh file, so the same two real children are
+        # Python ones; SYSTEMROOT is the one variable a Windows Python needs to start.
+        fast = [sys.executable, "-c", "raise SystemExit(3)"]
+        slow = [sys.executable, "-c", "import time; time.sleep(5)"]
+        env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    else:
+        refuse = tmp_path / "refuse"
+        refuse.write_text("#!/bin/sh\nexit 3\n")
+        linger = tmp_path / "linger"
+        linger.write_text("#!/bin/sh\nsleep 5\n")
+        for f in (refuse, linger):
+            f.chmod(f.stat().st_mode | stat.S_IXUSR)
+        fast, slow = [str(refuse)], [str(linger)]
     monkeypatch.setattr(la, "TERMINAL_WAIT_S", 0.5)
-    assert la._spawn_and_wait([str(fast)], str(tmp_path), {"PATH": "/usr/bin:/bin"}) == 3
-    assert la._spawn_and_wait([str(slow)], str(tmp_path), {"PATH": "/usr/bin:/bin"}) is None
+    assert la._spawn_and_wait(fast, str(tmp_path), env) == 3
+    assert la._spawn_and_wait(slow, str(tmp_path), env) is None
     assert la._spawn_and_wait([str(tmp_path / "nothere")], str(tmp_path), {}) == 127
 
 

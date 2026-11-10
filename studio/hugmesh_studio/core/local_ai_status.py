@@ -51,7 +51,7 @@ __all__ = [
     "DEFAULT_HOST", "DEFAULT_MODEL", "DOC", "STALE_AFTER", "LocalAIError", "NotLoopback",
     "Job", "Snapshot", "StartResult", "state_dir", "ollama_host", "base_url",
     "read_snapshot", "summary_line", "send_prompt", "pick_model", "write_status",
-    "start_assistant", "windows_refusal", "chat_loop", "format_status", "commands", "GROUNDED_ENV",
+    "start_assistant", "windows_refusal", "windows_worker_note", "chat_loop", "format_status", "commands", "GROUNDED_ENV",
 ]
 
 STATE_ENV = "HUGMESH_LOCAL_AI_DIR"
@@ -86,13 +86,33 @@ class NotLoopback(LocalAIError):
     """``OLLAMA_HOST`` names an address that is not on this machine."""
 
 
+def _native_windows(osname: str | None) -> bool:
+    """A NATIVE Windows Studio (the MSI, or a source run under PowerShell), where
+    ``scripts/local-ai.sh`` is a bash script nobody can run and the doc path is not on
+    disk. ``osname`` is ``os.name`` unless a test passes another."""
+    return (os.name if osname is None else osname) == "nt"
+
+
 # ── the state directory ──────────────────────────────────────────────────────────────
-def state_dir(env: dict | None = None) -> str:
-    """Where the local-AI worker keeps its state (same rule as scripts/local-ai.sh)."""
+def state_dir(env: dict | None = None, *, osname: str | None = None) -> str:
+    """Where the local-AI state lives: ``$HUGMESH_LOCAL_AI_DIR`` when set, else the
+    same rule as scripts/local-ai.sh (``$XDG_STATE_HOME``, else ``~/.local/state``).
+
+    On native Windows that bash script never runs, and ``~/.local/state`` is an XDG
+    path no Windows program uses: the Studio wrote its agent context into
+    ``C:\\Users\\<you>\\.local\\state\\hugmesh\\local-ai`` and the Local AI screen
+    showed that path. There the folder is ``local-ai`` inside the Studio's own state
+    folder (``$HUGMESH_STUDIO_STATE_DIR``, else ``%USERPROFILE%\\.hugmesh\\studio``),
+    beside everything else the Studio keeps. ``osname`` is ``os.name`` unless a test
+    passes another."""
     env = os.environ if env is None else env
     explicit = env.get(STATE_ENV)
     if explicit:
         return explicit
+    if _native_windows(osname):
+        from . import state_paths
+        studio = env.get(state_paths.STATE_DIR_ENV) or state_paths.state_dir()
+        return os.path.join(studio, "local-ai")
     base = env.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
     return os.path.join(base, "hugmesh", "local-ai")
 
@@ -285,18 +305,71 @@ def _pid_alive_windows(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+def _cmdline_windows(pid: int) -> str | None:
+    """The command line of process ``pid``, asked of the Windows API; None when it
+    cannot be read (no such process, not ours to inspect, no Windows API here).
+
+    NtQueryInformationProcess(ProcessCommandLineInformation) needs only the limited
+    query right, which a person holds on every process they started themselves."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32")      # own instances: the prototypes set
+        ntdll = ctypes.WinDLL("ntdll")            # below touch no shared windll entry
+    except (ImportError, AttributeError, OSError):
+        return None
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    query = ntdll.NtQueryInformationProcess
+    query.restype = ctypes.c_long
+    query.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG,
+                      ctypes.POINTER(wintypes.ULONG))
+
+    class _UnicodeString(ctypes.Structure):
+        _fields_ = [("Length", wintypes.USHORT), ("MaximumLength", wintypes.USHORT),
+                    ("Buffer", ctypes.c_void_p)]
+
+    query_limited, command_line_information = 0x1000, 60
+    handle = kernel32.OpenProcess(query_limited, False, int(pid))
+    if not handle:
+        return None
+    try:
+        size = wintypes.ULONG(0)
+        query(handle, command_line_information, None, 0, ctypes.byref(size))
+        if not size.value:
+            return None
+        buf = ctypes.create_string_buffer(size.value)
+        if query(handle, command_line_information, buf, size.value, ctypes.byref(size)) != 0:
+            return None
+        text = _UnicodeString.from_buffer(buf)
+        return ctypes.wstring_at(text.Buffer, text.Length // 2) if text.Buffer else ""
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _pid_alive(pid: int, needle: str = "", *, os_name: str | None = None) -> bool:
-    """True when ``pid`` exists and (where /proc says so) is still OUR process: a pid
-    that the system reused for something else must not make a dead worker look alive.
+    """True when ``pid`` exists and (where /proc, or on Windows the process API, says
+    so) is still OUR process: a pid that the system reused for something else must not
+    make a dead worker look alive.
 
     ``os_name`` is ``os.name`` unless a test injects one. On Windows ``os.kill(pid, 0)``
     is not a probe: any signal number other than the two console events TERMINATES the
     process, so a status line that merely looked at a stale pid would kill whatever now
-    holds it. There the question goes to the process API instead."""
+    holds it. There the question goes to the process API instead, and ``needle`` is
+    looked for in the process's command line. One that cannot be read is not ours: the
+    worker and draft.sh run as the person asking, and on native Windows a pid in these
+    files was most often written in another pid space (WSL, MSYS bash), where the
+    number names some unrelated Windows process."""
     if pid <= 0:
         return False
     if (os.name if os_name is None else os_name) == "nt":
-        return _pid_alive_windows(pid)
+        if not _pid_alive_windows(pid):
+            return False
+        if needle:
+            line = _cmdline_windows(pid)
+            return line is not None and needle in line
+        return True
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -426,13 +499,6 @@ def _probe(env: dict | None, timeout: float) -> tuple[bool, list, list, str]:
     return True, models, loaded, ""
 
 
-def _native_windows(osname: str | None) -> bool:
-    """A NATIVE Windows Studio (the MSI, or a source run under PowerShell), where
-    ``scripts/local-ai.sh`` is a bash script nobody can run and the doc path is not on
-    disk. ``osname`` is ``os.name`` unless a test passes another."""
-    return (os.name if osname is None else osname) == "nt"
-
-
 def read_snapshot(env: dict | None = None, *, now: float | None = None,
                   probe: Callable[[], tuple] | None = None,
                   builds: Callable[[], list] | None = None,
@@ -442,11 +508,12 @@ def read_snapshot(env: dict | None = None, *, now: float | None = None,
 
     ``probe`` and ``builds`` replace the two outside lookups (tests, and callers that
     already hold the answer); ``now`` pins the clock for the heartbeat rule; ``osname``
-    is ``os.name`` unless a test passes another (it picks the Windows sentences).
+    is ``os.name`` unless a test passes another (it picks the state folder and the
+    Windows sentences).
     """
     env = os.environ if env is None else env
     now = time.time() if now is None else now
-    root = state_dir(env)
+    root = state_dir(env, osname=osname)
     snap = Snapshot(taken=now, state_dir=root)
     snap.ollama_installed = shutil.which("ollama") is not None
     try:
@@ -485,9 +552,10 @@ def read_snapshot(env: dict | None = None, *, now: float | None = None,
     if not snap.problem:
         if not snap.ollama_up:
             # On native Windows the bash script is not runnable (the MSI has no checkout
-            # and no bash) and the CLI prints no link for "see the link": name the
-            # Windows installer itself, which starts Ollama in the background. In Docker
-            # mode the Studio's container is the fix, whatever is installed.
+            # and no bash) and "see the link" pointed at no link: name the Windows
+            # installer itself, which starts Ollama in the background. When the address
+            # is the Studio's Docker Ollama, the container is the fix, whatever is
+            # installed.
             fix = _windows_up_fix(snap.host, env, snap.ollama_installed) if windows else ""
             if fix == _WINDOWS_CONTAINER:
                 snap.problem = f"The Studio's Ollama container is not answering on {snap.host}."
@@ -702,7 +770,7 @@ def _context_size(env: dict) -> int:
         return int(raw)
     raise LocalAIError(f"{CTX_ENV} is {raw!r}; it must be a whole number of tokens "
                        f"greater than 0, such as {DEFAULT_CTX}. Unset it to use the default "
-                       f"(see {DOC}).")
+                       f"(see {DOC_URL if _native_windows(None) else DOC}).")
 
 
 def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
@@ -769,7 +837,9 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
     finished = False                   # a ``done`` line arrived, or the caller said stop
     cut = ("The connection to Ollama was cut off before the answer finished "
            "({n} words arrived). Try again; if it keeps happening, look at the server's "
-           "log (journalctl --user -u ollama, or the terminal it runs in).")
+           + ("log (Ollama for Windows writes it to %LOCALAPPDATA%\\Ollama\\server.log, "
+              "or the terminal it runs in)." if _native_windows(None) else
+              "log (journalctl --user -u ollama, or the terminal it runs in)."))
     try:
         with _opener().open(req, timeout=timeout) as resp:
             for raw in resp:
@@ -808,7 +878,14 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
         # The stream died inside a chunk: http.client raises IncompleteRead, which is NOT
         # an OSError, so without this clause it left here as a bare traceback.
         raise LocalAIError(cut.format(n=len("".join(out).split()))) from exc
-    except (urllib.error.URLError, OSError) as exc:
+    except urllib.error.URLError:
+        # urllib wraps only what fails while CONNECTING and sending the request: a
+        # timeout there is a server that never accepted, not a model still loading
+        # (Ollama accepts at once and loads after). Windows takes about 2 s to refuse a
+        # loopback port nothing listens on, so with Ollama absent a short timeout ran
+        # out first and the person was told to wait for a model that does not exist.
+        raise LocalAIError(_down_message(env)) from None
+    except OSError as exc:
         if "timed out" in str(exc):
             raise LocalAIError(f"No answer for {int(timeout)} seconds; the model may still "
                                "be loading. Try again in a minute.") from None
@@ -862,6 +939,21 @@ def windows_refusal(osname: str | None = None) -> str:
     from . import platform_info
     said = platform_info.native_windows_blocker(
         "Starting the local assistant", osname=osname,
+        runs="the bash script scripts/local-ai.sh")
+    return f"{said} {WINDOWS_NATIVE_PATH}" if said else ""
+
+
+def windows_worker_note(osname: str | None = None) -> str:
+    """What replaces the run-it-yourself ``scripts/local-ai.sh`` lines (start, todo,
+    chat) in a NATIVE Windows Studio; "" anywhere else, WSL included. The Studio
+    window's panel and the text UI's Local AI screen both show it, so they say the same.
+
+    Every one of those lines is the bash script, which PowerShell cannot run and
+    System32's bash runs inside the Linux VM where a C:\\ path means nothing; the
+    panel's own questions go to Ollama over HTTP and need none of it."""
+    from . import platform_info
+    said = platform_info.native_windows_blocker(
+        "The local assistant's queue worker", osname=osname,
         runs="the bash script scripts/local-ai.sh")
     return f"{said} {WINDOWS_NATIVE_PATH}" if said else ""
 
@@ -1059,8 +1151,13 @@ def main(argv: list | None = None, *, out=None, err=None, inp=None) -> int:
 
 
 if __name__ == "__main__":
-    # UTF-8 stdout/stderr on native Windows, as app.main() does: a redirected cp1252
-    # stream raised UnicodeEncodeError on a checkout path such as C:\Users\Łukasz.
-    from ..app import utf8_stdio
-    utf8_stdio()
+    if os.name == "nt":
+        # UTF-8 out, as packaging/run_studio.py does for the MSI: a redirected stream is
+        # the ANSI code page there (cp1252), and a state path under C:\Users\Łukasz
+        # raised UnicodeEncodeError instead of printing.
+        for _stream in (sys.stdout, sys.stderr):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError, OSError):
+                pass
     raise SystemExit(main())
