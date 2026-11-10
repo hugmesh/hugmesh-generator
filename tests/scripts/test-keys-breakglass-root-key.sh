@@ -33,7 +33,8 @@ STEPS="$(awk '/^    provision_users$/{p=1} /^    provision_dial_user/{exit} p{pr
 
 FNS=""
 for fn in desktop_governance_governed provision_users install_root_keys \
-          provision_root_breakglass root_keys_ssh_reachability_note; do
+          provision_root_breakglass root_keys_ssh_reachability_note \
+          sshd_global_value device_registry_owner_type; do
     FNS="${FNS}$(extract_fn "${fn}")
 "
 done
@@ -41,14 +42,18 @@ done
 KEY_A='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBreakGlassWorkerKeyForTheTestOnly000000 breakglass'
 KEY_B='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRootBlockKeyFromTheManifestForTest0000 rootblock'
 
+SSHD_D="${REPO}/specs/etc/ssh/sshd_config.d"
+
 # run_case <name> <manifest json|""> <with root.authorized_keys: yes|no> <PermitRootLogin|"">
-# -> leaves ${WORK}/<name>/{root,log}
+#          [setup-fn: called with the case dir, to lay down extra sshd config]
+# -> leaves ${WORK}/<name>/{root,log}. STANDALONE_IMG passes through from the caller.
 run_case() {
     local d="${WORK}/$1"
     mkdir -p "${d}/keys/ssh" "${d}/state" "${d}/etc/ssh/sshd_config.d"
     [ -n "$2" ] && printf '%s\n' "$2" > "${d}/keys/provision.json"
     [ "$3" = yes ] && printf '%s\n' "${KEY_A}" > "${d}/keys/ssh/root.authorized_keys"
     [ -n "$4" ] && printf 'PermitRootLogin %s\n' "$4" > "${d}/etc/ssh/sshd_config.d/00-root-login.conf"
+    [ -n "${5:-}" ] && "$5" "${d}"
     local fns="${FNS//\/root\/.ssh/${d}/root/.ssh}"
     fns="${fns//\/etc\/ssh\//${d}/etc/ssh/}"
     fns="${fns//\/etc\/hugmesh\/desktop-governance/${d}/no-such-dir}"
@@ -58,6 +63,7 @@ run_case() {
       warn() { echo "WARNING: $*"; }
       passwd() { echo "STUB passwd $*"; }
       chpasswd() { cat >/dev/null; }
+      jqm()  { jq -r "$1" "${MANIFEST}" 2>/dev/null; }
       eval "${fns}"
       eval "${STEPS}" ) > "${d}/log" 2>&1
 }
@@ -93,6 +99,74 @@ echo "== no key on the stick: nothing is created =="
 run_case nokey '{"hostname":"node-be-01"}' no ""
 if [ -e "${WORK}/nokey/root/.ssh" ]; then bad "/root/.ssh was created with no key to install"
 else ok "no key, no /root/.ssh"; fi
+if grep -q "installing the break-glass" "${WORK}/nokey/log"; then
+    bad "no key on the stick, yet the log claims a break-glass key is being installed"
+else ok "no key, no 'installing the break-glass' claim in the log"; fi
+
+echo "== sshd's other PermitRootLogin spellings =="
+eq_tight()  { printf 'PermitRootLogin=no\n'    > "$1/etc/ssh/sshd_config.d/00-root-login.conf"; }
+eq_spaced() { printf '  permitrootlogin = "no"\n' > "$1/etc/ssh/sshd_config.d/00-root-login.conf"; }
+run_case eqtight '{"hostname":"node-be-01"}' yes "" eq_tight
+if grep -q "WARNING: .*PermitRootLogin no" "${WORK}/eqtight/log"; then
+    ok "PermitRootLogin=no: warned"
+else bad "PermitRootLogin=no: no warning (the '=' spelling was not read)"; fi
+run_case eqspaced '{"hostname":"node-be-01"}' yes "" eq_spaced
+if grep -q "WARNING: .*PermitRootLogin no" "${WORK}/eqspaced/log"; then
+    ok "'permitrootlogin = \"no\"' (indented, any case, quoted): warned"
+else bad "'permitrootlogin = \"no\"': no warning"; fi
+
+# sshd keeps the FIRST value even within one file (sshd_config itself, say).
+two_in_one() { printf 'PermitRootLogin no\nPermitRootLogin prohibit-password\n' > "$1/etc/ssh/sshd_config"; }
+run_case twoinone '{"hostname":"node-be-01"}' yes "" two_in_one
+if grep -q "WARNING: .*PermitRootLogin no" "${WORK}/twoinone/log"; then
+    ok "two PermitRootLogin lines in one file: the first ('no') wins and is warned about"
+else bad "two PermitRootLogin lines in one file: the first value did not win"; fi
+
+echo "== a Match block is not the global setting =="
+# A drop-in that sorts FIRST but sets PermitRootLogin only inside a Match: sshd's
+# global value is the later prohibit-password, so no warning.
+match_first() {
+    printf 'Match Address 192.0.2.1\n    PermitRootLogin no\n' > "$1/etc/ssh/sshd_config.d/00-a-match.conf"
+    printf 'PermitRootLogin prohibit-password\n' > "$1/etc/ssh/sshd_config.d/10-root-login.conf"
+}
+run_case matchfirst '{"hostname":"node-be-01"}' yes "" match_first
+if grep -q "WARNING: .*PermitRootLogin" "${WORK}/matchfirst/log"; then
+    bad "a Match-scoped 'PermitRootLogin no' was taken as the global value"
+else ok "a Match-scoped 'PermitRootLogin no' does not decide the global value"; fi
+
+echo "== registry enforcement: 'AuthorizedKeysFile none' =="
+# The REAL drop-ins as a flipped registry-enforced node has them: break-glass.conf
+# sorts first and its AuthorizedKeysFile is inside a loopback Match, so the global
+# value is device-registry.conf's `none`.
+registry_live() {
+    cp "${SSHD_D}/break-glass.conf" "${SSHD_D}/device-registry.conf" "$1/etc/ssh/sshd_config.d/"
+}
+run_case reglive '{"hostname":"node-be-01"}' yes prohibit-password registry_live
+if grep -q "WARNING: .*AuthorizedKeysFile none" "${WORK}/reglive/log"; then
+    ok "live device-registry.conf: warned that root's authorized_keys is not consulted"
+else bad "live device-registry.conf (AuthorizedKeysFile none): no warning, the log says the key is usable"; fi
+if grep -q "the root key is usable over SSH" "${WORK}/reglive/log"; then
+    bad "live device-registry.conf: the log still claims the root key is usable"
+else ok "live device-registry.conf: no 'usable' claim"; fi
+
+# Before the first verified sync device-registry.conf is only STAGED, so the
+# manifest decides: a mesh-extension (owner ADMIN) node is about to lose the key.
+run_case regpending '{"hostname":"node-be-01","device_registry":{"image_type":"mesh-extension"}}' yes prohibit-password
+if grep -q "WARNING: .*registry-enforced" "${WORK}/regpending/log"; then
+    ok "mesh-extension manifest: warned that the key stops working once the registry gate flips"
+else bad "mesh-extension manifest: no warning that the registry gate will retire the root key"; fi
+run_case regowner '{"hostname":"node-be-01","device_registry":{"owner_type":"ADMIN"}}' yes prohibit-password
+if grep -q "WARNING: .*registry-enforced" "${WORK}/regowner/log"; then
+    ok "owner_type ADMIN: warned"
+else bad "owner_type ADMIN: no registry warning"; fi
+run_case regcore '{"hostname":"node-be-01","device_registry":{"image_type":"mesh-extension","owner_type":"SUPERADMIN"}}' yes prohibit-password
+if grep -q "WARNING:" "${WORK}/regcore/log"; then
+    bad "owner_type SUPERADMIN (core node): a spurious warning"
+else ok "owner_type SUPERADMIN wins over image_type: no warning"; fi
+STANDALONE_IMG=true run_case regstandalone '{"hostname":"node-be-01","device_registry":{"image_type":"mesh-extension"}}' yes prohibit-password
+if grep -q "WARNING:" "${WORK}/regstandalone/log"; then
+    bad "standalone image: a registry warning although provision_device_registry never runs there"
+else ok "standalone image: no registry warning (registry enforcement is never installed)"; fi
 
 echo "== test-keys-breakglass-root-key: ${P} passed, ${N} failed =="
 [ "${N}" -eq 0 ]

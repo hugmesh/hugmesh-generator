@@ -507,13 +507,58 @@ provision_root_breakglass() {
     install_root_keys /dev/null
 }
 
-# The key alone is not a way in: sshd must also permit root key logins. Say so
-# when it does not, instead of leaving an unusable "break-glass" key in place
-# silently. sshd takes the FIRST PermitRootLogin it reads (drop-ins first).
+# The key alone is not a way in: sshd must also permit root key logins AND read
+# root's authorized_keys file. Say so when it will not, instead of leaving an
+# unusable "break-glass" key in place silently.
+#
+# sshd_global_value <keyword>: the value sshd takes for <keyword> outside any
+# Match block. sshd keeps the FIRST value it reads, drop-ins first (sshd_config
+# Includes sshd_config.d/*.conf at its top), and accepts `Keyword value`,
+# `Keyword=value` and `Keyword = value` with the keyword in any case. A Match block
+# ends at the end of the file it is in (an Include restores the outer scope), so
+# each file is read only up to its first Match line: break-glass.conf's
+# loopback-only `AuthorizedKeysFile` must not count as the node-wide one.
+sshd_global_value() {
+    local kw f
+    kw="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    for f in /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config; do
+        [ -r "${f}" ] || continue
+        awk -v kw="${kw}" '
+            { sub(/[ \t]*=[ \t]*/, " ") }
+            tolower($1) == "match" { exit }
+            tolower($1) == kw { v = $2; gsub(/"/, "", v); print tolower(v); found = 1; exit }
+            END { exit !found }' "${f}" && return 0
+    done
+    return 0
+}
+
+# device_registry_owner_type: ADMIN on a registry-enforced (mesh-extension) node,
+# else SUPERADMIN — the one decision provision_device_registry acts on.
+device_registry_owner_type() {
+    local owner_type image_type
+    owner_type="$(jqm '.device_registry.owner_type // ""')"
+    image_type="$(jqm '.device_registry.image_type // ""')"
+    if [ -z "${owner_type}" ] || [ "${owner_type}" = "null" ]; then
+        case "${image_type}" in
+            mesh-extension) owner_type="ADMIN" ;;
+            *)              owner_type="SUPERADMIN" ;;   # primary/client/unknown
+        esac
+    fi
+    printf '%s\n' "${owner_type}"
+}
+
 root_keys_ssh_reachability_note() {
-    local v
-    v="$(cat /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null \
-        | awk 'tolower($1)=="permitrootlogin"{print tolower($2); exit}')"
+    local v akf
+    v="$(sshd_global_value PermitRootLogin)"
+    akf="$(sshd_global_value AuthorizedKeysFile)"
+    if [ "${akf}" = none ]; then
+        warn "root has authorized key(s), but sshd has 'AuthorizedKeysFile none' (device-registry enforcement): /root/.ssh/authorized_keys is NOT consulted over SSH. Recovery is the console-only /etc/ssh/break-glass.keys, or a key the device registry licenses for this node."
+        return 0
+    fi
+    if ! ${STANDALONE_IMG:-false} && [ "$(device_registry_owner_type)" = ADMIN ]; then
+        warn "root has authorized key(s), but this is a registry-enforced (mesh-extension) node: on the first verified registry sync sshd switches to 'AuthorizedKeysFile none' and /root/.ssh/authorized_keys stops being consulted. Recovery is then the console-only /etc/ssh/break-glass.keys, or a key the device registry licenses for this node."
+        return 0
+    fi
     case "${v:-prohibit-password}" in
         no) warn "root has authorized key(s), but sshd has 'PermitRootLogin no': the key is NOT usable over SSH. Build with a root-login setting of prohibit-password to make it a break-glass login, or add a key-only admin user to the KEYS users.json." ;;
         *) log "sshd PermitRootLogin=${v:-prohibit-password (sshd default)}: the root key is usable over SSH" ;;
@@ -1278,14 +1323,8 @@ provision_device_registry() {
     # (in precedence) .device_registry.owner_type, else an ADMIN image_type, else
     # SUPERADMIN. .device_registry.image_type∈{primary,mesh-extension,client}.
     local owner_type image_type
-    owner_type="$(jqm '.device_registry.owner_type // ""')"
+    owner_type="$(device_registry_owner_type)"
     image_type="$(jqm '.device_registry.image_type // ""')"
-    if [ -z "${owner_type}" ] || [ "${owner_type}" = "null" ]; then
-        case "${image_type}" in
-            mesh-extension) owner_type="ADMIN" ;;
-            *)              owner_type="SUPERADMIN" ;;   # primary/client/unknown
-        esac
-    fi
 
     if [ "${owner_type}" != "ADMIN" ]; then
         # (c) SUPERADMIN / core / client: registry-enforced sshd is NOT installed.
