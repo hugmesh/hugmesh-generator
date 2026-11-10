@@ -21,6 +21,9 @@
   python -m hugmesh_studio --qemu-windows check|rows|plan|start|stop|status [options]
       # headless, Windows: boot ONE x86 device image under QEMU for Windows (WHPX);
       # the options are core/qemu_windows.py's own (--session, --row, --img, --mem …)
+  python -m hugmesh_studio --go-live-target targets|probe|status|list|plan|commit|rollback [options]
+      # headless, every OS: go live from this host or a RUNNING emulated device (ssh only;
+      # the device's own hugmesh-go-live answers); options are core/golive_target.py's own
   python -m hugmesh_studio --generator-dir /path/to/hugmesh-generator
   python -m hugmesh_studio --remember-roles-for-passwordless-login
       # OPT-IN, default OFF: KeyZipPage imports also mirror human-loginable KEYS
@@ -358,6 +361,10 @@ def main(argv=None) -> int:
     # own parser, so the MSI's console twin reaches the same start()/stop() as the GUI.
     from .core.qemu_windows import add_cli_arguments as _add_qemu_windows_args
     _add_qemu_windows_args(ap)
+    # ── Go-live against a target (this host or an emulated device), Qt-free ─────
+    # --go-live-target VERB [options]: the rest of the line goes to core/golive_target.py.
+    from .core.golive_target import add_cli_arguments as _add_golive_target_args
+    _add_golive_target_args(ap)
     args = ap.parse_args(argv)
 
     if args.mesh_token is not None:
@@ -381,6 +388,12 @@ def main(argv=None) -> int:
         # Qt binding, so it works from hugmesh-studio-cli.exe with no display.
         from .core.qemu_windows import run_studio_cli as _run_qemu_windows
         return _run_qemu_windows(args.qemu_windows, args.generator_dir)
+
+    if args.go_live_target is not None:
+        # Qt-free path: runs only ssh against an emulated device (or the checkout's
+        # driver for this host), never a Qt binding — so the MSI's console twin has it.
+        from .core.golive_target import run_studio_cli as _run_golive_target
+        return _run_golive_target(args.go_live_target, args.generator_dir)
 
     if args.login_agent:
         # Qt-free path: the loopback login agent is stdlib-only and blocks in
