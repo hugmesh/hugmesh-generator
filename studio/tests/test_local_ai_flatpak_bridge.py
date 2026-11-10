@@ -166,6 +166,8 @@ def test_docker_commands_from_the_flatpak_run_on_the_host_with_no_secret(
     for k, v in FAKE_SECRETS.items():
         monkeypatch.setenv(k, v)
     monkeypatch.setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+    for name in ("DOCKER_CONTEXT", "DOCKER_CONFIG"):       # the runner's own, if any
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(subprocess, "run", run)
     assert odk._run(["docker", "version"]) == (0, "29.9.0\n")
