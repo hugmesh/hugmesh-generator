@@ -1038,6 +1038,15 @@ class LocalMeshBootstrap:
         overlay will attach, MeshNode.available() (the mesh compose template)."""
         if self.lane_refusal:
             return False, self.lane_refusal
+        if self._own_project():
+            # A mesh with its own compose project still publishes compose.real.yaml's
+            # FIXED ports (Casdoor 8000, the social tier): while another mesh holds
+            # one, `make stack-up` would create this project's containers and then
+            # fail on the bind. Refuse first, naming the holder.
+            from . import images_mesh
+            held = images_mesh.fixed_port_refusals(self.cfg)
+            if held:
+                return False, (f"{self.project} cannot start now: " + "; ".join(held))
         if self._in_cluster_pod():
             return False, ("Refusing to bootstrap a from-scratch mesh inside a cluster "
                            "pod — this is a HOST-LOCAL action (docker on the operator's "

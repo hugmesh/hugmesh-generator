@@ -327,6 +327,39 @@ def _gib(b: int) -> str:
     return f"{b / host_resources.GIB:.1f} GiB"
 
 
+def fixed_port_refusals(boot_cfg, *, is_free=None, holder=None) -> list[str]:
+    """One sentence per FIXED host port this mesh publishes that something already
+    holds (8000 always — Casdoor; 8008, 3000, 4000 with the social tier), naming the
+    container holding it. ``[]`` = all free. The probes default to this module's
+    :func:`port_free` / :func:`port_holder`, looked up at call time.
+
+    Shared by :func:`plan_alongside` (before a start beside a build) and by
+    ``LocalMeshBootstrap.guard_host_local`` for every bootstrap of a mesh with its own
+    compose project (a saved record's Start/Restore): with the checkout's mesh up,
+    `make stack-up` in the worktree would otherwise create containers and then die
+    on Casdoor's port."""
+    is_free = port_free if is_free is None else is_free
+    holder = port_holder if holder is None else holder
+    try:
+        social = bool(boot_cfg.effective_social())
+    except Exception:                    # noqa: BLE001
+        social = False
+    out: list[str] = []
+    for p in list(FIXED_PORTS) + (list(SOCIAL_FIXED_PORTS) if social else []):
+        if not is_free(p):
+            who = holder(p)
+            out.append(
+                f"host port {p} is already in use" + (f" by {who}" if who else "")
+                + " — compose publishes it as a fixed port"
+                + (" (Casdoor, the sign-in every token names)" if p == 8000 else
+                   " (the social tier)")
+                + ", so two local meshes cannot run at once; stop the other mesh "
+                  "first, then start this one (tick 'Start this mesh locally' for a "
+                  "build, or with no build running `python -m "
+                  "hugmesh_studio.core.images_mesh start <record id> --not-building`)")
+    return out
+
+
 #: The build backends :func:`plan_alongside` knows the memory cap of.
 BACKEND_DOCKER = "docker"
 BACKEND_NATIVE = "native"
@@ -388,24 +421,7 @@ def plan_alongside(boot_cfg, *, building: bool, backend: str | None = None,
     env = os.environ if env is None else env
     mi = host_resources.read_meminfo() if meminfo is None else meminfo
     plan = AlongsidePlan(ok=True)
-    social = False
-    try:
-        social = bool(boot_cfg.effective_social())
-    except Exception:                    # noqa: BLE001
-        social = False
-    fixed = list(FIXED_PORTS) + (list(SOCIAL_FIXED_PORTS) if social else [])
-    for p in fixed:
-        if not is_free(p):
-            who = holder(p)
-            plan.reasons.append(
-                f"host port {p} is already in use" + (f" by {who}" if who else "")
-                + " — compose publishes it as a fixed port"
-                + (" (Casdoor, the sign-in every token names)" if p == 8000 else
-                   " (the social tier)")
-                + ", so two local meshes cannot run at once; stop the other mesh "
-                  "first, then start this one (tick 'Start this mesh locally' for a "
-                  "build, or with no build running `python -m "
-                  "hugmesh_studio.core.images_mesh start <record id> --not-building`)")
+    plan.reasons.extend(fixed_port_refusals(boot_cfg, is_free=is_free, holder=holder))
     own = tuple(getattr(boot_cfg, "own_idp_domains", ()) or ())
     if own:
         plan.reasons.append(

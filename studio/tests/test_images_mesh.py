@@ -454,6 +454,8 @@ def makes(monkeypatch):
                         lambda self: local_stack_node.StackStatus(False, "not started"))
     monkeypatch.setattr(LocalMeshBootstrap, "preflight", lambda self: [])
     monkeypatch.setattr(LocalMeshBootstrap, "validate", lambda self: [])
+    # every fixed host port free (this host may well run hugmesh-local on 8000)
+    monkeypatch.setattr(images_mesh, "port_free", lambda p: True)
     monkeypatch.setattr(LocalMeshBootstrap, "_await_onion", lambda self, *a, **k: "")
     monkeypatch.setattr(LocalMeshBootstrap, "read_superadmin",
                         lambda self: {"username": "sa", "password": "pw"})
@@ -551,6 +553,28 @@ def test_an_img_record_restores_only_its_own_project_in_its_own_worktree(
         assert m["project"] == project and m["COMPOSE_PROJECT_NAME"] == project, m
         assert m["PUBLIC_HOST_PORT"] == "18090"
         assert m["FRONT_DOOR"] == "http://localhost:18090"
+    assert _sentinel_intact(checkout)
+
+
+def test_an_img_record_is_refused_while_another_mesh_holds_casdoor(checkout, makes,
+                                                                   monkeypatch):
+    """With its worktree and ports in place but hugmesh-local up on 8000, a restore
+    refuses BEFORE `make stack-up` — naming the holder — instead of creating the
+    record's containers and dying on the bind."""
+    rec = _img_record(checkout)
+    os.makedirs(os.path.join(rec.lanes["worktree"], ".git"))
+    rec.lanes["host_ports"] = {"PUBLIC_HOST_PORT": 18090}
+    saved_meshes.save(rec)
+    monkeypatch.setattr(images_mesh, "port_free", lambda p: p != 8000)
+    monkeypatch.setattr(images_mesh, "port_holder",
+                        lambda p: "hugmesh-local-casdoor-1")
+    boot = LocalMeshBootstrap.for_record(checkout, rec)
+    assert boot.lane_refusal == ""
+    for verb in (lambda: boot.restore(rec), lambda: boot.start_saved(rec)):
+        ok, lines = verb()
+        assert not ok
+        assert any("8000" in ln and "hugmesh-local-casdoor-1" in ln for ln in lines)
+    assert not [m for m in makes if m["target"] != "probe_state"]
     assert _sentinel_intact(checkout)
 
 
