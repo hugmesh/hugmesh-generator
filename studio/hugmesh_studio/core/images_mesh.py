@@ -462,14 +462,12 @@ def checkout_fixed_port_refusals(boot_cfg, project: str = vaults.DEFAULT_PROJECT
         who = holder(p)
         if not who or holder_in_project(who, project, project_of):
             continue
-        # WHO holds it (PR #937 round 4): "another local mesh" only for a container
-        # whose compose project label is hugmesh-img-* (or, when docker reports no
-        # label at all, whose compose-made name says so) — anything else is named
-        # and said NOT to be a HugMesh mesh, with no images_mesh remedy
+        # WHO holds it (PR #937 round 4): "another local mesh" ONLY for a container
+        # whose compose project LABEL is hugmesh-img-* — never on a name alone.
+        # Anything else (another project, no compose label at all) is named and
+        # said NOT to be a HugMesh mesh, with no images_mesh remedy.
         label = (container_project if project_of is None else project_of)(who)
-        img_project = (label if label.startswith(PROJECT_PREFIX) else
-                       "" if label else
-                       _img_project_of_name(who))
+        img_project = label if label.startswith(PROJECT_PREFIX) else ""
         if not img_project:
             out.append(f"host port {p} is already in use by the container {who}, which "
                        "is not a HugMesh mesh ("
@@ -498,15 +496,6 @@ def checkout_fixed_port_refusals(boot_cfg, project: str = vaults.DEFAULT_PROJECT
                    "then start this one. Nothing was started.")
     return out
 
-
-def _img_project_of_name(name: str) -> str:
-    """The ``hugmesh-img-<tail>`` project a compose-made container name
-    (``<project>-<service>-<n>``) carries, or "" — asked only when docker reports no
-    compose label for the container."""
-    if not (name or "").startswith(PROJECT_PREFIX):
-        return ""
-    tail = name[len(PROJECT_PREFIX):].split("-", 1)[0]
-    return PROJECT_PREFIX + tail if tail else ""
 
 
 #: The build backends :func:`plan_alongside` knows the memory cap of.

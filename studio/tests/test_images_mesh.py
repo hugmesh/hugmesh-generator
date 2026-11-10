@@ -999,7 +999,10 @@ def test_round3_hugmesh_local_refuses_while_an_img_mesh_holds_casdoor(checkout, 
     holder = images_mesh.project_for(img.id) + "-casdoor-1"
     monkeypatch.setattr(images_mesh, "port_free", lambda p: p != 8000)
     monkeypatch.setattr(images_mesh, "port_holder", lambda p: holder)
-    monkeypatch.setattr(images_mesh, "container_project", lambda name: "")
+    # (round 4: "another local mesh" and its stop remedy only for a holder whose
+    # compose project LABEL is hugmesh-img-*)
+    monkeypatch.setattr(images_mesh, "container_project",
+                        lambda name: images_mesh.project_for(img.id))
     rec = _checkout_record(checkout)
     boot = LocalMeshBootstrap(checkout, LocalMeshBootstrapConfig())
     assert not boot._own_project()
@@ -1234,7 +1237,7 @@ def test_round4_a_present_registration_is_never_dropped(checkout, tmp_path):
     ("lonely-postgres", "", False),              # a plain `docker run` container
     ("hugmesh-mesh-casdoor-1", "hugmesh-mesh", False),
     ("hugmesh-img-abc-casdoor-1", "hugmesh-img-abc", True),
-    ("hugmesh-img-abc-casdoor-1", "", True),     # docker reported no label: the name
+    ("hugmesh-img-abc-casdoor-1", "", False),    # a NAME alone never makes it a mesh
 ])
 def test_round4_the_reverse_refusal_names_a_mesh_only_for_a_hugmesh_img_holder(
         monkeypatch, holder, label, mesh):
@@ -1251,6 +1254,8 @@ def test_round4_the_reverse_refusal_names_a_mesh_only_for_a_hugmesh_img_holder(
         assert "another local mesh" not in why
         assert "not a HugMesh mesh" in why
         assert "images_mesh stop" not in why and "Saved meshes" not in why
+        assert (f"its compose project is {label}" if label else
+                "it belongs to no compose project") in why
 
 
 def _clean_recipe(*extra):

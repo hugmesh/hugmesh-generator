@@ -1997,8 +1997,9 @@ class LocalStackNode:
                 pass
         ok, msg = self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel,
                              args=args)
-        # a buffered caller sees only the return: the sentence leads it there too
-        return ok, (f"{kept}\n{msg}" if kept else msg)
+        # a buffered caller sees only the return: the sentence ends it there too (the
+        # END, which a caller that keeps only the tail of a make transcript still has)
+        return ok, (f"{msg}\n{kept}" if kept else msg)
 
     def _clean_args(self) -> tuple[list[str], str]:
         """``(make variables, sentence)`` for `make stack-clean`. The private-maven
