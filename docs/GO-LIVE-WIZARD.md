@@ -478,6 +478,10 @@ Still **deferred**, by design:
 - **A pre-flip `verify` subcommand** (probe DNS, HTTP, tunnel, DDNS and funnel before
   `commit`). The gate today is preview, then confirm. Automated propagation probes would
   be a new driver subcommand that every front-end then surfaces.
+- **Emulated-mesh follow-ups** (see [Go live from an emulated mesh](#go-live-from-an-emulated-mesh)):
+  booting a mesh from a saved device, so an emulated posture survives a restart; the
+  **remote** target (any ssh-reachable node); and an inbound relay on the Studio host,
+  which waits on an operator decision because it exposes the workstation.
 - **The other eight builders** (Frite, Jetson, Orange Pi) bake no go-live driver, on
   purpose. They bake neither firewall-reconcile nor release-state, because they are
   clients and appliances, not go-live server nodes.
