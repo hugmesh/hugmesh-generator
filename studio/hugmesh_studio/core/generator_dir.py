@@ -13,7 +13,9 @@ Resolution order, first hit wins:
   3. the checkout this source tree lives in (a source run)
   4. the working directory, when it is a checkout (``cd checkout && hugmesh-studio``)
   5. the folder the operator last picked in the GUI, saved under the Studio state dir
-  6. the working directory
+  6. the hugmesh-generator copy this install carries (the Flatpak), placed in
+     ~/.local/share/hugmesh-studio/generator by :mod:`managed_generator`
+  7. the working directory
 Steps 2 to 5 only count when the folder really is a checkout (:func:`is_checkout`). A
 stale ``$HUGMESH_GENERATOR_DIR`` would otherwise outrank a good source tree and a saved
 pick, and flake.nix ``cd``s into a relative value before Python resolves it again.
@@ -22,7 +24,7 @@ from __future__ import annotations
 
 import os
 
-from . import state_paths
+from . import managed_generator, state_paths
 
 ENV = "HUGMESH_GENERATOR_DIR"
 
@@ -71,6 +73,9 @@ def resolve(source_repo: str = "") -> str:
     picked = saved()
     if is_checkout(picked):
         return picked
+    placed = managed_generator.ensure()
+    if placed.path and is_checkout(placed.path):
+        return placed.path
     return cwd
 
 
@@ -78,6 +83,18 @@ def not_a_checkout_message(path: str, osname: str | None = None) -> str:
     # The picker runs wherever the Studio is not inside a checkout. On Windows that is the
     # MSI; on Linux it can be pip, Flatpak, the release tarball, or a source run handed a
     # --generator-dir that is no checkout, so say what holds for all of them.
+    if managed_generator.seed_dir():
+        # This install carries a copy (the Flatpak): the picker only appears when it
+        # could not be placed, so say why, with the path and the free space.
+        placed = managed_generator.last
+        head = (f"{path} is not a hugmesh-generator checkout (it has no {MARKER}). This "
+                f"Studio carries its own copy of hugmesh-generator")
+        if placed.path and not placed.error:
+            return (f"{head}, placed in {placed.path}. Use the copy that came with this "
+                    f"Studio, or choose the folder you cloned hugmesh-generator into.")
+        why = placed.error or "it has not been placed yet"
+        return (f"{head}, but {why}. Use the copy that came with this Studio to try "
+                f"again, or choose the folder you cloned hugmesh-generator into.")
     installed = ("the Windows installer does not include them"
                  if (osname or os.name) == "nt"
                  else "the Studio itself does not include them")

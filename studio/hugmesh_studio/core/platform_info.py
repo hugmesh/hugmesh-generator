@@ -111,12 +111,21 @@ class HostInfo:
     #: time); "" when unknown. Native Windows words its remedy from it: a busy Docker
     #: Desktop was told to "Install Docker Desktop".
     docker_state: str = ""
+    #: Running inside the Flatpak sandbox. Every other field then describes the HOST,
+    #: read through flatpak-spawn --host (core/flatpak_host.py), not the sandbox.
+    in_flatpak: bool = False
+    #: In the Flatpak: why flatpak-spawn --host could not start a host command ("" when
+    #: it could, or outside the Flatpak). Without that route nothing on the host is
+    #: reachable, so this outranks every other remedy.
+    host_bridge_error: str = ""
 
     @property
     def can_build_native(self) -> bool:
         # The build script is Gentoo+bash and writes a stage4/chroot — only a Gentoo
-        # host (ideally root) can run it natively. Everyone else uses Docker.
-        return self.os == "linux" and self.is_gentoo and self.has_bash
+        # host (ideally root) can run it natively. Everyone else uses Docker. Never from
+        # the Flatpak: see flatpak_host.native_build_blocker for the two measured reasons.
+        return (self.os == "linux" and self.is_gentoo and self.has_bash
+                and not self.in_flatpak)
 
     @property
     def default_backend(self) -> str:
@@ -150,6 +159,8 @@ class HostInfo:
         """
         if self.os != "linux":
             return False
+        if self.in_flatpak:
+            return False
         if self.is_wsl and not self.has_usb_passthrough:
             return False
         return True
@@ -174,6 +185,9 @@ class HostInfo:
         """WHY flashing is unavailable, with the fix — never a bare 'unsupported'."""
         if self.can_flash_devices:
             return ""
+        if self.in_flatpak:
+            from . import flatpak_host
+            return flatpak_host.flash_blocker()
         if self.os == "windows":
             # The usbipd steps used to be promised "(below)" and never shown.
             return ("Writing an image to a device needs Linux block devices, which the "
@@ -251,6 +265,14 @@ class HostInfo:
         the cure without saying the diagnosis twice."""
         if self.has_docker:
             return ""
+        if self.in_flatpak and self.host_bridge_error:
+            from . import flatpak_host
+            return flatpak_host.bridge_failure_message(self.host_bridge_error)
+        if self.in_flatpak and self.docker_state == DOCKER_MISSING:
+            return ("Docker is not installed on this computer (checked outside the Flatpak "
+                    "sandbox, through flatpak-spawn --host). Install Docker Engine with "
+                    "your distribution's package manager, start it, add your user to the "
+                    "'docker' group, then restart the Studio so it checks again.")
         wsl = wsl_docker_remedy(self.is_wsl, self.wsl_version, self.wsl_distro)
         if wsl:
             return wsl
@@ -293,6 +315,9 @@ class HostInfo:
         """
         if self.has_kvm:
             return ""
+        if self.in_flatpak and self.host_bridge_error:
+            from . import flatpak_host
+            return flatpak_host.bridge_failure_message(self.host_bridge_error)
         head = ("No usable /dev/kvm — emulated x86 devices will run under full "
                 "emulation (TCG), which is roughly 10x slower and reads as a hang. "
                 "Aarch64/Pi rows are pure emulation on any x86 host and are unaffected.")
@@ -318,6 +343,8 @@ class HostInfo:
 
     def summary(self) -> str:
         bits = [f"OS={self.os}"]
+        if self.in_flatpak:
+            bits.append("Flatpak")
         if self.is_wsl:
             bits.append(f"WSL{self.wsl_version or ''}")
         if self.is_gentoo:
@@ -336,7 +363,12 @@ class HostInfo:
         return " · ".join(bits)
 
 
-def _is_gentoo() -> bool:
+def _is_gentoo(in_flatpak: bool = False) -> bool:
+    if in_flatpak:
+        # The sandbox's /etc is the runtime's ("KDE Flatpak runtime"); the host's
+        # os-release is mounted at /run/host/os-release.
+        from . import flatpak_host
+        return "gentoo" in flatpak_host.host_os_release().lower()
     try:
         if os.path.exists("/etc/gentoo-release"):
             return True
@@ -609,11 +641,22 @@ def detect(builder_image: str = "hugmesh-builder") -> HostInfo:
     except AttributeError:
         is_root = False
     is_wsl, wsl_version = detect_wsl()
-    kvm_usable, kvm_denied = _kvm_state()
-    docker_state = docker_probe()
+    from . import flatpak_host
+    in_flatpak = osname == "linux" and flatpak_host.in_flatpak()
+    bridge_error = ""
+    if in_flatpak:
+        # Everything below is about the HOST, which the sandbox reaches only through
+        # flatpak-spawn --host (installed by app.main via flatpak_host.install()).
+        bridge_ok, bridge_error = flatpak_host.bridge_status()
+        kvm_usable, kvm_denied = (flatpak_host.host_kvm_state() if bridge_ok
+                                  else (False, False))
+        docker_state = docker_probe() if bridge_ok else DOCKER_MISSING
+    else:
+        kvm_usable, kvm_denied = _kvm_state()
+        docker_state = docker_probe()
     return HostInfo(
         os=osname,
-        is_gentoo=(osname == "linux" and _is_gentoo()),
+        is_gentoo=(osname == "linux" and _is_gentoo(in_flatpak)),
         has_docker=docker_state == DOCKER_OK,
         docker_state=docker_state,
         has_bash=bool(shutil.which("bash")),
@@ -628,4 +671,6 @@ def detect(builder_image: str = "hugmesh-builder") -> HostInfo:
         has_win_interop=is_wsl and bool(os.environ.get("WSL_INTEROP")),
         wsl_distro=os.environ.get("WSL_DISTRO_NAME", "") if is_wsl else "",
         kvm_present_but_denied=kvm_denied,
+        in_flatpak=in_flatpak,
+        host_bridge_error=bridge_error,
     )

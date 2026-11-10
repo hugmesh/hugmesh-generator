@@ -114,6 +114,10 @@ TIPS: dict = {
         "Ways to reach it: an internal name, a Tor address or a public name; Tor needs Tor on the node.",
         "The Look tab: a preset, a main and second colour, font, style; empty means inherited from the mesh.",
     ),
+    "domain_ca_keys": (
+        "Import each domain's CA: the signing key goes to the pki stick only, every other stick gets the certificates.",
+        "A root CA key is never taken; import the root certificate and an intermediate signed by it.",
+    ),
     "users_choice": ("Say yes to add user accounts now; generated accounts are written to the session folder.",),
     "users": (
         "Superusers and domain users are generated or typed here; the node key folders land under keys-* after the build.",

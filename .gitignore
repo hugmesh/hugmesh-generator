@@ -199,3 +199,6 @@ tests/.ungated-lane/
 
 # The TUI stages the login password here (0600, removed when the build ends).
 /.hugmesh-secrets/
+# The generator seed the Flatpak bundles (studio/packaging/make_generator_seed.py
+# writes it here right before flatpak-builder; a release artefact, never committed).
+/studio/packaging/flatpak/generator-seed/

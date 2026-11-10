@@ -143,6 +143,35 @@ _M2_PROBE_TIMEOUT_S = 3.0
 # <project>-<service>. These four services resolve PRIVATE maven artifacts at
 # image-build time — a cold build of any of them needs the m2 registry.
 _COMPOSE_PROJECT = "hugmesh-local"
+#: Compose project prefix of a mesh the Studio's node-image lane starts beside a build
+#: (``hugmesh-img-<id>``, core/images_mesh.py imports it from here). The ONLY projects
+#: a label-based stop may ever name, and the ones a clean of hugmesh-local keeps the
+#: shared private-maven registry for while any of them is up.
+IMG_PROJECT_PREFIX = "hugmesh-img-"
+#: The one private-maven registry container per host (Makefile M2_REGISTRY_NAME).
+M2_REGISTRY_CONTAINER = "hugmesh-m2-registry"
+
+
+def running_img_projects() -> list[str] | None:
+    """The ``hugmesh-img-*`` compose projects with a RUNNING container on this host
+    (:func:`probe_running_img_projects`); the one name callers and tests use."""
+    return probe_running_img_projects()
+
+
+def probe_running_img_projects() -> list[str] | None:
+    """The ``hugmesh-img-*`` compose projects with a RUNNING container on this host,
+    by compose label (``docker ps``, read-only). ``None`` = docker did not answer."""
+    try:
+        r = subprocess.run(["docker", "ps", "--format",
+                            '{{.Label "com.docker.compose.project"}}'],
+                           capture_output=True, text=True, **proc_text.TEXT_IO,
+                           timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return sorted({ln.strip() for ln in (r.stdout or "").splitlines()
+                   if ln.strip().startswith(IMG_PROJECT_PREFIX)})
 #: `docker ps` filters that select the RUNNING hugmesh-tor container of the stack — by
 #: compose LABEL (project + service), never by container name.
 _TOR_PS_FILTERS = (
@@ -150,6 +179,16 @@ _TOR_PS_FILTERS = (
     "--filter", f"label=com.docker.compose.service={_TOR_SERVICE}",
     "--filter", "status=running",
 )
+
+
+def _tor_ps_filters(project: str) -> tuple[str, ...]:
+    """:data:`_TOR_PS_FILTERS` for another compose project (the node-images lane's
+    own mesh runs beside the checkout's, under its own project name)."""
+    if project == _COMPOSE_PROJECT:
+        return _TOR_PS_FILTERS
+    return ("--filter", f"label=com.docker.compose.project={project}",
+            "--filter", f"label=com.docker.compose.service={_TOR_SERVICE}",
+            "--filter", "status=running")
 PRIVATE_ARTIFACT_SERVICES = (
     "hugmesh-admin-bff-api",
     "hugmesh-user-bff-api",
@@ -256,8 +295,28 @@ class LocalStackNode:
                  tor_domains=(),
                  external_idp_domains=(),
                  superbrand_look=None,
-                 look_brands=None):
+                 look_brands=None,
+                 project: str = _COMPOSE_PROJECT,
+                 host_ports: dict | None = None):
         self.generator_dir = os.path.abspath(generator_dir)
+        # The COMPOSE PROJECT this node drives. The default is the name the compose
+        # files pin (``name: hugmesh-local``) and threads NOTHING new: the env, the
+        # argv and every label filter stay byte-identical. Another name (the node-
+        # images lane's own mesh, core/images_mesh.py) is exported as
+        # COMPOSE_PROJECT_NAME, which compose ranks above the files' ``name:``, so its
+        # containers, networks, volumes and built images are all its own.
+        self.project = (project or _COMPOSE_PROJECT).strip() or _COMPOSE_PROJECT
+        # Extra host ports beyond the two front doors (TOR_SOCKS_HOST_PORT,
+        # ANUBIS_HOST_PORT): exported only when given, so a default node's env is
+        # unchanged. A second mesh beside the checkout's needs every published port
+        # of its own (compose.local.yaml publishes exactly these four).
+        self.host_ports = {str(k): str(v) for k, v in (host_ports or {}).items()}
+        # the two front doors are named on this node too (web_url, the plan), so a
+        # port given here moves them as well — one value, never two that disagree
+        if "PUBLIC_HOST_PORT" in self.host_ports:
+            public_host_port = int(self.host_ports["PUBLIC_HOST_PORT"])
+        if "PUBLIC_HTTPS_PORT" in self.host_ports:
+            public_https_port = int(self.host_ports["PUBLIC_HTTPS_PORT"])
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
         self.social = social
@@ -460,7 +519,7 @@ class LocalStackNode:
             return None
         try:
             r = subprocess.run(
-                ["docker", "ps", "-q", "--no-trunc", *_TOR_PS_FILTERS],
+                ["docker", "ps", "-q", "--no-trunc", *_tor_ps_filters(self.project)],
                 capture_output=True, text=True, **proc_text.TEXT_IO, timeout=5)
             ids = r.stdout.split() if r.returncode == 0 else []
             if not ids:
@@ -485,7 +544,7 @@ class LocalStackNode:
         if not shutil.which("docker"):
             return False
         try:
-            r = subprocess.run(["docker", "ps", "-q", "--no-trunc", *_TOR_PS_FILTERS],
+            r = subprocess.run(["docker", "ps", "-q", "--no-trunc", *_tor_ps_filters(self.project)],
                                capture_output=True, text=True, **proc_text.TEXT_IO, timeout=5)
             ids = r.stdout.split() if r.returncode == 0 else []
             if not ids:
@@ -839,7 +898,7 @@ class LocalStackNode:
                             f"cold stack build needs ~{PREFLIGHT_MIN_FREE_GIB} GiB; free "
                             f"space (e.g. `docker system prune`) and retry.")
         missing = [s for s in PRIVATE_ARTIFACT_SERVICES
-                   if not self._image_present(f"{_COMPOSE_PROJECT}-{s}")]
+                   if not self._image_present(f"{self.project}-{s}")]
         if missing:
             ready, why = self.m2_registry_ready()
             if not ready:
@@ -923,6 +982,15 @@ class LocalStackNode:
             # container refuses — the terminal fail-closed layer.)
             env["EGRESS_VPN_CONF"] = os.path.abspath(self.egress_vpn_conf)
         env["PUBLIC_HOST_PORT"] = str(self.public_host_port)
+        # Another compose project (see __init__): set only then, so the default
+        # node's env is byte-identical to before the parameter existed. With it the
+        # TLS front door and the other published ports must move too, or `up` fails
+        # on a port the checkout's own mesh already holds.
+        if self.project != _COMPOSE_PROJECT:
+            env["COMPOSE_PROJECT_NAME"] = self.project
+            env["PUBLIC_HTTPS_PORT"] = str(self.public_https_port)
+        for k, v in self.host_ports.items():
+            env[k] = v
         # Only export DOMAIN when set, so existing callers (and ENV=test) keep the
         # Makefile's own default. In prod this pins the Casdoor issuer to the same
         # apex the minted secrets use (Makefile: CASDOOR_ISSUER = https://id.$(DOMAIN)).
@@ -1223,7 +1291,7 @@ class LocalStackNode:
     def cold_build_expected(self) -> bool:
         """True when any private-maven service image is absent — the first stack-up
         will COMPILE the fleet (hours-scale) instead of restarting it (minutes)."""
-        return any(not self._image_present(f"{_COMPOSE_PROJECT}-{s}")
+        return any(not self._image_present(f"{self.project}-{s}")
                    for s in PRIVATE_ARTIFACT_SERVICES)
 
     def _write_looks(self) -> None:
@@ -1332,8 +1400,8 @@ class LocalStackNode:
         if not base or not os.path.exists(self.compose_file):
             return ""
         try:
-            r = subprocess.run([*base, "-f", self.compose_file, "ps", "-q",
-                                "hugmesh-fe-gateway"],
+            r = subprocess.run([*base, *self._project_args(), "-f", self.compose_file,
+                                "ps", "-q", "hugmesh-fe-gateway"],
                                cwd=self.generator_dir, capture_output=True,
                                text=True, **proc_text.TEXT_IO, timeout=30)
             cid = r.stdout.strip().splitlines()[0].strip() if r.stdout.strip() else ""
@@ -1921,14 +1989,60 @@ class LocalStackNode:
         blocker = self._native_windows_refusal("The local stack", on_line)
         if blocker:
             return False, blocker
-        return self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel)
+        args, kept = self._clean_args()
+        if kept and on_line is not None:
+            try:
+                on_line(kept)
+            except Exception:                    # noqa: BLE001 — a viewer never sinks it
+                pass
+        ok, msg = self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel,
+                             args=args)
+        # a buffered caller sees only the return: the sentence ends it there too (the
+        # END, which a caller that keeps only the tail of a make transcript still has)
+        return ok, (f"{msg}\n{kept}" if kept else msg)
+
+    def _clean_args(self) -> tuple[list[str], str]:
+        """``(make variables, sentence)`` for `make stack-clean`. The private-maven
+        registry container is ONE per host (``hugmesh-m2-registry``, m2-bootstrap.sh's
+        fixed name) and every mesh on it builds from it, so ``STACK_CLEAN_KEEP_M2=1``
+        keeps it (and its env file):
+
+        * a node that is NOT the checkout's own mesh (the node-image lane's
+          ``hugmesh-img-<id>``) always passes it (PR #937 round 3); the sentence is
+          "" — the Makefile's own echo says it was kept;
+        * the checkout's own hugmesh-local passes it while any ``hugmesh-img-*``
+          project is UP (PR #937 round 4: its build pulls from that registry) — or
+          when docker cannot say whether one is (fail closed: the registry is a
+          rebuildable cache, a build starved of it mid-run is not) — and the
+          sentence says why. With none up the argv is unchanged ([], "")."""
+        if self.project != _COMPOSE_PROJECT:
+            return ["STACK_CLEAN_KEEP_M2=1"], ""
+        up = running_img_projects()
+        if up == []:
+            return [], ""
+        if up is None:
+            why = ("docker could not say whether a mesh started beside a node-image "
+                   f"build ({IMG_PROJECT_PREFIX}*) is running")
+        else:
+            why = (", ".join(up) + (" is" if len(up) == 1 else " are") + " running (a "
+                   "mesh started beside a node-image build) and builds from it")
+        return ["STACK_CLEAN_KEEP_M2=1"], (
+            f"[stack-clean] the private-maven registry {M2_REGISTRY_CONTAINER} is KEPT, "
+            f"not removed: {why}. Everything else of {_COMPOSE_PROJECT} is cleaned; "
+            "clean again once that mesh is stopped to remove the registry too.")
+
+    def _project_args(self) -> list[str]:
+        """``-p <project>`` for a node that is not the checkout's own mesh; [] for the
+        default, whose argv stays what it was (the file's ``name:`` decides)."""
+        return [] if self.project == _COMPOSE_PROJECT else ["-p", self.project]
 
     def status(self) -> StackStatus:
         base = _compose_base()
         if not base or not os.path.exists(self.compose_file):
             return StackStatus(running=False, detail="not started")
         try:
-            r = subprocess.run([*base, "-f", self.compose_file, "ps", "-q"],
+            r = subprocess.run([*base, *self._project_args(), "-f", self.compose_file,
+                                "ps", "-q"],
                                cwd=self.generator_dir, capture_output=True, text=True,
                                **proc_text.TEXT_IO, timeout=30)
             ids = [x for x in r.stdout.splitlines() if x.strip()]
@@ -1941,7 +2055,8 @@ class LocalStackNode:
         if not base:
             return "docker compose not available"
         try:
-            r = subprocess.run([*base, "-f", self.compose_file, "logs", "--tail", str(tail)],
+            r = subprocess.run([*base, *self._project_args(), "-f", self.compose_file,
+                                "logs", "--tail", str(tail)],
                                cwd=self.generator_dir, capture_output=True, text=True,
                                **proc_text.TEXT_IO, timeout=30)
             return r.stdout

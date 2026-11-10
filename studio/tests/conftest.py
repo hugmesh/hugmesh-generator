@@ -68,6 +68,19 @@ def _host_independent_build_defaults(monkeypatch):
     monkeypatch.setattr(host_resources, "_meminfo_fresh", lambda: dict(healthy))
 
 
+@pytest.fixture(autouse=True)
+def _no_node_image_meshes_up(monkeypatch):
+    """Answer "no hugmesh-img-* mesh is up" for the checkout's own `stack-clean` on
+    ANY test host (PR #937 round 4). LocalStackNode.clean of hugmesh-local asks
+    docker whether a mesh started beside a node-image build is running and, when one
+    is — or when docker cannot say — keeps the shared private-maven registry and says
+    so; left live, a test of the clean argv would depend on this host's docker. Tests
+    of that behaviour re-monkeypatch ``running_img_projects`` themselves; the real
+    probe is ``probe_running_img_projects``."""
+    from hugmesh_studio.core import local_stack_node
+    monkeypatch.setattr(local_stack_node, "running_img_projects", lambda: [])
+
+
 def _live_qapplication():
     """The process's QApplication, or None — without ever raising, and without
     importing Qt into a run that has not already imported it.

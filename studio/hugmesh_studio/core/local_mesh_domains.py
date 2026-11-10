@@ -57,6 +57,7 @@ __all__ = ["LocalMeshDomains", "bootstrap_domain_records", "own_idp_names",
            "added_row_problems", "domains_from_bootstrap", "reviewed_record_names",
            "record_walk", "imported_mesh_domains", "apply_imported_domains",
            "apply_imported_tor", "imported_domains_lines",
+           "bootstrap_config_from_images",
            "DOMAIN_NAME_RE", "LOCAL_MESH_REMEDY", "SAVED_MESH_REMEDY",
            "DOCKER_SERVICES_NOTE"]
 
@@ -524,3 +525,100 @@ def imported_domains_lines(md: "LocalMeshDomains | None") -> list[str]:
         exported = f"; exports to GitHub org {org}" if org else ""
         out.append(f"{name} — {signin}; services: {svc}{state}{door}{exported}")
     return out
+
+
+# ── the node images -> saved mesh projection (the inverse of #636) ──────────────────
+def _superadmin_username(cfg) -> str:
+    """The login of the first Users-table account holding the superadmin role, or ""
+    (the bootstrap's own default then applies)."""
+    for u in (getattr(cfg, "users", None) or ()):
+        roles = list(getattr(u, "roles", None) or [getattr(u, "role", "")])
+        name = (getattr(u, "username", "") or "").strip()
+        if name and "superadmin" in roles:
+            return name
+    return ""
+
+
+def _mesh_plane_selection(cfg) -> tuple[str, ...]:
+    """The MESH-PLANE services (local_services.mesh_plane_slugs) an image config
+    turns on, in catalogue order: its own tri-states for Tor, Anubis and the TTS voice,
+    plus any mesh-plane slug in ``optional_services``. A per-domain slug is never here
+    (the domain rows carry those), and an image-only service with no local twin is
+    not invented."""
+    from .local_services import mesh_plane_slugs
+    chosen = {str(s) for s in (getattr(cfg, "optional_services", None) or ())}
+    tor = getattr(cfg, "tor_onion_service", False) is True
+    chosen.discard("tor")
+    if tor:
+        chosen.add("tor")
+    if (getattr(cfg, "anubis", "") or "") == "on":
+        chosen.add("anubis")
+    elif (getattr(cfg, "anubis", "") or "") == "off":
+        chosen.discard("anubis")
+    if getattr(cfg, "edge_ai_tts", False) is True:
+        chosen.add("edge-ai-tts")
+    return tuple(s for s in mesh_plane_slugs() if s in chosen)
+
+
+def bootstrap_config_from_images(cfg, worklist=None):
+    """THE NODE IMAGES -> SAVED MESH PROJECTION: the ``LocalMeshBootstrapConfig`` a
+    node-image flow's configuration ``cfg`` (an ``ImageConfig``) describes, so the mesh
+    being built can be SAVED as a saved-mesh record (and started locally as a Docker
+    mesh) before and while its images build. Pure: ``cfg`` is never written, no file
+    is read (the login theme is derived from ``cfg`` itself).
+
+    The exact inverse of the #636 import (:func:`imported_mesh_domains` +
+    :func:`apply_imported_domains` + :func:`apply_imported_tor`): projecting and
+    importing back gives the same domains, own-domain services, reviewed markers and
+    Tor (pinned by tests/test_images_mesh.py). The brand plane goes through the ONE
+    record bridge both directions already use (``brand_model.record_from_image_config``
+    then ``apply_record_to_bootstrap``), never a hand-copied key list.
+
+    What has NO projection — the per-image role, platform, board, disk encryption,
+    hostname and the users' passwords — stays in the build-session record; the saved
+    mesh points at it (``SavedMesh.build``). ``worklist`` is accepted for that reason
+    and only its ids are read by callers; it is not consulted here.
+
+    ``out_dir`` is left empty: a lane that RUNS the record sets its own."""
+    del worklist                      # the worklist travels by reference (SavedMesh.build)
+    from . import brand_model
+    from .local_mesh_bootstrap import DEFAULT_BRAND, LocalMeshBootstrapConfig
+    boot = LocalMeshBootstrapConfig(
+        env=cfg.env if cfg.env in ("test", "prod") else "test",
+        brand=(cfg.brand or DEFAULT_BRAND).strip() or DEFAULT_BRAND,
+        cluster_domain=(cfg.cluster_domain or "").strip(),
+        idp=cfg.idp or "casdoor", idp_issuer=cfg.idp_issuer or "",
+        idp_client_id=cfg.idp_client_id or "", idp_jwks=cfg.idp_jwks or "")
+    sa = _superadmin_username(cfg)
+    if sa:
+        boot.superadmin_username = sa
+    try:
+        boot.login_theme_css = cfg.login_theme_css()
+    except ValueError:
+        boot.login_theme_css = ""     # a blocked upload: the shipped look, never a crash
+    # COPY SITE (brand_model.COPY_SITES): the brand plane and every added domain row
+    # through the record bridge, every Domain field by the field list.
+    brand_model.apply_record_to_bootstrap(brand_model.record_from_image_config(cfg),
+                                          boot, typed_flags=False)
+    own = (boot.cluster_domain or "").strip() or boot.resolved_domain()
+    reviewed = {str(n).strip() for n in (cfg.domain_services_reviewed or ())}
+    rows = [dict(r) for r in boot.domains if (r.get("name") or "").strip() != own]
+    own_services = normalise_slugs(getattr(cfg, "cluster_domain_services", None) or [])
+    own_org = (getattr(cfg, "cluster_domain_github_org", "") or "").strip()
+    if own_services or own in reviewed or own_org:
+        # the mesh's own domain is IMPLICIT on the image flow (a field, not a row);
+        # on a saved mesh it is a row exactly when it says something — the
+        # bootstrap_domain_records rule — and apply_imported_domains reads it back
+        # into cluster_domain_services
+        own_row = {"name": own, "title": "", "idp": DOMAIN_IDP_SUPERDOMAIN,
+                   "optional_services": list(own_services)}
+        if own_org:
+            own_row["github_org"] = own_org
+        rows.insert(0, own_row)
+    boot.domains = tuple(rows)
+    names = [str(r.get("name") or "").strip() for r in rows]
+    boot.domain_services_reviewed = tuple(n for n in names if n in reviewed)
+    boot.services = _mesh_plane_selection(cfg)
+    boot.with_tor = "tor" in boot.services
+    boot.social = False
+    return boot
