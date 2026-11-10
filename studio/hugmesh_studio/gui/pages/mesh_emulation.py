@@ -79,6 +79,8 @@ from .. import console
 from ..styles import MUTED, WARN
 from ...core import (emulation, emulation_save, mesh_emulation, platform_info,
                      qemu_devices, qemu_tests, qemu_windows)
+from ...core import golive_target
+from ...tui.meshemu import GO_LIVE_ACTION
 from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
@@ -554,6 +556,14 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self.tunnel_close_btn.clicked.connect(
             lambda: self._close_tunnels("closed from this page"))
         web.addWidget(self.tunnel_close_btn)
+        # Go live FROM this mesh: the Go-Live wizard opened on the front door (its
+        # own baked driver, over ssh — core.golive_target). Greyed with the reason
+        # beside it whenever that row cannot be a go-live target.
+        self.golive_btn = QtWidgets.QPushButton(GO_LIVE_ACTION)
+        self.golive_btn.setEnabled(False)
+        self.golive_btn.clicked.connect(self._go_live)
+        web.addWidget(self.golive_btn)
+        self._golive_wiz = None
         self.web_note = QtWidgets.QLabel()
         self.web_note.setWordWrap(True)
         self.web_note.setTextFormat(Qt.TextFormat.RichText)
@@ -569,6 +579,15 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self.tunnel_note.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(self.tunnel_note)
+        # why "Go live from this mesh…" is greyed, said INLINE (a disabled button's
+        # tooltip is the only other place, and it is easy never to find)
+        self.golive_note = QtWidgets.QLabel()
+        self.golive_note.setWordWrap(True)
+        self.golive_note.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.golive_note.setStyleSheet(f"color: {MUTED};")
+        self.golive_note.setVisible(False)
+        lay.addWidget(self.golive_note)
 
         # ── the device table ─────────────────────────────────────────────────────
         self.devices = common.make_table(_HEADERS, min_height=200)
@@ -1366,6 +1385,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 f'<span style="color:{MUTED}">No QEMU for Windows device is '
                 "running.</span>")
         self._sync_tunnel_note()
+        self._sync_golive(not self._running)
 
     def _arm_row(self, row: _Row, idle: bool):
         up = row.up
@@ -1631,6 +1651,62 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 f"(<tt>{self.plan.gateway_label or '?'}</tt>) is not up yet — start "
                 "the mesh, then Refresh.</span>")
         self._sync_tunnel_note()
+        self._sync_golive(idle)
+
+    # ── go live FROM this mesh (core.golive_target) ─────────────────────────────
+    def _golive_target(self):
+        """The front door as a go-live TARGET: its keep-alive record (Docker), or
+        under QEMU for Windows its native record. None when it is not running."""
+        if self.plan is None or not self.plan.gateway_label:
+            return None
+        work = self.plan.work_dir
+        if self._whpx:
+            rec = self._native.get(self.plan.gateway_label)
+            return golive_target.target_from_whpx(rec, work) if rec else None
+        row = self._gateway_row()
+        if row is None or row.dev is None:
+            return None
+        return golive_target.target_from_device(row.dev, work)
+
+    def golive_refusal(self) -> str:
+        """Why the front door cannot be gone live from, "" when it can (its record's
+        refusal: not running, no ssh channel, a client or driverless platform, a WHPX
+        record without an ssh identity)."""
+        if self.plan is None:
+            return ""
+        t = self._golive_target()
+        if t is None:
+            return (f"The front door ({self.plan.gateway_label or 'none'}) is not "
+                    "running — start it first.")
+        return golive_target.refusal(t)
+
+    def _sync_golive(self, idle: bool):
+        why = self.golive_refusal()
+        ok = idle and self.plan is not None and not why
+        self.golive_btn.setEnabled(ok)
+        self.golive_btn.setToolTip(
+            why or (f"Open the Go-Live wizard on {self.plan.gateway_label}: its OWN "
+                    "go-live driver, over ssh. Plan runs inside the device; the flip "
+                    "opens an ssh terminal where the device asks you to confirm. The "
+                    "posture lasts until the device stops." if self.plan else ""))
+        self.golive_note.setText(f"{GO_LIVE_ACTION} — not offered: {why}" if why else "")
+        self.golive_note.setVisible(bool(why) and self.plan is not None)
+
+    def _go_live(self):
+        t = self._golive_target()
+        why = self.golive_refusal()
+        if t is None or why:
+            self.note.setText(html.escape(why))
+            return
+        from .golive import open_go_live
+        try:
+            self._golive_wiz = open_go_live(self.wiz.generator_dir, target=t,
+                                            current=self._golive_wiz,
+                                            work_dir=self.plan.work_dir)
+        except Exception as exc:            # noqa: BLE001 — PyQt6 aborts on a slot raise
+            self.note.setText(html.escape(f"Could not open the Go-Live wizard: {exc}"))
+            return
+        console.write(self.log, f"[go-live] opened the Go-Live wizard on {t.label}")
 
     def _sync_tunnel_note(self):
         """The tunnel's state, ON the page. This is the operator's "why can't I

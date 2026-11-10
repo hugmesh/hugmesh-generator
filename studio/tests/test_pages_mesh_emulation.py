@@ -2188,3 +2188,63 @@ def test_look_the_display_button_is_drawn_beside_ssh(qapp, fake_generator, style
             w.close()
             w.deleteLater()
             settle(qapp)
+
+
+# ---- go live FROM this mesh: the front door as a go-live target --------------------------
+
+@pytest.fixture
+def opened_go_live(monkeypatch):
+    """Capture the Go-Live wizard the button opens (the real one is its own window,
+    tested in test_golive_wizard.py)."""
+    from hugmesh_studio.gui.pages import golive as golive_page
+    got = []
+
+    def fake_open(generator_dir, domain="", current=None, target=None, work_dir=""):
+        got.append({"generator_dir": generator_dir, "target": target,
+                    "work_dir": work_dir, "current": current})
+        return object()
+    monkeypatch.setattr(golive_page, "open_go_live", fake_open)
+    return got
+
+
+def test_go_live_is_greyed_with_the_reason_until_the_front_door_runs(wiz, registry):
+    page = _page(wiz)
+    assert page.golive_btn.text() == "Go live from this mesh…"
+    assert not page.golive_btn.isEnabled()
+    assert page.golive_note.isVisible()
+    assert "x86/frontend" in page.golive_note.text()
+    assert "not running" in page.golive_note.text()
+    assert page.golive_btn.toolTip() in page.golive_note.text()
+    registry(_device("rpi5/pki"))                     # up, but not the front door
+    page._refresh_reality()
+    assert not page.golive_btn.isEnabled()
+
+
+def test_go_live_opens_the_wizard_on_the_front_door(wiz, registry, opened_go_live):
+    page = _page(wiz)
+    registry(_device("x86/frontend", port=22357))
+    page._refresh_reality()
+    assert page.golive_btn.isEnabled()
+    assert not page.golive_note.isVisible()
+    assert "over ssh" in page.golive_btn.toolTip()
+    page.golive_btn.click()
+    (call,) = opened_go_live
+    t = call["target"]
+    assert t.label == "x86/frontend" and t.kind == "emulated-docker"
+    assert t.ssh_port == 22357 and t.ssh_base_argv[0] == "ssh"
+    assert call["work_dir"] == page.plan.work_dir == t.work_dir
+    assert "opened the Go-Live wizard on x86/frontend" in page.log.toPlainText()
+
+
+def test_a_front_door_with_no_ssh_channel_is_refused_with_the_core_sentence(
+        wiz, registry, opened_go_live):
+    from hugmesh_studio.core import golive_target
+    page = _page(wiz)
+    registry(_device("x86/frontend", port=0))
+    page._refresh_reality()
+    assert not page.golive_btn.isEnabled()
+    why = golive_target.refusal(page._golive_target())
+    assert why and "published no ssh port" in why
+    assert why in page.golive_note.text()
+    page._go_live()                                   # even if it were clicked
+    assert not opened_go_live

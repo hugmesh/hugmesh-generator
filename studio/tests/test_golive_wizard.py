@@ -38,6 +38,17 @@ def _pinned_status(monkeypatch):
                         lambda self: CANNED_STATUS)
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_targets(monkeypatch, tmp_path):
+    """No test here reads this machine's real device registry (a running emulated mesh
+    on the developer's box would otherwise appear in the picker), and this host
+    answers as a node unless a test says otherwise (B1 has its own tests)."""
+    from hugmesh_studio.core import golive_target
+    monkeypatch.setattr(golive_mod.qemu_devices, "default_work_dir",
+                        lambda _gen: str(tmp_path / "no-devices"))
+    monkeypatch.setattr(golive_target, "local_node_refusal", lambda *a, **k: "")
+
+
 @pytest.fixture(scope="session")
 def qapp():
     from hugmesh_studio.gui.qt import QtWidgets
@@ -334,3 +345,409 @@ def test_flip_page_final_button_says_exit_not_finish(wiz, baked_domain):
     btn = wiz.button(QtWidgets.QWizard.WizardButton.FinishButton)
     assert btn is not None and btn.isVisible()
     assert btn.text() == "Exit", f"the flip page still renders {btn.text()!r}"
+
+
+# ---- go live from an EMULATED device (core.golive_target) ------------------------------
+# The device is a fake `ssh` first on PATH that plays the guest (tests/_golive_fake_guest):
+# every go-live verb against an emulated target is an ssh, so the argv the wizard makes
+# this host run is what is asserted — and nothing else runs.
+
+
+import _golive_fake_guest as fake                          # noqa: E402
+from hugmesh_studio.core import golive_target              # noqa: E402
+
+SECRET = "tok-NEVER-ON-ARGV-0123456789"
+
+
+@pytest.fixture
+def guest(tmp_path, monkeypatch):
+    g = fake.install(tmp_path, monkeypatch)
+    monkeypatch.setattr(golive_mod.qemu_devices, "default_work_dir",
+                        lambda _gen: g.work_dir)
+    return g
+
+
+@pytest.fixture
+def emu_wiz(qapp, guest):
+    """The wizard opened the way the Mesh emulation page opens it: on the front door."""
+    fake.register(guest, label="rpi5/pki")
+    fake.register(guest, label="x86/laptop", platform="x86", role="laptop", port=22402)
+    fake.register(guest, label="rpi5/be", role="backend", port=22403, state="stopped")
+    w = golive_mod.GoLiveWizard(GENERATOR_DIR, target="rpi5/pki")
+    w.show()
+    yield w
+    w.close()
+    w.deleteLater()
+
+
+def _no_secret_on_any_argv(guest):
+    for argv in guest.calls():
+        assert not any(SECRET in a for a in argv), argv
+
+
+def test_the_picker_offers_this_host_and_every_device_greying_the_refused(emu_wiz, guest):
+    from hugmesh_studio.gui.qt import QtCore
+    pre = advance_to(emu_wiz, golive_mod.GoLivePreflightPage)
+    pick = pre.target_pick
+    texts = [pick.itemText(i) for i in range(pick.count())]
+    assert texts[0] == golive_mod.THIS_HOST
+    assert any(t.startswith("rpi5/pki") for t in texts)
+    # the front door is preselected, and the wizard really targets it
+    assert pick.currentText().startswith("rpi5/pki")
+    assert emu_wiz.target.label == "rpi5/pki" and emu_wiz.target.is_remote
+    assert emu_wiz.driver.target.label == "rpi5/pki"
+    model = pick.model()
+    for i, text in enumerate(texts):
+        enabled = bool(model.item(i).flags() & QtCore.Qt.ItemFlag.ItemIsEnabled)
+        tip = pick.itemData(i, QtCore.Qt.ItemDataRole.ToolTipRole) or ""
+        if text.startswith(("x86/laptop", "rpi5/be")):
+            assert not enabled, text
+            assert tip, f"{text}: greyed with no reason"
+            assert tip in pre.target_refusals.text()      # said INLINE, too
+        else:
+            assert enabled, text
+    assert "client" in pre.target_refusals.text()           # the laptop: no driver baked
+    assert "not running" in pre.target_refusals.text()      # the stopped backend
+    assert pre.target_refusals.isVisible()
+    assert not pre.target_problem.isVisible()
+    assert "over ssh" in pre.target_info.text()
+    assert pre.isComplete()
+    # the probe ran — one read-only ssh round trip, BatchMode, no tty
+    probes = [c for c in guest.calls() if "::driver" in c[-1]]
+    assert probes and "BatchMode=yes" in probes[0] and "-t" not in probes[0]
+
+
+def test_a_device_whose_image_bakes_no_driver_stops_preflight_inline(qapp, guest,
+                                                                     monkeypatch):
+    monkeypatch.setenv("FAKE_GUEST_DRIVER", "")             # B8: no hugmesh-go-live
+    fake.register(guest, label="rpi5/pki")
+    w = golive_mod.GoLiveWizard(GENERATOR_DIR, target="rpi5/pki")
+    w.show()
+    try:
+        pre = advance_to(w, golive_mod.GoLivePreflightPage)
+        assert not pre.isComplete()
+        assert pre.target_problem.isVisible()
+        assert "no go-live driver" in pre.target_problem.text()
+        # back to this host: the flow opens again
+        pre.target_pick.setCurrentIndex(0)
+        assert w.target.is_local and pre.isComplete()
+        assert not pre.target_problem.isVisible()
+    finally:
+        w.close()
+        w.deleteLater()
+
+
+def test_an_unknown_label_stays_on_this_host_and_says_why(qapp, guest):
+    w = golive_mod.GoLiveWizard(GENERATOR_DIR, target="x86/nope")
+    try:
+        assert w.target.is_local
+        pre = w.page(w._page_ids["preflight"])
+        assert "no running device 'x86/nope'" in pre.target_problem.text()
+    finally:
+        w.close()
+        w.deleteLater()
+
+
+def test_exposure_and_provider_say_what_each_mechanism_can_do_from_the_device(emu_wiz):
+    exp = advance_to(emu_wiz, golive_mod.GoLiveExposurePage)
+    assert exp.reach["tunnel"].isVisible()
+    assert "can be really reachable (outbound only)" in exp.reach["tunnel"].text()
+    assert "can be really reachable" in exp.reach["onion"].text()
+    for model in ("public-dns", "ddns", "router"):
+        assert exp.reach[model].text().startswith("From rpi5/pki: REHEARSAL"), model
+    assert "not on headscale" in exp.reach["funnel"].text()
+    pick_model(emu_wiz, "tunnel")
+    prov = advance_to(emu_wiz, golive_mod.GoLiveProviderPage)
+    assert prov.reach.isVisible()
+    assert "PROD ExternalSecret" in prov.reach.text()       # cloudflare-tunnel's caveat
+
+
+def test_this_host_shows_no_reachability_labels(wiz):
+    exp = advance_to(wiz, golive_mod.GoLiveExposurePage)
+    assert not any(lb.isVisible() for lb in exp.reach.values())
+    prov = advance_to(wiz, golive_mod.GoLiveProviderPage)
+    assert not prov.reach.isVisible()
+
+
+def test_inputs_autofill_from_the_devices_probe_not_this_host(emu_wiz, monkeypatch,
+                                                               tmp_path, guest):
+    monkeypatch.setenv("FAKE_GUEST_DOMAINS", "mesh.example\nshop.example")
+    host = tmp_path / "host-cluster-domain"
+    host.write_text("workstation.example\n")             # must NOT be what is offered
+    monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", str(host))
+    emu_wiz.forget_probes()                              # read the device again
+    pick_model(emu_wiz, "public-dns")
+    inputs = advance_to(emu_wiz, golive_mod.GoLiveInputsPage)
+    assert inputs.domain.text() == "mesh.example"
+    assert "rpi5/pki" in inputs.domain_hint.text()
+    assert [inputs.domain_pick.itemData(i) for i in range(inputs.domain_pick.count())] \
+        == ["mesh.example", "shop.example"]
+    # the host-side folders mean nothing on a device; where the plan goes is said
+    assert not inputs.out_row.isVisible() and not inputs.keys_row.isVisible()
+    assert inputs.remote_note.isVisible()
+    assert golive_target.GUEST_OUT_ROOT in inputs.remote_note.text()
+    # the emulator's own addresses are refused inline, before any plan runs
+    inputs.ingress_ip.setText("10.0.2.15")
+    before = emu_wiz.currentId()
+    emu_wiz.next()
+    assert emu_wiz.currentId() == before
+    assert inputs.problem.isVisible() and "10.0.2.0/24" in inputs.problem.text()
+    inputs.ingress_ip.setText("203.0.113.10")
+    emu_wiz.next()
+    assert emu_wiz.currentId() != before
+
+
+def test_generate_runs_the_plan_inside_the_device_and_shows_what_came_back(
+        emu_wiz, guest, qapp):
+    pick_model(emu_wiz, "public-dns")
+    inputs = advance_to(emu_wiz, golive_mod.GoLiveInputsPage)
+    inputs.ingress_ip.setText("203.0.113.10")
+    gen = advance_to(emu_wiz, golive_mod.GoLiveGeneratePage)
+    preview = gen.cmd.toPlainText()
+    assert preview.startswith("ssh ") and "sudo -n hugmesh-go-live plan" in preview
+    assert "--domain mesh.example" in preview and "bash" not in preview.split()
+    gen._generate()
+    assert gen.worker.wait(30000)
+    qapp.processEvents()
+    log = gen.log.toPlainText()
+    assert "==> Plan summary ready" in log and "=== plan exited 0 ===" in log
+    assert gen.progress_label.text() == "done" and gen.progress_bar.value() == 100
+    out = golive_target.artifacts_dir(guest.work_dir, "rpi5/pki")
+    assert gen.artifacts_folder() == out
+    assert sorted(os.listdir(out)) == ["records.txt", "zone.db"]
+    for name in ("records.txt", "zone.db"):
+        assert f"  {name}" in log                           # listed on the page by name
+    plans = [c for c in guest.calls() if "hugmesh-go-live plan" in c[-1]]
+    assert len(plans) == 1
+    assert not any(a in ("-y", "--yes") for a in plans[0])
+    assert golive_target.GUEST_OUT_ROOT + "/studio-" in plans[0][-1]
+
+
+def test_a_masked_token_reaches_the_device_over_stdin_never_argv(emu_wiz, guest, qapp):
+    pick_model(emu_wiz, "tunnel")
+    inputs = advance_to(emu_wiz, golive_mod.GoLiveInputsPage)
+    inputs.token_secret.setText(SECRET)
+    gen = advance_to(emu_wiz, golive_mod.GoLiveGeneratePage)
+    assert SECRET not in gen.cmd.toPlainText()
+    gen._generate()
+    assert gen.worker.wait(30000)
+    qapp.processEvents()
+    assert guest.token_seen().strip() == SECRET               # the plan read it there
+    assert guest.removed() == ["/run/hugmesh-golive-tok.AbC123"]   # and it was deleted
+    assert gen._staged == []                                   # the host temp file too
+    _no_secret_on_any_argv(guest)
+    assert SECRET not in gen.log.toPlainText()
+
+
+def test_verify_and_flip_show_the_ephemeral_banner_for_a_device(emu_wiz):
+    pick_model(emu_wiz, "public-dns")
+    inputs = advance_to(emu_wiz, golive_mod.GoLiveInputsPage)
+    inputs.ingress_ip.setText("203.0.113.10")
+    ver = advance_to(emu_wiz, golive_mod.GoLiveVerifyPage)
+    assert ver.ephemeral.isVisible()
+    assert golive_target.EPHEMERAL_NOTE in ver.ephemeral.text()
+    assert "REHEARSAL" in ver.checklist.toPlainText()
+    flip = advance_to(emu_wiz, golive_mod.GoLiveFlipPage)
+    assert flip.ephemeral.isVisible()
+    assert "a restart boots the golden image INTERNAL again" in flip.ephemeral.text()
+    assert "rpi5/pki" in flip.flip_btn.text()
+    # the warning does not promise the internet: from a device this is a rehearsal
+    assert "ABOUT TO GO PUBLIC on rpi5/pki" in flip.warning.text()
+    assert "REHEARSAL" in flip.warning.text()
+
+
+def test_this_host_shows_no_ephemeral_banner(wiz, baked_domain):
+    pick_model(wiz, "public-dns")
+    inputs = advance_to(wiz, golive_mod.GoLiveInputsPage)
+    inputs.ingress_ip.setText("203.0.113.7")
+    ver = advance_to(wiz, golive_mod.GoLiveVerifyPage)
+    assert not ver.ephemeral.isVisible()
+    flip = advance_to(wiz, golive_mod.GoLiveFlipPage)
+    assert not flip.ephemeral.isVisible() and flip.ephemeral.text() == ""
+
+
+class _Launched(list):
+    pass
+
+
+@pytest.fixture
+def launched(monkeypatch):
+    """Capture the terminal the flip opens (a real Popen would open a window)."""
+    import subprocess
+    real = subprocess.Popen
+    got = _Launched()
+
+    def popen(argv, *a, **kw):
+        # a DETACHED launch (its own session / console) is the terminal; everything
+        # else (the fake guest's ssh) runs for real
+        if kw.get("start_new_session") or kw.get("creationflags"):
+            got.append((list(argv), kw))
+            return None
+        return real(argv, *a, **kw)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    return got
+
+
+def _at_flip(w):
+    pick_model(w, "public-dns")
+    inputs = advance_to(w, golive_mod.GoLiveInputsPage)
+    inputs.ingress_ip.setText("203.0.113.10")
+    return advance_to(w, golive_mod.GoLiveFlipPage)
+
+
+def test_flip_opens_the_ssh_commit_on_a_tty_with_no_bypass(emu_wiz, guest, launched,
+                                                           monkeypatch):
+    monkeypatch.setattr(golive_target, "terminal_spec",
+                        lambda argv, **k: golive_target.TerminalSpec(
+                            ["xterm", "-e", "bash", "-c", " ".join(argv)], 0, "linux"))
+    flip = _at_flip(emu_wiz)
+    flip.confirm.setText("mesh.example")
+    assert flip.flip_btn.isEnabled()
+    flip.flip_btn.click()
+    assert len(launched) == 1
+    script = launched[0][0][-1]
+    assert "ssh" in script and "-t" in script.split()
+    assert "sudo hugmesh-go-live commit --provider byo-domain --domain mesh.example" in script
+    assert " -y" not in script and "--yes" not in script and "GL_ASSUME_YES" not in script
+    assert "Launched in xterm" in flip.out.text()
+    # the journal: what was ASKED of which boot of the device, no secret
+    j = golive_target.read_journal(guest.work_dir, "rpi5/pki")
+    assert j["action"] == "commit" and j["domain"] == "mesh.example"
+    assert j["started_at"] == "2026-11-09T20:00:00Z"
+    assert "last commit from this host" in flip.status.toPlainText()
+
+
+def test_flip_without_a_terminal_shows_the_exact_ssh_command(emu_wiz, launched,
+                                                            monkeypatch):
+    monkeypatch.setattr(golive_target, "terminal_spec", lambda argv, **k: None)
+    flip = _at_flip(emu_wiz)
+    flip.confirm.setText("mesh.example")
+    flip.flip_btn.click()
+    assert not launched
+    assert flip.manual.isVisible()
+    cmd = flip.manual.text()
+    assert cmd.startswith("ssh ") and " -t " in cmd
+    assert "hugmesh-go-live commit --provider byo-domain --domain mesh.example" in cmd
+
+
+def test_a_restart_since_the_commit_is_said(emu_wiz, guest, monkeypatch):
+    golive_target.write_journal(
+        golive_target.GoLiveTarget(kind=golive_target.KIND_DOCKER, label="rpi5/pki",
+                                   started_at="2026-11-01T00:00:00Z",
+                                   work_dir=guest.work_dir),
+        "commit", "byo-domain", "mesh.example")
+    flip = _at_flip(emu_wiz)
+    assert "reset by a restart" in flip.status.toPlainText()
+
+
+def test_this_host_off_node_cannot_flip_whatever_is_typed(wiz, baked_domain, monkeypatch,
+                                                          launched):
+    monkeypatch.setattr(golive_target, "local_node_refusal",
+                        lambda *a, **k: "this host is not a HugMesh node — pick a device")
+    pre = advance_to(wiz, golive_mod.GoLivePreflightPage)
+    pre.rescan_btn.click()                           # the wizard was shown before the patch
+    assert "commit is refused" in pre.target_info.text()
+    assert pre.isComplete()                          # plan and status still preview
+    flip = _at_flip(wiz)
+    assert flip.refused.isVisible()
+    assert "not a HugMesh node" in flip.refused.text()
+    flip.confirm.setText(baked_domain)
+    assert not flip.flip_btn.isEnabled()
+    flip._flip()                                     # even if it were clicked
+    assert not launched
+    assert "not a HugMesh node" in flip.out.text()
+
+
+def test_rollback_opens_no_message_box_and_takes_the_revert_tick(emu_wiz, launched,
+                                                                monkeypatch):
+    from hugmesh_studio.gui.qt import QtWidgets
+    modals = []
+    for name in ("warning", "information", "critical", "question"):
+        monkeypatch.setattr(QtWidgets.QMessageBox, name,
+                            staticmethod(lambda *a, _n=name, **k: modals.append(_n)))
+    monkeypatch.setattr(golive_target, "terminal_spec",
+                        lambda argv, **k: golive_target.TerminalSpec(list(argv), 0, "x"))
+    flip = _at_flip(emu_wiz)
+    flip.persist.setChecked(True)
+    assert flip.revert.isChecked()                  # a persisted flip needs the revert
+    flip.rollback_btn.click()
+    assert not modals
+    argv = launched[-1][0]
+    assert argv[0] == "ssh" and "-t" in argv
+    assert argv[-1] == "sudo hugmesh-go-live rollback --revert-release-state"
+    flip.revert.setChecked(False)
+    flip.rollback_btn.click()
+    assert launched[-1][0][-1] == "sudo hugmesh-go-live rollback"
+
+
+def test_open_go_live_opens_a_new_wizard_for_another_device(qapp, guest):
+    fake.register(guest, label="rpi5/pki")
+    fake.register(guest, label="x86/be", platform="x86", role="backend", port=22404)
+    first = golive_mod.open_go_live(GENERATOR_DIR, target="rpi5/pki")
+    try:
+        assert first.target.label == "rpi5/pki"
+        assert golive_mod.open_go_live(GENERATOR_DIR, target="rpi5/pki",
+                                       current=first) is first
+        other = golive_mod.open_go_live(GENERATOR_DIR, target="x86/be", current=first)
+        assert other is not first and other.target.label == "x86/be"
+        other.close()
+        other.deleteLater()
+    finally:
+        first.close()
+        first.deleteLater()
+
+
+# ---- what a person SEES: the picker and the banner, measured (not just "visible") ------
+
+def _rect_in(widget, frame):
+    from hugmesh_studio.gui.qt import QtCore
+    return QtCore.QRect(widget.mapTo(frame, QtCore.QPoint(0, 0)), widget.size())
+
+
+def _whole(label):
+    return label.heightForWidth(label.width()) <= label.height() + 1
+
+
+def _shoot(w, name, tmp_path):
+    """Render the window to a PNG (GOLIVE_SHOTS_DIR keeps it for a human to look at)
+    and hand back the image, so a test can assert it is not blank."""
+    from hugmesh_studio.gui.qt import QtWidgets
+    QtWidgets.QApplication.processEvents()
+    img = w.grab().toImage()
+    out = os.environ.get("GOLIVE_SHOTS_DIR") or str(tmp_path)
+    os.makedirs(out, exist_ok=True)
+    assert img.save(os.path.join(out, f"{name}.png"))
+    return img
+
+
+def test_the_target_picker_and_its_refusals_are_drawn_whole(emu_wiz, tmp_path):
+    pre = advance_to(emu_wiz, golive_mod.GoLivePreflightPage)
+    img = _shoot(emu_wiz, "golive-preflight-target-picker", tmp_path)
+    assert not img.isNull() and img.width() >= 800
+    pick = pre.target_pick
+    assert pick.isVisible() and emu_wiz.rect().contains(_rect_in(pick, emu_wiz))
+    # as wide as its widest entry needs (a squeezed combo elides the device names)
+    widest = max(pick.fontMetrics().horizontalAdvance(pick.itemText(i))
+                 for i in range(pick.count()))
+    assert pick.width() >= widest, (pick.width(), widest)
+    for lb in (pre.target_info, pre.target_refusals):
+        assert lb.isVisible() and lb.text()
+        assert emu_wiz.rect().contains(_rect_in(lb, emu_wiz)), lb.text()
+        assert _whole(lb), (lb.text(), lb.heightForWidth(lb.width()), lb.height())
+    # the refusals sit UNDER the picker, not over it
+    assert _rect_in(pre.target_refusals, emu_wiz).top() >= _rect_in(pick, emu_wiz).bottom()
+
+
+def test_the_ephemeral_banner_is_drawn_whole_above_the_flip(emu_wiz, tmp_path):
+    flip = _at_flip(emu_wiz)
+    _shoot(emu_wiz, "golive-flip-ephemeral-banner", tmp_path)
+    b = flip.ephemeral
+    assert b.isVisible() and emu_wiz.rect().contains(_rect_in(b, emu_wiz))
+    assert _whole(b), (b.heightForWidth(b.width()), b.height())
+    assert b.width() >= 400                           # a banner, not a squeezed sliver
+    # it is read before the button that acts: above GO LIVE, and the button is whole
+    assert _rect_in(b, emu_wiz).bottom() <= _rect_in(flip.flip_btn, emu_wiz).top()
+    btn = flip.flip_btn
+    assert btn.isVisible() and emu_wiz.rect().contains(_rect_in(btn, emu_wiz))
+    assert btn.width() >= btn.fontMetrics().horizontalAdvance(btn.text())
+    _shoot(emu_wiz, "golive-flip-ephemeral-banner", tmp_path)
