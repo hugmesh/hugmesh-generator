@@ -76,7 +76,23 @@ grep -q 'KEYLESS BOOT' "${R}/out" && bad "keyless fallback ran after a working s
 grep -q '^passwd -l root' "${R}/log" && ok "root stays locked" || bad "root not locked"
 grep -q 'ready (password set at build time)' "${R}/out" && ok "'ready' reported" || bad "no 'ready' line"
 [ ! -e "${R}/self" ] && ok "finaliser removed itself after success" || bad "finaliser left in place after success"
-grep -Eq '^%wheel ALL=\(ALL\) ALL$' "${R}/etc/sudoers" && ok "wheel may sudo" || bad "no %wheel sudoers line"
+grep -Eq '^%wheel ALL=\(ALL\) ALL$' "${R}/etc/sudoers" && ok "%wheel sudoers line written (wheel = the admin group)" || bad "no %wheel sudoers line"
+grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && bad "standalone account put in wheel WITHOUT --local-admin (admin must be opt-in)" \
+    || ok "standalone account is not in wheel without --local-admin"
+grep -q 'magus is NOT an administrator' "${R}/console" 2>/dev/null && ok "console says nobody local can sudo" \
+    || bad "silent: a standalone box with no administrator, and the console never says so"
+
+echo "== A1a. standalone + password + --local-admin: the account is the administrator =="
+R="${WORK}/a1a"; make_root "${R}"; render "${R}" "${HASH6}" true true; run_fb "${R}"
+grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && ok "--local-admin puts the standalone account in wheel" \
+    || bad "--local-admin did not make the standalone account an administrator"
+[ "$(grep -c '^%wheel ALL=(ALL) ALL$' "${R}/etc/sudoers")" = 1 ] && ok "exactly one %wheel line" \
+    || bad "expected exactly one %wheel line, got $(grep -c '^%wheel' "${R}/etc/sudoers")"
+grep -q 'NOT an administrator' "${R}/console" 2>/dev/null && bad "console claims no administrator although --local-admin was given" \
+    || ok "no 'NOT an administrator' line with --local-admin"
+[ -z "$(ls -A "${R}/etc/sudoers.d" 2>/dev/null)" ] && ok "no sudoers.d grant on a keyless shape (wheel is the path)" \
+    || bad "sudoers.d grant written on a standalone image"
+grep -q '^passwd -l root' "${R}/log" && ok "root still locked" || bad "root not locked"
 
 echo "== A2. a hash made only of word characters after its \$-segments survives quoting =="
 # Inside double quotes the template's `$y$`/`$6$` segments are parameter
@@ -133,10 +149,29 @@ R="${WORK}/a6"; make_root "${R}"; render "${R}" "${HASH6}" false; run_fb "${R}"
 grep -q 'KEYLESS BOOT' "${R}/out" && bad "keyless random-password fallback ran although a password was given" \
     || ok "keyless fallback did not run"
 grep -q '^passwd -l root' "${R}/log" && ok "root locked" || bad "root not locked"
-grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && ok "only login on the box -> in wheel (as the fallback was)" \
-    || bad "keyless image: the only account cannot administer the box"
+grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && bad "keyless boot put the local account in wheel WITHOUT --local-admin (the 2026-11-09 prover defect)" \
+    || ok "keyless boot: local account is not in wheel without --local-admin"
+grep -q 'magus is NOT an administrator' "${R}/console" 2>/dev/null && ok "console says no local account can sudo" \
+    || bad "silent: keyless box with no administrator, and the console never says so"
 [ -f "${R}/var/lib/keys-provision/users.created" ] && ok "users.created marked" || bad "users.created not marked"
 [ ! -e "${R}/self" ] && ok "finaliser removed itself" || bad "finaliser left in place"
+
+echo "== A6a. STANDALONE=false + password + --local-admin, keyless boot: in wheel =="
+R="${WORK}/a6a"; make_root "${R}"; render "${R}" "${HASH6}" false true; run_fb "${R}"
+grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && ok "--local-admin on a keyless boot puts the account in wheel" \
+    || bad "--local-admin ignored on a keyless boot"
+grep -Eq '^%wheel ALL=\(ALL\) ALL$' "${R}/etc/sudoers" && ok "%wheel line present" || bad "no %wheel line"
+grep -q 'NOT an administrator' "${R}/console" 2>/dev/null && bad "false 'NOT an administrator' with --local-admin" || ok "no false no-admin line"
+
+echo "== A6b. a %wheel line already there is not duplicated (local account and fallback) =="
+R="${WORK}/a6b"; make_root "${R}"; printf '%%wheel ALL=(ALL) ALL\n' > "${R}/etc/sudoers"
+render "${R}" "${HASH6}" false true; run_fb "${R}"
+[ "$(grep -c '^%wheel' "${R}/etc/sudoers")" = 1 ] && ok "local-account path: one %wheel line" \
+    || bad "local-account path duplicated %wheel ($(grep -c '^%wheel' "${R}/etc/sudoers") lines)"
+R="${WORK}/a6c"; make_root "${R}"; printf '%%wheel ALL=(ALL) ALL\n' > "${R}/etc/sudoers"
+render "${R}" "" false; run_fb "${R}"
+[ "$(grep -c '^%wheel' "${R}/etc/sudoers")" = 1 ] && ok "fallback path: one %wheel line" \
+    || bad "fallback path duplicated %wheel ($(grep -c '^%wheel' "${R}/etc/sudoers") lines)"
 
 echo "== A7. STANDALONE=false + password, KEYS provisioned users: an ADDITIONAL account, no wheel =="
 R="${WORK}/a7"; make_root "${R}"; keys_provisioned "${R}"; printf '%%wheel ALL=(ALL) ALL  # hugmesh: governed\n' > "${R}/etc/sudoers"
@@ -184,6 +219,15 @@ R="${WORK}/a9"; make_root "${R}"; render "${R}" "" false; run_fb "${R}"
 grep -q 'KEYLESS BOOT' "${R}/console" 2>/dev/null && ok "keyless fallback banner on the console" \
     || bad "keyless fallback did not run with no password"
 [ -s "${R}/shadow.plain" ] && ok "random one-time password set" || bad "no random password"
+grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && bad "keyless fallback put in wheel WITHOUT --local-admin" \
+    || ok "keyless fallback is not in wheel without --local-admin"
+grep -q 'magus is NOT an administrator' "${R}/console" 2>/dev/null && ok "fallback banner says it is not an administrator" \
+    || bad "silent: the fallback banner does not say nobody can sudo"
+grep -q '^passwd -l root' "${R}/log" && ok "root stays locked (never unlocked to make up for it)" || bad "root not locked"
+R="${WORK}/a9a"; make_root "${R}"; render "${R}" "" false true; run_fb "${R}"
+grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && ok "--local-admin: keyless fallback in wheel" \
+    || bad "--local-admin ignored by the keyless fallback"
+grep -q 'NOT an administrator' "${R}/console" 2>/dev/null && bad "false no-admin banner with --local-admin" || ok "no false no-admin banner"
 R="${WORK}/a9k"; make_root "${R}"; keys_provisioned "${R}"; render "${R}" "" false; run_fb "${R}"
 [ ! -e "${R}/shadow.plain" ] && [ ! -e "${R}/shadow.hash" ] && ! grep -qE '^magus:' "${R}/etc/passwd" \
     && ok "KEYS image, no password: no local account at all" || bad "KEYS image with no password got a local account"
@@ -317,6 +361,35 @@ for b in "${REPO}"/build-*-stage4.sh; do
         && ok "${n}: --local-admin/--local-pass-file parsed, @@LOCAL_ADMIN@@ rendered" \
         || bad "${n}: missing --local-admin/--local-pass-file arm or @@LOCAL_ADMIN@@ substitution"
 done
+echo "== C3b. admin is opt-in in every builder and in the template (static guard) =="
+# The template: nothing grants wheel except @@LOCAL_ADMIN@@.
+if sed '/^[[:space:]]*#/d' "${TMPL}" | grep -E 'useradd[^#]*-G[[:space:]]*"?wheel' >/dev/null; then
+    bad "template: a useradd with a literal wheel group (admin must come from @@LOCAL_ADMIN@@)"
+else
+    ok "template: no useradd with a literal wheel group"
+fi
+grep -qx '    LL_WHEEL=false' "${TMPL}" && ok "template: LL_WHEEL defaults to false" \
+    || bad "template: LL_WHEEL does not default to false"
+[ "$(grep -c '"@@LOCAL_ADMIN@@" = "true"' "${TMPL}")" -ge 3 ] && ok "template: local account, KEYS grant and fallback all read @@LOCAL_ADMIN@@" \
+    || bad "template: some account path does not read @@LOCAL_ADMIN@@"
+for b in "${REPO}"/build-*-stage4.sh; do
+    n="$(basename "${b}")"
+    grep -q '^LOCAL_ADMIN=false ' "${b}" && ok "${n}: LOCAL_ADMIN defaults to false" || bad "${n}: LOCAL_ADMIN does not default to false"
+    grep -q 'KEYS-provisioned image too' "${b}" && bad "${n}: help still says --local-admin only matters on a KEYS image" \
+        || ok "${n}: help does not limit --local-admin to KEYS images"
+    grep -qE '^ +--local-admin +Make the local|^ +--local-admin$' "${b}" && ok "${n}: usage documents --local-admin" \
+        || bad "${n}: usage does not document --local-admin"
+done
+for b in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh build-frite-stage4.sh \
+         build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+    awk '/^if ! \$\{LOCAL_ADMIN\}; then$/ { a = 1; next }
+         a && /warn "No --local-admin: the local login account will NOT be an administrator\./ { f = 1 }
+         a && /^fi$/ { a = 0 }
+         END { exit !f }' "${REPO}/${b}" \
+        && ok "${b}: warns at build time when there is no --local-admin" \
+        || bad "${b}: builds an image with no administrator silently (no --local-admin warning)"
+done
+
 echo "== C4. a standalone DESKTOP builder refuses a real build with no password =="
 for b in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh build-frite-stage4.sh \
          build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do

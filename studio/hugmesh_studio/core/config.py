@@ -3599,7 +3599,7 @@ class ImageConfig:
     user: str = ""                     # -u/--user baked default account name (all; distinct from --local-user)
     local_user: str = field(default_factory=default_local_user)  # the INVOKING user, not a baked operator name
     local_pass: str = ""               # --local-pass (SECRET — never saved; live cmd only)
-    local_admin: bool = False          # --local-admin: the local account may sudo on a KEYS-provisioned image
+    local_admin: bool = False          # --local-admin: the local account is an administrator (sudo) on ANY image; off = not
     user_password: str = ""            # --user-password node FALLBACK cred (SECRET; x86)
     root_password: str = ""            # --root-password node FALLBACK cred (SECRET; x86)
     standalone: bool = False           # --standalone (arm64 only; x86 gets it via role name)
