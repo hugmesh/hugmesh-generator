@@ -333,3 +333,7 @@ jobs:
           "tests/test_tui_gui_parity.py::test_go_live_offers_and_plans_the_same_domains_on_both_faces"
           "tests/test_windows_packaging_files.py::test_the_spec_freezes_the_entry_shim_as_a_windowed_onedir"
           "tests/test_windows_packaging_files.py::test_windows_also_freezes_a_console_twin_into_the_same_tree"
+          tests/test_local_ai_windows.py
+          tests/test_local_ai_status.py
+          tests/test_local_ai_cli.py
+          tests/test_assistant_code_edits.py

@@ -190,13 +190,15 @@ docker exec hugmesh-local-hugmesh-headscale-1 \
   headscale preauthkeys create --user hugmesh --tags tag:hugmesh --expiration 1h
 ```
 
-The Studio's `mesh_token.mint_and_issue` (from #862) works against this container unchanged:
-`find_headscale_container` matches its name, and the key is minted with
-`docker exec ... headscale preauthkeys create`. Measured: a token minted and signed with the
-key from `make stack-mesh-token-key` passes `mesh_token.verify`, and Studio's `fingerprint()`
-equals the one the target prints. One gap: the Studio's `DEFAULT_MINT_TAGS` is empty, so by
-default it mints an **untagged** key. For this mesh it should pass the `key-tags` label,
-`tag:hugmesh`.
+The Studio's `mesh_token.mint_and_issue` (from #862) works against this container:
+`find_headscale_container` finds it by its `net.hugmesh.role=headscale` label, and unless the
+admin names a user, the key is minted for its `net.hugmesh.headscale.user` label (`hugmesh`)
+with its `net.hugmesh.headscale.key-tags` label (`tag:hugmesh`), using
+`docker exec ... headscale preauthkeys create`. The key-tags label is used only for a key
+minted for that label's user; a key for any other named user carries no tags unless they
+are given. Measured: a token minted and signed with the key from
+`make stack-mesh-token-key` passes `mesh_token.verify`, and Studio's `fingerprint()` equals
+the one the target prints.
 
 A node on the host reaches the login server at `https://hs.<domain>:<PUBLIC_HTTPS_PORT>`. That
 needs two things:
