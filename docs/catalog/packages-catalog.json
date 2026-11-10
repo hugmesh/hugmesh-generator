@@ -77,7 +77,8 @@
               "sys-apps/i2c-tools",
               "sys-apps/util-linux",
               "sys-fs/e2fsprogs",
-              "sys-fs/dosfstools"
+              "sys-fs/dosfstools",
+              "sys-fs/mtd-utils"
             ],
             "title": "Board hardware / storage"
           },
@@ -308,6 +309,13 @@
               "gui-libs/display-manager-init"
             ],
             "title": "Login / session bring-up"
+          },
+          {
+            "atoms": [
+              "sys-auth/polkit",
+              "dev-lang/python"
+            ],
+            "title": "Desktop-governance runtime (SSO `desktop-sudo` claim -> polkit)"
           },
           {
             "atoms": [
@@ -561,6 +569,13 @@
           },
           {
             "atoms": [
+              "sys-auth/polkit",
+              "dev-lang/python"
+            ],
+            "title": "Desktop-governance runtime (SSO `desktop-sudo` claim -> polkit)"
+          },
+          {
+            "atoms": [
               "media-gfx/feh",
               "app-editors/nano",
               "www-client/netsurf"
@@ -748,6 +763,13 @@
               "gui-libs/display-manager-init"
             ],
             "title": "Login / session bring-up"
+          },
+          {
+            "atoms": [
+              "sys-auth/polkit",
+              "dev-lang/python"
+            ],
+            "title": "Desktop-governance runtime (SSO `desktop-sudo` claim -> polkit)"
           },
           {
             "atoms": [
@@ -1206,6 +1228,13 @@
           },
           {
             "atoms": [
+              "sys-auth/polkit",
+              "dev-lang/python"
+            ],
+            "title": "Desktop-governance runtime (SSO `desktop-sudo` claim -> polkit)"
+          },
+          {
+            "atoms": [
               "media-gfx/feh",
               "app-editors/nano",
               "www-client/netsurf"
@@ -1611,6 +1640,7 @@
           "sys-block/parted",
           "sys-fs/dosfstools",
           "sys-fs/e2fsprogs",
+          "sys-fs/mtd-utils",
           "sys-kernel/gentoo-sources",
           "sys-kernel/linux-firmware",
           "sys-libs/libseccomp",
@@ -1654,6 +1684,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -1727,6 +1758,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -1797,7 +1829,6 @@
           "app-containers/containerd",
           "app-containers/cri-tools",
           "app-containers/runc",
-          "dev-lang/python",
           "net-firewall/conntrack-tools",
           "net-firewall/nftables",
           "net-misc/curl",
@@ -1847,6 +1878,7 @@
           "x11-wm/openbox"
         ],
         "removable": [
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -1854,6 +1886,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -1873,6 +1906,7 @@
           "media-fonts/dejavu",
           "media-fonts/noto",
           "media-gfx/feh",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -1983,6 +2017,7 @@
       "frontend": {
         "available": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -1991,6 +2026,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "sys-kernel/dracut",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
@@ -2122,6 +2158,7 @@
         ],
         "removable": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2130,6 +2167,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2145,6 +2183,7 @@
       "backend": {
         "available": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2153,6 +2192,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "sys-kernel/dracut",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
@@ -2225,6 +2265,7 @@
       "frontend": {
         "available": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2233,6 +2274,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "sys-kernel/dracut",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
@@ -2305,6 +2347,7 @@
       "omnibus": {
         "available": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2313,6 +2356,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "sys-kernel/dracut",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
@@ -2444,6 +2488,7 @@
         ],
         "removable": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2452,6 +2497,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2465,6 +2511,7 @@
       "pki": {
         "available": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2473,6 +2520,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "sys-kernel/dracut",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
@@ -2670,6 +2718,7 @@
       "backend": {
         "available": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2678,6 +2727,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2751,6 +2801,7 @@
       "frontend": {
         "available": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2759,6 +2810,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2832,6 +2884,7 @@
       "generic": {
         "available": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2840,6 +2893,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2913,6 +2967,7 @@
       "omnibus": {
         "available": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -2921,6 +2976,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -2994,6 +3050,7 @@
       "pki": {
         "available": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -3002,6 +3059,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
@@ -3136,6 +3194,7 @@
         ],
         "removable": [
           "app-emulation/spice-vdagent",
+          "dev-lang/python",
           "gui-libs/display-manager-init",
           "lxde-base/lxappearance",
           "lxde-base/lxpanel",
@@ -3144,6 +3203,7 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
+          "sys-auth/polkit",
           "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
