@@ -222,6 +222,18 @@ else
 fi
 
 echo
+echo "== 2c. device_code applications list the \"Device login\" sign-in method =="
+# casdoor's /api/device-auth checks the SIGN-IN METHOD, not the grant, and refuses
+# with HTTP 200 + unauthorized_client when it is missing (hugmesh-desktop shipped
+# that way: #878). Every seed shape is swept — the cluster manifests, the per-brand
+# IdP template and the local-stack seed — not just the init Jobs above.
+if python3 "${CONTRACT}" devicelogin "${CLUSTER}" "${REPO}/templates" "${REPO}/tests/stack"; then
+    ok "(2c) every application granted device_code can actually start a device flow"
+else
+    bad "(2c) an application is granted device_code that casdoor will refuse to run (details above)"
+fi
+
+echo
 echo "== 3. negative controls — each check re-run against a corrupted copy =="
 STAGE="${WORK}/stage"
 mkdir -p "${STAGE}/manifests"
@@ -439,6 +451,33 @@ j["applications"].append({"owner": "admin", "name": "app-acme",
 if [ $? -eq 0 ]; then permits "a second tenant declared the way casdoor requires"
 else bad "(3) control [admin-owned second tenant allowed] could not be staged"; fi
 cp "${CLUSTER}/manifests/casdoor/init-data-configmap.yaml" "${SEED_CM}"
+
+# ── controls for the device-login contract (2c) ──────────────────────────────
+# (ncD1) THE SHIPPED BUG, restored: hugmesh-desktop keeps the device_code grant and
+# loses its signinMethods, which is byte-for-byte the shape #878 caught live.
+python3 - "${INIT_JOB}" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+pat = re.compile(r'^ *"signinMethods": \[\n(?: *\{"name": "Device login".*\n)+ *\],\n', re.M)
+assert len(pat.findall(s)) == 1, "control precondition: the Device login signinMethods block not found once"
+p.write_text(pat.sub("", s))
+PY
+if [ $? -eq 0 ]; then control "hugmesh-desktop grants device_code with no signinMethods" devicelogin
+else bad "(3) control [device_code with no signinMethods] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
+
+# (ncD2) the method is present but spelled the way a human would write it.
+# HasSigninMethod compares the name EXACTLY (object/application.go:181).
+python3 - "${INIT_JOB}" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+needle = '{"name": "Device login",'
+assert s.count(needle) == 1, "control precondition: Device login entry not found once"
+p.write_text(s.replace(needle, '{"name": "Device Login",'))
+PY
+if [ $? -eq 0 ]; then control "the Device login method is misspelled" devicelogin
+else bad "(3) control [Device login misspelled] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
 
 echo
 echo "== 4. behaviour — the real scripts against the live failure shapes =="
