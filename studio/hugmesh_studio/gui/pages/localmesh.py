@@ -4404,14 +4404,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if self._mesh_up is True:
             self._refuse(
                 native_windows_running_mesh() or (
-                f"This checkout's mesh ({vaults.DEFAULT_PROJECT}) is "
-                "running — stop it first. "
-                + (f"'{rec.label or rec.id}' runs as its own compose project "
-                   f"{saved_meshes.record_project(rec)}, but it publishes the same "
-                   "fixed ports (Casdoor's 8000), so the two cannot run at once."
-                   if own_project else
-                   "Starting a saved mesh over a live one would bring up a second "
-                   "stack on the same compose project.")))
+                f"This checkout's mesh ({vaults.DEFAULT_PROJECT}) is running — stop "
+                f"it first. '{rec.label or rec.id}' runs as its own compose project "
+                f"{saved_meshes.record_project(rec)}, but it publishes the same "
+                "fixed ports (Casdoor's 8000), so the two cannot run at once."
+                if own_project else
+                "A local mesh is running — stop it first. Starting "
+                "a saved mesh over a live one would bring up a "
+                "second stack on the same compose project."))
             return
         if own_project:
             # A mesh with its OWN compose project (the node-image flow's
