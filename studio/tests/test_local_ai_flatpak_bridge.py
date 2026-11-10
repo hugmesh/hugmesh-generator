@@ -101,6 +101,9 @@ def test_starting_the_assistant_from_the_flatpak_puts_no_secret_on_any_argv(
     assert argv[:2] == ["flatpak-spawn", "--host"]
     assert argv[-3:] == ["bash", str(checkout / "scripts" / "local-ai.sh"), "start"]
     assert f"--directory={checkout}" in argv
+    # once the Flatpak's Popen hook is installed too (flatpak_host.install, #936), this
+    # argv passes through it as it stands: it is already a flatpak-spawn command
+    assert not flatpak_host.runs_on_host(argv)
     # what does cross is the allowlist, and what the host script needs is in it
     assert set(forwarded) <= set(odk.HOST_ASSISTANT_ENV), forwarded
     assert forwarded["HUGMESH_LOCAL_AI_DIR"] == str(tmp_path / "state")

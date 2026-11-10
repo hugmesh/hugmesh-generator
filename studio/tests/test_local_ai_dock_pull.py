@@ -298,3 +298,34 @@ def test_an_offer_for_a_named_model_stays_until_that_model_is_in(shell, qapp, mo
         models=["qwen3:1.7b", "qwen3:8b"], loaded=[]))
     dock.refresh()
     assert wait_for(qapp, lambda: dock.offer_row.isHidden())
+
+
+# ── the status line follows the problem (round 2 of #933) ────────────────────────────
+def test_docker_mode_down_status_line_names_the_docker_ollama_not_a_missing_install(
+        shell, qapp, tmp_path, monkeypatch):
+    """Docker mode, the container not started, no ``ollama`` on this machine: what
+    read_snapshot says ("not installed") is rewritten by adjust_snapshot, and the status
+    line on the strip must say the same as the note under it."""
+    odk.set_mode(odk.DOCKER)
+    monkeypatch.delenv(odk.PORT_ENV, raising=False)
+    down = make_snapshot(ollama_installed=False, ollama_up=False, models=[], loaded=[],
+                         worker="stopped", worker_pid=0, counts={})
+    down.jobs = []
+    down.problem = "Ollama is not installed on this machine."
+    down.fix = "Install it (see the link), then run: scripts/local-ai.sh up"
+    down.summary = lai.summary_line(down)
+    assert down.summary == "Local AI: Ollama is not installed on this machine"
+    monkeypatch.setattr(lai, "read_snapshot", lambda *a, **k: down)
+    wiz = open_at(shell, qapp, SMALLEST)
+    dock = wiz.local_ai_dock
+    dock.set_expanded(True)
+    dock.show_tab("assistant")
+    assert wait_for(qapp, lambda: dock.snapshot is not None)
+    for _ in range(3):
+        qapp.processEvents()
+    said = dock.summary.full_text()
+    assert "not installed" not in said, said
+    assert "Docker Ollama is not answering on 127.0.0.1:11435" in said, said
+    assert "Docker Ollama is not answering on 127.0.0.1:11435" in dock.note.text()
+    assert_drawn_whole(wiz, dock, dock.prompt)
+    grab(wiz, "down-docker-status-line", tmp_path)
