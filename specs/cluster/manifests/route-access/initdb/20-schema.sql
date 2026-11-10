@@ -148,6 +148,21 @@ DELETE FROM gateway_route_access
    AND url_pattern IN ('/games/api/' || '**', '/games/' || '**')
    AND role = 'ROLE_MOD';
 
+-- Retire the pki gateway's bare catch-all row an earlier apply seeded (decision
+-- 79 = B, hugmesh-admin-bff-api#57; see the note where the pki rows are seeded
+-- below). The seed INSERT is ON CONFLICT DO NOTHING, so dropping the tuple from
+-- it only changes a FRESH initdb: a local-stack volume (`make stack-up` re-applies
+-- this file through tests/stack/route-access-reconcile.sh) or a cluster DB
+-- re-applied in place would keep the row forever. It is deleted whatever its
+-- role, user or domain scope: the admin API refuses to write a bare double-star
+-- row (decision 61), so no operator-made row can match, and
+-- [route-access-wildcard] in tests/scripts/cluster_manifest_integrity.py allows
+-- no bare row at all. Spelled with || like the retirements above so the seed's
+-- tuple readers never count it as a row.
+DELETE FROM gateway_route_access
+ WHERE gateway = 'hugmesh-pki-gateway'
+   AND url_pattern = '/' || '**';
+
 -- Canonical seed — one allow row per (gateway, url_pattern, role) in the routing
 -- contract. Role semantics (mirroring the hugmesh.games SecurityConfig
 -- casdoorAuthoritiesConverter):
