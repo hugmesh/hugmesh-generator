@@ -32,11 +32,39 @@ prefixes:
   v6: fd7a:115c:a1e0::/48
   allocation: sequential
 
+# DERP relay — OFFLINE-FIRST (operator decision 2026-11-10, "Built-in relay on").
+# headscale's EMBEDDED DERP server is on and the public Tailscale DERP map is OFF,
+# so the mesh starts and relays with no internet and no traffic to Tailscale's
+# servers. (With only the public map and no internet, headscale 0.23 exits
+# "initial DERPMap is empty".) docs/HEADSCALE-DERP.md explains the whole model.
+#   * DERP itself rides headscale's own HTTP listener: clients dial /derp on the
+#     server_url host:port, so it needs NO new TCP port. STUN is UDP 3478.
+#   * region_id 999 sits in the 900-999 block Tailscale leaves for private
+#     regions, so it never collides with a public region if the opt-in below
+#     adds the public map. keys-provision (provision_headscale) rewrites
+#     region_code/region_name from the brand's cluster domain at first boot.
+#   * ipv4/ipv6 are left unset on purpose: clients resolve the server_url host,
+#     which is the LAN IP by default and the published facade once there is one.
+#   * The DERP server key is generated on first start under headscale's state
+#     dir, next to the noise key, and survives reboots.
+# OPT-IN public map (meshes that WANT Tailscale's relays as well): builder flag
+# --headscale-public-derp, brand/env HEADSCALE_PUBLIC_DERP=true, or KEYS
+# provision.json .headscale.public_derp=true. keys-provision then swaps the
+# `urls: []` line below for the public map and turns auto-update on; the
+# embedded region stays in the map either way.
 derp:
   server:
-    enabled: false
-  urls:
-    - https://controlplane.tailscale.com/derpmap/default
+    enabled: true
+    region_id: 999
+    region_code: "hugmesh"
+    region_name: "hugmesh embedded relay"
+    stun_listen_addr: "0.0.0.0:3478"
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+  urls: []
+  paths: []
+  auto_update_enabled: false
+  update_frequency: 24h
 
 disable_check_updates: true
 ephemeral_node_inactivity_timeout: 30m

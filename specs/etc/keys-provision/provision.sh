@@ -722,12 +722,117 @@ headscale_policy_owned_security_tags() {
     [ "${rc}" -eq 0 ] || [ "${rc}" -eq 4 ]
 }
 
+# ── headscale DERP relay: offline-first, public map opt-in ─────────────────────
+# Operator decision 2026-11-10 ("Built-in relay on"): the shipped configs turn
+# headscale's EMBEDDED DERP server on and ship NO public DERP map (urls: []), so the
+# mesh starts and relays with no internet and no traffic to Tailscale's servers.
+# docs/HEADSCALE-DERP.md is the full write-up. This step, run on whichever config is
+# live (baked or KEYS-supplied), does three things:
+#   1. names the embedded region after the brand's cluster domain (region_code =
+#      its first label, region_name = "<domain> embedded relay"). region_id stays the
+#      fixed 999 from the config: 900-999 is the private block, so it can never
+#      collide with a public region id if the opt-in adds the public map.
+#   2. the OPT-IN public map. resolve_headscale_public_derp: provision.json
+#      .headscale.public_derp (true/false) wins, else the baked
+#      /etc/hugmesh/headscale-public-derp marker (builder --headscale-public-derp /
+#      HEADSCALE_PUBLIC_DERP=true), else OFF. ON swaps a `  urls: []` line for the
+#      public map and turns derp auto-update on. OFF leaves the file alone, so a
+#      KEYS config that lists its own DERP map keeps it.
+#   3. records the embedded STUN port in /etc/hugmesh/headscale-derp-stun for the node
+#      firewall (hugmesh-coturn-firewall admits exactly that UDP port; nothing else).
+HEADSCALE_PUBLIC_DERP_URL="https://controlplane.tailscale.com/derpmap/default"
+HEADSCALE_PUBLIC_DERP_MARKER="/etc/hugmesh/headscale-public-derp"
+HEADSCALE_DERP_STUN_MARKER="/etc/hugmesh/headscale-derp-stun"
+
+# true|false — is the public Tailscale DERP map opted in for this node?
+resolve_headscale_public_derp() {
+    local v
+    # NOT `// ""`: jq's alternative operator treats an explicit false as absent.
+    v="$(jqm 'if .headscale.public_derp == null then "" else (.headscale.public_derp | tostring) end')"
+    case "${v}" in
+        true|false) echo "${v}"; return 0 ;;
+    esac
+    if [ -r "${HEADSCALE_PUBLIC_DERP_MARKER}" ] \
+       && [ "$(tr -d '[:space:]' < "${HEADSCALE_PUBLIC_DERP_MARKER}" 2>/dev/null)" = "true" ]; then
+        echo true; return 0
+    fi
+    echo false
+}
+
+# Prints "<enabled> <stun_port>" read from the derp.server block of a headscale
+# config (enabled = true|false; port empty when unset/unparseable).
+headscale_derp_server_state() {
+    awk '
+        /^[^[:space:]#]/ { top = $0; sub(/:.*/, "", top); sub_ = "" }
+        top == "derp" && /^  [^[:space:]#]/ { sub_ = $1; sub(/:$/, "", sub_) }
+        top == "derp" && sub_ == "server" && /^    enabled:/ { en = $2 }
+        top == "derp" && sub_ == "server" && /^    stun_listen_addr:/ {
+            a = $2; gsub(/["\047]/, "", a); n = split(a, parts, ":"); port = parts[n]
+        }
+        END { printf "%s %s\n", (en == "true" ? "true" : "false"), port }
+    ' "$1" 2>/dev/null
+}
+
+provision_headscale_derp() {
+    local cfg="$1"
+    [ -f "${cfg}" ] || return 0
+
+    # 1. Region name from the brand's cluster domain (fail-closed hostname gate, the
+    #    same one base_domain uses: no sed metachars, no quotes, no newlines).
+    local dom code
+    dom="$(jqm '.hugmesh.cluster_domain // ""')"
+    { [ -z "${dom}" ] || [ "${dom}" = "null" ]; } && [ -r /etc/hugmesh/cluster-domain ] \
+        && dom="$(tr -d '[:space:]' < /etc/hugmesh/cluster-domain 2>/dev/null)"
+    dom="$(printf '%s' "${dom}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "${dom}" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+        code="${dom%%.*}"
+        sed -i -e "s|^\(    region_code:\).*|\1 \"${code}\"|" \
+               -e "s|^\(    region_name:\).*|\1 \"${dom} embedded relay\"|" "${cfg}"
+        log "headscale DERP: embedded region named ${code} (${dom} embedded relay)"
+    elif [ -n "${dom}" ] && [ "${dom}" != "null" ]; then
+        warn "headscale DERP: cluster domain '${dom}' is not a valid hostname — keeping the baked region name"
+    fi
+
+    # 2. Public map opt-in.
+    if [ "$(resolve_headscale_public_derp)" = "true" ]; then
+        if grep -q '^  urls: \[\][[:space:]]*$' "${cfg}"; then
+            sed -i -e "s|^  urls: \[\][[:space:]]*$|  urls: [\"${HEADSCALE_PUBLIC_DERP_URL}\"]|" \
+                   -e 's|^  auto_update_enabled:.*|  auto_update_enabled: true|' "${cfg}"
+            log "headscale DERP: public Tailscale DERP map OPTED IN (${HEADSCALE_PUBLIC_DERP_URL}) next to the embedded region"
+        elif grep -qF "${HEADSCALE_PUBLIC_DERP_URL}" "${cfg}"; then
+            log "headscale DERP: public Tailscale DERP map already listed"
+        else
+            warn "headscale DERP: public map opted in but ${cfg} has a custom derp.urls list — leaving it as written"
+        fi
+    else
+        grep -qF "${HEADSCALE_PUBLIC_DERP_URL}" "${cfg}" \
+            && warn "headscale DERP: ${cfg} lists the public Tailscale DERP map although the opt-in is off (a KEYS override?) — leaving it as written"
+    fi
+
+    # 3. Firewall hand-off: the embedded server's STUN port, or no marker at all.
+    local en port
+    read -r en port <<<"$(headscale_derp_server_state "${cfg}")"
+    mkdir -p "$(dirname "${HEADSCALE_DERP_STUN_MARKER}")"
+    if [ "${en}" = "true" ] && [[ "${port}" =~ ^[0-9]{1,5}$ ]] && [ "${port}" -ge 1 ] && [ "${port}" -le 65535 ]; then
+        printf '%s\n' "${port}" > "${HEADSCALE_DERP_STUN_MARKER}"
+        log "headscale DERP: embedded relay ON, STUN ${port}/udp handed to the node firewall"
+    else
+        rm -f "${HEADSCALE_DERP_STUN_MARKER}"
+        if [ "${en}" = "true" ]; then
+            warn "headscale DERP: embedded relay ON but stun_listen_addr has no usable port — the node firewall admits no STUN port"
+        elif ! grep -qE '^  urls: \[.+\]|^    - https?://' "${cfg}"; then
+            warn "headscale DERP: embedded relay OFF and no DERP map URL either — headscale will refuse to start (initial DERPMap is empty)"
+        fi
+    fi
+}
+
 provision_headscale() {
     have headscale || { log "headscale not installed — skipping"; return 0; }
     local enabled
     enabled="$(jqm '.headscale.enabled // false')"
     if [ "${enabled}" != "true" ]; then
         log "headscale disabled in manifest — removing from runlevel"
+        rm -f "${HEADSCALE_DERP_STUN_MARKER}"
         rc-update del headscale default 2>/dev/null || true
         rc-service headscale stop 2>/dev/null || true
         return 0
@@ -852,6 +957,8 @@ provision_headscale() {
                 warn "headscale MagicDNS base_domain '${dnsdom}' is not a valid hostname ([a-z0-9.-]) — leaving baked default"
             fi
         fi
+        # Embedded DERP region name + public-map opt-in + STUN firewall hand-off.
+        provision_headscale_derp /etc/headscale/config.yaml
     fi
 
     chown -R headscale:headscale /etc/headscale /var/lib/headscale /run/headscale
