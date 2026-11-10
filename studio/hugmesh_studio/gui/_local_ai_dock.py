@@ -81,6 +81,7 @@ from ..core import assistant_docs as adocs
 from ..core import assistant_prompt as aprompt
 from ..core import assistant_settings
 from ..core import assistant_tips as atips
+from ..core import local_ai_models as lam
 from ..core import local_ai_status as lai
 from ..core import ollama_docker as odk
 from ..core import plain_words
@@ -618,7 +619,7 @@ class LocalAIDock(QtWidgets.QFrame):
     def __init__(self, generator_dir: str, parent=None, *, snapshot_fn=None, prompt_fn=None,
                  start_fn=None, poll_ms: int = POLL_MS, auto_poll: bool = True,
                  expanded: bool | None = None, work_window_factory=None,
-                 open_build=None, agent_card: bool = True):
+                 open_build=None, agent_card: bool = True, pull_fn=None, free_fn=None):
         super().__init__(parent)
         self.setObjectName("localAIDock")
         self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
@@ -664,6 +665,20 @@ class LocalAIDock(QtWidgets.QFrame):
         self._message = ""                      # a transient line (waiting, started, failed)
         self._message_warn = False
         self._message_token = 0
+        # A MODEL OUT OF THE BOX (core/local_ai_models): an Ollama with no model gets a
+        # Download button with the size and the free space, never a silent download.
+        # ``pull_fn``/``free_fn`` replace the real pull and free-space read (tests); both
+        # are looked up at use time, so a test's monkeypatch of the module is honoured.
+        self._pull_fn = pull_fn
+        self._free_fn = free_fn
+        self._pulling = False
+        self._pull_model = ""
+        self._pull_stop = threading.Event()
+        self._offer: dict = {}                  # what the Download button fetches ({} = hidden)
+        self._error_offer: dict = {}            # from a question that came back NoModel
+        self._pending_question = ""             # asked again once the download is in
+        self._free = None                       # free bytes where the models go (None = unknown)
+        self._free_for = None                   # the Ollama mode ``_free`` was read for
 
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(8, 3, 8, 4)
@@ -799,7 +814,48 @@ class LocalAIDock(QtWidgets.QFrame):
         self.answer.setMinimumHeight(36)
         self.answer.setPlaceholderText("The model's answer appears here.")
         self.answer.setAccessibleName("Answer from the local model")
+        # THE OFFER ROW: shown while the chosen Ollama has no model (the snapshot's
+        # offer, or a question that came back NoModel). Download + Other model…, and
+        # while a download runs, its progress bar and Cancel.
+        self.offer_row = QtWidgets.QWidget()
+        self.offer_row.setObjectName("assistant_offer_row")
+        orow = QtWidgets.QHBoxLayout(self.offer_row)
+        orow.setContentsMargins(0, 0, 0, 0)
+        orow.setSpacing(6)
+        self.pull_btn = _styled_button(
+            "Download", "Download this model into the Ollama the assistant uses. Nothing "
+            "is downloaded until you press it; Cancel stops it and a later download resumes.")
+        self.pull_btn.setObjectName("assistant_pull_btn")
+        self.pull_btn.clicked.connect(lambda: self.start_pull())
+        self.pull_other = QtWidgets.QToolButton()
+        self.pull_other.setText("Other model\u2026")
+        self.pull_other.setToolTip("Pick another model to download")
+        self.pull_other.setMinimumHeight(MIN_CLICK_PX)
+        self.pull_other.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QtWidgets.QMenu(self.pull_other)
+        for choice in lam.CHOICES:
+            act = menu.addAction(f"{choice.name} ({lam.size_words(choice.bytes)}): {choice.words}")
+            act.triggered.connect(lambda _on=False, name=choice.name: self.start_pull(name))
+        self.pull_other.setMenu(menu)
+        self.pull_bar = QtWidgets.QProgressBar()
+        self.pull_bar.setObjectName("assistant_pull_bar")
+        self.pull_bar.setRange(0, 1000)
+        self.pull_bar.setTextVisible(True)
+        self.pull_bar.setMinimumHeight(MIN_CLICK_PX)
+        self.pull_bar.setAccessibleName("Model download progress")
+        self.pull_cancel = _styled_button("Cancel download", "Stop the download. What "
+                                          "arrived is kept, and the next download resumes.")
+        self.pull_cancel.clicked.connect(self.cancel_pull)
+        orow.addWidget(self.pull_btn)
+        orow.addWidget(self.pull_other)
+        orow.addWidget(self.pull_bar, 1)
+        orow.addWidget(self.pull_cancel)
+        orow.addStretch(0)
+        self.pull_bar.setVisible(False)
+        self.pull_cancel.setVisible(False)
+        self.offer_row.setVisible(False)
         chat_lay.addWidget(self.note)
+        chat_lay.addWidget(self.offer_row)
         chat_lay.addWidget(self.tip_row)
         chat_lay.addLayout(row)
         chat_lay.addWidget(self.answer, 1)
@@ -886,6 +942,8 @@ class LocalAIDock(QtWidgets.QFrame):
             self.agent_card = law.LocalAgentWidget(
                 generator_dir, context=self._agent_context, environ=self._env,
                 context_text=self._agent_context_text)
+            if hasattr(self.agent_card, "set_downloader"):
+                self.agent_card.set_downloader(self.start_pull)
             opt.addWidget(self.agent_card)
         opt.addStretch(1)
         self.options_scroll = _scroll(options)
@@ -1069,7 +1127,8 @@ class LocalAIDock(QtWidgets.QFrame):
         return h
 
     def _note_shown(self) -> bool:
-        return bool(self.note.text()) and not self.note.isHidden()
+        return (bool(self.note.text()) and not self.note.isHidden()) \
+            or not self.offer_row.isHidden()
 
     def card_need(self) -> int:
         """How tall the docked panel must be to show the whole card (its text and its
@@ -1495,6 +1554,8 @@ class LocalAIDock(QtWidgets.QFrame):
             return
         self.ollama_mode = mode
         odk.set_mode(mode)
+        # the offer and the free space belong to the instance: read them again there
+        self._error_offer, self._free, self._free_for = {}, None, None
         self._render_instance()
         self.refresh()
         if self.agent_card is not None and getattr(self.agent_card, "_first_probe_done", False):
@@ -1534,10 +1595,104 @@ class LocalAIDock(QtWidgets.QFrame):
                         "(about 3.8 GB).")
         if gpu is not None:
             bits.append(gpu.words)
-        bits.append("Pull a model into it: " + odk.pull_command(lai.DEFAULT_MODEL))
+        bits.append(f"With no model in it, Download (in the chat) fetches "
+                    f"{lam.RECOMMENDED.name}; by hand: {odk.pull_command(lam.RECOMMENDED.name)}")
         self.docker_label.setText("  ".join(bits))
         self.docker_start_btn.setEnabled(not (st is not None and st.running))
         self.docker_stop_btn.setEnabled(bool(st is not None and st.running))
+
+    # ---- a model out of the box (core/local_ai_models) -------------------------------
+    def _read_free(self) -> None:
+        """Read the free space where the models go, off the window thread (in Docker
+        mode it is a ``docker exec``)."""
+        env, mode = self._env(), self.ollama_mode
+        fn = self._free_fn or lam.free_bytes
+        self._threads.submit("free", lambda: (mode, fn(env)))
+
+    def _render_offer(self) -> None:
+        offer, pulling = self._offer, self._pulling
+        model = str(offer.get("model") or lam.RECOMMENDED.name)
+        size = lam.size_words(offer.get("bytes") or lam.size_of(model))
+        free = "" if self._free is None else f", {lam.size_words(self._free)} free"
+        self.pull_btn.setText(f"Download {model} ({size}{free})")
+        self.pull_btn.setVisible(not pulling)
+        self.pull_other.setVisible(not pulling)
+        self.pull_bar.setVisible(pulling)
+        self.pull_cancel.setVisible(pulling)
+        show = bool(offer) or pulling
+        changed = self.offer_row.isHidden() == show
+        self.offer_row.setVisible(show)
+        self.send_btn.setEnabled(not pulling)
+        self.send_btn.setToolTip("A model is downloading; ask when it is in." if pulling else "")
+        if self.agent_card is not None and hasattr(self.agent_card, "set_downloader"):
+            self.agent_card.set_downloader(None if pulling else self.start_pull)
+        if changed:
+            self._card_resized()                 # the panel may need to grow for the row
+
+    def start_pull(self, model: str | None = None) -> bool:
+        """Download ``model`` (the offer's, else the recommended one) into the Ollama in
+        use, on a worker thread. Pressed, never automatic. False when one is running."""
+        if self._pulling:
+            return False
+        model = model or str(self._offer.get("model") or "") or lam.RECOMMENDED.name
+        self._pulling, self._pull_model = True, model
+        self._pull_stop = threading.Event()
+        stop, alive, q = self._pull_stop, self._alive, self._threads
+        env = self._env()
+        pull_fn = self._pull_fn or lam.pull
+        free_fn = self._free_fn or lam.free_bytes
+        self.pull_bar.setRange(0, 0)
+        self.pull_bar.setFormat(f"{model}: starting")
+        self.pull_cancel.setEnabled(True)
+        self.pull_cancel.setText("Cancel download")
+        if not self._offer:
+            self._offer = {"model": model, "bytes": lam.size_of(model)}
+        self._render_offer()
+        self._say(f"Downloading {model} ({lam.size_words(lam.size_of(model))}) into "
+                  f"{lam.where_words(env)}. Cancel stops it; what arrived is kept.")
+
+        def work():
+            try:
+                free = free_fn(env)
+                problem = lam.space_problem(lam.size_of(model), free)
+                if problem:
+                    q.put("pull", lam.PullResult(False, model, problem))
+                    return
+                res = pull_fn(model, env,
+                              on_progress=lambda p: q.put("pull-progress", (model, p)),
+                              should_stop=lambda: stop.is_set() or alive.is_set())
+                q.put("pull", res)
+            except Exception as exc:              # noqa: BLE001 — a sentence, not a trace
+                q.put("pull", lam.PullResult(False, model, f"The download failed: {exc}"))
+        threading.Thread(target=work, name="local-ai-pull", daemon=True).start()
+        return True
+
+    def cancel_pull(self) -> None:
+        if self._pulling:
+            self._pull_stop.set()
+            self.pull_cancel.setEnabled(False)
+            self.pull_cancel.setText("Stopping\u2026")
+
+    def _finish_pull(self, res) -> None:
+        self._pulling = False
+        self.pull_cancel.setEnabled(True)
+        self.pull_cancel.setText("Cancel download")
+        if res is not None and res.ok:
+            self._offer, self._error_offer = {}, {}
+            again = self._pending_question
+            self._pending_question = ""
+            self._render_offer()
+            self._say(res.message + (" Asking your question again." if again else ""), 20)
+            self.refresh()
+            if self.agent_card is not None and getattr(self.agent_card, "_first_probe_done", False):
+                self.agent_card.recheck()
+            if again and not self._busy:
+                self.prompt.setText(again)
+                self.send()
+            return
+        self._render_offer()
+        message = res.message if res is not None else "The download failed."
+        self._say(message, 30, warn=not (res is not None and res.cancelled))
 
     def start_docker_ollama(self) -> None:
         self.docker_start_btn.setEnabled(False)
@@ -1592,6 +1747,16 @@ class LocalAIDock(QtWidgets.QFrame):
 
     def apply_snapshot(self, snap) -> None:
         snap.fix = tui_lai.windows_advice(snap.fix, self.ollama_mode)
+        offer = dict(getattr(snap, "offer", None) or {})
+        if offer:
+            # this face has a button: say so, with the by-hand line for THIS instance
+            snap.fix = lam.fix_words(offer, "gui", self._env())
+        elif snap.models:
+            self._error_offer = {}              # a model is there now: nothing to offer
+        self._offer = offer or self._error_offer
+        if self._offer and self._free_for != self.ollama_mode:
+            self._read_free()
+        self._render_offer()
         self.snapshot = snap
         line = snap.summary
         if self.ollama_mode == odk.DOCKER and line.startswith("Local AI:"):
@@ -1651,6 +1816,12 @@ class LocalAIDock(QtWidgets.QFrame):
         text = self.prompt.text().strip()
         if not text or self._busy:
             return False
+        if self._pulling:
+            # the question stays on the line: it is asked once the model is in
+            self._pending_question = text
+            self._say(f"{self._pull_model} is still downloading; your question is asked "
+                      "as soon as it is in.", 10)
+            return False
         self.prompt.clear()
         self._busy = True
         self._warned = False                    # a new answer scrolls again
@@ -1692,6 +1863,10 @@ class LocalAIDock(QtWidgets.QFrame):
                 else:
                     answer = self._prompt_fn(text, history, chunk, stopping)
                 q.put("done", (born, text, answer))
+            except lam.NoModel as exc:
+                # nothing to answer with: the offer comes home with the question, which
+                # is asked again once the download is in
+                q.put("nomodel", (born, text, str(exc), dict(exc.offer)))
             except Exception as exc:      # noqa: BLE001 — shown to the person, as a sentence
                 q.put("error", (born, str(exc) or exc.__class__.__name__))
         threading.Thread(target=work, name="local-ai-prompt", daemon=True).start()
@@ -2279,6 +2454,35 @@ class LocalAIDock(QtWidgets.QFrame):
             self._finish_prompt()
             self._say(str(message), 30, warn=True)
             self.refresh()
+        elif tag == "nomodel":
+            born, text, message, offer = value
+            if born != self._clears:
+                return
+            self._pending_question = text
+            self._error_offer = dict(offer)
+            self._offer = self._offer or self._error_offer
+            if self._free_for != self.ollama_mode:
+                self._read_free()
+            self._render_offer()
+            # the answer pane gets the sentence and the docs fallback, as any failure
+            self._handle("error", (born, f"{message} {lam.action_words(offer, 'gui')}"), None)
+        elif tag == "free":
+            mode, free = value if error is None and value else (None, None)
+            if mode == self.ollama_mode:
+                self._free, self._free_for = free, mode
+                self._render_offer()
+        elif tag == "pull-progress":
+            model, prog = value
+            if self._pulling and model == self._pull_model:
+                frac = prog.fraction
+                if frac is None:
+                    self.pull_bar.setRange(0, 0)          # busy until the sizes are in
+                else:
+                    self.pull_bar.setRange(0, 1000)
+                    self.pull_bar.setValue(int(frac * 1000))
+                self.pull_bar.setFormat(f"{model}: {prog.words(model)}")
+        elif tag == "pull":
+            self._finish_pull(value)
         elif tag == "tip":
             if error is None and value and self._tip_born is not None:
                 born, slug, domain = self._tip_born

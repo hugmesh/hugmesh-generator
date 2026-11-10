@@ -41,6 +41,7 @@ from ..core import assistant_context as actxt
 from ..core import assistant_docs as adocs
 from ..core import assistant_prompt as aprompt
 from ..core import assistant_tips as atips
+from ..core import local_ai_models as lam
 from ..core import local_ai_status as lai
 from ..core import ollama_docker as odk
 from ..core import platform_info
@@ -79,6 +80,9 @@ def status_line(env: dict | None = None, *, key_hint: bool = True, slug: str = "
     of previous builds has no journey to open the screen over), so the line never
     advertises a key that is dead there. ``slug`` (optional) appends the page's tip."""
     line = lai.quick_line(env)
+    pulling = lam.active_line()           # a model download this process is running
+    if pulling:
+        line = f"{line}; {pulling}"
     line = f"{line}   [{FOOTER_KEY}]" if key_hint else line
     return line + _footer_tip(slug)
 
@@ -136,6 +140,7 @@ def windows_advice(text: str, mode: str = "", osname: str | None = None) -> str:
 _HELP = [
     "type a question and press Enter to ask the local model (it stays on this machine)",
     "  start      start the local Ollama and the queue worker",
+    "  pull [model]   download a model (asks first; shows the size and the free space)",
     "  ollama docker | ollama system   which Ollama to use (Docker starts on 'start')",
     "  docs <question>   what the docs say (no model needed)   options   this page's settings",
     "  apply | cancel | undo   a proposed change    tips on | tips off",
@@ -152,11 +157,22 @@ class LocalAIScreen:
     title = "Local AI"
     wants_q = True                       # q means BACK here, not quit-the-journey
 
-    def __init__(self, *, snapshot_fn=None, prompt_fn=None, start_fn=None, generator_dir: str = "."):
+    def __init__(self, *, snapshot_fn=None, prompt_fn=None, start_fn=None, generator_dir: str = ".",
+                 pull_fn=None, free_fn=None):
         # Every default goes through the saved Ollama choice (system or Docker): the
         # environment it names is the one the read, the prompt and the start all use.
-        self._snapshot_fn = snapshot_fn or (lambda: odk.adjust_snapshot(
-            lai.read_snapshot(env=odk.assistant_env(odk.current_mode())), odk.current_mode()))
+        self._snapshot_fn = snapshot_fn or (lambda: _offer_in_tui_words(odk.adjust_snapshot(
+            lai.read_snapshot(env=odk.assistant_env(odk.current_mode())), odk.current_mode())))
+        # A MODEL OUT OF THE BOX (core/local_ai_models): ``pull`` asks y/n with the size
+        # and the free space, then downloads on a thread; the line under the screen and
+        # the status block show its progress. Looked up at use time (tests replace them).
+        self._pull_fn = pull_fn
+        self._free_fn = free_fn
+        self._pull_ask = ""              # the model a y/n is pending for
+        self._pull_thread = None
+        self._pull_stop = None
+        self._pull_offer: dict = {}      # from a question that came back NoModel
+        self._pending_question = ""
         self._custom_prompt = prompt_fn is not None
         self._prompt_fn = prompt_fn or (lambda text, history: lai.send_prompt(
             text, history=history, env=odk.assistant_env(odk.current_mode())))
@@ -303,6 +319,13 @@ class LocalAIScreen:
         self.message = ""
         self.warning = ""
         low = line.strip().lower()
+        if self._pull_ask:
+            model, self._pull_ask = self._pull_ask, ""
+            if low in ("y", "yes"):
+                self._start_pull(model)
+            else:
+                self.message = "Nothing downloaded."
+            return
         if low in ("q", "quit", "exit", "back", "b"):
             j.overlay = self._under
             return
@@ -331,6 +354,13 @@ class LocalAIScreen:
             self.message = odk.describe(want) + (
                 "  Type start to start it." if want == odk.DOCKER else "")
             return
+        if words and words[0] == "pull" and len(words) <= 2:
+            self._ask_pull(words[1] if len(words) == 2 else "")
+            return
+        if low in ("cancel", "stop") and self.pulling:
+            self._pull_stop.set()
+            self.message = "Stopping the download; what arrived is kept, and the next pull resumes."
+            return
         if low == "start":
             res = self._start_fn()
             self.message = (res.message if res.ok or not res.command or res.command in res.message
@@ -355,6 +385,11 @@ class LocalAIScreen:
             answer = self._ask(j, line.strip())
         except lai.LocalAIError as exc:
             self.message = windows_advice(str(exc), odk.current_mode())
+            if isinstance(exc, lam.NoModel):
+                # the offer, in this screen's word; the question is remembered
+                self._pull_offer = dict(exc.offer)
+                self._pending_question = line.strip()
+                self.message += " " + lam.action_words(exc.offer, "tui")
             if self._last_prompt is not None:
                 fb = aprompt.fallback_line(self._last_prompt)
                 if fb:
@@ -384,6 +419,67 @@ class LocalAIScreen:
             if footer:
                 self.transcript += [f"     {ln}" for ln in footer.split("\n")]
             self._offer(j, answer, line.strip(), prompt)
+
+    # ── a model out of the box ─────────────────────────────────────────────────────
+    @property
+    def pulling(self) -> bool:
+        return self._pull_thread is not None and self._pull_thread.is_alive()
+
+    def _ask_pull(self, model: str) -> None:
+        """``pull [model]``: the size and the free space, then a y/n. Nothing is
+        downloaded without the y."""
+        if self.pulling:
+            self.message = (lam.active_line() or "A download is running.") + \
+                "  Type cancel to stop it."
+            return
+        snap_offer = dict(getattr(self.snapshot, "offer", None) or {})
+        model = model or str((self._pull_offer or snap_offer).get("model") or "") \
+            or lam.RECOMMENDED.name
+        env = odk.assistant_env(odk.current_mode())
+        free = (self._free_fn or lam.free_bytes)(env)
+        problem = lam.space_problem(lam.size_of(model), free)
+        if problem:
+            self.message = problem
+            return
+        self._pull_ask = model
+        self.message = (f"{lam.consent_line(model, free)}  Into {lam.where_words(env)}. "
+                        "Type y to download, anything else to leave it.")
+
+    def _start_pull(self, model: str) -> None:
+        import threading
+        env = odk.assistant_env(odk.current_mode())
+        stop = threading.Event()
+        fn = self._pull_fn or lam.pull
+        self._pull_stop = stop
+
+        def work():
+            try:
+                res = fn(model, env, should_stop=stop.is_set)
+            except Exception as exc:             # noqa: BLE001 — a sentence on the screen
+                res = lam.PullResult(False, model, f"The download failed: {exc}")
+            if res.ok:
+                self._pull_offer = {}
+                try:
+                    self.snapshot = self._snapshot_fn()
+                except Exception:                # noqa: BLE001 — r re-reads
+                    pass
+                again = self._pending_question
+                self._pending_question = ""
+                self.message = res.message + (f" Ask again: {again}" if again else
+                                              " Ask your question.")
+            else:
+                self.message = res.message
+        self._pull_thread = threading.Thread(target=work, name="local-ai-tui-pull", daemon=True)
+        self._pull_thread.start()
+        self.message = (f"Downloading {model} into {lam.where_words(env)}. The line below "
+                        "shows the progress (r re-reads this screen); cancel stops it.")
+
+    def wait_pull(self, timeout: float = 30.0) -> bool:
+        """Wait for a running download (tests, and the plain face's ``r``)."""
+        t = self._pull_thread
+        if t is not None:
+            t.join(timeout)
+        return not self.pulling
 
     # ── grounded answers ───────────────────────────────────────────────────────────
     def _ask(self, j, text: str) -> str:
@@ -463,6 +559,15 @@ class LocalAIScreen:
         self._undo[res.target_id] = res
         self._pending = None
         self.message = "Applied. The step shows the new value (undo puts it back)."
+
+
+def _offer_in_tui_words(snap):
+    """A no-model snapshot's fix in this screen's words (``type pull``), with the
+    by-hand line for the Ollama in use."""
+    offer = dict(getattr(snap, "offer", None) or {})
+    if snap is not None and offer:
+        snap.fix = lam.fix_words(offer, "tui", odk.assistant_env(odk.current_mode()))
+    return snap
 
 
 class Standalone:

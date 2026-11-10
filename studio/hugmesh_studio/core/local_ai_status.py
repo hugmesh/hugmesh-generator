@@ -234,6 +234,9 @@ class Snapshot:
     doc: str = DOC
     summary: str = ""
     checked: bool = True                 # False: built from status.json, no request was made
+    #: what to download when the server answers with no model (core/local_ai_models):
+    #: {"model", "bytes", "docker"}; {} when there is nothing to offer
+    offer: dict = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -500,8 +503,12 @@ def read_snapshot(env: dict | None = None, *, now: float | None = None,
                 snap.fix = (_WINDOWS_INSTALL if windows else
                             "Install it (see the link), then run: scripts/local-ai.sh up")
         elif not snap.models:
+            # an offer every face shows with its own button or word (local_ai_models);
+            # the by-hand command names the instance the env points at
+            from . import local_ai_models as lam
             snap.problem = "Ollama is running but no model is pulled."
-            snap.fix = f"Pull one: ollama pull {DEFAULT_MODEL}"
+            snap.offer = lam.offer_for(env)
+            snap.fix = lam.fix_words(snap.offer, "cli", env)
     snap.summary = summary_line(snap)
     return snap
 
@@ -598,6 +605,10 @@ def format_status(s: Snapshot) -> str:
                  + ("answering" if s.ollama_up else "not answering"))
     lines.append("  models   " + (", ".join(s.models) if s.models else "(none pulled)"))
     lines.append("  loaded   " + (", ".join(s.loaded) if s.loaded else "(none)"))
+    from . import local_ai_models as lam
+    pulling = lam.active_line()
+    if pulling:
+        lines.append("  download " + pulling)
     beat = "never" if s.heartbeat_age is None else f"{int(s.heartbeat_age)}s ago"
     lines.append(f"  worker   {s.worker}" + (f" (pid {s.worker_pid})" if s.worker_pid else "")
                  + f", last heartbeat {beat}")
@@ -643,15 +654,25 @@ def write_status(pid: int, running: str = "", env: dict | None = None,
 
 
 # ── talking to the model ─────────────────────────────────────────────────────────────
-def pick_model(env: dict | None = None, available: Iterable[str] | None = None) -> str:
-    """``$LOCAL_AI_MODEL``, else qwen3:8b when pulled, else the first pulled model."""
+def pick_model(env: dict | None = None, available: Iterable[str] | None = None,
+               saved: str | None = None) -> str:
+    """``$LOCAL_AI_MODEL``; else the model the person downloaded or chose last (the
+    ``model`` setting, core/local_ai_models) when it is pulled; else qwen3:8b when
+    pulled; else the small recommended one when pulled; else the first pulled model
+    that is not an embedding model. With nothing pulled it names qwen3:8b, and
+    :func:`send_prompt` turns "nothing pulled" into an offer before it asks."""
     env = os.environ if env is None else env
     asked = (env.get(MODEL_ENV) or "").strip()
     if asked:
         return asked
     names = [n for n in (available or []) if n]
-    if DEFAULT_MODEL in names or not names:
+    if not names:
         return DEFAULT_MODEL
+    from . import local_ai_models as lam
+    chosen = lam.saved_choice() if saved is None else saved
+    for wanted in (chosen, DEFAULT_MODEL, lam.RECOMMENDED.name):
+        if wanted and wanted in names:
+            return wanted
     usable = [n for n in names if "embed" not in n.lower()]
     return (usable or names)[0]
 
@@ -735,6 +756,12 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
             pulled = _model_names(_get_json(env, "/api/tags", 5))
         except _NOT_ANSWERING:
             raise LocalAIError(_down_message(env)) from None
+        if not [n for n in pulled if "embed" not in n.lower()] and not (
+                env.get(MODEL_ENV) or "").strip():
+            # nothing to answer with: say so, with the offer, before a request that
+            # can only come back 404 (local_ai_models.NoModel)
+            from . import local_ai_models as lam
+            raise lam.NoModel("", env)
         model = pick_model(env, pulled)
     # GROUNDED (LOCAL_AI_GROUNDED=1): a bare call with no system message gets the
     # assistant's own one — the primer, the rules, a command-line "where", the docs
@@ -799,7 +826,8 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
                     break
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            raise LocalAIError(f"The model {model} is not pulled. Run: ollama pull {model}") from None
+            from . import local_ai_models as lam
+            raise lam.NoModel(model, env, gone=True) from None
         raise LocalAIError(f"Ollama answered HTTP {exc.code}.") from None
     except TimeoutError:
         raise LocalAIError(f"No answer for {int(timeout)} seconds; the model may still be "
@@ -892,9 +920,14 @@ def start_assistant(generator_dir: str, *, env: dict | None = None,
         log = open(os.path.join(root, "start.log"), "ab")
     except OSError as exc:
         return StartResult(False, f"Cannot write {root}: {exc}", cmd)
+    # Inside the Flatpak the sandbox has no ollama and no docker: the script runs on the
+    # HOST (flatpak-spawn --host, the variables it needs named one by one), where both
+    # are, and writes the state folder the Studio reads (core/flatpak_host).
+    from . import flatpak_host
+    argv = flatpak_host.host_argv(["bash", script, "start"], env)
     try:
         (spawn or subprocess.Popen)(
-            ["bash", script, "start"], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+            argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
             env=env, start_new_session=True)
     except OSError as exc:
         return StartResult(False, f"Could not start it: {exc}. Run it yourself: {cmd}", cmd)
@@ -909,15 +942,23 @@ def chat_loop(inp, out, env: dict | None = None, model: str | None = None) -> in
     """A prompt loop against the local model. ``/quit`` leaves, ``/clear`` forgets."""
     env = os.environ if env is None else env
     try:
-        _get_json(env, "/api/tags", 5)
+        tags = _get_json(env, "/api/tags", 5)
     except NotLoopback as exc:
         print(str(exc), file=out)
         return 1
     except _NOT_ANSWERING:
         print(_down_message(env), file=out)
         return 1
+    pulled = _model_names(tags)
+    if not model and not (env.get(MODEL_ENV) or "").strip() and \
+            not [n for n in pulled if "embed" not in n.lower()]:
+        from . import local_ai_models as lam
+        print(f"{lam.NoModel('', env)}\n{lam.action_words(lam.offer_for(env), 'cli')}\n"
+              "Until then, scripts/local-ai.sh docs QUESTION answers from the docs "
+              "without a model.", file=out)
+        return 1
     history: list = []
-    shown = model or env.get(MODEL_ENV) or DEFAULT_MODEL
+    shown = model or pick_model(env, pulled)
     grounded = _grounded(env)
     slug = ""
     print(f"Local AI chat with {shown}. Everything stays on this machine. "
@@ -965,6 +1006,9 @@ def chat_loop(inp, out, env: dict | None = None, model: str | None = None) -> in
                                      on_chunk=lambda c: (out.write(c), out.flush()))
         except LocalAIError as exc:
             print(f"\n{exc}", file=out)
+            if hasattr(exc, "offer"):            # local_ai_models.NoModel
+                from . import local_ai_models as lam
+                print(lam.action_words(exc.offer, "cli"), file=out)
             continue
         print(file=out)
         history += [{"role": "user", "content": line},
@@ -999,11 +1043,17 @@ def main(argv: list | None = None, *, out=None, err=None, inp=None) -> int:
                         on_chunk=lambda c: (out.write(c), out.flush()))
         except LocalAIError as exc:
             print(str(exc), file=err)
+            if hasattr(exc, "offer"):            # local_ai_models.NoModel
+                from . import local_ai_models as lam
+                print(lam.action_words(exc.offer, "cli"), file=err)
             return 1
         print(file=out)
         return 0
     if cmd == "chat":
         return chat_loop(inp, out)
+    if cmd == "pull":                                        # download a model, asked first
+        from . import local_ai_models as lam
+        return lam.main(args, out=out, err=err, inp=inp)
     if cmd == "host":                                        # for the shell: host:port, checked
         try:
             print(_hostport(*ollama_host()), file=out)
@@ -1052,8 +1102,9 @@ def main(argv: list | None = None, *, out=None, err=None, inp=None) -> int:
             print(file=out)
         print(adocs.sources_line(chunks, index=idx), file=out)
         return 0
-    print("usage: local_ai_status [status [--json] | prompt TEXT | chat | host | dir | "
-          "ping | write-status PID [JOB] | catalogue [domain|mesh|image] | docs QUESTION]",
+    print("usage: local_ai_status [status [--json] | prompt TEXT | chat | pull [MODEL] [--yes] | "
+          "host | dir | ping | write-status PID [JOB] | catalogue [domain|mesh|image] | "
+          "docs QUESTION]",
           file=err)
     return 2
 

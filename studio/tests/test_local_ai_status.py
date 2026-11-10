@@ -509,9 +509,13 @@ def test_a_models_field_that_is_not_a_list_means_no_model_pulled_not_a_crash(fak
     # /api/ps is healthy in this test, so what it reports as loaded still shows
     assert snap.ollama_up is True and snap.models == [] and snap.loaded == ["qwen3:8b"]
     assert snap.problem.startswith("Ollama is running but no model is pulled")
-    # a prompt with no model named falls back to the default instead of crashing
-    assert lai.send_prompt("hi", None, env=env) == "Hello there"
-    assert fake.requests[-1][2]["model"] == lai.DEFAULT_MODEL
+    # a prompt with no model named says so, with the offer, instead of crashing, and
+    # sends no chat request that could only come back 404
+    from hugmesh_studio.core import local_ai_models as lam
+    with pytest.raises(lam.NoModel) as caught:
+        lai.send_prompt("hi", None, env=env)
+    assert caught.value.offer["model"] == lam.RECOMMENDED.name
+    assert not [r for r in fake.requests if r[1] == "/api/chat"]
 
 
 # /api/tags is healthy and only /api/ps is unwell: the server IS up and has models, so

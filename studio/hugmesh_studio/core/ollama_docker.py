@@ -42,7 +42,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
-from . import assistant_settings, proc_text
+from . import assistant_settings, flatpak_host, proc_text
 
 __all__ = [
     "SYSTEM", "DOCKER", "MODES", "MODE_WORDS", "IMAGE", "IMAGE_ROCM", "IMAGE_VERSION",
@@ -87,7 +87,12 @@ Runner = Callable[[Sequence[str], float], "tuple[int, str]"]
 
 
 def _run(argv: Sequence[str], timeout: float = 30.0) -> "tuple[int, str]":
-    """Run a docker command; ``(exit code, stdout + stderr)``. Never raises."""
+    """Run a docker command; ``(exit code, stdout + stderr)``. Never raises.
+
+    Inside the Flatpak the sandbox has no docker and no Docker socket: the command runs
+    on the host through ``flatpak-spawn --host`` (core/flatpak_host), which the manifest
+    grants for exactly this. Elsewhere the argv is run as it stands."""
+    argv = flatpak_host.host_argv(argv)
     try:
         # UTF-8 with replacement, never the code page: on native Windows text=True alone
         # decodes docker's output as cp1252, and a byte it cannot map raised past the
@@ -142,7 +147,9 @@ def assistant_env(mode: str, environ=None) -> dict:
     env = dict(os.environ if environ is None else environ)
     if mode == DOCKER:
         env["OLLAMA_HOST"] = endpoint(DOCKER, env)
-    return env
+    # a Flatpak Studio reads the state folder the HOST's local-ai.sh writes, not the
+    # sandbox's private XDG_STATE_HOME (core/flatpak_host.host_state_dir)
+    return flatpak_host.host_env_defaults(env)
 
 
 # ── the GPU ──────────────────────────────────────────────────────────────────────────
@@ -168,7 +175,9 @@ def detect_gpu(runner: Optional[Runner] = None, *, exists=os.path.exists,
             runtimes = parsed if isinstance(parsed, dict) else {}
         except ValueError:
             runtimes = {}
-    cdi = [p for d in ("/etc/cdi", "/var/run/cdi") for p in globber(os.path.join(d, "*.y*ml"))
+    # inside the Flatpak the host's /etc is under /run/host (--filesystem=host)
+    cdi = [p for d in ("/etc/cdi", "/var/run/cdi", "/run/host/etc/cdi")
+           for p in globber(os.path.join(d, "*.y*ml"))
            if "nvidia" in os.path.basename(p).lower()]
     if "nvidia" in runtimes or cdi:
         how = "the nvidia runtime" if "nvidia" in runtimes else "a CDI spec"
@@ -357,8 +366,10 @@ def describe(mode: str, environ=None) -> str:
 def adjust_snapshot(snap, mode: str, generator_dir: str = "."):
     """Rewrite a local-AI snapshot's problem and fix for docker mode, where "install
     Ollama" and "scripts/local-ai.sh up" are the wrong advice. Returns the snapshot."""
-    if mode != DOCKER or snap is None:
+    if snap is None:
         return snap
+    if mode != DOCKER:
+        return _adjust_system(snap)
     if not getattr(snap, "ollama_up", False) and not getattr(snap, "problem", "").startswith(
             "OLLAMA_HOST"):
         snap.problem = (f"The Studio's Docker Ollama is not answering on "
@@ -366,9 +377,31 @@ def adjust_snapshot(snap, mode: str, generator_dir: str = "."):
         snap.fix = ("Press Start local assistant: it starts the container (the first start "
                     "downloads the image, about 3.8 GB).")
     elif getattr(snap, "ollama_up", False) and not getattr(snap, "models", None):
-        from .local_ai_status import DEFAULT_MODEL
+        from . import local_ai_models as lam
+        env = assistant_env(DOCKER)
         snap.problem = "The Docker Ollama is running but no model is pulled into it."
-        snap.fix = f"Pull one: {pull_command(DEFAULT_MODEL)}"
+        snap.offer = lam.offer_for(env)
+        snap.fix = lam.fix_words(snap.offer, "cli", env)
+    return snap
+
+
+def _adjust_system(snap):
+    """System mode inside the Flatpak: the sandbox has no ``ollama`` of its own, so
+    "not installed" is asked of the HOST, and the bash advice becomes what the person
+    can do from there (the host's own service, or the Studio's Docker Ollama)."""
+    if not flatpak_host.in_flatpak() or getattr(snap, "ollama_up", True):
+        return snap
+    if getattr(snap, "problem", "").startswith("OLLAMA_HOST"):
+        return snap
+    if flatpak_host.host_which("ollama"):
+        snap.ollama_installed = True
+        snap.problem = f"Ollama is installed but is not answering on {snap.host}."
+        snap.fix = ("Start it on this machine (its system service, or `ollama serve` in a "
+                    "terminal), or choose the Studio's own Ollama in Docker and press Start.")
+    else:
+        snap.problem = "Ollama is not installed on this machine."
+        snap.fix = ("Install it (see the link), or choose the Studio's own Ollama in "
+                    "Docker (needs Docker) and press Start.")
     return snap
 
 
@@ -408,6 +441,16 @@ def start_assistant(generator_dir: str, mode: str, *, environ=None, extra_env=No
                       f"the bash script scripts/local-ai.sh, which the Windows build of the "
                       f"Studio cannot run (run the Studio inside WSL2 for it).", "")
     res = lai.start_assistant(generator_dir, env=env, osname=osname)
+    if mode == DOCKER and not res.ok and not os.path.isfile(
+            os.path.join(generator_dir, "scripts", "local-ai.sh")):
+        # An installed Studio (the Flatpak, a wheel) ships no checkout, so there is no
+        # queue worker to start; the container is up, and the panel asks it directly.
+        # That is a working assistant, not a failed start.
+        return lai.StartResult(
+            True, f"The Studio's own Ollama is answering on {endpoint(DOCKER, env)}, and "
+                  f"the panel asks it directly. The queue worker was not started: it needs a "
+                  f"hugmesh-generator checkout (scripts/local-ai.sh), and none was found at "
+                  f"{generator_dir}.", "")
     if mode == DOCKER and not res.ok:
         # the "run it yourself" line must name the Docker instance, not the system one
         res = lai.StartResult(res.ok, res.message.replace(

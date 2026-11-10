@@ -579,7 +579,7 @@ def test_uncommitted_edits_in_the_real_folder_are_called_out(wiz, src_tree):
     (probe_of(ollama=False), "ollama_missing", ("not installed", "docs section 2")),
     (probe_of(up=False), "server_down", ("not answering on 127.0.0.1:11434",
                                          "connection refused", "ollama serve")),
-    (probe_of(models=()), "no_models", ("no model is pulled", "ollama pull qwen3:8b")),
+    (probe_of(models=()), "no_models", ("no model is pulled", "ollama pull qwen3:1.7b")),
     (probe_of(models=("plain:1",), tools=False), "no_tools_model",
      ("tools capability", "plain:1")),
     (probe_of(agents=()), "agent_missing", ("`claude` command is not installed",
