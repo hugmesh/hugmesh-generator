@@ -13,9 +13,9 @@ out of the box". These tests pin the answer:
   * FREE SPACE. ``docker exec ... df`` in Docker mode, the models folder in system mode,
     and a refusal when the download would not fit.
   * THE COMMAND LINE and THE TEXT SCREEN ask first and show progress.
-  * THE FLATPAK. Host commands go through ``flatpak-spawn --host`` with only the
-    assistant's variables forwarded, the host's state folder is read, "not installed" is
-    asked of the host, and an installed Studio with no checkout still starts Docker mode.
+  * THE FLATPAK. The host's state folder is read, "not installed" is asked of the host,
+    and an installed Studio with no checkout still starts Docker mode (what crosses to
+    the host, and how: tests/test_local_ai_flatpak_bridge.py).
 
 Every request goes to the fake on 127.0.0.1, never to an Ollama on the test host.
 """
@@ -63,7 +63,7 @@ def docker_env(tmp_path, fake):
 
 @pytest.fixture
 def not_flatpak(monkeypatch):
-    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda exists=None: False)
+    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda *a, **k: False)
 
 
 def chat_requests(fake):
@@ -412,54 +412,15 @@ def test_the_text_screen_cancels_a_download_and_refuses_one_that_will_not_fit(en
 # ── the Flatpak ──────────────────────────────────────────────────────────────────────
 
 
-def test_host_commands_go_through_flatpak_spawn_only_inside_a_flatpak():
-    assert flatpak_host.host_argv(["docker", "ps"], exists=lambda p: False) == ["docker", "ps"]
-    argv = flatpak_host.host_argv(
-        ["bash", "x.sh", "start"],
-        {"OLLAMA_HOST": "127.0.0.1:11435", "HUGMESH_LOCAL_AI_DIR": "/h/s", "GH_TOKEN": "secret",
-         "LOCAL_AI_MODEL": "qwen3:1.7b", "PATH": "/app/bin"},
-        exists=lambda p: p == flatpak_host.INFO_FILE)
-    assert argv[:2] == ["flatpak-spawn", "--host"] and argv[-3:] == ["bash", "x.sh", "start"]
-    assert "--env=OLLAMA_HOST=127.0.0.1:11435" in argv and "--env=LOCAL_AI_MODEL=qwen3:1.7b" in argv
-    assert not [a for a in argv if "GH_TOKEN" in a or "PATH=" in a]
-
-
-def test_docker_runs_on_the_host_from_inside_the_flatpak(monkeypatch):
-    seen = []
-
-    def run(argv, **kw):
-        seen.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "29.9.0\n", "")
-    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda exists=None: True)
-    monkeypatch.setattr(odk.subprocess, "run", run)
-    assert odk._run(["docker", "version"]) == (0, "29.9.0\n")
-    assert seen == [["flatpak-spawn", "--host", "docker", "version"]]
-
-
-def test_host_which_asks_the_host(monkeypatch):
-    seen = []
-
-    def run(argv, **kw):
-        seen.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "/usr/local/bin/ollama\n", "")
-    inside = lambda p: p == flatpak_host.INFO_FILE              # noqa: E731
-    assert flatpak_host.host_which("ollama", exists=inside, run=run) == "/usr/local/bin/ollama"
-    assert seen[0][:2] == ["flatpak-spawn", "--host"] and seen[0][-1] == "ollama"
-    gone = lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "")   # noqa: E731
-    assert flatpak_host.host_which("ollama", exists=inside, run=gone) == ""
-    assert flatpak_host.host_which("ollama", exists=lambda p: False,
-                                   which=lambda c: "/usr/bin/ollama") == "/usr/bin/ollama"
-
-
 def test_a_flatpak_studio_reads_the_hosts_state_folder(monkeypatch):
-    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda exists=None: True)
+    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda *a, **k: True)
     sandbox = {"HOME": "/home/me", "XDG_STATE_HOME": "/home/me/.var/app/org.hugmesh.ImageStudio/.local/state"}
     env = odk.assistant_env(odk.SYSTEM, sandbox)
     assert env["HUGMESH_LOCAL_AI_DIR"] == "/home/me/.local/state/hugmesh/local-ai"
     assert lai.state_dir(env) == "/home/me/.local/state/hugmesh/local-ai"
     kept = odk.assistant_env(odk.SYSTEM, dict(sandbox, HUGMESH_LOCAL_AI_DIR="/mine"))
     assert kept["HUGMESH_LOCAL_AI_DIR"] == "/mine"
-    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda exists=None: False)
+    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda *a, **k: False)
     assert "HUGMESH_LOCAL_AI_DIR" not in odk.assistant_env(odk.SYSTEM, sandbox)
 
 
@@ -468,8 +429,8 @@ def test_a_flatpak_studio_reads_the_hosts_state_folder(monkeypatch):
     ("", "not installed"),
 ])
 def test_in_the_flatpak_not_installed_is_asked_of_the_host(monkeypatch, host_has, words):
-    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda exists=None: True)
-    monkeypatch.setattr(flatpak_host, "host_which", lambda cmd, **k: host_has)
+    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda *a, **k: True)
+    monkeypatch.setattr(flatpak_host, "host_which", lambda cmd, **k: host_has or None)
     snap = lai.Snapshot(host="127.0.0.1:11434", ollama_up=False, ollama_installed=False,
                         problem="Ollama is not installed on this machine.",
                         fix="Install it (see the link), then run: scripts/local-ai.sh up")
@@ -484,22 +445,6 @@ def test_outside_the_flatpak_system_mode_advice_is_left_alone(not_flatpak):
     assert odk.adjust_snapshot(snap, odk.SYSTEM).fix == "f"
 
 
-def test_the_start_script_runs_on_the_host_from_the_flatpak(tmp_path, monkeypatch):
-    gen = tmp_path / "gen"
-    (gen / "scripts").mkdir(parents=True)
-    (gen / "scripts" / "local-ai.sh").write_text("#!/bin/bash\n")
-    monkeypatch.setattr(flatpak_host, "in_flatpak", lambda exists=None: True)
-    spawned = []
-    res = lai.start_assistant(str(gen), env={"HUGMESH_LOCAL_AI_DIR": str(tmp_path / "s"),
-                                             "OLLAMA_HOST": "127.0.0.1:11435", "SECRET": "x"},
-                              spawn=lambda argv, **kw: spawned.append(argv), osname="posix")
-    assert res.ok
-    argv = spawned[0]
-    assert argv[:2] == ["flatpak-spawn", "--host"]
-    assert argv[-3:] == ["bash", str(gen / "scripts" / "local-ai.sh"), "start"]
-    assert "--env=OLLAMA_HOST=127.0.0.1:11435" in argv and not [a for a in argv if "SECRET" in a]
-
-
 def test_docker_mode_with_no_checkout_is_a_working_start(tmp_path):
     """An installed Studio (the Flatpak, a wheel) has no scripts/: the container answering
     is the assistant working, not a failed start."""
@@ -511,8 +456,8 @@ def test_docker_mode_with_no_checkout_is_a_working_start(tmp_path):
     assert "the panel asks it directly" in res.message and "no-checkout" in res.message
 
 
-def test_the_manifest_no_longer_says_flatpak_spawn_is_unused():
-    text = open(os.path.join(GENERATOR_DIR, "studio", "packaging", "flatpak",
-                             "org.hugmesh.ImageStudio.yml"), encoding="utf-8").read()
-    assert "Granted but not used yet" not in text
-    assert "core/flatpak_host.py" in text
+def test_the_docs_say_what_crosses_to_the_host_and_how():
+    """The Flatpak paragraph names the allowlist and the descriptor (the manifest's own
+    comment about flatpak-spawn belongs to the Flatpak bridge PR, hugmesh-generator#936)."""
+    text = open(DOC, encoding="utf-8").read()
+    assert "HOST_ASSISTANT_ENV" in text and "--env-fd" in text

@@ -190,9 +190,13 @@ question; `qwen3:0.6b` about 10 s for the first.
 
 **The Flatpak** has no `docker` and no `ollama` inside its sandbox: the Studio runs
 those on the host with `flatpak-spawn --host` and talks to Ollama over loopback HTTP,
-so both the system Ollama and the Studio's Docker one work from it. An installed Studio
-ships no checkout, so the queue worker (`scripts/local-ai.sh`) does not start there;
-the chat does not need it.
+so both the system Ollama and the Studio's Docker one work from it. A host command gets
+only the settings it needs (`OLLAMA_HOST`, `LOCAL_AI_MODEL`, `HUGMESH_LOCAL_AI_DIR` and
+the rest of `HOST_ASSISTANT_ENV` in `studio/hugmesh_studio/core/ollama_docker.py`), and
+gets them through `--env-fd`, never on its command line, where every user of the machine
+could read them: no token, password or API key in the Studio's environment crosses to
+the host. An installed Studio ships no checkout, so the queue worker
+(`scripts/local-ai.sh`) does not start there; the chat does not need it.
 
 Sizes, context windows and tags below are from the Ollama library pages on
 **2026-10-07** (<https://ollama.com/library>). The library changes weekly: before you

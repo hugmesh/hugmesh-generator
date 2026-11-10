@@ -24,17 +24,10 @@
 #
 #   WHAT THAT BUYS TODAY, measured on the installed 1.0.0 bundle (2026-09-30, on a host
 #   that has Docker): the Studio starts, draws its wizard and answers --print-specs, but
-#   image builds cannot use the host's Docker: inside the sandbox `docker` is not on
-#   PATH, the build backend detection does not go through flatpak-spawn, and the Studio
-#   says "This machine can't build images yet". Building images from the Flatpak needs
-#   that code first.
-#
-#   THE LOCAL ASSISTANT DOES USE IT (2026-11-09): core/flatpak_host.py runs its docker
-#   commands (the Studio's own Ollama container) and the scripts/local-ai.sh start on the
-#   host with flatpak-spawn --host, asks the host whether `ollama` is installed, and reads
-#   the host's ~/.local/state/hugmesh/local-ai instead of the sandbox's private state
-#   folder. Its questions, and the model download it offers, go to a loopback Ollama
-#   over HTTP (--share=network), which needs no host command at all.
+#   it cannot use the host's Docker. Nothing in the code calls flatpak-spawn --host, so
+#   inside the sandbox `docker` is not on PATH, the Studio detects no backend and tells
+#   the user "This machine can't build images yet". The permission is granted; the
+#   application does not use it. Building images from the Flatpak needs that code first.
 app-id: org.hugmesh.ImageStudio
 runtime: org.kde.Platform
 # The newest KDE branch Flathub offers that is not end-of-life (read with
@@ -66,9 +59,9 @@ finish-args:
   # operator at first run and is different on every machine.
   - --filesystem=host
   # Lets the app run host commands (docker, make, qemu, kubectl) through
-  # flatpak-spawn --host. Used by the local assistant (core/flatpak_host.py: the
-  # Studio's Ollama container and scripts/local-ai.sh start); image builds do not use it
-  # yet (see the measurement at the top).
+  # flatpak-spawn --host. Granted but not used yet: the Studio never calls
+  # flatpak-spawn (see the measurement at the top), so holding this does not change what
+  # the app can do today.
   - --talk-name=org.freedesktop.Flatpak
 
 modules:

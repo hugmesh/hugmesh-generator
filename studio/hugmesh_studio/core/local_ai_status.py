@@ -920,14 +920,9 @@ def start_assistant(generator_dir: str, *, env: dict | None = None,
         log = open(os.path.join(root, "start.log"), "ab")
     except OSError as exc:
         return StartResult(False, f"Cannot write {root}: {exc}", cmd)
-    # Inside the Flatpak the sandbox has no ollama and no docker: the script runs on the
-    # HOST (flatpak-spawn --host, the variables it needs named one by one), where both
-    # are, and writes the state folder the Studio reads (core/flatpak_host).
-    from . import flatpak_host
-    argv = flatpak_host.host_argv(["bash", script, "start"], env)
     try:
         (spawn or subprocess.Popen)(
-            argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+            ["bash", script, "start"], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
             env=env, start_new_session=True)
     except OSError as exc:
         return StartResult(False, f"Could not start it: {exc}. Run it yourself: {cmd}", cmd)
