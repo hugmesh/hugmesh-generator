@@ -614,7 +614,14 @@ def test_flip_opens_the_ssh_commit_on_a_tty_with_no_bypass(emu_wiz, guest, launc
     j = golive_target.read_journal(guest.work_dir, "rpi5/pki")
     assert j["action"] == "commit" and j["domain"] == "mesh.example"
     assert j["started_at"] == "2026-11-09T20:00:00Z"
-    assert "last commit from this host" in flip.status.toPlainText()
+    # the GUI only LAUNCHED the commit in a detached terminal: the device's TTY confirm
+    # is what decides, so the journal never reads it as a commit that went through
+    # (golive_target.journal_status, FG1 #927 final wording)
+    assert j["confirmed"] is None
+    shown = flip.status.toPlainText()
+    assert "commit launched from this host" in shown
+    assert "the confirmation happened on the device's TTY" in shown
+    assert "last commit from this host" not in shown
 
 
 def test_flip_without_a_terminal_shows_the_exact_ssh_command(emu_wiz, launched,
@@ -697,6 +704,180 @@ def test_open_go_live_opens_a_new_wizard_for_another_device(qapp, guest):
         first.deleteLater()
 
 
+# ---- the picked device is RE-BOUND to its fresh record (round 2 of #931) ------------
+# A keep-alive device restarted by the harness comes back on the first FREE ssh port of
+# a range (tests/qemu/run-qemu-docker.sh claim_port), with a new started_at; a stopped
+# device's port can be handed to ANOTHER device. The wizard must never go on driving
+# the record it read when the device was first picked.
+
+def _restart(guest, label="rpi5/pki", port=22999, started_at="2026-11-10T09:00:00Z",
+             **kw):
+    return fake.register(guest, label=label, port=port, started_at=started_at, **kw)
+
+
+def _flip_port(w):
+    argv = golive_target.commit_argv(w.driver.target, "byo-domain", "mesh.example")
+    return argv[argv.index("-p") + 1]
+
+
+def test_rescan_after_a_restart_rebinds_to_the_new_port_and_boot(emu_wiz, guest):
+    pre = advance_to(emu_wiz, golive_mod.GoLivePreflightPage)
+    assert emu_wiz.target.ssh_port == 22401
+    emu_wiz.opts.provider = "byo-domain"
+    golive_target.write_journal(emu_wiz.target, "commit", "byo-domain", "mesh.example",
+                                confirmed=True)
+    assert "reset by a restart" not in emu_wiz.journal_line()
+    _restart(guest)                                  # new port, new boot
+    pre.rescan_btn.click()
+    assert emu_wiz.target.ssh_port == 22999
+    assert emu_wiz.target.started_at == "2026-11-10T09:00:00Z"
+    assert emu_wiz.driver.target.ssh_port == 22999, "the driver still sshes the OLD port"
+    assert _flip_port(emu_wiz) == "22999"
+    assert "reset by a restart" in emu_wiz.journal_line()
+    assert "reset by a restart" in pre.status.toPlainText()
+    assert "127.0.0.1:22999" in pre.target_info.text()
+    # the same device: the provider picked for it is kept
+    assert emu_wiz.opts.provider == "byo-domain"
+    assert pre.isComplete()
+    # the probe after the re-scan went to the NEW port
+    probes = [c for c in guest.calls() if "::driver" in c[-1]]
+    assert probes[-1][probes[-1].index("-p") + 1] == "22999"
+
+
+def test_rescan_after_a_stop_and_port_reuse_refuses_the_stale_pick(emu_wiz, guest):
+    from hugmesh_studio.gui.qt import QtCore
+    pre = advance_to(emu_wiz, golive_mod.GoLivePreflightPage)
+    # rpi5/pki stops; the backend starts and the first-free port lock hands it 22401
+    _restart(guest, port=22401, started_at="2026-11-09T20:00:00Z", state="stopped")
+    _restart(guest, label="rpi5/be", role="backend", port=22401)
+    pre.rescan_btn.click()
+    i = pre.target_pick.currentIndex()
+    assert pre._rows[i].label == "rpi5/pki" and not pre._rows[i].running
+    assert not (pre.target_pick.model().item(i).flags() & QtCore.Qt.ItemFlag.ItemIsEnabled)
+    assert pre.target_problem.isVisible()
+    assert "rpi5/pki is not running" in pre.target_problem.text()
+    assert "not running" in emu_wiz.target_refusal()
+    assert "not running" in emu_wiz.commit_refusal()
+    assert not pre.isComplete()
+    # and the button a person presses follows: Next is greyed, Next does not move
+    from hugmesh_studio.gui.qt import QtWidgets
+    assert not emu_wiz.button(QtWidgets.QWizard.WizardButton.NextButton).isEnabled()
+
+
+def test_picking_a_row_again_takes_the_record_as_it_is_now(emu_wiz, guest):
+    """Target change: the picker's rows were read before the restart; picking the
+    device re-reads its record instead of trusting the row."""
+    pre = advance_to(emu_wiz, golive_mod.GoLivePreflightPage)
+    at = pre.target_pick.currentIndex()
+    _restart(guest)
+    pre.target_pick.setCurrentIndex(0)               # this host
+    assert emu_wiz.target.is_local
+    pre.target_pick.setCurrentIndex(at)              # back to rpi5/pki
+    assert emu_wiz.target.label == "rpi5/pki"
+    assert emu_wiz.target.ssh_port == 22999 and emu_wiz.driver.target.ssh_port == 22999
+
+
+def test_filling_the_picker_rebinds_without_a_rescan(emu_wiz, guest):
+    """Every fill of the picker (the step's initializePage, a re-scan) re-reads the
+    work dir AND re-binds the picked device — not only the rows around it."""
+    advance_to(emu_wiz, golive_mod.GoLiveExposurePage)
+    _restart(guest)
+    pre = back_to(emu_wiz, golive_mod.GoLivePreflightPage)
+    pre.initializePage()
+    assert emu_wiz.driver.target.ssh_port == 22999
+    assert pre._rows[pre.target_pick.currentIndex()].ssh_port == 22999
+
+
+def test_the_flip_refuses_a_device_that_restarted_since_it_was_picked(emu_wiz, guest,
+                                                                      launched,
+                                                                      monkeypatch):
+    monkeypatch.setattr(golive_target, "terminal_spec",
+                        lambda argv, **k: golive_target.TerminalSpec(list(argv), 0, "x"))
+    flip = _at_flip(emu_wiz)
+    flip.confirm.setText("mesh.example")
+    assert flip.flip_btn.isEnabled()
+    _restart(guest, port=22401, started_at="2026-11-09T20:00:00Z", state="stopped")
+    _restart(guest, label="rpi5/be", role="backend", port=22401)
+    flip.confirm.setText("")
+    flip.confirm.setText("mesh.example")
+    assert not flip.flip_btn.isEnabled()
+    flip._flip()                                     # even if it were clicked
+    flip._rollback()
+    assert not launched, launched
+    assert "rpi5/pki" in flip.out.text() and "Re-scan" in flip.out.text()
+
+
+def test_the_flip_refuses_a_restart_on_a_new_port_and_says_so(emu_wiz, guest, launched,
+                                                              monkeypatch):
+    monkeypatch.setattr(golive_target, "terminal_spec",
+                        lambda argv, **k: golive_target.TerminalSpec(list(argv), 0, "x"))
+    flip = _at_flip(emu_wiz)
+    _restart(guest)
+    n = len(guest.calls())
+    flip.initializePage()
+    # nothing is asked of the old port: not even `status` (it could be another device)
+    assert all(c[c.index("-p") + 1] != "22401" for c in guest.calls()[n:]), \
+        guest.calls()[n:]
+    assert "restarted" in flip.status.toPlainText()
+    assert flip.refused.isVisible()
+    assert "restarted" in flip.refused.text() and "22999" in flip.refused.text()
+    flip.confirm.setText("mesh.example")
+    assert not flip.flip_btn.isEnabled()
+    flip._flip()
+    assert not launched
+
+
+def test_open_go_live_does_not_reuse_a_wizard_bound_to_an_old_boot(qapp, guest):
+    fake.register(guest, label="rpi5/pki", port=22401)
+    t1 = golive_target.find_target(golive_target.targets(guest.work_dir), "rpi5/pki")
+    w = golive_mod.open_go_live(GENERATOR_DIR, target=t1, work_dir=guest.work_dir)
+    w2 = w3 = None
+    try:
+        _restart(guest, port=22305)
+        t2 = golive_target.find_target(golive_target.targets(guest.work_dir), "rpi5/pki")
+        w2 = golive_mod.open_go_live(GENERATOR_DIR, target=t2, current=w,
+                                     work_dir=guest.work_dir)
+        assert w2.target.ssh_port == 22305 and w2.driver.target.ssh_port == 22305
+        assert w2.target.started_at == "2026-11-10T09:00:00Z"
+        # by LABEL (--go-live-target, the TUI's g): the label resolves to the fresh
+        # record before reuse is decided
+        _restart(guest, port=22306, started_at="2026-11-10T10:00:00Z")
+        w3 = golive_mod.open_go_live(GENERATOR_DIR, target="rpi5/pki", current=w2,
+                                     work_dir=guest.work_dir)
+        assert w3.driver.target.ssh_port == 22306
+        # unchanged record: the open wizard IS reused
+        assert golive_mod.open_go_live(GENERATOR_DIR, target="rpi5/pki", current=w3,
+                                       work_dir=guest.work_dir) is w3
+    finally:
+        for x in {id(v): v for v in (w, w2, w3) if v is not None}.values():
+            x.close()
+            x.deleteLater()
+
+
+# ---- Tailscale Funnel on an emulated mesh: refused on the face, not just in core -------
+
+def test_funnel_is_refused_inline_on_the_provider_step_for_a_device(emu_wiz):
+    pick_model(emu_wiz, "funnel")
+    prov = advance_to(emu_wiz, golive_mod.GoLiveProviderPage)
+    assert prov._current().id == "tailscale-funnel"
+    assert prov.refused.isVisible()
+    assert "headscale" in prov.refused.text() and "refused" in prov.refused.text()
+    assert not prov.isComplete()
+    before = emu_wiz.currentId()
+    emu_wiz.next()
+    assert emu_wiz.currentId() == before, "Next went past a refused provider"
+    # and the flip would refuse it as well (belt and braces)
+    emu_wiz.opts.provider = "tailscale-funnel"
+    assert "headscale" in emu_wiz.commit_refusal()
+
+
+def test_funnel_is_not_refused_on_this_host(wiz):
+    pick_model(wiz, "funnel")
+    prov = advance_to(wiz, golive_mod.GoLiveProviderPage)
+    assert prov._current().id == "tailscale-funnel"
+    assert not prov.refused.isVisible() and prov.isComplete()
+
+
 # ---- what a person SEES: the picker and the banner, measured (not just "visible") ------
 
 def _rect_in(widget, frame):
@@ -751,3 +932,26 @@ def test_the_ephemeral_banner_is_drawn_whole_above_the_flip(emu_wiz, tmp_path):
     assert btn.isVisible() and emu_wiz.rect().contains(_rect_in(btn, emu_wiz))
     assert btn.width() >= btn.fontMetrics().horizontalAdvance(btn.text())
     _shoot(emu_wiz, "golive-flip-ephemeral-banner", tmp_path)
+
+
+def test_the_funnel_refusal_is_drawn_whole_under_the_provider_list(emu_wiz, tmp_path):
+    pick_model(emu_wiz, "funnel")
+    prov = advance_to(emu_wiz, golive_mod.GoLiveProviderPage)
+    _shoot(emu_wiz, "golive-provider-funnel-refused", tmp_path)
+    r = prov.refused
+    assert r.isVisible() and emu_wiz.rect().contains(_rect_in(r, emu_wiz))
+    assert _whole(r), (r.heightForWidth(r.width()), r.height())
+    assert r.width() >= 400
+    assert _rect_in(r, emu_wiz).top() >= _rect_in(prov.list, emu_wiz).bottom()
+
+
+def test_a_stale_pick_after_rescan_is_drawn_whole_under_the_picker(emu_wiz, guest,
+                                                                   tmp_path):
+    pre = advance_to(emu_wiz, golive_mod.GoLivePreflightPage)
+    _restart(guest, port=22401, started_at="2026-11-09T20:00:00Z", state="stopped")
+    pre.rescan_btn.click()
+    _shoot(emu_wiz, "golive-preflight-rescan-stopped", tmp_path)
+    lb = pre.target_problem
+    assert lb.isVisible() and emu_wiz.rect().contains(_rect_in(lb, emu_wiz))
+    assert _whole(lb), (lb.heightForWidth(lb.width()), lb.height())
+    assert _rect_in(lb, emu_wiz).top() >= _rect_in(pre.target_pick, emu_wiz).bottom()

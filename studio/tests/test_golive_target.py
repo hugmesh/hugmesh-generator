@@ -851,3 +851,44 @@ def test_cli_plan_prints_the_reachability_verdict_and_refuses_funnel(tmp_path, m
                    call=lambda a: pytest.fail("ssh -t must not start"), isatty=lambda: True)
     assert rc == 2 and "does not implement Funnel" in out
     assert gt.read_journal(work, "rpi5/pki") is None
+
+
+# ── re-binding a picked device to its fresh record (#931 round 2) ────────────────────
+def test_same_binding_is_the_boot_and_channel_not_the_label(tmp_path):
+    t = _target(tmp_path)
+    assert gt.same_binding(t, t)
+    import dataclasses
+    for change in (dict(ssh_port=22999), dict(started_at="2026-11-10T09:00:00Z"),
+                   dict(running=False), dict(ssh_base_argv=("ssh", "x@127.0.0.1"))):
+        assert not gt.same_binding(t, dataclasses.replace(t, **change)), change
+    # the work dir is where the journal lives, not where the ssh lands
+    assert gt.same_binding(t, dataclasses.replace(t, work_dir="/elsewhere"))
+
+
+def test_rebind_takes_the_fresh_record_and_a_vanished_one_is_not_running(tmp_path):
+    import dataclasses
+    t = _target(tmp_path)
+    moved = dataclasses.replace(t, ssh_port=22999, started_at="2026-11-10T09:00:00Z",
+                                work_dir="")
+    other = dataclasses.replace(t, label="rpi5/be", ssh_port=t.ssh_port)
+    got = gt.rebind(t, [gt.local_target(), other, moved])
+    assert got.ssh_port == 22999 and got.started_at == "2026-11-10T09:00:00Z"
+    assert got.work_dir == t.work_dir                     # kept from the pick
+    gone = gt.rebind(t, [gt.local_target(), other])       # its port went to rpi5/be
+    assert gone.label == t.label and not gone.running
+    assert "not running" in gt.refusal(gone, osname="posix")
+    assert gt.rebind(gt.local_target(), []) == gt.local_target()
+
+
+def test_binding_change_says_what_moved(tmp_path):
+    import dataclasses
+    t = _target(tmp_path)
+    assert gt.binding_change(t, [t]) == ""
+    assert gt.binding_change(gt.local_target(), []) == ""
+    moved = dataclasses.replace(t, ssh_port=22999, started_at="2026-11-10T09:00:00Z")
+    why = gt.binding_change(t, [moved])
+    assert "restarted since it was picked" in why
+    assert f"ssh port {t.ssh_port} -> 22999" in why and "2026-11-10T09:00:00Z" in why
+    stopped = dataclasses.replace(t, running=False)
+    assert "stopped since it was picked" in gt.binding_change(t, [stopped])
+    assert "stopped since it was picked" in gt.binding_change(t, [])

@@ -209,6 +209,10 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
 
     # ── the picker ──────────────────────────────────────────────────────────────
     def _fill_targets(self) -> None:
+        # the picked device is RE-BOUND to its record as it is now (a restart moves it
+        # to another port and boot; a stopped device's port can go to another device)
+        # BEFORE the rows are drawn and refused — never only the rows around it
+        self.wiz.rebind_target()
         rows = self.wiz.target_rows()
         self._rows = rows
         cur = self.wiz.target
@@ -234,6 +238,8 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
             ("Not offered:\n" + "\n".join("  • " + r for r in refused)) if refused else "")
         self.target_refusals.setVisible(bool(refused))
         self._say_target()
+        # the picked device may have just become refused (or usable): Next follows
+        self.completeChanged.emit()
 
     def _rescan(self):
         self.wiz.forget_probes()
@@ -243,7 +249,9 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
     def _picked(self, idx: int) -> None:
         try:                                   # PyQt6 qFatals on a slot raise
             if 0 <= idx < len(self._rows):
-                self.wiz.set_target(self._rows[idx])
+                # the rows were read when the picker was filled: take the device's
+                # record as it is NOW
+                self.wiz.set_target(self.wiz.fresh(self._rows[idx]))
             self._say_target()
             self._refresh()
             self.completeChanged.emit()
@@ -259,7 +267,7 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
         self.target_problem.setVisible(bool(why))
 
     def _refresh(self):
-        text = self.wiz.driver.status_text()
+        text = self.wiz.status_text()
         js = self.wiz.journal_line()
         self.status.setPlainText(text + (f"\n\n{js}" if js else ""))
 
@@ -357,8 +365,26 @@ class GoLiveProviderPage(QtWidgets.QWizardPage):
         lay.addWidget(self.summary)
         self.reach = _reach_label()          # emulated targets: what this one can do
         lay.addWidget(self.reach)
+        # a provider the target CANNOT run (Tailscale Funnel on an emulated mesh, whose
+        # control plane is its own headscale): said inline and Next stays shut. The row
+        # stays pickable so the sentence can be read; a modal here hangs a headless run.
+        self.refused = QtWidgets.QLabel("")
+        self.refused.setWordWrap(True)
+        self.refused.setStyleSheet(_RED)
+        self.refused.setVisible(False)
+        lay.addWidget(self.refused)
         lay.addStretch(1)
         self.list.currentRowChanged.connect(self._changed)
+
+    def refusal(self, p=None) -> str:
+        """golive_target.headscale_refusal for the highlighted provider ("" if none)."""
+        p = p or self._current()
+        if p is None:
+            return ""
+        return golive_target.headscale_refusal(self.wiz.target, p.id, p.mechanism)
+
+    def isComplete(self):
+        return not self.refusal() and super().isComplete()
 
     def initializePage(self):
         self.list.blockSignals(True)
@@ -388,11 +414,17 @@ class GoLiveProviderPage(QtWidgets.QWizardPage):
         if p is None:
             self.summary.setText("")
             self.reach.setVisible(False)
+            self.refused.setVisible(False)
+            self.completeChanged.emit()
             return
         t = self.wiz.target
         reach = golive_target.mechanism_reachability(p.mechanism, t, p.id)
         self.reach.setText(f"From {t.label}: {reach}" if reach else "")
         self.reach.setVisible(bool(reach))
+        why = self.refusal(p)
+        self.refused.setText(why)
+        self.refused.setVisible(bool(why))
+        self.completeChanged.emit()
         req = ", ".join(p.inputs) or "none"
         opt = ", ".join(p.optional) or "none"
         emits = MECH_EMITS.get(p.mechanism, "")
@@ -402,7 +434,7 @@ class GoLiveProviderPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         p = self._current()
-        if p is None:
+        if p is None or self.refusal(p):
             return False
         self.wiz.opts.provider = p.id
         return True
@@ -737,6 +769,10 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
     def _generate(self):
         self._preview()
         if self.worker and self.worker.isRunning():
+            return
+        why = self.wiz.stale_binding()
+        if why:                       # the plan would run on whatever holds that port now
+            console.write(self.log, f"\n!! {why}")
             return
         d, o = self.wiz.driver, self.wiz.opts
         import copy
@@ -1375,7 +1411,7 @@ class GoLiveVerifyPage(QtWidgets.QWizardPage):
 
     def _recheck(self):
         js = self.wiz.journal_line()
-        self.status.setPlainText(self.wiz.driver.status_text() + (f"\n{js}" if js else ""))
+        self.status.setPlainText(self.wiz.status_text() + (f"\n{js}" if js else ""))
         self.wiz.verify_ok = True   # advisory only; the flip arms on the typed domain
 
 
@@ -1506,12 +1542,16 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
 
     def _refresh(self):
         js = self.wiz.journal_line()
-        self.status.setPlainText(self.wiz.driver.status_text() + (f"\n{js}" if js else ""))
+        self.status.setPlainText(self.wiz.status_text() + (f"\n{js}" if js else ""))
 
     def _armed(self, text):
         d = self.wiz.opts.domain
-        self.flip_btn.setEnabled(bool(d) and text.strip() == d
-                                 and not self.wiz.commit_refusal())
+        # asked again on every keystroke: the device may have stopped or restarted
+        # since this step was opened, and the refusal is said, not only greyed
+        why = self.wiz.commit_refusal()
+        self.refused.setText(why)
+        self.refused.setVisible(bool(why))
+        self.flip_btn.setEnabled(bool(d) and text.strip() == d and not why)
 
     def _report(self, ok, msg):
         self.out.setText(msg)
@@ -1540,6 +1580,10 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         # No message box: the driver's own confirm runs on the TTY the terminal opens
         # (the same gate as commit), and whether release-state is reset too is the
         # inline tick beside the button — a modal in page logic hangs a headless run.
+        why = self.wiz.stale_binding()
+        if why:                                 # never a rollback on another device
+            self._report(False, why)
+            return
         ok, msg = self.wiz.driver.run_rollback_in_terminal(
             revert_release_state=self.revert.isChecked())
         self._report(ok, msg)
@@ -1638,15 +1682,53 @@ class GoLiveWizard(QtWidgets.QWizard):
         if target.is_remote and not target.work_dir:
             import dataclasses
             target = dataclasses.replace(target, work_dir=self.work_dir)
-        same = (target.kind, target.label) == (self.target.kind, self.target.label)
+        same_device = (target.kind, target.label) == (self.target.kind, self.target.label)
+        same = same_device and golive_target.same_binding(target, self.target)
         self.target = target
         if not same:
+            # another device, OR the same device on another port / boot: every verb
+            # (and the probe) must go where the record says it is now
             self.driver = GoLiveDriver(self.generator_dir,
                                        target=target if target.is_remote else None)
+        if not same_device:
             self.opts.provider = ""
 
+    def _fresh_rows(self) -> list:
+        try:
+            return golive_target.targets(self.work_dir)
+        except OSError:
+            return [golive_target.local_target()]
+
+    def fresh(self, target):
+        """``target``'s device as the work dir says it is NOW (golive_target.rebind):
+        a restarted device's new port and boot, or NOT running when its record says
+        stopped or is gone."""
+        return golive_target.rebind(target, self._fresh_rows())
+
+    def rebind_target(self) -> None:
+        """Re-bind the picked device to its fresh record (a new driver when it moved)."""
+        if self.target.is_remote:
+            self.set_target(self.fresh(self.target))
+
+    def stale_binding(self) -> str:
+        """"" while the picked device is still the record it was picked as; otherwise
+        what changed (golive_target.binding_change) and where to re-pick it. Checked
+        before anything that ACTS on the device: Generate, the flip, the rollback."""
+        if self.target.is_local:
+            return ""
+        why = golive_target.binding_change(self.target, self._fresh_rows())
+        return (why + " (Back to the Preflight step: Re-scan devices.)") if why else ""
+
+    def status_text(self) -> str:
+        """The picked target's `status` — or, when the device changed since it was
+        picked, why it is not asked (an ssh to its old port could reach another
+        device and show THAT device's posture as this one's)."""
+        return self.stale_binding() or self.driver.status_text()
+
     def forget_probes(self) -> None:
-        """Re-scan: a fresh driver, so the device is probed (and listed) again."""
+        """Re-scan: the picked device re-bound to its fresh record, and a fresh driver
+        either way, so the device is probed (and listed) again."""
+        self.rebind_target()
         t = self.target
         self.driver = GoLiveDriver(self.generator_dir, target=t if t.is_remote else None)
 
@@ -1660,12 +1742,20 @@ class GoLiveWizard(QtWidgets.QWizard):
             return ""
         if (t.kind, t.label) != (self.target.kind, self.target.label):
             return golive_target.refusal(t)
-        return self.driver.blocker()
+        # the record's own refusal first (stopped, no channel), then the probe's
+        return golive_target.refusal(t) or self.driver.blocker()
 
     def commit_refusal(self) -> str:
-        """Why the FLIP cannot run here: the device's blocker, or — on this host — B1,
-        this host is not a HugMesh node (GoLiveDriver.commit_refusal)."""
-        return self.driver.commit_refusal()
+        """Why the FLIP cannot run here: the picked device changed since it was picked
+        (stale_binding), the device's blocker, or — on this host — B1, this host is not
+        a HugMesh node (GoLiveDriver.commit_refusal); then a provider the device's
+        headscale cannot carry (Tailscale Funnel)."""
+        why = self.stale_binding() or self.driver.commit_refusal()
+        if why or self.target.is_local or not self.opts.provider:
+            return why
+        p = self.driver.provider(self.opts.provider)
+        return golive_target.headscale_refusal(self.target, self.opts.provider,
+                                               p.mechanism if p else "")
 
     def cluster_domain(self) -> str:
         """The target's baked cluster domain: this host's file, or the device's own,
@@ -1766,8 +1856,10 @@ def open_go_live(generator_dir: str, domain: str = "", current=None, target=None
     try:
         reuse = (wiz is not None and wiz.isVisible() and wiz.before_inputs()
                  and os.path.abspath(generator_dir) == wiz.generator_dir
-                 # a wizard open on another device is that device's run
-                 and (target is None or _same_target(wiz.target, target)))
+                 and (not work_dir or os.path.abspath(work_dir) == wiz.work_dir)
+                 # a wizard open on another device — or on an earlier boot of this
+                 # one (another port, another started_at) — is not this run
+                 and (target is None or _same_target(wiz, target)))
     except RuntimeError:                         # its C++ side was deleted
         reuse = False
     if not reuse:
@@ -1779,7 +1871,14 @@ def open_go_live(generator_dir: str, domain: str = "", current=None, target=None
     return wiz
 
 
-def _same_target(cur, target) -> bool:
+def _same_target(wiz, target) -> bool:
+    """True when ``wiz`` is bound to exactly ``target``: the same device AND the same
+    boot over the same ssh channel. A LABEL is resolved against the wizard's work dir
+    first, so the comparison is with the device's record as it is now."""
+    cur = wiz.target
     if isinstance(target, str):
-        return cur.label == target.strip()
-    return (cur.kind, cur.label) == (target.kind, target.label)
+        found = golive_target.find_target(wiz._fresh_rows(), target.strip())
+        if found is None:
+            return False
+        target = found
+    return golive_target.same_binding(cur, target)

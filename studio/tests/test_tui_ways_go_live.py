@@ -231,3 +231,141 @@ def test_a_token_file_reaches_the_device_over_stdin_only(guest, tmp_path):
     for argv in guest.calls():
         assert not any(SECRET in a for a in argv), argv
     assert SECRET not in "\n".join(j.lines())
+
+
+# ── round 2 of #931: the picked device is RE-BOUND on `r` and on a pick ──────────────
+
+def _restart(guest, label="rpi5/pki", port=22999, started_at="2026-11-10T09:00:00Z",
+             **kw):
+    return fake.register(guest, label=label, port=port, started_at=started_at, **kw)
+
+
+def _commit_port(gl, j):
+    argv = shlex.split(gl.commit_command(j))
+    return argv[argv.index("-p") + 1]
+
+
+def test_r_rebinds_the_picked_device_after_a_restart(guest):
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    assert _commit_port(gl, j) == "22401"
+    _restart(guest)                                  # new port, new boot
+    # the plan stage refuses to hand over a command for the boot it no longer is
+    text = "\n".join(j.lines())
+    assert "restarted" in text and "22999" in text
+    assert "sudo hugmesh-go-live commit" not in text
+    j.feed("p")
+    assert "restarted" in j.status
+    assert not any("plan" in c[-1] for c in guest.calls() if c[-1].startswith("sudo "))
+    # t, then r: the device is re-bound to its fresh record
+    j.feed("")                                       # back to the providers
+    j.feed("t")
+    j.feed("r")
+    assert gl.target.ssh_port == 22999 and gl._driver(j).target.ssh_port == 22999
+    assert gl.target.started_at == "2026-11-10T09:00:00Z"
+    assert gl.opts.provider == "byo-domain"          # the same device: provider kept
+    assert _commit_port(gl, j) == "22999"
+
+
+def test_r_after_a_stop_and_port_reuse_refuses_the_stale_pick(guest):
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _restart(guest, port=22401, started_at="2026-11-09T20:00:00Z", state="stopped")
+    _restart(guest, label="rpi5/be", role="backend", port=22401)
+    j.feed("t")
+    j.feed("r")
+    assert gl.target.label == "rpi5/pki" and not gl.target.running
+    assert "rpi5/pki is not running" in j.status
+    _to_plan_anyway = gl._driver(j).blocker()
+    assert "not running" in _to_plan_anyway
+    assert gl.commit_command(j).startswith("!! ")    # no ssh line to hand over
+
+
+def test_picking_a_row_takes_the_record_as_it_is_now(guest):
+    j, gl = _go_live_screen(guest)
+    j.feed("t")
+    j.lines()                                        # the rows a person reads...
+    rows = [t.label for t in gl._rows]
+    _restart(guest)                                  # ...then the device restarts
+    j.feed(str(rows.index("rpi5/pki") + 1))
+    assert gl.target.ssh_port == 22999 and gl._driver(j).target.ssh_port == 22999
+
+
+# ── Tailscale Funnel on an emulated mesh: refused on the TUI too ─────────────────────
+
+def test_funnel_is_refused_on_the_provider_step_for_a_device(guest):
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    text = "\n".join(j.lines())
+    assert "! refused: tailscale-funnel is refused on rpi5/pki" in text
+    ids = [p.id for p in gl._driver(j).providers()]
+    j.feed(str(ids.index("tailscale-funnel") + 1))
+    assert gl.stage == "provider" and gl.opts.provider != "tailscale-funnel"
+    assert "headscale" in j.status
+
+
+def test_funnel_is_offered_on_this_host(guest):
+    j, gl = _go_live_screen(guest)
+    assert "! refused: tailscale-funnel" not in "\n".join(j.lines())
+    ids = [p.id for p in gl._driver(j).providers()]
+    j.feed(str(ids.index("tailscale-funnel") + 1))
+    assert gl.stage == "domain" and gl.opts.provider == "tailscale-funnel"
+
+
+# ── plan inputs on the TUI: --ingress-ip, --tunnel-cname, --ddns-subdomain ───────────
+
+def test_ingress_ip_and_tunnel_cname_reach_the_plan_on_the_device(guest):
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    text = "\n".join(j.lines())
+    assert "ip ADDR|-" in text and "cname HOST|-" in text
+    assert "sub LABEL|-" not in text                 # byo-domain takes no subdomain
+    j.feed("ip 203.0.113.10")
+    j.feed("cname edge.example.invalid")
+    assert gl.opts.ingress_ip == "203.0.113.10"
+    assert gl.opts.tunnel_cname == "edge.example.invalid"
+    assert "--ingress-ip 203.0.113.10" in "\n".join(j.lines())
+    j.feed("p")
+    plans = [c[-1] for c in guest.calls() if " plan " in c[-1]]
+    assert plans, guest.calls()
+    words = shlex.split(plans[-1])
+    assert words[words.index("--ingress-ip") + 1] == "203.0.113.10"
+    assert words[words.index("--tunnel-cname") + 1] == "edge.example.invalid"
+    j.feed("ip -")
+    assert gl.opts.ingress_ip == ""
+
+
+def test_a_slirp_or_mesh_l2_ingress_ip_is_refused_on_the_tui(guest):
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    for ip in ("10.0.2.15", "10.77.0.5"):
+        j.feed(f"ip {ip}")
+        assert gl.opts.ingress_ip == "", ip
+        assert "the emulator's private network" in j.status, j.status
+    assert not any(" plan " in c[-1] for c in guest.calls())
+
+
+def test_ddns_subdomain_is_a_command_for_a_ddns_provider(guest):
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "duckdns")
+    assert "sub LABEL|-" in "\n".join(j.lines())
+    j.feed("sub home")
+    assert gl.opts.ddns_subdomain == "home"
+    assert "--ddns-subdomain home" in "\n".join(j.lines())
+    j.feed("ip 203.0.113.10")                        # duckdns takes no ingress IP
+    assert gl.opts.ingress_ip == ""
+    assert "duckdns takes no" in j.status
+
+
+def test_this_host_takes_the_same_inputs_into_its_command(guest):
+    j, gl = _go_live_screen(guest)
+    _to_plan(j, gl, "byo-domain")
+    j.feed("ip 203.0.113.10")
+    assert gl.opts.ingress_ip == "203.0.113.10"
+    assert "--ingress-ip 203.0.113.10" in "\n".join(j.lines())
+    j.feed("ip 10.0.2.15")                           # a real node's LAN: not refused
+    assert gl.opts.ingress_ip == "10.0.2.15"

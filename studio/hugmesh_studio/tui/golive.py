@@ -28,6 +28,16 @@ verbs there — ``s`` status, ``l`` list, ``p`` plan (the plan writes inside the
 its artefacts are copied back) — and hands over the exact ``ssh -t … commit`` command to
 run in a terminal, where the device asks to confirm on its TTY (no -y, ever). The Mesh
 emulation screen's ``g`` opens this screen on its front door.
+
+The plan stage takes the GUI Inputs step's fields as commands — ``ip ADDR``, ``ip6
+ADDR``, ``cname HOST``, ``sub LABEL``, ``svc duckdns|cloudflare`` (``-`` clears),
+offered only for a provider that takes them; an emulated target refuses an ingress
+address in the emulator's own slirp / mesh-L2 range, as the GUI does. ``r`` on the
+target list RE-BINDS the picked device to its record as it is now (a restart moves it
+to another port and boot; a stopped device's port can be handed to another device),
+and until it is re-bound the plan stage runs nothing on it and hands over no commit.
+Tailscale Funnel is refused on an emulated target (its control plane is its own
+headscale), on the provider list, as on the GUI's Provider step.
 """
 from __future__ import annotations
 
@@ -47,6 +57,20 @@ THIS_HOST = "This host"
 
 #: how many lines of a plan run the plan stage keeps on screen
 PLAN_TAIL = 40
+
+#: The plan stage's input commands — the GUI Inputs step's fields, one command each:
+#: (command, GoLiveOptions attribute, the provider input that offers it (GoLiveProvider
+#: .offers), the driver flag, what it takes). Offered only for a provider that takes it.
+PLAN_INPUTS = (
+    ("ip", "ingress_ip", "ingress-ip", "--ingress-ip", "ADDR"),
+    ("ip6", "ingress_ipv6", "ingress-ipv6", "--ingress-ipv6", "ADDR"),
+    ("cname", "tunnel_cname", "tunnel-cname", "--tunnel-cname", "HOST"),
+    ("sub", "ddns_subdomain", "subdomain", "--ddns-subdomain", "LABEL"),
+    ("svc", "ddns_service", "ddns-service", "--ddns-service", "duckdns|cloudflare"),
+)
+_INPUT_BY_COMMAND = {row[0]: row for row in PLAN_INPUTS}
+#: the GUI's DDNS service picker's two entries
+DDNS_SERVICES = ("duckdns", "cloudflare")
 
 
 def target_title(t: golive_target.GoLiveTarget) -> str:
@@ -159,6 +183,33 @@ class GoLiveScreen:
         self.run_log = []
         return ""
 
+    def fresh(self, j, target):
+        """``target``'s device as the work dir says it is NOW (golive_target.rebind):
+        a restart's new port and boot, or NOT running when it stopped or is gone."""
+        return golive_target.rebind(target, self.target_rows(j))
+
+    def rebind_target(self, j) -> str:
+        """``r``: re-bind the picked device to its fresh record, whatever it says. A
+        stopped device is KEPT, refused (unlike a pick, which keeps the previous
+        target): what must never survive a re-scan is the old port. "" or why."""
+        t = self.target
+        if t.is_local:
+            return ""
+        fresh = self.fresh(j, t)
+        if not golive_target.same_binding(fresh, t):
+            self.target, self.driver = fresh, None
+            self.run_log = []
+        return golive_target.refusal(self.target) or (
+            self._driver(j).blocker() if self.target.running else "")
+
+    def stale_binding(self, j) -> str:
+        """"" while the picked device is still the record it was picked as; otherwise
+        what changed and how to re-pick it (the GUI's stale_binding, TUI words)."""
+        if self.target.is_local:
+            return ""
+        why = golive_target.binding_change(self.target, self.target_rows(j))
+        return (why + " (t, then r: re-scan.)") if why else ""
+
     def _target_line(self, j) -> str:
         t = self.target
         if t.is_local:
@@ -182,8 +233,8 @@ class GoLiveScreen:
             elif t.is_local and golive_target.local_node_refusal():
                 out.append("       plan/status preview only — commit refused: "
                            + golive_target.local_node_refusal())
-        out += ["", "commands: NUMBER=pick · r=re-scan · Enter or b=back to the "
-                "providers"]
+        out += ["", "commands: NUMBER=pick · r=re-scan (re-binds the picked device) · "
+                "Enter or b=back to the providers"]
         return out
 
     def _feed_target(self, j, line: str) -> None:
@@ -191,7 +242,11 @@ class GoLiveScreen:
             self.stage = "provider"
             return
         if line.lower() == "r":
-            return                               # lines() re-reads the work dir
+            # lines() re-reads the rows; the PICKED device is re-bound here
+            why = self.rebind_target(j)
+            if why:
+                j.status = why
+            return
         rows = self._rows or self.target_rows(j)
         try:
             n = int(line)
@@ -200,7 +255,8 @@ class GoLiveScreen:
         if not 1 <= n <= len(rows):
             j.status = f"no such target: {line!r}"
             return
-        why = self.set_target(j, rows[n - 1])
+        # the rows were read when the list was drawn: take the record as it is NOW
+        why = self.set_target(j, self.fresh(j, rows[n - 1]))
         if why:
             j.status = why
             return
@@ -246,6 +302,9 @@ class GoLiveScreen:
             reach = golive_target.mechanism_reachability(p.mechanism, self.target, p.id)
             if reach:
                 out.append(f"       from {self.target.label}: {reach}")
+            why = golive_target.headscale_refusal(self.target, p.id, p.mechanism)
+            if why:
+                out.append(f"       ! refused: {why}")
         if self.opts.domain and self._over(j):
             out += ["", f"domain: {self.opts.domain} (picked from its Brand settings)"]
         out += ["", "commands: NUMBER=pick · t=pick the target" + (
@@ -276,7 +335,12 @@ class GoLiveScreen:
         if not 1 <= n <= len(providers):
             j.status = f"no such provider: {line!r}"
             return
-        self.opts.provider = providers[n - 1].id
+        p = providers[n - 1]
+        why = golive_target.headscale_refusal(self.target, p.id, p.mechanism)
+        if why:                                  # the GUI's Provider step refuses it too
+            j.status = why
+            return
+        self.opts.provider = p.id
         self.stage = "domain"
 
     # ── domain ──────────────────────────────────────────────────────────────────
@@ -329,10 +393,53 @@ class GoLiveScreen:
         step's exact text."""
         return exposure_lines(plan_rows(self._driver(j), self.opts))
 
+    # ── the plan's inputs (the GUI Inputs step's fields) ────────────────────────────
+    def _offered_inputs(self, j) -> list:
+        p = self._driver(j).provider(self.opts.provider)
+        return [row for row in PLAN_INPUTS if p is not None and p.offers(row[2])]
+
+    def _input_lines(self, j) -> list[str]:
+        """What the plan will be given, and the commands that set it."""
+        rows = self._offered_inputs(j)
+        if not rows:
+            return []
+        said = " · ".join(f"{flag} {getattr(self.opts, attr) or '(none)'}"
+                          for _cmd, attr, _name, flag, _what in rows)
+        cmds = " · ".join(f"{cmd} {what}" + ("" if cmd == "svc" else "|-")
+                          for cmd, _attr, _name, _flag, what in rows)
+        return [f"inputs: {said}", f"  set: {cmds}"]
+
+    def _set_input(self, j, row, arg: str) -> None:
+        cmd, attr, name, flag, what = row
+        p = self._driver(j).provider(self.opts.provider)
+        if p is None or not p.offers(name):
+            j.status = f"{self.opts.provider or 'this provider'} takes no {flag}"
+            return
+        if not arg:
+            j.status = f"{cmd} needs {what}" + ("" if cmd == "svc" else ", or - to clear it")
+            return
+        value = "" if arg == "-" else arg
+        if cmd == "svc" and value not in DDNS_SERVICES:
+            j.status = f"svc takes one of {', '.join(DDNS_SERVICES)}"
+            return
+        if cmd in ("ip", "ip6") and self.target.is_remote:
+            # the emulator's own addresses (slirp, mesh L2): no registrar record can
+            # carry one — refused here, as the GUI's Inputs step refuses it
+            why = golive_target.refuse_private_ingress(value)
+            if why:
+                j.status = why
+                return
+        setattr(self.opts, attr, value)
+        self.run_log = []
+        j.status = f"{flag} {value}" if value else f"{flag} cleared"
+
     def _lines_plan(self, j) -> list[str]:
         d = self._driver(j)
         out = [self._target_line(j), "", "Per-domain exposure (this device):", ""]
         out += ["  " + ln for ln in self.plan_lines(j)]
+        inputs = self._input_lines(j)
+        if inputs:
+            out += [""] + inputs
         if self.target.is_remote:
             return out + self._remote_plan_lines(j)
         out += ["", "The TUI does not run the driver. The exact command (the GUI's "
@@ -341,7 +448,9 @@ class GoLiveScreen:
                 "  " + d.command_string("plan", self.opts),
                 "On the device, the terminal menu hugmesh-go-live-menu runs it too. "
                 "The flip (commit) runs only on a real TTY there, by design."]
-        commands = ["b=back to the domain", "Enter=back to the providers"]
+        commands = [f"{cmd} {what}{'' if cmd == 'svc' else '|-'}"
+                    for cmd, _a, _n, _f, what in self._offered_inputs(j)]
+        commands += ["b=back to the domain", "Enter=back to the providers"]
         cands = self.export_candidates(j)
         if export_step_applies(cands):
             commands.append(f"x=export to a GitHub org ({len(cands)} domain"
@@ -353,13 +462,27 @@ class GoLiveScreen:
     def commit_command(self, j, persist: bool = False) -> str:
         """The exact ``ssh -t … sudo hugmesh-go-live commit …`` to paste into a
         terminal (the device's confirm runs on that TTY; no -y)."""
+        why = self._act_refusal(j)
+        if why:
+            return f"!! {why}"
         try:
             return shlex.join(self._driver(j).commit_command(self.opts, persist=persist))
         except ValueError as exc:
             return f"!! {exc}"
 
     def rollback_command(self, j, revert: bool = False) -> str:
+        why = self._act_refusal(j)
+        if why:
+            return f"!! {why}"
         return shlex.join(self._driver(j).rollback_command(revert_release_state=revert))
+
+    def _act_refusal(self, j) -> str:
+        """Why nothing may be run on, or handed over for, the picked device: it changed
+        since it was picked (stale_binding), or it is refused (stopped, no channel, no
+        driver). "" for this host — its commands are never run from here."""
+        if self.target.is_local:
+            return ""
+        return self.stale_binding(j) or self._driver(j).commit_refusal()
 
     def _remote_plan_lines(self, j) -> list[str]:
         t = self.target
@@ -389,7 +512,9 @@ class GoLiveScreen:
                 "--persist-public flip):",
                 "  " + self.rollback_command(j),
                 "", "commands: p=run the plan on the device · s=status · l=list · "
-                "tf PATH|-=token file · b=back to the domain · Enter=back to the "
+                + "".join(f"{cmd} {what}{'' if cmd == 'svc' else '|-'} · "
+                          for cmd, _a, _n, _f, what in self._offered_inputs(j))
+                + "tf PATH|-=token file · b=back to the domain · Enter=back to the "
                 "providers"]
         return out
 
@@ -424,10 +549,18 @@ class GoLiveScreen:
         if line == "":
             self.stage = "provider"
             return
+        verb, _, arg = line.partition(" ")
+        row = _INPUT_BY_COMMAND.get(verb.lower())
+        if row is not None:
+            self._set_input(j, row, arg.strip())
+            return
         if self.target.is_remote:
             low = line.lower()
-            verb, _, arg = line.partition(" ")
             if low in ("p", "s", "l"):
+                why = self.stale_binding(j)
+                if why:                # it would land on whatever holds that port now
+                    j.status = why
+                    return
                 self._run_remote(j, {"p": "plan", "s": "status", "l": "list"}[low])
                 return
             if verb.lower() == "tf" and arg.strip():
