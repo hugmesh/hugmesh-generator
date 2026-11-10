@@ -16,7 +16,7 @@ the key the same way:
   malformed value is refused before anything is stored or sent;
 * the STORE: ``<state_dir>/secrets/nvd_api_key``, dir 0700, file 0600, written to a
   private temporary file and renamed into place (``mesh_token._write_private``), with
-  a sidecar ``nvd_api_key.meta.json`` holding only a sha256 prefix, when it was saved
+  a sidecar ``nvd_api_key.meta.json`` holding only a 12-hex PBKDF2 fingerprint, when it was saved
   and the last Verify verdict. The key itself is never in a FleetConfig/ImageConfig
   JSON, a session record, a log, argv, the command preview or the assistant context;
 * VERIFY: one GET to NVD's CVE API with the key in the ``apiKey`` header, run only
@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import functools
 import getpass
 import hashlib
 import http.client
@@ -155,8 +156,14 @@ def check(raw) -> str:
     return key
 
 
+@functools.lru_cache(maxsize=8)
 def _fingerprint(key: str) -> str:
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+    """A 12-hex id for "is this the same key" (the sidecar's match, the push's
+    verified check), shown and stored instead of the key. A slow KDF, not a bare
+    hash: the key is a credential, and a plain sha256 of one is what a scanner
+    rightly flags (CodeQL py/weak-sensitive-data-hashing). Cached per key."""
+    return hashlib.pbkdf2_hmac("sha256", key.encode("utf-8"),
+                               b"hugmesh-studio nvd-api-key fingerprint", 50_000).hex()[:12]
 
 
 # ── store ─────────────────────────────────────────────────────────────────────────────
@@ -196,7 +203,7 @@ def save(raw) -> "KeyStatus":
     _write_private(path, key)                 # 0600 temp file + os.replace, no newline
     if os.name != "nt":
         os.chmod(path, 0o600)
-    _write_meta({"sha256_prefix": _fingerprint(key), "saved_at": _now(),
+    _write_meta({"fingerprint": _fingerprint(key), "saved_at": _now(),
                  "last_verdict": "", "verified_at": ""})
     return status()
 
@@ -243,7 +250,7 @@ def status() -> KeyStatus:
     m = _read_meta()
     fp = _fingerprint(key)
     # a sidecar about a different key (replaced by hand) says nothing about this one
-    if m.get("sha256_prefix") != fp:
+    if m.get("fingerprint") != fp:
         m = {}
     return KeyStatus(True, fp, str(m.get("saved_at") or ""),
                      str(m.get("last_verdict") or ""), str(m.get("verified_at") or ""))
@@ -268,7 +275,7 @@ def record_verdict(result: "VerifyResult") -> None:
     if not st.stored or result.fingerprint != st.fingerprint:
         return
     m = _read_meta()
-    m.update({"sha256_prefix": st.fingerprint, "last_verdict": result.verdict})
+    m.update({"fingerprint": st.fingerprint, "last_verdict": result.verdict})
     m.setdefault("saved_at", st.saved_at)
     if result.verdict == OK:
         m["verified_at"] = _now()
@@ -278,7 +285,7 @@ def record_verdict(result: "VerifyResult") -> None:
 # ── verify ────────────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class VerifyResult:
-    """A Verify outcome. Holds no key (only its 12-hex sha256 prefix)."""
+    """A Verify outcome. Holds no key (only its 12-hex fingerprint)."""
     verdict: str
     sentence: str
     http_status: Optional[int] = None
@@ -591,14 +598,14 @@ def main(argv=None, *, stdin=None, prompt=getpass.getpass, opener=None, runner=N
         if args.cmd == "status":
             st = status()
             print(f"NVD API key: {status_line(st)}"
-                  + (f" (sha256 {st.fingerprint})" if st.stored else ""), file=out)
+                  + (f" (fingerprint {st.fingerprint})" if st.stored else ""), file=out)
             for ln in info_lines():
                 print(ln, file=out)
             return 0
         if args.cmd == "set":
             raw = _read_key_source(args.key_file, stdin, prompt)
             st = save(raw)
-            print(f"NVD API key: {status_line(st)} (sha256 {st.fingerprint})", file=out)
+            print(f"NVD API key: {status_line(st)} (fingerprint {st.fingerprint})", file=out)
             print(ACTIVATION_WARNING, file=out)
             return 0
         if args.cmd == "verify":

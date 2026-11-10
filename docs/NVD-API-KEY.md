@@ -95,7 +95,7 @@ Two traps when checking by hand:
 
 - **Studio:** in `~/.hugmesh/studio/secrets/nvd_api_key` (`$HUGMESH_STUDIO_STATE_DIR/secrets/` when that is
   set). The directory is 0700 and the file is 0600, written atomically. The file holds the
-  key with no newline. Beside it, `nvd_api_key.meta.json` keeps only a sha256 prefix, when
+  key with no newline. Beside it, `nvd_api_key.meta.json` keeps only a 12-hex PBKDF2 fingerprint, when
   the key was saved, and the last Verify verdict.
 
   The key is never written into a saved fleet or image config, a session record, a log,
