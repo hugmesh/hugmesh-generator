@@ -8,6 +8,7 @@ broken; the Linux behaviour of the same code is pinned beside it where it could 
 Gates take an ``osname`` (or read the wizard's pinned host) so both sides run on any
 CI; tests that drive code with no such seam are ``skipif(os.name != "nt")``.
 """
+import ast
 import inspect
 import os
 import threading
@@ -321,43 +322,82 @@ def test_a_build_adopted_before_its_thread_starts_is_not_reaped_by_the_panel(qap
 
 
 # ── Local AI: Windows-true advice in both faces ─────────────────────────────────────
-def test_the_replaced_advice_is_still_what_local_ai_status_says():
-    """If core/local_ai_status rewords its advice, the rewrite here would silently stop
-    matching; fail loudly instead."""
-    src = inspect.getsource(lai)
-    for old, _system, _docker in tui_lai._WINDOWS_UP:
-        assert old in src, old
+# The Windows sentences are produced at the source (core/local_ai_status, picked by
+# ``osname``); the faces show the snapshot and the error message as they come, with no
+# rewrite of their own. So the advice is pinned where it is made, and the faces are
+# driven with the real read below.
 
-
-@pytest.mark.parametrize("text", [
+#: The "bring Ollama up" sentences core/local_ai_status gives on Linux: each names the
+#: bash script, which a native Windows Studio cannot run.
+_LINUX_UP_ADVICE = (
     "Install it (see the link), then run: scripts/local-ai.sh up",
     "Start it with: scripts/local-ai.sh up",
     "Ollama is not answering on 127.0.0.1:11434. Start it with scripts/local-ai.sh up "
     "(see docs/LOCAL-AI-ASSISTANT.md).",
-])
-def test_windows_advice_names_no_bash_script_on_native_windows(text):
+)
+
+
+def _up_advice(text, mode, osname, tmp_path, monkeypatch):
+    """The sentence core/local_ai_status gives on ``osname`` in Ollama ``mode`` where it
+    gives ``text`` (one of _LINUX_UP_ADVICE) on Linux."""
+    installed = text != _LINUX_UP_ADVICE[0]
+    monkeypatch.setattr(lai.shutil, "which",
+                        lambda name, *a, **k: "ollama" if installed else None)
+    env = odk.assistant_env(mode, {lai.STATE_ENV: str(tmp_path / "lai")})
+    if text == _LINUX_UP_ADVICE[2]:
+        return lai._down_message(env, osname=osname)
+    return lai.read_snapshot(env, probe=lambda: (False, [], [], ""), builds=lambda: [],
+                             osname=osname).fix
+
+
+def test_the_replaced_advice_is_still_what_local_ai_status_says():
+    """If core/local_ai_status gains another piece of ``scripts/local-ai.sh up`` advice,
+    the Windows pins below would silently not cover it; fail loudly instead. Every
+    string in its code (docstrings aside) that names ``local-ai.sh up`` must belong to
+    one of the Linux sentences whose Windows counterpart is pinned here."""
+    tree = ast.parse(inspect.getsource(lai))
+    docstrings = {id(node.value) for node in ast.walk(tree)
+                  if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)}
+    found = [node.value for node in ast.walk(tree)
+             if isinstance(node, ast.Constant) and isinstance(node.value, str)
+             and "local-ai.sh up" in node.value and id(node) not in docstrings]
+    assert found, "local_ai_status no longer names local-ai.sh up: drop these pins"
+    for piece in found:
+        assert any(piece in text for text in _LINUX_UP_ADVICE), piece
+
+
+@pytest.mark.parametrize("text", _LINUX_UP_ADVICE)
+def test_windows_advice_names_no_bash_script_on_native_windows(text, tmp_path, monkeypatch):
     for mode, word in ((odk.SYSTEM, "Ollama for Windows"), (odk.DOCKER, "container")):
-        got = tui_lai.windows_advice(text, mode, osname="nt")
+        got = _up_advice(text, mode, "nt", tmp_path, monkeypatch)
         assert "local-ai.sh" not in got and word in got
-    assert tui_lai.windows_advice(text, odk.SYSTEM, osname="posix") == text
+    assert _up_advice(text, odk.SYSTEM, "posix", tmp_path, monkeypatch) == text
 
 
 def test_native_windows_note_is_the_wsl2_sentence_plus_the_windows_path():
-    note = tui_lai.native_windows_note("nt")
+    note = lai.windows_worker_note("nt")
     assert "WSL2" in note and lai.WINDOWS_NATIVE_PATH in note
-    assert tui_lai.native_windows_note("posix") == ""
+    assert lai.windows_worker_note("posix") == ""
+
+
+@pytest.fixture
+def no_ollama(monkeypatch):
+    """Ollama absent whatever this host has installed: one set of sentences per OS."""
+    real = lai.shutil.which
+    monkeypatch.setattr(lai.shutil, "which",
+                        lambda name, *a, **k: None if name == "ollama" else real(name, *a, **k))
 
 
 def _down_snapshot():
-    s = _snapshot()
-    s.ollama_up, s.ollama_installed = False, False
-    s.problem = "Ollama is not installed on this machine."
-    s.fix = "Install it (see the link), then run: scripts/local-ai.sh up"
-    return s
+    """The real read with Ollama absent (not installed, not answering): the sentences
+    this platform gives, as the faces receive them."""
+    return odk.adjust_snapshot(
+        lai.read_snapshot({"OLLAMA_HOST": "127.0.0.1:1"}, builds=lambda: [],
+                          probe=lambda: (False, [], [], "")), odk.SYSTEM)
 
 
 @WINDOWS_ONLY
-def test_tui_local_ai_screen_gives_no_bash_lines_on_native_windows(tmp_path):
+def test_tui_local_ai_screen_gives_no_bash_lines_on_native_windows(tmp_path, no_ollama):
     gen = tmp_path / "gen Jörg Ä"
     screen = tui_lai.LocalAIScreen(snapshot_fn=_down_snapshot, generator_dir=str(gen))
     j = SimpleNamespace(slug="")
@@ -369,7 +409,7 @@ def test_tui_local_ai_screen_gives_no_bash_lines_on_native_windows(tmp_path):
 
 
 @POSIX_ONLY
-def test_tui_local_ai_screen_unchanged_on_linux(tmp_path):
+def test_tui_local_ai_screen_unchanged_on_linux(tmp_path, no_ollama):
     screen = tui_lai.LocalAIScreen(snapshot_fn=_down_snapshot, generator_dir=str(tmp_path))
     j = SimpleNamespace(slug="")
     screen.enter(j)
@@ -377,12 +417,17 @@ def test_tui_local_ai_screen_unchanged_on_linux(tmp_path):
     assert "Run it yourself" in text and "scripts/local-ai.sh up" in text
 
 
+@pytest.mark.parametrize("windows", [True, False], ids=["nt", "posix"])
 def test_start_local_assistant_writes_its_context_inside_the_studio_state_dir(
-        qapp, tmp_path, monkeypatch):
+        qapp, tmp_path, monkeypatch, windows):
     """Review round: each press of Start local assistant on native Windows wrote
     HUGMESH-CONTEXT.md and its inputs into %USERPROFILE%\\.local\\state\\hugmesh\\local-ai
-    (lai.state_dir()'s XDG rule), outside the Studio state dir. Linux keeps that rule."""
+    (lai.state_dir()'s XDG rule), outside the Studio state dir. Linux keeps that rule.
+
+    The folder is lai.state_dir()'s choice, made by its native-Windows test; that test
+    is pinned here so both sides run on any host, through the dock's real start path."""
     from hugmesh_studio.gui import _local_ai_dock as dock_mod
+    monkeypatch.setattr(lai, "_native_windows", lambda osname=None: windows)
     home = tmp_path / "home"
     for var in ("HOME", "USERPROFILE"):
         monkeypatch.setenv(var, str(home))
@@ -393,20 +438,23 @@ def test_start_local_assistant_writes_its_context_inside_the_studio_state_dir(
                         got.append(dict(extra_env or {})) or lai.StartResult(True, "ok", ""))
     dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=_snapshot, auto_poll=False)
     try:
-        dock._make_default_start(osname="nt")()
+        dock._make_default_start()()
         ctx = got[-1]["HUGMESH_AGENT_CONTEXT"]
         assert os.path.isfile(ctx)
-        assert os.path.commonpath([ctx, str(tmp_path / "state")]) == str(tmp_path / "state")
-        assert not home.exists(), list(home.rglob("*"))
-        dock._make_default_start(osname="posix")()
-        assert os.path.dirname(got[-1]["HUGMESH_AGENT_CONTEXT"]) == lai.state_dir()
+        if windows:
+            assert os.path.commonpath([ctx, str(tmp_path / "state")]) == str(tmp_path / "state")
+            assert not home.exists(), list(home.rglob("*"))
+        else:
+            assert os.path.dirname(ctx) == lai.state_dir()
+            assert os.path.dirname(ctx) == os.path.join(
+                str(home), ".local", "state", "hugmesh", "local-ai")
     finally:
         dock.deleteLater()
         qapp.processEvents()
 
 
 @WINDOWS_ONLY
-def test_studio_panel_gives_no_bash_advice_on_native_windows(qapp):
+def test_studio_panel_gives_no_bash_advice_on_native_windows(qapp, no_ollama):
     from hugmesh_studio.gui import _local_ai_dock as dock_mod
     dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=_down_snapshot, auto_poll=False)
     work = dock_mod.LocalWorkWindow(GENERATOR_DIR, snapshot_fn=_down_snapshot)
