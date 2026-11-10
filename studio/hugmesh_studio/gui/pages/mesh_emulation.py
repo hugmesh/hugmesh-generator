@@ -826,13 +826,16 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
 
     # ── population ──────────────────────────────────────────────────────────────
     def _reload_sessions(self):
-        self._sessions = qemu_tests.discover_sessions(self.wiz.generator_dir)
-        common.populate_sessions(self.session_combo, self._sessions)
+        self._sessions = qemu_tests.discover_sessions(
+            self.wiz.generator_dir, extra_roots=common.extra_roots(self.wiz))
+        common.populate_sessions(self.session_combo, self._sessions,
+                                 os.path.join(self.wiz.generator_dir, "out"))
         if not self._sessions:
             self.plan_label.setText(
-                f'<span style="color:{WARN}">No build session under out/sessions/ '
-                "holds a bootable image yet.</span> Build a mesh first, then come "
-                "back — this screen emulates images that already exist.")
+                f'<span style="color:{WARN}">No build session in any known output '
+                "folder holds a bootable image yet</span> (searched: "
+                f"{html.escape(common.searched_text(self.wiz))}). Build a mesh first, "
+                "then come back — this screen emulates images that already exist.")
         self._session_changed()
 
     def _current_session(self) -> qemu_tests.BuildSession | None:

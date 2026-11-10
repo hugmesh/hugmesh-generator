@@ -1003,7 +1003,11 @@ class LocalMeshBootstrap:
         else). Those three never reached guard_host_local, so they failed with a raw
         "[WinError 2]" (or advised 'Generate && start', which refuses there too). Public
         so the page refuses 'Stop && clean Docker' BEFORE its destructive
-        confirmation. ``osname`` is ``os.name`` unless a test passes another."""
+        confirmation. ``osname`` is ``os.name`` unless a test passes another — and is
+        passed on only when given: the suite pins the host by swapping in
+        partial(native_windows_blocker, osname=...), which an explicit None would undo."""
+        if osname is None:
+            return platform_info.native_windows_blocker("The local stack")
         return platform_info.native_windows_blocker("The local stack", osname=osname)
 
     def guard_host_local(self) -> tuple[bool, str]:

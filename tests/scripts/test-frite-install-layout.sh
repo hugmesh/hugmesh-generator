@@ -17,10 +17,12 @@
 #            executed below on a fixture tree, then read back with sfdisk, blkid
 #            and mtools.
 #   eMMC     specs-frite/installer/install-frite.sh partitions the target with
-#            parted, rewrites root= in extlinux.conf to the root partition's
-#            PARTUUID and rewrites the two LABEL= lines of /etc/fstab. Its parted
-#            lines and its sed expressions are extracted from the script and run
-#            against regular files (parted on a file, mkfs.vfat on a file, mke2fs
+#            ONE sfdisk write carrying an explicit disk id (p1 at 8 MiB, clear of
+#            the Amlogic BL2/FIP), rewrites root= in extlinux.conf through
+#            ${ROOT_ARG} and rewrites the two LABEL= lines of /etc/fstab. Its
+#            layout constants, sfdisk write, ROOT_ARG/FSTAB_ROOT assignments and
+#            sed lines are extracted from the script and run against regular
+#            files (sfdisk on a file, mkfs.vfat on a file, mke2fs
 #            -d populating ext4 from a directory): root= must equal the PARTUUID
 #            of partition 2 as blkid and sfdisk independently report it, the FDT
 #            and kernel must be on the FAT, fstab must be rewritten, and the
@@ -54,7 +56,7 @@ LIB="${REPO}/scripts/_builder-resume-lib.sh"
 # shellcheck source=../lib/guard-preflight.sh
 . "${REPO}/tests/lib/guard-preflight.sh"
 guard_require_tools bash awk sed grep tar xz sfdisk blkid mkfs.vfat mcopy mdir mtype mlabel \
-    mke2fs debugfs parted getfattr setfattr du dd truncate stat od head cut sort sha256sum
+    mke2fs debugfs getfattr setfattr du dd truncate stat od head cut sort sha256sum
 for f in "${BUILDER}" "${INSTALLER}" "${FSTAB}" "${TMPL}" "${LIB}"; do
     [ -f "${f}" ] || { echo "  FAIL missing: ${f}"; exit 1; }
 done
@@ -304,47 +306,84 @@ T6="${WORK}/t6"; mk_tree "${T6}"; rm -f "${T6}/extlinux/extlinux.conf"
 [ "$(refuses FRITE_INST "${T6}")" = refused ] && ok "refuses a tree with no /extlinux/extlinux.conf" || bad "accepted a tree u-boot could not boot"
 
 # ═══════ 4. the eMMC layout install-frite.sh writes, as regular files ═════════
-echo "-- 4) eMMC layout: the installer's parted + sed, executed on files --"
+echo "-- 4) eMMC layout: the installer's sfdisk write + root=/fstab rewrite, executed on files --"
 EMMC="${WORK}/emmc.img"; truncate -s 512M "${EMMC}"
-PARTED_LINES="$(grep -E '^parted -s "\$\{DEV\}"' "${INSTALLER}")"
-[ "$(printf '%s\n' "${PARTED_LINES}" | wc -l)" -ge 3 ] || bad "could not extract the installer's parted lines"
-( DEV="${EMMC}"; eval "${PARTED_LINES}" ) >"${WORK}/parted.log" 2>&1 && ok "installer's parted sequence ran on a file" || { bad "parted failed:"; sed 's/^/      | /' "${WORK}/parted.log"; }
+# The layout constants and the ONE sfdisk write (#877), sliced from the installer.
+LAYOUT_VARS="$(grep -E '^(P1_START_MIB|P1_END_MIB|SECTOR)=' "${INSTALLER}")"
+P1_BYTES_LINE="$(grep -E '^P1_START_BYTES=' "${INSTALLER}")"
+SFDISK_SRC="$(awk '/^P1_START_S=/ {on=1} on {print} on && /sfdisk failed to write the partition table/ {exit}' "${INSTALLER}")"
+DISKID_FN="$(awk '/^mbr_disk_id\(\) \{/ {on=1} on {print} on && /^}$/ {exit}' "${INSTALLER}")"
+if [ "$(printf '%s\n' "${LAYOUT_VARS}" | grep -c .)" -eq 3 ] && [ -n "${P1_BYTES_LINE}" ] \
+   && printf '%s\n' "${SFDISK_SRC}" | grep -F 'label-id: 0x%s' >/dev/null \
+   && printf '%s\n' "${SFDISK_SRC}" | grep -F '| sfdisk ' >/dev/null && [ -n "${DISKID_FN}" ]; then
+    ok "sliced the installer's layout constants, its ONE sfdisk write (explicit label-id) and mbr_disk_id()"
+else
+    bad "could not slice the installer's layout constants / sfdisk write / mbr_disk_id()"
+fi
+DISK_ID="$(od -An -tx1 -N4 /dev/urandom | awk '{printf "%s%s%s%s\n", $1, $2, $3, $4}')"
+[ "${DISK_ID}" != 00000000 ] || DISK_ID="5a5a5a5a"
+( DEV="${EMMC}"; ENCRYPT=false; die() { echo "DIE: $*" >&2; exit 1; }
+  eval "${LAYOUT_VARS}"; eval "${P1_BYTES_LINE}"; eval "${SFDISK_SRC}" ) >"${WORK}/sfdisk.log" 2>&1 \
+    && ok "installer's sfdisk write ran on a file" || { bad "sfdisk write failed:"; sed 's/^/      | /' "${WORK}/sfdisk.log"; }
+EXPECT_P1_START="$( eval "${LAYOUT_VARS}"; eval "${P1_BYTES_LINE}"; echo $(( P1_START_BYTES / SECTOR )) )"
 EDUMP="$(sfdisk -d "${EMMC}" 2>/dev/null)"
 e1="$(printf '%s\n' "${EDUMP}" | grep -E '^[^ ]+1 :')"; e2="$(printf '%s\n' "${EDUMP}" | grep -E '^[^ ]+2 :')"
 printf '%s' "${e1}" | grep 'type=c' >/dev/null && printf '%s' "${e1}" | grep 'bootable' >/dev/null && ok "eMMC p1: FAT32 LBA, bootable" || bad "eMMC p1: '${e1}'"
 printf '%s' "${e2}" | grep 'type=83' >/dev/null && ok "eMMC p2: Linux (0x83)" || bad "eMMC p2: '${e2}'"
 P1_START="$(printf '%s' "${e1}" | sed -n 's/.*start= *\([0-9]*\),.*/\1/p')"; P1_SIZE="$(printf '%s' "${e1}" | sed -n 's/.*size= *\([0-9]*\),.*/\1/p')"
 P2_START="$(printf '%s' "${e2}" | sed -n 's/.*start= *\([0-9]*\),.*/\1/p')"; P2_SIZE="$(printf '%s' "${e2}" | sed -n 's/.*size= *\([0-9]*\),.*/\1/p')"
-[ "${P1_START}" = 2048 ] && ok "eMMC p1 starts at 1 MiB (sector 2048), as install-frite.sh partitions" || bad "eMMC p1 start: ${P1_START}"
+[ "${P1_START}" = $(( 8 * MiB / 512 )) ] && [ "${P1_START}" = "${EXPECT_P1_START}" ] \
+    && ok "eMMC p1 starts at 8 MiB (sector ${P1_START}), as install-frite.sh partitions (clear of the Amlogic BL2/FIP)" \
+    || bad "eMMC p1 start: '${P1_START}' (want $(( 8 * MiB / 512 )); installer's P1_START_BYTES/SECTOR = '${EXPECT_P1_START}')"
+[ -n "${P1_START}" ] && [ -n "${P1_SIZE}" ] && [ "${P2_START}" = "$(( P1_START + P1_SIZE ))" ] \
+    && ok "eMMC p2 starts right after p1 (sector ${P2_START})" || bad "eMMC p2 start '${P2_START}' != p1 end"
 PTUUID="$(blkid -p -o value -s PTUUID "${EMMC}")"
 LABEL_ID="$(printf '%s\n' "${EDUMP}" | sed -n 's/^label-id: 0x//p')"
-if [ -n "${PTUUID}" ] && [ "${PTUUID}" != 00000000 ] && [ "${PTUUID}" = "${LABEL_ID}" ]; then
-    ok "MBR disk id ${PTUUID} is non-zero and blkid/sfdisk agree (PARTUUIDs are ${PTUUID}-01 / ${PTUUID}-02)"
+if [ -n "${PTUUID}" ] && [ "${PTUUID}" != 00000000 ] && [ "${PTUUID}" = "${LABEL_ID}" ] && [ "${PTUUID}" = "${DISK_ID}" ]; then
+    ok "MBR disk id ${PTUUID} is the installer's explicit id, non-zero, and blkid/sfdisk agree (PARTUUIDs are ${PTUUID}-01 / ${PTUUID}-02)"
 else
-    bad "disk id: blkid '${PTUUID}' sfdisk '${LABEL_ID}'"
+    bad "disk id: wrote '${DISK_ID}', blkid '${PTUUID}' sfdisk '${LABEL_ID}'"
 fi
+GOT_DISK_ID="$( eval "${DISKID_FN}"; mbr_disk_id "${EMMC}" )"
+[ "${GOT_DISK_ID}" = "${DISK_ID}" ] \
+    && ok "the installer's own mbr_disk_id() reads the id back (its post-write verification would pass)" \
+    || bad "mbr_disk_id() reads '${GOT_DISK_ID}', wrote ${DISK_ID}"
 ROOT_PARTUUID="${PTUUID}-02"; BOOT_PARTUUID="${PTUUID}-01"
-# The installer's own sed expressions (plaintext branch), sliced by their anchors.
-ROOT_EXPR_T="$(grep -o 's#root=\[^ \]+#root=PARTUUID=\${ROOT_PARTUUID}#' "${INSTALLER}" | head -n 1)"
-FSB_EXPR_T="$(grep -o 's#^LABEL=FRITE_BOOT#PARTUUID=\${BOOT_PARTUUID}#' "${INSTALLER}" | head -n 1)"
-FSR_EXPR_T="$(grep -o 's#^LABEL=FRITE_ROOT#PARTUUID=\${ROOT_PARTUUID}#' "${INSTALLER}" | head -n 1)"
-LUKS_EXPR_T="$(grep -o 's#root=\[^ \]+#root=/dev/mapper/cryptroot rd.luks.uuid=\${LUKS_UUID} rd.luks.name=\${LUKS_UUID}=cryptroot#' "${INSTALLER}" | head -n 1)"
-[ -n "${ROOT_EXPR_T}" ] && [ -n "${FSB_EXPR_T}" ] && [ -n "${FSR_EXPR_T}" ] && [ -n "${LUKS_EXPR_T}" ] \
-    && ok "sliced the installer's root= and fstab sed expressions (plaintext + LUKS)" \
-    || bad "could not slice the installer's sed expressions (root='${ROOT_EXPR_T}' boot='${FSB_EXPR_T}' root-fs='${FSR_EXPR_T}' luks='${LUKS_EXPR_T}')"
-ROOT_EXPR="${ROOT_EXPR_T//\$\{ROOT_PARTUUID\}/${ROOT_PARTUUID}}"
-FSB_EXPR="${FSB_EXPR_T//\$\{BOOT_PARTUUID\}/${BOOT_PARTUUID}}"
-FSR_EXPR="${FSR_EXPR_T//\$\{ROOT_PARTUUID\}/${ROOT_PARTUUID}}"
+# The installer's own root=/fstab rewrite (#877): the ROOT_ARG / FSTAB_ROOT
+# assignments of both branches, the extlinux sed and the LABEL=FRITE_* fstab sed.
+ROOT_ARG_PLAIN="$(grep -E '^[[:space:]]*ROOT_ARG="root=PARTUUID=' "${INSTALLER}" | head -n 1)"
+ROOT_ARG_LUKS="$(grep -E '^[[:space:]]*ROOT_ARG="root=/dev/mapper/cryptroot ' "${INSTALLER}" | head -n 1)"
+FSTAB_ROOT_PLAIN="$(grep -E '^[[:space:]]*FSTAB_ROOT="PARTUUID=' "${INSTALLER}" | head -n 1)"
+ROOT_SED="$(grep -F 'sed -i -E "s#root=[^ ]+#${ROOT_ARG}#" "${EXTLINUX_DST}"' "${INSTALLER}")"
+FSTAB_SED="$(awk '/^sed -i -E \\$/ {on=1} on {print} on && /"\$\{FSTAB_DST\}"$/ {exit}' "${INSTALLER}")"
+if [ -n "${ROOT_ARG_PLAIN}" ] && [ -n "${ROOT_ARG_LUKS}" ] && [ -n "${FSTAB_ROOT_PLAIN}" ] \
+   && [ "$(printf '%s\n' "${ROOT_SED}" | grep -c .)" -eq 1 ] \
+   && printf '%s\n' "${FSTAB_SED}" | grep -F 'LABEL=FRITE_BOOT' >/dev/null \
+   && printf '%s\n' "${FSTAB_SED}" | grep -F 'LABEL=FRITE_ROOT' >/dev/null; then
+    ok "sliced the installer's ROOT_ARG= (plaintext + LUKS), FSTAB_ROOT=, root= sed and LABEL=FRITE_* fstab sed"
+else
+    bad "could not slice the installer's rewrite (ROOT_ARG plain='${ROOT_ARG_PLAIN}' luks='${ROOT_ARG_LUKS}' FSTAB_ROOT='${FSTAB_ROOT_PLAIN}' root-sed lines=$(printf '%s\n' "${ROOT_SED}" | grep -c .) fstab-sed='${FSTAB_SED}')"
+fi
+# run_rewrite FILE KIND [LUKS_UUID] — the installer's own lines, executed on FILE.
+run_rewrite() {
+    ( LUKS_UUID="${3:-}"
+      case "$2" in
+          extlinux) EXTLINUX_DST="$1"; eval "${ROOT_ARG_PLAIN}"; eval "${ROOT_SED}" ;;
+          luks)     EXTLINUX_DST="$1"; eval "${ROOT_ARG_LUKS}";  eval "${ROOT_SED}" ;;
+          fstab)    FSTAB_DST="$1";    eval "${FSTAB_ROOT_PLAIN}"; eval "${FSTAB_SED}" ;;
+          *)        exit 2 ;;
+      esac )
+}
 # p1: FAT boot from the installer tree's boot/ payload, root= rewritten
 BOOT_T="${WORK}/boot-stage"; rm -rf "${BOOT_T}"; cp -r "${TREE}/boot" "${BOOT_T}"
-sed -i -E "${ROOT_EXPR}" "${BOOT_T}/extlinux/extlinux.conf"
+run_rewrite "${BOOT_T}/extlinux/extlinux.conf" extlinux || bad "the installer's root= rewrite failed on the fixture"
 BFAT="${WORK}/boot.fat"; mkfs.vfat -C -F 32 -n FRITE_BOOT "${BFAT}" $(( P1_SIZE / 2 )) >/dev/null || bad "mkfs.vfat for the eMMC boot partition failed"
 mcopy -i "${BFAT}" -s -m -Q "${BOOT_T}"/* ::/ || bad "mcopy into the eMMC boot FAT failed"
 dd if="${BFAT}" of="${EMMC}" bs=512 seek="${P1_START}" conv=notrunc status=none
 # p2: ext4 root populated from the stage4 (xattrs on), fstab rewritten
 ROOT_T="${WORK}/root-stage"; rm -rf "${ROOT_T}"; mkdir -p "${ROOT_T}"
 tar -C "${ROOT_T}" --xattrs --xattrs-include='*' -xpf "${STAGE4}" || bad "stage4 extraction failed"
-sed -i -E -e "${FSB_EXPR}" -e "${FSR_EXPR}" "${ROOT_T}/etc/fstab"
+run_rewrite "${ROOT_T}/etc/fstab" fstab || bad "the installer's fstab rewrite failed on the fixture"
 REXT="${WORK}/root.ext4"
 mke2fs -q -F -t ext4 -L FRITE_ROOT -d "${ROOT_T}" "${REXT}" $(( P2_SIZE / 2 ))k >"${WORK}/mke2fs.log" 2>&1 || { bad "mke2fs -d failed:"; sed 's/^/      | /' "${WORK}/mke2fs.log"; }
 dd if="${REXT}" of="${EMMC}" bs=512 seek="${P2_START}" conv=notrunc status=none
@@ -378,13 +417,12 @@ else
 fi
 # LUKS branch of the same rewrite
 LUKS_UUID="0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
-LUKS_EXPR="${LUKS_EXPR_T//\$\{LUKS_UUID\}/${LUKS_UUID}}"
-cp "${TREE}/boot/extlinux/extlinux.conf" "${WORK}/luks.conf"; sed -i -E "${LUKS_EXPR}" "${WORK}/luks.conf"
+cp "${TREE}/boot/extlinux/extlinux.conf" "${WORK}/luks.conf"; run_rewrite "${WORK}/luks.conf" luks "${LUKS_UUID}"
 grep -q "root=/dev/mapper/cryptroot rd.luks.uuid=${LUKS_UUID} rd.luks.name=${LUKS_UUID}=cryptroot" "${WORK}/luks.conf" \
     && grep -q '^    INITRD /initrd.img' "${WORK}/luks.conf" \
     && ok "LUKS rewrite: root=/dev/mapper/cryptroot + rd.luks.uuid + rd.luks.name=…=cryptroot, with the INITRD line the encrypted payload carries" \
     || bad "LUKS rewrite wrong: $(grep -o 'root=.*' "${WORK}/luks.conf")"
-# The medium's p1 (4 MiB) and the installer's p1 (1 MiB) both clear the u-boot image.
+# The medium's p1 (4 MiB) and the installer's p1 (8 MiB) both clear the u-boot image.
 [ $(( P1_START * 512 )) -gt 700000 ] && ok "installer's p1 at ${P1_START} sectors clears a 700000-byte GXL u-boot image" || bad "installer's p1 overlaps the u-boot image area"
 
 echo

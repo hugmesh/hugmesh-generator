@@ -32,6 +32,14 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
 BOOT="${HERE}/m2-bootstrap.sh"
+# SELF-TEST SEAM, CHILD RUNS ONLY. Control (xviii) below must run this suite
+# against a STAGED copy of m2-bootstrap.sh whose PINS table it has damaged, and a
+# copy of the whole suite would lose REPO (compose.local.yaml, git ls-files) with
+# it. The override is honoured only when M2_SELFTEST_CHILD is set, which nothing
+# but this file's own controls sets, so a real run always reads the real table.
+if [ -n "${M2_SELFTEST_CHILD:-}" ] && [ -n "${M2_SELFTEST_BOOT:-}" ]; then
+  BOOT="${M2_SELFTEST_BOOT}"
+fi
 
 P=0; F=0
 ok(){ echo "  PASS $*"; P=$((P+1)); }
@@ -156,6 +164,38 @@ echo "-- 2b) PIN drift: every private version a sibling pom requests must be ser
 # next coordinate move.
 PIN_LINES="$(awk '/^PINS=\(/{f=1;next} f&&/^\)/{exit} f' "${BOOT}" \
              | sed -n 's/^[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p')"
+
+# ── THE TWO READERS OF THE PINS TABLE MUST AGREE ────────────────────────────
+# The sed above is this guard's reading of the table; bash's is the one the
+# bootstrap actually builds from. They differ on any line sed's anchored pattern
+# does not match: `"…|2.5.0|jar|net/hugmesh"  # admin-bff main` is one perfectly
+# good bash element and NO guard element, so the walker compared the consumers
+# against a served set one version short and reported
+#     FAIL PIN DRIFT … wants hugmesh-auth-core 2.5.0, registry serves 2.4.2
+# while the registry would in fact serve 2.5.0 (#372 item 4). Red, but red with a
+# false diagnosis that sends the reader to bump a pin that is already there.
+# So evaluate ONLY the PINS=( … ) block in a fresh bash (never the whole script:
+# it has `set -e` and M2_CACHE side effects) and compare the two readings line
+# for line. Any difference fails here, by name, and the drift verdict below is
+# withheld because the served set it would be computed from is known to be wrong.
+PINS_PARSE_AGREE=1
+PINS_BLOCK="$(awk '/^PINS=\(/{f=1} f{print} f&&/^\)/{exit}' "${BOOT}")"
+GUARD_PIN_N="$(printf '%s\n' "${PIN_LINES}" | grep -c .)"
+BASH_PIN_OUT="$(printf '%s\n' "${PINS_BLOCK}" 'printf "%s\n" "${#PINS[@]}" "${PINS[@]}"' \
+                  | env -i PATH="${PATH}" bash --norc --noprofile -s 2>&1)"; BASH_PIN_RC=$?
+BASH_PIN_N="$(printf '%s\n' "${BASH_PIN_OUT}" | head -1)"
+BASH_PIN_LINES="$(printf '%s\n' "${BASH_PIN_OUT}" | tail -n +2)"
+if [ -z "${PINS_BLOCK}" ] || [ "${BASH_PIN_RC}" -ne 0 ] || ! [[ "${BASH_PIN_N}" =~ ^[0-9]+$ ]]; then
+  PINS_PARSE_AGREE=0
+  bad "bash could not evaluate the PINS=( … ) block of ${BOOT##*/} (rc=${BASH_PIN_RC}), so the guard's parse of it cannot be cross-checked: $(printf '%s' "${BASH_PIN_OUT}" | head -3 | tr '\n' ' ')"
+elif [ "${GUARD_PIN_N}" -ne "${BASH_PIN_N}" ] || [ "${PIN_LINES}" != "${BASH_PIN_LINES}" ]; then
+  PINS_PARSE_AGREE=0
+  bad "PINS parse disagrees: guard ${GUARD_PIN_N} vs bash ${BASH_PIN_N} — a PINS line this guard's sed does not read the way bash does (a trailing comment, an escape, an expansion); the drift verdict below is withheld because it would compare against the wrong served set. Lines that differ (< guard, > bash):"
+  diff <(printf '%s\n' "${PIN_LINES}") <(printf '%s\n' "${BASH_PIN_LINES}") | grep -E '^[<>]' | sed 's/^/         /'
+else
+  ok "the guard's PINS parse agrees with bash's own reading of the table (${BASH_PIN_N} pins, line for line)"
+fi
+
 PINNED="$(printf '%s\n' "${PIN_LINES}" | awk -F'|' 'NF>=4{print $3"="$4}')"
 PIN_GROUPS="$(printf '%s\n' "${PIN_LINES}" | awk -F'|' 'NF>=6{gsub(/\//,".",$6); print $6}' | sort -u | tr '\n' ' ')"
 PIN_GROUPS="${PIN_GROUPS% }"
@@ -579,6 +619,16 @@ print("SEEN %d" % seen)
 PYEOF
 )"; PYRC=$?
 
+  # SELF-TEST SEAM, CHILD RUNS ONLY: control (xvii) appends one more well-formed
+  # record to the walker's output, because nothing in the corpus can — esc()
+  # keeps every corpus string on one line, which control (v) proves. Without this
+  # the `-ne 1` SEEN-count check below had no control at all, and weakening it to
+  # `-lt 1` left the whole battery green (#372 item 3). It can only ADD a line,
+  # so the worst it can do is make a child run redder.
+  if [ -n "${M2_SELFTEST_CHILD:-}" ] && [ -n "${M2_SELFTEST_EXTRA_RECORD:-}" ]; then
+    DRIFT_RAW="$(printf '%s\n%s' "${DRIFT_RAW}" "${M2_SELFTEST_EXTRA_RECORD}")"
+  fi
+
   # The walker's own exit status. `VAR="$(cmd)"` keeps it, and throwing it away
   # is the same defect one level up: an interpreter that died mid-walk prints
   # nothing more, and "no DRIFT lines" would read as "no drift".
@@ -626,15 +676,25 @@ PYEOF
   else
     ok "pin-drift walk resolved ${SEEN} ${PIN_GROUPS} coordinate(s) across the consumer poms"
   fi
-  if [ -n "${UNSERVED}" ]; then
-    bad "UNSERVED — a consumer requests a ${PIN_GROUPS} artifact the PINS table does not name, so the registry serves no version of it and a cold stack build will die resolving it (add it to PINS in tests/stack/m2-bootstrap.sh):"
-    printf '%s\n' "${UNSERVED}" | sed 's/^/         /'
-  fi
-  if [ -z "${DRIFT}" ]; then
-    ok "every sibling-requested ${PIN_GROUPS} version matches its pin"
+  if [ "${PINS_PARSE_AGREE}" -ne 1 ]; then
+    # Already red above, with the real cause. Do not add a second verdict computed
+    # from a served set known to be incomplete: that is how a missed PINS line
+    # read as "the registry serves the wrong version" (#372 item 4).
+    if [ -n "${DRIFT}${UNSERVED}" ]; then
+      echo "  .. drift verdict withheld (PINS parse disagrees, see above); records computed from the guard's partial table:"
+      printf '%s\n' "${DRIFT}" "${UNSERVED}" | grep -v '^$' | sed 's/^/         /'
+    fi
   else
-    bad "PIN DRIFT — a cold stack build will die resolving these:"
-    printf '%s\n' "${DRIFT}" | sed 's/^/         /'
+    if [ -n "${UNSERVED}" ]; then
+      bad "UNSERVED — a consumer requests a ${PIN_GROUPS} artifact the PINS table does not name, so the registry serves no version of it and a cold stack build will die resolving it (add it to PINS in tests/stack/m2-bootstrap.sh):"
+      printf '%s\n' "${UNSERVED}" | sed 's/^/         /'
+    fi
+    if [ -z "${DRIFT}" ]; then
+      ok "every sibling-requested ${PIN_GROUPS} version matches its pin"
+    else
+      bad "PIN DRIFT — a cold stack build will die resolving these:"
+      printf '%s\n' "${DRIFT}" | sed 's/^/         /'
+    fi
   fi
 fi
 
@@ -1011,6 +1071,47 @@ POM
     rm -rf "${NC}/partial/hugmesh-admin-bff-api"
     m2_neg "a corpus that is missing one consumer entirely" "${NC}/partial" \
            "carries NO checkout for: hugmesh-admin-bff-api"
+
+    # ── (xvii) A SECOND, WELL-FORMED `SEEN <n>` RECORD IS A FORGERY ─────────
+    # The walker prints SEEN exactly once; a second record is not caught by the
+    # catch-all (it matches `SEEN [0-9]+$`), so the `-ne 1` count is the only
+    # thing that refuses it. Control (v) proves the corpus cannot inject one; this
+    # proves the counter would refuse one if anything ever did. Healthy corpus,
+    # so the counter is the ONLY reason this child can fail.
+    base_corpus "${NC}/seen2"
+    M2_SELFTEST_EXTRA_RECORD="SEEN 9999" m2_neg "(xvii) a second well-formed 'SEEN <n>' record in the walker output" \
+           "${NC}/seen2" "expected exactly one 'SEEN <n>' line from the walker, got 2"
+
+    # ── (xviii) A PINS LINE THE GUARD MISREADS MUST BE NAMED, NOT MIS-BLAMED ─
+    # Stage a copy of m2-bootstrap.sh with a trailing comment after the closing
+    # quote of the auth-core line the fixtures are built on. bash still reads that
+    # element; the guard's sed does not. Before the cross-check the child reported
+    # `PIN DRIFT … wants hugmesh-auth-core ${AUTH_CORE_PIN}, registry serves …` — a
+    # false diagnosis, since the registry would serve it. It must now fail on the
+    # disagreement instead, and must NOT print the false PIN DRIFT.
+    STAGED_BOOT="${NC}/m2-bootstrap.staged.sh"
+    AC_RE="$(printf '%s' "${AUTH_CORE_PIN}" | sed 's/[.[\*^$/]/\\&/g')"
+    sed "s/^\([[:space:]]*\"[^\"]*|hugmesh-auth-core|${AC_RE}|[^\"]*\"\)[[:space:]]*\$/\1  # staged trailing comment/" \
+      "${BOOT}" > "${STAGED_BOOT}"
+    BASH_N_STAGED="$(printf '%s\n' "$(awk '/^PINS=\(/{f=1} f{print} f&&/^\)/{exit}' "${STAGED_BOOT}")" \
+                       'printf "%s\n" "${#PINS[@]}"' | env -i PATH="${PATH}" bash --norc --noprofile -s 2>/dev/null)"
+    if cmp -s "${BOOT}" "${STAGED_BOOT}"; then
+      bad "(xviii) staging did not change m2-bootstrap.sh — no PINS line carries hugmesh-auth-core ${AUTH_CORE_PIN}, so the parse-disagreement control did not run"
+    elif [ "${BASH_N_STAGED}" != "${BASH_PIN_N}" ]; then
+      bad "(xviii) the staged comment changed bash's own reading of PINS (${BASH_PIN_N} -> ${BASH_N_STAGED}), so the fixture is not the misparse it claims to be"
+    else
+      STAGED_OUT="$(M2_SELFTEST_CHILD=1 M2_SELFTEST_BOOT="${STAGED_BOOT}" STACK_SRC="${NC}/clean" bash "${SELF_M2}" 2>&1)"; STAGED_RC=$?
+      STAGED_WANT="PINS parse disagrees: guard $((BASH_PIN_N - 1)) vs bash ${BASH_PIN_N}"
+      if [ "${STAGED_RC}" -eq 0 ] || ! printf '%s' "${STAGED_OUT}" | grep -F "${STAGED_WANT}" >/dev/null; then
+        bad "(xviii) a PINS line with a trailing comment did not fail as '${STAGED_WANT}' (rc=${STAGED_RC})"
+        printf '%s\n' "${STAGED_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
+      elif printf '%s' "${STAGED_OUT}" | grep -F "PIN DRIFT" >/dev/null; then
+        bad "(xviii) the misparsed PINS table is named, but the run ALSO reports a false PIN DRIFT computed from the partial table:"
+        printf '%s\n' "${STAGED_OUT}" | grep -F -A3 "PIN DRIFT" | sed 's/^/           /'
+      else
+        ok "negative control bites: (xviii) a PINS line with a trailing comment fails as '${STAGED_WANT}', not as a false PIN DRIFT"
+      fi
+    fi
   fi
 
   # ── (xi) NO CORPUS MUST NAME WHAT WENT UNCHECKED ───────────────────────────

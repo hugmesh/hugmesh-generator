@@ -28,6 +28,13 @@ lightdm-gtk-greeter speaks plain PAM. The hint line above the password box
   enter the code `XXXX-XXXX`"*. Approve on a phone or any browser. The session
   starts. Bounded: `LOGIN_TIMEOUT` (180 s) or the code's own expiry, then the
   greeter is back; Cancel works at any time.
+  *IdP side*: Casdoor starts a device flow only for an application that lists
+  the **"Device login" sign-in method** (the `device_code` grant alone gets
+  `unauthorized_client` — #878). The `hugmesh-desktop` seed
+  (`manifests/casdoor/init-job.yaml`) lists only that method and leaves
+  Password off, so the approval page accepts a browser that is already signed
+  in to the IdP (quick sign-in) and refuses a password typed into it.
+  `tests/scripts/test-casdoor-init-honesty.sh` §2c holds every seed to this.
 * **SSO offline**: type the offline password instead. To set or change it, type
   the password you want and approve one more online sign-in (the greeter says
   so). It works while the cache is valid (`OFFLINE_MAX_AGE_DAYS`, 14 by

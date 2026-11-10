@@ -60,6 +60,8 @@ def _target(tmp_path=None, **over):
 BASE = ["ssh", "-i", "/k/id_ed25519", "-p", "2201", "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null"]
 BATCH = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "LogLevel=ERROR"]
+#: commit/rollback: a pty, BatchMode off, and no "Permanently added" line on the prompt.
+TTY = ["-t", "-o", "LogLevel=ERROR"]
 DEST = "hugmesh@127.0.0.1"
 
 
@@ -251,10 +253,10 @@ def test_remote_verb_argv_refuses_commit_and_rollback():
 
 def test_commit_and_rollback_are_ssh_t_and_never_yes():
     c = gt.commit_argv(_target(), "byo-domain", "example.invalid", persist_public=True)
-    assert c == BASE + ["-t", DEST, "sudo hugmesh-go-live commit --provider byo-domain "
+    assert c == BASE + TTY + [DEST, "sudo hugmesh-go-live commit --provider byo-domain "
                                     "--domain example.invalid --persist-public"]
     r = gt.rollback_argv(_target(), revert_release_state=True)
-    assert r == BASE + ["-t", DEST, "sudo hugmesh-go-live rollback --revert-release-state"]
+    assert r == BASE + TTY + [DEST, "sudo hugmesh-go-live rollback --revert-release-state"]
     for argv in (c, r, gt.rollback_argv(_target())):
         toks = _all_argv_tokens([argv])
         assert "-y" not in toks and "--yes" not in toks
@@ -399,7 +401,7 @@ def test_fetch_artifacts_skips_names_that_could_escape(tmp_path):
 
 
 # ── terminals ────────────────────────────────────────────────────────────────────────
-CMD = BASE + ["-t", DEST, "sudo hugmesh-go-live commit --provider byo-domain"]
+CMD = BASE + TTY + [DEST, "sudo hugmesh-go-live commit --provider byo-domain"]
 
 
 def test_terminal_linux_uses_the_shared_list_and_holds_open():
@@ -459,7 +461,7 @@ def test_journal_round_trip_has_no_secret_and_detects_a_restart(tmp_path):
     assert path == str(tmp_path / "golive" / "rpi5_pki.json")
     j = gt.read_journal(str(tmp_path), t.label)
     assert set(j) == {"label", "kind", "action", "provider", "domain", "started_at",
-                      "at", "confirmed"}
+                      "at", "confirmed", "rc", "refused"}
     assert j["started_at"] == t.started_at
     assert not gt.reset_by_restart(j, t)
     assert "reset by a restart" not in gt.journal_status(str(tmp_path), t)
@@ -467,6 +469,10 @@ def test_journal_round_trip_has_no_secret_and_detects_a_restart(tmp_path):
     assert gt.reset_by_restart(j, rebooted)
     assert "reset by a restart" in gt.journal_status(str(tmp_path), rebooted)
     assert not gt.reset_by_restart(None, rebooted)
+    assert gt.journal_status(str(tmp_path), t).startswith("last commit from this host:")
+    gt.write_journal(t, "commit", "byo-domain", "example.invalid")      # GUI: launched
+    said = gt.journal_status(str(tmp_path), t)
+    assert said.startswith("commit launched from this host") and "device's TTY" in said
     assert not gt.reset_by_restart(j, gt.local_target())
 
 
@@ -527,9 +533,9 @@ def test_remote_driver_command_and_commit_route_through_ssh(remote_driver):
     opts = GoLiveOptions(provider="byo-domain", domain="example.invalid", ddns_service="")
     assert d.command("status", GoLiveOptions(ddns_service="")) == BASE + BATCH + [
         DEST, "sudo -n hugmesh-go-live status"]
-    assert d.commit_command(opts) == BASE + ["-t", DEST, "sudo hugmesh-go-live commit "
+    assert d.commit_command(opts) == BASE + TTY + [DEST, "sudo hugmesh-go-live commit "
                                              "--provider byo-domain --domain example.invalid"]
-    assert d.rollback_command() == BASE + ["-t", DEST, "sudo hugmesh-go-live rollback"]
+    assert d.rollback_command() == BASE + TTY + [DEST, "sudo hugmesh-go-live rollback"]
     lines = []
     assert d.run("commit", opts, on_line=lines.append) == 2
     assert "needs a terminal" in lines[0]
@@ -548,7 +554,7 @@ def test_remote_commit_in_terminal_launches_ssh_t_and_journals(remote_driver, mo
     assert ok and "CONFIRM" in msg
     argv, _kw = launched[0]
     assert argv[:4] == ["konsole", "-e", "bash", "-c"]
-    assert " -t hugmesh@127.0.0.1 " in argv[4]
+    assert " -t -o LogLevel=ERROR hugmesh@127.0.0.1 " in argv[4]
     assert "-y" not in shlex.split(argv[4]) and "--yes" not in argv[4]
     j = gt.read_journal(str(tmp_path), "rpi5/pki")
     assert j["action"] == "commit" and j["provider"] == "byo-domain"
@@ -600,7 +606,7 @@ def test_cli_commit_needs_a_tty_and_never_says_yes(tmp_path, monkeypatch):
     assert rc == 2 and not calls and "needs a terminal" in out
     rc, out = _cli(base, call=lambda a: calls.append(a) or 0, isatty=lambda: True)
     assert rc == 0
-    assert calls[0] == BASE + ["-t", DEST, "sudo hugmesh-go-live commit --provider "
+    assert calls[0] == BASE + TTY + [DEST, "sudo hugmesh-go-live commit --provider "
                                            "byo-domain --domain example.invalid"]
     j = gt.read_journal(work, "rpi5/pki")
     assert j["confirmed"] is True and j["domain"] == "example.invalid"
@@ -659,3 +665,189 @@ def test_the_target_cli_loads_no_qt_binding(tmp_path):
                        text=True, timeout=120)
     assert r.returncode == 0, r.stderr
     assert "QT=\n" in r.stdout and "rpi5/pki" in r.stdout
+
+
+# ── round 2 (#927 refuter + prover) ─────────────────────────────────────────────────
+class FunnelRun(FakeRun):
+    """FakeRun whose guest `list` also carries the funnel row."""
+
+    def __call__(self, argv, **kw):
+        r = super().__call__(argv, **kw)
+        if argv[-1].endswith("list"):
+            r = subprocess.CompletedProcess(
+                argv, 0, r.stdout + "tailscale-funnel  funnel  full  Tailscale Funnel\n", "")
+        return r
+
+
+def _node_checkout(tmp_path, monkeypatch):
+    """A checkout with the driver + registry, and THIS host made to look like a node
+    (release-state + the reconciler), so B1 lets a local commit through."""
+    gen = tmp_path / "gen"
+    for rel in ("specs/usr/sbin/hugmesh-go-live", "specs/usr/lib/hugmesh/go-live-providers.sh"):
+        (gen / rel).parent.mkdir(parents=True, exist_ok=True)
+        (gen / rel).write_text("#!/bin/bash\n")
+    etc = tmp_path / "etc-hugmesh"
+    etc.mkdir()
+    (etc / "release-state").write_text("internal\n")
+    monkeypatch.setenv("GL_ETC_HUGMESH", str(etc))
+    monkeypatch.delenv("GL_PROVIDERS_LIB", raising=False)
+    monkeypatch.setattr("hugmesh_studio.core.golive_target._which_sbin",
+                        lambda n: "/usr/sbin/" + n)
+    monkeypatch.setattr("hugmesh_studio.core.golive_driver.platform_info."
+                        "native_windows_blocker", lambda *a, **k: "")
+    elsewhere = tmp_path / "operator-cwd"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)              # wherever the operator typed the command
+    return str(gen)
+
+
+@pytest.mark.parametrize("verb", ["commit", "rollback"])
+def test_cli_local_commit_rollback_run_the_checkout_driver_by_absolute_path(
+        tmp_path, monkeypatch, verb):
+    """Refuter #927 blocker 1: `--target this-host commit|rollback` ran
+    `sudo bash ./specs/…` from the operator's cwd with no env — 'No such file' on the
+    one host B1 lets through. It must run the ABSOLUTE driver, cwd=the checkout, with
+    the driver env (the in-repo registry), exactly as `plan` and the GUI do."""
+    gen = _node_checkout(tmp_path, monkeypatch)
+    work = _work(tmp_path)
+    calls = []
+    argv = [verb, "--target", gt.LOCAL_LABEL, "--work", work, "--generator-dir", gen]
+    if verb == "commit":
+        argv += ["--provider", "byo-domain", "--domain", "example.invalid"]
+    rc, out = _cli(argv, call=lambda a, **kw: calls.append((a, kw)) or 0,
+                   isatty=lambda: True)
+    assert rc == 0, out
+    (cmd, kw), = calls
+    drv_arg = cmd[cmd.index("bash") + 1]
+    assert os.path.isabs(drv_arg) and os.path.isfile(drv_arg)
+    assert drv_arg == os.path.join(gen, "specs", "usr", "sbin", "hugmesh-go-live")
+    assert kw["cwd"] == gen
+    assert kw["env"]["GL_PROVIDERS_LIB"] == os.path.join(
+        gen, "specs", "usr", "lib", "hugmesh", "go-live-providers.sh")
+    assert "GL_ASSUME_YES" not in kw["env"] or os.environ.get("GL_ASSUME_YES")
+    assert "-y" not in cmd and "--yes" not in cmd
+    assert cmd[cmd.index("bash") + 2] == verb
+    # the GUI terminal keeps its repo-relative spelling (it runs with cwd=checkout)
+    d = GoLiveDriver(gen, is_root=False)
+    assert d.rollback_command()[2] == "./specs/usr/sbin/hugmesh-go-live"
+    assert gt.read_journal(work, gt.LOCAL_LABEL) is None
+
+
+def test_cli_refused_commit_never_reads_as_a_commit(tmp_path, monkeypatch):
+    """Prover finding 2: a commit the device REFUSED (rc=1) was journalled as
+    'last commit from this host (not confirmed)' forever. rc!=0 changed nothing: it
+    must read as not having gone through, and must not bury an earlier real commit."""
+    work = _work(tmp_path, _record())
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run",
+                        FakeRun(probe_text=PROBE_OK))
+    t = _target(tmp_path / "work")
+
+    def commit(provider, rc, verb="commit"):
+        argv = [verb, "--target", "rpi5/pki", "--work", work, "--generator-dir",
+                str(tmp_path)]
+        if verb == "commit":
+            argv += ["--provider", provider, "--domain", "example.invalid"]
+        return _cli(argv, call=lambda a: rc, isatty=lambda: True)[0]
+
+    assert commit("tor-onion", 1) == 1
+    j = gt.read_journal(work, "rpi5/pki")
+    assert j["action"] == "" and j["confirmed"] is None
+    assert j["refused"]["action"] == "commit" and j["refused"]["rc"] == 1
+    said = gt.journal_status(work, t)
+    assert "last commit" not in said and "commit launched" not in said
+    assert said.startswith("commit attempted from this host did NOT go through (exit 1")
+    assert "tor-onion" in said
+    # a real commit, then a refused one: the real one is still what status reports
+    assert commit("byo-domain", 0) == 0
+    assert gt.journal_status(work, t).startswith("last commit from this host: byo-domain")
+    assert commit("tor-onion", 1) == 1
+    said = gt.journal_status(work, t)
+    assert said.startswith("last commit from this host: byo-domain example.invalid")
+    assert "commit attempted from this host did NOT go through (exit 1" in said
+    j = gt.read_journal(work, "rpi5/pki")
+    assert j["action"] == "commit" and j["provider"] == "byo-domain" and j["confirmed"]
+    # a declined rollback (operator typed n) leaves the commit standing, too
+    assert commit("", 1, verb="rollback") == 1
+    said = gt.journal_status(work, t)
+    assert said.startswith("last commit from this host: byo-domain")
+    assert "rollback attempted from this host did NOT go through" in said
+    # a rollback that went through replaces it, and clears the refusal
+    assert commit("", 0, verb="rollback") == 0
+    assert gt.journal_status(work, t).startswith("last rollback from this host")
+    assert "did NOT go through" not in gt.journal_status(work, t)
+
+
+def test_journal_refused_after_a_gui_launch_keeps_the_launch_wording(tmp_path):
+    t = _target(tmp_path)
+    gt.write_journal(t, "commit", "byo-domain", "example.invalid")      # GUI: launched
+    gt.write_journal(t, "commit", "tor-onion", "", rc=255)              # ssh failed
+    said = gt.journal_status(str(tmp_path), t)
+    assert said.startswith("commit launched from this host")
+    assert "(exit 255" in said and "last commit" not in said
+
+
+def test_funnel_is_refused_on_an_emulated_mesh_in_core(tmp_path):
+    """Prover finding 3: tailscale-funnel was only LABELLED 'not on headscale'. An
+    emulated mesh is coordinated by its own headscale, which has no Funnel: plan and
+    commit refuse it in core, so every face refuses it — before any ssh call."""
+    t = _target(tmp_path)
+    why = gt.headscale_refusal(t, "tailscale-funnel")
+    assert "headscale" in why and "does not implement Funnel" in why
+    assert gt.headscale_refusal(t, "", "funnel") == why.replace("tailscale-funnel",
+                                                                  "Funnel", 1)
+    assert gt.headscale_refusal(t, "byo-domain", "files") == ""
+    assert gt.headscale_refusal(gt.local_target(), "tailscale-funnel", "funnel") == ""
+    with pytest.raises(ValueError, match="does not implement Funnel"):
+        gt.commit_argv(t, "tailscale-funnel", "example.invalid")
+    run, record, lines = FakeRun(probe_text=PROBE_OK), [], []
+    rc = gt.run_plan(t, GoLiveOptions(provider="tailscale-funnel", domain="example.invalid"),
+                     on_line=lines.append, work_dir=str(tmp_path), run=run,
+                     popen=FakePopen(record=record))
+    assert rc == 2 and not run.calls and not record
+    assert "does not implement Funnel" in lines[0]
+
+
+def test_funnel_refusal_reaches_the_driver_preflight_and_gui_commit(tmp_path, monkeypatch):
+    run = FunnelRun(probe_text=PROBE_OK)
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run", run)
+    monkeypatch.setattr("hugmesh_studio.core.golive_driver.subprocess.run", run)
+    launched = []
+    monkeypatch.setattr("hugmesh_studio.core.golive_driver.subprocess.Popen",
+                        lambda *a, **k: launched.append(a))
+    d = GoLiveDriver(str(tmp_path), is_root=False, target=_target(tmp_path))
+    opts = GoLiveOptions(provider="tailscale-funnel", domain="example.invalid")
+    assert any("does not implement Funnel" in p for p in d.preflight(opts))
+    ok, msg = d.run_commit_in_terminal(opts)
+    assert not ok and not launched and "does not implement Funnel" in msg
+    assert gt.read_journal(str(tmp_path), "rpi5/pki") is None
+    lines = []
+    assert d.run("plan", opts, on_line=lines.append) == 2
+    assert any("does not implement Funnel" in ln for ln in lines)
+
+
+def test_cli_plan_prints_the_reachability_verdict_and_refuses_funnel(tmp_path, monkeypatch):
+    """Prover finding: `plan` never printed the verdict `list`, the GUI and the TUI
+    show — a REHEARSAL plan read like a go-live."""
+    work = _work(tmp_path, _record())
+    run = FunnelRun(probe_text=PROBE_OK)
+    record = []
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run", run)
+    monkeypatch.setattr("hugmesh_studio.core.golive_driver.subprocess.run", run)
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.Popen",
+                        FakePopen(record=record))
+    base = ["plan", "--target", "rpi5/pki", "--work", work, "--generator-dir",
+            str(tmp_path), "--domain", "example.invalid", "--ingress-ip", "203.0.113.10"]
+    rc, out = _cli(base + ["--provider", "byo-domain"])
+    assert rc == 0, out
+    first = out.splitlines()[0]
+    assert first.startswith("[reachability] byo-domain (files) from rpi5/pki: REHEARSAL")
+    assert "==> Plan summary ready" in out and len(record) == 1
+    rc, out = _cli(base + ["--provider", "tailscale-funnel"])
+    assert rc == 2 and len(record) == 1                      # nothing ran on the guest
+    assert "[reachability] tailscale-funnel (funnel) from rpi5/pki: not on headscale" in out
+    assert "does not implement Funnel" in out
+    rc, out = _cli(["commit", "--target", "rpi5/pki", "--work", work, "--generator-dir",
+                    str(tmp_path), "--provider", "tailscale-funnel"],
+                   call=lambda a: pytest.fail("ssh -t must not start"), isatty=lambda: True)
+    assert rc == 2 and "does not implement Funnel" in out
+    assert gt.read_journal(work, "rpi5/pki") is None

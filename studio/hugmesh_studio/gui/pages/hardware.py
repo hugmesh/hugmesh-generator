@@ -15,17 +15,40 @@ and finalises them into the argv. Anything that re-adds a scan trigger elsewhere
 re-opening the duplicate."""
 from __future__ import annotations
 
-from ..qt import QtWidgets
+from ..qt import QtCore, QtWidgets, Signal
 from ...core import hw_scan
 from ...core.config import GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES
 from ._gating import clear_unsupported, gate_widgets
-from ._widgets import _row
+from ._widgets import _row, own_probe
+
+
+class _ScanWorker(QtCore.QThread):
+    """Run ``hw_scan.scan()`` OFF the GUI thread.
+
+    On Windows the scan is one PowerShell start with a 45 s ceiling (a cold start alone
+    measured 6-19 s), and on Linux each ``lspci`` call has a 15 s one; inline, either is
+    a frozen window with no way to cancel or close. The same one-shot probe shape as
+    keyzip._FetchWorker. Emits (scan, error) — exactly one of them set. Never raises:
+    an exception escaping QThread.run would be lost and leave the button greyed."""
+    done = Signal(object, str)
+
+    def run(self):                              # noqa: D102 — QThread contract
+        try:
+            self.done.emit(hw_scan.scan(), "")
+        except Exception as e:                  # noqa: BLE001 — a probe must never die
+            self.done.emit(None, f"{type(e).__name__}: {e}")
 
 
 class HardwarePage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
+        #: the in-flight machine scan (None = idle) — see _scan.
+        self._scan_worker: _ScanWorker | None = None
+        #: the scan-written fields as they were when the scan started (None = no scan
+        #: in flight) — see _scanned. Its own flag, not the worker's isRunning():
+        #: _scanned is delivered before the worker's thread has quite finished.
+        self._scan_from: dict | None = None
         self.setTitle("Target hardware")
         self.setSubTitle("Tune the GPU, Wi-Fi/Bluetooth and kernel for the target — "
                          "or scan this machine to autofill them. The machine profile "
@@ -113,14 +136,81 @@ class HardwarePage(QtWidgets.QWizardPage):
             f"'nvidia' driver (the builder hard-errors on this pair).")
 
     def _scan(self):
-        s = hw_scan.scan()
-        self._set_gpu(s.recommended_gpu_driver)
-        self.wifi.setChecked(s.recommend_wifi)
-        self.bt.setChecked(s.recommend_bluetooth)
-        gpus = ", ".join(g.name for g in s.gpus) or "none"
-        self.scan_out.setText(f"CPU: {s.cpu or '?'}  ·  GPU: {gpus}  ·  "
-                              f"recommended driver: {s.recommended_gpu_driver}"
-                              + (f"  ·  Wi-Fi: {s.wifi}" if s.wifi else ""))
+        """Start the machine scan on a worker thread; _scanned applies it. The fields
+        stay editable meanwhile; the three the scan writes are remembered as they are
+        now, so _scanned leaves alone any the operator changes before it ends, and in
+        the wizard Next waits for the scan (isComplete), so validatePage never commits
+        the values from before it."""
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            return
+        self.scan_btn.setEnabled(False)
+        self.scan_out.setText("Scanning this machine … (the window stays responsive; "
+                              "Next waits for the scan)")
+        self._scan_from = self._scan_fields()
+        self.completeChanged.emit()
+        worker = own_probe(self, "_scan_worker", _ScanWorker())
+        worker.done.connect(self._scanned)
+        worker.start()
+
+    def _scan_fields(self) -> dict:
+        return {"gpu": self.gpu.currentText(), "wifi": self.wifi.isChecked(),
+                "bt": self.bt.isChecked()}
+
+    def isComplete(self):                       # noqa: N802 — Qt override
+        return self._scan_from is None and super().isComplete()
+
+    def _scanned(self, s, error: str):
+        """The scan finished (GUI thread). A probe that did not run (s.probe_errors —
+        only ever filled on Windows, e.g. a PowerShell timeout) leaves its fields as
+        they were: 'not checked' is not 'none', so a timed-out GPU probe must not reset
+        the driver to auto, nor a timed-out network probe untick Wi-Fi/Bluetooth. A GPU
+        probe that was cut short counts as not checked even when it named some GPUs
+        first: a partial list can recommend the wrong driver. A field the operator
+        changed while the scan ran is theirs and is left as they set it."""
+        before, self._scan_from = self._scan_from, None
+        self.scan_btn.setEnabled(True)
+        self.completeChanged.emit()
+        if s is None:
+            self.scan_out.setText(f"The scan failed: {error}")
+            return
+        now = self._scan_fields()
+        kept = [] if before is None else [k for k in now if now[k] != before[k]]
+        gpu_ok, net_ok = s.scanned("gpu"), s.scanned("network")
+        if gpu_ok and "gpu" not in kept:
+            self._set_gpu(s.recommended_gpu_driver)
+        if net_ok:
+            if "wifi" not in kept:
+                self.wifi.setChecked(s.recommend_wifi)
+            if "bt" not in kept:
+                self.bt.setChecked(s.recommend_bluetooth)
+        cpu = s.cpu or ("?" if s.scanned("cpu") else "not checked")
+        gpus = ((", ".join(g.name for g in s.gpus) or "none") if gpu_ok
+                else "not checked")
+        driver = (f"  ·  recommended driver: {s.recommended_gpu_driver}"
+                  if gpu_ok else "")
+        lines = [f"CPU: {cpu}  ·  GPU: {gpus}{driver}"
+                 + (f"  ·  Wi-Fi: {s.wifi}" if s.wifi else "")]
+        # The page's own words for a probe that did not run — hw_scan's notes name
+        # the CLI flags (--gpu-driver, --enable-wifi), which this page does not show.
+        why = s.probe_errors
+        if "cpu" in why:
+            lines.append(f"CPU scan {why['cpu']}: the CPU was not checked.")
+        if "gpu" in why:
+            lines.append(f"GPU scan {why['gpu']}: the GPU was not checked, so 'GPU "
+                         f"driver' was left as it was; choose it yourself or scan again.")
+        if "network" in why:
+            lines.append(f"Network adapter scan {why['network']}: Wi-Fi and Bluetooth "
+                         f"were not checked, so 'Enable Wi-Fi' and 'Enable Bluetooth' "
+                         f"were left as they were; set them yourself or scan again.")
+        names = {"gpu": "'GPU driver'", "wifi": "'Enable Wi-Fi'",
+                 "bt": "'Enable Bluetooth'"}
+        changed = [names[k] for k in kept
+                   if (k == "gpu" and gpu_ok) or (k != "gpu" and net_ok)]
+        if changed:
+            lines.append(f"You changed {' and '.join(changed)} while the scan ran, so "
+                         f"the scan left {'it' if len(changed) == 1 else 'them'} as you "
+                         f"set {'it' if len(changed) == 1 else 'them'}.")
+        self.scan_out.setText("\n".join(lines))
 
     def initializePage(self):
         c = self.wiz.cfg

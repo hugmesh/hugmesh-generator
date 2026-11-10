@@ -199,9 +199,9 @@ def test_a_question_goes_to_the_local_model_and_the_answer_is_shown(state):
 
 
 def test_a_failing_model_is_a_message_not_a_crash(state, monkeypatch):
-    # The Linux/WSL wording on any host: on native Windows the screen swaps this advice
-    # for what runs there (test_windows_sweep_c4.py pins that).
-    monkeypatch.setattr(local_ai, "native_windows_note", lambda osname=None: "")
+    # The screen shows the error's own words on any host: the Windows wording is made
+    # where the error is raised (send_prompt's not-answering message, pinned in
+    # test_windows_sweep_c10.py), not rewritten by the screen.
     def boom(*a, **k):
         raise lai.LocalAIError("Ollama is not answering on 127.0.0.1:11434. Start it with scripts/local-ai.sh up")
     monkeypatch.setattr(lai, "send_prompt", boom)

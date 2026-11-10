@@ -43,7 +43,7 @@ from ..core.config import (
 )
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
-from ..core import plain_words
+from ..core import plain_words, platform_info
 from ..core.validate import validate_domain_name
 from ..core import roles as role_vocab
 from ..core.worklist import (
@@ -514,7 +514,10 @@ class VaultScreen:
             if not arg:
                 j.status = "c needs the path of a PEM certificate file"
                 return
-            path = os.path.abspath(os.path.expanduser(arg))
+            # Explorer's "Copy as path" quotes come off first (native Windows only):
+            # abspath() of the quoted text was a path that cannot exist
+            path = os.path.abspath(os.path.expanduser(
+                platform_info.unquote_pasted_path(arg)))
             if path in cfg.base_ca_certs:
                 j.status = f"already listed: {os.path.basename(path)}"
                 return
@@ -1070,6 +1073,7 @@ class Journey:
         from .localmesh import LocalMeshScreen
         from .meshemu import MeshEmuScreen
         from .network_step import NetworkScreen
+        from .domain_ca_keys_step import DomainCAKeysScreen
         from .qemu import QemuScreen
         self.generator_dir = generator_dir
         self.cfg = cfg or ImageConfig()
@@ -1093,6 +1097,7 @@ class Journey:
                       "additional_domains"),
             NetworkScreen(), DomainsScreen(), DomainServicesScreen(
                 brand_session_of=_image_brand_session, route="image"),
+            DomainCAKeysScreen(),
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),

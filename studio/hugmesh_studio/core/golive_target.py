@@ -32,7 +32,9 @@ THE FLOW (each step is one function below, and each argv is pinned by a test):
    :func:`terminal_spec` opens them in a terminal on Linux (cloud_deploy.TERMINALS),
    WSL2 (cmd.exe/wt.exe interop around wsl.exe) and native Windows (a new console).
 5. :func:`write_journal` — ``<work>/golive/<label>.json`` (provider, domain, the
-   device's started_at, UTC time; no secrets). :func:`reset_by_restart` compares it
+   device's started_at, UTC time, exit code; no secrets). A commit/rollback that
+   exited non-zero (refused, declined, ssh failed) is kept apart as ``refused`` and
+   never becomes the recorded action. :func:`reset_by_restart` compares it
    with the live record: an emulated device boots its golden image INTERNAL again, so
    a posture flipped inside it lasts only until it stops.
 
@@ -40,7 +42,9 @@ WHAT IS REFUSED (each with a sentence, :func:`refusal`): a target that is not ru
 or has no ssh port or key (no channel to it); a client role or a platform whose image
 bakes no go-live driver (not a go-live server node); a WHPX record without an ssh key;
 a guest with no driver (the probe, B8); a local commit off-node (B1); an ingress IP in
-the slirp 10.0.2.0/24 or mesh-L2 10.77.0.0/24 range (:func:`refuse_private_ingress`).
+the slirp 10.0.2.0/24 or mesh-L2 10.77.0.0/24 range (:func:`refuse_private_ingress`);
+Tailscale Funnel on an emulated mesh, whose control plane is its own headscale
+(:func:`headscale_refusal` — plan and commit both, so every face refuses it).
 
 Inbound reachability through a host relay (publishing 0.0.0.0:80/443 from this host
 into the container) is deliberately NOT built: it exposes the operator's workstation
@@ -78,6 +82,7 @@ __all__ = [
     "run_plan", "commit_argv", "rollback_argv", "terminal_spec", "journal_path",
     "write_journal", "read_journal", "reset_by_restart", "journal_status",
     "mechanism_reachability", "refuse_private_ingress", "EPHEMERAL_NOTE",
+    "HEADSCALE_REFUSED_PROVIDERS", "HEADSCALE_REFUSED_MECHANISMS", "headscale_refusal",
     "add_cli_arguments", "run_studio_cli", "main",
 ]
 
@@ -126,6 +131,13 @@ _BATCH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "LogLe
 _PRIVATE_INGRESS_NETS = (ipaddress.ip_network("10.0.2.0/24"),
                          ipaddress.ip_network("10.77.0.0/24"))
 
+#: Funnel is a feature of Tailscale's HOSTED control plane. Self-hosted headscale does
+#: not implement it, and an emulated mesh is coordinated by its own headscale by
+#: construction (tests/qemu/docker-entrypoint.sh enables it on pki/generic/omnibus and
+#: points every other node at it), so on an emulated target nothing could ever publish.
+HEADSCALE_REFUSED_PROVIDERS = frozenset({"tailscale-funnel"})
+HEADSCALE_REFUSED_MECHANISMS = frozenset({"funnel"})
+
 #: Shown on the Flip step for every emulated target.
 EPHEMERAL_NOTE = ("this posture lasts until the device stops; a restart boots the golden "
                   "image INTERNAL again — Save the device to keep a copy")
@@ -173,7 +185,12 @@ def local_target() -> GoLiveTarget:
 def target_from_device(dev: qemu_devices.Device, work_dir: str = "") -> GoLiveTarget:
     """A docker-lane keep-alive record. The base argv is qemu_devices.ssh_argv's own
     (the same key, loopback port and throwaway host-key options as the device's login
-    button), as the record's always-present wheel user."""
+    button), as the record's always-present wheel user.
+
+    The guest host key is NOT pinned (StrictHostKeyChecking=no): the keep-alive record
+    carries no host key yet. Pinning needs the harness to record the guest's key at
+    boot (ssh-keyscan of the loopback port) and ssh_argv to use it with
+    StrictHostKeyChecking=yes — a follow-up across tests/qemu and qemu_devices."""
     base = qemu_devices.ssh_argv(dev, dev.ssh_user) if dev.ssh_user else ()
     return GoLiveTarget(
         kind=KIND_DOCKER, label=dev.label, ssh_base_argv=tuple(base),
@@ -300,10 +317,11 @@ def remote_argv(target: GoLiveTarget, remote: list[str], *, tty: bool = False) -
     """``ssh <options> [-t | batch options] user@127.0.0.1 '<remote, shell-quoted>'``.
     The remote command is ONE argv element, parsed by the guest's login shell, so it is
     ``shlex.join``-ed here and nowhere else. ``tty`` (commit/rollback) asks for a pty
-    and leaves BatchMode off; every other verb is non-interactive."""
+    and leaves BatchMode off (LogLevel=ERROR still keeps ssh's own "Permanently
+    added" line off the confirm prompt); every other verb is non-interactive."""
     if not target.ssh_base_argv:
         raise ValueError(refusal(target) or f"{target.label}: no ssh channel")
-    mode = ("-t",) if tty else _BATCH_OPTIONS
+    mode = ("-t", "-o", "LogLevel=ERROR") if tty else _BATCH_OPTIONS
     return ["ssh", *target.ssh_options, *mode, target.destination, shlex.join(remote)]
 
 
@@ -311,9 +329,28 @@ def _flags(opts) -> list[str]:
     return list(opts.to_cli_args(include_token_file=True))
 
 
-def _check_inputs(opts) -> str:
+def headscale_refusal(target: GoLiveTarget, provider: str = "", mechanism: str = "") -> str:
+    """Why ``provider`` (or a ``mechanism``) cannot run on ``target`` because the mesh
+    is coordinated by headscale; "" when it can. LOCAL is never refused here: a real
+    node may sit on a Tailscale-hosted tailnet, and its own driver's plan says so."""
+    if target.is_local:
+        return ""
+    if (provider not in HEADSCALE_REFUSED_PROVIDERS
+            and mechanism not in HEADSCALE_REFUSED_MECHANISMS):
+        return ""
+    return (f"{provider or 'Funnel'} is refused on {target.label or 'this device'}: "
+            "Funnel is a feature of Tailscale's hosted control plane, and an emulated "
+            "mesh is coordinated by its own self-hosted headscale, which does not "
+            "implement Funnel — nothing would ever be published. Pick tor-onion, or a "
+            "rehearsal provider such as byo-domain.")
+
+
+def _check_inputs(target: GoLiveTarget, opts) -> str:
     if getattr(opts, "provider", "") and not _PROVIDER_RE.match(opts.provider):
         return f"provider '{opts.provider}' is not a provider id ([a-z0-9-])."
+    why = headscale_refusal(target, getattr(opts, "provider", ""))
+    if why:
+        return why
     dom = getattr(opts, "domain", "")
     if dom and not _DOMAIN_RE.match(dom):
         return f"domain '{dom}' is not a lowercase DNS name."
@@ -340,6 +377,9 @@ def commit_argv(target: GoLiveTarget, provider: str, domain: str = "",
         raise ValueError(f"provider '{provider}' is not a provider id")
     if domain and not _DOMAIN_RE.match(domain):
         raise ValueError(f"domain '{domain}' is not a lowercase DNS name")
+    why = headscale_refusal(target, provider)
+    if why:
+        raise ValueError(why)
     remote = ["sudo", GUEST_DRIVER, "commit", "--provider", provider]
     if domain:
         remote += ["--domain", domain]
@@ -543,7 +583,7 @@ def run_plan(target: GoLiveTarget, opts, *, on_line: Callable[[str], None] | Non
     run = run or subprocess.run
     popen = popen or subprocess.Popen
     say = on_line or (lambda _l: None)
-    why = refusal(target) or _check_inputs(opts)
+    why = refusal(target) or _check_inputs(target, opts)
     if why:
         say(f"!! {why}")
         return 2
@@ -658,17 +698,39 @@ def journal_path(work_dir: str, label: str) -> str:
     return os.path.join(work_dir, "golive", qemu_devices.safe_label(label) + ".json")
 
 
+_JOURNAL_KEYS = ("label", "kind", "action", "provider", "domain", "started_at", "at",
+                 "confirmed")
+
+
 def write_journal(target: GoLiveTarget, action: str, provider: str = "",
                   domain: str = "", *, confirmed: bool | None = None,
-                  now: str = "") -> str:
+                  rc: int | None = None, now: str = "") -> str:
     """Record what this host asked the device to do. Holds NO secret: provider,
-    domain, the device's started_at and the UTC time only."""
+    domain, the device's started_at, the UTC time and the exit code only.
+
+    ``rc`` is the exit code of a commit/rollback run in this terminal (the CLI). A
+    non-zero ``rc`` — the device's driver refused, the operator declined the confirm,
+    or ssh failed — changed NOTHING on the device, so it never becomes the recorded
+    action: it is kept beside the last action that did go through (or was launched)
+    under ``refused``, and :func:`journal_status` says it did not go through.
+    ``confirmed`` is None for a commit the GUI only LAUNCHED in a detached terminal."""
     path = journal_path(target.work_dir, target.label)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    rec = {"label": target.label, "kind": target.kind, "action": action,
-           "provider": provider, "domain": domain, "started_at": target.started_at,
-           "at": now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-           "confirmed": confirmed}
+    at = now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if rc is not None and rc != 0:
+        prior = read_journal(target.work_dir, target.label) or {}
+        rec = {k: prior.get(k, "") for k in _JOURNAL_KEYS}
+        rec.update(label=target.label, kind=target.kind,
+                   confirmed=prior.get("confirmed") if prior.get("action") else None,
+                   rc=prior.get("rc"),
+                   refused={"action": action, "provider": provider, "domain": domain,
+                            "started_at": target.started_at, "at": at, "rc": rc})
+    else:
+        if rc is not None:
+            confirmed = True
+        rec = {"label": target.label, "kind": target.kind, "action": action,
+               "provider": provider, "domain": domain, "started_at": target.started_at,
+               "at": at, "confirmed": confirmed, "rc": rc, "refused": None}
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(rec, fh, indent=1)
@@ -698,12 +760,33 @@ def journal_status(work_dir: str, target: GoLiveTarget) -> str:
     j = read_journal(work_dir, target.label)
     if not j:
         return ""
-    what = (f"last {j.get('action', '?')} from this host: {j.get('provider') or '-'} "
-            f"{j.get('domain') or ''} at {j.get('at', '?')}").replace("  ", " ")
-    if reset_by_restart(j, target):
-        return (what + f" — reset by a restart (the device booted again at "
-                f"{target.started_at or '?'}, INTERNAL)")
-    return what
+    said: list[str] = []
+    act = j.get("action") or ""
+    if act:
+        if j.get("confirmed") is None:
+            # The GUI's terminal is detached: this host knows the commit was LAUNCHED,
+            # not whether the operator answered y on the device's TTY.
+            head = (f"{act} launched from this host (the confirmation happened on the "
+                    "device's TTY — its status says whether it went through)")
+        elif j["confirmed"]:
+            head = f"last {act} from this host"
+        else:
+            # A journal written before refusals were kept apart: the attempt failed.
+            head = f"last {act} attempt from this host did NOT go through"
+        what = (f"{head}: {j.get('provider') or '-'} {j.get('domain') or ''} at "
+                f"{j.get('at', '?')}").replace("  ", " ")
+        if reset_by_restart(j, target):
+            what += (f" — reset by a restart (the device booted again at "
+                     f"{target.started_at or '?'}, INTERNAL)")
+        said.append(what)
+    ref = j.get("refused")
+    if isinstance(ref, dict) and ref.get("action"):
+        said.append((f"{ref['action']} attempted from this host did NOT go through (exit "
+                     f"{ref.get('rc', '?')}: refused by the device, declined at its "
+                     f"confirm, or ssh failed) — nothing changed: "
+                     f"{ref.get('provider') or '-'} {ref.get('domain') or ''} at "
+                     f"{ref.get('at', '?')}").replace("  ", " "))
+    return "; ".join(said)
 
 
 # ── honest per-mechanism labels ─────────────────────────────────────────────────────
@@ -834,6 +917,15 @@ def run_cli(args, *, out=None, call=None, isatty=None) -> int:
                          ddns_subdomain=args.ddns_subdomain, ttl=args.ttl,
                          token_file=args.token_file)
     if args.verb == "plan":
+        if t.is_remote:
+            # The same verdict `list`, the GUI and the TUI show, before the plan runs:
+            # a plan that cannot reach anything must not read as a go-live.
+            pr = drv.provider(args.provider) if args.provider else None
+            mech = pr.mechanism if pr else ""
+            reach = mechanism_reachability(mech, t, args.provider)
+            if reach:
+                say(f"[reachability] {args.provider} ({mech}) from {t.label}: {reach}")
+        # run_plan refuses what cannot run there (Funnel on headscale, a slirp ingress)
         return drv.run("plan", opts, on_line=say)
     # commit / rollback: ssh -t in the caller's own terminal, which must BE one.
     tty = isatty() if isatty is not None else sys.stdin.isatty()
@@ -841,18 +933,34 @@ def run_cli(args, *, out=None, call=None, isatty=None) -> int:
         say(f"!! {args.verb} needs a terminal: the device asks you to confirm on a TTY, "
             "and there is deliberately no way around that.")
         return 2
-    if args.verb == "commit":
-        if t.is_local:
-            why = local_node_refusal()
-            if why:
-                say(f"!! {why}")
-                return 2
-        argv = drv.commit_command(opts, persist=args.persist_public)
+    try:
+        if args.verb == "commit":
+            if t.is_local:
+                why = local_node_refusal()
+                if why:
+                    say(f"!! {why}")
+                    return 2
+            argv = drv.commit_command(opts, persist=args.persist_public,
+                                      absolute=t.is_local)
+        else:
+            argv = drv.rollback_command(revert_release_state=args.revert_release_state,
+                                        absolute=t.is_local)
+    except ValueError as e:
+        say(f"!! {e}")
+        return 2
+    call = call or subprocess.call
+    if t.is_local:
+        # The checkout's driver, by its absolute path, from the checkout, with the
+        # in-repo registry — exactly what `plan` and the GUI's terminal run; the
+        # operator's own cwd is wherever they typed this.
+        rc = call(argv, cwd=drv.generator_dir, env=drv._driver_env())
     else:
-        argv = drv.rollback_command(revert_release_state=args.revert_release_state)
-    rc = (call or subprocess.call)(argv)
+        rc = call(argv)
     if t.is_remote:
-        write_journal(t, args.verb, args.provider, args.domain, confirmed=(rc == 0))
+        # rc != 0 (refused, declined, ssh failed) is journalled as NOT having gone
+        # through; it never overwrites the last action that did.
+        write_journal(t, args.verb, args.provider if args.verb == "commit" else "",
+                      args.domain if args.verb == "commit" else "", rc=rc)
     return rc
 
 

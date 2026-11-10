@@ -270,6 +270,8 @@ def test_mesh_walk_reaches_worklist_and_gates_the_tables():
     assert j.slug == "domain_services"      # … but the OWN domain's page is not (#494)
     assert j.screen().current(j).name == j.cfg.cluster_domain
     j.feed("")
+    assert j.slug == "domain_ca_keys"        # the Domain CA keys step
+    j.feed("")
     assert j.slug == "users_choice"
     j.feed("n")           # users table skipped too
     assert j.slug == "system"

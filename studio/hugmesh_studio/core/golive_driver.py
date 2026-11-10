@@ -498,16 +498,24 @@ class GoLiveDriver:
         return path
 
     # ---- commit / rollback (terminal path — the driver's TTY confirm is the law) -
-    def commit_command(self, opts: GoLiveOptions, persist: bool = False) -> list[str]:
+    def _local_driver(self, absolute: bool) -> str:
+        """The checkout's driver as ``bash`` is given it: ``./specs/…`` for a run whose
+        cwd is generator_dir (the GUI terminal), or the absolute path when the caller's
+        cwd is wherever the operator typed the command (the CLI)."""
+        return self.driver_path if absolute else f"./{DRIVER_REL}"
+
+    def commit_command(self, opts: GoLiveOptions, persist: bool = False,
+                       absolute: bool = False) -> list[str]:
         """The commit invocation: sudo (writing /etc/hugmesh/go-live needs root)
         + only the flags `commit` consumes. NO -y/--yes: the driver's confirmation
         gate MUST run on the real TTY (adding -y here would be the bypass this
         front-end refuses to add). NO token files: commit never needs a secret.
-        For an emulated target: ``ssh -t … sudo hugmesh-go-live commit …``."""
+        For an emulated target: ``ssh -t … sudo hugmesh-go-live commit …``.
+        ``absolute`` names the LOCAL driver by its absolute path (the CLI)."""
         if self.remote:
             return golive_target.commit_argv(self.target, opts.provider, opts.domain,
                                              persist_public=persist)
-        inner = ["bash", f"./{DRIVER_REL}", "commit"]
+        inner = ["bash", self._local_driver(absolute), "commit"]
         if opts.provider:
             inner += ["--provider", opts.provider]
         if opts.domain:
@@ -516,13 +524,14 @@ class GoLiveDriver:
             inner += ["--persist-public"]
         return inner if self.is_root else ["sudo", *inner]
 
-    def rollback_command(self, revert_release_state: bool = False) -> list[str]:
+    def rollback_command(self, revert_release_state: bool = False,
+                         absolute: bool = False) -> list[str]:
         """rollback deletes the marker (root). Like commit, NO -y/--yes — the
         driver's confirm runs on the TTY."""
         if self.remote:
             return golive_target.rollback_argv(self.target,
                                                revert_release_state=revert_release_state)
-        inner = ["bash", f"./{DRIVER_REL}", "rollback"]
+        inner = ["bash", self._local_driver(absolute), "rollback"]
         if revert_release_state:
             inner += ["--revert-release-state"]
         return inner if self.is_root else ["sudo", *inner]
@@ -626,6 +635,11 @@ class GoLiveDriver:
             if not shutil.which("bash"):
                 problems.append("bash is required to run the go-live driver.")
         p = self.provider(opts.provider) if opts.provider else None
+        if self.remote:
+            why = golive_target.headscale_refusal(self.target, opts.provider,
+                                                  p.mechanism if p else "")
+            if why:
+                problems.append(why)
         # Onion (and any future no-domain mechanism) has no public DNS name — the
         # .onion address IS the endpoint, so don't demand a domain for it.
         needs_domain = not (p and p.mechanism in _NO_DOMAIN_MECHANISMS)
