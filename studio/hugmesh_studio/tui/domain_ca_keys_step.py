@@ -52,7 +52,8 @@ class DomainCAKeysScreen:
         dca.rekey_own(j.cfg)
 
     def table(self, j) -> tuple[list[str], list[list[str]]]:
-        return list(dca.TABLE_HEADERS), dca.row_cells(j.cfg)
+        return list(dca.TABLE_HEADERS), dca.row_cells(
+            j.cfg, dca.store(), node_key_profiles(getattr(j, "worklist", None)))
 
     def checklist_lines(self, j) -> list[str]:
         return dca.readiness_lines(j.cfg, dca.store(),

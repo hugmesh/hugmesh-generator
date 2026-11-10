@@ -132,7 +132,8 @@ class DomainCAKeysPage(QtWidgets.QWizardPage):
         cfg = self.wiz.cfg
         dca.rekey_own(cfg)
         keep = max(0, self.table.currentRow())
-        cells = dca.row_cells(cfg)
+        cells = dca.row_cells(cfg, dca.store(),
+                              node_key_profiles(getattr(self.wiz, "worklist", None)))
         self.table.setRowCount(len(cells))
         for r, row in enumerate(cells):
             for c, text in enumerate(row):

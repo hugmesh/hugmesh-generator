@@ -119,7 +119,8 @@ def test_import_fills_the_row_and_the_checklist_says_ready(wiz, monkeypatch, tmp
     _import_chain(page, monkeypatch, chain, pw="pw on the page")
     assert page.passphrase.text() == ""                      # cleared after use
     assert "Imported for" in page.note.text()
-    assert _cells(page) == dca.row_cells(wiz.cfg)
+    assert _cells(page) == dca.row_cells(wiz.cfg, dca.store(),
+                                         node_key_profiles(wiz.worklist))
     row = _cells(page)[0]
     assert row[3] == "held (pki stick only)" and row[4] == "ready"
     expect = dca.readiness_lines(wiz.cfg, dca.store(), node_key_profiles(wiz.worklist))

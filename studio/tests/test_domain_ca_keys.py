@@ -342,6 +342,9 @@ def test_no_pki_stick_in_the_worklist_is_not_ready(chain):
     _import_ok(st, chain)
     checks = dca.readiness(_cfg(), st, ["backend", "host"])
     assert not dca.ready_to_go_live(checks)
+    # the table's Status agrees with the checklist
+    assert dca.row_cells(_cfg(), st, ["backend", "host"])[0][4] == "not ready"
+    assert dca.row_cells(_cfg(), st, ["pki", "host"])[0][4] == "ready"
     assert any("no stick would carry the key" in c.text for c in checks)
 
 

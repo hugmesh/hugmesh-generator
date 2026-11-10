@@ -753,8 +753,10 @@ def readiness_lines(cfg, st: DomainCAStore | None = None, profiles=None,
     return out
 
 
-def row_cells(cfg, st: DomainCAStore | None = None) -> list[list[str]]:
-    """The table body both faces render (TABLE_HEADERS columns)."""
+def row_cells(cfg, st: DomainCAStore | None = None,
+              profiles=None) -> list[list[str]]:
+    """The table body both faces render (TABLE_HEADERS columns). ``profiles`` as for
+    :func:`readiness`, so a row's Status never disagrees with the checklist."""
     st = st or store()
     rows = []
     for domain, own in domain_rows(cfg):
@@ -767,7 +769,7 @@ def row_cells(cfg, st: DomainCAStore | None = None) -> list[list[str]]:
                    else "needed" if e and e.signing_pem else "-")
         else:
             key = "not taken (certificates only)"
-        checks = [c for c in readiness(cfg, st) if c.domain == label]
+        checks = [c for c in readiness(cfg, st, profiles) if c.domain == label]
         status = "ready" if ready_to_go_live(checks) else "not ready"
         if not own and not (e and e.signing_pem):
             status = "optional"
