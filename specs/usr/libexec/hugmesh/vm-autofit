@@ -18,6 +18,18 @@
 # hardware: it exits immediately unless a DRM card is driven by virtio_gpu or
 # qxl, so a laptop or SBC never carries a polling loop.
 #
+# FINDING THE VIRTIO GPU. Measured on a built x86 image (kernel 6.18, -vga
+# virtio): /sys/class/drm/card0/device is the PCI function (driver virtio-pci),
+# and the device bound to virtio_gpu is its `virtioN` CHILD. Reading only
+# card0/device/driver therefore saw "virtio-pci", the applier exited at once on
+# every virtio-vga guest, and a viewer resize stayed a scaled bitmap. The card
+# is matched when EITHER its parent's driver is virtio_gpu/qxl (qxl is a plain
+# PCI driver; virtio_gpu where the parent is the virtio device itself) OR one of
+# the parent's virtio*/ children is bound to virtio_gpu (virtio-pci on x86,
+# virtio-mmio on an ARM `virt` board — the walk names no bus). The connector
+# name (Virtual-*) is NOT a signal: bochs (-vga std) exposes Virtual-1 too and
+# cannot resize.
+#
 # WHY SYSFS, NOT AN X EVENT LOOP. POSIX sh cannot subscribe to RandR events, and
 # the preferred mode is readable without any X round-trip: the kernel lists a
 # connector's modes with the preferred one FIRST (drm_mode_sort), so one `head`
@@ -40,18 +52,29 @@ XRANDR="${VM_AUTOFIT_XRANDR:-xrandr}"
 INTERVAL="${VM_AUTOFIT_INTERVAL:-2}"
 ONCE="${VM_AUTOFIT_ONCE:-}"
 
-# The first DRM card whose driver is a resize-capable virtual GPU, or nothing.
-# For virtio-gpu, card0/device is the virtio bus device (driver virtio_gpu); for
-# qxl it is the PCI device (driver qxl). bochs (-vga std) cannot resize and is
-# deliberately not matched.
+# 0 when DRM card $1 is driven by a resize-capable virtual GPU (see FINDING THE
+# VIRTIO GPU above). bochs (-vga std) cannot resize and is deliberately not
+# matched.
+is_virtual_gpu() {
+    drv="$(readlink "$1/device/driver" 2>/dev/null)"
+    case "${drv##*/}" in
+        virtio_gpu|qxl) return 0 ;;
+    esac
+    for v in "$1"/device/virtio[0-9]*; do
+        [ -d "${v}" ] || continue
+        vdrv="$(readlink "${v}/driver" 2>/dev/null)" || continue
+        [ "${vdrv##*/}" = "virtio_gpu" ] && return 0
+    done
+    return 1
+}
+
+# The first DRM card driven by a resize-capable virtual GPU, or nothing.
 vm_card() {
     for c in "${SYSFS}"/class/drm/card[0-9]*; do
         [ -d "${c}" ] || continue
         case "${c##*/}" in *-*) continue ;; esac   # card0-Virtual-1 is a connector
-        drv="$(readlink "${c}/device/driver" 2>/dev/null)" || continue
-        case "${drv##*/}" in
-            virtio_gpu|qxl) printf '%s\n' "${c}"; return 0 ;;
-        esac
+        is_virtual_gpu "${c}" || continue
+        printf '%s\n' "${c}"; return 0
     done
     return 1
 }
@@ -75,25 +98,37 @@ current_mode() {
         f && /\*/ { print $1; exit }'
 }
 
+# 0 when the output now runs its preferred mode (already did, or --auto took).
 apply_if_changed() {
     # $1 = "card0-Virtual-1=1280x720"
     name="${1%%=*}"; mode="${1#*=}"
     out="${name#*-}"                         # card0-Virtual-1 -> Virtual-1
     [ "$(current_mode "${out}")" = "${mode}" ] && return 0
     "${XRANDR}" --output "${out}" --auto >/dev/null 2>&1
+    [ "$(current_mode "${out}")" = "${mode}" ]
 }
 
 card="$(vm_card)" || exit 0
 [ -n "${DISPLAY:-}" ] || [ -n "${ONCE}" ] || exit 0
 
-last=""
+# A change counts as handled only once every output reports the new mode, so a
+# mode-set the X server has not caught up with (it re-probes on our --query, but
+# a hotplug can land between the sysfs read and the xrandr call) is retried on
+# the next poll — at most MAX_TRIES times per change, never an endless loop of
+# xrandr calls against a mode the server will not take.
+MAX_TRIES=3
+last=""; tries=0
 while :; do
     cur="$(preferred_modes "${card}")"
     if [ "${cur}" != "${last}" ]; then
+        done_all=1
         for item in ${cur}; do
-            apply_if_changed "${item}"
+            apply_if_changed "${item}" || done_all=0
         done
-        last="${cur}"
+        tries=$((tries + 1))
+        if [ "${done_all}" = 1 ] || [ "${tries}" -ge "${MAX_TRIES}" ]; then
+            last="${cur}"; tries=0
+        fi
     fi
     [ -n "${ONCE}" ] && exit 0
     sleep "${INTERVAL}"
