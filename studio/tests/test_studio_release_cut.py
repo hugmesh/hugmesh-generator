@@ -38,6 +38,9 @@ OLD_SHA = "1111111111111111111111111111111111111111"
 NEW_SHA = "2222222222222222222222222222222222222222"
 TAGOBJ_SHA = "3333333333333333333333333333333333333333"
 B7 = "b7edc89cdb61fe5f1d14fcb1a6dfbbab85b78571"  # the live studio-v0.3.0-beta.1 commit
+REAL_GIT = shutil.which("git") or "/usr/bin/git"
+METAINFO_REL = os.path.join("studio", "packaging", "flatpak", "org.hugmesh.ImageStudio.metainfo.xml")
+INIT_REL = os.path.join("studio", "hugmesh_studio", "__init__.py")
 
 
 def _read(path: str) -> str:
@@ -127,10 +130,13 @@ def test_preflight_runs_the_guard_tests_and_actionlint_against_the_tree_that_exe
     assert "studio/tests/test_studio_release_signing.py" in tests
     lint = _step("preflight", "actionlint the release workflow that will execute, and this one")["run"]
     assert ".github/workflows/studio-release.yml" in lint and ".github/workflows/studio-release-cut.yml" in lint
-    bump = _step("preflight", "Apply the bump to the working tree (not committed here)")
-    assert bump["if"] == "${{ !inputs.republish && steps.main.outputs.bump_needed == 'true' }}"
-    assert names.index("Apply the bump to the working tree (not committed here)") < names.index(
+    # The decide step applies the bump to the working tree (that is how it decides), so
+    # the guard tests run against the bumped tree; no second, conditional bump step.
+    decide = _step("preflight", "Read main and decide the bump")["run"]
+    assert 'release_version.py bump "$VERSION"' in decide and "git diff --quiet" in decide
+    assert names.index("Read main and decide the bump") < names.index(
         "Run the release guard tests against the tree that will execute")
+    assert not any("Apply the bump" in (n or "") for n in names), names
     tag_checkout = _step("preflight", "Check out the tag that will be rebuilt")
     assert tag_checkout["if"] == "${{ inputs.republish }}"
     assert names.index("Check out the tag that will be rebuilt") < names.index(
@@ -198,6 +204,7 @@ case "$*" in
   "rev-parse HEAD") cat "$GIT_HEAD_FILE"; exit 0 ;;
   "rev-parse origin/main") echo "$FAKE_ORIGIN_MAIN"; exit 0 ;;
   fetch*|checkout*|add*) exit 0 ;;
+  diff*) exec "$REAL_GIT" "$@" ;;   # the bump decision: a real diff of the tmp tree
   *commit*) echo "$FAKE_NEW_SHA" > "$GIT_HEAD_FILE"; exit 0 ;;
   "push origin HEAD:main") [ "${FAKE_PUSH_RC:-0}" = "0" ] && exit 0; echo "! [rejected] main -> main (non-fast-forward)" >&2; exit "$FAKE_PUSH_RC" ;;
 esac
@@ -206,9 +213,19 @@ exit 99
 '''
 
 
-def _tree(tmp_path, version="0.3.0-beta.1", workflow_text=None):
+def _without_releases(meta: str, keep: set[str]) -> str:
+    """The metainfo with every <release> block dropped except the AppStream versions in
+    `keep`, so a fixture can say exactly which entries main carries."""
+    def drop(match):
+        return match.group(0) if match.group(2) in keep else ""
+    return re.sub(r'(?ms)^([ \t]*)<release version="([^"]+)".*?</release>\n', drop, meta)
+
+
+def _tree(tmp_path, version="0.3.0-beta.1", workflow_text=None, metainfo_releases=None):
     """A tmp generator tree with the real release_version.py, a controlled __version__
-    and a controlled .github/workflows/studio-release.yml."""
+    and a controlled .github/workflows/studio-release.yml, committed to a real git
+    repository (the bump decision is a real `git diff`). `metainfo_releases`, when
+    given, is the set of AppStream versions the metainfo keeps."""
     root = tmp_path / "tree"
     (root / "studio" / "hugmesh_studio").mkdir(parents=True)
     (root / "studio" / "packaging" / "wix").mkdir(parents=True)
@@ -222,6 +239,13 @@ def _tree(tmp_path, version="0.3.0-beta.1", workflow_text=None):
     init = re.sub(r'(?m)^__version__ = "[^"]+"$', f'__version__ = "{version}"', init)
     (root / "studio" / "hugmesh_studio" / "__init__.py").write_text(init)
     (root / ".github" / "workflows" / "studio-release.yml").write_text(workflow_text or _read(RELEASE))
+    if metainfo_releases is not None:
+        meta = root / METAINFO_REL
+        meta.write_text(_without_releases(meta.read_text(), set(metainfo_releases)))
+    for args in (["init", "-q"], ["add", "-A"],
+                 ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false",
+                  "commit", "-q", "-m", "fixture"]):
+        subprocess.run([REAL_GIT, *args], cwd=root, check=True, capture_output=True)
 
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -248,7 +272,7 @@ def _run(tmp_path, script: str, **env_over) -> tuple[subprocess.CompletedProcess
         "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123",
         "GITHUB_ACTOR": "someone", "GITHUB_ACTOR_ID": "42",
         "GH_LOG": str(tmp_path / "gh.log"), "GIT_LOG": str(tmp_path / "git.log"),
-        "GIT_HEAD_FILE": str(tmp_path / "head"), "FAKE_NEW_SHA": NEW_SHA, "FAKE_TAGOBJ": TAGOBJ_SHA,
+        "GIT_HEAD_FILE": str(tmp_path / "head"), "REAL_GIT": REAL_GIT, "FAKE_NEW_SHA": NEW_SHA, "FAKE_TAGOBJ": TAGOBJ_SHA,
         "FAKE_API_RC": "0", "FAKE_ORIGIN_MAIN": OLD_SHA,
         "VERSION": "0.3.0-beta.2", "REPUBLISH": "false", "CONFIRM": "", "DRY_RUN": "false",
         "FAKE_RELEASE": "absent", "FAKE_TAG": "", "FAKE_ALL_TAGS": "refs/tags/studio-v0.3.0-beta.1",
@@ -369,6 +393,35 @@ def test_decide_the_bump(tmp_path, tree_version, want_rc, want_bump):
         assert "choose a later version" in proc.stdout and out == ""
     else:
         assert _outputs(out) == {"sha": OLD_SHA, "bump_needed": want_bump}
+
+
+@pytest.mark.parametrize("init_version,meta_keeps,want_bump,want_changed", [
+    # 567a5a60: __init__.py bumped by hand, the metainfo <release> never added. The cut
+    # must see a bump is needed and the bump must add only the metainfo entry.
+    ("0.3.0-beta.2", {"0.3.0~beta.1"}, "true", {METAINFO_REL}),
+    # both files already at the version: the re-run case, nothing to commit
+    ("0.3.0-beta.2", {"0.3.0~beta.2", "0.3.0~beta.1"}, "false", set()),
+    # both behind: the normal bump, both files
+    ("0.3.0-beta.1", {"0.3.0~beta.1"}, "true", {INIT_REL, METAINFO_REL}),
+])
+def test_decide_heals_a_hand_bumped_init_without_its_metainfo_entry(
+        tmp_path, init_version, meta_keeps, want_bump, want_changed):
+    root = _tree(tmp_path, version=init_version, metainfo_releases=meta_keeps)
+    meta = root / METAINFO_REL
+    before = meta.read_text()
+    assert ('<release version="0.3.0~beta.2"' in before) == ("0.3.0~beta.2" in meta_keeps), "fixture"
+    proc, out, _, _ = _run(tmp_path, _step("preflight", DECIDE)["run"], VERSION="0.3.0-beta.2",
+                           TAG_STATE="absent", TAG_SHA="")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert _outputs(out) == {"sha": OLD_SHA, "bump_needed": want_bump}
+    changed = subprocess.run([REAL_GIT, "diff", "--name-only"], cwd=root, capture_output=True, text=True).stdout
+    assert set(changed.split()) == {p.replace(os.sep, "/") for p in want_changed}, changed
+    # The bumped tree is what the guard tests then read: newest <release> == __version__.
+    import xml.etree.ElementTree as ET
+    newest = ET.parse(meta).getroot().find("releases").find("release")
+    assert newest.get("version") == "0.3.0~beta.2"
+    assert '__version__ = "0.3.0-beta.2"' in (root / INIT_REL).read_text()
+    assert ("metainfo <release> entry is missing" in proc.stdout) == (want_changed == {METAINFO_REL})
 
 
 @pytest.mark.parametrize("tree_version,tag_sha,want_moved", [

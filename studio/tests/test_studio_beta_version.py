@@ -288,8 +288,15 @@ def test_metainfo_newest_release_is_this_version():
         "a pre-release with '~' so it sorts below its final release)")
     if "-" in _version():
         assert newest.get("type") == "development"
-    assert all(r.get("version") != "1.0.0" for r in releases.findall("release")), (
-        "the never-published 1.0.0 entry is back: software centres would show 1.0.0")
+    # No entry may name a version LATER than __version__: software centres show the
+    # highest <release>, so a never-published one (the old 1.0.0 entry) would be what
+    # users see. Ordered, not spelt: a real 1.0.0, once it is __version__, passes.
+    spec = importlib.util.spec_from_file_location("release_version", RELEASE_VERSION)
+    rv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rv)
+    later = [r.get("version") for r in releases.findall("release")
+             if rv.compare(r.get("version").replace("~", "-", 1), _version()) > 0]
+    assert not later, f"metainfo <release> entries later than __version__ {_version()}: {later}"
 
 
 EXISTS = '{"tagName":"studio-v0.3.0-beta.1","assets":[{"updatedAt":"2026-10-23T07:35:52Z"},{"updatedAt":"2026-10-22T10:28:46Z"}]}'
@@ -385,6 +392,86 @@ def test_release_version_cli_current_next_validate_compare():
         assert _rv("compare", a, b).stdout.strip() == "lt", (a, b)
         assert _rv("compare", b, a).stdout.strip() == "gt", (a, b)
     assert _rv("compare", "0.3.0", "0.3.0").stdout.strip() == "eq"
+
+
+@pytest.mark.parametrize("base,flags,want", [
+    # Pure functions of their input: version-independent, they hold at any __version__.
+    ("0.3.0-beta.4", [], "0.3.0-beta.5"),
+    ("0.3.0-beta.4", ["--final"], "0.3.0"),
+    ("0.3.0", [], "0.3.1-beta.1"),
+    ("0.3.0-beta.4", ["--minor"], "0.4.0-beta.1"),
+    ("0.3.2", ["--minor"], "0.4.0-beta.1"),
+    ("0.3.0-beta.4", ["--minor", "--final"], "0.4.0"),
+    ("0.3.0-beta.4", ["--major"], "1.0.0-beta.1"),
+    ("0.9.9", ["--major", "--final"], "1.0.0"),
+])
+def test_release_version_next_steps_patch_minor_major_and_final(base, flags, want):
+    proc = _rv("next", base, *flags)
+    assert proc.returncode == 0 and proc.stdout.strip() == want, (base, flags, proc.stdout, proc.stderr)
+    assert _rv("compare", base, want).stdout.strip() == "lt", "next must always go up"
+
+
+@pytest.mark.parametrize("base,flags,why", [
+    ("0.3.0", ["--final"], "already a final release"),
+    ("0.255.0", ["--minor"], "MSI"),                 # 0.256.0 cannot be an MSI ProductVersion
+    ("255.0.0", ["--major"], "MSI"),
+])
+def test_release_version_next_refuses_what_cannot_follow(base, flags, why):
+    proc = _rv("next", base, *flags)
+    assert proc.returncode == 1 and why in proc.stderr, (proc.stdout, proc.stderr)
+    assert _rv("next", "0.3.0", "--minor", "--major").returncode == 2, "--minor and --major exclude each other"
+
+
+def test_release_version_next_from_the_tree():
+    # Derived from __version__, so it holds after every bump (0.4.1-beta.1, 0.5.0, 1.0.0-beta.1...).
+    ma, mi, _ = (int(x) for x in _version().split("-")[0].split("."))
+    assert _rv("next", "--minor").stdout.strip() == f"{ma}.{mi + 1}.0-beta.1"
+    assert _rv("next", "--major").stdout.strip() == f"{ma + 1}.0.0-beta.1"
+    assert _rv("next", "--minor", "--final").stdout.strip() == f"{ma}.{mi + 1}.0"
+
+
+TAGS_03 = ["refs/tags/studio-v0.3.0-beta.1", "refs/tags/studio-v0.3.0-beta.3", "refs/tags/studio-vjunk"]
+
+
+@pytest.mark.parametrize("spec,flags,main,want", [
+    # Keywords count from the newest TAG (what was released) ...
+    ("next", [], "0.3.0-beta.3", "0.3.0-beta.4"),
+    ("next-beta", [], "0.3.0-beta.3", "0.3.0-beta.4"),
+    ("next-minor", [], "0.3.0-beta.3", "0.4.0-beta.1"),
+    ("next-major", [], "0.3.0-beta.3", "1.0.0-beta.1"),
+    ("next", ["--final"], "0.3.0-beta.3", "0.3.0"),
+    ("next-minor", ["--final"], "0.3.0-beta.3", "0.4.0"),
+    # ... except when main was bumped past every tag and never released (567a5a60):
+    # that pending version, not a number main is already later than.
+    ("next", [], "0.4.0-beta.2", "0.4.0-beta.2"),
+    ("next-minor", [], "0.4.0-beta.2", "0.4.0-beta.2"),
+    ("next", ["--final"], "0.4.0-beta.2", "0.4.0"),
+    ("next-major", [], "0.4.0-beta.2", "1.0.0-beta.1"),
+    # explicit versions pass through when they fit the channel
+    ("0.5.0-beta.1", [], "0.3.0-beta.3", "0.5.0-beta.1"),
+    ("0.5.0", ["--final"], "0.3.0-beta.3", "0.5.0"),
+])
+def test_release_version_resolve(spec, flags, main, want):
+    proc = _rv("resolve", spec, *flags, "--main", main, "--after-tags", *TAGS_03)
+    assert proc.returncode == 0 and proc.stdout.strip() == want, (spec, flags, main, proc.stdout, proc.stderr)
+    # Whatever it resolves to, the cut's own ordering check accepts it.
+    assert _rv("validate", want, "--after-tags", *TAGS_03).returncode == 0
+
+
+@pytest.mark.parametrize("spec,flags,why", [
+    ("0.5.0", [], "--final"),                 # a final is the LATEST release: say so
+    ("0.5.0-beta.1", ["--final"], "is a beta"),
+    ("0.5.0-rc.1", [], "not MAJOR.MINOR.PATCH"),
+    ("nextminor", [], "not MAJOR.MINOR.PATCH"),
+])
+def test_release_version_resolve_refuses(spec, flags, why):
+    proc = _rv("resolve", spec, *flags, "--main", "0.3.0-beta.3", "--after-tags", *TAGS_03)
+    assert proc.returncode == 1 and why in proc.stderr, (proc.stdout, proc.stderr)
+    proc = _rv("resolve", "next", "--final", "--main", "0.4.0", "--after-tags", "refs/tags/studio-v0.4.0")
+    assert proc.returncode == 1 and "already a final release" in proc.stderr and "next-minor" in proc.stderr
+    assert _rv("resolve", "next").returncode == 1, "no tag and no main: nothing to count from"
+    assert _rv("newest", *TAGS_03, "refs/tags/studio-v0.3.0").stdout.strip() == "0.3.0"
+    assert _rv("newest").stdout == "\n"
 
 
 def test_bump_version_edits_both_files(tmp_path):

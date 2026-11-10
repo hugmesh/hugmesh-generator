@@ -1,7 +1,10 @@
 # Cut a Studio release — THE one way to release the HugMesh Image Studio.
 #
-# HOW TO RELEASE, in one line: `scripts/release-studio.sh 0.3.0-beta.2` on a terminal,
-# or Actions > "Cut a Studio release" > Run workflow > version = 0.3.0-beta.2 > Run.
+# HOW TO RELEASE, in one line: `scripts/release-studio.sh next` (the next beta),
+# `scripts/release-studio.sh next-minor` (X.Y+1.0-beta.1), `scripts/release-studio.sh
+# --final` (the stable X.Y.Z), or any explicit version, on a terminal. The script
+# validates everything first and then presses this button for you; the button itself
+# is Actions > "Cut a Studio release" > Run workflow > version = 0.3.0-beta.2 > Run.
 # Nothing else. This workflow then (1) commits the bump of __version__ to main,
 # (2) creates the tag studio-v<version> ON GITHUB (never on an operator machine), and
 # (3) dispatches studio-release.yml on that tag with publish=true, which builds, signs
@@ -14,6 +17,9 @@
 # workflow (GitHub's no-cascade rule), so this workflow starts the publishing run
 # itself with `gh workflow run --ref refs/tags/...` (workflow_dispatch is the one event
 # GITHUB_TOKEN may start). Exactly one publishing run results.
+#
+# ANY VERSION release_version.py accepts can be cut here, a new MINOR or MAJOR and a
+# final included: nothing in this file or in the guard tests it runs names a version.
 #
 # THE BUMP COMMIT TRIGGERS NO CI. A push made with GITHUB_TOKEN starts no workflow, so
 # the bump must never grow beyond the two files release_version.py edits
@@ -31,7 +37,8 @@
 # commit and the release's same-named assets are REPLACED, so every checksum,
 # signature and attestation changes and anyone who already downloaded can no longer
 # verify what they have. The tag is never moved (a published tag is a coordinate that
-# users' verify commands name). A wrong build gets a new beta N, not a republish.
+# users' verify commands name). A wrong build gets a new version (the next beta N, or
+# the next PATCH after a final), not a republish.
 #
 # PERMISSIONS. The whole file is contents: read. Only the `cut` job holds
 # contents: write (the bump commit and the tag) and actions: write (the dispatch); it
@@ -204,6 +211,13 @@ jobs:
       - name: Read main and decide the bump
         # Normal cut only. main's __version__ must be the version or sort before it;
         # main already past the version means somebody released or bumped meanwhile.
+        # The bump is DECIDED BY APPLYING IT: `release_version.py bump` is idempotent,
+        # so a tree whose two version files already agree is left untouched and any
+        # difference means a bump commit is needed. Comparing __version__ alone once
+        # read a hand-edited __init__.py (567a5a60: __version__ bumped, metainfo
+        # <release> missing) as "already bumped", and the guard tests then failed on
+        # a tree nothing here would repair. The bumped tree stays in the working copy:
+        # it is what the guard tests below run against.
         # A tag at another commit does not block when no release exists: the cut
         # moves it to the bump commit (nothing published references it) and says so.
         id: main
@@ -215,16 +229,24 @@ jobs:
           sha=$(git rev-parse HEAD)
           current=$(python3 studio/packaging/release_version.py current)
           case "$(python3 studio/packaging/release_version.py compare "$current" "$VERSION")" in
-            eq) bump_needed=false ;;
-            lt) bump_needed=true ;;
+            eq|lt) ;;
             gt) echo "::error::main is already at $current, which is later than $VERSION; choose a later version"; exit 1 ;;
             *) echo "::error::could not compare $current with $VERSION"; exit 1 ;;
           esac
+          python3 studio/packaging/release_version.py bump "$VERSION"
+          if git diff --quiet -- studio/hugmesh_studio/__init__.py studio/packaging/flatpak/org.hugmesh.ImageStudio.metainfo.xml; then
+            bump_needed=false
+          else
+            bump_needed=true
+          fi
           {
             echo "sha=$sha"
             echo "bump_needed=$bump_needed"
           } >> "$GITHUB_OUTPUT"
           echo "main is at $sha with __version__ $current; bump needed: $bump_needed"
+          if [ "$bump_needed" = "true" ] && [ "$current" = "$VERSION" ]; then
+            echo "::warning::main's __version__ is already $VERSION but its metainfo <release> entry is missing (a hand edit); the bump commit adds it"
+          fi
           if [ "$TAG_STATE" = "absent" ]; then
             echo "tag studio-v$VERSION: will be created"
           elif [ "$TAG_STATE" = "present@$sha" ] && [ "$bump_needed" = "false" ]; then
@@ -257,10 +279,6 @@ jobs:
             echo "::error::the workflow file at tag studio-v$VERSION predates the republish input; this release cannot be re-published through this path (see docs/STUDIO-INSTALLERS.md, 'Releases cut before the republish input')"
             exit 1
           fi
-
-      - name: Apply the bump to the working tree (not committed here)
-        if: ${{ !inputs.republish && steps.main.outputs.bump_needed == 'true' }}
-        run: python3 studio/packaging/release_version.py bump "$VERSION"
 
       - name: Run the release guard tests against the tree that will execute
         # These parse studio-release.yml, so a hand edit like 8319b5c6 (the deleted
