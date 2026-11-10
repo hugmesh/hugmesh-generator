@@ -246,8 +246,20 @@ def test_terminal_command_picks_the_first_available(monkeypatch, tmp_path):
     assert shlex.join(inner) in cmd[4]
 
 
+def _as_a_node(monkeypatch, tmp_path):
+    """Make THIS host look like a HugMesh node to the B1 check: the release-state file
+    under the driver's GL_ETC_HUGMESH seam, and hugmesh-firewall-reconcile found."""
+    etc = tmp_path / "etc-hugmesh"
+    etc.mkdir()
+    (etc / "release-state").write_text("internal\n")
+    monkeypatch.setenv("GL_ETC_HUGMESH", str(etc))
+    monkeypatch.setattr("hugmesh_studio.core.golive_target._which_sbin",
+                        lambda name: "/usr/sbin/" + name)
+
+
 def test_run_commit_without_a_terminal_reports_the_manual_command(monkeypatch, tmp_path):
     d = GoLiveDriver(str(tmp_path), is_root=True)
+    _as_a_node(monkeypatch, tmp_path)
     monkeypatch.setattr("hugmesh_studio.core.golive_driver.shutil.which", lambda b: None)
     ok, msg = d.run_commit_in_terminal(GoLiveOptions(provider="byo-domain", domain="example.org"))
     assert not ok
@@ -312,3 +324,11 @@ def test_preflight_flags_dangling_token_files(monkeypatch, tmp_path):
     opts = GoLiveOptions(provider="duckdns", domain="example.org", ddns_subdomain="home",
                          token_file=str(tmp_path / "gone"))
     assert any("does not exist" in p for p in d.preflight(opts))
+
+
+def test_terminals_are_the_shared_cloud_deploy_list():
+    """No private copy: the go-live driver reads cloud_deploy.TERMINALS itself, so
+    ptyxis/kgx (stock GNOME on Wayland) reach the commit terminal too."""
+    from hugmesh_studio.core import cloud_deploy, golive_driver
+    assert golive_driver.TERMINALS is cloud_deploy.TERMINALS
+    assert not hasattr(golive_driver, "_TERMINALS")

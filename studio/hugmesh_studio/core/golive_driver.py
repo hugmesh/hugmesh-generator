@@ -20,12 +20,20 @@ v1 non-goal), so the GUI cannot stream ``commit`` through a pipe. Instead
 ``run_commit_in_terminal()`` launches it inside a real terminal emulator, where the
 driver's own confirm (and sudo, when writing under /etc/hugmesh) run untouched.
 
+TARGETS (core.golive_target): with ``target=None`` (or a LOCAL target) every verb runs
+the checkout's driver on THIS host, as it always has. With an EMULATED target every
+verb is an ``ssh`` into that device and its own baked /usr/sbin/hugmesh-go-live answers
+— status, list, the probe that feeds the domain/onion tables, plan (token over ssh
+stdin), and commit/rollback in a terminal on the ssh pty. This host then runs no bash
+at all, which is what lets a WHPX device on native Windows go live too.
+
 Secret hygiene: token VALUES never enter argv — a masked GUI field is staged into
 a 0600 temp file (``stage_token``) handed over via --token-file and deleted right
 after the run. GoLiveOptions has no field for a secret value at all.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import shlex
@@ -34,7 +42,8 @@ import subprocess
 import tempfile
 import threading
 
-from . import platform_info, proc_text
+from . import golive_target, platform_info, proc_text
+from .cloud_deploy import TERMINALS
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -82,18 +91,9 @@ _MECH_INPUTS = {
 # when the domain has none, and core.golive_domains.plan_rows shows it on both faces.
 _NO_DOMAIN_MECHANISMS = frozenset({"onion"})
 
-# Terminal emulators the commit/rollback can run in, most-specific first; each
-# entry is (binary, exec-style args that precede the command argv).
-_TERMINALS = (
-    ("x-terminal-emulator", ("-e",)),
-    ("konsole", ("-e",)),
-    ("gnome-terminal", ("--",)),
-    ("xfce4-terminal", ("-x",)),
-    ("alacritty", ("-e",)),
-    ("kitty", ("--",)),
-    ("foot", ()),
-    ("xterm", ("-e",)),
-)
+# Terminal emulators the commit/rollback can run in: the ONE shared list,
+# cloud_deploy.TERMINALS — imported, not copied, so ptyxis/kgx and any later addition
+# reach this page too.
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # Same shapes the driver's validate_inputs() enforces (mirrored here as a courtesy
@@ -170,14 +170,34 @@ class GoLiveProvider:
 
 
 class GoLiveDriver:
-    def __init__(self, generator_dir: str, is_root: bool | None = None):
+    def __init__(self, generator_dir: str, is_root: bool | None = None,
+                 target: golive_target.GoLiveTarget | None = None):
         self.generator_dir = os.path.abspath(generator_dir)
         if is_root is None:
             is_root = getattr(os, "geteuid", lambda: -1)() == 0
         self.is_root = is_root
+        self.target = target or golive_target.local_target()
         self._proc: subprocess.Popen | None = None
         self._cancel = threading.Event()
         self._providers: list[GoLiveProvider] | None = None
+        self._probe: golive_target.Probe | None = None
+
+    # ---- the target ------------------------------------------------------------
+    @property
+    def remote(self) -> bool:
+        """True when every verb is an ssh into an emulated device."""
+        return self.target.is_remote
+
+    def probe(self, refresh: bool = False) -> golive_target.Probe:
+        """The device's one read-only probe (cached; ``refresh`` re-reads it)."""
+        if self._probe is None or refresh:
+            self._probe = golive_target.probe(self.target)
+        return self._probe
+
+    @property
+    def work_dir(self) -> str:
+        from .qemu_devices import default_work_dir
+        return self.target.work_dir or default_work_dir(self.generator_dir)
 
     # ---- driver/registry locations -------------------------------------------
     @property
@@ -207,7 +227,10 @@ class GoLiveDriver:
     def autofill_domain(self) -> str:
         """The baked cluster domain the driver reads --domain from
         (GOLIVE_CLUSTER_DOMAIN_FILE / /etc/hugmesh/cluster-domain) — read here
-        only so the GUI can prefill the same value the driver would use."""
+        only so the GUI can prefill the same value the driver would use. For an
+        emulated target it is the DEVICE's file, read by the probe."""
+        if self.remote:
+            return self.probe().cluster_domain
         path = os.environ.get("GOLIVE_CLUSTER_DOMAIN_FILE", "/etc/hugmesh/cluster-domain")
         try:
             with open(path, encoding="utf-8") as f:
@@ -221,7 +244,24 @@ class GoLiveDriver:
         (``core.golive_domains.onion_exports`` — ``$GL_ONION_EXPORT_DIR``, only
         well-formed names and v3 addresses). {} when none."""
         from .golive_domains import onion_exports       # lazy: it has no need of us
+        if self.remote:
+            return dict(onion_exports(files=self.probe().onion_files)[1])
         return dict(onion_exports()[1])
+
+    def onion_scan(self):
+        """``golive_domains.onion_export_scan`` for this target: the host's export
+        directory for LOCAL, the device's files (from the probe) for an emulated one."""
+        from .golive_domains import onion_export_scan
+        if self.remote:
+            return onion_export_scan(files=self.probe().onion_files)
+        return onion_export_scan()
+
+    def baked_domains(self) -> list[str]:
+        """``golive_domains.baked_domains`` for this target (primary first)."""
+        from .golive_domains import baked_domains
+        if self.remote:
+            return baked_domains(self.autofill_domain(), text=self.probe().domains_text)
+        return baked_domains(self.autofill_domain())
 
     def domain_onion(self, domain: str) -> str:
         """The onion a Go-Live for ``domain`` exposes over Tor: that domain's OWN onion
@@ -238,11 +278,28 @@ class GoLiveDriver:
 
     # ---- provider registry (via the driver's `list` — the source of truth) ----
     def blocker(self) -> str:
-        """WHY the driver cannot run here, "" when it can. Native Windows only: every
-        verb is ``bash ./specs/usr/sbin/hugmesh-go-live``, and the bash found there is
-        the WSL launcher, so `list` printed nothing and the wizard offered no provider
-        at all instead of saying why."""
+        """WHY the driver cannot run against this target, "" when it can.
+
+        LOCAL: native Windows only — every verb is ``bash ./specs/usr/sbin/
+        hugmesh-go-live``, and the bash found there is the WSL launcher, so `list`
+        printed nothing and the wizard offered no provider at all instead of saying
+        why. EMULATED: the target's own refusal (not running, no ssh channel, a client
+        or non-go-live platform), then the probe's (unreachable, or no driver baked —
+        B8). The native-Windows blocker does NOT apply: this host runs only ssh."""
+        if self.remote:
+            why = golive_target.refusal(self.target)
+            if why:
+                return why
+            return golive_target.probe_refusal(self.target, self.probe())
         return platform_info.native_windows_blocker("Go Live", runs="bash scripts")
+
+    def commit_refusal(self) -> str:
+        """Why a COMMIT cannot be launched against this target, "" when it can. On
+        LOCAL this is B1: a host that is not a HugMesh node has no reconciler to act on
+        the marker (``golive_target.local_node_refusal``)."""
+        if self.remote:
+            return self.blocker()
+        return self.blocker() or golive_target.local_node_refusal()
 
     def providers(self) -> list[GoLiveProvider]:
         if self._providers is None:
@@ -272,10 +329,16 @@ class GoLiveDriver:
         are ignored."""
         out: list[GoLiveProvider] = []
         try:
-            r = subprocess.run(
-                ["bash", f"./{DRIVER_REL}", "list"], cwd=self.generator_dir,
-                env=self._driver_env(), stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, text=True, timeout=30)
+            if self.remote:
+                r = subprocess.run(
+                    golive_target.remote_verb_argv(self.target, "list"),
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL, text=True, timeout=45)
+            else:
+                r = subprocess.run(
+                    ["bash", f"./{DRIVER_REL}", "list"], cwd=self.generator_dir,
+                    env=self._driver_env(), stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL, text=True, timeout=30)
             lines = (r.stdout or "").splitlines()
         except (OSError, subprocess.SubprocessError):
             return out
@@ -335,7 +398,13 @@ class GoLiveDriver:
     def command(self, subcommand: str, opts: GoLiveOptions,
                 include_token_file: bool = True) -> list[str]:
         """The exact driver invocation (run with cwd=generator_dir, like
-        BuildDriver): ``bash ./<driver> <subcommand> <flags>``."""
+        BuildDriver): ``bash ./<driver> <subcommand> <flags>`` — or, for an emulated
+        target, ``ssh … sudo -n hugmesh-go-live <subcommand> <flags>``."""
+        if self.remote:
+            return golive_target.remote_verb_argv(
+                self.target, subcommand,
+                opts if include_token_file else
+                dataclasses.replace(opts, token_file=""))
         return ["bash", f"./{DRIVER_REL}", subcommand,
                 *opts.to_cli_args(include_token_file=include_token_file)]
 
@@ -355,11 +424,32 @@ class GoLiveDriver:
                 on_line(f"!! {blocker}")
             return 2
         self._cancel.clear()
+        if self.remote:
+            if subcommand in ("commit", "rollback"):
+                if on_line:
+                    on_line(f"!! {subcommand} needs a terminal (the device's confirm "
+                            "runs on a TTY) — use the terminal path")
+                return 2
+            if subcommand == "plan":
+                return golive_target.run_plan(
+                    self.target, opts, on_line=on_line, work_dir=self.work_dir,
+                    cancel=self._cancel, on_proc=self._set_proc)
+            self._proc = subprocess.Popen(
+                golive_target.remote_verb_argv(self.target, subcommand, opts),
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, bufsize=1, **proc_text.TEXT_IO)
+            return self._stream(on_line)
         self._proc = subprocess.Popen(
             self.command(subcommand, opts), cwd=self.generator_dir,
             env=self._driver_env(), stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1, **proc_text.TEXT_IO)
-        assert self._proc.stdout is not None
+        return self._stream(on_line)
+
+    def _set_proc(self, proc) -> None:
+        self._proc = proc
+
+    def _stream(self, on_line) -> int:
+        assert self._proc is not None and self._proc.stdout is not None
         for line in self._proc.stdout:
             if on_line:
                 on_line(line.rstrip("\n"))
@@ -379,10 +469,15 @@ class GoLiveDriver:
         if blocker:
             return blocker
         try:
-            r = subprocess.run(["bash", f"./{DRIVER_REL}", "status"],
-                               cwd=self.generator_dir, env=self._driver_env(),
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True, timeout=30)
+            if self.remote:
+                r = subprocess.run(golive_target.remote_verb_argv(self.target, "status"),
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, timeout=45)
+            else:
+                r = subprocess.run(["bash", f"./{DRIVER_REL}", "status"],
+                                   cwd=self.generator_dir, env=self._driver_env(),
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True, timeout=30)
             return _ANSI_RE.sub("", r.stdout or "").strip()
         except (OSError, subprocess.SubprocessError) as e:
             return f"status unavailable: {e}"
@@ -407,7 +502,11 @@ class GoLiveDriver:
         """The commit invocation: sudo (writing /etc/hugmesh/go-live needs root)
         + only the flags `commit` consumes. NO -y/--yes: the driver's confirmation
         gate MUST run on the real TTY (adding -y here would be the bypass this
-        front-end refuses to add). NO token files: commit never needs a secret."""
+        front-end refuses to add). NO token files: commit never needs a secret.
+        For an emulated target: ``ssh -t … sudo hugmesh-go-live commit …``."""
+        if self.remote:
+            return golive_target.commit_argv(self.target, opts.provider, opts.domain,
+                                             persist_public=persist)
         inner = ["bash", f"./{DRIVER_REL}", "commit"]
         if opts.provider:
             inner += ["--provider", opts.provider]
@@ -420,6 +519,9 @@ class GoLiveDriver:
     def rollback_command(self, revert_release_state: bool = False) -> list[str]:
         """rollback deletes the marker (root). Like commit, NO -y/--yes — the
         driver's confirm runs on the TTY."""
+        if self.remote:
+            return golive_target.rollback_argv(self.target,
+                                               revert_release_state=revert_release_state)
         inner = ["bash", f"./{DRIVER_REL}", "rollback"]
         if revert_release_state:
             inner += ["--revert-release-state"]
@@ -429,19 +531,42 @@ class GoLiveDriver:
         """Wrap inner in the first available terminal emulator (kept open at the
         end so the driver's result stays readable). The in-repo registry path is
         exported into the shell so the driver finds it even if the emulator scrubs
-        the environment. None when no emulator exists."""
+        the environment. None when no emulator exists.
+
+        For an emulated target the inner argv is an ``ssh -t …`` and the wrapping is
+        ``golive_target.terminal_spec`` (Linux TERMINALS, WSL2 interop, or a new
+        console on native Windows)."""
+        if self.remote:
+            spec = golive_target.terminal_spec(inner)
+            return spec.argv if spec else None
         prefix = ""
         env = self._driver_env()
         if "GL_PROVIDERS_LIB" in env:
             prefix = f"export GL_PROVIDERS_LIB={shlex.quote(env['GL_PROVIDERS_LIB'])}; "
         script = (prefix + shlex.join(inner)
                   + '; rc=$?; echo; read -r -p "press Enter to close..." _; exit "$rc"')
-        for binary, exec_args in _TERMINALS:
+        for binary, exec_args in TERMINALS:
             if shutil.which(binary):
                 return [binary, *exec_args, "bash", "-c", script]
         return None
 
     def _run_in_terminal(self, inner: list[str]) -> tuple[bool, str]:
+        if self.remote:
+            spec = golive_target.terminal_spec(inner)
+            if spec is None:
+                return False, ("No terminal could be opened here — run this yourself in "
+                               f"a terminal: {shlex.join(inner)}")
+            try:
+                if spec.creationflags:
+                    subprocess.Popen(spec.argv, creationflags=spec.creationflags)
+                else:
+                    subprocess.Popen(spec.argv, start_new_session=True)
+            except OSError as e:
+                return False, (f"could not launch {spec.argv[0]}: {e} — run this "
+                               f"yourself: {shlex.join(inner)}")
+            return True, (f"Launched in {spec.argv[0]} — finish there: {self.target.label} "
+                          "prints the posture change, then asks you to CONFIRM on the "
+                          "ssh TTY; there is deliberately no way around that confirm.")
         cmd = self.terminal_command(inner)
         if cmd is None:
             return False, ("No terminal emulator found — run this on the device "
@@ -456,10 +581,32 @@ class GoLiveDriver:
                       "deliberately no way around that confirm).")
 
     def run_commit_in_terminal(self, opts: GoLiveOptions, persist: bool = False) -> tuple[bool, str]:
-        return self._run_in_terminal(self.commit_command(opts, persist=persist))
+        why = self.commit_refusal()
+        if why:
+            return False, why
+        try:
+            inner = self.commit_command(opts, persist=persist)
+        except ValueError as e:
+            return False, str(e)
+        ok, said = self._run_in_terminal(inner)
+        if ok and self.remote:
+            # Launched, not confirmed: the operator answers on the device's TTY. The
+            # journal is what lets Status say "reset by a restart" later.
+            golive_target.write_journal(
+                dataclasses.replace(self.target, work_dir=self.work_dir), "commit",
+                opts.provider, opts.domain)
+        return ok, said
 
     def run_rollback_in_terminal(self, revert_release_state: bool = False) -> tuple[bool, str]:
-        return self._run_in_terminal(self.rollback_command(revert_release_state=revert_release_state))
+        why = self.blocker()
+        if why:
+            return False, why
+        ok, said = self._run_in_terminal(
+            self.rollback_command(revert_release_state=revert_release_state))
+        if ok and self.remote:
+            golive_target.write_journal(
+                dataclasses.replace(self.target, work_dir=self.work_dir), "rollback")
+        return ok, said
 
     # ---- preflight (GUI hints only — the driver re-validates everything) --------
     def preflight(self, opts: GoLiveOptions, has_secret: bool = False) -> list[str]:
@@ -467,12 +614,17 @@ class GoLiveDriver:
         Purely a courtesy preview: input needs come from the mechanism taxonomy,
         and the driver independently enforces (and shape-checks) all of them."""
         problems: list[str] = []
-        if not os.path.exists(self.driver_path):
-            problems.append(f"go-live driver not found: {self.driver_path}")
-        if not os.path.exists(self.registry_path):
-            problems.append(f"provider registry not found: {self.registry_path}")
-        if not shutil.which("bash"):
-            problems.append("bash is required to run the go-live driver.")
+        if self.remote:
+            why = self.blocker()
+            if why:
+                problems.append(why)
+        else:
+            if not os.path.exists(self.driver_path):
+                problems.append(f"go-live driver not found: {self.driver_path}")
+            if not os.path.exists(self.registry_path):
+                problems.append(f"provider registry not found: {self.registry_path}")
+            if not shutil.which("bash"):
+                problems.append("bash is required to run the go-live driver.")
         p = self.provider(opts.provider) if opts.provider else None
         # Onion (and any future no-domain mechanism) has no public DNS name — the
         # .onion address IS the endpoint, so don't demand a domain for it.
@@ -522,6 +674,9 @@ class GoLiveDriver:
                                 "--tunnel-cname to autofill the real targets).")
         if opts.ingress_ip and not _IPV4_RE.match(opts.ingress_ip):
             problems.append("Record IP is not a valid IPv4 address (the driver rejects it).")
+        private = golive_target.refuse_private_ingress(opts.ingress_ip)
+        if private:
+            problems.append(private)
         if opts.token_file and not os.path.exists(opts.token_file):
             problems.append(f"token file does not exist: {opts.token_file}")
         return problems
