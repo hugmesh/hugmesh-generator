@@ -1114,7 +1114,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 233 -> 234 on 2026-11-10 (feat/studio-nvd-key-20261110): +1 gated, +1 total —
 # tests/pentest/test-run-sca-nvd-key.sh, named by shell-suites.yml and .gitlab-ci.yml's
 # lint:run-sca-nvd-key. PREMERGE_UNGATED is untouched. Measured by running this file.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-234}"
+# 234 -> 235 on 2026-11-10 (fix/arm-prod-gate-test-wave, PR #964): +1 gated, +1 total —
+# tests/scripts/test-prod-gate-env-apps.sh, named by shell-suites.yml's debian leg.
+# MEASURED by running this file with GUARD_PREMERGE=0 on the merge with origin/main
+# 0ae76851: '235 of 277 suites are named by a pull_request-triggered workflow'.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-235}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
