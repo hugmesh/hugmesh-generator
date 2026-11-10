@@ -131,18 +131,46 @@ done
 
 echo "== B) behaviour: vm-autofit against a fixture sysfs + stub xrandr =="
 
-# Fixture: <root>/class/drm/card0 (driver symlink -> a dir named after the driver),
-# card0-<conn>/{status,modes}. For virtio-gpu card0/device is the virtio device
-# (driver virtio_gpu); for qxl it is the PCI device (driver qxl).
-mk_sysfs(){ # root driver conn status modes...
-  local root="$1" drv="$2" conn="$3" st="$4"; shift 4
-  rm -rf "${root}"; mkdir -p "${root}/class/drm/card0/device" "${root}/bus/x/drivers/${drv}" "${root}/class/drm/card0-${conn}"
-  ln -s "../../../../bus/x/drivers/${drv}" "${root}/class/drm/card0/device/driver"
-  printf '%s\n' "${st}" > "${root}/class/drm/card0-${conn}/status"
-  printf '%s\n' "$@" > "${root}/class/drm/card0-${conn}/modes"
+# Fixture, shaped like the real tree (class/drm entries are SYMLINKS into
+# devices/): <root>/devices/<bus>/DEV is the card's parent device, bound to
+# $parent; when $child is not "-", DEV/virtio0 is a virtio child bound to $child;
+# DEV/drm/card0/card0-<conn>/{status,modes}; class/drm/card0 and
+# class/drm/card0-<conn> link into it, and card0/device links back to DEV.
+#
+# MEASURED on a built x86 image (kernel 6.18, -vga virtio; desktop-proof-20261109
+# serial log): card0/device -> /sys/devices/pci0000:00/0000:00:03.0, whose driver
+# is virtio-pci — the virtio_gpu-bound device is that function's virtioN child.
+# This suite's earlier fixture put virtio_gpu on card0/device itself, a tree no
+# measured guest has, so the hermetic test stayed green while the applier exited
+# on every virtio-vga guest. Layouts used below:
+#   virtio-pci + virtio_gpu   x86 virtio-vga / virtio-gpu-pci (the measured one)
+#   virtio-mmio + virtio_gpu  an ARM `virt` board's virtio-gpu-device
+#   virtio_gpu + -            the parent IS the virtio device (legacy layout)
+#   qxl / i915 / bochs-drm + -  a PCI GPU driven directly
+mk_sysfs(){ # root parent child conn status modes...
+  local root="$1" parent="$2" child="$3" conn="$4" st="$5"; shift 5
+  local bus="pci0000:00" dev="0000:00:03.0" pbus="pci"
+  case "${parent}" in virtio-mmio) bus="platform"; dev="a003e00.virtio_mmio"; pbus="platform" ;; esac
+  local D="${root}/devices/${bus}/${dev}"
+  rm -rf "${root}"
+  mkdir -p "${D}/drm/card0/card0-${conn}" "${root}/class/drm" "${root}/bus/${pbus}/drivers/${parent}"
+  ln -s "../../../bus/${pbus}/drivers/${parent}" "${D}/driver"
+  if [ "${child}" != "-" ]; then
+    mkdir -p "${D}/virtio0" "${root}/bus/virtio/drivers/${child}"
+    ln -s "../../../../bus/virtio/drivers/${child}" "${D}/virtio0/driver"
+  fi
+  ln -s "../../../${dev}" "${D}/drm/card0/device"
+  ln -s "../../devices/${bus}/${dev}/drm/card0" "${root}/class/drm/card0"
+  ln -s "../../devices/${bus}/${dev}/drm/card0/card0-${conn}" "${root}/class/drm/card0-${conn}"
+  printf '%s\n' "${st}" > "${D}/drm/card0/card0-${conn}/status"
+  printf '%s\n' "$@" > "${D}/drm/card0/card0-${conn}/modes"
 }
-# Stub xrandr: logs every argv line; --query prints one connected output whose
-# active (*) mode is $STUB_CURRENT.
+modes_file(){ echo "$1/class/drm/card0-Virtual-1/modes"; }
+# Stub xrandr, STATEFUL like the X server: logs every argv line; --query prints
+# one connected output whose active (*) mode is the content of $STUB_CUR;
+# `--output Virtual-1 --auto` switches $STUB_CUR to the first line of
+# $STUB_MODES (the connector's preferred mode), unless $STUB_FAILS holds a
+# positive count, which it decrements instead (a mode-set that did not take).
 mk_xrandr(){ # path
   cat > "$1" <<'STUB'
 #!/bin/sh
@@ -150,22 +178,26 @@ printf '%s\n' "$*" >> "${STUB_LOG}"
 if [ "$1" = "--query" ]; then
   printf 'Screen 0: minimum 16 x 16, current 1280 x 720, maximum 8192 x 8192\n'
   printf 'Virtual-1 connected primary 1280x720+0+0 0mm x 0mm\n'
-  printf '   %s      60.00*+\n' "${STUB_CURRENT}"
+  printf '   %s      60.00*+\n' "$(cat "${STUB_CUR}")"
   printf '   640x480       60.00  \n'
   printf 'Virtual-2 disconnected\n'
+elif [ "$*" = "--output Virtual-1 --auto" ]; then
+  n="$(cat "${STUB_FAILS}" 2>/dev/null || echo 0)"
+  if [ "${n:-0}" -gt 0 ]; then echo $((n-1)) > "${STUB_FAILS}"; else head -n 1 "${STUB_MODES}" > "${STUB_CUR}"; fi
 fi
 exit 0
 STUB
   chmod +x "$1"
 }
 
-# run_autofit SUT driver status current preferred [more modes...] -> prints log
+# run_autofit SUT parent child status current preferred [more modes...] -> prints log
 run_autofit(){
-  local sut="$1" drv="$2" st="$3" cur="$4"; shift 4
+  local sut="$1" parent="$2" child="$3" st="$4" cur="$5"; shift 5
   local root="${T}/sysfs" log="${T}/xr.log"
-  mk_sysfs "${root}" "${drv}" Virtual-1 "${st}" "$@"
-  : > "${log}"; mk_xrandr "${T}/xrandr"
-  STUB_LOG="${log}" STUB_CURRENT="${cur}" VM_AUTOFIT_SYSFS="${root}" VM_AUTOFIT_XRANDR="${T}/xrandr" VM_AUTOFIT_ONCE=1 \
+  mk_sysfs "${root}" "${parent}" "${child}" Virtual-1 "${st}" "$@"
+  : > "${log}"; mk_xrandr "${T}/xrandr"; echo "${cur}" > "${T}/cur"; echo 0 > "${T}/fails"
+  STUB_LOG="${log}" STUB_CUR="${T}/cur" STUB_FAILS="${T}/fails" STUB_MODES="$(modes_file "${root}")" \
+  VM_AUTOFIT_SYSFS="${root}" VM_AUTOFIT_XRANDR="${T}/xrandr" VM_AUTOFIT_ONCE=1 \
     sh "${sut}" >/dev/null 2>&1
   echo $? > "${T}/rc"
   cat "${log}"
@@ -178,46 +210,73 @@ count_apply(){ grep -c -- '^--output Virtual-1 --auto$' || true; }
 # Prints one FAIL line per broken case to stdout; returns the count.
 battery(){ # SUT
   local sut="$1" fails=0 log
-  log="$(run_autofit "$sut" virtio_gpu connected 1280x720 1280x720 1024x768)"
+  log="$(run_autofit "$sut" virtio-pci virtio_gpu connected 1280x720 1280x720 1024x768)"
   [ "$(last_rc)" -eq 0 ] && [ "$(printf '%s\n' "$log" | count_apply)" -eq 0 ] || { echo "    case1: preferred==current must not call xrandr --auto (rc=$(last_rc) log=[$log])"; fails=$((fails+1)); }
-  log="$(run_autofit "$sut" virtio_gpu connected 1280x720 1920x1080 1280x720)"
-  [ "$(last_rc)" -eq 0 ] && [ "$(printf '%s\n' "$log" | count_apply)" -eq 1 ] || { echo "    case2: new preferred mode must call xrandr --output Virtual-1 --auto exactly once (rc=$(last_rc) log=[$log])"; fails=$((fails+1)); }
-  log="$(run_autofit "$sut" qxl connected 800x600 1600x900 800x600)"
+  log="$(run_autofit "$sut" virtio-pci virtio_gpu connected 1280x720 1920x1080 1280x720)"
+  [ "$(last_rc)" -eq 0 ] && [ "$(printf '%s\n' "$log" | count_apply)" -eq 1 ] || { echo "    case2: virtio-vga as MEASURED on 6.18 (card0/device = PCI fn bound to virtio-pci, its virtio0 child bound to virtio_gpu): a new preferred mode must call xrandr --output Virtual-1 --auto exactly once (rc=$(last_rc) log=[$log])"; fails=$((fails+1)); }
+  log="$(run_autofit "$sut" qxl - connected 800x600 1600x900 800x600)"
   [ "$(last_rc)" -eq 0 ] && [ "$(printf '%s\n' "$log" | count_apply)" -eq 1 ] || { echo "    case3: qxl is a resize-capable driver too (rc=$(last_rc) log=[$log])"; fails=$((fails+1)); }
-  log="$(run_autofit "$sut" i915 connected 1280x720 1920x1080 1280x720)"
+  log="$(run_autofit "$sut" i915 - connected 1280x720 1920x1080 1280x720)"
   [ "$(last_rc)" -eq 0 ] && [ -z "$log" ] || { echo "    case4: real hardware (i915) must exit 0 before touching xrandr at all (rc=$(last_rc) log=[$log])"; fails=$((fails+1)); }
-  log="$(run_autofit "$sut" virtio_gpu disconnected 1280x720 1920x1080 1280x720)"
+  log="$(run_autofit "$sut" virtio-pci virtio_gpu disconnected 1280x720 1920x1080 1280x720)"
   [ "$(last_rc)" -eq 0 ] && [ "$(printf '%s\n' "$log" | count_apply)" -eq 0 ] || { echo "    case5: a disconnected connector is never applied (rc=$(last_rc) log=[$log])"; fails=$((fails+1)); }
+  log="$(run_autofit "$sut" virtio_gpu - connected 1280x720 1920x1080 1280x720)"
+  [ "$(last_rc)" -eq 0 ] && [ "$(printf '%s\n' "$log" | count_apply)" -eq 1 ] || { echo "    case6: legacy layout (card0/device itself bound to virtio_gpu) still matches (rc=$(last_rc) log=[$log])"; fails=$((fails+1)); }
+  log="$(run_autofit "$sut" virtio-mmio virtio_gpu connected 1280x720 1920x1080 1280x720)"
+  [ "$(last_rc)" -eq 0 ] && [ "$(printf '%s\n' "$log" | count_apply)" -eq 1 ] || { echo "    case7: virtio-gpu-device on virtio-mmio (ARM virt) matches through its virtio child (rc=$(last_rc) log=[$log])"; fails=$((fails+1)); }
+  log="$(run_autofit "$sut" bochs-drm - connected 1280x720 1920x1080 1280x720)"
+  [ "$(last_rc)" -eq 0 ] && [ -z "$log" ] || { echo "    case8: bochs (-vga std) exposes Virtual-1 but cannot resize: must exit before xrandr (rc=$(last_rc) log=[$log])"; fails=$((fails+1)); }
+  log="$(run_autofit "$sut" virtio-pci virtio_net connected 1280x720 1920x1080 1280x720)"
+  [ "$(last_rc)" -eq 0 ] && [ -z "$log" ] || { echo "    case9: a virtio child bound to anything but virtio_gpu is not a GPU (rc=$(last_rc) log=[$log])"; fails=$((fails+1)); }
   return $fails
 }
 
-if battery "${AUTOFIT}"; then ok "vm-autofit: all five one-pass cases hold"; else bad "vm-autofit: one-pass battery broken (see above)"; fi
+if battery "${AUTOFIT}"; then ok "vm-autofit: all nine one-pass cases hold (measured 6.18 virtio-vga layout, mmio, legacy, qxl; i915/bochs/non-gpu virtio refused)"; else bad "vm-autofit: one-pass battery broken (see above)"; fi
 
-# Loop case: a preferred-mode change AFTER start must be applied on the next poll.
-root="${T}/sysfs"; log="${T}/xr.log"
-mk_sysfs "${root}" virtio_gpu Virtual-1 connected 1280x720 1024x768
-: > "${log}"; mk_xrandr "${T}/xrandr"
-STUB_LOG="${log}" STUB_CURRENT=1280x720 VM_AUTOFIT_SYSFS="${root}" VM_AUTOFIT_XRANDR="${T}/xrandr" VM_AUTOFIT_INTERVAL=1 DISPLAY=:9 \
-  sh "${AUTOFIT}" >/dev/null 2>&1 &
-loop_pid=$!
-sleep 2
-printf '%s\n' 1920x1080 1280x720 > "${root}/class/drm/card0-Virtual-1/modes"
-sleep 3
-kill "${loop_pid}" 2>/dev/null; wait "${loop_pid}" 2>/dev/null
-n="$(count_apply < "${log}")"
-[ "${n}" -eq 1 ] && ok "vm-autofit loop: a later preferred-mode change is applied exactly once" || bad "vm-autofit loop: expected 1 apply after the change, saw ${n}"
+# loop_run SUT fails-before-success seconds-after-change -> number of --auto calls
+# after the preferred mode changes in a RUNNING applier (measured 6.18 layout).
+# Also leaves the stub's final current mode in ${T}/cur.
+loop_run(){
+  local sut="$1" nfail="$2" wait_after="$3" root="${T}/sysfs-loop" log="${T}/xr-loop.log" pid
+  mk_sysfs "${root}" virtio-pci virtio_gpu Virtual-1 connected 1280x720 1024x768
+  : > "${log}"; mk_xrandr "${T}/xrandr"; echo 1280x720 > "${T}/cur"; echo "${nfail}" > "${T}/fails"
+  STUB_LOG="${log}" STUB_CUR="${T}/cur" STUB_FAILS="${T}/fails" STUB_MODES="$(modes_file "${root}")" \
+  VM_AUTOFIT_SYSFS="${root}" VM_AUTOFIT_XRANDR="${T}/xrandr" VM_AUTOFIT_INTERVAL=0.2 DISPLAY=:9 \
+    sh "${sut}" >/dev/null 2>&1 &
+  pid=$!
+  sleep 1
+  printf '%s\n' 1920x1080 1280x720 > "$(modes_file "${root}")"
+  sleep "${wait_after}"
+  kill "${pid}" 2>/dev/null; wait "${pid}" 2>/dev/null
+  count_apply < "${log}"
+}
+# The loop battery, replayed against mutants in section D.
+loop_battery(){ # SUT
+  local sut="$1" fails=0 n
+  n="$(loop_run "$sut" 0 2)"
+  [ "$n" -eq 1 ] && [ "$(cat "${T}/cur")" = 1920x1080 ] || { echo "    loop1: a later preferred-mode change must be applied exactly once (applies=$n current=$(cat "${T}/cur"))"; fails=$((fails+1)); }
+  n="$(loop_run "$sut" 1 2)"
+  [ "$n" -eq 2 ] && [ "$(cat "${T}/cur")" = 1920x1080 ] || { echo "    loop2: a mode-set that did not take must be retried on the next poll (applies=$n, want 2; current=$(cat "${T}/cur"))"; fails=$((fails+1)); }
+  n="$(loop_run "$sut" 99 3)"
+  [ "$n" -eq 3 ] || { echo "    loop3: a mode the server never takes is tried at most 3 times per change, not every poll (applies=$n)"; fails=$((fails+1)); }
+  return $fails
+}
+if loop_battery "${AUTOFIT}"; then ok "vm-autofit loop: a later change is applied once, a failed mode-set is retried, retries are bounded at 3"; else bad "vm-autofit loop battery broken (see above)"; fi
 
 # No DISPLAY and not ONCE: must exit at once even on a virtual GPU (nothing to drive).
 # Exit is observed through a marker the SUT's own parent writes after `wait`,
 # NOT `kill -0 <pid>`: in a CI job container PID 1 is `tail -f /dev/null`, which
 # never reaps, so an orphaned SUT that exited stays a zombie and `kill -0` on it
 # SUCCEEDS (measured in alpine:3 — this check read "keeps running" for a script
-# that had exited). Polls up to 5 s, then kills the loop it started.
+# that had exited). Polls up to 5 s, then kills the loop it started. The fixture
+# is the MEASURED layout, so the DISPLAY guard is what stops it — not a card
+# detection that never matched (which is how this check stayed green before).
 no_display_exits(){ # SUT -> 0 when it exits by itself with rc 0
   local sut="$1" i=0 root="${T}/sysfs-nd"
-  mk_sysfs "${root}" virtio_gpu Virtual-1 connected 1280x720
+  mk_sysfs "${root}" virtio-pci virtio_gpu Virtual-1 connected 1280x720
   rm -f "${T}/nd.exited" "${T}/nd.pid"
   ( env -u DISPLAY VM_AUTOFIT_SYSFS="${root}" VM_AUTOFIT_XRANDR="${T}/xrandr" VM_AUTOFIT_INTERVAL=1 STUB_LOG="${T}/nd.log" \
+      STUB_CUR="${T}/nd.cur" STUB_FAILS="${T}/nd.fails" STUB_MODES="$(modes_file "${root}")" \
       sh "${sut}" >/dev/null 2>&1 &
     echo $! > "${T}/nd.pid"; wait $!; echo $? > "${T}/nd.exited" ) &
   local sub=$!
@@ -273,6 +332,10 @@ try_mut "current-mode skip removed (racing mode-sets)"     "$AUTOFIT" 's/\[ "$(c
 try_mut "connected check removed"                          "$AUTOFIT" 's/= "connected" \] || continue/= "nonsense" ] || :/'      battery
 try_mut "--auto dropped from the xrandr call"              "$AUTOFIT" 's/--output "${out}" --auto/--output "${out}"/'            battery
 try_mut "DISPLAY guard removed (loops with no X server)"  "$AUTOFIT" '/^\[ -n "${DISPLAY:-}" \] ||/d'                  no_display_exits
+try_mut "virtio child walk removed (the pre-fix detection: exits on 6.18 virtio-vga)" "$AUTOFIT" 's/\[ "${vdrv##\*\/}" = "virtio_gpu" \] \&\& return 0/:/' battery
+try_mut "any virtio child accepted as a GPU"               "$AUTOFIT" 's/\[ "${vdrv##\*\/}" = "virtio_gpu" \] \&\& return 0/return 0/' battery
+try_mut "post-apply re-check removed (no retry)"           "$AUTOFIT" '/^    \[ "$(current_mode "${out}")" = "${mode}" \]$/d'           loop_battery
+try_mut "retry bound removed (xrandr every poll)"          "$AUTOFIT" 's/ || \[ "${tries}" -ge "${MAX_TRIES}" \]//'                 loop_battery
 try_mut "starter: char-device gate removed"                "$STARTER" 's/^\[ -c "${PORT}" \] ||/true ||/'                        starter_battery
 try_mut "starter: starts nothing"                          "$STARTER" 's/^rc-service --ifnotstarted spice-vdagent start$/:/'    starter_battery
 echo "  mutations: ${caught} caught / ${survived} survived"

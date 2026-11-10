@@ -149,6 +149,15 @@ KEEP=(
   # path after `=` must be written as a URL (`URL=https://hugmesh.net/path` below
   # rebrands). Pinned so a change to that behaviour is deliberate, not accidental.
   'BASE=hugmesh.net/api'
+  # FILESYSTEM PATHS on the image are never renamed by a rebrand, so their literals
+  # must not be either. Real cases: the baked bootstrap.sh read /etc/<org>/release-state
+  # (RELEASE_STATE silently fell back to internal) and the node-storage cron ran a
+  # nonexistent /usr/sbin/<brand>-node-storage-reconcile every minute.
+  '[ -r /etc/hugmesh/release-state ] && RELEASE_STATE="$(cat /etc/hugmesh/release-state)"'
+  '* * * * * root /usr/sbin/hugmesh-node-storage-reconcile >> /var/log/hugmesh-node-storage-reconcile.log 2>&1'
+  'CLUSTER_DIR=/var/lib/hugmesh/cluster'
+  'p: /usr/lib/hugmesh/x /usr/libexec/hugmesh-y /run/hugmesh/z /var/cache/hugmesh /usr/share/hugmesh'
+  'p: /opt/hugmesh /usr/bin/hugmesh-a /usr/local/sbin/hugmesh-b /usr/local/bin/hugmesh-c'
 )
 # REWRITE: rebrandable shapes. The INPUT is the same for both non-default passes;
 # the expected OUTPUT differs only where the org token itself appears.
@@ -169,6 +178,7 @@ REWRITE_IN=(
   'repoURL: https://github.com/hugmesh/hugmesh-generator.git'
   'namespace: hugmesh'
   'ns: hugmesh-policy'
+  'mnt: /srv/hugmesh-data'
 )
 REWRITE_OUT_A=(
   'issuer: https://id.example.org/login'
@@ -182,6 +192,7 @@ REWRITE_OUT_A=(
   'repoURL: https://github.com/hugmesh/acme-generator.git'
   'namespace: hugmesh'
   'ns: acme-policy'
+  'mnt: /srv/acme-data'
 )
 REWRITE_OUT_B=(
   'issuer: https://id.example.org/login'
@@ -195,6 +206,7 @@ REWRITE_OUT_B=(
   'repoURL: https://github.com/acmeorg/acme-generator.git'
   'namespace: acmeorg'
   'ns: acme-policy'
+  'mnt: /srv/acme-data'
 )
 
 # The nodeSelector KEY of the projector DaemonSet: first non-comment line after

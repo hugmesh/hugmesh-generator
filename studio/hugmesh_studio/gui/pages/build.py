@@ -53,6 +53,7 @@ import os
 
 from ..qt import Qt, QtCore, QtWidgets, Signal
 from .. import console
+from ..styles import muted
 from ._scroll import scrollable
 from ...core import ansi
 from ...core import build_sessions
@@ -986,10 +987,24 @@ class BuildPage(QtWidgets.QWizardPage):
         self.seed_url.setPlaceholderText("stage3 seed index URL (--seed-url)")
         pl.addWidget(_row("Seed URL", self.seed_url))
         # OWASP pen-test bake (G40) — PENTEST=1 is a FLEET/ENV knob the build driver
-        # forwards to the build environment, never a per-builder argv flag.
+        # forwards to the build environment, never a per-builder argv flag. HONEST
+        # COPY (2026-11-10): only scripts/build-all-roles.sh (the fleet lane) and the
+        # shell menu read PENTEST — no per-arch builder does — so for a single image
+        # this box runs no pen-test and no SCA. It says so, and points at the Fleet
+        # window, where the pen-test and its NVD API key box live. No key box here.
         self.pentest = QtWidgets.QCheckBox(
-            "OWASP pen-test bake (PENTEST=1 — env knob forwarded to the build, not a builder flag)")
+            "OWASP pen-test (PENTEST=1) — runs only on a fleet build")
+        self.pentest.setToolTip(
+            "Forwarded as the PENTEST=1 env value. Only the fleet lane "
+            "(scripts/build-all-roles.sh) reads it; a single-image builder does not.")
         pl.addWidget(self.pentest)
+        self.pentest_note = QtWidgets.QLabel(
+            "A single-image build does not run the pen-test. Use the Fleet window "
+            "(python -m hugmesh_studio --fleet, or Sessions → Fleet build…) and tick the pen-test "
+            "there: its SCA step needs an NVD API key, which you set in that window.")
+        self.pentest_note.setWordWrap(True)
+        self.pentest_note.setStyleSheet(muted())
+        pl.addWidget(self.pentest_note)
         # Post-build QEMU emulated-device tests. Like PENTEST this is a driver-level
         # step, not a builder flag (NON_ARGV_FIELDS), so it changes no argv.
         #

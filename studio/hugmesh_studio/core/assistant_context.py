@@ -99,6 +99,7 @@ DENY_PATHS: tuple[tuple[str, str], ...] = (
     ("**/.env", "an environment file"),
     ("~/.local/share/hugmesh-local-only/**", "the operator's local-only folder"),
     ("<secret_files>/**", "a secret-files staging folder"),
+    ("<state>/secrets/nvd_api_key*", "the stored NVD API key"),
     ("<egress_vpn_conf>", "the egress VPN provider file"),
 )
 
@@ -106,7 +107,7 @@ DENY_PATHS: tuple[tuple[str, str], ...] = (
 #: test can plant one of each).
 DENY_BASENAME_GLOBS: tuple[str, ...] = (
     "secrets.json", "report.json", ".cli.json", "*.kubeconfig", "*.pem", "*.key", "id_*",
-    ".env", ".e2e-credentials", "roles.json",
+    ".env", ".e2e-credentials", "roles.json", "nvd_api_key*",
 )
 _DENY_DIR_WORDS: tuple[str, ...] = ("keys-out", "keyzip", "hugmesh-local-only", "secret-files",
                                     "secret_files")
@@ -281,6 +282,10 @@ _REDACT_RULES: tuple[tuple[re.Pattern, Any], ...] = (
     (re.compile(r"(?:tskey|hskey)-[a-z]+-[A-Za-z0-9\-]+"), "[redacted]"),
     (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"), "[redacted]"),
     (re.compile(r"AKIA[0-9A-Z]{16}"), "[redacted]"),
+    # OWASP Dependency-Check echoes the NVD key's first and last five characters
+    # ("Invalid API Key: 33333-*****-77777", core/nvd_key.py)
+    (re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{5}-\*{5}-[0-9a-fA-F]{5}(?![0-9A-Za-z])"),
+     "[redacted]"),
     (re.compile(r"\bhv[sbr]\.[A-Za-z0-9_-]{4,}"), "[redacted]"),
     (re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"), "[redacted]"),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"), "[redacted]"),
