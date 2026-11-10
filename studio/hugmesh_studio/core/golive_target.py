@@ -614,7 +614,7 @@ def _wt_escape(arg: str) -> str:
 def terminal_spec(cmd_argv: list[str], *, osname: str | None = None,
                   is_wsl: bool | None = None, wsl_distro: str | None = None,
                   has_interop: bool | None = None,
-                  which: Callable[[str], str | None] = shutil.which,
+                  which: Callable[[str], str | None] | None = None,
                   terminals=None) -> TerminalSpec | None:
     """Open ``cmd_argv`` (an ``ssh -t …``) in a terminal, or None when none can be
     opened (the caller then shows the exact command to copy).
@@ -627,7 +627,8 @@ def terminal_spec(cmd_argv: list[str], *, osname: str | None = None,
       <distro> -- …``), else a plain console (``cmd.exe /c start "" wsl.exe …``) —
       only when WSL interop is on."""
     from .cloud_deploy import TERMINALS
-    osname = osname or os.name
+    osname = osname or _host_os()
+    which = which or shutil.which
     if osname == "nt":
         return TerminalSpec(list(cmd_argv), getattr(subprocess, "CREATE_NEW_CONSOLE", 0x10),
                             "nt")
