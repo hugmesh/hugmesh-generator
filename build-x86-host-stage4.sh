@@ -5282,9 +5282,10 @@ for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/de
 # before systemd-udevd has bound its uevent socket, and those uevents are lost:
 # no seat tags (seat0 without devices, no X), no NIC initialisation (no
 # NetworkManager, no ssh). Seen on 1 of 2 display-door boots of the x86 laptop
-# image on 2026-11-10. The guard pings udevd, checks the NIC + DRM canaries and
-# re-runs the coldplug once only when they are missing; see the helper for the
-# mechanism. Neutral names (no brand), so --unaffiliated images carry it as is.
+# image on 2026-11-10. The guard pings udevd, checks the PCI + NIC + DRM canaries
+# (a card's seat tag only where 71-seat.rules is installed: node roles have no
+# elogind, so a GPU node's card is never tagged) and re-runs the coldplug once
+# only when they are missing; see the helper for the mechanism. Neutral names (no brand), so --unaffiliated images carry it as is.
 # Sysinit, not default: it has to finish before elogind, NetworkManager and the
 # display manager start, and the SVCS loop above only writes runlevels/default.
 install -D -m 0755 "${SHARED_SPECS}/usr/libexec/udev-coldplug-guard" "${SYSROOT}/usr/libexec/udev-coldplug-guard"

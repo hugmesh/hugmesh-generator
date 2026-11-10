@@ -10,18 +10,23 @@
 # real code making real decisions; nothing is grepped out of it.
 #
 # WHAT IT PINS:
-#   1. HEALTHY BOOT: every canary initialised -> "ok", exit 0, and NO second
-#      coldplug (a re-trigger re-runs every RUN+= rule, so it must not be routine).
-#   2. THE 2026-11-10 DOOR-1 BOOT: NIC and card never reached udevd -> "LOST"
-#      naming both, then exactly one re-trigger (subsystems, then devices,
-#      --action=add), then "RECOVERED", exit 0.
+#   1. HEALTHY BOOTS on a desktop (seat rule, tagged card), a headless node and
+#      a headless GPU node (initialised card, NO seat rule: nodes have no
+#      elogind) -> "ok", exit 0, and NO second coldplug (a re-trigger re-runs
+#      every RUN+= rule, so it must not be routine). A masked seat rule counts
+#      as no seat rule; one in /etc alone counts as one.
+#   2. LOST COLDPLUGS: the 2026-11-10 door-1 boot (PCI, NIC and card never
+#      reached udevd); a headless node whose NIC driver is a module (no NIC class
+#      device at all, only the PCI canary sees it); an uninitialised card on a
+#      GPU node -> "LOST", exactly one re-trigger (subsystems, then devices,
+#      --action=add), "RECOVERED", exit 0. The ping comes FIRST.
 #   3. A COLDPLUG THAT STAYS LOST -> the "udev-coldplug-guard: FAIL" line the QEMU
-#      runner fails fast on, exit 1.
-#   4. A card that is initialised but carries no "seat" tag is still a lost
-#      seat device (seat0 is built from that tag).
-#   5. The ping comes FIRST: it is the barrier udev-trigger lacks.
+#      runner fails fast on, exit 1; it claims seat0 only where a seat rule is.
+#   4. With a seat rule, a card that is initialised but carries no "seat" tag is
+#      still a lost seat device (seat0 is built from that tag).
+#   5. A ping failure is reported and the check still runs.
 #   6. Virtual NICs (no device link) and DRM connectors (no dev file) are not
-#      canaries; a box with no canaries at all is fine.
+#      canaries; a box with no canaries at all is fine; a long list is bounded.
 #   7. The OpenRC service orders itself need udev / after udev-trigger and runs
 #      the helper; the x86 build installs both files and links the service into
 #      runlevels/SYSINIT (executed against a scratch sysroot, not read).
@@ -49,6 +54,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
 # State dir ($UCG_STATE):
 #   calls        one line per invocation: its argv
 #   db/<name>    a processed device ("udevd saw it"); content = its TAGS value
+#                (empty = processed, no tags)
 #   ping_rc      exit status of `control --ping` (default 0)
 #   on_trigger   "recover" = a trigger initialises every device in recover.list
 #                (each line "name TAGS"), anything else = triggers change nothing
@@ -82,43 +88,103 @@ exit 0
 EOF
 chmod +x "${FAKE}"
 
-# mk_world NAME — a fresh sysfs + state: eth0 (physical), lo + dummy0 (virtual),
-# card0 (a card node), card0-Virtual-1 (a connector, no dev file).
+# mk_world NAME ROLE — a fresh sysfs + rules dirs + state. ROLE is one of
+#   desktop  client/desktop image: elogind's 71-seat.rules installed, card0
+#   gpunode  headless GPU node (backend-gpu/omnibus/edge-ai, i915/amdgpu built
+#            in): card0, but NO seat rule (nodes ship no elogind)
+#   node     headless node: no card, no seat rule
+# Every world has three PCI devices (host bridge, VGA, NIC), eth0 (physical),
+# lo + dummy0 (virtual); card worlds add card0-Virtual-1 (a connector, no dev
+# file). recover.list holds what a working coldplug writes to the db; heal
+# writes it, i.e. "this boot's coldplug reached udevd".
+PCI_DEVS="0000:00:00.0 0000:00:02.0 0000:00:03.0"
 mk_world() {
-    local w="${TMP}/$1"
+    local w="${TMP}/$1" role="$2" d
     mkdir -p "${w}/sys/class/net/eth0/device" "${w}/sys/class/net/lo" "${w}/sys/class/net/dummy0" \
-             "${w}/sys/class/drm/card0" "${w}/sys/class/drm/card0-Virtual-1" "${w}/state/db"
-    echo "226:0" > "${w}/sys/class/drm/card0/dev"
-    : > "${w}/state/calls"
-    printf '%s\n' "eth0 :systemd:" "card0 :master-of-seat:uaccess:seat:" > "${w}/state/recover.list"
+             "${w}/sys/bus/pci/devices" "${w}/rules/etc" "${w}/rules/run" "${w}/rules/usr" "${w}/state/db"
+    : > "${w}/state/calls"; : > "${w}/state/recover.list"
+    for d in ${PCI_DEVS}; do
+        mkdir -p "${w}/sys/bus/pci/devices/${d}"
+        printf '%s\n' "${d} " >> "${w}/state/recover.list"
+    done
+    printf '%s\n' "eth0 :systemd:" >> "${w}/state/recover.list"
+    case "${role}" in
+        desktop|gpunode)
+            mkdir -p "${w}/sys/class/drm/card0" "${w}/sys/class/drm/card0-Virtual-1"
+            echo "226:0" > "${w}/sys/class/drm/card0/dev" ;;
+    esac
+    case "${role}" in
+        desktop)
+            printf '%s\n' 'SUBSYSTEM=="drm", KERNEL=="card[0-9]*", TAG+="seat", TAG+="master-of-seat"' \
+                > "${w}/rules/usr/71-seat.rules"
+            printf '%s\n' "card0 :master-of-seat:uaccess:seat:" >> "${w}/state/recover.list" ;;
+        gpunode)
+            printf '%s\n' "card0 " >> "${w}/state/recover.list" ;;
+    esac
     echo "${w}"
 }
+# heal WORLD — every device the coldplug would reach is in the db.
+heal() { while read -r n t; do printf '%s\n' "${t}" > "$1/state/db/${n}"; done < "$1/state/recover.list"; }
 # run_guard WORLD — run the real helper under sh; sets OUT and RC.
 run_guard() {
     OUT="$(UCG_SYSFS="$1/sys" UCG_UDEVADM="${FAKE}" UCG_STATE="$1/state" \
+           UCG_RULES_DIRS="$1/rules/etc:$1/rules/run:$1/rules/usr" \
            UCG_PING_TIMEOUT=1 UCG_SETTLE_TIMEOUT=1 sh "${HELPER}" 2>&1)"
     RC=$?
 }
 ntrig() { grep -c '^trigger' "$1/state/calls"; }
 
-echo "1. healthy boot: ok, no second coldplug"
-W="$(mk_world healthy)"
-printf '%s\n' ":systemd:" > "${W}/state/db/eth0"
-printf '%s\n' ":master-of-seat:uaccess:seat:" > "${W}/state/db/card0"
+echo "1. healthy boots on every role: ok, no second coldplug"
+W="$(mk_world healthy-desktop desktop)"; heal "${W}"
 run_guard "${W}"
-eq "${RC}" 0 "healthy: exit 0"
-has "${OUT}" "udev-coldplug-guard: ok (2 coldplug canaries initialised)" "healthy: one ok line counting eth0 + card0"
-eq "$(ntrig "${W}")" 0 "healthy: no re-trigger"
-lacks "${OUT}" "LOST" "healthy: nothing reported lost"
+eq "${RC}" 0 "desktop: exit 0"
+has "${OUT}" "udev-coldplug-guard: ok (5 coldplug canaries initialised: 3 pci, 1 net, 1 drm; cards seat-tagged)" "desktop: one ok line counting 3 PCI + eth0 + card0"
+eq "$(ntrig "${W}")" 0 "desktop: no re-trigger"
+lacks "${OUT}" "LOST" "desktop: nothing reported lost"
 
-echo "2. door-1: the coldplug never reached udevd, one re-trigger recovers it"
-W="$(mk_world door1)"
+W="$(mk_world healthy-node node)"; heal "${W}"
+run_guard "${W}"
+eq "${RC}" 0 "headless node: exit 0"
+has "${OUT}" "udev-coldplug-guard: ok (4 coldplug canaries initialised: 3 pci, 1 net, 0 drm; no seat rule, cards need no seat tag)" "headless node: ok line"
+eq "$(ntrig "${W}")" 0 "headless node: no re-trigger"
+
+# THE PR #972 REFUTER'S MEDIUM: an initialised card with no seat tag on a node
+# with no seat rule is HEALTHY. Before the fix this printed LOST, re-ran the
+# whole coldplug and printed the FAIL marker the QEMU runner kills rows on.
+W="$(mk_world healthy-gpunode gpunode)"; heal "${W}"
+run_guard "${W}"
+eq "${RC}" 0 "headless GPU node, untagged card, no seat rule: exit 0"
+has "${OUT}" "udev-coldplug-guard: ok (5 coldplug canaries initialised: 3 pci, 1 net, 1 drm; no seat rule, cards need no seat tag)" "headless GPU node: ok line"
+eq "$(ntrig "${W}")" 0 "headless GPU node: no re-trigger"
+lacks "${OUT}" "LOST" "headless GPU node: the untagged card is not reported lost"
+lacks "${OUT}" "FAIL" "headless GPU node: no FAIL marker for the runner to kill the row on"
+
+# A seat rule that is installed but MASKED (same name in a higher-precedence
+# dir, empty or a /dev/null link) tags nothing either.
+for mask in empty devnull; do
+    W="$(mk_world masked-${mask} desktop)"; heal "${W}"
+    printf '%s\n' "card0 :uaccess:" > "${W}/state/db/card0"
+    if [ "${mask}" = empty ]; then : > "${W}/rules/etc/71-seat.rules"
+    else ln -s /dev/null "${W}/rules/run/71-seat.rules"; fi
+    run_guard "${W}"
+    eq "${RC}" 0 "seat rule masked (${mask}): untagged card is fine, exit 0"
+    eq "$(ntrig "${W}")" 0 "seat rule masked (${mask}): no re-trigger"
+done
+# ...while the same rule in /etc (not masked) overrides an absent /usr copy.
+W="$(mk_world etc-rule gpunode)"; heal "${W}"
+cp "${TMP}/healthy-desktop/rules/usr/71-seat.rules" "${W}/rules/etc/71-seat.rules"
+run_guard "${W}"
+has "${OUT}" "drm/card0(no seat tag)" "seat rule in /etc only: the card must be tagged"
+
+echo "2. lost coldplugs: one re-trigger recovers them"
+W="$(mk_world door1 desktop)"
 echo recover > "${W}/state/on_trigger"
 run_guard "${W}"
 eq "${RC}" 0 "door-1: exit 0 after recovery"
-has "${OUT}" "udev-coldplug-guard: LOST coldplug: 2 canary device(s) never reached udevd" "door-1: LOST line with the count"
+has "${OUT}" "udev-coldplug-guard: LOST coldplug: 5 canary device(s) never reached udevd" "door-1: LOST line with the count"
 has "${OUT}" "net/eth0" "door-1: names the NIC"
 has "${OUT}" "drm/card0" "door-1: names the card"
+has "${OUT}" "pci/0000:00:02.0" "door-1: names the PCI devices"
 lacks "${OUT}" "lo " "door-1: lo (virtual) is not a canary"
 lacks "${OUT}" "dummy0" "door-1: dummy0 (virtual) is not a canary"
 lacks "${OUT}" "card0-Virtual-1" "door-1: a connector is not a canary"
@@ -132,48 +198,82 @@ has "${first}" "control --ping" "the FIRST udevadm call is the ping (the barrier
 seq="$(grep -n -E '^(trigger --type=devices|settle)' "${W}/state/calls" | tail -2 | cut -d: -f2- | tr '\n' '|')"
 has "${seq}" "trigger --type=devices --action=add|settle" "door-1: settles after the re-trigger before re-checking"
 
+# THE REFUTER'S LOW: a headless node whose only NIC driver is a module udev
+# loads from the modalias. With the coldplug lost the module never loads, so
+# there is no NIC class device and no card: before the fix the guard printed
+# "ok (0 coldplug canaries initialised)". The PCI devices are still in sysfs.
+W="$(mk_world module-nic node)"
+rm -rf "${W}/sys/class/net/eth0"
+sed -i '/^eth0 /d' "${W}/state/recover.list"
+echo recover > "${W}/state/on_trigger"
+run_guard "${W}"
+has "${OUT}" "udev-coldplug-guard: LOST coldplug: 3 canary device(s) never reached udevd: pci/0000:00:00.0 pci/0000:00:02.0 pci/0000:00:03.0" "module NIC: the PCI canary sees the loss"
+eq "$(ntrig "${W}")" 2 "module NIC: re-triggered once"
+has "${OUT}" "udev-coldplug-guard: RECOVERED" "module NIC: RECOVERED"
+eq "${RC}" 0 "module NIC: exit 0 after recovery"
+
+# No seat rule does not mean no check: an UNINITIALISED card on a GPU node is
+# still a lost coldplug.
+W="$(mk_world gpunode-lost gpunode)"; heal "${W}"
+rm -f "${W}/state/db/card0"
+echo recover > "${W}/state/on_trigger"
+run_guard "${W}"
+has "${OUT}" "LOST coldplug: 1 canary device(s) never reached udevd: drm/card0 ;" "GPU node: an uninitialised card is still lost"
+has "${OUT}" "RECOVERED" "GPU node: recovered by the re-trigger"
+
 echo "3. a coldplug that stays lost: the FAIL line the runner keys on"
-W="$(mk_world stuck)"
+W="$(mk_world stuck desktop)"
 run_guard "${W}"
 eq "${RC}" 1 "stuck: exit 1"
 has "${OUT}" "udev-coldplug-guard: FAIL: still uninitialised after the re-trigger" "stuck: the exact FAIL marker"
-has "${OUT}" "seat0 will have no devices" "stuck: says what it costs"
+has "${OUT}" "seat0 will have no devices" "stuck desktop: says what it costs (seat0)"
 eq "$(ntrig "${W}")" 2 "stuck: re-triggered once, not in a loop"
+W="$(mk_world stuck-node node)"
+run_guard "${W}"
+eq "${RC}" 1 "stuck node: exit 1"
+has "${OUT}" "udev-coldplug-guard: FAIL: still uninitialised after the re-trigger" "stuck node: the exact FAIL marker"
+lacks "${OUT}" "seat0" "stuck node: no seat0 claim on a box with no seat manager"
+has "${OUT}" "udev never applied its rules to them" "stuck node: says what it costs"
 # the marker the runner greps must be what the helper prints, byte for byte
 grep -q -F "grep -aq 'udev-coldplug-guard: FAIL'" "${ROOT}/tests/qemu/docker-entrypoint.sh" \
     && _ok "the runner greps the same 'udev-coldplug-guard: FAIL' marker" \
     || _bad "the runner does not grep 'udev-coldplug-guard: FAIL'"
 
-echo "4. an initialised card without the seat tag is a lost seat device"
-W="$(mk_world untagged)"
-printf '%s\n' ":systemd:" > "${W}/state/db/eth0"
+echo "4. with a seat rule, an initialised card without the seat tag is a lost seat device"
+W="$(mk_world untagged desktop)"; heal "${W}"
 printf '%s\n' ":uaccess:" > "${W}/state/db/card0"
 run_guard "${W}"
 has "${OUT}" "drm/card0(no seat tag)" "untagged: card0 reported as missing its seat tag"
 lacks "${OUT}" "net/eth0" "untagged: eth0 is fine and not named"
+lacks "${OUT}" "pci/" "untagged: the PCI devices are fine and not named"
 eq "$(ntrig "${W}")" 2 "untagged: re-triggered"
 eq "${RC}" 1 "untagged: still FAIL when the re-trigger does not tag it"
 # the tag must be :seat: itself, not a substring of another tag or another line
-W="$(mk_world near-miss)"
-printf '%s\n' ":systemd:" > "${W}/state/db/eth0"
+W="$(mk_world near-miss desktop)"; heal "${W}"
 printf '%s\n' ":master-of-seat:uaccess:" > "${W}/state/db/card0"
 run_guard "${W}"
 has "${OUT}" "drm/card0(no seat tag)" "near-miss: master-of-seat alone is not the seat tag"
 
 echo "5. ping failure is reported and the check still runs"
-W="$(mk_world noping)"
+W="$(mk_world noping desktop)"; heal "${W}"
 echo 1 > "${W}/state/ping_rc"
-printf '%s\n' ":systemd:" > "${W}/state/db/eth0"
-printf '%s\n' ":seat:" > "${W}/state/db/card0"
 run_guard "${W}"
 has "${OUT}" "udevd did not answer a ping" "noping: says so"
 eq "${RC}" 0 "noping: canaries fine -> exit 0"
 
-echo "6. a box with no canaries"
+echo "6. a box with no canaries, and a lost coldplug on a big box"
 W="${TMP}/bare"; mkdir -p "${W}/sys/class/net/lo" "${W}/state/db"; : > "${W}/state/calls"
 run_guard "${W}"
-eq "${RC}" 0 "no NIC, no card: exit 0"
-eq "$(ntrig "${W}")" 0 "no NIC, no card: no re-trigger"
+eq "${RC}" 0 "no PCI, no NIC, no card: exit 0"
+eq "$(ntrig "${W}")" 0 "no PCI, no NIC, no card: no re-trigger"
+W="$(mk_world big node)"
+for i in 10 11 12 13 14 15 16 17 18 19; do mkdir -p "${W}/sys/bus/pci/devices/0000:00:${i}.0"; done
+run_guard "${W}"
+has "${OUT}" "LOST coldplug: 14 canary device(s) never reached udevd:" "big box: counts every lost canary"
+has "${OUT}" "+6 more ; re-triggering" "big box: names the first 8, then '+6 more'"
+has "${OUT}" "pci/0000:00:14.0 +6 more" "big box: the 8th name is the last one printed"
+lacks "${OUT}" "pci/0000:00:15.0" "big box: the 9th lost canary is counted, not named"
+has "${OUT}" "+6 more (udev never applied" "big box: the FAIL line is bounded too"
 
 echo "7. the service and the x86 build wiring"
 svc="$(cat "${INITD}")"

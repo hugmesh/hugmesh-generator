@@ -440,9 +440,11 @@ json_str() {
 # size at which `| grep -q` under pipefail turns a match into a failure):
 #   1. The guest's own verdict. /usr/libexec/udev-coldplug-guard prints
 #      "udev-coldplug-guard: FAIL" when udev's coldplug never reached udevd and
-#      the one in-guest re-trigger did not recover it. seat0 then has no
-#      devices (no X, no greeter) and NetworkManager will not manage the NIC
-#      (no ssh), so the row fails the moment that line appears.
+#      the one in-guest re-trigger did not recover it. udev's rules never ran
+#      for those devices: the NIC is not set up (no ssh) and, on a desktop,
+#      seat0 has no devices (no X, no greeter), so the row fails the moment
+#      that line appears. (On a node with no seat rule an untagged card is not
+#      a failure; the helper only demands the seat tag where 71-seat.rules is.)
 #   2. A login prompt with no ssh behind it. getty is spawned after the default
 #      runlevel and sshd starts inside it, so once "<host> login:" is on the
 #      console init is over. If ssh still has not answered BOOT_STALL_GRACE

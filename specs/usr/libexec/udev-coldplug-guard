@@ -29,10 +29,27 @@
 #   1. `udevadm control --ping`: udevd answers a ping only from inside its event
 #      loop, which it enters after the netlink bind. A reply means "udevd is
 #      listening now", which is exactly the barrier udev-trigger lacks.
-#   2. `udevadm settle`, then probe the coldplug canaries: every physical NIC
-#      (/sys/class/net/*/device) and every DRM card node (/sys/class/drm/card*
-#      with a dev file). A canary is initialised when udevadm reports
-#      USEC_INITIALIZED for it; a card must also carry the "seat" tag.
+#   2. `udevadm settle`, then probe the coldplug canaries. A canary is
+#      initialised when udevadm reports USEC_INITIALIZED for it.
+#      - pci: every /sys/bus/pci/devices/*. The role-independent canary: PCI
+#        devices are in sysfs before any driver binds, their only "add" uevent
+#        is the boot-time one (so only the coldplug can initialise them), and
+#        systemd-utils' own 50-udev-default.rules gives every one a stored
+#        ID_PATH (`SUBSYSTEM=="pci|usb|platform", IMPORT{builtin}="path_id"`),
+#        so a processed PCI device always has a database entry. This is what
+#        catches a lost coldplug on a box whose NIC driver is a module udev
+#        itself loads from the modalias (KERNEL_BUILTIN=false, keep-as-module:
+#        r8125/r8168, iwlwifi, mt7921, ...): there the NIC class device never
+#        appears, so the net canary below cannot see the loss.
+#      - net: every physical NIC (/sys/class/net/*/device).
+#      - drm: every DRM card node (/sys/class/drm/card* with a dev file). It
+#        must ALSO carry the "seat" tag, but only when a seat rule is installed
+#        (71-seat.rules, shipped by elogind; see seat_rule below). That tag is
+#        what elogind builds seat0 from. Node roles have no elogind, so no rule
+#        ever tags a card there, and a GPU node (backend-gpu, omnibus, edge-ai
+#        build i915/amdgpu in) must not read its untagged card as a lost
+#        coldplug: that would re-run the whole coldplug and print FAIL on
+#        every healthy boot.
 #   3. Only if a canary is missing: trigger the whole coldplug again
 #      (subsystems, then devices, --action=add, the same two calls udev-trigger
 #      makes) and settle. A second coldplug re-runs RUN+= rules, so it is never
@@ -41,12 +58,15 @@
 #      waiting for an ssh that cannot come (tests/qemu/docker-entrypoint.sh).
 #
 # Exit 0 = every canary initialised (first time, or after the re-trigger).
-# Exit 1 = still missing after the re-trigger: seat0 will have no devices.
+# Exit 1 = still missing after the re-trigger: udev never applied its rules to
+#          those devices (no driver autoload, no NIC naming, no seat tags).
 #
 # The same plain udevadm calls udev-trigger makes, so the SELinux shape is the
 # one udev-trigger already has (initrc_t is files_unconfined_type; udevadm
 # transitions to its own domain). Overridable for the hermetic test only:
 #   UCG_SYSFS  sysfs root (default /sys)   UCG_UDEVADM  udevadm binary
+#   UCG_RULES_DIRS  colon-separated udev rules dirs, highest precedence first
+#                   (default /etc/udev/rules.d:/run/udev/rules.d:/usr/lib/udev/rules.d:/lib/udev/rules.d)
 #   UCG_PING_TIMEOUT / UCG_SETTLE_TIMEOUT  seconds (defaults 30 / 60)
 
 set -u
@@ -55,22 +75,47 @@ SYSFS="${UCG_SYSFS:-/sys}"
 UDEVADM="${UCG_UDEVADM:-udevadm}"
 PING_TIMEOUT="${UCG_PING_TIMEOUT:-30}"
 SETTLE_TIMEOUT="${UCG_SETTLE_TIMEOUT:-60}"
+RULES_DIRS="${UCG_RULES_DIRS:-/etc/udev/rules.d:/run/udev/rules.d:/usr/lib/udev/rules.d:/lib/udev/rules.d}"
 TAG="udev-coldplug-guard"
 
 say() { printf '%s: %s\n' "${TAG}" "$*"; }
 
-# canaries — "KIND PATH" per line. net = a NIC backed by a real device (virtual
-# interfaces such as lo/dummy0/sit0 are created by software and prove nothing
-# about the coldplug); seat = a DRM card node (connectors like card0-Virtual-1
-# have no dev file and are skipped).
+# seat_rule — succeed when a udev rule that tags DRM cards "seat" is active.
+# That rule is 71-seat.rules (elogind's on OpenRC, systemd's own elsewhere):
+# `SUBSYSTEM=="drm", KERNEL=="card[0-9]*", TAG+="seat"`. udev picks one file per
+# name, highest-precedence dir first, and a same-named empty file or a
+# /dev/null symlink masks it; so the FIRST dir holding the name decides.
+seat_rule() {
+    _rest="${RULES_DIRS}:"
+    while [ -n "${_rest}" ]; do
+        _dir="${_rest%%:*}"; _rest="${_rest#*:}"
+        [ -n "${_dir}" ] || continue
+        _f="${_dir}/71-seat.rules"
+        if [ -e "${_f}" ] || [ -L "${_f}" ]; then
+            [ -s "${_f}" ] && return 0
+            return 1
+        fi
+    done
+    return 1
+}
+
+# canaries — "KIND PATH" per line. pci = every PCI device (see the header);
+# net = a NIC backed by a real device (virtual interfaces such as
+# lo/dummy0/sit0 are created by software and prove nothing about the coldplug);
+# drm = a DRM card node (connectors like card0-Virtual-1 have no dev file and
+# are skipped).
 canaries() {
+    for _d in "${SYSFS}"/bus/pci/devices/*; do
+        [ -e "${_d}" ] || continue
+        printf 'pci %s\n' "${_d}"
+    done
     for _d in "${SYSFS}"/class/net/*; do
         [ -e "${_d}/device" ] || continue
         printf 'net %s\n' "${_d}"
     done
     for _d in "${SYSFS}"/class/drm/card*; do
         [ -f "${_d}/dev" ] || continue
-        printf 'seat %s\n' "${_d}"
+        printf 'drm %s\n' "${_d}"
     done
 }
 
@@ -86,19 +131,45 @@ has_line() {
     }
 }
 
-# missing — print every canary udevd never processed (or, for a card, never
-# tagged for a seat), one per line. Empty output = coldplug reached udevd.
+# missing — print every canary udevd never processed (or, for a card on a box
+# with a seat rule, never tagged for a seat), one per line. Empty output =
+# coldplug reached udevd.
 missing() {
     canaries | while read -r _kind _path; do
         _props="$("${UDEVADM}" info --query=property --path="${_path}" 2>/dev/null)" || _props=""
-        _name="${_path#"${SYSFS}"/class/}"
+        case "${_kind}" in
+            pci) _name="pci/${_path##*/}" ;;
+            *)   _name="${_path#"${SYSFS}"/class/}" ;;
+        esac
         if ! has_line "${_props}" "USEC_INITIALIZED=" ""; then
             printf '%s\n' "${_name}"
-        elif [ "${_kind}" = seat ] && ! has_line "${_props}" "TAGS=" ":seat:"; then
+        elif [ "${_kind}" = drm ] && [ "${SEAT_RULE}" = yes ] && ! has_line "${_props}" "TAGS=" ":seat:"; then
             printf '%s\n' "${_name}(no seat tag)"
         fi
     done
 }
+
+# names LIST — the first 8 lines of LIST space-joined, then "+N more" (a lost
+# coldplug on a real box leaves dozens of PCI devices).
+names() {
+    _all="$(printf '%s\n' "$1" | wc -l | tr -d ' ')"
+    _shown="$(printf '%s\n' "$1" | head -n 8 | tr '\n' ' ')"
+    if [ "${_all}" -gt 8 ]; then
+        printf '%s+%s more ' "${_shown}" "$((_all - 8))"
+    else
+        printf '%s' "${_shown}"
+    fi
+}
+
+# count KIND — how many canaries of KIND this box has.
+count() { canaries | grep -c "^$1 " || true; }
+
+if seat_rule; then SEAT_RULE=yes; else SEAT_RULE=no; fi
+if [ "${SEAT_RULE}" = yes ]; then
+    COST="seat0 will have no devices and NetworkManager will not manage the NIC"
+else
+    COST="udev never applied its rules to them: no driver autoload, no NIC naming, no device permissions"
+fi
 
 settle() { "${UDEVADM}" settle --timeout="${SETTLE_TIMEOUT}" >/dev/null 2>&1; }
 
@@ -109,12 +180,13 @@ settle || say "udevadm settle timed out after ${SETTLE_TIMEOUT}s"
 
 _lost="$(missing)"
 if [ -z "${_lost}" ]; then
-    say "ok ($(canaries | wc -l | tr -d ' ') coldplug canaries initialised)"
+    if [ "${SEAT_RULE}" = yes ]; then _seat="cards seat-tagged"; else _seat="no seat rule, cards need no seat tag"; fi
+    say "ok ($(canaries | wc -l | tr -d ' ') coldplug canaries initialised: $(count pci) pci, $(count net) net, $(count drm) drm; ${_seat})"
     exit 0
 fi
 
 _n="$(printf '%s\n' "${_lost}" | wc -l | tr -d ' ')"
-say "LOST coldplug: ${_n} canary device(s) never reached udevd: $(printf '%s' "${_lost}" | tr '\n' ' '); re-triggering"
+say "LOST coldplug: ${_n} canary device(s) never reached udevd: $(names "${_lost}"); re-triggering"
 "${UDEVADM}" trigger --type=subsystems --action=add >/dev/null 2>&1
 "${UDEVADM}" trigger --type=devices --action=add >/dev/null 2>&1
 settle || say "udevadm settle timed out after ${SETTLE_TIMEOUT}s"
@@ -124,5 +196,5 @@ if [ -z "${_lost}" ]; then
     say "RECOVERED: the re-trigger initialised every canary"
     exit 0
 fi
-say "FAIL: still uninitialised after the re-trigger: $(printf '%s' "${_lost}" | tr '\n' ' ')(seat0 will have no devices and NetworkManager will not manage the NIC)"
+say "FAIL: still uninitialised after the re-trigger: $(names "${_lost}")(${COST})"
 exit 1
