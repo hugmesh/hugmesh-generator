@@ -1111,7 +1111,10 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # gated suite, tests/scripts/test-fe-template-route-parity.sh (shell-suites.yml node job)
 # = 233 of 275, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree;
 # ungated SET stays 42.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-233}"
+# 233 -> 234 on 2026-11-10 (feat/studio-nvd-key-20261110): +1 gated, +1 total —
+# tests/pentest/test-run-sca-nvd-key.sh, named by shell-suites.yml and .gitlab-ci.yml's
+# lint:run-sca-nvd-key. PREMERGE_UNGATED is untouched. Measured by running this file.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-234}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

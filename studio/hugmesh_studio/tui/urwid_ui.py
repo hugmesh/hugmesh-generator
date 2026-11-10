@@ -319,6 +319,9 @@ class JourneyApp:
         self.frame.body = _text_lines(j.lines()[1:])
         self.input.set_caption(j.prompt())
         self.input.set_edit_text("")
+        # a secret line (the NVD API key after `nvd set`) is masked for exactly that
+        # one line; the next sync() takes the mask off again
+        self.input.set_mask("*" if j.secret_input() else None)
         self.refresh_ai_line()
 
     def refresh_ai_line(self) -> None:

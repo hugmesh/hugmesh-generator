@@ -44,11 +44,13 @@ from __future__ import annotations
 import os
 import shlex
 
-from ..core import golive_target, org_export, qemu_devices
+from ..core import golive_target, nvd_key, org_export, qemu_devices
 from ..core.golive_domains import (NO_EXPORT_DOMAINS_NOTE, NO_EXTRA_DOMAINS_NOTE,
                                    baked_domains, export_candidates,
                                    export_step_applies, exposure_lines, plan_rows)
 from ..core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
+from .nvd_step import SECRET_PROMPT, NvdCommands
+from .nvd_step import HELP as NVD_HELP
 
 __all__ = ["GoLiveScreen", "THIS_HOST", "target_title"]
 
@@ -122,6 +124,8 @@ class GoLiveScreen:
         self.export_visibility = "private"
         self.export_update = org_export.UPDATE_REFUSE
         self.export_rename_map = ""            # `r FILE`: the CLI's --rename-map
+        #: the NVD API key the exported repos' SCA jobs need (the GUI step's box)
+        self.nvd = NvdCommands(org_of=self._picked_org)
 
     def _driver(self, j) -> GoLiveDriver:
         if self.driver is None:
@@ -266,13 +270,21 @@ class GoLiveScreen:
     def enter(self, j) -> None:  # noqa: ARG002
         self.stage = "provider"
 
+    def secret_input(self, j) -> bool:  # noqa: ARG002
+        return self.nvd.secret_input()
+
     def prompt(self, j) -> str:  # noqa: ARG002
+        if self.nvd.secret_input():
+            return SECRET_PROMPT
         return f"go-live-{self.stage}> "
 
     def lines(self, j) -> list[str]:
         return getattr(self, f"_lines_{self.stage}")(j)
 
     def feed(self, j, line: str) -> None:
+        if self.nvd.secret_input():
+            self.nvd.feed_secret(j, line)
+            return
         getattr(self, f"_feed_{self.stage}")(j, line.strip())
 
     # ── provider ────────────────────────────────────────────────────────────────
@@ -604,6 +616,10 @@ class GoLiveScreen:
             cfg.remote_base = self.export_remote_base
         return cfg
 
+    def _picked_org(self, j) -> str:
+        c = self._picked_candidate(j)
+        return getattr(c, "org", "") if c is not None else ""
+
     def _picked_candidate(self, j):
         cands = self.export_candidates(j)
         return cands[min(self.export_pick, len(cands) - 1)] if cands else None
@@ -648,16 +664,23 @@ class GoLiveScreen:
             out += ["", f"rename map {self.export_rename_map}: {exc}"]
         if cfg is not None:
             out += ["", same_line_heading(), "  " + self._cli_command(j, cfg, "PLAN")]
+        # the GUI step's NVD block: the exported repos carry the SCA jobs
+        out += ["", nvd_key.export_line(self._picked_org(j)),
+                "  NVD API key: " + nvd_key.status_line(), "  " + nvd_key.ACTIVATION_WARNING]
         out += ["", "commands: NUMBER=pick · c FILE=add a config file · r FILE|-=rename "
                 "map (exclude a refused file, extra rules) · v private|public|"
                 "internal=visibility · u refuse|branch=existing repositories · p=plan "
-                "(dry run) · apply ORG=apply (type the org name) · b=back"]
+                "(dry run) · apply ORG=apply (type the org name) · b=back",
+                "          " + NVD_HELP]
         return out
 
     def _feed_export(self, j, line: str) -> None:
         cands = self.export_candidates(j)
         if line.lower() == "b":
             self.stage = "plan"
+            return
+        if self.nvd.handles(line):
+            self.nvd.feed(j, line)
             return
         verb, _, arg = line.partition(" ")
         verb, arg = verb.lower(), arg.strip()

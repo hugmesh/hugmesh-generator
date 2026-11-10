@@ -87,7 +87,8 @@ def test_a_seed_is_placed_as_a_working_checkout(tmp_path, placed):
     assert (result.action, result.error, result.path) == ("seeded", "", str(target))
     assert generator_dir.is_checkout(str(target))
     assert os.access(target / generator_dir.MARKER, os.X_OK), "the builder lost its x bit"
-    assert not os.access(target / "Makefile", os.X_OK)
+    if os.name != "nt":   # Windows has no x bit: os.access(X_OK) is true for any file
+        assert not os.access(target / "Makefile", os.X_OK)
     assert managed_generator.ensure().action == "current"
 
 
@@ -193,6 +194,7 @@ def test_the_copy_lives_under_the_real_home_not_xdg_data_home(monkeypatch, tmp_p
     monkeypatch.delenv(managed_generator.TARGET_ENV, raising=False)
     monkeypatch.setenv("HUGMESH_STUDIO_ALLOW_HOME_STATE_DIR", "1")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))   # expanduser on Windows
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "var-app-data"))
     assert managed_generator.target_dir() == str(
         tmp_path / "home" / ".local" / "share" / "hugmesh-studio" / "generator")
