@@ -92,16 +92,18 @@ BUILDERS=(
 
 # app|git tree it serves|expected ExternalSecret key count|expects a harbor env
 APPS=(
-  "specs/cluster/apps/04-external-secrets-config.yaml|specs/cluster/manifests/external-secrets|126|no"
+  "specs/cluster/apps/04-external-secrets-config.yaml|specs/cluster/manifests/external-secrets|127|no"
   "specs/cluster/apps/12-cloudflared.yaml|specs/cluster/manifests/cloudflared|1|no"
   "specs/cluster/apps/03b-harbor-provision.yaml|specs/cluster/manifests/harbor|0|yes"
 )
 
 # THE EXPECTED CENSUS. Recomputed below from the tree, never taken on faith; the
 # numbers are here so a change that moves one of them has to say so in a diff.
-EXP_TOTAL=148      # every "key: hugmesh/" literal under specs/cluster
-EXP_LIVE=146       # ... minus the 2 commented-out examples in velero-externalsecrets.yaml
-EXP_SERVED=126     # ... carried by apps/04 (files listed in its kustomization resources)
+# 149/147/127: 4e829ae0 (#848, games-bff) and 86ae63f6 (#885, mesh-token-issuer +
+# headscale-admin) each bumped the census from the same base; the merge kept only one bump.
+EXP_TOTAL=149      # every "key: hugmesh/" literal under specs/cluster
+EXP_LIVE=147       # ... minus the 2 commented-out examples in velero-externalsecrets.yaml
+EXP_SERVED=127     # ... carried by apps/04 (files listed in its kustomization resources)
 EXP_CLOUDFLARED=1  # ... carried by apps/12
 EXP_CASDOOR=3      # ... per-DOMAIN, patched by apps/05b's ApplicationSet (slug, not brand)
 EXP_UNSERVED=16    # ... in files NOT listed in resources: azure-intune 3 (commented out,
