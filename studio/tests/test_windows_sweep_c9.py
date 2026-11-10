@@ -357,9 +357,11 @@ def test_a_quoted_egress_conf_is_stored_without_its_quotes_on_windows(monkeypatc
 def test_a_quoted_ca_path_in_the_text_screen_is_added_on_windows(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from hugmesh_studio.tui.journey import VaultScreen
+    from ca_fixtures import CA_ROOT_PEM
     pem = tmp_path / "ca.pem"
-    pem.write_text("-----BEGIN CERTIFICATE-----\naGVsbG8=\n-----END CERTIFICATE-----\n",
-                   encoding="utf-8")
+    # A real certificate: where `cryptography` is installed (Linux CI) the screen
+    # parses the X.509 body, and a dummy block is rightly refused there.
+    pem.write_text(CA_ROOT_PEM, encoding="utf-8")
     _unquote_as(monkeypatch, "nt")
     j = SimpleNamespace(cfg=ImageConfig(), status="")
     VaultScreen._feed_certificate(j, "c", f'"{pem}"')
