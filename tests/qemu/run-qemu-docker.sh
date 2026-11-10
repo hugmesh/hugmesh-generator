@@ -1464,12 +1464,37 @@ save_check_target() {
     # subcommands deliberately run before artifact resolution), so this only
     # fires when the operator named one explicitly on the same command line.
     # It costs nothing and covers an artifacts dir that lives under ${WORK}.
-    if [ -n "${ARTIFACTS}" ]; then
-        arts="$(readlink -m "${ARTIFACTS}")"
-        case "${target}/" in
-            "${arts}"/*) die "REFUSING to save into the artifacts dir ${arts}: that is where the golden build images live" ;;
-        esac
-    fi
+    arts="$(save_in_artifacts_refusal "${target}")"
+    [ -z "${arts}" ] || die "REFUSING to save: ${arts}"
+}
+
+# save_in_artifacts_refusal PATH — print why PATH (a save, to write or to boot) is
+# inside the artifacts dir, or nothing when it is not. The ONE rule for both
+# directions: save_check_target and boot_save_preflight both call it, and
+# core/qemu_devices.save_in_artifacts_refusal is the same rule with the same
+# sentence, so a save the save path accepts boots, and a refused one is refused by
+# both in the same words.
+#
+# Containment alone was the first rule, and it disagreed with itself: the flat
+# layout --artifacts <repo>/out with the DEFAULT --work <repo>/out/qemu-runs puts
+# every save under the artifacts dir, so a mesh save (which never checked) wrote a
+# set --boot-save then refused forever. The carve-out is exactly ${WORK}/saves when
+# that directory itself sits inside the artifacts dir: goldens are discovered only
+# at the TOP of the artifacts dir (discover_rows: *.img, *.img.xz), never down in a
+# nested work tree. Only ${WORK}/saves, not all of ${WORK}, so an artifacts dir that
+# lives UNDER the work dir stays protected.
+save_in_artifacts_refusal() {
+    local real arts saves
+    [ -n "${ARTIFACTS}" ] || return 0
+    real="$(readlink -m "$1")"
+    arts="$(readlink -m "${ARTIFACTS}")"
+    saves="$(readlink -m "${WORK}/saves")"
+    case "${real}/" in "${arts}"/*) ;; *) return 0 ;; esac
+    case "${real}/" in
+        "${saves}"/*) case "${saves}/" in "${arts}"/*) return 0 ;; esac ;;
+    esac
+    printf '%s is inside the artifacts dir %s, where the golden build images live; a save belongs under %s\n' \
+        "${real}" "${arts}" "${saves}"
 }
 
 # save_pick_target SAFE LABEL — resolve the target path, honouring --save-to and
@@ -2261,12 +2286,14 @@ row_matches_filters() {
 # saves live — a path outside it does not exist inside the container), not in the
 # artifacts dir, and its saved KEYS stick + login key beside it.
 boot_save_preflight() {
-    local label path real wreal areal stem rel
+    local label path real wreal in_arts stem rel
     [ "${#BOOT_SAVE_FOR[@]}" -gt 0 ] || return 0
     [ "${MODE}" = "golden" ] || die "--boot-save is golden-mode only (stage4 fabricates its own throwaway disk)"
+    # The test lane (run_row) grades a FIRST boot with assertions.sh and then powers
+    # the guest off: on a resumed disk that is a verdict about the wrong thing, and
+    # a resume nobody can use afterwards. Boot-from-save is a standing-fleet verb.
+    ${KEEP_ALIVE:-false} || die "--boot-save is a --keep-alive lane: the test lane grades a FIRST boot and powers the guest off, so a resumed disk would be graded against first-boot checks and then stopped"
     wreal="$(readlink -m "${WORK}")"
-    areal=""
-    [ -z "${ARTIFACTS}" ] || areal="$(readlink -m "${ARTIFACTS}")"
     for label in "${!BOOT_SAVE_FOR[@]}"; do
         path="${BOOT_SAVE_FOR[${label}]}"
         real="$(readlink -m "${path}")"
@@ -2279,11 +2306,8 @@ boot_save_preflight() {
             "${wreal}"/*) ;;
             *) die "--boot-save ${label}: ${real} is not under --work ${wreal} — the container only mounts --work writable, and saves live in ${wreal}/saves" ;;
         esac
-        if [ -n "${areal}" ]; then
-            case "${real}/" in
-                "${areal}"/*) die "--boot-save ${label}: ${real} is inside the artifacts dir — that is a golden build image, not a save" ;;
-            esac
-        fi
+        in_arts="$(save_in_artifacts_refusal "${real}")"
+        [ -z "${in_arts}" ] || die "--boot-save ${label}: ${in_arts}"
         stem="${real%.qcow2}"
         [ -s "${stem}.keys.img" ] \
             || die "--boot-save ${label}: the saved KEYS stick ${stem}.keys.img is missing — boot-from-save needs a MESH save (core/emulation_save.py writes it); a bare --save-device copy has no stick, and the saved disk does not open with a fresh one"

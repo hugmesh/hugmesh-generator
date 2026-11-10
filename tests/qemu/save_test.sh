@@ -224,7 +224,7 @@ eq "$(sha_of "${SAVE}")" "${SAVE_SHA}" "the save's bytes are unchanged after eve
 echo
 echo "run-qemu-docker.sh --boot-save — parse, preflight, and the saved-rows-only rule"
 BF="${TMP}/runner-bs.sh"; : > "${BF}"
-for fn in boot_save_arg boot_save_preflight boot_save_filter_rows; do
+for fn in save_in_artifacts_refusal save_check_target boot_save_arg boot_save_preflight boot_save_filter_rows; do
     sed -n "/^${fn}() {/,/^}/p" "${RUNNER}" >> "${BF}"
     grep -q "^${fn}() {" "${BF}" || { echo "could not extract ${fn}" >&2; exit 2; }
 done
@@ -241,7 +241,7 @@ bs_run() { # bs_run ROWS_CSV -- ARGS... ; prints "rc=N" + stdout/err + the CPATH
     local rows_csv="$1"; shift
     ( set -u
       info() { echo "INFO: $*"; }; die() { echo "DIE: $*"; exit 1; }
-      MODE="golden"; WORK="${W}"; ARTIFACTS="${TMP}/arts"
+      MODE="golden"; KEEP_ALIVE=true; WORK="${BS_WORK:-${W}}"; ARTIFACTS="${BS_ARTS-${TMP}/arts}"
       declare -A BOOT_SAVE_FOR=() BOOT_SAVE_CPATH=()
       source "${BF}"
       IFS=, read -r -a ROWS <<< "${rows_csv}"
@@ -278,6 +278,38 @@ case "${out}" in *"golden-mode only"*) _ok "--boot-save with --mode stage4 is re
 out="$( ( set -u; info() { :; }; die() { echo "DIE: $*"; exit 1; }; MODE="golden"; WORK="${W}"; ROWS=("0|rpi5|pki|t|a")
           declare -A BOOT_SAVE_FOR=() BOOT_SAVE_CPATH=(); source "${BF}"; boot_save_preflight; boot_save_filter_rows; printf 'ROW %s\n' "${ROWS[@]}" ) 2>&1)"
 eq "${out}" "ROW 0|rpi5|pki|t|a" "without --boot-save the rows are untouched"
+# ROUND 2: save and boot-from-save agree on --artifacts/--work. The flat layout —
+# --artifacts <repo>/out holding the images directly, and the DEFAULT --work
+# <repo>/out/qemu-runs nested in it — put every save "inside the artifacts dir":
+# the save path accepted it, and boot_save_preflight refused the set forever.
+FO="${TMP}/repo/out"; FW="${FO}/qemu-runs"; FSD="${FW}/saves/mesh-2"
+mkdir -p "${FSD}"; : > "${FO}/hugmesh-rpi5-arm64-pki-test-20261105T041211Z.img"
+cp "${SAVE}" "${FSD}/rpi5_pki.qcow2"; echo s > "${FSD}/rpi5_pki.keys.img"; echo k > "${FSD}/rpi5_pki.id_ed25519"
+out="$(BS_WORK="${FW}" BS_ARTS="${FO}" bs_run "0|rpi5|pki|t|a.img" "rpi5/pki=${FSD}/rpi5_pki.qcow2")"
+case "${out}" in *"CPATH rpi5/pki /work/saves/mesh-2/rpi5_pki.qcow2"*) _ok "flat --artifacts out + default --work out/qemu-runs: the saved set boots" ;; *) _bad "flat-layout save refused at boot: ${out}" ;; esac
+sc_run() { # sc_run WORK ARTIFACTS TARGET — the runner's own save-side target rule
+    ( set -u; die() { echo "DIE: $*"; exit 1; }; WORK="$1"; ARTIFACTS="$2"
+      source "${BF}"; save_check_target "$3" && echo ACCEPTED ) 2>&1
+}
+out="$(sc_run "${FW}" "${FO}" "${FSD}/rpi5_pki.qcow2")"
+case "${out}" in ACCEPTED) _ok "...and the save side accepts the same path (they agree)" ;; *) _bad "flat-layout save target refused on save: ${out}" ;; esac
+# Negative control: an artifacts dir that does NOT contain <work>/saves (here the
+# set dir itself) is refused on BOTH sides, in the same sentence.
+want="${FSD}/rpi5_pki.qcow2 is inside the artifacts dir ${FSD}, where the golden build images live; a save belongs under ${FW}/saves"
+out="$(BS_WORK="${FW}" BS_ARTS="${FSD}" bs_run "0|rpi5|pki|t|a.img" "rpi5/pki=${FSD}/rpi5_pki.qcow2")"
+case "${out}" in *"DIE: --boot-save rpi5/pki: ${want}"*) _ok "a save inside an artifacts dir that is not above <work>/saves is refused at boot" ;; *) _bad "boot accepted a save inside the artifacts dir: ${out}" ;; esac
+out="$(sc_run "${FW}" "${FSD}" "${FSD}/rpi5_pki.qcow2")"
+eq "${out}" "DIE: REFUSING to save: ${want}" "...and refused on save, in the same sentence"
+# A save elsewhere under --work is NOT in the carve-out: only <work>/saves is.
+cp "${SAVE}" "${FW}/loose.qcow2"; echo s > "${FW}/loose.keys.img"; echo k > "${FW}/loose.id_ed25519"
+out="$(BS_WORK="${FW}" BS_ARTS="${FO}" bs_run "0|rpi5|pki|t|a.img" "rpi5/pki=${FW}/loose.qcow2")"
+case "${out}" in *"is inside the artifacts dir ${FO}"*) _ok "the carve-out is <work>/saves only, not all of --work" ;; *) _bad "a save outside <work>/saves but inside artifacts booted: ${out}" ;; esac
+out="$(sc_run "${FW}" "${FO}" "${FW}/loose.qcow2")"
+case "${out}" in *"is inside the artifacts dir ${FO}"*) _ok "...and the save side refuses that target too" ;; *) _bad "save side accepted a target outside <work>/saves in artifacts: ${out}" ;; esac
+# --boot-save is a --keep-alive lane: the test lane grades a FIRST boot and powers off.
+out="$( ( set -u; info() { :; }; die() { echo "DIE: $*"; exit 1; }; MODE="golden"; KEEP_ALIVE=false; WORK="${W}"; ARTIFACTS=""
+          declare -A BOOT_SAVE_FOR=([rpi5/pki]="${SD}/rpi5_pki.qcow2") BOOT_SAVE_CPATH=(); source "${BF}"; boot_save_preflight ) 2>&1)"
+case "${out}" in *"is a --keep-alive lane"*) _ok "--boot-save without --keep-alive is refused" ;; *) _bad "--boot-save accepted on the test lane: ${out}" ;; esac
 grep -q '^\s*boot_save_preflight$' "${RUNNER}" && grep -q '^\s*boot_save_filter_rows$' "${RUNNER}" \
     && _ok "the runner calls the preflight and the row filter" || _bad "boot-save preflight/filter defined but never called"
 # Both docker-run sites forward it: drive each row starter, extracted, against a

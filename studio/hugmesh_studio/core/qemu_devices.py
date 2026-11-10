@@ -958,6 +958,41 @@ def _within(path: str, root: str) -> bool:
         return False
 
 
+def save_in_artifacts_refusal(path: str, artifacts_dir: str, work_dir: str = "") -> str:
+    """The ONE "is this save inside the artifacts dir?" rule, or "" when it is not.
+
+    Shared verbatim with run-qemu-docker.sh (``save_in_artifacts_refusal``, used by
+    both ``save_check_target`` and ``boot_save_preflight``), so a save the save path
+    accepts is a save boot-from-save boots, and a refused one is refused by both with
+    the same sentence (:data:`SAVE_IN_ARTIFACTS`).
+
+    Containment alone was the round-1 rule, and it disagreed with itself: the flat
+    layout ``--artifacts <repo>/out`` with the DEFAULT ``--work <repo>/out/qemu-runs``
+    puts every save under the artifacts dir, so the mesh save (which never checked)
+    wrote a set that ``--boot-save`` then refused forever. The carve-out is exactly
+    ``<work>/saves`` when that directory itself sits inside the artifacts dir: the
+    goldens are discovered only at the TOP of the artifacts dir (``*.img``/
+    ``*.img.xz``), never down in a nested work tree, and the work tree already holds
+    multi-GB overlays there. Only ``<work>/saves`` — not all of ``--work`` — so an
+    artifacts dir that lives UNDER ``--work`` (or under its saves dir) stays
+    protected.
+    """
+    if not artifacts_dir or not _within(path, artifacts_dir):
+        return ""
+    saves = saves_dir(work_dir) if work_dir else ""
+    if saves and _within(path, saves) and _within(saves, artifacts_dir):
+        return ""
+    return SAVE_IN_ARTIFACTS.format(
+        path=os.path.realpath(path), arts=os.path.realpath(artifacts_dir),
+        saves=os.path.realpath(saves) if saves else "<work>/saves")
+
+
+#: The refusal sentence, word for word what run-qemu-docker.sh prints for the same
+#: rule (tests/qemu/save_test.sh and test_emulation_boot_from_save.py pin both).
+SAVE_IN_ARTIFACTS = ("{path} is inside the artifacts dir {arts}, where the golden "
+                     "build images live; a save belongs under {saves}")
+
+
 def save_target_refusal(target: str, *, generator_dir: str = "",
                         artifacts_dir: str = "", work_dir: str = "") -> str:
     """Why ``target`` must not be written to, or "" when it is an acceptable save.
@@ -999,9 +1034,9 @@ def save_target_refusal(target: str, *, generator_dir: str = "",
                 "save is the device's whole virtual size, not the data in it")
     if os.path.isdir(target):
         return f"save target {target} is a directory"
-    if artifacts_dir and _within(target, artifacts_dir):
-        return (f"refusing to save into the artifacts directory {artifacts_dir}: it "
-                "holds the golden images every run and every session boots from")
+    in_arts = save_in_artifacts_refusal(target, artifacts_dir, work_dir)
+    if in_arts:
+        return in_arts
     if generator_dir:
         # EVERY sessions tree, not only <generator>/out/sessions: a build pointed at
         # another output folder writes its goldens to <that folder>/sessions, and a

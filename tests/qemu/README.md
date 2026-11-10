@@ -638,9 +638,20 @@ PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation plan --from-save mesh
   never runs beside a fresh worker. A set with a failed device is refused, and so is a
   mesh NIC MAC that differs from the one the saved disk was bound to.
 - The device record names its source (`"boot_save"`), and `mesh-emu-status` shows
-  "resumed from save".
-- `assertions.sh` still runs on a resumed guest. Its checks are written for a FIRST boot,
-  so a resumed row can grade FAIL. Under `--keep-alive` the device stays up either way.
+  "resumed from save". Starting a stopped resumed device again from its record boots
+  the same save, never its golden. A resumed device from a shared-L2 fleet is refused
+  there too, as below.
+- `--boot-save` is a `--keep-alive` lane only; the runner refuses it on the test lane,
+  which grades a FIRST boot and then powers the guest off. `assertions.sh` still runs on
+  a resumed keep-alive guest, and because its checks are written for a first boot, a
+  resumed row can grade FAIL. The device stays up either way.
+- **Where a save may sit.** Saves and boot-from-save share one rule
+  (`save_in_artifacts_refusal`, in the runner and in `core/qemu_devices.py`): a save
+  must not be inside the artifacts dir, except under `<work>/saves` when that directory
+  is itself inside the artifacts dir. So `--artifacts out` with the default
+  `--work out/qemu-runs` (images directly in `out/`) saves and boots. A save the rule
+  refuses is refused by the save, by `plan --from-save` and by the runner, with the same
+  sentence.
 - A set saved from a shared-L2 fleet (`--mesh-net`) is refused by `--from-save`, which
   boots no mesh NIC. Resume it with the runner and the same identity file:
   `run-qemu-docker.sh --keep-alive --mesh-net auto --identities FILE --boot-save …`.

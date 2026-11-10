@@ -382,8 +382,14 @@ def _save_argv(generator_dir: str, work_dir: str, dev: qd.Device, target: str,
     "target must be under the work dir" rule against ITS work dir — so a mesh save
     into a custom ``--work`` must say so or the runner refuses its own target.
     """
+    # artifacts_dir=dev.artifacts: the device RECORD says which artifacts dir it ran
+    # from, and boot-from-save checks the saved disk against exactly that dir (the
+    # manifest carries it into plan_from_save -> --artifacts). Checking the save
+    # without it is how round 1 wrote sets the boot path then refused forever; with
+    # it, both sides apply qemu_devices.save_in_artifacts_refusal to the same facts.
     argv = qd.device_save_argv(generator_dir, dev, target,
-                               overwrite=overwrite, work_dir=work_dir)
+                               overwrite=overwrite, work_dir=work_dir,
+                               artifacts_dir=dev.artifacts)
     if os.path.realpath(work_dir) != os.path.realpath(qd.default_work_dir(generator_dir)):
         argv[1:1] = ["--work", work_dir]
     return argv
@@ -428,8 +434,12 @@ def plan_mesh_save(generator_dir: str, items=None, *, work_dir: str = "",
                      for src, dest, kind in _keys_pairs(work, dev)],
         }
         if not blocker:
-            savable.append(dev)
-            row["argv"] = _save_argv(generator_dir, work, dev, target, overwrite)
+            try:
+                row["argv"] = _save_argv(generator_dir, work, dev, target, overwrite)
+            except ValueError as exc:       # refused target: shown, not raised
+                blocker = row["blocker"] = str(exc)
+            else:
+                savable.append(dev)
         rows.append(row)
     needed = sum(r["budget_bytes"] for r in rows if not r["blocker"])
     return {

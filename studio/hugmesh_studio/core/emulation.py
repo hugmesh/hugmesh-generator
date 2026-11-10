@@ -399,6 +399,14 @@ def plan_from_save(generator_dir: str, save_ref: str,
             f"save-set {sset.session} was saved from {sset.artifacts}, not "
             f"{sess.path}; a saved disk boots with the kernel of the build it came "
             "from — drop --session, or name that one")
+    # The runner's boot_save_preflight applies this same rule to the same three
+    # facts (the disk, --artifacts = sess.path, --work = work) and dies with the
+    # same sentence; refusing here makes `plan --from-save` say so BEFORE `up`
+    # spawns anything, instead of previewing an argv the runner then refuses.
+    for lb, disk in sset.disks:
+        in_arts = qemu_devices.save_in_artifacts_refusal(disk, sess.path, work)
+        if in_arts:
+            raise ValueError(f"--boot-save {lb}: {in_arts}")
     pl = plan(generator_dir, sess, EmulationMode.DEPLOY, envelope,
               work_dir=work, epoch=epoch)
     saved = dict(sset.disks)
@@ -505,7 +513,22 @@ def start_device_argv(plan_or_record, label: str = "", *, generator_dir: str = "
                 "boot a different build than this device came from.")
         work = work_dir or qemu_devices.default_work_dir(gen)
         env = envelope or RunEnvelope(jobs=1)
-        boot_saves = ()
+        # A device that was RESUMED from a save restarts from that same save. Round 1
+        # dropped the record's boot_save here, so Start on a stopped resumed device
+        # booted its golden — a silent first boot, INTERNAL again, with every bit of
+        # state the save carried (a go-live flip included) gone. The save was never
+        # written, so the path still holds exactly what was saved.
+        rec_save = str(getattr(rec, "boot_save", "") or "")
+        if rec_save and str(getattr(rec, "mesh_net", "") or ""):
+            # Same refusal as plan_from_save: this argv boots no mesh NIC, and the
+            # saved disk's mesh0 profile is bound to the MAC it had on the L2.
+            raise ValueError(
+                f"{label} was resumed from {rec_save} on a shared L2 "
+                f"(--mesh-net {rec.mesh_net}); a single-row Start boots no mesh NIC. "
+                "Resume it with the runner and the SAME identity file: "
+                "tests/qemu/run-qemu-docker.sh --keep-alive --mesh-net auto "
+                f"--identities FILE --boot-save {label}={rec_save}")
+        boot_saves = ((label, rec_save),) if rec_save else ()
     opts = _envelope_options(env, artifacts_dir=artifacts, work_dir=work,
                              only_exact=label, keep_alive=True,
                              boot_saves=boot_saves)

@@ -17,6 +17,8 @@ authors and reads:
 Nothing here starts docker, qemu or ssh.
 """
 import json
+import shutil
+import subprocess
 import os
 from types import SimpleNamespace
 
@@ -353,3 +355,237 @@ def test_a_set_saved_from_a_shared_l2_fleet_is_refused_by_name(gen_session, tmp_
     with pytest.raises(ValueError, match=r"shared-L2 fleet \(rpi5/pki ran with "
                                          r"--mesh-net\).*--identities FILE"):
         em.plan_from_save(gen, f"mesh-{STAMP}", work_dir=work)
+
+
+# ── round 2: save and boot-from-save agree on --artifacts/--work ────────────────
+# Round 1 refused at BOOT a set the SAVE path had accepted: with the flat layout
+# `--artifacts <repo>/out` (the build images directly in out/) and the DEFAULT
+# `--work <repo>/out/qemu-runs`, every save sits under the artifacts dir. The mesh
+# save never checked that, wrote artifacts=<repo>/out into the manifest, and the
+# runner's boot_save_preflight then died on "is inside the artifacts dir" — so such
+# a set could never be resumed. Both sides now apply ONE rule
+# (qemu_devices.save_in_artifacts_refusal == run-qemu-docker.sh's function of the
+# same name) to the same facts, and refuse with the same sentence when they refuse.
+
+RUNNER = os.path.join(os.path.dirname(__file__), "..", "..", "tests", "qemu",
+                      "run-qemu-docker.sh")
+_RUNNER_FNS = ("save_in_artifacts_refusal", "save_check_target", "boot_save_arg",
+               "boot_save_preflight", "boot_save_filter_rows")
+
+
+def _runner_fns() -> str:
+    """The runner's own functions, extracted the way tests/qemu/save_test.sh does."""
+    src = open(RUNNER, encoding="utf-8").read().splitlines()
+    out = []
+    for fn in _RUNNER_FNS:
+        start = src.index(f"{fn}() {{")
+        end = src.index("}", start)
+        out += src[start:end + 1]
+    return "\n".join(out) + "\n"
+
+
+def _bash_boot_preflight(work, artifacts, label, disk) -> tuple[int, str]:
+    """Drive the REAL boot_save_preflight on (work, artifacts, label=disk)."""
+    script = (_runner_fns() + 'die() { echo "DIE: $*"; exit 1; }\n'
+              'info() { :; }\nMODE=golden KEEP_ALIVE=true WORK="$1" ARTIFACTS="$2"\n'
+              'declare -A BOOT_SAVE_FOR=() BOOT_SAVE_CPATH=()\n'
+              'boot_save_arg "$3" || exit 3\nboot_save_preflight\n'
+              'for k in "${!BOOT_SAVE_CPATH[@]}"; do echo "CPATH $k ${BOOT_SAVE_CPATH[$k]}"; done\n')
+    proc = subprocess.run(["bash", "-c", script, "bs", work, artifacts,
+                           f"{label}={disk}"], capture_output=True, text=True,
+                          timeout=60)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def _bash_save_check(work, artifacts, target) -> tuple[int, str]:
+    """Drive the REAL save_check_target (the runner's --save-device target rule)."""
+    script = (_runner_fns() + 'die() { echo "DIE: $*"; exit 1; }\n'
+              'WORK="$1" ARTIFACTS="$2"\nsave_check_target "$3" && echo ACCEPTED\n')
+    proc = subprocess.run(["bash", "-c", script, "sc", work, artifacts, target],
+                          capture_output=True, text=True, timeout=60)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+@pytest.fixture
+def flat_out(tmp_path):
+    """A checkout whose build images sit DIRECTLY in out/ (``--artifacts <repo>/out``),
+    with the runner's DEFAULT work dir out/qemu-runs nested inside it."""
+    gen = tmp_path / "gen"
+    out = gen / "out"
+    out.mkdir(parents=True)
+    for name in ("hugmesh-rpi5-arm64-pki-test-20261105T041211Z.img",
+                 "hugmesh-rpi5-arm64-backend-test-20261105T043508Z.img"):
+        (out / name).write_bytes(b"\0")
+    gen_s, out_s = os.path.realpath(gen), os.path.realpath(out)
+    work = qd.default_work_dir(gen_s)
+    assert work == os.path.join(out_s, "qemu-runs")     # the layout under test
+    return gen_s, out_s, work
+
+
+def test_flat_out_layout_saved_set_plans_with_the_default_work(flat_out):
+    """`--artifacts <repo>/out` + the default --work: the save is accepted, and the
+    set it wrote plans (and therefore boots) instead of being refused forever."""
+    gen, out, work = flat_out
+    labels = ("rpi5/pki", "rpi5/backend")
+    _registry(work, out, labels=labels)
+    report = es.save_mesh(gen, None, work_dir="", stamp=STAMP, run=_spy(),
+                          disk_usage=_roomy)
+    assert [r.error for r in report.results] == ["", ""]
+    assert all(r.ok for r in report.results)
+    pl = em.plan_from_save(gen, f"mesh-{STAMP}", epoch=EPOCH)    # default --work
+    argv = em.run_argv(pl)
+    assert argv[argv.index("--artifacts") + 1] == out
+    assert argv[argv.index("--work") + 1] == work
+    assert sorted(lb for lb, _ in pl.boot_saves) == sorted(labels)
+    # ...and the RUNNER's own preflight, on exactly what the plan hands it, agrees.
+    for lb, disk in pl.boot_saves:
+        rc, txt = _bash_boot_preflight(work, out, lb, disk)
+        assert rc == 0, txt
+        assert f"CPATH {lb} /work/saves/mesh-{STAMP}/" in txt
+        # and the runner's save-side target rule accepts the same path
+        rc, txt = _bash_save_check(work, out, disk)
+        assert rc == 0 and "ACCEPTED" in txt, txt
+
+
+def test_a_save_inside_the_artifacts_dir_is_refused_by_both_sides_in_one_sentence(
+        tmp_path):
+    """The negative control: an artifacts dir that is NOT an ancestor of
+    <work>/saves (here the set dir itself) is refused by the Python save path, the
+    plan, the runner's save rule and its boot preflight — with the SAME sentence."""
+    gen = os.path.realpath(str(tmp_path / "gen"))
+    work = os.path.join(gen, "out", "qemu-runs")
+    arts = os.path.join(work, "saves", f"mesh-{STAMP}")      # under --work's saves
+    os.makedirs(arts)
+    disk = os.path.join(arts, "rpi5_pki.qcow2")
+    for suffix, body in ((".qcow2", b"QFI\xfb"), (".keys.img", b"s"),
+                         (".id_ed25519", b"k")):
+        with open(disk[:-len(".qcow2")] + suffix, "wb") as fh:
+            fh.write(body)
+    want = qd.SAVE_IN_ARTIFACTS.format(path=disk, arts=arts,
+                                       saves=os.path.join(work, "saves"))
+    assert qd.save_in_artifacts_refusal(disk, arts, work) == want
+    # an artifacts dir strictly UNDER the saves dir is not covered by the carve-out
+    assert qd.save_in_artifacts_refusal(disk, os.path.dirname(disk) + "/", work)
+    rc, txt = _bash_boot_preflight(work, arts, "rpi5/pki", disk)
+    assert rc == 1 and f"DIE: --boot-save rpi5/pki: {want}" in txt, txt
+    rc, txt = _bash_save_check(work, arts, disk)
+    assert rc == 1 and f"DIE: REFUSING to save: {want}" in txt, txt
+    assert qd.save_target_refusal(disk, artifacts_dir=arts, work_dir=work) == want
+
+
+def test_plan_from_save_refuses_a_set_inside_its_artifacts_dir_at_plan_time(
+        gen_session, tmp_path, capsys):
+    """`plan --from-save` refuses what the runner would refuse, in the runner's
+    words, instead of previewing an argv the runner then dies on."""
+    gen, sess = gen_session
+    work = os.path.realpath(str(tmp_path / "work"))
+    report = _saved_set(gen, sess, work)
+    # Point the set at an artifacts dir that CONTAINS the set dir but not
+    # <work>/saves (an images dir planted in the set dir itself).
+    sdir = report.session_dir
+    for name in os.listdir(sess):
+        with open(os.path.join(sdir, name), "wb") as fh:
+            fh.write(b"\0")
+    rec = json.load(open(report.manifest_path, encoding="utf-8"))
+    for d in rec["devices"]:
+        d["artifacts"] = sdir
+    json.dump(rec, open(report.manifest_path, "w", encoding="utf-8"))
+    first = rec["devices"][0]["label"]
+    want = qd.SAVE_IN_ARTIFACTS.format(
+        path=os.path.join(sdir, qd.save_basename(first)), arts=sdir,
+        saves=os.path.join(work, "saves"))
+    with pytest.raises(ValueError) as exc:
+        em.plan_from_save(gen, f"mesh-{STAMP}", work_dir=work)
+    assert str(exc.value) == f"--boot-save {first}: {want}"
+    assert em.main(["plan", "--generator-dir", gen, "--work", work,
+                    "--from-save", f"mesh-{STAMP}"]) == 1
+    assert f"REFUSED: --boot-save {first}: {want}" in capsys.readouterr().err
+    rc, txt = _bash_boot_preflight(work, sdir, first,
+                                   os.path.join(sdir, qd.save_basename(first)))
+    assert rc == 1 and f"DIE: --boot-save {first}: {want}" in txt, txt
+
+
+def test_the_mesh_save_checks_against_the_records_artifacts_dir(tmp_path):
+    """The save path used to forget what the record knows (Device.artifacts), which
+    is why it accepted sets the boot path refused. It now checks with it: a device
+    that ran from an artifacts dir holding the set dir is refused at SAVE time,
+    with the boot side's sentence, and the plan shows it as a blocker."""
+    gen = os.path.realpath(str(tmp_path / "gen"))
+    work = os.path.join(gen, "out", "qemu-runs")
+    sdir = es.mesh_save_dir(work, es.session_name(STAMP))
+    _registry(work, sdir, labels=("rpi5/pki",))
+    plan = es.plan_mesh_save(gen, None, work_dir="", stamp=STAMP, disk_usage=_roomy)
+    assert "is inside the artifacts dir" in plan["devices"][0]["blocker"]
+    report = es.save_mesh(gen, None, work_dir="", stamp=STAMP, run=_spy(),
+                          disk_usage=_roomy)
+    want = qd.SAVE_IN_ARTIFACTS.format(
+        path=os.path.join(sdir, "rpi5_pki.qcow2"), arts=sdir,
+        saves=os.path.join(work, "saves"))
+    assert [r.error for r in report.results] == [want]
+
+
+def test_a_stopped_resumed_device_restarts_from_its_save(gen_session, tmp_path):
+    """Round 1 dropped the record's boot_save: Start on a stopped RESUMED device
+    booted its golden — INTERNAL again, the save's go-live posture gone."""
+    gen, sess = gen_session
+    work = str(tmp_path / "work")
+    save = os.path.join(work, "saves", f"mesh-{STAMP}", "x86_backend.qcow2")
+    rec = qd.Device(label="x86/backend", platform="x86", role="backend",
+                    container="c", artifacts=sess, boot_save=save, state="stopped")
+    argv = em.start_device_argv(rec, generator_dir=gen, work_dir=work)
+    assert [argv[i + 1] for i, a in enumerate(argv) if a == "--boot-save"] == [
+        f"x86/backend={save}"]
+    assert "--keep-alive" in argv
+    golden = replace_dev(rec, boot_save="")
+    assert "--boot-save" not in em.start_device_argv(golden, generator_dir=gen,
+                                                     work_dir=work)
+    # resumed on a shared L2: this single-row argv boots no mesh NIC -> refused
+    with pytest.raises(ValueError, match=r"shared L2.*--identities FILE"):
+        em.start_device_argv(replace_dev(rec, mesh_net="mcast=239.77.0.1:5000"),
+                             generator_dir=gen, work_dir=work)
+
+
+def replace_dev(dev, **kw):
+    import dataclasses
+    return dataclasses.replace(dev, **kw)
+
+
+def test_boot_save_is_a_keep_alive_lane(tmp_path):
+    """The test lane grades a FIRST boot and powers off; a resumed disk there is
+    graded against the wrong checks. The runner refuses --boot-save without
+    --keep-alive."""
+    work = os.path.realpath(str(tmp_path / "w"))
+    sdir = os.path.join(work, "saves", "mesh-1")
+    os.makedirs(sdir)
+    for suffix in (".qcow2", ".keys.img", ".id_ed25519"):
+        open(os.path.join(sdir, "a" + suffix), "w").write("x")
+    script = (_runner_fns() + 'die() { echo "DIE: $*"; exit 1; }\n'
+              'MODE=golden KEEP_ALIVE=false WORK="$1" ARTIFACTS=""\n'
+              'declare -A BOOT_SAVE_FOR=() BOOT_SAVE_CPATH=()\n'
+              'boot_save_arg "rpi5/pki=$2"\nboot_save_preflight && echo OK\n')
+    proc = subprocess.run(["bash", "-c", script, "x", work,
+                           os.path.join(sdir, "a.qcow2")],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 1 and "is a --keep-alive lane" in proc.stdout
+
+
+@pytest.mark.skipif(not shutil.which("docker")
+                    or subprocess.run(["docker", "info"], capture_output=True,
+                                      timeout=30).returncode != 0,
+                    reason="run-qemu-docker.sh --list needs a reachable docker daemon")
+def test_flat_out_layout_real_runner_lists_the_saved_rows(flat_out):
+    """End to end on the REAL runner: the argv plan_from_save authors for the flat
+    layout, plus --list, exits 0 and lists every row from its save (round 1: rc=1,
+    'is inside the artifacts dir')."""
+    gen, out, work = flat_out
+    _registry(work, out, labels=("rpi5/pki", "rpi5/backend"))
+    es.save_mesh(gen, None, work_dir="", stamp=STAMP, run=_spy(), disk_usage=_roomy)
+    pl = em.plan_from_save(gen, f"mesh-{STAMP}", epoch=EPOCH)
+    argv = em.run_argv(pl)
+    argv[0] = os.path.realpath(RUNNER)
+    proc = subprocess.run(["bash", *argv, "--list"], capture_output=True, text=True,
+                          timeout=120)
+    txt = proc.stdout + proc.stderr
+    assert proc.returncode == 0, txt
+    assert txt.count("from save: ") == 2, txt
+    assert "inside the artifacts dir" not in txt
