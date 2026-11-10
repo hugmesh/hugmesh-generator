@@ -660,6 +660,12 @@ if ns_path:
             existing = {i["metadata"]["name"] for i in json.load(fh).get("items", [])}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         existing = None
+# A list that parses but does not name the store's OWN namespace is not a reading of
+# this cluster (an empty `items`, a truncated answer): the store was just read from
+# that namespace. Trusting it would retire every stored entry at once, so it is
+# treated exactly like a failed read - it retires nothing.
+if existing is not None and os.environ["HALT_FLOOR_NS"] not in existing:
+    existing = None
 
 floor, new_store, added, retired, from_store = {}, {}, [], [], []
 for ns in sorted(live):

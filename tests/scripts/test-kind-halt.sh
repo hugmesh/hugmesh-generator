@@ -127,6 +127,9 @@
 #   M33  the live-only fallback is silent                         (S54)
 #   M34  the store lives in the ArgoCD namespace, off tier 1      (S52)
 #   M35  retirements are not logged                               (S53)
+# Re-run 2026-11-09 against the tree as pushed, plus one new mutant; all killed:
+#   M25a, M26, M27 (as above)                                    (S50/S51, S53, S50)
+#   M36  union: trust a namespace list that does not name kube-system (S53c)
 # NOT CLOSED: the fake has no kyverno, so nothing here proves kyverno deregisters
 # its webhooks when it stops; that is the 2026-09-18 live measurement #561 quotes.
 #
@@ -160,7 +163,7 @@
 # carry prune+selfHeal), pinned as a CALL SEQUENCE by scenario 10, and never
 # exercised against a real controller.
 #
-# 49 scenario fixtures, 207 assertions (counted 2026-11-04). The S-numbers are
+# 50 scenario fixtures, 211 assertions (counted 2026-11-09). The S-numbers are
 # stable identifiers (a failure is grepped by them), so they are NOT renumbered
 # when a scenario is inserted — S36b and S37b are later additions that kill a
 # mutant S36 and S37 could not, and they keep their neighbours' names on purpose.
@@ -1370,6 +1373,18 @@ run_halt; rc=$?
 expect_rc 0 "${rc}" "S53b halt when the namespace list cannot be read"
 expect_eq "$(floor_has gone-ns)" "yes" "S53b an unreadable namespace list retires NOTHING"
 if saw "nothing was retired"; then ok "S53b …and says so"; else bad "S53b did not say why nothing was retired"; fi
+
+# A namespace list that PARSES but names nothing (or not even kube-system, where the
+# store itself was just read from) is not a reading of this cluster either. Without
+# this, an empty `items` would retire every stored entry in one halt.
+scenario floor-store-ns-list-empty
+seed_floor_store kyverno gone-ns
+printf '{"items": []}' > "${SCEN}/namespaces.json"
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S53c halt when the namespace list parses but is empty"
+expect_eq "$(floor_has gone-ns)" "yes" "S53c an empty namespace list retires NOTHING"
+if saw "nothing was retired"; then ok "S53c …and says so"; else bad "S53c did not say why nothing was retired"; fi
+expect_eq "$(record_field floorstore:retirement_checked)" "false" "S53c …and the record says retirement was not checked"
 
 scenario floor-store-unreadable
 seed_floor_store kyverno gone-ns
