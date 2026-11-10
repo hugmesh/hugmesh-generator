@@ -641,6 +641,8 @@ jobs:
           # 2026-10-30: the org release suite (scripts/release.sh, beta and stable, with
           # 29 mutations) takes ~8 min serially; with it, the first leg (17 min on
           # PR #839 with the beta-only suite) would near its 25-minute limit.
+          # 2026-11-09: with the one-command bump (V checks; 50 mutations in all) it is ~10 min
+          # here (586 s), still alone in this leg and well inside the 25-minute limit.
           - part: ', release'
             suites: |
               tests/scripts/test-release-beta.sh

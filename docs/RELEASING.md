@@ -19,7 +19,7 @@ tags every stage in dependency order, releases the Studio at the same version, r
 hugmesh.net and verifies the result. It ends with one table and one line:
 
 ```
-would release 34, already done 4, refused 0 (reasons above), skipped 0; next: scripts/release.sh 0.5.0-beta.1 --apply
+would release 35, already done 4, refused 0 (reasons above), skipped 0; next: scripts/release.sh 0.5.0-beta.1 --apply
 ```
 
 Without a VERSION nothing is bumped: each repository releases what its `main` already

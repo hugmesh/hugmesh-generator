@@ -49,6 +49,16 @@
 #      the tag goes on the release branch's re-read SHA; patches must be the next patch on
 #      an existing release branch; the next-beta PR goes to main; Studio stable is refused;
 #      every stable dry run makes zero writes;
+#   V  the one direct command, scripts/release.sh <VERSION> [selectors]: the beta bump phase
+#      plans/opens ONE draft PR per selected repo on release-bump/<target> (every file
+#      kind: pom with parent and pins, package.json + lock (a >1 MB lock read as a blob),
+#      VERSION, composer.json, the gateway pin, mesh-node, games-shaped mirrors and :jar
+#      names), leaves the Maven chain alone under a literal VERSION and refuses one on
+#      --maven, flags off-line repos, supersedes older bump PRs (and keeps a same-target
+#      one), merges in stage order, tags at the target, resumes --from merge, refuses
+#      -rc.N / stable-on-beta / published / backwards targets before any write, honours
+#      --changed-only and --studio alone, prints ONE summary line with ONE next:, and the
+#      make targets spell the command;
 #   M  the guards are mutation-tested: each is broken in a copy of the script, the check
 #      that covers it must go red, and the copy must really differ from the original.
 #
