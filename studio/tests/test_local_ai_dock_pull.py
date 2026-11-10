@@ -13,13 +13,16 @@ import threading
 
 import pytest
 
-from hugmesh_studio.core import local_ai_models as lam
-from hugmesh_studio.core import local_ai_status as lai
-from hugmesh_studio.core import ollama_docker as odk
-from hugmesh_studio.gui import _local_ai_dock as dock_mod
-from hugmesh_studio.gui import wizard as wizard_mod
-from hugmesh_studio.gui.qt import QtCore
-from test_local_ai_dock import (GENERATOR_DIR, HOST, NORMAL, SMALLEST, button_rects,  # noqa: F401
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding (PySide6/PyQt6) installed")
+
+from hugmesh_studio.core import local_ai_models as lam                 # noqa: E402
+from hugmesh_studio.core import local_ai_status as lai                 # noqa: E402
+from hugmesh_studio.core import ollama_docker as odk                   # noqa: E402
+from hugmesh_studio.gui import _local_ai_dock as dock_mod              # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
+from hugmesh_studio.gui.qt import QtCore                               # noqa: E402
+from test_local_ai_dock import (GENERATOR_DIR, HOST, NORMAL, SMALLEST, button_rects,  # noqa: E402,F401
                                 make_snapshot, open_at, qapp, rect_in, shell, wait_for)
 
 FREE = 120_300_000_000
@@ -273,3 +276,25 @@ def test_the_real_pull_through_the_panel_against_a_loopback_fake(qapp, monkeypat
         dock.close()
     finally:
         fake.close()
+
+
+def test_an_offer_for_a_named_model_stays_until_that_model_is_in(shell, qapp, monkeypatch):
+    """LOCAL_AI_MODEL=qwen3:8b with only qwen3:1.7b pulled: the 404 offer must not
+    vanish at the next poll just because SOME model is pulled."""
+    def prompt_fn(text, history, on_chunk, should_stop):
+        raise lam.NoModel("qwen3:8b", {"OLLAMA_HOST": "127.0.0.1:11434"}, gone=True)
+    _wiz, dock = docked(shell, qapp)
+    dock._prompt_fn = prompt_fn
+    monkeypatch.setattr(lai, "read_snapshot", lambda *a, **k: make_snapshot(
+        models=["qwen3:1.7b"], loaded=[]))
+    dock.prompt.setText("hi")
+    assert dock.send()
+    assert wait_for(qapp, lambda: not dock._busy and dock._error_offer)
+    dock.refresh()
+    assert wait_for(qapp, lambda: dock.snapshot is not None and dock.snapshot.models == ["qwen3:1.7b"])
+    qapp.processEvents()
+    assert not dock.offer_row.isHidden() and dock.pull_btn.text().startswith("Download qwen3:8b (5.2 GB")
+    monkeypatch.setattr(lai, "read_snapshot", lambda *a, **k: make_snapshot(
+        models=["qwen3:1.7b", "qwen3:8b"], loaded=[]))
+    dock.refresh()
+    assert wait_for(qapp, lambda: dock.offer_row.isHidden())

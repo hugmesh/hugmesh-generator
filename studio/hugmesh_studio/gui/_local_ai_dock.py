@@ -1751,8 +1751,11 @@ class LocalAIDock(QtWidgets.QFrame):
         if offer:
             # this face has a button: say so, with the by-hand line for THIS instance
             snap.fix = lam.fix_words(offer, "gui", self._env())
-        elif snap.models:
-            self._error_offer = {}              # a model is there now: nothing to offer
+        elif snap.models and (not self._error_offer.get("gone")
+                              or self._error_offer.get("model") in snap.models):
+            # a model is there now (the named one, when it was a named one that was
+            # missing): nothing to offer
+            self._error_offer = {}
         self._offer = offer or self._error_offer
         if self._offer and self._free_for != self.ollama_mode:
             self._read_free()

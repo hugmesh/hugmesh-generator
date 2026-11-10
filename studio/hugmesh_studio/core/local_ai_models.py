@@ -130,7 +130,8 @@ class NoModel(lai.LocalAIError):
         name = model or RECOMMENDED.name
         self.model = name
         self.gone = gone
-        self.offer = {"model": name, "bytes": size_of(name), "docker": is_docker(env)}
+        self.offer = {"model": name, "bytes": size_of(name), "docker": is_docker(env),
+                      "gone": gone}
         where = where_words(env)
         lead = (f"The model {name} is not pulled into {where}." if gone else
                 f"No model is pulled into {where} yet, so it cannot answer.")
