@@ -165,7 +165,7 @@ def _restyle(win, style, pt):
 
 @pytest.mark.parametrize("style, pt", COMBOS, ids=[f"{s}-{p or 'default'}pt"
                                                   for s, p in COMBOS])
-def test_look_the_step_is_drawn_whole_inside_the_window(wiz, qapp, monkeypatch,
+def test_the_step_is_drawn_whole_inside_the_window(wiz, qapp, monkeypatch,
                                                         tmp_path, style, pt):
     page = _to_page(wiz)
     _import_chain(page, monkeypatch, tca.Chain(tmp_path))

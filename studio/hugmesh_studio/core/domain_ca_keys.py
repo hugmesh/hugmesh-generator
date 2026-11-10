@@ -853,15 +853,6 @@ def materialize(st: DomainCAStore | None = None) -> MaterializedCA | None:
     return m
 
 
-def held_spki(st: DomainCAStore | None = None) -> tuple[bytes, ...]:
-    st = st or store()
-    out = []
-    for e in st.entries():
-        if e.key_pem and e.signing_pem:
-            out.append(_spki(e.signing_cert().public_key()))
-    return tuple(out)
-
-
 _PEM_KEY = re.compile(rb"-----BEGIN ([A-Z0-9 ]*)PRIVATE KEY-----.*?"
                       rb"-----END \1PRIVATE KEY-----", re.S)
 
