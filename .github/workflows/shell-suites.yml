@@ -367,6 +367,16 @@ jobs:
           # 2026-11-04, in alpine:3 with this job's apk set (checkout copied in;
           # busybox grep/sed/diff/cmp): 134 passed / 0 failed. Mutation-tested
           # on a Gentoo host: 23 planted defects, 23 caught.
+          # tests/qemu/golive_emulated_test.sh (2026-11-09): the go-live-on-an-
+          # emulated-device proof lane (tests/qemu/golive-emulated.sh). Hermetic:
+          # `ssh` is a PATH shim that records argv and runs the remote command
+          # against a throwaway guest root with the REAL hugmesh-go-live driver;
+          # it pins loopback-only destinations, plan/commit/rollback argv, commit
+          # and rollback on `ssh -tt` with 'y' typed on a pty, and NO -y /
+          # GL_ASSUME_YES / token on any argv. Needs python3 (pty) only. MEASURED,
+          # 2026-11-09, in alpine:3 (bash python3 coreutils; busybox grep/sed):
+          # 85 passed / 0 failed. Mutation-tested on a Gentoo host: 22 planted
+          # defects in the lane, 22 caught.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
@@ -426,6 +436,7 @@ jobs:
             tests/qemu/qemu-e2e-lane_test.sh
             tests/qemu/display_door_test.sh
             tests/qemu/display_argv_test.sh
+            tests/qemu/golive_emulated_test.sh
             tests/requested-atoms-resolvable.sh
             tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
             tests/scripts/test-anubis-env-gate.sh
