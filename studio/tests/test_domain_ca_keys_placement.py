@@ -300,6 +300,7 @@ import time as _time           # noqa: E402
 from hugmesh_studio.core import secret_files as sf                    # noqa: E402
 
 _CHILD = r"""
+import os
 import sys
 sys.path[:0] = [sys.argv[1], sys.argv[2]]
 from hugmesh_studio.core import domain_ca_keys as dca
@@ -311,7 +312,7 @@ m = dca.materialize(st)
 held = sf.materialize([sf.HeldSecretFile("sb_key", "db.key", "/x/db.key",
                                          (("db.key", b"k"),), "0" * 64)])
 login, _cleanup = sf.stage_local_pass("pw")
-print(m.root, held._root, login.rsplit("/", 1)[0] if "/" in login else login,
+print(m.root, held._root, os.path.dirname(login),
       sep="\n", flush=True)
 sys.stdin.readline()          # hold until the test kills us
 """

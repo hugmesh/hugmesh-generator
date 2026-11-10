@@ -33,3 +33,29 @@ def test_a_finished_pid_is_not_alive_and_ours_is():
     p.wait()
     assert build_sessions._pid_alive(os.getpid()) is True
     assert build_sessions._pid_alive(p.pid) is False
+
+
+def test_a_private_dirs_owner_lock_holds_and_lets_go_on_this_platform(tmp_path,
+                                                                     monkeypatch):
+    """The owner lock (fcntl.flock on POSIX, msvcrt.locking on Windows) keeps the
+    startup sweep off a live dir, and removal still works with the lock file open
+    (Windows cannot delete an open file). PR #938 review, finding 4."""
+    monkeypatch.setattr(secret_files.tempfile, "tempdir", str(tmp_path))
+    held = secret_files.materialize([secret_files.HeldSecretFile(
+        "sb_key", "db.der", "C:/x/db.der", (("db.der", PAYLOAD),), "0" * 64)])
+    path, cleanup = secret_files.stage_local_pass("pw")
+    roots = [held._root, os.path.dirname(path)]
+    later = 10 ** 10                      # far past every grace period
+    assert secret_files.sweep_stale_private_dirs(str(tmp_path), now=later) == []
+    with open(held.paths["sb_key"], "rb") as fh:
+        assert fh.read() == PAYLOAD
+    held.cleanup()
+    cleanup()
+    assert not any(os.path.exists(r) for r in roots)
+    # a dead owner's dir: the lock file is there and free
+    stale = tmp_path / "hugmesh-held-keys-dead"
+    stale.mkdir()
+    (stale / secret_files.OWNER_LOCK).write_bytes(b"1\n")
+    assert secret_files.sweep_stale_private_dirs(str(tmp_path), now=later) \
+        == [str(stale)]
+    assert not stale.exists()
