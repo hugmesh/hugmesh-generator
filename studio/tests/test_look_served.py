@@ -11,6 +11,7 @@ The parametrised door test below removes each committed half in turn and expects
 """
 from __future__ import annotations
 
+import functools
 import importlib.util
 import os
 import re
@@ -21,6 +22,7 @@ import pytest
 
 from hugmesh_studio.core import (brand_look, local_stack_node, look_serving, stack_limits,
                                   view_doors)
+from hugmesh_studio.core import platform_info
 from hugmesh_studio.core.local_stack_node import LocalStackNode
 from hugmesh_studio.core.local_mesh_bootstrap import (LocalMeshBootstrap,
                                                       LocalMeshBootstrapConfig)
@@ -202,9 +204,13 @@ def test_a_bare_node_never_touches_the_looks(gen, fake_make):
     assert _snapshot(_looks(gen)) == before
 
 
-def test_only_a_start_writes_the_looks(gen, fake_make):
+def test_only_a_start_writes_the_looks(gen, fake_make, monkeypatch):
     """A page that holds the EMPTY default config (the e2e page) runs make verbs too;
     only a start may write or clear the folder, so those verbs leave it alone."""
+    # these pin the Linux recipe; the native-Windows refusal is test_windows_sweep_c6's
+    real = platform_info.native_windows_blocker
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(real, osname="posix"))
     LocalMeshBootstrap(gen, _cfg())._stack_node().start()
     before = _snapshot(_looks(gen))
     empty = LocalMeshBootstrap(gen, LocalMeshBootstrapConfig())._stack_node()

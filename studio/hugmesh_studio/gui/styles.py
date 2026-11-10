@@ -12,6 +12,7 @@ from __future__ import annotations
 MUTED = "#8a8a8a"   # secondary / help / description text
 WARN = "#c2410c"    # a degraded-but-usable state that needs attention
 ERROR = "#c5221f"   # a hard failure (matches the tray/progress red)
+OK = "#2e7d32"      # a confirmed-good state (always with words, never colour alone)
 
 
 def muted() -> str:

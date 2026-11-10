@@ -5,6 +5,9 @@
 #
 #   scripts/local-ai.sh up                     start the loopback Ollama if it is down
 #   scripts/local-ai.sh start                  up + the queue worker, both detached
+#   scripts/local-ai.sh pull [MODEL] [--yes]   download a model (default qwen3:1.7b, 1.4 GB)
+#                                              into the Ollama in use; asks first, shows
+#                                              the size and the free space
 #   scripts/local-ai.sh status [--json]        server, model loaded, queue, drafts
 #   scripts/local-ai.sh todo [N] [REPO...] [--watch] [--dry-run]
 #                                              queue the N smallest open issues (default 6,
@@ -222,6 +225,7 @@ case "${1:-help}" in
   chat)          shift; LOCAL_AI_GROUNDED=1 la_py chat ;;
   prompt)        shift; LOCAL_AI_GROUNDED=1 la_py prompt "$@" ;;
   docs)          shift; la_py docs "$@" ;;
+  pull)          shift; la_py pull "$@" ;;
   catalogue)     shift; la_py catalogue "$@" ;;
   watch)         shift; cmd_watch ;;
   help|-h|--help) usage ;;

@@ -87,8 +87,10 @@ import hashlib
 import ntpath
 import os
 import shutil
+import stat
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 
 # The config fields whose browsed selection is held as CONTENT (see the module
@@ -295,12 +297,150 @@ class MaterializedSecretFiles:
     keys_usb. ``cleanup()`` removes the whole tree; callers run it in a ``finally``
     so a failed/cancelled build never leaves key material behind."""
 
-    def __init__(self, root: str, paths: dict[str, str]):
+    def __init__(self, root: str, paths: dict[str, str],
+                 owner: "PrivateDir | None" = None):
         self._root = root
         self.paths = paths
+        self._owner = owner
 
     def cleanup(self) -> None:
-        shutil.rmtree(self._root, ignore_errors=True)
+        if self._owner is not None:
+            self._owner.remove()
+        else:
+            shutil.rmtree(self._root, ignore_errors=True)
+
+
+# ── private temp dirs: an owner lock for their life, and a sweep for the dead ──────
+#: Every prefix a private key/password dir is minted under in TMPDIR. A run removes
+#: its own dir in a ``finally``; a SIGKILL, a power cut or a hard crash skips that,
+#: and before this the plaintext stayed there for good (PR #938 review, finding 4).
+PRIVATE_DIR_PREFIXES = ("hugmesh-held-keys-", "hugmesh-domain-ca-", "hugmesh-login-",
+                        "hugmesh-nvd-", "hugmesh-secret-")
+#: The lock file inside each dir. Its lock is held by the creating process for the
+#: dir's whole life, and the OS drops it when that process dies, however it dies.
+OWNER_LOCK = ".owner.lock"
+#: A dir younger than this is never swept: it may be one being created right now
+#: (between ``mkdtemp`` and its lock), or a pre-lock Studio's that is still in use.
+SWEEP_GRACE_SECONDS = 120
+
+
+def _try_lock(fd: int) -> bool:
+    """Take an exclusive, non-blocking lock on ``fd``. False when another open file
+    holds it, or when this filesystem cannot lock at all (then nobody can, and the
+    sweep reads the dir as live: it never removes a dir it cannot prove dead)."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock_close(fd: int) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+class PrivateDir:
+    """A 0700 ``mkdtemp`` dir that holds its owner lock until :meth:`remove`."""
+
+    def __init__(self, prefix: str):
+        self.path = tempfile.mkdtemp(prefix=prefix)
+        self._fd: int | None = None
+        try:
+            os.chmod(self.path, 0o700)
+            fd = os.open(os.path.join(self.path, OWNER_LOCK),
+                         os.O_RDWR | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_BINARY", 0), 0o600)
+            self._fd = fd
+            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+            _try_lock(fd)      # (a filesystem without locks: see _try_lock)
+        except BaseException:
+            self.remove()
+            raise
+
+    def remove(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            _unlock_close(fd)  # first: Windows cannot delete an open file
+        shutil.rmtree(self.path, ignore_errors=True)
+
+
+def _owner_gone(path: str) -> bool:
+    """True when ``path``'s owner lock can be taken (its process is gone), or when the
+    dir has no lock file at all (a Studio from before the lock)."""
+    lock = os.path.join(path, OWNER_LOCK)
+    try:
+        fd = os.open(lock, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_BINARY", 0))
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    try:
+        return _try_lock(fd)
+    finally:
+        _unlock_close(fd)
+
+
+def sweep_stale_private_dirs(tmp_dir: str | None = None, *, dry_run: bool = False,
+                             grace: float = SWEEP_GRACE_SECONDS,
+                             now: float | None = None) -> list[str]:
+    """Remove the private key/password dirs in ``tmp_dir`` (default: TMPDIR) whose
+    owning process is gone, and return their paths (``dry_run``: list, remove
+    nothing). A dir is removed only when ALL of these hold: its name has a
+    :data:`PRIVATE_DIR_PREFIXES` prefix; it is a real directory (``lstat``: a symlink
+    is never followed); it belongs to this user (POSIX); it is older than ``grace``
+    seconds; and its owner lock is free, or it has none (pre-lock Studio)."""
+    tmp_dir = tmp_dir or tempfile.gettempdir()
+    now = time.time() if now is None else now
+    getuid = getattr(os, "getuid", None)
+    out: list[str] = []
+    try:
+        names = sorted(os.listdir(tmp_dir))
+    except OSError:
+        return out
+    for name in names:
+        if not name.startswith(PRIVATE_DIR_PREFIXES):
+            continue
+        path = os.path.join(tmp_dir, name)
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if not stat.S_ISDIR(st.st_mode):
+            continue
+        if getuid is not None and st.st_uid != getuid():
+            continue
+        if now - st.st_mtime < grace:
+            continue
+        if not _owner_gone(path):
+            continue
+        out.append(path)
+        if not dry_run:
+            shutil.rmtree(path, ignore_errors=True)
+    return out
+
+
+def startup_sweep() -> list[str]:
+    """The Studio's startup call (GUI and TUI entry points): sweep TMPDIR, and never
+    let a sweep problem stop the Studio from starting."""
+    try:
+        return sweep_stale_private_dirs()
+    except Exception:       # noqa: BLE001 - a cleanup must never block startup
+        return []
 
 
 def _write_0600(path: str, data: bytes) -> None:
@@ -321,8 +461,8 @@ def materialize(entries) -> MaterializedSecretFiles:
     ``mkdtemp`` (0700 by contract, re-asserted) / ``<field>/`` (0700) / members at
     0600. Never under the build workdir — that tree is the artifact output the
     operator browses and archives; key material does not belong in it."""
-    root = tempfile.mkdtemp(prefix="hugmesh-held-keys-")
-    os.chmod(root, 0o700)
+    owner = PrivateDir("hugmesh-held-keys-")
+    root = owner.path
     paths: dict[str, str] = {}
     try:
         for e in entries:
@@ -335,9 +475,9 @@ def materialize(entries) -> MaterializedSecretFiles:
             paths[e.field] = base if e.field == "keys_usb" else os.path.join(
                 base, e.members[0][0])
     except BaseException:
-        shutil.rmtree(root, ignore_errors=True)
+        owner.remove()
         raise
-    return MaterializedSecretFiles(root, paths)
+    return MaterializedSecretFiles(root, paths, owner)
 
 
 def stage_local_pass(password: str) -> tuple[str, "Callable[[], None]"]:
@@ -353,15 +493,27 @@ def stage_local_pass(password: str) -> tuple[str, "Callable[[], None]"]:
     only by its owner and root (the builder runs as root), and the caller's cleanup
     removes it when the run ends — success, failure or cancel alike. Same dir/perm
     contract as :func:`materialize`, never under the build workdir."""
-    root = tempfile.mkdtemp(prefix="hugmesh-login-")
-    os.chmod(root, 0o700)
-    path = os.path.join(root, "local-pass")
+    return stage_secret_file("local-pass", password.encode("utf-8"), prefix="hugmesh-login-")
+
+
+def stage_secret_file(name: str, data: bytes,
+                      prefix: str = "hugmesh-secret-") -> tuple[str, "Callable[[], None]"]:
+    """Write ``data`` to ``<PrivateDir 0700>/<name>`` at 0600 for ONE run and return
+    ``(path, cleanup)``; cleanup removes the whole private dir. The shared shape of
+    :func:`stage_local_pass` and the NVD API key's per-run copy
+    (core/nvd_key.materialize_for_run): a secret a script reads from a FILE so it is
+    never on argv or in a container's env. The dir holds its owner lock for its life,
+    so a run that dies by SIGKILL leaves a dir :func:`sweep_stale_private_dirs`
+    removes on the next start — ``prefix`` must be one of
+    :data:`PRIVATE_DIR_PREFIXES` for that to happen."""
+    owner = PrivateDir(prefix)
+    path = os.path.join(owner.path, name)
     try:
-        _write_0600(path, password.encode("utf-8"))
+        _write_0600(path, data)
     except BaseException:
-        shutil.rmtree(root, ignore_errors=True)
+        owner.remove()
         raise
-    return path, (lambda: shutil.rmtree(root, ignore_errors=True))
+    return path, owner.remove
 
 
 # ── restart support ──────────────────────────────────────────────────────────────────

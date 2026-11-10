@@ -114,6 +114,10 @@ TIPS: dict = {
         "Ways to reach it: an internal name, a Tor address or a public name; Tor needs Tor on the node.",
         "The Look tab: a preset, a main and second colour, font, style; empty means inherited from the mesh.",
     ),
+    "domain_ca_keys": (
+        "Import each domain's CA: the signing key goes to the pki stick only, every other stick gets the certificates.",
+        "A root CA key is never taken; import the root certificate and an intermediate signed by it.",
+    ),
     "users_choice": ("Say yes to add user accounts now; generated accounts are written to the session folder.",),
     "users": (
         "Superusers and domain users are generated or typed here; the node key folders land under keys-* after the build.",
@@ -134,7 +138,9 @@ TIPS: dict = {
         "Building streams build.log; a failed build keeps its last lines on Prior sessions under View errors.",
         "You can follow the log in a terminal with tail -F on the session's build.log.",
     ),
-    "fleet": ("The fleet window manages several meshes; each row is a saved mesh.",),
+    "fleet": ("The fleet window manages several meshes; each row is a saved mesh.",
+              "The pen-test's dependency scan needs a free NVD API key; tick a pen-test "
+              "and set the key in the Pen-test harness box."),
     "golive": ("Go live starts the Tor addresses; it opens no public port.",),
     "local_ai": ("Type a question for the local model; docs <question> shows the docs without a model.",),
     "themes": ("Themes preview the look presets; choose one on the domain's Look tab.",),

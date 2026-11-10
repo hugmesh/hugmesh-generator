@@ -1358,7 +1358,9 @@ runner plus the ESO-materialized `image-builder-registry` push credential. The s
 Kaniko builder (PR #110) is the separate per-service-catalog build path.
 
 The OWASP pen-test suite (ZAP + Dependency-Check + nuclei + k6) runs as a GitLab pipeline
-stage, not a deployed CronJob. The pipeline also runs **fail-closed lint/verify gates**
+stage, not a deployed CronJob. Its SCA step (Dependency-Check) needs a free, **activated**
+NVD API key — the `NVD_API_KEY` CI variable / org secret, or the key box in the Studio's
+Fleet window: see [`docs/NVD-API-KEY.md`](docs/NVD-API-KEY.md). The pipeline also runs **fail-closed lint/verify gates**
 before any build:
 `lint:x86-kernel-net-symbols` (the k8s netfilter/NAT fragment can't re-truncate),
 the **`casdoor-jwt-custom-gate`** (mints a real RS256 token against

@@ -42,6 +42,20 @@ class FakeOllama:
         self.garbage_ps = False
         self.tags_body = None
         self.ps_body = None
+        # /api/pull: the NDJSON lines it streams (dicts), the pause between them, and an
+        # HTTP status other than 200 to answer instead. ``pull_adds`` is the model a
+        # pull that reaches its last line adds to /api/tags (as a real one does).
+        self.pull_lines = [
+            {"status": "pulling manifest"},
+            {"status": "pulling aaa", "digest": "sha256:aaa", "total": 1000, "completed": 0},
+            {"status": "pulling aaa", "digest": "sha256:aaa", "total": 1000, "completed": 600},
+            {"status": "pulling aaa", "digest": "sha256:aaa", "total": 1000, "completed": 1000},
+            {"status": "verifying sha256 digest"}, {"status": "writing manifest"},
+            {"status": "success"}]
+        self.pull_delay = 0.0
+        self.pull_status = 200
+        self.pull_adds = True
+        self.pull_served = 0         # lines written by the last pull before it ended
         self.requests = []           # (method, path, body-dict)
         outer = self
 
@@ -112,6 +126,9 @@ class FakeOllama:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
                 outer.requests.append(("POST", self.path, body))
+                if self.path == "/api/pull" and not outer.redirect:
+                    self._pull(body)
+                    return
                 if outer.redirect:
                     self.send_response(302)
                     self.send_header("Location", f"http://127.0.0.1:{outer.port}/bounced")
@@ -141,6 +158,27 @@ class FakeOllama:
                     self.wfile.write(json.dumps({"done": True}).encode() + b"\n")
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+
+            def _pull(self, body):
+                if outer.pull_status != 200:
+                    self._json({"error": "pull refused"}, outer.pull_status)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson")
+                self.end_headers()
+                outer.pull_served = 0
+                try:
+                    for line in outer.pull_lines:
+                        if outer.pull_delay:
+                            time.sleep(outer.pull_delay)
+                        self.wfile.write(json.dumps(line).encode() + b"\n")
+                        self.wfile.flush()
+                        outer.pull_served += 1
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                if outer.pull_adds and outer.pull_lines and \
+                        outer.pull_lines[-1].get("status") == "success":
+                    outer.models.append({"name": body.get("model") or body.get("name")})
 
             def _stream_then_cut(self):
                 """Chunked encoding, every chunk but the last written whole, then the

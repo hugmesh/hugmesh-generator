@@ -50,10 +50,25 @@ from dataclasses import dataclass, field
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
 from ...core import saved_meshes as sm
+from ...core import vaults
+from ...core.local_mesh_bootstrap import LocalMeshBootstrap
 from ._emulation_common import make_table, set_cell
 
 #: plain words for :func:`.saved_meshes.unrecorded_fields` in the overwrite note
 _UNRECORDED_WORDS = {"services": "services", "kind_addons": "DevOps add-ons"}
+
+
+def native_windows_running_mesh() -> str:
+    """Why Start/Restore refuse over a running mesh in a NATIVE Windows Studio ("" anywhere
+    else). There 'Stop mesh' is greyed with the WSL2 sentence, so "stop it first" would
+    send the operator to a button that refuses; and Start/Restore are `make` targets as
+    well. The same check as the page's mesh-state label (teardown_refusal)."""
+    if not LocalMeshBootstrap.teardown_refusal():
+        return ""
+    return ("A local mesh is running, and the Windows build of the Studio cannot stop it "
+            "(Stop runs `make` and bash scripts); stop it where it was started, such as "
+            "the Studio inside WSL2. Start and Restore run `make` and bash scripts too, "
+            "so they cannot run in this Studio either.")
 
 # Symbolic column indices only (network.py's rule).
 (_SM_COL_MESH, _SM_COL_SAVED, _SM_COL_ENV, _SM_COL_SERVICES,
@@ -90,6 +105,53 @@ _CANNOT_RESTORE = (
     "of users added with 'Add user…' (env-only at creation), the exact image bits "
     "after a clean (rebuilt from the tree as it is now), and the .onion after a "
     "clean (its key volume is gone).")
+
+
+def _own_project_refusal(generator_dir: str, rec) -> str:
+    """Why a saved mesh with its own compose project cannot be started/restored from
+    this table now ("" when it can): file checks only (worktree, recorded ports)."""
+    try:
+        from ...core import images_mesh
+        return images_mesh.AlongsideMesh(generator_dir, rec).refusal()
+    except Exception as e:                    # noqa: BLE001 — refuse, never raise
+        return f"this mesh's own worktree could not be checked ({e})"
+
+
+def own_project_stop_gate(generator_dir: str, rec, probe: dict | None) -> tuple[bool, str]:
+    """``(enabled, tooltip)`` of the row's Stop (PR #937 round 4). Stop is for a mesh
+    started beside a node-image build (its own ``hugmesh-img-<id>`` project) whose
+    containers are UP — the row's probe asked docker by that project's label
+    (``probe_state``'s ``mesh_running``). It runs ``images_mesh.AlongsideMesh.stop``:
+    ``make stack-halt`` in its worktree, or — with the worktree gone — ``docker compose
+    -p <project> down`` by label. Volumes are kept either way. The checkout's own
+    hugmesh-local is stopped with the page's 'Stop mesh', never from here."""
+    from ...core import images_mesh
+    if not sm.is_own_project(rec):
+        return False, ("This record runs as this checkout's own mesh "
+                       f"({sm.record_project(rec)}) — stop it with 'Stop mesh' above.")
+    foreign = images_mesh.foreign_record_refusal(rec)
+    if foreign:
+        return False, foreign
+    project = sm.record_project(rec)
+    bad = images_mesh.label_stop_refusal(project)
+    if bad:
+        return False, bad
+    blocker = LocalMeshBootstrap.teardown_refusal()
+    if blocker:
+        return False, blocker
+    if not probe:
+        return False, f"Checking whether {project} is running…"
+    running = probe.get("mesh_running")
+    if running is None:
+        return False, (f"Docker did not say whether {project} is running, so there is "
+                       "nothing this button can be sure to stop.")
+    if not running:
+        return False, f"Nothing of {project} is running — there is nothing to stop."
+    return True, (f"Stop {project} (the mesh started beside its node-image build): its "
+                  "containers go, its data volumes are KEPT. Its worktree's `make "
+                  "stack-halt`, or — when that worktree is gone — `docker compose -p "
+                  f"{project} down` by its compose label. Never this checkout's "
+                  f"{vaults.DEFAULT_PROJECT}.")
 
 
 class SavedMeshProbe(QtCore.QThread):
@@ -141,6 +203,9 @@ class SavedMeshesWidget(QtWidgets.QWidget):
     load_requested = Signal(object)
     #: list[SavedMesh] — the page owns the QThread (own_probe/probe_running).
     probe_needed = Signal(object)
+    #: SavedMesh — Stop a RUNNING mesh started beside a node-image build (its own
+    #: hugmesh-img-<id> project); the page runs images_mesh.AlongsideMesh.stop.
+    stop_requested = Signal(object)
     #: (SavedMesh | None, label) — save the CURRENT mesh: None = a new record, a
     #: record = overwrite that one (already confirmed by the second click). The page
     #: does the capture off-thread and calls :meth:`mark_current` when it is written.
@@ -274,15 +339,19 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         self.start_btn.clicked.connect(self._start)
         self.restore_btn = QtWidgets.QPushButton("Restore (reseed)")
         self.restore_btn.clicked.connect(self._restore)
+        # PR #937 round 4: a mesh started beside a node-image build is stopped HERE
+        # (the reverse-collision refusal on hugmesh-local points at this button)
+        self.stop_btn = QtWidgets.QPushButton("Stop")
+        self.stop_btn.clicked.connect(self._stop)
         self.load_btn = QtWidgets.QPushButton("Load into the form")
         self.load_btn.clicked.connect(self._load)
         self.reveal_btn = QtWidgets.QPushButton("Reveal folder")
         self.reveal_btn.setToolTip("Open the records folder in your file manager.")
         self.reveal_btn.clicked.connect(self._reveal)
-        for col, b in enumerate((self.start_btn, self.restore_btn, self.load_btn,
-                                 self.reveal_btn)):
+        for col, b in enumerate((self.start_btn, self.restore_btn, self.stop_btn,
+                                 self.load_btn, self.reveal_btn)):
             btns.addWidget(b, 0, col)
-        btns.setColumnStretch(4, 1)
+        btns.setColumnStretch(5, 1)
         lay.addLayout(btns)
 
         # DESTRUCTIVE ROW — the vaults_dialog inline confirm: type the record's
@@ -575,7 +644,11 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                 # as "nothing running" and offered Restore over a mesh that may be up;
                 # the page's own `_mesh_up` False is no better evidence (its status()
                 # also reports running=False when docker raises).
-                if self._mesh_up is True:
+                # ONLY for a record of the checkout's own project: a mesh with its
+                # own compose project (node-image flow) is "running" when ITS project
+                # is (the probe asked that); the checkout's mesh blocks it for another
+                # reason, which _render_row states.
+                if self._mesh_up is True and not sm.is_own_project(r.rec):
                     kw["mesh_running"] = True
                 r.plan = sm.restore_plan(r.rec, **kw)
             elif probe:
@@ -610,7 +683,11 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         if not rec.same_checkout(self.generator_dir, self.hostname):
             tip += ("\n\nThis record is from ANOTHER checkout or host — it points "
                     "at another mesh's volumes, so Start is disabled here.")
-        set_cell(self.table, i, _SM_COL_MESH, rec.label or rec.id, tooltip=tip)
+        origin = rec.build_text()          # "from node images (N images)" or ""
+        if origin:
+            tip += f"\n\nSaved {origin}: build session {rec.build.get('session_id') or '—'}."
+        set_cell(self.table, i, _SM_COL_MESH,
+                 (rec.label or rec.id) + (f" — {origin}" if origin else ""), tooltip=tip)
         # The LAST save, as the node-image picker shows it: an Overwrite keeps
         # `created` and moves `updated` (saved-meshes skeptic 3 — the two screens
         # disagreed about when the same record was saved).
@@ -670,7 +747,8 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         self._gate_save(r, gate, busy_tip)
         if r is None:
             for b, ok_tip in ((self.start_btn, ""), (self.restore_btn, ""),
-                              (self.load_btn, ""), (self.delete_btn, "")):
+                              (self.stop_btn, ""), (self.load_btn, ""),
+                              (self.delete_btn, "")):
                 gate(b, False, none_tip, ok_tip)
             self.danger.setVisible(False)
             self.confirm.setEnabled(False)
@@ -680,8 +758,9 @@ class SavedMeshesWidget(QtWidgets.QWidget):
             gate(self.start_btn, False, "This record is unreadable — only Delete applies.", "")
             gate(self.restore_btn, False, "This record is unreadable — only Delete applies.", "")
             gate(self.load_btn, False, "This record is unreadable — only Delete applies.", "")
+            gate(self.stop_btn, False, "This record is unreadable — only Delete applies.", "")
         elif self._busy:
-            for b in (self.start_btn, self.restore_btn, self.load_btn):
+            for b in (self.start_btn, self.restore_btn, self.stop_btn, self.load_btn):
                 gate(b, False, busy_tip, "")
         else:
             rec, plan = r.rec, r.plan
@@ -690,10 +769,19 @@ class SavedMeshesWidget(QtWidgets.QWidget):
                      f"({rec.generator_dir} on {rec.hostname or '?'}) — it points at "
                      "another mesh's volumes. Load it into the form and use "
                      "'Generate && start', or restore it cold.")
+            own = sm.is_own_project(rec)
+            lane_why = _own_project_refusal(self.generator_dir, rec) if own else ""
             if self._mesh_up is True:
-                why = "A local mesh is running — stop it first."
+                why = (native_windows_running_mesh() or (
+                       "This checkout's mesh is running and holds the fixed ports "
+                       f"(Casdoor's 8000) that {sm.record_project(rec)} also publishes "
+                       "— stop it first." if own else
+                       "A local mesh is running — stop it first."))
                 gate(self.start_btn, False, why, "")
                 gate(self.restore_btn, False, why, "")
+            elif lane_why:
+                gate(self.start_btn, False, lane_why, "")
+                gate(self.restore_btn, False, lane_why, "")
             elif plan.mode == sm.MODE_UNKNOWN:
                 gate(self.start_btn, False, plan.sentence, "")
                 gate(self.restore_btn, False, plan.sentence, "")
@@ -714,6 +802,14 @@ class SavedMeshesWidget(QtWidgets.QWidget):
             gate(self.load_btn, True, "",
                  "Put this record's configuration into the form above without "
                  "starting anything. The auth key is never stored and stays as typed.")
+            # NOT gated on this page's _mesh_up: that is hugmesh-local's state, and
+            # stopping a hugmesh-img-* mesh is right whether or not it runs
+            try:
+                stop_on, stop_tip = own_project_stop_gate(self.generator_dir, rec,
+                                                          r.probe)
+            except Exception as e:           # noqa: BLE001 — refuse, never raise
+                stop_on, stop_tip = False, f"Could not check this mesh ({e})."
+            gate(self.stop_btn, stop_on, stop_tip, stop_tip)
         typed = self.confirm.text().strip() == r.label
         gate(self.delete_btn, typed and not self._busy,
              busy_tip if self._busy else
@@ -799,6 +895,12 @@ class SavedMeshesWidget(QtWidgets.QWidget):
         if r is None or r.rec is None or not self.restore_btn.isEnabled():
             return
         self.start_requested.emit(r.rec, sm.MODE_RESEED)
+
+    def _stop(self) -> None:
+        r = self.selected()
+        if r is None or r.rec is None or not self.stop_btn.isEnabled():
+            return
+        self.stop_requested.emit(r.rec)
 
     def _load(self) -> None:
         r = self.selected()

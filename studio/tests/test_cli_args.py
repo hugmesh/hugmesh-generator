@@ -139,10 +139,14 @@ def test_mode_skipped_pages_match_the_page_catalog():
     # services the operator must answer for.
     assert MODE_SKIPPED_PAGES["standalone"] == ("idp", "worklist", "keyzip",
                                                 "domains_choice", "domains",
-                                                "domain_services",
+                                                "domain_services", "domain_ca_keys",
                                                 "users_choice", "users", "vault")
+    # "domain_ca_keys" (the Domain CA keys step) is mesh-only: the KEYS sticks it
+    # fills are a mesh's, and a cloud client takes trust from its stick's certs/.
     assert MODE_SKIPPED_PAGES["cloud"] == ("idp", "worklist",
-                                           "domains_choice", "users_choice", "vault")
+                                           "domains_choice", "users_choice", "vault",
+                                           "domain_ca_keys")
+    assert "domain_ca_keys" not in MODE_SKIPPED_PAGES["mesh"]
     for slug in ("domains", "domain_services", "users"):
         assert slug not in MODE_SKIPPED_PAGES["cloud"], (
             f"cloud must keep its {slug} table — the FD-08 --domains/--person-role tie "

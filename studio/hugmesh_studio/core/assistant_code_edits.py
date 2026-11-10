@@ -92,7 +92,7 @@ class FileEdit:
     changed: int
 
     def new_text(self, old: str) -> str:
-        lines = old.split("\n")
+        lines, eol = _split_lines(old)
         out: list = []
         pos = 0
         for h in self.hunks:
@@ -101,7 +101,19 @@ class FileEdit:
             out += list(h.new_lines)
             pos = start + len(h.old_lines)
         out += lines[pos:]
-        return "\n".join(out)
+        return eol.join(out)
+
+
+def _split_lines(text: str) -> "tuple[list[str], str]":
+    """``(lines, line ending)``. A file whose EVERY line ends in CRLF (what Git for
+    Windows checks out with core.autocrlf, and what Windows editors save) is split on
+    CRLF, so its lines match a diff the model writes with plain newlines, and it is
+    written back with CRLF on every line. Any other file (LF, or a mix) is split on LF
+    and compared byte for byte as before; a stray CR shows in the mismatch."""
+    crlf = text.count("\r\n")
+    if crlf and crlf == text.count("\n"):
+        return text.split("\r\n"), "\r\n"
+    return text.split("\n"), "\n"
 
 
 @dataclass(frozen=True)
@@ -191,7 +203,8 @@ def file_text(ws: Workspace, rel: str, *, max_lines: int = FILES_BLOCK_MAX_LINES
     if b"\0" in data:
         return "", f"{rel} is not a text file"
     text = data.decode("utf-8", "replace")
-    lines = text.split("\n")
+    lines = _split_lines(text)[0]
+    text = "\n".join(lines)               # the model sees, and diffs, plain newlines
     if len(lines) > max_lines:
         text = "\n".join(lines[:max_lines]) + f"\n... ({len(lines) - max_lines} more lines not shown)"
     return redact(text), ""
@@ -320,7 +333,7 @@ def parse_diff(text: str, ws: Workspace) -> "list[FileEdit] | DiffProblem":
             text = _utf8(raw, data)
             if isinstance(text, DiffProblem):
                 return text
-            file_lines = text.split("\n")
+            file_lines = _split_lines(text)[0]
             i += 1
             continue
         hdr = _hunk_header(ln) if ln.startswith("@@") else None
@@ -461,7 +474,7 @@ def apply(edits: "Iterable[FileEdit]", ws: Workspace, state_dir: str) -> "Applie
         text = _utf8(e.path, old)
         if isinstance(text, DiffProblem):
             return text
-        lines = text.split("\n")
+        lines = _split_lines(text)[0]
         for h in e.hunks:
             why = _mismatch(e.path, h.old_start, h.old_lines, lines)
             if why:

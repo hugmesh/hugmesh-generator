@@ -326,6 +326,13 @@ auth "${HELPER}" alice ""; rc=$?
 [ "${rc}" -eq 0 ] && ok "ONLINE: empty password + approval => rc 0" || bad "ONLINE: rc ${rc}; out: $(cat "${CASE}/out"); err: $(tail -3 "${CASE}/err")"
 grep -q 'enter the code ABCD-EFGH' "${CASE}/out" && grep -q '/activate' "${CASE}/out" \
     && ok "ONLINE: the code and URL were shown on the greeter" || bad "ONLINE: code/URL missing: $(cat "${CASE}/out")"
+# The approval page asks a fresh phone/browser to sign in to the IdP (#958
+# follow-up): the greeter must say so, say MFA applies, and say the SSO password
+# goes on that page and never into this greeter's password box.
+grep -q 'on your phone or any browser' "${CASE}/out" && grep -q 'Sign in to 127.0.0.1 there if it asks (MFA applies), then approve' "${CASE}/out" \
+    && grep -q 'SSO password only on that page, never on this screen' "${CASE}/out" \
+    && ok "ONLINE: the greeter says where to sign in (phone/browser, IdP page, MFA) and never here" \
+    || bad "ONLINE: sign-in guidance missing: $(cat "${CASE}/out")"
 grep -q '^useradd .* -G audio,video,usb,plugdev alice$' "${CASE}/log" \
     && ok "ONLINE: account created with audio,video,usb,plugdev and NO wheel" || bad "ONLINE: useradd line: $(grep useradd "${CASE}/log")"
 grep -q '^alice:!:' "${CASE}/etc/shadow" && ok "ONLINE: the SSO-managed account has a LOCKED local password" || bad "ONLINE: shadow: $(grep alice "${CASE}/etc/shadow")"

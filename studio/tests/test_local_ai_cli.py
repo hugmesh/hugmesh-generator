@@ -35,6 +35,14 @@ def cli(args, capsys):
     return rc, cap.out, cap.err
 
 
+def says_how_to_bring_ollama_up(text: str) -> bool:
+    """The fix in the words true on this host: the bash script on Linux, macOS and WSL;
+    Ollama for Windows on native Windows, where the MSI has no bash and no checkout."""
+    if os.name == "nt":
+        return "Ollama for Windows" in text and "local-ai.sh" not in text
+    return "scripts/local-ai.sh up" in text
+
+
 def test_status_prints_the_dock_text_and_exits_zero(fake, env, capsys):
     env.setenv("OLLAMA_HOST", fake.host)
     rc, out, err = cli(["--local-ai-status"], capsys)
@@ -47,7 +55,7 @@ def test_status_prints_the_dock_text_and_exits_zero(fake, env, capsys):
 def test_status_exits_non_zero_with_a_sentence_when_ollama_is_down(env, capsys):
     env.setenv("OLLAMA_HOST", "127.0.0.1:1")
     rc, out, err = cli(["--local-ai-status"], capsys)
-    assert rc == 1 and err.startswith("error: Ollama") and "scripts/local-ai.sh up" in err
+    assert rc == 1 and err.startswith("error: Ollama") and says_how_to_bring_ollama_up(err)
     assert "docs/LOCAL-AI-ASSISTANT.md" in err
     assert "Problem:" in out                         # the screen still says what it can
     rc, out, err = cli(["--local-ai-status", "--json"], capsys)
@@ -65,7 +73,7 @@ def test_status_says_what_is_wrong_when_ollama_dies_mid_reply(fake, env, capsys,
     setattr(fake, *how)
     env.setenv("OLLAMA_HOST", fake.host)
     rc, out, err = cli(["--local-ai-status"], capsys)
-    assert rc == 1 and err.startswith("error: Ollama") and "scripts/local-ai.sh up" in err
+    assert rc == 1 and err.startswith("error: Ollama") and says_how_to_bring_ollama_up(err)
     assert "Traceback" not in err and "Problem:" in out
     rc, out, err = cli(["--local-ai-status", "--json"], capsys)
     assert rc == 1 and json.loads(out)["ok"] is False and json.loads(out)["ollama_up"] is False

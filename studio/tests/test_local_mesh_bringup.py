@@ -13,6 +13,7 @@ Core tests monkeypatch ``subprocess.Popen`` to substitute a bash script for
 ``make`` — the streaming/cancel/timeout machinery under test is the REAL loop
 (select, killpg, deadline), not a re-implementation.
 """
+import functools
 import os
 import subprocess
 import threading
@@ -24,6 +25,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from hugmesh_studio.core import local_stack_node as lsn_mod          # noqa: E402
+from hugmesh_studio.core import platform_info                         # noqa: E402
 from hugmesh_studio.core.local_mesh_bootstrap import (               # noqa: E402
     LocalMeshBootstrap, LocalMeshBootstrapConfig)
 from hugmesh_studio.core.local_stack_node import (                   # noqa: E402
@@ -37,6 +39,18 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 def _node() -> LocalStackNode:
     return LocalStackNode(GENERATOR_DIR)
+
+
+_REAL_BLOCKER = platform_info.native_windows_blocker
+
+
+@pytest.fixture
+def as_linux(monkeypatch):
+    """The tests that take this pin the Linux recipe on any host: on native Windows
+    the m2 verb, its button and Stop refuse with the WSL2 sentence instead, which
+    test_windows_sweep_c6 / _c10 / _localmesh pin."""
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname="posix"))
 
 
 def _fake_make(monkeypatch, script: str):
@@ -138,7 +152,7 @@ def test_the_old_flat_ceiling_would_have_killed_a_cold_build():
     assert WARM_STACK_UP_TIMEOUT_S == 1800
 
 
-def test_m2_bootstrap_runs_the_named_target_with_its_own_ceiling(monkeypatch):
+def test_m2_bootstrap_runs_the_named_target_with_its_own_ceiling(monkeypatch, as_linux):
     node = _node()
     calls = _capture_make(monkeypatch, node)
     ok, _ = node.m2_bootstrap()
@@ -214,7 +228,7 @@ def _drain(qapp, page, timeout_s=15.0):
     assert not page._running, "verb never finished"
 
 
-def test_check_readiness_reports_problems_with_the_m2_pointer(qapp, monkeypatch):
+def test_check_readiness_reports_problems_with_the_m2_pointer(qapp, monkeypatch, as_linux):
     monkeypatch.setattr(LocalMeshBootstrap, "preflight",
                         lambda self: ["cold build required but the local maven "
                                       "registry is not up"], raising=True)
@@ -235,7 +249,7 @@ def test_check_readiness_green_path(qapp, monkeypatch):
     assert "READY" in dlg.log.toPlainText()
 
 
-def test_m2_button_streams_the_build_into_the_log(qapp, monkeypatch):
+def test_m2_button_streams_the_build_into_the_log(qapp, monkeypatch, as_linux):
     monkeypatch.setattr(
         LocalMeshBootstrap, "m2_bootstrap",
         lambda self, on_line=None, cancel=None:
@@ -249,7 +263,7 @@ def test_m2_button_streams_the_build_into_the_log(qapp, monkeypatch):
     assert "[m2] building hugmesh-parent" in text
 
 
-def test_cancel_button_shows_during_a_cancellable_verb_and_stops_it(qapp):
+def test_cancel_button_shows_during_a_cancellable_verb_and_stops_it(qapp, as_linux):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
 
@@ -286,7 +300,7 @@ def test_open_web_ui_opens_the_TLS_front_door(qapp, monkeypatch):
 
 
 # ── Stop says WHAT it did ──────────────────────────────────────────────────────────
-def test_stop_says_nothing_was_running_instead_of_echoing_the_make_env(monkeypatch, tmp_path):
+def test_stop_says_nothing_was_running_instead_of_echoing_the_make_env(monkeypatch, tmp_path, as_linux):
     """`make stack-down` echoes its whole STACK_ENV command line and compose prints
     nothing when there is nothing to remove, so a SUCCESSFUL stop rendered as a wall
     of env vars with no outcome — reported as "tried stopping and nothing happened"."""
@@ -306,7 +320,7 @@ def test_stop_says_nothing_was_running_instead_of_echoing_the_make_env(monkeypat
     assert "STACK_SRC" not in line, "the make env wall leaked into the operator-facing line"
 
 
-def test_stop_reports_what_it_stopped_when_something_was_running(monkeypatch, tmp_path):
+def test_stop_reports_what_it_stopped_when_something_was_running(monkeypatch, tmp_path, as_linux):
     from hugmesh_studio.core.local_stack_node import StackStatus
     monkeypatch.setattr(LocalStackNode, "status",
                         lambda self: StackStatus(running=True, detail="44 container(s)"),
@@ -322,7 +336,7 @@ def test_stop_reports_what_it_stopped_when_something_was_running(monkeypatch, tm
     assert "dropped" not in line
 
 
-def test_a_failed_stop_still_shows_the_error_tail(monkeypatch, tmp_path):
+def test_a_failed_stop_still_shows_the_error_tail(monkeypatch, tmp_path, as_linux):
     from hugmesh_studio.core.local_stack_node import StackStatus
     monkeypatch.setattr(LocalStackNode, "status",
                         lambda self: StackStatus(running=True, detail="3 container(s)"),

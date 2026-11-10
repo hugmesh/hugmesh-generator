@@ -173,6 +173,7 @@ brand.conf
 # Claude Code agent worktrees / scratch — never commit
 .claude/
 scripts/__pycache__/
+scripts/local-ai/__pycache__/
 tests/scripts/__pycache__/
 specs/cluster/manifests/meshbridge/app/__pycache__/
 tests/meshbridge/__pycache__/
@@ -199,3 +200,6 @@ tests/.ungated-lane/
 
 # The TUI stages the login password here (0600, removed when the build ends).
 /.hugmesh-secrets/
+# The generator seed the Flatpak bundles (studio/packaging/make_generator_seed.py
+# writes it here right before flatpak-builder; a release artefact, never committed).
+/studio/packaging/flatpak/generator-seed/
