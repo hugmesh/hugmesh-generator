@@ -482,6 +482,7 @@ jobs:
             tests/scripts/test-password-reset-front-door.sh
             tests/scripts/test-platform-key-spelling.sh
             tests/scripts/test-portage-config-sync.sh
+            tests/scripts/test-prod-gate-env-apps.sh
             tests/scripts/test-provision-manifest-injection.sh
             tests/scripts/test-publish-images.sh
             tests/scripts/test-qt6-keyword-preseeds.sh

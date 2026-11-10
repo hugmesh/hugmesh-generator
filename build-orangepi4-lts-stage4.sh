@@ -254,6 +254,9 @@ source "${SCRIPT_DIR}/scripts/_node-storage-bake-lib.sh"
 # calls anything from either file).
 # shellcheck source=scripts/_optional-services-lib.sh
 source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
+# prod_gate_cluster_tree, called by the Pi builder's gate_env_apps for ENV=prod.
+# shellcheck source=scripts/_prod-gate-lib.sh
+source "${SCRIPT_DIR}/scripts/_prod-gate-lib.sh"
 # shellcheck source=scripts/_node-role-lib.sh
 source "${SCRIPT_DIR}/scripts/_node-role-lib.sh"
 
