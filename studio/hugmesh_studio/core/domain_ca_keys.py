@@ -57,7 +57,12 @@ Safety rules (each one pinned by a test):
   - the key of a certificate that is self-signed BY SIGNATURE: the certificate's
     own public key verifies its signature, whatever its issuer and subject names
     say (a "signing CA" that names a root as issuer but is signed by its own key
-    is that root's key under another name).
+    is that root's key under another name); and
+  - a key that carries a held root's SECRET under another public half
+    (:func:`_shared_root_secret`): an RSA modulus sharing a prime factor with a
+    root's (the same ``n`` under another public exponent is a different SPKI, and
+    it is the root's key), or an EC private scalar that gives a root's public point
+    on the root's own curve.
 
   It is checked on :func:`import_signing`, re-checked on :func:`import_root` for
   ANY domain (so the reverse order -- the key first, the matching root later, even
@@ -67,7 +72,11 @@ Safety rules (each one pinned by a test):
 * the held root is fixed until the domain's CA is removed, in every state (with
   or without a signing CA held): :func:`import_root` refuses a different root,
   and a root bundled with a signing import (PKCS#12 or a combined PEM) must be the
-  held root, byte for byte;
+  held root, byte for byte. A RENAME of the mesh's own domain does not change
+  that either: :func:`rekey_own` moves the own CA through :func:`_admit`, and
+  refuses (nothing moved, the checklist NOT ready, every KEYS step failed with the
+  sentence) when the new name already holds another domain's CA
+  (:func:`rekey_refusal`);
 * the KEYS generation places the signing key only when the go-live checklist
   (:func:`readiness`) is READY: a not-ready checklist fails the pki stick's keys
   step with the reason (:func:`placement_refusal`), it never builds that stick with
@@ -565,7 +574,10 @@ def root_key_invariant_problem(entries) -> str:
     * its certificate must not be signed by its own key (:func:`_signed_by_own_key`,
       names ignored): such a certificate is a root;
     * the key's public half -- and the certificate's, which an import already ties
-      to it -- must not equal the public half of ANY held root, of ANY domain.
+      to it -- must not equal the public half of ANY held root, of ANY domain;
+    * nor may the key carry such a root's secret under another public half
+      (:func:`_shared_root_secret`: an RSA modulus with a common prime factor, an
+      EC scalar reused on the root's curve).
 
     :func:`import_signing` and :func:`import_root` call this with the entries the
     import WOULD leave (so neither order slips through), and :func:`materialize`
@@ -585,14 +597,61 @@ def root_key_invariant_problem(entries) -> str:
         key = serialization.load_pem_private_key(e.key_pem, password=None)
         held = {_spki(key.public_key()), _spki(sc.public_key())}
         for re_, rc in roots:
+            where = ("this domain" if re_.domain == e.domain and re_.own == e.own
+                     else _entry_label(re_))
             if _spki(rc.public_key()) in held:
-                where = ("this domain" if re_.domain == e.domain and re_.own == e.own
-                         else _entry_label(re_))
                 return (f"the signing key for {_entry_label(e)} is the key of the "
                         f"root CA held for {where} ({_cn(rc)}): {_ROOT_KEY_NEVER}, "
                         "whichever domain holds that root and whatever certificate "
                         "carries its key. Import an intermediate with its own key "
                         "as the signing CA")
+            shared = _shared_root_secret(key, rc.public_key())
+            if shared:
+                return (f"the signing key for {_entry_label(e)} {shared} the root CA "
+                        f"held for {where} ({_cn(rc)}), so holding it is holding that "
+                        f"root's private key: {_ROOT_KEY_NEVER}. Import an "
+                        "intermediate with a freshly generated key of its own as the "
+                        "signing CA")
+    return ""
+
+
+def _shared_root_secret(key, root_public) -> str:
+    """"" unless the private ``key`` carries the SECRET of the root whose public key
+    is ``root_public`` while its public half (SPKI) differs -- the shapes an SPKI
+    comparison cannot see (PR #938 refute, round 3):
+
+    * RSA: the two moduli share a prime factor. The same modulus ``n`` under another
+      public exponent is the crafted case (a different SPKI, the root's own ``p`` and
+      ``q``); any common factor is enough, since ``gcd`` then factors the root's
+      modulus and its private exponent follows.
+    * EC: the key's private scalar, used on the ROOT's curve, gives the root's public
+      point (one secret scalar reused on another curve).
+
+    Otherwise "" (no other pair of key types can share a secret this way: Ed25519
+    and Ed448 keys have one curve each, so a reuse is an equal SPKI). Says what is
+    shared, for the refusal sentence."""
+    import math
+
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
+    if isinstance(key, rsa.RSAPrivateKey) and isinstance(root_public, rsa.RSAPublicKey):
+        n_key = key.public_key().public_numbers().n
+        n_root = root_public.public_numbers().n
+        if n_key == n_root:
+            return "has the same RSA modulus (another public exponent) as"
+        if math.gcd(n_key, n_root) != 1:
+            return "shares an RSA prime factor with"
+        return ""
+    if (isinstance(key, ec.EllipticCurvePrivateKey)
+            and isinstance(root_public, ec.EllipticCurvePublicKey)):
+        scalar = key.private_numbers().private_value
+        try:
+            on_root_curve = ec.derive_private_key(scalar, root_public.curve)
+        except (ValueError, TypeError):
+            return ""           # the scalar is out of range for that curve: not reused
+        if _spki(on_root_curve.public_key()) == _spki(root_public):
+            return ("uses the same EC private scalar as" if
+                    key.curve.name == root_public.curve.name else
+                    f"reuses, on {key.curve.name}, the EC private scalar of")
     return ""
 
 
@@ -697,19 +756,61 @@ def own_label(cfg) -> str:
     return own if own else "this mesh's own domain (no name set yet)"
 
 
-def rekey_own(cfg, st: DomainCAStore | None = None) -> None:
+def rekey_refusal(cfg, st: DomainCAStore | None = None) -> str:
+    """"" unless the mesh's own CA cannot follow a rename of the mesh's domain, else
+    why (one sentence: both faces, the checklist and the KEYS step).
+
+    It cannot when the new name is a row that already holds ANOTHER domain's CA
+    (``own=False``): moving the own entry there would overwrite that row, and its
+    held root would be gone with no removal step -- the root is fixed until
+    removal (PR #938 refute, round 3). Nothing is moved; the operator removes that
+    domain's CA, or renames the mesh's domain back."""
+    st = st or store()
+    own = own_domain(cfg)
+    mine = st.own()
+    if mine is None or mine.domain == own:
+        return ""
+    there = st.get(own)
+    if there is None or there.own:
+        return ""
+    held = ("its root CA " + _cn(there.root_cert()) if there.root_pem else
+            "its signing CA " + _cn(there.signing_cert()))
+    return (f"the mesh's own domain was renamed to {own}, which already holds "
+            f"another domain's CA ({held}); the mesh's CA (held for "
+            f"{mine.domain or 'the unnamed own domain'}) was not moved onto it, so "
+            f"neither CA was lost. Remove {own}'s CA on the {STEP_TITLE} step and "
+            "import it again as the mesh's own, or rename the mesh's domain back")
+
+
+def rekey_own(cfg, st: DomainCAStore | None = None) -> str:
     """Keep the own-domain entry keyed by the CURRENT cluster_domain (an operator may
     rename it after importing); extra-domain entries that left the table are dropped
-    so a stale CA can never reach a stick."""
+    so a stale CA can never reach a stick.
+
+    The move goes through :func:`_admit` like any import, and is REFUSED -- nothing
+    moved, the sentence returned -- when the new name already holds another
+    domain's CA (:func:`rekey_refusal`): a rename never silently drops a held root.
+    Returns "" when the store now follows the config."""
     st = st or store()
     own = own_domain(cfg)
     names = {d for d, _own in domain_rows(cfg)}
+    refusal = rekey_refusal(cfg, st)
     for e in st.entries():
         if e.own and e.domain != own:
+            if refusal:
+                continue
+            moved = replace(e, domain=own)
+            # _admit checks the store as the move would leave it: the old key is
+            # gone first, so put the entry back if the move is refused
             st.remove(e.domain)
-            st.put(replace(e, domain=own))
+            try:
+                _admit(st, moved)
+            except CAImportError as exc:
+                st.put(e)
+                refusal = str(exc)
         elif not e.own and e.domain not in names:
             st.remove(e.domain)
+    return refusal
 
 
 # ── imports (every path validates fully before anything is held) ────────────────
@@ -989,6 +1090,10 @@ def readiness(cfg, st: DomainCAStore | None = None, profiles=None,
         label = own_label(cfg) if own else domain
         e = st.get(domain)
         if own:
+            moved = rekey_refusal(cfg, st)
+            if moved:
+                out.append(Check(label, False, moved))
+                continue
             if e is None or not e.signing_pem:
                 out.append(Check(label, False,
                                  "no signing CA imported: each pki stick would mint a "
