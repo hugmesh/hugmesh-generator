@@ -31,7 +31,7 @@ The lanes that need it:
 | Studio Fleet window, pen-test ticked | Studio -> Fleet build -> Pen-test harness | the stored key -> a per-run 0600 copy -> `NVD_API_KEY_FILE` |
 | `make pentest` / `make build-all PENTEST=1` | generator `Makefile` | `NVD_API_KEY_FILE=/path/to/file` |
 | `tests/pentest/dependency-check/run-sca.sh` | the shared wrapper | `NVD_API_KEY_FILE` (preferred) or `NVD_API_KEY` |
-| GitLab `sca` stage in `hugmesh-games` | `hugmesh-games/.gitlab-ci.yml` -> its own `tests/pentest/dependency-check/run-sca.sh` | `NVD_API_KEY` CI variable -> a private `--propertyfile` (hugmesh-games companion PR; before it, `--nvdApiKey` on argv) |
+| GitLab `sca` stage in `hugmesh-games` | `hugmesh-games/.gitlab-ci.yml` -> its own `tests/pentest/dependency-check/run-sca.sh` | `NVD_API_KEY` CI variable -> a private `--propertyfile` once hugmesh/hugmesh-games#68 lands (before it: `--nvdApiKey` on argv, and the key is called optional) |
 | each repository's `make pentest-sca` | per-repo `Makefile` | not wired yet (follow-up): runs keyless and its failure is swallowed |
 
 ## 2. Request a key
