@@ -77,6 +77,7 @@ from ...core.emerge_packages import (
 from ...core.progress_parse import ProgressParser, platform_phases, strip_ansi
 from ...core.stage_tracker import StageTracker
 from ...core.worklist_driver import WorklistDriver
+from ._images_mesh import LocalMeshPanel
 from ._widgets import hold_thread, label_finish_as_exit
 
 # Residual control bytes AFTER strip_ansi() — a bare ESC that formed no complete
@@ -589,6 +590,11 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.total_bar.setMinimumHeight(26)
         self.total_bar.setStyleSheet(self._TOTAL_BAR_QSS.format(chunk="#1a73e8"))  # blue
         lay.addWidget(self.total_bar)
+        # THIS MESH (operator ask 2026-11-09): the dispatch save of the node-image
+        # mesh, and its local copy while the images build. Hidden unless the Build
+        # screen asked for either; nothing in it can fail or stop the build.
+        self.local_mesh = LocalMeshPanel()
+        lay.addWidget(self.local_mesh)
 
         # ── NESTED, DRILLABLE job/stage tree (GitHub-Actions style) — replaces the flat
         # QVBoxLayout-of-QFrames. A QTreeWidget (the established Studio idiom, cf.
@@ -1503,6 +1509,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._manifest_path = ""
         self._keys_done = []
         self.footer.setText("")
+        self.local_mesh.reset()
         self.log_header.setText("Log")
         self.log.setPlainText("")       # the DOCUMENT clears; the widget itself is alive
         self._refresh_log_help()        # back to "no build session yet"
@@ -1603,6 +1610,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._write_status()                  # building 0% -> the tray shows a badge
         if self._session is not None:         # START record: status "running" + pid
             build_sessions.start(self._session)
+        # Save the mesh these images make (and start its local copy) — off-thread and
+        # exception-guarded inside the panel, so neither can delay or fail the build.
+        try:
+            self.local_mesh.begin(self.wiz, self._session)
+        except Exception:                     # noqa: BLE001
+            traceback.print_exc()
         # ASK 16 — hand the run to the process-wide supervisor BEFORE starting it. From
         # here the worker's Qt parent is the supervisor (not this page, not the window)
         # and the supervisor pins the window alive until the run ends, so closing the

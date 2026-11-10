@@ -1893,6 +1893,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                                          expanded=False)
         self.saved_meshes.section = self.saved_section
         self.saved_meshes.start_requested.connect(self._start_saved)
+        self.saved_meshes.stop_requested.connect(self._stop_saved_own)
         self.saved_meshes.load_requested.connect(self._load_saved)
         self.saved_meshes.probe_needed.connect(self._probe_saved)
         # THE CURRENT MESH (operator, 2026-10-21: "Saved meshes screen does not give
@@ -4400,11 +4401,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self._refuse(f"Still running: {self._running_label or 'a verb'}. "
                                 "Wait for it to finish, or Cancel.")
             return
+        own_project = saved_meshes.is_own_project(rec)
         if self._mesh_up is True:
-            self._refuse(native_windows_running_mesh()
-                         or "A local mesh is running — stop it first. Starting "
-                                "a saved mesh over a live one would bring up a "
-                                "second stack on the same compose project.")
+            self._refuse(
+                native_windows_running_mesh() or (
+                f"This checkout's mesh ({vaults.DEFAULT_PROJECT}) is running — stop "
+                f"it first. '{rec.label or rec.id}' runs as its own compose project "
+                f"{saved_meshes.record_project(rec)}, but it publishes the same "
+                "fixed ports (Casdoor's 8000), so the two cannot run at once."
+                if own_project else
+                "A local mesh is running — stop it first. Starting "
+                "a saved mesh over a live one would bring up a "
+                "second stack on the same compose project."))
+            return
+        if own_project:
+            # A mesh with its OWN compose project (the node-image flow's
+            # hugmesh-img-<id>): driven through for_record — its project, its ports,
+            # its worktree — and never through this page's form or `self.boot`,
+            # which drive this checkout's hugmesh-local. A worktree or ports that are
+            # gone refuse here with one sentence; nothing falls back to the checkout.
+            self._start_own_project_saved(rec, mode)
             return
         # THE PER-DOMAIN SERVICES GATE (#494/#495), SECOND DOOR. Saved meshes ->
         # Start/Restore brings a docker mesh up on the same compose project
@@ -4468,6 +4484,60 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                          lambda on_line, cancel: boot.restore(
                              rec, on_line=on_line, cancel=cancel),
                          stream=True, cancellable=True, verb="")
+
+    def _start_own_project_saved(self, rec, mode: str) -> None:
+        """Start/Restore of a saved mesh with its own compose project (see
+        :meth:`_start_saved`). The form, ``self.boot`` and ``_loaded_record_id`` are
+        left alone: this page's verbs keep driving the checkout's mesh."""
+        cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
+        refusal = self._saved_domain_services_refusal(rec, cfg)
+        if refusal:
+            self._refuse(refusal)
+            return
+        boot = LocalMeshBootstrap.for_record(self.generator_dir, rec)
+        if boot.lane_refusal:
+            self._refuse("Cannot start the saved mesh: " + boot.lane_refusal)
+            return
+        problems = boot.validate()
+        if problems:
+            self._refuse("Cannot start the saved mesh: " + "; ".join(problems))
+            return
+        label = rec.label or rec.id
+        where = f"compose project {boot.project}, worktree {boot.generator_dir}"
+        if mode == saved_meshes.MODE_START:
+            self._note(f"[saved-mesh] starting '{label}' ({where}) — reattaching its "
+                       "data volumes; nothing is re-minted or re-seeded …")
+            self._launch(f"Starting saved mesh {label}",
+                         lambda on_line, cancel: boot.start_saved(
+                             rec, on_line=on_line, cancel=cancel),
+                         stream=True, cancellable=True, verb="")
+        else:
+            self._note(f"[saved-mesh] restoring '{label}' ({where}) — bringing it up "
+                       "and seeding it again; credentials are NOT re-minted …")
+            self._launch(f"Restoring saved mesh {label}",
+                         lambda on_line, cancel: boot.restore(
+                             rec, on_line=on_line, cancel=cancel),
+                         stream=True, cancellable=True, verb="")
+
+    def _stop_saved_own(self, rec) -> None:
+        """Saved meshes -> Stop of a mesh started beside a node-image build (PR #937
+        round 4): the ONE stop path the CLI ``images_mesh stop <id>`` and
+        ``for_record(...).down()`` share (:meth:`.images_mesh.AlongsideMesh.stop`) —
+        its worktree's ``make stack-halt``, or by compose project label when that
+        worktree is gone. Never this page's ``self.boot`` (the checkout's mesh), never
+        the tailnet overlay; volumes are kept. The row re-probes when it ends."""
+        from ...core import images_mesh
+        label = rec.label or rec.id
+        refusal = (images_mesh.foreign_record_refusal(rec)
+                   or images_mesh.label_stop_refusal(saved_meshes.record_project(rec))
+                   or LocalMeshBootstrap.teardown_refusal())
+        if refusal:
+            self._refuse(f"Cannot stop '{label}': {refusal}")
+            return
+        lane = images_mesh.AlongsideMesh(self.generator_dir, rec)
+        self._note(f"[saved-mesh] stopping '{label}' (compose project {lane.project}) — "
+                   "its data volumes are kept; this checkout's mesh is not touched …")
+        self._launch(f"Stopping saved mesh {label}", lane.stop, verb="")
 
     def _open_vaults(self):
         """Open the Vaults & managed-volumes manager.
