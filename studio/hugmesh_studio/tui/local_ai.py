@@ -44,10 +44,9 @@ from ..core import assistant_tips as atips
 from ..core import local_ai_models as lam
 from ..core import local_ai_status as lai
 from ..core import ollama_docker as odk
-from ..core import platform_info
 
 __all__ = ["OPEN_COMMAND", "FOOTER_KEY", "LocalAIScreen", "Standalone", "status_line",
-           "plain_status_line", "native_windows_note", "windows_advice"]
+           "plain_status_line"]
 
 #: Typed into either face, it opens the screen. Hyphenated so it cannot collide with a
 #: value a journey step asks for.
@@ -92,51 +91,6 @@ def plain_status_line(env: dict | None = None, slug: str = "") -> str:
     return f"[{lai.quick_line(env)} | type {OPEN_COMMAND}]" + _footer_tip(slug)
 
 
-def native_windows_note(osname: str | None = None) -> str:
-    """What replaces the run-it-yourself ``scripts/local-ai.sh`` lines in a NATIVE
-    Windows Studio (the MSI); "" anywhere else, WSL included. Shared with the Studio
-    window's panel, so both faces say the same.
-
-    Every one of those lines (start, todo, chat) is the bash script, which PowerShell
-    cannot run and System32's bash runs inside the Linux VM where a C:\\ path means
-    nothing; the panel's own questions go to Ollama over HTTP and need none of it."""
-    said = platform_info.native_windows_blocker(
-        "The local assistant's queue worker", osname=osname,
-        runs="the bash script scripts/local-ai.sh")
-    return f"{said} {lai.WINDOWS_NATIVE_PATH}" if said else ""
-
-
-#: core/local_ai_status's "bring Ollama up" advice names the bash script. In a native
-#: Windows Studio the system Ollama is Ollama for Windows, a native app; in Docker mode
-#: it is the Studio's own container. (old, system-mode new, Docker-mode new)
-_WINDOWS_UP = (
-    (", then run: scripts/local-ai.sh up",
-     "; Ollama for Windows then runs in the background on its own",
-     "; or start the Studio's Ollama container (Start local assistant, or start in the "
-     "text UI)"),
-    ("Start it with: scripts/local-ai.sh up",
-     "Start Ollama for Windows from the Start menu.",
-     "Start the Studio's Ollama container (Start local assistant, or start in the text "
-     "UI)."),
-    ("Start it with scripts/local-ai.sh up",
-     "Start Ollama for Windows from the Start menu",
-     "Start the Studio's Ollama container (Start local assistant, or start in the text "
-     "UI)"),
-)
-
-
-def windows_advice(text: str, mode: str = "", osname: str | None = None) -> str:
-    """``text`` (a snapshot's fix, or the not-answering message) with its
-    ``scripts/local-ai.sh up`` advice replaced by what works in a native Windows
-    Studio; unchanged anywhere else. ``mode`` is the Ollama in use (odk.SYSTEM /
-    odk.DOCKER): in Docker mode the container, not Ollama for Windows, is the fix."""
-    if not text or not native_windows_note(osname):
-        return text
-    for old, system, docker in _WINDOWS_UP:
-        text = text.replace(old, docker if mode == odk.DOCKER else system)
-    return text
-
-
 _HELP = [
     "type a question and press Enter to ask the local model (it stays on this machine)",
     "  start      start the local Ollama and the queue worker",
@@ -148,6 +102,17 @@ _HELP = [
     "  clear      forget the conversation",
     "  q          back",
 ]
+#: The ``start`` line where windows_worker_note() is said (native Windows): there System
+#: mode starts nothing and Docker mode starts only the container, never the worker.
+_WINDOWS_START_HELP = ("  start      in Docker mode, start the Studio's Ollama container "
+                       "(the queue worker needs WSL2)")
+
+
+def _help_lines(windows: bool) -> list[str]:
+    """The help under the screen; ``windows`` = the native-Windows note is shown."""
+    if not windows:
+        return list(_HELP)
+    return [_WINDOWS_START_HELP if ln.startswith("  start ") else ln for ln in _HELP]
 
 
 class LocalAIScreen:
@@ -278,22 +243,15 @@ class LocalAIScreen:
                     out += ["", "Tip: " + atips.tip_for(self.where_page_only(j))]
         except Exception:                # noqa: BLE001
             pass
-        mode = odk.current_mode()
-        if snap is not None and snap.fix:
-            # format_status printed the fix verbatim: swap the bash advice in place
-            fix = windows_advice(snap.fix, mode)
-            if fix != snap.fix:
-                out = [ln.replace(snap.fix, fix) for ln in out]
-        out += ["", odk.describe(mode)]
-        note = native_windows_note()
+        out += ["", odk.describe(odk.current_mode())]
+        note = lai.windows_worker_note()
         if note:
-            # the .sh lines below are bash: PowerShell cannot run them (an unquoted
-            # path with spaces besides), so say what is true here instead
+            # the lines below are the bash script: PowerShell cannot run them (an
+            # unquoted path with spaces besides), so say what is true here instead
             out += ["", note, ""]
         else:
             cmds = odk.commands_for(self.generator_dir)
-            out += ["", "Run it yourself:  " + cmds["todo"],
-                    "                  " + cmds["chat"], ""]
+            out += ["", "Run it yourself:  " + cmds["todo"], "                  " + cmds["chat"], ""]
         if getattr(self, "warning", ""):
             # above the conversation: the transcript shows only its last 12 lines, and a
             # long answer would push a warning above the answer out of view
@@ -302,7 +260,7 @@ class LocalAIScreen:
             out += ["conversation:"] + [f"  {t}" for t in self.transcript[-12:]] + [""]
         if self.message:
             out += [self.message, ""]
-        return out + _HELP
+        return out + _help_lines(bool(note))
 
     def where_page_only(self, j) -> actxt.Where:
         """The page half only (no file reads): for the tip line."""
@@ -384,7 +342,7 @@ class LocalAIScreen:
         try:
             answer = self._ask(j, line.strip())
         except lai.LocalAIError as exc:
-            self.message = windows_advice(str(exc), odk.current_mode())
+            self.message = str(exc)
             if isinstance(exc, lam.NoModel):
                 # the offer, in this screen's word; the question is remembered
                 self._pull_offer = dict(exc.offer)

@@ -360,13 +360,18 @@ class Problem:
     code: str
     what: str
     fix: str
-    doc: str                     # path#anchor inside the repository
+    doc: str                     # path#anchor inside the repository (a URL on Windows)
 
     def text(self) -> str:
         return f"{self.what} {self.fix}"
 
 
-def _doc(anchor: str) -> str:
+def _doc(anchor: str, osname: Optional[str] = None) -> str:
+    """Where the doc says more. The repository path on Linux; on native Windows the
+    same section as a URL, since the MSI ships no checkout to hold that path."""
+    if (os.name if osname is None else osname) == "nt":
+        from .local_ai_status import DOC_URL
+        return f"{DOC_URL}#{anchor}"
     return f"{DOC_PATH}#{anchor}"
 
 
@@ -384,7 +389,7 @@ def diagnose(pr: Probe, agent: str = "claude", model: str = "",
             "ollama_missing",
             "Ollama is not installed: no `ollama` command was found.",
             "Install it (docs section 2), then press Re-check.",
-            _doc("2-install-ollama-cli")))
+            _doc("2-install-ollama-cli", osname)))
     if not pr.server_up:
         why = f" ({pr.server_error})" if pr.server_error else ""
         out.append(Problem(
@@ -402,7 +407,7 @@ def diagnose(pr: Probe, agent: str = "claude", model: str = "",
              "Start it on this machine only: OLLAMA_HOST=127.0.0.1:11434 "
              "OLLAMA_CONTEXT_LENGTH=32768 setsid ollama serve >~/.cache/ollama-serve.log "
              "2>&1 &  (docs section 3), then press Re-check."),
-            _doc("3-start-the-server")))
+            _doc("3-start-the-server", osname)))
     else:
         local = pr.local_models
         if not local:
@@ -411,37 +416,37 @@ def diagnose(pr: Probe, agent: str = "claude", model: str = "",
                      "servers, not this PC.)" if cloud else "")
             out.append(Problem(
                 "no_models", "The server answers, but no model is pulled." + extra,
-                _download_fix(pr), _doc("4-pick-a-model")))
+                _download_fix(pr), _doc("4-pick-a-model", osname)))
         elif not pr.usable_models:
             names = ", ".join(m.name for m in local[:4]) + (", ..." if len(local) > 4 else "")
             out.append(Problem(
                 "no_tools_model",
                 f"None of the pulled models ({names}) has the tools capability, which "
                 "an agent needs to read files and run commands.",
-                _download_fix(pr), _doc("4-pick-a-model")))
+                _download_fix(pr), _doc("4-pick-a-model", osname)))
         elif model:
             chosen = next((m for m in pr.models if m.name == model), None)
             if chosen is None:
                 out.append(Problem(
                     "model_gone", f"The model {model} is not pulled any more.",
                     "Pick another from the list, or press Re-check.",
-                    _doc("4-pick-a-model")))
+                    _doc("4-pick-a-model", osname)))
             elif chosen.cloud:
                 out.append(Problem(
                     "model_cloud",
                     f"{model} runs on Ollama's servers, not on this PC.",
                     "Pick a local model: the prompt and the code would leave the "
-                    "machine otherwise (docs section 4).", _doc("4-pick-a-model")))
+                    "machine otherwise (docs section 4).", _doc("4-pick-a-model", osname)))
             elif not chosen.tools:
                 out.append(Problem(
                     "model_no_tools",
                     f"{model} does not have the tools capability, so it cannot drive "
                     "an agent.", "Pick a model marked with tools.",
-                    _doc("4-pick-a-model")))
+                    _doc("4-pick-a-model", osname)))
     spec = AGENTS.get(agent)
     if spec is None:
         out.append(Problem("agent_unknown", f"{agent} is not an agent this card starts.",
-                           "Pick one from the list.", _doc("63-other-assistants")))
+                           "Pick one from the list.", _doc("63-other-assistants", osname)))
     elif not pr.agents.get(agent):
         out.append(Problem(
             "agent_missing",
@@ -449,11 +454,12 @@ def diagnose(pr: Probe, agent: str = "claude", model: str = "",
             f"`ollama launch {agent}` needs it.",
             f"Install {spec['label']} so `{spec['command']}` is on your PATH "
             "(docs section 6.2), then press Re-check.",
-            _doc("62-claude-code-on-the-local-model-verified")))
+            _doc("62-claude-code-on-the-local-model-verified", osname)))
     if source is not None and not source.ok:
         out.append(Problem("source", source.reason,
                            "Pick another app, or download / point at the source first.",
-                           _doc("61-give-the-assistant-a-copy-never-your-working-checkout")))
+                           _doc("61-give-the-assistant-a-copy-never-your-working-checkout",
+                                osname)))
     return out
 
 

@@ -489,6 +489,21 @@ def test_the_files_of_a_code_edit_keep_their_routes_and_paths(tmp_path, monkeypa
     assert body in p.system and str(home) not in p.system and "~/x/y" in p.system
 
 
+@pytest.mark.parametrize("strict", [False, True])
+def test_a_drive_path_after_a_comment_opener_is_its_own_path(strict):
+    """Windows: in `/* C:\\Users\\<user>\\... */` the drive path was read as the second
+    word of a spaced folder name starting at "/*", so it reached the model whole, user
+    name included (the test above, on Windows). Literal paths: checked on every OS."""
+    home = "C:\\Users\\jane"
+    out = ap.scrub_paths("const a = 1; /* C:\\Users\\jane\\proj\\x\\y.ts */", home=home, strict=strict)
+    assert "jane" not in out and "~/proj/x/y.ts" in out and out.startswith("const a = 1; /* ")
+    other = ap.scrub_paths("see /* D:\\work\\jane\\a\\b.txt */", home=home, strict=strict)
+    if strict:                    # machine text: any other drive path keeps its last two parts
+        assert "jane" not in other and "b.txt" in other
+    else:                         # repo text: a path outside the home folder stays whole
+        assert other == "see /* D:\\work\\jane\\a\\b.txt */"
+
+
 def test_a_build_output_folder_on_another_disk_never_reaches_the_model(tmp_path, monkeypatch):
     """Round 6: cfg.output_dir on /mnt put `log /mnt/bigdisk/...` and the error tail's
     /var/tmp/portage and /media/<user> paths into the system message unchanged."""
