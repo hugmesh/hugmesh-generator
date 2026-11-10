@@ -12,22 +12,31 @@
 # the permissions and not only in the release notes:
 #
 #   The Studio is a FRONT END over host tooling. It shells out to docker, make, bash,
-#   qemu, kubectl, lsblk and ssh, and it reads the build scripts and cluster specs out
-#   of a hugmesh-generator checkout on the host. A sandbox that could not reach any of
-#   that would install cleanly and then be unable to do the one thing it is for.
+#   qemu, kubectl, lsblk and ssh, and it runs the build scripts and cluster specs of a
+#   hugmesh-generator tree. A sandbox that could not reach any of that would install
+#   cleanly and then be unable to do the one thing it is for.
 #
-#   So this manifest asks for --filesystem=host (to read the checkout and write build
-#   output) and --talk-name=org.freedesktop.Flatpak (to run host commands via
-#   flatpak-spawn --host). Those are broad permissions and they are listed with their
-#   reasons below rather than buried. An operator who does not want to grant them can
-#   run the Studio from a checkout instead — it needs no installer.
+#   So this manifest asks for --filesystem=host (the generator tree and build output
+#   must be HOST paths: the host's docker mounts them) and --talk-name=org.freedesktop.Flatpak
+#   (to run host commands via flatpak-spawn --host). Those are broad permissions and
+#   they are listed with their reasons below rather than buried. An operator who does
+#   not want to grant them can run the Studio from a checkout instead.
 #
-#   WHAT THAT BUYS TODAY, measured on the installed 1.0.0 bundle (2026-09-30, on a host
-#   that has Docker): the Studio starts, draws its wizard and answers --print-specs, but
-#   it cannot use the host's Docker. Nothing in the code calls flatpak-spawn --host, so
-#   inside the sandbox `docker` is not on PATH, the Studio detects no backend and tells
-#   the user "This machine can't build images yet". The permission is granted; the
-#   application does not use it. Building images from the Flatpak needs that code first.
+#   HOW THE INSTALLED STUDIO USES THEM (0.4.1 and later):
+#   * THE GENERATOR TREE IS BUNDLED. The second and third sources below are a
+#     `git archive` of the whole generator repository at this release
+#     (studio/packaging/make_generator_seed.py, run by the release workflow and by
+#     build-flatpak-local.sh before flatpak-builder) and its per-file sha256 list. They
+#     are installed to /app/share/hugmesh-studio/, and on its first start of a release
+#     the Studio places them in ~/.local/share/hugmesh-studio/generator
+#     (core/managed_generator.py): /app is read-only and does not exist on the host, so
+#     the tree cannot be used from there. An operator's own clone still wins.
+#   * HOST COMMANDS GO THROUGH flatpak-spawn --host (core/flatpak_host.py): docker,
+#     make, git, qemu, kubectl and the generator's scripts run on the host, with the
+#     environment passed through --env-fd. Builds use the host's Docker; the native
+#     (sudo) backend and device flashing are not offered from the sandbox, and the
+#     Studio says why. Measured on 2026-11-09: the installed app found the host's
+#     Docker 29.9.0, KVM and Gentoo through this route.
 app-id: org.hugmesh.ImageStudio
 runtime: org.kde.Platform
 # The newest KDE branch Flathub offers that is not end-of-life (read with
@@ -58,10 +67,8 @@ finish-args:
   # config. There is no narrower grant that works: the checkout path is chosen by the
   # operator at first run and is different on every machine.
   - --filesystem=host
-  # Lets the app run host commands (docker, make, qemu, kubectl) through
-  # flatpak-spawn --host. Granted but not used yet: the Studio never calls
-  # flatpak-spawn (see the measurement at the top), so holding this does not change what
-  # the app can do today.
+  # Lets the app run host commands (docker, make, qemu, kubectl, the generator's
+  # scripts) through flatpak-spawn --host: core/flatpak_host.py.
   - --talk-name=org.freedesktop.Flatpak
 
 modules:
@@ -106,6 +113,13 @@ modules:
           install -Dm644 "build/icons/icon-${size}.png"
             "${FLATPAK_DEST}/share/icons/hicolor/${size}x${size}/apps/org.hugmesh.ImageStudio.png";
         done
+      # The generator tree the Studio runs (see the top of this file). The names and the
+      # directory are core/managed_generator.py's SEED_ARCHIVE, SEED_META and
+      # SEED_SUBDIR; tests/test_flatpak_generator_seed.py holds the three together.
+      - install -Dm644 generator-seed.tar.gz
+          ${FLATPAK_DEST}/share/hugmesh-studio/generator-seed.tar.gz
+      - install -Dm644 generator-seed.json
+          ${FLATPAK_DEST}/share/hugmesh-studio/generator-seed.json
     sources:
       - type: dir
         path: ../..
@@ -116,7 +130,9 @@ modules:
         # build/lib/hugmesh_studio/zzz_stale_module.py was inside the built app). These
         # are exact paths relative to studio/: flatpak-builder takes no globs and no bare
         # names here, so a nested __pycache__ cannot be listed (it is never packaged).
-        # The last three are what building in this directory by hand leaves behind.
+        # The three packaging/flatpak/ build entries are what building in this directory
+        # by hand leaves behind; generator-seed is the seed the two `type: file` sources
+        # below ship, which would otherwise be copied a second time with studio/.
         skip:
           - .venv
           - .venv-studio
@@ -127,3 +143,12 @@ modules:
           - packaging/flatpak/build-dir
           - packaging/flatpak/.flatpak-builder
           - packaging/flatpak/repo
+          - packaging/flatpak/generator-seed
+      # Written by studio/packaging/make_generator_seed.py into
+      # studio/packaging/flatpak/generator-seed/ before flatpak-builder runs (it is not
+      # committed). A missing file stops the build here, which is the point: a bundle
+      # without the generator tree is the defect this replaced.
+      - type: file
+        path: generator-seed/generator-seed.tar.gz
+      - type: file
+        path: generator-seed/generator-seed.json
