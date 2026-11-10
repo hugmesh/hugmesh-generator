@@ -33,6 +33,7 @@ Only the button-gating tests build a widget, and they build `MeshMonitorWidget` 
 """
 from __future__ import annotations
 
+import functools
 import inspect
 import os
 
@@ -46,6 +47,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 from hugmesh_studio.gui.pages import localmesh  # noqa: E402
 from hugmesh_studio.gui.pages import _mesh_monitor_widget as mw  # noqa: E402
+from hugmesh_studio.core import platform_info  # noqa: E402
 from hugmesh_studio.core import local_stack_node  # noqa: E402
 
 
@@ -92,9 +94,13 @@ class _Page:
         self.boot = _Boot(self.node)
         self.notes: list[str] = []
         self.launched: list[str] = []
+        self.refused: list[str] = []
 
     def _note(self, text, queue=True):
         self.notes.append(text)
+
+    def _refuse(self, text):
+        self.refused.append(text)
 
     def _launch(self, title, fn, **kw):
         self.launched.append(kw.get("verb", title))
@@ -107,8 +113,20 @@ class _Page:
     _devops_resume = localmesh.LocalMeshPage._devops_resume
 
 
+_REAL_BLOCKER = platform_info.native_windows_blocker
+
+
+def _answer_as(monkeypatch, osname):
+    """Pin the host the page's native-Windows gate sees (the test_windows_sweep_c6
+    idiom), so the Linux contract below holds on a Windows runner too."""
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        functools.partial(_REAL_BLOCKER, osname=osname))
+
+
 @pytest.fixture
-def page():
+def page(monkeypatch):
+    # these pin the Linux behaviour; the native-Windows refusal has its own tests below
+    _answer_as(monkeypatch, "posix")
     return _Page()
 
 
@@ -236,8 +254,30 @@ def test_resume_says_it_does_not_restore_everything(page):
     assert "another reason stays suspended" in joined, joined
 
 
+# ── native Windows: refused BEFORE the confirmation, never after it ──────────────
+@pytest.mark.parametrize("verb", ["_devops_down", "_devops_halt", "_devops_resume"])
+def test_on_native_windows_each_verb_refuses_before_any_dialog_or_note(
+        page, monkeypatch, verb):
+    """kind-down/-halt/-resume are bash recipes the Windows build cannot run, and the
+    node verb refuses them. The page must say so FIRST: asking "Delete the DevOps
+    lane?" for a deletion that can never happen (or announcing a halt that never
+    runs) is the defect this pins."""
+    _answer_as(monkeypatch, "nt")
+
+    def _boom(*a, **k):
+        raise AssertionError("no confirmation for a verb that cannot run")
+
+    monkeypatch.setattr(localmesh, "confirm_devops_down", _boom)
+    getattr(page, verb)()
+    sentence = _REAL_BLOCKER("The DevOps (Kubernetes) lane", osname="nt")
+    assert page.refused == [sentence] and "WSL2" in sentence
+    assert page.notes == [] and page.launched == [] and page.node.calls == []
+
+
 # ── the node verbs reach the right make targets ─────────────────────────────────
 def test_node_verbs_call_the_documented_targets(monkeypatch):
+    # these pin the Linux recipe; the native-Windows refusal is test_windows_sweep_c6's
+    _answer_as(monkeypatch, "posix")
     seen = []
 
     def _fake_make(self, target, **kw):

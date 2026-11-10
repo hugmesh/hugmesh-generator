@@ -417,6 +417,21 @@ def wsl_docker_remedy(is_wsl: bool | None = None, wsl_version: int = 0,
             f"'docker' group.)")
 
 
+def unquote_pasted_path(text: str, osname: str | None = None) -> str:
+    """``text`` without the double quotes Explorer's "Copy as path" puts around a path,
+    on native Windows; ``text`` unchanged anywhere else, or when it is not one quoted
+    path. A Windows file name cannot contain a double quote, so on nt a pair around the
+    whole text can only be that wrapping, never part of the path. Elsewhere a quote is
+    a legal file-name character, so nothing is touched. ``osname`` is ``os.name``
+    unless a test passes another."""
+    if (osname or os.name) != "nt":
+        return text
+    t = (text or "").strip()
+    if len(t) >= 2 and t[0] == t[-1] == '"' and '"' not in t[1:-1]:
+        return t[1:-1]
+    return text
+
+
 def native_windows_blocker(action: str, osname: str | None = None,
                            runs: str = "`make` and bash scripts") -> str:
     """WHY ``action`` cannot run in a NATIVE Windows Studio (the MSI), with the fix.

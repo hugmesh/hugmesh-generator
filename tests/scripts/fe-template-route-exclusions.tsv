@@ -1,0 +1,18 @@
+# fe-template-route-exclusions.tsv -- primary fe-gateway routes that the per-brand
+# template templates/apps/20-gateway-fe.yaml.hbs deliberately does NOT carry.
+# Read by tests/scripts/test-fe-template-route-parity.sh (hugmesh-generator#559).
+#
+# Format: <primary route id><TAB><reason>. One route per line; `#` starts a comment.
+# Name the route by its id IN THE PRIMARY TABLE (specs/cluster/apps/20-gateway-fe.yaml).
+#
+# Every entry is CHECKED, not trusted: the id must exist in the primary table, the
+# rendered brand table must NOT carry it (a stale entry goes red), and the reason
+# must be non-empty. Add a line only for a route that is genuinely mesh-wide or
+# primary-only; "the brand lane does not deploy that service yet" is not a reason,
+# because the template already routes to services that have no brand Application
+# (login-ui, api-docs, remote-fragment, host-shell) and a request to an absent
+# Service fails there rather than being misrouted to another one.
+#
+# EMPTY as of 2026-11-04: every route on the primary fe table is per-domain. The
+# mesh-wide superadmin surface is NOT on this table at all; it is its own gateway
+# (templates/apps/22-gateway-superadmin.yaml.hbs).

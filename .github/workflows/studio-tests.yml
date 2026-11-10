@@ -79,6 +79,26 @@ on:
       - 'studio/hugmesh_studio/__init__.py'
       - 'studio/packaging/flatpak/org.hugmesh.ImageStudio.metainfo.xml'
       - 'scripts/release-studio.sh'
+      # The GUARDS themselves, and every file they read by a literal path. On
+      # 2026-11-05/06 test_studio_beta_version.py was hand-edited and then cut from 21
+      # tests to 1 on main through the web UI. Each of those commits touched only
+      # studio/tests/*, so the list above never fired and nothing went red. The 0.4 cut
+      # then ran its guard step on the one remaining test.
+      # studio/tests/test_studio_tests_push_paths.py derives this set from the cut's
+      # guard step and from the files the guards open, and fails if any entry is missing.
+      - '.github/workflows/studio-tests.yml'
+      - 'studio/tests/test_studio_beta_version.py'
+      - 'studio/tests/test_studio_release_signing.py'
+      - 'studio/tests/test_studio_release_cut.py'
+      - 'studio/tests/test_release_studio_script.py'
+      - 'studio/tests/test_studio_tests_push_paths.py'
+      - 'studio/packaging/wix/msi_version.py'
+      - 'studio/packaging/build-msi-wine.sh'
+      - 'studio/packaging/wix/windows-build-requirements.txt'
+      - 'studio/packaging/linux-build-requirements.txt'
+      # The cut's guard step runs under pytest.ini's options, so an edit to it can
+      # change what the guards do; test_studio_beta_version.py's bump simulation reads it.
+      - 'studio/pytest.ini'
   workflow_dispatch: {}
 
 permissions:
@@ -333,3 +353,7 @@ jobs:
           "tests/test_tui_gui_parity.py::test_go_live_offers_and_plans_the_same_domains_on_both_faces"
           "tests/test_windows_packaging_files.py::test_the_spec_freezes_the_entry_shim_as_a_windowed_onedir"
           "tests/test_windows_packaging_files.py::test_windows_also_freezes_a_console_twin_into_the_same_tree"
+          tests/test_local_ai_windows.py
+          tests/test_local_ai_status.py
+          tests/test_local_ai_cli.py
+          tests/test_assistant_code_edits.py

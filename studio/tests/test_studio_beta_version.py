@@ -21,25 +21,27 @@ What this pins, and why each one matters:
   (format, ordering, the bump of the two files); the cut workflow and the release
   script call it rather than re-implementing them.
 * The AppStream metadata's newest ``<release>`` is the same version, spelt with ``~``,
-  and every older entry sorts strictly below it.
+  and every older entry sorts strictly below the one above it.
 
-NO RELEASE LINE IS SPELT HERE. ``.github/workflows/studio-release-cut.yml`` runs this
-file AFTER ``release_version.py bump`` has rewritten the tree, so a test that names one
-MAJOR.MINOR fails every cut that leaves it. On 2026-11-06 ``test_version_is_the_0_3_beta_line``
-did exactly that, a hand edit then made one MSI expectation wrong, and the file was cut
-from 21 tests to 1 to get 0.4.1-beta.1 out. Every fixture below is built from the line
-``__version__`` is on (``_line()``) and the two lines after it, and every MSI
-expectation is either spelt from that line by template or computed by ``_expected_msi``,
-which restates the rule from msi_version.py's docstring rather than calling it.
-``test_guards_hold_after_a_bump`` proves it: it bumps a copy of the tree to the next
-MINOR and the next MAJOR with the real ``release_version.py bump`` and runs the cut's
-own guard files there.
+NO VERSION LITERALS. ``.github/workflows/studio-release-cut.yml`` runs this file AFTER
+``release_version.py bump`` has rewritten the tree, so every expectation here is derived
+from ``__version__`` (or from synthetic versions built around its MAJOR.MINOR). A test
+that spelt one release line failed every cut that moved the version (eight red cuts on
+2026-11-06), and the file was then hand-cut to one test to get 0.4.1-beta.1 out. The
+mapping and ordering rules are restated below (``_expected_msi``, ``_key``) from the
+docstrings of msi_version.py and release_version.py, so the functions under test never
+supply their own expected values; ``test_mapper_documents_the_rule_this_file_restates``
+fails first if that docstring rule changes. ``test_guards_hold_after_a_bump`` proves the
+whole set: it bumps a copy of the tree with the real ``release_version.py bump`` (the
+next MINOR, the next MAJOR, that MAJOR's final and the last beta slot) and runs the
+cut's own guard files there.
 """
 from __future__ import annotations
 
 import importlib.util
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -58,6 +60,10 @@ METAINFO = os.path.join(STUDIO_ROOT, "packaging", "flatpak", "org.hugmesh.ImageS
 
 BETA_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-beta\.([1-9]\d*))?")
 
+# GitHub runs a `run:` block as `bash -e {0}`. shutil.which, not a bare "bash": on
+# Windows a bare name resolves to System32's WSL stub before PATH is searched.
+BASH = shutil.which("bash") or "bash"
+
 
 def _read(path: str) -> str:
     with open(path, encoding="utf-8") as handle:
@@ -69,46 +75,49 @@ def _version() -> str:
                      _read(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"))).group(1)
 
 
+def _script(path, body: str) -> None:
+    """A fake tool for a `run:` block: LF endings even on Windows, executable."""
+    path.write_text(body, newline="\n")
+    path.chmod(0o755)
+
+
+# ── the documented rules, restated independently of the code under test ───────────
+def _key(version: str) -> tuple[int, int, int, int, int]:
+    """release_version.py's ordering key: (major, minor, patch, 1 if final else 0, N)."""
+    major, minor, patch, beta = BETA_VERSION.fullmatch(version).groups()
+    return (int(major), int(minor), int(patch), 0 if beta else 1, int(beta) if beta else 0)
+
+
+def _expected_msi(version: str) -> str:
+    """msi_version.py's rule: build = PATCH * 100 + N for -beta.N, PATCH * 100 + 99 for
+    the final release."""
+    major, minor, patch, beta = BETA_VERSION.fullmatch(version).groups()
+    return f"{major}.{minor}.{int(patch) * 100 + (int(beta) if beta else 99)}"
+
+
+# The same docstring's cap: beta.99 is the final's slot, so a PATCH has betas 1..98.
+_LAST_BETA = 98
+
+
+# Synthetic versions around the tree's MAJOR.MINOR. They move with every bump, so no
+# expectation below names a release line.
+_MAJ, _MIN, _PATCH = (int(x) for x in BETA_VERSION.fullmatch(_version()).groups()[:3])
+_BASE = f"{_MAJ}.{_MIN}.{_PATCH}"            # the current version without -beta.N
+
+
+def _beta(patch: int, n: int, major: int = _MAJ, minor: int = _MIN) -> str:
+    return f"{major}.{minor}.{patch}-beta.{n}"
+
+
+def _final(patch: int, major: int = _MAJ, minor: int = _MIN) -> str:
+    return f"{major}.{minor}.{patch}"
+
+
 def _mapper():
     spec = importlib.util.spec_from_file_location("msi_version", MAPPER)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def _release_version():
-    spec = importlib.util.spec_from_file_location("release_version", RELEASE_VERSION)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _parts(version: str) -> tuple[int, int, int, int | None]:
-    """(MAJOR, MINOR, PATCH, N or None for a final), parsed here, not by the code under test."""
-    match = BETA_VERSION.fullmatch(version)
-    assert match, version
-    major, minor, patch = (int(match.group(i)) for i in (1, 2, 3))
-    return major, minor, patch, int(match.group(4)) if match.group(4) else None
-
-
-def _line() -> str:
-    """The MAJOR.MINOR line __version__ is on. Every fixture is built from this."""
-    major, minor = _parts(_version())[:2]
-    return f"{major}.{minor}"
-
-
-def _lines() -> list[str]:
-    """This line, the next MINOR and the next MAJOR: what a cut can move to."""
-    major, minor = _parts(_version())[:2]
-    return [f"{major}.{minor}", f"{major}.{minor + 1}", f"{major + 1}.0"]
-
-
-def _expected_msi(version: str) -> str:
-    """The rule from msi_version.py's docstring, restated so the mapper never supplies its
-    own expected value: ``build = PATCH * 100 + N`` for ``-beta.N``, ``PATCH * 100 + 99``
-    for the final release; MAJOR and MINOR pass through."""
-    major, minor, patch, beta = _parts(version)
-    return f"{major}.{minor}.{patch * 100 + (99 if beta is None else beta)}"
 
 
 def _workflow() -> dict:
@@ -126,21 +135,10 @@ def test_version_is_a_beta_scheme_version():
         "allows no other form (no +build, no -SNAPSHOT, no -rc)")
 
 
-def test_version_heads_the_release_history():
-    """Replaces ``test_version_is_the_0_3_beta_line``, which named one MINOR and so refused
-    every cut that moved it. What that lock was for (MAJOR/MINOR never moves by accident,
-    never backwards) is checked against the tree's own history instead: the metainfo's
-    entries, newest first, are strictly descending under release_version.py's ordering
-    key, and the newest is __version__. A hand edit of __init__.py alone, a bump
-    backwards, or an old entry put back on top (the never-published 1.0.0 once was) all
-    break the order."""
-    rv = _release_version()
-    releases = ET.parse(METAINFO).getroot().find("releases").findall("release")
-    history = [r.get("version").replace("~", "-", 1) for r in releases]
-    assert history and history[0] == _version(), (history[:3], _version())
-    keys = [rv.parse(v) for v in history]
-    for newer, older, k_new, k_old in zip(history, history[1:], keys, keys[1:]):
-        assert k_new > k_old, f"metainfo lists {newer} above {older}, which does not sort below it"
+# DROPPED: test_version_is_the_0_3_beta_line asserted __version__.startswith("0.3.").
+# It pinned one historical line, so it could only fail a legitimate MINOR bump (it did,
+# on 2026-11-06). It has no derived form; the ordering guards below cover the real rule
+# (a release never goes backwards).
 
 
 def test_python_metadata_normalises_the_beta_to_pep440():
@@ -155,11 +153,12 @@ def test_python_metadata_normalises_the_beta_to_pep440():
 
 # ── the MSI ProductVersion mapping ─────────────────────────────────────────────────
 def test_mapper_documents_the_rule_this_file_restates():
-    """``_expected_msi`` restates msi_version.py's rule. If the rule in its docstring
-    changes, this fails first, so the restatement cannot quietly go stale."""
+    """``_expected_msi`` and ``_LAST_BETA`` restate msi_version.py's docstring. If the rule
+    there changes, this fails first, so the restatement cannot quietly go stale."""
     doc = _mapper().__doc__
     assert "build = PATCH * 100 + N" in doc and "PATCH * 100 + 99" in doc, doc
-    assert _mapper().FINAL_SLOT == 99
+    assert f"cap of {_LAST_BETA} betas per PATCH" in doc, doc
+    assert _mapper().FINAL_SLOT == _LAST_BETA + 1
 
 
 def test_mapper_docstring_examples_follow_the_rule():
@@ -173,70 +172,50 @@ def test_mapper_docstring_examples_follow_the_rule():
         assert _mapper().msi_version(semver) == msi, (semver, msi)
 
 
-def _templated_mapping() -> list[tuple[str, str]]:
-    """Expectations SPELT from each line by template, independent of _expected_msi's
-    arithmetic: X.Y.0-beta.N -> X.Y.N, the final X.Y.0 -> X.Y.99, X.Y.1-beta.1 -> X.Y.101."""
-    cases = []
-    for line in _lines():
-        cases += [
-            (f"{line}.0-beta.1", f"{line}.1"),
-            (f"{line}.0-beta.2", f"{line}.2"),
-            (f"{line}.0-beta.10", f"{line}.10"),
-            (f"{line}.0-beta.98", f"{line}.98"),
-            (f"{line}.0", f"{line}.99"),
-            (f"{line}.1-beta.1", f"{line}.101"),
-            (f"{line}.1", f"{line}.199"),
-        ]
-    # The largest version an MSI can carry (255.255 and build 65499 <= 65535).
-    cases.append(("255.255.654", "255.255.65499"))
-    return cases
-
-
-@pytest.mark.parametrize("semver,msi", _templated_mapping())
+@pytest.mark.parametrize("semver,msi", [
+    (_beta(0, 1), f"{_MAJ}.{_MIN}.1"),
+    (_beta(0, 2), f"{_MAJ}.{_MIN}.2"),
+    (_beta(0, 10), f"{_MAJ}.{_MIN}.10"),
+    (_beta(0, 98), f"{_MAJ}.{_MIN}.98"),
+    (_final(0), f"{_MAJ}.{_MIN}.99"),
+    (_beta(1, 1), f"{_MAJ}.{_MIN}.101"),
+    (_beta(0, 1, minor=_MIN + 1), f"{_MAJ}.{_MIN + 1}.1"),
+    (_beta(0, 1, major=_MAJ + 1, minor=0), f"{_MAJ + 1}.0.1"),
+    # The format's ceiling (MSI major/minor <= 255, build <= 65535), not a release line.
+    ("255.255.654", "255.255.65499"),
+    (_version(), _expected_msi(_version())),
+])
 def test_msi_version_mapping(semver, msi):
-    assert _expected_msi(semver) == msi, "the restated rule disagrees with its own template"
+    assert _expected_msi(semver) == msi, "the test's own restatement of the rule drifted"
     assert _mapper().msi_version(semver) == msi
 
 
-def _refused() -> list[str]:
-    line = _line()
-    major, minor = _parts(_version())[:2]
-    return [f"{line}.0-SNAPSHOT", f"{line}.0-rc.1", f"{line}.0-beta.0", f"{line}.0-beta.99",
-            f"{line}.0-beta", f"{line}.0+build.1", line, f"256.{minor}.0", f"{major}.256.0",
-            f"{line}.655", f"v{line}.0"]
-
-
-@pytest.mark.parametrize("bad", _refused())
+@pytest.mark.parametrize("bad", [
+    f"{_BASE}-SNAPSHOT", f"{_BASE}-rc.1", f"{_BASE}-beta.0", f"{_BASE}-beta.99", f"{_BASE}-beta",
+    f"{_BASE}+build.1", f"{_MAJ}.{_MIN}", "256.0.0", "0.256.0", f"{_MAJ}.{_MIN}.655", f"v{_BASE}",
+])
 def test_msi_version_refuses_what_it_cannot_order(bad):
     with pytest.raises(ValueError):
         _mapper().msi_version(bad)
 
 
-def _ordered() -> list[str]:
-    """Versions in release order across this line and the two a cut can move to."""
-    order = []
-    for line in _lines():
-        order += [f"{line}.0-beta.1", f"{line}.0-beta.2", f"{line}.0-beta.9", f"{line}.0-beta.10",
-                  f"{line}.0-beta.98", f"{line}.0", f"{line}.1-beta.1", f"{line}.1"]
-    return order
+def _ladder() -> list[str]:
+    """A strictly increasing run of versions around the tree's MAJOR.MINOR, with the
+    current version placed by the documented key (not by the code under test)."""
+    order = [_beta(0, 1), _beta(0, 2), _beta(0, 9), _beta(0, 10), _beta(0, 98), _final(0),
+             _beta(1, 1), _final(1), _beta(0, 1, minor=_MIN + 1),
+             _beta(0, 1, major=_MAJ + 1, minor=0), _final(0, major=_MAJ + 1, minor=0)]
+    if _version() not in order:
+        order.append(_version())
+    return sorted(order, key=_key)
 
 
 def test_msi_versions_only_ever_go_up():
     """Windows Installer compares the three fields numerically; a later SemVer must give a
     strictly larger triple, or the newer MSI refuses to replace the older one."""
-    order = _ordered()
+    order = _ladder()
     msi = [tuple(int(x) for x in _mapper().msi_version(v).split(".")) for v in order]
     assert msi == sorted(msi) and len(set(msi)) == len(msi), list(zip(order, msi))
-
-
-def test_msi_order_agrees_with_the_release_order():
-    """__version__ itself sits in that order: sorted by release_version.py's key, the MSI
-    triples come out strictly increasing too, so the version being cut upgrades the one
-    before it on Windows."""
-    rv = _release_version()
-    versions = sorted(set(_ordered() + [_version()]), key=rv.parse)
-    msi = [tuple(int(x) for x in _mapper().msi_version(v).split(".")) for v in versions]
-    assert all(a < b for a, b in zip(msi, msi[1:])), list(zip(versions, msi))
 
 
 def test_current_version_maps():
@@ -245,10 +224,8 @@ def test_current_version_maps():
 
 def test_mapper_cli(capsys):
     mod = _mapper()
-    line = _line()
-    assert mod.main([f"{line}.0-beta.1"]) == 0 and capsys.readouterr().out == f"{line}.1\n"
-    assert mod.main([_version()]) == 0 and capsys.readouterr().out == _expected_msi(_version()) + "\n"
-    assert mod.main([f"{line}.0-SNAPSHOT"]) == 1
+    assert mod.main([_beta(0, 1)]) == 0 and capsys.readouterr().out == f"{_MAJ}.{_MIN}.1\n"
+    assert mod.main([f"{_BASE}-SNAPSHOT"]) == 1
     assert mod.main([]) == 2
 
 
@@ -326,26 +303,27 @@ def test_version_job_guards_ref_tag_and_snapshot():
     assert "GITHUB_STEP_SUMMARY" in verdict["run"]
 
 
+_TAG_REF = f"refs/tags/studio-v{_version()}"
+
+
 @pytest.mark.parametrize("ref, event, publish, want", [
     # A hand-pushed tag: inputs.publish is EMPTY on a push event. This combination once
     # exited 1 under `bash -e` (a false `[ ]` inside a `$( )` failed the assignment) and
     # killed the job every build job needs, so a documented release path was dead.
-    (f"refs/tags/studio-v{_version()}", "push", "", "WILL publish (tag ref; push event)"),
-    (f"refs/tags/studio-v{_version()}", "workflow_dispatch", "true", "WILL publish (tag ref; workflow_dispatch event, publish=true)"),
-    (f"refs/tags/studio-v{_version()}", "workflow_dispatch", "false", "WILL NOT publish (tag ref, but publish was not ticked)"),
+    (_TAG_REF, "push", "", "WILL publish (tag ref; push event)"),
+    (_TAG_REF, "workflow_dispatch", "true", "WILL publish (tag ref; workflow_dispatch event, publish=true)"),
+    (_TAG_REF, "workflow_dispatch", "false", "WILL NOT publish (tag ref, but publish was not ticked)"),
     ("refs/heads/main", "workflow_dispatch", "", "WILL NOT publish (refs/heads/main is not a studio-v* tag"),
     ("refs/heads/main", "push", "", "WILL NOT publish (refs/heads/main is not a studio-v* tag"),
 ])
 def test_verdict_step_runs_to_the_end_for_every_event(tmp_path, ref, event, publish, want):
-    import subprocess
     steps = _workflow()["jobs"]["version"]["steps"]
     script = next(s for s in steps if s.get("name") == "Say whether this run will publish")["run"]
     summary = tmp_path / "summary"
     summary.write_text("")
     env = {"PATH": "/usr/bin:/bin", "REF": ref, "EVENT": event, "PUBLISH": publish, "REPUBLISH": "",
            "GITHUB_STEP_SUMMARY": str(summary)}
-    # GitHub runs a `run:` block as `bash -e {0}`.
-    proc = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    proc = subprocess.run([BASH, "-e", "-c", script], env=env, capture_output=True, text=True)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     assert want in proc.stdout, proc.stdout
     assert want in summary.read_text()
@@ -400,19 +378,34 @@ def test_metainfo_newest_release_is_this_version():
     assert newest.get("version") == _version().replace("-", "~", 1), (
         "the metainfo's newest <release> does not name __version__ (AppStream spells "
         "a pre-release with '~' so it sorts below its final release)")
+    # release_version.py bump: a beta is type="development", a final carries no type.
     assert (newest.get("type") == "development") == ("-" in _version()), newest.attrib
-    # The never-published 1.0.0 entry once came back on top, so software centres showed
-    # 1.0.0. That used to be a literal "!= 1.0.0", which would refuse the real 1.0.0 cut;
-    # the version-free form: no entry is NEWER than __version__.
-    rv = _release_version()
-    for release in releases.findall("release"):
-        version = release.get("version").replace("~", "-", 1)
-        assert rv.compare(version, _version()) <= 0, (
-            f"the metainfo lists {version}, which is newer than __version__ {_version()}")
+    # ADAPTED: this used to refuse a literal "1.0.0" entry (the never-published 1.0.0
+    # that made software centres show 1.0.0). That literal would fail the day 1.0.0 is
+    # really cut, so the rule is now the general one: no entry sorts above __version__.
+    for entry in releases.findall("release"):
+        spelt = entry.get("version").replace("~", "-", 1)
+        assert BETA_VERSION.fullmatch(spelt), f"metainfo entry {entry.get('version')!r} is not a scheme version"
+        assert _key(spelt) <= _key(_version()), (
+            f"metainfo entry {entry.get('version')} is newer than __version__ {_version()}: "
+            "software centres would show it")
 
 
-TAG = f"studio-v{_version()}"
-EXISTS = '{"tagName":"%s","assets":[{"updatedAt":"2026-10-23T07:35:52Z"},{"updatedAt":"2026-10-22T10:28:46Z"}]}' % TAG
+def test_metainfo_history_is_strictly_descending():
+    """Newest first, every entry sorts strictly below the one above it (by the documented
+    key, not the code under test). The check above only bounds each entry by __version__;
+    this one also catches a duplicated entry, a bump that inserted an older version under
+    the newest, or a history reordered by hand."""
+    history = [r.get("version").replace("~", "-", 1)
+               for r in ET.parse(METAINFO).getroot().find("releases").findall("release")]
+    assert history and history[0] == _version(), (history[:3], _version())
+    for newer, older in zip(history, history[1:]):
+        assert _key(newer) > _key(older), f"metainfo lists {newer} above {older}, which does not sort below it"
+
+
+_RELEASE_ID = f"studio-v{_version()}"
+EXISTS = ('{"tagName":"' + _RELEASE_ID + '","assets":[{"updatedAt":"2026-10-23T07:35:52Z"},'
+          '{"updatedAt":"2026-10-22T10:28:46Z"}]}')
 
 
 @pytest.mark.parametrize("gh_rc,gh_out,republish,want_rc,want_output,want_text", [
@@ -420,8 +413,9 @@ EXISTS = '{"tagName":"%s","assets":[{"updatedAt":"2026-10-23T07:35:52Z"},{"updat
     (0, EXISTS, "false", 1, "", "--republish"),
     (0, EXISTS, "", 1, "", "--republish"),                       # a push event: no inputs at all
     # the release exists and republish was asked for: go on, loudly
-    (0, EXISTS, "true", 0, "replaced=true\n", f"::warning::REPUBLISHING {TAG}: 2 files will be replaced (newest currently from 2026-10-23T07:35:52Z)"),
-    (0, '{"tagName":"%s"}' % TAG, "true", 0, "replaced=true\n", "::warning::REPUBLISHING"),
+    (0, EXISTS, "true", 0, "replaced=true\n",
+     f"::warning::REPUBLISHING {_RELEASE_ID}: 2 files will be replaced (newest currently from 2026-10-23T07:35:52Z)"),
+    (0, '{"tagName":"' + _RELEASE_ID + '"}', "true", 0, "replaced=true\n", "::warning::REPUBLISHING"),
     # it does not exist: a republish is an error, a normal publish goes on
     (1, "release not found", "true", 1, "", "does not exist; run a normal release"),
     (1, "release not found", "false", 0, "replaced=false\n", ""),
@@ -436,20 +430,19 @@ def test_overwrite_check_fails_closed(tmp_path, gh_rc, gh_out, republish, want_r
     count as absent: treating a network or auth failure as absent would send the publish
     step at a release that may exist, and it replaces same-named files. An existing
     release is RED unless REPUBLISH=true, and then the warning names what is replaced."""
-    import subprocess
     steps = _workflow()["jobs"]["publish"]["steps"]
     script = next(s for s in steps if s.get("id") == "exists")["run"]
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    fake = bindir / "gh"
-    fake.write_text(f"#!/bin/sh\nprintf '%s\\n' '{gh_out}' >&2\nexit {gh_rc}\n")
-    fake.chmod(0o755)
+    _script(bindir / "gh", f"#!/bin/sh\nprintf '%s\\n' '{gh_out}' >&2\nexit {gh_rc}\n")
+    # The step counts the assets with `python3 -c`; hand it this interpreter, so the
+    # check does not depend on what /usr/bin happens to hold.
+    _script(bindir / "python3", f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n")
     out_file = tmp_path / "github_output"
     out_file.write_text("")
     env = {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": _version(), "REPUBLISH": republish,
            "GITHUB_REPOSITORY": "hugmesh/hugmesh-generator", "GITHUB_OUTPUT": str(out_file)}
-    # GitHub runs a `run:` block as `bash -e {0}`.
-    proc = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    proc = subprocess.run([BASH, "-e", "-c", script], env=env, capture_output=True, text=True)
     assert proc.returncode == want_rc, (proc.stdout, proc.stderr)
     assert out_file.read_text() == want_output
     assert want_text in proc.stdout + proc.stderr, (proc.stdout, proc.stderr)
@@ -457,93 +450,132 @@ def test_overwrite_check_fails_closed(tmp_path, gh_rc, gh_out, republish, want_r
         assert "::error::" in proc.stdout
 
 
-@pytest.mark.parametrize("version", [_version(), f"{_line()}.0-beta.2", f"{_line()}.0"])
+def _counterpart() -> str:
+    """A version of the other kind: the final of a beta, or the next beta of a final."""
+    return _BASE if "-" in _version() else _beta(_PATCH + 1, 1)
+
+
+@pytest.mark.parametrize("version", [_version(), _counterpart()])
 @pytest.mark.parametrize("replaced", ["true", "false", ""])
 def test_release_notes_say_when_files_were_replaced(tmp_path, replaced, version):
-    import subprocess
     steps = _workflow()["jobs"]["publish"]["steps"]
     script = next(s for s in steps if s.get("name") == "Write the release notes")["run"]
     env = {"PATH": "/usr/bin:/bin", "VERSION": version, "GITHUB_REPOSITORY": "hugmesh/hugmesh-generator",
            "AUTHENTICODE": "false", "REPLACED": replaced, "GITHUB_SHA": "abc123", "GITHUB_RUN_ID": "42",
            "GITHUB_SERVER_URL": "https://github.com"}
-    proc = subprocess.run(["bash", "-e", "-c", script], env=env, cwd=tmp_path, capture_output=True, text=True)
+    proc = subprocess.run([BASH, "-e", "-c", script], env=env, cwd=tmp_path, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
-    notes = (tmp_path / "release-notes.md").read_text()
+    notes = (tmp_path / "release-notes.md").read_text(encoding="utf-8")
     assert ("Files replaced on" in notes) == (replaced == "true")
     if replaced == "true":
         assert "every checksum, signature and attestation changed" in notes
         assert "from abc123 by run https://github.com/hugmesh/hugmesh-generator/actions/runs/42" in notes
         assert "must re-download to verify" in notes
-    # A beta says so in the first line; a final release does not.
     stage = " (beta, pre-release)" if "-" in version else ""
-    assert notes.startswith(f"HugMesh Image Studio {version}{stage}.\n"), notes.splitlines()[0]
+    assert notes.startswith(f"HugMesh Image Studio {version}{stage}.\n"), notes[:120]
     assert "**Windows**" in notes
+    assert f"hugmesh-studio-{version}-x64.msi" in notes
 
 
 # ── release_version.py: the one place the version rules are spelt ─────────────────
 def _rv(*args, **kwargs):
-    import subprocess
-    return subprocess.run(["python3", RELEASE_VERSION, *args], capture_output=True, text=True, **kwargs)
+    return subprocess.run([sys.executable, RELEASE_VERSION, *args], capture_output=True, text=True, **kwargs)
 
 
 def test_release_version_cli_current_next_validate_compare():
     assert _rv("current").stdout.strip() == _version()
-    base = _version().split("-")[0]
     if "-" in _version():
         n = int(_version().rsplit(".", 1)[1])
-        assert _rv("next").stdout.strip() == f"{base}-beta.{n + 1}"
-        assert _rv("next", "--final").stdout.strip() == base
-    line = _line()
-    assert _rv("next", f"{line}.0").stdout.strip() == f"{line}.1-beta.1"
-    assert _rv("validate", f"{line}.0-beta.2").returncode == 0
-    for bad in (f"{line}.0-rc.1", f"{line}.0-SNAPSHOT", f"{line}.0+build.1", f"{line}.0-beta.0",
-                f"{line}.0-beta.99", f"v{line}.0"):
+        if n < _LAST_BETA:
+            assert _rv("next").stdout.strip() == _beta(_PATCH, n + 1)
+        else:
+            # The last beta slot: there is no next beta of this PATCH (see below).
+            assert _rv("next").returncode == 1
+        assert _rv("next", "--final").stdout.strip() == _BASE
+    else:
+        # After a final release the next beta is the next PATCH's beta.1, and a final
+        # has no "final" of its own.
+        assert _rv("next").stdout.strip() == _beta(_PATCH + 1, 1)
+        proc = _rv("next", "--final")
+        assert proc.returncode == 1 and "already a final release" in proc.stderr
+    assert _rv("next", _final(0)).stdout.strip() == _beta(1, 1)
+    assert _rv("next", _beta(0, 9)).stdout.strip() == _beta(0, 10)
+    assert _rv("next", _beta(0, _LAST_BETA - 1)).stdout.strip() == _beta(0, _LAST_BETA)
+    # `next` never proposes a version `validate` refuses: after the last beta slot it
+    # fails (printing nothing) and names the two ways on, the final and the next PATCH.
+    proc = _rv("next", _beta(0, _LAST_BETA))
+    assert proc.returncode == 1 and proc.stdout == "", proc.stdout
+    assert "--final" in proc.stderr and _beta(1, 1) in proc.stderr, proc.stderr
+    assert _rv("validate", _beta(0, _LAST_BETA + 1)).returncode == 1
+    assert _rv("next", _beta(0, _LAST_BETA), "--final").stdout.strip() == _final(0)
+    # Whatever `next` prints validates; where it prints nothing it must say so with exit 1.
+    for base in (_version(), _final(0), _beta(0, 1), _beta(0, _LAST_BETA - 1), _beta(0, _LAST_BETA)):
+        proc = _rv("next", base)
+        if proc.returncode == 0:
+            assert _rv("validate", proc.stdout.strip()).returncode == 0, (base, proc.stdout)
+        else:
+            assert proc.returncode == 1 and proc.stdout == "" and base == _beta(_key(base)[2], _LAST_BETA), base
+    assert _rv("validate", _beta(0, 2)).returncode == 0
+    assert _rv("validate", _version()).returncode == 0
+    for bad in (f"{_BASE}-rc.1", f"{_BASE}-SNAPSHOT", f"{_BASE}+build.1", f"{_BASE}-beta.0",
+                f"{_BASE}-beta.99", f"v{_BASE}"):
         assert _rv("validate", bad).returncode == 1, bad
-    tags = [f"refs/tags/studio-v{line}.0-beta.1", "refs/tags/studio-vgarbage"]
-    assert _rv("validate", f"{line}.0-beta.1", "--after-tags", *tags).returncode == 1
-    assert _rv("validate", f"{line}.0-beta.2", "--after-tags", *tags).returncode == 0
-    assert _rv("validate", f"{line}.0", "--after-tags", *tags).returncode == 0
-    # Re-cutting the version that is already tagged is refused.
-    assert _rv("validate", _version(), "--after-tags", f"refs/tags/studio-v{_version()}").returncode == 1
-    major, minor = _parts(_version())[:2]
-    earlier = f"{major}.{minor - 1}.9" if minor else (f"{major - 1}.9.9" if major else None)
-    if earlier is not None:
-        assert _rv("validate", earlier, "--after-tags", *tags).returncode == 1, earlier
-    assert _rv("validate", f"{line}.0-beta.2", "--after-tags").returncode == 0, "no tags yet: anything valid goes"
-    order = [v for v in _ordered() if not v.endswith(("-beta.9", "-beta.98"))]
+    # A new release must sort strictly after the newest valid studio-v* tag; a tag that
+    # is not a version is ignored.
+    tags = [f"refs/tags/studio-v{_beta(0, 2)}", f"studio-v{_beta(0, 1)}", "refs/tags/studio-vgarbage"]
+    assert _rv("validate", _beta(0, 2), "--after-tags", *tags).returncode == 1, "equal to the newest tag"
+    assert _rv("validate", _beta(0, 1), "--after-tags", *tags).returncode == 1, "below the newest tag"
+    assert _rv("validate", _beta(0, 3), "--after-tags", *tags).returncode == 0
+    assert _rv("validate", _final(0), "--after-tags", *tags).returncode == 0
+    assert _rv("validate", _beta(0, 2), "--after-tags").returncode == 0, "no tags yet: anything valid goes"
+    order = [_beta(0, 1), _beta(0, 2), _beta(0, 10), _final(0), _beta(1, 1), _final(1),
+             _beta(0, 1, minor=_MIN + 1)]
+    assert order == sorted(order, key=_key), "the test's own ladder is out of order"
     for a, b in zip(order, order[1:]):
         assert _rv("compare", a, b).stdout.strip() == "lt", (a, b)
         assert _rv("compare", b, a).stdout.strip() == "gt", (a, b)
-    assert _rv("compare", f"{line}.0", f"{line}.0").stdout.strip() == "eq"
+    assert _rv("compare", _final(0), _final(0)).stdout.strip() == "eq"
+    assert _rv("compare", _version(), _version()).stdout.strip() == "eq"
 
 
 def test_bump_version_edits_both_files(tmp_path):
-    import shutil
-    import subprocess
     root = tmp_path / "tree"
     (root / "studio" / "hugmesh_studio").mkdir(parents=True)
     (root / "studio" / "packaging" / "flatpak").mkdir(parents=True)
     shutil.copy(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"), root / "studio" / "hugmesh_studio")
     shutil.copy(METAINFO, root / "studio" / "packaging" / "flatpak")
+    before_text = _read(METAINFO)
     before = ET.parse(METAINFO).getroot().find("releases").findall("release")
     # Targets are derived from the tree, never spelt: the cut's preflight runs this
     # test AFTER bumping the working tree, so a literal target is already present
-    # there from the second cut on (0.3.0-beta.2 in the metainfo once beta.3 is cut).
-    target = _rv("next", "--root", str(root)).stdout.strip()
-    final = _rv("next", target, "--final").stdout.strip() if "-" in target else _rv("next", target).stdout.strip()
-    assert f'<release version="{target.replace("-", "~")}"' not in _read(METAINFO), target
-    assert f'<release version="{final.replace("-", "~")}"' not in _read(METAINFO), final
+    # there from the second cut on.
+    # At the last beta slot `next` has no beta to propose, so the next valid version is
+    # the final (`next --final`); a cut to X.Y.Z-beta.98 must not turn this test red.
+    def next_valid(*base):
+        proc = _rv("next", *base)
+        return (proc if proc.returncode == 0 else _rv("next", *base, "--final")).stdout.strip()
+
+    target = next_valid("--root", str(root))
+    assert target, "release_version.py next printed nothing"
+    final = _rv("next", target, "--final").stdout.strip() if "-" in target else next_valid(target)
+    assert final, "release_version.py next printed nothing"
+    assert f'<release version="{target.replace("-", "~")}"' not in before_text, target
+    assert f'<release version="{final.replace("-", "~")}"' not in before_text, final
     proc = _rv("bump", target, "--root", str(root), "--date", "2026-10-28")
     assert proc.returncode == 0, proc.stderr
     assert _rv("current", "--root", str(root)).stdout.strip() == target
     meta = root / "studio" / "packaging" / "flatpak" / "org.hugmesh.ImageStudio.metainfo.xml"
     releases = ET.parse(meta).getroot().find("releases").findall("release")
-    assert releases[0].get("version") == target.replace("-", "~") and releases[0].get("type") == "development"
+    assert releases[0].get("version") == target.replace("-", "~")
+    assert (releases[0].get("type") == "development") == ("-" in target)
     assert releases[0].get("date") == "2026-10-28"
     assert [r.get("version") for r in releases[1:]] == [r.get("version") for r in before], "an old entry was lost"
-    text = meta.read_text()
+    text = meta.read_text(encoding="utf-8")
     assert "AppStream spells a pre-release with" in text, "the explanatory comment was lost"
-    assert "<p>First beta.</p>" in text
+    # Every older <release> block survives as it was (this used to look for the first
+    # entry's "<p>First beta.</p>"; the derived form checks all of them).
+    for block in re.findall(r"(?s)<release\b.*?</release>", before_text):
+        assert block in text, block[:80]
     # Idempotent: a second bump to the same version changes nothing.
     snapshot = {p.name: p.read_bytes() for p in (meta, root / "studio" / "hugmesh_studio" / "__init__.py")}
     proc = _rv("bump", target, "--root", str(root), "--date", "2026-11-01")
@@ -553,13 +585,13 @@ def test_bump_version_edits_both_files(tmp_path):
     proc = _rv("bump", _version(), "--root", str(root), "--date", "2026-11-02")
     assert proc.returncode == 1 and "never goes backwards" in proc.stderr
     assert {p.name: p.read_bytes() for p in (meta, root / "studio" / "hugmesh_studio" / "__init__.py")} == snapshot
-    # A final release gets no type="development"; a later beta.1 gets it back.
+    # A final release gets no type="development".
     proc = _rv("bump", final, "--root", str(root), "--date", "2026-12-01")
     assert proc.returncode == 0, proc.stderr
     newest = ET.parse(meta).getroot().find("releases").find("release")
     assert newest.get("version") == final.replace("-", "~")
     assert (newest.get("type") == "development") == ("-" in final)
-    assert _rv("bump", f"{_line()}.0-rc.1", "--root", str(root)).returncode == 1
+    assert _rv("bump", f"{_BASE}-rc.1", "--root", str(root)).returncode == 1
 
 
 # ── the proof that nothing above names a release line ─────────────────────────────
@@ -569,8 +601,14 @@ _SIMULATING = "HUGMESH_STUDIO_GUARD_SIMULATION"
 
 
 def _bump_targets() -> list[str]:
-    major, minor = _parts(_version())[:2]
-    return [f"{major}.{minor + 1}.0-beta.1", f"{major + 1}.0.0-beta.1", f"{major + 1}.0.0"]
+    """What a cut can move the tree to: the next MINOR, the next MAJOR, that MAJOR's final,
+    and the last beta slot (beta.98, after which `next` has no beta to propose)."""
+    targets = [_beta(0, 1, minor=_MIN + 1), _beta(0, 1, major=_MAJ + 1, minor=0),
+               _final(0, major=_MAJ + 1, minor=0)]
+    last = _beta(_PATCH, _LAST_BETA) if "-" in _version() else _beta(_PATCH + 1, _LAST_BETA)
+    if _key(last) > _key(_version()):
+        targets.append(last)
+    return targets
 
 
 def test_the_cut_runs_these_guard_files():
@@ -587,17 +625,18 @@ def test_the_cut_runs_these_guard_files():
 @pytest.mark.skipif(os.environ.get(_SIMULATING) == "1", reason="already inside a simulated bump")
 @pytest.mark.parametrize("target", _bump_targets())
 def test_guards_hold_after_a_bump(tmp_path, target):
-    """Copy what the guards read, bump the copy to the next MINOR, the next MAJOR and that
-    MAJOR's final with the real ``release_version.py bump`` (the cut's own step), then run
-    the cut's guard files inside the copy. Any test that spells this release line fails
-    here, before a cut does."""
+    """Copy what the guards read, bump the copy with the real ``release_version.py bump``
+    (the cut's own step), then run the cut's guard files inside the copy. Any test that
+    spells this release line, or that cannot survive the last beta slot, fails here,
+    before a cut does."""
     root = tmp_path / "tree"
     shutil.copytree(os.path.join(GENERATOR_DIR, ".github", "workflows"), root / ".github" / "workflows")
     shutil.copytree(os.path.join(STUDIO_ROOT, "packaging"), root / "studio" / "packaging")
     # The whole package: the suite's conftest imports hugmesh_studio.core.
     shutil.copytree(os.path.join(STUDIO_ROOT, "hugmesh_studio"), root / "studio" / "hugmesh_studio",
                     ignore=shutil.ignore_patterns("__pycache__"))
-    shutil.copy(os.path.join(STUDIO_ROOT, "pytest.ini"), root / "studio")  # the suite's markers
+    # The cut's guard step runs under the suite's ini (testpaths, markers) and conftest.
+    shutil.copy(os.path.join(STUDIO_ROOT, "pytest.ini"), root / "studio")
     (root / "studio" / "tests").mkdir()
     for name in ("conftest.py",) + _CUT_GUARDS:
         shutil.copy(os.path.join(STUDIO_ROOT, "tests", name), root / "studio" / "tests")
