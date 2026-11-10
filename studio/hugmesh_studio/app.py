@@ -312,6 +312,12 @@ def main(argv=None) -> int:
     ap.add_argument("--mesh-token", nargs=argparse.REMAINDER, metavar="ARGS", default=None,
                     help="issue / show / trust / issuer: run the HugMesh token CLI with the "
                          "rest of the command line (--mesh-token --help for its usage).")
+    # ── the Domain CA keys step, from a terminal (Qt-free) ──────────────────────
+    # Everything after --domain-ca goes to core/domain_ca_keys.py's CLI: the same
+    # imports, refusals and go-live checklist the GUI page and the TUI screen show.
+    ap.add_argument("--domain-ca", nargs=argparse.REMAINDER, metavar="ARGS", default=None,
+                    help="check a domain's CA certificate/key files and print the go-live "
+                         "checklist (--domain-ca --help for its usage).")
     # ── QEMU for Windows (WHPX), from a terminal (Qt-free) ───────────────────────
     # --qemu-windows ACTION [options]: the rest of the line goes to core/qemu_windows.py's
     # own parser, so the MSI's console twin reaches the same start()/stop() as the GUI.
@@ -323,6 +329,10 @@ def main(argv=None) -> int:
         # Qt-free path: mesh_token imports core modules only, never a Qt binding.
         from .core.mesh_token import main as _mesh_token_main
         return _mesh_token_main(args.mesh_token)
+
+    if args.domain_ca is not None:
+        from .core.domain_ca_keys import cli_main as _domain_ca_main
+        return _domain_ca_main(args.domain_ca)
 
     if args.org_export:
         # Qt-free path: the same plan()/apply() the GUI step and the TUI step call,

@@ -41,7 +41,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
-from . import pid_probe, roles, secret_files
+from . import domain_ca_keys, pid_probe, roles, secret_files
 from .config import PLATFORM_FIELD_SUPPORT, SECRET_FIELDS
 from .state_paths import state_dir
 from .worklist import WorklistConfig
@@ -225,6 +225,12 @@ class BuildSession:
     # verify a re-selected file matches), never the material and never even its path.
     # from_dict filters unknown keys, so pre-existing records load with [].
     held_secret_files: list = field(default_factory=list)
+    # The Domain CA keys step's material at dispatch (core/domain_ca_keys.py): one
+    # DomainCA.record() per domain — fingerprints only, never a key or a path. A
+    # RESTART in a fresh process (whose store is empty) refuses to dispatch until the
+    # same CA is imported again, instead of silently minting a throwaway CA. Omitted
+    # from the saved record when empty, so a session without it is unchanged.
+    held_domain_ca: list = field(default_factory=list)
     workdir: str = ""                 # absolute per-session artifact dir
     backend: str | None = None        # exact dispatch params BuildPage stashes
     generate_keys: bool = True
@@ -247,6 +253,8 @@ class BuildSession:
         # asdict rebuilds an _UnknownImageRow as an empty one; write the saved value
         d["images"] = _saved_form(self.images)
         d["history"] = _saved_form(self.history)    # RESTART archives `images` here
+        if not d.get("held_domain_ca"):
+            d.pop("held_domain_ca", None)
         return d
 
     @classmethod
@@ -366,6 +374,8 @@ def new_session(wl: WorklistConfig, generator_dir: str, *,
     s.config = wl.to_dict()                        # secrets blanked (the save rule)
     s.blanked_secrets = [k for k in SECRET_FIELDS if getattr(wl.base, k, "")]
     s.held_secret_files = _held_secret_file_records(wl)
+    s.held_domain_ca = (domain_ca_keys.store().records()
+                        if generate_keys and wl.base.mode == "mesh" else [])
     s.backend = backend
     s.generate_keys = generate_keys
     s.images = [{"id": e.id, "role": e.role, "platform": e.platform,
