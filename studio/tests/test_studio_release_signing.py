@@ -15,8 +15,8 @@ GITHUB ACTIONS AND SIGNED THERE. For ``.github/workflows/studio-release.yml`` th
   ``SITE_DISPATCH_TOKEN`` is not set.
 
 Several tests run the workflow's own ``run:`` scripts with fake tools, so they test what
-GitHub would execute, not a copy of it. """
-
+GitHub would execute, not a copy of it.
+"""
 from __future__ import annotations
 
 import json
@@ -34,8 +34,12 @@ WIN_LOCK = os.path.join(STUDIO_ROOT, "packaging", "wix", "windows-build-requirem
 LINUX_REQS = os.path.join(STUDIO_ROOT, "packaging", "linux-build-requirements.txt")
 
 REPO = "hugmesh/hugmesh-generator"
-VERSION = "0.4.0-beta.2"
-TAG = f"studio-v{VERSION}"
+# A SYNTHETIC fixture for artefact names, tags and the signing identity. It never tracks
+# ``__version__`` and must not be bumped on a cut: every test here runs the workflow's
+# scripts with this value in ``env``, so any valid version works. A new MAJOR/MINOR
+# needs no edit in this file.
+FIXTURE_VERSION = "0.3.0-beta.1"
+TAG = f"studio-v{FIXTURE_VERSION}"
 IDENTITY = f"https://github.com/{REPO}/.github/workflows/studio-release.yml@refs/tags/{TAG}"
 ISSUER = "https://token.actions.githubusercontent.com"
 HOSTED = {"ubuntu-latest", "ubuntu-24.04", "ubuntu-24.04-arm", "windows-latest"}
@@ -69,8 +73,6 @@ def _run_bash(script: str, env: dict, cwd) -> subprocess.CompletedProcess:
     # GitHub runs a `run:` block as `bash -e {0}` (plus pipefail when shell: bash is set).
     return subprocess.run(["bash", "-e", "-c", script], env=env, cwd=cwd,
                           capture_output=True, text=True)
-                          
-
 
 
 # ── runners and permissions ────────────────────────────────────────────────────────
@@ -198,34 +200,34 @@ def test_publish_needs_all_four_builds_and_collect_requires_all_four_files(tmp_p
     art = tmp_path / "artifacts"
     (art / "msi").mkdir(parents=True)
     (art / "flatpak").mkdir()
-    (art / "msi" / f"hugmesh-studio-{VERSION}-x64.msi").write_bytes(b"msi")
-    (art / "flatpak" / f"hugmesh-studio-{VERSION}-x86_64.flatpak").write_bytes(b"fp")
-    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION}
+    (art / "msi" / f"hugmesh-studio-{FIXTURE_VERSION}-x64.msi").write_bytes(b"msi")
+    (art / "flatpak" / f"hugmesh-studio-{FIXTURE_VERSION}-x86_64.flatpak").write_bytes(b"fp")
+    env = {"PATH": "/usr/bin:/bin", "VERSION": FIXTURE_VERSION}
     proc = _run_bash(script, env, tmp_path)
-    assert proc.returncode != 0 and f"hugmesh-studio-{VERSION}-aarch64.flatpak is missing" in proc.stdout, proc
+    assert proc.returncode != 0 and f"hugmesh-studio-{FIXTURE_VERSION}-aarch64.flatpak is missing" in proc.stdout, proc
     # The aarch64 bundle arrives in its own artifact directory (upload name flatpak-aarch64).
     (art / "flatpak-aarch64").mkdir()
-    (art / "flatpak-aarch64" / f"hugmesh-studio-{VERSION}-aarch64.flatpak").write_bytes(b"fp-arm")
+    (art / "flatpak-aarch64" / f"hugmesh-studio-{FIXTURE_VERSION}-aarch64.flatpak").write_bytes(b"fp-arm")
     proc = _run_bash(script, env, tmp_path)
     assert proc.returncode != 0 and "linux-x86_64.tar.gz is missing" in proc.stdout, proc
     (art / "linux").mkdir()
-    (art / "linux" / f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz").write_bytes(b"tgz")
+    (art / "linux" / f"hugmesh-studio-{FIXTURE_VERSION}-linux-x86_64.tar.gz").write_bytes(b"tgz")
     proc = _run_bash(script, env, tmp_path)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     collected = sorted(f.name for f in (tmp_path / "release").iterdir())
-    assert collected == sorted([f"hugmesh-studio-{VERSION}-x64.msi",
-                                f"hugmesh-studio-{VERSION}-x86_64.flatpak",
-                                f"hugmesh-studio-{VERSION}-aarch64.flatpak",
-                                f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"]), collected
+    assert collected == sorted([f"hugmesh-studio-{FIXTURE_VERSION}-x64.msi",
+                                f"hugmesh-studio-{FIXTURE_VERSION}-x86_64.flatpak",
+                                f"hugmesh-studio-{FIXTURE_VERSION}-aarch64.flatpak",
+                                f"hugmesh-studio-{FIXTURE_VERSION}-linux-x86_64.tar.gz"]), collected
 
 
 def test_sha256sums_lists_installers_and_sboms_and_tolerates_a_missing_sbom(tmp_path):
     script = _step("publish", "Write SHA256SUMS")["run"]
     rel = tmp_path / "release"
     rel.mkdir()
-    for name in (f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-x86_64.flatpak",
-                 f"hugmesh-studio-{VERSION}-aarch64.flatpak",
-                 f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"):
+    for name in (f"hugmesh-studio-{FIXTURE_VERSION}-x64.msi", f"hugmesh-studio-{FIXTURE_VERSION}-x86_64.flatpak",
+                 f"hugmesh-studio-{FIXTURE_VERSION}-aarch64.flatpak",
+                 f"hugmesh-studio-{FIXTURE_VERSION}-linux-x86_64.tar.gz"):
         (rel / name).write_bytes(name.encode())
     proc = _run_bash(script, {"PATH": "/usr/bin:/bin"}, rel)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
@@ -233,8 +235,8 @@ def test_sha256sums_lists_installers_and_sboms_and_tolerates_a_missing_sbom(tmp_
     assert len(lines) == 4, lines
     # Both Flatpaks are in the signed list: the aarch64 bundle is verified like the rest.
     for arch in FLATPAK_ARCHES:
-        assert any(l.endswith(f"  hugmesh-studio-{VERSION}-{arch}.flatpak") for l in lines), (arch, lines)
-    (rel / f"hugmesh-studio-{VERSION}-linux-x86_64.spdx.json").write_text("{}")
+        assert any(l.endswith(f"  hugmesh-studio-{FIXTURE_VERSION}-{arch}.flatpak") for l in lines), (arch, lines)
+    (rel / f"hugmesh-studio-{FIXTURE_VERSION}-linux-x86_64.spdx.json").write_text("{}")
     proc = _run_bash(script, {"PATH": "/usr/bin:/bin"}, rel)
     lines = (rel / "SHA256SUMS").read_text().splitlines()
     assert len(lines) == 5 and any(l.endswith(".spdx.json") for l in lines), lines
@@ -301,7 +303,7 @@ def test_authenticode_is_gated_on_its_secret_and_signs_before_the_checksum():
 @pytest.mark.parametrize("signed", ["true", "false"])
 def test_release_notes_carry_verify_commands_with_the_signing_identity(tmp_path, signed):
     script = _step("publish", "Write the release notes")["run"]
-    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+    env = {"PATH": "/usr/bin:/bin", "VERSION": FIXTURE_VERSION, "GITHUB_REPOSITORY": REPO,
            "AUTHENTICODE": signed}
     proc = _run_bash(script, env, tmp_path)
     assert proc.returncode == 0, proc.stderr
@@ -315,16 +317,21 @@ def test_release_notes_carry_verify_commands_with_the_signing_identity(tmp_path,
     # Both Flatpaks are named, each with its install line; the aarch64 one is not a
     # footnote to the x86_64 paragraph.
     for arch in FLATPAK_ARCHES:
-        assert f"`hugmesh-studio-{VERSION}-{arch}.flatpak`" in notes, arch
-        assert f"flatpak install --user ./hugmesh-studio-{VERSION}-{arch}.flatpak" in notes, arch
+        assert f"`hugmesh-studio-{FIXTURE_VERSION}-{arch}.flatpak`" in notes, arch
+        assert f"flatpak install --user ./hugmesh-studio-{FIXTURE_VERSION}-{arch}.flatpak" in notes, arch
     assert "**Linux aarch64**" in notes and "**Linux x86_64**" in notes
-    assert "(beta, pre-release)" in notes
+    assert ("(beta, pre-release)" in notes) == ("-" in FIXTURE_VERSION)
     regexp = re.search(r"--certificate-identity-regexp '([^']+)'", notes).group(1)
     assert re.fullmatch(regexp, IDENTITY), regexp
-    for other in (IDENTITY + "0",  # studio-v0.3.0-beta.10
+    # Each forgery is derived from the fixture, never spelt. A spelt "0.3.0" here had to be
+    # hand-edited with the fixture (5bf1c393): once they disagree, str.replace() returns
+    # IDENTITY unchanged and the case stops being a forgery at all.
+    for other in (IDENTITY + "0",  # one more digit on the tag (beta.1 -> beta.10)
                   IDENTITY.replace("studio-release.yml", "evil.yml"),
                   IDENTITY.replace("hugmesh-generator", "hugmesh-generatorX"),
-                  IDENTITY.replace("0.4.0", "0x4x0")):
+                  # an unescaped "." in the regexp would accept any character there
+                  IDENTITY.replace(FIXTURE_VERSION, FIXTURE_VERSION.replace(".", "x"))):
+        assert other != IDENTITY, "a forged identity equals the real one: the case is vacuous"
         assert not re.search(regexp, other), f"{regexp} also matches {other}"
 
 
@@ -333,18 +340,18 @@ def test_releases_json_lists_all_four_packages_and_the_signature_material(tmp_pa
     script = _step("publish", "Generate releases.json for the documentation site")["run"]
     rel = tmp_path / "release"
     rel.mkdir()
-    for name in (f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-x86_64.flatpak",
-                 f"hugmesh-studio-{VERSION}-aarch64.flatpak",
-                 f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz",
-                 f"hugmesh-studio-{VERSION}-linux-x86_64.spdx.json", "SHA256SUMS"):
+    for name in (f"hugmesh-studio-{FIXTURE_VERSION}-x64.msi", f"hugmesh-studio-{FIXTURE_VERSION}-x86_64.flatpak",
+                 f"hugmesh-studio-{FIXTURE_VERSION}-aarch64.flatpak",
+                 f"hugmesh-studio-{FIXTURE_VERSION}-linux-x86_64.tar.gz",
+                 f"hugmesh-studio-{FIXTURE_VERSION}-linux-x86_64.spdx.json", "SHA256SUMS"):
         (rel / name).write_bytes(b"x" * 2048)
-    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+    env = {"PATH": "/usr/bin:/bin", "VERSION": FIXTURE_VERSION, "GITHUB_REPOSITORY": REPO,
            "AUTHENTICODE": signed}
     proc = _run_bash(script, env, tmp_path)
     assert proc.returncode == 0, proc.stderr
     data = json.loads((rel / "releases.json").read_text())
     # The fields the site's page reads today are all still there.
-    assert data["version"] == VERSION and data["notesUrl"].endswith(f"/releases/tag/{TAG}")
+    assert data["version"] == FIXTURE_VERSION and data["notesUrl"].endswith(f"/releases/tag/{TAG}")
     kinds = {(i["platform"], i["kind"]) for i in data["installers"]}
     assert kinds == {("windows", "msi"), ("linux", "flatpak"), ("linux", "tarball")}
     assert len(data["installers"]) == 4, [i["file"] for i in data["installers"]]
@@ -352,7 +359,7 @@ def test_releases_json_lists_all_four_packages_and_the_signature_material(tmp_pa
     flatpaks = {i["arch"]: i for i in data["installers"] if i["kind"] == "flatpak"}
     assert set(flatpaks) == set(FLATPAK_ARCHES), flatpaks
     for arch, item in flatpaks.items():
-        assert item["file"] == f"hugmesh-studio-{VERSION}-{arch}.flatpak"
+        assert item["file"] == f"hugmesh-studio-{FIXTURE_VERSION}-{arch}.flatpak"
         assert item["label"] == f"Flatpak bundle ({arch})"
         assert arch in item["notes"]
     assert len({i["label"] for i in data["installers"]}) == 4, "two installers share a label"
@@ -379,8 +386,8 @@ def test_releases_json_refuses_a_flatpak_of_an_unknown_architecture(tmp_path):
     script = _step("publish", "Generate releases.json for the documentation site")["run"]
     rel = tmp_path / "release"
     rel.mkdir()
-    (rel / f"hugmesh-studio-{VERSION}-riscv64.flatpak").write_bytes(b"x" * 2048)
-    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+    (rel / f"hugmesh-studio-{FIXTURE_VERSION}-riscv64.flatpak").write_bytes(b"x" * 2048)
+    env = {"PATH": "/usr/bin:/bin", "VERSION": FIXTURE_VERSION, "GITHUB_REPOSITORY": REPO,
            "AUTHENTICODE": "false"}
     proc = _run_bash(script, env, tmp_path)
     assert proc.returncode != 0 and "riscv64.flatpak: not a bundle of a known architecture" in proc.stderr, proc
@@ -438,7 +445,7 @@ def test_the_arch_check_and_the_qt_smoke_test_refuse_what_they_must(tmp_path):
     aarch64 (a PyQt6 fallback, an x86_64 wheel, Qt not starting at all)."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    env = {"PATH": f"{bindir}:/usr/bin:/bin", "ARCH": "aarch64", "VERSION": VERSION}
+    env = {"PATH": f"{bindir}:/usr/bin:/bin", "ARCH": "aarch64", "VERSION": FIXTURE_VERSION}
     arch = _step("flatpak-aarch64", "The runner must really be aarch64")["run"]
     (bindir / "flatpak").write_text("#!/bin/sh\necho x86_64\n")
     (bindir / "flatpak").chmod(0o755)
@@ -470,7 +477,7 @@ def _dispatch_env(tmp_path, token: str) -> dict:
     curl = bindir / "curl"
     curl.write_text('#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > "$CURL_LOG"\n')
     curl.chmod(0o755)
-    return {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+    return {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": FIXTURE_VERSION, "GITHUB_REPOSITORY": REPO,
             "SITE_DISPATCH_TOKEN": token, "SITE_REPO": "hugmesh/hugmesh.github.io",
             "CURL_LOG": str(log)}
 
@@ -494,7 +501,7 @@ def test_site_dispatch_sends_releases_updated(tmp_path):
     body = json.loads(args[args.index("-d") + 1])
     assert body["event_type"] == "releases-updated"
     assert body["client_payload"] == {
-        "source": REPO, "kind": "studio", "version": VERSION, "tag": TAG,
+        "source": REPO, "kind": "studio", "version": FIXTURE_VERSION, "tag": TAG,
         "releases_json": f"https://github.com/{REPO}/releases/download/{TAG}/releases.json"}
     # Runs after the release, and also on a re-run whose release already exists.
     steps = _jobs()["publish"]["steps"]

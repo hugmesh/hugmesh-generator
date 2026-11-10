@@ -21,6 +21,7 @@ STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 SCRIPT = os.path.join(GENERATOR_DIR, "scripts", "release-studio.sh")
 RELEASE = os.path.join(GENERATOR_DIR, ".github", "workflows", "studio-release.yml")
+METAINFO = os.path.join(STUDIO_ROOT, "packaging", "flatpak", "org.hugmesh.ImageStudio.metainfo.xml")
 REPO = "hugmesh/hugmesh-generator"
 
 FAKE_GH = r'''#!/bin/bash
@@ -33,6 +34,7 @@ case "$1 $2" in
   "api repos/$R") echo "${FAKE_VISIBILITY:-public}"; exit 0 ;;
   "api repos/$R/git/matching-refs/tags/studio-v") printf '%s\n' $FAKE_ALL_TAGS; exit 0 ;;
   "api repos/$R/contents/studio/hugmesh_studio/__init__.py?ref=main") echo "$FAKE_INIT_B64"; exit 0 ;;
+  "api repos/$R/contents/studio/packaging/flatpak/org.hugmesh.ImageStudio.metainfo.xml?ref=main") echo "$FAKE_META_B64"; exit 0 ;;
   "api repos/$R/contents/.github/workflows/studio-release.yml?ref=refs/tags/"*) echo "$FAKE_WORKFLOW_B64"; exit 0 ;;
   "release view")
     case "$FAKE_RELEASE" in
@@ -66,6 +68,23 @@ def _b64(text: str) -> str:
     return base64.b64encode(text.encode()).decode()
 
 
+def _init(version: str) -> str:
+    """main's __init__.py at `version`, base64 as the contents API returns it."""
+    init = open(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"), encoding="utf-8").read()
+    return _b64(re.sub(r'(?m)^__version__ = "[^"]+"$', f'__version__ = "{version}"', init))
+
+
+def _meta(*appstream_versions: str) -> str:
+    """main's metainfo carrying exactly these <release> entries, base64."""
+    text = open(METAINFO, encoding="utf-8").read()
+    text = re.sub(r'(?ms)^[ \t]*<release version="([^"]+)".*?</release>\n',
+                  lambda m: m.group(0) if m.group(1) in appstream_versions else "", text)
+    for v in appstream_versions:
+        if f'<release version="{v}"' not in text:
+            text = text.replace("<releases>", f'<releases>\n    <release version="{v}" date="2026-10-21"/>', 1)
+    return _b64(text)
+
+
 def _workflow_without_republish() -> str:
     lines = open(RELEASE, encoding="utf-8").read().splitlines(keepends=True)
     start = next(i for i, l in enumerate(lines) if l.rstrip() == "      republish:")
@@ -91,6 +110,7 @@ def fake(tmp_path):
         "GH_TOKEN": "not-a-token", "GITHUB_TOKEN": "not-a-token",
         "FAKE_RELEASE": "absent", "FAKE_ALL_TAGS": "refs/tags/studio-v0.3.0-beta.1",
         "FAKE_INIT_B64": _b64(main_init),
+        "FAKE_META_B64": _meta("0.3.0~beta.2", "0.3.0~beta.1"),
         "FAKE_WORKFLOW_B64": _b64(open(RELEASE, encoding="utf-8").read()),
     }
 
@@ -123,15 +143,97 @@ def test_dry_run_prints_the_plan_and_never_dispatches(fake):
 
 
 def test_dry_run_with_no_version_proposes_the_next_beta(fake):
-    expected = subprocess.run(["python3", os.path.join(STUDIO_ROOT, "packaging", "release_version.py"), "next"],
-                              capture_output=True, text=True).stdout.strip()
+    # Counted from the newest tag on GitHub (the fixture: studio-v0.3.0-beta.1, main at
+    # the same), never from this checkout's __init__.py.
     proc, log = fake("--dry-run", stdin="y\n")
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
-    assert f"the next beta is {expected}" in proc.stdout
-    assert f"Release {expected}? [Y/n]" in proc.stdout
+    assert "the next beta is 0.3.0-beta.2" in proc.stdout
+    assert "Release 0.3.0-beta.2? [Y/n]" in proc.stdout
+    assert "tag studio-v0.3.0-beta.2" in proc.stdout
     assert "workflow run" not in log
     proc, _ = fake("--dry-run", stdin="n\n")
     assert proc.returncode == 0 and "Nothing done." in proc.stdout
+
+
+@pytest.mark.parametrize("args,main,tags,want", [
+    # the next beta, a new minor, a new major, from what was released
+    (["next"], "0.4.1-beta.1", "refs/tags/studio-v0.3.0-beta.3 refs/tags/studio-v0.4.1-beta.1", "0.4.1-beta.2"),
+    (["next-beta"], "0.4.1-beta.1", "refs/tags/studio-v0.4.1-beta.1", "0.4.1-beta.2"),
+    (["next-minor"], "0.4.1-beta.1", "refs/tags/studio-v0.4.1-beta.1", "0.5.0-beta.1"),
+    (["next-major"], "0.4.1-beta.1", "refs/tags/studio-v0.4.1-beta.1", "1.0.0-beta.1"),
+    (["next"], "0.4.0", "refs/tags/studio-v0.4.0", "0.4.1-beta.1"),
+    # the stable channel
+    (["--final"], "0.4.1-beta.3", "refs/tags/studio-v0.4.1-beta.3", "0.4.1"),
+    (["next", "--channel", "stable"], "0.4.1-beta.3", "refs/tags/studio-v0.4.1-beta.3", "0.4.1"),
+    (["next-minor", "--channel=stable"], "0.4.1-beta.3", "refs/tags/studio-v0.4.1-beta.3", "0.5.0"),
+    # main bumped by hand past every tag and never released (567a5a60): that version
+    (["next"], "0.4.0-beta.2", "refs/tags/studio-v0.3.0-beta.3", "0.4.0-beta.2"),
+    (["next-minor"], "0.4.0-beta.2", "refs/tags/studio-v0.3.0-beta.3", "0.4.0-beta.2"),
+    (["--final"], "0.4.0-beta.2", "refs/tags/studio-v0.3.0-beta.3", "0.4.0"),
+])
+def test_keywords_resolve_against_main_and_the_tags(fake, args, main, tags, want):
+    proc, log = fake(*args, "--dry-run", "--yes", FAKE_INIT_B64=_init(main), FAKE_ALL_TAGS=tags)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert f"tag studio-v{want}" in proc.stdout, proc.stdout
+    assert f"release view studio-v{want}" in log
+    if "-" in want:
+        assert "PRE-RELEASE (never latest)" in proc.stdout
+    else:
+        assert "publish the release and mark it latest" in proc.stdout
+        assert "stable channel" in proc.stdout
+    assert "workflow run" not in log
+
+
+def test_a_final_needs_the_stable_channel_and_a_beta_refuses_it(fake):
+    proc, log = fake("0.4.0", "--dry-run", FAKE_ALL_TAGS="refs/tags/studio-v0.3.0-beta.1")
+    assert proc.returncode == 2 and "--final" in proc.stderr and "LATEST" in proc.stderr, (proc.stdout, proc.stderr)
+    assert "release view" not in log, "refused before anything about the release is looked up"
+    proc, _ = fake("0.4.0", "--final", "--dry-run", FAKE_ALL_TAGS="refs/tags/studio-v0.3.0-beta.1")
+    assert proc.returncode == 0 and "mark it latest" in proc.stdout, (proc.stdout, proc.stderr)
+    proc, _ = fake("0.4.0-beta.1", "--final", "--dry-run")
+    assert proc.returncode == 2 and "is a beta" in proc.stderr
+    proc, _ = fake("0.4.0-beta.1", "--channel", "nightly", "--dry-run")
+    assert proc.returncode == 2 and "beta or stable" in proc.stderr
+
+
+def test_final_after_a_final_says_what_to_type(fake):
+    proc, _ = fake("--final", "--dry-run", "--yes", FAKE_INIT_B64=_init("0.4.0"), FAKE_ALL_TAGS="refs/tags/studio-v0.4.0")
+    assert proc.returncode == 2 and "already a final release" in proc.stderr, (proc.stdout, proc.stderr)
+
+
+def test_plan_names_a_half_bumped_main(fake):
+    # __version__ already at the target, metainfo without its <release>: the cut's bump
+    # commit adds it, and the plan says so instead of "no bump".
+    proc, _ = fake("0.4.0-beta.2", "--dry-run", FAKE_INIT_B64=_init("0.4.0-beta.2"),
+                   FAKE_META_B64=_meta("0.3.0~beta.3"), FAKE_ALL_TAGS="refs/tags/studio-v0.3.0-beta.3")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert "missing metainfo <release> entry for 0.4.0-beta.2" in proc.stdout
+    assert "no bump" not in proc.stdout
+    proc, _ = fake("0.4.0-beta.2", "--dry-run", FAKE_INIT_B64=_init("0.4.0-beta.2"),
+                   FAKE_META_B64=_meta("0.4.0~beta.2", "0.3.0~beta.3"), FAKE_ALL_TAGS="refs/tags/studio-v0.3.0-beta.3")
+    assert proc.returncode == 0 and "no bump: main is already at 0.4.0-beta.2" in proc.stdout
+
+
+def test_republish_takes_an_explicit_version_only(fake):
+    for spec in ("next", "next-minor"):
+        proc, log = fake(spec, "--republish", "--dry-run", FAKE_RELEASE="present")
+        assert proc.returncode == 2 and "explicit version" in proc.stderr, (proc.stdout, proc.stderr)
+        assert "workflow run" not in log
+
+
+def test_republish_of_a_final_still_makes_you_type_the_version(fake):
+    proc, log = fake("0.4.0", "--final", "--republish", "--yes", stdin="0.4.1\n", FAKE_RELEASE="present")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "Type 0.4.0 to confirm:" in proc.stdout and "confirmation did not match" in proc.stderr
+    assert "workflow run" not in log
+    proc, log = fake("0.4.0", "--final", "--republish", "--yes", stdin="0.4.0\n", FAKE_RELEASE="present")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert "workflow run studio-release-cut.yml" in log and "-f republish=true" in log and "-f confirm=0.4.0" in log
+
+
+def test_existing_final_release_names_the_republish_command_with_its_channel(fake):
+    proc, _ = fake("0.4.0", "--final", "--dry-run", FAKE_RELEASE="present")
+    assert proc.returncode == 2 and "0.4.0 --final --republish" in proc.stderr, proc.stderr
 
 
 @pytest.mark.parametrize("bad", ["0.3.0-rc.1", "0.3.0-SNAPSHOT", "v0.3.0", "0.3.0-beta.0"])

@@ -4,6 +4,12 @@
     release_version.py current                         -> 0.3.0-beta.1
     release_version.py next                            -> 0.3.0-beta.2
     release_version.py next --final                    -> 0.3.0
+    release_version.py next --minor                    -> 0.4.0-beta.1
+    release_version.py next --minor --final            -> 0.4.0
+    release_version.py next --major                    -> 1.0.0-beta.1
+    release_version.py resolve next-minor --main 0.3.0-beta.1 --after-tags refs/tags/studio-v0.3.0-beta.1
+                                                       -> 0.4.0-beta.1
+    release_version.py newest refs/tags/studio-v0.3.0 refs/tags/studio-v0.3.0-beta.9  -> 0.3.0
     release_version.py validate 0.3.0-beta.2           (format + MSI mapping; exit 1 if bad)
     release_version.py validate 0.3.0-beta.2 --after-tags refs/tags/studio-v0.3.0-beta.1
     release_version.py compare 0.3.0-beta.1 0.3.0      -> lt | eq | gt
@@ -148,19 +154,87 @@ def current(root: str = GENERATOR_ROOT) -> str:
     return match.group(1)
 
 
-def next_version(base: str | None = None, final: bool = False, root: str = GENERATOR_ROOT) -> str:
-    """The next beta of the current base (0.3.0-beta.1 -> 0.3.0-beta.2), or with
-    --final the base itself (0.3.0). After a final release the next beta is the next
-    PATCH's beta.1 (0.3.0 -> 0.3.1-beta.1)."""
+def next_version(base: str | None = None, final: bool = False, root: str = GENERATOR_ROOT,
+                 minor: bool = False, major: bool = False) -> str:
+    """The next version after `base` (default: the tree's __version__).
+
+    plain:            the next beta of the same base (0.3.0-beta.1 -> 0.3.0-beta.2); after a
+                      final, the next PATCH's beta.1 (0.3.0 -> 0.3.1-beta.1)
+    --final:          the base itself (0.3.0-beta.4 -> 0.3.0); refused on a final
+    --minor:          the next MINOR's beta.1 (0.3.0-beta.4 or 0.3.2 -> 0.4.0-beta.1)
+    --major:          the next MAJOR's beta.1 (0.3.0-beta.4 -> 1.0.0-beta.1)
+    --minor/--major --final: that MINOR/MAJOR's final, with no beta before it (0.4.0, 1.0.0)
+
+    Nothing here knows which version is "current" in the world; it only counts. The
+    result goes through parse(), so a number the MSI cannot carry is refused here."""
+    if minor and major:
+        raise VersionError("--minor and --major are mutually exclusive")
     version = base or current(root)
-    major, minor, patch, fin, n = parse(version)
-    if final:
+    ma, mi, pa, fin, n = parse(version)
+    if major or minor:
+        triple = f"{ma + 1}.0.0" if major else f"{ma}.{mi + 1}.0"
+        result = triple if final else f"{triple}-beta.1"
+    elif final:
         if fin:
             raise VersionError(f"{version} is already a final release")
-        return f"{major}.{minor}.{patch}"
-    if fin:
-        return f"{major}.{minor}.{patch + 1}-beta.1"
-    return f"{major}.{minor}.{patch}-beta.{n + 1}"
+        result = f"{ma}.{mi}.{pa}"
+    elif fin:
+        result = f"{ma}.{mi}.{pa + 1}-beta.1"
+    else:
+        result = f"{ma}.{mi}.{pa}-beta.{n + 1}"
+    parse(result)
+    return result
+
+
+# The words scripts/release-studio.sh (and scripts/release.sh) accept in place of a number.
+KEYWORDS = {"next": None, "next-beta": None, "next-minor": "minor", "next-major": "major"}
+
+
+def resolve(spec: str, final: bool = False, main: str | None = None, tags: list[str] | None = None) -> str:
+    """A version, or a keyword (next, next-beta, next-minor, next-major), resolved to the
+    number to release on a channel (beta, or stable with final=True).
+
+    A keyword counts from the newest studio-v* TAG, i.e. what was already released, not
+    from a checkout that may be stale. One exception: main's __version__ is PENDING when
+    it sorts after every tag (bumped, never released; 567a5a60 was one). When the
+    keyword would not get past it, the pending version is released (or its final, on
+    the stable channel) instead of a number main is already later than.
+
+    An explicit version must match the channel: a beta is refused on stable, and a
+    final X.Y.Z is refused on beta, because a final publishes as the LATEST release and
+    is the one typo nobody can take back."""
+    spec = spec.strip()
+    if spec in KEYWORDS:
+        kind = KEYWORDS[spec]
+        top = newest(tag_versions(tags or []))
+        if main is not None:
+            parse(main)
+        if top is None and main is None:
+            raise VersionError(f"{spec}: there is no studio-v* tag and no main version to count from")
+        candidate = None
+        if top is not None:
+            try:
+                candidate = next_version(top, final=final, minor=kind == "minor", major=kind == "major")
+            except VersionError as exc:
+                if main is None or compare(main, top) <= 0:
+                    raise VersionError(
+                        f"{spec} on the {'stable' if final else 'beta'} channel: {exc} "
+                        f"(newest tag {TAG_PREFIX}{top}); name the version, or use next-minor") from exc
+        pending = main is not None and (top is None or compare(main, top) > 0)
+        if pending and (candidate is None or compare(candidate, main) <= 0):
+            if is_final(main) == final and (kind is None or top is not None):
+                return main
+            return next_version(main, final=final, minor=top is None and kind == "minor",
+                                major=top is None and kind == "major")
+        return candidate
+    parse(spec)
+    if final and not is_final(spec):
+        raise VersionError(f"{spec} is a beta; the stable channel (--final) releases MAJOR.MINOR.PATCH only")
+    if not final and is_final(spec):
+        raise VersionError(
+            f"{spec} is a final release, which publishes as the LATEST release; "
+            "say so with --final (or --channel stable)")
+    return spec
 
 
 def _release_entry(version: str, date: str, indent: str) -> str:
@@ -225,8 +299,20 @@ def main(argv: list[str]) -> int:
 
     p = sub.add_parser("next", help="propose the next version")
     p.add_argument("base", nargs="?")
-    p.add_argument("--final", action="store_true")
+    p.add_argument("--final", action="store_true", help="a final MAJOR.MINOR.PATCH, not a beta")
+    step = p.add_mutually_exclusive_group()
+    step.add_argument("--minor", action="store_true", help="the next MINOR (X.Y+1.0)")
+    step.add_argument("--major", action="store_true", help="the next MAJOR (X+1.0.0)")
     p.add_argument("--root", default=GENERATOR_ROOT)
+
+    p = sub.add_parser("resolve", help="a version or keyword (next, next-beta, next-minor, next-major) -> the version")
+    p.add_argument("spec")
+    p.add_argument("--final", action="store_true", help="the stable channel")
+    p.add_argument("--main", help="main's __version__ (a keyword never counts from a local checkout)")
+    p.add_argument("--after-tags", nargs="*", default=None, help="existing studio-v* tag refs")
+
+    p = sub.add_parser("newest", help="the newest version among studio-v* tag refs (empty when none)")
+    p.add_argument("refs", nargs="*")
 
     p = sub.add_parser("validate", help="exit 0 when the version is releasable")
     p.add_argument("version")
@@ -247,7 +333,11 @@ def main(argv: list[str]) -> int:
         if args.cmd == "current":
             print(current(args.root))
         elif args.cmd == "next":
-            print(next_version(args.base, args.final, args.root))
+            print(next_version(args.base, args.final, args.root, minor=args.minor, major=args.major))
+        elif args.cmd == "resolve":
+            print(resolve(args.spec, args.final, args.main, args.after_tags))
+        elif args.cmd == "newest":
+            print(newest(tag_versions(args.refs)) or "")
         elif args.cmd == "validate":
             validate(args.version, args.after_tags)
             print(f"{args.version} ok (MSI ProductVersion {_msi_mapper().msi_version(args.version)})")

@@ -86,12 +86,12 @@ column of `repos.tsv`, so they never drift from the table:
 
 | Selector | Selects |
 |---|---|
-| `--all` (the default) | every repository, the Studio and the site |
+| `--all` (the default) | every repository, the Studio and the site (refused together with `--only` or a group) |
 | `--maven` | build-config, parent, commons, auth-core (exactly the `mvn` rows) |
 | `--services` | the gateway, the be/fe/pki overlays, the Java BFF/API images (with actions and remote-fragment), forum-api |
 | `--apps` | the Angular UIs and games |
 | `--node` | the mesh-node image (`clients/docker-mesh-node`) |
-| `--images` | every container image: services, apps and node |
+| `--images` | every container image (`kind=img`): everything but `--maven` |
 | `--studio` | the Studio, through `scripts/release-studio.sh` |
 | `--site` | rebuild hugmesh.net |
 | `--only <repo>` (repeatable) | that repository |
@@ -101,6 +101,19 @@ Any selection other than `--all` includes the Studio and the site only when you 
 them. Every repository is still read and printed; only the selected ones are acted on
 ([`--only` and the stages](#resume-and-recovery)). A run that selects no repository at
 all (`scripts/release.sh 0.5.0-beta.1 --studio`) does not read them.
+
+```bash
+scripts/release.sh --groups                     # every group and its repositories (no gh call)
+scripts/release.sh 0.5.0-beta.1 --apps          # dry run: the UIs and games only
+scripts/release.sh --apply --services --maven   # no VERSION: release what their mains say
+```
+
+The groups are read from the table's `group` column (field 8), never from a list in the
+script, so a new row is in a group the moment it is added, and a row without a known
+group (or an `mvn` row outside `maven`, or the reverse) refuses the whole table. A group
+selects exactly like `--only`: its rows are added to `--only`, every row is still checked,
+stage order and dependency stops are unchanged. `--all` cannot be combined with `--only`
+or a group; `--group <name>` is the same as `--<name>`.
 
 ## How channels work
 
@@ -138,6 +151,7 @@ independently, so a cut is "each repository's current beta, released as its stab
 | `--dry-run` (default) / `--apply` | read-only plan / do it |
 | `--yes` | answer `y` to every `y/N` except "Did you grant Read?" (web-UI pauses still wait for Enter) |
 | `--merge <repo>#<n>` (repeatable) | also merge this PR (before the bump PRs): `gh pr ready` when draft, `gh pr merge --squash --delete-branch`, then wait for the new push run (if none appears, it stops there) |
+| `--group <name>` (repeatable), `--groups` | the same as `--<name>`; `--groups` prints every group and its repositories (no `gh` call). `--all` cannot be combined with `--only` or a group |
 | `--from <phase>` | resume at a phase (re-running also skips DONE work by itself) |
 | `--expect <repo>=<version>` (repeatable) | refuse that repository unless the version this run would release is exactly this (beta: main's version file; stable: the computed `X.Y.Z`) |
 | `--urls` | only list the packages that are not public yet, with their settings pages |
@@ -544,7 +558,7 @@ second one. What moves:
 | `pom.xml` | the project's own `<version>`; every `<parent>`, dependency, plugin or extension with `groupId` `net.hugmesh` whose artifact a row of `repos.tsv` publishes, to that artifact's stable from the same run; every `<artifact>.version` property of such an artifact. Found by element, never by line number. Comments are left alone |
 | `package.json` | `version`, and its `package-lock.json` (`version` and `packages[""].version`) |
 | `composer.json`, `VERSION` | the version |
-| `repos.tsv` `mirrors` column | `frontend/package.json` (character-forge), `README.md:Version` and `CHANGELOG.md:heading` (auth-core), `gateway-pin` (the be/fe/pki `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN`, to the gateway's stable), hugmesh-games' module poms and `frontend/package.json` |
+| `repos.tsv` `mirrors` column | `frontend/package.json` (character-forge), `backend/pom.xml`, `rpg-builder/pom.xml`, `vn-builder/pom.xml` and `frontend/package.json` (games: a mirrored pom's own `<version>` moves too), `README.md:Version` and `CHANGELOG.md:heading` (auth-core), `gateway-pin` (the be/fe/pki `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN`, to the gateway's stable). A mirror already **above** the target is refused, never moved backwards |
 
 Left for a person, and said in the PR: auth-core's `CHANGELOG.md` gets a `## X.Y.Z`
 heading with a TODO line where the release notes go (its metadata test needs the prose),

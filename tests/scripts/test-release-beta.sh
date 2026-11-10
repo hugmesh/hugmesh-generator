@@ -49,6 +49,13 @@
 #      the tag goes on the release branch's re-read SHA; patches must be the next patch on
 #      an existing release branch; the next-beta PR goes to main; Studio stable is refused;
 #      every stable dry run makes zero writes;
+#   R  release groups come from the table's group column: every row of the real
+#      scripts/release/repos.tsv names a known group, the groups partition the table, the mvn
+#      rows are exactly group maven; --maven/--services/--apps/--node/--images select
+#      exactly the rows the column (or kind=img) names; an unknown, missing or misplaced
+#      group refuses the table, an unknown --group and --all with a selection are refused; a
+#      group run acts on its rows only (plan and --apply); a pom named as a mirror moves its
+#      own version, and a mirror already above the target is refused, never moved back;
 #   V  the one direct command, scripts/release.sh <VERSION> [selectors]: the beta bump phase
 #      plans/opens ONE draft PR per selected repo on release-bump/<target> (every file
 #      kind: pom with parent and pins, package.json + lock (a >1 MB lock read as a blob),
@@ -407,10 +414,15 @@ def pj(v): return json.dumps({"name": "x", "version": v}, indent=2) + "\n"
 def run(i, wf_="release.yml", br="main", sha="m1", concl="success", status="completed", days=1, ev="push"):
     return {"databaseId": i, "workflow": wf_, "headBranch": br, "headSha": sha, "event": ev, "status": status, "conclusion": concl, "createdAt": ago(days)}
 repos = {}; rows = []
+def group_of(stage, kind, vfile):
+    """the group column, as scripts/release/repos.tsv assigns it"""
+    if kind == "mvn": return "maven"
+    if stage <= 7 or vfile == "composer.json": return "services"
+    if "docker-mesh-node" in vfile: return "node"
+    return "apps"
 def add(stage, name, kind, vfile, prefix, wfname, pkgs, mirrors=None, group=None, **r):
-    if group is None:
-        group = "maven" if kind == "mvn" else "node" if "docker-mesh-node" in vfile else "apps" if stage == 8 else "services"
-    rows.append("|".join([str(stage), name, kind, vfile, prefix, wfname, pkgs, mirrors or "", group]))
+    rows.append("|".join([str(stage), name, kind, vfile, prefix, wfname, pkgs, group or group_of(stage, kind, vfile)]
+                         + ([mirrors] if mirrors else [])))
     r.setdefault("main", ["m-" + name]); r.setdefault("secrets", []); r.setdefault("tag_workflow", wfname)
     repos[name] = r
 gen_files = {"studio/hugmesh_studio/__init__.py": '__version__ = "0.9.0-beta.1"\n'}
@@ -1318,6 +1330,159 @@ check_stable_readonly() { # the read-only stub really refuses a write (so a dry 
 }
 if check_stable_readonly; then ok "the read-only stub refuses a write (exit 97) and still answers a read"; else bad "read-only stub"; fi
 
+# ── R: release groups (the table's group column) ─────────────────────────────
+echo "== R release groups"
+REAL_TABLE="$REPO/scripts/release/repos.tsv"
+# sel <script> <table> args... -> the rows the args select (ONLY after expansion), one per line
+sel() {
+  local s=$1 t=$2; shift 2
+  RELEASE_BETA_TABLE="$t" RELEASE_BETA_SOURCE_ONLY=1 bash -c 's=$1; shift; source "$s" "$@" || exit $?; printf "%s\n" "${ONLY[@]}"' _ "$s" "$@" 2>&1
+}
+# want_rows <table> <group> -> the rows an independent reading of the column assigns (images = kind img)
+want_rows() {
+  python3 -I - "$1" "$2" <<'PY'
+import sys
+t, g = sys.argv[1], sys.argv[2]
+for l in open(t):
+    l = l.rstrip("\n")
+    if not l or l.startswith("#"): continue
+    f = l.split("|")
+    if (g == "images" and f[2] == "img") or (g != "images" and len(f) > 7 and f[7] == g): print(f[1])
+PY
+}
+check_real_table() { # script -> 0 when the real table parses, every row has a known group, and the groups partition it
+  local s=$1 out all
+  python3 -I - "$REAL_TABLE" <<'PY' || return 1
+import sys
+rows, seen = [], {}
+for l in open(sys.argv[1]):
+    l = l.rstrip("\n")
+    if not l or l.startswith("#"): continue
+    f = l.split("|")
+    assert len(f) in (8, 9), ("fields", l)
+    assert f[7] in ("maven", "services", "apps", "node"), ("group", l)
+    assert (f[2] == "mvn") == (f[7] == "maven"), ("mvn<->maven", l)
+    seen.setdefault(f[7], []).append(f[1]); rows.append(f[1])
+assert len(rows) == len(set(rows)) and len(rows) >= 30, len(rows)
+assert sorted(sum(seen.values(), [])) == sorted(rows)
+assert set(seen) == {"maven", "services", "apps", "node"}, seen.keys()
+PY
+  out=$(RELEASE_BETA_TABLE="$REAL_TABLE" bash "$s" --groups 2>&1) || { echo "      --groups: $out"; return 1; }
+  # the union of --maven --services --apps --node is every row, each once
+  all=$(sel "$s" "$REAL_TABLE" --maven --services --apps --node | sort)
+  [ "$all" = "$(grep -v '^#' "$REAL_TABLE" | grep . | cut -d'|' -f2 | sort)" ] || { echo "      union of the groups is not the table"; return 1; }
+  [ -z "$(printf '%s\n' "$all" | uniq -d)" ]
+}
+if check_real_table "$SCRIPT"; then ok "R: every row of the real repos.tsv names a known group, mvn<->maven, the 4 groups partition the table"
+else bad "R: the real table's group column"; fi
+check_group_selection() { # script -> 0 when each group flag selects exactly the rows its column (or kind=img) names
+  local s=$1 g got want rc=0
+  for g in maven services apps node images; do
+    got=$(sel "$s" "$REAL_TABLE" "--$g"); want=$(want_rows "$REAL_TABLE" "$g")
+    [ -n "$want" ] || { echo "      $g: the table names no row"; rc=1; continue; }
+    [ "$got" = "$want" ] || { echo "      --$g: got [$(echo $got)] want [$(echo $want)]"; rc=1; }
+    got=$(sel "$s" "$REAL_TABLE" --group "$g")
+    [ "$got" = "$want" ] || { echo "      --group $g differs from --$g"; rc=1; }
+  done
+  # anchors that do not come from the table, so a mis-assigned row shows
+  [ "$(sel "$s" "$REAL_TABLE" --maven | paste -sd' ')" = "hugmesh-build-config hugmesh-parent hugmesh-commons hugmesh-auth-core" ] || { echo "      --maven anchor"; rc=1; }
+  [ "$(sel "$s" "$REAL_TABLE" --node)" = hugmesh-generator ] || { echo "      --node anchor"; rc=1; }
+  got=$(sel "$s" "$REAL_TABLE" --apps)
+  for want in hugmesh-host-shell hugmesh-login-ui hugmesh-games; do grep -qx "$want" <<<"$got" || { echo "      --apps lacks $want"; rc=1; }; done
+  for want in hugmesh-gateway hugmesh-admin-bff-api hugmesh-parent hugmesh-generator; do grep -qx "$want" <<<"$got" && { echo "      --apps has $want"; rc=1; }; done
+  got=$(sel "$s" "$REAL_TABLE" --services)
+  for want in hugmesh-gateway hugmesh-be-gateway hugmesh-pki-gateway hugmesh-admin-bff-api hugmesh-actions hugmesh-forum-api; do grep -qx "$want" <<<"$got" || { echo "      --services lacks $want"; rc=1; }; done
+  for want in hugmesh-host-shell hugmesh-commons hugmesh-generator; do grep -qx "$want" <<<"$got" && { echo "      --services has $want"; rc=1; }; done
+  got=$(sel "$s" "$REAL_TABLE" --images)
+  for want in hugmesh-build-config hugmesh-parent hugmesh-commons hugmesh-auth-core; do grep -qx "$want" <<<"$got" && { echo "      --images has $want"; rc=1; }; done
+  [ "$(grep -c . <<<"$got")" = "$(( $(grep -v '^#' "$REAL_TABLE" | grep -c .) - 4 ))" ] || { echo "      --images is not every row but the 4 Maven ones"; rc=1; }
+  # groups add up with each other and with --only, without duplicates
+  got=$(sel "$s" "$REAL_TABLE" --only hugmesh-host-shell --node --apps)
+  { [ "$(grep -cx hugmesh-host-shell <<<"$got")" = 1 ] && grep -qx hugmesh-generator <<<"$got"; } || { echo "      --only + groups"; rc=1; }
+  return "$rc"
+}
+if check_group_selection "$SCRIPT"; then ok "R: --maven/--services/--apps/--node/--images (and --group <g>) select exactly the rows the column names; anchors hold; groups add to --only"
+else bad "R: group selection"; fi
+# edit_table <src> <dst> <python editing r, the rows as field lists>
+edit_table() {
+  python3 -I - "$1" "$2" "$3" <<'PY'
+import sys
+src, dst, edit = sys.argv[1:4]
+r = [l.rstrip("\n").split("|") for l in open(src) if l.strip() and not l.startswith("#")]
+exec(edit)
+open(dst, "w").write("\n".join("|".join(f) for f in r) + "\n")
+PY
+}
+check_group_refusals() { # script -> 0 when every malformed group column, and every bad group argument, is refused (rc 2)
+  local s=$1 t="$TMP/rt.$RANDOM" name edit code rc=0 out
+  mkdir -p "$t"
+  # each line: name|the refusal it must print|python editing r (the real rows as field lists)
+  while IFS='|' read -r name want edit; do
+    edit_table "$REAL_TABLE" "$t/$name.tsv" "$edit"
+    out=$(RELEASE_BETA_TABLE="$t/$name.tsv" bash "$s" --groups 2>&1); code=$?
+    if [ "$code" != 2 ] || ! grep -aqF "$want" <<<"$out"; then echo "      table '$name' not refused with '$want' (rc $code): $(head -1 <<<"$out")"; rc=1; fi
+  done <<'EOF'
+unknown|names an unknown group 'appz'|r[20][7] = "appz"
+nogroup|names no group|r[20][:] = r[20][:7]
+emptygroup|names no group|r[20][7] = ""
+oldmirror|names an unknown group 'gateway-pin'|i = [x[1] for x in r].index("hugmesh-be-gateway"); r[i][:] = r[i][:7] + ["gateway-pin"]
+toomany|has more than 9 fields|r[20][:] = r[20][:8] + ["", "x"]
+mvn-in-apps|is kind mvn, so its group must be maven|r[0][7] = "apps"
+img-in-maven|is in group maven but is kind 'img'|r[20][7] = "maven"
+EOF
+  out=$(RELEASE_BETA_TABLE="$REAL_TABLE" bash "$s" --group nope 2>&1); code=$?
+  { [ "$code" = 2 ] && grep -aq "unknown group" <<<"$out"; } || { echo "      --group nope: $out"; rc=1; }
+  RELEASE_BETA_TABLE="$REAL_TABLE" bash "$s" --all --apps >/dev/null 2>&1; [ $? = 2 ] || { echo "      --all --apps accepted"; rc=1; }
+  RELEASE_BETA_TABLE="$REAL_TABLE" bash "$s" --all --only hugmesh-admin-ui >/dev/null 2>&1; [ $? = 2 ] || { echo "      --all --only accepted"; rc=1; }
+  # a known group with no row in this table is refused, never read as "everything"
+  edit_table "$REAL_TABLE" "$t/nonode.tsv" 'r[:] = [f for f in r if f[7] != "node"]'
+  out=$(RELEASE_BETA_TABLE="$t/nonode.tsv" bash "$s" --node 2>&1); code=$?
+  { [ "$code" = 2 ] && grep -aq 'no row' <<<"$out"; } || { echo "      --node over a table without node: $out"; rc=1; }
+  return "$rc"
+}
+if check_group_refusals "$SCRIPT"; then ok "R: unknown/missing/empty group, an old 8-field mirrors row, 10 fields, an mvn<->maven mismatch: table refused; --group nope, --all with a selection, an empty group: refused (rc 2)"
+else bad "R: a bad group column or argument was accepted"; fi
+check_group_run() { # script -> 0 when --apps plans and tags only the apps rows, and --maven only the Maven rows
+  local s=$1 d="$TMP/rg.$RANDOM"
+  fixture mixed "$d"; run_script "$s" "$d" --apps --no-studio
+  grep -a 'groups: --apps' "$d/out" >/dev/null || return 1
+  grep -a 'would tag: fx-ui-ready v0.3.0-beta.2' "$d/out" >/dev/null || return 1
+  ! grep -a 'would tag: fx-lib-b' "$d/out" >/dev/null || return 1
+  [ -z "$(writes "$d/calls")" ] || return 1
+  grep -aE '^would release .*; next: scripts/release.sh --apply .*--apps' "$d/out" >/dev/null || return 1   # the command to run it keeps --apps
+  fixture mixed "$d"; run_script "$s" "$d" --apply --yes --apps --no-studio
+  writes "$d/calls" | grep -a 'repos/hugmesh/fx-ui-ready/git/refs' | grep -a 'ref=refs/tags/v0.3.0-beta.2' >/dev/null || return 1
+  [ "$(writes "$d/calls" | grep -ac 'git/refs')" = 1 ] || return 1
+  fixture mixed "$d"; run_script "$s" "$d" --maven --no-studio
+  grep -a 'would tag: fx-lib-b v2.0.0-beta.3' "$d/out" >/dev/null || return 1
+  ! grep -a 'would tag: fx-ui-ready' "$d/out" >/dev/null
+}
+if check_group_run "$SCRIPT"; then ok "R: --apps plans and (--apply) tags only fx-ui-ready; --maven plans only fx-lib-b; zero writes in the dry runs; the run command keeps --apps"
+else bad "R: a group run acted outside its group"; fi
+check_mirror_bump() { # script -> 0 when a pom mirror's own version moves to the target and a mirror above it is refused
+  local s=$1 d="$TMP/rm.$RANDOM" r P
+  mkdir -p "$d/f/backend" "$d/f/frontend" "$d/g/backend" "$d/g/frontend"
+  P='<?xml version="1.0"?>\n<project xmlns="http://maven.apache.org/POM/4.0.0">\n  <parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId><version>4.0.7</version></parent>\n  <artifactId>b</artifactId>\n  <version>%s</version>\n</project>\n'
+  # shellcheck disable=SC2059
+  { printf '1.2.0-beta.3\n' > "$d/f/VERSION"; printf "$P" 1.2.0-beta.3 > "$d/f/backend/pom.xml"
+    printf '1.2.0-beta.3\n' > "$d/g/VERSION"; printf "$P" 1.3.0-beta.1 > "$d/g/backend/pom.xml"; }
+  printf '{\n  "name": "f",\n  "version": "1.2.0-beta.3"\n}\n' | tee "$d/f/frontend/package.json" > "$d/g/frontend/package.json"
+  printf '{"own":"1.2.0","pins":{},"images":{},"org":"hugmesh","vfile":"VERSION","wf":"","mirrors":["backend/pom.xml","frontend/package.json"]}\n' > "$d/spec.json"
+  r=$(RELEASE_BETA_TABLE="$REAL_TABLE" RELEASE_BETA_SOURCE_ONLY=1 bash -c 's=$1 d=$2; set --; source "$s"; python3 -I -c "$BUMP_PY" stable "$d/f" "$d/spec.json" && python3 -I -c "$BUMP_PY" stable "$d/g" "$d/spec.json"' _ "$s" "$d") || return 1
+  python3 -I - "$r" <<'PY'
+import json, sys
+a, b = [json.loads(x) for x in sys.argv[1].strip().split("\n")]
+pom = a["changed"].get("backend/pom.xml", "")
+assert "<version>1.2.0</version>" in pom and "<version>4.0.7</version>" in pom, a
+assert '"version": "1.2.0"' in a["changed"].get("frontend/package.json", ""), a
+assert a["changed"].get("VERSION") == "1.2.0\n" and not a["left"], a
+assert "backend/pom.xml" not in b["changed"], b
+assert any("backend/pom.xml is at 1.3.0-beta.1, above the target 1.2.0" in x for x in b["left"]), b
+PY
+}
+if check_mirror_bump "$SCRIPT"; then ok "R: a games-style pom mirror moves its own <version> (not its spring parent's); a mirror above the target is refused, never moved back"
+else bad "R: pom mirror bump"; fi
+
 # ── V: the one direct command: scripts/release.sh <VERSION> [selectors] ──────
 echo "== V scripts/release.sh <VERSION>: bump, supersede, merge, tag, one summary"
 summary_lines() { grep -aE '^(would release|released) [0-9]+, already done [0-9]+, refused [0-9]+ \(reasons above\), skipped [0-9]+' "$1"; }
@@ -1603,6 +1768,16 @@ mutate beta-stable-advice 's/^  if \[ -n "\$stable" \] \&\& \[ "\$(vercmp "\$nb"
 mutate tags-fail-open '/cannot read tags/s/) || {.*}$/ || true)/' check_tags_unreadable
 # T-M4 the failed read is noted but classification goes on with an empty listing
 mutate tags-fail-noreturn '/cannot read tags/s/; return; }$/; }/' check_tags_unreadable
+# R-M1..R-M9 the group column and its selectors
+mutate group-unknown 's/^  case " \${TABLE_GROUPS\[\*\]} " in \*" \$group "\*) ;; \*) die/  case x in x) ;; *) die/' check_group_refusals
+mutate group-missing 's/^  \[ -n "\${group:-}" \] || die/  true || die/' check_group_refusals
+mutate group-extra 's/^  \[ -z "\${extra:-}" \] || die/  true || die/' check_group_refusals
+mutate group-mvn 's/^  if \[ "\$kind" = mvn \] \&\& \[ "\$group" != maven \]; then die/  if false; then die/' check_group_refusals
+mutate group-empty 's/^  \[ -n "\$gr" \] || die/  true || die/' check_group_refusals
+mutate group-select 's/^    case " \${ONLY\[\*\]} " in \*" \$r "\*) ;; \*) ONLY+=("\$r") ;; esac$/    :/' check_group_run
+mutate group-images 's/^    if \[ "\$1" = images \]; then \[ "\${T_KIND\[\$r\]}" = img \]/    if [ "$1" = images ]; then [ "${T_STAGE[$r]}" != 9 ]/' check_group_selection
+mutate mirror-pom-own 's/^        new = pom(path, text, how in ("vfile", "mirror"), how == "mirror")$/        new = pom(path, text, how == "vfile", how == "mirror")/' check_mirror_bump
+mutate mirror-above 's/^    if a is not None and b is not None and a > b:$/    if False:/' check_mirror_bump
 
 # V-M1 a literal VERSION is applied to --maven / --only <library> again
 mutate v-maven-literal 's/^  if \[ \${#maven_named\[@\]} -gt 0 \]; then$/  if false; then/' check_refusals
@@ -1616,8 +1791,6 @@ mutate v-bump-dry '/^phase_bump_beta() {/,/^}/s/^  \[ "\$MODE" = dry \] \&\& ret
 mutate v-bump-dry-writes '/^phase_bump_beta() {/,/^}/s/^  \[ "\$MODE" = dry \] \&\& return 0$/  :/; s/^  if \[ "\$MODE" != apply \]; then return 1; fi$/  :/' check_literal_dry
 # V-M5 a "<file>:jar" mirror is ignored (games' Dockerfile/Makefile jar names stay behind)
 mutate v-jar-mirror 's/^    elif how == "jar":$/    elif False:/' check_literal_apply
-# V-M6 a mirror pom.xml keeps its own <version> (games' module poms stay behind)
-mutate v-mirror-pom 's/new = pom(path, text, how in ("vfile", "mirror"))/new = pom(path, text, how == "vfile")/' check_literal_apply
 # V-M7 the to-mode pin map takes every selected row, not just the ones this run bumps
 mutate v-pins-bumped-only 's/^      to) case "\${S_BUMP\[\$r\]:-}" in planned|opened) tv=\${S_TO\[\$r\]:-} ;; esac ;;$/      to) tv=${S_TO[$r]:-} ;;/' check_literal_apply
 # V-M8 the off-line report is silent
