@@ -81,20 +81,18 @@ TABLE_HEADERS = ("Domain", "Root CA certificate", "Signing CA certificate",
 #: What the step deliberately does not take, with the reason (both faces).
 NOT_TAKEN = (
     ("Root CA private key",
-     "never taken: the root stays offline. Import its certificate; sign an "
-     "intermediate with it and import that as the signing CA."),
-    ("Secure Boot signing key", "held on the Build step (Secure Boot)."),
-    ("Device registry signing key",
-     "lives in the BFF and Vault, never on a stick."),
-    ("headscale key", "no CA: each node mints its own noise key at first boot."),
+     "the root stays offline; import its certificate, and an intermediate signed "
+     "by it as the signing CA"),
+    ("Secure Boot signing key", "held on the Build step (Secure Boot)"),
+    ("Device registry signing key", "lives in the BFF and Vault, never on a stick"),
+    ("headscale key", "there is no CA; each node mints its own noise key at first boot"),
     ("Public edge TLS",
-     "Let's Encrypt or cloudflared, set in the device's go-live wizard."),
+     "Let's Encrypt or cloudflared, set in the device's go-live wizard"),
 )
 
 #: Thresholds (stated in the PR and on refusal).
 MIN_RSA_BITS = 2048
 ALLOWED_EC_CURVES = ("secp256r1", "secp384r1", "secp521r1")
-WEAK_SIGNATURE_HASHES = ("md2", "md4", "md5", "sha1")
 EXPIRY_WARN_DAYS = 30
 
 #: KEYS profile that carries the signing key (gen-provision-keys.sh --role pki).
@@ -246,13 +244,17 @@ def _key_strength_problem(public_key, what: str) -> str:
 
 
 def _signature_problem(cert, what: str) -> str:
-    try:
-        h = cert.signature_hash_algorithm
-    except Exception:
-        h = None
-    if h is not None and h.name.lower() in WEAK_SIGNATURE_HASHES:
-        return (f"the {what} is signed with {h.name.upper()}, which is broken; "
-                "re-issue it with SHA-256 or stronger")
+    # By OID, not signature_hash_algorithm: cryptography raises UnsupportedAlgorithm
+    # for exactly the broken hashes, and a swallowed exception must not read as "ok".
+    from cryptography.x509.oid import SignatureAlgorithmOID as S
+    weak = {S.RSA_WITH_MD5: "MD5", S.RSA_WITH_SHA1: "SHA1",
+            S.ECDSA_WITH_SHA1: "SHA1", S.DSA_WITH_SHA1: "SHA1"}
+    if hasattr(S, "_RSA_WITH_SHA1"):            # the non-standard sha1WithRSA OID
+        weak[S._RSA_WITH_SHA1] = "SHA1"
+    name = weak.get(cert.signature_algorithm_oid)
+    if name:
+        return (f"the {what} is signed with {name}, which is broken; re-issue it "
+                "with SHA-256 or stronger")
     return ""
 
 
@@ -511,10 +513,10 @@ def import_signing(st: DomainCAStore, domain: str, own: bool, *,
     _need_crypto()
     _check_domain(domain, own)
     prior = st.get(domain)
-    root = prior.root_cert() if prior else None
-    root_name = prior.root_name if root is not None else ""
     key = None
     warns: list[str] = []
+    bundled = None                      # a root that came IN this import, preferred
+    bundled_name = ""
     if p12_path:
         from cryptography.hazmat.primitives.serialization import pkcs12
         data = _read(p12_path)
@@ -530,11 +532,8 @@ def import_signing(st: DomainCAStore, domain: str, own: bool, *,
             raise CAImportError("the PKCS#12 file holds no private key")
         # a self-signed extra certificate in the bundle is the root it chains to
         for c in extra or ():
-            if root is None and _self_signed(c) and c != cert:
-                root_problems = ca_cert_problems(c, "root CA certificate", now)
-                if root_problems:
-                    raise CAImportError(root_problems[0])
-                root, root_name = c, os.path.basename(p12_path)
+            if bundled is None and _self_signed(c) and c != cert:
+                bundled, bundled_name = c, os.path.basename(p12_path)
         signing = cert
         name = os.path.basename(p12_path)
         if not own and key is not None:
@@ -557,8 +556,14 @@ def import_signing(st: DomainCAStore, domain: str, own: bool, *,
         # a combined file's FIRST certificate is the signing CA; a self-signed
         # certificate after it is its root
         for c in certs[1:]:
-            if root is None and _self_signed(c):
-                root, root_name = c, os.path.basename(cert_path)
+            if bundled is None and _self_signed(c):
+                bundled, bundled_name = c, os.path.basename(cert_path)
+    if bundled is not None:
+        root, root_name = bundled, bundled_name
+    elif prior is not None and prior.root_pem:
+        root, root_name = prior.root_cert(), prior.root_name
+    else:
+        root, root_name = None, ""
     if not own:
         key = None                      # an extra domain never holds a key
     warns = _check_signing(domain, own, signing, key, root, now) + warns
@@ -607,7 +612,8 @@ def import_root(st: DomainCAStore, domain: str, own: bool, cert_path: str, *,
     if prior and prior.signing_pem:
         cp = chain_problem(prior.signing_cert(), root)
         if cp:
-            raise CAImportError(cp)
+            raise CAImportError(cp + ". To rotate to a new CA, remove this domain's "
+                                     "CA first, then import the new one")
         warns = [w for w in prior.warnings if "intermediate" not in w]
     entry = DomainCA(domain=domain, own=own, root_pem=_pem(root),
                      signing_pem=prior.signing_pem if prior else b"",

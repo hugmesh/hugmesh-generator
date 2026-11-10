@@ -51,7 +51,6 @@ class DomainCAKeysPage(QtWidgets.QWizardPage):
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         hdr.setStretchLastSection(True)
-        self.table.setMinimumHeight(140)
         self.table.itemSelectionChanged.connect(self._sync_buttons)
         lay.addWidget(self.table)
 
@@ -106,7 +105,8 @@ class DomainCAKeysPage(QtWidgets.QWizardPage):
         lay.addWidget(self.checklist_box)
 
         not_taken = QtWidgets.QLabel(
-            "Not taken here: " + "; ".join(f"{what}: {why}" for what, why in dca.NOT_TAKEN))
+            "Not taken here:\n" + "\n".join(f"• {what}: {why}"
+                                             for what, why in dca.NOT_TAKEN))
         not_taken.setWordWrap(True)
         not_taken.setStyleSheet(muted())
         lay.addWidget(not_taken)
@@ -140,6 +140,14 @@ class DomainCAKeysPage(QtWidgets.QWizardPage):
                 item.setToolTip(text)
                 self.table.setItem(r, c, item)
         self.table.selectRow(min(keep, len(cells) - 1))
+        # as tall as its rows (up to six), so one domain is not a mostly empty box
+        shown = max(1, min(6, len(cells)))
+        # (room for a sideways scrollbar is kept: a long file name may need one)
+        self.table.setFixedHeight(
+            self.table.horizontalHeader().sizeHint().height()
+            + 2 * self.table.frameWidth()
+            + shown * self.table.verticalHeader().defaultSectionSize()
+            + self.table.horizontalScrollBar().sizeHint().height() + 2)
         self.checklist.setText("\n".join(self.checklist_lines()))
         if self.crypto_note:
             self.note.setText("Cannot take a CA key: " + self.crypto_note)

@@ -112,7 +112,7 @@ collected into `cfg`.
 
 - **Mesh node** (`mesh`) — skips role/hardware (branding is no longer skipped: it
   also hosts the mesh web-login theme):
-  `welcome → mode → idp → worklist → branding → network → keyzip → domains_choice → domains → domain_services → users_choice → users → system → vault → home → build → launch → progress`
+  `welcome → mode → idp → worklist → branding → network → keyzip → domains_choice → domains → domain_services → domain_ca_keys → users_choice → users → system → vault → home → build → launch → progress`
   (`domains` shows only if the Domains choice screen asked for more domains, and `users`
   only if the Users choice screen asked to name users. `domain_services` shows on every mesh
   flow, because the mesh's own domain always gets a services page.)

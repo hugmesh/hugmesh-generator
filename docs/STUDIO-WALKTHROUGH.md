@@ -98,7 +98,7 @@ Only **three** of the ten build an image. Those three are the only values the co
 | **Mesh desktop client** | `mode=cloud` | Identity provider, the worklist, the two "do you want to configure…" choice screens for domains and users, and the secrets store | `desktop` |
 | **Standalone Gentoo desktop** | `mode=standalone` | Identity provider, the worklist, the key-zip screen, both domains and users screens entirely, and the secrets store | `standalone-thick` |
 
-A mesh run reads Identity provider → Choose the images to build → Branding → Network → Load your admin config (key-zip or link) → Domains → *Domains & their services* → *Domain services* → Users → *Superusers & domain users* → System identity → Secrets store → Home folder, encryption & login → Review → Build → Building.
+A mesh run reads Identity provider → Choose the images to build → Branding → Network → Load your admin config (key-zip or link) → Domains → *Domains & their services* → *Domain services* → Domain CA keys → Users → *Superusers & domain users* → System identity → Secrets store → Home folder, encryption & login → Review → Build → Building.
 
 - *Domains & their services* shows only if the Domains choice screen before it asked for more domains (`additional_domains`).
 - *Domain services* always shows, because the mesh's own domain always gets a services page. It then walks one page per further named domain.
@@ -561,6 +561,23 @@ Moving off a domain (**Next domain**, **Back**, or leaving the page) records it 
 Every refusal renders as an inline label, never a modal. This page's own **Next** is never blocked; the block comes downstream, where it can be acted on.
 
 **Honesty note**, carried over unchanged from the old control: the selection made here does not yet reach the cluster (#496) — it is provisioning input recorded for a cluster to read later, same as before.
+
+### Domain CA keys — mesh only
+
+Operator ask, 2026-11-09: *"we need another section step of the domain config to add the private keys to the CA so everything is ready to go live in the sticks"*. The page title is **Domain CA keys** (`gui/pages/domain_ca_keys.py`; the TUI screen `tui/domain_ca_keys_step.py` and `hugmesh-studio --domain-ca check` print the same rows and checklist from `core/domain_ca_keys.py`).
+
+One row per domain: the mesh's own domain first, then every domain in the Domains table.
+
+- **The mesh's own domain** takes a **root CA certificate** and a **signing CA** (certificate and private key: PEM or DER files, or a PKCS#12 file; an encrypted key takes the *Key passphrase* field). The signing key goes to the **pki stick only**, as `certs/cluster-ca.key`, which first boot hands to Vault `pki_int` as its signing CA. kubeadm keeps its own CA (`--no-kubeadm-ca`).
+- **Every other domain** takes certificates only. No node consumes another domain's CA key yet.
+- **Every stick** gets the public certificates: `certs/cluster-ca.crt` and `certs/<domain>-root-ca.crt` (and `certs/<domain>-ca.crt` for other domains), which keys-provision adds to the node's trust store.
+- A **root CA key** is never taken: the root stays offline.
+
+An import is refused, with the reason under the buttons, when the key does not match the certificate, the certificate is not a CA (no `CA:TRUE`, or no `keyCertSign`), it is expired or not yet valid, its key is weak (RSA under 2048 bits; any curve but P-256, P-384, P-521; anything but RSA or ECDSA), it is signed with MD5 or SHA-1, or the signing CA was not issued by the domain's root.
+
+Keys are held decrypted **in this Studio's memory only**. They are never written to a config, a session record or a log; for the keys step of a build they are written to a 0600 file in a private temp folder that is removed when the step ends. A Studio restart forgets them, and a **Restart** of a session that used them refuses to dispatch until the same CA is imported again. After each node's keys are generated, the Studio checks the folder: the CA key anywhere but `certs/cluster-ca.key` on the pki stick, or any private key under `certs/` or `kubernetes/pki/` on another stick, fails that node's keys step.
+
+The **Ready to go live?** box lists, per domain, what is in place and what is missing. It needs `python-cryptography`; a Studio without it says so and takes no key. Leaving the step untouched changes nothing: the build mints a throwaway CA per pki stick, as before, and the box says *NOT ready to go live*.
 
 ## Building and finishing
 
