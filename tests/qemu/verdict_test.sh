@@ -252,6 +252,32 @@ assert rec["image"] == "hugmesh-x86-amd64-pki-test-20260816T000000Z.img", rec
 assert rec["ssh_key"] == "/home/op/qemu-runs/runs/x86_pki/id_ed25519", rec
 assert rec["qmp"] == "/home/op/qemu-runs/runs/x86_pki/launch/qmp.sock", rec
 assert rec["ssh_host_port"] == 22307 and rec["container"] == "hugmesh-qemu-dev-x86_pki", rec
+assert rec["boot_save"] == "", rec                      # a golden boot says so, explicitly
+PY
+# Boot from a save (FG5): the record names the save as a HOST path, so a reader
+# (the go-live journal, the device list) can tell a resumed device from a fresh one.
+(
+    set -uo pipefail
+    WORK="/work"; HOST_WORK="/home/op/qemu-runs"
+    ARTIFACTS="/artifacts"; HOST_ARTIFACTS="/home/op/sessions/s1"
+    DEVICES_DIR="${TMP}/devices-bs"; DEVICE_JSON="${DEVICES_DIR}/x86_pki.json"
+    LABEL="x86/pki"; PLATFORM="x86"; ROLE="pki"; BOARD=""
+    CONTAINER_NAME="hugmesh-qemu-dev-x86_pki"; SSH_HOST_PORT=22307
+    SSH_USER="tester"; GUEST_USERS=(tester)
+    SSHKEY="/work/runs/x86_pki/id_ed25519"; QMP_SOCK="/work/runs/x86_pki/launch/qmp.sock"
+    IMG="/work/images/hugmesh-x86-amd64-pki-test-20260816T000000Z.img"
+    BOOT_SAVE="/work/saves/mesh-20261109T000000Z/x86_pki.qcow2"
+    STARTED_AT="2026-11-09T00:00:00Z"; HOST_UID=""
+    warn() { :; }
+    # shellcheck disable=SC1090
+    source "${DF}"
+    write_device_record running
+) || _bad "write_device_record (boot-from-save) run failed outright"
+python3 - "${TMP}/devices-bs/x86_pki.json" <<'PY' && _ok "a boot-from-save record names its save as a HOST path (and still names the golden)" || _bad "boot_save missing/wrong in the record"
+import json, sys
+rec = json.load(open(sys.argv[1]))
+assert rec["boot_save"] == "/home/op/qemu-runs/saves/mesh-20261109T000000Z/x86_pki.qcow2", rec
+assert rec["image"] == "hugmesh-x86-amd64-pki-test-20260816T000000Z.img", rec
 PY
 # The booting record must be published BEFORE the ssh wait starts (that is the
 # whole point: a row killed during boot still leaves a findable device).

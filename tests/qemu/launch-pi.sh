@@ -52,6 +52,10 @@ RUN_DIR=""                     # scratch dir for the overlay/pidfile/console
 KERNEL_IMG_NAME="kernel_2712.img"
 ROOT_PART="/dev/vda2"          # PARTUUID image: p1=firmware/boot, p2=ext4 root
 OVERLAY_SIZE="16G"             # qcow2 overlay grows so growroot can expand
+# What --img IS. "raw" (default) is a golden build artifact; "qcow2" is a STANDALONE
+# save (run-qemu-docker.sh --save-device / core/emulation_save.py) booted again —
+# boot-from-save. Either way the per-run overlay below is the only file qemu writes.
+IMG_FORMAT="raw"
 MEM="2048"
 SMP="2"
 QEMU_CPU="cortex-a76"          # match the Pi 5 core; TCG, no KVM on this host
@@ -118,6 +122,11 @@ QEMU / guest:
       --root PART      root= device for the kernel cmdline. Default: ${ROOT_PART}
       --append STR     Extra kernel cmdline (appended verbatim).
       --overlay-size SZ  qcow2 overlay size (qemu-img resize). Default: ${OVERLAY_SIZE}
+      --img-format F   raw (default: a golden build .img) | qcow2 (a STANDALONE save
+                       from run-qemu-docker.sh --save-device, booted again). qcow2 puts
+                       the per-run overlay over the SAVE with -F qcow2, so the save is
+                       never written; it is not resized (it already carries the size
+                       the original run grew it to).
       --run-dir DIR    Scratch dir for overlay/pidfile/console. Default: <work>/qemu-run-pi
 
 Mesh (multi-node) networking — issue #48; all default-off:
@@ -172,6 +181,7 @@ while [[ $# -gt 0 ]]; do
         -w|--work-dir)     WORK_DIR="$2"; shift 2 ;;
         -r|--role)         ROLE="$2"; shift 2 ;;
         --img)             IMG="$2"; shift 2 ;;
+        --img-format)      IMG_FORMAT="$2"; shift 2 ;;
         --kernel)          KERNEL="$2"; shift 2 ;;
         --kernel-from-img) KERNEL="@from-img@"; shift ;;
         -m|--mem)          MEM="$2"; shift 2 ;;
@@ -214,6 +224,15 @@ die()  { echo "${RED}[launch-pi] ERROR:${RST} $*" >&2; exit 1; }
 # ── Tool checks (arg-parse + autodetect stay usable without these) ──────────
 command -v qemu-system-aarch64 >/dev/null || die "missing qemu-system-aarch64"
 command -v qemu-img            >/dev/null || die "missing qemu-img"
+case "${IMG_FORMAT}" in
+    raw) ;;
+    # A save is only ever named explicitly: autodetect finds GOLDEN images, and a
+    # raw golden opened as qcow2 would fail at boot instead of here.
+    qcow2) [ -n "${IMG}" ] || die "--img-format qcow2 needs an explicit --img (the saved .qcow2); autodetect only finds golden images" ;;
+    *) die "--img-format must be raw or qcow2, got '${IMG_FORMAT}'" ;;
+esac
+[ "${IMG_FORMAT}" = raw ] || [ "${KERNEL}" != "@from-img@" ] \
+    || die "--kernel-from-img reads the boot partition of a RAW image; with --img-format qcow2 pass --kernel (the kernel of the golden image this save came from)"
 
 # ── Resolve the .img (shared autodetect) ────────────────────────────────────
 autodetect_img() {
@@ -453,10 +472,27 @@ info "run dir: ${RUN_DIR}"
 
 # ── Per-run qcow2 overlay (keeps the golden .img pristine) ───────────────────
 mkdir -p "${RUN_DIR}"
+# The overlay is DELETED and recreated just below, so --img must never be this
+# run's own overlay path — with --img-format qcow2 that would be the save itself.
+[ -z "${IMG}" ] || [ "$(readlink -m "${IMG}")" != "$(readlink -m "${OVERLAY}")" ] \
+    || die "--img ${IMG} is this run's own overlay path (${OVERLAY}); it would be deleted before boot — point --img at the save, and --run-dir somewhere else"
 rm -f "${OVERLAY}"
-step "Creating qcow2 overlay over the golden image (resized to ${OVERLAY_SIZE})"
-qemu-img create -f qcow2 -b "${IMG}" -F raw "${OVERLAY}" >/dev/null
-qemu-img resize "${OVERLAY}" "${OVERLAY_SIZE}" >/dev/null
+case "${IMG_FORMAT}" in
+    raw)
+        step "Creating qcow2 overlay over the golden image (resized to ${OVERLAY_SIZE})"
+        qemu-img create -f qcow2 -b "${IMG}" -F raw "${OVERLAY}" >/dev/null
+        qemu-img resize "${OVERLAY}" "${OVERLAY_SIZE}" >/dev/null ;;
+    qcow2)
+        # BOOT FROM A SAVE. The save is a standalone qcow2 (no backing file); it
+        # becomes the overlay's READ-ONLY backing, so every guest write lands in
+        # ${OVERLAY} and the save itself is never written — the same promise the
+        # golden gets. No resize: the save's virtual size IS the overlay size the
+        # original run grew it to, and qemu-img refuses to shrink without --shrink.
+        [ "$(head -c 4 "${IMG}" | od -An -tx1 | tr -d ' \n')" = "514649fb" ] \
+            || die "--img-format qcow2: ${IMG} is not a qcow2 image (no QFI magic) — pass the .qcow2 a save wrote"
+        step "Creating qcow2 overlay over the SAVED disk (read-only backing; the save is never written)"
+        qemu-img create -f qcow2 -b "${IMG}" -F qcow2 "${OVERLAY}" >/dev/null ;;
+esac
 
 cleanup() {
     [ -f "${PIDFILE}" ] && kill "$(cat "${PIDFILE}")" 2>/dev/null || true

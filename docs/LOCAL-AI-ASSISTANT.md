@@ -798,6 +798,7 @@ assistant — not by the docs index, not by a code edit, not by a state collecto
 - `**/.env` — an environment file
 - `~/.local/share/hugmesh-local-only/**` — the operator's local-only folder
 - `<secret_files>/**` — a secret-files staging folder
+- `<state>/secrets/nvd_api_key*` — the stored NVD API key
 - `<egress_vpn_conf>` — the egress VPN provider file
 
 A question that names one gets "That file holds secrets; I do not read it." Every

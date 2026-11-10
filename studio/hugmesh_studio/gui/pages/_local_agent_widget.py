@@ -36,6 +36,7 @@ plain scan of the source root's ``hugmesh-*`` folders, and it says so.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -278,21 +279,79 @@ def _combo() -> QtWidgets.QComboBox:
     return box
 
 
-class _Job(QtCore.QThread):
+class _Job(QtCore.QObject):
     """Run one callable off the GUI thread and hand back its value, or the exception it
-    raised, as the single ``result`` payload. Never raises into Qt."""
+    raised, as the single ``result`` payload, then ``finished``. Never raises into Qt.
+
+    It keeps the slice of the ``QThread`` interface :func:`own_probe`,
+    :func:`probe_running` and ``tests/conftest.py`` use (``start``, ``isRunning``,
+    ``wait``, ``finished``), but it is NOT a QThread, and that is the point. The callable
+    runs on a DAEMON Python thread that touches no Qt (the arrangement
+    ``gui/_local_ai_dock._Threads`` already uses) and a timer on the window thread
+    delivers the value. A QThread still running when its C++ object is destroyed is
+    ``QThread: Destroyed while thread is still running``, a qFatal, and at interpreter
+    exit PySide6 destroys every Python-owned QObject: so quitting the Studio while the
+    probe was in flight killed the process with 0xC0000409 on Windows, where the default
+    probe of an Ollama that is not running waits out its 2 s connect timeout (a refused
+    loopback connect is not instant there). Measured 2026-11-10: quitting 0.3 s after
+    the card was shown aborted every time. A daemon thread is simply abandoned at exit
+    instead; a probe is read-only, and a launch cut short by the exit is left as any
+    killed process would leave it.
+    """
     result = Signal(object)
+    finished = Signal()
+
+    #: how often the window thread looks for the worker's value
+    POLL_MS = 15
 
     def __init__(self, fn: Callable[[], object], parent=None):
         super().__init__(parent)
         self._fn = fn
+        self._thread: "Optional[threading.Thread]" = None
+        self._box: list = []                       # the worker's value, once it has one
+        self._running = False
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(self.POLL_MS)
+        self._timer.timeout.connect(self._deliver)
 
-    def run(self) -> None:                         # noqa: D401 — Qt's name
-        try:
-            value = self._fn()
-        except BaseException as exc:               # noqa: BLE001 — carried to the slot
-            value = exc
+    def start(self) -> None:
+        if self._running:
+            return
+        fn, box = self._fn, self._box
+
+        def work() -> None:                        # no Qt in here, ever
+            try:
+                value = fn()
+            except BaseException as exc:           # noqa: BLE001 — carried to the slot
+                value = exc
+            box.append(value)
+
+        self._running = True
+        self._thread = threading.Thread(target=work, name="local-agent-job", daemon=True)
+        self._thread.start()
+        self._timer.start()
+
+    def _deliver(self) -> None:
+        if not self._box:
+            return
+        self._timer.stop()
+        value = self._box.pop()
+        self._running = False                      # as a QThread: not running at `finished`
         self.result.emit(value)
+        self.finished.emit()
+
+    def isRunning(self) -> bool:                   # noqa: N802 — QThread's name
+        """True from ``start()`` until ``result`` and ``finished`` have been delivered."""
+        return self._running
+
+    def wait(self, ms: int = -1) -> bool:
+        """Wait up to ``ms`` (forever if negative) for the WORKER to end; True when it
+        has. Delivery still needs the event loop, as a QThread's queued signals do."""
+        t = self._thread
+        if t is None:
+            return True
+        t.join(None if ms is None or ms < 0 else ms / 1000.0)
+        return not t.is_alive()
 
 
 class LocalAgentWidget(QtWidgets.QGroupBox):

@@ -1163,14 +1163,24 @@ class Journey:
     def prompt(self) -> str:
         return self.screen().prompt(self)
 
+    def secret_input(self) -> bool:
+        """True when the NEXT line is a secret (the NVD API key after ``nvd set``):
+        the urwid face masks its Edit, the plain face reads with getpass, and the
+        line goes straight to the screen — no global command (q, local-ai) sees it."""
+        fn = getattr(self.screen(), "secret_input", None)
+        return bool(fn(self)) if callable(fn) else False
+
     def feed(self, line: str) -> None:
         """One input line. Global: q quits the journey — EXCEPT on screens that
         declare ``wants_q`` (overlays and sub-state screens, where q means BACK
         and the screen handles it itself)."""
         self.status = ""
         self.effect = None
-        line = line.strip()
         screen = self.screen()
+        if self.secret_input():
+            screen.feed(self, line)
+            return
+        line = line.strip()
         if line.lower() == _LOCAL_AI_COMMAND:
             # global, like q: the Local AI screen opens over whatever screen this is, and
             # q returns to exactly it (an overlay that was open stays open underneath).

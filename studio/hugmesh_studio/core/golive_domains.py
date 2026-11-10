@@ -30,6 +30,11 @@ WHAT IS "BAKED" ON THE DEVICE, measured on the builders rather than assumed:
 Every path has an env seam (the driver's own ``GOLIVE_CLUSTER_DOMAIN_FILE`` and the
 registry's ``GL_ONION_EXPORT_DIR``, plus ``GOLIVE_DOMAINS_FILE``) so tests and a
 non-device host read fixtures.
+
+A GO-LIVE TARGET that is an emulated device (core.golive_target) is not this host: its
+files are read by ONE ssh probe, and the readers below take that text instead of a path
+(``baked_domains(text=…)``, ``onion_export_scan(files=…)``, ``onion_exports(files=…)``).
+With no injected text they read this host's paths exactly as before.
 """
 from __future__ import annotations
 
@@ -99,15 +104,22 @@ def _read_lines(path: str) -> list[str] | None:
         return None
 
 
-def baked_domains(primary: str = "", domains_file: str | None = None) -> list[str]:
+def baked_domains(primary: str = "", domains_file: str | None = None, *,
+                  text: str | None = None) -> list[str]:
     """The domains this device serves, primary FIRST, deduped, in file order.
 
     ``primary`` is what the driver autofills (the baked cluster domain); then every
     line of ``/etc/hugmesh/domains`` (``$GOLIVE_DOMAINS_FILE``) that is a DNS name —
-    comments, blanks and junk are skipped, never passed on to ``--domain``."""
-    path = domains_file or os.environ.get("GOLIVE_DOMAINS_FILE", DOMAINS_FILE)
+    comments, blanks and junk are skipped, never passed on to ``--domain``. ``text``
+    is that file's content read elsewhere (an emulated target's probe); given, no
+    host path is opened."""
+    if text is not None:
+        words = [ln.strip() for ln in text.splitlines()]
+    else:
+        words = _read_words(domains_file or os.environ.get("GOLIVE_DOMAINS_FILE",
+                                                           DOMAINS_FILE))
     out: list[str] = []
-    for name in [(primary or "").strip().lower(), *_read_words(path)]:
+    for name in [(primary or "").strip().lower(), *words]:
         name = name.lower()
         if name and not name.startswith("#") and _DNS_RE.match(name) and name not in out:
             out.append(name)
@@ -152,7 +164,8 @@ def onion_export_state(export_dir: str | None = None
     return onion_export_scan(export_dir)[:4]
 
 
-def onion_export_scan(export_dir: str | None = None
+def onion_export_scan(export_dir: str | None = None, *,
+                      files: dict[str, str] | None = None
                       ) -> tuple[str, list[tuple[str, str]], str, str, str]:
     """:func:`onion_export_state` plus a fifth item: ``"<path>: <reason>; ..."`` for
     every ``<slug>.hostname`` file that exists in a LISTABLE directory but cannot be
@@ -162,7 +175,15 @@ def onion_export_scan(export_dir: str | None = None
     is root-only — and the round-3 review measured that case dropping that domain from
     the plan with no row at all (the reason was filed under the primary's, which a
     known primary never shows). The third item keeps meaning "``hostname`` itself, or,
-    when it was fine, nothing"; a refused slug file no longer lands in it."""
+    when it was fine, nothing"; a refused slug file no longer lands in it.
+
+    ``files`` (``{"hostname": text, "<slug>.hostname": text}``) is the export read
+    ELSEWHERE — an emulated target's probe, run as root on the device, so nothing in
+    it is unreadable. Given, no host path is opened and the reasons are "", and the
+    host's ``GL_ONION_HOSTNAME`` is not consulted: that variable never reaches the
+    device's driver, so its card would not use it either."""
+    if files is not None:
+        return _scan_files(files)
     d = export_dir or os.environ.get("GL_ONION_EXPORT_DIR", ONION_EXPORT_DIR)
     unreadable = ""
     refused: list[str] = []
@@ -205,10 +226,30 @@ def onion_export_scan(export_dir: str | None = None
     return primary, per, unreadable, unlistable, "; ".join(refused)
 
 
-def onion_exports(export_dir: str | None = None) -> tuple[str, list[tuple[str, str]]]:
+def _scan_files(files: dict[str, str]
+                ) -> tuple[str, list[tuple[str, str]], str, str, str]:
+    """:func:`onion_export_scan` over already-read file contents (same filters)."""
+    def first(text: str) -> str:
+        return next((w.strip() for w in (text or "").splitlines() if w.strip()), "")
+    head = first(files.get("hostname", ""))
+    primary = head if _ONION_RE.match(head) else ""
+    per: list[tuple[str, str]] = []
+    for fn in sorted(files):
+        if not fn.endswith(".hostname") or fn == "hostname":
+            continue
+        slug, addr = fn[: -len(".hostname")], first(files[fn])
+        if _SLUG_RE.match(slug) and _ONION_RE.match(addr):
+            per.append((slug, addr))
+    return primary, per, "", "", ""
+
+
+def onion_exports(export_dir: str | None = None, *,
+                  files: dict[str, str] | None = None
+                  ) -> tuple[str, list[tuple[str, str]]]:
     """``(primary onion, [(slug, onion), ...])`` — :func:`onion_export_state` without
-    the reasons; callers that render a plan want the reasons and use the state."""
-    primary, per, _unreadable, _unlistable = onion_export_state(export_dir)
+    the reasons; callers that render a plan want the reasons and use the state.
+    ``files`` as for :func:`onion_export_scan`."""
+    primary, per = onion_export_scan(export_dir, files=files)[:2]
     return primary, per
 
 
@@ -401,9 +442,16 @@ def plan_rows(driver, opts) -> list[tuple[str, str]]:
     p = driver.provider(opts.provider) if opts.provider else None
     mechanism = p.mechanism if p else ""
     label = f"{p.model} ({p.mechanism})" if p else "(no provider picked)"
-    domains = baked_domains(driver.autofill_domain())
+    # A target-aware driver (core.golive_target) answers for the node it targets — an
+    # emulated device's files come from its probe; a plain driver reads this host.
+    target_domains = getattr(driver, "baked_domains", None)
+    domains = (target_domains() if callable(target_domains)
+               else baked_domains(driver.autofill_domain()))
     chosen = norm_domain(opts.domain) or (domains[0] if domains else "")
-    onion, per, unreadable, unlistable, refused = onion_export_scan()
+    target_scan = getattr(driver, "onion_scan", None)
+    onion, per, unreadable, unlistable, refused = (
+        target_scan() if callable(target_scan) else onion_export_scan())
+    remote = getattr(driver, "remote", False) is True
     # #582: with the onion mechanism a domain names WHICH onion. Said for a domain
     # other than the cluster domain, and only when this host knows its cluster domain
     # (elsewhere the typed one may be the node's own, which the node's onion opens).
@@ -413,6 +461,7 @@ def plan_rows(driver, opts) -> list[tuple[str, str]]:
     if mechanism == "onion" and primary and chosen and chosen != primary and lookup:
         chosen_onion = str(lookup(chosen) or "")
     return exposure_rows(domains, chosen, p.id if p else "?", mechanism, label,
-                         onion, per, unreadable, onion_override_problem(),
+                         onion, per, unreadable,
+                         "" if remote else onion_override_problem(),
                          listing_unreadable=unlistable, domain_files_unreadable=refused,
                          chosen_onion=chosen_onion)

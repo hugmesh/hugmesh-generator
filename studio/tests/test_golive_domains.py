@@ -740,3 +740,29 @@ def test_the_generate_exposure_pane_fits_six_rows_and_grows_with_the_window(wiz,
     assert box.minimumHeight() >= box.content_height() or (
         box.minimumHeight() == golive_mod.EXPOSURE_PANE_MAX_PX)
     wiz.close()
+
+
+# ── a go-live TARGET's files, read by its ssh probe (core.golive_target) ────────────
+def test_baked_domains_reads_injected_text_and_never_the_host_file(tmp_path, monkeypatch):
+    host = tmp_path / "host-domains"
+    host.write_text("host-only.example\n")
+    monkeypatch.setenv("GOLIVE_DOMAINS_FILE", str(host))
+    from hugmesh_studio.core.golive_domains import baked_domains as bd
+    assert bd("example.org", text="# c\nshop.example.org\n\nNOT A NAME\n") == [
+        "example.org", "shop.example.org"]
+    assert bd("example.org", text="") == ["example.org"]
+    assert bd("example.org") == ["example.org", "host-only.example"]     # default unchanged
+
+
+def test_onion_scan_reads_injected_files_and_ignores_the_host_override(tmp_path, monkeypatch):
+    from hugmesh_studio.core.golive_domains import onion_export_scan, onion_exports
+    monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(tmp_path / "absent"))
+    monkeypatch.setenv("GL_ONION_HOSTNAME", "c" * 56 + ".onion")
+    files = {"hostname": ONION_A + "\n", "shop.hostname": ONION_B,
+             "Bad_Slug.hostname": ONION_B, "junk.hostname": "not-an-onion",
+             "notes.txt": ONION_B}
+    assert onion_export_scan(files=files) == (ONION_A, [("shop", ONION_B)], "", "", "")
+    assert onion_exports(files=files) == (ONION_A, [("shop", ONION_B)])
+    assert onion_export_scan(files={}) == ("", [], "", "", "")
+    # the host path keeps honouring the override exactly as before
+    assert onion_export_scan()[0] == "c" * 56 + ".onion"

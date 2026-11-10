@@ -10,7 +10,7 @@ work, the greeter says why and the local path is untouched. Nothing hangs.
 
 | path | credential | needs | who |
 |------|------------|-------|-----|
-| **A. local** | the account's password in `/etc/shadow` | nothing | the `--local-pass` user (standalone), KEYS `users.json` users, the keyless first-boot fallback user |
+| **A. local** | the account's password in `/etc/shadow` | nothing | the `--local-pass` user (standalone), KEYS `users.json` users, the keyless first-boot fallback user. The `--local-pass` and fallback users are administrators only with `--local-admin` (`docs/STANDALONE-DESKTOP.md`) |
 | **B. SSO** | approval at the per-domain IdP (`https://id.<domain>`, RFC 8628 device flow) | the IdP reachable (usually over the tailnet) | anyone the IdP knows; the account is created on the device on first sign-in |
 | **B'. SSO offline** | the user's offline password (set during an online SSO sign-in) | nothing, while the bounded cache is valid | SSO-managed accounts only |
 
@@ -24,17 +24,63 @@ lightdm-gtk-greeter speaks plain PAM. The hint line above the password box
   helper steps aside without a network call.
 * **SSO**: pick or type the user name (`greeter-show-manual-login=true`, so a
   user the device has never seen can type theirs), leave the password
-  **empty**, press Enter. The greeter shows *"open `<url>` on any device and
-  enter the code `XXXX-XXXX`"*. Approve on a phone or any browser. The session
-  starts. Bounded: `LOGIN_TIMEOUT` (180 s) or the code's own expiry, then the
-  greeter is back; Cancel works at any time.
+  **empty**, press Enter. The greeter shows *"open `<url>` on your phone or any
+  browser and enter the code `XXXX-XXXX`"* and *"Sign in to `id.<domain>` there
+  if it asks (MFA applies), then approve. Type your SSO password only on that
+  page, never on this screen."* So, on the phone or browser:
+  1. open the URL. Casdoor's URL already carries the code; the page shows it
+     as *"Confirmation code"* — check it matches the one on the greeter;
+  2. **sign in to the IdP if it asks** — a browser that is already signed in to
+     `id.<domain>` also gets a *"Continue with your current account"* button
+     above the form; a fresh one gets only the IdP's own user name / password
+     form, and a user who has MFA
+     enrolled is then asked for the second factor (TOTP) before anything is
+     approved;
+  3. **approve** (*"Approve and sign in"*, or the continue button). The session
+     starts.
+
+  **Never type the IdP password on the desktop**: the greeter's password box
+  means the LOCAL (or offline) password, and the greeter only ever shows a URL
+  and a code. Bounded: `LOGIN_TIMEOUT` (180 s) or the code's own expiry, then
+  the greeter is back; Cancel works at any time.
   *IdP side*: Casdoor starts a device flow only for an application that lists
   the **"Device login" sign-in method** (the `device_code` grant alone gets
-  `unauthorized_client` — #878). The `hugmesh-desktop` seed
-  (`manifests/casdoor/init-job.yaml`) lists only that method and leaves
-  Password off, so the approval page accepts a browser that is already signed
-  in to the IdP (quick sign-in) and refuses a password typed into it.
-  `tests/scripts/test-casdoor-init-honesty.sh` §2c holds every seed to this.
+  `unauthorized_client` — #878). With that method **alone** the approval page
+  `/login/oauth/device/<code>` is a dead end for a browser that is not signed in
+  to the IdP: it shows *"To access HugMesh Desktop (PKCE):"* and no input and no
+  button. The `hugmesh-desktop` seed (`manifests/casdoor/init-job.yaml`)
+  therefore lists **Device login + Password**: the approval page renders the
+  application's own sign-in form, and signing in there IS the approval.
+  Measured against `casbin/casdoor:3.80.0`:
+  * a fresh browser gets the sign-in form; `alice` signs in, the desktop's token
+    poll returns her token (`name` alice, `roles` [desktop-user], `aud`
+    hugmesh-desktop);
+  * a user with TOTP enrolled gets the MFA step after the password, and the
+    token poll stays `authorization_pending` until the code is entered (the
+    org's MFA policy, `reconcile_org_mfa`, is enforced by `/api/login` for every
+    application). After a correct code casdoor 3.80.0 approves the device but
+    leaves its page on the MFA form (no *"Logged in successfully"*); the
+    desktop signs in regardless;
+  * a browser already signed in to the IdP gets *"Continue with your current
+    account to approve this sign-in"* above the form, one tap approves;
+  * the **resource-owner password grant stays refused**
+    (`grant_type=password` -> `unsupported_grant_type`): the Password sign-in
+    *method* is not the password *grant*, which is `grantTypes` alone and
+    omits `password`.
+
+  Two consequences to know. Casdoor keys sign-in methods per application, not
+  per page, so the PKCE authorize page for `hugmesh-desktop` also gets the
+  sign-in form (the ordinary auth-code model, the IdP's page in a browser;
+  nothing shipped drives that page — the greeter and `hugmesh-sso-token` use
+  the device grant). And leaving Password off was never a server-side barrier:
+  casdoor 3.80.0's `/api/login` checks the password method only when the
+  request names `signinMethod: "Password"`, so a request that omits it signed
+  in and approved a device code with Password off too. The defences are the
+  ones above: the greeter never sees the password, MFA applies on the IdP page,
+  and the password grant is off.
+  `tests/scripts/test-casdoor-init-honesty.sh` §2c holds every seed to this:
+  Device login present, a sign-in method the approval page can render
+  (Password), and no `password` grant on the public device client.
 * **SSO offline**: type the offline password instead. To set or change it, type
   the password you want and approve one more online sign-in (the greeter says
   so). It works while the cache is valid (`OFFLINE_MAX_AGE_DAYS`, 14 by
@@ -113,7 +159,8 @@ LTS, Orange Pi 5):
   KEYS chain to run the mapper, so baking it would strip `wheel` from KEYS users
   with nothing to replace it. A standalone SSO user gets `wheel` only while the
   IdP says `desktop-admin`. SSO OFF bakes no governance dir either: the image
-  stays ungoverned and `wheel` sudo stays.
+  stays ungoverned and `wheel` sudo stays. The local login account joins `wheel`
+  only when the build passed `--local-admin`.
 
 **Runtime** (root, on the device; contacts nothing):
 
