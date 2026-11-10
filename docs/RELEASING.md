@@ -39,6 +39,28 @@ The script is [`scripts/release.sh`](../scripts/release.sh);
 The list of what gets released is [`scripts/release/repos.tsv`](../scripts/release/repos.tsv):
 38 repositories in nine dependency stages. That list holds **no version numbers**.
 
+Each row also names its **group**, so a release can be the whole org or one part of it:
+
+```bash
+scripts/release.sh --groups                     # every group and its repositories (no gh call)
+scripts/release.sh --apps                       # dry run: the UIs and games only
+scripts/release.sh --apply --services --maven   # groups add up, and add to --only
+```
+
+| Group | Rows |
+|---|---|
+| `--maven` | the Maven chain: build-config, parent, commons, auth-core (exactly the `kind=mvn` rows) |
+| `--services` | the gateway, its be/fe/pki overlays, the Java BFF/API images, actions, remote-fragment, forum-api |
+| `--apps` | the Angular UIs and games |
+| `--node` | the mesh-node image |
+| `--images` | every `kind=img` row: everything but `--maven` |
+| `--all` (the default) | every row; refused together with `--only` or a group |
+
+The groups are read from the table's `group` column, never from a list in the script, so
+a new row is in a group the moment it is added (and a row without a known group refuses
+the whole table). A group selects exactly like `--only`: every row is still checked, stage
+order and dependency stops are unchanged, and only the group's rows are acted on.
+
 ## How channels work
 
 The **tag decides the channel**. A tag with `-beta.N` is a beta; a plain `X.Y.Z` is
@@ -70,6 +92,7 @@ independently, so a cut is "each repository's current beta, released as its stab
 | `--merge <repo>#<n>` (repeatable) | before releasing: `gh pr ready` (when draft) and `gh pr merge --squash --delete-branch`, then wait for the new main push run (if none appears, it stops there) |
 | `--studio <version>` / `--studio next` / `--no-studio` | release the Studio through `scripts/release-studio.sh` (see below; beta only for now) |
 | `--only <repo>` (repeatable) | act on these repositories only; every repository is still checked, and a stage with none of them is skipped |
+| `--maven` / `--services` / `--apps` / `--node` / `--images`, `--group <name>` (repeatable) | add a group's repositories to `--only` (see the table above); `--groups` lists them; `--all` is every row |
 | `--from <phase>` | resume at a phase (re-running also skips DONE work by itself) |
 | `--expect <repo>=<version>` (repeatable) | refuse that repository unless the version this run would release is exactly this (beta: main's version file; stable: the computed `X.Y.Z`) |
 | `--urls` | only list the packages that are not public yet, with their settings pages |
@@ -381,7 +404,7 @@ second one. What moves:
 | `pom.xml` | the project's own `<version>`; every `<parent>`, dependency, plugin or extension with `groupId` `net.hugmesh` whose artifact a row of `repos.tsv` publishes, to that artifact's stable from the same run; every `<artifact>.version` property of such an artifact. Found by element, never by line number. Comments are left alone |
 | `package.json` | `version`, and its `package-lock.json` (`version` and `packages[""].version`) |
 | `composer.json`, `VERSION` | the version |
-| `repos.tsv` `mirrors` column | `frontend/package.json` (character-forge), `README.md:Version` and `CHANGELOG.md:heading` (auth-core), `gateway-pin` (the be/fe/pki `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN`, to the gateway's stable) |
+| `repos.tsv` `mirrors` column | `frontend/package.json` (character-forge), `backend/pom.xml`, `rpg-builder/pom.xml`, `vn-builder/pom.xml` and `frontend/package.json` (games: a mirrored pom's own `<version>` moves too), `README.md:Version` and `CHANGELOG.md:heading` (auth-core), `gateway-pin` (the be/fe/pki `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN`, to the gateway's stable). A mirror already **above** the target is refused, never moved backwards |
 
 Left for a person, and said in the PR: auth-core's `CHANGELOG.md` gets a `## X.Y.Z`
 heading with a TODO line where the release notes go (its metadata test needs the prose),

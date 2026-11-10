@@ -9,6 +9,9 @@
 #   scripts/release.sh --apply --from java          # resume at a phase (re-running skips DONE work anyway)
 #   scripts/release.sh --apply --only hugmesh-admin-ui   # act on these repos only (repeatable);
 #                                                   # stages with none of them are skipped, never a stop
+#   scripts/release.sh --apps                       # act on one GROUP of repos (see --groups);
+#   scripts/release.sh --apply --services --maven   # groups add up, and add to --only
+#   scripts/release.sh --groups                     # print every group and its repos (no gh call)
 #   scripts/release.sh --urls                       # only list the packages that are not public yet
 #   scripts/release.sh --channel stable             # dry run of a stable cut: release/X.Y per repo
 #   scripts/release.sh --channel stable --apply     # cut, bump PRs, tag, next-beta PRs (asks first)
@@ -18,6 +21,8 @@
 # Options: --channel beta|stable (default beta)   --dry-run (default) | --apply
 #   --yes (answer y to every y/N; each action is still printed)
 #   --merge <repo>#<n> (repeatable)   --only <repo> (repeatable)   --from <phase>
+#   --all (every row: the default)    --maven | --services | --apps | --node | --images
+#   --group <name> (repeatable: maven, services, apps, node, images)   --groups
 #   --studio <version>|next | --no-studio   --expect <repo>=<version> (repeatable pin)
 #   --version X.Y.Z (stable only, needs --only: a patch release on release/X.Y)
 #
@@ -25,6 +30,13 @@
 #                 studio visibility site verify
 # Phases, stable: preflight cut bump merge maven apps rerun gateway gateway-access overlays
 #                 java studio visibility site next verify
+#
+# Groups come from the table's group column (scripts/release/repos.tsv), never from a list
+# in this script: maven = the Maven chain (stages 1-4), services = the gateway, its
+# overlays, the Java BFF/API images and forum-api, apps = the UIs and games, node = the
+# mesh-node image; images = every kind=img row (all but maven). A group selects rows
+# exactly like --only does: every row is still classified, only the selected ones are
+# acted on, and stage order is kept.
 #
 # Versions are never typed here (except a stable patch's --version): each repo's version
 # is read from its version file (scripts/release/repos.tsv says which file). BETA releases
@@ -60,6 +72,7 @@ usage() { sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed
 
 MODE=dry; YES=false; FROM=preflight; STUDIO=""; URLS_ONLY=false; CHANNEL=beta; PATCH_VERSION=""
 ONLY=(); MERGES=(); declare -A EXPECT=()
+SEL_GROUPS=(); ALL=false; LIST_GROUPS=false
 ORIG_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -71,6 +84,11 @@ while [ $# -gt 0 ]; do
     --yes|-y) YES=true; ORIG_ARGS+=("$1") ;;
     --urls) URLS_ONLY=true ;;
     --only) shift; ONLY+=("${1:?--only needs a repo}"); ORIG_ARGS+=(--only "$1") ;;
+    --all) ALL=true; ORIG_ARGS+=("$1") ;;
+    --maven|--services|--apps|--node|--images) SEL_GROUPS+=("${1#--}"); ORIG_ARGS+=("$1") ;;
+    --group) shift; SEL_GROUPS+=("${1:?--group needs a group name (see --groups)}"); ORIG_ARGS+=(--group "$1") ;;
+    --group=*) SEL_GROUPS+=("${1#--group=}"); ORIG_ARGS+=("$1") ;;
+    --groups) LIST_GROUPS=true ;;
     --merge) shift; MERGES+=("${1:?--merge needs <repo>#<number>}"); ORIG_ARGS+=(--merge "$1") ;;
     --from) shift; FROM="${1:?--from needs a phase}" ;;
     --studio) shift; STUDIO="${1:?--studio needs a version, or next}"; ORIG_ARGS+=(--studio "$1") ;;
@@ -132,18 +150,57 @@ FROM_I=$(phase_index "$FROM") || die "--from: unknown phase '$FROM' (phases: ${P
 
 # ── the table ────────────────────────────────────────────────────────────────
 [ -r "$TABLE" ] || die "cannot read the repo table $TABLE"
+# The groups a row may name (the table's group column). "images" is not a column value: it
+# is every kind=img row, derived below.
+TABLE_GROUPS=(maven services apps node)
 ROWS=()
-declare -A T_STAGE=() T_KIND=() T_VFILE=() T_PREFIX=() T_WF=() T_PKGS=() T_MIRRORS=()
-while IFS='|' read -r st repo kind vfile prefix wf pkgs mirrors; do
+declare -A T_STAGE=() T_KIND=() T_VFILE=() T_PREFIX=() T_WF=() T_PKGS=() T_MIRRORS=() T_GROUP=()
+while IFS='|' read -r st repo kind vfile prefix wf pkgs group mirrors extra; do
   case "$st" in ''|'#'*) continue ;; esac
   case "$st" in [1-9]) ;; *) die "$TABLE: bad stage '$st' for '$repo'" ;; esac
   case "$kind" in mvn|img) ;; *) die "$TABLE: bad kind '$kind' for '$repo'" ;; esac
   [ -n "$repo" ] && [ -n "$vfile" ] && [ -n "$prefix" ] && [ -n "$wf" ] && [ -n "$pkgs" ] || die "$TABLE: incomplete row for '$repo'"
+  [ -z "${extra:-}" ] || die "$TABLE: '$repo' has more than 9 fields (stage|repo|kind|version file|tag prefix|workflow|packages|group[|mirrors])"
+  [ -n "${group:-}" ] || die "$TABLE: '$repo' names no group (field 8; one of: ${TABLE_GROUPS[*]})"
+  case " ${TABLE_GROUPS[*]} " in *" $group "*) ;; *) die "$TABLE: '$repo' names an unknown group '$group' (field 8; one of: ${TABLE_GROUPS[*]})" ;; esac
+  # the Maven group IS the Maven libraries: neither can drift from the other
+  if [ "$kind" = mvn ] && [ "$group" != maven ]; then die "$TABLE: '$repo' is kind mvn, so its group must be maven, not '$group'"; fi
+  if [ "$group" = maven ] && [ "$kind" != mvn ]; then die "$TABLE: '$repo' is in group maven but is kind '$kind' (maven is the mvn rows)"; fi
   [ -z "${T_STAGE[$repo]:-}" ] || die "$TABLE: '$repo' is listed twice"
   ROWS+=("$repo")
-  T_STAGE[$repo]=$st; T_KIND[$repo]=$kind; T_VFILE[$repo]=$vfile; T_PREFIX[$repo]=$prefix; T_WF[$repo]=$wf; T_PKGS[$repo]=$pkgs; T_MIRRORS[$repo]=${mirrors:-}
+  T_STAGE[$repo]=$st; T_KIND[$repo]=$kind; T_VFILE[$repo]=$vfile; T_PREFIX[$repo]=$prefix; T_WF[$repo]=$wf; T_PKGS[$repo]=$pkgs; T_MIRRORS[$repo]=${mirrors:-}; T_GROUP[$repo]=$group
 done < "$TABLE"
 [ ${#ROWS[@]} -gt 0 ] || die "$TABLE has no rows"
+
+# rows_in_group <group> -> its rows in table order (images = every kind=img row)
+rows_in_group() {
+  local r
+  for r in "${ROWS[@]}"; do
+    if [ "$1" = images ]; then [ "${T_KIND[$r]}" = img ] && echo "$r"
+    else [ "${T_GROUP[$r]}" = "$1" ] && echo "$r"; fi
+  done
+  return 0
+}
+if [ "$LIST_GROUPS" = true ]; then
+  for g in "${TABLE_GROUPS[@]}" images; do
+    printf '%-9s %s\n' "$g" "$(rows_in_group "$g" | paste -sd' ' -)"
+  done
+  exit 0
+fi
+# --maven/--services/--apps/--node/--images/--group add the group's rows to --only.
+GROUP_SEL=""
+if [ "$ALL" = true ]; then
+  [ ${#ONLY[@]} -eq 0 ] && [ ${#SEL_GROUPS[@]} -eq 0 ] || die "--all selects every row; it cannot be combined with --only or a group"
+fi
+for g in "${SEL_GROUPS[@]}"; do
+  case " ${TABLE_GROUPS[*]} images " in *" $g "*) ;; *) die "--group '$g': unknown group (groups: ${TABLE_GROUPS[*]} images; see --groups)" ;; esac
+  gr=$(rows_in_group "$g")
+  [ -n "$gr" ] || die "--$g: no row of $TABLE is in group $g"
+  for r in $gr; do
+    case " ${ONLY[*]} " in *" $r "*) ;; *) ONLY+=("$r") ;; esac
+  done
+  GROUP_SEL="$GROUP_SEL --$g"
+done
 for o in "${ONLY[@]}"; do [ -n "${T_STAGE[$o]:-}" ] || die "--only $o: not a repo in $TABLE"; done
 for o in "${!EXPECT[@]}"; do [ -n "${T_STAGE[$o]:-}" ] || die "--expect $o: not a repo in $TABLE"; done
 for m in "${MERGES[@]}"; do [[ "$m" =~ ^[A-Za-z0-9._-]+#[0-9]+$ ]] || die "--merge '$m': expected <repo>#<number>"; done
@@ -758,6 +815,19 @@ org = spec.get("org", "hugmesh")
 vfile = spec["vfile"]
 wf = spec.get("wf", "")
 BETA = re.compile(r"-beta\.[0-9]+$")
+VER = re.compile(r"^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-beta\.([0-9]+))?$")
+def vkey(v):
+    m = VER.match(v or "")
+    if not m:
+        return None
+    return tuple(int(x) for x in m.groups()[:3]) + ((int(m.group(4)) if m.group(4) else float("inf")),)
+def above(path, old):
+    """a MIRROR already past the target is never moved backwards: noted, nothing written"""
+    a, b = vkey(old), vkey(own)
+    if a is not None and b is not None and a > b:
+        res["left"].append("%s is at %s, above the target %s; it is not moved backwards (fix the version file or the mirror by hand)" % (path, old, own))
+        return True
+    return False
 res = {"changed": {}, "summary": [], "left": [], "notes": [], "missing": []}
 
 def rd(p):
@@ -773,7 +843,7 @@ def line_of(text, pos):
 TOKEN = re.compile(r"<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>|<![A-Za-z][^>]*>"
                    r"|<(/?)([A-Za-z_][\w.:-]*)((?:[^>\"']|\"[^\"]*\"|'[^']*')*?)(/?)>", re.S)
 
-def pom(path, text, is_vfile):
+def pom(path, text, is_vfile, is_mirror=False):
     edits = []
     stack = []
     def pin(where, art, v, s, e, gid_ok):
@@ -813,6 +883,8 @@ def pom(path, text, is_vfile):
                 vs = v.strip()
                 if mode == "check":
                     pass
+                elif is_mirror and above(path, vs):
+                    return None
                 elif vs != own:
                     edits.append((s, e, v.replace(vs, own)))
                     res["summary"].append("%s:%d project version %s -> %s" % (path, line_of(text, s), vs, own))
@@ -841,7 +913,7 @@ def detect_indent(text):
     m = re.search(r"\n([ \t]+)\"", text)
     return m.group(1) if m else "  "
 
-def jsonfile(path, text, lock):
+def jsonfile(path, text, lock, is_mirror=False):
     try:
         d = json.loads(text)
     except Exception:
@@ -855,6 +927,8 @@ def jsonfile(path, text, lock):
     old = d.get("version")
     if mode == "check":
         return text
+    if is_mirror and isinstance(old, str) and above(path, old):
+        return None
     changes = []
     if old != own:
         d["version"] = own
@@ -878,10 +952,12 @@ def jsonfile(path, text, lock):
     res["summary"].append("%s %s" % (path, "; ".join(changes)))
     return out
 
-def versionfile(path, text):
+def versionfile(path, text, is_mirror=False):
     first, sep, rest = text.partition("\n")
     if mode == "check" or first.strip() == own:
         return text
+    if is_mirror and above(path, first.strip()):
+        return None
     res["summary"].append("%s %s -> %s" % (path, first.strip(), own))
     return own + sep + rest if sep else own + "\n"
 
@@ -944,13 +1020,14 @@ def handle(path, how):
     elif how == "changelog":
         new = changelog(path, text)
     elif base == "pom.xml":
-        new = pom(path, text, how == "vfile")
+        # a pom named as a mirror is a version file too: its own <version> moves
+        new = pom(path, text, how in ("vfile", "mirror"), how == "mirror")
     elif base == "package-lock.json":
         new = jsonfile(path, text, True)
     elif base in ("package.json", "composer.json"):
-        new = jsonfile(path, text, False)
+        new = jsonfile(path, text, False, how == "mirror")
     else:
-        new = versionfile(path, text)
+        new = versionfile(path, text, how == "mirror")
     if new is not None and new != text and mode != "check":
         res["changed"][path] = new
 
@@ -1665,6 +1742,7 @@ FAILED=0
 phase_preflight() {
   local st r blk pub cnt
   say "release.sh --channel $CHANNEL: mode=$MODE  $(date -u +%FT%TZ)  table=$(shown "$TABLE")  rows=${#ROWS[@]}"
+  [ -n "$GROUP_SEL" ] && say "  groups:${GROUP_SEL} (from the table's group column)"
   [ ${#ONLY[@]} -gt 0 ] && say "  --only: ${ONLY[*]} (every row is still checked; only these are acted on)"
   [ ${#EXPECT[@]} -gt 0 ] && say "  --expect: $(for r in "${!EXPECT[@]}"; do printf '%s=%s ' "$r" "${EXPECT[$r]}"; done)"
   GH auth status >/dev/null 2>&1 || die "gh is not logged in (GH_TOKEN/GITHUB_TOKEN are unset for every call): gh auth login"
