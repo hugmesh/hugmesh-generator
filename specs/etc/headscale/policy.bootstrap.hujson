@@ -22,24 +22,32 @@
   // hujson = JSON + comments + trailing commas; headscale parses it natively.
 
   // ── Who may apply which tags ──────────────────────────────────────────────
-  // tag:hugmesh STAYS self-applied (the data-plane MEMBERSHIP tag gating the
-  // CIDR rule + route auto-approval); the mesh-join flow (preauth key,
+  // tag:hugmesh and the role tags (pki/be/fe/host) STAY self-applied, so they
+  // stay owned by "hugmesh" (tag:hugmesh is the data-plane MEMBERSHIP tag gating
+  // the CIDR rule + route auto-approval); the mesh-join flow (preauth key,
   // --advertise-tags=tag:hugmesh) is UNTOUCHED by Layer-A.
   //
-  // The SECURITY tags — tag:superadmin, tag:mesh_*, tag:dev_*, tag:dom_* — are
-  // owned by NO user (empty owner list) and are SERVER-FORCED via
-  // `headscale nodes tag` at approval (hugmesh-headscale-forcetags). headscale
-  // 0.23 gives a node its forced tags PLUS every advertised tag its own user
-  // owns; a forced tag does not cancel a different advertised one. Every
-  // pre-auth key is minted for the MEMBERSHIP user "hugmesh", so if "hugmesh"
-  // owned tag:superadmin, any key holder could advertise it and get SSH as the
-  // privileged user on every node. With an empty owner list an advertised
-  // security tag is always invalid, while a forced one still applies (forcing
-  // does not consult tagOwners). Never give these tags an owner.
+  // tag:superadmin is a SECURITY tag: it is SERVER-FORCED via `headscale nodes
+  // tag` (hugmesh-headscale-forcetags, superadmin operator machines only) and
+  // owned by NOBODY: its owner list is EMPTY ([]). That is the FIX-SERVERTAG
+  // hardening. headscale 0.23 accepts a self-advertised tag when the node's
+  // USER is one of the tag's owners, and every node registers as the "hugmesh"
+  // user, so an owner of ["hugmesh"] let ANY node claim tag:superadmin by
+  // advertising it (measured on 0.23.0: valid_tags=[tag:superadmin], and the
+  // node became an SSH principal of the superadmin rule). With [] the claim
+  // lands in invalid_tags. Forced tags, from a preauth key's tags or from
+  // `headscale nodes tag -t`, bypass tagOwners, so forcing still works.
   //
-  // headscale tagOwners keys must be exact tag strings, so only the STATIC
-  // tag:superadmin is listed here; the rendered policy adds tag:mesh_<id> and
-  // the per-node tag:dev_<fp> entries, also with empty owner lists.
+  // The per-node/per-domain/per-mesh tags (tag:dev_*, tag:dom_*, tag:mesh_*)
+  // are minted dynamically, so this file cannot name them; the rendered policy
+  // lists tag:mesh_<id> and tag:dev_<fp> with [] too. A tag with NO tagOwners
+  // entry is also refused when advertised, but headscale 0.23 fails EVERY map
+  // update when a rule names an unlisted tag that no node carries as forced,
+  // which is why the rendered policy lists the tags its rules name. This file's
+  // only rule names tag:hugmesh. A preauth key is NOT a guard here: headscale
+  // mints a key carrying tag:superadmin whatever tagOwners says, so the key
+  // minters (provisioning, the Studio, admin-bff) must only ever ask for
+  // tag:hugmesh plus a role tag.
   "tagOwners": {
     "tag:hugmesh": ["hugmesh"],
     "tag:pki": ["hugmesh"],

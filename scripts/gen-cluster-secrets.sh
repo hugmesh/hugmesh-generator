@@ -398,6 +398,8 @@ CASDOOR_CLIENT_SECRET="$(openssl rand -hex 32)"
 CASDOOR_GAMES_ADMIN_PLAIN="$(openssl rand -base64 18)"
 CASDOOR_GAMES_DB_PASSWORD="$(openssl rand -base64 24)"
 CASDOOR_GAMES_CLIENT_SECRET="$(openssl rand -hex 32)"
+# The games BFF's own Postgres (games-bff-db), under its own Vault path.
+GAMES_BFF_DB_PASSWORD="$(openssl rand -hex 32)"
 # GitHub OAuth client (issued by GitHub) — placeholders the operator replaces.
 CASDOOR_GAMES_GITHUB_CLIENT_ID="REPLACE_WITH_GITHUB_OAUTH_CLIENT_ID"
 CASDOOR_GAMES_GITHUB_CLIENT_SECRET="REPLACE_WITH_GITHUB_OAUTH_CLIENT_SECRET"
@@ -606,6 +608,8 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             db_password_plain="${CASDOOR_GAMES_DB_PASSWORD}" \
             github_client_id="${CASDOOR_GAMES_GITHUB_CLIENT_ID}" \
             github_client_secret="${CASDOOR_GAMES_GITHUB_CLIENT_SECRET}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/games-bff" \
+            db_password_plain="${GAMES_BFF_DB_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/clickhouse" \
             password="${CLICKHOUSE_PASSWORD}"
         # Dedicated per-app Postgres passwords (federation-db / admin-bff-db /
@@ -806,7 +810,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         fi
         # NB: harbor-robots is deliberately NOT in this list — see the block
         # above; it belongs to the harbor-provision Job.
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,mesh-bff-db,character-forge-bff-db,forum,forum-db,akkoma,tube,route-access-db,cassandra-admin,cassandra-app-creds,uptrace,mail,harbor,headwind}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,games-bff,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,mesh-bff-db,character-forge-bff-db,forum,forum-db,akkoma,tube,route-access-db,cassandra-admin,cassandra-app-creds,uptrace,mail,harbor,headwind}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -858,6 +862,7 @@ CASDOOR_CLIENT_ID="${CASDOOR_CLIENT_ID}" \
 CASDOOR_CLIENT_SECRET="${CASDOOR_CLIENT_SECRET}" \
 CASDOOR_GAMES_ADMIN_PLAIN="${CASDOOR_GAMES_ADMIN_PLAIN}" \
 CASDOOR_GAMES_DB_PASSWORD="${CASDOOR_GAMES_DB_PASSWORD}" \
+GAMES_BFF_DB_PASSWORD="${GAMES_BFF_DB_PASSWORD}" \
 CASDOOR_GAMES_CLIENT_SECRET="${CASDOOR_GAMES_CLIENT_SECRET}" \
 CASDOOR_GAMES_GITHUB_CLIENT_ID="${CASDOOR_GAMES_GITHUB_CLIENT_ID}" \
 CASDOOR_GAMES_GITHUB_CLIENT_SECRET="${CASDOOR_GAMES_GITHUB_CLIENT_SECRET}" \
@@ -1196,6 +1201,10 @@ data = {
         "casdoor-games-db": {
             "username": "threewizards",
             "password": os.environ["CASDOOR_GAMES_DB_PASSWORD"],
+        },
+        "games-bff-db": {
+            "username": "threewizards",
+            "password": os.environ["GAMES_BFF_DB_PASSWORD"],
         },
         "casdoor-games-admin": {
             "username": "admin",

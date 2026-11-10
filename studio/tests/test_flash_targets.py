@@ -329,6 +329,64 @@ def test_auto_pick_prefers_the_compressed_img_over_an_iso(tmp_path):
     assert ft.pick_artifact(arts, "live") == str(tmp_path / f"{_REAL}.live.iso")
 
 
+# ── frite media are raw .img (#881): u-boot distro-boot has no ISO9660 driver ─────────
+_FRITE = "hugmesh-frite-aml-s905x-cc-arm64-desktop-prod-20261105T010203Z"
+
+
+@pytest.mark.parametrize("suffix,flavor", [
+    (".live.img", "live"), (".live.img.xz", "live"),
+    (".installer.img", "installer"), (".installer.img.xz", "installer"),
+    # the --medium-iso twin and the other FLAVOR_MEDIA builders keep their ISO names
+    (".live.iso", "live"), (".installer.iso.xz", "installer"),
+    # a plain OS image is still an "img" — the new arms must not swallow it
+    (".img", "img"), (".img.xz", "img"),
+])
+def test_frite_raw_media_keep_their_live_and_installer_flavour(suffix, flavor):
+    """<prefix>.live.img ends in ".img": with live/installer arms that only knew .iso,
+    it fell through to the plain "img" arm, and a live/installer pick for a frite
+    device (the ONLY flavours frite offers) found nothing to write."""
+    assert ft.classify_artifact_flavor(f"{_FRITE}{suffix}") == flavor
+
+
+def test_frite_flavour_pick_finds_the_raw_installer_medium(tmp_path):
+    """The default (--compress) frite build: two .img.xz media, nothing else."""
+    _touch(tmp_path / f"{_FRITE}.installer.img.xz", 1000)
+    _touch(tmp_path / f"{_FRITE}.live.img.xz", 2000)
+    arts = ft.new_artifacts(str(tmp_path), {})
+    assert len(arts) == 2, arts                     # both are flashable artifacts
+    assert ft.pick_artifact(arts, "installer") == str(tmp_path / f"{_FRITE}.installer.img.xz")
+    assert ft.pick_artifact(arts, "live") == str(tmp_path / f"{_FRITE}.live.img.xz")
+    # and every flavour frite's menu offers resolves to SOMETHING
+    for fl in ft.flavors_for_platform("frite"):
+        assert ft.pick_artifact(arts, fl), fl
+    # the uncompressed pair resolves the same way
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    _touch(raw / f"{_FRITE}.installer.img", 1000)
+    _touch(raw / f"{_FRITE}.live.img", 2000)
+    rarts = ft.new_artifacts(str(raw), {})
+    assert ft.pick_artifact(rarts, "installer") == str(raw / f"{_FRITE}.installer.img")
+    assert ft.pick_artifact(rarts, "live") == str(raw / f"{_FRITE}.live.img")
+
+
+def test_flavour_labels_name_the_raw_media_too():
+    assert ".live.img" in ft.FLAVOR_LABELS["live"]
+    assert ".installer.img" in ft.FLAVOR_LABELS["installer"]
+
+
+def test_validator_accepts_a_raw_mbr_frite_medium(tmp_path):
+    """A frite medium is MBR + FAT32, no CD001 and no GPT. The validator's .img
+    branch must call that a partition table, not refuse it as a non-ISO."""
+    from hugmesh_studio.core import flash_validate as fv
+    p = tmp_path / f"{_FRITE}.live.img"
+    with open(p, "wb") as fh:
+        fh.truncate(32 << 20)
+        fh.seek(510)
+        fh.write(b"\x55\xaa")
+    c = fv._format_check(str(p), fv._head(str(p)))
+    assert c.state == fv.OK and "MBR" in c.detail, c
+
+
 # ── the NODE image shape (never exercised by the operator — #337 predicted it) ────────
 @pytest.mark.parametrize("platform,arch,role,stem", [
     # arm64 node roles: rpi5 builds pki/backend/frontend, jetson omnibus/edge-ai.

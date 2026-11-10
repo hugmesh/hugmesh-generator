@@ -1,0 +1,100 @@
+#!/bin/sh
+# vm-autofit — make an emulated desktop session follow the viewer window.
+#
+# WHAT IT DOES. When the QEMU runner opens a desktop image with a SPICE display
+# (tests/qemu/run-qemu-docker.sh --open-display), the native viewer sends a
+# monitors-config every time its window is resized. With virtio-gpu, QEMU turns
+# that into a new PREFERRED mode on the guest's DRM connector (a hotplug event);
+# the X server re-probes the output but does NOT switch to the new mode by
+# itself, and the lean LXDE/openbox session has no output-configuration daemon
+# (XFCE's xfsettingsd and KDE's kscreen do apply hotplug; lxsession does not). So
+# this session-side applier watches the connector's preferred mode and runs
+# `xrandr --output <name> --auto` when it changes — the desktop then re-lays
+# out at the new resolution instead of showing a scaled bitmap.
+#
+# WHERE IT RUNS. Started by /etc/xdg/autostart/hugmesh-vm-autofit.desktop, in the
+# user's session (user context, so SELinux allows the xrandr call; a udev rule
+# would run as udev_t and could not reach the X server). It is a no-op on real
+# hardware: it exits immediately unless a DRM card is driven by virtio_gpu or
+# qxl, so a laptop or SBC never carries a polling loop.
+#
+# WHY SYSFS, NOT AN X EVENT LOOP. POSIX sh cannot subscribe to RandR events, and
+# the preferred mode is readable without any X round-trip: the kernel lists a
+# connector's modes with the preferred one FIRST (drm_mode_sort), so one `head`
+# every INTERVAL seconds is the whole watch. xrandr is invoked only on a change.
+#
+# SELF-SKIPPING. Before calling xrandr the current mode (the `*` line of
+# `xrandr --query`) is compared with the preferred one; a session whose desktop
+# already applied the hotplug (XFCE/KDE) therefore gets no second, racing
+# mode-set. That is what makes it safe to ship on every session rather than
+# only on the one that was measured to need it.
+#
+# Overridable for tests (tests/scripts/test-vm-display-guest.sh): VM_AUTOFIT_SYSFS
+# (fixture tree in place of /sys), VM_AUTOFIT_XRANDR (a stub), VM_AUTOFIT_INTERVAL,
+# and VM_AUTOFIT_ONCE=1 (one pass, then exit 0).
+#
+# POSIX sh: no arrays, no bashisms (tests/posix-sh-no-arrays.sh scans it).
+
+SYSFS="${VM_AUTOFIT_SYSFS:-/sys}"
+XRANDR="${VM_AUTOFIT_XRANDR:-xrandr}"
+INTERVAL="${VM_AUTOFIT_INTERVAL:-2}"
+ONCE="${VM_AUTOFIT_ONCE:-}"
+
+# The first DRM card whose driver is a resize-capable virtual GPU, or nothing.
+# For virtio-gpu, card0/device is the virtio bus device (driver virtio_gpu); for
+# qxl it is the PCI device (driver qxl). bochs (-vga std) cannot resize and is
+# deliberately not matched.
+vm_card() {
+    for c in "${SYSFS}"/class/drm/card[0-9]*; do
+        [ -d "${c}" ] || continue
+        case "${c##*/}" in *-*) continue ;; esac   # card0-Virtual-1 is a connector
+        drv="$(readlink "${c}/device/driver" 2>/dev/null)" || continue
+        case "${drv##*/}" in
+            virtio_gpu|qxl) printf '%s\n' "${c}"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# "<connector>=<preferred mode>" for every CONNECTED connector of the card.
+preferred_modes() {
+    for conn in "$1"-*; do
+        [ -d "${conn}" ] || continue
+        [ "$(cat "${conn}/status" 2>/dev/null)" = "connected" ] || continue
+        pref="$(head -n 1 "${conn}/modes" 2>/dev/null)"
+        [ -n "${pref}" ] || continue
+        printf '%s=%s\n' "${conn##*/}" "${pref}"
+    done
+}
+
+# The mode the X server currently drives on an output ("" when unknown).
+current_mode() {
+    "${XRANDR}" --query 2>/dev/null | awk -v o="$1" '
+        $1 == o { f = 1; next }
+        f && /^[^ ]/ { f = 0 }
+        f && /\*/ { print $1; exit }'
+}
+
+apply_if_changed() {
+    # $1 = "card0-Virtual-1=1280x720"
+    name="${1%%=*}"; mode="${1#*=}"
+    out="${name#*-}"                         # card0-Virtual-1 -> Virtual-1
+    [ "$(current_mode "${out}")" = "${mode}" ] && return 0
+    "${XRANDR}" --output "${out}" --auto >/dev/null 2>&1
+}
+
+card="$(vm_card)" || exit 0
+[ -n "${DISPLAY:-}" ] || [ -n "${ONCE}" ] || exit 0
+
+last=""
+while :; do
+    cur="$(preferred_modes "${card}")"
+    if [ "${cur}" != "${last}" ]; then
+        for item in ${cur}; do
+            apply_if_changed "${item}"
+        done
+        last="${cur}"
+    fi
+    [ -n "${ONCE}" ] && exit 0
+    sleep "${INTERVAL}"
+done

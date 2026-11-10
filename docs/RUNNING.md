@@ -483,8 +483,17 @@ lives in `specs-frite/portage/packages-light-desktop.list`; the always-on base i
 # LIVE off USB (La Frite has no SD):
 sudo dd if=out/<brand>-frite-la-frite-arm64-desktop-test-<UTC>.live.iso of=/dev/sdX bs=4M status=progress conv=fsync
 # INSTALLER: boot it off USB, then on the Frite run:
-sudo install-frite.sh /dev/mmcblk0      # write the light desktop to the eMMC module
+sudo /run/initramfs/live/install-frite.sh          # auto-detects the eMMC (/sys/block/mmcblk*/device/type = MMC)
+sudo /run/initramfs/live/install-frite.sh --yes    # unattended (LUKS passphrase via --luks-pass or the seeded file)
+sudo /run/initramfs/live/install-frite.sh /dev/mmcblk1   # explicit target (e.g. microSD on Le Potato)
+# Le Potato / Sweet Potato without SPI u-boot: add --write-uboot-media to put the
+# staged signed u-boot into the target's user area at sector 1 (p1 starts at 8 MiB).
 ```
+
+> The installer refuses partitions, `mmcblkNboot0/1`/`rpmb`, mounted disks and the
+> medium it booted from; it writes one MBR with an explicit random disk id and
+> rewrites `root=PARTUUID=` + fstab from ids read back off the disk. An unlabelled
+> stage4 gets `/.autorelabel` on the target (relabel on first boot).
 
 > **u-boot caveat (HONEST).** Amlogic GXL u-boot needs Amlogic's **proprietary
 > FIP/BL31 blobs** to be flashable; mainline u-boot alone is not. The builder

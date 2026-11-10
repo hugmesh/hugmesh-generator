@@ -8,7 +8,8 @@
 # (out/sessions/<id>/) into a flat, verifiable publish tree:
 #
 #   <dest>/
-#     <brand>-<platform>-<arch>-<role>-<env>-<stamp>.{img.xz,iso,fs.tar.xz,stage4.tar.xz}
+#     <brand>-<platform>-<arch>-<role>-<env>-<stamp>.{img.xz,iso,fs.tar.xz,stage4.tar.xz,
+#                                                    live.img,installer.img}
 #     hugmesh-mesh-manifest.json      # the session's own mesh manifest, verbatim
 #     publish-manifest.json           # versioned manifest: per-file id/role/platform/
 #                                     #   flavor/bytes/sha256/builtAt + provenance stamp
@@ -42,7 +43,8 @@
 #      naming shape (an artifact-suffixed file of unknown provenance is
 #      poison, mirroring cloud-package.sh's x86-provenance refusal),
 #   4. content magic: xz artifacts must open with the xz magic, .iso with
-#      ISO9660's CD001 — a PEM/text file wearing an image name is refused,
+#      ISO9660's CD001, a raw frite .live.img/.installer.img with the MBR
+#      boot signature — a PEM/text file wearing an image name is refused,
 #   5. non-empty (a hollow artifact is a lie, not a publish).
 #
 # The staged output is then swept (no subdirectories, no symlinks, no file
@@ -98,7 +100,8 @@ cat <<EOF
 Usage: $0 <session-id|session-dir> --dest <dir> [--images id,...] [--hardlink] [--produced-at ISO8601]
 
   Exports one build session's image artifacts (*.img.xz, *.iso, *.fs.tar.xz,
-  *.stage4.tar.xz) + hugmesh-mesh-manifest.json into <dir>, with SHA256SUMS and
+  *.stage4.tar.xz, frite *.live.img / *.installer.img) + hugmesh-mesh-manifest.json
+  into <dir>, with SHA256SUMS and
   a versioned publish-manifest.json (optionally Ed25519-signed). Key material
   (keys-*/, secureboot/, wl-*/ sysroots, logs) is structurally unexportable;
   any secret-looking file intersecting the ship set REFUSES the whole export.
@@ -154,9 +157,15 @@ mkdir -p "${DEST_PARENT}"
 
 # ── policy tables ────────────────────────────────────────────────────────────
 # Allow-list: the builders' artifact suffixes, NOTHING else. (*.iso covers the
-# x86 builder's .installer.iso/.live.iso pair.) Raw .img is deliberately absent:
-# sessions store compressed artifacts, and every allowed kind is magic-checkable.
-ALLOW_SUFFIXES=("*.img.xz" "*.iso" "*.fs.tar.xz" "*.stage4.tar.xz")
+# x86 builder's .installer.iso/.live.iso pair.) A bare raw *.img stays absent:
+# that is the x86/rpi5/jetson whole-disk image, which sessions store compressed.
+# The two narrow raw globs are the frite MEDIA: since #881 they are MBR+FAT32
+# images (<prefix>.live.img / .installer.img — u-boot has no ISO9660 driver), the
+# successors of the uncompressed .live.iso/.installer.iso this tool always
+# shipped, and they are magic-checkable (the MBR boot signature, gate 4).
+# Compressed (--compress, Studio's default) they are <prefix>.live.img.xz, which
+# *.img.xz already admits and the SHAPE below must then also know.
+ALLOW_SUFFIXES=("*.img.xz" "*.iso" "*.fs.tar.xz" "*.stage4.tar.xz" "*.live.img" "*.installer.img")
 
 # Deny-list (lowercase basename globs). Matching one of these REFUSES the whole
 # export when the name also wears an artifact suffix (poison), and is re-swept
@@ -210,7 +219,7 @@ while IFS= read -r -d '' entry; do
     CANDIDATES+=("${entry}")
 done < <(find "${SESSION_DIR}" -mindepth 1 -maxdepth 1 \( -type f -o -type l \) -print0 | sort -z)
 
-[ "${#CANDIDATES[@]}" -gt 0 ] || die "session ${SESSION_ID} has no publishable image artifacts (*.img.xz, *.iso, *.fs.tar.xz, *.stage4.tar.xz at the session root)"
+[ "${#CANDIDATES[@]}" -gt 0 ] || die "session ${SESSION_ID} has no publishable image artifacts (*.img.xz, *.iso, *.fs.tar.xz, *.stage4.tar.xz, *.live.img, *.installer.img at the session root)"
 
 # ── mesh-manifest brand (best-effort, names the platform token) ──────────────
 BRAND=""
@@ -228,8 +237,11 @@ fi
 # platform and role may themselves contain hyphens (jetson-orin-nano,
 # standalone-unaffiliated) — the arch token and the trailing stamp anchor the
 # parse. The rpi5 builder stamps the LONG role spellings; normalize to the mesh
-# manifest's short ids so --images speaks one language.
-SHAPE='^([a-z0-9][a-z0-9-]*)-(amd64|arm64)-([a-z0-9_-]+)-([a-z0-9_]+)-([0-9]{8}T[0-9]{6}Z)\.(img\.xz|installer\.iso|live\.iso|iso|fs\.tar\.xz|stage4\.tar\.xz)$'
+# manifest's short ids so --images speaks one language. The frite media kinds
+# (live.img / installer.img, raw or .xz) are listed AHEAD of the bare img.xz:
+# every suffix this tool admits must have a kind here, or ONE frite medium in a
+# session refuses the export of every other board in it.
+SHAPE='^([a-z0-9][a-z0-9-]*)-(amd64|arm64)-([a-z0-9_-]+)-([a-z0-9_]+)-([0-9]{8}T[0-9]{6}Z)\.(live\.img\.xz|installer\.img\.xz|live\.img|installer\.img|img\.xz|installer\.iso|live\.iso|iso|fs\.tar\.xz|stage4\.tar\.xz)$'
 XZ_MAGIC="fd377a585a00"
 
 _role_alias() { case "$1" in backend) echo be ;; frontend) echo fe ;; *) echo "$1" ;; esac; }
@@ -251,6 +263,16 @@ for f in "${CANDIDATES[@]}"; do
             [ "$(stat -c %s "${f}")" -ge 32774 ] || die "poisoned session tree: ${base} is too small to be an ISO9660 image — refusing the whole export"
             cd001="$(dd if="${f}" bs=1 skip=32769 count=5 2>/dev/null)"
             [ "${cd001}" = "CD001" ] || die "poisoned session tree: ${base} claims ISO but carries no ISO9660 signature — refusing the whole export"
+            ;;
+        live.img|installer.img)
+            # A raw frite medium: MBR + FAT32. 0x55AA at byte 510 is the MBR boot
+            # signature (the u-boot write at sector 1 leaves it alone by design).
+            [ "$(stat -c %s "${f}")" -ge 512 ] || die "poisoned session tree: ${base} is too small to carry an MBR — refusing the whole export"
+            mbr="$(dd if="${f}" bs=1 skip=510 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+            [ "${mbr}" = "55aa" ] || die "poisoned session tree: ${base} claims a raw disk medium but carries no MBR boot signature (got 0x${mbr:-nothing}) — refusing the whole export"
+            ;;
+        *)
+            die "internal: artifact kind '${kind}' of ${base} has no content-magic gate — refusing the whole export"
             ;;
     esac
     platform="${brandplat}"

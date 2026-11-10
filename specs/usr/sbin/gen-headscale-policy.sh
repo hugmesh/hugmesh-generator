@@ -50,6 +50,16 @@
 # THE FOUR FIXES (vs main's forgeable policy):
 #   [FIX-SERVERTAG]   security tags (tag:dev_<fp>, tag:dom_<domain>,
 #                     tag:mesh_<id>, tag:superadmin) are SERVER-FORCED at
+#                     approval and owned by NOBODY: tagOwners lists them with the
+#                     EMPTY owner list [] (tag:dom_* is simply unlisted). headscale
+#                     0.23 accepts a self-advertised tag when the node's USER is an
+#                     owner, and every node registers as the "hugmesh" user, so an
+#                     owner of ["hugmesh"] made these tags self-advertisable by any
+#                     node (measured on 0.23.0). With [] a self-advertisement lands
+#                     in invalid_tags, while forced tags (preauth-key tags,
+#                     `headscale nodes tag -t`) bypass tagOwners and still apply.
+#                     So the SSH source tag:superadmin and the SSH destinations
+#                     tag:mesh_/tag:dev_ are non-forgeable.
 #                     approval and rendered with an EMPTY owner list in
 #                     tagOwners. headscale 0.23 grants a node its forced tags
 #                     PLUS every advertised tag its user owns (a forced tag does
@@ -212,16 +222,17 @@ fetch_export() {
 render_policy() {
     local export_json="$1" out="$2"
 
-    # Dynamic dst tagOwners: one "tag:dev_<shorthash>" per distinct machineKeyFp
-    # and one "tag:dom_<domain>" per distinct domain. We DERIVE the domain from
-    # the `via`/hostname is NOT reliable (the export carries no domain field), so
-    # tag:dom_* is minted from the operator's license domain ONLY when present;
-    # since the export AuthorizedOperator carries no domain, we mint tag:dom_*
-    # from a best-effort: NONE here (kept for the force-tag step which knows the
-    # node's registry domain). The renderer therefore emits per-NODE tag:dev_*
-    # owners (the load-bearing dst); tag:dom_* owners are added by the force-tag
-    # companion from the registry, not from the export body. So the dynamic
-    # tagOwners suffix here lists ONLY the tag:dev_<fp> family.
+    # Dynamic tagOwners: this mesh's tag:mesh_<id> (the SUPERADMIN rule's dst)
+    # plus one "tag:dev_<shorthash>" per distinct machineKeyFp, every one with the
+    # EMPTY owner list [] [FIX-SERVERTAG]: nobody may self-advertise them, the
+    # force-tagger assigns them. tag:mesh_<id> MUST be listed even though nothing
+    # self-advertises it: headscale 0.23 fails EVERY node's map update ("isn't
+    # owned by a TagOwner and no forced tags are defined") while a rule names an
+    # unlisted tag that no node carries as forced, e.g. before the force-tagger's
+    # first run or when it fails. tag:dom_<domain> gets NO entry: the export
+    # carries no domain field (the force-tag companion takes it from a node-local
+    # hint) and no rule names it, and an unlisted tag is refused when advertised.
+    # So the dynamic suffix lists tag:mesh_<id> and the tag:dev_<fp> family.
     #
     # tag:dev_<fp> uses a short, headscale-safe hash of the FULL machineKeyFp so
     # the ACL string is bounded + charset-clean while staying 1:1 with the fp.
@@ -645,8 +656,67 @@ retry_pending() {
     return 0
 }
 
+# ── Mesh route approval (every tick, BEFORE the export gate) ───────────────────
+# The fleet's k8s data plane rides approved subnet routes: every node advertises
+# the pod + service CIDRs (10.244.0.0/16, 10.96.0.0/12) and the policy's
+# autoApprovers approve them for tag:hugmesh. headscale 0.23 shows a node to a peer
+# ONLY through an enabled route (types.Node.CanAccess appends enabled route
+# prefixes to the reachable set; the ACL names no node address), so a node whose
+# routes are not enabled is a node nobody has in its netmap. Auto-approval runs
+# at the map request that first advertises the routes. MEASURED 2026-11-04 on
+# the emulated rpi5 pki+backend fleet (headscale 0.23.0): it held — all four mesh
+# routes advertised=true enabled=true, pki primary — so an unapproved route was
+# NOT why that fleet's worker saw no peer (that was the control node's own dead
+# control session; see provision.sh control_self_login_server). What this
+# function fixes for certain: provision.sh's backfill for a node that advertised
+# before the policy was loaded called `headscale nodes approve-routes`, a
+# subcommand headscale 0.25 added; on 0.23.0 it does not exist and the backfill
+# silently did nothing. And it converges the window the control node's own
+# headscale restarts open during provisioning (the policy load, the CP DNS
+# record): every minute, every advertised, not-yet-enabled mesh route of a node
+# that carries tag:hugmesh (valid or forced) is enabled, with the CLI the running
+# headscale has (0.23: `routes list` / `routes enable -r ID`; 0.25+: `nodes
+# approve-routes`). Independent of the signed export: it runs before _init's
+# fail-closed exit, so a bootstrap-policy fleet converges too.
+MESH_ROUTES="${HUGMESH_MESH_ROUTES:-10.244.0.0/16,10.96.0.0/12}"
+approve_mesh_routes() {
+    have headscale || return 0
+    have jq || return 0
+    local nodes_json mesh_ids routes_json todo id prefix name
+    nodes_json="$(headscale nodes list -o json 2>/dev/null)" || return 0
+    mesh_ids="$(printf '%s' "${nodes_json}" | jq -r '[.[]? | select(((.valid_tags // []) + (.forced_tags // [])) | index("tag:hugmesh") != null) | (.id | tostring)] | join(" ")' 2>/dev/null)"
+    [ -n "${mesh_ids}" ] || return 0
+    if routes_json="$(headscale routes list -o json 2>/dev/null)"; then
+        # 0.23: the routes table. One line per mesh route to enable: "ID PREFIX NODE".
+        todo="$(printf '%s' "${routes_json}" | jq -r --arg want ",${MESH_ROUTES}," --arg ids " ${mesh_ids} " \
+            '.[]? | select((.advertised // false) and ((.enabled // false) | not))
+                  | (.prefix // "") as $p | ((.node.id // "") | tostring) as $n
+                  | select($want | contains("," + $p + ","))
+                  | select($ids | contains(" " + $n + " "))
+                  | "\(.id) \(.prefix) \(.node.given_name // .node.name // "?")"' 2>/dev/null)"
+        [ -n "${todo}" ] || return 0
+        while read -r id prefix name; do
+            [ -n "${id}" ] || continue
+            if headscale routes enable -r "${id}" >/dev/null 2>&1; then
+                log "approved mesh route ${prefix} for ${name} (route ${id}) — it was advertised but not enabled"
+            else
+                warn "could not enable route ${id} (${prefix} for ${name})"
+            fi
+        done <<< "${todo}"
+    else
+        # 0.25+: routes live on the node; approve-routes is idempotent.
+        for id in ${mesh_ids}; do
+            headscale nodes approve-routes -i "${id}" -r "${MESH_ROUTES}" >/dev/null 2>&1 \
+                && log "approved mesh routes ${MESH_ROUTES} for node ${id}" || true
+        done
+    fi
+    return 0
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 main() {
+    case "${1:-}" in --approve-routes) approve_mesh_routes; exit 0 ;; esac
+    approve_mesh_routes
     _init || exit 0   # fail-closed: any unmet precondition keeps the current policy
     retry_pending
     local fetched; fetched="$(mktemp 2>/dev/null)" || { raise_alarm "mktemp failed: no export can be fetched, so no revocation is propagating"; exit 0; }

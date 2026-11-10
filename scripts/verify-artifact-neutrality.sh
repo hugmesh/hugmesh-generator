@@ -16,6 +16,12 @@
 #                          (listed via unsquashfs in the builder container)
 #   * installer ISO      — volid GENTOO_INSTALL, hugmesh-free tree,
 #                          gentoo-named embedded stage4
+#   * frite raw media    — <prefix>.live.img / .installer.img (MBR + one FAT32
+#                          partition since #881: u-boot reads no ISO9660). The
+#                          FAT is read with mtools in the builder container:
+#                          hugmesh-free label, file tree and extlinux.conf,
+#                          the squashfs swept like the live ISO's, the
+#                          installer's embedded stage4 gentoo-named
 #   * disk image         — hugmesh-free GPT partition names, FAT ESP labeled
 #                          GENTOO_ESP, ESP carries EFI/BOOT/bootx64.efi
 #   * UKI (Secure Boot)  — a gentoo UKI is checked on the INSTALLED ESP and the
@@ -37,6 +43,7 @@
 #
 #   <artifact-dir>    directory holding the build outputs
 #                     (gentoo-*.live.iso / *.installer.iso / *.img /
+#                      *.live.img / *.installer.img /
 #                      *.fs.tar.xz / *.stage4.tar.xz — any subset)
 #   [builder-image]   local container image providing unsquashfs, parted and
 #                     mdir (default: hugmesh-builder). Never pulled — this
@@ -54,7 +61,7 @@
 # =============================================================================
 set -u
 
-usage() { sed -n '2,53p' "$0"; }
+usage() { sed -n '2,60p' "$0"; }
 
 DIR=""
 BUILDER_IMG="hugmesh-builder"
@@ -158,7 +165,16 @@ in_builder() { # in_builder <host-dir-to-mount-ro> <cmd...>
 shopt -s nullglob
 LIVE_ISOS=("${DIR%/}"/gentoo-*.live.iso)
 INST_ISOS=("${DIR%/}"/gentoo-*.installer.iso)
-IMGS=("${DIR%/}"/gentoo-*.img)
+# The frite media are .img too, but they are not an installed disk: section 3
+# reads a GPT with a GENTOO_ESP + bootx64.efi, which a u-boot MBR+FAT32 medium
+# never carries. They are split out FIRST and read by their own section (1b).
+LIVE_IMGS=("${DIR%/}"/gentoo-*.live.img)
+INST_IMGS=("${DIR%/}"/gentoo-*.installer.img)
+IMGS=()
+for _i in "${DIR%/}"/gentoo-*.img; do
+  case "$_i" in *.live.img|*.installer.img) continue ;; esac
+  IMGS+=("$_i")
+done
 FS_TARS=("${DIR%/}"/gentoo-*.fs.tar.xz)
 STAGE4_TARS=("${DIR%/}"/gentoo-*.stage4.tar.xz)
 SNAP_NAMED=("${DIR%/}"/hugmesh-*)
@@ -168,7 +184,7 @@ if [ -z "$SYSROOT" ]; then
   [ -n "$SYSROOT" ] && note "auto-discovered sysroot: $SYSROOT"
 fi
 
-total_found=$(( ${#LIVE_ISOS[@]} + ${#INST_ISOS[@]} + ${#IMGS[@]} + ${#FS_TARS[@]} + ${#STAGE4_TARS[@]} ))
+total_found=$(( ${#LIVE_ISOS[@]} + ${#INST_ISOS[@]} + ${#LIVE_IMGS[@]} + ${#INST_IMGS[@]} + ${#IMGS[@]} + ${#FS_TARS[@]} + ${#STAGE4_TARS[@]} ))
 if [ "$total_found" -eq 0 ] && [ -z "$SYSROOT" ]; then
   bad "nothing to verify: no gentoo-* artifacts and no sysroot under $DIR"
 fi
@@ -282,6 +298,106 @@ for iso in "${INST_ISOS[@]}"; do
       [ "${n:-0}" -gt 0 ] && note "$b: installer script $sh_path carries ${n} 'hugmesh' token(s) (attributed, informational): $(grep -i hugmesh "$f" | head -2 | tr '\n' ' ')"
     fi
   done < <(grep -E '^/[^/]+\.sh$' "$tree")
+done
+
+# --- 1b/2b. frite raw media: MBR + FAT32 (u-boot distro-boot) ----------------
+# fat_offset <img> — byte offset of the first FAT partition in the MBR, or empty.
+# Read straight from the four primary entries (type at +4, start LBA at +8, LE):
+# no partition tool needed for a table this simple.
+fat_offset() {
+  local img="$1" i typ lba
+  local -a e
+  for i in 0 1 2 3; do
+    read -r -a e <<< "$(od -An -tu1 -j $((446 + i*16)) -N 16 "$img" 2>/dev/null | tr -s ' \n' ' ')"
+    [ "${#e[@]}" -eq 16 ] || return 0
+    typ="${e[4]}"; lba=$(( e[8] + e[9]*256 + e[10]*65536 + e[11]*16777216 ))
+    case "$typ" in 1|4|6|11|12|14)
+      [ "$lba" -gt 0 ] && { echo $((lba * 512)); return 0; } ;;
+    esac
+  done
+}
+# fat_cmd <img> <mtools-cmd> <args...> — run an mtools command against the FAT
+# partition of <img> in the builder container ("@@OFF" is substituted with the
+# image's partition spec). MTOOLS_SKIP_CHECK: an image file has no geometry.
+fat_cmd() {
+  local img="$1" off="$2"; shift 2
+  local cmd="$1"; shift
+  in_builder "$(dirname "$img")" env MTOOLS_SKIP_CHECK=1 "$cmd" -i "/a/$(basename "$img")@@$off" "$@"
+}
+for img in "${LIVE_IMGS[@]}" "${INST_IMGS[@]}"; do
+  b="$(basename "$img")"
+  case "$b" in *.live.img) kind=live ;; *) kind=installer ;; esac
+  mbr="$(dd if="$img" bs=1 skip=510 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+  [ "$mbr" = "55aa" ]; verdict $? \
+      "$b: MBR boot signature present" "$b: no MBR boot signature (got 0x${mbr:-nothing}) — not a raw medium"
+  off="$(fat_offset "$img")"
+  if [ -z "$off" ]; then
+    bad "$b: no FAT partition in the MBR — the FAT tree was NOT checked"
+    continue
+  fi
+  if [ "$HAVE_BUILDER" -ne 1 ]; then
+    bad "$b: builder image unavailable — the FAT tree (mtools) was NOT checked"
+    continue
+  fi
+  lbl="$(dd if="$img" bs=512 skip=$((off / 512)) count=1 2>/dev/null | file - )"
+  lbl="$(echo "$lbl" | grep -oE 'label: "[^"]*"')" || lbl=""
+  if [ -z "$lbl" ]; then
+    bad "$b: FAT volume label unreadable at byte $off"
+  else
+    ! echo "$lbl" | grep -qi 'hugmesh'; verdict $? \
+        "$b: FAT volume label is hugmesh-free ($lbl)" \
+        "$b: FAT volume label is hugmesh-branded ($lbl)"
+  fi
+  tree="$WORK/fat-tree"
+  fat_cmd "$img" "$off" mdir -/ -b ::/ > "$tree"
+  if [ ! -s "$tree" ]; then
+    bad "$b: could not list the FAT tree (mdir in builder container failed)"
+    continue
+  fi
+  ! grep -qi 'hugmesh' "$tree"; verdict $? \
+      "$b: no hugmesh-named paths in the FAT tree" \
+      "$b: hugmesh-named paths in the FAT tree: $(grep -i hugmesh "$tree" | head -3 | tr '\n' ' ')"
+  conf="$WORK/fat-extlinux.conf"; rm -f "$conf"
+  if grep -qi '^::/extlinux/extlinux\.conf$' "$tree"; then
+    fat_cmd "$img" "$off" mtype ::/extlinux/extlinux.conf > "$conf"
+  fi
+  if [ -s "$conf" ]; then
+    ! grep -qi 'hugmesh' "$conf"; verdict $? \
+        "$b: extlinux.conf is hugmesh-free" \
+        "$b: hugmesh token in extlinux.conf: $(grep -i hugmesh "$conf" | head -2 | tr '\n' ' ')"
+  else
+    bad "$b: no readable /extlinux/extlinux.conf on the FAT (u-boot would find nothing to boot)"
+  fi
+  sq_path="$(grep -Ei '\.squashfs$|squashfs\.img$' "$tree" | head -1)"
+  if [ -n "$sq_path" ]; then
+    sq="$WORK/live.squashfs"; rm -f "$sq"
+    fat_cmd "$img" "$off" mtype "$sq_path" > "$sq"
+    lst="$WORK/squashfs-list"; : > "$lst"
+    [ -s "$sq" ] && in_builder "$WORK" unsquashfs -l /a/live.squashfs > "$lst"
+    if [ -s "$lst" ]; then
+      sweep_listing "$lst" "$b squashfs"
+    else
+      bad "$b: could not list squashfs '$sq_path' from the FAT"
+    fi
+    rm -f "$sq"
+  else
+    bad "$b: no squashfs found in the FAT tree"
+  fi
+  if [ "$kind" = installer ]; then
+    if grep -q '^::/stage4/.' "$tree"; then
+      grep -E '^::/stage4/.+' "$tree" | grep -vq '^::/stage4/gentoo-'; rc=$?
+      [ $rc -ne 0 ]; verdict $? \
+          "$b: embedded stage4 tarball is gentoo-named" \
+          "$b: non-gentoo-named file under /stage4: $(grep -E '^::/stage4/.+' "$tree" | grep -v '^::/stage4/gentoo-' | head -2 | tr '\n' ' ')"
+    else
+      bad "$b: installer medium carries no /stage4 — nothing for the installer to write"
+    fi
+  fi
+  hits="$(strings -a "$img" 2>/dev/null | grep -ci 'hugmesh')" || hits=0
+  ok "$b: attributed raw-string sweep done — ${hits} 'hugmesh' hit(s) (qcom kernel/firmware strings are legitimate; top sources below if any)"
+  if [ "${hits:-0}" -gt 0 ]; then
+    strings -a "$img" 2>/dev/null | grep -i 'hugmesh' | sort | uniq -c | sort -rn | head -10
+  fi
 done
 
 # --- 3. installed disk image: partitions, ESP label, ESP contents ------------

@@ -48,6 +48,10 @@ _MIN_WRITE_SIZE = 16 << 20
 #   .img.xz       -> fd 37 7a 58 5a 00                          (xz container)
 #   .installer.iso-> "CD001" at 0x8001                          (ISO9660 PVD)
 #   .live.iso     -> "CD001" at 0x8001 AND 55 aa at 510 AND "EFI PART" at 512 (hybrid)
+#   .live.img / .installer.img (frite, #881)
+#                 -> 55 aa at 510, no CD001, no GPT: a raw MBR + FAT32 medium (u-boot
+#                    distro-boot has no ISO9660 driver). They take the ".img" branch of
+#                    _format_check, which accepts an MBR — the right verdict for them.
 _XZ_MAGIC = b"\xfd7zXZ\x00"
 _ISO_PVD_OFF = 0x8001
 _ISO_PVD = b"CD001"

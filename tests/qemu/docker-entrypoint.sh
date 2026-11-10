@@ -139,6 +139,58 @@ MESH_NET="${MESH_NET:-}"
 MESH_MAC="${MESH_MAC:-}"
 MESH_IP="${MESH_IP:-}"
 MESH_PREFIX_LEN="${MESH_PREFIX_LEN:-24}"
+# ── Display door (2026-11-04): a SPICE window onto an emulated DESKTOP ───────
+# One door: qemu's SPICE server, on the container's own network namespace, behind
+# a per-run random password held in a FILE (a qemu `secret` object — never
+# `password=` on argv, which would show in ps and in the tee'd launch.log). What
+# the HOST sees is decided by run-qemu-docker.sh alone: it publishes the door as
+# `-p 127.0.0.1:<ssh+100>:5930` and hands the host port down in DISPLAY_HOST_PORT
+# so the device record can name it, exactly like SSH_HOST_PORT. Nothing in here
+# binds a host port and nothing in here prints the secret.
+#   auto  : spice when this is a --keep-alive DESKTOP (kubernetes.role "none",
+#           the desktop|laptop|chromebook|standalone-* classification below) and
+#           the platform's launcher knows the display flags; otherwise none, so a
+#           test run's launcher argv stays byte-identical.
+#   spice : always (a launcher without the flags is an ERROR row, by design).
+#   none  : never.
+DISPLAY_MODE="${DISPLAY_MODE:-auto}"
+# noVNC browser fallback (websockify in front of a VNC unix socket). OPT-IN and
+# loopback only: VNC auth is 8-char DES, and the runner image ships no websockify
+# unless docker/Dockerfile.qemu-runner grows one, so this warns and skips rather
+# than failing a row.
+DISPLAY_WEB="${DISPLAY_WEB:-0}"
+# Host-side ports the RUNNER published for the door and the browser fallback; 0 =
+# nothing published. Recorded, never bound here (same contract as SSH_HOST_PORT).
+DISPLAY_HOST_PORT="${DISPLAY_HOST_PORT:-0}"
+DISPLAY_WEB_PORT="${DISPLAY_WEB_PORT:-0}"
+# What this image is KNOWN to do when the viewer window is resized: "guest" =
+# the desktop re-lays out at the new resolution (virtio-gpu + an in-guest agent
+# that applies the preferred mode), "scale" = the picture is scaled to fit. It is
+# "scale" until an image's guest-side proof lands; the runner may pass the proven
+# value per row. Nothing here can measure it, so nothing here guesses.
+DISPLAY_RESIZE="${DISPLAY_RESIZE:-scale}"
+# Resolved by display_setup once the role is classified. In-container listen
+# address/ports are fixed: 0.0.0.0 is THIS container's namespace only (reachable
+# by the runner's loopback publish and, on a --mesh-net bridge, by the sibling
+# containers — which is exactly why the password is required, not optional).
+DISPLAY_PROTOCOL=""
+DISPLAY_SECRET=""
+DISPLAY_LISTEN="0.0.0.0"
+DISPLAY_SPICE_PORT=5930
+DISPLAY_WEB_LISTEN_PORT=6080
+VNC_SOCK=""
+WEBSOCKIFY_PID=""
+DISPLAY_ARGS=()
+# The mesh CLIENT's rendezvous (2026-11-04). The L2 above lets the guests reach each
+# other; joining them to ONE tailnet also needs a key from the control node's own
+# headscale, which exists only once that guest has booted. run-qemu-docker.sh hands
+# every device of one --mesh-net fleet the SAME fresh directory under /work; the
+# control row (pki|generic|omnibus) publishes `authkey` (its reusable preauth key) and
+# `login_server` there once its guest answers ssh, and every other row waits for them
+# (at most MESH_JOIN_WAIT seconds) before writing its KEYS stick. Empty = no fleet:
+# the control node still self-joins its own headscale, a worker gets no key.
+MESH_RENDEZVOUS="${MESH_RENDEZVOUS:-}"
+MESH_JOIN_WAIT="${MESH_JOIN_WAIT:-1800}"
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; YEL=$'\033[0;33m'; RST=$'\033[0m'
 info() { echo "${GREEN}[qemu-docker]${RST} $*"; }
@@ -193,6 +245,19 @@ Interactive devices (golden mode only; everything below is off by default):
   --qmp PATH       qemu QMP unix socket, passed through to the launcher.
                    Implied by --keep-alive; without either, qemu keeps
                    -monitor none and the launcher argv is unchanged.
+  --display MODE   auto (default) | spice | none. A SPICE display door for the
+                   guest, behind a per-run random password file. auto = spice
+                   only for a --keep-alive DESKTOP row (kubernetes.role none)
+                   whose launcher knows the display flags; a test run's qemu
+                   argv is unchanged. Env: DISPLAY_MODE.
+  --display-web    also run websockify/noVNC in front of a VNC unix socket, for
+                   a browser fallback (scale-to-fit only). Opt-in: VNC auth is
+                   8-char DES. Skipped with a WARN when the runner image has no
+                   websockify. Env: DISPLAY_WEB=1.
+  --display-host-port P / --display-web-port P
+                   loopback host ports the runner published the door and the
+                   browser fallback on; recorded verbatim, never bound here.
+                   0 = not published. Env: DISPLAY_HOST_PORT / DISPLAY_WEB_PORT.
 
 Mesh L2 (issue #48 phase 4; all default-off, all from the planner's identity
 file — this container never invents an identity):
@@ -230,6 +295,10 @@ while [[ $# -gt 0 ]]; do
         --ssh-host-port) SSH_HOST_PORT="$2"; shift 2 ;;
         --container)     CONTAINER_NAME="$2"; shift 2 ;;
         --qmp)           QMP_SOCK="$2"; shift 2 ;;
+        --display)       DISPLAY_MODE="$2"; shift 2 ;;
+        --display-web)   DISPLAY_WEB=1; shift ;;
+        --display-host-port) DISPLAY_HOST_PORT="$2"; shift 2 ;;
+        --display-web-port)  DISPLAY_WEB_PORT="$2"; shift 2 ;;
         --mesh-net)      MESH_NET="$2"; shift 2 ;;
         --mesh-mac)      MESH_MAC="$2"; shift 2 ;;
         --mesh-ip)       MESH_IP="$2"; shift 2 ;;
@@ -445,6 +514,16 @@ write_device_record() {
             "${SSHKEY}" "${SSHKEY}.pub" 2>/dev/null || true
         chmod 600 "${SSHKEY}" 2>/dev/null || true
     fi
+    # The display password file, same reasoning and same moment: the record
+    # advertises its HOST path and a viewer on the host must be able to read it
+    # the instant the record says the door exists. 0600 to the operator — qemu
+    # already read it into its secret object at launch, and no other account
+    # has business with it. `:-` because this function is extracted and driven
+    # under `set -u` by verdict_test.sh with only the fields it names.
+    if [ -n "${HOST_UID}" ] && [ -n "${DISPLAY_SECRET:-}" ] && [ -f "${DISPLAY_SECRET}" ]; then
+        chown "${HOST_UID}:${HOST_GID:-${HOST_UID}}" "${DISPLAY_SECRET}" 2>/dev/null || true
+        chmod 600 "${DISPLAY_SECRET}" 2>/dev/null || true
+    fi
     # `|| warn` is load-bearing, not decoration. The prologue is `set -uo
     # pipefail` with no -e, so the call sites before the assertions run with
     # errexit OFF — but golden mode switches it ON right after the assertion
@@ -470,6 +549,11 @@ write_device_record() {
   "mesh_net": $(json_str "${MESH_NET:-}"),
   "mesh_mac": $(json_str "${MESH_MAC:-}"),
   "mesh_ip": $(json_str "${MESH_IP:-}"),
+  "display_protocol": $(json_str "${DISPLAY_PROTOCOL:-}"),
+  "display_port": ${DISPLAY_HOST_PORT:-0},
+  "display_web_port": ${DISPLAY_WEB_PORT:-0},
+  "display_password_file": $(json_str "$(host_path "${DISPLAY_SECRET:-}")"),
+  "display_resize": $(json_str "${DISPLAY_RESIZE:-scale}"),
   "state": $(json_str "${state}"),
   "started_at": $(json_str "${STARTED_AT}")
 }
@@ -537,6 +621,97 @@ SSH_HOST_PORT=$((10#${SSH_HOST_PORT}))
 [ "${SSH_HOST_PORT}" -le 65535 ] \
     || die "--ssh-host-port must be 0-65535, got '${SSH_HOST_PORT}'"
 
+# ── Display door: inputs checked, helpers defined ───────────────────────────
+# Both ports are emitted as BARE JSON numbers in the device record, so they get
+# the same numeric + base-10 + range treatment as ssh_host_port above.
+case "${DISPLAY_MODE}" in
+    auto|spice|none) ;;
+    *) die "--display must be auto, spice or none, got '${DISPLAY_MODE}'" ;;
+esac
+case "${DISPLAY_WEB}" in 0|1) ;; *) die "DISPLAY_WEB must be 0 or 1, got '${DISPLAY_WEB}'" ;; esac
+case "${DISPLAY_RESIZE}" in
+    guest|scale) ;;
+    *) die "DISPLAY_RESIZE must be guest or scale, got '${DISPLAY_RESIZE}'" ;;
+esac
+for _dp in DISPLAY_HOST_PORT DISPLAY_WEB_PORT; do
+    [[ "${!_dp}" =~ ^[0-9]+$ ]] || die "${_dp} must be a whole number, got '${!_dp}'"
+    printf -v "${_dp}" '%d' "$((10#${!_dp}))"
+    [ "${!_dp}" -le 65535 ] || die "${_dp} must be 0-65535, got '${!_dp}'"
+done
+unset _dp
+
+# display_wanted — does THIS row get a display door? Reads the KEEP_ALIVE and
+# K8S_ROLE classification instead of repeating the role case (the desktop roles
+# are exactly the ones provision.json files under kubernetes.role "none"), so
+# the role vocabulary stays declared in ONE place.
+display_wanted() {
+    case "${DISPLAY_MODE:-auto}" in
+        none)  return 1 ;;
+        spice) return 0 ;;
+        auto)  ${KEEP_ALIVE:-false} && [ "${K8S_ROLE:-}" = "none" ] ;;
+        *)     return 1 ;;
+    esac
+}
+
+# launcher_supports_display FILE — the launcher's own argv loop ends in `Unknown
+# arg -> usage 1`, so handing it a flag it lacks is a dead row. The flags land in
+# a separate change; until it is on the mounted /src this probe keeps `auto` from
+# killing every desktop row, and `spice` says why it refused.
+launcher_supports_display() {
+    grep -q -- '--display-secret' "$1" 2>/dev/null \
+        && grep -q -- '--display-listen' "$1" 2>/dev/null
+}
+
+# make_display_secret FILE — 48 hex chars from /dev/urandom into FILE, created
+# under umask 077. 48 hex: under SPICE's 60-char ticket limit, no base64 '+'
+# (which has already broken one URL-embedded credential in this product), and
+# od|tr reads a fixed 24 bytes so there is no tr|head SIGPIPE under pipefail.
+# The value lives in a variable for one printf and is never echoed.
+make_display_secret() {
+    local f="$1" hex
+    hex="$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')"
+    [[ "${hex}" =~ ^[0-9a-f]{48}$ ]] || return 1
+    rm -f "${f}" 2>/dev/null || true
+    ( umask 077; printf '%s' "${hex}" > "${f}" ) || return 1
+    chmod 600 "${f}" 2>/dev/null || true
+    return 0
+}
+
+# display_launcher_args — the flags handed to launch-{pi,arm,x86}.sh when the
+# door is on. The launcher turns them into the qemu `-object secret` + `-spice
+# password-secret=` pair (never password=), the virtio display, the SPICE agent
+# channel and the usb tablet/keyboard. Non-Pi ARM boards also get --virt-dtb: a
+# board DTB cannot describe the `virt` machine's PCIe, so with it the virtio-gpu
+# would be invisible to the guest; without -dtb qemu generates the virt DTB.
+display_launcher_args() {
+    DISPLAY_ARGS=(--display spice
+                  --display-listen "${DISPLAY_LISTEN}"
+                  --spice-port "${DISPLAY_SPICE_PORT}"
+                  --display-secret "${DISPLAY_SECRET}")
+    [ -z "${VNC_SOCK:-}" ] || DISPLAY_ARGS+=(--vnc-socket "${VNC_SOCK}")
+    case "${PLATFORM}" in
+        rpi5|x86) ;;
+        *)        DISPLAY_ARGS+=(--virt-dtb) ;;
+    esac
+    return 0
+}
+
+# display_announce — the one line a human needs, and only paths: the password
+# VALUE never reaches stdout, launch.log, docker logs or the Studio log.
+display_announce() {
+    [ "${DISPLAY_PROTOCOL:-}" = "spice" ] || return 0
+    if [ "${DISPLAY_HOST_PORT}" -gt 0 ]; then
+        info "  display: spice on 127.0.0.1:${DISPLAY_HOST_PORT} (password in $(host_path "${DISPLAY_SECRET}"); resize: ${DISPLAY_RESIZE})"
+        info "           open: run-qemu-docker.sh --open-display ${LABEL}"
+    else
+        info "  display: spice on container port ${DISPLAY_SPICE_PORT} — NOT published (password in $(host_path "${DISPLAY_SECRET}"))"
+    fi
+    if [ "${DISPLAY_WEB_PORT}" -gt 0 ]; then
+        info "  browser: http://127.0.0.1:${DISPLAY_WEB_PORT}/vnc.html (noVNC, scale-to-fit; it asks for the password — VNC uses its first 8 characters)"
+    fi
+    return 0
+}
+
 # ── Mesh identity: all three parts, or none ─────────────────────────────────
 # Validated HERE, before anything is built or booted, and fail-closed in both
 # directions. A half-identity is the dangerous case: a mesh NIC with no static
@@ -561,6 +736,18 @@ else
     [[ "${MESH_PREFIX_LEN}" =~ ^[0-9]+$ ]] \
         && [ "${MESH_PREFIX_LEN}" -ge 8 ] && [ "${MESH_PREFIX_LEN}" -le 30 ] \
         || die "--mesh-prefix-len must be 8..30, got '${MESH_PREFIX_LEN}'"
+fi
+# The rendezvous carries a preauth key, so it must be a plain directory under the
+# /work bind mount (shared by this fleet's containers, never the host's /tmp), and
+# it only means something on a shared L2.
+if [ -n "${MESH_RENDEZVOUS}" ]; then
+    [ -n "${MESH_NET}" ] || die "MESH_RENDEZVOUS makes no sense without --mesh-net"
+    case "${MESH_RENDEZVOUS}" in
+        /work/*) ;;
+        *) die "MESH_RENDEZVOUS must be under /work (got: ${MESH_RENDEZVOUS})" ;;
+    esac
+    case "${MESH_RENDEZVOUS}" in *..*) die "MESH_RENDEZVOUS must not contain '..' (got: ${MESH_RENDEZVOUS})" ;; esac
+    [[ "${MESH_JOIN_WAIT}" =~ ^[0-9]+$ ]] || die "MESH_JOIN_WAIT must be a number of seconds (got: ${MESH_JOIN_WAIT})"
 fi
 
 # ── Which logins will exist on the guest ────────────────────────────────────
@@ -705,7 +892,14 @@ info "image : ${IMG}"
 
 # ── stage4 mode: hand off to the pre-existing harness ───────────────────────
 if [ "${MODE}" = "stage4" ]; then
-    [ "${PLATFORM}" = "rpi5" ] || die "stage4 mode is aarch64/Pi-only (run-qemu-test.sh hardcodes qemu-system-aarch64); use --mode golden for ${PLATFORM}"
+    # rpi5-ONLY, and the reason is the LAYOUT, not the arch: run-qemu-test.sh
+    # fabricates a Pi disk (KERNEL_IMG_NAME=kernel_2712.img, RPI_BOOT FAT,
+    # config.txt/cmdline.txt) around the stage4. Frite is aarch64 too, but it
+    # boots extlinux + Image and ships no .img at all — its proof is
+    # tests/qemu/frite-emmc-install.sh on the HOST qemu-system-aarch64: the
+    # emulated eMMC target is QEMU's `emmc` device (>= 9.1), which this runner
+    # image's QEMU 7.2 does not have (it ships sd-card only).
+    [ "${PLATFORM}" = "rpi5" ] || die "stage4 mode is rpi5-only (run-qemu-test.sh fabricates a Pi kernel_2712.img/RPI_BOOT disk around the stage4). For frite run tests/qemu/frite-emmc-install.sh on the host QEMU (its eMMC target needs QEMU >= 9.1; this image has 7.2); use --mode golden for ${PLATFORM} otherwise"
     [ -n "${STAGE4}" ] || STAGE4="$(autodetect_stage4 || true)"
     [ -n "${STAGE4}" ] && [ -f "${STAGE4}" ] || die "no stage4 for ${ROLE} under ${ARTIFACTS}"
     info "stage4: ${STAGE4}"
@@ -1031,13 +1225,94 @@ case "${ROLE}" in
     desktop|laptop|chromebook|standalone-*) K8S_ROLE="none" ;;
 esac
 
+# ── The mesh client (tailscale), shaped like the PRODUCT's KEYS manifest ──────
+# This payload used to say "tailscale": { "enabled": false } for every row. The
+# product never does: keys-template/provision.json and every Studio-generated KEYS
+# stick (e.g. out/sessions/<id>/keys-{pki,backend,frontend}.rpi5/provision.json)
+# carry tailscale.enabled=true. provision_tailscale() honours the flag by DELETING
+# tailscaled from the default runlevel (specs/etc/keys-provision/provision.sh), so
+# the image's correct build-time link vanished at first boot and assertions.sh
+# graded every emulated node "/usr/sbin/tailscaled is installed but tailscaled is
+# MISSING from the default runlevel" — a harness defect reported as an image one
+# (2026-11-01 run, rpi5 pki/backend/frontend), and no emulated mesh could form.
+#
+# Now: enabled=true everywhere (provision_tailscale skips cleanly on an image with
+# no tailscaled binary), the product's role tags and routes as up_args, and a way
+# to actually JOIN —
+#   * a control row (headscale) declares the product's fleet user plus ONE
+#     preauth key, REUSABLE (hugmesh-generator#514: the control node's own
+#     self-join consumes a single-use key, leaving the workers nothing). With a
+#     shared L2 its server_url is its MESH address, the only one peers can dial
+#     (resolve_endpoint would otherwise pick the SLIRP 10.0.2.15 no peer reaches);
+#   * every other row on a fleet rendezvous waits for that control node's key
+#     and login_server and writes them onto its own stick.
+#
+# Which headscale policy that fleet runs (checked 2026-11-04 for PR #858, after a
+# proof run's worker showed peers=0 under the BOOTSTRAP policy and policy-sync
+# logged "MESH_ID empty" / "registry-pub.ed25519 ABSENT"): no stick written here
+# carries a device_registry block, a mesh id or a registry-pub.ed25519, and no
+# PRODUCT stick for a primary role does either. scripts/gen-provision-keys.sh
+# writes KEYS/device-registry/ only for role=mesh-extension, keys-template/
+# provision*.json carry no .mesh.id, and the rendered Layer-A policy also needs a
+# signed export fetched over mTLS from the in-cluster admin-bff
+# (gen-headscale-policy.sh fetch_export), which no first-boot fleet has. A real
+# pki/backend fleet therefore runs the baked bootstrap policy as well; this one
+# lacks nothing a real stick provides. Its acls[] equal the rendered template's
+# (specs/etc/headscale/policy.{bootstrap.hujson,hujson,hujson.tmpl} all grant only
+# tag:hugmesh -> 10.244.0.0/16:*, 10.96.0.0/12:*). No policy grants a node's own
+# 100.64 address, so fleet nodes are in each other's netmap only through those
+# routes, and assertions.sh grades exactly that (assert_mesh_client: "mesh
+# routes"). Follow-up, not changed here: kube-api.<base_domain> is published by
+# publish_cp_dns_record at the control node's TAILNET address, and :6443 there is
+# filtered under every shipped policy; the product reaches the API only because
+# provision_hosts pins cp_dns_name to the pki LAN IP from .nodes[] (this payload
+# has no .nodes[] and nothing here dials the API), so docs/SECURITY.md's "MagicDNS
+# then takes over" does not hold under the shipped ACL.
+TS_TAGS="tag:hugmesh"
+case "${ROLE}" in
+    pki|generic|omnibus)           TS_TAGS="tag:hugmesh,tag:pki" ;;
+    backend|backend-gpu|edge-ai)   TS_TAGS="tag:hugmesh,tag:be" ;;
+    frontend)                      TS_TAGS="tag:hugmesh,tag:fe" ;;
+esac
+TS_UP_ARGS="--advertise-tags=${TS_TAGS} --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false --ssh"
+case "${ROLE}" in
+    desktop|laptop|chromebook|standalone-*) TS_UP_ARGS="--advertise-tags=${TS_TAGS} --accept-routes" ;;
+esac
+TS_LOGIN=""
+HS_EXTRA=""
+if [ "${HS_ENABLED}" = true ]; then
+    HS_EXTRA=', "users": ["hugmesh"], "preauthkeys": [ { "user": "hugmesh", "reusable": true, "ephemeral": false } ]'
+    [ -n "${MESH_NET}" ] && HS_EXTRA+=", \"server_url\": \"http://${MESH_IP}:8080\""
+elif [ -n "${MESH_RENDEZVOUS}" ]; then
+    # Bounded, interruptible wait for the control node's key. Interruptible
+    # because a `docker stop` during it must not burn the stop grace window.
+    step "Waiting up to ${MESH_JOIN_WAIT}s for the fleet's control node to publish a mesh key (${MESH_RENDEZVOUS})"
+    _mw_deadline=$((SECONDS + MESH_JOIN_WAIT))
+    while [ "${SECONDS}" -lt "${_mw_deadline}" ]; do
+        [ -s "${MESH_RENDEZVOUS}/authkey" ] && [ -s "${MESH_RENDEZVOUS}/login_server" ] && break
+        sleep 5 & wait $! 2>/dev/null || true
+    done
+    if [ -s "${MESH_RENDEZVOUS}/authkey" ] && [ -s "${MESH_RENDEZVOUS}/login_server" ]; then
+        mkdir -p "${KEYS_SRC}/tailscale"
+        install -m 0600 "${MESH_RENDEZVOUS}/authkey" "${KEYS_SRC}/tailscale/authkey"
+        TS_LOGIN="$(tr -d '[:space:]' < "${MESH_RENDEZVOUS}/login_server")"
+        [[ "${TS_LOGIN}" =~ ^http://[0-9.]+:[0-9]+$ ]] \
+            || { warn "ignoring a malformed login_server in ${MESH_RENDEZVOUS}: '${TS_LOGIN}'"; TS_LOGIN=""; rm -f "${KEYS_SRC}/tailscale/authkey"; }
+        [ -n "${TS_LOGIN}" ] && info "mesh   : joining the control node's tailnet at ${TS_LOGIN} (key from the fleet rendezvous)"
+    else
+        warn "no mesh key appeared in ${MESH_RENDEZVOUS} within ${MESH_JOIN_WAIT}s — this node boots with tailscaled but cannot join (is the fleet's control row up?)"
+    fi
+fi
+
 cat > "${KEYS_SRC}/provision.json" <<EOF
 {
   "version": 1,
   "hostname": "hugmesh-${ROLE}-qemu",
   "timezone": "UTC",
-  "headscale": { "enabled": ${HS_ENABLED}, "config_file": "headscale/config.yaml" },
-  "tailscale": { "enabled": false },
+  "headscale": { "enabled": ${HS_ENABLED}, "config_file": "headscale/config.yaml"${HS_EXTRA} },
+  "tailscale": { "enabled": true, "authkey_file": "tailscale/authkey", "login_server": "${TS_LOGIN}",
+                 "ssh": true, "mesh_routes": "10.244.0.0/16,10.96.0.0/12",
+                 "up_args": "${TS_UP_ARGS}" },
   "kubernetes": { "role": "${K8S_ROLE}", "bootstrap": false },
   "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.local",
                "gitops": { "enabled": false } }
@@ -1111,6 +1386,46 @@ if ${KEEP_ALIVE} && [ -z "${QMP_SOCK}" ]; then
     QMP_SOCK="${LAUNCH_RUN_DIR}/qmp.sock"
 fi
 
+# ── Display door: decide, mint the secret, build the launcher flags ─────────
+# Everything below is skipped — DISPLAY_ARGS stays empty and the launcher argv
+# is character-for-character what it was — unless this row gets a door.
+case "${PLATFORM}" in
+    rpi5) DISPLAY_LAUNCHER="${QEMU_DIR}/launch-pi.sh" ;;
+    x86)  DISPLAY_LAUNCHER="${QEMU_DIR}/launch-x86.sh" ;;
+    *)    DISPLAY_LAUNCHER="${QEMU_DIR}/launch-arm.sh" ;;
+esac
+if display_wanted; then
+    if ! launcher_supports_display "${DISPLAY_LAUNCHER}"; then
+        if [ "${DISPLAY_MODE}" = "spice" ]; then
+            die "--display spice: $(basename "${DISPLAY_LAUNCHER}") on the mounted /src does not know --display-secret/--display-listen (the launcher half of the display door is not in this tree)"
+        fi
+        warn "display: none — $(basename "${DISPLAY_LAUNCHER}") on /src lacks the display flags, so this desktop boots headless (serial + ssh only)"
+    else
+        DISPLAY_SECRET="${LAUNCH_RUN_DIR}/display.secret"
+        make_display_secret "${DISPLAY_SECRET}" \
+            || die "could not generate the display password file ${DISPLAY_SECRET}"
+        DISPLAY_PROTOCOL="spice"
+        if [ "${DISPLAY_WEB}" = "1" ]; then
+            if command -v websockify >/dev/null 2>&1 && [ -d /usr/share/novnc ] \
+               && grep -q -- '--vnc-socket' "${DISPLAY_LAUNCHER}" 2>/dev/null; then
+                VNC_SOCK="${LAUNCH_RUN_DIR}/vnc.sock"
+            else
+                warn "display-web: no websockify + /usr/share/novnc in this runner image (or the launcher lacks --vnc-socket) — no browser fallback; SPICE still works"
+                DISPLAY_WEB_PORT=0
+            fi
+        else
+            DISPLAY_WEB_PORT=0
+        fi
+        display_launcher_args
+    fi
+fi
+if [ "${DISPLAY_PROTOCOL}" != "spice" ]; then
+    # No door => the record must not advertise a port the runner published for
+    # one: a viewer pointed at it would meet a refused connection, not a desktop.
+    DISPLAY_HOST_PORT=0
+    DISPLAY_WEB_PORT=0
+fi
+
 step "Booting ${PLATFORM}/${ROLE} (mem=${MEM}M smp=${SMP})"
 case "${PLATFORM}" in
     rpi5)
@@ -1120,7 +1435,8 @@ case "${PLATFORM}" in
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
             --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} \
-            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} 2>&1 | tee "${RUN_DIR}/launch.log"
+            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} \
+            "${DISPLAY_ARGS[@]}" 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
     x86)
@@ -1132,7 +1448,8 @@ case "${PLATFORM}" in
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
             --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} \
-            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} 2>&1 | tee "${RUN_DIR}/launch.log"
+            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} \
+            "${DISPLAY_ARGS[@]}" 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
     *)
@@ -1143,11 +1460,24 @@ case "${PLATFORM}" in
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
             --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} \
-            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} 2>&1 | tee "${RUN_DIR}/launch.log"
+            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} \
+            "${DISPLAY_ARGS[@]}" 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
 esac
 [ "${lrc}" -eq 0 ] || die "launcher exited ${lrc} (see ${RUN_DIR}/launch.log)"
+
+# The browser fallback: websockify bridges the container's :6080 (published by
+# the runner on loopback as DISPLAY_WEB_PORT) to qemu's VNC unix socket. It
+# connects to the socket per client, so it can start before the guest draws.
+# Its log holds client addresses only; the VNC password is in qemu's secret
+# object, never on this command line.
+if [ -n "${VNC_SOCK}" ]; then
+    websockify --web /usr/share/novnc "0.0.0.0:${DISPLAY_WEB_LISTEN_PORT}" \
+        --unix-target "${VNC_SOCK}" > "${LAUNCH_RUN_DIR}/websockify.log" 2>&1 &
+    WEBSOCKIFY_PID=$!
+    info "noVNC  : websockify on container port ${DISPLAY_WEB_LISTEN_PORT} -> ${VNC_SOCK}"
+fi
 
 # NB: this REPLACES the earlier `trap reown EXIT`, so it must call reown itself —
 # otherwise the run's artifacts stay root-owned on the host.
@@ -1161,6 +1491,7 @@ cleanup() {
         write_device_record stopped
     fi
     [ -f "${PIDFILE}" ] && kill "$(cat "${PIDFILE}")" 2>/dev/null || true
+    [ -n "${WEBSOCKIFY_PID}" ] && kill "${WEBSOCKIFY_PID}" 2>/dev/null || true
     ${KEEP} || rm -f "${RUN_DIR}"/launch/run.qcow2 2>/dev/null || true
     reown
 }
@@ -1176,6 +1507,10 @@ trap cleanup EXIT
 if ${KEEP_ALIVE}; then
     write_device_record booting
     info "device record (booting): ${DEVICE_JSON}"
+    # The door is open from this moment (qemu serves SPICE from launch, so the
+    # firmware and the boot splash are visible), which is why it is announced
+    # here and not when ssh answers.
+    display_announce
 fi
 
 # ── Wait for the guest, then assert ─────────────────────────────────────────
@@ -1250,6 +1585,39 @@ if ${KEEP_ALIVE}; then
     fi
 fi
 
+# Mesh rendezvous, control side: publish this node's reusable preauth key and its
+# mesh-address login_server for the fleet's other rows (see MESH_RENDEZVOUS above).
+# keys-provision minted the key before sshd started, but a slow first boot is
+# retried for a while. The key is copied guest -> file with no echo: it never
+# appears in a log, and the files are 0600 and handed to the invoking user.
+if [ "${HS_ENABLED}" = true ] && [ -n "${MESH_RENDEZVOUS}" ]; then
+    mkdir -p "${MESH_RENDEZVOUS}"
+    _mr_ok=false
+    for _mr_try in $(seq 1 36); do
+        if ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
+               'sudo cat /var/lib/headscale/preauthkeys/hugmesh.key' \
+               > "${MESH_RENDEZVOUS}/.authkey.part" 2>/dev/null \
+           && [ -s "${MESH_RENDEZVOUS}/.authkey.part" ] \
+           && [[ "$(tr -d '[:space:]' < "${MESH_RENDEZVOUS}/.authkey.part")" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            _mr_ok=true; break
+        fi
+        sleep 5 & wait $! 2>/dev/null || true
+    done
+    if ${_mr_ok}; then
+        chmod 0600 "${MESH_RENDEZVOUS}/.authkey.part"
+        printf 'http://%s:8080\n' "${MESH_IP}" > "${MESH_RENDEZVOUS}/.login_server.part"
+        [ -n "${HOST_UID}" ] && chown "${HOST_UID}:${HOST_GID:-${HOST_UID}}" \
+            "${MESH_RENDEZVOUS}" "${MESH_RENDEZVOUS}/.authkey.part" "${MESH_RENDEZVOUS}/.login_server.part" 2>/dev/null
+        # login_server LAST: a reader keys on both files, and each rename is atomic.
+        mv -f "${MESH_RENDEZVOUS}/.authkey.part" "${MESH_RENDEZVOUS}/authkey"
+        mv -f "${MESH_RENDEZVOUS}/.login_server.part" "${MESH_RENDEZVOUS}/login_server"
+        info "mesh   : published this control node's reusable preauth key + login_server http://${MESH_IP}:8080 for the fleet"
+    else
+        rm -f "${MESH_RENDEZVOUS}/.authkey.part"
+        warn "could not read /var/lib/headscale/preauthkeys/hugmesh.key from the guest — the fleet's other nodes cannot join this tailnet (see guest_var_log_keys-provision.log)"
+    fi
+fi
+
 step "Running assertions.sh in the guest (wall clock: ${ASSERT_TIMEOUT}s)"
 if ${KEEP_ALIVE}; then write_device_record assertions; fi
 # THE ONLY wall clock over the post-boot phase. ${TIMEOUT} bounds the ssh-wait
@@ -1283,13 +1651,24 @@ if ${KEEP_ALIVE}; then write_device_record assertions; fi
 # always the last attempt's. ConnectTimeout is raised to 15s for this one ssh,
 # and it goes BEFORE ${SSH_OPTS[@]}: ssh keeps the FIRST value it obtains for
 # an option, so appended after the array it would silently lose to the 5.
+# A fleet's CONTROL row asserts minutes before its workers boot and join. Its
+# "mesh peers" check waits, bounded by this many seconds, for a fleet node to
+# register on its headscale and reach its netmap (assertions.sh assert_mesh_client);
+# every other row gets 0 (no wait). `sudo bash -s` drops the environment, so the
+# budget rides as the first line of the streamed script. 600 s sits inside the
+# 900 s assertion wall clock with the rest of the suite's own waits to spare, and
+# a worker on TCG aarch64 joins ~4-5 min after the control row answers ssh
+# (2026-11-04 proof run: control ssh 02:15, worker joined 02:18:58).
+ASSERT_PEER_WAIT=0
+if [ "${HS_ENABLED}" = true ] && [ -n "${MESH_RENDEZVOUS}" ]; then ASSERT_PEER_WAIT="${ASSERT_PEER_WAIT_FLEET:-600}"; fi
+[[ "${ASSERT_PEER_WAIT}" =~ ^[0-9]+$ ]] || ASSERT_PEER_WAIT=0
 set +e
 ASSERT_ATTEMPTS=0
 while :; do
     ASSERT_ATTEMPTS=$((ASSERT_ATTEMPTS + 1))
     timeout -k 30 "${ASSERT_TIMEOUT}" \
         ssh -o ConnectTimeout=15 "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo bash -s' \
-        < <(cat "${QEMU_DIR}/../../scripts/_roles-lib.sh" "${QEMU_DIR}/assertions.sh") \
+        < <(printf 'HUGMESH_ASSERT_PEER_WAIT=%s\n' "${ASSERT_PEER_WAIT}"; cat "${QEMU_DIR}/../../scripts/_roles-lib.sh" "${QEMU_DIR}/assertions.sh") \
         2>&1 | tee "${RUN_DIR}/assertions.log"
     ARC=${PIPESTATUS[0]}
     [ "${ARC}" -eq 255 ] || break
@@ -1349,6 +1728,11 @@ done
 timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
     'sudo rc-service headscale status 2>&1; echo "--- rc-update ---"; sudo rc-update show default 2>&1' \
     > "${RUN_DIR}/guest_headscale-status.txt" 2>/dev/null || true
+# The mesh client's own view (2026-11-04): joined or not, its tailnet address, and
+# which peers it sees — the first thing to read when a fleet does not form.
+timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
+    'sudo rc-service tailscaled status 2>&1; echo "--- tailscale status ---"; sudo tailscale status 2>&1; echo "--- tailscale ip ---"; sudo tailscale ip -4 2>&1; echo "--- headscale nodes (control only) ---"; command -v headscale >/dev/null && sudo headscale nodes list 2>&1; echo "--- tor reconcile log ---"; sudo tail -n 40 /var/log/hugmesh-tor-reconcile.log 2>&1' \
+    > "${RUN_DIR}/guest_mesh-status.txt" 2>/dev/null || true
 # NetworkManager state: several boot-time failures (a guest that answers ssh on
 # the slirp NIC but never brings its provisioned connections up, or an rc
 # service stuck in 'starting') are only diagnosable from the NM/OpenRC side,

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=VM display autofit
+Comment=Follows the viewer window size on a virtio-gpu or QXL display; exits at once on real hardware
+Exec=/usr/libexec/hugmesh/vm-autofit
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

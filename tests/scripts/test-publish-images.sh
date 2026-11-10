@@ -21,6 +21,10 @@
 #     .img.xz (no xz magic), a fake .iso (no CD001), a 0-byte artifact, a
 #     secret-laced mesh manifest (secret-scan.sh gate), an existing --dest,
 #     a --dest nested inside the session,
+#   • frite media (#881: raw MBR+FAT32 <prefix>.live.img / .installer.img, and
+#     their --compress .img.xz forms) ship next to other boards' images instead
+#     of refusing the whole export; a bare raw x86 .img stays unpublished; a raw
+#     medium without the MBR signature is refused,
 #   • --images filter (and the unknown-id fatal), --hardlink, session-id
 #     lookup via HUGMESH_SESSIONS_ROOT,
 #   • manifest determinism (byte-identical re-run) + detached Ed25519 signing
@@ -286,6 +290,57 @@ o9="$(PROVENANCE_SIGNING_KEY="${WORK}/no-such-key.pem" bash "${PI}" "${SESS}" --
 [ "${rc}" -ne 0 ] && echo "${o9}" | grep 'PROVENANCE_SIGNING_KEY' >/dev/null \
     && ok "missing signing key is fail-closed (never silently unsigned)" \
     || bad "missing signing key should refuse (rc=${rc})"
+
+# ── 7. frite media are raw MBR+FAT32 .img since #881 (u-boot reads no ISO9660) ─
+# Compressed (Studio's default --compress) they are <prefix>.live.img.xz /
+# .installer.img.xz: *.img.xz admits them, so the SHAPE must know them too, or one
+# frite medium refuses the WHOLE export for every board in the session.
+mk_mbr() {  # mk_mbr <path> — a raw disk image: MBR boot signature at byte 510
+    printf 'mbr-payload:%s' "$(basename "$1")" > "$1"
+    truncate -s 65536 "$1"
+    printf '\x55\xaa' | dd of="$1" bs=1 seek=510 conv=notrunc 2>/dev/null
+}
+FRITE_STEM="hugmesh-frite-aml-s905x-cc-arm64-desktop-prod-20261105T010203Z"
+FS="${WORK}/frite-xz/${SID}"; mkdir -p "${FS}"
+mk_xz "${FS}/${X86_STEM}.img.xz"
+mk_xz "${FS}/${FRITE_STEM}.live.img.xz"
+mk_xz "${FS}/${FRITE_STEM}.installer.img.xz"
+o10="$(run_pub "${FS}" --dest "${WORK}/pub10")"; rc=$?
+[ "${rc}" -eq 0 ] && ok "frite .live.img.xz/.installer.img.xz next to an x86 .img.xz: export succeeds" \
+    || bad "frite compressed media refused the whole export (rc=${rc}): ${o10}"
+for f in "${X86_STEM}.img.xz" "${FRITE_STEM}.live.img.xz" "${FRITE_STEM}.installer.img.xz"; do
+    [ -f "${WORK}/pub10/${f}" ] && ok "compressed frite session ships ${f}" || bad "compressed frite session did not ship ${f}"
+done
+python3 - "${WORK}/pub10/publish-manifest.json" <<'PY' && ok "frite media carry kind live.img.xz / installer.img.xz in the manifest" || bad "frite media kinds wrong in the manifest"
+import json, sys
+m = json.load(open(sys.argv[1]))
+kinds = sorted(e["kind"] for e in m["images"] if "-frite-" in e["file"])
+assert kinds == ["installer.img.xz", "live.img.xz"], kinds
+PY
+
+# Uncompressed: before #881 the raw .live.iso/.installer.iso shipped; their raw .img
+# successors must too — while the bare x86 whole-disk .img stays excluded.
+FR="${WORK}/frite-raw/${SID}"; mkdir -p "${FR}"
+mk_xz  "${FR}/${X86_STEM}.img.xz"
+mk_mbr "${FR}/${X86_STEM}.img"
+mk_mbr "${FR}/${FRITE_STEM}.live.img"
+mk_mbr "${FR}/${FRITE_STEM}.installer.img"
+o11="$(run_pub "${FR}" --dest "${WORK}/pub11")"; rc=$?
+[ "${rc}" -eq 0 ] && ok "uncompressed frite media: export succeeds" || bad "uncompressed frite export failed (rc=${rc}): ${o11}"
+for f in "${FRITE_STEM}.live.img" "${FRITE_STEM}.installer.img"; do
+    [ -f "${WORK}/pub11/${f}" ] && ok "uncompressed frite session ships ${f}" || bad "uncompressed frite medium NOT published: ${f}"
+done
+[ ! -e "${WORK}/pub11/${X86_STEM}.img" ] && ok "a bare raw x86 .img is still NOT published (narrow globs only)" \
+    || bad "the bare raw x86 .img was published — the allow-list widened past the frite media"
+( cd "${WORK}/pub11" 2>/dev/null && sha256sum -c SHA256SUMS >/dev/null 2>&1 ) \
+    && ok "frite export SHA256SUMS verifies" || bad "frite export SHA256SUMS does not verify"
+
+# (j) a raw frite medium without the MBR boot signature (magic gate for the new kind).
+poison "poison: raw .live.img without an MBR signature" 'MBR' \
+    bash -c 'head -c 65536 /dev/zero > hugmesh-frite-aml-s905x-cc-arm64-desktop-prod-20261105T010203Z.live.img'
+# (k) a PEM wearing a raw frite medium name.
+poison "poison: PEM inside a builder-named .installer.img" 'MBR' \
+    cp "keys-pki.x86/id_ed25519" "hugmesh-frite-aml-s905x-cc-arm64-desktop-prod-20261105T010203Z.installer.img"
 
 echo "== done: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

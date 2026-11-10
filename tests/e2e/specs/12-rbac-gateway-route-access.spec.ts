@@ -79,9 +79,9 @@ const CASES: Case[] = [
   { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', user: 'e2e-gamesonly', expect: 'DENY', why: 'ROLE_GAMES alone is NOT games-admin (default-deny)' },
   { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', user: 'e2e-adminonly', expect: 'DENY', why: 'ROLE_ADMIN alone is NOT games-admin (default-deny)' },
   { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', user: 'e2e-mod', expect: 'DENY', why: 'ROLE_MOD alone is NOT games-admin' },
-  { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', user: 'e2e-gamesadmin', expect: 'ALLOW', why: 'derived ROLE_GAMES_ADMIN reaches games admin API' },
-  { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', user: 'e2e-gamesonly', expect: 'DENY', why: 'ROLE_GAMES alone denied games admin API' },
-  { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', user: 'e2e-adminonly', expect: 'DENY', why: 'ROLE_ADMIN alone denied games admin API' },
+  { gw: 'hugmesh-fe-gateway', path: '/games/api/admin/role-grants', user: 'e2e-gamesadmin', expect: 'ALLOW', why: 'derived ROLE_GAMES_ADMIN reaches games admin API' },
+  { gw: 'hugmesh-fe-gateway', path: '/games/api/admin/role-grants', user: 'e2e-gamesonly', expect: 'DENY', why: 'ROLE_GAMES alone denied games admin API' },
+  { gw: 'hugmesh-fe-gateway', path: '/games/api/admin/role-grants', user: 'e2e-adminonly', expect: 'DENY', why: 'ROLE_ADMIN alone denied games admin API' },
 
   // ── UNGOVERNED: an unmapped path is NO_RULE — the table does not wall it ──
   // The gateway forwards NO_RULE and the coarse SecurityConfig gate decides. What
@@ -129,11 +129,11 @@ test.describe('RBAC: gateway route-access ALLOW/DENY (schema.sql contract)', () 
     for (const single of ['ROLE_GAMES', 'ROLE_ADMIN', 'ROLE_MOD', 'ROLE_USER']) {
       expect(gatewayDecision('hugmesh-fe-gateway', '/games/admin/x', [single]),
         `${single} alone must NOT reach /games/admin`).toBe('DENY');
-      expect(gatewayDecision('hugmesh-be-gateway', '/games/api/admin/x', [single]),
+      expect(gatewayDecision('hugmesh-fe-gateway', '/games/api/admin/x', [single]),
         `${single} alone must NOT reach /games/api/admin`).toBe('DENY');
     }
     expect(gatewayDecision('hugmesh-fe-gateway', '/games/admin/x', ['ROLE_GAMES_ADMIN'])).toBe('ALLOW');
-    expect(gatewayDecision('hugmesh-be-gateway', '/games/api/admin/x', ['ROLE_GAMES_ADMIN'])).toBe('ALLOW');
+    expect(gatewayDecision('hugmesh-fe-gateway', '/games/api/admin/x', ['ROLE_GAMES_ADMIN'])).toBe('ALLOW');
   });
 
   // ── THE ORACLE ITSELF, under test ─────────────────────────────────────────

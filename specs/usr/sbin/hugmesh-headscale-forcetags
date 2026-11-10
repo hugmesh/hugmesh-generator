@@ -4,6 +4,21 @@
 # binary live). Invoked by gen-headscale-policy.sh after a verified export is
 # applied (and may be run standalone after node approval).
 #
+# WHY (FIX-SERVERTAG): tags are SELF-APPLIED at join
+# (--advertise-tags=tag:hugmesh). A node could therefore advertise
+# tag:dev_<otherfp> / tag:dom_<otherdomain> / tag:superadmin and MASQUERADE as a
+# different SSH destination or source. Forced tags do NOT override what a node
+# advertises: headscale 0.23 counts a node's forced tags AND every advertised tag
+# the policy accepts (measured on 0.23.0 by
+# tests/device-registry/test-headscale-tag-ownership.sh). What stops the forgery
+# is the policy: those tags carry the EMPTY owner list [] in tagOwners (tag:dom_*
+# is unlisted), so an advertised one lands in invalid_tags, while the tags forced
+# here bypass tagOwners and apply. That makes the SSH dst and the superadmin src
+# NON-FORGEABLE. tag:hugmesh stays self-applied and owned by "hugmesh"
+# (data-plane membership only — CIDR rule + route auto-approval, NOT a :22
+# src/dst). `headscale nodes tag -t` REPLACES the node's forced-tag list, so the
+# key's forced tag:hugmesh is dropped here; nodes keep tag:hugmesh through their
+# own --advertise-tags.
 # WHY (FIX-SERVERTAG): tags are SELF-APPLIED at join (--advertise-tags=...).
 # A node that could validly advertise tag:dev_<otherfp> / tag:dom_<otherdomain> /
 # tag:superadmin would MASQUERADE as a different SSH destination or source.
