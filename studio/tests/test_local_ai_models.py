@@ -323,6 +323,20 @@ def test_the_status_command_routes_pull(monkeypatch):
     assert 'pull)          shift; la_py pull "$@" ;;' in script
 
 
+def test_run_as_a_module_a_no_model_prompt_is_a_sentence_not_a_traceback(env, fake):
+    """``python -m ...local_ai_status`` (what scripts/local-ai.sh runs) loads the file
+    as ``__main__``; NoModel subclasses the package copy's LocalAIError. Found live on
+    2026-11-09: the first run printed a traceback."""
+    import sys
+    studio = os.path.dirname(os.path.dirname(os.path.abspath(lai.__file__)))
+    run_env = dict(os.environ, **env, PYTHONPATH=os.path.dirname(studio))
+    p = subprocess.run([sys.executable, "-m", "hugmesh_studio.core.local_ai_status", "prompt", "hi"],
+                       capture_output=True, text=True, env=run_env, timeout=60)
+    assert p.returncode == 1, p.stderr
+    assert "Traceback" not in p.stderr
+    assert "No model is pulled" in p.stderr and "scripts/local-ai.sh pull" in p.stderr
+
+
 def test_cli_prompt_and_chat_with_no_model_say_what_to_run(env, fake, monkeypatch):
     for k, v in env.items():
         monkeypatch.setenv(k, v)

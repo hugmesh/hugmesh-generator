@@ -1019,6 +1019,13 @@ def chat_loop(inp, out, env: dict | None = None, model: str | None = None) -> in
 # ── python -m hugmesh_studio.core.local_ai_status ────────────────────────────────────
 def main(argv: list | None = None, *, out=None, err=None, inp=None) -> int:
     """The command line behind ``scripts/local-ai.sh`` and the Studio's flags."""
+    if __name__ == "__main__":
+        # Run as ``python -m``: this file is then the module ``__main__``, and the
+        # modules it imports (core/local_ai_models) see a SECOND copy under its real
+        # name, so their LocalAIError is not this one and an ``except`` below would
+        # miss it (a traceback instead of a sentence). Run the one real copy.
+        from . import local_ai_status as one
+        return one.main(argv, out=out, err=err, inp=inp)
     out = out or sys.stdout
     err = err or sys.stderr
     inp = inp or sys.stdin
