@@ -62,6 +62,7 @@ import traceback
 
 from ..choice_cards import ChoiceCard
 from ..qt import Qt, QtWidgets
+from ._images_mesh import ImagesMeshStrip
 from ._scroll import scrollable
 from ..styles import ERROR, muted
 from ...core import cross_dracut
@@ -137,6 +138,14 @@ class LaunchPage(QtWidgets.QWizardPage):
         self.gate_err.setStyleSheet(f"color: {ERROR};")
         self.gate_err.hide()
         lay.addWidget(self.gate_err)
+        # SAVE THIS MESH (operator ask 2026-11-09: "the option to save that mesh before
+        # proceeding to the build as well as starting that mesh locally as the build
+        # proceeds"). Mesh flow only; ABOVE the cards for the reason the gate's refusal
+        # is: below them it is scrolled past. Saving is not a gate — the Continue card
+        # and validatePage are untouched by it (tests/test_launch_save_mesh.py).
+        self.mesh_strip = ImagesMeshStrip(wiz)
+        self.mesh_strip.hide()
+        lay.addWidget(self.mesh_strip)
         # ACTION cards, not a pick-one group: each one DOES its thing on click, so they
         # are deliberately not checkable (the tile look of ask 14 without pretending a
         # button is a selection).
@@ -214,3 +223,7 @@ class LaunchPage(QtWidgets.QWizardPage):
     def initializePage(self):
         self.summary.setText(launch_summary(self.wiz))
         self._refuse()
+        try:
+            self.mesh_strip.refresh()
+        except Exception:                     # noqa: BLE001 — never block the build screen
+            _log_swallowed("mesh_strip.refresh")
