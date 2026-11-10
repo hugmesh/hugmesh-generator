@@ -150,6 +150,16 @@ _TOR_PS_FILTERS = (
     "--filter", f"label=com.docker.compose.service={_TOR_SERVICE}",
     "--filter", "status=running",
 )
+
+
+def _tor_ps_filters(project: str) -> tuple[str, ...]:
+    """:data:`_TOR_PS_FILTERS` for another compose project (the node-images lane's
+    own mesh runs beside the checkout's, under its own project name)."""
+    if project == _COMPOSE_PROJECT:
+        return _TOR_PS_FILTERS
+    return ("--filter", f"label=com.docker.compose.project={project}",
+            "--filter", f"label=com.docker.compose.service={_TOR_SERVICE}",
+            "--filter", "status=running")
 PRIVATE_ARTIFACT_SERVICES = (
     "hugmesh-admin-bff-api",
     "hugmesh-user-bff-api",
@@ -256,8 +266,22 @@ class LocalStackNode:
                  tor_domains=(),
                  external_idp_domains=(),
                  superbrand_look=None,
-                 look_brands=None):
+                 look_brands=None,
+                 project: str = _COMPOSE_PROJECT,
+                 host_ports: dict | None = None):
         self.generator_dir = os.path.abspath(generator_dir)
+        # The COMPOSE PROJECT this node drives. The default is the name the compose
+        # files pin (``name: hugmesh-local``) and threads NOTHING new: the env, the
+        # argv and every label filter stay byte-identical. Another name (the node-
+        # images lane's own mesh, core/images_mesh.py) is exported as
+        # COMPOSE_PROJECT_NAME, which compose ranks above the files' ``name:``, so its
+        # containers, networks, volumes and built images are all its own.
+        self.project = (project or _COMPOSE_PROJECT).strip() or _COMPOSE_PROJECT
+        # Extra host ports beyond the two front doors (TOR_SOCKS_HOST_PORT,
+        # ANUBIS_HOST_PORT): exported only when given, so a default node's env is
+        # unchanged. A second mesh beside the checkout's needs every published port
+        # of its own (compose.local.yaml publishes exactly these four).
+        self.host_ports = {str(k): str(v) for k, v in (host_ports or {}).items()}
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
         self.social = social
@@ -460,7 +484,7 @@ class LocalStackNode:
             return None
         try:
             r = subprocess.run(
-                ["docker", "ps", "-q", "--no-trunc", *_TOR_PS_FILTERS],
+                ["docker", "ps", "-q", "--no-trunc", *_tor_ps_filters(self.project)],
                 capture_output=True, text=True, **proc_text.TEXT_IO, timeout=5)
             ids = r.stdout.split() if r.returncode == 0 else []
             if not ids:
@@ -485,7 +509,7 @@ class LocalStackNode:
         if not shutil.which("docker"):
             return False
         try:
-            r = subprocess.run(["docker", "ps", "-q", "--no-trunc", *_TOR_PS_FILTERS],
+            r = subprocess.run(["docker", "ps", "-q", "--no-trunc", *_tor_ps_filters(self.project)],
                                capture_output=True, text=True, **proc_text.TEXT_IO, timeout=5)
             ids = r.stdout.split() if r.returncode == 0 else []
             if not ids:
@@ -839,7 +863,7 @@ class LocalStackNode:
                             f"cold stack build needs ~{PREFLIGHT_MIN_FREE_GIB} GiB; free "
                             f"space (e.g. `docker system prune`) and retry.")
         missing = [s for s in PRIVATE_ARTIFACT_SERVICES
-                   if not self._image_present(f"{_COMPOSE_PROJECT}-{s}")]
+                   if not self._image_present(f"{self.project}-{s}")]
         if missing:
             ready, why = self.m2_registry_ready()
             if not ready:
@@ -923,6 +947,15 @@ class LocalStackNode:
             # container refuses — the terminal fail-closed layer.)
             env["EGRESS_VPN_CONF"] = os.path.abspath(self.egress_vpn_conf)
         env["PUBLIC_HOST_PORT"] = str(self.public_host_port)
+        # Another compose project (see __init__): set only then, so the default
+        # node's env is byte-identical to before the parameter existed. With it the
+        # TLS front door and the other published ports must move too, or `up` fails
+        # on a port the checkout's own mesh already holds.
+        if self.project != _COMPOSE_PROJECT:
+            env["COMPOSE_PROJECT_NAME"] = self.project
+            env["PUBLIC_HTTPS_PORT"] = str(self.public_https_port)
+        for k, v in self.host_ports.items():
+            env[k] = v
         # Only export DOMAIN when set, so existing callers (and ENV=test) keep the
         # Makefile's own default. In prod this pins the Casdoor issuer to the same
         # apex the minted secrets use (Makefile: CASDOOR_ISSUER = https://id.$(DOMAIN)).
@@ -1223,7 +1256,7 @@ class LocalStackNode:
     def cold_build_expected(self) -> bool:
         """True when any private-maven service image is absent — the first stack-up
         will COMPILE the fleet (hours-scale) instead of restarting it (minutes)."""
-        return any(not self._image_present(f"{_COMPOSE_PROJECT}-{s}")
+        return any(not self._image_present(f"{self.project}-{s}")
                    for s in PRIVATE_ARTIFACT_SERVICES)
 
     def _write_looks(self) -> None:
@@ -1923,12 +1956,18 @@ class LocalStackNode:
             return False, blocker
         return self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel)
 
+    def _project_args(self) -> list[str]:
+        """``-p <project>`` for a node that is not the checkout's own mesh; [] for the
+        default, whose argv stays what it was (the file's ``name:`` decides)."""
+        return [] if self.project == _COMPOSE_PROJECT else ["-p", self.project]
+
     def status(self) -> StackStatus:
         base = _compose_base()
         if not base or not os.path.exists(self.compose_file):
             return StackStatus(running=False, detail="not started")
         try:
-            r = subprocess.run([*base, "-f", self.compose_file, "ps", "-q"],
+            r = subprocess.run([*base, *self._project_args(), "-f", self.compose_file,
+                                "ps", "-q"],
                                cwd=self.generator_dir, capture_output=True, text=True,
                                **proc_text.TEXT_IO, timeout=30)
             ids = [x for x in r.stdout.splitlines() if x.strip()]
@@ -1941,7 +1980,8 @@ class LocalStackNode:
         if not base:
             return "docker compose not available"
         try:
-            r = subprocess.run([*base, "-f", self.compose_file, "logs", "--tail", str(tail)],
+            r = subprocess.run([*base, *self._project_args(), "-f", self.compose_file,
+                                "logs", "--tail", str(tail)],
                                cwd=self.generator_dir, capture_output=True, text=True,
                                **proc_text.TEXT_IO, timeout=30)
             return r.stdout
