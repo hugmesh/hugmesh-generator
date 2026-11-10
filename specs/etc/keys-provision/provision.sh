@@ -479,6 +479,7 @@ install_authorized_keys() {
 
 install_root_keys() {
     local f="$1" tmp; tmp="$(mktemp)"
+    ROOT_KEYS_HANDLED=1
     jq -r '.root.ssh_authorized_keys // [] | .[]' "${f}" 2>/dev/null >> "${tmp}"
     [ -f "${BASE}/ssh/root.authorized_keys" ] && cat "${BASE}/ssh/root.authorized_keys" >> "${tmp}"
     if [ -s "${tmp}" ]; then
@@ -486,8 +487,37 @@ install_root_keys() {
         sort -u "${tmp}" > /root/.ssh/authorized_keys
         chmod 0700 /root/.ssh; chmod 0600 /root/.ssh/authorized_keys
         log "Installed root authorized key(s)"
+        root_keys_ssh_reachability_note
     fi
     rm -f "${tmp}"
+}
+
+# ── Break-glass root key without a users block ──────────────────────
+# gen-provision-keys.sh gives a WORKER stick no users.json, only
+# ssh/root.authorized_keys (its "break-glass SSH" key). install_root_keys used to
+# run only from provision_users, AFTER its "No users.json" / "No .users/.root"
+# early returns, so on exactly those sticks the key was never installed and the
+# documented break-glass path did not exist. Install it here when provision_users
+# did not already handle root's keys (a .root block wins: it may add keys of its
+# own, and calling install_root_keys again with no .root would drop them).
+provision_root_breakglass() {
+    [ "${ROOT_KEYS_HANDLED:-0}" = 1 ] && return 0
+    [ -s "${BASE}/ssh/root.authorized_keys" ] || return 0
+    log "No .root block — installing the break-glass ssh/root.authorized_keys for root"
+    install_root_keys /dev/null
+}
+
+# The key alone is not a way in: sshd must also permit root key logins. Say so
+# when it does not, instead of leaving an unusable "break-glass" key in place
+# silently. sshd takes the FIRST PermitRootLogin it reads (drop-ins first).
+root_keys_ssh_reachability_note() {
+    local v
+    v="$(cat /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null \
+        | awk 'tolower($1)=="permitrootlogin"{print tolower($2); exit}')"
+    case "${v:-prohibit-password}" in
+        no) warn "root has authorized key(s), but sshd has 'PermitRootLogin no': the key is NOT usable over SSH. Build with a root-login setting of prohibit-password to make it a break-glass login, or add a key-only admin user to the KEYS users.json." ;;
+        *) log "sshd PermitRootLogin=${v:-prohibit-password (sshd default)}: the root key is usable over SSH" ;;
+    esac
 }
 
 # ── SSH host keys supplied on KEYS ─────────────────────────────────
@@ -3572,6 +3602,7 @@ main() {
     provision_hosts      # peers reachable by IP before mesh/k8s join
     provision_binhost    # binary OS updates over the VPN
     provision_users
+    provision_root_breakglass   # worker sticks: the break-glass root key ships with no users.json
     provision_dial_user         # BFF SSH dial account (unprivileged, no sudo) — the staged ssh/<dial_user>.authorized_keys has no owner without it
     provision_device_password   # superadmin client variant: set device password from KEYS hash
     provision_network
