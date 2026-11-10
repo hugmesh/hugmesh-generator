@@ -10,7 +10,9 @@
 #      manifest names (org.kde.Platform / org.kde.Sdk, branch read from the manifest);
 #   2. runs desktop-file-validate and `appstreamcli validate --no-net` (what the release
 #      workflow runs);
-#   3. builds org.hugmesh.ImageStudio from flatpak/org.hugmesh.ImageStudio.yml;
+#   3. writes the generator seed (make_generator_seed.py: a git archive of this commit,
+#      which the bundle carries) and builds org.hugmesh.ImageStudio from
+#      flatpak/org.hugmesh.ImageStudio.yml;
 #   4. exports hugmesh-studio-<version>-<arch>.flatpak and its .sha256 (same names and
 #      same flatpak build-bundle call as the release workflow, except that the bundle is
 #      written as <name>.partial and renamed when whole);
@@ -165,7 +167,7 @@ bundle="$out_dir/$bundle_name"
 
 # ---- preflight ----------------------------------------------------------------------------
 step "Checking this machine"
-for tool in python3 sha256sum sed awk df flock id; do
+for tool in python3 git sha256sum sed awk df flock id; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed"
 done
 # The Builder reaches the host through the flatpak session helper, which is a service on
@@ -251,6 +253,14 @@ run_validator desktop-file-validate "$flatpak_src/$app_id.desktop"
 run_validator appstreamcli validate --no-net "$flatpak_src/$app_id.metainfo.xml"
 
 # ---- 3. build ---------------------------------------------------------------------------------
+# The generator tree the bundle carries: the manifest's two `type: file` sources, written
+# where it reads them (studio/packaging/flatpak/generator-seed/, ignored by git), as the
+# release workflow does. It archives the COMMIT: uncommitted changes are not in it, and
+# the seed tool says so. A seed already written for this commit is reused.
+step "Writing the generator seed the bundle carries (git archive of this commit)"
+python3 "$here/make_generator_seed.py" --out "$flatpak_src/generator-seed" \
+    || die "could not write the generator seed (needs git and a checkout with history for HEAD)"
+
 sh_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 step "Preparing the Builder"
 mkdir -p "$work/bin"
@@ -375,6 +385,20 @@ done
 [ -f "$user_dir/exports/share/applications/$app_id.desktop" ] \
     || die "flatpak did not export $app_id.desktop into $user_dir/exports"
 printf 'ok       %s\n' "$user_dir/exports/share/applications/$app_id.desktop"
+
+step "Generator check: $app_command --self-check inside the sandbox (the tree the bundle carries)"
+# The release workflow's second smoke step. It places the bundled generator tree under
+# your home (~/.local/share/hugmesh-studio/generator, the same place the installed app
+# uses) and checks every generator path and make target the Studio names. Its host-bridge
+# line is reported, not counted.
+self_check="$work/self-check.json"
+if ! flatpak run --user --command="$app_command" "$app_id" --self-check --json > "$self_check"; then
+    cat "$self_check" >&2 || true
+    die "--self-check failed inside the sandbox: the bundle cannot run the generator's scripts"
+fi
+grep -q '"ok": true' "$self_check" \
+    || die "--self-check exited 0 without reporting \"ok\": true (see $self_check)"
+printf 'self-check ok (%s)\n' "$self_check"
 
 # ---- done ---------------------------------------------------------------------------------------------
 step "Done in ${SECONDS}s"

@@ -1105,13 +1105,21 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 
 # MERGED (origin/main 3f3ed7bb into fix/games-two-realms-20261030): 214 of 256, MEASURED by running this file on the merged tree.
 # MERGED (origin/main 3f3ed7bb into fix/emulated-mesh-tailscale-tor-20261104): 216 of 257, MEASURED by running this file on the merged tree.
+# MERGED (origin/main 7e4a5c14): 232 of 274, MEASURED by running this file with GUARD_PREMERGE=0 on
+# win/main-red-fix-20261109 (the 2026-11-05 merges each gated suites without moving this line).
+# MERGED (origin/main 3214d8f6 into fix/fe-template-route-parity-20261104): this branch adds ONE
+# gated suite, tests/scripts/test-fe-template-route-parity.sh (shell-suites.yml node job)
+# = 233 of 275, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree;
+# ungated SET stays 42.
 # 232 -> 234 (denominator 274 -> 276) on 2026-11-09 for fix/compose-db-passwords-20261104
 # (hugmesh-generator#857), which adds TWO gated suites, both in shell-suites.yml's debian
 # leg 1: tests/scripts/test-compose-no-literal-passwords.sh and
 # tests/stack/test-gen-stack-db-env.sh. Its base, origin/main 7e4a5c14, already
 # MEASURED 232 of 274 against the recorded 216 (the check was red on main); 234 of 276
 # MEASURED by running this file on the branch.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-234}"
+# MERGED (origin/main fc769fe2 into fix/compose-db-passwords-20261104): main 233 of 275 + this
+# branch's 2 = 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-235}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

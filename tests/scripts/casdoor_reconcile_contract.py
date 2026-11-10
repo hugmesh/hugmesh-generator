@@ -15,6 +15,13 @@ Subcommands
   static   <specs/cluster>            the source contract (below)
   conf     <specs/cluster>            the init_data.json wiring contract (below)
   seed     <specs/cluster>            the init_data.json OBJECT-GRAPH contract (below)
+  devicelogin <specs/cluster> [<root>...]
+                                      every app granted device_code lists the
+                                      "Device login" sign-in method AND a sign-in
+                                      method its approval page can render for a
+                                      browser with no IdP session (Password), and
+                                      no public device client carries the
+                                      "password" grant (below)
 
 THE SOURCE CONTRACT — every discovered script must:
   (1) parse;
@@ -1229,6 +1236,574 @@ def check_seed(cluster):
         check_one_seed(label, seed)
 
 
+# ── the device-login contract (`devicelogin`) ────────────────────────────────
+# An application that is GRANTED the RFC 8628 device_code grant must also list
+# the "Device login" SIGN-IN METHOD, or casdoor never lets the flow start.
+# casbin/casdoor:3.80.0 controllers/auth.go:1519 (DeviceAuth) asks
+#     if !application.HasSigninMethod("Device login") { ... UnauthorizedClient,
+#         "device login is not enabled for this application" }
+# BEFORE it looks at grantTypes, and answers that with HTTP 200 — so a seed that
+# grants device_code and omits the method reads as configured, imports cleanly,
+# re-syncs green, and refuses every device sign-in. HasSigninMethod
+# (object/application.go:175-187) compares the name EXACTLY and skips a method
+# whose rule is "Hide password". When a seed carries no signinMethods key at
+# all, casdoor fills one in on add (object/application_util.go:171-195) from
+# enablePassword / enableCodeSignin / enableWebAuthn plus an always-present
+# "Face ID" — never "Device login" — so an absent key is the bug, not a default.
+# LIVE-REPRODUCED for hugmesh-desktop (#878): stored as ["Face ID"],
+# /api/device-auth -> unauthorized_client.
+#
+# Discovery is by CONTENT, not by a list of files: every manifest under
+# specs/cluster/manifests and every file under the extra roots (templates/,
+# tests/stack/ — the per-brand IdP template and the local-stack seed) that
+# mentions grantTypes is parsed, and any of them that names the device_code grant
+# but yields no parsed application carrying it FAILS, so a seed written in a
+# shape this parser cannot read fails closed instead of going unchecked.
+DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+DEVICE_METHOD = "Device login"
+# HasSigninMethod's one rule-based exclusion (object/application.go:181).
+DEVICE_METHOD_DEAD_RULE = "Hide password"
+# The application(s) that MUST be found granting device_code, so a rename or a
+# reshaped seed cannot turn this sweep into a vacuous pass.
+REQUIRED_DEVICE_APPS = {"hugmesh-desktop"}
+# The approval page /login/oauth/device/<user_code> is casdoor's LoginPage for the
+# device app itself, rendering that app's sign-in methods minus "Device login"
+# (web/src/auth/LoginPage.js). With "Device login" alone a browser that is not
+# signed in to the IdP gets "To access <app>:" and no input, no button — a dead
+# end (LIVE-REPRODUCED against 3.80.0 after #958). The fix is the Password method
+# (rule "All" or "Non-LDAP"; "Hide password" renders nothing): the user signs in on
+# the IdP's own page on their phone/browser, MFA applies there, and that sign-in
+# with type=device IS the approval.
+DEVICE_PAGE_SIGNIN = {("Password", "All"), ("Password", "Non-LDAP")}
+# grantTypes these PUBLIC device clients must never carry. "password" is the
+# resource-owner password grant: the client itself would collect the IdP
+# password (the greeter must never see it). Casdoor gates that grant on
+# grantTypes alone (measured: unsupported_grant_type while it is absent, even
+# with the Password sign-in METHOD listed), so this is the only line of defence.
+FORBIDDEN_DEVICE_APP_GRANTS = {"password"}
+_UNRESOLVED = object()
+# child -> parent for the tree _py_device_apps is walking (read by _py_strings)
+parent_of = {}
+
+
+def _py_bindings(tree):
+    """{name: [value-expr, ...]} for every simple `name = <expr>` in the module."""
+    out = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name):
+            out.setdefault(node.targets[0].id, []).append(node.value)
+    return out
+
+
+def _py_strings(expr, binds, skip=None, depth=0):
+    """Every string constant an expression can contribute, following simple
+    name bindings (a grant list kept in a module constant still counts). `skip`
+    is the application variable itself: in `app["grantTypes"] + [...]` the
+    `app[...]` operand is the list already being collected, not new strings."""
+    found = set()
+    if expr is None or depth > 8:
+        return found
+    for node in ast.walk(expr):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if not (isinstance(parent_of.get(node), ast.Subscript)
+                    and isinstance(parent_of[node].value, ast.Name)
+                    and parent_of[node].value.id == skip):
+                found.add(node.value)
+        elif isinstance(node, ast.Name) and node.id in binds and node.id != skip:
+            for v in binds[node.id]:
+                found |= _py_strings(v, binds, skip, depth + 1)
+    return found
+
+
+def _py_methods(expr, binds, depth=0):
+    """[(name, rule)] a signinMethods expression evaluates to, or _UNRESOLVED when
+    it cannot be read statically (which the caller treats as a failure)."""
+    if depth > 8:
+        return _UNRESOLVED
+    if isinstance(expr, ast.Name):
+        vals = binds.get(expr.id) or []
+        if len(vals) != 1:
+            return _UNRESOLVED
+        return _py_methods(vals[0], binds, depth + 1)
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+        a = _py_methods(expr.left, binds, depth + 1)
+        b = _py_methods(expr.right, binds, depth + 1)
+        return _UNRESOLVED if _UNRESOLVED in (a, b) else a + b
+    if isinstance(expr, (ast.List, ast.Tuple)):
+        out = []
+        for elt in expr.elts:
+            if isinstance(elt, ast.Name):
+                elt = (binds.get(elt.id) or [None])[0] if len(binds.get(elt.id) or []) == 1 else None
+            if not isinstance(elt, ast.Dict):
+                return _UNRESOLVED
+            item = {}
+            for k, v in zip(elt.keys, elt.values):
+                if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
+                    item[k.value] = v.value
+            out.append((item.get("name"), item.get("rule")))
+        return out
+    return _UNRESOLVED
+
+
+_FOLDED = ("grantTypes", "signinMethods")
+# statements whose body may not run (or may run more than once)
+_BRANCHY = tuple(t for t in (getattr(ast, n, None) for n in (
+    "If", "For", "AsyncFor", "While", "Try", "TryStar", "With", "AsyncWith", "Match",
+    "FunctionDef", "AsyncFunctionDef", "Lambda", "IfExp", "BoolOp", "comprehension"))
+    if t is not None)
+# list methods that do not change the list
+_READ_ONLY_LIST_METHODS = {"copy", "count", "index"}
+
+
+def _key_of(expr, bound):
+    """"grantTypes" / "signinMethods" when expr is `<bound>["<that>"]`, else None."""
+    if isinstance(expr, ast.Subscript) and isinstance(expr.value, ast.Name) \
+            and expr.value.id == bound and isinstance(expr.slice, ast.Constant) \
+            and expr.slice.value in _FOLDED:
+        return expr.slice.value
+    return None
+
+
+def _mentions_key(expr, bound, key):
+    return any(_key_of(n, bound) == key for n in ast.walk(expr))
+
+
+def _pos(node):
+    return (node.lineno, node.col_offset)
+
+
+def _py_fold_writes(dict_node, bound, scope, binds, grants, methods):
+    """Fold every later write to `<bound>["grantTypes"]` / `<bound>["signinMethods"]`
+    in `scope` into (grants, methods), IN SOURCE ORDER, with the semantics the
+    write has at run time:
+      * `x[k] = <expr>`                REPLACES (unless <expr> reads x[k]: then
+                                       `x[k] + [...]` / `[...] + x[k]` EXTENDS);
+      * `x[k] += [...]`, `x[k].append/extend/insert(...)`   EXTEND;
+      * `del x[k]`, `x.pop(k)`, `x.clear()`, `x[k].clear()` REMOVE (an absent
+        signinMethods is what casdoor back-fills with "Face ID", so [] here);
+      * `x.update({k: ...})` / `x.update(k=...)` REPLACE; `x.setdefault(k, v)`
+        sets v only when k is absent.
+    A write to signinMethods this cannot read (a non-literal update(), an item
+    assignment, `.pop()`/`.remove()` on the list, an unknown mutator) makes the
+    methods _UNRESOLVED, and so does ANY signinMethods write inside a branch, loop,
+    try/with or nested function: the check reports what the dict WILL hold, and a
+    write that may or may not run cannot be folded either way. grantTypes writes
+    inside a branch are UNIONED instead (a grant that may be added counts — that is
+    the conservative side for both the device-app sweep and the password-grant
+    guard). Folding stops at the next rebinding of the variable (`app = {...}`)."""
+    start = (dict_node.end_lineno, dict_node.end_col_offset)
+    stop = None
+    for sub in ast.walk(scope):
+        if isinstance(sub, (ast.Assign, ast.AnnAssign)) and _pos(sub) > start:
+            tgts = sub.targets if isinstance(sub, ast.Assign) else [sub.target]
+            if any(isinstance(t, ast.Name) and t.id == bound for t in tgts):
+                stop = _pos(sub) if stop is None else min(stop, _pos(sub))
+    ops = []
+    for sub in ast.walk(scope):
+        if not isinstance(sub, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete, ast.Call)):
+            continue
+        if not hasattr(sub, "lineno") or _pos(sub) <= start or (stop and _pos(sub) >= stop):
+            continue
+        ops.append(sub)
+    ops.sort(key=_pos)
+
+    def branchy(n):
+        p = parent_of.get(n)
+        while p is not None and p is not scope:
+            if isinstance(p, _BRANCHY):
+                return True
+            p = parent_of.get(p)
+        return False
+
+    def strings(expr):
+        return _py_strings(expr, binds, skip=bound)
+
+    def meth(expr):
+        return _py_methods(expr, binds)
+
+    def plus(a, b):
+        return _UNRESOLVED if _UNRESOLVED in (a, b) else a + b
+
+    for sub in ops:
+        cond = branchy(sub)
+        # (key, kind, payload): kind in replace / extend / remove / unknown
+        writes = []
+        if isinstance(sub, (ast.Assign, ast.AnnAssign)):
+            tgts = sub.targets if isinstance(sub, ast.Assign) else [sub.target]
+            for t in tgts:
+                for n in ast.walk(t):
+                    k = _key_of(n, bound)
+                    if k is None:
+                        # x[k][i] = ...: an item write into the list
+                        if isinstance(n, ast.Subscript) and _key_of(n.value, bound):
+                            writes.append((_key_of(n.value, bound), "unknown", sub.value))
+                        continue
+                    if n is not t or sub.value is None:
+                        writes.append((k, "unknown", sub.value))   # tuple unpacking
+                    elif _mentions_key(sub.value, bound, k):
+                        v = sub.value
+                        if isinstance(v, ast.BinOp) and isinstance(v.op, ast.Add) \
+                                and k == "signinMethods":
+                            if _key_of(v.left, bound) == k:
+                                writes.append((k, "extend", v.right))
+                            elif _key_of(v.right, bound) == k:
+                                writes.append((k, "prepend", v.left))
+                            else:
+                                writes.append((k, "unknown", v))
+                        elif k == "grantTypes":
+                            writes.append((k, "extend", v))
+                        else:
+                            writes.append((k, "unknown", v))
+                    else:
+                        writes.append((k, "replace", sub.value))
+        elif isinstance(sub, ast.AugAssign):
+            k = _key_of(sub.target, bound)
+            if k:
+                writes.append((k, "extend" if isinstance(sub.op, ast.Add) else "unknown", sub.value))
+        elif isinstance(sub, ast.Delete):
+            for t in sub.targets:
+                if _key_of(t, bound):
+                    writes.append((_key_of(t, bound), "remove", None))
+                elif isinstance(t, ast.Subscript) and _key_of(t.value, bound):
+                    writes.append((_key_of(t.value, bound), "unknown", None))
+        elif isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
+            obj, attr, args = sub.func.value, sub.func.attr, sub.args
+            if isinstance(obj, ast.Name) and obj.id == bound:
+                k0 = args[0].value if args and isinstance(args[0], ast.Constant) else None
+                if attr in ("pop", "setdefault") and args and k0 is None:
+                    writes += [(k, "unknown", None) for k in _FOLDED]
+                elif attr == "pop" and k0 in _FOLDED:
+                    writes.append((k0, "remove", None))
+                elif attr == "setdefault" and k0 in _FOLDED:
+                    writes.append((k0, "setdefault", args[1] if len(args) > 1 else None))
+                elif attr == "clear":
+                    writes += [(k, "remove", None) for k in _FOLDED]
+                elif attr == "popitem":
+                    writes += [(k, "unknown", None) for k in _FOLDED]
+                elif attr == "update":
+                    for a in args:
+                        if isinstance(a, ast.Dict) and all(isinstance(x, ast.Constant) for x in a.keys):
+                            for kk, vv in zip(a.keys, a.values):
+                                if kk.value in _FOLDED:
+                                    writes.append((kk.value, "replace", vv))
+                        else:
+                            writes += [(k, "unknown", a) for k in _FOLDED]
+                    for kw in sub.keywords:
+                        if kw.arg in _FOLDED:
+                            writes.append((kw.arg, "replace", kw.value))
+                        elif kw.arg is None:
+                            writes += [(k, "unknown", kw.value) for k in _FOLDED]
+            elif _key_of(obj, bound):
+                k = _key_of(obj, bound)
+                if attr == "append" and args:
+                    writes.append((k, "extend", ast.List(elts=[args[0]], ctx=ast.Load())))
+                elif attr == "extend" and args:
+                    writes.append((k, "extend", args[0]))
+                elif attr == "insert" and len(args) > 1:
+                    writes.append((k, "extend", ast.List(elts=[args[1]], ctx=ast.Load())))
+                elif attr == "clear":
+                    writes.append((k, "remove", None))
+                elif attr not in _READ_ONLY_LIST_METHODS:
+                    writes.append((k, "unknown", None))
+        for k, kind, val in writes:
+            if k == "grantTypes":
+                new = strings(val) if val is not None else set()
+                if kind == "replace" and not cond:
+                    grants = new
+                elif kind == "remove" and not cond:
+                    grants = set()
+                elif kind == "setdefault":
+                    grants = grants or new
+                else:
+                    grants = grants | new
+                continue
+            if methods is _UNRESOLVED:
+                continue
+            if cond or kind == "unknown":
+                methods = _UNRESOLVED
+            elif kind == "replace":
+                methods = meth(val)
+            elif kind == "extend":
+                methods = plus(methods, meth(val))
+            elif kind == "prepend":
+                methods = plus(meth(val), methods)
+            elif kind == "remove":
+                methods = []
+            elif kind == "setdefault":
+                if not methods:
+                    methods = meth(val) if val is not None else _UNRESOLVED
+    return grants, methods
+
+
+def _py_device_apps(label, src):
+    """[(app-label, grants:set, methods:list|_UNRESOLVED)] for every application
+    dict literal in a Python seed script. A dict is an application when it has a
+    literal "grantTypes" key. Later writes to the variable the dict is bound to,
+    inside the same function (`app["grantTypes"] = app["grantTypes"] + [...]`,
+    `app["signinMethods"] = ...`, `del`, `.pop()`, `.update()`, ...), are folded in
+    source order with their run-time meaning by _py_fold_writes() — that is how
+    init-job's reconcile_app() specialises user-bff, a device grant added that way
+    must not slip past, and a later `app["signinMethods"] = []` must REPLACE the
+    list the dict literal declared, not be appended to it."""
+    tree = ast.parse(src)
+    module_binds = _py_bindings(tree)
+    parent = parent_of
+    parent.clear()
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+    apps = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys = {k.value: v for k, v in zip(node.keys, node.values)
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+        if "grantTypes" not in keys:
+            continue
+        # the variable the dict is bound to, and the function that owns it
+        bound, scope = None, node
+        p = parent.get(node)
+        if isinstance(p, ast.Assign) and len(p.targets) == 1 \
+                and isinstance(p.targets[0], ast.Name):
+            bound = p.targets[0].id
+        while scope in parent and not isinstance(
+                scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+            scope = parent[scope]
+        # a function's own bindings shadow the module's (`appname` is bound in
+        # more than one reconcile function)
+        if not isinstance(scope, ast.Module):
+            binds = {**module_binds, **_py_bindings(scope)}
+        else:
+            binds = module_binds
+        grants = _py_strings(keys["grantTypes"], binds)
+        methods = _py_methods(keys["signinMethods"], binds) if "signinMethods" in keys else []
+        if bound is not None:
+            grants, methods = _py_fold_writes(node, bound, scope, binds, grants, methods)
+        name = keys.get("name")
+        app = name.value if isinstance(name, ast.Constant) else (
+            ast.unparse(name) if name is not None else f"line {node.lineno}")
+        if isinstance(name, ast.Name) and len(binds.get(name.id) or []) == 1 \
+                and isinstance(binds[name.id][0], ast.Constant):
+            app = binds[name.id][0].value
+        apps.append((f"{label}: {app}", grants, methods))
+    return apps
+
+
+def _json_device_apps(label, obj):
+    """Every dict carrying a grantTypes list, anywhere in a parsed JSON seed."""
+    apps = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            if isinstance(o.get("grantTypes"), list):
+                sm = o.get("signinMethods")
+                methods = ([(m.get("name"), m.get("rule")) for m in sm
+                            if isinstance(m, dict)] if isinstance(sm, list) else [])
+                apps.append((f"{label}: {o.get('name', '?')}",
+                             {g for g in o["grantTypes"] if isinstance(g, str)}, methods))
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(obj)
+    return apps
+
+
+def _text_blocks(text):
+    """[(key, body)] for every `<key>.py: |` / `<key>.json: |` YAML block scalar,
+    extracted by indentation — for .hbs templates, which are not valid YAML."""
+    out = []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        m = re.match(r'^(\s*)([\w.-]+\.(?:py|json)):\s*\|[-+]?\s*$', lines[i])
+        if not m:
+            i += 1
+            continue
+        indent, key, body = len(m.group(1)), m.group(2), []
+        i += 1
+        while i < len(lines) and (not lines[i].strip()
+                                  or len(lines[i]) - len(lines[i].lstrip()) > indent):
+            body.append(lines[i])
+            i += 1
+        nonblank = [len(b) - len(b.lstrip()) for b in body if b.strip()]
+        cut = min(nonblank) if nonblank else 0
+        out.append((key, "\n".join(b[cut:] for b in body) + "\n"))
+    return out
+
+
+def _shell_device_apps(label, text):
+    """jq / JSON object literals in a shell seed (tests/stack/seed-e2e.sh builds
+    its applications with `jq -n '{... grantTypes:[...] ...}'`). The object
+    enclosing each grantTypes is found by brace matching."""
+    apps = []
+    for m in re.finditer(r'grantTypes', text):
+        depth, start = 0, None
+        for j in range(m.start() - 1, -1, -1):
+            if text[j] == "}":
+                depth += 1
+            elif text[j] == "{":
+                if depth == 0:
+                    start = j
+                    break
+                depth -= 1
+        if start is None:
+            continue
+        depth, end = 0, None
+        for j in range(start, len(text)):
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+        if end is None:
+            continue
+        body = text[start:end + 1]
+        grants = {DEVICE_GRANT} if DEVICE_GRANT in body else set()
+        methods = []
+        sm = re.search(r'signinMethods"?\s*:\s*(\[.*?\])\s*[,}]', body, re.S)
+        if sm:
+            for item in re.finditer(r'\{[^{}]*\}', sm.group(1)):
+                nm = re.search(r'name"?\s*:\s*"([^"]*)"', item.group(0))
+                rl = re.search(r'rule"?\s*:\s*"([^"]*)"', item.group(0))
+                methods.append((nm.group(1) if nm else None, rl.group(1) if rl else None))
+        nm = re.search(r'\bname"?\s*:\s*("?[^,\s}]+)', body)
+        apps.append((f"{label}: {nm.group(1) if nm else 'line ' + str(text.count(chr(10), 0, start) + 1)}",
+                     grants, methods))
+    return apps
+
+
+def _device_apps_in_file(path):
+    """(apps, parse_errors) for one candidate seed file."""
+    text = path.read_text(errors="replace")
+    label = str(path)
+    apps, errors = [], []
+
+    def py(key, src):
+        try:
+            apps.extend(_py_device_apps(f"{label}[{key}]", src))
+        except SyntaxError as e:
+            errors.append(f"{label}[{key}]: not parseable Python ({e.msg}, line {e.lineno})")
+
+    def js(key, src):
+        try:
+            apps.extend(_json_device_apps(f"{label}[{key}]", json.loads(src)))
+        except ValueError as e:
+            errors.append(f"{label}[{key}]: not parseable JSON ({e})")
+
+    suffix = path.suffix
+    if suffix in (".yaml", ".yml"):
+        try:
+            docs = [d for d in yaml.safe_load_all(text) if isinstance(d, dict)]
+        except yaml.YAMLError:
+            docs = None
+        if docs is None:
+            blocks = _text_blocks(text)
+        else:
+            blocks = [(k, v) for d in docs for k, v in ((d.get("data") or {}).items()
+                      if isinstance(d.get("data"), dict) else [])
+                      if isinstance(v, str) and k.endswith((".py", ".json"))]
+        for key, src in blocks:
+            (py if key.endswith(".py") else js)(key, src)
+    elif suffix == ".hbs":
+        for key, src in _text_blocks(text):
+            (py if key.endswith(".py") else js)(key, src)
+    elif suffix == ".py":
+        py("", text)
+    elif suffix == ".json":
+        js("", text)
+    elif suffix == ".sh":
+        apps.extend(_shell_device_apps(label, text))
+    return apps, errors
+
+
+def check_device_login(cluster, extra_roots):
+    files = sorted(p for p in pathlib.Path(cluster, "manifests").rglob("*.yaml"))
+    for root in extra_roots:
+        rp = pathlib.Path(root)
+        if not rp.is_dir():
+            bad(f"devicelogin: extra root {root} is not a directory — refusing to "
+                f"report a pass off a sweep that skipped it")
+            continue
+        files += sorted(p for p in rp.rglob("*")
+                        if p.is_file() and p.suffix in (".yaml", ".yml", ".hbs", ".sh",
+                                                        ".py", ".json"))
+    scanned = granted = 0
+    seen = set()
+    for path in files:
+        text = path.read_text(errors="replace")
+        if "grantTypes" not in text:
+            continue
+        scanned += 1
+        apps, errors = _device_apps_in_file(path)
+        for e in errors:
+            bad(f"devicelogin: {e}")
+        device_apps = [a for a in apps if DEVICE_GRANT in a[1]]
+        # The password-grant guard reads EVERY parsed app that is, or is named as,
+        # a public device client — not only the ones still carrying device_code, so
+        # a seed that swaps device_code for password is caught here as well as by
+        # the missing-app check below.
+        for app, grants, _methods in apps:
+            named = any(app.endswith(f": {n}") for n in REQUIRED_DEVICE_APPS)
+            bad_grants = sorted(grants & FORBIDDEN_DEVICE_APP_GRANTS)
+            if (named or DEVICE_GRANT in grants) and bad_grants:
+                bad(f"devicelogin: {app} is a public device client but its grantTypes "
+                    f"carry {bad_grants} — the resource-owner password grant would let "
+                    f"the client (the greeter) collect the IdP password; sign-in belongs "
+                    f"on the IdP's own approval page")
+            elif named:
+                ok(f"devicelogin: {app} grantTypes {sorted(grants)} carry no "
+                   f"{sorted(FORBIDDEN_DEVICE_APP_GRANTS)} grant")
+        if DEVICE_GRANT in text and not device_apps:
+            bad(f"devicelogin: {path} names the device_code grant but no application "
+                f"carrying it could be parsed out of it — a seed this check cannot "
+                f"read is a seed it cannot vouch for")
+        for app, _grants, methods in device_apps:
+            granted += 1
+            seen |= {n for n in REQUIRED_DEVICE_APPS if app.endswith(f": {n}")}
+            if methods is _UNRESOLVED:
+                bad(f"devicelogin: {app} grants device_code but its signinMethods "
+                    f"cannot be read statically")
+                continue
+            live = [(n, r) for n, r in methods
+                    if n == DEVICE_METHOD and r != DEVICE_METHOD_DEAD_RULE]
+            signin = [(n, r) for n, r in methods if (n, r) in DEVICE_PAGE_SIGNIN]
+            if live:
+                ok(f"devicelogin: {app} grants device_code and lists the "
+                   f"{DEVICE_METHOD!r} sign-in method (rule {live[0][1]!r})")
+                if signin:
+                    ok(f"devicelogin: {app}'s approval page offers sign-in to a browser "
+                       f"with no IdP session ({signin[0][0]!r}, rule {signin[0][1]!r})")
+                else:
+                    bad(f"devicelogin: {app}'s signinMethods {methods} offer no sign-in "
+                        f"on the approval page — /login/oauth/device/<code> shows "
+                        f"'To access <app>:' with no input and no button to a phone or "
+                        f"browser not already signed in to the IdP (needs one of "
+                        f"{sorted(DEVICE_PAGE_SIGNIN)})")
+            elif not methods:
+                bad(f"devicelogin: {app} grants device_code but declares NO "
+                    f"signinMethods — casdoor fills in ['Face ID'(+Password/Verification "
+                    f"code)] and /api/device-auth answers unauthorized_client 'device "
+                    f"login is not enabled for this application'")
+            else:
+                bad(f"devicelogin: {app} grants device_code but its signinMethods "
+                    f"{[n for n, _ in methods]} carry no usable {DEVICE_METHOD!r} "
+                    f"(exact name, rule not {DEVICE_METHOD_DEAD_RULE!r}) — "
+                    f"/api/device-auth answers unauthorized_client")
+    missing = REQUIRED_DEVICE_APPS - seen
+    if missing:
+        bad(f"devicelogin: {scanned} seed file(s) scanned, {granted} device_code "
+            f"application(s) found, but not {sorted(missing)} — refusing to report a "
+            f"pass off an incomplete sweep")
+    else:
+        ok(f"devicelogin: {scanned} seed file(s) scanned, {granted} device_code "
+           f"application(s) found (incl. {', '.join(sorted(REQUIRED_DEVICE_APPS))})")
+
+
 # ── extraction (for the behavioural half) ────────────────────────────────────
 def extract(cluster, outdir):
     out = pathlib.Path(outdir)
@@ -1420,6 +1995,8 @@ def main():
         check_seed(cluster)
     elif cmd == "hooks":
         check_hooks(cluster)
+    elif cmd == "devicelogin":
+        check_device_login(cluster, sys.argv[3:])
     else:
         sys.exit(f"unknown subcommand {cmd!r}")
     print(f"  ({P} passed, {F} failed)")

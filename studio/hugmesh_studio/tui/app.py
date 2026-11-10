@@ -95,6 +95,11 @@ def main(argv=None, *, inp=None, out=None) -> int:
                     help="force the plain numbered-prompt fallback (same as NO_TUI=1)")
     args = ap.parse_args(argv)
 
+    if inp is None and out is None:
+        # a real launch (not a scripted test): remove the private key/password temp
+        # dirs a killed Studio left in TMPDIR, exactly as the GUI entry point does
+        from ..core import secret_files
+        secret_files.startup_sweep()
     rich = not args.plain and inp is None and out is None and have_tui()
     err = sys.stderr
     if not rich:
@@ -118,7 +123,8 @@ def main(argv=None, *, inp=None, out=None) -> int:
         if not plain.print_meshemu(out if out is not None else sys.stdout,
                                    args.generator_dir, args.meshemu):
             print(f"error: no artifact session named {args.meshemu!r} with "
-                  f"bootable images under {args.generator_dir}/out/sessions",
+                  f"bootable images in any known output folder ({args.generator_dir}/out "
+                  f"or a folder a Studio build wrote sessions into)",
                   file=err)
             return 2
         return 0

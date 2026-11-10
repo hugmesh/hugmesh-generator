@@ -41,12 +41,12 @@ from ..core import assistant_context as actxt
 from ..core import assistant_docs as adocs
 from ..core import assistant_prompt as aprompt
 from ..core import assistant_tips as atips
+from ..core import local_ai_models as lam
 from ..core import local_ai_status as lai
 from ..core import ollama_docker as odk
-from ..core import platform_info
 
 __all__ = ["OPEN_COMMAND", "FOOTER_KEY", "LocalAIScreen", "Standalone", "status_line",
-           "plain_status_line", "native_windows_note", "windows_advice"]
+           "plain_status_line"]
 
 #: Typed into either face, it opens the screen. Hyphenated so it cannot collide with a
 #: value a journey step asks for.
@@ -79,6 +79,9 @@ def status_line(env: dict | None = None, *, key_hint: bool = True, slug: str = "
     of previous builds has no journey to open the screen over), so the line never
     advertises a key that is dead there. ``slug`` (optional) appends the page's tip."""
     line = lai.quick_line(env)
+    pulling = lam.active_line()           # a model download this process is running
+    if pulling:
+        line = f"{line}; {pulling}"
     line = f"{line}   [{FOOTER_KEY}]" if key_hint else line
     return line + _footer_tip(slug)
 
@@ -88,54 +91,10 @@ def plain_status_line(env: dict | None = None, slug: str = "") -> str:
     return f"[{lai.quick_line(env)} | type {OPEN_COMMAND}]" + _footer_tip(slug)
 
 
-def native_windows_note(osname: str | None = None) -> str:
-    """What replaces the run-it-yourself ``scripts/local-ai.sh`` lines in a NATIVE
-    Windows Studio (the MSI); "" anywhere else, WSL included. Shared with the Studio
-    window's panel, so both faces say the same.
-
-    Every one of those lines (start, todo, chat) is the bash script, which PowerShell
-    cannot run and System32's bash runs inside the Linux VM where a C:\\ path means
-    nothing; the panel's own questions go to Ollama over HTTP and need none of it."""
-    said = platform_info.native_windows_blocker(
-        "The local assistant's queue worker", osname=osname,
-        runs="the bash script scripts/local-ai.sh")
-    return f"{said} {lai.WINDOWS_NATIVE_PATH}" if said else ""
-
-
-#: core/local_ai_status's "bring Ollama up" advice names the bash script. In a native
-#: Windows Studio the system Ollama is Ollama for Windows, a native app; in Docker mode
-#: it is the Studio's own container. (old, system-mode new, Docker-mode new)
-_WINDOWS_UP = (
-    (", then run: scripts/local-ai.sh up",
-     "; Ollama for Windows then runs in the background on its own",
-     "; or start the Studio's Ollama container (Start local assistant, or start in the "
-     "text UI)"),
-    ("Start it with: scripts/local-ai.sh up",
-     "Start Ollama for Windows from the Start menu.",
-     "Start the Studio's Ollama container (Start local assistant, or start in the text "
-     "UI)."),
-    ("Start it with scripts/local-ai.sh up",
-     "Start Ollama for Windows from the Start menu",
-     "Start the Studio's Ollama container (Start local assistant, or start in the text "
-     "UI)"),
-)
-
-
-def windows_advice(text: str, mode: str = "", osname: str | None = None) -> str:
-    """``text`` (a snapshot's fix, or the not-answering message) with its
-    ``scripts/local-ai.sh up`` advice replaced by what works in a native Windows
-    Studio; unchanged anywhere else. ``mode`` is the Ollama in use (odk.SYSTEM /
-    odk.DOCKER): in Docker mode the container, not Ollama for Windows, is the fix."""
-    if not text or not native_windows_note(osname):
-        return text
-    for old, system, docker in _WINDOWS_UP:
-        text = text.replace(old, docker if mode == odk.DOCKER else system)
-    return text
-
-
 _HELP = [
     "type a question and press Enter to ask the local model (it stays on this machine)",
     "  start      start the local Ollama and the queue worker",
+    "  pull [model]   download a model (asks first; shows the size and the free space)",
     "  ollama docker | ollama system   which Ollama to use (Docker starts on 'start')",
     "  docs <question>   what the docs say (no model needed)   options   this page's settings",
     "  apply | cancel | undo   a proposed change    tips on | tips off",
@@ -143,6 +102,17 @@ _HELP = [
     "  clear      forget the conversation",
     "  q          back",
 ]
+#: The ``start`` line where windows_worker_note() is said (native Windows): there System
+#: mode starts nothing and Docker mode starts only the container, never the worker.
+_WINDOWS_START_HELP = ("  start      in Docker mode, start the Studio's Ollama container "
+                       "(the queue worker needs WSL2)")
+
+
+def _help_lines(windows: bool) -> list[str]:
+    """The help under the screen; ``windows`` = the native-Windows note is shown."""
+    if not windows:
+        return list(_HELP)
+    return [_WINDOWS_START_HELP if ln.startswith("  start ") else ln for ln in _HELP]
 
 
 class LocalAIScreen:
@@ -152,11 +122,22 @@ class LocalAIScreen:
     title = "Local AI"
     wants_q = True                       # q means BACK here, not quit-the-journey
 
-    def __init__(self, *, snapshot_fn=None, prompt_fn=None, start_fn=None, generator_dir: str = "."):
+    def __init__(self, *, snapshot_fn=None, prompt_fn=None, start_fn=None, generator_dir: str = ".",
+                 pull_fn=None, free_fn=None):
         # Every default goes through the saved Ollama choice (system or Docker): the
         # environment it names is the one the read, the prompt and the start all use.
-        self._snapshot_fn = snapshot_fn or (lambda: odk.adjust_snapshot(
-            lai.read_snapshot(env=odk.assistant_env(odk.current_mode())), odk.current_mode()))
+        self._snapshot_fn = snapshot_fn or (lambda: _offer_in_tui_words(odk.adjust_snapshot(
+            lai.read_snapshot(env=odk.assistant_env(odk.current_mode())), odk.current_mode())))
+        # A MODEL OUT OF THE BOX (core/local_ai_models): ``pull`` asks y/n with the size
+        # and the free space, then downloads on a thread; the line under the screen and
+        # the status block show its progress. Looked up at use time (tests replace them).
+        self._pull_fn = pull_fn
+        self._free_fn = free_fn
+        self._pull_ask = ""              # the model a y/n is pending for
+        self._pull_thread = None
+        self._pull_stop = None
+        self._pull_offer: dict = {}      # from a question that came back NoModel
+        self._pending_question = ""
         self._custom_prompt = prompt_fn is not None
         self._prompt_fn = prompt_fn or (lambda text, history: lai.send_prompt(
             text, history=history, env=odk.assistant_env(odk.current_mode())))
@@ -262,22 +243,15 @@ class LocalAIScreen:
                     out += ["", "Tip: " + atips.tip_for(self.where_page_only(j))]
         except Exception:                # noqa: BLE001
             pass
-        mode = odk.current_mode()
-        if snap is not None and snap.fix:
-            # format_status printed the fix verbatim: swap the bash advice in place
-            fix = windows_advice(snap.fix, mode)
-            if fix != snap.fix:
-                out = [ln.replace(snap.fix, fix) for ln in out]
-        out += ["", odk.describe(mode)]
-        note = native_windows_note()
+        out += ["", odk.describe(odk.current_mode())]
+        note = lai.windows_worker_note()
         if note:
-            # the .sh lines below are bash: PowerShell cannot run them (an unquoted
-            # path with spaces besides), so say what is true here instead
+            # the lines below are the bash script: PowerShell cannot run them (an
+            # unquoted path with spaces besides), so say what is true here instead
             out += ["", note, ""]
         else:
             cmds = odk.commands_for(self.generator_dir)
-            out += ["", "Run it yourself:  " + cmds["todo"],
-                    "                  " + cmds["chat"], ""]
+            out += ["", "Run it yourself:  " + cmds["todo"], "                  " + cmds["chat"], ""]
         if getattr(self, "warning", ""):
             # above the conversation: the transcript shows only its last 12 lines, and a
             # long answer would push a warning above the answer out of view
@@ -286,7 +260,7 @@ class LocalAIScreen:
             out += ["conversation:"] + [f"  {t}" for t in self.transcript[-12:]] + [""]
         if self.message:
             out += [self.message, ""]
-        return out + _HELP
+        return out + _help_lines(bool(note))
 
     def where_page_only(self, j) -> actxt.Where:
         """The page half only (no file reads): for the tip line."""
@@ -303,6 +277,13 @@ class LocalAIScreen:
         self.message = ""
         self.warning = ""
         low = line.strip().lower()
+        if self._pull_ask:
+            model, self._pull_ask = self._pull_ask, ""
+            if low in ("y", "yes"):
+                self._start_pull(model)
+            else:
+                self.message = "Nothing downloaded."
+            return
         if low in ("q", "quit", "exit", "back", "b"):
             j.overlay = self._under
             return
@@ -331,6 +312,13 @@ class LocalAIScreen:
             self.message = odk.describe(want) + (
                 "  Type start to start it." if want == odk.DOCKER else "")
             return
+        if words and words[0] == "pull" and len(words) <= 2:
+            self._ask_pull(words[1] if len(words) == 2 else "")
+            return
+        if low in ("cancel", "stop") and self.pulling:
+            self._pull_stop.set()
+            self.message = "Stopping the download; what arrived is kept, and the next pull resumes."
+            return
         if low == "start":
             res = self._start_fn()
             self.message = (res.message if res.ok or not res.command or res.command in res.message
@@ -354,7 +342,12 @@ class LocalAIScreen:
         try:
             answer = self._ask(j, line.strip())
         except lai.LocalAIError as exc:
-            self.message = windows_advice(str(exc), odk.current_mode())
+            self.message = str(exc)
+            if isinstance(exc, lam.NoModel):
+                # the offer, in this screen's word; the question is remembered
+                self._pull_offer = dict(exc.offer)
+                self._pending_question = line.strip()
+                self.message += " " + lam.action_words(exc.offer, "tui")
             if self._last_prompt is not None:
                 fb = aprompt.fallback_line(self._last_prompt)
                 if fb:
@@ -384,6 +377,67 @@ class LocalAIScreen:
             if footer:
                 self.transcript += [f"     {ln}" for ln in footer.split("\n")]
             self._offer(j, answer, line.strip(), prompt)
+
+    # ── a model out of the box ─────────────────────────────────────────────────────
+    @property
+    def pulling(self) -> bool:
+        return self._pull_thread is not None and self._pull_thread.is_alive()
+
+    def _ask_pull(self, model: str) -> None:
+        """``pull [model]``: the size and the free space, then a y/n. Nothing is
+        downloaded without the y."""
+        if self.pulling:
+            self.message = (lam.active_line() or "A download is running.") + \
+                "  Type cancel to stop it."
+            return
+        snap_offer = dict(getattr(self.snapshot, "offer", None) or {})
+        model = model or str((self._pull_offer or snap_offer).get("model") or "") \
+            or lam.RECOMMENDED.name
+        env = odk.assistant_env(odk.current_mode())
+        free = (self._free_fn or lam.free_bytes)(env)
+        problem = lam.space_problem(lam.size_of(model), free)
+        if problem:
+            self.message = problem
+            return
+        self._pull_ask = model
+        self.message = (f"{lam.consent_line(model, free)}  Into {lam.where_words(env)}. "
+                        "Type y to download, anything else to leave it.")
+
+    def _start_pull(self, model: str) -> None:
+        import threading
+        env = odk.assistant_env(odk.current_mode())
+        stop = threading.Event()
+        fn = self._pull_fn or lam.pull
+        self._pull_stop = stop
+
+        def work():
+            try:
+                res = fn(model, env, should_stop=stop.is_set)
+            except Exception as exc:             # noqa: BLE001 — a sentence on the screen
+                res = lam.PullResult(False, model, f"The download failed: {exc}")
+            if res.ok:
+                self._pull_offer = {}
+                try:
+                    self.snapshot = self._snapshot_fn()
+                except Exception:                # noqa: BLE001 — r re-reads
+                    pass
+                again = self._pending_question
+                self._pending_question = ""
+                self.message = res.message + (f" Ask again: {again}" if again else
+                                              " Ask your question.")
+            else:
+                self.message = res.message
+        self._pull_thread = threading.Thread(target=work, name="local-ai-tui-pull", daemon=True)
+        self._pull_thread.start()
+        self.message = (f"Downloading {model} into {lam.where_words(env)}. The line below "
+                        "shows the progress (r re-reads this screen); cancel stops it.")
+
+    def wait_pull(self, timeout: float = 30.0) -> bool:
+        """Wait for a running download (tests, and the plain face's ``r``)."""
+        t = self._pull_thread
+        if t is not None:
+            t.join(timeout)
+        return not self.pulling
 
     # ── grounded answers ───────────────────────────────────────────────────────────
     def _ask(self, j, text: str) -> str:
@@ -463,6 +517,15 @@ class LocalAIScreen:
         self._undo[res.target_id] = res
         self._pending = None
         self.message = "Applied. The step shows the new value (undo puts it back)."
+
+
+def _offer_in_tui_words(snap):
+    """A no-model snapshot's fix in this screen's words (``type pull``), with the
+    by-hand line for the Ollama in use."""
+    offer = dict(getattr(snap, "offer", None) or {})
+    if snap is not None and offer:
+        snap.fix = lam.fix_words(offer, "tui", odk.assistant_env(odk.current_mode()))
+    return snap
 
 
 class Standalone:

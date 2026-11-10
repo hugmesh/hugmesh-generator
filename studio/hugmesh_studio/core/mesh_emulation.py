@@ -581,7 +581,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--generator-dir", default=_REPO_ROOT,
                    help="the hugmesh-generator checkout (default: this one)")
     p.add_argument("--session", default="",
-                   help="build session: a name under out/sessions or a path "
+                   help="build session: a name in any known output folder, or a path "
                         "(default: the newest COMPLETE session)")
     p.add_argument("--work", default="",
                    help="runner --work dir (default: <generator>/out/qemu-runs)")
@@ -597,8 +597,9 @@ def main(argv: list[str] | None = None) -> int:
 
     session = args.session or qt.default_session(args.generator_dir)
     if session is None:
-        print("no build session with images under out/sessions — build images "
-              "first, or pass --session", file=sys.stderr)
+        print("no build session with images in any known output folder "
+              "(<generator>/out, plus every folder a Studio build wrote sessions "
+              "into) — build images first, or pass --session", file=sys.stderr)
         return 1
     try:
         pl = plan_session(args.generator_dir, session, EmulationMode.DEPLOY,

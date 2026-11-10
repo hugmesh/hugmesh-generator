@@ -29,7 +29,8 @@
 #      empty secret file, a secret over SPICE's 60-byte ticket limit, display
 #      flags without --display, an unknown mode, a --vnc-socket path over 107
 #      bytes: every one exits non-zero BEFORE QEMU.
-#   7. launch-arm.sh --virt-dtb drops -dtb (and only -dtb); --dtb with it refuses.
+#   7. launch-arm.sh --virt-dtb drops -dtb (and only -dtb); --dtb with it refuses;
+#      no --dtb at all gives the same argv (-dtb is opt-in since #879).
 #   8. DRIFT GUARD. The display block is the same text in all three launchers
 #      apart from the one DISPLAY_GPU_ARGS line.
 #   9. windows-studio-e2e.sh's inspection VNC binds 127.0.0.1, not a bare :N.
@@ -404,8 +405,13 @@ run_launcher arm-virt-disp launch-arm.sh "${ARMV[@]}" --virt-dtb "${DISP[@]}"
 eq "${LAST_RC}" "0" "arm --virt-dtb --display spice exits 0"
 has_pair "${LAST_ARGV}" -device virtio-gpu-pci,edid=on && _ok "arm --virt-dtb --display spice: virtio-gpu-pci,edid=on" || _bad "arm --virt-dtb --display spice: gpu missing"
 refuses "arm: --virt-dtb together with --dtb" launch-arm.sh "${ARM[@]}" --virt-dtb
+# #879: -dtb is opt-in, so no --dtb is the same argv as --virt-dtb (QEMU's own
+# virt DT); --virt-dtb only states that default and refuses an explicit --dtb.
 run_launcher arm-nodtb launch-arm.sh "${ARMV[@]}"
-if [ "${LAST_RC}" -ne 0 ] && [ ! -f "${LAST_ARGV}" ]; then _ok "arm without --virt-dtb still refuses when the board DTB is absent (unchanged)"; else _bad "arm booted without a DTB and without --virt-dtb"; fi
+eq "${LAST_RC}" "0" "arm without --dtb boots on QEMU's virt DTB (no board DTB on disk needed)"
+if has_elem "${LAST_ARGV}" -dtb; then _bad "arm without --dtb: -dtb in argv"; else _ok "arm without --dtb: no -dtb"; fi
+golden_a64 "${TMP}/run-arm-nodtb" cortex-a53 "${KERNEL}" > "${TMP}/armnodtb.golden"
+argv_matches_golden "${LAST_ARGV}" "${TMP}/armnodtb.golden" "arm without --dtb"
 
 # ── 8) Drift guard: one block, three launchers ───────────────────────────────
 echo "== 8) the display block is identical across the three launchers =="
