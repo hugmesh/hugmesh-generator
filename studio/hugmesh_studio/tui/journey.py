@@ -1073,6 +1073,7 @@ class Journey:
         from .localmesh import LocalMeshScreen
         from .meshemu import MeshEmuScreen
         from .network_step import NetworkScreen
+        from .domain_ca_keys_step import DomainCAKeysScreen
         from .qemu import QemuScreen
         self.generator_dir = generator_dir
         self.cfg = cfg or ImageConfig()
@@ -1096,6 +1097,7 @@ class Journey:
                       "additional_domains"),
             NetworkScreen(), DomainsScreen(), DomainServicesScreen(
                 brand_session_of=_image_brand_session, route="image"),
+            DomainCAKeysScreen(),
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),

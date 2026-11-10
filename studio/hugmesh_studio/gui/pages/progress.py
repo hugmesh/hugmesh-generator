@@ -65,7 +65,7 @@ from .. import build_supervisor
 from .. import console
 from .. import flag_badges
 from ..tray import write_build_status
-from ...core import build_sessions
+from ...core import build_sessions, domain_ca_keys
 from ...core.build_driver import ElevationRefused, guard_elevation
 from ...core import flash_targets, flash_validate
 from ...core import qemu_tests
@@ -1243,6 +1243,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         # Declining aborts honestly: nothing is dispatched, nothing is written
         # (new_session/start never run), the record keeps its prior truth.
         abort = self._collect_missing_held_files(wl)
+        if not abort and generate_keys:
+            abort = self._missing_domain_ca()
         if abort:
             self.log.setPlainText(abort)
             self._all_terminal = True
@@ -1380,6 +1382,19 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.initializePage()
 
     # ---- held-in-memory secret files: the RESTART re-collection gate --------------
+    def _missing_domain_ca(self) -> str:
+        """RESTART: the prior dispatch's Domain CA keys must be held again (same
+        fingerprints) or the restart refuses; never a silent throwaway CA."""
+        sid = getattr(self.wiz, "pending_session_id", None)
+        if not sid:
+            return ""
+        try:
+            prior = build_sessions.load(
+                os.path.join(build_sessions.sessions_dir(), f"{sid}.json"))
+        except (OSError, ValueError):
+            return ""
+        return domain_ca_keys.restart_refusal(getattr(prior, "held_domain_ca", []))
+
     def _collect_missing_held_files(self, wl) -> str:
         """Ensure every secret file the pending session's PRIOR dispatch consumed from
         the vault is in THIS process's vault, prompting the operator to re-select each

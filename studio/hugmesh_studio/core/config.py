@@ -165,12 +165,18 @@ MODE_DEFAULT_ROLE = {
 # NODE first-boot concern, so it is skipped statically by the two non-node modes
 # exactly like "idp"; it sits after "system" (host identity) and before the desktop-
 # only "home" page. The empty default emits NOTHING (offline/USB-only delivery).
+# "domain_ca_keys" (operator ask 2026-11-09: "another section step of the domain config
+# to add the private keys to the CA so everything is ready to go live in the sticks")
+# sits right after "domain_services", inside the domain configuration. It is mesh-only
+# (the KEYS sticks are a mesh's): standalone and cloud skip it statically. Its material
+# lives in memory (core/domain_ca_keys.py), never in the config, so an untouched step
+# changes no argv, no saved config and no session record.
 WIZARD_PAGE_SLUGS = ("welcome", "sessions",
                      "mode", "localmesh", "phone", "quest", "deploy",
                      "e2e", "qemu", "meshemu", "localcloud",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
-                     "domains_choice", "domains", "domain_services",
+                     "domains_choice", "domains", "domain_services", "domain_ca_keys",
                      "users_choice", "users",
                      "system", "vault", "home", "build", "launch", "progress")
 MODE_SKIPPED_PAGES = {
@@ -188,7 +194,7 @@ MODE_SKIPPED_PAGES = {
     # tie is the point of the image), so offering it a "just the internal domain"
     # choice would be a knob with one legal answer.
     "standalone": ("idp", "worklist", "keyzip",
-                   "domains_choice", "domains", "domain_services",
+                   "domains_choice", "domains", "domain_services", "domain_ca_keys",
                    "users_choice", "users",
                    "vault"),                                  # single image, no admin/mesh plane
     # "domain_services" (#495) is NOT skipped in cloud: a cloud client image IS built
@@ -198,8 +204,10 @@ MODE_SKIPPED_PAGES = {
     # --vault-addr on a client role and the per-domain CA is recorded-only, so the
     # step would offer knobs a client build discards. The Domains step says where a
     # client's trust really comes from instead (CLIENT_CA_INHERITANCE_NOTE).
+    # "domain_ca_keys" is skipped in cloud too: a client image gets no KEYS folder
+    # from the Studio and takes trust from its stick's certs/ (CLIENT_CA_INHERITANCE_NOTE).
     "cloud": ("idp", "worklist", "domains_choice", "users_choice",
-              "vault"),                                       # single image, admin plane via key-zip
+              "vault", "domain_ca_keys"),                     # single image, admin plane via key-zip
     # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
     # the WEB login theme (login_* — NON_ARGV_FIELDS), which themes the login-ui the
     # MESH serves to browsers. The DESKTOP-theme half shows in mesh too whenever the
@@ -1067,8 +1075,10 @@ CA_CERT_MAX_BYTES = 1 << 20             # 1 MiB: a CA bundle is kilobytes; refus
 #: test_keys_provision_certs.py) and the container and client-image proofs — lands in
 #: the same change as this wording: the note is true of the engine only WITH that
 #: change, so the two must not be separated. gen-provision-keys.sh does not mint the CA
-#: for a client: it tells the operator to copy certs/cluster-ca.crt from the pki node
-#: onto the stick, which is why the note says "the certificates you put there".
+#: for a client: given the CA certificate (--ca-cert, which the Domain CA keys step
+#: passes for every mesh node stick) it writes certs/cluster-ca.crt, and otherwise it
+#: tells the operator to copy it from the pki node, which is why the note says "the
+#: certificates you put there".
 #: studio/tests/test_client_ca_inheritance.py pins the text facts against the
 #: scripts, so this sentence goes red the day one of them changes.
 CLIENT_CA_INHERITANCE_NOTE = (
@@ -1076,6 +1086,8 @@ CLIENT_CA_INHERITANCE_NOTE = (
     "own, so there is no per-domain CA to pick here and the Secrets store step is "
     "skipped. At first boot keys-provision imports every certificate you put in the "
     "KEYS stick's certs/ folder (*.crt and *.pem — the mesh's cluster-ca.crt, which "
+    "gen-provision-keys.sh writes there when it is given the CA certificate (the "
+    "mesh's Domain CA keys step gives it to every node stick) and otherwise "
     "gen-provision-keys.sh tells you to copy there from the pki node, and any other "
     "CA) into the system trust store, so this client trusts exactly the certificate "
     "authorities on the stick you provision it with, for every domain it is tied to. "

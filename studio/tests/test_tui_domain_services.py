@@ -58,6 +58,8 @@ def test_a_step_with_no_domains_is_skipped_by_the_walk():
     j = _at_mesh_domains()
     j.cfg.cluster_domain = ""
     j.feed("")                               # Enter with an empty table
+    assert j.slug == "domain_ca_keys"        # the Domain CA keys step
+    j.feed("")
     assert j.slug == "users_choice"
 
 
@@ -68,6 +70,8 @@ def test_an_empty_table_still_walks_the_own_domains_page():
     assert j.slug == "domain_services"
     assert j.screen().current(j).name == j.cfg.cluster_domain
     j.feed("")
+    assert j.slug == "domain_ca_keys"        # the Domain CA keys step
+    j.feed("")
     assert j.slug == "users_choice"
 
 
@@ -75,6 +79,8 @@ def test_walking_the_only_domain_clears_the_gate():
     j = _at_services("chat.example.org")
     j.feed("n")                              # past the own domain onto the added one
     assert ds.gate_reason(j.cfg) == ""
+    j.feed("")
+    assert j.slug == "domain_ca_keys"        # the Domain CA keys step
     j.feed("")
     assert j.slug == "users_choice"
 
@@ -206,6 +212,8 @@ def test_the_default_mesh_path_walks_the_own_domains_page():
     assert j.cfg.domains == []                       # never a domains row
     assert j.cfg.domain_services_reviewed == [j.cfg.cluster_domain]
     j.feed("")
+    assert j.slug == "domain_ca_keys"        # the Domain CA keys step
+    j.feed("")
     assert j.slug == "users_choice"
 
 
@@ -218,6 +226,8 @@ def test_the_own_domains_page_is_emission_neutral_when_untouched():
     argv_before = j.cfg.to_cli_args()
     manifest_before = j.cfg.mesh_manifest()
     j.feed("n")
+    j.feed("")
+    assert j.slug == "domain_ca_keys"        # the Domain CA keys step
     j.feed("")
     assert j.slug == "users_choice"
     assert j.cfg.to_cli_args() == argv_before
