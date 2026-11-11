@@ -317,6 +317,39 @@ class TestDockerDownSaysWhyInTheWarningColour:
         finally:
             d.close()
 
+    def test_the_warning_wraps_instead_of_widening_the_dialog(self, qapp, monkeypatch):
+        """A larger system font (or a translated remedy) makes the line longer than
+        the dialog: it must wrap, not force the dialog wider than the screen."""
+        self._world(monkeypatch)
+        d = self._dialog(qapp)
+        try:
+            d.resize(640, 520)
+            for _ in range(5):
+                qapp.processEvents()
+            assert d.width() == 640, d.width()
+            page = d.status.parentWidget()
+            right = d.status.mapTo(page, d.status.rect().bottomRight())
+            assert right.x() <= page.width(), (right.x(), page.width())
+            assert d.status.height() >= d.status.heightForWidth(d.status.width()) - 2
+            assert d.status.text().endswith("then press Refresh.")
+        finally:
+            d.close()
+
+    def test_a_failed_probe_says_so_without_a_dangling_dash(self, qapp, monkeypatch):
+        """The probe's own failure carries no docker remedy: the line must not end in
+        an empty "— " where the remedy would go."""
+        self._world(monkeypatch)
+
+        def boom(*_a, **_k):
+            raise RuntimeError("kubectl went away")
+        monkeypatch.setattr(vaults, "vault_route", boom)
+        d = self._dialog(qapp)
+        try:
+            assert d.status.text() == "probe failed", d.status.text()
+            assert styles.WARN in d.status.styleSheet()
+        finally:
+            d.close()
+
     def test_every_disabled_delete_says_why_and_an_armed_one_says_what(
             self, qapp, monkeypatch, tmp_path):
         fake, state = self._world(monkeypatch)
