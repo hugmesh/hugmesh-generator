@@ -109,9 +109,9 @@ class UsersPage(QtWidgets.QWizardPage):
         self._cfg_seen = None
         self.setTitle("Superusers & domain users")
         self.setSubTitle(
-            "Name the superusers (locked to the Tailscale root domain) "
-            "and add users to each domain. For every user pick how they first sign in: "
-            "Discord or Gmail self-registration, or a password issued at provisioning.")
+            "Name the superusers (locked to the Tailscale root domain) and each "
+            "domain's users, and how each first signs in: Discord or Gmail "
+            "self-registration, or an issued password.")
         lay = QtWidgets.QVBoxLayout(self)
         self.table = QtWidgets.QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(

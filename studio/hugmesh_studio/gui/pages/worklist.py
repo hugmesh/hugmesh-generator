@@ -64,7 +64,7 @@ def _infra_service_options(platform: str) -> list[tuple[str, tuple[str, ...]]]:
     if len(expr) > 1:                                   # a "both" option (rpi5)
         opts.append((" + ".join(labels[s] for s in expr), tuple(expr)))
     return opts
-from ._widgets import NoWheelComboBox, status_badge
+from ._widgets import NoWheelComboBox, page_intro, status_badge
 
 # The GPU-bearing mesh roles (Notes-column callout); mirrors the builder's GPU roles.
 _GPU_ROLES = ("backend-gpu", "edge-ai", "be+gpu", "edge_ai", "gpu-host")
@@ -148,17 +148,21 @@ class WorklistPage(QtWidgets.QWizardPage):
         # row is one server node image, that pki+be+fe are required together, and that
         # GPU / Edge-AI nodes can wait — the core "make each step clear" ask.
         self.setTitle("Choose the images to build")
+        # Two lines at most: the wizard header clips the rest mid-sentence (GUI-14). The
+        # desktop-people sentence is the body's, under the root-domain header it is about.
         self.setSubTitle(
             "Select every server node this mesh needs — PKI + Backend + Frontend are "
             "required together; GPU / Edge-AI nodes can be built later from a provided "
-            "config. Desktop devices can be added for the mesh's people: checking one "
-            "asks who uses it (the account is created on the internal domain).")
+            "config.")
         lay = QtWidgets.QVBoxLayout(self)
 
         self.header = QtWidgets.QLabel("")
         self.header.setWordWrap(True)
         self.header.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(self.header)
+        lay.addWidget(page_intro(
+            "Desktop devices can be added for the mesh's people: checking one asks who "
+            "uses it (the account is created on the internal domain)."))
 
         # spec 2c convenience: one click checks the pki+be+fe trio (the minimum
         # buildable-together set) on whichever architectures the arch filter admits,

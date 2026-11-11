@@ -774,13 +774,13 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         #: ``pages/domain_services.py``, for the same reason.
         self._cfg_seen = None
         self.setTitle("Domains & their services")
+        # Two lines at most: the wizard header clips the rest mid-sentence (GUI-14 — the
+        # longer subtitle stopped at "…with a generated random"). What it went on to
+        # say is the body's: the table help (services are read-only here, picked per
+        # domain on the next step) and the default-admin note under the table.
         self.setSubTitle(
             "Every domain this mesh serves: its own domain first, then the OTHER "
-            "domains you add. Which optional services each one provides is picked on "
-            "the next step, which gives every domain its own page; this table SHOWS "
-            "what is recorded. "
-            "Every domain you add here is given its own default admin with a "
-            "generated random password (surfaced on the next, Users, step).")
+            "domains you add. Each one's optional services are picked on the next step.")
         lay = QtWidgets.QVBoxLayout(self)
         # read-only header naming the Tailscale root domain (spec 5): all mesh nodes
         # join it, it is never a table row and is never attachable.
