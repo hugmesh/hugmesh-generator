@@ -729,8 +729,18 @@ def test_build_stamps_x86(wiz):
     assert ("--release-tag", "2026.07-rc1") in p
 
 
-def test_build_release_tag_greys_on_arm_version_flows(wiz):
+def test_build_release_tag_shown_on_rpi5(wiz):
+    # rpi5 parses --release-tag (the ENV=prod image pin), so the field is live there
     pick_role(wiz, "generic")
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.release_tag.isVisible() and build.release_tag.isEnabled()
+    build.release_tag.setText("2026.07-rc1")
+    build._preview()
+    assert ("--release-tag", "2026.07-rc1") in pairs(wiz.cfg.to_cli_args())
+
+
+def test_build_release_tag_greys_on_arm_version_flows(wiz):
+    pick_role(wiz, "frite")             # no cluster tree: no --release-tag on this builder
     build = advance_to(wiz, wizard_mod.BuildPage)
     assert build.version.isEnabled() and not build.release_tag.isVisible()
     build.version.setText("1.2.3")

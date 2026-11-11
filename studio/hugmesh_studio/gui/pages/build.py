@@ -662,11 +662,12 @@ class BuildPage(QtWidgets.QWizardPage):
         self.grow.addItems(["", "fill", "none"])
         self.grow.lineEdit().setPlaceholderText("fill | none | <size e.g. 16G, 50%>  (empty = builder default)")
         im.addWidget(_row("First-boot root growth (--grow)", self.grow))
-        # image stamps (G30): -v/--version is all-platform, --release-tag x86-only
+        # image stamps (G30): -v/--version is all-platform; --release-tag is the tag an
+        # ENV=prod build pins first-party :dev images to (x86, rpi5, Orange Pi node roles)
         self.version = QtWidgets.QLineEdit()
         self.version.setPlaceholderText("-v/--version image stamp (empty = builder default)")
         self.release_tag = QtWidgets.QLineEdit()
-        self.release_tag.setPlaceholderText("--release-tag image stamp (empty = deterministic build stamp)")
+        self.release_tag.setPlaceholderText("--release-tag: ENV=prod image pin, e.g. 2026.07-rc1 (empty = the UTC build date)")
         im.addWidget(_row("Version stamp", self.version))
         im.addWidget(_row("Release tag", self.release_tag))
         # issue #232 "explain defaults": what each field does when left alone, in one
@@ -680,7 +681,7 @@ class BuildPage(QtWidgets.QWizardPage):
             "measured role payload; an empty growth policy is the builder's "
             "\"fill\" (the root grows to fill the disk on first boot); an empty "
             "Version stamp uses the builder's pinned release version; an empty "
-            "Release tag becomes a deterministic build stamp.")
+            "Release tag pins an ENV=prod build's images to the UTC build date.")
         im.addWidget(self.image_defaults_hint)
         # Expanded and never auto-folded: it carries the per-mode musts (the Packages…
         # entry point, the installer-UI honesty combo) and the unaffiliated bundle note.
