@@ -969,5 +969,14 @@ class WorklistPage(QtWidgets.QWizardPage):
         # a stale base field a no-op). role is the first checked row's (primary).
         cfg.role = entries[0].role
         cfg.platform = "x86"
+        # The Desktop step's per-row spec lives on the entry and is not a column here:
+        # carry it across this rebuild by row id, so Back to the worklist and Next again
+        # never loses what was chosen on the Desktop step.
+        prev = getattr(self.wiz, "worklist", None)
+        if prev is not None:
+            kept = {e.id: e.desktop_spec for e in prev.entries if getattr(e, "desktop_spec", None)}
+            for e in entries:
+                if e.id in kept and not e.desktop_spec:
+                    e.desktop_spec = kept[e.id]
         self.wiz.worklist = WorklistConfig(base=cfg, entries=entries)
         return True

@@ -35,7 +35,7 @@ from ...core.config import (
     ORANGEPI4LTS_FLAVORS,
     ROLE_CHOICES, RPI_BOARDS,
     UNAFFILIATED_ROLE,
-    field_default, role_presets_capable, role_presets_standalone,
+    field_default, role_presets_standalone,
     rpi_boards_for_role, x86_desktop_axis,
 )
 from ._gating import gate_widgets_role_class, out_of_scope_note, scope_allows
@@ -492,19 +492,17 @@ class RolePage(QtWidgets.QWizardPage):
         # the same "hide the section, not just the inner box" rule NetworkPage applies to
         # its collapsibles (named, not cited by line: that file is under edit in a
         # parallel lane — grep its QGroupBox setVisible calls).
+        # The desktop ENVIRONMENT (the --desktop weight: thin = LXDE, full = XFCE; and the
+        # --capable Plasma payload) and Steam delivery MOVED to the Desktop step
+        # (gui/pages/desktop.py, operator ask 2026-11-11), which is now their one writer:
+        # two pages editing one field let Back-then-Next overwrite the later choice with
+        # a stale combo here. This note says where they went.
         self.desktop_help = QtWidgets.QLabel(
-            "Desktop weight overrides the role's baseline: thin = light LXDE desktop, "
-            "full = full Plasma desktop. Leave at (default) to keep the role's built-in weight.")
+            "The desktop environment (LXDE, XFCE or KDE Plasma), Steam, extra window "
+            "managers, apps and video drivers are chosen on the Desktop step.")
         self.desktop_help.setWordWrap(True)
         self.desktop_help.setStyleSheet("color: gray;")
         cl.addWidget(self.desktop_help)
-        self.desktop = QtWidgets.QComboBox()
-        self.desktop.addItems(["(default)", "thin", "full"])
-        self.steam = QtWidgets.QComboBox()
-        self.steam.addItems(["(default)", "native", "flatpak", "none"])
-        self.desktop_row = _row("Desktop weight", self.desktop)
-        cl.addWidget(self.desktop_row)
-        cl.addWidget(_row("Steam delivery", self.steam))
         # Thin-desktop stream host (Sunshine; §8b) — tri-state like the Network
         # page's service toggles (G34: on / force-off / leave builder default).
         self.sunshine = QtWidgets.QCheckBox(
@@ -513,11 +511,8 @@ class RolePage(QtWidgets.QWizardPage):
         self.sunshine.setTristate(True)
         # Tooltip applied by _sync_client_gates, NOT here — see _SUNSHINE_TIP.
         cl.addWidget(self.sunshine)
-        # --capable composes onto ANY client/standalone role (G21) — before this
-        # checkbox it was only implicit via role standalone-thick.
-        self.capable = QtWidgets.QCheckBox(
-            "Most-capable payload (--capable) — full Plasma desktop, 50 GiB root (composable)")
-        cl.addWidget(self.capable)
+        # --capable (the KDE Plasma payload, composable onto any client role — G21) is
+        # the Desktop step's "KDE Plasma" environment now.
         # --unaffiliated composes onto the other standalone roles (G22): an
         # unaffiliated laptop/chromebook/thin was inexpressible before. The builder
         # HARD-ERRORS on any brand/mesh/SSO flag combined with it — config.py raises
@@ -928,10 +923,6 @@ class RolePage(QtWidgets.QWizardPage):
                 self.flavor.setCurrentText(c.flavor)
         if c.platform == "frite" and c.desktop:
             self.frite_desktop.setCurrentText(c.desktop)
-        elif c.desktop:
-            self.desktop.setCurrentText(c.desktop)
-        if c.steam:
-            self.steam.setCurrentText(c.steam)
         self.sunshine.setCheckState(_tri_state(c.sunshine))
         # one config field triple mirrored into every box's u-boot widget set (G35)
         for url_w, defconfig_w, skip_w in (
@@ -952,7 +943,6 @@ class RolePage(QtWidgets.QWizardPage):
             defconfig_w.setText(c.uboot_defconfig)
             skip_w.setChecked(c.skip_uboot)
         self.kernel_flavor.setCurrentIndex(max(0, self.kernel_flavor.findData(c.kernel_flavor or "")))
-        self.capable.setChecked(c.capable)
         # Restore from cfg on the axis that MATTERS, and only that one. The isEnabled()
         # conjunct this replaces read the widget's paint state, which the tautology above
         # it had already forced to False in every mode — so a loaded unaffiliated=True was
@@ -1098,25 +1088,10 @@ class RolePage(QtWidgets.QWizardPage):
             traceback.print_exc(file=sys.stderr)
 
     def _sync_client_gates_unguarded(self, role: str) -> None:
-        # (2b) --capable: standalone-thick / standalone-unaffiliated already carry
-        # CAPABLE=true from the builder's role arm (:1332, :1344). standalone-thin does
-        # NOT (:1325 sets only DESKTOP="thin"), so the checkbox stays live there — that
-        # is the compose G21 was added for. (Numbers RE-DERIVED against the current
-        # builder; the first spelling cited the pre-diff :1317/:1329/:1310.)
-        capable_redundant = role_presets_capable(role)
-        gate_widgets_role_class(self.capable, not capable_redundant,
-                                _REDUNDANT_NOTE.format(role=role), hide=True)
-
-        # (2b) Desktop weight: _role_changed has just filtered the combo to
-        # ["(default)"] + x86_desktop_axis(role). For the weight-pinning standalone roles
-        # that axis has a SINGLE member, so the combo offers "(default)" and the one
-        # answer that is already the default — a question with one answer is not a
-        # choice. Hide the whole ROW (its "Desktop weight" caption rides in the _row()
-        # container) and the help label that describes only this control, so no orphan
-        # caption is left behind.
-        weight_is_a_choice = len(x86_desktop_axis(role)) > 1
-        gate_widgets_role_class((self.desktop_row, self.desktop_help), weight_is_a_choice,
-                                _REDUNDANT_NOTE.format(role=role), hide=True)
+        # (2b) the --capable checkbox and the desktop-weight row that were gated here
+        # moved to the Desktop step (gui/pages/desktop.py), whose environment choices
+        # follow the same role pins (core/desktop_spec.environment_choices, which reads
+        # x86_desktop_axis / role_presets_capable).
 
         # (2d) Sunshine streams "to mesh headsets over the TAILNET only" — and ModePage's
         # standalone arm force-clears the pair (`cfg.tailscale = cfg.sso = False`,
@@ -1210,16 +1185,6 @@ class RolePage(QtWidgets.QWizardPage):
         # offer a pick that dead-ends there. "(default)" (= the role's built-in
         # weight) always stays. Node roles reduce to just "(default)" — moot, the
         # client box is hidden outside standalone/cloud anyway.
-        if machine == "x86":
-            weights = ["(default)"] + list(x86_desktop_axis(role))
-            if [self.desktop.itemText(i) for i in range(self.desktop.count())] != weights:
-                keep = self.desktop.currentText()
-                self.desktop.blockSignals(True)
-                self.desktop.clear()
-                self.desktop.addItems(weights)
-                if keep in weights:
-                    self.desktop.setCurrentText(keep)
-                self.desktop.blockSignals(False)
         # (ask 21) the standalone posture box follows the role selection too
         self._sync_standalone_gate()
         # (decision 2b/2c/2d) …and so do the role/mode-pinned client-box knobs — the
@@ -1286,7 +1251,7 @@ class RolePage(QtWidgets.QWizardPage):
         # identical either way — while clearing it would silently rewrite a loaded
         # standalone-thick config on a mere page visit. The PLATFORM axis below is
         # unchanged: an ARM build still zeroes it, because no ARM builder parses it.
-        c.capable = self.capable.isChecked() if x86_client else False
+        c.capable = c.capable if x86_client else False      # the Desktop step's choice
         # --unaffiliated is cleared on the INAPPLICABLE axis ONLY (decision 2c, CORRECTED
         # — see the module-level block). NOT on the hide axis: the dedicated role row
         # being a second spelling of the posture makes the checkbox REDUNDANT on the
@@ -1429,19 +1394,13 @@ class RolePage(QtWidgets.QWizardPage):
         else:
             c.board = ""
             c.flavor = ""
-            # The weight row may be HIDDEN (decision 2b: the role pins the only answer).
-            # That is the REDUNDANT kind of hide, so the value is read as-is rather than
-            # forced to "": _role_changed has already filtered the combo to
-            # ["(default)"] + x86_desktop_axis(role), so a contradicting saved weight
-            # cannot be selected in the first place (setCurrentText no-ops on a missing
-            # entry) and the only thing that can survive is a weight the builder's role
-            # arm sets anyway — an agreeing explicit --desktop, which the three arms'
-            # DESKTOP_SET contradiction guards (:1322/:1329/:1341) accept as the no-op it
-            # is. (Numbers RE-DERIVED against the current builder.)
-            weight = self.desktop.currentText()
-            c.desktop = "" if (weight == "(default)" or not x86_client) else weight
-        steam = self.steam.currentText()
-        c.steam = "" if (steam == "(default)" or not x86_client) else steam
+            # The weight is the Desktop step's (its one writer). Here it is only
+            # cleared when this build has no x86 client desktop, or when the role just
+            # picked pins a weight the old value contradicts (the builder hard-errors
+            # an explicit --desktop that disagrees with standalone-thin/thick).
+            c.desktop = (c.desktop if x86_client and c.desktop in x86_desktop_axis(c.role)
+                         else "")
+        c.steam = c.steam if x86_client else ""
         # sunshine: tri-state (True / "off" / False-as-default); False when the
         # client box is not on this build's surface — mirrors steam's x86_client
         # blanking so a stale value never rides a server/ARM argv. DECISION 2(d) adds

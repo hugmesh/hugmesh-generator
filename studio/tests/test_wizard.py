@@ -143,7 +143,7 @@ def test_page_slugs_map_to_the_right_pages(wiz):
               "users_choice": wizard_mod.UsersChoicePage,
               "users": wizard_mod.UsersPage,
               "system": wizard_mod.SystemPage, "vault": wizard_mod.VaultPage,
-                  "home": wizard_mod.HomePage,
+                  "home": wizard_mod.HomePage, "desktop": wizard_mod.DesktopPage,
               "build": wizard_mod.BuildPage, "launch": wizard_mod.LaunchPage,
               "progress": wizard_mod.ProgressPage}
     assert set(expect) == set(WIZARD_PAGE_SLUGS)
@@ -330,9 +330,10 @@ def test_rpi5_orangepi5_orangepizero2_boxes_mutually_exclusive(wiz):
 # ---- mode-gated page flow ------------------------------------------------------
 
 def test_standalone_flow_skips_admin_pages(wiz):
-    """standalone: Welcome→Mode→Role→Hardware→Branding→Network→System→Home→Build —
-    the key-zip and superadmin domains/users pages are never routed through (the
-    system-identity page is visited in EVERY mode)."""
+    """standalone: Welcome→Mode→Role→Hardware→Branding→Network→System→Home→Desktop→Build
+    — the key-zip and superadmin domains/users pages are never routed through (the
+    system-identity page is visited in EVERY mode; the Desktop step on every image that
+    builds a desktop, which the default standalone laptop does)."""
     seen = []
     for _ in range(len(WIZARD_PAGE_SLUGS)):
         seen.append(type(wiz.currentPage()).__name__)
@@ -342,7 +343,7 @@ def test_standalone_flow_skips_admin_pages(wiz):
         wiz.next()
     assert seen == ["WelcomePage", "ModePage", "RolePage", "HardwarePage",
                     "BrandingPage", "NetworkPage", "SystemPage", "HomePage",
-                    "BuildPage"]
+                    "DesktopPage", "BuildPage"]
     for skipped_slug in MODE_SKIPPED_PAGES["standalone"]:
         assert not wiz.hasVisitedPage(wiz._page_ids[skipped_slug])
 

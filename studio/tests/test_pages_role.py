@@ -211,56 +211,61 @@ def test_hardware_revisit_does_not_clobber_hw_profile(wiz):
     assert wiz.cfg.hw_profile == "framework-13-intel"
 
 
-# ---- x86 desktop-weight combo per role (desktop-axis honesty) ----------------------
+# ---- x86 desktop weight per role (desktop-axis honesty) -----------------------------
 # build-x86-host-stage4.sh hard-errors an explicit --desktop that contradicts a
-# weight-pinning standalone role name, so the combo must never offer such a pick
-# (same honesty rule as the rpi3 board gate). Client roles keep both weights.
+# weight-pinning standalone role name. The weight (and --capable, and Steam) MOVED to
+# the Desktop step on 2026-11-11 (its one writer — tests/test_pages_desktop.py drives
+# its widgets); what stays HERE is the Role step's half of the honesty rule: it no
+# longer offers the controls, and it clears a weight the role just picked contradicts.
 
-def _weight_items(page):
-    return [page.desktop.itemText(i) for i in range(page.desktop.count())]
+def test_role_page_no_longer_offers_the_desktop_controls(wiz):
+    pick_mode(wiz, "cloud")
+    page = pick_role(wiz, "desktop")
+    for gone in ("desktop", "steam", "capable", "desktop_row"):
+        assert not hasattr(page, gone), gone
+    assert "Desktop step" in page.desktop_help.text()
 
 
-def test_desktop_weight_combo_shrinks_to_the_pinned_weight(wiz):
-    """standalone-thin offers only its own thin weight (+ the role default);
-    standalone-thick / standalone-unaffiliated only full — 'standalone-thin/full'
-    is a contradiction in terms the builder now rejects loudly."""
+def test_a_contradicted_weight_is_cleared_when_the_role_pins_another(wiz):
+    """A weight chosen for a laptop must not reach a standalone-thin build (the builder
+    would refuse --desktop full there); an agreeing one survives."""
     pick_mode(wiz, "standalone")
     page = pick_role(wiz, "standalone-thin")
-    assert _weight_items(page) == ["(default)", "thin"]
-    pick_role(wiz, "standalone-thick")
-    assert _weight_items(page) == ["(default)", "full"]
-    pick_role(wiz, "standalone-unaffiliated")
-    assert _weight_items(page) == ["(default)", "full"]
+    wiz.cfg.desktop = "full"
+    assert page.validatePage()
+    assert wiz.cfg.desktop == ""
+    wiz.cfg.desktop = "thin"
+    assert page.validatePage()
+    assert wiz.cfg.desktop == "thin"
 
 
-def test_desktop_weight_combo_keeps_both_weights_standalone_chromebook(wiz):
-    """A person-device client role really takes both weights — the combo must not
-    over-shrink (chromebook is the standalone-mode client role)."""
-    pick_mode(wiz, "standalone")
-    page = pick_role(wiz, "chromebook")
-    assert _weight_items(page) == ["(default)", "thin", "full"]
+def test_the_desktop_steps_environment_follows_the_role_pins():
+    """The Desktop step's environment choices key on the SAME x86_desktop_axis /
+    role_presets_capable the old weight combo and --capable checkbox did."""
+    from hugmesh_studio.core import desktop_spec as ds
+    choices = {r: ds.environment_choices(ImageConfig(mode="standalone", role=r, platform="x86"))
+               for r in ("standalone-thin", "standalone-thick", UNAFFILIATED_ROLE, "chromebook")}
+    assert choices["standalone-thin"] == ["lxde", "plasma"]          # thin, or thin + capable
+    assert choices["standalone-thick"] == ["plasma"]
+    assert choices[UNAFFILIATED_ROLE] == ["plasma"]
+    assert choices["chromebook"] == ["lxde", "xfce", "plasma"]
+    for mode, role in (("cloud", "desktop"), ("cloud", "laptop")):
+        assert len(x86_desktop_axis(role)) == 2
+        assert ds.environment_choices(ImageConfig(mode=mode, role=role, platform="x86")) \
+            == ["lxde", "xfce", "plasma"]
 
 
-def test_desktop_weight_combo_keeps_both_weights_cloud_desktop(wiz):
-    """Cloud client roles keep both weights too — cloud/x86/desktop/thin is a REAL
-    image after the cause-C fix, so thin must stay offered on the desktop role."""
-    pick_mode(wiz, "cloud")
-    page = pick_role(wiz, "desktop")
-    assert _weight_items(page) == ["(default)", "thin", "full"]
-
-
-def test_desktop_weight_explicit_thin_survives_the_desktop_role(wiz):
-    """The cause-C regression pinned at the GUI layer: cloud/desktop + an explicit
-    thin weight must emit --desktop thin (the builder no longer silently upgrades
-    it to full, so the thin-weight desktop image is REAL and reachable here)."""
-    pick_mode(wiz, "cloud")
-    page = pick_role(wiz, "desktop")
-    page.desktop.setCurrentText("thin")
-    advance_to(wiz, wizard_mod.HardwarePage)
-    args = wiz.cfg.to_cli_args()
-    joined = " ".join(args)
-    assert "--desktop thin" in joined
-    assert (wiz.cfg.role, wiz.cfg.desktop) == ("desktop", "thin")
+def test_desktop_weight_explicit_thin_survives_the_desktop_role():
+    """The cause-C regression pinned at the model the Desktop step writes through:
+    cloud/desktop + LXDE must emit --desktop thin (the builder no longer silently
+    upgrades it to full, so the thin-weight desktop image is REAL and reachable)."""
+    from hugmesh_studio.core import desktop_spec as ds
+    cfg = ImageConfig(mode="cloud", role="desktop", platform="x86")
+    ds.set_environment(cfg, "lxde")
+    assert (cfg.role, cfg.desktop) == ("desktop", "thin")
+    assert "--desktop thin" in " ".join(cfg.to_cli_args())
+    ds.set_environment(cfg, "xfce")                 # the role's own default: no flag
+    assert cfg.desktop == "" and "--desktop" not in cfg.to_cli_args()
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
@@ -361,43 +366,6 @@ def test_image_posture_survives_where_it_genuinely_composes(qapp, mode, role, pl
     assert page.standalone.isVisibleTo(page)
     assert page.posture_box.isVisibleTo(page)
     assert "compose the same posture" in page.standalone.toolTip()
-
-
-def test_capable_is_hidden_only_where_the_role_presets_it(qapp):
-    """--capable: :1332 and :1344 set CAPABLE=true for standalone-thick and
-    standalone-unaffiliated, so the checkbox there is a no-op question. :1325 does NOT set
-    it for standalone-thin — that is exactly the compose G21 was added for, so the
-    checkbox stays. (Numbers RE-DERIVED; the pre-diff :1317/:1329/:1310 pointed at
-    unrelated code.)"""
-    for role in ("standalone-thick", UNAFFILIATED_ROLE):
-        page = _role_page(ImageConfig(mode="standalone", role=role, platform="x86"))
-        assert not page.capable.isVisibleTo(page), role
-    page = _role_page(ImageConfig(mode="standalone", role="standalone-thin", platform="x86"))
-    assert page.capable.isVisibleTo(page)
-    assert page.capable.isEnabled()
-
-
-def test_desktop_weight_row_is_hidden_when_the_role_pins_the_only_answer(qapp):
-    """A combo offering "(default)" plus the one weight the role already pins is not a
-    choice. The gate keys on the SAME x86_desktop_axis() the combo is filtered by, so the
-    two can never disagree; the caption row and the weight help label go with it rather
-    than being left as orphans over a hidden control."""
-    for role in ("standalone-thin", "standalone-thick", UNAFFILIATED_ROLE):
-        page = _role_page(ImageConfig(mode="standalone", role=role, platform="x86"))
-        assert len(x86_desktop_axis(role)) == 1, role   # the premise
-        assert not page.desktop_row.isVisibleTo(page), role
-        assert not page.desktop_help.isVisibleTo(page), role
-
-
-def test_desktop_weight_row_survives_on_a_role_with_a_real_choice(qapp):
-    """MUTATION GUARD: the client roles really take both weights, so the row must stay —
-    a rule that hid it everywhere would also pass the test above."""
-    for mode, role in (("standalone", "chromebook"), ("cloud", "desktop"),
-                       ("cloud", "laptop")):
-        page = _role_page(ImageConfig(mode=mode, role=role, platform="x86"))
-        assert len(x86_desktop_axis(role)) == 2, role   # the premise
-        assert page.desktop_row.isVisibleTo(page), role
-        assert page.desktop_help.isVisibleTo(page), role
 
 
 def test_sunshine_is_hidden_and_cleared_on_a_standalone_image(qapp):
@@ -591,8 +559,6 @@ def test_a_role_pinned_hide_does_not_rewrite_a_loaded_config(qapp):
                       standalone=True, capable=True, desktop="full")
     page = _role_page(cfg)
     assert not page.standalone.isVisibleTo(page)
-    assert not page.capable.isVisibleTo(page)
-    assert not page.desktop_row.isVisibleTo(page)
     assert page.validatePage()
     assert (cfg.standalone, cfg.capable, cfg.desktop) == (True, True, "full")
 
