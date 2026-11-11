@@ -26,6 +26,10 @@ PACKAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 needs_posix = pytest.mark.skipif(sys.platform == "win32" or not shutil.which("sh"),
                                  reason="runs a POSIX stand-in for flatpak-spawn")
+#: The Flatpak exists only on Linux: these feed the sandbox's POSIX paths (/app/lib/...,
+#: --directory=/home/op/gen) through os.path, which on native Windows is ntpath.
+flatpak_paths = pytest.mark.skipif(
+    os.name == "nt", reason="Flatpak (Linux-only) sandbox paths; os.path is ntpath on Windows")
 
 
 # ---------------------------------------------------------------------------------------
@@ -55,6 +59,7 @@ needs_posix = pytest.mark.skipif(sys.platform == "win32" or not shutil.which("sh
     (["/usr/bin/env"], False),
     ([], False),
 ])
+@flatpak_paths
 def test_runs_on_host(argv, host):
     assert flatpak_host.runs_on_host(argv) is host
 
@@ -99,6 +104,7 @@ def test_host_env_drops_what_only_describes_the_sandbox():
                                           "SECRET": "s"}
 
 
+@flatpak_paths
 def test_host_argv_carries_the_directory_and_extra_path_entries():
     argv = flatpak_host.host_argv(["kind", "get", "clusters"], cwd="/home/op/gen", env_fd=7,
                                   forward_fds=(9,),

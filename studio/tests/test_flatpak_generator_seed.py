@@ -191,6 +191,10 @@ def test_git_ignores_the_written_seed():
 # ---------------------------------------------------------------------------------------
 # End to end: this checkout's seed, placed, self-checked
 # ---------------------------------------------------------------------------------------
+@pytest.mark.skipif(os.name == "nt", reason=(
+    "the Flatpak's (Linux-only) self-check runs bash -n on the placed tree; on native "
+    "Windows the bash found first is often System32's WSL launcher, which cannot read a "
+    "C:\\ path"))
 def test_a_seed_of_this_checkout_places_a_tree_the_self_check_accepts(tmp_path, monkeypatch,
                                                                        seed_files):
     seed = tmp_path / "seed"
