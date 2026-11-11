@@ -233,12 +233,13 @@ mkbr "${W}"; bash "${KRC}" set --build-root "${W}/wl-pki.x86" -- --set-str LOCAL
 mkdir -p "${W}/wl-pki.x86/sysroot/usr/lib/modules/${KV}/video"; echo x > "${W}/wl-pki.x86/sysroot/usr/lib/modules/${KV}/video/nvidia.ko"
 out="$(run_lib "${W}" 'krc_preflight')"; rc=$?
 [ "${rc}" -eq 3 ] && grep -q 'out-of-tree kernel modules (nvidia.ko)' <<<"${out}" && ok "out-of-tree modules -> refusal naming them" || bad "out-of-tree: rc=${rc} ${out}"
-# disk
+# disk: the free-space SEAM answers 1 GiB (the fixed 4 GiB headroom alone exceeds it).
+# NEVER fake a full disk with a huge sparse file: on an eCryptfs home (this operator's)
+# `truncate -s 64T` is not sparse — it writes encrypted zeros until the disk is full,
+# which is exactly what an earlier version of this case did.
 mkbr "${W}"; bash "${KRC}" set --build-root "${W}/wl-pki.x86" -- --set-str LOCALVERSION -hmtest >/dev/null 2>&1
-rm "${W}"/*.img.xz; truncate -s 64T "${W}/hugmesh-x86-amd64-pki-test-20261111T000000Z.img"; sed -i 's/^IMG=.*/IMG=hugmesh-x86-amd64-pki-test-20261111T000000Z.img/' "${W}/wl-pki.x86/kernel-reconfig.env"
-out="$(run_lib "${W}" 'krc_preflight')"; rc=$?
-[ "${rc}" -eq 3 ] && grep -q 'Repackaging needs about' <<<"${out}" && ok "too little disk -> refusal with both numbers" || bad "disk: rc=${rc} ${out}"
-rm -f "${W}"/*.img
+out="$(run_lib "${W}" 'krc_avail_bytes() { echo 1073741824; }; krc_preflight')"; rc=$?
+[ "${rc}" -eq 3 ] && grep -q 'Repackaging needs about 4 GiB free under .*; 1 GiB is available' <<<"${out}" && ok "too little disk -> refusal with both numbers" || bad "disk: rc=${rc} ${out}"
 # clean preflight
 mkbr "${W}"; bash "${KRC}" set --build-root "${W}/wl-pki.x86" -- --set-str LOCALVERSION -hmtest >/dev/null 2>&1
 out="$(run_lib "${W}" 'krc_preflight; echo PREFLIGHT-OK')"; rc=$?

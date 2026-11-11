@@ -289,6 +289,10 @@ krc_disk_need() {
     printf '%s' "$(( n + 4 * 1024 * 1024 * 1024 ))"
 }
 
+# krc_avail_bytes <dir> — free bytes under <dir> (a seam: the suite answers it instead
+# of faking a full disk with a huge file).
+krc_avail_bytes() { df --output=avail -B1 "$1" | tail -1 | tr -dc 0-9; }
+
 krc_preflight() {
     exec 217>>"${BR}.lock"
     flock -n 217 \
@@ -331,7 +335,7 @@ krc_preflight() {
     [ -z "${extra}" ] \
         || krc_refuse "This image carries out-of-tree kernel modules (${extra% }) built against its current kernel; kernel reconfiguration cannot rebuild them, so a new kernel would leave them unloadable."
     local need avail
-    need="$(krc_disk_need)"; avail="$(df --output=avail -B1 "${WD}" | tail -1 | tr -dc 0-9)"
+    need="$(krc_disk_need)"; avail="$(krc_avail_bytes "${WD}")"
     [ "${avail:-0}" -ge "${need}" ] \
         || krc_refuse "Repackaging needs about $(( need / 1073741824 )) GiB free under ${WD}; $(( ${avail:-0} / 1073741824 )) GiB is available."
     for k in xz tar sfdisk losetup mount unsquashfs mksquashfs xorriso; do
