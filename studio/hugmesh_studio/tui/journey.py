@@ -1206,6 +1206,29 @@ class Journey:
     def close_overlay(self) -> None:
         self.overlay = None
 
+    def load_session(self, s) -> str:
+        """REDO ("edit as new") — the twin of ``StudioWizard.load_session``: a session
+        record's configuration snapshot back into the journey (base + worklist), landing
+        on the first screen with every step pre-populated; the eventual save is a NEW
+        configuration. Returns "" once loaded, or why nothing was (a fleet run, a
+        snapshot that no longer loads — ``model.redo_refusal``); a refusal changes
+        nothing. The blanked secrets are said, as the GUI's Redo warns about them."""
+        from . import model
+        why = model.redo_refusal(s)
+        if why:
+            return why
+        wl = WorklistConfig.from_dict(s.config)
+        self.cfg = wl.base
+        self.worklist = wl
+        self.goto(PAGE_ORDER[0])
+        said = [f"loaded the configuration of session {s.id} "
+                f"({s.label or 'no label'}) — Start building walks it; the mode menu "
+                "marks its mode with *"]
+        said += [f"! {k.replace('_', '-')} was NOT saved (plaintext secret) — re-enter "
+                 "it before building from this config" for k in s.blanked_secrets]
+        self.status = "\n".join(said)
+        return ""
+
     # ── navigation ──────────────────────────────────────────────────────────────
     def goto(self, slug: str) -> None:
         self.overlay = None

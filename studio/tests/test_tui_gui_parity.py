@@ -945,3 +945,33 @@ def test_go_live_names_targets_and_their_limits_identically_on_both_faces(
     assert golive_target.EPHEMERAL_NOTE in gui_golive.ephemeral_text(w.target)
     assert gui_meshemu.GO_LIVE_ACTION == tui_meshemu.GO_LIVE_ACTION
     w.deleteLater()
+
+
+# ── GUI-28 (B-10): the previous-builds RESTART gate is one answer on both faces ──────
+@pytest.mark.parametrize("case", ["active", "workdir_gone", "services", "ok",
+                                  "pre_feature", "fleet_flat"])
+def test_the_restart_gate_refuses_the_same_sessions_with_the_same_words(
+        case, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from hugmesh_studio.core import build_sessions
+    from hugmesh_studio.core import domain_services as ds
+    from hugmesh_studio.core.worklist import WorklistConfig
+    from hugmesh_studio.gui.pages.sessions_widget import PreviousBuildsWidget
+    from hugmesh_studio.tui import model as tui_model
+    monkeypatch.setattr(build_sessions, "is_active", lambda s: case == "active")
+    cfg = ImageConfig(mode="mesh", additional_domains=True,
+                      domains=[Domain(name="a.example")])
+    if case != "pre_feature":
+        ds.record_reviewed(cfg, ["a.example"])
+    if case in ("services", "fleet_flat"):
+        cfg.domains.append(Domain(name="late.example"))
+    workdir = str(tmp_path / "gone") if case == "workdir_gone" else str(tmp_path)
+    config = cfg.to_dict() if case == "fleet_flat" else WorklistConfig(base=cfg).to_dict()
+    s = SimpleNamespace(id="s1", workdir=workdir, config=config,
+                        kind="fleet" if case == "fleet_flat" else "wizard",
+                        blanked_secrets=[], held_secret_files=[])
+    ok, why = PreviousBuildsWidget.can_restart(s)
+    tui_why = tui_model.restart_refusal(s)
+    assert (ok, why) == (tui_why is None, tui_why or "")
+    assert ok is (case in ("ok", "pre_feature", "fleet_flat"))

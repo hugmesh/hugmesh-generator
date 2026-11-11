@@ -111,13 +111,24 @@ def test_plain_list_and_inspect_shows_detail(tmp_path):
     assert "  build.log" in text
 
 
-def test_plain_list_surfaces_unreadable_records(tmp_path):
+def _corrupt(name: str = "zz-corrupt.json") -> str:
     os.makedirs(bs.sessions_dir(), exist_ok=True)
-    bad = os.path.join(bs.sessions_dir(), "zz-corrupt.json")
+    bad = os.path.join(bs.sessions_dir(), name)
     with open(bad, "w", encoding="utf-8") as fh:
         fh.write("{not json")
+    return bad
+
+
+def test_plain_list_numbers_an_unreadable_record_after_the_sessions(tmp_path):
+    # B-11: listed as a ROW of the one numbering (the GUI lists it), not "skipped"
+    _finished(tmp_path, session_id="20260115-000001-abcdef")
+    bad = _corrupt()
     text = _run_plain("q\n")
-    assert f"unreadable record skipped: {bad}" in text
+    assert "  2. ! unreadable record zz-corrupt.json — only delete applies" in text
+    assert "skipped" not in text
+    detail = _run_plain("2\nq\n")                 # NUMBER inspects it: the whole path
+    assert f"record    {bad}" in detail
+    assert "only delete (removing the file) applies" in detail
 
 
 def test_plain_empty_state_says_so(tmp_path):
@@ -196,3 +207,185 @@ def test_main_worklist_flag_prints_headlessly(tmp_path, capsys):
                       inp=io.StringIO(""), out=out)
     assert rc == 0
     assert "pki.x86" in out.getvalue() and "backend.rpi5" in out.getvalue()
+
+
+# ── B-11: an unreadable record is deletable from the TUI (the GUI deletes it) ───────
+def test_plain_d_deletes_an_unreadable_record_after_a_confirm(tmp_path):
+    s = _finished(tmp_path, session_id="20260116-000001-abcdef")
+    bad = _corrupt()
+    text = _run_plain("d 2\ny\nq\n")
+    assert f"delete this unreadable record file {bad}? [y/N]" in text
+    assert f"deleted the unreadable record {bad}." in text
+    assert not os.path.exists(bad)
+    assert os.path.exists(s.path())                    # the build next to it is untouched
+    assert "unreadable record" not in text.rsplit("previous builds", 1)[1]
+
+
+def test_plain_d_on_an_unreadable_record_declined_keeps_it(tmp_path):
+    bad = _corrupt()
+    text = _run_plain("d 1\nn\nq\n")
+    assert "kept." in text
+    assert os.path.exists(bad)
+
+
+def test_plain_a_list_of_only_unreadable_records_is_still_deletable(tmp_path):
+    bad = _corrupt()
+    text = _run_plain("d 1\ny\nq\n")
+    assert f"deleted the unreadable record {bad}." in text
+    assert not os.path.exists(bad)
+
+
+def test_plain_unreadable_delete_says_so_when_the_file_stays(tmp_path, monkeypatch):
+    # delete_path swallows every error: the transcript must say what is TRUE after it
+    bad = _corrupt()
+    monkeypatch.setattr(bs, "delete_path", lambda _p: None)
+    text = _run_plain("d 1\ny\nq\n")
+    assert f"not deleted: {bad} is still there" in text
+    assert "deleted the unreadable record" not in text
+
+
+@pytest.mark.parametrize("verb, said", [("w", "worklist"), ("s", "restart"),
+                                        ("e", "redo")])
+def test_plain_other_verbs_on_an_unreadable_record_say_why_not(tmp_path, verb, said):
+    _finished(tmp_path, session_id="20260117-000001-abcdef")
+    bad = _corrupt()
+    text = _run_plain(f"{verb} 2\nq\n")
+    assert f"no {said} for an unreadable record: it could not be parsed" in text
+    assert os.path.exists(bad)
+
+
+# ── B-10: the GUI's other Previous-builds buttons ──────────────────────────────────
+def test_plain_help_offers_restart_redo_and_delete_all(tmp_path):
+    text = _run_plain("q\n")
+    assert ("build actions: s NUMBER=restart · e NUMBER=redo (edit as new) · "
+            "a=delete all finished") in text
+
+
+def _active(tmp_path, session_id):
+    s = bs.new_session(_standalone_wl(tmp_path), str(tmp_path), session_id=session_id)
+    bs.start(s)                                        # running with our live pid
+    return s
+
+
+def _with_artifacts(s):
+    os.makedirs(s.workdir, exist_ok=True)
+    marker = os.path.join(s.workdir, "artifact.img")
+    with open(marker, "w", encoding="utf-8") as fh:
+        fh.write("x")
+    return marker
+
+
+def test_plain_delete_all_prunes_every_finished_record_and_keeps_the_running_one(
+        tmp_path):
+    done = _finished(tmp_path, session_id="20260118-000001-aaaaaa")
+    failed = _finished(tmp_path, session_id="20260118-000002-bbbbbb", status="failed")
+    live = _active(tmp_path, "20260118-000003-cccccc")
+    marker = _with_artifacts(done)
+    text = _run_plain("a\ny\nn\nq\n")              # yes records, NO artifacts
+    assert ("Delete every finished build-session record? Sessions still running are "
+            "kept. [y/N]") in text
+    assert "Deleted 2; skipped 1 still running." in text
+    assert not os.path.exists(done.path()) and not os.path.exists(failed.path())
+    assert os.path.exists(live.path())                 # never removed underneath it
+    assert os.path.exists(marker)                      # artifacts: an explicit opt-in
+
+
+def test_plain_delete_all_with_artifacts_removes_the_trees(tmp_path):
+    done = _finished(tmp_path, session_id="20260119-000001-aaaaaa")
+    _with_artifacts(done)
+    text = _run_plain("a\ny\ny\nq\n")
+    assert "Deleted 1; skipped 0 still running." in text
+    assert not os.path.exists(done.workdir)
+
+
+def test_plain_delete_all_declined_keeps_everything(tmp_path):
+    done = _finished(tmp_path, session_id="20260120-000001-aaaaaa")
+    text = _run_plain("a\nn\nq\n")
+    assert "kept." in text
+    assert os.path.exists(done.path())
+
+
+def test_plain_delete_all_with_nothing_recorded_says_so(tmp_path):
+    text = _run_plain("a\nq\n")
+    assert "nothing to delete: no readable build session is recorded." in text
+
+
+def test_plain_restart_hands_over_and_never_touches_the_record(tmp_path):
+    s = _finished(tmp_path, session_id="20260121-000001-aaaaaa", status="failed")
+    _with_artifacts(s)
+    before = bs.load(s.path()).to_dict()
+    text = _run_plain("s 1\nq\n")
+    assert f"Restart session {s.id} rebuilds into {s.workdir}" in text
+    assert "The TUI does not run builds. Restart it from the GUI" in text
+    assert bs.load(s.path()).to_dict() == before       # nothing dispatched, nothing written
+
+
+def test_plain_restart_refuses_an_active_session_with_the_reason(tmp_path):
+    _active(tmp_path, "20260122-000001-aaaaaa")
+    text = _run_plain("s 1\nq\n")
+    assert ("not restarted: This session appears to be running in another Studio "
+            "process — stop it there first.") in text
+
+
+def test_plain_restart_without_a_workdir_offers_redo_and_redo_starts_the_journey(
+        tmp_path):
+    s = _finished(tmp_path, session_id="20260123-000001-aaaaaa", wl=_mesh_wl(tmp_path))
+    assert not os.path.isdir(s.workdir)
+    text = _run_plain("s 1\ny\n\n")                 # take the Redo, then Enter on welcome
+    assert f"not restarted: Its artifact directory no longer exists:\n{s.workdir}" in text
+    assert "Load its config into the journey now (Redo)? [y/N]" in text
+    assert f"loaded the configuration of session {s.id}" in text
+    # the journey's mode menu marks the LOADED config's mode (mesh, not the default)
+    assert " * 3. Mesh node" in text
+
+
+def test_plain_redo_from_the_journey_loads_its_config_and_resumes_on_welcome(tmp_path):
+    from hugmesh_studio.tui import journey as journey_mod
+    s = _finished(tmp_path, session_id="20260124-000001-aaaaaa", wl=_mesh_wl(tmp_path))
+    j = journey_mod.Journey(str(tmp_path))
+    out = io.StringIO()
+    assert plain.run_journey(io.StringIO("2\ne 1\n"), out, generator_dir=str(tmp_path),
+                             journey=j) == 0
+    assert j.cfg.mode == "mesh"
+    assert [e.id for e in j.worklist.entries] == ["pki.x86", "backend.rpi5"]
+    assert j.slug == "welcome"
+    assert f"loaded the configuration of session {s.id}" in out.getvalue()
+
+
+def test_plain_redo_says_which_secrets_were_not_saved(tmp_path):
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      brand="acme", output_dir=str(tmp_path / "out"),
+                      local_pass="hunter2")
+    s = _finished(tmp_path, session_id="20260125-000001-aaaaaa", wl=synthesize(cfg))
+    assert s.blanked_secrets == ["local_pass"]
+    text = _run_plain("e 1\n")
+    assert ("! local-pass was NOT saved (plaintext secret) — re-enter it before "
+            "building from this config") in text
+    assert "hunter2" not in text
+
+
+def test_plain_redo_refuses_a_fleet_run_with_the_reason(tmp_path):
+    s = _finished(tmp_path, session_id="20260126-000001-aaaaaa")
+    s.kind = "fleet"
+    bs.save(s)
+    text = _run_plain("e 1\nq\n")
+    assert "not redone: a fleet run is redone in the GUI's fleet window" in text
+    assert "HugMesh Image Studio" not in text           # no journey was started
+
+
+def test_plain_restart_refuses_a_config_that_gained_an_unconfigured_domain(tmp_path):
+    # the per-domain services arm of the GUI's gate (#495), on the face CI runs
+    from hugmesh_studio.core import domain_services as ds
+    from hugmesh_studio.core.config import Domain
+    base = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
+                       output_dir=str(tmp_path / "out"), additional_domains=True,
+                       domains=[Domain(name="a.example")])
+    ds.record_reviewed(base, ["a.example"])
+    base.domains.append(Domain(name="late.example"))
+    s = _finished(tmp_path, session_id="20260127-000001-aaaaaa",
+                  wl=WorklistConfig(base=base, entries=[
+                      WorklistEntry(role="pki", platform="x86")]))
+    os.makedirs(s.workdir)
+    text = _run_plain("s 1\nn\nq\n")
+    assert "not restarted: " in text and "late.example" in text
+    assert "The TUI does not run builds" not in text   # refused: no hand-over
