@@ -519,15 +519,15 @@ provision_root_breakglass() {
 # each file is read only up to its first Match line: break-glass.conf's
 # loopback-only `AuthorizedKeysFile` must not count as the node-wide one.
 sshd_global_value() {
-    local kw f
+    local kw f prog
     kw="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    # ONE line on purpose: tests/scripts/eso_provider_refs.py tracks quotes per line,
+    # so the braces of a multi-line awk program read to it as an unclosed shell
+    # group that gates the rest of this file (test-eso-provider-refs.sh goes red).
+    prog='{ sub(/[ \t]*=[ \t]*/, " ") }; tolower($1) == "match" { exit }; tolower($1) == kw { v = $2; gsub(/"/, "", v); print tolower(v); found = 1; exit }; END { exit !found }'
     for f in /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config; do
         [ -r "${f}" ] || continue
-        awk -v kw="${kw}" '
-            { sub(/[ \t]*=[ \t]*/, " ") }
-            tolower($1) == "match" { exit }
-            tolower($1) == kw { v = $2; gsub(/"/, "", v); print tolower(v); found = 1; exit }
-            END { exit !found }' "${f}" && return 0
+        awk -v kw="${kw}" "${prog}" "${f}" && return 0
     done
     return 0
 }

@@ -114,6 +114,12 @@ run_case eqspaced '{"hostname":"node-be-01"}' yes "" eq_spaced
 if grep -q "WARNING: .*PermitRootLogin no" "${WORK}/eqspaced/log"; then
     ok "'permitrootlogin = \"no\"' (indented, any case, quoted): warned"
 else bad "'permitrootlogin = \"no\"': no warning"; fi
+# sshd matches multistate VALUES case-insensitively too (servconf.c strcasecmp).
+val_case() { printf 'PermitRootLogin No\n' > "$1/etc/ssh/sshd_config.d/00-root-login.conf"; }
+run_case valcase '{"hostname":"node-be-01"}' yes "" val_case
+if grep -q "WARNING: .*PermitRootLogin no" "${WORK}/valcase/log"; then
+    ok "'PermitRootLogin No' (value in another case): warned"
+else bad "'PermitRootLogin No': no warning (the value was compared case-sensitively)"; fi
 
 # sshd keeps the FIRST value even within one file (sshd_config itself, say).
 two_in_one() { printf 'PermitRootLogin no\nPermitRootLogin prohibit-password\n' > "$1/etc/ssh/sshd_config"; }
