@@ -1784,7 +1784,7 @@ def covers(pat, target):
     if pat.endswith("/**"):
         return target.startswith(pat[:-3] + "/") or target == pat[:-3]
     return pat == target
-# A blanket row (e.g. the pki-gateway '/**' floor) is NOT the superadmin console
+# A blanket row (e.g. a bare '/**' floor, which no seed ships since decision 79) is NOT the superadmin console
 # surface: require the pattern to live under /bff/superadmin, so deleting that
 # surface is visible instead of being absorbed by a catch-all.
 grants = [r for r in rows if r[2] == "ROLE_SUPERADMIN" and r[3] == "true"
