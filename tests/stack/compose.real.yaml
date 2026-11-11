@@ -22,7 +22,7 @@ services:
   # ── Identity: Casdoor (OAuth2/OIDC) + its Postgres ───────────────
   casdoor-db:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: casdoor, POSTGRES_USER: casdoor, POSTGRES_PASSWORD: casdoor }
+    environment: { POSTGRES_DB: casdoor, POSTGRES_USER: casdoor, POSTGRES_PASSWORD: "${CASDOOR_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}" }
     volumes: [casdoor-pg:/var/lib/postgresql/data]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U casdoor"], interval: 5s, retries: 20 }
 
@@ -38,7 +38,7 @@ services:
     environment:
       RUNNING_IN_DOCKER: "true"
       driverName: postgres
-      dataSourceName: "user=casdoor password=casdoor host=casdoor-db port=5432 sslmode=disable dbname=casdoor"
+      dataSourceName: "user=casdoor password=${CASDOOR_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)} host=casdoor-db port=5432 sslmode=disable dbname=casdoor"
       # PIN THE TOKEN ISSUER. Casdoor ships `origin =` EMPTY in conf/app.conf, and with
       # no origin it derives a token's `iss` from the REQUEST HOST. A browser reaching
       # it on the published port gets iss=http://localhost:8000, but a service calling
@@ -176,7 +176,7 @@ services:
   # ── Mastodon: web + sidekiq + streaming + Postgres + (mandatory) Redis ──
   mastodon-db:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: mastodon, POSTGRES_USER: mastodon, POSTGRES_PASSWORD: mastodon }
+    environment: { POSTGRES_DB: mastodon, POSTGRES_USER: mastodon, POSTGRES_PASSWORD: "${MASTODON_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}" }
     volumes: [mastodon-pg:/var/lib/postgresql/data]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U mastodon"], interval: 5s, retries: 20 }
 
@@ -199,6 +199,7 @@ services:
     restart: "no"
     command: ["bundle", "exec", "rails", "db:prepare"]
     env_file: [.mastodon.env]
+    environment: { DB_PASS: "${MASTODON_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}" }
     depends_on:
       mastodon-db: { condition: service_healthy }
       mastodon-redis: { condition: service_healthy }
@@ -268,6 +269,7 @@ services:
           sleep 5
         end
     env_file: [.mastodon.env]
+    environment: { DB_PASS: "${MASTODON_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}" }
     restart: unless-stopped
     depends_on:
       mastodon-db: { condition: service_healthy }
@@ -277,6 +279,7 @@ services:
     image: ghcr.io/mastodon/mastodon:v4.3.1
     command: ["bundle", "exec", "puma", "-C", "config/puma.rb"]
     env_file: [.mastodon.env]
+    environment: { DB_PASS: "${MASTODON_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}" }
     depends_on:
       mastodon-init: { condition: service_completed_successfully }
       mastodon-db: { condition: service_healthy }
@@ -287,6 +290,7 @@ services:
     image: ghcr.io/mastodon/mastodon:v4.3.1
     command: ["bundle", "exec", "sidekiq"]
     env_file: [.mastodon.env]
+    environment: { DB_PASS: "${MASTODON_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}" }
     depends_on:
       mastodon-init: { condition: service_completed_successfully }
       mastodon-db: { condition: service_healthy }
@@ -296,6 +300,7 @@ services:
     image: ghcr.io/mastodon/mastodon-streaming:v4.3.1
     command: ["node", "./streaming/index.js"]
     env_file: [.mastodon.env]
+    environment: { DB_PASS: "${MASTODON_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}" }
     depends_on:
       mastodon-db: { condition: service_healthy }
       mastodon-redis: { condition: service_healthy }

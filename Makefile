@@ -2054,7 +2054,38 @@ STACK_HEADSCALE_FLAGS := $(if $(strip $(HEADSCALE)), -f $(STACK_HEADSCALE_COMPOS
 STACK_HEADSCALE_ENV := $(if $(strip $(HEADSCALE)), HUGMESH_DOMAIN='$(STACK_HUGMESH_DOMAIN)' HEADSCALE_MESH_ID='$(HEADSCALE_MESH_ID)',)
 STACK_HEADSCALE_DEP := $(if $(strip $(HEADSCALE)),stack-mesh-token-key,)
 STACK_ROUTE_ACCESS_ENV := ROUTE_ACCESS_DB_PASSWORD="$$(bash tests/stack/gen-route-access-env.sh --read)" 
-STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_DOMAINS_ENV)$(STACK_HEADSCALE_ENV) \
+# The local stack's per-role passwords (hugmesh-generator#857): every Postgres role
+# (federation, adminbff, forumbff, ..., casdoor, mastodon, phpbb, akkoma, games) and
+# the brokers' SVC_PASSWORD, one key each in the same gitignored tests/stack/.env.
+# The compose files read ${KEY:?...} and spell no value, so a missing key stops ANY
+# compose command on them with a message naming tests/stack/gen-stack-db-env.sh.
+# Same two steps as the route-access key above:
+#   1. stack-db-env (a prerequisite of every target that builds, creates, stops or
+#      writes to the stack: build, up, halt, down, clean, route-access-reconcile)
+#      runs the resolver: create-if-missing, never rotate, and for a volume that
+#      already exists ADOPT the value its container was created with (or the
+#      pre-#857 literal), so an existing stack keeps working unchanged. Halt/down
+#      need it too: compose interpolates the whole file before it applies
+#      profiles, so even a teardown needs every key. The READ-ONLY targets
+#      (stack-ps, stack-logs, stack-onion) do not run it, as with the route-access
+#      key: looking at a stack never mints or adopts a password (see 3).
+#   2. STACK_DB_ENV passes each key explicitly (an --env-file disables .env), READ
+#      ONLY. A value the operator EXPORTED wins, exactly as it would for compose.
+#   3. The READ-ONLY targets run compose with STACK_READ_ENV instead: the same env,
+#      except that a DB key neither exported nor in the file is passed as a fixed
+#      placeholder (STACK_DB_READ_ENV). `ps`/`logs` interpolate the whole file but
+#      create nothing, so the value goes nowhere; it only gets past ${KEY:?}, and
+#      looking at a stack works before any ensuring target has run (the operator's
+#      state the day #857 lands). Never used by a target that can create, stop or
+#      write; the Studio's status/logs reads do the same (stack_db_read_env).
+# stack-down/stack-clean strip the keys (--remove) AFTER `down -v` drops the volumes.
+# Keys: tests/stack/stack-db-passwords.tsv. Guards: tests/stack/test-gen-stack-db-env.sh,
+# tests/scripts/test-compose-no-literal-passwords.sh.
+STACK_DB_KEYS := $(shell bash tests/stack/gen-stack-db-env.sh --keys 2>/dev/null)
+STACK_DB_ENV  := $(foreach k,$(STACK_DB_KEYS),$(k)="$${$(k):-$$(bash tests/stack/gen-stack-db-env.sh --read $(k))}" )
+STACK_DB_READ_PLACEHOLDER := read-only-placeholder-not-a-password
+STACK_DB_READ_ENV := $(foreach k,$(STACK_DB_KEYS),$(k)="$${$(k):-$$(bash tests/stack/gen-stack-db-env.sh --read $(k) | grep . || echo $(STACK_DB_READ_PLACEHOLDER))}" )
+STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_DB_ENV)$(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_DOMAINS_ENV)$(STACK_HEADSCALE_ENV) \
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
@@ -2068,6 +2099,8 @@ STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$
              MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV)$(STACK_ANUBIS_ENV)$(STACK_TOR_ENV) \
              EGRESS_VPN_CONF='$(abspath $(EGRESS_VPN_CONF))' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
+# STACK_ENV with the DB keys' read-only spelling (see STACK_DB_READ_ENV above).
+STACK_READ_ENV := $(subst $(STACK_DB_ENV),$(STACK_DB_READ_ENV),$(STACK_ENV))
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
 STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
 # Alternative-backend profiles (phpBB / Akkoma). Separate from STACK_PROFILE so
@@ -2261,7 +2294,15 @@ stack-mesh-token-key: ## mint the local mesh's HugMesh-token issuer key (ed25519
 stack-route-access-env: ## ensure tests/stack/.env holds ROUTE_ACCESS_DB_PASSWORD (create-if-missing; stack-up runs it first)
 	@bash tests/stack/gen-route-access-env.sh
 
-stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## build every service from its cloned repo (no run)
+.PHONY: stack-db-env
+# Ensure tests/stack/.env holds every local-stack DB password (see STACK_DB_ENV).
+# Its exit status stops make before compose runs: docker that cannot say whether a
+# volume exists writes nothing and fails, rather than mint a value that would lock
+# that volume out.
+stack-db-env: ## ensure tests/stack/.env holds the local stack's per-role DB passwords (create-if-missing, adopts existing volumes)
+	@bash tests/stack/gen-stack-db-env.sh
+
+stack-build: stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## build every service from its cloned repo (no run)
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 
 # stack-up's LAST step reconciles gateway_route_access (the line right after
@@ -2275,7 +2316,7 @@ stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_
 # would otherwise send the seed to that server and leave this table stale.
 # stack-halt -> stack-up is the resume path, so this covers it (and the Studio,
 # which shells out to `make stack-up`). Guard: tests/stack/test-route-access-reconcile.sh.
-stack-up: stack-route-access-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
+stack-up: stack-route-access-env stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
@@ -2322,7 +2363,7 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin); the shared password is in .e2e-credentials at the repo root (minted NEW by every stack-seed; E2E_PASSWORD_KEEP=1 keeps the previous one) (not printed here: this output is persisted by the Studio run log)."
 	$(STACK_SEED_STAGE2_NOTE)
 
-stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)
+stack-halt: stack-db-env  ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)
 	# The NON-DESTRUCTIVE stop. `stack-down` below passes -v, which drops every
 	# named volume — Casdoor identity, Matrix rooms, Mastodon accounts, the phpBB
 	# board and all the BFF databases. That is the right default for a throwaway
@@ -2333,13 +2374,14 @@ stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts
 	# survives, so `make stack-up` brings the same mesh back.
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down
 
-stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
+stack-down: stack-db-env  ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
 	# Every profile is listed UNCONDITIONALLY (not via the PHPBB=1/AKKOMA=1
 	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
 	# akkoma containers and volumes orphaned while reporting success.
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
 	bash tests/stack/gen-route-access-env.sh --remove
+	bash tests/stack/gen-stack-db-env.sh --remove
 
 # stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
 # images with no registry name, i.e. ours; never the pulled postgres/cassandra/
@@ -2356,11 +2398,12 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 # project other than the checkout's own, and for hugmesh-local itself while any
 # hugmesh-img-* project is up. Only 1/true/yes keep it; 0/false/no/empty remove it.
 STACK_CLEAN_KEEP_M2_ON = $(filter 1 true yes TRUE YES True Yes,$(strip $(STACK_CLEAN_KEEP_M2)))
-stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
+stack-clean: stack-db-env  ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
 	bash tests/stack/gen-route-access-env.sh --remove
+	bash tests/stack/gen-stack-db-env.sh --remove
 	$(if $(STACK_CLEAN_KEEP_M2_ON),@echo "==> The private-maven registry $(M2_REGISTRY_NAME) is KEPT (STACK_CLEAN_KEEP_M2: another mesh shares it).",@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true)
 	$(if $(STACK_CLEAN_KEEP_M2_ON),,@rm -f $(STACK_M2_ENV))
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'
@@ -2489,7 +2532,7 @@ stack-onion: ## print the local mesh's Tor .onion address (needs `make stack-up 
 	  echo "stack-onion: $$f does not hold a v3 onion hostname (56 base32 chars + .onion): '$$onion'" >&2; exit 1; \
 	fi; \
 	if command -v docker >/dev/null 2>&1; then \
-	  running="$$($(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile tor ps -q --status running hugmesh-tor 2>/dev/null)"; \
+	  running="$$($(STACK_READ_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile tor ps -q --status running hugmesh-tor 2>/dev/null)"; \
 	  if [ -z "$$running" ]; then \
 	    echo "stack-onion: $$f names $$onion but hugmesh-tor is NOT running — a stale readout from a container that died without cleaning up. Start it: make stack-up TOR=1" >&2; exit 1; \
 	  fi; \
@@ -2530,10 +2573,10 @@ stack-tor-mechanism-check: ## OPT-IN, needs the public Tor network + a host tor 
 	HUGMESH_TOR_E2E=1 bash tests/stack/test-tor-onion-mechanism.sh
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
+	$(STACK_READ_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
+	$(STACK_READ_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
 
 # Re-apply the canonical route-access seed (specs/cluster/manifests/route-access/
 # initdb/20-schema.sql) to the RUNNING stack's route-access-db, in one transaction
@@ -2549,7 +2592,7 @@ stack-ps: ## list the local stack's containers + status
 # /bff/superadmin. stack-up runs this automatically; it is exposed for a stack
 # that is already up; like stack-up it blanks POSTGRES_HOST/ROUTE_ACCESS_CONTAINER
 # so a shell export cannot redirect it. Guard: tests/stack/test-route-access-reconcile.sh.
-stack-route-access-reconcile: ## re-apply the route-access seed to the running stack's route-access-db (stack-up does this itself)
+stack-route-access-reconcile: stack-db-env ## re-apply the route-access seed to the running stack's route-access-db (stack-up does this itself)
 	$(STACK_ENV) POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 
 # ── The Gherkin (BDD) e2e lane ───────────────────────────────────────────────

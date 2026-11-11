@@ -294,8 +294,11 @@ if docker compose version >/dev/null 2>&1; then
         /^  headscale-data:$/ || /^  headscale-admin-key:$/ { next }
         { print }
     ' "${STACK}/compose.local.yaml" > "${stripped}"
-    a="$(ROUTE_ACCESS_DB_PASSWORD=guard docker compose -p hsguard -f "${STACK}/compose.local.yaml" config 2>/dev/null)"; ra=$?
-    b="$(ROUTE_ACCESS_DB_PASSWORD=guard docker compose -p hsguard -f "${stripped}" config 2>/dev/null)"; rb=$?
+    # The per-role DB keys are ${KEY:?} (hugmesh-generator#857): dummies, so the
+    # render runs; their values play no part in this comparison.
+    dbk="$(bash "${REPO}/tests/stack/gen-stack-db-env.sh" --keys 2>/dev/null | sed 's/$/=guard/' | tr '\n' ' ')"
+    a="$(env ${dbk} ROUTE_ACCESS_DB_PASSWORD=guard docker compose -p hsguard -f "${STACK}/compose.local.yaml" config 2>/dev/null)"; ra=$?
+    b="$(env ${dbk} ROUTE_ACCESS_DB_PASSWORD=guard docker compose -p hsguard -f "${stripped}" config 2>/dev/null)"; rb=$?
     rm -f "${stripped}"
     if [ "${ra}" -ne 0 ] || [ "${rb}" -ne 0 ] || [ -z "${a}" ]; then
         bad "docker compose config failed (rc ${ra}/${rb})"
@@ -304,7 +307,7 @@ if docker compose version >/dev/null 2>&1; then
     else
         bad "the unprofiled config CHANGES with the headscale service present (it must only exist behind its profile)"
     fi
-    c="$(ROUTE_ACCESS_DB_PASSWORD=guard docker compose -p hsguard -f "${STACK}/compose.local.yaml" -f "${STACK}/compose.headscale.yaml" --profile headscale config 2>/dev/null)"
+    c="$(env ${dbk} ROUTE_ACCESS_DB_PASSWORD=guard docker compose -p hsguard -f "${STACK}/compose.local.yaml" -f "${STACK}/compose.headscale.yaml" --profile headscale config 2>/dev/null)"
     case "${c}" in
         *"hugmesh-headscale:"*"APP_MESH_TOKEN_ENABLED"*|*"APP_MESH_TOKEN_ENABLED"*"hugmesh-headscale:"*)
             ok "with --profile headscale + the overlay, the service and admin-bff's mesh-token env are both in the model" ;;
