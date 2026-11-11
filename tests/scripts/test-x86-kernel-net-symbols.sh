@@ -37,6 +37,23 @@ P=0; F=0
 ok(){ echo "  PASS $*"; P=$((P+1)); }
 bad(){ echo "  FAIL $*"; F=$((F+1)); }
 
+# The x86 post-olddefconfig guard lives in scripts/_x86-kernel-asserts.sh: it moved out of
+# the builder's chroot heredoc so scripts/kernel-reconfig-x86.sh asserts an operator's
+# menuconfig edit with the SAME list. It is only the builder's guard while the builder
+# stages it into the sysroot and RUNS it after `make olddefconfig` — prove that first,
+# then read the guard from the file (or fail every guard check against the builder).
+X86_ASSERTS="${REPO}/scripts/_x86-kernel-asserts.sh"
+_olddef=$(grep -n '^make olddefconfig$' "${X86_BUILD}" | head -1 | cut -d: -f1)
+_call=$(grep -n '^bash /tmp/hm-x86-kernel-asserts\.sh "\${ROLE_K8S}"$' "${X86_BUILD}" | head -1 | cut -d: -f1)
+if [ -f "${X86_ASSERTS}" ] && [ -n "${_olddef}" ] && [ -n "${_call}" ] && [ "${_call}" -gt "${_olddef}" ] \
+   && grep -F 'scripts/_x86-kernel-asserts.sh" "${SYSROOT}/tmp/hm-x86-kernel-asserts.sh"' "${X86_BUILD}" >/dev/null; then
+    X86_GUARD="${X86_ASSERTS}"
+    ok "the x86 builder stages scripts/_x86-kernel-asserts.sh and runs it after olddefconfig (line ${_call} > ${_olddef})"
+else
+    X86_GUARD="${X86_BUILD}"
+    bad "the x86 builder does not run scripts/_x86-kernel-asserts.sh after olddefconfig (olddefconfig@${_olddef:-?} call@${_call:-?})"
+fi
+
 echo "== x86 kernel k8s-networking fragment lint =="
 
 # ── 1) Every required arch-neutral net symbol is `enable` (=y) in the x86 frag ──
@@ -153,7 +170,7 @@ extract_guard(){
     awk '/for must in CONFIG_NETFILTER_XTABLES/{g=1} g{print} g&&/done/{exit}' "$1" \
         | tr -d '\\'
 }
-for build in "${X86_BUILD}" "${PI_BUILD}"; do
+for build in "${X86_GUARD}" "${PI_BUILD}"; do
     gmiss=0
     guard="$(extract_guard "${build}")"
     [ -n "${guard}" ] || { bad "$(basename "${build}") has no k8s-node-kernel 'for must in' guard loop"; gmiss=$((gmiss+1)); }
@@ -174,10 +191,10 @@ done
 # ── 5) Both guards are IDENTICAL in coverage (modulo escaping) ────────────────
 # Compare the SORTED set of CONFIG_ tokens each guard's `must in` list contains.
 guard_symbols(){ extract_guard "$1" | grep -oE 'CONFIG_[A-Z0-9_]+' | sort -u; }
-if diff <(guard_symbols "${X86_BUILD}") <(guard_symbols "${PI_BUILD}") >/dev/null; then
+if diff <(guard_symbols "${X86_GUARD}") <(guard_symbols "${PI_BUILD}") >/dev/null; then
     ok "x86 and Pi guards cover an IDENTICAL symbol set (modulo \${must}/\\\${must} escaping)"
 else
-    bad "x86 and Pi guard symbol sets DIFFER:"; diff <(guard_symbols "${X86_BUILD}") <(guard_symbols "${PI_BUILD}") | sed 's/^/    /'
+    bad "x86 and Pi guard symbol sets DIFFER:"; diff <(guard_symbols "${X86_GUARD}") <(guard_symbols "${PI_BUILD}") | sed 's/^/    /'
 fi
 
 echo "== RESULT: ${P} passed, ${F} failed =="

@@ -86,6 +86,10 @@ for m in proc sys dev run; do
 done
 grep -qx "home/snap" <<<"${mk}" && grep -qx "var/cache/distfiles" <<<"${mk}" && ok "mksquashfs keeps the distfiles + local-user excludes" || bad "mksquashfs lost the distfiles/home excludes: ${mk}"
 grep -qx -- "--exclude=./home/snap" <<<"${tr}" && ok "tar keeps the local-user exclude" || bad "tar lost the home exclude: ${tr}"
+# usr/src carries the BUILT kernel tree (kept for kernel reconfiguration) and with it
+# certs/signing_key.pem, the module-signing PRIVATE key: both arms drop it whole.
+grep -qx "usr/src" <<<"${mk}" && ok "mksquashfs excludes usr/src (the kernel tree and its module-signing key)" || bad "mksquashfs does NOT exclude usr/src — the live ISO ships certs/signing_key.pem: ${mk}"
+grep -qx -- "--exclude=./usr/src" <<<"${tr}" && ok "tar excludes ./usr/src" || bad "tar does NOT exclude ./usr/src — the live ISO ships certs/signing_key.pem: ${tr}"
 
 echo "-- 4) live_fstab_swap_in / live_fstab_restore, EXECUTED --"
 mkfake() { # $1 = dir — the fake sysroot with everything the pack must keep or drop
@@ -93,6 +97,8 @@ mkfake() { # $1 = dir — the fake sysroot with everything the pack must keep or
   rm -rf "${d}"; mkdir -p "${d}/proc/x" "${d}/sys/y" "${d}/dev" "${d}/run/z" "${d}/etc" "${d}/usr" "${d}/home/snap" "${d}/var/cache/distfiles" "${d}/tmp"
   echo j > "${d}/proc/x/j"; echo k > "${d}/sys/y/k"; echo n > "${d}/dev/null"; echo keep > "${d}/dev/.keep"; echo w > "${d}/run/z/w"
   echo secret > "${d}/home/snap/secret"; echo dist > "${d}/var/cache/distfiles/d"; echo f > "${d}/usr/f"; echo t > "${d}/tmp/t"
+  mkdir -p "${d}/usr/src/linux-6.0-gentoo/certs"
+  printf -- '-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----\n' > "${d}/usr/src/linux-6.0-gentoo/certs/signing_key.pem"
   cp "${SPEC_FSTAB}" "${d}/etc/fstab"
 }
 FIX="${TMPD}/sysroot"; BR="${TMPD}/build-root"; mkdir -p "${BR}"; mkfake "${FIX}"
@@ -174,6 +180,7 @@ else
     grep -qx "/home/snap" <<<"${top}" && bad "the local user's home rode into the live root" || ok "home/snap excluded"
     grep -qx "/var/cache/distfiles/d" <<<"${top}" && bad "distfiles rode into the live root" || ok "var/cache/distfiles excluded"
     grep -qx "/usr/f" <<<"${top}" && grep -qx "/tmp/t" <<<"${top}" && ok "ordinary content kept" || bad "ordinary content missing from the squashfs"
+    grep -E '^/usr/src(/|$)' <<<"${top}" >/dev/null && bad "the kernel tree (and its module-signing key) rode into the live root: $(grep -E '^/usr/src' <<<"${top}" | head -3 | tr '\n' ' ')" || ok "usr/src excluded (no module-signing key in the live root)"
     sqf="$(unsquashfs -cat "${SQ}" etc/fstab 2>/dev/null)"
     grep -qE '^[[:space:]]*PARTUUID=' <<<"${sqf}" && bad "squashfs /etc/fstab is the INSTALLED image's (PARTUUID lines) — OpenRC fsck would abort the live boot" || ok "squashfs /etc/fstab is the live one"
     grep -qE '^tmpfs[[:space:]]+/tmp[[:space:]]' <<<"${sqf}" && ok "squashfs /etc/fstab keeps the tmpfs lines" || bad "squashfs /etc/fstab lost the tmpfs lines"
@@ -198,7 +205,7 @@ else
     case "${out}" in *"has no /proc directory"*) ok "gate fails the old pack and names the missing mount point" ;; *) bad "gate failed the old pack with the wrong message: ${out}" ;; esac
   fi
   # (b) directories present, but the installed image's fstab
-  mksquashfs "${FIX}" "${TMPD}/fstab.sqfs" -quiet -noappend -comp gzip -wildcards -e 'proc/*' 'sys/*' 'dev/*' 'run/*' >/dev/null 2>&1
+  mksquashfs "${FIX}" "${TMPD}/fstab.sqfs" -quiet -noappend -comp gzip -wildcards -e 'proc/*' 'sys/*' 'dev/*' 'run/*' usr/src >/dev/null 2>&1
   if out="$(bash "${TMPD}/run-gate" "${TMPD}/fstab.sqfs" 2>&1)"; then
     bad "gate PASSED a live root whose /etc/fstab still addresses PARTUUID disks"
   else
@@ -209,9 +216,18 @@ else
   # but a bare -e that keeps /dev and drops /proc must still fail on /proc
   mksquashfs "${FIX}" "${TMPD}/partial.sqfs" -quiet -noappend -comp gzip -e proc sys run >/dev/null 2>&1
   bash "${TMPD}/run-gate" "${TMPD}/partial.sqfs" >/dev/null 2>&1 && bad "gate passed a root with /dev but no /proc /sys /run" || ok "gate fails when only some mount points survive"
+  # (e) mount points and fstab right, but usr/src still packed: the module-signing
+  # PRIVATE key rides along — the 2026-11-11 live ISO. The gate must refuse and say so.
+  mkdir -p "${TMPD}/leak"; cp -r "${FIX}/." "${TMPD}/leak/"; printf 'tmpfs /tmp tmpfs defaults 0 0\n' > "${TMPD}/leak/etc/fstab"
+  mksquashfs "${TMPD}/leak" "${TMPD}/leak.sqfs" -quiet -noappend -comp gzip -wildcards -e 'proc/*' 'sys/*' 'dev/*' 'dev/.*' 'run/*' >/dev/null 2>&1
+  if out="$(bash "${TMPD}/run-gate" "${TMPD}/leak.sqfs" 2>&1)"; then
+    bad "gate PASSED a live root that carries usr/src/linux-*/certs/signing_key.pem"
+  else
+    case "${out}" in *"module-signing PRIVATE key"*) ok "gate refuses a live root carrying the module-signing key and names it" ;; *) bad "gate failed the key-leak pack with the wrong message: ${out}" ;; esac
+  fi
   # (d) a correct pack passes
   mkdir -p "${TMPD}/good"; cp -r "${FIX}/." "${TMPD}/good/"; printf 'tmpfs /tmp tmpfs defaults 0 0\n' > "${TMPD}/good/etc/fstab"
-  mksquashfs "${TMPD}/good" "${TMPD}/good.sqfs" -quiet -noappend -comp gzip -wildcards -e 'proc/*' 'sys/*' 'dev/*' 'dev/.*' 'run/*' >/dev/null 2>&1
+  mksquashfs "${TMPD}/good" "${TMPD}/good.sqfs" -quiet -noappend -comp gzip -wildcards -e 'proc/*' 'sys/*' 'dev/*' 'dev/.*' 'run/*' usr/src >/dev/null 2>&1
   if out="$(bash "${TMPD}/run-gate" "${TMPD}/good.sqfs" 2>&1)"; then
     ok "gate passes a correct live root"
   else
@@ -243,6 +259,7 @@ else
       grep -qE "^\./${m}/." <<<"${lst}" && bad "tar stream still carries ./${m} contents" || ok "./${m} contents excluded from the tar stream"
     done
     grep -qx "./home/snap/secret" <<<"${lst}" && bad "tar stream carries the local user's home" || ok "tar stream excludes home/snap"
+    grep -E '^\./usr/src(/|$)' <<<"${lst}" >/dev/null && bad "tar stream carries usr/src (the module-signing key)" || ok "tar stream excludes usr/src"
     tar -xOf "${TMPD}/stream.tar" ./etc/fstab 2>/dev/null | grep -E '^[[:space:]]*PARTUUID=' >/dev/null && bad "tar stream's /etc/fstab is the installed image's" || ok "tar stream's /etc/fstab is the live one"
     cmp -s "${FIX}/etc/fstab" "${SPEC_FSTAB}" && ok "sysroot fstab restored after the tar stream" || bad "sysroot fstab NOT restored after the tar stream"
   else
