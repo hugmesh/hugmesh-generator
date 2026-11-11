@@ -61,13 +61,15 @@ fn() {  # fn <name>: print one top-level function of provision.sh
     awk -v n="$1" '$0 ~ "^"n"\\(\\) \\{" {f=1} f {print} f && /^}/ {exit}' "${PROV}"
 }
 RCE_FNS="node_is_public ipv4_literal resolve_pki_lan_ip control_probe_capver control_server_answers
-control_probe_wait_seconds control_endpoint_mesh_is_live resolve_control_endpoint"
+control_probe_wait_seconds control_endpoint_mesh_is_live resolve_mesh_control_transport resolve_mesh_control_name
+resolve_mesh_control_onion resolve_mesh_control_port mesh_control_active mesh_control_url resolve_control_endpoint"
 {
     echo 'log()  { echo "[keys-provision] $*"; }'
     echo 'warn() { log "WARNING: $*"; }'
     # NET_MISSING names tools this "image" does not carry (a host cannot un-install curl).
     echo 'have() { case " ${NET_MISSING:-} " in *" $1 "*) return 1 ;; esac; command -v "$1" >/dev/null 2>&1; }'
     echo 'jqm()  { jq -r "$1" "${MANIFEST}" 2>/dev/null; }'
+    echo 'resolve_magic_dns_domain() { echo headnet.internal; }'   # mesh_control_url (#1086)
     for f in ${RCE_FNS}; do
         fn "${f}"
     done
@@ -658,7 +660,7 @@ PY
     control "gen-provision-keys forgets the .mesh key" scripts/gen-provision-keys.sh \
         'd.setdefault("mesh", {})["pki_lan_ip"] = ip' 'pass'
     control "the Studio forgets to pass --pki-ip" studio/hugmesh_studio/core/worklist_driver.py \
-        '*pki_lan.genkeys_args(base), ' ''
+        '*pki_lan.genkeys_args(base),' ''
     control "the Studio accepts a public address" studio/hugmesh_studio/core/pki_lan.py \
         '    if not any(ip in n for n in _PRIVATE):' '    if False:'
     # A2: the mesh-live question.

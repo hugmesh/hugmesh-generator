@@ -174,8 +174,48 @@ fi
 
 # Every onion this node serves has its hostname minted (tor writes it when it first
 # loads the HiddenServiceDir, seconds after it starts).
+# ── MESH CONTROL over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md) ─────────────────
+# keys-provision (provision_mesh_control) writes /etc/hugmesh/tor/mesh-control on a
+# node whose KEYS choose .mesh.control_transport lan+onion|onion:
+#   "client"          a worker: Tor is a CLIENT for the node-local control relay
+#                     (hugmesh-mesh-control-relay, SocksPort 127.0.0.1:9050);
+#   "control <port>"  the pki: ALSO publish the dedicated CONTROL onion from
+#                     /var/lib/tor/hugmesh-control (its key was minted at KEYS time
+#                     and installed from the pki stick), HiddenServicePort
+#                     <port> -> 127.0.0.1:<port> (headscale's own TLS listener).
+# Either way the torrc gains a cookie-authenticated ControlSocket in the DataDirectory
+# (the relay keeper's SIGNAL NEWNYM). /etc/hugmesh/tor/mesh-control-only — written when
+# the tor optional service was NOT selected at build time — drops the fe-gateway
+# primary and the per-domain onions: a node that needs Tor only for the control plane
+# never publishes an onion of its own. The control onion is never exported (it is not
+# an Ingress host and must not be admitted as one).
+MC_FILE="/etc/hugmesh/tor/mesh-control"
+MC_ONLY_FILE="/etc/hugmesh/tor/mesh-control-only"
+MC_HS_DIR="/var/lib/tor/hugmesh-control"
+MC_ROLE="" MC_PORT=""
+if [ -r "${R}${MC_FILE}" ]; then
+    _mc="$(_trim "$(head -1 "${R}${MC_FILE}" 2>/dev/null)")"
+    if [ "${_mc}" = client ]; then
+        MC_ROLE=client
+    elif [[ "${_mc}" =~ ^control\ ([0-9]{1,5})$ ]] && [ "${BASH_REMATCH[1]}" -ge 1 ] && [ "${BASH_REMATCH[1]}" -le 65535 ]; then
+        MC_ROLE=control; MC_PORT="${BASH_REMATCH[1]}"
+    else
+        log "ignoring malformed ${MC_FILE} ('${_mc}': want 'client' or 'control <port>')"
+    fi
+fi
+MC_ONLY=false
+if [ -n "${MC_ROLE}" ] && [ -e "${R}${MC_ONLY_FILE}" ]; then
+    MC_ONLY=true
+    DOMAIN_SLUGS=()
+fi
+
 _all_minted() {
-    [ -s "${R}${HS_DIR}/hostname" ] || return 1
+    if ! ${MC_ONLY}; then
+        [ -s "${R}${HS_DIR}/hostname" ] || return 1
+    fi
+    if [ "${MC_ROLE}" = control ]; then
+        [ -s "${R}${MC_HS_DIR}/hostname" ] || return 1
+    fi
     local _s
     for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
         [ -s "${R}${HS_DOMAIN_ROOT}/${_s}/hostname" ] || return 1
@@ -191,7 +231,7 @@ _export() {  # SRC DEST LABEL
     fi
 }
 _export_all() {
-    _export "${R}${HS_DIR}/hostname" "${R}${EXPORT_DIR}/hostname" "primary"
+    ${MC_ONLY} || _export "${R}${HS_DIR}/hostname" "${R}${EXPORT_DIR}/hostname" "primary"
     local _s
     for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
         _export "${R}${HS_DOMAIN_ROOT}/${_s}/hostname" "${R}${EXPORT_DIR}/${_s}.hostname" "domain '${_s}'"
@@ -260,9 +300,14 @@ if ! id "${TOR_USER}" >/dev/null 2>&1; then
     log "tor user missing — net-vpn/tor not installed? leaving onion service inert"
     exit 0
 fi
-mkdir -p "${R}${DATA_DIR}" "${R}${HS_DIR}" "${R}${EXPORT_DIR}" "${R}$(dirname "${TORRC}")" \
+mkdir -p "${R}${DATA_DIR}" "${R}${EXPORT_DIR}" "${R}$(dirname "${TORRC}")" \
          "${R}$(dirname "${UPSTREAM_FILE}")" 2>/dev/null || true
-_owned=("${R}${DATA_DIR}" "${R}${HS_DIR}")
+_owned=("${R}${DATA_DIR}")
+${MC_ONLY} || { mkdir -p "${R}${HS_DIR}" 2>/dev/null || true; _owned+=("${R}${HS_DIR}"); }
+if [ "${MC_ROLE}" = control ]; then
+    mkdir -p "${R}${MC_HS_DIR}" 2>/dev/null || true
+    _owned+=("${R}${MC_HS_DIR}")
+fi
 if [ "${#DOMAIN_SLUGS[@]}" -gt 0 ]; then
     mkdir -p "${R}${HS_DOMAIN_ROOT}" 2>/dev/null || true
     _owned+=("${R}${HS_DOMAIN_ROOT}")
@@ -303,12 +348,30 @@ Log notice syslog
 DataDirectory ${DATA_DIR}
 # Node-local SOCKS proxy (pods reach it via the tor-onion-marked NetworkPolicy).
 SocksPort 127.0.0.1:9050
+EOT
+    ${MC_ONLY} || cat <<EOT
 # The mesh's primary onion. Keypair minted into HiddenServiceDir on first start and
 # persisted there (OFF-GIT, tor:tor 0700).
 HiddenServiceDir ${HS_DIR}
 HiddenServiceVersion 3
 HiddenServicePort 443 ${UPSTREAM}
 EOT
+    if [ -n "${MC_ROLE}" ]; then
+        cat <<EOT
+# Mesh control over Tor (docs/MESH-CONTROL-OVER-TOR.md): the relay keeper's NEWNYM.
+ControlSocket ${DATA_DIR}/control
+CookieAuthentication 1
+EOT
+    fi
+    if [ "${MC_ROLE}" = control ]; then
+        cat <<EOT
+# The pki's dedicated CONTROL onion (key minted at KEYS time, pki stick only) ->
+# headscale's own TLS listener. Never the fe-gateway onion, never exported.
+HiddenServiceDir ${MC_HS_DIR}
+HiddenServiceVersion 3
+HiddenServicePort ${MC_PORT} 127.0.0.1:${MC_PORT}
+EOT
+    fi
     for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
         cat <<EOT
 # Tor domain '${_s}' (its own onion, the SAME gateway; told apart by the onion Host).
@@ -427,5 +490,5 @@ if ${BOOT_ONESHOT} && ! _all_minted; then
     _spawn_export_waiter
 fi
 
-log "reconcile complete (upstream=${UPSTREAM}, domains=${#DOMAIN_SLUGS[@]})"
+log "reconcile complete (upstream=${UPSTREAM}, domains=${#DOMAIN_SLUGS[@]}, mesh-control=${MC_ROLE:-off}${MC_ONLY:+ only=${MC_ONLY}})"
 exit 0

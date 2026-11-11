@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+# Keeps the mesh control relay's paths fresh (OPT-IN Tor fallback,
+# docs/MESH-CONTROL-OVER-TOR.md): probes the pki on the LAN, keeps the onion's
+# rendezvous circuit warm on the relay's isolation, and sends NEWNYM after repeated
+# onion failures. Linked by keys-provision next to hugmesh-mesh-control-relay.
+
+description="Mesh control relay keeper (LAN probe, onion keep-warm, NEWNYM)"
+supervisor=supervise-daemon
+command="/usr/sbin/hugmesh-mesh-control-relay"
+command_args="keeper"
+output_log="/var/log/hugmesh-mesh-control-keeper.log"
+error_log="/var/log/hugmesh-mesh-control-keeper.log"
+respawn_delay=5
+
+depend() {
+    need net
+    use logger tor
+    after keys-provision hugmesh-mesh-control-relay
+}
+
+start_pre() {
+    checkpath -d -m 0755 /run/hugmesh/mesh-control
+}
