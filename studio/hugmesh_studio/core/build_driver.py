@@ -15,6 +15,7 @@ blocks a build and never silently throttles jobs or the cap.
 """
 from __future__ import annotations
 
+import math
 import os
 import shlex
 import shutil
@@ -24,8 +25,8 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 
-from . import askpass, host_resources, platform_info, proc_text, resource_limits
-from . import secret_files, state_paths
+from . import askpass, emulation_save, host_resources, platform_info, proc_text
+from . import resource_limits, secret_files, state_paths
 from .config import (PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations,
                      standalone_login_problem, unaffiliated_image)
 from .platform_info import HostInfo, detect
@@ -417,6 +418,102 @@ def shared_assets_root(out_dir: str) -> str:
     if name and sessions == "sessions" and grandparent:
         base = grandparent
     return os.path.join(base, "shared")
+
+
+# ---- free-space preflight ------------------------------------------------------------
+# Defect L4, session 20261110-220215-cde67f: a 23-image mesh started with about 117 GiB
+# free under its output dir and ran for 1.5 h before ENOSPC took out 5 images mid-build
+# ("truncate: failed to truncate ...img", "tee: /out/build.log: No space left on device",
+# "cannot open pool lockfile ... No space left on device"). Nothing compared free space
+# with what an image needs, either before the session or between images, so the record
+# held mid-build crashes where a refusal belonged. WorklistDriver checks these numbers
+# before the session (blocking for the first image, advisory for the whole list) and
+# again before each queued image. FleetDriver (build-all-roles.sh) does not use them.
+GIB = 1024 ** 3
+#: One x86 image under the work dir: the build tree (a ~23 GiB payload for the pki node
+#: on that session), the .img (~28 GiB there) and the live/installer ISO.
+X86_IMAGE_SPACE_GIB = 55
+#: One ARM image (rpi5, jetson, frite, Orange Pi): a smaller payload and its .img.
+ARM_IMAGE_SPACE_GIB = 20
+#: Kept free on top of an image's estimate. The output dir usually shares a filesystem
+#: with docker volumes and the rest of the host, and a disk filled to the last byte takes
+#: those down with the build (it killed a live 56-container mesh on 2026-08-14).
+SPACE_MARGIN_GIB = 10
+#: Operator override for the per-image estimate: unset or "" = the table above;
+#: 0/off/none = no free-space check; a positive number = that many GiB per image (the
+#: margin still applies). Anything else is ignored, so a typo never turns the check off.
+SPACE_ENV = "HUGMESH_BUILD_IMAGE_SPACE"
+_SPACE_OFF = ("0", "off", "none")
+
+
+def image_space_estimate_bytes(cfg, env=None) -> int:
+    """Bytes one image is expected to leave under its work dir; 0 = check switched off.
+
+    Builds in one session accumulate (each entry keeps its own ``wl-<id>`` tree beside
+    its products), so this is what the image ADDS, and the next image must fit into
+    what is left after it."""
+    env = os.environ if env is None else env
+    raw = (env.get(SPACE_ENV) or "").strip().lower()
+    if raw in _SPACE_OFF:
+        return 0
+    try:
+        gib = float(raw) if raw else 0.0
+    except ValueError:
+        gib = 0.0
+    if gib > 0 and math.isfinite(gib * GIB):
+        return int(gib * GIB)
+    platform = getattr(cfg, "platform", "") or "x86"
+    return (X86_IMAGE_SPACE_GIB if platform == "x86" else ARM_IMAGE_SPACE_GIB) * GIB
+
+
+def disk_space_refusal(cfg, out_dir: str, *, disk_usage=None, env=None) -> str:
+    """Why the filesystem under ``out_dir`` cannot take this image now, or "" when it can.
+
+    Free space comes from :func:`emulation_save.free_bytes_for`, which walks up to the
+    nearest existing ancestor (a session dir does not exist before dispatch) and whose
+    probe is the injectable ``emulation_save._disk_usage``. Its -1 (unknowable) never
+    refuses, the same rule :func:`emulation_save.preflight_refusal` follows."""
+    estimate = image_space_estimate_bytes(cfg, env)
+    if not estimate:
+        return ""
+    need = estimate + SPACE_MARGIN_GIB * GIB
+    free = emulation_save.free_bytes_for(out_dir, disk_usage)
+    if free < 0 or free >= need:
+        return ""
+    short = need - free
+    what = (f"{getattr(cfg, 'role', '') or 'this image'} "
+            f"({getattr(cfg, 'platform', '') or 'x86'})")
+    return (f"not enough free disk space under {out_dir} for {what}: it needs about "
+            f"{need / GIB:.0f} GiB ({estimate / GIB:.0f} GiB for its build tree and "
+            f"images, plus a {SPACE_MARGIN_GIB} GiB margin), but only {free / GIB:.1f} GiB "
+            f"is free, {short / GIB:.1f} GiB short. Free space on that disk (earlier "
+            f"build sessions under the output folder's sessions/ are the usual bulk), "
+            f"choose an output folder on a bigger disk, or set {SPACE_ENV} to the GiB "
+            f"one image needs (0 turns this check off).")
+
+
+def disk_space_warning(cfgs, out_dir: str, *, disk_usage=None, env=None) -> str:
+    """ADVISORY: the first image fits but the whole sequence does not; "" otherwise.
+
+    Also "" when the first image does not fit (:func:`disk_space_refusal` blocks that
+    case), when the check is off, and when free space is unknowable."""
+    estimates = [image_space_estimate_bytes(c, env) for c in cfgs]
+    if not estimates or not estimates[0]:
+        return ""
+    margin = SPACE_MARGIN_GIB * GIB
+    free = emulation_save.free_bytes_for(out_dir, disk_usage)
+    if free < 0 or free < estimates[0] + margin:
+        return ""
+    total = sum(estimates) + margin
+    if free >= total:
+        return ""
+    return (f"not enough free disk space under {out_dir} for the whole worklist: its "
+            f"{len(estimates)} images need about {total / GIB:.0f} GiB together "
+            f"(including a {SPACE_MARGIN_GIB} GiB margin), but only {free / GIB:.1f} GiB "
+            f"is free. The first image fits. Each later image is re-checked before it "
+            f"starts and refused (marked failed, with the reason) if the space has run "
+            f"out by then. Free space or choose an output folder on a bigger disk to "
+            f"build them all.")
 
 
 class BuildDriver:

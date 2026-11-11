@@ -44,7 +44,7 @@ from . import proc_text
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
-from .build_driver import BuildDriver
+from .build_driver import BuildDriver, disk_space_refusal, disk_space_warning
 from . import domain_ca_keys
 from . import roles
 from .config import (ImageConfig, User, brand_header_fields, image_class,
@@ -235,12 +235,24 @@ class WorklistDriver:
         """Aggregate preflight problems (empty = OK) — the BLOCKING channel: this is
         what the Review page's problems pane renders and isComplete() keys on, and
         what ProgressPage refuses dispatch over."""
-        problems = self._output_dir_problems()
+        problems = self._output_dir_problems() + self._disk_space_problems()
         per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
                         graphical=self.graphical, workdir=self.workdir)
                       .preflight(cfg, self.backend))
                      for entry, cfg in self.materialize()]
         return problems + self._aggregate_per_entry(per_entry)
+
+    def _disk_space_problems(self) -> list[str]:
+        """Can the output filesystem take the NEXT image? (empty = yes)
+
+        Only the first entry blocks the session: a later one that will not fit is
+        refused by run_all()'s re-check when its turn comes, and an ARM image after it
+        may still fit. preflight_warnings() says up front when the whole list will not."""
+        materialized = self.materialize()
+        if not materialized:
+            return []
+        why = disk_space_refusal(materialized[0][1], self._output_dir())
+        return [why] if why else []
 
     def _output_dir_problems(self) -> list[str]:
         """Can this run actually WRITE where it is about to write? (empty = yes)
@@ -295,7 +307,9 @@ class WorklistDriver:
                         graphical=self.graphical, workdir=self.workdir)
                       .preflight_warnings(cfg, self.backend))
                      for entry, cfg in self.materialize()]
-        return self._aggregate_per_entry(per_entry)
+        space = disk_space_warning([cfg for _entry, cfg in self.materialize()],
+                                   self._output_dir())
+        return self._aggregate_per_entry(per_entry) + ([space] if space else [])
 
     # ---- mesh manifest v2 (design 2.6) ------------------------------------
     def manifest_v2(self) -> dict:
@@ -388,22 +402,33 @@ class WorklistDriver:
             if on_entry_start:
                 on_entry_start(i)
 
-            driver = BuildDriver(self.generator_dir, self.host, graphical=self.graphical,
-                                 workdir=self.workdir)
-            with self._lock:
-                self._drivers[i] = driver
-            try:
-                code = driver.run(cfg, self.backend,
-                                  on_line=(lambda ln, i=i: on_line(i, ln)) if on_line else None)
-            except Exception as e:  # noqa: BLE001 - one image's raise must not strand the run
-                # #374: ElevationRefused (HUGMESH_STUDIO_NO_ELEVATION / pytest) or an
-                # OSError from Popen. Left to propagate, this entry stayed RUNNING and
-                # registered, on_entry_done never fired, and the session was recorded
-                # 'stopped' (the operator-Stop state). Fail THIS image and keep going —
-                # the same tolerate-failures contract as a non-zero exit.
+            # Re-check free space before EVERY image (defect L4). Earlier images' build
+            # trees and products stay in the session dir, so the disk that held image 1
+            # may not hold image 5. A refused image is never dispatched: it takes the
+            # normal FAILED path below, and its "!!" line is what the session record's
+            # error tail keeps, instead of an ENOSPC crash an hour into the build.
+            refusal = disk_space_refusal(cfg, self._output_dir())
+            if refusal:
                 if on_line:
-                    on_line(i, f"!! {e}")
+                    on_line(i, f"!! {entry.id} not started: {refusal}")
                 code = 1
+            else:
+                driver = BuildDriver(self.generator_dir, self.host,
+                                     graphical=self.graphical, workdir=self.workdir)
+                with self._lock:
+                    self._drivers[i] = driver
+                try:
+                    code = driver.run(cfg, self.backend,
+                                      on_line=(lambda ln, i=i: on_line(i, ln)) if on_line else None)
+                except Exception as e:  # noqa: BLE001 - one image's raise must not strand the run
+                    # #374: ElevationRefused (HUGMESH_STUDIO_NO_ELEVATION / pytest) or an
+                    # OSError from Popen. Left to propagate, this entry stayed RUNNING and
+                    # registered, on_entry_done never fired, and the session was recorded
+                    # 'stopped' (the operator-Stop state). Fail THIS image and keep going —
+                    # the same tolerate-failures contract as a non-zero exit.
+                    if on_line:
+                        on_line(i, f"!! {e}")
+                    code = 1
             with self._lock:
                 self._drivers.pop(i, None)
                 cancelled = i in self._cancelled or self._cancel_all.is_set()
