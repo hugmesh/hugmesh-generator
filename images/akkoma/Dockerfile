@@ -42,8 +42,10 @@ ENV MIX_ENV=prod \
     ERL_FLAGS="+JMsingle true"
 # ERL_FLAGS, build stage only (the runtime stage does not inherit it): the release
 # workflow builds linux/arm64 under QEMU, where the BEAM JIT's default dual-mapped
-# code memory crashes the compiler; single mapping is the documented workaround and
-# changes nothing on a native build.
+# code memory is known to crash the compiler; single mapping is the usual
+# workaround and changes nothing on a native build. NOT YET MEASURED here: the
+# release's QEMU leg first runs on the first push to main (pull requests build arm64
+# natively, akkoma-image-ci.yml). If that run fails, nothing is pushed.
 
 RUN set -eux; \
     apt-get update; \
