@@ -21,11 +21,18 @@
 #   RULE 1  every `expireInHours` under specs/cluster/manifests/casdoor*/ is an integer
 #           literal this parser reads (fail closed on any other spelling, and on none).
 #           ALL three Casdoor seeds count — casdoor (the platform IdP), casdoor-domain
-#           (per-brand IdPs) and casdoor-games — because the gateway's DomainRegistry
-#           can validate any of their issuers and the subject key is checked against
-#           whichever JWT arrives. refreshExpireInHours is NOT counted: a refresh mints a
-#           NEW token from Casdoor's current state (the removed role is gone, a disabled
-#           user is refused), and the key refuses that new token anyway while it lives.
+#           (per-brand IdPs) and casdoor-games. That is CONSERVATIVE: the platform and
+#           per-brand issuers are what the gateway's DomainRegistry validates; whether
+#           a casdoor-games token ever reaches a subject-key check was not traced, so it
+#           is counted rather than assumed away. refreshExpireInHours is NOT counted: a
+#           refresh mints a NEW token from Casdoor's CURRENT state, and the key refuses
+#           that new token anyway while it lives. That reasoning holds only when admin-bff
+#           actually changed Casdoor (role removed, user disabled). In the cluster today
+#           the Casdoor admin client ships dark (CASDOOR_ADMIN_ENABLED is not set), so the
+#           role endpoints answer 503 and an uninvite removes the allowlist row without
+#           disabling the Casdoor user — there, once any key lapses, a fresh login or
+#           refresh works again whatever this TTL is. That residual is the Casdoor admin
+#           client's flip, not this guard's.
 #   RULE 2  the admin-bff Deployment sets BROKER_GATEWAY_REVOCATION_SUBJECT_CUTOFF_TTL_SECONDS
 #           to an integer >= max(expireInHours) x 3600, and nothing else under specs/
 #           sets it (an overlay that lowered it would be invisible to rule 2 otherwise).

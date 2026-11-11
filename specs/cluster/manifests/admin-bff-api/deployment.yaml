@@ -399,7 +399,10 @@ spec:
             # each gateway whose Cassandra access is `schema-owner` (apps/20-gateway-
             # fe/be/pki.yaml; kind's sso profile runs the fe one), and
             # cassandra-init grants admin_bff_cass MODIFY on hugmesh_gateway. The
-            # write is best-effort (a failure is logged; the token is still issued).
+            # write is best-effort (a failure is logged; the token is still issued),
+            # but the mint WAITS for it: with Cassandra unreachable each brokered mint
+            # waits for the driver to give up — measured ~2-3 s per mint with the port
+            # refusing, ~7 s with the host unroutable (2026-11-11, throwaway run).
             # Nothing ENFORCES with it yet: the gateway's HomeserverTokenRevocationFilter
             # (app.hs-revocation.enabled) is off in every lane. It is on now because
             # that filter fails CLOSED on a bearer it has no row for, so rows must
