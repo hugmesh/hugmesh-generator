@@ -557,15 +557,6 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- gateway SecurityConfig FE_SHELL_PUBLIC_GET_PATHS `/login/**`. Pairs with the
   -- `/bff/login` PUBLIC row below.
   ('hugmesh-fe-gateway',  '/login/**',             'PUBLIC',         true),
-  -- The host shell's two PUBLIC MARKETING PAGES (host-shell app.routes.ts mounts
-  -- 'home' and 'about' with no guard; /home is also the shell's DENIED_PATH, where
-  -- a signed-in user a route-access row refuses lands as /home?denied=<path>). A
-  -- hard load of either serves the same index.html the '/' row already serves
-  -- anonymously, so nothing new is exposed. EXACT paths: neither page has children.
-  -- PARITY with the gateway SecurityConfig FE_SHELL_PUBLIC_GET_PATHS `/home` +
-  -- `/about` and CanonicalSeed.fe() (hugmesh-gateway GUI-08).
-  ('hugmesh-fe-gateway',  '/home',                 'PUBLIC',         true),  -- shell public page (and DENIED_PATH)
-  ('hugmesh-fe-gateway',  '/about',                'PUBLIC',         true),  -- shell public page
   ('hugmesh-fe-gateway',  '/admin/**',             'ROLE_ADMIN',     true),
   -- Moderation micro-frontend UI (hugmesh-mod-ui at /mod/**). ROLE_MOD floor;
   -- ROLE_ADMIN paired so admins (a superset that the converter does NOT
