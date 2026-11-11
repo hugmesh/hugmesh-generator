@@ -189,6 +189,14 @@ DOMAIN    ?=
 HEADSCALE_URL ?=
 HEADSCALE_PUBLIC_DERP ?=
 PKI_LAN_IP ?=
+# MESH_CONTROL_TRANSPORT=lan+onion|onion  OPT-IN mesh control over Tor
+#                (docs/MESH-CONTROL-OVER-TOR.md): the x86/rpi5 builders bake tor + the
+#                node-local relay; the keys step stamps the sticks. With MESH_CONTROL_
+#                ONION_MINT=1 the control onion key is minted at KEYS time into
+#                $(WORK_DIR)/mesh-control-onion (pki stick only; its secret key is
+#                removed once every stick is made). Default lan: nothing changes.
+MESH_CONTROL_TRANSPORT ?=
+MESH_CONTROL_ONION_MINT ?=
 
 # ── External CA (optional) ─────────────────────────────────────────────────────
 # Point the cert generators at an EXISTING CA (cert + key) to use it as the
@@ -231,6 +239,12 @@ endif
 ifneq ($(strip $(PKI_LAN_IP)),)
 BRAND_ENV += PKI_LAN_IP=$(PKI_LAN_IP)
 endif
+ifneq ($(strip $(MESH_CONTROL_TRANSPORT)),)
+BRAND_ENV += MESH_CONTROL_TRANSPORT=$(MESH_CONTROL_TRANSPORT)
+endif
+ifneq ($(strip $(MESH_CONTROL_ONION_MINT)),)
+BRAND_ENV += MESH_CONTROL_ONION_MINT=$(MESH_CONTROL_ONION_MINT)
+endif
 # Root SSH login toggle (empty => builder default 'no' = DISABLED). Only threaded when
 # explicitly set, so every image stays hardened-by-default unless opted in.
 ifneq ($(strip $(PERMIT_ROOT_LOGIN)),)
@@ -240,7 +254,7 @@ endif
 # BRAND_PASS — brand make-vars forwarded into the in-container `make` re-invoke
 # (the Docker dispatch path) so BRAND_FLAGS/BRAND_ENV are rebuilt identically
 # inside the builder image. brands/ is mounted at /src/brands via -v $(CURDIR):/src.
-BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' PKI_LAN_IP='$(PKI_LAN_IP)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
+BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' PKI_LAN_IP='$(PKI_LAN_IP)' MESH_CONTROL_TRANSPORT='$(MESH_CONTROL_TRANSPORT)' MESH_CONTROL_ONION_MINT='$(MESH_CONTROL_ONION_MINT)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
 
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).

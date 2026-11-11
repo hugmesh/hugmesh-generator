@@ -635,6 +635,14 @@ fi
 # mistaken for a deliverable), and the orchestrator exits nonzero at the end
 # listing every role whose keys failed.
 KEYS_FAILED=()
+# Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md): every role's keys run
+# shares ONE control onion key directory (gen-provision-keys.sh reads these from the
+# env); its secret key goes onto the pki stick only and is removed here afterwards.
+if [ -n "${MESH_CONTROL_TRANSPORT:-}" ] && [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
+    export MESH_CONTROL_TRANSPORT
+    export MESH_CONTROL_ONION_DIR="${MESH_CONTROL_ONION_DIR:-${WORK_DIR}/mesh-control-onion}"
+    [ -n "${MESH_CONTROL_ONION_MINT:-}" ] && export MESH_CONTROL_ONION_MINT
+fi
 if [ "${SKIP_KEYS:-0}" != "1" ]; then
     echo "############################################################"
     echo "#  Generate provisioning keys (all built roles)"
@@ -770,6 +778,13 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
             fi
         done
     fi
+fi
+
+# The control onion's SECRET key leaves this computer on the pki stick only: once every
+# keys folder above is made, it is removed (the address stays, for a later worker stick).
+if [ -n "${MESH_CONTROL_ONION_DIR:-}" ] && [ -e "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" ]; then
+    rm -f "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" "${MESH_CONTROL_ONION_DIR}/hs_ed25519_public_key"
+    echo "==> mesh control: removed the control onion's secret key from ${MESH_CONTROL_ONION_DIR} (it is on the pki stick only)"
 fi
 
 echo

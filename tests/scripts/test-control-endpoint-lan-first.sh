@@ -53,7 +53,11 @@ fn() {  # fn <name>: print one top-level function of provision.sh
     echo 'log()  { echo "[keys-provision] $*"; }'
     echo 'warn() { log "WARNING: $*"; }'
     echo 'jqm()  { jq -r "$1" "${MANIFEST}" 2>/dev/null; }'
-    for f in node_is_public ipv4_literal resolve_pki_lan_ip resolve_control_endpoint; do
+    echo 'have() { command -v "$1" >/dev/null 2>&1; }'
+    echo 'resolve_magic_dns_domain() { echo headnet.internal; }'
+    for f in node_is_public ipv4_literal resolve_pki_lan_ip resolve_mesh_control_transport resolve_mesh_control_name \
+             resolve_mesh_control_onion resolve_mesh_control_port mesh_control_active mesh_control_url \
+             resolve_control_endpoint; do
         fn "${f}"
     done
 } > "${WORK}/rce.sh"
@@ -390,7 +394,7 @@ PY
     control "gen-provision-keys forgets the .mesh key" scripts/gen-provision-keys.sh \
         'd.setdefault("mesh", {})["pki_lan_ip"] = ip' 'pass'
     control "the Studio forgets to pass --pki-ip" studio/hugmesh_studio/core/worklist_driver.py \
-        '*pki_lan.genkeys_args(base), ' ''
+        '*pki_lan.genkeys_args(base),' ''
     control "the Studio accepts a public address" studio/hugmesh_studio/core/pki_lan.py \
         '    if not any(ip in n for n in _PRIVATE):' '    if False:'
 fi

@@ -1,0 +1,8 @@
+# hugmesh-headscale-oidc-defer — mesh control over Tor (OPT-IN): switch headscale's
+# OIDC on once the issuer answers (docs/MESH-CONTROL-OVER-TOR.md). Staged at
+# /etc/hugmesh/registry/cron-headscale-oidc-defer by the builder and copied here by
+# keys-provision only on a pki node whose KEYS choose a Tor transport. A no-op once
+# its marker is gone.
+#
+# Field order: min hour dom month dow user command
+* * * * * root /usr/sbin/hugmesh-headscale-oidc-defer >> /var/log/hugmesh-headscale-oidc-defer.log 2>&1

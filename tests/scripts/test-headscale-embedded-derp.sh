@@ -250,7 +250,9 @@ printf '%s\n' '{"hugmesh":{"cluster_domain":"acme.example"},"nodes":[{"name":"hm
     # resolve_control_endpoint calls the LAN-first helpers (node_is_public, ipv4_literal,
     # resolve_pki_lan_ip; tests/scripts/test-control-endpoint-lan-first.sh) and warn.
     echo 'command -v warn >/dev/null 2>&1 || warn() { :; }'
-    for fn in node_is_public ipv4_literal resolve_pki_lan_ip resolve_endpoint resolve_control_endpoint; do
+    for fn in node_is_public ipv4_literal resolve_pki_lan_ip resolve_mesh_control_transport resolve_mesh_control_name \
+              resolve_mesh_control_onion resolve_mesh_control_port mesh_control_active mesh_control_url \
+              resolve_endpoint resolve_control_endpoint; do
         sed -n "/^${fn}() {/,/^}/p" "${PROV}"
     done
 } > "${WORK}/ep-fns.sh"

@@ -141,6 +141,23 @@ HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 # row (10.0.0.10) is left as it is — with a warning. (env: PKI_LAN_IP)
 PKI_LAN_IP="${PKI_LAN_IP:-}"
 
+# ── Mesh control over Tor (OPT-IN, default lan; docs/MESH-CONTROL-OVER-TOR.md) ───
+# lan (default) writes nothing new. lan+onion | onion stamp provision.json .mesh
+# control_transport / control_name (default hs.<superdomain>) / control_onion on every
+# stick, and put the pki's dedicated CONTROL onion key on the PKI STICK ONLY
+# (headscale/control-onion/, 0600). Operator decision 2026-11-11: the key is minted
+# HERE, at KEYS time, on the build host — workers can only know the onion before their
+# first boot that way. Every role's run takes the SAME --mesh-control-onion-dir: the
+# first run mints into it (only with the explicit --mesh-control-onion-mint consent),
+# every later run reuses it, a run never mints over an existing address. Delete the
+# secret key from that directory once every stick is made (this script says so).
+MESH_CONTROL_TRANSPORT="${MESH_CONTROL_TRANSPORT:-lan}"
+MESH_CONTROL_NAME="${MESH_CONTROL_NAME:-}"
+MESH_CONTROL_ONION_DIR="${MESH_CONTROL_ONION_DIR:-}"
+MESH_CONTROL_ONION_MINT="${MESH_CONTROL_ONION_MINT:-false}"
+# Optional: a container image that carries tor, used when this computer has no tor.
+MESH_CONTROL_TOR_IMAGE="${MESH_CONTROL_TOR_IMAGE:-}"
+
 # ── In-UI SSH-terminal key model: per-device sshd HOST + BFF DIAL keypairs ──────
 # The in-UI SSH terminal lets the BFF dial a device over the tailnet to drive an
 # operator console. That needs TWO per-device keypairs minted here, off-image-build:
@@ -279,6 +296,19 @@ Options:
                       every stick, so a worker dials the pki on the LAN before go-live
                       instead of a public HEADSCALE_URL that cannot answer yet.
                       (env: PKI_LAN_IP)
+      --mesh-control-transport lan|lan+onion|onion
+                      How a node reaches the control plane on first boot (OPT-IN,
+                      default lan). lan+onion / onion: every node dials one stable
+                      name (--mesh-control-name) through a node-local relay that
+                      prefers the pki on the LAN (lan+onion; needs --pki-ip) and falls
+                      back to the pki's control onion. Needs --mesh-control-onion-dir.
+                      (env: MESH_CONTROL_TRANSPORT)
+      --mesh-control-name NAME   The stable control name. Default hs.<superdomain>.
+      --mesh-control-onion-dir DIR   The control onion key directory, the SAME for
+                      every role's run; its key goes onto the pki stick only.
+      --mesh-control-onion-mint  Consent to create the control onion key on THIS
+                      computer when DIR has none (needs tor here, or
+                      MESH_CONTROL_TOR_IMAGE). Never re-mints an existing key.
   -h, --help          Show this help.
 
   Mail/OAuth creds are OPTIONAL and ABSENT BY DEFAULT. NONINTERACTIVE=1 (or
@@ -316,6 +346,10 @@ while [[ $# -gt 0 ]]; do
         --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;  # ALSO list the public Tailscale DERP map (default: embedded relay only)
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;          # mesh MagicDNS base_domain (permanently internal); default <BRAND>.internal
         --pki-ip)      PKI_LAN_IP="$2"; shift 2 ;;           # the pki node's static/reserved LAN IPv4 (LAN-first control plane)
+        --mesh-control-transport) MESH_CONTROL_TRANSPORT="$2"; shift 2 ;;   # lan (default) | lan+onion | onion
+        --mesh-control-name) MESH_CONTROL_NAME="$2"; shift 2 ;;             # stable control name (default hs.<superdomain>)
+        --mesh-control-onion-dir) MESH_CONTROL_ONION_DIR="$2"; shift 2 ;;   # shared control-onion key dir (one per mesh)
+        --mesh-control-onion-mint) MESH_CONTROL_ONION_MINT=true; shift ;;   # consent: mint the control onion key here
         --device-id)   DEVICE_ID="$2"; shift 2 ;;            # in-UI SSH terminal: per-device Vault-seed path segment
         --dial-user)   DIAL_USER="$2"; shift 2 ;;            # in-UI SSH terminal: unprivileged login the BFF dials as
         --no-device-ssh) GEN_DEVICE_SSH=false; shift ;;      # in-UI SSH terminal: skip host+dial keypair generation
@@ -350,6 +384,62 @@ if [ -n "${PKI_LAN_IP}" ]; then
         exit 1
     fi
     unset _pki_ok _o1 _o2 _o3 _o4
+fi
+
+# --mesh-control-*: checked BEFORE anything is built.
+case "${MESH_CONTROL_TRANSPORT}" in
+    lan|lan+onion|onion) ;;
+    *) echo "ERROR: --mesh-control-transport must be lan, lan+onion or onion (got '${MESH_CONTROL_TRANSPORT}')" >&2; exit 1 ;;
+esac
+case "${MESH_CONTROL_ONION_MINT}" in
+    true|1|yes|on) MESH_CONTROL_ONION_MINT=true ;;
+    *) MESH_CONTROL_ONION_MINT=false ;;
+esac
+MESH_CONTROL_ONION=""
+if [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
+    if [ -n "${MESH_CONTROL_NAME}" ]; then
+        MESH_CONTROL_NAME="${MESH_CONTROL_NAME,,}"
+        if ! [[ "${MESH_CONTROL_NAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
+           || [[ "${MESH_CONTROL_NAME}" == *.onion ]]; then
+            echo "ERROR: --mesh-control-name '${MESH_CONTROL_NAME}' is not a dotted DNS name (and never an .onion)" >&2; exit 1
+        fi
+    fi
+    if [ "${MESH_CONTROL_TRANSPORT}" = "lan+onion" ] && [ -z "${PKI_LAN_IP}" ]; then
+        echo "ERROR: --mesh-control-transport lan+onion needs --pki-ip (the LAN path the relay prefers)" >&2; exit 1
+    fi
+    [ -n "${MESH_CONTROL_ONION_DIR}" ] || { echo "ERROR: --mesh-control-transport ${MESH_CONTROL_TRANSPORT} needs --mesh-control-onion-dir (the SAME directory for every role's run)" >&2; exit 1; }
+    if [ ! -s "${MESH_CONTROL_ONION_DIR}/hostname" ]; then
+        if [ "${MESH_CONTROL_ONION_MINT}" != true ]; then
+            echo "ERROR: ${MESH_CONTROL_ONION_DIR} holds no control onion yet. Pass --mesh-control-onion-mint to create its key on THIS computer (it goes onto the pki stick only — a change from minting it on the node), or point --mesh-control-onion-dir at the directory the first run used." >&2
+            exit 1
+        fi
+        if [ -e "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" ]; then
+            echo "ERROR: ${MESH_CONTROL_ONION_DIR} has a secret key but no hostname — refusing to mint over it" >&2; exit 1
+        fi
+        mkdir -p "${MESH_CONTROL_ONION_DIR}" && chmod 0700 "${MESH_CONTROL_ONION_DIR}" || exit 1
+        echo "==> Minting the control onion key in ${MESH_CONTROL_ONION_DIR} (tor, DisableNetwork — nothing leaves this computer)"
+        _mc_tmp="$(mktemp -d)"; : > "${_mc_tmp}/torrc"   # tor refuses /dev/null as a torrc
+        if command -v tor >/dev/null 2>&1; then
+            tor --defaults-torrc "${_mc_tmp}/torrc" -f "${_mc_tmp}/torrc" --DisableNetwork 1 --SocksPort 0 \
+                --DataDirectory "${_mc_tmp}/data" --HiddenServiceDir "${MESH_CONTROL_ONION_DIR}" \
+                --HiddenServicePort "8080 127.0.0.1:8080" --Log "notice file ${_mc_tmp}/tor.log" >/dev/null 2>&1 &
+        elif [ -n "${MESH_CONTROL_TOR_IMAGE}" ] && command -v docker >/dev/null 2>&1; then
+            docker run --rm --network none --user "$(id -u):$(id -g)" -v "$(cd "${MESH_CONTROL_ONION_DIR}" && pwd):/hs" \
+                "${MESH_CONTROL_TOR_IMAGE}" sh -c ': > /tmp/torrc; exec tor --defaults-torrc /tmp/torrc -f /tmp/torrc --DisableNetwork 1 --SocksPort 0 --DataDirectory /tmp/data --HiddenServiceDir /hs --HiddenServicePort "8080 127.0.0.1:8080"' >/dev/null 2>&1 &
+        else
+            rm -rf "${_mc_tmp}"
+            echo "ERROR: minting the control onion needs tor on this computer (or MESH_CONTROL_TOR_IMAGE=<an image with tor> and docker)" >&2; exit 1
+        fi
+        _mc_pid=$!
+        for _i in $(seq 1 60); do [ -s "${MESH_CONTROL_ONION_DIR}/hostname" ] && break; sleep 0.5; done
+        sleep 0.5; kill "${_mc_pid}" 2>/dev/null; wait "${_mc_pid}" 2>/dev/null
+        rm -rf "${_mc_tmp}"; unset _mc_tmp _mc_pid _i
+        [ -s "${MESH_CONTROL_ONION_DIR}/hostname" ] && [ -s "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" ] \
+            || { echo "ERROR: tor did not mint a control onion key in ${MESH_CONTROL_ONION_DIR}" >&2; exit 1; }
+    fi
+    MESH_CONTROL_ONION="$(tr -d '[:space:]' < "${MESH_CONTROL_ONION_DIR}/hostname")"
+    [[ "${MESH_CONTROL_ONION}" =~ ^[a-z2-7]{56}\.onion$ ]] \
+        || { echo "ERROR: ${MESH_CONTROL_ONION_DIR}/hostname is not a v3 onion hostname" >&2; exit 1; }
 fi
 
 for t in openssl ssh-keygen python3; do
@@ -569,6 +659,33 @@ PY
         echo "         so workers find it on the LAN before go-live." >&2
         unset _tmpl_pki
     fi
+fi
+
+# ── Mesh control over Tor -> provision.json (+ the pki stick's onion key) ───────
+# lan writes nothing (byte-identical to before the option existed).
+if [ "${MESH_CONTROL_TRANSPORT}" != lan ] && [ -f "${PROV}" ]; then
+    MC_T="${MESH_CONTROL_TRANSPORT}" MC_N="${MESH_CONTROL_NAME:-hs.${EFFECTIVE_SUPERDOMAIN}}" MC_O="${MESH_CONTROL_ONION}" \
+        python3 - "${PROV}" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+d = json.load(open(p))
+m = d.setdefault("mesh", {})
+m["control_transport"] = os.environ["MC_T"]
+m["control_name"] = os.environ["MC_N"]
+m["control_onion"] = os.environ["MC_O"]
+json.dump(d, open(p, "w"), indent=2)
+open(p, "a").write("\n")
+PY
+    echo "==> mesh control over Tor: ${MESH_CONTROL_TRANSPORT}, name ${MESH_CONTROL_NAME:-hs.${EFFECTIVE_SUPERDOMAIN}}, onion ${MESH_CONTROL_ONION%%.*}… -> ${PROV}"
+    if [ "${ROLE}" = pki ]; then
+        mkdir -p "${OUT_DIR}/headscale/control-onion" && chmod 0700 "${OUT_DIR}/headscale/control-onion"
+        for _f in hs_ed25519_secret_key hs_ed25519_public_key hostname; do
+            [ -f "${MESH_CONTROL_ONION_DIR}/${_f}" ] || { [ "${_f}" = hs_ed25519_public_key ] && continue; echo "ERROR: ${MESH_CONTROL_ONION_DIR}/${_f} is missing — the pki stick cannot publish the control onion (its secret key was deleted: re-mint into an empty directory and re-make EVERY stick)" >&2; exit 1; }
+            install -m 0600 "${MESH_CONTROL_ONION_DIR}/${_f}" "${OUT_DIR}/headscale/control-onion/${_f}"
+        done
+        echo "    pki stick: the control onion key -> ${OUT_DIR}/headscale/control-onion/ (0600; this stick ONLY)"
+    fi
+    echo "    once EVERY stick of this mesh is made: delete ${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key from this computer"
 fi
 
 # ── Layer-B device-license registry: per-node identity + verifying key ─────────
@@ -1331,8 +1448,14 @@ done
 
 # ── Placement guard: only the pki stick may carry a CA private key ─────────────
 # certs/ and kubernetes/pki/ are copied onto the node (/etc/ssl/keys,
-# /etc/kubernetes/pki); a worker needs no private key in either.
+# /etc/kubernetes/pki); a worker needs no private key in either. Nor may a worker
+# stick carry the control onion key (mesh control over Tor): its address, yes.
 if [ "${ROLE}" != "pki" ]; then
+    if [ -n "$(find "${OUT_DIR}" -name 'hs_ed25519_secret_key' -print -quit 2>/dev/null)" ]; then
+        echo "ERROR: an onion secret key landed on a ${ROLE} stick; only the pki stick may carry the control onion key:" >&2
+        find "${OUT_DIR}" -name 'hs_ed25519_secret_key' >&2
+        exit 1
+    fi
     for _d in certs kubernetes/pki; do
         [ -d "${OUT_DIR}/${_d}" ] || continue
         if grep -rla -- 'PRIVATE KEY-----' "${OUT_DIR}/${_d}" >/dev/null; then
