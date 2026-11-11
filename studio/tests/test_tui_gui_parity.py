@@ -28,7 +28,7 @@ from hugmesh_studio.gui.pages import domains as gui_domains            # noqa: E
 from hugmesh_studio.gui.pages import localcloud_nodes as gui_lc        # noqa: E402
 from hugmesh_studio.gui.pages import vault as gui_vault                # noqa: E402
 from hugmesh_studio.gui.pages import welcome as gui_welcome            # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets                            # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets                        # noqa: E402
 from hugmesh_studio.tui import domains_step, journey, themes           # noqa: E402
 from hugmesh_studio.tui import e2e as tui_e2e                          # noqa: E402
 from hugmesh_studio.tui import localcloud as tui_lc                    # noqa: E402
@@ -378,6 +378,147 @@ def test_localmesh_domain_steps_are_hosted_on_both_faces(wiz):
 def test_the_own_row_reads_the_same_on_both_faces():
     assert (domains_step.OWN_APPLIES, domains_step.OWN_IDP, domains_step.OWN_CA) == \
         (gui_domains._OWN_APPLIES, gui_domains._OWN_IDP, gui_domains._OWN_CA)
+
+
+# ── GUI-22 (GUI retest 2026-11-11): the own row is the FIRST row, and is drawn whole ──
+#: How every face names the own row. The GUI table numbers its rows from 1 (Qt's
+#: vertical header) and the TUI from 1 ("1 (own)", "Row 1 is …"); the help text said
+#: "Row 0", which is a row nobody can see.
+FIRST_ROW = "The first row is this mesh's OWN domain"
+
+
+def _localmesh_domains_step(wiz):
+    """Welcome -> Local Docker mesh -> Generate -> Env & brand -> Domains."""
+    from hugmesh_studio.gui.pages import localmesh as gui_lm
+    wiz.next()
+    mode = wiz.currentPage()
+    mode._buttons["localmesh"].setChecked(True)
+    mode._on_mode_toggled()
+    wiz.next()
+    wiz.currentPage()._buttons["generate"].setChecked(True)
+    wiz.next()
+    wiz.next()
+    assert isinstance(wiz.currentPage(), gui_lm.LocalMeshDomainsPage), \
+        type(wiz.currentPage()).__name__
+    return wiz.page(wiz._page_ids["localmesh"])
+
+
+def _image_domains_page(wiz):
+    from _helpers import check_worklist_rows, enable_additional_domains, pick_mode
+    pick_mode(wiz, "mesh")
+    check_worklist_rows(advance_to(wiz, wizard_mod.WorklistPage), "omnibus.x86")
+    enable_additional_domains(wiz)
+    return advance_to(wiz, wizard_mod.DomainsPage)
+
+
+def test_the_own_row_is_the_first_row_in_the_same_words_on_every_face(
+        wiz, monkeypatch, tmp_path):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    # the TUI: the own row is numbered 1, and its help says so
+    j = journey.Journey(GENERATOR_DIR)
+    j.feed("")                                  # welcome -> mode
+    j.feed("1")                                 # Local Docker mesh
+    j.feed("2")                                 # Generate a new mesh
+    assert j.screen().stage == "domains"
+    tui = "\n".join(j.lines())
+    assert "Row 1 is this mesh's OWN domain" in tui and "1 (own)" in tui
+    # the GUI: both hosts of the table open their help with the same sentence, and
+    # neither still says "row 0" anywhere in it
+    image = _image_domains_page(wiz)
+    assert image.is_own_row(0)
+    assert image.table.model().headerData(0, Qt.Orientation.Vertical) == 1
+    helps = [image.table_help.text()]
+    wiz.close()
+    wiz2 = wizard_mod.StudioWizard(GENERATOR_DIR)
+    wiz2.show()
+    try:
+        ctl = _localmesh_domains_step(wiz2)
+        table = ctl.domains_table
+        assert table.is_own_row(0)
+        assert table.table.model().headerData(0, Qt.Orientation.Vertical) == 1
+        helps.append(ctl.domains_help.text())
+        # the refusal to remove it says the same thing
+        table.table.selectRow(0)
+        table._remove()
+        assert table.row_note.text().startswith("The first row is this mesh's own domain")
+    finally:
+        wiz2.close()
+    for text in helps:
+        assert text.startswith(FIRST_ROW + ":") or text.startswith(FIRST_ROW + " ("), text
+        assert "row 0" not in text.lower(), text
+
+
+#: The window sizes the 2026-11-11 retest walked, and the two routes that host the
+#: table, plus one narrower than any of them (where the columns MUST give width back).
+#: Where the viewport holds every column whole the own row's labels must be whole:
+#: always on the local-mesh route (four columns to the image flow's six), at the
+#: largest size on the image flow. Everywhere else a label may be ELIDED — drawn
+#: ending in ‘…’ with its whole text in the tooltip — but never CUT.
+_WALKED = [((1200, 800), "image", True), ((1040, 780), "image", None),
+           ((942, 552), "image", None), ((760, 560), "image", None),
+           ((1200, 800), "localmesh", True), ((1040, 780), "localmesh", True),
+           ((942, 552), "localmesh", True)]
+
+
+@pytest.mark.parametrize("size,route,whole", _WALKED,
+                         ids=[f"{r}-{w}x{h}" for (w, h), r, _ in _WALKED])
+def test_the_domains_table_draws_the_own_row_whole_and_fits_its_columns(
+        qapp, monkeypatch, tmp_path, size, route, whole):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    wiz = wizard_mod.StudioWizard(GENERATOR_DIR)
+    wiz.show()
+    try:
+        # walked and drawn at the wizard's own size, THEN resized: the fit must follow
+        host = (_image_domains_page(wiz) if route == "image"
+                else _localmesh_domains_step(wiz).domains_table)
+        for _ in range(20):
+            qapp.processEvents()
+        wiz.resize(*size)
+        for _ in range(20):
+            qapp.processEvents()
+        table = host.table
+        hh = table.horizontalHeader()
+        viewport = table.viewport().width()
+        shown = [c for c in range(table.columnCount()) if not hh.isSectionHidden(c)]
+        # every column inside the viewport: no horizontal scroll, the org cell whole
+        assert table.horizontalScrollBar().maximum() == 0, (route, size)
+        org = gui_domains._COL_ORG
+        assert hh.sectionViewportPosition(org) + hh.sectionSize(org) <= viewport
+        # the org column is not the one that takes the spare room any more: it was
+        # stretched over 315-773 px, a third to two thirds of the table
+        assert hh.sectionSize(org) < viewport // 3, (hh.sectionSize(org), viewport)
+        # ...and it never gives room back either: its line edit keeps its full size
+        cell = table.cellWidget(0, org)
+        assert cell.isVisible() and cell.width() >= cell.sizeHint().width(), \
+            (cell.width(), cell.sizeHint().width())
+        # no header elided ("Optional services" was, at 100 px): the retest's measure
+        for c in shown:
+            text = str(table.model().headerData(c, Qt.Orientation.Horizontal))
+            need = hh.fontMetrics().horizontalAdvance(text) + 14
+            assert hh.sectionSize(c) >= need, (text, hh.sectionSize(c), need)
+        # the own row's read-only labels: whole, or elided with "…" — never cut
+        labels = [(c, table.cellWidget(0, c)) for c in shown
+                  if c in (gui_domains._COL_APPLIES, gui_domains._COL_IDP,
+                           gui_domains._COL_CA)]
+        assert labels and host.is_own_row(0)
+        for c, lab in labels:
+            full = getattr(lab, "full_text", lab.text)()
+            room = lab.contentsRect().width()
+            if lab.text() == full:
+                assert lab.fontMetrics().horizontalAdvance(full) <= room, \
+                    f"{full!r} cut at {room}px with no ellipsis"
+            else:
+                assert not whole, f"{full!r} elided at {room}px on {route} {size}"
+                assert lab.text().endswith("…") and full.startswith(lab.text()[:-1])
+                assert lab.fontMetrics().horizontalAdvance(lab.text()) <= room
+            assert full in lab.toolTip(), (full, lab.toolTip())
+        shots = os.environ.get("HUGMESH_SHOTS_DIR") or str(tmp_path)
+        os.makedirs(shots, exist_ok=True)
+        assert wiz.grab().save(os.path.join(
+            shots, f"gui22-{route}-domains-{size[0]}x{size[1]}.png"))
+    finally:
+        wiz.close()
+        wiz.deleteLater()
 
 
 @pytest.mark.parametrize("cfg", [

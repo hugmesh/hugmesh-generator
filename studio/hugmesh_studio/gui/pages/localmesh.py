@@ -1372,15 +1372,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         lay = QtWidgets.QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
         self.domains_help = QtWidgets.QLabel(
-            "Row 0 is this mesh's OWN domain: on a test mesh the brand-default apex "
-            "(fixed — a test mesh publishes nothing), on a prod mesh the public apex, "
+            "The first row is this mesh's OWN domain: on a test mesh the brand-default "
+            "apex (fixed — a test mesh publishes nothing), on a prod mesh the public apex, "
             "typed here (it is what the minted issuer and superadmin align with; the "
             "Mesh overlay step shows it read-only). Add every OTHER domain this mesh "
             "serves below. ‘Sign-in’ = Superdomain (the mesh's central sign-in) or Own "
             "(its own: by default a Casdoor of its own beside the central one — host "
             "ports 8001, 8002, … in row order — or its own Entra, Cognito or OIDC "
             "provider, chosen on the domain's Identity tab on the next step). "
-            "‘Optional services’ is READ-ONLY here: every domain — this row 0 "
+            "‘Optional services’ is READ-ONLY here: every domain — the first row "
             "included — gets its own page on the ‘Domain services’ step that follows, "
             "and a mesh start refuses while any domain here has never been through "
             "it, naming the domain.")
