@@ -1127,7 +1127,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 236 -> 237 on 2026-11-11 (fix/qemu-no-egress): +1 gated, +1 total —
 # tests/qemu/no_egress_argv_test.sh, named by shell-suites.yml. PREMERGE_UNGATED is
 # untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 237 of 279.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-237}"
+# 237 -> 238 on 2026-11-11 (fix/sec-new-19-merged-a07-admin-bff-45-20261111): +1 gated, +1
+# total — tests/scripts/test-subject-revocation-ttl.sh, named by shell-suites.yml's debian
+# leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on this branch, which
+# is origin/main 39b953ad plus this change: 238 of 280.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
