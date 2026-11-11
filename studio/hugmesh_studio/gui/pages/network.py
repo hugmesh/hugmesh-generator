@@ -48,7 +48,7 @@ from ._scroll import scrollable
 # _cluster_identity_applies() for why both routes are the same rule and neither is a
 # page-local copy of it.
 from ...core import config as _config
-from ...core import pki_lan
+from ...core import mesh_control, pki_lan
 from ...core import plain_words
 from ...core.config import (
     ANUBIS_CHOICES,
@@ -811,6 +811,27 @@ class NetworkPage(QtWidgets.QWizardPage):
         cp.addWidget(self.pki_lan_box)
         self.pki_lan_ip.textChanged.connect(self._pki_lan_changed)
         self.pki_lan_fixed.toggled.connect(self._pki_lan_changed)
+        # Mesh control over Tor (core/mesh_control.py) — MESH ONLY, OPT-IN, default
+        # "Local network only". A Tor choice needs the operator's consent to create the
+        # control onion's key on this computer (it goes onto the PKI stick only); the
+        # build refuses without it (WorklistDriver.preflight), and so does an image
+        # whose builder cannot bake Tor (only x86 and rpi5 can).
+        self.mesh_control_box = QtWidgets.QWidget()
+        mc = QtWidgets.QVBoxLayout(self.mesh_control_box)
+        mc.setContentsMargins(0, 0, 0, 0)
+        self.mesh_control_q = QtWidgets.QLabel(mesh_control.QUESTION)
+        self.mesh_control_q.setWordWrap(True)
+        mc.addWidget(self.mesh_control_q)
+        self.mesh_control_transport = QtWidgets.QComboBox()
+        for value, label in mesh_control.CHOICES:
+            self.mesh_control_transport.addItem(label, value)
+        mc.addWidget(self.mesh_control_transport)
+        self.mesh_control_why = _hint(mesh_control.WHY)
+        mc.addWidget(self.mesh_control_why)
+        self.mesh_control_mint = QtWidgets.QCheckBox(mesh_control.MINT_LABEL)
+        mc.addWidget(self.mesh_control_mint)
+        cp.addWidget(self.mesh_control_box)
+        self.mesh_control_transport.currentIndexChanged.connect(self._mesh_control_changed)
         # ASK 8's "this mesh also hosts other domains" CHECKBOX used to sit here, under
         # the superdomain row. ASK 19 promoted that decision to its own choice-card
         # screen (gui/pages/domains_choice.py) in the ModePage idiom — "proceed with the
@@ -1375,6 +1396,11 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.pki_lan_ip.setText(c.pki_lan_ip)
         self.pki_lan_fixed.setChecked(bool(c.pki_lan_ip_fixed))
         self._pki_lan_changed()
+        self.mesh_control_box.setVisible(mesh)
+        idx = self.mesh_control_transport.findData(mesh_control.transport(c))
+        self.mesh_control_transport.setCurrentIndex(max(idx, 0))
+        self.mesh_control_mint.setChecked(bool(c.mesh_control_onion_mint))
+        self._mesh_control_changed()
         self.brand_profile.setText(c.brand_profile)
         self.brand.setText(c.brand)
         self.brand_title.setText(c.brand_title)
@@ -2077,6 +2103,13 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.pki_lan_note.setText(msg)
         self.pki_lan_note.setVisible(bool(msg))
 
+    def _mesh_control_changed(self, *_):
+        """The consent box means something only for a Tor transport, and the why-text
+        is shown with it."""
+        tor = (self.mesh_control_transport.currentData() or "lan") != "lan"
+        self.mesh_control_mint.setEnabled(tor)
+        self.mesh_control_why.setVisible(tor)
+
     def validatePage(self):
         c = self.wiz.cfg
         # what the refusable fields held BEFORE this collect — _refuse_malformed puts a
@@ -2108,6 +2141,9 @@ class NetworkPage(QtWidgets.QWizardPage):
             else:
                 c.pki_lan_ip = pki_lan.canonical(ip_text)
                 c.pki_lan_ip_fixed = self.pki_lan_fixed.isChecked()
+            t = self.mesh_control_transport.currentData() or "lan"
+            c.mesh_control_transport = "" if t == "lan" else t
+            c.mesh_control_onion_mint = t != "lan" and self.mesh_control_mint.isChecked()
         # ── the identity rows, collected ONLY while their axis has them on screen ──
         # THE HOUSE RULE, both halves. initializePage hides a row it does not apply to,
         # and a hidden QLineEdit KEEPS its text — so a collect that ignores scope here would let

@@ -86,7 +86,7 @@ from ...core.fleet import (FLEET_LANE_NOTE, JOBS_RANGE, WITH_TOR_NOTE, FleetConf
                            FleetDomains, FleetDriver, commit_fleet_domains,
                            fleet_domain_fields, fleet_domains_from_config,
                            seed_fleet_domains)
-from ...core import pki_lan
+from ...core import mesh_control, pki_lan
 from ...core import plain_words
 from ...tui.superbrand_step import session_for
 from ._nvd_key_widget import NvdKeyWidget
@@ -530,6 +530,13 @@ class FleetPage(QtWidgets.QWidget):
         self.with_tor_note.setWordWrap(True)
         self.with_tor_note.setStyleSheet("color: gray;")
         nl.addWidget(self.with_tor_note)
+        # Mesh control over Tor (core/mesh_control.py; OPT-IN, default lan).
+        self.mesh_control_transport = QtWidgets.QComboBox()
+        for value, label in mesh_control.CHOICES:
+            self.mesh_control_transport.addItem(label, value)
+        nl.addWidget(_row("First-boot control path", self.mesh_control_transport))
+        self.mesh_control_mint = QtWidgets.QCheckBox(mesh_control.MINT_LABEL)
+        nl.addWidget(self.mesh_control_mint)
         self.optional_services = QtWidgets.QLineEdit()
         # short enough to be whole in the field at the window's default size (the
         # long form was elided at its right edge); the rest is the tooltip
@@ -712,6 +719,9 @@ class FleetPage(QtWidgets.QWidget):
             headscale_url=self.headscale_url.text().strip(),
             pki_lan_ip=self.pki_lan_ip.text().strip(),
             pki_lan_ip_fixed=self.pki_lan_fixed.isChecked(),
+            mesh_control_transport=("" if (self.mesh_control_transport.currentData() or "lan") == "lan"
+                                    else self.mesh_control_transport.currentData()),
+            mesh_control_onion_mint=self.mesh_control_mint.isChecked(),
             env=self.env.currentData(),
             brand_profile=self.brand_profile.text().strip(),
             cluster_domain=self.cluster_domain.text().strip(),
@@ -784,6 +794,9 @@ class FleetPage(QtWidgets.QWidget):
         self.headscale_url.setText(cfg.headscale_url)
         self.pki_lan_ip.setText(cfg.pki_lan_ip)
         self.pki_lan_fixed.setChecked(bool(cfg.pki_lan_ip_fixed))
+        self.mesh_control_transport.setCurrentIndex(
+            max(self.mesh_control_transport.findData(cfg.mesh_control_transport or "lan"), 0))
+        self.mesh_control_mint.setChecked(bool(cfg.mesh_control_onion_mint))
         combo(self.env, cfg.env)
         self.brand_profile.setText(cfg.brand_profile)
         self.cluster_domain.setText(cfg.cluster_domain)

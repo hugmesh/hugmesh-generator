@@ -47,7 +47,7 @@ from dataclasses import asdict, dataclass, field
 from .build_driver import (BuildDriver, disk_space_refusal, disk_space_warning,
                            dispatch_space_refusal)
 from . import domain_ca_keys
-from . import pki_lan
+from . import mesh_control, pki_lan
 from . import roles
 from .config import (ImageConfig, User, brand_header_fields, image_class,
                      manifest_domain_rows)
@@ -246,6 +246,7 @@ class WorklistDriver:
             pki_problem = pki_lan.problem(self.worklist.base)
             if pki_problem:
                 problems.append(pki_problem)
+            problems += mesh_control.problems(self.worklist)
         per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
                         graphical=self.graphical, workdir=self.workdir)
                       .preflight(cfg, self.backend))
@@ -490,6 +491,10 @@ class WorklistDriver:
 
         if self.generate_keys and self._is_mesh():
             self._hand_mesh_ca_on(on_line)
+        # The control onion's secret key leaves this computer on the pki stick only:
+        # once every stick of the run is made, it is removed here (the address stays).
+        if self.generate_keys and self._is_mesh():
+            mesh_control.forget_secret(self.worklist.base, self._output_dir())
         return self.summary_exit_code()
 
     def _hand_mesh_ca_on(self, on_line: Callable[[int, str], None] | None) -> None:
@@ -673,7 +678,8 @@ class WorklistDriver:
                 "--role", profile,
                 "--out", keys_dir_, "--random",
                 "--superdomain", base.effective_superdomain(),
-                *pki_lan.genkeys_args(base), *ca_args], osname,
+                *pki_lan.genkeys_args(base),
+                *mesh_control.genkeys_args(base, self._output_dir()), *ca_args], osname,
                 ca_dir=ca.root if ca is not None else None)
             env = dict(os.environ)
             env["BRAND"] = base.brand
