@@ -518,19 +518,42 @@ grep -q 'Leave the password empty to sign in with Acme Desktops SSO' "${CASE}/ru
 PAM_USER=alice PAM_TYPE=setcred helper_cmd "${HELPER}" pam-ok
 grep -q "${FAILRE}" "${CASE}/run/hint" && ok "FAILNOTE: pam-ok outside the auth phase changes nothing" || bad "FAILNOTE: pam-ok disarmed on PAM_TYPE=setcred"
 PAM_USER=alice PAM_TYPE=auth helper_cmd "${HELPER}" pam-ok; rc=$?
-[ "${rc}" -eq 0 ] && ! grep -q 'failed' "${CASE}/run/hint" && grep -q 'Leave the password empty' "${CASE}/run/hint" \
-    && ok "FAILNOTE: pam-ok (a local success) disarms it and exits 0" || bad "FAILNOTE pam-ok: rc ${rc} hint: $(cat "${CASE}/run/hint")"
+[ "${rc}" -eq 0 ] && ! grep -q 'failed' "${CASE}/run/hint" && grep -q 'Leave the password empty' "${CASE}/run/hint" && [ ! -e "${CASE}/run/failed" ] \
+    && ok "FAILNOTE: pam-ok (a local success) disarms it, drops the armed state and exits 0" || bad "FAILNOTE pam-ok: rc ${rc} state: $(ls "${CASE}/run") hint: $(cat "${CASE}/run/hint")"
 auth "${HELPER}" alice "wrong"; helper_cmd "${HELPER}" probe
 ! grep -q 'failed' "${CASE}/run/hint" && ok "FAILNOTE: a new greeter (probe) starts clean" || bad "FAILNOTE: probe kept the notice: $(cat "${CASE}/run/hint")"
 new_case true "${ISSUER}"; auth "${HELPER}" alice ""; rc=$?
-[ "${rc}" -eq 0 ] && ! grep -q 'failed' "${CASE}/run/hint" \
-    && ok "FAILNOTE: an SSO sign-in (rc 0) leaves no notice behind" || bad "FAILNOTE SSO: rc ${rc} hint: $(cat "${CASE}/run/hint")"
+[ "${rc}" -eq 0 ] && ! grep -q 'failed' "${CASE}/run/hint" && [ ! -e "${CASE}/run/failed" ] \
+    && ok "FAILNOTE: an SSO sign-in (rc 0) leaves no notice and no armed state behind" || bad "FAILNOTE SSO: rc ${rc} state: $(ls "${CASE}/run") hint: $(cat "${CASE}/run/hint")"
 new_case false "${ISSUER}"; add_local alice; auth "${HELPER}" alice "wrong"
 head -1 "${CASE}/run/hint" | grep "${FAILRE}. Try again.$" >/dev/null \
     && ok "FAILNOTE: with SSO off the notice does not mention SSO" || bad "FAILNOTE off: $(cat "${CASE}/run/hint")"
 new_case true "${ISSUER}"; auth "${HELPER}" "Bad/Name" "x"
 head -1 "${CASE}/run/hint" | grep "^Sign-in failed: the password was not accepted" >/dev/null && ! grep -q 'Bad/Name' "${CASE}/run/hint" \
     && ok "FAILNOTE: an invalid user name is never echoed into the hint" || bad "FAILNOTE badname: $(cat "${CASE}/run/hint")"
+# WHOSE notice: `pam-hint` (the auth line before pam_echo) recomposes the hint for
+# the conversation that is starting, so only the refused user's own retry shows it.
+new_case true "${ISSUER}"; add_local alice; add_local bob; auth "${HELPER}" alice "wrong"
+[ "$(stat -c %a "${CASE}/run/hint" 2>/dev/null)" = 600 ] && [ "$(stat -c %a "${CASE}/run/failed" 2>/dev/null)" = 600 ] \
+    && ok "FAILNOTE: the hint and the armed state are 0600 (they name the refused user; pam_echo reads as root)" \
+    || bad "FAILNOTE modes: hint $(stat -c %a "${CASE}/run/hint" 2>/dev/null) failed $(stat -c %a "${CASE}/run/failed" 2>/dev/null)"
+PAM_USER=bob PAM_TYPE=auth helper_cmd "${HELPER}" pam-hint; rc=$?
+[ "${rc}" -eq 0 ] && ! grep -q 'failed' "${CASE}/run/hint" && ! grep -q 'alice' "${CASE}/run/hint" && grep -q 'Leave the password empty' "${CASE}/run/hint" \
+    && ok "FAILNOTE: picking ANOTHER user (bob) after alice was refused shows bob the plain hint, never alice's notice" \
+    || bad "FAILNOTE whose (bob): rc ${rc} hint: $(cat "${CASE}/run/hint" 2>/dev/null)"
+PAM_USER='' PAM_TYPE=auth helper_cmd "${HELPER}" pam-hint
+! grep -q 'failed' "${CASE}/run/hint" && ok "FAILNOTE: …nor does a conversation that has no user name yet" || bad "FAILNOTE whose (no user): $(cat "${CASE}/run/hint" 2>/dev/null)"
+PAM_USER=alice PAM_TYPE=auth helper_cmd "${HELPER}" pam-hint
+head -1 "${CASE}/run/hint" | grep "${FAILRE}" >/dev/null \
+    && ok "FAILNOTE: …while alice's own retry still leads with it" || bad "FAILNOTE whose (alice): $(cat "${CASE}/run/hint" 2>/dev/null)"
+helper_cmd "${HELPER}" probe; PAM_USER=alice PAM_TYPE=auth helper_cmd "${HELPER}" pam-hint
+! grep -q 'failed' "${CASE}/run/hint" && [ ! -e "${CASE}/run/failed" ] \
+    && ok "FAILNOTE: after a new greeter (probe) not even alice's next conversation brings it back" || bad "FAILNOTE probe/state: $(cat "${CASE}/run/hint" 2>/dev/null)"
+new_case true "${ISSUER}"; add_local bob; auth "${HELPER}" "Bad/Name" "x"
+PAM_USER=bob PAM_TYPE=auth helper_cmd "${HELPER}" pam-hint
+head -1 "${CASE}/run/hint" | grep "^Sign-in failed: the password was not accepted" >/dev/null && ! grep -q 'Bad/Name' "${CASE}/run/hint" \
+    && ok "FAILNOTE: an attempt with no valid name arms an UNNAMED notice, which names nobody and is shown to whoever comes next" \
+    || bad "FAILNOTE unnamed: $(cat "${CASE}/run/hint" 2>/dev/null)"
 
 # ── STACK: the real /etc/pam.d/lightdm through libpam with the real helper ──
 echo "== STACK: specs/etc/pam.d/lightdm executed through libpam =="
@@ -538,6 +561,7 @@ PAMPY="${WORK}/pam.py"
 cat > "${PAMPY}" <<'PY'
 import ctypes, ctypes.util, os, sys
 confdir, service, answer, envfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+user = sys.argv[5] if len(sys.argv) > 5 else "alice"
 libpam = ctypes.CDLL(ctypes.util.find_library("pam") or "libpam.so.0")
 libc = ctypes.CDLL(None); libc.calloc.restype = ctypes.c_void_p; libc.strdup.restype = ctypes.c_void_p
 class Msg(ctypes.Structure): _fields_ = [("style", ctypes.c_int), ("msg", ctypes.c_char_p)]
@@ -558,7 +582,7 @@ def conv(n, msgs, resp, app):
 h = ctypes.c_void_p(); c = Conv(conv, None)
 libpam.pam_start_confdir.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(Conv),
                                      ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
-rc = libpam.pam_start_confdir(service.encode(), b"alice", ctypes.byref(c), confdir.encode(), ctypes.byref(h))
+rc = libpam.pam_start_confdir(service.encode(), user.encode(), ctypes.byref(c), confdir.encode(), ctypes.byref(h))
 if rc != 0:
     sys.exit(100)
 # pam_exec gives its child the PAM environment, not ours: pass the seams through it.
@@ -721,6 +745,26 @@ if [ -f "${PAMFIX}" ] && [ -n "${WFN}" ] && ${PAM_OK}; then
     grep -q '^RC 0$' "${PO}" && ! grep -q 'failed' "${CASE}/run/hint" \
         && ok "FAILNOTE ORDER: the right password on the retry signs in and pam-ok disarms the notice" \
         || bad "FAILNOTE ORDER retry: $(tr '\n' '|' < "${PO}") hint: $(cat "${CASE}/run/hint" 2>/dev/null)"
+    # WHOSE: alice is refused, then bob is picked. bob's conversation opens with the
+    # plain hint and never names alice; bob is refused too, and HIS retry leads
+    # with HIS notice.
+    new_case true "${ISSUER}"; add_local alice; add_local bob; order_env
+    python3 "${PAMPY}" "$(order_confdir w1 "${STACK_SRC}" "${WORK}/system-auth.wired")" lightdm "wrong" "${CASE}/env" alice > /dev/null 2>&1
+    PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir w2 "${STACK_SRC}" "${WORK}/system-auth.wired")" lightdm "wrong" "${CASE}/env" bob > "${PO}" 2>/dev/null
+    first="$(grep -m1 '^MSG ' "${PO}")"
+    case "${first}" in
+        "MSG style=4 Leave the password empty"*) ! grep -q alice "${PO}" \
+            && ok "FAILNOTE WHOSE: after alice is refused, bob's conversation opens with the plain hint and never names alice" \
+            || bad "FAILNOTE WHOSE: bob's conversation named alice: $(tr '\n' '|' < "${PO}")" ;;
+        *) bad "FAILNOTE WHOSE: bob's first message was '${first}'" ;;
+    esac
+    PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir w3 "${STACK_SRC}" "${WORK}/system-auth.wired")" lightdm "hunter2" "${CASE}/env" bob > "${PO}" 2>/dev/null
+    first="$(grep -m1 '^MSG ' "${PO}")"
+    case "${first}" in
+        "MSG style=4 Sign-in as 'bob' failed"*) grep -q '^RC 0$' "${PO}" && ok "FAILNOTE WHOSE: bob's own retry leads with bob's notice, and signs him in" \
+            || bad "FAILNOTE WHOSE bob retry: $(tr '\n' '|' < "${PO}")" ;;
+        *) bad "FAILNOTE WHOSE: bob's retry opened with '${first}'" ;;
+    esac
     # S1: an SSO sign-in: success=done ends auth BEFORE system-auth, so neither the
     # password check nor faillock nor the ecryptfs unwrap runs for it.
     new_case true "${ISSUER}"; order_env
@@ -910,13 +954,18 @@ done
 
 # ── MUTATION battery: each defect planted in a copy must be caught ──────────
 echo "== MUTATION: planted defects in a helper copy =="
+# Every caller runs mutate in $(...), a SUBSHELL: a bad() in here used to raise F
+# in the subshell only, so a plant that no longer applied (the code it targets
+# was rewritten) vanished from the battery and the suite stayed green. Its
+# refusals are recorded in VOID and counted as failures before the RESULT line.
+VOID="${WORK}/mutate.void"; : > "${VOID}"
 mutate() {  # $1=label $2=sed-expr -> path of the mutated copy (fails if nothing changed)
     local m="${WORK}/mut-$1"
     sed -e "$2" "${HELPER}" > "${m}"; chmod 0755 "${m}"
-    if cmp -s "${HELPER}" "${m}"; then bad "MUTATION $1: the plant changed nothing (vacuous control)"; return 1; fi
+    if cmp -s "${HELPER}" "${m}"; then echo "MUTATION $1: the plant changed nothing (vacuous control)" >> "${VOID}"; return 1; fi
     # a plant that breaks the syntax would go red for the wrong reason
     python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "${m}" 2>/dev/null \
-        || { bad "MUTATION $1: the plant does not parse (a red here would prove nothing)"; return 1; }
+        || { echo "MUTATION $1: the plant does not parse (a red here would prove nothing)" >> "${VOID}"; return 1; }
     echo "${m}"
 }
 if m="$(mutate sig 's/if not any(rsa_verify(k, signing_input, sig) for k in keys):/if False:/')"; then
@@ -950,6 +999,19 @@ if m="$(mutate pin 's/^def pin_matches(rec, password):/def pin_matches(rec, pass
     auth "${m}" alice "wrong"; rc=$?
     [ "${rc}" -eq 0 ] && ok "MUTATION pin: a helper that accepts any offline password signs in with a wrong one — the OFFLINE wrong-password check catches it" \
         || bad "MUTATION pin: mutated helper still refused (rc ${rc})"
+fi
+# The two FAILNOTE rules the libpam battery below cannot see: a new greeter drops
+# the armed state, and the files that name a refused user are 0600.
+if m="$(mutate probe-keeps 's/^    clear_failure_notice()          # a new greeter starts clean$/    pass/')"; then
+    new_case true "${ISSUER}"; add_local alice; auth "${m}" alice "wrong"
+    helper_cmd "${m}" probe; PAM_USER=alice PAM_TYPE=auth helper_cmd "${m}" pam-hint
+    grep -q 'failed' "${CASE}/run/hint" && ok "MUTATION probe-keeps: a probe that keeps the armed state brings the notice back — the FAILNOTE probe/state check catches it" \
+        || bad "MUTATION probe-keeps: the notice did not come back; the probe/state check cannot tell"
+fi
+if m="$(mutate hint-0644 '/^def write_hint/,/os.replace/ s/0o600)$/0o644)/')"; then
+    new_case true "${ISSUER}"; add_local alice; auth "${m}" alice "wrong"
+    [ "$(stat -c %a "${CASE}/run/hint" 2>/dev/null)" = 644 ] && ok "MUTATION hint-0644: a world-readable hint is visible to the FAILNOTE modes check" \
+        || bad "MUTATION hint-0644: the hint mode did not change ($(stat -c %a "${CASE}/run/hint" 2>/dev/null))"
 fi
 
 # ── GUARD battery: every guard the requirement names, re-run against a planted
@@ -1022,12 +1084,21 @@ if ${PAM_OK}; then
     # the notice armed): wrong password => denied AND notice; right password =>
     # signed in AND no notice; SSO => signed in AND no notice.
     if [ -n "${WFN}" ] && [ -f "${WORK}/system-auth.wired" ]; then
-        chk_fail_notice() {  # STACKFILE [HELPER] -> 0 iff all three hold
-            local sf="$1" PO
+        chk_fail_notice() {  # STACKFILE [HELPER] -> 0 iff all five hold
+            local sf="$1" PO first
             local STACK_HELPER="${2:-${HELPER}}"
-            new_case true "${ISSUER}"; add_local alice; order_env
+            new_case true "${ISSUER}"; add_local alice; add_local bob; order_env
             PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir fn1 "${sf}" "${WORK}/system-auth.wired")" lightdm "wrong" "${CASE}/env" > "${PO}" 2>/dev/null
             grep -q '^RC [1-9]' "${PO}" && head -1 "${CASE}/run/hint" | grep "^Sign-in as 'alice' failed" >/dev/null || return 1
+            # alice's retry, through the stack, opens with her notice
+            PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir fn1r "${sf}" "${WORK}/system-auth.wired")" lightdm "hunter2" "${CASE}/env" alice > "${PO}" 2>/dev/null
+            first="$(grep -m1 '^MSG ' "${PO}")"
+            case "${first}" in "MSG style=4 Sign-in as 'alice' failed"*) ;; *) return 1 ;; esac
+            grep -q '^RC 0$' "${PO}" && [ ! -e "${CASE}/run/failed" ] || return 1
+            # refused again, then bob is picked: bob never sees alice's notice
+            python3 "${PAMPY}" "$(order_confdir fn1w "${sf}" "${WORK}/system-auth.wired")" lightdm "wrong" "${CASE}/env" alice > /dev/null 2>&1
+            PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir fn1b "${sf}" "${WORK}/system-auth.wired")" lightdm "hunter2" "${CASE}/env" bob > "${PO}" 2>/dev/null
+            grep -q '^RC 0$' "${PO}" && ! grep -q alice "${PO}" || return 1
             new_case true "${ISSUER}"; add_local alice; order_env
             PO="${CASE}/pam.out"; python3 "${PAMPY}" "$(order_confdir fn2 "${sf}" "${WORK}/system-auth.wired")" lightdm "hunter2" "${CASE}/env" > "${PO}" 2>/dev/null
             grep -q '^RC 0$' "${PO}" && [ -s "${CASE}/run/hint" ] && ! grep -q 'failed' "${CASE}/run/hint" || return 1
@@ -1049,11 +1120,17 @@ if ${PAM_OK}; then
         }
         notice_stack_mut  no-pam-ok      '/pam_exec\.so quiet \/usr\/lib\/hugmesh\/sso-greeter pam-ok$/d'
         notice_stack_mut  pam-ok-first   '/sso-greeter pam-ok$/d; /^auth[[:space:]]*include[[:space:]]*system-local-login/i auth\t\toptional\tpam_exec.so quiet /usr/lib/hugmesh/sso-greeter pam-ok'
-        notice_helper_mut no-arm         's/^               failed=user if valid_username(user) else "")$/               )/'
+        notice_stack_mut  no-pam-hint    '/sso-greeter pam-hint$/d'
+        notice_stack_mut  hint-after-echo '/sso-greeter pam-hint$/d; /pam_echo\.so file=/a auth\t\toptional\tpam_exec.so quiet /usr/lib/hugmesh/sso-greeter pam-hint'
+        notice_helper_mut no-arm         's/^    arm_failure_notice(name)$/    pass/; s/^    write_hint(conf, name or None, failed=name)$/    write_hint(conf, name or None)/'
+        notice_helper_mut no-state       's/^    arm_failure_notice(name)$/    pass/'
+        notice_helper_mut any-user       's/^    if valid_username(armed) and armed == user:$/    if valid_username(armed):/'
         notice_helper_mut ok-no-disarm   '/^def cmd_pam_ok():/,/^    return 0$/ s/^        disarm_failure_notice()$/        pass/'
         notice_helper_mut sso-no-disarm  '/^def cmd_pam_auth():/,/^    return rc$/ s/^        disarm_failure_notice()$/        pass/'
     fi
 fi
+
+while IFS= read -r v; do bad "${v}"; done < "${VOID}"
 
 echo
 echo "== RESULT: ${P} passed, ${F} failed =="

@@ -8,10 +8,16 @@
 # scripts/_desktop-sso-lib.sh). hugmesh-sso-greeter-stack
 #
 # How it reads, top to bottom, for one greeter attempt:
+#   0. pam_exec   `sso-greeter pam-hint` writes the hint for THIS conversation's
+#                 user (PAM_USER): the usual lines, led by the failure notice of
+#                 step 4 only when the refused attempt was this same user's, so
+#                 picking another user never shows "Sign-in as 'X' failed".
+#                 `optional`, quiet, always exit 0: it shows nothing itself.
 #   1. pam_echo   shows the hint (how to sign in with SSO, or why SSO is off, and
 #                 where a first-boot one-time password went). Local facts only;
-#                 written by `sso-greeter probe` (greeter-setup-script) and
-#                 refreshed by every attempt. Missing file => nothing shown.
+#                 written by step 0, by `sso-greeter probe` (greeter-setup-script)
+#                 and by every attempt; 0600, read here as root. Missing file =>
+#                 nothing shown.
 #   2. pam_exec   prompts "Password:" ONCE (expose_authtok; the answer is passed
 #                 to the helper on stdin and stays in PAM_AUTHTOK for pam_unix's
 #                 try_first_pass, so the user is never asked twice). The helper
@@ -46,6 +52,7 @@
 # /run/user/<uid>/hugmesh/oidc-token.src, the drop the desktop-governance chain
 # (hugmesh-sso-token --if-needed, oidc-token-deposit, the desktop-sudo mapper)
 # already reads. Nothing to hand off => no-op; never fails a session.
+auth		optional	pam_exec.so quiet /usr/lib/hugmesh/sso-greeter pam-hint
 auth		optional	pam_echo.so file=/run/hugmesh/sso-greeter/hint
 auth		[success=done default=ignore]	pam_exec.so quiet stdout expose_authtok /usr/lib/hugmesh/sso-greeter pam-auth
 auth		include		system-local-login
