@@ -62,8 +62,10 @@
 # window) and, where firewalld runs, the same single <port>/udp in the default zone.
 # A malformed marker is ignored (fail-closed: nothing is admitted). On a node that
 # is ALSO a coturn-public relay (an omnibus node), coturn and headscale would both
-# bind 3478/udp on the host; that clash is logged — headscale starts first at boot
-# and keeps the port.
+# bind 3478/udp on the host, and a headscale (re)start that loses that race exits
+# (headscale 0.23 treats a STUN bind failure as fatal). The clash is logged; the fix
+# is another stun_listen_addr in that node's KEYS headscale/config.yaml (the marker,
+# and so this carve-out, follow the port).
 #
 # FAIL-CLOSED: any render/apply error KEEPS the existing ruleset; the
 # first-ever posture (no marker) is CLOSED — deny by default, never allow.
@@ -124,7 +126,7 @@ if [ -e "${HS_STUN_MARKER}" ]; then
     unset _hs_port
 fi
 if [ -n "${HS_STUN_PORT}" ] && [ "${PUBLIC}" = "present" ] && [ "${HS_STUN_PORT}" = "3478" ]; then
-    warn "coturn-public AND headscale's embedded DERP both want 3478/udp on this node — only one of them can bind it (headscale starts first at boot)"
+    warn "coturn-public AND headscale's embedded DERP both want 3478/udp on this node — only one can bind it, and a headscale (re)start that loses the race EXITS (STUN bind failure is fatal); move headscale's stun_listen_addr via a KEYS headscale/config.yaml (docs/HEADSCALE-DERP.md)"
 fi
 HS_STUN_RULE=""
 [ -n "${HS_STUN_PORT}" ] && HS_STUN_RULE="        udp dport ${HS_STUN_PORT} accept  # headscale embedded DERP STUN (${HS_STUN_MARKER})"

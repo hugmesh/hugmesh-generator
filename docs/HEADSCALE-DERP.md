@@ -138,11 +138,21 @@ The local stack takes the same knob: `make stack-up HEADSCALE=1 HEADSCALE_PUBLIC
 | release gate (`hugmesh-firewall-reconcile`) | Unchanged. It only touches TCP 80/443. |
 | k8s NetworkPolicy / Kyverno | Unchanged. headscale is a host OpenRC service on the pki node, not a pod. DERP-over-TCP rides the existing 8080 path, and STUN never enters the cluster. |
 
-**Omnibus caveat.** On a node that is both the pki node and a coturn-public relay
-(`/etc/hugmesh/coturn-public`, see [`COTURN.md`](COTURN.md)), coturn's hostNetwork pod and
-headscale's STUN listener both want 3478/udp on the host. Only one can bind it.
-headscale starts first at boot and keeps it, so the coturn pod cannot bind it.
-`hugmesh-coturn-firewall` logs the clash.
+**Omnibus caveat: not supported on the default port.** An omnibus node is the pki node
+and a backend node at once. If it is also made a coturn-public relay
+(`/etc/hugmesh/coturn-public`, see [`COTURN.md`](COTURN.md)), coturn's hostNetwork pod
+and headscale's STUN listener both want 3478/udp on the host. A STUN bind failure is
+**fatal** to headscale 0.23. Measured: with 3478/udp already held, `headscale serve`
+exits 1 with `FTL failed to open STUN listener: listen udp 0.0.0.0:3478: bind: address
+already in use`. headscale usually binds first at boot, but it is restarted later (the
+Layer-A policy sync restarts it on every policy change). A restart while coturn holds
+the port takes the tailnet control server down. `hugmesh-coturn-firewall` logs the clash.
+
+The fix: give that node a KEYS `headscale/config.yaml` with another
+`stun_listen_addr` (for example `"0.0.0.0:3479"`). Clients take the STUN port from the
+DERP map, so any free port works. keys-provision reads the port from the live config
+into `/etc/hugmesh/headscale-derp-stun`, and the firewall admits whatever port that
+file names.
 
 ## Outside this change
 
