@@ -464,3 +464,30 @@ def test_the_test_page_points_native_windows_at_this_backend(wiz, monkeypatch):
     assert "WSL2" in text and "Mesh emulation" in text
     assert dict(qw.BACKENDS)[qw.BACKEND_WHPX] in text
     assert not page._docker_ok and not page.run_btn.isEnabled()   # gating unchanged
+
+
+# ---- go live from this mesh under WHPX: the NATIVE record is the target ---------------
+
+def test_go_live_under_whpx_needs_an_ssh_identity_in_the_native_record(
+        wiz, whpx_ready, live, monkeypatch):
+    from hugmesh_studio.gui.pages import golive as golive_page
+    opened = []
+    monkeypatch.setattr(golive_page, "open_go_live",
+                        lambda gen, domain="", current=None, target=None, work_dir="":
+                        opened.append(target) or object())
+    page = _page(wiz)
+    _choose(page, qw.BACKEND_WHPX)
+    gw = next(r for r in page._rows if r.label == page.plan.gateway_label)
+    live.append(_rec(gw))                             # today's record: no key, no user
+    page._refresh_reality()
+    assert not page.golive_btn.isEnabled()
+    assert "QEMU for Windows" in page.golive_note.text()
+    assert "no ssh key or user" in page.golive_note.text()
+    # it does NOT repeat the bash / WSL2 blocker: this path needs only ssh
+    assert "WSL" not in page.golive_note.text()
+    live[:] = [_rec(gw, ssh_key=r"C:\keys\id_ed25519", ssh_user="hugmesh")]
+    page._refresh_reality()
+    assert page.golive_btn.isEnabled(), page.golive_note.text()
+    page.golive_btn.click()
+    (t,) = opened
+    assert t.kind == "emulated-whpx" and t.label == gw.label and t.ssh_port == 2222
