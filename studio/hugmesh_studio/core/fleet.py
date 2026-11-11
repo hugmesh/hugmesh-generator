@@ -607,6 +607,8 @@ class FleetDriver(BuildDriver):
                 env_args += ["-e", f"{k}={v}"]
             return [
                 "docker", "run", "--rm", "--privileged",
+                # Apple silicon: the builder image is x86_64 ([] elsewhere).
+                *platform_info.docker_platform_args(self.host),
                 # THE lane the 2026-07-15 host freeze came from — a fleet build, in an
                 # unbounded container, on a desktop that was also being used. It was
                 # also the only lane with no cap at all: BuildDriver capped memory for
@@ -685,14 +687,13 @@ class FleetDriver(BuildDriver):
             problems.append(
                 f"Docker builder image '{self.host.builder_image}' not found — build it "
                 f"first: {' '.join(self.builder_image_build_command())}")
-        if backend == "native" and platform_info.native_windows_blocker("A native fleet build"):
+        native_refusal = platform_info.native_build_blocker(
+            "A native fleet build", host_os=getattr(self.host, "os", None))
+        if backend == "native" and native_refusal:
             # BuildDriver.preflight's refusal, which this override never reached. is_root
             # is always False on Windows (no geteuid), so the root sentence below was the
             # one shown there, and no Administrator shell could ever clear it.
-            problems.append(
-                "A native fleet build runs sudo and bash on a Gentoo host, which the "
-                "Windows build of the Studio cannot do. Choose the docker backend (Docker "
-                "Desktop), or run the Studio inside WSL2.")
+            problems.append(native_refusal)
         elif backend == "native" and not self.host.is_root:
             problems.append("Native build needs root (the Studio will prepend sudo).")
         if cfg.brand_profile and not os.path.exists(

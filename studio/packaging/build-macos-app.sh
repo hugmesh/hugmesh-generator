@@ -15,7 +15,7 @@
 #   check    check_macos_bundle.py (Info.plist, Mach-O arch, Qt cocoa plugin, package
 #            data) and `codesign --verify --deep --strict` of the ad-hoc signature
 #   smoke    the frozen executable under FINDER'S environment: --print-specs, then
-#            --self-check against the generator checkout (see SMOKE below)
+#            --self-check --json against the generator checkout (see SMOKE below)
 #   gui      with --gui-smoke only: start the app for real (the cocoa platform plugin,
 #            not offscreen), insist it is still running after 20 s, screenshot it
 #   dmg      hdiutil UDZO image holding the .app and an /Applications link, its
@@ -24,7 +24,12 @@
 # SMOKE runs with `env -i HOME=… PATH=/usr/bin:/bin:/usr/sbin:/sbin`, which is the
 # environment launchd gives an app opened from Finder: no Homebrew, no Docker, no
 # GNU tools on PATH. The Studio's own startup hook (core/macos_host.py) is what puts
-# them back, and this is the step that proves it does.
+# them back, and this is the step that proves it does: the self-check's "macos"
+# section must find bash 4+ and the GNU tools when Homebrew has them (--require-gnu,
+# which CI passes after installing them), and must refuse with the `brew install`
+# line, exit 1, when they are missing. A frozen app carries no Python sources, so its
+# self-check cannot list the generator paths the Studio names; CI runs that half from
+# the checkout.
 #
 # THIS SCRIPT RUNS UNDER macOS's OWN /bin/bash, which is 3.2: no associative arrays,
 # no ${x,,}, no mapfile, and no "${array[@]}" of an empty array under set -u.
@@ -41,6 +46,8 @@
 #   --dist DIR          where the .app, .dmg and .sha256 land (default: studio/dist)
 #   --generator-dir D   the checkout --self-check reads (default: this repository)
 #   --gui-smoke         also run the gui phase (opens a window: CI, or on purpose)
+#   --require-gnu       the smoke fails unless the GNU userland is found (CI, after
+#                       `brew install bash coreutils gnu-sed findutils grep make`)
 #   --no-dmg            stop after the smoke phases
 set -euo pipefail
 
@@ -122,10 +129,12 @@ phase_smoke() {
 	[ -s "$WORK/specs.json" ] || die "no output from --print-specs: the bundle is incomplete"
 	head -c 300 "$WORK/specs.json"; echo
 	local rc=0
-	finder_env "$exe" --self-check --generator-dir "$GENERATOR_DIR" > "$WORK/self-check.txt" \
-		2>&1 || rc=$?
-	cat "$WORK/self-check.txt"
-	[ "$rc" -eq 0 ] || die "--self-check failed (exit $rc) under Finder's environment"
+	finder_env "$exe" --self-check --json --generator-dir "$GENERATOR_DIR" \
+		> "$WORK/self-check.json" 2> "$WORK/self-check.err" || rc=$?
+	cat "$WORK/self-check.err"
+	"$PY" "$SCRIPT_DIR/check_macos_bundle.py" --self-check-report "$WORK/self-check.json" \
+		--exit-code "$rc" --require-gnu "$REQUIRE_GNU" \
+		|| die "--self-check under Finder's environment did not say what it should (exit $rc)"
 }
 
 phase_gui() {
@@ -192,7 +201,7 @@ phase_dmg() {
 }
 
 main() {
-	PY=python3 VERSION="" ARCH="" DIST="$STUDIO_DIR/dist" GENERATOR_DIR="$REPO_DIR"
+	PY=python3 VERSION="" ARCH="" DIST="$STUDIO_DIR/dist" GENERATOR_DIR="$REPO_DIR" REQUIRE_GNU=0
 	local gui=0 dmg=1
 	while [ $# -gt 0 ]; do
 		case "$1" in
@@ -202,6 +211,7 @@ main() {
 			--dist) DIST=${2:?--dist needs a value}; shift 2 ;;
 			--generator-dir) GENERATOR_DIR=${2:?--generator-dir needs a value}; shift 2 ;;
 			--gui-smoke) gui=1; shift ;;
+			--require-gnu) REQUIRE_GNU=1; shift ;;
 			--no-dmg) dmg=0; shift ;;
 			-h|--help) usage; return 0 ;;
 			*) echo "build-macos-app.sh: unknown option $1 (see --help)" >&2; return 2 ;;

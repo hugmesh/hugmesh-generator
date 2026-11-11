@@ -455,6 +455,38 @@ jobs:
         run: >-
           "$RUNNER_TEMP/venv/bin/python" -m pytest -q
           tests/test_macos_packaging.py
+          tests/test_macos_host.py
+          tests/test_platform_macos.py
+          tests/test_macos_terminals.py
+
+      - name: A stock Mac - the self-check names the missing GNU tools and exits 1
+        # Before Homebrew's GNU tools are installed: macOS's own bash 3.2 and BSD sed,
+        # find, grep and stat. Run from the checkout with launchd's PATH (what a Finder
+        # launch gets); the refusal must name each missing formula and the brew line.
+        run: |
+          set +e
+          env -i HOME="$RUNNER_TEMP/stock-home" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            PYTHONPATH="$GITHUB_WORKSPACE/studio" \
+            "$RUNNER_TEMP/venv/bin/python" -m hugmesh_studio --self-check --json \
+            --generator-dir "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/stock.json"
+          rc=$?
+          set -e
+          "$RUNNER_TEMP/venv/bin/python" studio/packaging/check_macos_bundle.py \
+            --self-check-report "$RUNNER_TEMP/stock.json" --exit-code "$rc" --require-gnu 0
+          "$RUNNER_TEMP/venv/bin/python" - "$RUNNER_TEMP/stock.json" <<'PY'
+          import json, sys
+          mac = json.load(open(sys.argv[1]))["macos"]
+          want = {"bash", "gnu-sed", "coreutils", "findutils", "grep"}
+          missing = set(mac["gnu_missing"])
+          assert want <= missing, f"a stock Mac should lack {sorted(want - missing)}: {mac}"
+          print("stock Mac refused as it should:", sorted(missing))
+          PY
+
+      - name: Install the GNU userland the docs ask for
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: brew install bash coreutils gnu-sed findutils grep make
 
       - name: Build, check and smoke-test the app, then pack the .dmg
         run: >-
@@ -463,6 +495,25 @@ jobs:
           --arch ${{ matrix.arch }}
           --dist "$RUNNER_TEMP/dist"
           --gui-smoke
+          --require-gnu
+
+      - name: From the checkout, with launchd's PATH - the whole self-check passes
+        # The half the frozen app cannot do (it has no Python sources to list the
+        # generator paths from): every path and make target the Studio names, and
+        # `bash -n` on every script, with the bash 5 the PATH hook found.
+        run: |
+          env -i HOME="$RUNNER_TEMP/full-home" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            PYTHONPATH="$GITHUB_WORKSPACE/studio" \
+            "$RUNNER_TEMP/venv/bin/python" -m hugmesh_studio --self-check --json \
+            --generator-dir "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/full.json"
+          "$RUNNER_TEMP/venv/bin/python" - "$RUNNER_TEMP/full.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          print(json.dumps({k: r.get(k) for k in ("checked_paths", "scripts_parsed", "macos", "problems")}, indent=1))
+          assert r["macos"]["gnu_missing"] == [] and r["macos"]["bash_major"] >= 4, r["macos"]
+          assert r["checked_paths"] > 0 and r["scripts_parsed"] > 0, "a vacuous self-check"
+          assert not r["problems"], r["problems"]
+          PY
 
       - uses: actions/upload-artifact@v4
         if: always()

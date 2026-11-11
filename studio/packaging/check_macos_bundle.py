@@ -21,6 +21,10 @@ it is the bundle we meant to build:
     from pyproject.toml exactly as the spec reads it);
   * no second Qt binding was frozen (PyQt5/PyQt6 are GPL; the bundle ships PySide6).
 
+With ``--self-check-report FILE --exit-code N [--require-gnu 1]`` it instead reads the
+``--self-check --json`` report the frozen app wrote under Finder's environment and checks
+that it said the right thing about the Mac it ran on (:func:`verify_self_check`).
+
 Exit 0 when every check passes, 1 when any fails (each failure on its own line), 2 on
 a usage error.
 """
@@ -28,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import plistlib
 import struct
@@ -161,13 +166,73 @@ def check(app: str, *, version: str = "", arch: str = "",
     return problems
 
 
+def verify_self_check(report, rc: int, require_gnu: bool = False) -> list[str]:
+    """Problems with what ``--self-check --json`` said on a Mac; [] when it was right.
+
+    * it ran the macOS checks at all (a frozen app taking the Linux branch would not);
+    * with ``require_gnu`` (Homebrew's GNU tools installed): it found them THROUGH ITS
+      OWN PATH HOOK, since the smoke runs with launchd's PATH, and passed;
+    * without: when tools are missing it must exit 1 and name the brew line, and when
+      none are it must pass."""
+    if not isinstance(report, dict):
+        return ["the self-check wrote no JSON report"]
+    mac = report.get("macos")
+    if not isinstance(mac, dict):
+        return ["the self-check ran no macOS checks (it took the Linux branch)"]
+    problems: list[str] = []
+    if mac.get("arch") not in CPU_TYPES:
+        problems.append(f"the self-check's macOS arch is {mac.get('arch')!r}")
+    missing = mac.get("gnu_missing")
+    if not isinstance(missing, list):
+        return problems + ["the self-check's macOS section has no gnu_missing list"]
+    said = "\n".join(report.get("problems") or [])
+    if require_gnu:
+        if missing:
+            problems.append(f"the GNU userland is installed but the app, started with "
+                            f"launchd's PATH, did not find: {', '.join(missing)} "
+                            f"(core/macos_host.install did not put Homebrew on PATH)")
+        if (mac.get("bash_major") or 0) < 4:
+            problems.append(f"the app found bash {mac.get('bash_major')}, not 4 or newer")
+        if rc != 0 or report.get("ok") is not True:
+            problems.append(f"the self-check failed (exit {rc}): {said[:400]}")
+    elif missing:
+        if rc != 1 or "brew install" not in said:
+            problems.append(f"GNU tools are missing ({', '.join(missing)}) but the "
+                            f"self-check exited {rc} without the brew line")
+    elif rc != 0:
+        problems.append(f"the self-check failed (exit {rc}): {said[:400]}")
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("app", help="path to the .app")
+    ap.add_argument("app", nargs="?", help="path to the .app")
     ap.add_argument("--version", default="", help="the Studio version it must carry")
     ap.add_argument("--arch", default="", choices=["", *CPU_TYPES],
                     help="the architecture its executable must contain")
+    ap.add_argument("--self-check-report", default="",
+                    help="instead: a --self-check --json report to verify")
+    ap.add_argument("--exit-code", type=int, default=0,
+                    help="the exit code the self-check returned")
+    ap.add_argument("--require-gnu", default="0", choices=["0", "1"],
+                    help="1: the GNU userland must have been found")
     args = ap.parse_args(argv)
+    if args.self_check_report:
+        try:
+            with open(args.self_check_report, encoding="utf-8") as fh:
+                report = json.load(fh)
+        except (OSError, ValueError) as exc:
+            report = None
+            print(f"cannot read {args.self_check_report}: {exc}")
+        problems = verify_self_check(report, args.exit_code, args.require_gnu == "1")
+        if isinstance(report, dict) and isinstance(report.get("macos"), dict):
+            print("self-check macos: " + json.dumps(report["macos"], sort_keys=True))
+        for problem in problems:
+            print(f"FAIL: {problem}")
+        print("self-check OK" if not problems else f"{len(problems)} problem(s)")
+        return 1 if problems else 0
+    if not args.app:
+        ap.error("the path to the .app is required")
     if not os.path.isdir(args.app):
         print(f"check_macos_bundle.py: {args.app} is not a directory", file=sys.stderr)
         return 2

@@ -47,12 +47,17 @@ import platform
 import posixpath
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 
 #: Session kinds. "none" = no display at all (headless/CI); the GUI cannot run.
 SESSION_WAYLAND = "wayland"
 SESSION_X11 = "x11"
 SESSION_NONE = "none"
+#: macOS: Qt's cocoa platform plugin, i.e. a window on the Mac's own desktop. Neither
+#: Wayland nor X11 applies, and "none" would have refused the askpass dialog and every
+#: "has a GUI" gate on a Mac that plainly has one.
+SESSION_COCOA = "cocoa"
 
 #: Where the kernel publishes the mount table. Overridable so the WSL cases can be
 #: asserted on a machine that is not WSL (this workstation, and CI).
@@ -118,6 +123,20 @@ class HostInfo:
     #: it could, or outside the Flatpak). Without that route nothing on the host is
     #: reachable, so this outranks every other remedy.
     host_bridge_error: str = ""
+    # ── macOS only (core/macos_host.py); left at these defaults everywhere else ──────
+    #: "arm64" (Apple silicon) or "x86_64", from the kernel, not platform.machine():
+    #: under Rosetta an x86_64 Python says x86_64 on an M-series Mac.
+    mac_arch: str = ""
+    #: Hypervisor.framework is usable (sysctl kern.hv_support), QEMU's -accel hvf.
+    has_hvf: bool = False
+    #: Homebrew formulae whose GNU tools (or bash 4+) are missing from PATH; empty when
+    #: the generator's bash scripts can run here.
+    gnu_missing: tuple = ()
+    #: Which Docker runtime answers (macos_host.RUNTIME_*), and the size of its VM —
+    #: what a build actually gets, not the Mac's own memory.
+    docker_runtime: str = ""
+    docker_vm_mem: int = 0
+    docker_vm_cpus: int = 0
 
     @property
     def can_build_native(self) -> bool:
@@ -146,7 +165,22 @@ class HostInfo:
 
     @property
     def has_gui(self) -> bool:
-        return self.session in (SESSION_WAYLAND, SESSION_X11)
+        return self.session in (SESSION_WAYLAND, SESSION_X11, SESSION_COCOA)
+
+    @property
+    def is_macos(self) -> bool:
+        return self.os == "darwin"
+
+    @property
+    def needs_amd64_platform(self) -> bool:
+        """An Apple-silicon Mac: the builder image is x86_64 (Dockerfile.build fetches an
+        amd64 Gentoo stage3), so every builder ``docker build``/``docker run`` must say
+        ``--platform linux/amd64``. Without it Docker builds an arm64 image around an
+        amd64 stage3, which dies with "exec format error" at the first chroot."""
+        return self.os == "darwin" and self.mac_arch == "arm64"
+
+    def docker_platform_args(self) -> list[str]:
+        return docker_platform_args(self)
 
     @property
     def can_flash_devices(self) -> bool:
@@ -197,6 +231,8 @@ class HostInfo:
                     "    usbipd list                     # find the BUSID of your drive\n"
                     "    usbipd bind --busid <BUSID>     # once per device\n"
                     "    usbipd attach --wsl --busid <BUSID>")
+        if self.os == "darwin":
+            return macos_flash_blocker()
         if self.os != "linux":
             return (f"Writing an image to a device needs Linux block devices; this is "
                     f"{self.os}.")
@@ -280,6 +316,8 @@ class HostInfo:
             return ("Start the daemon (`sudo systemctl start docker`) and make sure your "
                     "user is in the 'docker' group (`sudo usermod -aG docker $USER`, then "
                     "log out and back in).")
+        if self.os == "darwin":
+            return macos_docker_remedy(self.docker_state, self.mac_arch)
         # The Studio probes once, at start, so each Windows remedy ends in a restart:
         # nothing re-asks Docker before then.
         if self.os == "windows" and self.docker_state == DOCKER_TIMEOUT:
@@ -336,6 +374,8 @@ class HostInfo:
                     f"    nestedVirtualization=true\n"
                     f"then from PowerShell:  wsl --shutdown   — and reopen this distro "
                     f"(the setting is only read when the VM starts).")
+        if self.os == "darwin":
+            return macos_kvm_note(self.mac_arch, self.has_hvf)
         if self.os != "linux":
             return (f"{head}\nKVM is a Linux kernel feature; this is {self.os}.")
         return (f"{head}\nLoad the KVM module for your CPU (`sudo modprobe kvm_intel` or "
@@ -343,6 +383,8 @@ class HostInfo:
 
     def summary(self) -> str:
         bits = [f"OS={self.os}"]
+        if self.mac_arch:
+            bits.append(self.mac_arch)
         if self.in_flatpak:
             bits.append("Flatpak")
         if self.is_wsl:
@@ -354,13 +396,83 @@ class HostInfo:
         if not self.has_docker and self.os == "windows" and \
                 self.docker_state == DOCKER_TIMEOUT:
             bits.append(f"docker (did not answer in {WINDOWS_DOCKER_PROBE_TIMEOUT_S} s)")
+        elif self.has_docker and self.docker_runtime:
+            vm = f", {self.docker_vm_mem / 2**30:.0f} GiB VM" if self.docker_vm_mem else ""
+            bits.append(f"docker({self.docker_runtime}{vm})")
         else:
             bits.append("docker" if self.has_docker else "no-docker")
         if self.has_kvm:
             bits.append("KVM")
+        if self.has_hvf:
+            bits.append("HVF")
+        if self.gnu_missing:
+            bits.append("no-GNU-userland")
         if self.is_root:
             bits.append("root")
         return " · ".join(bits)
+
+
+def docker_platform_args(host) -> list[str]:
+    """``["--platform", "linux/amd64"]`` for every builder-image ``docker build`` and
+    ``docker run`` on an Apple-silicon Mac, [] everywhere else (so a Linux or Windows
+    argv stays byte-identical). Takes any host object (a test's stand-in included)."""
+    if getattr(host, "os", "") == "darwin" and getattr(host, "mac_arch", "") == "arm64":
+        return ["--platform", "linux/amd64"]
+    return []
+
+
+def folds_case(path: str) -> "bool | None":
+    """Does the filesystem holding ``path`` (or its nearest existing parent) ignore
+    case? True on APFS's and NTFS's defaults, False on ext4/btrfs/xfs and on a
+    case-sensitive APFS volume; None when it cannot be told (nothing writable there).
+
+    Asked of the filesystem itself, by creating a file with an upper-case name and
+    looking for its lower-case spelling, not inferred from the OS: a Mac can have a
+    case-sensitive volume, and that is exactly the remedy for a build that needs one."""
+    d = os.path.abspath(path or ".")
+    while not os.path.isdir(d):
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+    import tempfile
+    try:
+        fd, probe = tempfile.mkstemp(prefix="HmCaseProbe.", dir=d)
+    except OSError:
+        return None
+    os.close(fd)
+    try:
+        return os.path.exists(os.path.join(d, os.path.basename(probe).lower()))
+    finally:
+        try:
+            os.unlink(probe)
+        except OSError:
+            pass
+
+
+#: The smallest Docker VM a Mac build is sized for (the 16 GB the docs ask for, less
+#: what the VM's own kernel keeps back from MemTotal).
+MAC_VM_MIN_BYTES = 15 * 2**30
+
+
+def macos_build_warnings(host) -> list[str]:
+    """What a docker build on a Mac should be told before it starts. Advisory only."""
+    out = ["Building on a Mac is EXPERIMENTAL: the build runs in the Linux VM of Docker "
+           "Desktop, colima or OrbStack, writing its Gentoo chroot into a folder shared "
+           "from macOS, and that has not been proven end to end yet. If it fails, the "
+           "build log names the step; a Linux machine (or a Linux VM) is the proven "
+           "route."]
+    if getattr(host, "mac_arch", "") == "arm64":
+        out.append("Apple silicon: the builder image is x86_64, so the whole build runs "
+                   "under x86_64 emulation inside the Docker VM (Rosetta when it is "
+                   "turned on, otherwise QEMU). Expect it to take 2-5 times as long, and "
+                   "do not mistake a slow step for a hang.")
+    mem = getattr(host, "docker_vm_mem", 0) or 0
+    if 0 < mem < MAC_VM_MIN_BYTES:
+        out.append(f"Docker's VM has {mem / 2**30:.1f} GiB of memory; a build wants at "
+                   f"least 16 GB. Raise it in Docker Desktop (Settings -> Resources) or "
+                   f"restart colima with --memory 16.")
+    return out
 
 
 def _is_gentoo(in_flatpak: bool = False) -> bool:
@@ -464,28 +576,173 @@ def unquote_pasted_path(text: str, osname: str | None = None) -> str:
     return text
 
 
+def host_kind(osname: str | None = None, sysplatform: str | None = None) -> str:
+    """"windows", "darwin" or "linux": the ONE question every platform branch asks.
+
+    ``os.name`` alone cannot tell a Mac from Linux (both are "posix"), which is why a Mac
+    used to take every Linux branch silently. ``osname`` is ``os.name`` and
+    ``sysplatform`` is ``sys.platform`` unless a test passes others, so the darwin
+    branches are exercised on Linux with ``sysplatform="darwin"``."""
+    if (osname or os.name) == "nt":
+        return "windows"
+    if (sysplatform or sys.platform) == "darwin":
+        return "darwin"
+    return "linux"
+
+
+def builds_in_docker_vm(osname: str | None = None, sysplatform: str | None = None) -> bool:
+    """Every image build on this host runs in a Linux VM's Docker (Docker Desktop on
+    Windows; Docker Desktop, colima or OrbStack on a Mac), never natively: no "native"
+    backend to offer, and a binfmt registration or a memory figure that matters is the
+    VM's, which this process cannot read."""
+    return host_kind(osname, sysplatform) in ("windows", "darwin")
+
+
+def host_script_blocker(action: str, osname: str | None = None,
+                        runs: str = "`make` and bash scripts", *,
+                        sysplatform: str | None = None,
+                        gnu_missing: "list[str] | tuple[str, ...] | None" = None) -> str:
+    """WHY ``action`` cannot run the generator's bash/make verbs on this host, with the
+    fix; "" when it can (Linux, WSL, and a Mac with a GNU userland).
+
+    * native Windows (the MSI): the Win32 Studio cannot run them at all; WSL2 is the
+      supported Windows runtime (the module docstring), so that is what it says.
+    * macOS: they run, once bash 4+ and the GNU tools are installed. /bin/bash is 3.2
+      and sed/find/grep/stat are BSD, and the scripts die mid-run on a flag the BSD tool
+      does not have, naming the flag and not the cause. ``gnu_missing`` is the list
+      core/macos_host.gnu_userland_missing() returns, probed once when not given.
+
+    ``osname`` / ``sysplatform`` are ``os.name`` / ``sys.platform`` unless a test passes
+    others."""
+    kind = host_kind(osname, sysplatform)
+    if kind == "windows":
+        return (f"{action} runs {runs} from a hugmesh-generator checkout, "
+                f"which the Windows build of the Studio cannot run. On Windows, run the "
+                f"Studio inside WSL2 instead: in a WSL2 distro (Ubuntu) with Docker "
+                f"Desktop's WSL integration turned on for it, clone hugmesh-generator into "
+                f"~ (not /mnt/c) and start the Linux build of the Studio from that "
+                f"checkout; WSLg shows its window on the Windows desktop.")
+    if kind != "darwin":
+        return ""
+    missing = list(_gnu_missing_cached() if gnu_missing is None else gnu_missing)
+    if not missing:
+        return ""
+    from .macos_host import BREW_INSTALL
+    what = ", ".join("bash 4 or newer (macOS ships 3.2)" if m == "bash" else m
+                     for m in missing)
+    return (f"{action} runs {runs} written for bash 4 and the GNU tools, and this Mac is "
+            f"missing: {what}. Install them with Homebrew (https://brew.sh):\n"
+            f"    {BREW_INSTALL}\n"
+            f"then restart the Studio. You do not need to change your shell or PATH: the "
+            f"Studio puts Homebrew's GNU tools first for every command it runs.")
+
+
 def native_windows_blocker(action: str, osname: str | None = None,
                            runs: str = "`make` and bash scripts") -> str:
-    """WHY ``action`` cannot run in a NATIVE Windows Studio (the MSI), with the fix.
-    "" anywhere else, WSL included.
+    """WHY ``action`` cannot run here, with the fix. "" when it can.
 
-    The MSI runs the Studio as a Win32 program, but every local-mesh and DevOps verb is
-    a `make` target whose recipes are bash scripts. Without this the operator was told
-    "make is required", and installing make does not help: the recipes still need
-    bash, and C:\\Windows\\System32\\bash.exe is the WSL launcher, which runs a script
-    inside the Linux VM where a C:\\ checkout path means nothing. WSL2 is the supported
-    Windows runtime (see the module docstring), so that is what the sentence says.
-    ``runs`` names what ``action`` actually needs (Go Live, cloud deploy and the phone
-    wizard are bash drivers with no `make` in them). ``osname`` is ``os.name`` unless a
-    test passes another."""
-    if (osname or os.name) != "nt":
-        return ""
-    return (f"{action} runs {runs} from a hugmesh-generator checkout, "
-            f"which the Windows build of the Studio cannot run. On Windows, run the "
-            f"Studio inside WSL2 instead: in a WSL2 distro (Ubuntu) with Docker Desktop's "
-            f"WSL integration turned on for it, clone hugmesh-generator into ~ (not "
-            f"/mnt/c) and start the Linux build of the Studio from that checkout; WSLg "
-            f"shows its window on the Windows desktop.")
+    The name is historical (it began as the MSI's sentence) and its ~45 call sites keep
+    it: it is :func:`host_script_blocker`, so a Mac without a GNU userland is now refused
+    here too, with the ``brew install`` line, instead of being let through to a script
+    that dies on a BSD flag. The Windows wording is unchanged: every local-mesh and
+    DevOps verb is a `make` target whose recipes are bash scripts, and
+    C:\\Windows\\System32\\bash.exe is the WSL launcher, which runs a script inside the
+    Linux VM where a C:\\ checkout path means nothing. ``runs`` names what ``action``
+    actually needs (Go Live, cloud deploy and the phone wizard are bash drivers with no
+    `make` in them). ``osname`` is ``os.name`` unless a test passes another."""
+    return host_script_blocker(action, osname, runs)
+
+
+def native_build_blocker(what: str = "A native build", osname: str | None = None,
+                         sysplatform: str | None = None, *, host_os: str | None = None) -> str:
+    """WHY the NATIVE backend (sudo + bash + a Gentoo chroot) cannot run here; "" when
+    it can be tried. Not :func:`host_script_blocker`: a Mac WITH the GNU tools still
+    cannot build natively, because the builders write a Gentoo stage4 through chroot,
+    loop devices and mount, which macOS does not have. Both say what to use instead.
+
+    ``host_os`` is a driver's ``HostInfo.os``: a host that says "windows" or "darwin"
+    is refused whatever this process runs on, and otherwise the process's own
+    ``os.name`` / ``sys.platform`` decide (``osname`` / ``sysplatform`` for tests)."""
+    kind = host_os if host_os in ("windows", "darwin") else host_kind(osname, sysplatform)
+    if kind == "windows":
+        return (f"{what} runs sudo and bash on a Gentoo host, which the Windows build of "
+                f"the Studio cannot do. Choose the docker backend (Docker Desktop), or run "
+                f"the Studio inside WSL2.")
+    if kind == "darwin":
+        return (f"{what} runs a Gentoo chroot as root (sudo, bash, loop devices, mount), "
+                f"which only a Linux host can do. On a Mac choose the docker backend: the "
+                f"build runs in the Linux VM of Docker Desktop, colima or OrbStack.")
+    return ""
+
+
+_GNU_MISSING: "list[str] | None" = None
+
+
+def _gnu_missing_cached() -> list[str]:
+    """macos_host.gnu_userland_missing(), once per process: it starts six probes, and
+    the blocker is asked on every page refresh. Read AFTER macos_host.install() has put
+    Homebrew on PATH (app.main), so an installed GNU userland is found."""
+    global _GNU_MISSING
+    if _GNU_MISSING is None:
+        from .macos_host import gnu_userland_missing
+        _GNU_MISSING = gnu_userland_missing()
+    return _GNU_MISSING
+
+
+def macos_docker_remedy(docker_state: str = "", mac_arch: str = "") -> str:
+    """How to give a Mac a Docker that answers. The Mac's own memory does not matter to
+    a build: it runs in the runtime's Linux VM, sized in that runtime's settings."""
+    rosetta = ("" if mac_arch != "arm64" else
+               " On Apple silicon also turn on \"Use Rosetta for x86_64/amd64 emulation on "
+               "Apple Silicon\" (Docker Desktop: Settings -> General), or start colima "
+               "with --vz-rosetta: the builder image is x86_64.")
+    colima_arch = "" if mac_arch == "arm64" else " --arch x86_64"
+    sizing = (f" Give the VM at least 16 GB of memory and a 200 GB disk (Docker Desktop: "
+              f"Settings -> Resources; colima: `colima start --vm-type vz --vz-rosetta "
+              f"--cpu 8 --memory 16 --disk 200{colima_arch}`).{rosetta}")
+    if docker_state == DOCKER_MISSING or not docker_state:
+        return ("No docker command was found (the Studio looked in Homebrew, Docker "
+                "Desktop's and colima's folders too). Install one Docker runtime: Docker "
+                "Desktop for Mac, or `brew install colima docker`, or OrbStack; start it, "
+                "then restart the Studio so it checks again." + sizing)
+    if docker_state == DOCKER_TIMEOUT:
+        return ("Docker did not answer `docker info` in time when the Studio started. If "
+                "its VM is still starting, wait until it is up, then restart the Studio "
+                "so it checks again." + sizing)
+    return ("docker is installed but no engine answers: start Docker Desktop (or "
+            "`colima start`, or OrbStack) and wait until it is running, then restart the "
+            "Studio so it checks again." + sizing)
+
+
+def macos_kvm_note(mac_arch: str = "", has_hvf: bool = False) -> str:
+    """What emulated devices cost on a Mac. A warning, like the KVM one: the run still
+    succeeds, it is just slow enough to read as a hang."""
+    head = ("macOS has no /dev/kvm, and the Docker VM the QEMU harness runs in has none "
+            "either, so emulated devices run under full emulation (TCG): expect x86 rows "
+            "to take hours rather than minutes, which reads as a hang.")
+    if mac_arch == "arm64":
+        head += (" On Apple silicon every x86_64 row is emulated whatever the "
+                 "accelerator; only aarch64 rows could ever run at native speed.")
+    hvf = ("Hypervisor.framework is available on this Mac (QEMU's -accel hvf), but the "
+           "Studio does not drive a native macOS QEMU yet."
+           if has_hvf else
+           "Hypervisor.framework is not available on this Mac (sysctl kern.hv_support "
+           "is 0), so QEMU could not accelerate here at all.")
+    return f"{head}\n{hvf}"
+
+
+def macos_flash_blocker() -> str:
+    """Flashing from a Mac, by hand. The Studio's writer (scripts/flash-disk.sh) reads
+    lsblk and Linux sysfs and cannot run here; until a diskutil writer with the same
+    safety checks exists, the commands are given rather than a dead end."""
+    return ("The Studio cannot write an image to a device on macOS yet (its writer uses "
+            "Linux block devices). Do it in Terminal, and check the disk number twice: "
+            "/dev/disk0 is the Mac's own disk.\n"
+            "    diskutil list external physical        # find /dev/diskN, your card or stick\n"
+            "    diskutil unmountDisk /dev/diskN\n"
+            "    sudo dd if=<image>.img of=/dev/rdiskN bs=4m\n"
+            "    diskutil eject /dev/diskN\n"
+            "For a .img.xz, decompress it first (`brew install xz`, then `xz -dk <image>.img.xz`).")
 
 
 def _unescape_mount(field: str) -> str:
@@ -586,7 +843,7 @@ def _is_usb_backed(block_name: str) -> bool:
         return False
 
 
-def detect_session() -> str:
+def detect_session(sysplatform: str | None = None, environ=None) -> str:
     """Which display server is actually in use.
 
     Order matters. ``XDG_SESSION_TYPE`` is the declared answer but is routinely wrong or
@@ -596,16 +853,25 @@ def detect_session() -> str:
     compositor is reachable; a bare ``DISPLAY`` means X11 — including XWayland, which is
     the right answer for Qt because in that case Qt IS an X11 client and ``move()``
     works again.
+
+    macOS has neither: Qt draws through cocoa on the Mac's own desktop. The one Mac
+    session that cannot show a window is a login over ssh, whose processes have no
+    connection to the WindowServer, so that alone is "none".
     """
-    if os.environ.get("WAYLAND_DISPLAY"):
+    env = os.environ if environ is None else environ
+    if (sysplatform or sys.platform) == "darwin":
+        if env.get("SSH_CONNECTION") or env.get("SSH_TTY"):
+            return SESSION_NONE
+        return SESSION_COCOA
+    if env.get("WAYLAND_DISPLAY"):
         # XWayland: a Wayland compositor is up, but Qt was told to be an X11 client, so
         # it gets X11 semantics. Believe the override.
-        if os.environ.get("QT_QPA_PLATFORM", "").strip().lower() in ("xcb", "x11"):
+        if env.get("QT_QPA_PLATFORM", "").strip().lower() in ("xcb", "x11"):
             return SESSION_X11
         return SESSION_WAYLAND
-    if os.environ.get("DISPLAY"):
+    if env.get("DISPLAY"):
         return SESSION_X11
-    declared = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
+    declared = env.get("XDG_SESSION_TYPE", "").strip().lower()
     if declared in (SESSION_WAYLAND, SESSION_X11):
         return declared
     return SESSION_NONE
@@ -654,6 +920,13 @@ def detect(builder_image: str = "hugmesh-builder") -> HostInfo:
     else:
         kvm_usable, kvm_denied = _kvm_state()
         docker_state = docker_probe()
+    mac: dict = {}
+    if osname == "darwin":
+        from . import macos_host
+        vm = macos_host.docker_vm() if docker_state == DOCKER_OK else macos_host.DockerVM()
+        mac = {"mac_arch": macos_host.mac_arch(), "has_hvf": macos_host.hvf_available(),
+               "gnu_missing": tuple(_gnu_missing_cached()), "docker_runtime": vm.runtime,
+               "docker_vm_mem": vm.mem_bytes, "docker_vm_cpus": vm.cpus}
     return HostInfo(
         os=osname,
         is_gentoo=(osname == "linux" and _is_gentoo(in_flatpak)),
@@ -663,7 +936,7 @@ def detect(builder_image: str = "hugmesh-builder") -> HostInfo:
         has_kvm=kvm_usable,
         is_root=is_root,
         builder_image=builder_image,
-        session=detect_session(),
+        session=detect_session(sysplatform="darwin" if osname == "darwin" else None),
         is_wsl=is_wsl,
         wsl_version=wsl_version,
         # WSL_INTEROP is the socket that makes Windows binaries callable; without it
@@ -673,4 +946,5 @@ def detect(builder_image: str = "hugmesh-builder") -> HostInfo:
         kvm_present_but_denied=kvm_denied,
         in_flatpak=in_flatpak,
         host_bridge_error=bridge_error,
+        **mac,
     )

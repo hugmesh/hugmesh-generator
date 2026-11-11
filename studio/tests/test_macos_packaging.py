@@ -397,3 +397,47 @@ def test_every_file_the_macos_contract_names_exists():
     assert "tests/test_macos_packaging.py" in named
     for rel in named:
         assert os.path.isfile(os.path.join(STUDIO_ROOT, rel)), rel
+
+
+# ── the smoke's reading of the frozen app's --self-check --json ──────────────────────
+def _report(missing, bash=5, ok=None, problems=None, arch="arm64"):
+    if problems is None:
+        problems = (["The generator runs bash scripts and make ... brew install bash"]
+                    if missing else [])
+    return {"macos": {"arch": arch, "gnu_missing": missing, "bash_major": bash},
+            "problems": problems, "ok": (not problems) if ok is None else ok}
+
+
+@pytest.mark.parametrize("report, rc, require, good", [
+    (_report([]), 0, True, True),                       # CI after brew install
+    (_report(["bash", "grep"], bash=3), 1, False, True),  # a stock Mac, refused right
+    (_report([]), 0, False, True),
+    (_report(["bash"], bash=3), 1, True, False),        # the hook missed Homebrew
+    (_report([], bash=3), 0, True, False),
+    (_report([]), 1, True, False),
+    (_report(["grep"]), 0, False, False),               # missing tools, yet exit 0
+    (_report(["grep"], problems=["something else"]), 1, False, False),  # no brew line
+    (_report([], problems=["boom"]), 1, False, False),
+    (_report([], arch="ppc"), 0, True, False),
+    ({"problems": []}, 0, False, False),                # the Linux branch ran
+    (None, 0, False, False),
+])
+def test_the_smoke_reads_the_self_check_report(report, rc, require, good):
+    problems = _checker().verify_self_check(report, rc, require)
+    assert (problems == []) is good, problems
+
+
+def test_the_self_check_report_cli(tmp_path, capsys):
+    import json as _json
+    path = tmp_path / "r.json"
+    path.write_text(_json.dumps(_report([])))
+    checker = _checker()
+    assert checker.main(["--self-check-report", str(path), "--exit-code", "0",
+                         "--require-gnu", "1"]) == 0
+    assert "self-check OK" in capsys.readouterr().out
+    assert checker.main(["--self-check-report", str(path), "--exit-code", "1",
+                         "--require-gnu", "1"]) == 1
+    path.write_text("not json")
+    assert checker.main(["--self-check-report", str(path)]) == 1
+    with pytest.raises(SystemExit):
+        checker.main([])                                 # neither an app nor a report
