@@ -345,7 +345,11 @@ class BrandingPage(QtWidgets.QWizardPage):
         Guarded: a Qt slot (the step's ``changed``); under PyQt6 an exception escaping
         one calls qFatal and kills the Studio."""
         try:
-            mesh = self.wiz.cfg.mode == "mesh"
+            # spelled through ``c`` like the rest of this page: the assistant's page map
+            # (core/assistant_catalogue_pages.py) greps ``cfg.<field>`` to say where a
+            # setting is EDITED, and the mode is not edited on this page
+            c = self.wiz.cfg
+            mesh = c.mode == "mesh"
             step_says_it = (self.superbrand is not None
                             and self.superbrand.look_pointer.isVisibleTo(self))
             self.look_pointer.setVisible(mesh and not step_says_it)
