@@ -1134,6 +1134,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PREMERGE_UNGATED is untouched (42). MEASURED by RUNNING this file with GUARD_PREMERGE=0
 # on that branch over origin/main 39b953ad (which measures '237 of 279'):
 #     239 of 281 suites are named by a pull_request-triggered workflow
+# MERGED (origin/main a621b468, #931, which adds no shell suite, into
+# fix/sec-new-15-20261111): 239 of 281, MEASURED with GUARD_PREMERGE=0 on the merged tree.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-239}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
