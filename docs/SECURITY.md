@@ -28,6 +28,23 @@ proven (see the README roadmap). Lockdown selects
 `CONFIG_MODULE_SIG`, so modules built with the kernel are signed and an unsigned
 out-of-tree `.ko` is refused at runtime on every board.
 
+**The module-signing private key never ships (x86 live ISO, fixed 2026-11-11).** That
+signature is only worth something while `certs/signing_key.pem` stays private. The x86
+build system keeps its kernel tree in `/usr/src` (the stage4 tar has always excluded
+it), and the live ISO used to squash the whole build system, key included. Anyone with
+that ISO could sign a module that every kernel of the same build accepts under
+`lockdown=integrity`. The live pack now excludes `usr/src` (`live_squash_excludes`, both
+arms), and `live_root_gate` refuses a squashfs that still lists the key. Live ISOs built
+before the fix, and images whose kernel came from the same cache entry, share a key that
+has to be treated as public. Rotating it means invalidating the x86 kernel cache and
+rebuilding.
+
+The x86 kernel's post-`olddefconfig` hardening asserts and its compile/install/UKI recipe
+are two plain scripts, `scripts/_x86-kernel-asserts.sh` and
+`scripts/_x86-kernel-install.sh`. The builder runs them in the chroot, and the Studio's
+kernel reconfiguration runs the same two files, so an edited kernel passes exactly the
+asserts a fresh build passes.
+
 - **Pi (cross-built):** SELinux policy packages' `pkg_postinst` runs the *target*
   `semodule`, which can't execute under aarch64 cross-emerge — so `keys-provision`
   loads the base policy + relabels the filesystem **natively at first boot**

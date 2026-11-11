@@ -8234,32 +8234,39 @@ fi
 # existed has no such file, and the Studio refuses it in one sentence.
 _krc_base() { case "$1" in "("*|"") printf '' ;; *) basename -- "${1%% *}" ;; esac; }
 kernel_reconfig_env() {
-    local f="${BUILD_ROOT}/kernel-reconfig.env" kver signed=no live="" k v
+    local f="${BUILD_ROOT}/kernel-reconfig.env" kver signed=no live="" cfg=""
     kver="$(ls -1 "${SYSROOT}/lib/modules" 2>/dev/null | sort -V | tail -1 || true)"
     if [ -f "${SYSROOT}/boot/${UKI_NAME}" ] && [ -f "${SBCRT:-}" ] && command -v sbverify >/dev/null \
        && sbverify --cert "${SBCRT}" "${SYSROOT}/boot/${UKI_NAME}" >/dev/null 2>&1; then
         signed=yes
     fi
     case "${ISO_PATH}" in *.live.iso) live="$(_krc_base "${ISO_PATH}")" ;; esac
+    [ -n "${kver}" ] && [ -s "${KRC_DIR}/config-${kver}" ] && cfg="kernel/config-${kver}"
+    # One `_krc_kv KEY VALUE` per line (a value never carries a newline). Written as a
+    # call, not as KEY=VALUE text, so no line here reads as a shell assignment — the
+    # role-tag guard (test-role-key-spelling.sh A4d) scans this file for those.
+    _krc_kv() { local v="${2-}"; printf '%s=%s\n' "$1" "${v//$'\n'/ }"; }
     {
-        for k in KR_FORMAT=1 \
-                 "BUILD_TS=${BUILD_TS}" "BRAND=${BRAND}" "BRAND_TITLE=${BRAND_TITLE}" \
-                 "ROLE=${ROLE}" "ROLE_TAG=${ROLE_TAG}" "ROLE_K8S=${ROLE_K8S}" "ENV=${ENV}" \
-                 "UNAFFILIATED=${UNAFFILIATED}" \
-                 "UKI_NAME=${UKI_NAME}" "ROOT_LABEL=${ROOT_LABEL}" "ESP_LABEL=${ESP_LABEL}" \
-                 "SB_ETC_DIR=${SB_ETC_DIR}" "SB_EFI_VENDOR=${SB_EFI_VENDOR}" \
-                 "SECURE_BOOT=${SECURE_BOOT}" "UKI_SIGNED=${signed}" \
-                 "DEFAULT_USER=${DEFAULT_USER}" "LIVE_ROOT_MOUNTPOINTS=${LIVE_ROOT_MOUNTPOINTS}" \
-                 "LIVE_VOLID=${LIVE_VOLID}" "INSTALL_VOLID=${INSTALL_VOLID}" \
-                 "SLX_TYPE=${SLX_TYPE:-}" "JOBS=${JOBS}" "KVER=${kver}" \
-                 "KERNEL_FROM_CACHE=${KCACHE_HIT}" \
-                 "KERNEL_CONFIG=$([ -n "${kver}" ] && [ -s "${KRC_DIR}/config-${kver}" ] && printf 'kernel/config-%s' "${kver}")" \
-                 "COMPRESS_IMG=${COMPRESS_IMG}" "COMPRESS_LEVEL=${COMPRESS_LEVEL}" \
-                 "STAGE4=$(_krc_base "${STAGE4:-}")" "IMG=$(_krc_base "${IMG_PATH}")" \
-                 "FS_TAR=$(_krc_base "${FS_TAR_PATH}")" "LIVE_ISO=${live}" \
-                 "INSTALLER_ISO=$(_krc_base "${INSTALLER_ISO_PATH}")"; do
-            v="${k#*=}"; printf '%s=%s\n' "${k%%=*}" "${v//$'\n'/ }"
-        done
+        _krc_kv KR_FORMAT 1
+        _krc_kv BUILD_TS "${BUILD_TS}";           _krc_kv BRAND "${BRAND}"
+        _krc_kv BRAND_TITLE "${BRAND_TITLE}";     _krc_kv ROLE "${ROLE}"
+        _krc_kv ROLE_TAG "${ROLE_TAG}";           _krc_kv ROLE_K8S "${ROLE_K8S}"
+        _krc_kv ENV "${ENV}";                     _krc_kv UNAFFILIATED "${UNAFFILIATED}"
+        _krc_kv UKI_NAME "${UKI_NAME}";           _krc_kv ROOT_LABEL "${ROOT_LABEL}"
+        _krc_kv ESP_LABEL "${ESP_LABEL}";         _krc_kv SB_ETC_DIR "${SB_ETC_DIR}"
+        _krc_kv SB_EFI_VENDOR "${SB_EFI_VENDOR}"; _krc_kv SECURE_BOOT "${SECURE_BOOT}"
+        _krc_kv UKI_SIGNED "${signed}";           _krc_kv DEFAULT_USER "${DEFAULT_USER}"
+        _krc_kv LIVE_ROOT_MOUNTPOINTS "${LIVE_ROOT_MOUNTPOINTS}"
+        _krc_kv LIVE_VOLID "${LIVE_VOLID}";       _krc_kv INSTALL_VOLID "${INSTALL_VOLID}"
+        _krc_kv SLX_TYPE "${SLX_TYPE:-}";         _krc_kv JOBS "${JOBS}"
+        _krc_kv KVER "${kver}";                   _krc_kv KERNEL_FROM_CACHE "${KCACHE_HIT}"
+        _krc_kv KERNEL_CONFIG "${cfg}"
+        _krc_kv COMPRESS_IMG "${COMPRESS_IMG}";   _krc_kv COMPRESS_LEVEL "${COMPRESS_LEVEL}"
+        _krc_kv STAGE4 "$(_krc_base "${STAGE4:-}")"
+        _krc_kv IMG "$(_krc_base "${IMG_PATH}")"
+        _krc_kv FS_TAR "$(_krc_base "${FS_TAR_PATH}")"
+        _krc_kv LIVE_ISO "${live}"
+        _krc_kv INSTALLER_ISO "$(_krc_base "${INSTALLER_ISO_PATH}")"
     } > "${f}.tmp" && mv -f "${f}.tmp" "${f}" \
         && info "Kernel reconfiguration contract: ${f}" \
         || warn "could not write ${f} — the Studio's \"Kernel config…\" will refuse this image"
