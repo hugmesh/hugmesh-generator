@@ -1039,7 +1039,14 @@ jobs:
     # Linux host with docker, images cached: 14 passed / 0 failed in 29 s at load
     # average 45 (3.5 min at 75), and each of four mutations of the deny-all text or
     # the owner check (an allow-all rule, no group, an owned tag:hugmesh, the old
-    # `.tagOwners` read) turned it red.
+    # `.tagOwners` read) turned it red. It also checks keys-provision's config gate
+    # against the binary: over 18 config.yaml spellings, what `headscale serve` loads,
+    # what `headscale dumpConfig` reports and the gate's verdict must agree, and the
+    # real provision_headscale refuses stick configs that redirect the policy or name
+    # none, while with the gate off those sticks really grant tag:superadmin / run
+    # allow-all, and a refused config is set aside so a later restart cannot start it
+    # (the CP DNS rewrite is re-checked too). MEASURED 2026-11-11 with the gate: 96
+    # passed / 0 failed in about 2 min.
     # tests/device-registry/test-headscale-tag-ownership.sh starts throwaway
     # headscale 0.23.0 + tailscale 1.78.1 containers (and curlimages/curl as a
     # LocalAPI client) on one private docker network, no published ports, and

@@ -50,6 +50,11 @@ policy. keys-provision never starts headscale without a policy it has checked:
 when the stick's policy can be neither used nor narrowed and there is no clean
 baked bootstrap policy, or there is no policy at all, it stages a deny-all policy
 (nodes join but reach nothing, no tag can be self-assigned) and marks the node
-UNPROTECTED in `/run/hugmesh/firewall-health/`. Keep `policy.path` in any
-`headscale/config.yaml` on the stick: headscale itself runs allow-all, with no
-tags and no route approval, when its config names no policy file.
+UNPROTECTED in `/run/hugmesh/firewall-health/`. It also checks that headscale
+will read that policy: any `headscale/config.yaml` on the stick must keep
+`policy.mode: file` and `policy.path: /etc/headscale/policy.hujson`. A config that
+names another file, names none (headscale itself would then run allow-all, with no
+tags and no route approval), selects `mode: database` or uses a relative path is
+refused: headscale is not started (marked `state=not-started`) and the config is
+moved aside to `/etc/headscale/config.yaml.refused` until the node is
+re-provisioned with a fixed stick.

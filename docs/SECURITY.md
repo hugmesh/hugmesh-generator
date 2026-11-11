@@ -428,6 +428,26 @@ headscale so the rewritten file is the one in force.
   deny-all policy cannot be written headscale is not started. The first verified
   Layer-A sync, or re-provisioning with a clean policy, replaces the deny-all policy. See
   [`docs/DEVICE-REGISTRY-KEY-ROTATION.md`](DEVICE-REGISTRY-KEY-ROTATION.md).
+  All of these checks are on `/etc/headscale/policy.hujson`, and headscale loads the
+  file its own configuration names, which comes from the KEYS stick. So right before
+  starting headscale, keys-provision asks headscale itself (`headscale dumpConfig`, the
+  same config search and resolution `headscale serve` does) what it will load, and
+  starts it only on `policy.mode: file` with `policy.path: /etc/headscale/policy.hujson`.
+  A stick config that names another file (another stick file such as `acl.hujson`
+  could own `tag:superadmin`), names none (headscale then runs allow-all), selects
+  database mode, uses a relative path, or cannot be read is **refused**: headscale is
+  not started, health is marked UNPROTECTED with `state=not-started`, and the config
+  is moved aside to `/etc/headscale/config.*.refused`, because OpenRC's `restart`
+  starts a stopped service and later steps restart headscale (the CP DNS record, the
+  Layer-A policy-sync apply leg). `publish_cp_dns_record`, which rewrites
+  `config.yaml` after that first check, runs the same check again before its restart.
+  Measured on
+  headscale 0.23.0, a line-by-line read of `config.yaml` is not enough to know the
+  answer (case-variant and dotted keys, `<<:` merges, CR/NEL/U+2028 line breaks, a
+  quoted scalar that swallows a later `policy:` block, a second YAML document, a
+  `config.json` beside the yaml). The boundary: a `HEADSCALE_*` variable in the
+  daemon's own environment is not visible to the check; the image's init script sets
+  none and the stick cannot.
   `specs/etc/headscale/policy.hujson` is a reference copy that the builders no
   longer bake; neither it nor `keys-template/headscale/policy.hujson` carries the
   any-to-any rule, though the header comments of both still describe the old

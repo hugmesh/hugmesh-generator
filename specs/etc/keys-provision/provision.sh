@@ -850,11 +850,12 @@ provision_headscale() {
     else
         policy_fail="no headscale policy: none on the KEYS stick and no baked bootstrap policy"
     fi
-    # FINAL GATE. headscale reads /etc/headscale/policy.hujson at startup (policy.mode
-    # file), so it starts only on a file that was just read and found clean. Anything
-    # else gets the deny-all policy; when even that cannot be written, headscale is not
-    # started at all (and is taken out of the runlevel) rather than run on an unchecked
-    # file or on none.
+    # POLICY GATE. /etc/headscale/policy.hujson is re-read once more, so headscale starts
+    # only on a file that was just read and found clean. Anything else gets the deny-all
+    # policy; when even that cannot be written, headscale is not started at all (and is
+    # taken out of the runlevel) rather than run on an unchecked file or on none. That
+    # this is the file headscale reads at startup is NOT assumed: the CONFIG GATE right
+    # before the start below refuses any configuration that loads another one.
     local final_sec=""
     if [ -z "${policy_fail}" ]; then
         if [ ! -f /etc/headscale/policy.hujson ]; then
@@ -869,9 +870,9 @@ provision_headscale() {
             headscale_policy_unprotected "deny-all" "${policy_fail}; the deny-all policy is in force (no node reaches another, no Tailscale SSH, no tag can be self-assigned) until a clean policy is loaded"
         else
             rm -f /etc/headscale/policy.hujson 2>/dev/null
-            headscale_policy_unprotected "not-started" "${policy_fail}; the deny-all policy could not be written either, so headscale is NOT started"
-            rc-update del headscale default 2>/dev/null || true
-            rc-service headscale stop 2>/dev/null || true
+            # Set aside like a CONFIG GATE refusal: a later restart must not start
+            # headscale on whatever the configuration names instead.
+            headscale_refuse_config "${policy_fail}; the deny-all policy could not be written either"
             return 1
         fi
     else
@@ -909,6 +910,29 @@ provision_headscale() {
                 warn "headscale MagicDNS base_domain '${dnsdom}' is not a valid hostname ([a-z0-9.-]) — leaving baked default"
             fi
         fi
+    fi
+
+    # CONFIG GATE. Every check above is on /etc/headscale/policy.hujson, but headscale
+    # loads the policy its EFFECTIVE configuration names (policy.mode, policy.path), and
+    # that configuration came from the KEYS stick (headscale/config.yaml, or the
+    # manifest's .headscale.config_file), next to any acl* / *.hujson files the stick
+    # carries. A stick config that names another file, names none (headscale then runs
+    # with no policy at all: allow-all), or selects database mode would put none of the
+    # checks above in force. So headscale starts only when its own reading of its
+    # configuration is policy.mode file with policy.path /etc/headscale/policy.hujson,
+    # the one file the checks above, the deny-all fallback and the Layer-A renderer
+    # (gen-headscale-policy.sh POLICY_OUT) all write. Anything else, including a
+    # configuration that cannot be read, is REFUSED (headscale_refuse_config): headscale
+    # is not started, is taken out of the runlevel, and the configuration is set aside so
+    # that no later restart can start it on that configuration either. The deny-all
+    # policy is no fallback here, because such a configuration does not read the file it
+    # is staged in. This runs after this function's last edit to config.yaml (server_url,
+    # base_domain) and right before the start; publish_cp_dns_record, which edits it
+    # again later, runs the same check before its restart.
+    local cfg_fail=""
+    if ! cfg_fail="$(headscale_config_gate)"; then
+        headscale_refuse_config "${cfg_fail} (the KEYS headscale/config.yaml must keep policy.mode: file and policy.path: /etc/headscale/policy.hujson)"
+        return 1
     fi
 
     chown -R headscale:headscale /etc/headscale /var/lib/headscale /run/headscale
@@ -1093,6 +1117,114 @@ headscale_policy_unprotected() {
     have logger && logger -p daemon.crit -t keys-provision -- "headscale policy failed closed (${1}): ${2}" 2>/dev/null || true
 }
 
+# headscale_config_gate: exit 0 when headscale's own reading of its configuration is
+# policy.mode file with policy.path /etc/headscale/policy.hujson (the checked file);
+# otherwise prints why and exits 1. See the CONFIG GATE in provision_headscale.
+headscale_config_gate() {
+    local eff=""
+    if ! eff="$(headscale_effective_policy_path)"; then
+        echo "headscale's configuration does not load the checked policy file: ${eff}"
+        return 1
+    fi
+    if [ "${eff}" != /etc/headscale/policy.hujson ]; then
+        echo "headscale's configuration loads its policy from ${eff}, not from the checked /etc/headscale/policy.hujson"
+        return 1
+    fi
+    return 0
+}
+
+# headscale_refuse_config <reason>: headscale is NOT to run (the CONFIG GATE refused its
+# configuration, or the policy step could not even stage the deny-all). It is stopped and
+# taken out of the runlevel, and every file headscale's config search would find in
+# /etc/headscale (config.<ext>, in viper's extension list) is moved aside to
+# <file>.refused. Stopping is not enough on its own: OpenRC's `restart` STARTS a
+# stopped service, and later steps restart headscale (publish_cp_dns_record, the
+# Layer-A policy-sync apply leg every minute, an operator), which would bring it up on
+# the refused configuration. With no configuration headscale cannot start at all.
+# Re-provisioning with a KEYS headscale/config.yaml that keeps policy.mode: file and
+# policy.path: /etc/headscale/policy.hujson installs a configuration again.
+headscale_refuse_config() {
+    local f left=""
+    rc-service headscale stop 2>/dev/null || true
+    rc-update del headscale default 2>/dev/null || true
+    for f in json toml yaml yml properties props prop hcl tfvars dotenv env ini; do
+        f="/etc/headscale/config.${f}"
+        [ -e "${f}" ] || [ -L "${f}" ] || continue
+        mv -f "${f}" "${f}.refused" 2>/dev/null || rm -f "${f}" 2>/dev/null
+        if [ -e "${f}" ] || [ -L "${f}" ]; then left="${left} ${f}"; fi
+    done
+    if [ -n "${left}" ]; then
+        headscale_policy_unprotected "not-started" "$1; headscale is stopped, but its configuration could not be set aside (${left# }), so a later restart could start it on it"
+    else
+        headscale_policy_unprotected "not-started" "$1; headscale is NOT started and its configuration is set aside as /etc/headscale/config.*.refused"
+    fi
+}
+
+# headscale_effective_policy_path: prints the policy FILE headscale will load at its
+# next start, as headscale itself resolves its configuration. Exit 0 = file mode and a
+# plain absolute policy.path (printed). Exit 1 = anything else, with the reason printed
+# instead: database mode, no policy.path (headscale then starts with no policy at all,
+# i.e. allow-all), a relative or odd path, or a configuration headscale cannot read.
+# WHY headscale's own reading and not a read of config.yaml: headscale (viper over
+# yaml.v3) matches keys in any case (Policy:, PATH:), lets a top-level dotted key
+# (policy.path:) win over the nested one, merges <<: anchors, resolves a relative path
+# against the config directory, treats CR, NEL, U+2028 and U+2029 as line breaks, lets a
+# multi-line quoted scalar swallow a later "policy:" block, reads only the first YAML
+# document, and prefers /etc/headscale/config.json or config.toml over config.yaml.
+# Measured on the pinned headscale 0.23.0: each of these made it load a different file
+# from the one a line-by-line read of config.yaml finds. `headscale dumpConfig` (hidden;
+# present in 0.23.0 and 0.26.1) runs the same config search and resolution as
+# `headscale serve` and writes the result, normalised, to /etc/headscale/config.dump.yaml.
+#   * Its exit status says nothing (it prints "Failed to dump config" and exits 0), so
+#     the dump is removed first and must exist, non-empty, afterwards.
+#   * -o json switches off headscale's update check (no network).
+#   * It runs from / with every HEADSCALE_* variable unset, as the openrc service does.
+#     The daemon's own environment is not visible from here; the image's init script
+#     sets no HEADSCALE_* variable and nothing on the KEYS stick can. That is the
+#     boundary of this check.
+#   * The dump repeats the whole configuration (inline secrets too), so it is deleted
+#     again before this returns.
+#   * Its policy block is read strictly: exactly one top-level "policy:", nothing in it
+#     but one mode and one path line; any other shape is refused.
+headscale_effective_policy_path() {
+    local dump=/etc/headscale/config.dump.yaml res="" rc=0
+    rm -f "${dump}" 2>/dev/null
+    if [ -e "${dump}" ] || [ -L "${dump}" ]; then
+        echo "a stale ${dump} could not be removed, so headscale's reading of its configuration cannot be told apart from it"
+        return 1
+    fi
+    (
+        cd / || exit 1
+        for v in $(compgen -A export -X '!HEADSCALE_*'); do unset "${v}"; done
+        umask 077
+        timeout 60 headscale dumpConfig -o json
+    ) >/dev/null 2>&1
+    if [ -L "${dump}" ] || [ ! -f "${dump}" ] || [ ! -s "${dump}" ]; then
+        rm -f "${dump}" 2>/dev/null
+        echo "headscale dumpConfig wrote no configuration dump, so headscale could not read its configuration"
+        return 1
+    fi
+    res="$(awk '
+        function clean(s) { gsub(/[^A-Za-z0-9_.\/:@ -]/, "?", s); return substr(s, 1, 120) }
+        /^policy:$/        { blocks++; inb = 1; next }
+        /^[^ ]/            { inb = 0; if (tolower($0) ~ /^"?policy/) odd++; next }
+        inb && /^    mode: / { nm++; mode = substr($0, 11); next }
+        inb && /^    path: / { np++; path = substr($0, 11); next }
+        inb                { odd++ }
+        END {
+            if (blocks != 1 || odd || nm != 1 || np > 1) { print "the dump has no single plain policy block (mode and path only)"; exit 1 }
+            if (mode == "database") { print "policy.mode is database: headscale loads whatever policy its database holds, which keys-provision cannot check before headscale starts"; exit 1 }
+            if (mode != "file") { print "policy.mode is \"" clean(mode) "\", not file"; exit 1 }
+            if (np == 0) { print "it names no policy.path: headscale would start with no policy at all (allow-all)"; exit 1 }
+            if (path !~ /^\/[A-Za-z0-9_.\/-]+$/) { print "policy.path \"" clean(path) "\" is not a plain absolute path"; exit 1 }
+            print path
+        }' "${dump}" 2>/dev/null)" || rc=1
+    rm -f "${dump}" 2>/dev/null
+    [ -n "${res}" ] || { echo "the configuration dump could not be read"; return 1; }
+    printf '%s\n' "${res}"
+    return "${rc}"
+}
+
 # Run the renderer's mesh-route approval once, now (see provision_headscale).
 approve_mesh_routes_now() {
     local mesh_routes
@@ -1157,6 +1289,16 @@ open(p, "w").write("".join(out))
 PY
     chown headscale:headscale /etc/headscale/config.yaml 2>/dev/null || true
     log "Published MagicDNS CP record ${cpname} -> ${tip}"
+    # This edit comes AFTER provision_headscale's CONFIG GATE, and the restart below
+    # makes headscale read it, so the gate runs again first. The managed-block removal
+    # above deletes everything between its two marker lines: a KEYS config.yaml that put
+    # its policy: block between them passed the first gate and, measured on headscale
+    # 0.23.0, came back from this rewrite with no policy.path (allow-all).
+    local cfg_fail=""
+    if ! cfg_fail="$(headscale_config_gate)"; then
+        headscale_refuse_config "after the CP DNS record was written: ${cfg_fail}"
+        return 0
+    fi
     # headscale 0.23 reads dns.extra_records at startup only (SIGHUP reloads the
     # policy, not the config), so this is a restart, not a reload — and it happens
     # under this node's own tailscaled session. control_client_regain (called by
