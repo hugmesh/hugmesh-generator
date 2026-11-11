@@ -1131,6 +1131,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-edge-ai-analysis-ssrf.sh, named by shell-suites.yml's debian
 # edge-ai-analysis leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on
 # the branch over origin/main 39b953ad: 238 of 280.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #926 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 240 of 282.
 # 238 -> 240 (feat/headscale-embedded-derp-20261110): +2 gated, +2 total — the headscale DERP static + live suites; MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main b3eafff5.
 # 240 -> 241 (MERGED fix/control-endpoint-lan-first-20261111 into feat/headscale-onion-control-20261111): +1 gated, +1 total —
 # tests/scripts/test-control-endpoint-lan-first.sh, named by shell-suites.yml (debian leg)
@@ -1140,7 +1145,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-mesh-control-onion.sh (shell-suites.yml debian leg, orphan-guards-
 # verify) and tests/scripts/test-mesh-control-onion-live.sh, which joins PREMERGE_UNGATED
 # (opt-in on the real Tor network by design).
-PREMERGE_BASELINE="${GUARD_PREMERGE:-242}"
+# 242 -> 244 (MERGED origin/main ea8d3143 into feat/headscale-onion-control-20261111): +2 gated (#983, #926), +2 total. MEASURED with GUARD_PREMERGE=0 on the merged tree: 244 of 287.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-244}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
