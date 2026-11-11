@@ -60,10 +60,14 @@ here is the top of that range.
 - **`HEALTHCHECK`** is `curl` against `/api/v1/instance`.
 - **Not included: ffmpeg and ImageMagick.** They are needed only for the media preview
   proxy and the `AnalyzeMetadata` upload filter, and both are off unless configured.
-- **linux/amd64 only**, like every other HugMesh backend image the cluster runs.
-  Adding arm64 means a native `ubuntu-24.04-arm` leg plus a manifest merge before the
-  signing steps. A QEMU build of the BEAM JIT needs `ERL_FLAGS="+JMsingle true"` in
-  the build stage.
+- **linux/amd64 and linux/arm64.** Akkoma is selectable on rpi5 and x86 meshes
+  (`optional-services.yaml` `buildGate`). Unlike the cluster's other first-party
+  images, which it builds in-cluster into Harbor for its own architecture, this one is
+  pulled from GHCR, so the published index must carry both. The release workflow
+  builds arm64 under QEMU, and the build stage sets `ERL_FLAGS="+JMsingle true"`
+  because the BEAM JIT's dual-mapped code memory crashes under QEMU. Pull requests
+  build and boot-test arm64 natively on `ubuntu-24.04-arm`. The release's QEMU leg
+  first runs on the first push to `main`; if it fails, nothing is pushed.
 - **The MRF** (`mrf/force_local_for_users_policy.ex`) is compiled in and does nothing
   until config lists it under `:mrf policies`. See
   [`docs/DOMAIN-LOCK.md`](../../docs/DOMAIN-LOCK.md).
@@ -121,11 +125,25 @@ in any default while the placeholder is in place. After a release:
    `PLACEHOLDER digest` comments. The refs are in `akkoma.yaml` ×2,
    `admin-sync-job.yaml`, `domainlock-sync-job.yaml` and
    `test-runner/akkoma-peer.yaml` ×2.
-3. Then turn `akkoma` back on in the defaults: the builder lib, both builders, Studio's
+3. Re-wire `akkoma-peer.yaml` in `specs/cluster/manifests/test-runner/kustomization.yaml`.
+   It is unwired while the digest is the placeholder, because that bundle syncs from
+   git on every ENV=test mesh whatever the selection.
+4. Then turn `akkoma` back on in the defaults: the builder lib, both builders, Studio's
    `BUILTIN_DEFAULT_SERVICES`, the registry's `default:`, the installed-services
    baseline, the seed OptionalService and the federation `gate.sql`. The test-suite
    expectations that this change moved must move back too.
 
-Before the default goes back on, the Akkoma config in `akkoma.yaml` needs
-`config :pleroma, Pleroma.Upload, base_url: ...` on a host other than the instance's.
-Akkoma 3.x refuses to boot without one, and the smoke test sets one for that reason.
+Three things must be settled before the default goes back on:
+
+- **Upload `base_url`.** Akkoma 3.x refuses to boot without
+  `config :pleroma, Pleroma.Upload, base_url: ...` on a host other than the
+  instance's. Neither `akkoma.yaml` nor the test-runner peer's config has one. The
+  smoke test sets one for that reason.
+- **Branded meshes.** On a non-default brand, `rebrand_sysroot` in both builders turns
+  `ghcr.io/hugmesh/hugmesh-akkoma@sha256:...` into
+  `ghcr.io/<org>/<brand>-akkoma@sha256:...`, the same digest under a name that does
+  not hold it. Either exempt this ref from the rebrand, so every brand pulls the
+  HugMesh-published image (a brand-neutrality decision), or have each brand publish
+  and pin its own.
+- **The MRF is still a skeleton.** See its header. It is inert until listed under
+  `:mrf policies`.

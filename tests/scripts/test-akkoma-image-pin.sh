@@ -136,6 +136,8 @@ expect "seed OptionalService akkoma enabled" defaults \
   specs/cluster/manifests/optional-services-operator/seed-optionalservices.yaml "re.sub(r'(slug: akkoma\n\s+)enabled: false', r'\1enabled: true', s, count=1)"
 expect "federation gate.sql mastodon on" defaults \
   specs/cluster/manifests/federation-modules-gate/sql/gate.sql "s.replace(\"enabled = false WHERE slug = 'mastodon'\", \"enabled = true WHERE slug = 'mastodon'\", 1)"
+expect "the test-runner bundle wires akkoma-peer with the placeholder" defaults \
+  specs/cluster/manifests/test-runner/kustomization.yaml "s.replace('  # - akkoma-peer.yaml\n', '  - akkoma-peer.yaml\n', 1)"
 expect "an unreadable default source fails closed" defaults \
   scripts/_optional-services-lib.sh "s.replace('_OPT_BUILTIN_DEFAULT_SERVICES=', '_OPT_DEFAULTS=', 1)"
 expect "runtime base unpinned" dockerfile \
@@ -164,6 +166,10 @@ expect "the boot test moves after the tag decision" release-wf \
   "${REL}" "re.sub(r'(\n      # The image about to be pushed.*?)(\n      - name: Compute tags and labels.*?)(\n      - name: Build and push image)', r'\2\1\3', s, count=1, flags=re.S)"
 expect "the first build pushes" release-wf \
   "${REL}" "re.sub(r'(- name: Build the image \(no push\)(?:.*\n)*?\s+)push: false', r'\1push: true', s, count=1)"
+expect "the release drops arm64" release-wf \
+  "${REL}" "s.replace('platforms: linux/amd64,linux/arm64\n          pull: true\n          push: true', 'platforms: linux/amd64\n          pull: true\n          push: true', 1)"
+expect "the PR build loses its native arm64 leg" pr-wf \
+  "${CI}" "s.replace('runner: ubuntu-24.04-arm', 'runner: ubuntu-latest', 1)"
 expect "the PR build gains packages: write" pr-wf \
   "${CI}" "s.replace('permissions:\n  contents: read', 'permissions:\n  contents: read\n  packages: write', 1)"
 expect "the PR build logs in to a registry" pr-wf \

@@ -38,7 +38,12 @@ ARG AKKOMA_COMMIT=98dd958886a8b0ef65d5bd827aba3789f1dc5116
 ARG HEX_VERSION=2.7.0
 ENV MIX_ENV=prod \
     LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
+    LC_ALL=C.UTF-8 \
+    ERL_FLAGS="+JMsingle true"
+# ERL_FLAGS, build stage only (the runtime stage does not inherit it): the release
+# workflow builds linux/arm64 under QEMU, where the BEAM JIT's default dual-mapped
+# code memory crashes the compiler; single mapping is the documented workaround and
+# changes nothing on a native build.
 
 RUN set -eux; \
     apt-get update; \

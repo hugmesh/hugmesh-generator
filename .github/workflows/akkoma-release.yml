@@ -8,8 +8,9 @@
 # This workflow is mesh-node-release.yml with the artifact's names swapped in, and
 # tests/scripts/test-akkoma-image-pin.sh holds every security-relevant step body
 # equal to the mesh-node one after that swap, so a fix to one cannot silently skip
-# the other. What differs on purpose: linux/amd64 only (no QEMU), the upstream-tag
-# check in the version job, and the boot test of the loaded image before the push.
+# the other. What differs on purpose: the upstream-tag check in the version job, and
+# the boot test of the (amd64) image before the push. Like the mesh-node image it is
+# linux/amd64 + linux/arm64.
 #
 # hugmesh-release-channels: beta+stable
 # The release channel comes from the TAG (scripts/mesh-node-release-channel.sh,
@@ -139,6 +140,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Akkoma is selectable on rpi5 (arm64) and x86 meshes (optional-services.yaml
+      # buildGate), and the cluster pulls this image from GHCR rather than building
+      # it in-cluster like its other first-party images, so the index carries both.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -194,16 +201,25 @@ jobs:
       # Builds now and pushes nothing, so the step that pushes finds every layer
       # in the builder's cache and takes seconds. The tag check below would
       # otherwise be as old as the whole build by the time the tags are written.
-      # linux/amd64 only, like every other HugMesh backend image the cluster runs
-      # next to it (images/akkoma/README.md says what an arm64 leg would take).
-      # load: true hands the image to the smoke test below before anything is pushed.
+      # The arm64 leg compiles under QEMU (the Dockerfile sets ERL_FLAGS=+JMsingle
+      # for that); akkoma-image-ci.yml builds and boot-tests arm64 natively on PRs.
       - name: Build the image (no push)
         if: steps.exists.outputs.skip != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ env.CONTEXT }}
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           pull: true
+          push: false
+
+      # The runner is amd64, so that half is loaded (from the cache above) for the
+      # boot test; a multi-platform result cannot be loaded into the local engine.
+      - name: Load the amd64 image for the boot test
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          platforms: linux/amd64
           push: false
           load: true
           tags: hugmesh-akkoma:smoke
@@ -259,7 +275,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ env.CONTEXT }}
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           pull: true
           push: true
           tags: ${{ steps.meta.outputs.tags }}

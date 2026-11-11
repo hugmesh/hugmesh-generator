@@ -25,7 +25,9 @@ mesh deploys a pod that cannot pull. These checks hold that line:
                OFF in every default source: the shared builder lib, both builders'
                OPTIONAL_SERVICES default, Studio's BUILTIN_DEFAULT_SERVICES, the
                registry's `default:`, the installed-services ConfigMap baseline, the
-               seed OptionalService CR and the federation gate.sql baseline. A real
+               seed OptionalService CR, the federation gate.sql baseline, and the
+               test-runner kustomization (git-synced on every ENV=test mesh, so a
+               wired akkoma-peer.yaml is "on" there whatever the selection). A real
                digest must not carry the marker.
   [dockerfile] images/akkoma/Dockerfile pins both base images by digest, builds one
                40-hex upstream commit in every stage, ships no Erlang cookie and runs
@@ -33,12 +35,13 @@ mesh deploys a pod that cannot pull. These checks hold that line:
   [version]    images/akkoma/VERSION is MAJOR.MINOR.PATCH[-beta.N] and shares X.Y with
                clients/docker-mesh-node/VERSION (one release/X.Y per repository).
   [release-wf] akkoma-release.yml has no pull_request trigger, publishes only
-               akkoma-v* tags with TAG_PREFIX=akkoma-v, boot-tests before it decides
-               the tags, decides them in the step right before the push, and every
+               akkoma-v* tags with TAG_PREFIX=akkoma-v, builds and pushes
+               linux/amd64 + linux/arm64, boot-tests before it decides the tags,
+               decides them in the step right before the push, and every
                security-relevant step body equals mesh-node-release.yml's after the
                artifact's names are swapped in.
   [pr-wf]      akkoma-image-ci.yml runs on pull_request only, with a read-only token,
-               no registry login and no push.
+               no registry login and no push, and boot-tests a native arm64 build.
 """
 import os
 import re
@@ -193,6 +196,14 @@ def default_sources():
             out.append(("seed OptionalService", val == "true", "%s: akkoma enabled: %s" % (rel, val)))
     else:
         out.append(("seed OptionalService", None, "%s is missing" % rel))
+
+    rel = "specs/cluster/manifests/test-runner/kustomization.yaml"
+    if exists(rel):
+        wired = re.search(r"^\s*-\s*akkoma-peer\.yaml\b", read(rel), re.M) is not None
+        out.append(("test-runner akkoma-peer", wired,
+                    "%s: akkoma-peer.yaml %s (synced on every ENV=test mesh)" % (rel, "wired" if wired else "unwired")))
+    else:
+        out.append(("test-runner akkoma-peer", None, "%s is missing" % rel))
 
     rel = "specs/cluster/manifests/federation-modules-gate/sql/gate.sql"
     if exists(rel):
@@ -423,6 +434,10 @@ def check_release_workflow():
             problems.append("the first build is not push: false")
         if "smoke-test.sh" not in s["Boot-test the image before pushing it"]:
             problems.append("the boot test does not run images/akkoma/smoke-test.sh")
+        for n in ("Build the image (no push)", "Build and push image"):
+            if "platforms: linux/amd64,linux/arm64" not in s[n]:
+                problems.append("step %r does not build linux/amd64,linux/arm64 (akkoma is "
+                                "selectable on rpi5 and x86 meshes)" % n)
     if "Check the upstream tag still names the pinned commit" not in s:
         problems.append("the version job does not check the upstream tag against the pinned commit")
     for name in PARITY_STEPS:
@@ -462,6 +477,9 @@ def check_pr_workflow():
             problems.append("it contains %r" % bad)
     if "smoke-test.sh" not in code:
         problems.append("it does not boot-test the image")
+    if "runner: ubuntu-24.04-arm" not in code or "platform: linux/arm64" not in code:
+        problems.append("it has no native linux/arm64 leg (the release builds arm64 under QEMU; "
+                        "this is where arm64 is proven)")
     if problems:
         fail("pr-wf", "; ".join(problems))
     else:
