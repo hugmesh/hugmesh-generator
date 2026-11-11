@@ -387,6 +387,11 @@ grep -vE '^[[:space:]]*#' "${KRC}" | grep -E 'kc_store|kernel_cache_store' >/dev
 grep -q 'scripts/_x86-kernel-asserts.sh' "${KRC}" && grep -q 'scripts/_x86-kernel-install.sh' "${KRC}" \
     && ok "the reconfig path runs the builder's own assert + install scripts" || bad "the reconfig path does not run the shared scripts"
 
+code="$(grep -vE '^[[:space:]]*#' "${KRC}")"
+unb="$(grep -E '(^|[|[:space:]])xz ' <<<"${code}" | grep -vE 'command -v|--robot|krc_xz_memlimit|xz -dc -T1' || true)"
+[ -z "${unb}" ] && ok "every xz the repackager runs is memory-bounded (decompress -T1, compress capped by MemAvailable)" \
+    || bad "an unbounded xz (the real run's xz -dc was OOM-killed): ${unb}"
+
 echo "-- 11) the builder half of the contract --"
 fn() { awk -v n="$1" '$0 ~ "^"n"\\(\\) \\{"{f=1} f{print} f&&/^}/{exit}' "${BUILDER}"; }
 { fn kernel_reconfig_reset; fn kernel_config_preserve; fn kernel_cache_try_restore; } > "${TMPD}/bfn.sh"

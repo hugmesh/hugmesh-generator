@@ -528,7 +528,7 @@ krc_pack_stage4() {
         --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
         --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude="./home/${KRE[DEFAULT_USER]}" \
         --exclude='./boot/initramfs-live.img' -cpf - . \
-        | xz -T0 -6 > "${NEW_STAGE4}" \
+        | xz -T0 "$(krc_xz_memlimit)" -6 > "${NEW_STAGE4}" \
         || krc_fail "stage4 tar (with xattrs) failed"
     slx_tar_label_gate "${NEW_STAGE4}" stage4 "${SLX_PROBE_TABLE}" \
         || krc_fail "the new stage4 lost its SELinux labels"
@@ -572,7 +572,7 @@ krc_img_patch() {
     banner "Building raw .img (UEFI GPT: ESP + ext4 root, GRUB-EFI --removable)"
     info "Patching ${KRE[IMG]}: kernel, modules, initramfs and the signed UKI on the ESP"
     case "${src}" in
-        *.xz) xz -dc "${src}" | dd of="${work}" bs=1M conv=sparse iflag=fullblock status=none ;;
+        *.xz) xz -dc -T1 "${src}" | dd of="${work}" bs=1M conv=sparse iflag=fullblock status=none ;;
         *)    cp --sparse=always "${src}" "${work}" ;;
     esac
     geom="$(sfdisk -d "${work}")"
@@ -615,7 +615,7 @@ krc_img_patch() {
         NEW_FS_TAR="${WD}/${KRE[BRAND]}-x86-amd64-${KRE[ROLE_TAG]}-${KRE[ENV]}-${NEW_TS}.fs.tar.xz"
         info "Filesystem tarball (mounted tree) -> ${NEW_FS_TAR}"
         tar -C "${KRC_IMG_MNT}" --xattrs --xattrs-include='*.*' --numeric-owner -cpf - . \
-            | xz -T0 -6 > "${NEW_FS_TAR}" || krc_fail "fs.tar (with xattrs) failed"
+            | xz -T0 "$(krc_xz_memlimit)" -6 > "${NEW_FS_TAR}" || krc_fail "fs.tar (with xattrs) failed"
     fi
     sync
     krc_img_cleanup; trap - EXIT
@@ -623,7 +623,7 @@ krc_img_patch() {
     mv -f "${work}" "${NEW_IMG}"
     case "${src}" in
         *.xz) info "Compressing image (xz -T0 -${KRE[COMPRESS_LEVEL]:-6})..."
-              xz -T0 --memlimit-compress=50% "-${KRE[COMPRESS_LEVEL]:-6}" -f "${NEW_IMG}"; NEW_IMG="${NEW_IMG}.xz" ;;
+              xz -T0 "$(krc_xz_memlimit)" "-${KRE[COMPRESS_LEVEL]:-6}" -f "${NEW_IMG}"; NEW_IMG="${NEW_IMG}.xz" ;;
     esac
     info "Image: ${NEW_IMG} ($(du -sh "${NEW_IMG}" | cut -f1))"
 }
@@ -684,6 +684,17 @@ krc_installer_iso() {
         -map "${NEW_STAGE4}" "/stage4/$(basename "${NEW_STAGE4}")" >/dev/null 2>&1 \
         || { rm -f "${NEW_INSTALLER}"; krc_fail "xorriso could not rewrite the installer ISO"; }
     info "Installer ISO: ${NEW_INSTALLER}"
+}
+
+# krc_xz_memlimit — xz's thread budget from the memory this machine has FREE right now
+# (half of MemAvailable, at least 256 MiB): xz -T0 shrinks its thread count to fit.
+# Measured on the real run: an unbounded multi-threaded `xz -dc` of the -9 image was
+# OOM-killed on a busy 31 GiB host, so decompression is single-threaded (-T1, ~65 MiB)
+# and every compression is capped.
+krc_xz_memlimit() {
+    local kb; kb="$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null)"
+    kb=$(( ${kb:-0} / 2 / 1024 )); [ "${kb}" -ge 256 ] || kb=256
+    printf -- '--memlimit-compress=%sMiB' "${kb}"
 }
 
 krc_sha256() { local f="$1"; (cd "$(dirname "${f}")" && sha256sum "$(basename "${f}")" > "$(basename "${f}").sha256"); cut -d' ' -f1 < "${f}.sha256"; }
