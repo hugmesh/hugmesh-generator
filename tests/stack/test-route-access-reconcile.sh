@@ -435,7 +435,9 @@ printf '%s' "${out}" | grep -E "^route-access reconcile: [0-9]+ -> [0-9]+ rows \
 
 # ── The incident + the preservation/convergence matrix ──
 G="$(games)"
-[ "${G}" -ge 8 ] || bad "expected at least the 8 fe /games rows in the seed, found ${G}"
+# 6 since the ROLE_MOD /games rows were retired (the file's "Retire the games rows"
+# DELETE): ROLE_GAMES_ADMIN x2, ROLE_GAMES x2, ROLE_ADMIN x2.
+[ "${G}" -ge 6 ] || bad "expected at least the 6 fe /games rows in the seed, found ${G}"
 q "DELETE FROM gateway_route_access WHERE gateway='hugmesh-fe-gateway' AND url_pattern LIKE '/games/%'" >/dev/null
 q "UPDATE gateway_route_access SET mfa_required=false WHERE gateway='hugmesh-fe-gateway' AND url_pattern='/bff/admin/**' AND role='ROLE_ADMIN'" >/dev/null
 q "UPDATE gateway_route_access SET mfa_required=true  WHERE gateway='hugmesh-fe-gateway' AND url_pattern='/bff/mod/**'   AND role='ROLE_ADMIN'" >/dev/null
@@ -460,7 +462,7 @@ fi
   && ok "PRESERVED: an admin's allow=false on a seed row (pki /login/** PUBLIC) survives — ON CONFLICT DO NOTHING never rewrites an existing row" \
   || bad "an admin's allow=false on a seed row was reverted"
 [ "$(q "SELECT count(*) FROM gateway_route_access WHERE url_pattern='/zz-admin-added/**'")" = 1 ] \
-  && ok "PRESERVED: an admin-ADDED row survives (nothing in the file deletes non-seed rows except the de-dup and the one '/apidocs/**' retirement)" \
+  && ok "PRESERVED: an admin-ADDED row survives (nothing in the file deletes non-seed rows except the de-dup and the named retirements)" \
   || bad "an admin-added row was deleted"
 [ "$(q "SELECT mfa_required FROM gateway_route_access WHERE gateway='hugmesh-fe-gateway' AND url_pattern='/bff/admin/**' AND role='ROLE_ADMIN' AND domain IS NULL")" = t ] \
   && ok "CONVERGED (documented): an admin LOOSENING under /bff/admin (unscoped row mfa_required=false) is re-flipped true — the file's OPERATOR CAVEAT contract" \
@@ -479,6 +481,46 @@ if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -E "reconcile: ${EXPECT_AFTE
   ok "re-running is a no-op (rc=0, ${EXPECT_AFTER} -> ${EXPECT_AFTER}, inserted 0, rewritten 0, fingerprint identical)"
 else
   bad "re-running is NOT a no-op (rc=${rc}): ${out}"
+fi
+
+# ── A row the seed DROPPED must be retired from a table an earlier apply seeded ──
+# The seed INSERT is ON CONFLICT DO NOTHING, so deleting a tuple from the file only
+# changes a FRESH initdb. hugmesh-admin-bff-api#57 (decision 79 = B) dropped the pki
+# gateway's bare '/**' -> ROLE_SUPERADMIN row; without the file's retire DELETE every
+# existing volume keeps it forever. Plant it the way main's seed wrote it, prove a
+# copy of the file WITHOUT the retirement leaves it (the assertion can fail), then
+# prove the real file deletes it and lands back on the fresh-seed fingerprint.
+pki_bare() { q "SELECT count(*) FROM gateway_route_access WHERE gateway='hugmesh-pki-gateway' AND url_pattern='/' || '**'"; }
+[ "$(pki_bare)" = 0 ] && ok "a fresh initdb seeds NO pki bare '/**' row" \
+  || bad "a fresh initdb seeded $(pki_bare) pki bare '/**' row(s)"
+plant_pki_bare() { q "INSERT INTO gateway_route_access (gateway,url_pattern,role,allow) VALUES ('hugmesh-pki-gateway','/' || '**','ROLE_SUPERADMIN',true)" >/dev/null; }
+NORETIRE="${W}/no-pki-retire.sql"
+python3 - "${SQL}" "${NORETIRE}" <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+s2, n = re.subn(r"DELETE FROM gateway_route_access\n WHERE gateway = 'hugmesh-pki-gateway'\n   AND url_pattern = '/' \|\| '\*\*';\n", '', s)
+open(sys.argv[2], 'w').write(s2 if n == 1 else s)
+PY
+if diff -q "${SQL}" "${NORETIRE}" >/dev/null; then
+  bad "mutation no-pki-retire did NOT land (the retire DELETE is missing or re-spelled in the seed)"
+else
+  plant_pki_bare
+  out="$(ROUTE_ACCESS_SQL="${NORETIRE}" reconcile "${SCRIPT}" 2>&1)"; rc=$?
+  if [ "${rc}" -eq 0 ] && [ "$(pki_bare)" = 1 ]; then
+    ok "mutation no-pki-retire goes RED: without the retire DELETE an in-place re-apply KEEPS the planted pki bare '/**' row"
+  else
+    bad "mutation no-pki-retire did not keep the planted row (rc=${rc}, rows $(pki_bare)) — the retirement assertion cannot fail: ${out}"
+  fi
+  q "DELETE FROM gateway_route_access WHERE gateway='hugmesh-pki-gateway' AND url_pattern='/' || '**'" >/dev/null
+fi
+plant_pki_bare
+out="$(reconcile "${SCRIPT}" 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ "$(pki_bare)" = 0 ] \
+   && printf '%s' "${out}" | grep -E "reconcile: $((EXPECT_AFTER + 1)) -> ${EXPECT_AFTER} rows \(inserted 0, deleted 1, mfa_required rewritten 0;" >/dev/null \
+   && [ "$(fingerprint)" = "${FP1}" ]; then
+  ok "RETIRED: an in-place re-apply deletes the pki bare '/**' row an earlier seed wrote ($((EXPECT_AFTER + 1)) -> ${EXPECT_AFTER}, deleted 1, fingerprint back to the converged table)"
+else
+  bad "the pki bare '/**' row was NOT retired in place (rc=${rc}, rows $(pki_bare)): ${out}"
 fi
 
 # ── Failure atomicity: a SQL error exits non-zero and leaves the table untouched ──

@@ -167,18 +167,24 @@ Feature: The in-image fail-closed floor is measured against the cluster seed
     When the "hugmesh-be-gateway" gateway decides "/bff/superadmin/workloads" from the in-image floor
     Then the deciding rule requires MFA
 
-  # DECISION 56's boundary, stated as a NEGATIVE control. Not every SUPERADMIN
-  # surface joined the declared set — pki()'s headscale catch-all did not (its
-  # cluster-seed counterpart is mfa_required=false too: the blanket flip only
-  # touches /bff/admin and /bff/superadmin patterns, and pki's row is a bare
-  # /**). Without this, a future "every privileged row should have it" change
-  # could widen the declared set unnoticed.
-  Scenario: the pki headscale catch-all does NOT require MFA on either source @layer:gateway
+  # DECISION 79 = B (hugmesh-admin-bff-api#57, 2026-09-23). There is NO pki
+  # headscale catch-all row on either source any more: hugmesh-gateway#40
+  # (f0faca1) dropped the bare /** -> ROLE_SUPERADMIN row from CanonicalSeed.pki()
+  # and this repo dropped it from the cluster seed. The headscale floor is the
+  # gateway SecurityConfig HOST gate now — every request on the `headscale`
+  # route's Host (Host=scale.<domain>, no Path predicate) needs ROLE_SUPERADMIN,
+  # ahead of PUBLIC_PATHS and ahead of the route-access filter — and route-access
+  # rows cannot see it, because they key on path, never on Host. So a pki path
+  # none of the three remaining pki rows matches is NO_RULE on BOTH sources.
+  # (This scenario used to pin that the catch-all row did not require MFA; with
+  # no row there is nothing to require it, and NO_RULE is the stronger claim.)
+  # Re-adding a bare /** row to either source turns the matching leg red here.
+  Scenario: a headscale path is ungoverned by route-access on both sources, its floor is the SecurityConfig Host gate @layer:gateway
     Given a principal holding only the role "ROLE_USER"
     When the "hugmesh-pki-gateway" gateway decides "/key" from the cluster seed
-    Then the deciding rule does not require MFA
+    Then the seed decision is "NO_RULE"
     When the "hugmesh-pki-gateway" gateway decides "/key" from the in-image floor
-    Then the deciding rule does not require MFA
+    Then the seed decision is "NO_RULE"
 
   # The role that DOES hold a granting row reaches the console from both sources.
   # Without this a future "fix" could satisfy the scenario above by denying

@@ -363,6 +363,47 @@ s=s.replace("(\x27hugmesh-fe-gateway\x27,  \x27/bff/mesh/**\x27",
 open(p,"w",encoding="utf-8").write(s)
 PY
 '
+# (3e) the pki headscale catch-all re-added. Decision 79 = B (hugmesh-admin-bff-api#57)
+#      dropped it: the headscale floor is the gateway SecurityConfig Host gate now,
+#      and BARE_DOUBLE_STAR_EXCEPTIONS is empty, so the exact row that used to be the
+#      one exception must be a finding. The anchor is asserted (count == 1).
+expect_catch "pki headscale bare /** SUPERADMIN row re-added (decision 79 = B)" "[route-access-wildcard]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/manifests/route-access/initdb/20-schema.sql"
+s=open(p,encoding="utf-8").read()
+anchor="  (\x27hugmesh-pki-gateway\x27, \x27/.well-known/**\x27,"
+assert s.count(anchor)==1, "pki /.well-known/** anchor matched %d times, not 1" % s.count(anchor)
+row="  (\x27hugmesh-pki-gateway\x27, \x27/**\x27, \x27ROLE_SUPERADMIN\x27, true),\n"
+open(p,"w",encoding="utf-8").write(s.replace(anchor,row+anchor,1))
+PY
+'
+# (3f) a bare /** row on a DIFFERENT gateway and role: the guard is not keyed on the
+#      one row it used to exempt.
+expect_catch "fe-gateway bare /** PUBLIC row added" "[route-access-wildcard]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/manifests/route-access/initdb/20-schema.sql"
+s=open(p,encoding="utf-8").read()
+anchor="  (\x27hugmesh-pki-gateway\x27, \x27/.well-known/**\x27,"
+assert s.count(anchor)==1, "pki /.well-known/** anchor matched %d times, not 1" % s.count(anchor)
+row="  (\x27hugmesh-fe-gateway\x27, \x27/**\x27, \x27PUBLIC\x27, true),\n"
+open(p,"w",encoding="utf-8").write(s.replace(anchor,row+anchor,1))
+PY
+'
+# (3g) every row reshaped so the row reader matches none (still valid SQL: a space
+#      after the opening paren). With zero exceptions "no bare row found" is the
+#      green answer, so the guard must refuse a zero-row parse instead of passing.
+expect_catch "route-access rows reshaped past the row reader (zero parsed)" "[route-access-wildcard]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/manifests/route-access/initdb/20-schema.sql"
+s=open(p,encoding="utf-8").read()
+n=s.count("\n  (\x27hugmesh-")
+assert n>100, "row anchor matched %d times, expected the whole seed" % n
+open(p,"w",encoding="utf-8").write(s.replace("\n  (\x27hugmesh-","\n  ( \x27hugmesh-"))
+PY
+'
 # (4) the exact bash bug: two `for entry in` headers line-continued into one list.
 #     The anchor is ASSERTED, because this control silently no-op'd (and stayed
 #     "green") the day the loop was reshaped from `for app in <name>` to

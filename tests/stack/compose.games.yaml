@@ -119,7 +119,7 @@ services:
       DB_PORT: "5432"
       DB_NAME: threewizards
       DB_USER: threewizards
-      DB_PASS: threewizards
+      DB_PASS: ${GAMES_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       # The PLATFORM Casdoor, in-DNS: jwk-set-uri = http://casdoor:8000/.well-known/jwks.
       # The fe-gateway's bff-exchange mints the custody JWT against this same
       # Casdoor (HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED=true in compose.local.yaml),
@@ -171,7 +171,7 @@ services:
     environment:
       POSTGRES_DB: threewizards
       POSTGRES_USER: threewizards
-      POSTGRES_PASSWORD: threewizards
+      POSTGRES_PASSWORD: ${GAMES_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     volumes:
       - games-bff-db-data:/var/lib/postgresql/data
     healthcheck:

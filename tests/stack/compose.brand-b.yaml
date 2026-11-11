@@ -14,7 +14,7 @@ services:
   casdoor-brandb-db:
     image: postgres:16-alpine
     profiles: ["brandb"]
-    environment: { POSTGRES_DB: casdoor, POSTGRES_USER: casdoor, POSTGRES_PASSWORD: casdoor }
+    environment: { POSTGRES_DB: casdoor, POSTGRES_USER: casdoor, POSTGRES_PASSWORD: "${CASDOOR_BRANDB_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}" }
     volumes: [casdoor-brandb-pg:/var/lib/postgresql/data]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U casdoor"], interval: 5s, retries: 20 }
 
@@ -27,7 +27,7 @@ services:
     environment:
       RUNNING_IN_DOCKER: "true"
       driverName: postgres
-      dataSourceName: "user=casdoor password=casdoor host=casdoor-brandb-db port=5432 sslmode=disable dbname=casdoor"
+      dataSourceName: "user=casdoor password=${CASDOOR_BRANDB_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)} host=casdoor-brandb-db port=5432 sslmode=disable dbname=casdoor"
       # Same issuer-pinning rationale as the brand-A casdoor (compose.real.yaml).
       origin: "http://casdoor-brandb.localtest.me:8001"
       # NOTE: an httpport env override was tried and DISPROVEN LIVE — the

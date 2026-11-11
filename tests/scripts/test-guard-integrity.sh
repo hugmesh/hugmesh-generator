@@ -1122,7 +1122,22 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # checks 3 and 7 red naming both, so the +2/+2 is these two suites and nothing else.
 # Both landed together: 234 (main, +nvd-key) + 2 (udev door) = 236 of 278, MEASURED by
 # running this file on the merge of origin/main into fix/x86-udev-door-20261110.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-236}"
+# 232 -> 234 (denominator 274 -> 276) on 2026-11-09 for fix/compose-db-passwords-20261104
+# (hugmesh-generator#857), which adds TWO gated suites, both in shell-suites.yml's debian
+# leg 1: tests/scripts/test-compose-no-literal-passwords.sh and
+# tests/stack/test-gen-stack-db-env.sh. Its base, origin/main 7e4a5c14, already
+# MEASURED 232 of 274 against the recorded 216 (the check was red on main); 234 of 276
+# MEASURED by running this file on the branch.
+# MERGED (origin/main 1c1da933 into fix/compose-db-passwords-20261104): main 233 of 275 + this
+# branch's 2 = 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
+# MERGED (origin/main 3e020b2b into fix/compose-db-passwords-20261104): main 234 of 276 + this
+# branch's 2 = 236 of 278, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
+# MERGED (origin/main 5d7d5b69 into fix/x86-udev-door-20261110): both blocks above raised this
+# line to 236 on their own (main 236 of 278 with #857 + studio-nvd-key; the branch 236 of 278 with the
+# udev door + studio-nvd-key), so the merge conflicted on it. main 236 of 278 + this branch's 2
+# (boot_stall_test.sh, test-udev-coldplug-guard.sh) = 238 of 280, MEASURED by running this file
+# with GUARD_PREMERGE=0 on origin/main alone (236 of 278) and on the merged tree (238 of 280).
+PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
