@@ -603,6 +603,7 @@ jobs:
           - part: ''
             suites: |
               tests/auto-update/test-builder-opt-in.sh
+              tests/device-registry/test-headscale-policy-fallback.sh
               tests/device-registry/test-headscale-security-tag-owners.sh
               tests/egress-vpn/test-vpn-reconcile-verify.sh
               tests/keystores/test-keystores-multidomain.sh
@@ -999,6 +1000,18 @@ jobs:
     # one suite on disk that nothing ran (check 3 and check 7b of
     # tests/scripts/test-guard-integrity.sh both named it): it landed in 1abc9bf3 /
     # 2ab3325f with neither this file nor .gitlab-ci.yml naming it.
+    # tests/device-registry/test-headscale-policy-fallback-live.sh runs the PINNED
+    # headscale and tailscale on a private --internal network against the deny-all
+    # policy keys-provision falls back to (cut from the real provision.sh): headscale
+    # starts on it, joining nodes get no self-advertised tag and an empty packet
+    # filter, and the owner spellings the old check missed ("TagOwners", a repeated
+    # tagOwners member) really grant tag:superadmin; controls show a granting policy
+    # is seen and that the text without its group is refused as an empty policy.
+    # Exits 2 (a failure here) without docker or an image. MEASURED 2026-11-11 on a
+    # Linux host with docker, images cached: 14 passed / 0 failed in 29 s at load
+    # average 45 (3.5 min at 75), and each of four mutations of the deny-all text or
+    # the owner check (an allow-all rule, no group, an owned tag:hugmesh, the old
+    # `.tagOwners` read) turned it red.
     # tests/device-registry/test-headscale-tag-ownership.sh starts throwaway
     # headscale 0.23.0 + tailscale 1.78.1 containers (and curlimages/curl as a
     # LocalAPI client) on one private docker network, no published ports, and
@@ -1027,6 +1040,7 @@ jobs:
         run: |
           SUITES="
             tests/boot/test-gpu-worker-node-labels.sh
+            tests/device-registry/test-headscale-policy-fallback-live.sh
             tests/device-registry/test-headscale-tag-ownership.sh
             tests/device-registry/test-headscale-security-tag-live.sh
           "

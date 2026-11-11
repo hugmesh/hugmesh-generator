@@ -414,7 +414,19 @@ headscale so the rewritten file is the one in force.
   node its forced tags plus every advertised tag its own user owns, so a security tag
   owned by `hugmesh` could be claimed by anyone holding a pre-auth key.
   keys-provision refuses to load a KEYS-stick policy that gives one an owner, and a
-  key minted by the Studio may not carry one (headscale forces a key's tags at join). See
+  key minted by the Studio may not carry one (headscale forces a key's tags at join).
+  The check reads owners the way headscale does: under a case variant such as
+  `TagOwners` and in every repeat of a `tagOwners` member (headscale's Go JSON
+  decoder honours both; a plain `.tagOwners` query saw neither). A refused policy is
+  replaced by the clean baked bootstrap policy, or, with no clean bootstrap, by the
+  same policy with those owners emptied and checked again. Everything else **fails
+  closed**: a policy that can be neither narrowed nor read, and no policy at all, get
+  a static deny-all policy (no ACL, no SSH rule, no tag owner: nodes join but reach
+  nothing and cannot claim a tag), first-boot health is marked UNPROTECTED in
+  `/run/hugmesh/firewall-health/headscale_policy.unprotected` (with an ERROR line in
+  `/var/log/keys-provision.log` and a `daemon.crit` syslog line), and when even the
+  deny-all policy cannot be written headscale is not started. The first verified
+  Layer-A sync, or re-provisioning with a clean policy, replaces the deny-all policy. See
   [`docs/DEVICE-REGISTRY-KEY-ROTATION.md`](DEVICE-REGISTRY-KEY-ROTATION.md).
   `specs/etc/headscale/policy.hujson` is a reference copy that the builders no
   longer bake; neither it nor `keys-template/headscale/policy.hujson` carries the
