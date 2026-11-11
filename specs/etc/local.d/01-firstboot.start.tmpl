@@ -35,8 +35,9 @@
 #                          account logs in with it. Empty on a STANDALONE image =>
 #                          random one-time password; empty elsewhere => no local
 #                          account beyond the keyless fallback.
-#   @@LOCAL_ADMIN@@        "true" (--local-admin) => the local account may sudo
-#                          even when KEYS provisioning created the image's users.
+#   @@LOCAL_ADMIN@@        "true" (--local-admin) => the local account is an
+#                          administrator (may sudo). Anything else => it is NOT,
+#                          on every image: standalone, keyless, KEYS-provisioned.
 
 locale-gen
 eselect locale set en_US.utf8
@@ -50,16 +51,24 @@ env-update && source /etc/profile
 # used to run only on STANDALONE images, so a cloud/mesh desktop built with a Login
 # Password dropped the hash and took the keyless random-password fallback instead.
 #
+# ADMIN IS OPT-IN (operator rule: the local login account is not an administrator
+# unless the build asked for one). Only --local-admin (@@LOCAL_ADMIN@@=true) makes
+# it one, on every shape below. It used to get `wheel` on every keyless and
+# standalone boot regardless (2026-11-09 prover: a cloud laptop booted without a
+# KEYS stick gave the local account wheel; the same image WITH a stick did not).
+# Without --local-admin, root stays locked and nobody on a keyless/standalone box
+# can sudo; first boot says so on the console (docs/STANDALONE-DESKTOP.md).
+#
 # Three shapes, decided here at first boot:
 #   * STANDALONE image (no KEYS stick, no SSO, no mesh): the account is the only
-#     login. In wheel (the sudo path — no SSO desktop-sudo governance here). No
-#     password given => a RANDOM one-time password, shown on the console.
+#     login. --local-admin => in `wheel` (the sudo path on an ungoverned image: no
+#     SSO desktop-sudo governance here). No password given => a RANDOM one-time
+#     password, shown on the console.
 #   * any other image, and KEYS provisioning created NO users (keyless boot): the
-#     account replaces the keyless fallback below, which used to be the only login
-#     — so it gets wheel, the same as that fallback did, and root is locked.
+#     account replaces the keyless fallback below, and root is locked.
+#     --local-admin => in `wheel`, as on a standalone image.
 #   * any other image, and KEYS provisioning DID create users: the local account is
-#     ADDITIONAL. The KEYS users are untouched. It is NOT in wheel and gets no
-#     sudo unless the build asked for an admin local account (--local-admin), which
+#     ADDITIONAL. The KEYS users are untouched. It is NOT in wheel; --local-admin
 #     is granted through /etc/sudoers.d/<user> — never the shared `%wheel` line,
 #     which keys-provision comments out on a governed image (re-adding it would
 #     hand standing root to every KEYS wheel member). If KEYS already created an
@@ -95,8 +104,10 @@ fi
 if ${LL_RUN}; then
     SA_OK=false
     LL_SKIP=false
-    LL_WHEEL=true
-    ${LL_KEYS} && LL_WHEEL=false
+    # Admin only when the build asked (--local-admin). A KEYS image gets its admin
+    # grant through sudoers.d below, never through wheel.
+    LL_WHEEL=false
+    [ "@@LOCAL_ADMIN@@" = "true" ] && ! ${LL_KEYS} && LL_WHEEL=true
     LL_WANT="audio video usb plugdev games"
     ${LL_WHEEL} && LL_WANT="wheel ${LL_WANT}"
     SA_GROUPS=""
@@ -125,7 +136,11 @@ if ${LL_RUN}; then
             echo "  the build-time Login Password was NOT applied to it."
         } | tee /dev/console 2>/dev/null || true
     elif id "@@DEFAULT_USER@@" &>/dev/null; then
-        if ${LL_WHEEL}; then
+        if ! ${LL_KEYS}; then
+            # The `%wheel` line is how `wheel` means "may sudo" on an ungoverned
+            # (keyless/standalone) image — for this account when --local-admin put it
+            # there, and for an SSO user the greeter gives wheel for the IdP admin
+            # role (docs/DESKTOP-LOGIN-SSO.md). Being IN wheel is the opt-in part.
             grep -q '^%wheel ALL=(ALL) ALL' /etc/sudoers || echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
         fi
         if [ "@@LOCAL_ADMIN@@" = "true" ] && ${LL_KEYS}; then
@@ -165,6 +180,14 @@ if ${LL_RUN}; then
             # fallback below not to mint a second, random-password account.
             passwd -l root
             touch /var/lib/keys-provision/users.created
+            if ! ${LL_WHEEL}; then
+                # Never silently unadministrable: say so where the operator looks.
+                # -a: after a one-time password banner, never in place of it.
+                {
+                    echo "Local login: @@DEFAULT_USER@@ is NOT an administrator (image built without --local-admin)."
+                    echo "  root is locked, so no local account on this device can use sudo."
+                } | tee -a /dev/console 2>/dev/null || true
+            fi
         fi
     else
         SA_RETRY=true
@@ -184,7 +207,12 @@ if ${SA_RETRY}; then
 elif [ ! -f /var/lib/keys-provision/users.created ]; then
     echo "No users provisioned from KEYS — creating fallback @@DEFAULT_USER@@ with a RANDOM one-time password"
     if ! id "@@DEFAULT_USER@@" &>/dev/null; then
-        useradd -m -G wheel,audio,video,usb -s /bin/bash "@@DEFAULT_USER@@"
+        # Admin only when the build asked (--local-admin), like the local account above.
+        FB_ADMIN=false
+        [ "@@LOCAL_ADMIN@@" = "true" ] && FB_ADMIN=true
+        FB_GROUPS="audio,video,usb"
+        ${FB_ADMIN} && FB_GROUPS="wheel,${FB_GROUPS}"
+        useradd -m -G "${FB_GROUPS}" -s /bin/bash "@@DEFAULT_USER@@"
         # Mint a random one-time password at FIRST BOOT — never a baked default.
         # Prefer openssl; fall back to /dev/urandom so this works on a minimal
         # image. The plaintext is printed ONCE to the boot console below and is
@@ -200,7 +228,8 @@ elif [ ! -f /var/lib/keys-provision/users.created ]; then
         passwd -l root
         # Force the fallback user to change the random password at first login.
         chage -d 0 "@@DEFAULT_USER@@" 2>/dev/null || passwd -e "@@DEFAULT_USER@@" 2>/dev/null || true
-        echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+        # Same `%wheel` line as above (idempotent); membership is the opt-in part.
+        grep -q '^%wheel ALL=(ALL) ALL' /etc/sudoers || echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
         echo ""
         {
             echo "###############################################################"
@@ -208,10 +237,14 @@ elif [ ! -f /var/lib/keys-provision/users.created ]; then
             echo "#    user: @@DEFAULT_USER@@"
             echo "#    pass: ${FB_PW}"
             echo "#  root is LOCKED. This password is shown ONCE and not stored.  "
+            if ! ${FB_ADMIN}; then
+                echo "#  @@DEFAULT_USER@@ is NOT an administrator (built without --local-admin):"
+                echo "#  no local account on this device can use sudo.               "
+            fi
             echo "###############################################################"
             echo ""
         } | tee /dev/console 2>/dev/null || true
-        unset FB_PW
+        unset FB_PW FB_ADMIN FB_GROUPS
     fi
 else
     echo "Users were provisioned from KEYS — skipping fallback user"
