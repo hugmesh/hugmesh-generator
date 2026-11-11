@@ -1127,8 +1127,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 236 -> 237 on 2026-11-11 (fix/qemu-no-egress): +1 gated, +1 total —
 # tests/qemu/no_egress_argv_test.sh, named by shell-suites.yml. PREMERGE_UNGATED is
 # untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 237 of 279.
-# 237 -> 239 (feat/headscale-embedded-derp-20261110): +2 gated, +2 total — the headscale DERP static + live suites; MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-239}"
+# 237 -> 238 on 2026-11-11 (fix/sec-new-7-s02-codeql-9--20261111): +1 gated, +1 total —
+# tests/scripts/test-edge-ai-analysis-ssrf.sh, named by shell-suites.yml's debian
+# edge-ai-analysis leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on
+# the branch over origin/main 39b953ad: 238 of 280.
+# 238 -> 240 (feat/headscale-embedded-derp-20261110): +2 gated, +2 total — the headscale DERP static + live suites; MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main b3eafff5.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-240}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
