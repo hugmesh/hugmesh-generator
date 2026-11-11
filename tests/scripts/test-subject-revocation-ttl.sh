@@ -36,12 +36,15 @@
 #   RULE 2  the admin-bff Deployment sets BROKER_GATEWAY_REVOCATION_SUBJECT_CUTOFF_TTL_SECONDS
 #           to an integer >= max(expireInHours) x 3600, and nothing else under specs/
 #           sets it (an overlay that lowered it would be invisible to rule 2 otherwise).
-#   RULE 3  BROKER_GATEWAY_REVOCATION_ENABLED is not "true". The client sends no
-#           Authorization header and the gateway answers an anonymous write with 401,
-#           which the client swallows — "true" would claim a cut-off that never lands.
-#           When the service credential exists (hugmesh-admin-bff-api#45,
-#           hugmesh-generator#347 decision 45) flip it in the SAME change that wires the
-#           credential, and change this rule there.
+#   RULE 3  BROKER_GATEWAY_REVOCATION_ENABLED is unset or one of Spring's false spellings
+#           (false/off/no/0). The client sends no Authorization header and the gateway
+#           answers an anonymous write with 401, which the client swallows — on would claim
+#           a cut-off that never lands. When the service credential exists
+#           (hugmesh-admin-bff-api#45, hugmesh-generator#347 decision 45) flip it in the SAME
+#           change that wires the credential, and change this rule there. Also wait for
+#           every gateway to keep the later expiry of a key (hugmesh-gateway#69): with a
+#           last-write-wins key a role grant or a suspension tick right after a cut-off
+#           shortens it to 1 h.
 #   RULE 4  BROKER_HS_TOKEN_REGISTRY_ENABLED is "true", and the session it writes through
 #           targets hugmesh_gateway (the keyspace where gateway migration 006 creates
 #           hs_tokens) with Cassandra auth on.
@@ -81,7 +84,10 @@ def bad(m):
 
 # ── RULE 1: the seeded token lifetimes ───────────────────────────────────────
 TOKEN   = re.compile(r'(?<![A-Za-z])expireInHours')
-LITERAL = re.compile(r'''(?<![A-Za-z])expireInHours["']?\]?\s*[:=]\s*(\d+)\b''')
+# The integer must END the value (a separator, a comment or the end of the line follows),
+# so `= 24 * 30` is not read as 24: anything that is not a bare literal is unreadable,
+# and unreadable fails closed below.
+LITERAL = re.compile(r'''(?<![A-Za-z])expireInHours["']?\]?\s*[:=]\s*(\d+)(?=\s*(?:[,;})\]#]|$))''')
 seeds = sorted(glob.glob(os.path.join(root, "specs/cluster/manifests/casdoor*/**/*.yaml"), recursive=True))
 values, unread = [], []
 for path in seeds:
@@ -167,12 +173,15 @@ else:
 
 FLAG = "BROKER_GATEWAY_REVOCATION_ENABLED"
 f = literal(FLAG)
-if f is not None and f.strip().lower() == "true":
-    bad("rule3: %s=true, but auth-core's GatewayRevocationClient sends no Authorization header and "
+# Spring binds true/on/yes/1 (any case) to true and false/off/no/0 to false. Only an unset
+# value or one of the false spellings passes; anything else is on, or does not bind.
+if f is not None and f.strip().lower() not in ("false", "off", "no", "0"):
+    bad("rule3: %s is on, but auth-core's GatewayRevocationClient sends no Authorization header and "
         "the gateway answers an anonymous POST /api/gateway/revocations with 401, which the client "
         "swallows — this claims a cut-off that never lands. Flip it in the change that wires the "
-        "service credential (hugmesh-admin-bff-api#45, hugmesh-generator#347 decision 45) and "
-        "update this rule there." % FLAG)
+        "service credential (hugmesh-admin-bff-api#45, hugmesh-generator#347 decision 45), once "
+        "every gateway keeps the later expiry of a key (hugmesh-gateway#69), and update this rule "
+        "there." % (FLAG + "=" + repr(f)))
 else:
     ok("rule3: %s is %s (no credential exists yet, so on would be an inert toggle)"
        % (FLAG, "unset" if f is None else repr(f)))
@@ -290,6 +299,12 @@ D="$(stage n9)"; neg "N9 the registry session pointed at another keyspace" "${D}
 D="$(stage n10)"; neg "N10 the cut-off TTL set twice (a lower duplicate after it)" "${D}" "${DEP_REL}" \
   "${CUT}, value: \"604800\" }"$'\n' \
   "${CUT}, value: \"604800\" }"$'\n'"            - { name: ${CUT}, value: \"3600\" }"$'\n'
+D="$(stage n12)"; neg "N12 expireInHours written as arithmetic (24 * 30 is not 24)" "${D}" "${INIT_REL}" \
+  'app["expireInHours"] = 4' 'app["expireInHours"] = 24 * 30'
+for spelling in on yes 1 TRUE; do
+  D="$(stage "n13-${spelling}")"; neg "N13 the revocation flag turned on as \"${spelling}\"" "${D}" "${DEP_REL}" \
+    'BROKER_GATEWAY_REVOCATION_ENABLED, value: "false"' "BROKER_GATEWAY_REVOCATION_ENABLED, value: \"${spelling}\""
+done
 D="$(stage n11)"
 mkdir -p "${D}/specs/cluster/overlays/x"
 printf 'env:\n  - { name: %s, value: "60" }\n' "${CUT}" > "${D}/specs/cluster/overlays/x/patch.yaml"

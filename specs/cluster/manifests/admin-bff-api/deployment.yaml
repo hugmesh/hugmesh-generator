@@ -183,9 +183,13 @@ spec:
             # pins anonymous POST/DELETE -> 401). The client swallows the 401 as a
             # WARN, so "true" here would claim a cut-off that never lands. It flips
             # together with the service credential, which waits on the operator
-            # (hugmesh-admin-bff-api#45; hugmesh-generator#347 decision 45).
-            # tests/scripts/test-subject-revocation-ttl.sh fails if this turns true
-            # on its own.
+            # (hugmesh-admin-bff-api#45; hugmesh-generator#347 decision 45). It also
+            # waits on every gateway keeping the LATER expiry of a key
+            # (hugmesh-gateway#69): admin-bff writes the same subject:<user> key at
+            # 168 h (revoke, disable) and at 1 h (role grant, suspension tick), and a
+            # last-write-wins gateway lets the 1 h write cut the 168 h one short.
+            # tests/scripts/test-subject-revocation-ttl.sh fails if this turns on
+            # (true/on/yes/1) on its own.
             - { name: BROKER_GATEWAY_REVOCATION_ENABLED, value: "false" }
             # How long a subject:<user> cut-off key lives (account-disable, role
             # revoke, desktop-sudo revoke). The gateway refuses EVERY token for the
