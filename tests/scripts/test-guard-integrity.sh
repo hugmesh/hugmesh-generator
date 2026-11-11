@@ -1124,9 +1124,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # branch's 2 = 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
 # MERGED (origin/main 3e020b2b into fix/compose-db-passwords-20261104): main 234 of 276 + this
 # branch's 2 = 236 of 278, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
-# feat/kernel-menuconfig-20261111 (origin/main 64e3e42f + tests/scripts/test-kernel-reconfig-x86.sh,
-# wired into shell-suites.yml): 237, MEASURED by running this file on the branch.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-237}"
+# 236 -> 237 on 2026-11-11 (fix/qemu-no-egress): +1 gated, +1 total —
+# tests/qemu/no_egress_argv_test.sh, named by shell-suites.yml. PREMERGE_UNGATED is
+# untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 237 of 279.
+# 237 -> 238 (feat/kernel-menuconfig-20261111 merged with origin/main 39b953ad):
+# + tests/scripts/test-kernel-reconfig-x86.sh, named by shell-suites.yml. MEASURED by
+# running this file on the merged tree.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
