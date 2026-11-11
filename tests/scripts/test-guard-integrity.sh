@@ -1131,7 +1131,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-edge-ai-analysis-ssrf.sh, named by shell-suites.yml's debian
 # edge-ai-analysis leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on
 # the branch over origin/main 39b953ad: 238 of 280.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
+# 238 -> 239 on 2026-11-11 (fix/sec-layer-a-golden-ci-20261111): +1 gated, +1 total — tests/device-registry/test-layer-a-bff-fixture-identity.sh, named by shell-suites.yml's new layer-a job (admin-bff sibling at a pin); PREMERGE_UNGATED unchanged in membership (test-layer-a-headscale-acl.sh stays, its reason corrected). MEASURED with GUARD_PREMERGE=0 on the branch over origin/main b3eafff5: 239 of 281.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-239}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
@@ -1343,6 +1344,12 @@ PREMERGE_UNGATED=(
   # pwsh; Pester 5.6.1 must be installed), DELETE this entry and raise PREMERGE_BASELINE
   # by one to the number this file then prints.
   tests/docker-mesh-node/test-launcher-parity.sh
+  # NOT for want of the hugmesh-admin-bff-api sibling (public now; shell-suites.yml's
+  # layer-a job checks it out at a pin): its two policy-mode checks are red against the
+  # BFF's `database` declaration by design until the #634 cut-over (#634 item 4). Its
+  # cross-repo fixture identity leg IS gated, as test-layer-a-bff-fixture-identity.sh.
+  # TO CLOSE THIS: after #634, add it to the layer-a job, DELETE this entry, raise
+  # PREMERGE_BASELINE by one.
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
   # Offline, bash + python3 only, 48 passed / 0 failed on 2026-10-14 (#654 D12:
