@@ -6019,7 +6019,10 @@ cp "${SCRIPT_DIR}/scripts/patch-portage-file-copy.py" "${SYSROOT}/tmp/hugmesh-pa
 # on the host); every chroot-side expansion is backslash-escaped; no backticks
 # and no dollar-parens anywhere in it, comments included.
 if ${PRETEND_ONLY}; then
-    banner "Pretend only: resolving @world + the role payload (nothing is merged)"
+    # info, not banner(): a progress PHASE banner here would be a 30th call site the
+    # Studio's progress table (core/progress-tables.json) does not know, and a pretend
+    # run is not a build phase — its output is read by core/desktop_pretend.py instead.
+    info "Pretend only: resolving @world + the role payload (nothing is merged)"
     cp "${SCRIPT_DIR}/scripts/_pretend-lib.sh" "${SYSROOT}/tmp/hugmesh-pretend-lib.sh" \
         || { err "pretend lib staging failed (scripts/_pretend-lib.sh -> ${SYSROOT}/tmp)"; exit 1; }
     _pretend_pkgs="${PKGS}"
