@@ -326,6 +326,11 @@ def test_a_mesh_edits_each_desktop_rows_own_spec(wiz):
     assert ds.DesktopSpec.from_dict(b.desktop_spec).sessions == ["sway"]
     assert cfg.desktop_spec == {}                                          # the base is untouched
     out = dict((e.id, c) for e, c in wiz.worklist.materialize())
+    # every row is checked on Next, not only the one on screen
+    a.desktop_spec = {"sessions": ["picom"], "default_session": "sway"}
+    assert not page.validatePage()
+    assert f"laptop on x86 ({a.id}):" in page.problems.text()
+    a.desktop_spec = {"sessions": ["i3"]}
     assert out[a.id].to_cli_args()[out[a.id].to_cli_args().index("--desktop-sessions") + 1] == "i3"
     assert "--desktop-sessions" not in out[node.id].to_cli_args()
 

@@ -80,6 +80,19 @@ def test_parse_strips_colour_codes():
     assert r.status == "clean"
 
 
+def test_a_real_clean_run_parses_clean():
+    """clean-real.txt is the REAL --verbose resolver output of the 2026-11-11 baseline run
+    (portage prints "Total: N packages" only with --verbose — the positive evidence)."""
+    import subprocess
+    script = (f'. "{GEN}/scripts/_pretend-lib.sh"; '
+              '_hugmesh_pretend_conf_list() { printf "python3_14"; }; '
+              f'hugmesh_pretend_report "{FIX}/clean-real.txt" 0')
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    r = dp.parse(p.stdout.splitlines(), p.returncode)
+    assert (p.returncode, r.status, r.needs) == (0, "clean", [])
+    assert r.excerpt[-1].startswith("Total: 687 packages")
+
+
 def test_the_builders_own_output_parses(tmp_path):
     """The shell side prints what this side parses: run scripts/_pretend-lib.sh's report on
     the shared fixture and feed its stdout to parse()."""

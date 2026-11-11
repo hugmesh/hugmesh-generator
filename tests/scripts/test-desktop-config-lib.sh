@@ -197,6 +197,11 @@ printf '%s\n' "${out}" | grep -x '==> Pretend needs: package.use >=media-video/f
 printf '%s\n' "${out}" | grep -x '===== END PRETEND RESOLVER OUTPUT =====' >/dev/null && ok "resolver excerpt framed" || bad "no excerpt frame"
 out="$(pretend clean.txt 0)"; rc=$?
 [ "${rc}" = 0 ] && printf '%s\n' "${out}" | grep '^==> Pretend result: status=clean ' >/dev/null && ok "clean -> exit 0" || bad "clean rc=${rc}"
+# clean-real.txt is the REAL --verbose resolver output of the first pretend run
+# (standalone-thin, 2026-11-11; "Total: 687 packages ..."), not a hand-written one
+out="$(pretend clean-real.txt 0)"; rc=$?
+[ "${rc}" = 0 ] && printf '%s\n' "${out}" | grep '^==> Pretend result: status=clean ' >/dev/null \
+    && ok "the real run's output reads as clean" || bad "real clean output rc=${rc}"
 out="$(pretend clean.txt 124)"; rc=$?
 [ "${rc}" = 1 ] && printf '%s\n' "${out}" | grep '^==> Pretend result: status=error rc=124' >/dev/null && ok "a timeout (rc 124) is error even with a plan line" || bad "timeout rc=${rc}"
 out="$(pretend slot-conflict.txt 1)"; rc=$?

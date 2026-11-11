@@ -886,9 +886,17 @@ class DesktopPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         self._collect()
-        c = self.view()
-        probs = [p for p in ds.problems(c, passwords=ds.parse_passwords(
-            getattr(self.wiz.cfg, "extra_local_passes", "") or "")) if p.level == "error"]
+        typed = ds.parse_passwords(getattr(self.wiz.cfg, "extra_local_passes", "") or "")
+        probs = [p for p in ds.problems(self.view(), passwords=typed) if p.level == "error"]
+        # a mesh: EVERY desktop row is checked, not only the one on screen, so a row
+        # edited earlier and left wrong is named here rather than by its builder
+        if self._mesh():
+            for e in self._entries():
+                if self._entry is not None and e.id == self._entry.id:
+                    continue
+                probs += [type(p)(p.level, p.section, f"{e.role} on {e.platform} ({e.id}): {p.text}")
+                          for p in ds.problems(ds.entry_view(self.wiz.cfg, e), passwords=typed)
+                          if p.level == "error"]
         if probs:
             self.problems.setText("\n".join("Fix: " + p.text for p in probs))
             self.problems.setStyleSheet(_ERR)
