@@ -265,6 +265,28 @@ mkbr "${W}"; bash "${KRC}" set --build-root "${W}/wl-pki.x86" -- --set-str LOCAL
 out="$(run_lib "${W}" 'krc_preflight; echo PREFLIGHT-OK')"; rc=$?
 [ "${rc}" -eq 0 ] && grep -q PREFLIGHT-OK <<<"${out}" && ok "a complete, unsigned, changed build passes the preflight" || bad "clean preflight failed: rc=${rc} ${out}"
 
+echo "-- 6b) an interrupted rebuild resumes (the step journal) --"
+mkbr "${W}"; bash "${KRC}" set --build-root "${W}/wl-pki.x86" -- --set-str LOCALVERSION -hmtest >/dev/null 2>&1
+out="$(run_lib "${W}" 'KST=(); KST[done]="kernel sign"; STAMP=S1; OLD_TS=T0; KR_SIGNED=no
+ran=""; mark() { ran="${ran} $1"; }
+krc_step kernel mark kernel; krc_step label mark label; echo "RAN=${ran}"; cat "$(krc_state_file)"')"
+grep -q 'RAN= label$' <<<"${out}" && grep -q '^done=kernel sign label$' <<<"${out}" && grep -q '^stamp=S1$' <<<"${out}" \
+    && ok "krc_step skips what the journal says finished, runs the rest and records it" || bad "step journal wrong: ${out}"
+# the build system already carries the interrupted run's kernel: preflight compares the
+# APPLIED config with the kept one instead of refusing the edit as "made against another config"
+B="${W}/wl-pki.x86"; S="${B}/sysroot"
+mv "${S}/usr/lib/modules/${KV}" "${S}/usr/lib/modules/${KV}-hmtest"
+cp "${B}/kernel-reconfig/pending/config.after" "${B}/kernel-reconfig/pending/config.applied"
+rm "${B}/kernel/config-${KV}"; cp "${B}/kernel-reconfig/pending/config.applied" "${B}/kernel/config-${KV}-hmtest"
+printf 'stamp=S1\nold_ts=20261111T000000Z\nold_kver=%s\nnew_kver=%s-hmtest\ndone=kernel\n' "${KV}" "${KV}" > "${B}/kernel-reconfig/pending/apply.state"
+out="$(run_lib "${W}" 'krc_preflight; echo PREFLIGHT-OK')"; rc=$?
+[ "${rc}" -eq 0 ] && grep -q PREFLIGHT-OK <<<"${out}" && ok "a resumed rebuild passes the preflight (the kept config is the applied one)" || bad "resume preflight: rc=${rc} ${out}"
+echo 'CONFIG_DRIFT=y' >> "${B}/kernel/config-${KV}-hmtest"
+out="$(run_lib "${W}" 'krc_preflight')"; rc=$?
+[ "${rc}" -eq 3 ] && grep -q 'interrupted kernel rebuild was recorded' <<<"${out}" && ok "a journal whose kernel the build system no longer carries is refused" || bad "stale journal: rc=${rc} ${out}"
+grep -q 'if \[ "${f}" != "$(basename "${new}")" \]; then' "${KRC}" \
+    && ok "finishing never moves a NEW artifact into superseded/ (resume after the contract was rewritten)" || bad "supersede guard missing"
+
 echo "-- 7) kernel rebuild (chroot stubbed; the REAL asserts run) --"
 # The stub chroot runs the asserts script for real against the fixture tree and fakes
 # only the compile: kernelrelease = version + the tree's CONFIG_LOCALVERSION.

@@ -352,10 +352,17 @@ krc_preflight() {
     krc_locate
     [ -f "${PEND}/config.before" ] && [ -s "${PEND}/config.after" ] \
         || krc_refuse "There is no kernel config edit to apply — open menuconfig (Kernel config…) first."
-    cmp -s "${PEND}/config.before" "${KCFG}" \
-        || krc_refuse "The pending edit was made against a different kernel config than this build now carries — discard it and edit again."
-    [ -n "$(krc_config_diff "${PEND}/config.before" "${PEND}/config.after")" ] \
-        || krc_refuse "The kernel config edit changes nothing — there is nothing to rebuild."
+    if krc_state_has kernel; then
+        # An interrupted rebuild (a cancel, a killed container): the build system already
+        # carries THIS edit's kernel, so its kept config is the applied one.
+        cmp -s "${PEND}/config.applied" "${KCFG}" \
+            || krc_refuse "An interrupted kernel rebuild was recorded, but the build system no longer carries its kernel — discard the edit and edit again."
+    else
+        cmp -s "${PEND}/config.before" "${KCFG}" \
+            || krc_refuse "The pending edit was made against a different kernel config than this build now carries — discard it and edit again."
+        [ -n "$(krc_config_diff "${PEND}/config.before" "${PEND}/config.after")" ] \
+            || krc_refuse "The kernel config edit changes nothing — there is nothing to rebuild."
+    fi
     hmr_owner_gate "${SYSROOT}" "rebuild the image (never with --resume) so the build system is root's again" \
         || krc_refuse "The build system is not root's any more (see above) — rebuild the image."
     local stale; stale="$(hmr_stale_mounts "${SYSROOT}" 2>/dev/null || true)"
@@ -375,7 +382,8 @@ krc_preflight() {
     local k f
     for k in STAGE4 IMG FS_TAR LIVE_ISO INSTALLER_ISO; do
         f="${KRE[${k}]:-}"; [ -n "${f}" ] || continue
-        [ -f "${WD}/${f}" ] || krc_refuse "The ${k} artifact this build produced is missing from ${WD} (${f}) — was it moved or deleted?"
+        [ -f "${WD}/${f}" ] || [ -f "${WD}/superseded/${KRE[BUILD_TS]}/${f}" ] \
+            || krc_refuse "The ${k} artifact this build produced is missing from ${WD} (${f}) — was it moved or deleted?"
     done
     local extra
     # (find exits 1 for each of the four dirs that does not exist: never let that, under
@@ -680,25 +688,75 @@ krc_installer_iso() {
 
 krc_sha256() { local f="$1"; (cd "$(dirname "${f}")" && sha256sum "$(basename "${f}")" > "$(basename "${f}").sha256"); cut -d' ' -f1 < "${f}.sha256"; }
 
+# ── the step journal: an interrupted rebuild resumes, it never strands the session ──
+# <pending>/apply.state records each finished step and what it produced. A Studio
+# cancel or a killed container in the middle of a 30-minute repackaging used to leave
+# a build system that already carries the new kernel next to artifacts that do not —
+# and a retry refused, because the kept config had moved on. Now `apply` again picks up
+# after the last finished step, under the SAME stamp, so the artifact names agree.
+KRC_STATE_KEYS="stamp old_ts old_kver new_kver signed sbv_sysroot sbv_esp done new_stage4 new_img new_fs_tar new_live new_installer"
+declare -A KST=()
+krc_state_file() { printf '%s/apply.state' "${PEND}"; }
+krc_state_load() {
+    local line k
+    KST=()
+    [ -f "$(krc_state_file)" ] || return 1
+    while IFS= read -r line || [ -n "${line}" ]; do
+        [[ "${line}" == *=* ]] || continue
+        k="${line%%=*}"
+        case " ${KRC_STATE_KEYS} " in *" ${k} "*) KST["${k}"]="${line#*=}" ;; esac
+    done < "$(krc_state_file)"
+    for k in ${KRC_STATE_KEYS}; do [ -n "${KST[${k}]+x}" ] || KST["${k}"]=""; done
+    return 0
+}
+krc_state_has() { krc_state_load >/dev/null 2>&1 || return 1; case " ${KST[done]} " in *" $1 "*) return 0 ;; esac; return 1; }
+krc_state_save() {
+    local k f; f="$(krc_state_file)"
+    KST[stamp]="${STAMP:-}"; KST[old_ts]="${OLD_TS:-}"; KST[old_kver]="${OLD_KVER:-}"; KST[new_kver]="${NEW_KVER:-}"
+    KST[signed]="${KR_SIGNED:-}"; KST[sbv_sysroot]="${SBV_SYSROOT:-false}"; KST[sbv_esp]="${SBV_ESP:-n/a}"
+    KST[new_stage4]="${NEW_STAGE4:-}"; KST[new_img]="${NEW_IMG:-}"; KST[new_fs_tar]="${NEW_FS_TAR:-}"
+    KST[new_live]="${NEW_LIVE:-}"; KST[new_installer]="${NEW_INSTALLER:-}"
+    for k in ${KRC_STATE_KEYS}; do printf '%s=%s\n' "${k}" "${KST[${k}]:-}"; done > "${f}.tmp" && mv -f "${f}.tmp" "${f}"
+}
+# krc_step <name> <function...> — run a step unless the journal says it finished.
+krc_step() {
+    local name="$1"; shift
+    if case " ${KST[done]:-} " in *" ${name} "*) true ;; *) false ;; esac; then
+        info "(${name}: already done by the interrupted run — kept)"
+        return 0
+    fi
+    "$@"
+    KST[done]="${KST[done]:+${KST[done]} }${name}"
+    krc_state_save
+}
+
 krc_apply() {
     krc_preflight
-    STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+    NEW_STAGE4=""; NEW_IMG=""; NEW_FS_TAR=""; NEW_LIVE=""; NEW_INSTALLER=""; SBV_ESP=n/a; SBV_SYSROOT=false
+    if krc_state_load; then
+        STAMP="${KST[stamp]}"; OLD_TS="${KST[old_ts]}"; OLD_KVER="${KST[old_kver]}"; NEW_KVER="${KST[new_kver]}"
+        SBV_SYSROOT="${KST[sbv_sysroot]:-false}"; SBV_ESP="${KST[sbv_esp]:-n/a}"
+        NEW_STAGE4="${KST[new_stage4]}"; NEW_IMG="${KST[new_img]}"; NEW_FS_TAR="${KST[new_fs_tar]}"
+        NEW_LIVE="${KST[new_live]}"; NEW_INSTALLER="${KST[new_installer]}"
+        say "resuming the interrupted rebuild (stamp ${STAMP}); finished steps: ${KST[done]:-none}"
+    else
+        STAMP="$(date -u +%Y%m%dT%H%M%SZ)"; OLD_TS="${KRE[BUILD_TS]}"
+        [ "${STAMP}" != "${OLD_TS}" ] || krc_refuse "Two rebuilds within the same second — try again."
+        KST[done]=""; krc_state_save
+    fi
     NEW_TS="${STAMP}"
-    OLD_TS="${KRE[BUILD_TS]}"
-    [ "${NEW_TS}" != "${OLD_TS}" ] || krc_refuse "Two rebuilds within the same second — try again."
     KRC_WORK="${KRC_ROOT}/work-${STAMP}"
     rm -rf "${KRC_WORK}"; mkdir -p "${KRC_WORK}"
     export TMPDIR="${KRC_WORK}"
     say "applying the pending kernel config edit (stamp ${STAMP}):"
     krc_config_diff "${PEND}/config.before" "${PEND}/config.after" | sed 's/^/    /'
-    krc_kernel_rebuild
-    krc_sign
-    krc_label_sysroot
-    NEW_STAGE4=""; NEW_IMG=""; NEW_FS_TAR=""; NEW_LIVE=""; NEW_INSTALLER=""; SBV_ESP=n/a
-    [ -n "${KRE[STAGE4]}" ] && krc_pack_stage4
-    [ -n "${KRE[IMG]}" ] && krc_img_patch
-    if [ -n "${KRE[LIVE_ISO]}" ]; then krc_live_helpers; krc_live_iso; fi
-    [ -n "${KRE[INSTALLER_ISO]}" ] && [ -n "${NEW_STAGE4}" ] && krc_installer_iso
+    krc_step kernel krc_kernel_rebuild
+    krc_step sign krc_sign
+    krc_step label krc_label_sysroot
+    [ -n "${KRE[STAGE4]}" ] && krc_step stage4 krc_pack_stage4
+    [ -n "${KRE[IMG]}" ] && krc_step img krc_img_patch
+    if [ -n "${KRE[LIVE_ISO]}" ]; then krc_live_helpers; krc_step live krc_live_iso; fi
+    [ -n "${KRE[INSTALLER_ISO]}" ] && [ -n "${NEW_STAGE4}" ] && krc_step installer krc_installer_iso
 
     banner "Checksums and superseded artifacts"
     local sup="${WD}/superseded/${OLD_TS}" k f new json_art="" h
@@ -710,8 +768,12 @@ krc_apply() {
         [ -n "${f}" ] && [ -n "${new}" ] || continue
         h="$(krc_sha256 "${new}")"
         json_art="${json_art}${json_art:+,}\"$(basename "${new}")\": \"${h}\""
-        mv -f "${WD}/${f}" "${sup}/"
-        [ -f "${WD}/${f}.sha256" ] && mv -f "${WD}/${f}.sha256" "${sup}/"
+        # A resumed run may already have moved the original, or even rewritten the
+        # contract to the new names: never move the NEW artifact into superseded/.
+        if [ "${f}" != "$(basename "${new}")" ]; then
+            [ -f "${WD}/${f}" ] && mv -f "${WD}/${f}" "${sup}/"
+            [ -f "${WD}/${f}.sha256" ] && mv -f "${WD}/${f}.sha256" "${sup}/"
+        fi
         KRE["${k}"]="$(basename "${new}")"
         info "${KRE[${k}]}  sha256 ${h}"
     done
