@@ -46,7 +46,7 @@ services:
     environment:
       POSTGRES_DB: phpbb
       POSTGRES_USER: phpbb
-      POSTGRES_PASSWORD: phpbb
+      POSTGRES_PASSWORD: ${PHPBB_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     networks:
       default:
         # The extension repo's shipped install YAML hardcodes `dbhost: db`, and it
@@ -84,7 +84,7 @@ services:
       PHPBB_DB_PORT: "5432"
       PHPBB_DB_NAME: phpbb
       PHPBB_DB_USER: phpbb
-      PHPBB_APP_PASSWORD: phpbb
+      PHPBB_APP_PASSWORD: ${PHPBB_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       PHPBB_TABLE_PREFIX: phpbb_
       # Shipped BY the extension repo for exactly this lane; the entrypoint runs it
       # once against an empty DB, then removes install/. Dev-only literals
@@ -117,7 +117,7 @@ services:
     environment:
       POSTGRES_DB: akkoma
       POSTGRES_USER: akkoma
-      POSTGRES_PASSWORD: akkoma
+      POSTGRES_PASSWORD: ${AKKOMA_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     volumes: [akkoma-pg:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U akkoma"]
@@ -135,7 +135,7 @@ services:
       DB_PORT: "5432"
       DB_NAME: akkoma
       DB_USER: akkoma
-      DB_PASS: akkoma
+      DB_PASS: ${AKKOMA_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       # Akkoma derives every federated URL from these; they must match the host
       # the instance is reached on or ActivityPub ids are generated wrong.
       INSTANCE_NAME: "HugMesh Test (Akkoma)"

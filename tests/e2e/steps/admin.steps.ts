@@ -79,21 +79,28 @@ function dig(obj: unknown, dotted: string): unknown {
 // 1. Route-access write validation (hugmesh-admin-bff-api#57, decision 61)
 // ═════════════════════════════════════════════════════════════════════════════
 
-Then('the only bare {string} rows in the cluster seed are {string}',
-  async ({ world }, pattern: string, csv: string) => {
-    const rows = world.get<SeedRow[]>('seed').filter((r) => r.urlPattern === pattern);
-    const got = rows.map((r) => `${r.gateway}:${canonicalRole(r.role)}`).sort();
+Then('the cluster seed ships no row whose url_pattern is exactly {string}',
+  async ({ world }, pattern: string) => {
+    const seed = world.get<SeedRow[]>('seed');
+    // Non-vacuity: the 'seed' Given already refuses a zero-row parse; this pins
+    // that the reader still sees the pki gateway's remaining rows, so "no bare
+    // row" cannot be satisfied by a reader that lost the pki block entirely.
+    expect(
+      seed.filter((r) => r.gateway === 'hugmesh-pki-gateway').length,
+      'the cluster seed parsed to zero hugmesh-pki-gateway rows, so "no bare row" would be vacuous',
+    ).toBeGreaterThan(0);
+    const got = seed.filter((r) => r.urlPattern === pattern)
+      .map((r) => `${r.gateway}:${canonicalRole(r.role)}:${r.allow ? 'allow' : 'deny'}`).sort();
     expect(
       got,
       `rows whose url_pattern is exactly '${pattern}'. Decision 61 = refuse (hugmesh-generator#347, `
       + `2026-09-18): AdminController.addRouteRule 400s a pattern whose first segment is a bare `
-      + `wildcard, so any row here beyond the documented exception is one the admin API can never `
-      + `recreate. tests/scripts/cluster_manifest_integrity.py BARE_DOUBLE_STAR_EXCEPTIONS is the `
-      + `other copy of this list.`,
-    ).toEqual(list(csv).sort());
-    for (const r of rows) {
-      expect(r.allow, `${r.gateway} '${pattern}' ${r.role} must be an allow row (a catch-all DENY is not the documented shape)`).toBe(true);
-    }
+      + `wildcard, so any such row is one the admin API can never recreate. Decision 79 = B `
+      + `(hugmesh-admin-bff-api#57, 2026-09-23) dropped the last one, the pki headscale catch-all: `
+      + `that floor is the gateway SecurityConfig Host gate now (hugmesh-gateway#40). `
+      + `tests/scripts/cluster_manifest_integrity.py BARE_DOUBLE_STAR_EXCEPTIONS is the other copy `
+      + `of this rule, and it is empty.`,
+    ).toEqual([]);
   });
 
 When('the API client POSTs a route rule with url_pattern {string} for role {string} at gateway {string}',
