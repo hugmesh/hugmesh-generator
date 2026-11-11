@@ -115,9 +115,16 @@ def medium_size(avail) -> "QtCore.QSize":
 
     Pure function of the rect (no display needed) so the clamp is directly testable
     against screens the test host does not have. Measured: 1080p/1440p -> 1040x780,
-    768p laptop -> 1040x706, 1024x600 netbook -> 942x552, 800x800 -> 736x736 — all
-    of which clear every page's minimumSizeHint (widest: WorklistPage at 518, tallest:
-    ProgressPage at 401)."""
+    768p laptop -> 1040x706, 1024x600 netbook -> 942x552, 800x800 -> 736x736.
+
+    What a PAGE gets is smaller than the window. The header, the button row and the
+    folded Studio panel come off it, so at 942x552 the page area is 916x405, and at
+    736x736 it is 710x589. Every page's minimumSizeHint must fit 916x405 or Qt lays the
+    page out below its minimum. A tall page scrolls (pages/_scroll.scrollable) instead of
+    asking for more. Measured 2026-11-11: the widest and tallest minimum is WorklistPage
+    at 518x221. SystemPage and ProgressPage used to break this at 410 and 462-671 px
+    (GUI-13). tests/test_wizard_netbook_fit.py measures every registered page against
+    the live window, so read the numbers there, not here."""
     w, h = _PREFERRED
     return QtCore.QSize(min(w, int(avail.width() * _MARGIN)),
                         min(h, int(avail.height() * _MARGIN)))
