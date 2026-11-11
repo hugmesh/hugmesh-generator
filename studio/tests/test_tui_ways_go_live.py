@@ -275,8 +275,11 @@ def test_s_while_the_reconcile_lags_says_mixed_and_unreachable_says_unknown(
         "release gate says internal" in text
     monkeypatch.setenv("FAKE_GUEST_NFT", "absent")  # no table loaded: never "public"
     j.feed("s")
+    text = "\n".join(j.lines())
     assert "the nft release gate says unknown (table inet hugmesh_release_gate absent " \
-        "or unreadable)" in "\n".join(j.lines())
+        "or unreadable)" in text
+    # an unloaded table is not a reconcile lag: no promise that it converges
+    assert "converges them" not in text.split("device posture now: ")[-1].splitlines()[0]
     monkeypatch.setenv("FAKE_GUEST_DOWN", "1")
     j.feed("s")
     text = "\n".join(j.lines())

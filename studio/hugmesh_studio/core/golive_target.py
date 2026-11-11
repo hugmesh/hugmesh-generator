@@ -945,9 +945,15 @@ class Posture:
         if v == POSTURE_MIXED:
             nft = (self.nft if self.nft != POSTURE_UNKNOWN else
                    f"unknown (table inet {RELEASE_GATE_TABLE} absent or unreadable)")
-            return (f"MIXED — hugmesh-go-live status says {self.status}, the nft release "
-                    f"gate says {nft}; hugmesh-firewall-reconcile converges them at boot "
-                    "and every 60 s, so read it again in a minute")
+            said = (f"MIXED — hugmesh-go-live status says {self.status}, the nft release "
+                    f"gate says {nft}")
+            if POSTURE_UNKNOWN not in (self.status, self.nft):
+                # both read, and they disagree: the reconcile has not caught up yet. An
+                # unreadable witness (no table loaded, no driver) is not a lag, and
+                # nothing promises it converges.
+                said += ("; hugmesh-firewall-reconcile converges them at boot and every "
+                         "60 s, so read it again in a minute")
+            return said
         return (f"unknown ({self._why_unknown()})"
                 + (f" — {self.error}" if self.error else ""))
 

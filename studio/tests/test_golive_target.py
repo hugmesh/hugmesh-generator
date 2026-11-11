@@ -586,6 +586,13 @@ def test_read_posture_reads_both_witnesses(tmp_path):
     assert mixed.verdict == "mixed"
     assert mixed.sentence().startswith("MIXED — hugmesh-go-live status says public, the "
                                        "nft release gate says internal")
+    assert "converges them at boot and every 60 s" in mixed.sentence()     # a lag
+    absent = gt.read_posture(_target(tmp_path), run=FakeRun(posture_text=_posture_out(
+        "public", "", nftrc=1)))
+    assert absent.verdict == "mixed"
+    assert absent.sentence() == ("MIXED — hugmesh-go-live status says public, the nft "
+                                 "release gate says unknown (table inet "
+                                 "hugmesh_release_gate absent or unreadable)")
 
 
 def test_an_unreachable_device_is_unknown_never_internal(tmp_path):

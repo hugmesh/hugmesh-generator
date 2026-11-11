@@ -393,8 +393,9 @@ trip, with the same two witnesses the proof lane uses: `hugmesh-go-live status`
 (`effective posture:`) and `nft list table inet hugmesh_release_gate` (loaded with the
 80/443 drop rule = internal, loaded without it = public, absent or unreadable =
 unknown). It prints `device posture now (read <UTC time>): PUBLIC` or `INTERNAL` when
-both witnesses agree, and `MIXED` with both values while
-`hugmesh-firewall-reconcile`'s 60 s cron has not yet caught up. When the device
+both witnesses agree, and `MIXED` with both values when they do not: while
+`hugmesh-firewall-reconcile`'s 60 s cron has not yet caught up, or when one witness
+cannot be read (no table loaded is not a lag, and is not called one). When the device
 cannot be asked (stopped, no ssh, ssh failed) it prints `unknown (device not
 reachable)` and the reason. It never guesses.
 
