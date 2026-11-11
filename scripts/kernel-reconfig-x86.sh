@@ -316,6 +316,8 @@ krc_diff_verb() {
 krc_discard() {
     exec 217>>"${BR}.lock"
     flock -n 217 || krc_refuse "A kernel rebuild for this image is running — wait for it to finish before discarding the edit."
+    krc_state_has kernel \
+        && krc_refuse "An interrupted kernel rebuild already put the edited kernel into this image's build system — run the rebuild again to finish it; discarding now would leave the build system and the artifacts disagreeing."
     rm -rf "${PEND}"; say "pending kernel config edit discarded"
 }
 
@@ -396,6 +398,9 @@ krc_preflight() {
     need="$(krc_disk_need)"; avail="$(krc_avail_bytes "${WD}")"
     [ "${avail:-0}" -ge "${need}" ] \
         || krc_refuse "Repackaging needs about $(( need / 1073741824 )) GiB free under ${WD}; $(( ${avail:-0} / 1073741824 )) GiB is available."
+    # The live ISO step reuses the builder's own live-root helpers; read them NOW, so a
+    # renamed anchor in the builder fails here in seconds rather than after the .img.
+    [ -z "${KRE[LIVE_ISO]:-}" ] || krc_live_helpers
     for k in xz tar sfdisk losetup mount unsquashfs mksquashfs xorriso; do
         command -v "${k}" >/dev/null || krc_refuse "${k} is not on this host — run the rebuild in the builder container."
     done
@@ -741,6 +746,29 @@ krc_step() {
     krc_state_save
 }
 
+# krc_json_str <value> — a JSON string literal (backslash and quote escaped; a .config
+# value never carries a control character).
+krc_json_str() { local s="${1//\\/\\\\}"; s="${s//\"/\\\"}"; printf '"%s"' "${s}"; }
+# krc_result_json — the record the Studio reads back (core/kernel_reconfig.run_apply):
+# printed from the globals the apply set; the artifacts map is JSON_ART (pre-rendered).
+krc_result_json() {
+    local first=1 line sym old new
+    printf '{\n  "stamp": %s,\n  "old_kver": %s,\n  "new_kver": %s,\n' \
+        "$(krc_json_str "${STAMP}")" "$(krc_json_str "${OLD_KVER}")" "$(krc_json_str "${NEW_KVER}")"
+    printf '  "old_build_ts": %s,\n  "new_build_ts": %s,\n' "$(krc_json_str "${OLD_TS}")" "$(krc_json_str "${NEW_TS}")"
+    printf '  "signed": %s,\n' "$([ "${KR_SIGNED}" = yes ] && echo true || echo false)"
+    printf '  "sbverify": {"sysroot": %s, "esp": %s},\n' \
+        "$([ "${SBV_SYSROOT:-false}" = true ] && echo true || echo false)" "$(krc_json_str "${SBV_ESP:-n/a}")"
+    printf '  "changes": ['
+    while IFS= read -r line; do
+        [ -n "${line}" ] || continue
+        sym="${line%%: *}"; line="${line#*: }"; old="${line%% -> *}"; new="${line#* -> }"
+        [ "${first}" = 1 ] || printf ', '; first=0
+        printf '{"symbol": %s, "old": %s, "new": %s}' "$(krc_json_str "${sym}")" "$(krc_json_str "${old}")" "$(krc_json_str "${new}")"
+    done < <(krc_config_diff "${PEND}/config.before" "${PEND}/config.applied")
+    printf '],\n  "artifacts": {%s},\n  "superseded": %s\n}\n' "${JSON_ART:-}" "$(krc_json_str "superseded/${OLD_TS}")"
+}
+
 krc_apply() {
     krc_preflight
     NEW_STAGE4=""; NEW_IMG=""; NEW_FS_TAR=""; NEW_LIVE=""; NEW_INSTALLER=""; SBV_ESP=n/a; SBV_SYSROOT=false
@@ -757,6 +785,8 @@ krc_apply() {
     fi
     NEW_TS="${STAMP}"
     KRC_WORK="${KRC_ROOT}/work-${STAMP}"
+    # A run killed during the .img step leaves loop devices on its scratch image.
+    local l; for l in $(losetup -j "${KRC_WORK}/work.img" 2>/dev/null | cut -d: -f1); do losetup -d "${l}" 2>/dev/null || true; done
     rm -rf "${KRC_WORK}"; mkdir -p "${KRC_WORK}"
     export TMPDIR="${KRC_WORK}"
     say "applying the pending kernel config edit (stamp ${STAMP}):"
@@ -770,7 +800,8 @@ krc_apply() {
     [ -n "${KRE[INSTALLER_ISO]}" ] && [ -n "${NEW_STAGE4}" ] && krc_step installer krc_installer_iso
 
     banner "Checksums and superseded artifacts"
-    local sup="${WD}/superseded/${OLD_TS}" k f new json_art="" h
+    local sup="${WD}/superseded/${OLD_TS}" k f new h
+    JSON_ART=""
     mkdir -p "${sup}"
     declare -A NEWOF=([STAGE4]="${NEW_STAGE4}" [IMG]="${NEW_IMG}" [FS_TAR]="${NEW_FS_TAR}"
                       [LIVE_ISO]="${NEW_LIVE}" [INSTALLER_ISO]="${NEW_INSTALLER}")
@@ -778,7 +809,7 @@ krc_apply() {
         f="${KRE[${k}]:-}"; new="${NEWOF[${k}]}"
         [ -n "${f}" ] && [ -n "${new}" ] || continue
         h="$(krc_sha256 "${new}")"
-        json_art="${json_art}${json_art:+,}\"$(basename "${new}")\": \"${h}\""
+        JSON_ART="${JSON_ART}${JSON_ART:+, }$(krc_json_str "$(basename "${new}")"): $(krc_json_str "${h}")"
         # A resumed run may already have moved the original, or even rewritten the
         # contract to the new names: never move the NEW artifact into superseded/.
         if [ "${f}" != "$(basename "${new}")" ]; then
@@ -793,25 +824,9 @@ krc_apply() {
     [ "${KR_SIGNED}" = yes ] && KRE[UKI_SIGNED]=yes || KRE[UKI_SIGNED]=no
     krc_write_env
 
-    local hist="${KRC_ROOT}/${STAMP}" changes
-    changes="$(krc_config_diff "${PEND}/config.before" "${PEND}/config.applied" \
-        | awk -F': ' '{ split($2, v, " -> "); gsub(/"/, "\\\"", v[1]); gsub(/"/, "\\\"", v[2]);
-                        printf "%s{\"symbol\": \"%s\", \"old\": \"%s\", \"new\": \"%s\"}", (NR>1?", ":""), $1, v[1], v[2] }')"
+    local hist="${KRC_ROOT}/${STAMP}"
+    krc_result_json > "${PEND}/result.json.tmp" && mv -f "${PEND}/result.json.tmp" "${PEND}/result.json"
     mv -f "${PEND}" "${hist}"
-    cat > "${hist}/result.json" <<JSON
-{
-  "stamp": "${STAMP}",
-  "old_kver": "${OLD_KVER}",
-  "new_kver": "${NEW_KVER}",
-  "old_build_ts": "${OLD_TS}",
-  "new_build_ts": "${NEW_TS}",
-  "signed": $([ "${KR_SIGNED}" = yes ] && echo true || echo false),
-  "sbverify": {"sysroot": ${SBV_SYSROOT}, "esp": "${SBV_ESP}"},
-  "changes": [${changes}],
-  "artifacts": {${json_art}},
-  "superseded": "superseded/${OLD_TS}"
-}
-JSON
     chmod 0644 "${hist}"/*; chmod 0755 "${hist}"
     rm -rf "${KRC_WORK}"
     say "done: kernel ${OLD_KVER} -> ${NEW_KVER}; artifacts repackaged as ${NEW_TS}"

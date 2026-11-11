@@ -287,6 +287,29 @@ out="$(run_lib "${W}" 'krc_preflight')"; rc=$?
 grep -q 'if \[ "${f}" != "$(basename "${new}")" \]; then' "${KRC}" \
     && ok "finishing never moves a NEW artifact into superseded/ (resume after the contract was rewritten)" || bad "supersede guard missing"
 
+# result.json — what the Studio parses back — is valid JSON even for a string value
+# carrying quotes and a backslash, and says what changed.
+mkbr "${W}"; PDIR="${W}/wl-pki.x86/kernel-reconfig/pending"; mkdir -p "${PDIR}"
+printf 'CONFIG_LOCALVERSION=""\nCONFIG_CMDLINE="a\\\\b"\nCONFIG_X=m\n' > "${PDIR}/config.before"
+printf 'CONFIG_LOCALVERSION="-hm\\"q"\nCONFIG_CMDLINE="a\\\\b"\n# CONFIG_X is not set\n' > "${PDIR}/config.applied"
+run_lib "${W}" 'STAMP=S1 OLD_KVER=6.0 NEW_KVER=6.0-hm OLD_TS=T0 NEW_TS=S1 KR_SIGNED=yes SBV_SYSROOT=true SBV_ESP=true
+JSON_ART="$(krc_json_str a.img.xz): $(krc_json_str abc)"; krc_result_json' > "${TMPD}/result.json"
+if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c={x["symbol"]: x for x in d["changes"]}
+assert d["signed"] is True and d["sbverify"]["sysroot"] is True and d["artifacts"]=={"a.img.xz":"abc"}, d
+assert c["CONFIG_LOCALVERSION"]["new"] == "\"-hm\\\"q\"", c
+assert c["CONFIG_X"]["new"] == "n (not set)" and "CONFIG_CMDLINE" not in c, c' "${TMPD}/result.json" 2>"${TMPD}/json.err"; then
+    ok "result.json parses as JSON (quotes and backslashes escaped) and lists exactly the changed symbols"
+else bad "result.json is not what the Studio can read: $(cat "${TMPD}/json.err") $(cat "${TMPD}/result.json")"; fi
+# the builder's live helpers are read in the PREFLIGHT, so a renamed anchor fails in seconds
+mkbr "${W}"; bash "${KRC}" set --build-root "${W}/wl-pki.x86" -- --set-str LOCALVERSION -hmtest >/dev/null 2>&1
+out="$(run_lib "${W}" 'krc_preflight; type live_root_gate >/dev/null && echo HELPERS-READ')"
+grep -q HELPERS-READ <<<"${out}" && ok "the preflight already holds the builder's live-root gate" || bad "preflight did not read the live helpers: ${out}"
+# discard after an interrupted rebuild would leave the build system and the artifacts disagreeing
+printf 'stamp=S1\ndone=kernel\n' > "${W}/wl-pki.x86/kernel-reconfig/pending/apply.state"
+out="$(bash "${KRC}" discard --build-root "${W}/wl-pki.x86" 2>&1)"; rc=$?
+[ "${rc}" -eq 3 ] && grep -q 'interrupted kernel rebuild already put the edited kernel' <<<"${out}" && [ -d "${W}/wl-pki.x86/kernel-reconfig/pending" ] \
+    && ok "discard refuses once an interrupted rebuild changed the build system (finish it instead)" || bad "discard after interruption: rc=${rc} ${out}"
+
 echo "-- 7) kernel rebuild (chroot stubbed; the REAL asserts run) --"
 # The stub chroot runs the asserts script for real against the fixture tree and fakes
 # only the compile: kernelrelease = version + the tree's CONFIG_LOCALVERSION.
