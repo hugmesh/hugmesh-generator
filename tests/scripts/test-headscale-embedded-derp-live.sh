@@ -18,13 +18,15 @@
 #      writes its DERP key under /var/lib/headscale, serves /derp (426 upgrade
 #      required) and /derp/probe (200); a stock client joins, receives a DERP map with
 #      ONLY region 999 named from the cluster domain, and its netcheck gets a STUN
-#      answer (UDP true) from the embedded relay.
+#      answer (UDP true) from the embedded relay. It also pins the documented limit:
+#      with that http:// server_url the relay itself refuses (clients speak TLS).
 #   B. specs/etc/headscale/config.yaml with the public map OPTED IN: the public URL
 #      is in the config, headscale tries it (and cannot reach it, offline) and STILL
 #      starts, with the embedded region in the client's map.
-#   C. relay through a TLS front (nginx terminating TLS, Upgrade passed through, the
-#      shape of the local stack's https-front): two clients forced onto DERP reach
-#      each other "via DERP(<region>)".
+#   C. relay through the local stack's REAL TLS front: tests/stack/tls-front/default.conf
+#      itself, unedited, in stock nginx (its hs.<domain> server block: TLS on 8443,
+#      http2 on, Upgrade/Connection passed through to hugmesh-headscale:8080). Two
+#      clients forced onto DERP reach each other "via DERP(<region>)".
 #
 # EXIT: 0 all passed; 1 an assertion failed; 2 could not run (no docker daemon, an
 # image could not be pulled) — a job FAILURE, never a skip.
@@ -33,6 +35,7 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PIN_SRC="${REPO}/build-x86-host-stage4.sh"
 PROV="${REPO}/specs/etc/keys-provision/provision.sh"
+FRONT_CONF="${DERP_LIVE_FRONT_CONF:-${REPO}/tests/stack/tls-front/default.conf}"  # override only to mutation-test section C
 NGINX_IMAGE="${DERP_LIVE_NGINX_IMAGE:-nginx:1.27-alpine}"
 PUBLIC_URL="https://controlplane.tailscale.com/derpmap/default"
 
@@ -75,6 +78,8 @@ grep -E '^provision_headscale_derp\(\) \{' "${WORK}/derp-fns.sh" >/dev/null || c
 
 # hs_up <label> <config-src|-> <server_url> <public_derp true|false> [config text on stdin when src is -]
 # Renders the config like a first boot and starts headscale as ${SFX}-<label>.
+# HS_DOCKER_ARGS (array) adds docker run arguments (section C: a network alias).
+HS_DOCKER_ARGS=()
 hs_up() {
     local label="$1" src="$2" url="$3" pub="$4" d="${WORK}/$1" name="${SFX}-$1"
     mkdir -p "${d}/etc" "${d}/lib" "${d}/run" "${d}/hm"
@@ -95,8 +100,8 @@ hs_up() {
     ) > "${d}/provision.log" 2>&1
     chmod -R a+rwX "${d}"
     CONTAINERS+=("${name}")
-    docker run -d --name "${name}" --network "${NET}" -v "${d}/etc:/etc/headscale" -v "${d}/lib:/var/lib/headscale" \
-        -v "${d}/run:/run/headscale" "${HS_IMAGE}" serve >/dev/null 2>&1 || return 1
+    docker run -d --name "${name}" --network "${NET}" "${HS_DOCKER_ARGS[@]}" -v "${d}/etc:/etc/headscale" \
+        -v "${d}/lib:/var/lib/headscale" -v "${d}/run:/run/headscale" "${HS_IMAGE}" serve >/dev/null 2>&1 || return 1
     local i
     for i in $(seq 1 20); do
         docker logs "${name}" 2>&1 | grep -E 'listening and serving HTTP|Headscale ran into an error' >/dev/null && break
@@ -201,6 +206,13 @@ if ts_up c1 keys "http://${SFX}-keys:8080"; then
         && ok "netcheck: STUN answered by the embedded relay (UDP: true)" || bad "netcheck: no STUN answer"
     printf '%s\n' "${nc}" | grep -F 'Nearest DERP: derp.example embedded relay' >/dev/null \
         && ok "netcheck: nearest DERP is the embedded relay" || bad "netcheck: nearest DERP is not the embedded relay"
+    # The documented LIMIT (docs/HEADSCALE-DERP.md "Relaying needs an HTTPS server_url"):
+    # clients always speak TLS to a DERP node, so a plain http:// server_url leaves the
+    # relay itself unusable. Pinned here so the doc goes red the day that changes.
+    dd="$(docker exec "${SFX}-c1" tailscale debug derp 999 2>&1)"
+    printf '%s\n' "${dd}" | grep -F 'first record does not look like a TLS handshake' >/dev/null \
+        && ok "documented limit holds: an http:// server_url leaves the relay unusable (clients speak TLS to DERP)" \
+        || bad "the http:// server_url relay limit changed — update docs/HEADSCALE-DERP.md: $(printf '%s' "${dd}" | tail -2 | tr '\n' ' ')"
 else
     bad "a stock client could not join the offline mesh"
 fi
@@ -225,40 +237,35 @@ else
 fi
 
 # ── C. relay through a TLS front ─────────────────────────────────────────────
-echo "-- C. DERP relay through a TLS front (nginx, Upgrade passed through) --"
+echo "-- C. DERP relay through the local stack's real TLS front (tests/stack/tls-front/default.conf) --"
+# The front runs the repo's file UNEDITED: its hs.<domain> block listens on 8443 with
+# http2 on and proxies to hugmesh-headscale:8080 through docker's resolver. So the
+# headscale container carries that alias, the front answers as hs.derp.test, and the
+# cert sits where the file reads it (/etc/hugmesh-tls/{fullchain.crt,server.key}).
+[ -f "${FRONT_CONF}" ] || cannot "missing ${FRONT_CONF}"
 FR="${SFX}-front"
+FRONT_HOST="hs.derp.test"
 mkdir -p "${WORK}/front-tls"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj "/CN=derp live CA" \
     -keyout "${WORK}/front-tls/ca.key" -out "${WORK}/front-tls/ca.crt" >/dev/null 2>&1
-openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=${FR}" \
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=${FRONT_HOST}" \
     -keyout "${WORK}/front-tls/server.key" -out "${WORK}/front-tls/server.csr" >/dev/null 2>&1
-printf 'subjectAltName=DNS:%s\n' "${FR}" > "${WORK}/front-tls/ext"
+printf 'subjectAltName=DNS:%s\n' "${FRONT_HOST}" > "${WORK}/front-tls/ext"
 openssl x509 -req -in "${WORK}/front-tls/server.csr" -CA "${WORK}/front-tls/ca.crt" -CAkey "${WORK}/front-tls/ca.key" -CAcreateserial \
-    -days 1 -extfile "${WORK}/front-tls/ext" -out "${WORK}/front-tls/server.crt" >/dev/null 2>&1 || cannot "could not mint the test TLS cert"
-hs_up tls keys-template/headscale/config.yaml "https://${FR}" false || cannot "could not start headscale (tls)"
-cat > "${WORK}/front-tls/default.conf" <<NG
-map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
-server {
-    listen 443 ssl;
-    server_name ${FR};
-    ssl_certificate /tls/server.crt;
-    ssl_certificate_key /tls/server.key;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$http_host;
-    proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection \$connection_upgrade;
-    proxy_buffering off;
-    proxy_read_timeout 300s;
-    location / { proxy_pass http://${SFX}-tls:8080; }
-}
-NG
+    -days 1 -extfile "${WORK}/front-tls/ext" -out "${WORK}/front-tls/fullchain.crt" >/dev/null 2>&1 || cannot "could not mint the test TLS cert"
+HS_DOCKER_ARGS=(--network-alias hugmesh-headscale)
+hs_up tls keys-template/headscale/config.yaml "https://${FRONT_HOST}:8443" false || cannot "could not start headscale (tls)"
+HS_DOCKER_ARGS=()
 chmod -R a+rX "${WORK}/front-tls"
 CONTAINERS+=("${FR}")
-docker run -d --name "${FR}" --network "${NET}" -v "${WORK}/front-tls/default.conf:/etc/nginx/conf.d/default.conf:ro" \
-    -v "${WORK}/front-tls:/tls:ro" "${NGINX_IMAGE}" >/dev/null 2>&1 || cannot "could not start the TLS front"
+docker run -d --name "${FR}" --network "${NET}" --network-alias "${FRONT_HOST}" \
+    -v "${FRONT_CONF}:/etc/nginx/conf.d/default.conf:ro" -v "${WORK}/front-tls:/etc/hugmesh-tls:ro" \
+    "${NGINX_IMAGE}" >/dev/null 2>&1 || cannot "could not start the TLS front"
 sleep 2
+[ "$(docker inspect -f '{{.State.Running}}' "${FR}" 2>/dev/null)" = "true" ] \
+    || cannot "the real tls-front config did not start in ${NGINX_IMAGE}: $(docker logs "${FR}" 2>&1 | tail -3 | tr '\n' ' ')"
 DERP_ONLY=(-v "${WORK}/front-tls/ca.crt:/ca.crt:ro" -e SSL_CERT_FILE=/ca.crt -e TS_DEBUG_ALWAYS_USE_DERP=true)
-if ts_up r1 tls "https://${FR}" "${DERP_ONLY[@]}" && ts_up r2 tls "https://${FR}" "${DERP_ONLY[@]}"; then
+if ts_up r1 tls "https://${FRONT_HOST}:8443" "${DERP_ONLY[@]}" && ts_up r2 tls "https://${FRONT_HOST}:8443" "${DERP_ONLY[@]}"; then
     ok "two clients join through the TLS front"
     docker exec "${SFX}-r1" tailscale debug derp 999 2>&1 | grep -F 'Successfully established a DERP connection' >/dev/null \
         && ok "a DERP connection is established through the front (TLS + Upgrade)" \

@@ -75,17 +75,18 @@ headscale puts the region in every client's DERP map. The node in that region is
 
 ### Relaying needs an HTTPS `server_url`
 
-Tailscale clients always speak TLS to a DERP node. Measured with headscale 0.23.0 and
-tailscale 1.76.6 on an offline docker network:
+Tailscale clients always speak TLS to a DERP node. Measured with the pinned headscale
+0.23.0 and tailscale 1.78.1 on an offline docker network (both cases are assertions in
+`tests/scripts/test-headscale-embedded-derp-live.sh`):
 
 - With the LAN default `server_url: http://<pki-ip>:8080`, headscale starts, the map
   holds the embedded region, STUN answers (`tailscale netcheck`: `UDP: true`, nearest
   DERP = the embedded relay) and peers on the same LAN connect directly. The relay
   itself is **not** usable: `tailscale debug derp 999` reports `tls: first record does
   not look like a TLS handshake`.
-- With `server_url: https://<front>` and a TLS front that passes `Upgrade`/`Connection`
-  through to headscale's `:8080` (the shape of the local stack's
-  `tests/stack/tls-front/default.conf`), `tailscale debug derp 999` reports
+- With `server_url: https://hs.<domain>:8443` behind the local stack's own TLS front
+  (`tests/stack/tls-front/default.conf`, run unedited: TLS, `http2 on`, `Upgrade`/
+  `Connection` passed through to headscale's `:8080`), `tailscale debug derp 999` reports
   `Successfully established a DERP connection`, and two clients forced onto DERP ping
   each other `via DERP(<region>)`.
 
@@ -174,5 +175,7 @@ this change leaves it alone.
   headscale and tailscale on an `--internal` network. A negative control shows the old
   config dying there. Then: the KEYS config starts, serves `/derp` (426) and
   `/derp/probe` (200), and hands a client a map holding only the embedded region plus
-  a STUN answer. The opt-in starts offline too. Two clients relay `via DERP` through an
-  nginx TLS front.
+  a STUN answer, and the relay refuses an `http://` `server_url` (the limit above).
+  The opt-in starts offline too. Two clients relay `via DERP` through the local
+  stack's real TLS front config. Mutation-checked: a front that drops `Upgrade` stops
+  the clients joining, and a front that 404s `/derp` fails the relay assertions.
