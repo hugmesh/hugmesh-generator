@@ -1,0 +1,65 @@
+# Pull-request build of hugmesh-akkoma (images/akkoma). Builds the image exactly as
+# akkoma-release.yml's image job does (same Dockerfile, same platform), boot-tests
+# it with images/akkoma/smoke-test.sh, and pushes NOTHING: no registry login, no
+# packages permission, read-only token. Publishing happens only in
+# akkoma-release.yml, which never runs on a pull request.
+name: Akkoma image (PR build)
+
+on:
+  pull_request:
+    paths:
+      - 'images/akkoma/**'
+      - '.github/workflows/akkoma-image-ci.yml'
+      - '.github/workflows/akkoma-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: akkoma-image-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CONTEXT: images/akkoma
+
+jobs:
+  build:
+    name: build and boot-test (no push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Lint the scripts
+        run: |
+          bash -n "$CONTEXT/smoke-test.sh"
+          bash -n "$CONTEXT/check-upstream-pin.sh"
+
+      - name: Check the upstream tag still names the pinned commit
+        run: bash "$CONTEXT/check-upstream-pin.sh"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          platforms: linux/amd64
+          pull: true
+          push: false
+          load: true
+          tags: hugmesh-akkoma:pr-${{ github.event.pull_request.number }}
+
+      - name: Boot-test the image
+        env:
+          IMAGE: hugmesh-akkoma:pr-${{ github.event.pull_request.number }}
+        run: bash "$CONTEXT/smoke-test.sh" "$IMAGE" "$(sed -n 's/^ARG AKKOMA_VERSION=//p' "$CONTEXT/Dockerfile" | head -n 1)"
+
+      - name: Image size and labels
+        env:
+          IMAGE: hugmesh-akkoma:pr-${{ github.event.pull_request.number }}
+        run: |
+          docker image inspect "$IMAGE" --format '{{.Size}} bytes'
+          docker image inspect "$IMAGE" --format '{{json .Config.Labels}}'

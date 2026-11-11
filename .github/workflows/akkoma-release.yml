@@ -1,0 +1,489 @@
+# Publishes hugmesh-akkoma (images/akkoma: Akkoma built from upstream source at a
+# pinned commit, with the HugMesh ForceLocalForUsers MRF compiled in) to
+# ghcr.io/hugmesh/hugmesh-akkoma, built, boot-tested, signed and attested on a
+# GitHub-hosted runner. Upstream publishes no container image (operator decision
+# 2026-11-11: build our own), so this is the only source of the image the cluster
+# pins (specs/cluster/manifests/akkoma, test-runner/akkoma-peer.yaml).
+#
+# This workflow is mesh-node-release.yml with the artifact's names swapped in, and
+# tests/scripts/test-akkoma-image-pin.sh holds every security-relevant step body
+# equal to the mesh-node one after that swap, so a fix to one cannot silently skip
+# the other. What differs on purpose: linux/amd64 only (no QEMU), the upstream-tag
+# check in the version job, and the boot test of the loaded image before the push.
+#
+# hugmesh-release-channels: beta+stable
+# The release channel comes from the TAG (scripts/mesh-node-release-channel.sh,
+# shared with the mesh-node image, run with TAG_PREFIX=akkoma-v):
+#
+#   push to main touching the paths below -> :main and :sha-<12>
+#   push to release/X.Y touching them     -> :sha-<12> only
+#   push of tag akkoma-vX.Y.Z-beta.N      -> :X.Y.Z-beta.N, :beta and :sha-<12>,
+#                                            plus a GitHub prerelease (never
+#                                            Latest). The commit must be on main.
+#   push of tag akkoma-vX.Y.Z (stable)    -> :X.Y.Z, :X.Y, :latest and :sha-<12>,
+#                                            plus a full GitHub release. The
+#                                            commit must be on release/X.Y.
+#   workflow_dispatch on main, a release/X.Y branch or an akkoma-v* tag
+#                                         -> same as the push; for a tag, an image
+#                                            tag that already exists is never
+#                                            overwritten (the build is skipped)
+#   anything else                         -> refused by the `version` job
+#
+# The version lives in images/akkoma/VERSION and is the IMAGE's version, not
+# Akkoma's (that is AKKOMA_VERSION in the Dockerfile, also a label and in the
+# release notes). Its X.Y must equal clients/docker-mesh-node/VERSION's X.Y:
+# hugmesh-generator has ONE release/X.Y branch for all its artifacts, and the
+# channel script refuses a release/X.Y push whose version is on another line.
+# tests/scripts/test-akkoma-image-pin.sh enforces the equality.
+#
+# :X.Y.Z is never overwritten; the floating tags :beta, :X.Y and :latest move.
+# Every tag a run pushes points at one digest, and that digest is signed (cosign
+# keyless) and attested (SLSA build provenance and an SPDX SBOM), exactly as for
+# the mesh-node image; see that workflow's header for the race and re-run notes,
+# which apply here unchanged.
+#
+# The GitHub Release is never marked Latest: Studio (studio-release.yml) owns the
+# repository's one Latest slot.
+#
+# Every job runs on GitHub-hosted runners. Nothing built on a self-hosted runner
+# may be published, so this workflow never reads RUNS_ON or RUNS_ON_PUBLISH. It
+# has no pull_request / pull_request_target trigger and must never get one: pull
+# requests build (without pushing) in akkoma-image-ci.yml.
+name: Akkoma image
+
+on:
+  push:
+    branches: [main, 'release/**']
+    paths:
+      - 'images/akkoma/**'
+      - '.github/workflows/akkoma-release.yml'
+      - 'scripts/mesh-node-release-channel.sh'
+      - 'scripts/test-mesh-node-release-channel.sh'
+    tags: ['akkoma-v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: akkoma-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: hugmesh/hugmesh-akkoma
+  CONTEXT: images/akkoma
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.v.outputs.kind }}
+      version: ${{ steps.v.outputs.version }}
+      channel: ${{ steps.v.outputs.channel }}
+      line: ${{ steps.v.outputs.line }}
+      sha12: ${{ steps.v.outputs.sha12 }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Self-test the release channel rules
+        run: bash scripts/test-mesh-node-release-channel.sh
+
+      - name: Read and check the version
+        id: v
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < "$CONTEXT/VERSION")"
+          if ! printf '%s\n' "$version" | grep -aEx '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?' >/dev/null; then
+            echo "::error::$CONTEXT/VERSION '$version' is not MAJOR.MINOR.PATCH[-pre.N]"
+            exit 1
+          fi
+          case "$version" in
+            *SNAPSHOT*) echo "::error::refusing to publish a SNAPSHOT version ($version)"; exit 1 ;;
+          esac
+          # Channel, branch rules and image tags: scripts/mesh-node-release-channel.sh
+          # (hugmesh-release-channels: beta+stable). It narrows the version to
+          # MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-beta.N. Captured first, appended
+          # after: a refusal midway never leaves partial outputs.
+          out="$(VERSION="$version" VERSION_FILE="$CONTEXT/VERSION" TAG_PREFIX=akkoma-v IMAGE_NAME="$REGISTRY/$IMAGE_NAME" bash scripts/mesh-node-release-channel.sh)"
+          printf '%s\n' "$out" >> "$GITHUB_OUTPUT"
+          echo "$out"
+
+      - name: Lint the smoke test
+        run: bash -n "$CONTEXT/smoke-test.sh"
+
+      # The Dockerfile fetches upstream by commit id. Refuse to publish if the
+      # upstream tag it names has moved off that commit: a moved tag is a question
+      # for a human, never something to build past.
+      - name: Check the upstream tag still names the pinned commit
+        run: bash "$CONTEXT/check-upstream-pin.sh"
+
+  image:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      KIND: ${{ needs.version.outputs.kind }}
+      VERSION: ${{ needs.version.outputs.version }}
+      SHA12: ${{ needs.version.outputs.sha12 }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only the immutable :X.Y.Z (or :X.Y.Z-beta.N) is checked here. The
+      # floating tags :beta, :X.Y and :latest are meant to move to a newer
+      # release, so they are not.
+      - name: Refuse to overwrite a published version
+        id: exists
+        run: |
+          set -uo pipefail
+          if [ "$KIND" != release ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ref="$REGISTRY/$IMAGE_NAME:$VERSION"
+          # The step runs as `bash -e {0}` (no shell: key), and `set -uo pipefail`
+          # does not turn -e off: a bare `out=$(...)` would end the step on the
+          # normal "not found" answer of a first publish, before the check below.
+          # `|| rc=$?` keeps the failure in rc.
+          rc=0
+          out="$(docker buildx imagetools inspect "$ref" 2>&1)" || rc=$?
+          if [ "$rc" = 0 ]; then
+            if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+              echo "::notice::$ref already exists; not rebuilding it (re-run of an existing release)"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            case "$VERSION" in
+              *-*) next="raise the beta number in $CONTEXT/VERSION on main" ;;
+              *) next="cut the next patch release from release/${VERSION%.*}" ;;
+            esac
+            echo "::error::$ref already exists; a published version is never overwritten: $next instead."
+            exit 1
+          fi
+          case "$out" in
+            *": not found"*)
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              # Fail closed: an auth or network error must not look like "absent".
+              echo "::error::could not tell whether $ref exists (exit $rc): $out"
+              exit 1
+              ;;
+          esac
+
+      # Builds now and pushes nothing, so the step that pushes finds every layer
+      # in the builder's cache and takes seconds. The tag check below would
+      # otherwise be as old as the whole build by the time the tags are written.
+      # linux/amd64 only, like every other HugMesh backend image the cluster runs
+      # next to it (images/akkoma/README.md says what an arm64 leg would take).
+      # load: true hands the image to the smoke test below before anything is pushed.
+      - name: Build the image (no push)
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          platforms: linux/amd64
+          pull: true
+          push: false
+          load: true
+          tags: hugmesh-akkoma:smoke
+
+      # The image about to be pushed (the push below rebuilds it from this build's
+      # cache) boots against Postgres the way the cluster runs it
+      # (images/akkoma/smoke-test.sh): nothing that fails it is published.
+      - name: Boot-test the image before pushing it
+        if: steps.exists.outputs.skip != 'true'
+        run: bash "$CONTEXT/smoke-test.sh" hugmesh-akkoma:smoke "$(sed -n 's/^ARG AKKOMA_VERSION=//p' "$CONTEXT/Dockerfile" | head -n 1)"
+
+      - name: Compute tags and labels
+        id: meta
+        if: steps.exists.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          # scripts/mesh-node-release-channel.sh decides the tag list here, right
+          # before the push, not in the version job: beta -> :X.Y.Z-beta.N + :beta;
+          # stable -> :X.Y.Z plus :X.Y and :latest when nothing newer is published
+          # on its line / on any line; every run adds :sha-<12>.
+          out="$(VERSION_FILE="$CONTEXT/VERSION" TAG_PREFIX=akkoma-v IMAGE_NAME="$image" bash scripts/mesh-node-release-channel.sh)"
+          echo "$out"
+          tags="$(printf '%s\n' "$out" | sed -n '/^image_tags<<EOF_IMAGE_TAGS$/,/^EOF_IMAGE_TAGS$/p' | sed '1d;$d')"
+          move_latest="$(printf '%s\n' "$out" | sed -n 's/^move_latest=//p')"
+          if [ -z "$tags" ]; then
+            echo "::error::scripts/mesh-node-release-channel.sh computed no image tags"
+            exit 1
+          fi
+          while IFS= read -r t; do
+            case "$t" in
+              "$image":?*) ;;
+              *) echo "::error::unexpected image tag '$t'"; exit 1 ;;
+            esac
+          done <<< "$tags"
+          if [ "$KIND" = release ]; then
+            label_version="$VERSION"
+          else
+            label_version="$GITHUB_REF_NAME"
+          fi
+          {
+            echo "move_latest=$move_latest"
+            echo "label_version=$label_version"
+            echo "tags<<EOF_TAGS"
+            echo "$tags"
+            echo "EOF_TAGS"
+          } >> "$GITHUB_OUTPUT"
+          printf 'tags:\n%s\n' "$tags"
+
+      - name: Build and push image
+        id: build
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          platforms: linux/amd64
+          pull: true
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.title=hugmesh-akkoma
+            org.opencontainers.image.description=Akkoma built from upstream source with the HugMesh ForceLocalForUsers MRF compiled in
+            org.opencontainers.image.version=${{ steps.meta.outputs.label_version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      # --- signed-images-20261021 ---
+      # Everything below signs what the step `build` just pushed, by DIGEST, from
+      # this GitHub-hosted job: a cosign keyless signature (Sigstore, GitHub OIDC),
+      # a SLSA build-provenance attestation and an SPDX SBOM attestation, both
+      # pushed next to the image. A run that skipped the build (existing release
+      # tag) skips all of it.
+      - name: Resolve the pushed image name and digest
+        id: signref
+        if: steps.build.outcome == 'success'
+        env:
+          METADATA: ${{ steps.build.outputs.metadata }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_TAGS: ${{ steps.meta.outputs.tags }}
+          MOVE_LATEST: ${{ steps.meta.outputs.move_latest }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re, sys
+          meta = json.loads(os.environ.get("METADATA") or "{}")
+          digest = os.environ.get("DIGEST", "")
+          if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+              sys.exit(f"::error::build step gave no usable digest: {digest!r}")
+          names = [n.strip() for n in meta.get("image.name", "").split(",") if n.strip()]
+          repos, tags = set(), []
+          for n in names:
+              head, _, last = n.rpartition("/")
+              if ":" in last:
+                  last, tag = last.split(":", 1)
+                  tags.append(tag)
+              repos.add(f"{head}/{last}")
+          if len(repos) != 1:
+              sys.exit(f"::error::expected one pushed repository, got {sorted(repos)}")
+          expected = sorted(t.rpartition(":")[2] for t in os.environ.get("EXPECTED_TAGS", "").split() if t)
+          if sorted(tags) != expected:
+              sys.exit(f"::error::pushed tags {sorted(tags)} are not the computed tags {expected}")
+          # :latest only for a stable version that owns it (MOVE_LATEST from the
+          # check right before the push). The "-" fallback makes a missing or EMPTY VERSION fail
+          # closed (a job output that was never set arrives as "", not unset).
+          if "latest" in tags and ("-" in (os.environ.get("VERSION") or "-") or os.environ.get("MOVE_LATEST") != "true"):
+              sys.exit("::error::a :latest tag was pushed; beta images and older-line patches must never be tagged latest")
+          repo = repos.pop()
+          if repo != repo.lower() or not repo.startswith("ghcr.io/hugmesh/"):
+              sys.exit(f"::error::unexpected image repository {repo!r}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"repo={repo}\ndigest={digest}\n")
+          print(f"signing {repo}@{digest} (tags: {', '.join(tags)})")
+          PY
+
+      - name: Install cosign
+        if: steps.signref.outcome == 'success'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign the image digest (cosign keyless, GitHub OIDC)
+        if: steps.signref.outcome == 'success'
+        env:
+          REF: ${{ steps.signref.outputs.repo }}@${{ steps.signref.outputs.digest }}
+        run: cosign sign --yes "$REF"
+
+      - name: Attest build provenance (pushed to the registry)
+        if: steps.signref.outcome == 'success'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ steps.signref.outputs.repo }}
+          subject-digest: ${{ steps.signref.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate an SPDX SBOM of the pushed digest
+        if: steps.signref.outcome == 'success'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.signref.outputs.repo }}@${{ steps.signref.outputs.digest }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest the SBOM (pushed to the registry)
+        if: steps.signref.outcome == 'success'
+        uses: actions/attest-sbom@v2
+        with:
+          subject-name: ${{ steps.signref.outputs.repo }}
+          subject-digest: ${{ steps.signref.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/sbom.spdx.json
+          push-to-registry: true
+
+      # cosign and the attestations bind to the digest, so they cover every tag
+      # that resolves to it. Prove each pushed tag does (a floating tag moved
+      # by a concurrent run would not).
+      - name: Check every pushed tag resolves to the signed digest
+        if: steps.signref.outcome == 'success'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.signref.outputs.digest }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            # A digest is the sha256 of the manifest's exact bytes, which --raw
+            # prints. Do not use --format '{{.Manifest.Digest}}': buildx answers
+            # any format that starts with {{.Manifest with its full listing.
+            if ! raw_sha="$(docker buildx imagetools inspect "$ref" --raw | sha256sum)"; then
+              echo "::error::could not read $ref from the registry"
+              exit 1
+            fi
+            got="sha256:${raw_sha%% *}"
+            if [ "$got" != "$DIGEST" ]; then
+              echo "::error::$ref resolves to $got, not the signed digest $DIGEST"
+              exit 1
+            fi
+            echo "$ref -> $DIGEST (signed)"
+          done <<< "$TAGS"
+
+      - name: Write the verify commands to the job summary
+        if: steps.signref.outcome == 'success'
+        env:
+          REPO_IMAGE: ${{ steps.signref.outputs.repo }}
+          DIGEST: ${{ steps.signref.outputs.digest }}
+        run: |
+          {
+            echo "### Signed image"
+            echo '```'
+            echo "$REPO_IMAGE@$DIGEST"
+            echo "cosign verify $REPO_IMAGE@$DIGEST --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/$GITHUB_REPOSITORY/.github/workflows/akkoma-release.yml@refs/(heads/main|heads/release/[0-9]+[.][0-9]+|tags/akkoma-v.*)\$'"
+            echo "gh attestation verify oci://$REPO_IMAGE@$DIGEST --repo $GITHUB_REPOSITORY"
+            echo "gh attestation verify oci://$REPO_IMAGE@$DIGEST --repo $GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v2.3"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    needs: [version, image]
+    if: needs.version.outputs.kind == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # beta -> a prerelease; stable -> a full release. Neither is marked
+      # Latest: this repository has one Latest slot and Studio owns it
+      # (studio-release.yml); the image's :latest tag is separate. The channel
+      # is decided again here, right before the release is created, by the same
+      # script the version and image jobs ran (a re-run reuses old outputs).
+      - name: Create the GitHub release
+        run: |
+          set -euo pipefail
+          tag="akkoma-v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::notice::release $tag already exists; leaving it as it is"
+            exit 0
+          fi
+          out="$(VERSION_FILE=images/akkoma/VERSION TAG_PREFIX=akkoma-v IMAGE_NAME="$REGISTRY/$IMAGE_NAME" bash scripts/mesh-node-release-channel.sh)"
+          echo "$out"
+          channel="$(printf '%s\n' "$out" | sed -n 's/^channel=//p')"
+          args=(--verify-tag)
+          case "$channel:$VERSION" in
+            beta:*-*) args+=(--prerelease --latest=false); stage=" (BETA)" ;;
+            stable:*-*) echo "::error::stable channel with prerelease version $VERSION"; exit 1 ;;
+            stable:*) args+=(--latest=false); stage="" ;;
+            *) echo "::error::no release flags for channel=$channel version=$VERSION; refusing"; exit 1 ;;
+          esac
+          image="ghcr.io/hugmesh/hugmesh-akkoma"
+          upstream="$(sed -n 's/^ARG AKKOMA_VERSION=//p' images/akkoma/Dockerfile | head -n 1)"
+          commit="$(sed -n 's/^ARG AKKOMA_COMMIT=//p' images/akkoma/Dockerfile | head -n 1)"
+          notes=$(cat <<EOF
+          Container image: $image:$VERSION$stage
+
+          Akkoma $upstream, built from upstream source at commit $commit (https://akkoma.dev/AkkomaGang/akkoma), with the HugMesh overlay in images/akkoma/ (AGPL-3.0: this tag's images/akkoma/ directory plus that upstream commit are the complete corresponding source).
+
+          Built, signed (cosign keyless) and attested (build provenance + SPDX SBOM) by GitHub Actions on a GitHub-hosted runner.
+
+          Verify:
+
+              cosign verify $image:$VERSION --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/$GH_REPO/.github/workflows/akkoma-release.yml@refs/tags/akkoma-v'
+              gh attestation verify oci://$image:$VERSION --repo $GH_REPO
+          EOF
+          )
+          gh release create "$tag" "${args[@]}" \
+            --title "akkoma $tag" \
+            --notes "$notes"
+
+  # --- signed-images-20261021 ---
+  # After the GitHub Release of an akkoma-v<version> tag run, ask hugmesh.github.io to
+  # rebuild its downloads data (contract: .wf-scripts results downloads/
+  # DISPATCH-CONTRACT.md). The payload is informational; the site re-reads
+  # GitHub itself. Needs the SITE_DISPATCH_TOKEN secret (a token allowed to
+  # write contents on hugmesh/hugmesh.github.io); without it this job prints a
+  # notice and succeeds. Never runs on a push to main.
+  notify-site:
+    needs: [github-release]
+    if: startsWith(github.ref, 'refs/tags/akkoma-v')
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Notify hugmesh.github.io (repository_dispatch releases-updated)
+        env:
+          SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SITE_DISPATCH_TOKEN:-}" ]; then
+            echo "::notice::SITE_DISPATCH_TOKEN is not set; skipping the hugmesh.github.io releases-updated notification"
+            exit 0
+          fi
+          payload=$(python3 -c 'import json, os; print(json.dumps({"event_type": "releases-updated", "client_payload": {"source": os.environ["GITHUB_REPOSITORY"], "kind": "image", "image": "ghcr.io/hugmesh/hugmesh-akkoma", "version": os.environ["GITHUB_REF_NAME"].removeprefix("akkoma-v"), "ref": os.environ["GITHUB_REF"], "sha": os.environ["GITHUB_SHA"]}}))')
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $SITE_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/hugmesh/hugmesh.github.io/dispatches \
+            -d "$payload"
+          echo "sent releases-updated for $GITHUB_REPOSITORY $GITHUB_REF_NAME"

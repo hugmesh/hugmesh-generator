@@ -927,7 +927,8 @@ _opt_negative_tokens() {
 # `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-...}"` line (tests/stack/
 # test-optional-services-exclude.sh asserts that), because the function below
 # restores it.
-_OPT_BUILTIN_DEFAULT_SERVICES="akkoma tuwunel phpbb"
+# akkoma left this list on 2026-11-11: its image (hugmesh-akkoma) is not yet published.
+_OPT_BUILTIN_DEFAULT_SERVICES="tuwunel phpbb"
 
 # _opt_negative_only_keeps_defaults — a list made ONLY of explicit-deselect tokens
 # ("-anubis", "no-anubis") keeps the built-in default selection.

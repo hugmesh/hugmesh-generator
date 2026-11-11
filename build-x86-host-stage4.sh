@@ -202,9 +202,11 @@ SELECTABLE_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-
 # to _opt_explicitly_deselected, so it cannot rot into a comment.
 DESELECTABLE_OPTIONAL_SERVICES="anubis"
 # OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
-#   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
-#   DEFAULT-OFF (must be specifically added): games owncast tube character-studio
-#   character-forge.
+#   DEFAULT-ON  (the built-in default when NO selection is given): tuwunel phpbb.
+#   DEFAULT-OFF (must be specifically added): akkoma games owncast tube
+#   character-studio character-forge. akkoma: image not yet published
+#   (images/akkoma/README.md); tests/scripts/test-akkoma-image-pin.sh refuses
+#   default-on while its digest is the placeholder.
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services) expands to EVERY
 # user-level slug (USER_LEVEL_SERVICES) just before EXCLUDE_SERVICES subtracts, so
 # `all` + EXCLUDE_SERVICES="games" still drops games. GAMES IS OPT-IN / OFF BY
@@ -214,7 +216,7 @@ DESELECTABLE_OPTIONAL_SERVICES="anubis"
 # brand.conf narrows; --optional-services overrides both (built-in < brand.conf <
 # flag). Each unselected slug is pruned from the baked GitOps tree by
 # gate_optional_services(). See specs/cluster/optional-services.yaml.
-OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
 # EXCLUDE_SERVICES — the SUBTRACTIVE build-time exclusion knob (brand.conf /
 # --exclude-services). Any user-level slug listed here is REMOVED from the final
 # selection AFTER all positive sources (built-in default, brand.conf
@@ -720,9 +722,10 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             literal "all" (every user-level slug). Unlisted slugs
                             are pruned from the baked GitOps tree by
                             gate_optional_services.
-                            Built-in DEFAULT (no selection) = "akkoma tuwunel phpbb";
-                            games/owncast/tube/character-studio/character-forge are
-                            DEFAULT-OFF.
+                            Built-in DEFAULT (no selection) = "tuwunel phpbb";
+                            akkoma/games/owncast/tube/character-studio/
+                            character-forge are DEFAULT-OFF (akkoma: image not
+                            yet published).
                             (env/brand.conf: OPTIONAL_SERVICES; =all = the full set)
                             FAIL-CLOSED since 2026-08-26: a slug this builder
                             cannot honour ABORTS the build instead of being

@@ -165,7 +165,7 @@ cp brands/example.conf brands/acme.conf
 | `BRAND_TITLE` | `HugMesh Systems` | human title shown in UIs |
 | `ORG` | `hugmesh` | GitHub org / container-image namespace |
 | `CLUSTER_DOMAIN` | `hugmesh.net` | base domain (`id.`/`api.`/`matrix.`/`mastodon.` derived) |
-| `OPTIONAL_SERVICES` | `akkoma tuwunel phpbb` | which optional services to bake (see §2a) |
+| `OPTIONAL_SERVICES` | `tuwunel phpbb` | which optional services to bake (see §2a) |
 | `GAMES_DOMAIN` | `games.<CLUSTER_DOMAIN>` | games portal host + OIDC issuer (see §2b) |
 | `GROW_POLICY` | `fill` | first-boot root-grow policy baked into the `.img` (see §2c) |
 | `DEFAULT_USER` / `DEFAULT_USER_PASS` / `ROOT_PASS` | `pi` / `raspberry` / `gentoo` | **fallback** console accounts when no KEYS stick is present — change for real builds |
@@ -189,7 +189,8 @@ not listed from the baked GitOps tree (Application YAMLs, gateway host routes,
 route-access rows, the per-service ESO half, all enumerated by
 `specs/cluster/optional-services.yaml`). The rest of the stack degrades gracefully
 (greyed out, never 502) when one is omitted. The built-in default is
-**`akkoma tuwunel phpbb`**; the other five are opt-in, and `OPTIONAL_SERVICES=all`
+**`tuwunel phpbb`** (`akkoma` is off until its image is published:
+`images/akkoma/README.md`); the other six are opt-in, and `OPTIONAL_SERVICES=all`
 (or `--all-services`) selects every one. An unknown slug is refused.
 
 ```sh
@@ -405,7 +406,7 @@ Full flag reference: `./build-rpi5-stage4.sh --help` and
 | `--env test\|prod` | `test` | baked build ENV (see §2e) |
 | `-C, --config FILE` | auto `./brand.conf` | source a brand profile |
 | `--brand` / `--brand-title` / `--org` / `--cluster-domain` | profile/defaults | per-field rebrand overrides |
-| `--optional-services "…"` | `akkoma tuwunel phpbb` | prune optional services (see §2a) |
+| `--optional-services "…"` | `tuwunel phpbb` | prune optional services (see §2a) |
 | `--games-domain` | `games.<domain>` | games host + OIDC issuer (see §2b) |
 | `--grow fill\|none\|<size>` / `--no-grow` | `fill` | first-boot grow (see §2c) |
 | `--img-size MiB` |9216 (Pi) / 8192 (x86) | compact ext4 root size |

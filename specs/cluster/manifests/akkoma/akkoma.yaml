@@ -14,7 +14,9 @@
 #     for the chosen image tag).
 #   - admin + OIDC(Casdoor via ueberauth_oidcc) + Mastodon->Akkoma data import are
 #     follow-ups (documented in docs/architecture).
-#   - confirm the image ref (git.akkoma.dev/AkkomaGang/akkoma OR ghcr mirror).
+#   - image: ghcr.io/hugmesh/hugmesh-akkoma, built from upstream source by
+#     images/akkoma/ (upstream publishes no image). Every Akkoma ref in this tree
+#     carries the same digest; tests/scripts/test-akkoma-image-pin.sh enforces it.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -204,15 +206,21 @@ spec:
         seLinuxOptions:
           type: container_t
           level: "s0:c30"
+        # hugmesh-akkoma runs as akkoma (1000:1000, set per container below; the
+        # nginx sidecar keeps its own user). fsGroup gives group 1000 the uploads
+        # PVC and read access to the 0440 config file.
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
       initContainers:
         - name: migrate
-          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
+          image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:0000000000000000000000000000000000000000000000000000000000000000   # PLACEHOLDER digest: hugmesh-akkoma is not published yet (images/akkoma/README.md, "Pinning")
           command: ["/opt/akkoma/bin/pleroma_ctl", "migrate"]
           envFrom: [{ secretRef: { name: akkoma-secrets } }]
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
           volumeMounts: [{ name: config, mountPath: /etc/akkoma }]
       containers:
         - name: akkoma
-          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
+          image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:0000000000000000000000000000000000000000000000000000000000000000   # PLACEHOLDER digest: hugmesh-akkoma is not published yet (images/akkoma/README.md, "Pinning")
           # akkoma-smtp is OPTIONAL (optional: true): when ESO has not materialized
           # it (no SMTP creds) the env stay unset, AKKOMA_SMTP_RELAY is "" and the
           # Pleroma.Mailer is disabled. When present it injects the AKKOMA_SMTP_*
@@ -220,6 +228,7 @@ spec:
           envFrom:
             - secretRef: { name: akkoma-secrets }
             - secretRef: { name: akkoma-smtp, optional: true }
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
           ports: [{ name: http, containerPort: 4000 }]
           volumeMounts:
             - { name: config,  mountPath: /etc/akkoma }
@@ -244,8 +253,11 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 15
       volumes:
+        # 0440: the release refuses a config.exs that is world-readable or
+        # group-writable (Pleroma.Config.ReleaseRuntimeProvider); a ConfigMap's
+        # default 0644 crash-loops it at boot.
         - name: config
-          configMap: { name: akkoma-config }
+          configMap: { name: akkoma-config, defaultMode: 0440 }
         - name: uploads
           persistentVolumeClaim: { claimName: akkoma-uploads }
         - name: proxy-conf
