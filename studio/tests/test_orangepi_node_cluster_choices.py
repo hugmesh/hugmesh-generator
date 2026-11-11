@@ -46,7 +46,8 @@ def test_desktop_row_emits_none_of_them(platform):
 def test_cluster_choices_are_node_class_only_on_the_orange_pi(platform):
     node = ImageConfig(mode="mesh", platform=platform, role="frontend")
     desk = ImageConfig(mode="mesh", platform=platform, role=platform)
-    for f in ("release_state", "idp", "vault_addr", "optional_services", "games_domain"):
+    for f in ("release_state", "idp", "vault_addr", "optional_services", "games_domain",
+              "release_tag"):
         assert field_in_scope(f, node), f
         assert not field_in_scope(f, desk), f
 

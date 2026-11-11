@@ -265,6 +265,11 @@ RAM_GB=""                                       # --ram-gb N : GB of RAM on the 
 NODE_ROLE=false                                 # true for a cluster NODE role (pki backend frontend omnibus); false for the desktop
 ROLE_CLIENT=true                                # the Pi gate functions read this: false on a node role
 CLUSTER_ARGS_GIVEN=""                           # cluster-choice flags given (--release-state, --idp, ...); a desktop refuses them
+# Pinned first-party release tag for an ENV=prod NODE role (--release-tag): the Pi
+# gate_env_apps pins the baked tree's floating `:dev` images to it. Same default and
+# check as build-rpi5-stage4.sh / build-x86-host-stage4.sh, so an explicit empty
+# --release-tag is refused here exactly as it is there.
+RELEASE_TAG="${RELEASE_TAG:-$(date -u +%Y%m%d)}"
 GROW_POLICY="fill"
 COMPRESS_IMG=false
 COMPRESS_LEVEL=9        # xz preset --compress uses (0-9); --compress-level N
@@ -723,9 +728,9 @@ if ${NODE_ROLE}; then
     # does not carry (tor, egress-vpn, domain-registry-bridge) is refused.
     node_role_resolve_cluster_choices orangepi5 || exit 1
     # ENV=prod pins the baked tree's first-party :dev image tags to RELEASE_TAG
-    # (--release-tag, or the gate's UTC-date default); refuse a floating or
+    # (--release-tag, or the UTC-date default above); refuse a floating or
     # malformed tag now, not after the emerge phase (scripts/_prod-gate-lib.sh).
-    if [ "${ENV}" = "prod" ] && [ -n "${RELEASE_TAG:-}" ]; then
+    if [ "${ENV}" = "prod" ]; then
         prod_gate_validate_release_tag "${RELEASE_TAG}" || exit 1
     fi
 else

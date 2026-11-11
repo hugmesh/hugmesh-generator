@@ -13,6 +13,9 @@
 # Runs the REAL functions (extracted from the builders / loaded through the node
 # role loader) over a scratch copy of specs/cluster. No root, no network.
 set -uo pipefail
+# Hermetic: an exported RELEASE_TAG would stand in for the builders' UTC-date default
+# and for the tag the Orange Pi node bake pins to (every case sets its own).
+unset RELEASE_TAG
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$(mktemp -d)"
@@ -173,6 +176,24 @@ builder_stop "grow must be" "node role, --env prod accepts a pinned --release-ta
     build-orangepi5-stage4.sh --role pki --ram-gb 8 --env prod --release-tag 20261110 --grow bogus
 builder_stop "grow must be" "node role, --env prod accepts a pinned --release-tag" \
     build-orangepi4-lts-stage4.sh --role frontend --ram-gb 4 --env prod --release-tag 20261110 --grow bogus
+# An explicit EMPTY --release-tag is refused on every builder (rpi5/x86 always did:
+# they default the tag before parsing and check it unconditionally). The Orange Pi
+# node roles used to skip the check for an empty tag and silently take the date.
+builder_stop "${TAGMSG}" "node role, --env prod with an empty --release-tag is refused" \
+    build-orangepi5-stage4.sh --role pki --ram-gb 8 --env prod --release-tag ''
+builder_stop "${TAGMSG}" "node role, --env prod with an empty --release-tag is refused" \
+    build-orangepi4-lts-stage4.sh --role frontend --ram-gb 4 --env prod --release-tag ''
+builder_stop "${TAGMSG}" "--env prod with an empty --release-tag is refused" \
+    build-rpi5-stage4.sh --role pki --env prod --release-tag ''
+# No --release-tag at all: the UTC-date default is a pinned tag and gets past the check.
+builder_stop "grow must be" "node role, --env prod with no --release-tag takes the date default" \
+    build-orangepi5-stage4.sh --role pki --ram-gb 8 --env prod --grow bogus
+builder_stop "grow must be" "node role, --env prod with no --release-tag takes the date default" \
+    build-orangepi4-lts-stage4.sh --role frontend --ram-gb 4 --env prod --grow bogus
+builder_stop "release-state must be" "--env prod with no --release-tag takes the date default" \
+    build-rpi5-stage4.sh --role pki --env prod --release-state bogus
+builder_stop "release-state must be" "--env prod with no --release-tag takes the date default" \
+    build-x86-host-stage4.sh --role pki --env prod --release-state bogus
 builder_stop "cluster choices only apply to a cluster node role" "the desktop refuses --release-tag like every cluster choice" \
     build-orangepi5-stage4.sh --env prod --release-tag 20261110
 builder_stop "cluster choices only apply to a cluster node role" "the desktop refuses --release-tag like every cluster choice" \
