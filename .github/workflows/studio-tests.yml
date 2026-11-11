@@ -67,6 +67,13 @@ on:
       - 'scripts/build-all-roles.sh'
       - 'scripts/_roles-lib.sh'
       - 'build-rpi5-stage4.sh'
+      # studio/tests/test_studio_installers_doc.py holds the installers page's "clone
+      # hugmesh-generator" rows to the release jobs that prove a package carries the
+      # tree. The page and the release workflow are both outside studio/, and a change
+      # to either alone (a seed step added to the MSI job, a row edited) is exactly the
+      # drift that guard exists to catch.
+      - 'docs/STUDIO-INSTALLERS.md'
+      - '.github/workflows/studio-release.yml'
   # A PUSH to main, for the Studio release machinery only. The release guard tests
   # (test_studio_beta_version.py, test_studio_release_signing.py,
   # test_studio_release_cut.py) parse the release workflows, and on 2026-10-22/23

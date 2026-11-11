@@ -1127,11 +1127,21 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 236 -> 237 on 2026-11-11 (fix/qemu-no-egress): +1 gated, +1 total —
 # tests/qemu/no_egress_argv_test.sh, named by shell-suites.yml. PREMERGE_UNGATED is
 # untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 237 of 279.
-# 237 -> 238 on 2026-11-11 (feat/desktop-config-20261111): +1 gated, +1 total —
+# 237 -> 238 on 2026-11-11 (fix/sec-new-7-s02-codeql-9--20261111): +1 gated, +1 total —
+# tests/scripts/test-edge-ai-analysis-ssrf.sh, named by shell-suites.yml's debian
+# edge-ai-analysis leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on
+# the branch over origin/main 39b953ad: 238 of 280.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-239}"
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-239}"
+# 239 -> 240 on 2026-11-11 (feat/desktop-config-20261111): +1 gated, +1 total —
 # tests/scripts/test-desktop-config-lib.sh, named by shell-suites.yml (alpine) and the
-# .gitlab-ci.yml desktop job. PREMERGE_UNGATED untouched. MEASURED on the tree merged
-# with origin/main a621b468.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
+# .gitlab-ci.yml desktop job. PREMERGE_UNGATED untouched. MEASURED with GUARD_PREMERGE=0
+# on the tree merged with origin/main aedbb1fd.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-240}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
