@@ -1,0 +1,27 @@
+# Build dependencies for the macOS app and .dmg (packaging/build-macos-app.sh, run by
+# the `macos` jobs in .github/workflows/studio-tests.yml and studio-release.yml).
+# Installed with
+#   pip install --only-binary=:all: -r macos-build-requirements.txt
+#
+# The SAME versions as the hash-locked Windows file (wix/windows-build-requirements.txt),
+# minus the Windows-only packages (pefile, pywin32-ctypes) and Pillow (only the Windows
+# .ico needs it; the .icns is made by macOS's own iconutil), PLUS macholib: PyInstaller
+# requires it on darwin only (it rewrites the Mach-O load commands of every library it
+# bundles), so pip would otherwise pull whatever version is newest on the day.
+# tests/test_macos_packaging.py holds this file to that description.
+#
+# Every wheel here is universal2 (PySide6 6.11.2: macosx_13_0_universal2), so the one
+# list serves the Apple-silicon and the Intel build. NOT hash-locked yet, for the same
+# reason as linux-build-requirements.txt: lock_windows_build.py only knows win_amd64
+# wheels. `pip freeze` in the job log records exactly what was installed.
+altgraph==0.17.5
+macholib==1.16.4
+packaging==26.3
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8
+pyside6==6.11.2
+pyside6-addons==6.11.2
+pyside6-essentials==6.11.2
+setuptools==84.1.0
+shiboken6==6.11.2
+tzdata==2026.4

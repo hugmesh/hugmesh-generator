@@ -370,3 +370,107 @@ jobs:
           tests/test_ollama_docker.py
           tests/test_local_ai_dock.py
           tests/test_local_ai_dock_pull.py
+
+  macos:
+    # The macOS app: "HugMesh Image Studio.app" in a .dmg, for Apple silicon and Intel.
+    # A Mac runs the Studio as a POSIX program whose builds go through a Docker VM
+    # (Docker Desktop, colima or OrbStack), like Windows and unlike Linux; the darwin
+    # branches in core/ are unit-tested on Linux with an injected sys.platform, and THIS
+    # job is where they meet a real Mac: real diskutil/sysctl output, real /bin/bash 3.2,
+    # a real Finder-style PATH, a real cocoa window.
+    #
+    # NAMED FILES, as in the windows job: these are the macOS contract, and a new macOS
+    # fix adds its test here. Then packaging/build-macos-app.sh, the SAME script the
+    # release's macos jobs run, freezes, checks, smoke-tests and packs the app, so what
+    # a pull request proves is what a release ships.
+    #
+    # macos-15 is Apple silicon (arm64) and macos-15-intel is x86_64; both are GitHub's
+    # standard hosted images, pinned by version rather than macos-latest so the
+    # minimum-macOS floor the bundle is tested on does not move silently. No Docker on
+    # either (hosted macOS runners have no nested virtualisation), so a Mac BUILD of an
+    # image is not proven here; the Studio says so (EXPERIMENTAL) in its preflight.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: studio/packaging/macos-build-requirements.txt
+
+      - name: Record the host facts the darwin code parses
+        # What core/macos_host.py and core/flash_targets.py read on a Mac, captured from
+        # the runner itself, so the test fixtures are this output and not someone's
+        # memory of it. Never fails the job; the files are uploaded below.
+        continue-on-error: true
+        run: |
+          out="$RUNNER_TEMP/host-facts"
+          mkdir -p "$out"
+          cap() { name=$1; shift; "$@" > "$out/$name" 2>&1 || echo "exit $?" >> "$out/$name"; }
+          cap uname.txt uname -a
+          cap sw_vers.txt sw_vers
+          cap sysctl.txt sysctl hw.optional.arm64 kern.hv_support hw.memsize hw.ncpu machdep.cpu.brand_string kern.osproductversion
+          cap bash-bin.txt /bin/bash --version
+          cap bash-path.txt bash --version
+          cap which.txt which -a bash sed make readlink find grep awk xz qemu-system-x86_64 docker colima
+          cap gnu.txt sh -c 'sed --version | head -1; make --version | head -1; readlink --version | head -1; find --version | head -1; grep --version | head -1; awk --version | head -1'
+          cap brew-opt.txt ls /opt/homebrew/opt /usr/local/opt
+          cap diskutil-list.plist diskutil list -plist
+          cap diskutil-list-external.plist diskutil list -plist external physical
+          cap diskutil-info-root.plist diskutil info -plist /
+          cap diskutil-apfs.plist diskutil apfs list -plist
+          cap launchctl.txt launchctl managername
+          cap env-path.txt sh -c 'echo "$PATH"'
+          ls -la "$out"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-host-facts-${{ matrix.arch }}
+          path: ${{ runner.temp }}/host-facts
+          retention-days: 14
+
+      - name: Install the pinned build dependencies, then pytest
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --only-binary=:all: -r studio/packaging/macos-build-requirements.txt
+          "$RUNNER_TEMP/venv/bin/python" -m pip install pytest PyYAML jsonschema
+          "$RUNNER_TEMP/venv/bin/python" -m pip freeze
+          "$RUNNER_TEMP/venv/bin/python" -c "import PySide6.QtCore as q; print('PySide6', q.qVersion())"
+
+      - name: Run the macOS contract
+        working-directory: studio
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          "$RUNNER_TEMP/venv/bin/python" -m pytest -q
+          tests/test_macos_packaging.py
+
+      - name: Build, check and smoke-test the app, then pack the .dmg
+        run: >-
+          bash studio/packaging/build-macos-app.sh
+          --python "$RUNNER_TEMP/venv/bin/python"
+          --arch ${{ matrix.arch }}
+          --dist "$RUNNER_TEMP/dist"
+          --gui-smoke
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-dmg-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/dist/*.dmg
+            ${{ runner.temp }}/dist/*.dmg.sha256
+            ${{ runner.temp }}/dist/*.png
+          if-no-files-found: warn
+          retention-days: 7
