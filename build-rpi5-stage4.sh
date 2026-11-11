@@ -3018,7 +3018,7 @@ resolve_stage4_packages() {
         _rsp_info "OPTIONAL_SERVICES: tor selected — added ${TOR_NODE_PACKAGES[*]} to the node packages (v3 onion daemon; keypair off-git, minted first-boot)"
     fi
     # Mesh control over Tor (OPT-IN): the same net-vpn/tor as a control-plane client.
-    if [ "${MESH_CONTROL_TRANSPORT}" != lan ] && ! _tor_node_selected; then
+    if [ "${MESH_CONTROL_TRANSPORT:-lan}" != lan ] && ! _tor_node_selected; then
         STAGE4_PACKAGES+=("${TOR_NODE_PACKAGES[@]}")
         _rsp_info "MESH_CONTROL_TRANSPORT ${MESH_CONTROL_TRANSPORT}: added ${TOR_NODE_PACKAGES[*]} (control-plane Tor client)"
     fi
@@ -4034,7 +4034,7 @@ fi
 # Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md): the node-local control
 # relay + keeper, the OIDC-defer job (staged; keys-provision links it on a pki only) and
 # the transport default keys-provision falls back to. lan bakes none of it.
-if [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
+if [ "${MESH_CONTROL_TRANSPORT:-lan}" != lan ]; then
     mkdir -p "${SYSROOT}/etc/hugmesh/registry" "${SYSROOT}/usr/sbin" "${SYSROOT}/etc/init.d"
     for _mc in hugmesh-mesh-control-relay hugmesh-headscale-oidc-defer; do
         cp "${SHARED_SPECS}/usr/sbin/${_mc}" "${SYSROOT}/usr/sbin/${_mc}"; chmod +x "${SYSROOT}/usr/sbin/${_mc}"

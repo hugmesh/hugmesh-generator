@@ -1136,7 +1136,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-control-endpoint-lan-first.sh, named by shell-suites.yml (debian leg)
 # and .gitlab-ci.yml's orphan-guards-verify. PREMERGE_UNGATED is untouched. MEASURED by
 # running this file on the branch. 241 of 283 on the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-241}"
+# 241 -> 242 (feat/headscale-onion-control-20261111): +1 gated, +2 total —
+# tests/scripts/test-mesh-control-onion.sh (shell-suites.yml debian leg, orphan-guards-
+# verify) and tests/scripts/test-mesh-control-onion-live.sh, which joins PREMERGE_UNGATED
+# (opt-in on the real Tor network by design).
+PREMERGE_BASELINE="${GUARD_PREMERGE:-242}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
@@ -1515,6 +1519,11 @@ PREMERGE_UNGATED=(
   # tests/stack/test-tor-flip-wiring.sh drives it against stub harnesses (#585).
   tests/stack/test-tor-onion-mechanism.sh
   tests/stack/test-web-locales-wiring.sh
+  # OPT-IN BY DESIGN, never default CI: it publishes a THROWAWAY onion on the real Tor
+  # network (a test headscale with no real users) and needs docker plus internet for
+  # Tor. The offline half — every script it drives, against stubs — IS pre-merge gated:
+  # tests/scripts/test-mesh-control-onion.sh. Run it by hand on a host with docker.
+  tests/scripts/test-mesh-control-onion-live.sh
 )
 if [ -n "${GUARD_PREMERGE_UNGATED+x}" ]; then UNGATED_TEXT="${GUARD_PREMERGE_UNGATED}"
 else UNGATED_TEXT="$(printf '%s\n' "${PREMERGE_UNGATED[@]}")"; fi

@@ -634,6 +634,7 @@ jobs:
               tests/scripts/test-client-connect-routes.sh
               tests/scripts/test-compose-no-literal-passwords.sh
               tests/scripts/test-control-endpoint-lan-first.sh
+              tests/scripts/test-mesh-control-onion.sh
               tests/scripts/test-db-connection-budget.sh
               tests/scripts/test-deeplink-remote-coverage.sh
               tests/desktop-governance/test-sso-greeter.sh

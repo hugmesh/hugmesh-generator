@@ -2993,6 +2993,13 @@ builder-unmount-real-check: ## OPT-IN, needs unshare -Urm (a developer host, not
 mesh-node-launcher-parity-check: ## Windows vs Linux mesh-node launchers pass docker identical arguments (bar the TUN pair); Pester in pwsh or the PowerShell image
 	bash tests/docker-mesh-node/test-launcher-parity.sh
 
+# mesh-control-onion-live-check: OPT-IN live proof of mesh control over Tor on the REAL
+# Tor network (docs/MESH-CONTROL-OVER-TOR.md): publishes one THROWAWAY onion for a few
+# minutes, mints it with gen-provision-keys.sh, deletes every key after. Never in CI.
+.PHONY: mesh-control-onion-live-check
+mesh-control-onion-live-check: ## Mesh control over Tor, live on the real Tor network (docker, throwaway onion; opt-in)
+	bash tests/scripts/test-mesh-control-onion-live.sh
+
 # casdoor-render-boot-check: every Casdoor (systems, games, domain) rendered by its OWN
 # initContainer script inside casbin/casdoor:3.80.0 on a hostile DB password (| & / \ ' " $ %
 # # ; ? @ tab, and a newline via ALTER USER), then booted against postgres:16-alpine:
