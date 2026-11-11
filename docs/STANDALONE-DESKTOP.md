@@ -177,7 +177,9 @@ libcrypt supports it, SHA-512 crypt `$6$` otherwise). **The plaintext is never
 baked.** `--local-pass-file` reads it from a file, which keeps it off every
 process argv (`ps`, `/proc/<pid>/cmdline`, `docker inspect`); the Studio and the
 TUI always pass it that way, through a private 0600 file removed when the build
-ends. `wheel` is the sudo path. `--skip-sso` bakes the Casdoor/OIDC greeter
+ends. The account is **not an administrator unless the build asks**:
+`--local-admin` (the Studio's *Administrator* box) is the only thing that lets it
+use sudo, on every image (see the table below). `--skip-sso` bakes the Casdoor/OIDC greeter
 sign-in OFF on any client image (auto-on for standalone); the greeter then says
 so, and an administrator can turn it on later with `sso-greeter configure
 --enable --issuer https://...` (see `docs/DESKTOP-LOGIN-SSO.md`). Nothing is
@@ -186,11 +188,24 @@ contacted until that happens and a user chooses SSO at the greeter.
 **The same Login Password works on every image, not only standalone.** First boot
 applies the hash on standalone, tailnet-only and mesh images alike:
 
-| Image at first boot | Local account |
-|---|---|
-| standalone | the only login; in `wheel`; root locked |
-| not standalone, no KEYS users | replaces the keyless fallback: in `wheel`; root locked |
-| not standalone, KEYS-provisioned users | **additional** account, not in `wheel`, `/etc/sudoers` untouched; `--local-admin` grants sudo through `/etc/sudoers.d` only; a KEYS account with the same name keeps its KEYS password (the console says so) |
+| Image at first boot | Local account | with `--local-admin` |
+|---|---|---|
+| standalone | the only login; **not** in `wheel`; root locked | in `wheel` (sudo) |
+| not standalone, no KEYS users | replaces the keyless fallback; **not** in `wheel`; root locked | in `wheel` (sudo) |
+| not standalone, KEYS-provisioned users | **additional** account, not in `wheel`, `/etc/sudoers` untouched; a KEYS account with the same name keeps its KEYS password (the console says so) | sudo through `/etc/sudoers.d` only, never `wheel` |
+| not standalone, no password, no KEYS users (keyless fallback) | random one-time password; **not** in `wheel`; root locked | in `wheel` (sudo) |
+
+**No administrator unless asked.** Without `--local-admin`, a standalone image or
+a keyless boot has **no local account that can use sudo**: the local account is a
+plain user and root stays locked (it is never unlocked to make up for it). The
+builder warns about this at build time (`No --local-admin: ...`), the Studio says
+it under the *Administrator* box, and first boot writes it to the console (`is NOT
+an administrator`). A mesh-associated image is administered through its KEYS
+users and the SSO `desktop-sudo` claim instead; a standalone image with SSO turned
+on gives `wheel` to an SSO user only for the IdP admin role
+(`docs/DESKTOP-LOGIN-SSO.md`). To administer a standalone box, build it with
+`--local-admin`. The shared `%wheel ALL=(ALL) ALL` line is still written on a
+keyless or standalone first boot: being *in* `wheel` is the opt-in part.
 
 With no password on a standalone *desktop*, the Studio, the TUI **and the builder**
 refuse to build: root is locked and there is no KEYS stick or SSO, so this account

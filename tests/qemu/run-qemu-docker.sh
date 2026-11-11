@@ -73,6 +73,25 @@
 # the device is returned to the run state it was ALREADY in — a device the
 # operator had paused by hand stays paused.
 #
+# BOOT FROM A SAVE (--boot-save LABEL=QCOW2)
+# ------------------------------------------
+# The other half of the save: boot a row again from the standalone qcow2 a mesh
+# save wrote, so what was done inside the emulated device (a go-live posture, a
+# provisioned cluster) survives a restart instead of the golden booting INTERNAL
+# again. Three rules, each load-bearing:
+#
+#   * THE SAVE IS NEVER WRITTEN. The launcher puts the per-run overlay over it
+#     (qemu-img create -b SAVE -F qcow2), exactly as it does over the golden, so a
+#     save can be booted any number of times and still be what was saved.
+#   * A BOOT-FROM-SAVE RUN BOOTS ONLY THE SAVED ROWS. Rows the other filters select
+#     but no --boot-save names are dropped, never booted golden alongside: a fleet
+#     where pki is resumed and a worker is fresh is a worker holding a first-boot
+#     key the resumed control node never minted. A --boot-save label that matches
+#     no selected row is an error, not a silent golden boot.
+#   * THE SAVE NEEDS ITS KEYS. The saved disk only opens with the login key it was
+#     provisioned with, so <stem>.keys.img and <stem>.id_ed25519 (what a mesh save
+#     writes beside each disk) are required and checked here, before any container.
+#
 # Examples:
 #   ./tests/qemu/run-qemu-docker.sh --list
 #   ./tests/qemu/run-qemu-docker.sh --platform rpi5
@@ -160,6 +179,9 @@ EXTRA_USERS=()
 # containers a previous --keep-alive run left up, exit.
 DEV_ACTION=""
 DEV_LABEL=""
+# --boot-save LABEL=QCOW2, repeatable: label -> HOST path as given, and (after
+# boot_save_preflight) label -> the CONTAINER path under /work the entrypoint gets.
+declare -A BOOT_SAVE_FOR=() BOOT_SAVE_CPATH=()
 DEV_QMP_CMD=""
 
 # ── Pause-and-save knobs ────────────────────────────────────────────────────
@@ -306,6 +328,13 @@ Usage: $0 [OPTIONS]
                     port>+${WEB_PORT_OFFSET} (scale-to-fit only; VNC auth is weak, so
                     opt-in; skipped with a WARN if the runner image has no
                     websockify).
+  --boot-save LABEL=QCOW2
+                    boot row LABEL from a STANDALONE save instead of its golden
+                    image; repeatable, one per row. The save must be a .qcow2
+                    under --work with its <stem>.keys.img and <stem>.id_ed25519
+                    beside it (a mesh save writes all three). The save is never
+                    written (the run overlay goes over it), and a run with any
+                    --boot-save boots ONLY the rows it names.
   -h, --help
 
 Shared-L2 mesh (--keep-alive only; both flags off by default, and a run without
@@ -369,6 +398,27 @@ EOF
 exit "${1:-0}"
 }
 
+# boot_save_arg "LABEL=QCOW2" — record one --boot-save. Split on the FIRST '='
+# (a label never holds one; a path might). Refusals print and return 1 so the
+# parse loop can show the usage, like every other operand check there.
+boot_save_arg() {
+    local spec label path
+    spec="$1"
+    case "${spec}" in
+        *=*) ;;
+        *) echo "--boot-save wants LABEL=QCOW2 (e.g. rpi5/pki=out/qemu-runs/saves/mesh-<stamp>/rpi5_pki.qcow2), got '${spec}'" >&2; return 1 ;;
+    esac
+    label="${spec%%=*}"; path="${spec#*=}"
+    if [ -z "${label}" ] || [ -z "${path}" ]; then
+        echo "--boot-save wants LABEL=QCOW2 with both halves non-empty, got '${spec}'" >&2; return 1
+    fi
+    if [ -n "${BOOT_SAVE_FOR[${label}]:-}" ]; then
+        echo "--boot-save names ${label} twice (one disk per row)" >&2; return 1
+    fi
+    BOOT_SAVE_FOR["${label}"]="${path}"
+    return 0
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --session)      SESSION="$2"; shift 2 ;;
@@ -416,6 +466,8 @@ while [[ $# -gt 0 ]]; do
         --save-timeout) [ $# -ge 2 ] || { echo "--save-timeout needs a number of seconds" >&2; usage 1; }
                         DEV_SAVE_TIMEOUT="$2"; shift 2 ;;
         --overwrite)    DEV_SAVE_OVERWRITE=true; shift ;;
+        --boot-save)    [ $# -ge 2 ] || { echo "--boot-save needs LABEL=QCOW2" >&2; usage 1; }
+                        boot_save_arg "$2" || usage 1; shift 2 ;;
         --display)      [ $# -ge 2 ] || { echo "--display needs auto, spice or none" >&2; usage 1; }
                         DISPLAY_MODE="$2"; shift 2 ;;
         --display-web)  DISPLAY_WEB=true; shift ;;
@@ -1422,12 +1474,37 @@ save_check_target() {
     # subcommands deliberately run before artifact resolution), so this only
     # fires when the operator named one explicitly on the same command line.
     # It costs nothing and covers an artifacts dir that lives under ${WORK}.
-    if [ -n "${ARTIFACTS}" ]; then
-        arts="$(readlink -m "${ARTIFACTS}")"
-        case "${target}/" in
-            "${arts}"/*) die "REFUSING to save into the artifacts dir ${arts}: that is where the golden build images live" ;;
-        esac
-    fi
+    arts="$(save_in_artifacts_refusal "${target}")"
+    [ -z "${arts}" ] || die "REFUSING to save: ${arts}"
+}
+
+# save_in_artifacts_refusal PATH — print why PATH (a save, to write or to boot) is
+# inside the artifacts dir, or nothing when it is not. The ONE rule for both
+# directions: save_check_target and boot_save_preflight both call it, and
+# core/qemu_devices.save_in_artifacts_refusal is the same rule with the same
+# sentence, so a save the save path accepts boots, and a refused one is refused by
+# both in the same words.
+#
+# Containment alone was the first rule, and it disagreed with itself: the flat
+# layout --artifacts <repo>/out with the DEFAULT --work <repo>/out/qemu-runs puts
+# every save under the artifacts dir, so a mesh save (which never checked) wrote a
+# set --boot-save then refused forever. The carve-out is exactly ${WORK}/saves when
+# that directory itself sits inside the artifacts dir: goldens are discovered only
+# at the TOP of the artifacts dir (discover_rows: *.img, *.img.xz), never down in a
+# nested work tree. Only ${WORK}/saves, not all of ${WORK}, so an artifacts dir that
+# lives UNDER the work dir stays protected.
+save_in_artifacts_refusal() {
+    local real arts saves
+    [ -n "${ARTIFACTS}" ] || return 0
+    real="$(readlink -m "$1")"
+    arts="$(readlink -m "${ARTIFACTS}")"
+    saves="$(readlink -m "${WORK}/saves")"
+    case "${real}/" in "${arts}"/*) ;; *) return 0 ;; esac
+    case "${real}/" in
+        "${saves}"/*) case "${saves}/" in "${arts}"/*) return 0 ;; esac ;;
+    esac
+    printf '%s is inside the artifacts dir %s, where the golden build images live; a save belongs under %s\n' \
+        "${real}" "${arts}" "${saves}"
 }
 
 # save_pick_target SAFE LABEL — resolve the target path, honouring --save-to and
@@ -1933,6 +2010,8 @@ if [ -n "${DEV_ACTION}" ]; then
     # effect of being asked a read-only question.
     WORK="$(readlink -m "${WORK}")"
     set_device_paths
+    [ "${#BOOT_SAVE_FOR[@]}" -eq 0 ] \
+        || die "--boot-save boots rows; it does not combine with a device subcommand (--${DEV_ACTION})"
     # --overwrite and --save-to only mean anything to --save-device. Silently
     # ignoring them is how an operator ends up believing a copy was replaced
     # when it never was, so say it out loud instead.
@@ -2210,12 +2289,78 @@ row_matches_filters() {
     return 0
 }
 
+# boot_save_preflight — check every --boot-save BEFORE a container exists, and
+# fill BOOT_SAVE_CPATH with the path the entrypoint sees. The checks mirror the
+# entrypoint's (it re-checks; this is the "fail once, not once per container"
+# copy): a .qcow2, a real file, under --work (the only writable mount, and where
+# saves live — a path outside it does not exist inside the container), not in the
+# artifacts dir, and its saved KEYS stick + login key beside it.
+boot_save_preflight() {
+    local label path real wreal in_arts stem rel
+    [ "${#BOOT_SAVE_FOR[@]}" -gt 0 ] || return 0
+    [ "${MODE}" = "golden" ] || die "--boot-save is golden-mode only (stage4 fabricates its own throwaway disk)"
+    # The test lane (run_row) grades a FIRST boot with assertions.sh and then powers
+    # the guest off: on a resumed disk that is a verdict about the wrong thing, and
+    # a resume nobody can use afterwards. Boot-from-save is a standing-fleet verb.
+    ${KEEP_ALIVE:-false} || die "--boot-save is a --keep-alive lane: the test lane grades a FIRST boot and powers the guest off, so a resumed disk would be graded against first-boot checks and then stopped"
+    wreal="$(readlink -m "${WORK}")"
+    for label in "${!BOOT_SAVE_FOR[@]}"; do
+        path="${BOOT_SAVE_FOR[${label}]}"
+        real="$(readlink -m "${path}")"
+        case "${real}" in
+            *.qcow2) ;;
+            *) die "--boot-save ${label}: ${path} is not a .qcow2 (boot-from-save takes what a save wrote)" ;;
+        esac
+        [ -f "${real}" ] || die "--boot-save ${label}: no such file ${real}"
+        case "${real}" in
+            "${wreal}"/*) ;;
+            *) die "--boot-save ${label}: ${real} is not under --work ${wreal} — the container only mounts --work writable, and saves live in ${wreal}/saves" ;;
+        esac
+        in_arts="$(save_in_artifacts_refusal "${real}")"
+        [ -z "${in_arts}" ] || die "--boot-save ${label}: ${in_arts}"
+        stem="${real%.qcow2}"
+        [ -s "${stem}.keys.img" ] \
+            || die "--boot-save ${label}: the saved KEYS stick ${stem}.keys.img is missing — boot-from-save needs a MESH save (core/emulation_save.py writes it); a bare --save-device copy has no stick, and the saved disk does not open with a fresh one"
+        [ -s "${stem}.id_ed25519" ] \
+            || die "--boot-save ${label}: the saved login key ${stem}.id_ed25519 is missing — the saved disk's accounts only accept the key they were provisioned with"
+        rel="${real#"${wreal}"/}"
+        BOOT_SAVE_CPATH["${label}"]="/work/${rel}"
+    done
+    return 0
+}
+
+# boot_save_filter_rows — with any --boot-save, keep ONLY the rows it names (see
+# BOOT FROM A SAVE in the header) and refuse a label that matched no row. Reads
+# and rewrites ROWS in place; a no-op without --boot-save.
+boot_save_filter_rows() {
+    local r kept=() label _rank platform role env img
+    declare -A seen=()
+    [ "${#BOOT_SAVE_FOR[@]}" -gt 0 ] || return 0
+    for r in "${ROWS[@]}"; do
+        IFS='|' read -r _rank platform role env img <<< "${r}"
+        label="${platform}/${role}"
+        if [ -n "${BOOT_SAVE_FOR[${label}]:-}" ]; then
+            kept+=("${r}"); seen["${label}"]=1
+        else
+            info "--boot-save: not booting ${label} (no save named for it; a boot-from-save run boots only the saved rows)"
+        fi
+    done
+    for label in "${!BOOT_SAVE_FOR[@]}"; do
+        [ -n "${seen[${label}]:-}" ] \
+            || die "--boot-save ${label}: no runnable row ${label} in ${ARTIFACTS} under the current filters — refusing rather than booting the others without it"
+    done
+    ROWS=("${kept[@]}")
+    return 0
+}
+
 ROWS=()
 while IFS=$'\t' read -r platform role env img; do
     [ -n "${platform}" ] || continue
     row_matches_filters "${platform}" "${role}" || continue
     ROWS+=("$(row_rank "${platform}" "${role}")|${platform}|${role}|${env}|${img}")
 done < <(discover_rows | collapse_rows)
+boot_save_preflight
+boot_save_filter_rows
 
 [ "${#ROWS[@]}" -gt 0 ] || die "no runnable rows found in ${ARTIFACTS} (filters: platform='${PLATFORM_FILTER}' role='${ROLE_FILTER}' only='${ONLY}' only-exact='${ONLY_EXACT}')"
 
@@ -2233,6 +2378,8 @@ for r in "${ROWS[@]}"; do
     IFS='|' read -r _rank platform role env img <<< "${r}"
     i=$((i+1))
     printf '%-4s %-14s %-22s %-6s %s\n' "${i}" "${platform}" "${role}" "${env}" "$(basename "${img}")"
+    [ -z "${BOOT_SAVE_FOR[${platform}/${role}]:-}" ] \
+        || printf '%-4s %-14s %s\n' "" "" "from save: ${BOOT_SAVE_FOR[${platform}/${role}]} (never written)"
 done
 echo "----------------------------------------------------------------------"
 echo "${#ROWS[@]} row(s) runnable"
@@ -2264,6 +2411,14 @@ run_row() {
     local label="${platform}/${role}"
     local safe; safe="$(echo "${label}" | tr '/+' '__')"
     local name="hugmesh-qemu-${safe}-$$"
+    # This row's --boot-save, as docker-run argv (empty = the golden). `declare -p`
+    # FIRST: tests drive this function extracted, without the global, and an
+    # undeclared array's "rpi5/pki" subscript would be evaluated as ARITHMETIC
+    # under set -u — a crash instead of a golden boot.
+    local bs_args=()
+    if declare -p BOOT_SAVE_CPATH >/dev/null 2>&1 && [ -n "${BOOT_SAVE_CPATH[${label}]:-}" ]; then
+        bs_args=(--boot-save "${BOOT_SAVE_CPATH[${label}]}")
+    fi
     local log="${WORK}/${safe}.log"
 
     # --privileged: losetup -P inside. Container-local networking only, so the
@@ -2288,6 +2443,7 @@ run_row() {
         ${ASSERT_TIMEOUT:+--assert-timeout "${ASSERT_TIMEOUT}"} \
         ${BOOT_STALL_GRACE:+--boot-stall-grace "${BOOT_STALL_GRACE}"} \
         --label "${label}" $( ${KEEP} && echo --keep ) \
+        "${bs_args[@]}" \
         > "${log}" 2>&1
     local rc=$?
     if [ "${rc}" -eq 0 ]; then
@@ -2573,8 +2729,22 @@ start_device_row() {
     # The display door's -p/-e lines, filled per candidate port (they derive
     # from it). Empty only with --display none.
     local display_args=()
+    # This row's --boot-save, as docker-run argv (empty = the golden). `declare -p`
+    # FIRST: tests drive this function extracted, without the global, and an
+    # undeclared array's "rpi5/pki" subscript would be evaluated as ARITHMETIC
+    # under set -u — a crash instead of a golden boot.
+    local bs_args=()
+    if declare -p BOOT_SAVE_CPATH >/dev/null 2>&1 && [ -n "${BOOT_SAVE_CPATH[${label}]:-}" ]; then
+        bs_args=(--boot-save "${BOOT_SAVE_CPATH[${label}]}")
+    fi
 
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -xF "${name}" >/dev/null; then
+        # "Leave it alone" is a success for a plain start (the device is up), but a
+        # boot-from-save asked for a SPECIFIC disk, and the running one is not it.
+        if [ "${#bs_args[@]}" -gt 0 ]; then
+            warn "${label} is already up as ${name}, NOT from the save it was asked to boot (${bs_args[1]}) — --stop-device '${label}' first"
+            return 1
+        fi
         warn "${label} is already up as ${name} — leaving it alone (--stop-device '${label}' first to replace it)"
         return 0
     fi
@@ -2689,6 +2859,7 @@ start_device_row() {
             ${ASSERT_TIMEOUT:+--assert-timeout "${ASSERT_TIMEOUT}"} \
             ${BOOT_STALL_GRACE:+--boot-stall-grace "${BOOT_STALL_GRACE}"} \
             --label "${label}" --keep --keep-alive \
+            "${bs_args[@]}" \
             "${EXTRA_USER_ARGS[@]}" 2>&1)"
         rc=$?
         if [ "${rc}" -eq 0 ]; then
