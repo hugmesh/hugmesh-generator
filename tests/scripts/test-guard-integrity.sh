@@ -1114,6 +1114,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 233 -> 234 on 2026-11-10 (feat/studio-nvd-key-20261110): +1 gated, +1 total —
 # tests/pentest/test-run-sca-nvd-key.sh, named by shell-suites.yml and .gitlab-ci.yml's
 # lint:run-sca-nvd-key. PREMERGE_UNGATED is untouched. Measured by running this file.
+# MERGED (origin/main 3e020b2b into fix/worker-breakglass-root-key): this branch adds ONE
+# gated suite, tests/scripts/test-keys-breakglass-root-key.sh (shell-suites.yml alpine job)
+# = 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree;
+# ungated SET stays 42.
+# MERGED (origin/main 267f1a0a into fix/worker-breakglass-root-key): main gated no new suite
+# since 3e020b2b, so this stays 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0
+# on the merged tree; ungated SET stays 42.
 # 232 -> 234 (denominator 274 -> 276) on 2026-11-09 for fix/compose-db-passwords-20261104
 # (hugmesh-generator#857), which adds TWO gated suites, both in shell-suites.yml's debian
 # leg 1: tests/scripts/test-compose-no-literal-passwords.sh and
@@ -1137,7 +1144,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
 # PR #926 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 240 of 282.
 # PR #972 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 242 of 284.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-242}"
+# PR #966 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 243 of 285.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-243}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
