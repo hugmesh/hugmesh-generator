@@ -183,6 +183,17 @@ Tenancy: the gateway-validated `X-Tenant-ID`/`X-User-ID` headers stamp every ver
 Config (task→model map, NSFW/abuse thresholds, `moderate-action`) is the
 `edge-ai-analysis` ConfigMap; the stable verdict schema is documented there.
 
+**Image input.** The image endpoints take `image_b64` or `image_url`. The service
+fetches an `image_url` only when every address its host resolves to is globally
+routable. It refuses private, loopback, link-local, reserved, multicast and CGNAT
+(`100.64.0.0/10`) addresses. CGNAT is the mesh's own headscale tailnet, MagicDNS
+`100.100.100.100` included. The fetch connects to the address that was checked, so the
+name is not resolved a second time. It does not follow redirects, ignores proxy
+variables, and reports every failure with the same generic message.
+`tests/scripts/test-edge-ai-analysis-ssrf.sh` pins this behaviour. Where the CNI enforces
+the service's NetworkPolicy, egress is limited to Ollama and DNS, so an `image_url` fetch
+cannot leave the pod at all. Send `image_b64` there.
+
 ```bash
 # add the analysis API onto an edge-AI cluster (needs the edge-ai model server):
 ./build-x86-host-stage4.sh --role edge-ai --with-edge-ai-analysis

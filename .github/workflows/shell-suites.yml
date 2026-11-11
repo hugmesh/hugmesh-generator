@@ -12,6 +12,20 @@
 # guess: several suites exit 0 while skipping their most valuable assertions when a
 # tool is absent, and would have looked perfectly gateable from source.
 #
+# MEASURED, 2026-11-11: tests/scripts/test-edge-ai-analysis-ssrf.sh (CodeQL
+# py/full-ssrf #9, the edge-ai-analysis image_url guard) was executed in
+# python:3.12-slim with openssl and the service image's pinned requirements.txt
+# installed, the checkout mounted READ-ONLY and --network=none, before getting its
+# own debian leg: 13 passed / 0 failed, rc=0, in 32 s. That is 14 tests on the real
+# app.py plus a 12-mutation battery the suite runs itself (every mutation caught by
+# the assertion it names). Run on the vulnerable app.py from origin/main 39b953ad,
+# 10 of the 14 tests fail (14 failures counting subtests: the tailnet addresses,
+# the second lookup, the proxy reroute, the echoed error) and the 2 TLS tests
+# error, because that file has no TLS trust seam. It needs the app's own imports
+# (httpx, FastAPI, Pillow, imagehash), which is why its leg installs that
+# requirements file and no other leg does. Without them it exits 2 rather than
+# skipping, which was measured in a bare python:3.12-slim.
+#
 # MEASURED, 2026-11-09: tests/scripts/test-compose-no-literal-passwords.sh and
 # tests/stack/test-gen-stack-db-env.sh (hugmesh-generator#857) were executed in
 # python:3.12-slim with this job's apt packages, the checkout mounted READ-ONLY,
@@ -384,6 +398,31 @@ jobs:
           # 2026-11-04, in alpine:3 with this job's apk set (checkout copied in;
           # busybox grep/sed/diff/cmp): 134 passed / 0 failed. Mutation-tested
           # on a Gentoo host: 23 planted defects, 23 caught.
+          # tests/qemu/boot_stall_test.sh and tests/scripts/test-udev-coldplug-guard.sh
+          # (2026-11-10): the lost-udev-coldplug fix. The first drives the REAL
+          # ssh-wait loop of docker-entrypoint.sh (fake ssh, fake clock) over the
+          # captured consoles of a stalled and a healthy x86 display-door boot; the
+          # second runs specs/usr/libexec/udev-coldplug-guard under busybox sh against
+          # a fake root (sysfs + udevd's rules dirs) + udevadm and executes the x86
+          # build's sysinit wiring against a scratch sysroot. MEASURED, 2026-11-11, in
+          # alpine:3 + bash coreutils (busybox sh): 33 passed / 0 failed and 107 passed
+          # / 0 failed, 40 of 40 runs green with 8 suites in parallel plus CPU load (the
+          # ping-poll checks read the clock). Mutation-tested on a Gentoo host: 36
+          # planted defects, 36 caught.
+          # tests/qemu/golive_emulated_test.sh (2026-11-09): the go-live-on-an-
+          # emulated-device proof lane (tests/qemu/golive-emulated.sh). Hermetic:
+          # `ssh` is a PATH shim that records argv and runs the remote command
+          # against a throwaway guest root with the REAL hugmesh-go-live driver;
+          # it pins loopback-only destinations, plan/commit/rollback argv, commit
+          # and rollback on `ssh -tt` with 'y' typed on a pty, and NO -y /
+          # GL_ASSUME_YES / token on any argv; a rollback that never converges, an
+          # absent/truncated/empty nft table or a read cut off before its rc marker
+          # (unknown, never public) and a status/nft disagreement all fail. Needs
+          # python3 (pty) only. MEASURED, 2026-11-11, in alpine:3 (bash python3
+          # coreutils util-linux; busybox grep/sed): 121 passed / 0 failed.
+          # Mutation-tested on a Gentoo host: 18 planted defects in the lane in
+          # round 2, 17 caught; round 3's two missing-rc-marker mutants, both caught
+          # (they survived the round-2 suite). The survivor is named in the PR.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
@@ -444,6 +483,8 @@ jobs:
             tests/qemu/qemu-e2e-lane_test.sh
             tests/qemu/display_door_test.sh
             tests/qemu/display_argv_test.sh
+            tests/qemu/boot_stall_test.sh
+            tests/qemu/golive_emulated_test.sh
             tests/qemu/no_egress_argv_test.sh
             tests/requested-atoms-resolvable.sh
             tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
@@ -525,6 +566,7 @@ jobs:
             tests/scripts/test-tools-path-lib.sh
             tests/scripts/test-tor-export-sync.sh
             tests/scripts/test-tor-node-contract.sh
+            tests/scripts/test-udev-coldplug-guard.sh
             tests/scripts/test-verify-artifact-neutrality-frite.sh
             tests/scripts/test-vm-display-guest.sh
             tests/scripts/test-virtual-display-kernel.sh
@@ -644,6 +686,7 @@ jobs:
               tests/scripts/test-url-embedded-credentials.sh
               tests/scripts/test-docs-command-coverage.sh
               tests/scripts/test-x86-artifact-integrity.sh
+              tests/scripts/test-x86-build-sudoers-strip.sh
               tests/scripts/test-x86-live-root-pack.sh
               tests/stack/test-anubis-flip-wiring.sh
               tests/stack/test-gen-route-access-env.sh
@@ -666,6 +709,13 @@ jobs:
           - part: ', release'
             suites: |
               tests/scripts/test-release-beta.sh
+          # 2026-11-11: the edge-ai-analysis image_url SSRF guard (CodeQL py/full-ssrf
+          # #9). It imports the service's own app.py, so this leg installs that image's
+          # pinned requirements; the other legs do not pay for numpy/scipy/Pillow.
+          - part: ', edge-ai-analysis'
+            requirements: specs/cluster/manifests/edge-ai-analysis/image/requirements.txt
+            suites: |
+              tests/scripts/test-edge-ai-analysis-ssrf.sh
     container:
       image: python:3.12-slim
     steps:
@@ -681,6 +731,13 @@ jobs:
         # other git-reading suites would quietly cover less. Explicit rather than
         # relying on actions/checkout doing it for us.
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: leg requirements
+        # Only a leg that names a requirements file installs it (the edge-ai-analysis
+        # leg). The path comes through env, never interpolated into the script text.
+        if: matrix.requirements
+        env:
+          LEG_REQUIREMENTS: ${{ matrix.requirements }}
+        run: pip install --quiet -r "$LEG_REQUIREMENTS"
       - name: preflight
         run: |
           # PREFLIGHT. Many of these suites SKIP their most valuable assertions when a
