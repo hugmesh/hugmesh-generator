@@ -29,7 +29,9 @@
 # LAYERA_BFF_EXPECT_REF, when set, must equal the checkout's HEAD.
 #
 # Offline: bash + jq + openssl + awk + cmp (+ git for the HEAD print). No JVM: the
-# BFF side of the contract is its own HeadscaleAclParityTest.
+# BFF side of the contract is its own HeadscaleAclParityTest. The negative controls
+# also run test-layer-a-headscale-acl.sh three times against an absent or partial
+# sibling (NC8), since no pull-request job runs that suite yet; up to ~35 s each.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -146,8 +148,13 @@ POLICY_TMPL="${TMPL}"
 . "${FIXDIR}/layer-a-parity-params.env"
 # shellcheck disable=SC2034
 MESH_TAG="tag:mesh_$(sanitise_tag "${MESH_ID}")"
+# golden_is_rendered <golden.json>: 0 when the rendered parity export, as `jq -S`, is
+# byte-identical to the file. Shared with the negative control.
+golden_is_rendered() {
+    diff -u "$1" <(strip "${WORK}/rendered.hujson" | jq -S .) >/dev/null 2>&1
+}
 if render_policy "${FIXDIR}/layer-a-parity-export.json" "${WORK}/rendered.hujson"; then
-    if diff -u "${FIXDIR}/layer-a-parity-policy.golden.json" <(strip "${WORK}/rendered.hujson" | jq -S .) >/dev/null 2>&1; then
+    if golden_is_rendered "${FIXDIR}/layer-a-parity-policy.golden.json"; then
         ok "gen-headscale-policy.sh renders the parity export to exactly the golden"
     else
         bad "gen-headscale-policy.sh no longer renders the golden — regenerate it (jq -S) in BOTH repos and re-review"
@@ -215,6 +222,72 @@ if [ -z "${LAYERA_NC_CHILD:-}" ]; then
         ok "NC5: an absent sibling checkout exits 1 with ::error:: (not a skip, not exit 3)"
     else
         bad "NC5: an absent sibling checkout exited ${nc5_rc} (want 1 with ::error::)"
+    fi
+    # NC7: the WHOLE verdict path, not only the helpers. A planted sibling tree with the
+    # BFF's real compiler and parity test but the pre-#896 golden (security tags owned,
+    # mesh tag undeclared) must make this suite exit 1, naming both defects.
+    PL="${WORK}/planted"
+    mkdir -p "${PL}/src/main/java/net/hugmesh/adminbff/device" \
+             "${PL}/src/test/java/net/hugmesh/adminbff/device" "${PL}/src/test/resources/layer-a"
+    cp "${BFF_COMPILER}" "${PL}/src/main/java/net/hugmesh/adminbff/device/"
+    cp "${BFF_PARITY_TEST}" "${PL}/src/test/java/net/hugmesh/adminbff/device/"
+    cp "${FIXDIR}"/layer-a-parity-* "${PL}/src/test/resources/layer-a/"
+    jq '.tagOwners["tag:superadmin"] = ["hugmesh"] | del(.tagOwners[(.ssh[0].dst[0])])
+        | .tagOwners |= with_entries(if (.key | startswith("tag:dev_")) then .value = ["hugmesh"] else . end)' \
+        "${FIXDIR}/layer-a-parity-policy.golden.json" > "${PL}/src/test/resources/layer-a/layer-a-parity-policy.golden.json"
+    env -u LAYERA_BFF_EXPECT_REF LAYERA_NC_CHILD=1 LAYERA_BFF_ROOT="${PL}" bash "${SELF}" </dev/null >"${WORK}/nc7.out" 2>&1; nc7_rc=$?
+    if [ "${nc7_rc}" -eq 1 ] \
+       && grep -F 'FAIL parity fixture layer-a-parity-policy.golden.json DIFFERS' "${WORK}/nc7.out" >/dev/null \
+       && grep -F 'security tag tag:superadmin has owner' "${WORK}/nc7.out" >/dev/null \
+       && grep -F 'ssh names tag:mesh_' "${WORK}/nc7.out" >/dev/null; then
+        ok "NC7: a sibling carrying the pre-#896 golden fails the whole suite (exit 1, DIFFERS + owned tag:superadmin + undeclared mesh tag)"
+    else
+        bad "NC7: a sibling carrying the pre-#896 golden was not failed by the suite (rc=${nc7_rc})"
+        sed 's/^/      /' "${WORK}/nc7.out" | tail -8
+    fi
+    # NC7b: the byte check ALONE. The same golden re-serialised on one line (jq -c) is
+    # semantically identical, so the owner check passes; only the byte identity can fail it.
+    jq -c . "${FIXDIR}/layer-a-parity-policy.golden.json" > "${PL}/src/test/resources/layer-a/layer-a-parity-policy.golden.json"
+    env -u LAYERA_BFF_EXPECT_REF LAYERA_NC_CHILD=1 LAYERA_BFF_ROOT="${PL}" bash "${SELF}" </dev/null >"${WORK}/nc7b.out" 2>&1; nc7b_rc=$?
+    if [ "${nc7b_rc}" -eq 1 ] \
+       && grep -F 'FAIL parity fixture layer-a-parity-policy.golden.json DIFFERS' "${WORK}/nc7b.out" >/dev/null \
+       && ! grep -F 'FAIL tag owners wrong' "${WORK}/nc7b.out" >/dev/null; then
+        ok "NC7b: a byte-different but equivalent BFF golden fails the suite on the byte check alone"
+    else
+        bad "NC7b: a byte-different BFF golden did not fail the suite through the byte check (rc=${nc7b_rc})"
+    fi
+    # NC9: the renderer check can fail: a golden the renderer does not emit is refused.
+    if golden_is_rendered "${WORK}/nc2.json"; then
+        bad "NC9: a golden with owned security tags was accepted as the renderer's output"
+    else
+        ok "NC9: a golden the renderer does not emit (owners restored) is refused"
+    fi
+    # NC8: test-layer-a-headscale-acl.sh, which no pull-request job can run yet (#634),
+    # must FAIL (exit 1, ::error::) on an absent sibling under a CI/require flag, and keep
+    # exit 3 INCOMPLETE locally. GitHub sets CI=true in every job, so the local leg unsets it.
+    BIG="${REPO}/tests/device-registry/test-layer-a-headscale-acl.sh"
+    LAYERA_BFF_ROOT="${WORK}/empty" LAYERA_REQUIRE_BFF=1 bash "${BIG}" </dev/null >"${WORK}/nc8a.out" 2>&1; nc8a_rc=$?
+    env -u CI -u GITHUB_ACTIONS -u LAYERA_REQUIRE_BFF LAYERA_BFF_ROOT="${WORK}/empty" \
+        bash "${BIG}" </dev/null >"${WORK}/nc8b.out" 2>&1; nc8b_rc=$?
+    if [ "${nc8a_rc}" -eq 1 ] && grep -F '::error::test-layer-a-headscale-acl' "${WORK}/nc8a.out" >/dev/null; then
+        ok "NC8a: test-layer-a-headscale-acl.sh fails (exit 1, ::error::) on an absent sibling under LAYERA_REQUIRE_BFF=1"
+    else
+        bad "NC8a: test-layer-a-headscale-acl.sh exited ${nc8a_rc} on an absent sibling under LAYERA_REQUIRE_BFF=1 (want 1 with ::error::)"
+    fi
+    if [ "${nc8b_rc}" -eq 3 ] && grep -F 'COMPILE SIDE NOT CHECKED (exit 3)' "${WORK}/nc8b.out" >/dev/null; then
+        ok "NC8b: run locally (no CI flag) it keeps exit 3 INCOMPLETE"
+    else
+        bad "NC8b: run locally on an absent sibling it exited ${nc8b_rc} (want 3, INCOMPLETE)"
+    fi
+    # NC8c: a PARTIAL sibling (the planted tree has the compiler and the parity test but
+    # not HeadscaleAclProperties/Config, application.yml or the compiler test) is the
+    # suite's second INCOMPLETE path; under the require flag it must fail the same way.
+    LAYERA_BFF_ROOT="${PL}" LAYERA_REQUIRE_BFF=1 bash "${BIG}" </dev/null >"${WORK}/nc8c.out" 2>&1; nc8c_rc=$?
+    if [ "${nc8c_rc}" -eq 1 ] && grep -F 'is missing from the sibling checkout' "${WORK}/nc8c.out" >/dev/null \
+       && grep -F '::error::test-layer-a-headscale-acl' "${WORK}/nc8c.out" >/dev/null; then
+        ok "NC8c: a partial sibling fails test-layer-a-headscale-acl.sh (exit 1, ::error::) under LAYERA_REQUIRE_BFF=1"
+    else
+        bad "NC8c: a partial sibling under LAYERA_REQUIRE_BFF=1 exited ${nc8c_rc} (want 1 with ::error::)"
     fi
     # NC6: a pin that does not match the checkout fails.
     if [ "${BFF_HEAD}" != unknown ]; then
