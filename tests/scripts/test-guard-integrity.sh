@@ -1131,7 +1131,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-edge-ai-analysis-ssrf.sh, named by shell-suites.yml's debian
 # edge-ai-analysis leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on
 # the branch over origin/main 39b953ad: 238 of 280.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
+# 238 -> 239 on 2026-11-11 (fix/gui-gui-35-20261111): +1 gated, +1 total —
+# tests/stack/test-mastodon-front.sh, named by shell-suites.yml's alpine job (and
+# .gitlab-ci.yml's lint:mastodon-front). PREMERGE_UNGATED is untouched. MEASURED by
+# running this file on the branch over origin/main b3eafff5: 239 of 281.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-239}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

@@ -310,7 +310,10 @@ jobs:
       # binutils (strings), file, xorriso: tests/scripts/test-verify-artifact-neutrality-frite.sh
       # runs scripts/verify-artifact-neutrality.sh, whose host preflight FAILs closed
       # without all three; the suite builds its frite FAT media with mtools (already here).
-      - run: apk add --no-cache attr bash binutils coreutils curl e2fsprogs-extra file flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
+      # nginx: tests/stack/test-mastodon-front.sh runs the committed
+      # mastodon-front/default.conf through a real nginx (alpine's is built with
+      # http_sub_module); without it that suite exits 2 "SKIPPED-LOUDLY".
+      - run: apk add --no-cache attr bash binutils coreutils curl e2fsprogs-extra file flock gawk git git-daemon helm jq make mtools nginx nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
       # xorriso: tests/qemu/launch_arm_medium_test.sh builds a real ISO9660 Frite
       # medium fixture with it (the launcher reads such media with xorriso or
       # bsdtar); without it that suite exits 2 "SKIPPING LOUDLY", a red job.
@@ -550,6 +553,7 @@ jobs:
             tests/stack/test-coturn-optional-service.sh
             tests/stack/test-derive-games-admin.sh
             tests/stack/test-front-door-client-surface.sh
+            tests/stack/test-mastodon-front.sh
             tests/stack/test-no-store-posture.sh
             tests/stack/test-optional-services-exclude.sh
             tests/stack/test-optional-services-parity.sh
