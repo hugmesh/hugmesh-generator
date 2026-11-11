@@ -691,6 +691,12 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             pruned; OAuth/SMTP optional). prod = real public domain
                             (Cloudflare/ACME allowed; creds from keys USB) — prints
                             a LOUD announced banner before building.
+      --release-tag TAG     The tag --env prod pins first-party :dev image tags to.
+                            Letters, digits, . _ - only, and not dev/main/latest
+                            (since #964 '+', '/' and other characters are refused;
+                            none is valid in an image tag). With --env prod a bad
+                            tag is refused before the build starts. Default: the
+                            UTC build date (YYYYMMDD).
       --cluster-domain D    Default: ${CLUSTER_DOMAIN}
       --superdomain D       Orchestration superdomain (mesh MagicDNS suffix) baked to
                             /etc/<brand>/superdomain + headscale base_domain. Mesh only;
@@ -2432,6 +2438,11 @@ case "${ENV}" in
     test|prod) ;;
     *) err "--env must be one of: test | prod  (got '${ENV}')"; exit 1 ;;
 esac
+# ENV=prod pins first-party :dev image tags to RELEASE_TAG at bake time; refuse a
+# floating or malformed tag NOW, not after the emerge phase (scripts/_prod-gate-lib.sh).
+if [ "${ENV}" = "prod" ]; then
+    prod_gate_validate_release_tag "${RELEASE_TAG}" || exit 1
+fi
 
 # ── Validate the release-state posture (baked into the image) ─────────────
 case "${RELEASE_STATE}" in

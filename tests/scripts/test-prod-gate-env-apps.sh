@@ -118,6 +118,69 @@ for tag in main dev latest 'x;rm -rf /' ''; do
     else ok "release tag '${tag}' is refused"; fi
 done
 
+for tag in 20261110 2026.07-rc1 v1.2.3_b; do
+    if ( source "${REPO}/scripts/_prod-gate-lib.sh"
+         prod_gate_validate_release_tag "${tag}" ) >/dev/null 2>&1; then
+        ok "release tag '${tag}' is accepted"
+    else bad "pinned release tag '${tag}' was refused"; fi
+done
+for tag in main dev latest 'a/b' 'a+b' 'x y' ''; do
+    if ( source "${REPO}/scripts/_prod-gate-lib.sh"
+         prod_gate_validate_release_tag "${tag}" ) >/dev/null 2>&1; then
+        bad "prod_gate_validate_release_tag accepted '${tag}'"
+    else ok "prod_gate_validate_release_tag refuses '${tag}'"; fi
+done
+
+echo "== the REAL builders check --release-tag at argument parsing (ENV=prod only) =="
+# Each case runs the real builder as an ordinary user. It must stop in its
+# validation prologue, before any work: a refused tag stops on the tag message, and
+# an accepted tag (or ENV=test) gets past it to a DELIBERATE later error (a bogus
+# --release-state / --grow), which proves the run went beyond the tag check
+# without starting a build. A different stop reason fails the case (no vacuous pass).
+TAGMSG="is not a pinned tag"
+# builder_stop <want-regex> <label> <builder> [args...]
+builder_stop() {
+    local want="$1"
+    local label="$2"
+    local b="$3"
+    shift 3
+    local out
+    local rc
+    out="$(cd "${WORK}" && timeout 120 bash "${REPO}/${b}" -w "${WORK}/bw" "$@" </dev/null 2>&1)"
+    rc=$?
+    if [ "${rc}" -ne 0 ] && printf '%s\n' "${out}" | grep -E -- "${want}" >/dev/null \
+        && { [ "${want}" = "${TAGMSG}" ] || ! printf '%s\n' "${out}" | grep -F -- "${TAGMSG}" >/dev/null; }; then
+        ok "${b}: ${label}"
+    else
+        bad "${b}: ${label} (rc=${rc}): $(printf '%s' "${out}" | grep -E 'ERROR|FATAL' | tail -2 | tr '\n' ' ')"
+    fi
+}
+builder_stop "${TAGMSG}" "--env prod --release-tag dev is refused before the build" \
+    build-rpi5-stage4.sh --role pki --env prod --release-tag dev
+builder_stop "${TAGMSG}" "--env prod --release-tag 'a+b' is refused before the build" \
+    build-x86-host-stage4.sh --role pki --env prod --release-tag 'a+b'
+builder_stop "${TAGMSG}" "node role, --env prod --release-tag latest is refused before the build" \
+    build-orangepi5-stage4.sh --role pki --ram-gb 8 --env prod --release-tag latest
+builder_stop "${TAGMSG}" "node role, --env prod --release-tag 'a/b' is refused before the build" \
+    build-orangepi4-lts-stage4.sh --role frontend --ram-gb 4 --env prod --release-tag 'a/b'
+builder_stop "release-state must be" "--env prod accepts a pinned --release-tag" \
+    build-rpi5-stage4.sh --role pki --env prod --release-tag 2026.07-rc1 --release-state bogus
+builder_stop "release-state must be" "--env prod accepts a pinned --release-tag" \
+    build-x86-host-stage4.sh --role pki --env prod --release-tag 20261110 --release-state bogus
+builder_stop "release-state must be" "--env test does not check the release tag" \
+    build-x86-host-stage4.sh --role pki --env test --release-tag dev --release-state bogus
+builder_stop "grow must be" "node role, --env prod accepts a pinned --release-tag" \
+    build-orangepi5-stage4.sh --role pki --ram-gb 8 --env prod --release-tag 20261110 --grow bogus
+builder_stop "grow must be" "node role, --env prod accepts a pinned --release-tag" \
+    build-orangepi4-lts-stage4.sh --role frontend --ram-gb 4 --env prod --release-tag 20261110 --grow bogus
+builder_stop "cluster choices only apply to a cluster node role" "the desktop refuses --release-tag like every cluster choice" \
+    build-orangepi5-stage4.sh --env prod --release-tag 20261110
+builder_stop "cluster choices only apply to a cluster node role" "the desktop refuses --release-tag like every cluster choice" \
+    build-orangepi4-lts-stage4.sh --env prod --release-tag 20261110
+if [ -e "${WORK}/bw" ]; then
+    bad "a builder created its work dir during a validation-only run (it got past the prologue)"
+else ok "no builder created its work dir (every case stopped in validation)"; fi
+
 echo "== Orange Pi node path (node_role_bake_cluster_tree, ENV=prod) =="
 s="$(new_sysroot)"
 rm -rf "${s}/var/lib/hugmesh"

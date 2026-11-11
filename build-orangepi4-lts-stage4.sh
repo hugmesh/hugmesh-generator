@@ -496,6 +496,10 @@ OPTIONS
 
   Branding / env / system  (same knobs as the other builders)
     --brand / --brand-title / --org / --cluster-domain / --env test|prod
+    --release-tag TAG   NODE roles only, used by --env prod: the tag the baked
+        cluster tree's first-party :dev images are pinned to. Letters, digits,
+        . _ - only, and not dev/main/latest; a bad tag is refused before the
+        build starts. Default: the UTC build date (YYYYMMDD).
     --domain-idp DOMAIN=own|superdomain   (repeatable) Casdoor for DOMAIN's sign-in:
         own = a dedicated instance, superdomain = the mesh's (default; bakes
         nothing). Only `own` is baked: /etc/hugmesh/domain-idp. DOMAIN must be
@@ -702,6 +706,7 @@ while [[ $# -gt 0 ]]; do
         # same spellings the Raspberry Pi builder parses; validated after the role is
         # known by node_role_resolve_cluster_choices (scripts/_node-role-lib.sh).
         --release-state)      RELEASE_STATE="$2";      CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --release-tag)        RELEASE_TAG="$2";        CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
         --games-domain)       GAMES_DOMAIN="$2";       CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
         --optional-services)  OPTIONAL_SERVICES="$2";  CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
         --all-services)       OPTIONAL_SERVICES="all"; CLUSTER_ARGS_GIVEN+=" $1"; shift   ;;
@@ -799,6 +804,12 @@ if ${NODE_ROLE}; then
     # validated and resolved exactly as the Pi does; a host-daemon slug this board
     # does not carry (tor, egress-vpn, domain-registry-bridge) is refused.
     node_role_resolve_cluster_choices orangepi4-lts || exit 1
+    # ENV=prod pins the baked tree's first-party :dev image tags to RELEASE_TAG
+    # (--release-tag, or the gate's UTC-date default); refuse a floating or
+    # malformed tag now, not after the emerge phase (scripts/_prod-gate-lib.sh).
+    if [ "${ENV}" = "prod" ] && [ -n "${RELEASE_TAG:-}" ]; then
+        prod_gate_validate_release_tag "${RELEASE_TAG}" || exit 1
+    fi
 else
     if [ -n "${RAM_GB}" ]; then
         warn "--ram-gb ${RAM_GB} is ignored for the desktop (no RAM floor on it)."

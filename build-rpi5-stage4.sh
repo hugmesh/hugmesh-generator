@@ -1016,8 +1016,9 @@ OPTIONS
                --release-tag, and fails the build if the static prod-hygiene
                check (scripts/validate-prod-hygiene.sh) finds anything left.
     --release-tag TAG
-        The tag ENV=prod pins first-party :dev image tags to.
-        Default: the UTC build date (YYYYMMDD).
+        The tag ENV=prod pins first-party :dev image tags to. Letters, digits,
+        . _ - only, and not dev/main/latest; with --env prod a bad tag is
+        refused before the build starts. Default: the UTC build date (YYYYMMDD).
 
   Per-domain identity provider (issue #47)
     --domain-idp DOMAIN=own|superdomain
@@ -1780,6 +1781,11 @@ case "${ENV}" in
     test|prod) ;;
     *) err "--env must be one of: test | prod  (got '${ENV}')"; exit 1 ;;
 esac
+# ENV=prod pins first-party :dev image tags to RELEASE_TAG at bake time; refuse a
+# floating or malformed tag NOW, not after the emerge phase (scripts/_prod-gate-lib.sh).
+if [ "${ENV}" = "prod" ]; then
+    prod_gate_validate_release_tag "${RELEASE_TAG}" || exit 1
+fi
 
 # ── Validate the release-state posture (baked into the image) ─────────────
 case "${RELEASE_STATE}" in

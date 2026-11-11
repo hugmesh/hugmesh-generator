@@ -17,6 +17,28 @@
 # NO `set -e` here: the caller owns its shell options. One `local` per assignment
 # (bash 5.3 localises a whole `local a=$1 b=$a` list before assigning).
 
+# prod_gate_validate_release_tag <tag>
+#   rc=0 when <tag> is a pinned image tag ENV=prod may pin first-party :dev images
+#   to: non-empty, only letters, digits, '.', '_' and '-', and not one of the
+#   floating names dev / main / latest. rc=1 (with a message) otherwise.
+#   Every builder calls it right after argument parsing when ENV=prod, so a bad
+#   --release-tag fails in seconds, not after the emerge phase; prod_gate_cluster_tree
+#   calls it again at gate time (fail closed if a caller skipped the early check).
+#   ACCEPTED-SET NOTE: before this lib, build-x86-host-stage4.sh accepted ANY
+#   --release-tag unchecked (it was pasted into a sed replacement). It now refuses
+#   '+', '/', spaces and every other character outside [A-Za-z0-9._-] for ENV=prod.
+#   None of those is valid in an OCI image tag, so no working prod build is lost.
+#   ENV=test builds never use the tag and are not checked.
+prod_gate_validate_release_tag() {
+    local tag="${1-}"
+    case "${tag}" in
+        ''|*[!A-Za-z0-9._-]*|dev|main|latest)
+            _prod_gate_err "release tag '${tag}' is not a pinned tag (letters, digits, . _ - only; not dev/main/latest)"
+            return 1 ;;
+    esac
+    return 0
+}
+
 # prod_gate_cluster_tree <cluster-tree> <release-tag> <hygiene-script>
 #   For an ENV=prod image, over the BAKED tree only (never the repo):
 #   1. pin first-party floating `:dev` image tags to <release-tag>;
@@ -32,11 +54,7 @@ prod_gate_cluster_tree() {
     local tag="${2:?prod_gate_cluster_tree: release tag required}"
     local hygiene="${3:?prod_gate_cluster_tree: hygiene script required}"
     [ -d "${tree}" ] || return 0
-    case "${tag}" in
-        *[!A-Za-z0-9._-]*|dev|main|latest)
-            _prod_gate_err "release tag '${tag}' is not a pinned tag (letters, digits, . _ - only; not dev/main/latest)"
-            return 1 ;;
-    esac
+    prod_gate_validate_release_tag "${tag}" || return 1
 
     local n=0
     local f
