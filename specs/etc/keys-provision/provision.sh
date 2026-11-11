@@ -3049,10 +3049,19 @@ provision_run_hooks() {
         local s; s="$(jqm ".run[$i]")"
         [ -f "${BASE}/${s}" ] || { warn "run hook missing: ${s}"; continue; }
         log "Running hook ${s}"
-        # Copy out of the read-only mount so it is executable
-        local tmp; tmp="$(mktemp)"; cp "${BASE}/${s}" "${tmp}"; chmod +x "${tmp}"
+        # Copy out of the read-only, noexec KEYS mount so it is executable. NOT into
+        # mktemp's default /tmp: both fstabs (specs-rpi5, specs-x86) mount /tmp (and
+        # x86 /var/tmp) noexec, so exec'ing a copy there fails "Permission denied" and
+        # EVERY run[] hook was silently skipped as "exited non-zero". /run is a tmpfs
+        # mounted without noexec on every image; a private 0700 dir keeps the copy
+        # unreadable to other users while it runs.
+        local hookdir tmp
+        hookdir="$(mktemp -d -p /run keys-hook.XXXXXX)" || { warn "hook ${s}: cannot create a private dir under /run"; continue; }
+        chmod 0700 "${hookdir}"
+        tmp="${hookdir}/$(basename "${s}")"
+        cp "${BASE}/${s}" "${tmp}"; chmod 0700 "${tmp}"
         KEYS_BASE="${BASE}" "${tmp}" || warn "hook ${s} exited non-zero"
-        rm -f "${tmp}"
+        rm -rf "${hookdir}"
     done
 }
 
