@@ -753,6 +753,14 @@ PY
 then ok "beta --apply: akkoma-v0.4.0-beta.1 is tagged in hugmesh-generator at main and starts akkoma-release.yml"
 else bad "beta --apply artifact row: rc=$(cat "$D/rc"); $(grep -a 'akkoma' "$D/out" | tail -3 | tr '\n' ';')"
 fi
+# the WRITE path too: no call of the --apply run (tag POST, run watch, package reads) names the row ID
+if grep -a '@akkoma' "$D/calls" >/dev/null; then
+  bad "beta --apply: a gh call names the row ID instead of the repository: $(grep -a '@akkoma' "$D/calls" | head -1)"
+elif grep -a '"POST"' "$D/calls" | grep -a 'repos/hugmesh/hugmesh-generator/git/refs' >/dev/null; then
+  ok "beta --apply: every call of the run goes to the repository (the tag POST included), none names the row ID"
+else
+  bad "beta --apply: no tag POST to repos/hugmesh/hugmesh-generator/git/refs was recorded"
+fi
 
 # Studio through the REAL scripts/release-studio.sh --dry-run, still zero writes
 echo "== A studio dry run"
