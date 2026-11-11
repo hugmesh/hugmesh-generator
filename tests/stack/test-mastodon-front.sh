@@ -61,7 +61,7 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1" >&2; }
 check() { if [ "$1" -eq 0 ]; then ok "$2"; else bad "$2"; fi; }
-has()   { case "$1" in *"$2"*) ok "$3";; *) bad "$3 (missing '$2')";; esac; }
+has()   { case "$1" in *"$2"*) ok "$3";; *) bad "$3 (missing '$2')"; return 1;; esac; }
 hasnt() { case "$1" in *"$2"*) bad "$3 (found '$2')";; *) ok "$3";; esac; }
 
 for f in "${CONF}" "${REAL}" "${SOCIAL}" "${LOCAL}" "${GENENV}" "${UPREAL}"; do
@@ -306,8 +306,16 @@ for pat, rep in edits:
         sys.exit(f"test harness: expected exactly one match for {pat!r}, got {n} — the conf changed shape")
 open(dst, "w").write(text)
 PY
+# Run as root (CI's alpine container), nginx hands requests to workers running as
+# its compile-time user, and a 2 MB request body is buffered to
+# client_body_temp_path under ${TMP}. When a parent of ${TMP} is not traversable by
+# that user (measured: TMPDIR under a 0700 directory), the upload 500s for a
+# reason that has nothing to do with the conf. Keep the workers as root here.
+WORKER_USER=""
+[ "$(id -u)" -eq 0 ] && WORKER_USER="user root;"
 cat > "${TMP}/nginx.conf" <<EOF
 daemon off;
+${WORKER_USER}
 pid ${TMP}/nginx.pid;
 error_log ${TMP}/error.log warn;
 events {}
@@ -440,7 +448,8 @@ except urllib.error.HTTPError as e:
     print(e.code, e.read()[:80])
 PY
 )"
-has "${up_body}" '200 {"received": 2097152' "a 2 MB upload with no X-Forwarded-Proto reaches mastodon-web whole (no 413 from nginx's 1 MB default, no force_ssl 308)"
+has "${up_body}" '200 {"received": 2097152' "a 2 MB upload with no X-Forwarded-Proto reaches mastodon-web whole (no 413 from nginx's 1 MB default, no force_ssl 308)" \
+  || { echo "     upload answered: ${up_body:0:200}" >&2; tail -5 "${TMP}/error.log" 2>/dev/null | sed 's/^/     nginx: /' >&2; }
 has "${up_body}" '"url": "/bff/user/mastodon/system/media_attachments/files/2/original/b.png"' "the upload's answer is rewritten like any other (the media proxy's path)"
 
 echo
