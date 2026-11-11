@@ -1131,7 +1131,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-edge-ai-analysis-ssrf.sh, named by shell-suites.yml's debian
 # edge-ai-analysis leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on
 # the branch over origin/main 39b953ad: 238 of 280.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-239}"
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-239}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
