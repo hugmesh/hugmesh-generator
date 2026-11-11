@@ -282,6 +282,54 @@ def test_r_after_a_stop_and_port_reuse_refuses_the_stale_pick(guest):
     assert gl.commit_command(j).startswith("!! ")    # no ssh line to hand over
 
 
+def _keep_a_stopped_pick(guest):
+    """Plan stage on rpi5/pki, then it stops and rpi5/be takes its port; `t`, `r`
+    keeps the stopped device (refused). Returns (j, gl) back on the providers."""
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    _restart(guest, port=22401, started_at="2026-11-09T20:00:00Z", state="stopped")
+    _restart(guest, label="rpi5/be", role="backend", port=22401)
+    j.feed("")                                       # back to the providers
+    j.feed("t")
+    j.feed("r")
+    assert gl.target.label == "rpi5/pki" and not gl.target.running
+    j.feed("")                                       # back to the providers
+    assert gl.stage == "provider"
+    return j, gl
+
+
+def test_a_kept_stopped_device_lists_no_providers_and_refuses_a_pick(guest):
+    """The provider step says WHY, and never lists this checkout's registry as if the
+    stopped device offered it (the driver falls back to that registry when it cannot
+    run). A NUMBER is refused, as the GUI's Preflight shuts Next on the same record."""
+    j, gl = _keep_a_stopped_pick(guest)
+    sent = len(guest.calls())
+    text = "\n".join(gl.lines(j))
+    assert "rpi5/pki is not running" in text
+    assert "  1. " not in text and "cloudflare-tunnel" not in text
+    assert "commands: t=pick the target" in text
+    j.feed("2")
+    assert gl.stage == "provider"
+    assert "rpi5/pki is not running" in j.status
+    assert guest.calls()[sent:] == []
+
+
+def test_plan_verbs_refuse_a_device_the_driver_cannot_reach(guest):
+    """The backstop under the provider step. That step no longer lets a refused device
+    through, so the test puts one on the plan stage itself: p, s and l each say why and
+    send nothing. `l` used to list this checkout's registry as the device's."""
+    j, gl = _keep_a_stopped_pick(guest)
+    gl.stage = "plan"                                # unreachable through the providers now
+    sent = len(guest.calls())
+    for verb in ("l", "s", "p"):
+        gl.run_log = []
+        j.feed(verb)
+        assert "rpi5/pki is not running" in j.status, verb
+        assert gl.run_log == [], (verb, gl.run_log)
+    assert guest.calls()[sent:] == []
+
+
 def test_picking_a_row_takes_the_record_as_it_is_now(guest):
     j, gl = _go_live_screen(guest)
     j.feed("t")

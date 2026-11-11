@@ -288,12 +288,26 @@ class GoLiveScreen:
         getattr(self, f"_feed_{self.stage}")(j, line.strip())
 
     # ── provider ────────────────────────────────────────────────────────────────
+    def _providers_or_blocker(self, j) -> tuple[list, str]:
+        """The providers a pick may take, and why none may be picked ("" when one may).
+
+        A device the driver cannot run against lists NONE: ``r`` keeps a stopped device
+        (refused), and providers() would then fall back to THIS checkout's registry,
+        which is not what the device offers (the GUI's Preflight shuts Next on the same
+        record). On this host an empty list is the native-Windows blocker; a listed
+        registry there is real, and the screen goes on."""
+        d = self._driver(j)
+        if self.target.is_remote:
+            why = d.blocker()
+            if why:
+                return [], why
+        providers = d.providers()
+        return providers, ("" if providers else d.blocker())
+
     def _lines_provider(self, j) -> list[str]:
-        driver = self._driver(j)
-        providers = driver.providers()
+        providers, blocker = self._providers_or_blocker(j)
         out = ["Internal-only -> publicly live. Pick the provider (the driver's own "
                "registry, grouped by exposure model).", self._target_line(j), ""]
-        blocker = "" if providers else driver.blocker()
         if blocker:
             # No providers on native Windows means the driver could not list them there,
             # so asking whether the driver file is present sent the operator looking for
@@ -335,8 +349,7 @@ class GoLiveScreen:
         if line.lower() == "t":
             self.stage = "target"
             return
-        providers = self._driver(j).providers()
-        blocker = "" if providers else self._driver(j).blocker()
+        providers, blocker = self._providers_or_blocker(j)
         if blocker:
             j.status = blocker               # not "no such provider": there are none here
             return
@@ -569,8 +582,10 @@ class GoLiveScreen:
         if self.target.is_remote:
             low = line.lower()
             if low in ("p", "s", "l"):
-                why = self.stale_binding(j)
-                if why:                # it would land on whatever holds that port now
+                # stale: it would land on whatever holds that port now; refused (a
+                # stopped device `r` kept): `l` would list THIS checkout's registry
+                why = self._act_refusal(j)
+                if why:
                     j.status = why
                     return
                 self._run_remote(j, {"p": "plan", "s": "status", "l": "list"}[low])
