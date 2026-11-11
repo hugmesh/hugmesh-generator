@@ -121,7 +121,7 @@ def _running_elsewhere(tmp_path):
     return s
 
 
-def _services_gap(tmp_path):
+def _services_gap(tmp_path, *, workdir=True):
     """A mesh record whose configuration gained a domain with no recorded services
     (#495): restart_gate_reason refuses it by name."""
     cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
@@ -131,7 +131,8 @@ def _services_gap(tmp_path):
     s = bs.new_session(synthesize(cfg), GENERATOR_DIR)
     bs.start(s)
     bs.finish(s, "failed")
-    os.makedirs(s.workdir, exist_ok=True)
+    if workdir:
+        os.makedirs(s.workdir, exist_ok=True)
     return s
 
 
@@ -321,6 +322,33 @@ def test_redo_says_unsaved_passwords_on_welcome_not_in_a_modal(qapp, wiz, no_mod
     assert scroll.verticalScrollBar().value() == 0
 
 
+def test_redo_from_a_tray_opened_build_window_lands_its_note_too(qapp, no_modal,
+                                                                tmp_path):
+    """The tray's per-build window delegates through StudioShell._delegate, which
+    opens (or raises) a Studio window FIRST and only then runs Redo. A window opened
+    after the Redo would re-initialise Welcome and wipe the note; this pins the order."""
+    from hugmesh_studio.gui import shell as shell_mod
+    s = _finished(tmp_path, local_pass="hunter2")
+    sh = shell_mod.StudioShell(GENERATOR_DIR)
+    try:
+        assert sh.current_window() is None          # the tray route opens the window
+        win = sh.open_build_window(s)
+        win.buttons["edit"].click()
+        qapp.processEvents()
+        wiz = sh.current_window()
+        assert wiz is not None
+        assert wiz.currentId() == wiz._page_ids["welcome"]
+        note = _welcome(wiz).landing_note
+        assert note.isVisible() and "local-pass was NOT saved" in note.text()
+        assert no_modal == []
+    finally:
+        for w in list(sh.windows) + list(sh.build_windows):
+            try:
+                w.close()
+            except RuntimeError:
+                pass
+
+
 def test_the_redo_note_does_not_outlive_its_redo(qapp, wiz, no_modal, tmp_path):
     blanked = _finished(tmp_path, local_pass="hunter2")
     kept = _finished(tmp_path, role="generic", platform="rpi5")
@@ -343,10 +371,14 @@ def test_the_redo_note_does_not_outlive_its_redo(qapp, wiz, no_modal, tmp_path):
 
 
 # ── what is drawn: the reason fits the page at the wizard's own sizes ─────────────────
+@pytest.mark.parametrize("workdir", [True, False], ids=["longest", "tallest"])
 @pytest.mark.parametrize("size", SIZES, ids=[f"{w}x{h}" for w, h in SIZES])
 def test_the_reason_is_drawn_inside_the_page_without_widening_it(qapp, wiz, no_modal,
-                                                                 size, tmp_path):
-    s = _services_gap(tmp_path)           # the longest reason this route states
+                                                                 size, workdir,
+                                                                 tmp_path):
+    # the longest reason this route states; without its directory it is also the
+    # tallest note (a second line for Open artifacts), and SessionsPage does not scroll
+    s = _services_gap(tmp_path, workdir=workdir)
     wiz.resize(*size)
     wiz.show()
     welcome = _welcome(wiz)
@@ -363,6 +395,7 @@ def test_the_reason_is_drawn_inside_the_page_without_widening_it(qapp, wiz, no_m
     qapp.processEvents()
     note = w.gate_note
     assert note.isVisible() and note.height() > 0
+    assert (sw.MISSING_DIR_REASON in note.text()) is (not workdir)
     assert wiz.size() == QtCore.QSize(*size)     # the window did not grow to fit it
     assert page.minimumSizeHint().width() <= max(min_w_before, size[0])
     page_rect = page.rect()
