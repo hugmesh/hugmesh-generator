@@ -1364,6 +1364,10 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # headscale DERP: the public Tailscale map is an OPT-IN next to the embedded relay
     # (every builder parses --headscale-public-derp; docs/HEADSCALE-DERP.md).
     "headscale_public_derp": _ALL_PLATFORMS,
+    # Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md): only the x86 and
+    # rpi5 builders can bake Tor; every other builder parses the flag and refuses a Tor
+    # transport, so the Studio never emits it there.
+    "mesh_control_transport": _X86_RPI5,
     # hardware.
     "gpu_driver": _X86, "nvidia_cuda": _X86, "kernel_builtin": _X86,
     "enable_wifi": _ALL_PLATFORMS, "enable_bluetooth": _ALL_PLATFORMS,
@@ -1488,7 +1492,10 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    # The pki node's LAN address + the operator's "it is fixed"
                    # confirmation (core/pki_lan.py): the KEYS channel
                    # (gen-provision-keys.sh --pki-ip), never a builder argv.
-                   "pki_lan_ip", "pki_lan_ip_fixed")
+                   "pki_lan_ip", "pki_lan_ip_fixed",
+                   # mesh control over Tor: the consent to mint the control onion key
+                   # here (KEYS channel: gen-provision-keys.sh --mesh-control-onion-mint).
+                   "mesh_control_onion_mint")
 
 
 # ── role-class capability layer (Qt-free; BESIDE PLATFORM_FIELD_SUPPORT, NEVER inside
@@ -3635,6 +3642,13 @@ class ImageConfig:
     tailscale_version: str = ""        # --tailscale-version pin (all)
     skip_tailscale: bool = False       # --skip-tailscale: headscale-only posture, distinct from --skip-mesh (all)
     headscale_public_derp: bool = False  # --headscale-public-derp: ALSO list Tailscale's public DERP map (default: embedded relay only, offline-first) (all)
+    # How nodes reach the control plane on first boot (core/mesh_control.py): "" / "lan"
+    # (the default, emits nothing) | "lan+onion" | "onion" -> --mesh-control-transport
+    # (x86 + rpi5) AND the KEYS sticks' .mesh.control_* (gen-provision-keys.sh).
+    mesh_control_transport: str = ""
+    # The operator's consent to create the control onion key on THIS computer (it goes
+    # onto the pki stick only) — KEYS channel, never argv. Required for a Tor transport.
+    mesh_control_onion_mint: bool = False
     # ── mesh-node identity provider (I6; x86 + rpi5 node builders) ──
     # "casdoor" (the NATIVE DEFAULT) emits NOTHING — argv/sysroot byte-identity is
     # the hard invariant. External providers emit --idp/--idp-issuer/--idp-client-id
@@ -4365,6 +4379,10 @@ class ImageConfig:
         # here so no face can save one gen-provision-keys.sh would refuse. Whether a
         # mesh HAS one is pki_lan.problem's business (the build/keys gates), not this
         # structural check: a saved config without it still loads.
+        if self.mesh_control_transport not in ("", "lan", "lan+onion", "onion"):
+            raise IdentityValidationError(
+                f"mesh_control_transport must be lan, lan+onion or onion, not "
+                f"{self.mesh_control_transport!r}")
         if self.pki_lan_ip:
             from . import pki_lan   # local import: config stays lean
             err = pki_lan.ip_error(self.pki_lan_ip)
@@ -4619,6 +4637,9 @@ class ImageConfig:
             a += ["--skip-tailscale"]
         if self.headscale_public_derp:
             a += ["--headscale-public-derp"]
+        # x86 + rpi5 only: the other builders refuse a Tor transport (they cannot bake Tor).
+        if self.mesh_control_transport not in ("", "lan") and (self.platform or "x86") in _X86_RPI5:
+            a += ["--mesh-control-transport", self.mesh_control_transport]
         return a
 
     def _plumbing_args(self) -> list[str]:

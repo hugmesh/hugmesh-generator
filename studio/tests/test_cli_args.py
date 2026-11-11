@@ -1787,7 +1787,10 @@ def test_non_argv_fields_set():
         "domain_services_reviewed",
         # the pki node's LAN address + its "fixed" confirmation: the KEYS channel
         # (gen-provision-keys.sh --pki-ip), never a builder argv.
-        "pki_lan_ip", "pki_lan_ip_fixed"}
+        "pki_lan_ip", "pki_lan_ip_fixed",
+        # mesh control over Tor: the consent to mint the control onion key on this
+        # computer (KEYS channel: gen-provision-keys.sh --mesh-control-onion-mint).
+        "mesh_control_onion_mint"}
     # no flow flag may reach ANY builder argv, on any platform, in any mode
     for mode, role in (("mesh", "omnibus"), ("cloud", "desktop")):
         cfg = ImageConfig(mode=mode, role=role, platform="x86",
@@ -1871,6 +1874,7 @@ _FIELD_PROBE = {
     "tailscale_version": {"tailscale_version": "1.60"},
     "skip_tailscale": {"skip_tailscale": True},
     "headscale_public_derp": {"headscale_public_derp": True},
+    "mesh_control_transport": {"mesh_control_transport": "lan+onion"},
     "gpu_driver": {"gpu_driver": "nvidia"}, "nvidia_cuda": {"nvidia_cuda": True},
     "kernel_builtin": {"kernel_builtin": True},
     "enable_wifi": {"enable_wifi": True}, "enable_bluetooth": {"enable_bluetooth": True},

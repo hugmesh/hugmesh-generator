@@ -46,7 +46,8 @@ STUDIO_ROOT = os.path.dirname(HERE)
 #: below fails when a file carries one that is not listed).
 LOOK_FILES = ("test_anubis_tristate_page.py", "test_localcloud_nodes.py",
               "test_pages_qemu.py", "test_pages_mesh_emulation.py",
-              "test_look_editor.py", "test_pki_lan_page.py")
+              "test_look_editor.py", "test_pki_lan_page.py",
+              "test_mesh_control_page.py")
 
 
 # an id may also end in the window size a look case was drawn at (``fusion-9pt-736x736``)
