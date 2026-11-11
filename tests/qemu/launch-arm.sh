@@ -57,7 +57,9 @@
 #   --gpu              virtio-gpu-pci + usb-kbd + usb-tablet so the lightdm
 #                      greeter is drawn and QMP `screendump` captures it
 #                      (-display none stays: the dump comes from the virtual
-#                      framebuffer, no host display needed).
+#                      framebuffer, no host display needed). With --display
+#                      spice it adds nothing: the door's own virtio-gpu-pci,edid=on
+#                      + usb-kbd + usb-tablet are that GPU (as on launch-x86.sh).
 # Every one of these is default-off: without them the argv is byte-identical to
 # the golden-.img path, minus the -dtb that never belonged there.
 # tests/qemu/frite-emmc-install.sh is the two-phase driver on top of this.
@@ -186,6 +188,7 @@ Frite media / eMMC target (all default-off; see the header):
       --emmc-boot-size BYTES   Per-boot-partition size (default ${EMMC_BOOT_SIZE}; 128K-multiple, <= 32640K).
       --emmc-rpmb-size BYTES   RPMB size (default ${EMMC_RPMB_SIZE}; 128K-multiple, <= 16384K).
       --gpu            virtio-gpu-pci + usb-kbd + usb-tablet (greeter drawn; QMP screendump).
+                       With --display spice it is folded into the door's GPU.
 
 QEMU / guest:
   -m, --mem MB         Guest RAM. Default: ${MEM}
@@ -690,10 +693,17 @@ QEMU_ARGS+=(
     -device virtio-net-pci,netdev=net0
     -pidfile "${PIDFILE}"
 )
+# --gpu with --display spice is FOLDED into the display door (#955), the way
+# launch-x86.sh folds it into virtio-vga: the door below already brings
+# virtio-gpu-pci,edid=on + its own qemu-xhci + usb-tablet + usb-kbd, and --gpu's
+# devices on top of it gave the guest TWO GPUs (two heads, the viewer showing a
+# blank one) and TWO xhci controllers with two keyboards and two tablets.
+GPU_DEVICES=${GPU}
+[ "${DISPLAY_MODE}" = spice ] && GPU_DEVICES=false
 # ONE xhci controller, shared by the USB medium and the --gpu input devices.
 NEED_XHCI=false
 { [ -n "${MEDIUM}" ] && [ "${MEDIUM_BUS}" = usb ]; } && NEED_XHCI=true
-${GPU} && NEED_XHCI=true
+${GPU_DEVICES} && NEED_XHCI=true
 ${NEED_XHCI} && QEMU_ARGS+=(-device qemu-xhci,id=xhci)
 if [ -n "${MEDIUM}" ]; then
     QEMU_ARGS+=(-drive "file=${MEDIUM},format=raw,if=none,id=medium,readonly=on")
@@ -709,9 +719,11 @@ if [ -n "${EMMC}" ]; then
                 -device sdhci-pci,sd-spec-version=3
                 -device "${_emmc_dev}")
 fi
-if ${GPU}; then
+if ${GPU_DEVICES}; then
     QEMU_ARGS+=(-device virtio-gpu-pci -device usb-kbd,bus=xhci.0 -device usb-tablet,bus=xhci.0)
     info "gpu    : virtio-gpu-pci + usb-kbd + usb-tablet (QMP screendump captures the greeter)"
+elif ${GPU}; then
+    info "gpu    : --gpu folded into the display door's virtio-gpu-pci,edid=on (no second GPU, xhci, keyboard or tablet)"
 fi
 if [ -n "${KEYS_IMG}" ]; then
     [ -f "${KEYS_IMG}" ] || die "keys-img not found: ${KEYS_IMG}"

@@ -1114,10 +1114,20 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 233 -> 234 on 2026-11-10 (feat/studio-nvd-key-20261110): +1 gated, +1 total —
 # tests/pentest/test-run-sca-nvd-key.sh, named by shell-suites.yml and .gitlab-ci.yml's
 # lint:run-sca-nvd-key. PREMERGE_UNGATED is untouched. Measured by running this file.
-# 234 -> 235 on 2026-11-11 (fix/qemu-no-egress): +1 gated, +1 total —
+# 232 -> 234 (denominator 274 -> 276) on 2026-11-09 for fix/compose-db-passwords-20261104
+# (hugmesh-generator#857), which adds TWO gated suites, both in shell-suites.yml's debian
+# leg 1: tests/scripts/test-compose-no-literal-passwords.sh and
+# tests/stack/test-gen-stack-db-env.sh. Its base, origin/main 7e4a5c14, already
+# MEASURED 232 of 274 against the recorded 216 (the check was red on main); 234 of 276
+# MEASURED by running this file on the branch.
+# MERGED (origin/main 1c1da933 into fix/compose-db-passwords-20261104): main 233 of 275 + this
+# branch's 2 = 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
+# MERGED (origin/main 3e020b2b into fix/compose-db-passwords-20261104): main 234 of 276 + this
+# branch's 2 = 236 of 278, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
+# 236 -> 237 on 2026-11-11 (fix/qemu-no-egress): +1 gated, +1 total —
 # tests/qemu/no_egress_argv_test.sh, named by shell-suites.yml. PREMERGE_UNGATED is
-# untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 235 of 277.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-235}"
+# untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 237 of 279.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-237}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
