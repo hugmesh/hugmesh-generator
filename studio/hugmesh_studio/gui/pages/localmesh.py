@@ -734,8 +734,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     #: The subtitle once the bottom panel holds the actions, the stages and the table.
     #: Two lines at most — the wizard header clips the rest mid-sentence (GUI-14).
     DOCKED_SUBTITLE = (
-        "Press 'Generate & start' on the panel's Local mesh tab, at the bottom of this "
-        "window; its Mesh run tab reports what happens. Exit closes the Studio; the mesh "
+        "Press 'Generate & start' on the panel's Local mesh tab (at the bottom) to bring "
+        "the mesh up; its Mesh run tab reports progress. Exit closes the Studio; the mesh "
         "keeps running.")
 
     def __init__(self, wiz):
@@ -5550,7 +5550,7 @@ class LocalMeshReviewPage(_LocalMeshStep):
     # Two lines at most, both of them — the wizard header clips the rest (GUI-14).
     SUBTITLE = ("What a bring-up will generate and start, and the meshes saved on this "
                 "machine. The plan is read-only; a saved row's Start or Restore runs "
-                "docker, its output below.")
+                "docker, with its output below.")
     DOCKED_SUBTITLE = (
         "What a bring-up will generate and start, and the meshes saved on this machine. "
         "The plan is read-only; a saved row's Start or Restore runs docker (output: the "
