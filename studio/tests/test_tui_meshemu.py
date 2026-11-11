@@ -284,3 +284,57 @@ def test_a_parseable_but_malformed_record_does_not_take_the_screen_down(gen):
         json.dump({"id": SESSION, "config": None}, fh)
     j = _at_table(gen)
     assert "! refused" not in "\n".join(j.lines())
+
+
+# ── go live FROM this mesh: `g` on the front door's detail ──────────────────────────
+import dataclasses                                          # noqa: E402
+
+import _golive_fake_guest as fake                           # noqa: E402
+from hugmesh_studio.tui.golive import GoLiveScreen          # noqa: E402
+
+
+def _front_door_detail(j) -> list[str]:
+    j.feed("3")                                      # x86/frontend — the gateway
+    return j.lines()
+
+
+def test_the_front_door_says_why_go_live_is_not_offered_while_it_is_off(gen):
+    j = _at_table(gen)
+    text = "\n".join(_front_door_detail(j))
+    assert ("Go live from this mesh… — not offered: the front door (x86/frontend) is "
+            "not running") in text
+    j.feed(meshemu.GO_LIVE_KEY)
+    assert j.overlay is None
+    assert "not running" in j.status
+
+
+def test_g_on_a_running_front_door_opens_go_live_on_that_device(gen, tmp_path,
+                                                                monkeypatch):
+    j = _at_table(gen)
+    plan = j.screen()._plan
+    guest = dataclasses.replace(fake.install(tmp_path, monkeypatch),
+                                work_dir=plan.work_dir)
+    os.makedirs(os.path.join(plan.work_dir, "devices"), exist_ok=True)
+    fake.register(guest, label="x86/frontend", platform="x86", role="frontend")
+    text = "\n".join(_front_door_detail(j))
+    assert "Go live from this mesh… press g" in text
+    assert "g = Go live from this mesh…" in text
+    under = j.screen()
+    j.feed("g")
+    gl = j.screen()
+    assert isinstance(gl, GoLiveScreen) and j.overlay is gl
+    assert gl.target.label == "x86/frontend" and gl.target.is_remote
+    assert gl.target.work_dir == plan.work_dir
+    shown = "\n".join(j.lines())
+    assert "target: x86/frontend (emulated · x86 · frontend)" in shown
+    assert "b=back to Mesh emulation" in shown
+    j.feed("b")                                      # the first step's b comes back
+    assert j.overlay is None and j.screen() is under
+
+
+def test_g_on_another_row_points_at_the_front_door(gen):
+    j = _at_table(gen)
+    j.feed("1")                                      # rpi5/pki
+    j.feed("g")
+    assert j.overlay is None
+    assert "front door's (x86/frontend)" in j.status
