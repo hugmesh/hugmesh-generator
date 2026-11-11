@@ -348,6 +348,9 @@ def test_tui_journey_builds_exactly_the_saved_meshs_domains(tmp_path, monkeypatc
     assert [d.name for d in j.cfg.domains] == ["a.example", "b.example"]
     _walk_to_build(j)
     assert [d.name for d in j.cfg.domains] == ["a.example", "b.example"]
+    # the pki node's fixed LAN address (core/pki_lan.py) — set as the Network step
+    # would, so the last assertion is about the domains alone
+    j.cfg.pki_lan_ip, j.cfg.pki_lan_ip_fixed = "192.168.1.10", True
     text = "\n".join(j.lines())
     assert "domains   2 (own Casdoor: b.example)" in text
     assert "x.example" not in text

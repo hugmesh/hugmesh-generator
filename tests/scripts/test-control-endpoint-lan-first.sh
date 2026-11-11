@@ -182,6 +182,7 @@ fwrun() {  # fwrun <marker content|-> <tag>
     : > "${FWT}/log"
     PATH="${FWT}:${PATH}" FW_RULES="${FWT}/rules" FW_LOG="${FWT}/log" NFT_CAPTURE="${FWT}/$2.nft" \
         HUGMESH_COTURN_PUBLIC_MARKER="${FWT}/no-coturn" HUGMESH_HEADSCALE_LAN_MARKER="${FWT}/marker" \
+        HUGMESH_HEADSCALE_STUN_MARKER="${FWT}/no-stun" HUGMESH_HEADSCALE_STUN_FW_STATE="${FWT}/stun-state" \
         HUGMESH_FIREWALL_HEALTH_DIR="${FWT}/health" bash "${FW}" > "${FWT}/$2.out" 2>&1
 }
 want_set() {  # want_set <port>: the exact expected rule set (+ the foreign rule)
