@@ -148,6 +148,21 @@ DELETE FROM gateway_route_access
    AND url_pattern IN ('/games/api/' || '**', '/games/' || '**')
    AND role = 'ROLE_MOD';
 
+-- Retire the pki gateway's bare catch-all row an earlier apply seeded (decision
+-- 79 = B, hugmesh-admin-bff-api#57; see the note where the pki rows are seeded
+-- below). The seed INSERT is ON CONFLICT DO NOTHING, so dropping the tuple from
+-- it only changes a FRESH initdb: a local-stack volume (`make stack-up` re-applies
+-- this file through tests/stack/route-access-reconcile.sh) or a cluster DB
+-- re-applied in place would keep the row forever. It is deleted whatever its
+-- role, user or domain scope: the admin API refuses to write a bare double-star
+-- row (decision 61), so no operator-made row can match, and
+-- [route-access-wildcard] in tests/scripts/cluster_manifest_integrity.py allows
+-- no bare row at all. Spelled with || like the retirements above so the seed's
+-- tuple readers never count it as a row.
+DELETE FROM gateway_route_access
+ WHERE gateway = 'hugmesh-pki-gateway'
+   AND url_pattern = '/' || '**';
+
 -- Canonical seed — one allow row per (gateway, url_pattern, role) in the routing
 -- contract. Role semantics (mirroring the hugmesh.games SecurityConfig
 -- casdoorAuthoritiesConverter):
@@ -182,7 +197,19 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-pki-gateway', '/api/auth/**',          'ROLE_USER',      true),  -- public-floor
   ('hugmesh-pki-gateway', '/login/**',             'PUBLIC', true),  -- public
   ('hugmesh-pki-gateway', '/.well-known/**',       'PUBLIC', true),  -- public (OIDC/jwks)
-  ('hugmesh-pki-gateway', '/**',                   'ROLE_SUPERADMIN', true),  -- headscale control-plane (scale.) catch-all -> SUPERADMIN-only; the 3 specific rows above win by most-specific match (bug #15)
+  -- NO bare catch-all row for the pki gateway (decision 79 = B,
+  -- hugmesh-admin-bff-api#57, 2026-09-23; gateway half landed in
+  -- hugmesh-gateway#40, f0faca1). The headscale control plane (the `headscale`
+  -- route in apps/20-gateway-pki.yaml, Host=scale.<domain> with NO Path
+  -- predicate) used to be floored here by a bare double-star -> ROLE_SUPERADMIN
+  -- row (bug #15). That row could not stop a same-brand ROLE_ADMIN or
+  -- ROLE_GAME-MASTER (GatewayRouteAccessFilter forwards both in their own domain
+  -- before any row is read), and the admin API can never recreate it (decision
+  -- 61). The gateway SecurityConfig now requires ROLE_SUPERADMIN for EVERY
+  -- request on the headscale route Host, ahead of PUBLIC_PATHS, so no row is
+  -- needed here. Mirrors CanonicalSeed.pki() and compose/route-access-seed.sql in
+  -- hugmesh-gateway. tests/scripts/cluster_manifest_integrity.py
+  -- [route-access-wildcard] refuses any bare double-star row, with no exceptions.
 
   -- be-gateway (api./matrix./mastodon.hugmesh.net -> APIs/Matrix/Mastodon)
   -- ROLE_MOD moderation surfaces — MORE SPECIFIC than the ROLE_MASTODON /api/v1/**
