@@ -17,17 +17,21 @@ Multi-role (issue #228): the Role cell is a row of checkboxes (``RoleCell``), on
 every consumer that reads the scalar.
 
 The per-row Domain cell is a DROPDOWN of the previously-defined domains (spec 6): the
-Tailscale root domain plus every name from the shared Domains table (and any rows
-a superadmin added this session). Selecting the ``superadmin`` role forces + locks the
-row to the root domain (spec 5): superadmins belong to the Tailscale root domain, not a
-tenant domain. A loaded user whose domain is not (yet) defined is shown suffixed
-'(not defined)' with an orange warning — never silently rewritten.
+Tailscale root domain, then every domain the mesh serves — on the mesh route its OWN
+domain (``cfg.cluster_domain``, implicit: never a Domains-table row, always served)
+first, then every name from the shared Domains table (and any rows a superadmin added
+this session); ``core.domain_services.domain_names_for_services`` is that list. Selecting
+the ``superadmin`` role forces + locks the row to the root domain (spec 5): superadmins
+belong to the Tailscale root domain, not a tenant domain. A loaded user whose domain is
+not (yet) defined is shown suffixed '(not defined)' — in the cell, its tooltip and one
+orange warning that names each such domain once — never silently rewritten.
 """
 from __future__ import annotations
 
-from ..qt import QtWidgets
+from ..qt import QtCore, QtWidgets
 from ...core.config import (USER_ROLE_CHOICES, User, normalize_user_roles,
                             users_table_applies)
+from ...core.domain_services import domain_names_for_services
 
 # USER_ROLE_CHOICES (G20) moved to core.config with issue #228 so the core's
 # multi-role normalization and this page offer ONE vocabulary; re-exported here for
@@ -46,6 +50,24 @@ _COL_USER, _COL_DOMAIN, _COL_ROLE, _COL_EMAIL, _COL_REG = range(5)
 # a loaded domain that is not among the defined domains is kept, but flagged — never
 # silently rewritten to a defined one.
 _UNDEFINED = " (not defined)"
+
+
+def _combo_width_for(combo) -> int:
+    """The width ``combo`` needs to show its LONGEST entry uncut, the style's frame,
+    padding and drop-down arrow included — measured from its items now. Not
+    ``combo.sizeHint()``: the default size-adjust policy freezes that at first show,
+    so a domain added on Back-navigation would not count, and ``AdjustToContents``
+    makes the combo ``adjustSize()`` itself, shrinking it out of its table cell."""
+    fm = combo.fontMetrics()
+    text = max((fm.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())),
+               default=0)
+    opt = QtWidgets.QStyleOptionComboBox()
+    opt.initFrom(combo)
+    opt.editable = combo.isEditable()
+    opt.frame = combo.hasFrame()
+    return combo.style().sizeFromContents(
+        QtWidgets.QStyle.ContentsType.CT_ComboBox, opt,
+        QtCore.QSize(text, fm.height()), combo).width()
 
 
 class RoleCell(QtWidgets.QWidget):
@@ -155,11 +177,21 @@ class UsersPage(QtWidgets.QWizardPage):
 
     # ---- domain-dropdown helpers -------------------------------------------------
     def _domain_choices(self) -> list[str]:
-        """The superdomain + every defined domain name (deduped, order-preserving)."""
-        out = [self.wiz.cfg.effective_superdomain()]
-        for d in self.wiz.cfg.domains:
-            if d.name and d.name not in out:
-                out.append(d.name)
+        """The superdomain + every domain the mesh serves (deduped, order-preserving).
+
+        On the mesh route that includes the mesh's OWN domain (``cfg.cluster_domain``):
+        it is implicit — never a ``cfg.domains`` row, and the Domains page cannot add
+        it as one — yet always served, and it is where the "Create nodes for local
+        cloud" import places every non-superadmin account. Built from the domain list
+        alone, every imported row read '(not defined)' and the warning told the
+        operator to define, on the Domains page, a domain that page cannot hold.
+        A cloud client's own domain is a real row 0 there, so nothing changes off the
+        mesh route (``domain_names_for_services`` -> ``implicit_own_domain``)."""
+        out: list[str] = []
+        for name in [self.wiz.cfg.effective_superdomain(),
+                     *domain_names_for_services(self.wiz.cfg)]:
+            if name and name not in out:
+                out.append(name)
         return out
 
     def _raw_domain(self, text: str) -> str:
@@ -177,6 +209,28 @@ class UsersPage(QtWidgets.QWizardPage):
                 i = combo.count() - 1
             combo.setCurrentIndex(i)
         combo.blockSignals(False)
+        self._sync_domain_tooltip(combo)
+
+    def _sync_domain_tooltip(self, combo) -> None:
+        """The cell's full text, '(not defined)' flag included, as its tooltip — a
+        narrow column must never be the only place the flag could have been read."""
+        text = combo.currentText()
+        if text.endswith(_UNDEFINED):
+            combo.setToolTip(f"{self._raw_domain(text)} is not defined on the Domains "
+                             "page — define it there or pick a defined domain.")
+        else:
+            combo.setToolTip(text)
+
+    def _fit_domain_column(self) -> None:
+        """Widen the Domain column to its widest dropdown — every row's longest entry,
+        '(not defined)' flag included. The default 100px section cut even the
+        Tailscale root domain short ("hugmesh.inte"). Never narrows it: a column the
+        operator dragged wider stays wide."""
+        need = max((_combo_width_for(w) for w in (
+            self.table.cellWidget(r, _COL_DOMAIN) for r in range(self.table.rowCount()))
+            if isinstance(w, QtWidgets.QComboBox)), default=0)
+        if need > self.table.columnWidth(_COL_DOMAIN):
+            self.table.setColumnWidth(_COL_DOMAIN, need)
 
     def _apply_role_lock(self, dom_combo, role_cell):
         """superadmin belongs to the Tailscale root domain (spec 5): force + lock
@@ -209,7 +263,8 @@ class UsersPage(QtWidgets.QWizardPage):
         role_cell = RoleCell(
             roles, on_change=lambda: self._apply_role_lock(dom_combo, role_cell))
         self.table.setCellWidget(r, _COL_ROLE, role_cell)
-        dom_combo.currentTextChanged.connect(lambda _t: self._update_warning())
+        dom_combo.currentTextChanged.connect(
+            lambda _t: (self._sync_domain_tooltip(dom_combo), self._update_warning()))
         self.table.setItem(r, _COL_EMAIL, QtWidgets.QTableWidgetItem(email))
         # per-user first-login registration method ("" -> the 'derive' default)
         reg_combo = QtWidgets.QComboBox()
@@ -218,6 +273,7 @@ class UsersPage(QtWidgets.QWizardPage):
         self.table.setCellWidget(r, _COL_REG, reg_combo)
         self.table.resizeColumnToContents(_COL_ROLE)
         self._apply_role_lock(dom_combo, role_cell)
+        self._fit_domain_column()
 
     def _remove(self):
         for idx in sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True):
@@ -225,11 +281,15 @@ class UsersPage(QtWidgets.QWizardPage):
         self._update_warning()
 
     def _update_warning(self):
-        undef = []
+        # each undefined domain ONCE, in row order: thirty rows on one domain are one
+        # thing to define, not thirty.
+        undef: list[str] = []
         for r in range(self.table.rowCount()):
             dom = self.table.cellWidget(r, _COL_DOMAIN)
             if isinstance(dom, QtWidgets.QComboBox) and dom.currentText().endswith(_UNDEFINED):
-                undef.append(self._raw_domain(dom.currentText()))
+                name = self._raw_domain(dom.currentText())
+                if name not in undef:
+                    undef.append(name)
         if undef:
             self.warn.setText(
                 "Domain(s) not defined on the Domains page: " + ", ".join(undef) +
@@ -278,6 +338,7 @@ class UsersPage(QtWidgets.QWizardPage):
                     self._fill_domain_combo(dom, self._raw_domain(dom.currentText()))
                     if isinstance(role_cell, RoleCell):
                         self._apply_role_lock(dom, role_cell)
+            self._fit_domain_column()
         self._update_warning()
 
     def forget_rows(self) -> None:
