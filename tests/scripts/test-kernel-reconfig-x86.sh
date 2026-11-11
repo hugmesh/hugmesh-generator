@@ -192,6 +192,18 @@ echo "-- 5) no terminal / not root --"
 mkbr "${W}"
 out="$(bash "${KRC}" edit --build-root "${W}/wl-pki.x86" </dev/null 2>&1)"; rc=$?
 [ "${rc}" -eq 3 ] && grep -q 'menuconfig needs an interactive terminal' <<<"${out}" && ok "edit without a terminal refuses (never hangs a pipe on ncurses)" || bad "edit without tty: rc=${rc} ${out}"
+# mid-build (the image's build lock is held): edit must not mount anything, and with no
+# static /dev/null in the build system it refuses rather than mounting
+mkbr "${W}"
+( flock 9; sleep 5 ) 9>>"${W}/wl-pki.x86.lock" & lockpid=$!; sleep 0.5
+out="$(run_lib "${W}" 'krc_edit_mode; echo "MODE=${KRC_EDIT_MODE}"')"; rc=$?
+kill "${lockpid}" 2>/dev/null; wait "${lockpid}" 2>/dev/null
+[ "${rc}" -eq 3 ] && grep -q 'menuconfig can open once this image.s build has finished' <<<"${out}" \
+    && ok "mid-build with no static /dev/null: edit refuses instead of mounting into a live build" || bad "mid-build edit mode: rc=${rc} ${out}"
+out="$(run_lib "${W}" 'krc_edit_mode; echo "MODE=${KRC_EDIT_MODE}"')"
+[ "${out}" = MODE=after-build ] && ok "no build holds the lock: edit runs after-build (mounts allowed)" || bad "after-build edit mode: ${out}"
+grep -q 'KCONFIG_CONFIG=/usr/src/.hm-kreconf/.config' "${KRC}" && ! grep -q '/var/tmp/hm-kreconf' "${KRC}" \
+    && ok "the menuconfig copy is staged under /usr/src (the clean step empties /var/tmp; artifacts exclude ./usr/src)" || bad "menuconfig staging is not under /usr/src"
 if [ "$(id -u)" != 0 ]; then
     bash "${KRC}" set --build-root "${W}/wl-pki.x86" -- --enable X >/dev/null 2>&1
     out="$(bash "${KRC}" apply --build-root "${W}/wl-pki.x86" 2>&1)"; rc=$?

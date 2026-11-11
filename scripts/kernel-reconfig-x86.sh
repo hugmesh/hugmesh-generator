@@ -228,19 +228,39 @@ krc_status() {
 }
 
 # ── edit / set / diff / discard ─────────────────────────────────────────────────
+# krc_edit_mode — sets KRC_EDIT_MODE: "after-build", or "mid-build" while the image's build still holds its
+# lock. Mid-build, edit mounts NOTHING inside the build system: the builder asserts that
+# nothing is mounted there before its SELinux labelling (slx_label_tree) and its clean,
+# and an operator sitting in menuconfig at that moment would fail the build. Kconfig
+# only needs /dev/null and a tty, which the sysroot's static /dev provides; without
+# them mid-build editing refuses instead of mounting.
+krc_edit_mode() {
+    local fd
+    exec {fd}>>"${BR}.lock"
+    if flock -n "${fd}"; then exec {fd}>&-; KRC_EDIT_MODE=after-build; return 0; fi
+    exec {fd}>&-
+    [ -c "${SYSROOT}/dev/null" ] \
+        || krc_refuse "menuconfig can open once this image's build has finished: its build system has no static /dev/null to run in while it is being built."
+    KRC_EDIT_MODE=mid-build
+}
 krc_edit() {
     krc_prepare
     [ -t 0 ] && [ -t 1 ] \
         || krc_refuse "menuconfig needs an interactive terminal — open it from the Studio's \"Kernel config…\" button (it opens a terminal window), or use 'set' for a scripted change."
-    local stage="${SYSROOT}/var/tmp/hm-kreconf"
+    krc_edit_mode                       # sets KRC_EDIT_MODE (in THIS shell: a refusal must reach the terminal)
+    local mode="${KRC_EDIT_MODE}"
+    # Staged under /usr/src, NOT /var/tmp: the builder's clean step empties /var/tmp —
+    # the very step that starts when the Build kernel stage (and this button) turns
+    # ready — and every artifact excludes ./usr/src, so the copy can never ship.
+    local stage="${SYSROOT}/usr/src/.hm-kreconf"
     rm -rf "${stage}"; mkdir -p "${stage}"
     cp -f "$(krc_base_config)" "${stage}/.config"
     trap 'krc_umount; rm -rf "${stage}"' EXIT
-    krc_mount
-    say "menuconfig on a COPY of ${KCFG} (the build's own .config is not touched); save and exit to keep the change"
+    [ "${mode}" = after-build ] && krc_mount
+    say "menuconfig on a COPY of ${KCFG} (the build's own .config is not touched; ${mode}); save and exit to keep the change"
     # KCONFIG_CONFIG points mconf at the staged copy: the tree's live .config — the one
-    # the build compiled — never changes here, so this is safe even mid-build.
-    krc_chroot make -C "/usr/src/linux" KCONFIG_CONFIG=/var/tmp/hm-kreconf/.config menuconfig \
+    # the build compiled — never changes here.
+    krc_chroot make -C "/usr/src/linux" KCONFIG_CONFIG=/usr/src/.hm-kreconf/.config menuconfig \
         || krc_fail "menuconfig did not run (it needs gcc and the ncurses headers inside the build system)"
     cp -f "${stage}/.config" "${PEND}/config.after"; chmod 0644 "${PEND}/config.after"
     krc_umount; rm -rf "${stage}"; trap - EXIT
