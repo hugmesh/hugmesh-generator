@@ -372,12 +372,28 @@ def _docker_verb(t: KernelTarget, ctx: RunContext, verb: str, *, interactive: bo
     term = ["-e", "TERM=" + os.environ.get("TERM", "xterm-256color")] if interactive else []
     if ctx.container and verb == "edit":
         return ["docker", "exec", *(["-it"] if interactive else []), *term, ctx.container, *inner]
+    # The shared asset root rides along READ-ONLY at /shared, exactly where the build saw
+    # it: the build's clean step stripped the static libraries, and the script overlays
+    # them from the stage3 seed cached there (scripts/kernel-reconfig-x86.sh,
+    # krc_statics_prepare).
+    from .build_driver import shared_assets_root
+    shared = shared_assets_root(t.workdir)
+    seed_mount = ["-v", f"{hp(shared)}:/shared:ro"] if os.path.isdir(shared) else []
     return ["docker", "run", *(["-it"] if interactive else []), "--rm", "--privileged",
             *(["--name", ctx.run_container_name] if ctx.run_container_name else []),
             *term,
             "-v", f"{hp(ctx.generator_dir)}:/src",
             "-v", f"{hp(t.workdir)}:/out",
+            *seed_mount,
             "-w", "/src", ctx.builder_image, *inner]
+
+
+def _native_seed_args(t: KernelTarget) -> list[str]:
+    """Natively the script finds the seed beside the session itself; say it explicitly
+    when the session uses the Studio layout, so a moved out dir still works."""
+    from .build_driver import shared_assets_root
+    seeds = os.path.join(shared_assets_root(t.workdir), "seed", "amd64")
+    return ["--seed-dir", seeds] if os.path.isdir(seeds) else []
 
 
 def edit_argv(t: KernelTarget, ctx: RunContext) -> list[str]:
@@ -385,7 +401,8 @@ def edit_argv(t: KernelTarget, ctx: RunContext) -> list[str]:
     prompts on THAT terminal, which is exactly where a password belongs."""
     if ctx.backend == "docker":
         return _docker_verb(t, ctx, "edit", interactive=True)
-    return ["sudo", "bash", _script(ctx), "edit", "--build-root", t.build_root]
+    return ["sudo", "bash", _script(ctx), "edit", "--build-root", t.build_root,
+            *_native_seed_args(t)]
 
 
 def verb_argv(t: KernelTarget, ctx: RunContext, verb: str,
@@ -395,7 +412,8 @@ def verb_argv(t: KernelTarget, ctx: RunContext, verb: str,
     runs a named container the driver's cancel() can kill."""
     if ctx.backend == "docker":
         return _docker_verb(t, ctx, verb, interactive=False, extra=extra)
-    return [*ctx.elevation, "bash", _script(ctx), verb, "--build-root", t.build_root, *(extra or [])]
+    return [*ctx.elevation, "bash", _script(ctx), verb, "--build-root", t.build_root,
+            *_native_seed_args(t), *(extra or [])]
 
 
 def apply_argv(t: KernelTarget, ctx: RunContext) -> list[str]:

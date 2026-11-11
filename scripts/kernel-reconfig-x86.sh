@@ -23,6 +23,9 @@
 #   --work-dir DIR   the session work dir holding the artifacts (default: the parent
 #                    of --build-root).
 #   --jobs N         make -j for the kernel compile (default: the build's own JOBS).
+#   --seed-dir DIR   where the build's stage3 seed is, when the clean step stripped the
+#                    build system's static libraries (default: /shared/seed/amd64, then
+#                    <out>/shared/seed/amd64 beside the session).
 #
 # Runs as ROOT, natively (sudo) or inside the builder container (the Studio mounts
 # the generator at /src and the session at /out, exactly as for the build). It is
@@ -67,7 +70,7 @@ krc_refuse() { printf '%s REFUSED: %s\n' "${KRC_TAG}" "$*"; exit 3; }
 krc_fail()   { printf '%s FAILED: %s\n' "${KRC_TAG}" "$*" >&2; exit 1; }
 
 # ── arguments ───────────────────────────────────────────────────────────────────
-VERB=""; BR=""; WD=""; JOBS_OVERRIDE=""; SET_ARGS=()
+VERB=""; BR=""; WD=""; JOBS_OVERRIDE=""; SET_ARGS=(); KRC_SEED_DIR="${KRC_SEED_DIR:-}"
 krc_usage() { printf 'usage: %s <status|edit|set|diff|discard|apply> --build-root DIR [--work-dir DIR] [--jobs N] [-- scripts/config args]\n' "$0" >&2; exit 2; }
 krc_args() {
     VERB="${1:-}"; [ $# -gt 0 ] && shift
@@ -76,6 +79,7 @@ krc_args() {
             --build-root) BR="${2:?--build-root needs a path}"; shift 2 ;;
             --work-dir)   WD="${2:?--work-dir needs a path}"; shift 2 ;;
             --jobs)       JOBS_OVERRIDE="${2:?--jobs needs a number}"; shift 2 ;;
+            --seed-dir)   KRC_SEED_DIR="${2:?--seed-dir needs a path}"; shift 2 ;;
             --) shift; SET_ARGS=("$@"); break ;;
             *) krc_usage ;;
         esac
@@ -187,29 +191,66 @@ krc_config_diff() {
         }' "$1" "$2" | LC_ALL=C sort
 }
 
-# ── chroot mounts: only what this run mounted is unmounted ──────────────────────
-KRC_MOUNTED=()
-krc_mount() {
-    local m
-    for m in proc sys dev; do
-        mountpoint -q "${SYSROOT}/${m}" && continue
-        case "${m}" in
-            proc) mount -t proc none "${SYSROOT}/proc" ;;
-            *)    mount --rbind "/${m}" "${SYSROOT}/${m}"; mount --make-rslave "${SYSROOT}/${m}" ;;
-        esac
-        KRC_MOUNTED+=("${m}")
-    done
+# ── the build system, entered in a PRIVATE mount namespace ─────────────────────
+# Every command runs as `unshare --mount --propagation private` + chroot, with /dev,
+# /proc and /sys bound INSIDE that namespace only. Three things this buys, all measured
+# on the real 2026-11-11 run:
+#   * nothing is ever mounted in the namespace the builder (or the host) sees: the
+#     builder asserts its build system has no mounts before the SELinux labelling and
+#     the clean, so an operator sitting in menuconfig mid-build cannot fail the build,
+#     and a crashed run leaves no stale mount behind (the namespace dies with it);
+#   * the sysroot's own /dev nodes are useless on a nodev filesystem (this operator's
+#     eCryptfs home: "/dev/null: Permission denied"), so a bind is required anyway;
+#   * the clean step strips every static archive (no libgcc.a, no libc_nonshared.a),
+#     so mconf and the kernel's host tools cannot link. krc_statics_prepare extracts
+#     those archives from the stage3 seed the build system came from, and they are
+#     overlaid read-only onto usr/lib64 and usr/lib/gcc in the private namespace only —
+#     the build system on disk never gains a file, so no artifact can carry one.
+KRC_STATICS=""
+# krc_seed_dirs — where the build's stage3 seed can be: the builder container's
+# /shared, the Studio layout (<out>/sessions/<id> next to <out>/shared), --seed-dir.
+krc_seed_dirs() {
+    printf '%s\n' ${KRC_SEED_DIR:+"${KRC_SEED_DIR}"} /shared/seed/amd64 \
+        "$(dirname "$(dirname "${WD}")")/shared/seed/amd64" "${WD}/shared/seed/amd64"
 }
-krc_umount() {
-    local i m
-    for (( i=${#KRC_MOUNTED[@]}-1; i>=0; i-- )); do
-        m="${KRC_MOUNTED[i]}"
-        umount -R "${SYSROOT}/${m}" 2>/dev/null || umount -l "${SYSROOT}/${m}" 2>/dev/null || true
-    done
-    KRC_MOUNTED=()
+krc_statics_prepare() {
+    [ -n "${KRC_STATICS}" ] && return 0
+    hmr_statics_missing "${SYSROOT}" || return 0
+    local name d seed=""
+    name="$(hmr_seed_marker_read "${BR}" 2>/dev/null || true)"
+    [ -n "${name}" ] || krc_refuse "The build system's static libraries were stripped by its clean step and it does not record which stage3 seed it came from — rebuild the image."
+    while IFS= read -r d; do
+        [ -n "${d}" ] && [ -f "${d}/${name}" ] && { seed="${d}/${name}"; break; }
+    done < <(krc_seed_dirs)
+    [ -n "${seed}" ] || krc_refuse "The build system's static libraries were stripped by its clean step and the seed it came from (${name}) is not in any seed folder ($(krc_seed_dirs | tr '\n' ' ')) — rebuild the image."
+    KRC_STATICS="$(mktemp -d "${TMPDIR:-/tmp}/hm-kreconf-statics.XXXXXX")"
+    tar -xJf "${seed}" -C "${KRC_STATICS}" --wildcards './usr/lib64/*.a' './usr/lib/gcc/*' 2>/dev/null \
+        || { rm -rf "${KRC_STATICS}"; KRC_STATICS=""; krc_refuse "Could not read the static libraries out of ${seed} — rebuild the image."; }
+    info "Toolchain static archives overlaid from ${name} (private to this run; the build system on disk is unchanged)"
 }
-krc_chroot() { chroot "${SYSROOT}" /usr/bin/env -i HOME=/root TERM="${TERM:-xterm}" LANG=C.UTF-8 \
-                   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "$@"; }
+krc_statics_cleanup() { [ -n "${KRC_STATICS}" ] && rm -rf "${KRC_STATICS}"; KRC_STATICS=""; return 0; }
+krc_chroot() {
+    SYSROOT="${SYSROOT}" KRC_STATICS="${KRC_STATICS}" KTERM="${TERM:-xterm}" \
+    unshare --mount --propagation private /bin/bash -c '
+        set -e
+        mount --rbind /dev "${SYSROOT}/dev"
+        mount -t proc none "${SYSROOT}/proc"
+        mount --rbind /sys "${SYSROOT}/sys"
+        if [ -n "${KRC_STATICS}" ]; then
+            for d in usr/lib64 usr/lib/gcc; do
+                [ -d "${KRC_STATICS}/${d}" ] || continue
+                mount -t overlay overlay -o "lowerdir=${KRC_STATICS}/${d}:${SYSROOT}/${d}" "${SYSROOT}/${d}"
+            done
+        fi
+        exec chroot "${SYSROOT}" /usr/bin/env -i HOME=/root TERM="${KTERM}" LANG=C.UTF-8 \
+            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "$@"
+    ' krc-chroot "$@"
+}
+# krc_link_check — can the build system link a C program (the mconf / host-tool path)?
+krc_link_check() {
+    krc_chroot /bin/bash -c 'd="$(mktemp -d /usr/src/.hm-link.XXXXXX)"; trap "rm -rf \"$d\"" EXIT
+        printf "int main(void){return 0;}\n" > "$d/t.c"; gcc -o "$d/t" "$d/t.c" -lpthread -ldl' >/dev/null 2>&1
+}
 
 # ── status ──────────────────────────────────────────────────────────────────────
 krc_status() {
@@ -228,42 +269,31 @@ krc_status() {
 }
 
 # ── edit / set / diff / discard ─────────────────────────────────────────────────
-# krc_edit_mode — sets KRC_EDIT_MODE: "after-build", or "mid-build" while the image's build still holds its
-# lock. Mid-build, edit mounts NOTHING inside the build system: the builder asserts that
-# nothing is mounted there before its SELinux labelling (slx_label_tree) and its clean,
-# and an operator sitting in menuconfig at that moment would fail the build. Kconfig
-# only needs /dev/null and a tty, which the sysroot's static /dev provides; without
-# them mid-build editing refuses instead of mounting.
-krc_edit_mode() {
-    local fd
-    exec {fd}>>"${BR}.lock"
-    if flock -n "${fd}"; then exec {fd}>&-; KRC_EDIT_MODE=after-build; return 0; fi
-    exec {fd}>&-
-    [ -c "${SYSROOT}/dev/null" ] \
-        || krc_refuse "menuconfig can open once this image's build has finished: its build system has no static /dev/null to run in while it is being built."
-    KRC_EDIT_MODE=mid-build
-}
 krc_edit() {
     krc_prepare
     [ -t 0 ] && [ -t 1 ] \
         || krc_refuse "menuconfig needs an interactive terminal — open it from the Studio's \"Kernel config…\" button (it opens a terminal window), or use 'set' for a scripted change."
-    krc_edit_mode                       # sets KRC_EDIT_MODE (in THIS shell: a refusal must reach the terminal)
-    local mode="${KRC_EDIT_MODE}"
     # Staged under /usr/src, NOT /var/tmp: the builder's clean step empties /var/tmp —
     # the very step that starts when the Build kernel stage (and this button) turns
     # ready — and every artifact excludes ./usr/src, so the copy can never ship.
     local stage="${SYSROOT}/usr/src/.hm-kreconf"
     rm -rf "${stage}"; mkdir -p "${stage}"
     cp -f "$(krc_base_config)" "${stage}/.config"
-    trap 'krc_umount; rm -rf "${stage}"' EXIT
-    [ "${mode}" = after-build ] && krc_mount
-    say "menuconfig on a COPY of ${KCFG} (the build's own .config is not touched; ${mode}); save and exit to keep the change"
+    trap 'krc_statics_cleanup; rm -rf "${stage}"' EXIT
+    krc_statics_prepare
+    # mconf-cfg.sh caches its ncurses flags in mconf-cflags / mconf-libs and nothing
+    # regenerates them. An attempt that ran without /proc (pkg-config segfaults there)
+    # cached a bare -lncursesw, and every later link failed on libtinfow ("DSO missing
+    # from command line"). Until mconf has linked once, recompute them.
+    [ -x "${KTREE}/scripts/kconfig/mconf" ] \
+        || rm -f "${KTREE}/scripts/kconfig/mconf-cflags" "${KTREE}/scripts/kconfig/mconf-libs" "${KTREE}/scripts/kconfig/mconf-bin"
+    say "menuconfig on a COPY of ${KCFG} (the build's own .config is not touched); save and exit to keep the change"
     # KCONFIG_CONFIG points mconf at the staged copy: the tree's live .config — the one
     # the build compiled — never changes here.
     krc_chroot make -C "/usr/src/linux" KCONFIG_CONFIG=/usr/src/.hm-kreconf/.config menuconfig \
-        || krc_fail "menuconfig did not run (it needs gcc and the ncurses headers inside the build system)"
+        || krc_fail "menuconfig did not run inside the build system (see above)"
     cp -f "${stage}/.config" "${PEND}/config.after"; chmod 0644 "${PEND}/config.after"
-    krc_umount; rm -rf "${stage}"; trap - EXIT
+    krc_statics_cleanup; rm -rf "${stage}"; trap - EXIT
     krc_diff_verb
 }
 krc_set() {
@@ -379,12 +409,10 @@ krc_kernel_rebuild() {
     banner "Building hardened kernel (reconfigured: menuconfig)"
     OLD_KVER="${KVER_NOW}"
     [ -f "${tree_cfg}" ] && cp -f "${tree_cfg}" "${PEND}/config.tree-before"
-    hmr_statics_missing "${SYSROOT}" \
-        && krc_refuse "The build system's toolchain static libraries were stripped (an older clean step), so the kernel's host tools cannot link — rebuild the image."
-    krc_mount
-    trap 'krc_umount' EXIT
-    hmr_link_check_chroot "${SYSROOT}" \
-        || krc_refuse "The build system cannot link a C program (see above), so the kernel cannot be rebuilt in it — rebuild the image."
+    trap 'krc_statics_cleanup' EXIT
+    krc_statics_prepare
+    krc_link_check \
+        || krc_refuse "The build system cannot link a C program, so the kernel cannot be rebuilt in it — rebuild the image."
     cp -f "${PEND}/config.after" "${tree_cfg}"
     krc_chroot make -C /usr/src/linux olddefconfig >/dev/null \
         || { cp -f "${PEND}/config.before" "${tree_cfg}"; krc_refuse "make olddefconfig rejected the edited kernel config — nothing was rebuilt."; }
@@ -422,7 +450,7 @@ krc_kernel_rebuild() {
         krc_live_initramfs "${NEW_KVER}" || krc_fail "the live initramfs (dracut dmsquash-live) failed"
     fi
     rm -f "${SYSROOT}/tmp/hm-x86-kernel-asserts.sh" "${SYSROOT}/tmp/hm-x86-kernel-install.sh"
-    krc_umount; trap - EXIT
+    krc_statics_cleanup; trap - EXIT
     # The kept config follows the new release.
     rm -f "${KDIR}"/config-*
     cp -f "${PEND}/config.applied" "${KDIR}/config-${NEW_KVER}"

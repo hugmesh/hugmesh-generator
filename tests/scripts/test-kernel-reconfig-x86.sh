@@ -192,16 +192,24 @@ echo "-- 5) no terminal / not root --"
 mkbr "${W}"
 out="$(bash "${KRC}" edit --build-root "${W}/wl-pki.x86" </dev/null 2>&1)"; rc=$?
 [ "${rc}" -eq 3 ] && grep -q 'menuconfig needs an interactive terminal' <<<"${out}" && ok "edit without a terminal refuses (never hangs a pipe on ncurses)" || bad "edit without tty: rc=${rc} ${out}"
-# mid-build (the image's build lock is held): edit must not mount anything, and with no
-# static /dev/null in the build system it refuses rather than mounting
+# Every chroot command runs in a PRIVATE mount namespace: no mount, umount or
+# make-rslave outside krc_chroot's unshare'd body, so nothing is ever mounted where the
+# builder (mid-build) or the host can see it.
+outside="$(awk '/^krc_chroot\(\) \{/{f=1} f&&/^}/{f=0; next} !f' "${KRC}" | grep -vE '^[[:space:]]*#' | grep -E '(^|[^a-z_])(mount|umount)[[:space:]]+-' || true)"
+inside="$(awk '/^krc_chroot\(\) \{/{f=1} f{print} f&&/^}/{exit}' "${KRC}")"
+[ -z "${outside}" ] && grep -q 'unshare --mount --propagation private' <<<"${inside}" && grep -q 'mount --rbind /dev' <<<"${inside}" \
+    && ok "the build system is entered only through a private mount namespace (nothing mounted where the builder can see it)" \
+    || bad "a mount happens outside krc_chroot's private namespace: ${outside}"
+grep -q 'lowerdir=${KRC_STATICS}' <<<"${inside}" && grep -q "tar -xJf \"\${seed}\" -C \"\${KRC_STATICS}\"" "${KRC}" \
+    && ok "stripped static libraries come from the seed as a private read-only overlay (never written into the build system)" \
+    || bad "static libraries are not overlaid privately from the seed"
+# no seed recorded -> refusal, never a silent link failure
 mkbr "${W}"
-( flock 9; sleep 5 ) 9>>"${W}/wl-pki.x86.lock" & lockpid=$!; sleep 0.5
-out="$(run_lib "${W}" 'krc_edit_mode; echo "MODE=${KRC_EDIT_MODE}"')"; rc=$?
-kill "${lockpid}" 2>/dev/null; wait "${lockpid}" 2>/dev/null
-[ "${rc}" -eq 3 ] && grep -q 'menuconfig can open once this image.s build has finished' <<<"${out}" \
-    && ok "mid-build with no static /dev/null: edit refuses instead of mounting into a live build" || bad "mid-build edit mode: rc=${rc} ${out}"
-out="$(run_lib "${W}" 'krc_edit_mode; echo "MODE=${KRC_EDIT_MODE}"')"
-[ "${out}" = MODE=after-build ] && ok "no build holds the lock: edit runs after-build (mounts allowed)" || bad "after-build edit mode: ${out}"
+out="$(run_lib "${W}" 'hmr_statics_missing() { return 0; }; krc_statics_prepare')"; rc=$?
+[ "${rc}" -eq 3 ] && grep -q 'does not record which stage3 seed' <<<"${out}" && ok "stripped statics with no seed marker -> refusal" || bad "statics/no marker: rc=${rc} ${out}"
+printf '%s\n' stage3-amd64-x.tar.xz > "${W}/wl-pki.x86/sysroot.seed"
+out="$(run_lib "${W}" 'hmr_statics_missing() { return 0; }; krc_statics_prepare')"; rc=$?
+[ "${rc}" -eq 3 ] && grep -q 'stage3-amd64-x.tar.xz) is not in any seed folder' <<<"${out}" && ok "stripped statics with the seed gone -> refusal naming it" || bad "statics/no seed: rc=${rc} ${out}"
 grep -q 'KCONFIG_CONFIG=/usr/src/.hm-kreconf/.config' "${KRC}" && ! grep -q '/var/tmp/hm-kreconf' "${KRC}" \
     && ok "the menuconfig copy is staged under /usr/src (the clean step empties /var/tmp; artifacts exclude ./usr/src)" || bad "menuconfig staging is not under /usr/src"
 if [ "$(id -u)" != 0 ]; then
@@ -261,8 +269,7 @@ echo "-- 7) kernel rebuild (chroot stubbed; the REAL asserts run) --"
 # The stub chroot runs the asserts script for real against the fixture tree and fakes
 # only the compile: kernelrelease = version + the tree's CONFIG_LOCALVERSION.
 STUBS='
-krc_mount() { :; }; krc_umount() { :; }
-hmr_statics_missing() { return 1; }; hmr_link_check_chroot() { return 0; }
+hmr_statics_missing() { return 1; }; krc_link_check() { return 0; }
 krc_chroot() {
     case "$*" in
         *olddefconfig*) return 0 ;;

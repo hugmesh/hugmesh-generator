@@ -162,6 +162,19 @@ def test_edit_argv_docker_after_the_build(tmp_path):
     assert a[a.index("-w") + 1] == "/src" and "hugmesh-builder" in a
 
 
+def test_docker_mounts_the_shared_seed_read_only(tmp_path):
+    """The clean step strips static libraries; the script overlays them from the stage3
+    seed in the shared asset root, so the container must see it — read-only."""
+    s = make_session(str(tmp_path))
+    shared = os.path.join(str(tmp_path), "out", "shared")
+    os.makedirs(os.path.join(shared, "seed", "amd64"))
+    t = kr.locate(s)
+    a = kr.edit_argv(t, _ctx())
+    assert f"{shared}:/shared:ro" in a
+    n = kr.apply_argv(t, _ctx(backend="native"))
+    assert n[n.index("--seed-dir") + 1] == os.path.join(shared, "seed", "amd64")
+
+
 def test_edit_argv_docker_mid_build_goes_into_the_live_container(tmp_path):
     t = kr.locate(make_session(str(tmp_path)))
     a = kr.edit_argv(t, _ctx(container="sd-build-live"))

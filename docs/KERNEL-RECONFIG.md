@@ -23,9 +23,12 @@ session at `/out`, exactly as for the build).
 1. **edit** (the button, or `--kernel-config`) runs `make menuconfig` inside the build
    system (a chroot), on a **copy** of the build's final `.config`. The build's own
    `.config` is never touched, so you can open it while the image is still being packed.
-   In that case it mounts nothing inside the build system: the builder refuses to label
-   or clean a build system that has something mounted in it. Saving writes
-   `<build-root>/kernel-reconfig/pending/config.after`.
+   Every chroot command runs in a private mount namespace, with `/dev`, `/proc` and
+   `/sys` bound only inside it. Nothing is ever mounted where the builder looks: it
+   refuses to label or clean a build system with a mount in it. The clean step strips
+   the build system's static libraries, so the ones from the stage3 seed it came from
+   are overlaid read-only in that private namespace. The build system on disk never
+   gains a file. Saving writes `<build-root>/kernel-reconfig/pending/config.after`.
 2. The Studio diffs `config.before` against `config.after` and shows the result
    (`CONFIG_LOCALVERSION: "" -> "-hmtest"`).
 3. **apply** (the rebuild button, or `--kernel-config-apply`):
