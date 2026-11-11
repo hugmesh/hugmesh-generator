@@ -433,9 +433,22 @@ class _DomainsGrid(QtWidgets.QTableWidget):
         """The width at which ``column``'s header is drawn whole."""
         return self.horizontalHeader().sectionSizeHint(column) + _FIT_PAD
 
+    def cell_margin(self) -> int:
+        """How much narrower than its cell the view draws a cell WIDGET: the style's
+        item-text margins, which ``QStyledItemDelegate.updateEditorGeometry`` takes
+        off both sides (none in Fusion, 3 px a side in Breeze). The grid line is
+        already in ``sizeHintForColumn``."""
+        opt = QtWidgets.QStyleOptionViewItem()
+        self.initViewItemOption(opt)
+        opt.rect = QtCore.QRect(0, 0, 1000, 30)
+        text = self.style().subElementRect(
+            QtWidgets.QStyle.SubElement.SE_ItemViewItemText, opt, self)
+        return max(0, opt.rect.width() - text.width())
+
     def column_need(self, column: int) -> int:
         """The width at which ``column``'s header and every cell are drawn whole."""
-        return max(self.header_need(column), self.sizeHintForColumn(column) + _FIT_PAD)
+        return max(self.header_need(column),
+                   self.sizeHintForColumn(column) + self.cell_margin() + _FIT_PAD)
 
     def _floor(self, column: int) -> int:
         if column == _COL_TITLE:

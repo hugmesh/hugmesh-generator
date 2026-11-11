@@ -28,7 +28,7 @@ from hugmesh_studio.gui.pages import domains as gui_domains            # noqa: E
 from hugmesh_studio.gui.pages import localcloud_nodes as gui_lc        # noqa: E402
 from hugmesh_studio.gui.pages import vault as gui_vault                # noqa: E402
 from hugmesh_studio.gui.pages import welcome as gui_welcome            # noqa: E402
-from hugmesh_studio.gui.qt import Qt, QtWidgets                        # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtCore, QtWidgets                # noqa: E402
 from hugmesh_studio.tui import domains_step, journey, themes           # noqa: E402
 from hugmesh_studio.tui import e2e as tui_e2e                          # noqa: E402
 from hugmesh_studio.tui import localcloud as tui_lc                    # noqa: E402
@@ -520,6 +520,44 @@ def test_the_domains_table_draws_the_own_row_whole_and_fits_its_columns(
     finally:
         wiz.close()
         wiz.deleteLater()
+
+
+#: The installed styles among the ones the layout suites measure. One that is not
+#: installed here is not a case — never a skip.
+_FIT_STYLES = [s for s in ("Fusion", "Windows", "Breeze", "Oxygen")
+               if s in QtWidgets.QStyleFactory.keys()]
+
+
+@pytest.mark.parametrize("style_name", _FIT_STYLES)
+def test_the_fit_gives_a_cell_widget_its_whole_width_in_every_style(qapp, style_name):
+    """The view draws a cell WIDGET inside the style's item-text margins (Breeze: 3 px a
+    side), so a column fitted to the widget's size hint alone left Breeze's org cell
+    2 px short of it and its Sign-in label elided with room to spare. The style is set
+    on the widget tree, never on the application (see test_fleet_window_layout.py)."""
+    style = QtWidgets.QStyleFactory.create(style_name)
+    host = gui_domains.DomainsTableWidget(cfg=None)
+    try:
+        host.fill([], "mesh.example")                  # the own row alone
+        for w in [host, *host.findChildren(QtWidgets.QWidget)]:
+            w.setStyle(style)
+        host.resize(1200, 300)
+        host.show()
+        for _ in range(20):
+            qapp.processEvents()
+        table = host.table
+        assert host.is_own_row(0)
+        for c in (gui_domains._COL_IDP, gui_domains._COL_ORG):
+            cell = table.cellWidget(0, c)
+            assert cell.isVisible() and cell.width() >= cell.sizeHint().width(), \
+                (style_name, c, cell.width(), cell.sizeHint().width())
+        label = table.cellWidget(0, gui_domains._COL_IDP)
+        assert label.text() == label.full_text(), (style_name, label.text())
+    finally:
+        host.close()
+        host.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        qapp.processEvents()
+    del style                                          # after the table is gone
 
 
 @pytest.mark.parametrize("cfg", [
