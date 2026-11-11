@@ -287,7 +287,7 @@ Every go-live verb (`status`, `list`, `plan`, `commit`, `rollback`) runs against
 
 | Target | What it is | When it is offered |
 | --- | --- | --- |
-| **This host** (LOCAL) | The Studio host is itself the node. This is the wizard's behaviour before this section. | Always offered. `commit` is refused unless `/etc/hugmesh/release-state` exists **and** `command -v hugmesh-firewall-reconcile` finds the reconcile agent. Without them the GUI picker still offers the row, because `status` and `plan` preview anywhere. The Flip step then refuses the commit inline with *this host is not a HugMesh node — pick a device*, and **GO LIVE** stays grey. The TUI's target line says the same, and the CLI's `targets` prints that sentence in the row's status column. |
+| **This host** (LOCAL) | The Studio host is itself the node. This is the wizard's behaviour before this section. | Always offered. `commit` is refused unless `/etc/hugmesh/release-state` exists **and** `command -v hugmesh-firewall-reconcile` finds the reconcile agent. Without them the GUI picker still offers the row, because `status` and `plan` preview anywhere; the note under the picker says commit is refused, and why. The Flip step then refuses the commit inline with *this host is not a HugMesh node — pick a device*, and **GO LIVE** stays grey. The TUI's target line says the same, and the CLI's `targets` prints that sentence in the row's status column. |
 | **Emulated** | A running keep-alive device record: `qemu_devices.discover_devices(<work>)` for the docker lane, `qemu_windows.running(<work>)` for WHPX. | One row per running emulated **server** device. The mesh's front-door row is preselected. |
 | **Remote** (later) | Any ssh-reachable node, through the same code. | Not built yet. |
 
