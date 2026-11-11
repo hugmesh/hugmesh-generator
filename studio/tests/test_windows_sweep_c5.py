@@ -31,6 +31,19 @@ def _isolated_state_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
+@pytest.fixture(scope="session")
+def qapp():
+    """The QApplication for the two Sessions-page tests, HELD for the session. They used
+    to evaluate ``QApplication.instance() or QApplication([...])`` and drop the result:
+    under PyQt6 the application is destroyed on the spot, the next QWidget aborts the
+    interpreter, and this file run alone died (PySide6 keeps an extra reference, which is
+    why the Windows job never showed it). Skips where there is no Qt binding."""
+    pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding installed")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from hugmesh_studio.gui.qt import QtWidgets
+    return QtWidgets.QApplication.instance() or QtWidgets.QApplication(["c5"])
+
+
 def _finished_session(tmp_path):
     # a space and non-ASCII in the out dir, as under C:\Users\Jörg Müller\...
     out = tmp_path / "out dir Jörg"
@@ -214,12 +227,9 @@ def test_plain_tui_delete_refusal_says_the_tree_was_kept(tmp_path, monkeypatch):
     assert _KEPT in text and "active again" not in text
 
 
-def test_sessions_page_delete_refusal_is_shown(tmp_path, monkeypatch):
-    pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding installed")
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+def test_sessions_page_delete_refusal_is_shown(qapp, tmp_path, monkeypatch):
     from hugmesh_studio.gui.pages import sessions_widget as sw
     from hugmesh_studio.gui.qt import QtWidgets
-    QtWidgets.QApplication.instance() or QtWidgets.QApplication(["c5"])
     s = _kept_tree(tmp_path, monkeypatch)
     shown = []
     monkeypatch.setattr(QtWidgets.QMessageBox, "exec",
@@ -288,11 +298,8 @@ def test_non_object_image_rows_never_crash_the_tui():
     assert [r[-1] for r in rows] == ["unknown", "failed"]
 
 
-def test_non_object_image_rows_never_crash_the_sessions_page(tmp_path):
-    pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding installed")
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+def test_non_object_image_rows_never_crash_the_sessions_page(qapp, tmp_path):
     from hugmesh_studio.gui.pages import sessions_widget as sw
-    from hugmesh_studio.gui.qt import QtWidgets
     _write_record({"id": "20261030-020000-aaaaaa", "status": "failed",
                    "images": [1, {"id": "a", "status": "failed"}]})
     s = bs.find("20261030-020000-aaaaaa")
@@ -300,8 +307,6 @@ def test_non_object_image_rows_never_crash_the_sessions_page(tmp_path):
     assert r.images_text() == "0/2 ok"
     assert r.status_text().endswith("failed · 1 of 2 images")
     assert "[None] None" in sw._SessionDetailDialog._body(r)
-
-    QtWidgets.QApplication.instance() or QtWidgets.QApplication(["c5"])
 
     class _Wiz:
         class cfg:

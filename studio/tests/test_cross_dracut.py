@@ -20,6 +20,7 @@ Three layers, each with its own guard:
 import os
 import re
 import stat
+import subprocess
 
 import pytest
 
@@ -88,23 +89,104 @@ def test_binfmt_constants_match_the_shell_library():
     assert cross_dracut.DEFAULT_INTERP == interp.group(1)
 
 
+#: The flags of a plain ``--encrypt-root`` image build (installer / ISO medium, kernel
+#: built, not --packages-only), as the builders spell them. A preflight gate is
+#: evaluated against these, so it counts only if it fires on exactly such a build.
+_ENCRYPT_ROOT_BUILD = {"ENCRYPT_ROOT": "true", "BUILD_INSTALLER": "true",
+                       "BUILD_ISO": "true", "BUILD_LIVE": "false", "SKIP_KERNEL": "false",
+                       "IMAGE_ONLY": "false", "PACKAGES_ONLY": "false"}
+
+
+def _fail_fast_preflights(src: str) -> list:
+    """The gates of the builder's fail-FAST preflights: every top-level
+    ``if <gate>; then ... fi`` whose body holds ``if ! dracut_cross_preflight_ok; then``
+    with ``exit 1`` directly in that branch (not under a further ``if``).
+
+    The gate is whatever the builder chose. It used to be ``${ENCRYPT_ROOT} &&
+    ${BUILD_...}`` on every ARM builder; frite's now fires on every real build
+    (``! ${PACKAGES_ONLY}``: its sysroot is SELinux-labelled in the qemu chroot even
+    without --encrypt-root). The waf-family block that follows it does not count: its
+    preflight call is the top-level ``if`` itself and its ``exit 1`` sits under the
+    blocker check, so a missing qemu there only WARNs for a waf-free package set."""
+    gates = []
+    for blk in re.finditer(r"^if ([^\n]+?); then\n(.*?)^fi$", src, re.M | re.S):
+        inner = re.search(r"^(?P<ind>[ \t]+)if ! dracut_cross_preflight_ok; then\n"
+                          r"(?P<branch>.*?)^(?P=ind)fi$", blk.group(2), re.M | re.S)
+        if not inner:
+            continue
+        branch = [ln for ln in inner.group("branch").splitlines() if ln.strip()]
+        level = re.match(r"[ \t]*", branch[0]).group(0) if branch else ""
+        if any(ln == f"{level}exit 1" for ln in branch):
+            gates.append(blk.group(1))
+    return gates
+
+
+def _gate_fires(gate: str) -> tuple:
+    """(fired, stderr): run the gate in bash against :data:`_ENCRYPT_ROOT_BUILD` under
+    ``set -u``, so a gate on a variable this table does not set fails loudly instead of
+    reading as "does not fire"."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **_ENCRYPT_ROOT_BUILD}
+    proc = subprocess.run(
+        ["bash", "-c", f"set -u; if {gate}; then echo FIRES; else echo QUIET; fi"],
+        env=env, capture_output=True, text=True, timeout=10)
+    return proc.stdout.strip() == "FIRES", proc.stderr.strip()
+
+
 def test_every_cross_fde_platform_really_has_the_fail_fast_preflight():
     """CROSS_FDE_PLATFORMS is the set whose builder REFUSES on --encrypt-root without a
     usable qemu-aarch64. Read that claim off each builder rather than trusting the list:
-    the preflight is an ``if ${ENCRYPT_ROOT} && ${BUILD_...}`` block that calls
-    ``dracut_cross_preflight_ok`` and ``exit 1``."""
+    the builder has a gated block that calls ``dracut_cross_preflight_ok`` and
+    ``exit 1``s when it fails, and that gate FIRES on a plain --encrypt-root build
+    (bash evaluates it; the gate's wording is the builder's own)."""
     assert cross_dracut.CROSS_FDE_PLATFORMS, "the set went empty"
     assert "x86" not in cross_dracut.CROSS_FDE_PLATFORMS
     assert "jetson" not in cross_dracut.CROSS_FDE_PLATFORMS   # no FDE path at all
     for plat in cross_dracut.CROSS_FDE_PLATFORMS:
         path = os.path.join(GENERATOR_DIR, BUILDER_SCRIPTS[plat])
         src = open(path, encoding="utf-8").read()
-        m = re.search(r'^if \$\{ENCRYPT_ROOT\} && \$\{BUILD_(?:INSTALLER|ISO)\}.*?^fi$',
-                      src, re.M | re.S)
-        assert m, f"{plat}: no ${{ENCRYPT_ROOT}}-gated preflight block in {path}"
-        block = m.group(0)
-        assert "dracut_cross_preflight_ok" in block, plat
-        assert "exit 1" in block, plat
+        gates = _fail_fast_preflights(src)
+        assert gates, (f"{plat}: no gated `if ! dracut_cross_preflight_ok; then ... exit 1` "
+                       f"block in {path}")
+        verdicts = [(gate, *_gate_fires(gate)) for gate in gates]
+        assert any(fired for _g, fired, _e in verdicts), (
+            f"{plat}: no fail-fast preflight fires on an --encrypt-root build: {verdicts}")
+
+
+def test_the_preflight_reader_counts_only_a_gated_unconditional_refusal():
+    """The reader above, on fixtures: the shape it must find (either gate the builders
+    use), and the shapes it must NOT count: the waf-family block (its exit is under the
+    blocker check), a preflight that only warns, and a gate that is never true on an
+    --encrypt-root build."""
+    refuse = ("    dracut_cross_register_qemu || true\n"
+              "    if ! dracut_cross_preflight_ok; then\n"
+              "        err \"no qemu\"\n"
+              "        exit 1\n"
+              "    fi\n")
+    enc = "if ${ENCRYPT_ROOT} && ${BUILD_INSTALLER} && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY}; }; then\n"
+    assert _fail_fast_preflights(enc + refuse + "fi\n") == [enc[3:-7]]
+    assert _gate_fires(enc[3:-7])[0]
+    assert _fail_fast_preflights("if ! ${PACKAGES_ONLY}; then\n" + refuse + "fi\n") \
+        == ["! ${PACKAGES_ONLY}"]
+    assert _gate_fires("! ${PACKAGES_ONLY}")[0]
+    waf = ("if ! dracut_cross_preflight_ok; then\n"
+           "    if [ -n \"${_exec_blockers}\" ]; then\n"
+           "        exit 1\n"
+           "    fi\n"
+           "    warn \"continuing\"\n"
+           "fi\n")
+    assert _fail_fast_preflights(waf) == []
+    nested = enc + ("    if ! dracut_cross_preflight_ok; then\n"
+                    "        if ${STRICT}; then\n"
+                    "            exit 1\n"
+                    "        fi\n"
+                    "    fi\n") + "fi\n"
+    assert _fail_fast_preflights(nested) == []
+    warn_only = enc + refuse.replace("exit 1", "warn \"continuing\"") + "fi\n"
+    assert _fail_fast_preflights(warn_only) == []
+    assert not _gate_fires("${PACKAGES_ONLY}")[0]
+    assert not _gate_fires("${ENCRYPT_ROOT} && ${SKIP_KERNEL}")[0]
+    fired, err = _gate_fires("${NOT_A_BUILDER_FLAG}")
+    assert not fired and "unbound" in err
 
 
 def test_the_x86_builder_has_no_such_preflight():

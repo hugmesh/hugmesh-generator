@@ -224,31 +224,57 @@ class WorklistPage(QtWidgets.QWizardPage):
         # Role/Platform are NOT ResizeToContents on purpose: their longest cells want
         # 391px/627px, which would push the rest of the row off-screen. Explicit widths
         # that fit the medium window instead.
-        # 210px fits the family-group labels that head each block ("x86 PCs — x86-64
-        # (Intel/AMD)") and every buildable role id. The longest cells are ~467px (the
-        # grey unbuildable device rows' prose names) — no width fits those without eating
-        # the row, so they truncate and keep their tooltip; that text is informational,
-        # while the check/board/flavor controls are what the operator has to act on.
-        self.tree.setColumnWidth(_COL_ROLE, 210)
-        self.tree.setColumnWidth(_COL_PLATFORM, 110)
-        # TRAP: _COL_BOARD/_COL_FLAVOR/_COL_ENC hold setItemWidget() combos, so the
-        # ITEM TEXT is empty and sizeHintForColumn() reports 0 for them. Giving these
-        # ResizeToContents collapses them to ~0 and HIDES the combos — trading this
-        # report for a worse one. They must stay Interactive with explicit widths.
-        # Sized to the COMBO each column carries. Budget: check + these + the Notes
-        # stretch floor (100 = defaultSectionSize; Stretch will not go below it) fit
-        # inside the medium window's ~980px viewport with ~330px left for Notes. On a
-        # much narrower window the row does scroll horizontally — that is deliberate:
-        # squeezing 3 combo columns + Role/Platform under ~576px would starve them into
-        # uselessness, and a scrollbar is the honest answer. The CHECK column is
-        # unaffected either way: it is section 0 at viewport x=0, so it stays visible
-        # without dragging at any width, which is what the report was about.
-        # 128 fits "orange-pi-5-plus", the longest board token (the Orange Pi 5 node rows).
-        self.tree.setColumnWidth(_COL_BOARD, 128)
-        self.tree.setColumnWidth(_COL_RAM, 84)
+        # Role is 160: every buildable role id reads whole ("jetson-desktop", ~96px in
+        # DejaVu Sans). The family-group labels that head each block are bold and
+        # 212-393px, so they elided at the earlier 210 as well; the family's name leads
+        # the label ("x86 PCs — …", "Raspberry Pi — …"), and that part stays on screen.
+        # The grey unbuildable device rows' prose names (~467px) truncate and keep their
+        # tooltip; that text is informational, while the check/board/flavor controls are
+        # what the operator has to act on.
+        # Platform is 90: the x86 rows' "x86_64 host" reads whole, and the ARM rows'
+        # platform sentences (450-790px) elide at any width that leaves room for the
+        # rest of the row; their family is already named by the group row above them.
+        self.tree.setColumnWidth(_COL_ROLE, 160)
+        self.tree.setColumnWidth(_COL_PLATFORM, 90)
+        # TRAP: _COL_BOARD/_COL_RAM/_COL_FLAVOR/_COL_ENC/_COL_SERVICES hold
+        # setItemWidget() combos, so the ITEM TEXT is empty and sizeHintForColumn() knows
+        # these columns only through the combos of EXPANDED rows: a collapsed family's
+        # combos measure 0, and an expanded one sizes the column to its widest choice
+        # ("Tor onion + Egress VPN", jetson's fixed Encryption cell), which pushes the
+        # rest of the row off-screen. ResizeToContents would hide combos or the row's
+        # right end depending on what is expanded, so they stay Interactive with
+        # explicit widths, each sized to the COMBO its column carries: ~25px of frame
+        # and arrow plus the longest choice that has to read whole, and the header label.
+        # The widths fit DejaVu Sans 10pt (Ubuntu's default, and the widest of the
+        # three measured: Liberation Sans and Noto Sans are narrower) under Fusion and
+        # Breeze, with a few px to spare.
+        #
+        # BUDGET (the medium window on a 1080p screen, 1040x780: a 980px viewport). The
+        # check column (60 Fusion / 72 Breeze, ResizeToContents) + these 848 leave Notes
+        # 132 / 115 (Notes is Stretch, and Stretch will not go below the 100px
+        # defaultSectionSize). Adding the RAM column (84) to the earlier widths overflowed
+        # the row by 42px: a horizontal scrollbar on arrival and Notes pinned at its
+        # floor. A new column must come out of this budget;
+        # tests/test_pages_worklist_columns.py measures it. On a much narrower window
+        # the row does scroll horizontally — that is deliberate: squeezing the combo
+        # columns + Role/Platform would starve them into uselessness, and a scrollbar is
+        # the honest answer. The CHECK column is unaffected either way: it is section 0
+        # at viewport x=0, so it stays visible without dragging at any width, which is
+        # what the report was about.
+        # 136 fits "orange-pi-5-plus", the longest board token (132 in DejaVu; the 128
+        # this used to be cut it there).
+        self.tree.setColumnWidth(_COL_BOARD, 136)
+        # 88 fits "choose…", the omnibus row's prompt (84 in DejaVu; Breeze's cell
+        # margins cut it at 84).
+        self.tree.setColumnWidth(_COL_RAM, 88)
+        # 120 keeps the "Flavor/Desktop" header whole (116 in DejaVu); the widest choice
+        # is "installer".
         self.tree.setColumnWidth(_COL_FLAVOR, 120)
+        # 90 keeps the "Encryption" header (83) and "default" whole.
         self.tree.setColumnWidth(_COL_ENC, 90)
-        self.tree.setColumnWidth(_COL_SERVICES, 120)
+        # 104 fits "Egress VPN" (99 in DejaVu); "Tor onion + Egress VPN" (rpi5 only)
+        # elides, as it did at 120.
+        self.tree.setColumnWidth(_COL_SERVICES, 104)
         # Notes absorbs the slack, replacing the accidental stretchLastSection outcome
         # that handed Notes 452px while Role starved at 100.
         hdr_view.setSectionResizeMode(_COL_NOTES, QtWidgets.QHeaderView.ResizeMode.Stretch)

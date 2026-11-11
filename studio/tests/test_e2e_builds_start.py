@@ -36,6 +36,7 @@ from hugmesh_studio.core.config import UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS   # 
 from hugmesh_studio.core.mesh_node import MeshNode                            # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo                        # noqa: E402
 from hugmesh_studio.core import mesh_node as mesh_node_mod                    # noqa: E402
+from hugmesh_studio.core import resource_limits as rl                        # noqa: E402
 from hugmesh_studio.core import worklist_driver as wd                         # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                           # noqa: E402
 from _helpers import type_login_password  # noqa: E402
@@ -364,6 +365,14 @@ def test_localmesh_launch_dispatches_compose_up(qapp, tmp_path, monkeypatch):
     subprocess env."""
     monkeypatch.delenv("TS_AUTHKEY", raising=False)   # prove start() no longer needs it in env
     monkeypatch.setenv("HOME", str(tmp_path))         # isolate the default ~/.hugmesh workdir
+    # Resource limits OFF, by the env knobs (they beat the saved tray setting and the
+    # auto formula). With limits on, start() also hands compose
+    # `-f <workdir>/docker-compose.limits.yml`, and the auto formula caps CPU on every
+    # host with two or more cores, so the exact argv below depended on the host. The
+    # overlay half is pinned in tests/test_limits_reach_lanes.py; this test is about
+    # the auth key reaching `up -d`.
+    for knob in (rl.CPUS_ENV, rl.MEMORY_ENV, rl.GPUS_ENV):
+        monkeypatch.setenv(knob, "off")
     monkeypatch.setattr(mesh_node_mod, "_compose_base", lambda: ["docker", "compose"])
 
     calls = []
@@ -402,6 +411,7 @@ def test_localmesh_launch_dispatches_compose_up(qapp, tmp_path, monkeypatch):
     expected = ["docker", "compose", "--profile", "mesh", "-p", dlg.node.project, "-f",
                 os.path.join(dlg.node.workdir, "docker-compose.mesh.yml"), "up", "-d"]
     assert up_cmd == expected
+    assert not os.path.exists(os.path.join(dlg.node.workdir, mesh_node_mod.LIMITS_OVERLAY))
     # the effective auth key (from the dialog field, NOT the environment) reached the
     # subprocess env — the second half of the fix (inherited _env used to inject only a
     # teardown placeholder, shadowing the staged real key).

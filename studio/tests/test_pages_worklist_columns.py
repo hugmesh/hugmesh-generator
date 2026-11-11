@@ -26,6 +26,7 @@ from hugmesh_studio.gui.wizard import medium_size                 # noqa: E402
 from hugmesh_studio.gui.pages.worklist import (                   # noqa: E402
     WorklistPage, _COL_CHECK, _COL_BOARD, _COL_ENC, _COL_FLAVOR, _COL_NOTES,
 )
+from hugmesh_studio.gui.pages.worklist import _COL_RAM, _COL_SERVICES  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -107,20 +108,81 @@ def test_check_column_auto_sizes_to_contents(page):
     assert hdr.minimumSectionSize() <= 24
 
 
+_WIDGET_COLUMNS = ((_COL_BOARD, "board"), (_COL_RAM, "ram"), (_COL_FLAVOR, "flavor"),
+                   (_COL_ENC, "enc"), (_COL_SERVICES, "services"))
+
+
 def test_widget_columns_are_not_resize_to_contents(page):
-    """THE TRAP. _COL_BOARD/_COL_FLAVOR/_COL_ENC are filled with setItemWidget() combos,
-    so the ITEM TEXT is empty and sizeHintForColumn() reports 0 for them. Giving these
-    ResizeToContents would collapse them to ~0 and HIDE the combos — trading the reported
-    bug for a worse one. They must keep explicit, non-zero widths."""
+    """THE TRAP. The Board/RAM/Flavor/Encryption/Services cells are setItemWidget()
+    combos, so the ITEM TEXT is empty and sizeHintForColumn() knows these columns only
+    through the combos of EXPANDED rows. ResizeToContents would size them by whatever
+    happens to be expanded: 0 for a collapsed family (the combos hidden), the widest
+    choice for an expanded one (the row pushed off-screen). They must keep explicit,
+    non-zero widths."""
     tree, hdr = page.tree, page.tree.header()
-    for col, name in ((_COL_BOARD, "board"), (_COL_FLAVOR, "flavor"), (_COL_ENC, "enc")):
+    for col, name in _WIDGET_COLUMNS:
         assert hdr.sectionResizeMode(col) != \
             QtWidgets.QHeaderView.ResizeMode.ResizeToContents, (
             f"{name} column is ResizeToContents, but its cells hold setItemWidget() "
-            f"combos with no item text — it would collapse to ~0 and hide the combos")
+            f"combos with no item text — its width would follow what is expanded")
         assert hdr.sectionSize(col) >= 60, f"{name} column too narrow for its combo"
-    # the trap is real, not hypothetical: the item text really does measure 0
-    assert tree.sizeHintForColumn(_COL_FLAVOR) == 0
+    # the trap is real, not hypothetical: no cell in these columns carries text, and
+    # with every family collapsed they measure 0 (Qt measures only the combos of the
+    # rows it shows, so the hint depends on what is expanded)
+    groups = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+    rows = [g.child(i) for g in groups for i in range(g.childCount())]
+    for col, name in _WIDGET_COLUMNS:
+        assert not any(r.text(col) for r in groups + rows), f"{name} cells carry text"
+    assert any(tree.sizeHintForColumn(col) > 0 for col, _n in _WIDGET_COLUMNS), \
+        "no expanded row shows a combo: the collapse below would prove nothing"
+    expanded = [g.isExpanded() for g in groups]
+    try:
+        for g in groups:
+            g.setExpanded(False)
+        assert [tree.sizeHintForColumn(col) for col, _n in _WIDGET_COLUMNS] == \
+            [0] * len(_WIDGET_COLUMNS)
+    finally:
+        for g, was in zip(groups, expanded):
+            g.setExpanded(was)
+
+
+def _edit_field_width(combo) -> int:
+    """The width the combo's style gives its text: the edit field, inside the frame and
+    left of the arrow, at the width the column gave the combo."""
+    opt = QtWidgets.QStyleOptionComboBox()
+    opt.initFrom(combo)
+    opt.editable = combo.isEditable()
+    opt.frame = combo.hasFrame()
+    return combo.style().subControlRect(
+        QtWidgets.QStyle.ComplexControl.CC_ComboBox, opt,
+        QtWidgets.QStyle.SubControl.SC_ComboBoxEditField, combo).width()
+
+
+def test_every_choice_reads_whole_in_its_column(page):
+    """The other half of the budget: the widths came back from the combo columns, so no
+    choice an operator picks may be cut where they read it. Every Board, RAM, Flavor and
+    Encryption choice reads whole; in Services every single-service choice does, and
+    only the combined one ("Tor onion + Egress VPN") elides, as it did before."""
+    cells = []
+    for rid in page.rows:
+        board, flavor = page._combos[rid]
+        cells += [("board", rid, board), ("flavor", rid, flavor),
+                  ("ram", rid, page._ram_combos[rid]), ("enc", rid, page._enc_combos[rid]),
+                  ("services", rid, page._services_combos[rid])]
+    cells = [(name, rid, c) for name, rid, c in cells if c is not None]
+    assert {name for name, _r, _c in cells} == {"board", "flavor", "ram", "enc",
+                                                "services"}, "a combo column is missing"
+    clipped = []
+    for name, rid, combo in cells:
+        room = _edit_field_width(combo)
+        for i in range(combo.count()):
+            if name == "services" and len(combo.itemData(i) or ()) > 1:
+                continue
+            text = combo.itemText(i)
+            need = combo.fontMetrics().horizontalAdvance(text)
+            if need > room:
+                clipped.append(f"{rid} {name} {text!r}: {need}px > {room}px")
+    assert not clipped, "choices cut in their column:\n" + "\n".join(sorted(set(clipped)))
 
 
 def test_notes_absorbs_the_slack(page):

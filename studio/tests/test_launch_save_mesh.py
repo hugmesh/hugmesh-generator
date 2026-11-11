@@ -421,9 +421,19 @@ def test_progress_dispatch_survives_a_panel_that_raises(monkeypatch, qapp, wiz,
     assert page.driver.results[0].status == "ok"
 
 
-def test_look_at_the_progress_page_with_the_panel(monkeypatch, qapp, wiz, tmp_path):
+# ---- #647 / #656 rule: the panel is LOOKED AT, under two styles and at 8 pt -----------
+from _look import LOOK_CASES, LOOK_IDS, child_only, looking, settle, snap  # noqa: E402
+
+
+@pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
+def test_look_at_the_progress_page_with_the_panel(monkeypatch, qapp, tmp_path, style, pt):
     """The whole progress page of a mesh build whose local copy was refused: the panel
-    sits between the overall bar and the image rows, and its status is fully drawn."""
+    sits between the overall bar and the image rows, and its status is fully drawn.
+
+    A look case (tests/_look.py): it skips in an ordinary run and tests/test_look.py
+    runs it in a fresh interpreter under every style in LOOK_CASES and at 8 pt. The
+    wizard is built inside ``looking`` so its size hints are the asked-for style's."""
+    child_only()
     from hugmesh_studio.core import worklist_driver as wd
 
     class FakeBuildDriver:
@@ -451,26 +461,37 @@ def test_look_at_the_progress_page_with_the_panel(monkeypatch, qapp, wiz, tmp_pa
         on_line("  - host port 8000 is already in use by hugmesh-local-casdoor-1")
         return False, []
     monkeypatch.setattr(images_mesh.AlongsideMesh, "start", refused)
-    cfg = _mesh_cfg(tmp_path)
-    wiz.cfg = cfg
-    wiz.worklist = WorklistConfig(base=cfg, entries=[WorklistEntry(role="pki",
-                                                                   platform="x86")])
-    wiz.build_backend = None
-    wiz.generate_node_keys = False
-    wiz.images_mesh_start_local = True
-    wiz.setStartId(wiz._page_ids["progress"])
-    wiz.restart()
-    page = wiz.currentPage()
-    assert page is wiz.page(wiz._page_ids["progress"])
-    page.worker.wait(5000)
-    assert _pump(qapp, lambda: page.isComplete()
-                 and "did NOT start" in page.local_mesh.run_status.text())
-    _settle(qapp)
-    panel = page.local_mesh
-    assert panel.isVisible() and _fully_drawn(panel.status) and \
-        _fully_drawn(panel.run_status)
-    assert _top_in(page, page.total_bar) < _top_in(page, panel) < _top_in(page, page.tree)
-    assert page.driver.results[0].status == "ok"
-    rec = saved_meshes.scan()[0][0]
-    assert rec.build["session_id"] == page._session.id
-    _shot(wiz, "progress-page-local-mesh.png")
+    with looking(qapp, style, pt):
+        wiz = wizard_mod.StudioWizard(GENERATOR_DIR)
+        wiz.resize(736, 736)
+        wiz.show()
+        try:
+            cfg = _mesh_cfg(tmp_path)
+            wiz.cfg = cfg
+            wiz.worklist = WorklistConfig(base=cfg, entries=[WorklistEntry(role="pki",
+                                                                           platform="x86")])
+            wiz.build_backend = None
+            wiz.generate_node_keys = False
+            wiz.images_mesh_start_local = True
+            wiz.setStartId(wiz._page_ids["progress"])
+            wiz.restart()
+            page = wiz.currentPage()
+            assert page is wiz.page(wiz._page_ids["progress"])
+            page.worker.wait(5000)
+            assert _pump(qapp, lambda: page.isComplete()
+                         and "did NOT start" in page.local_mesh.run_status.text())
+            _settle(qapp)
+            panel = page.local_mesh
+            assert panel.isVisible() and _fully_drawn(panel.status) and \
+                _fully_drawn(panel.run_status)
+            assert _top_in(page, page.total_bar) < _top_in(page, panel) \
+                < _top_in(page, page.tree)
+            assert page.driver.results[0].status == "ok"
+            rec = saved_meshes.scan()[0][0]
+            assert rec.build["session_id"] == page._session.id
+            _shot(wiz, f"progress-page-local-mesh-{style.lower()}-{pt or 'default'}.png")
+            snap(wiz, "progress-page-local-mesh", style, pt)
+        finally:
+            wiz.close()
+            wiz.deleteLater()
+            settle(qapp)

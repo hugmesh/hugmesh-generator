@@ -256,9 +256,12 @@ def _installed_looks():
         from hugmesh_studio.gui import qt as qt_mod
     except Exception:                          # noqa: BLE001 — no binding: see _qt()
         return [("Fusion", None)]
-    qt_mod.QtWidgets.QApplication.instance() \
+    # HELD while the styles are read: an application nothing refers to is destroyed on
+    # the spot under PyQt6, and the style plugins were then listed with none at all
+    app = qt_mod.QtWidgets.QApplication.instance() \
         or qt_mod.QtWidgets.QApplication(["hugmesh-studio-selection-column"])
     keys = set(qt_mod.QtWidgets.QStyleFactory.keys())
+    del app
     return ([("Fusion", None), ("Fusion", 8.0)]
             + [(s, 8.0) for s in _KDE_STYLES if s in keys]
             # 9 pt at a forced font DPI of 120 and 144 (fonts scaled, widgets not)
