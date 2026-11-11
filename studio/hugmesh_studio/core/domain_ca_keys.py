@@ -1172,6 +1172,18 @@ def _expiry_text(cert, now) -> str:
     return f"valid until {_not_after(cert):%Y-%m-%d} ({days} days)"
 
 
+#: The checklist item, and the Signing key cell, of another domain's row named like
+#: the mesh's OLD name while a refused rename keeps the mesh's own CA there (#974
+#: refute, round 1b: the row read "not taken (certificates only) | ready" while it
+#: held the signing key, and its Remove removed the mesh's CA).
+OLD_NAME_ROW = ("this row holds the mesh's OWN CA{key}, still under the mesh's old "
+                "name {domain} (the rename to {own} has not moved it: see that row), "
+                "not a CA of this domain. Removing this row's CA removes the mesh's "
+                "CA{key}. Let the mesh's CA follow the rename first, or rename the "
+                "mesh's domain back to {domain}")
+OLD_NAME_KEY_CELL = "held: the mesh's own CA (old name)"
+
+
 def readiness(cfg, st: DomainCAStore | None = None, profiles=None,
               now: _dt.datetime | None = None) -> list[Check]:
     """The per-domain go-live checklist. ``profiles`` is the KEYS profile of every
@@ -1201,6 +1213,15 @@ def readiness(cfg, st: DomainCAStore | None = None, profiles=None,
                              "signing key not held: import it again (keys are never "
                              "saved, so a Studio restart forgets them)"))
         else:
+            if e is not None and e.own:
+                # A refused rename (rekey_refusal) left the mesh's own CA under its
+                # old name, and that name is back as another domain's row: the row
+                # shows the MESH's CA and its signing key, not a certificates-only
+                # CA of this domain, and removing it removes the mesh's CA.
+                out.append(Check(label, False, OLD_NAME_ROW.format(
+                    domain=domain, own=own_label(cfg),
+                    key=" and its signing key" if e.key_pem else "")))
+                continue
             if e is not None and e.root_pem and not e.signing_pem:
                 rc = e.root_cert()
                 out.append(Check(label, True, f"root CA {_cn(rc)} (certificate only), "
@@ -1273,6 +1294,8 @@ def row_cells(cfg, st: DomainCAStore | None = None,
         if own:
             key = ("held (pki stick only)" if e and e.key_pem
                    else "needed" if e and e.signing_pem else "-")
+        elif e is not None and e.own:
+            key = OLD_NAME_KEY_CELL if e.key_pem else "-"
         else:
             key = "not taken (certificates only)"
         checks = [c for c in readiness(cfg, st, profiles) if c.domain == label]

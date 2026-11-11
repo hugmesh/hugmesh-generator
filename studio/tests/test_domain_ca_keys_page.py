@@ -448,3 +448,70 @@ def test_tui_an_own_row_import_during_a_refused_rename_is_refused(tmp_path):
     j.lines()
     own = dca.store().own()
     assert own is not None and own.domain == "x.example" and own.key_pem
+
+
+# ── the old name added back during a refused rename (#974 refute, round 1b) ──────
+def _old_name_back(cfg):
+    """After the refused rename to x.example, the operator adds m.example back as
+    another domain: its row is where the mesh's own CA (and key) is still held."""
+    from hugmesh_studio.core.config import Domain
+    cfg.cluster_domain = "x.example"
+    cfg.domains = [Domain(name="x.example"), Domain(name="m.example")]
+
+
+def test_the_old_name_row_says_it_holds_the_meshs_ca_and_key(wiz, qapp, monkeypatch,
+                                                             tmp_path):
+    """That row read 'm-signing.crt + m-signing.key | not taken (certificates only)
+    | ready' and its Remove removed the mesh's CA and key. It now names whose CA
+    and key it shows, is not ready, and the checklist says what Remove does there.
+    HUGMESH_LOOK_SHOTS=DIR saves the screenshot a reviewer looks at."""
+    from hugmesh_studio.core.config import Domain
+    page = _to_page(wiz)
+    wiz.cfg.cluster_domain = "m.example"
+    wiz.cfg.domains = [Domain(name="x.example")]
+    page.refresh()
+    m = tca.Chain(tmp_path, tag="m")
+    rx_path, _xi, _xk = _x_files(tmp_path)
+    page.table.selectRow(0)
+    _picks(monkeypatch, m.signing_path, m.key_path)
+    page.import_files.click()
+    page.table.selectRow(1)
+    _picks(monkeypatch, rx_path)
+    page.import_root.click()
+    _old_name_back(wiz.cfg)
+    page.refresh()
+    held = _held_now()
+    rows = {r[0]: r for r in _cells(page)}
+    assert rows["m.example"][3] == dca.OLD_NAME_KEY_CELL, rows["m.example"]
+    assert rows["m.example"][4] == "not ready", rows["m.example"]
+    text = page.checklist.text()
+    assert "holds the mesh's OWN CA and its signing key" in text, text
+    assert "Removing this row's CA removes the mesh's CA" in text, text
+    assert "not taken (certificates only)" not in rows["m.example"]
+    assert _held_now() == held                       # showing it moves nothing
+    settle(qapp, 5)
+    shots = os.environ.get("HUGMESH_LOOK_SHOTS", "")
+    if shots:
+        os.makedirs(shots, exist_ok=True)
+        wiz.grab().save(os.path.join(shots, "domain-ca-keys-old-name-row.png"))
+    assert_page_fits_its_window(page)
+    assert_whole(page.checklist, "the go-live checklist")
+
+
+def test_tui_the_old_name_row_says_it_holds_the_meshs_ca_and_key(tmp_path):
+    from hugmesh_studio.core.config import Domain
+    m = tca.Chain(tmp_path, tag="m")
+    rx_path, _xi, _xk = _x_files(tmp_path)
+    j = journey.Journey(GENERATOR_DIR)
+    j.cfg.mode = "mesh"
+    j.cfg.cluster_domain = "m.example"
+    j.cfg.domains = [Domain(name="x.example")]
+    j.goto(dca.STEP_SLUG)
+    j.feed(f"k 1 {m.signing_path} {m.key_path}")
+    j.feed(f"r 2 {rx_path}")
+    _old_name_back(j.cfg)
+    out = "\n".join(j.lines())
+    row = next(ln for ln in out.splitlines() if ln.strip().startswith("2. m.example"))
+    assert dca.OLD_NAME_KEY_CELL in row and row.rstrip().endswith("not ready"), row
+    assert "certificates only" not in row, row
+    assert "holds the mesh's OWN CA and its signing key" in out, out
