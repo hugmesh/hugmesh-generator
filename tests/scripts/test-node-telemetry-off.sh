@@ -119,7 +119,7 @@ echo "== NetworkManager: no connectivity probe on headless and node images =="
 #   builder | block marker | settings that turn it off | settings that keep it
 NM_TABLE=(
     "build-rpi5-stage4.sh|wait|ROLE_CLIENT=false|ROLE_CLIENT=true"
-    "build-x86-host-stage4.sh|wait|ROLE_CLIENT=false|ROLE_CLIENT=true"
+    "build-x86-host-stage4.sh|probe|ROLE_CLIENT=false|ROLE_CLIENT=true"
     "build-jetson-stage4.sh|probe|ROLE_CLIENT=false|ROLE_CLIENT=true"
     "build-orangepi5-stage4.sh|probe|ROLE_CLIENT=false|ROLE_CLIENT=true"
     "build-orangepi4-lts-stage4.sh|probe|ROLE_CLIENT=false|ROLE_CLIENT=true"
@@ -129,8 +129,10 @@ NM_TABLE=(
     "build-orangepi-zero3-stage4.sh|probe|:|"
     "build-orangepi3-lts-stage4.sh|probe|:|"
 )
-# The two node builders write it inside the INACTIVE_TIMEOUT=60 block (#858), which
-# ends at its `fi`; every other builder has its own block, which ends at a blank line.
+# rpi5 writes it inside its INACTIVE_TIMEOUT=60 block (#858), which ends at its `fi`
+# (rpi5 has no build-time SELinux label pass); every other builder has its own block,
+# which ends at a blank line. x86's INACTIVE_TIMEOUT=60 is pinned by
+# tests/qemu/mesh_client_test.sh section F1.
 nm_block() { # $1 builder  $2 wait|probe
     case "$2" in
         wait)  awk '/^# ── NetworkManager: wait for the link before handing over `net`/{p=1} p{print} p&&/^fi$/{exit}' "$1" ;;
@@ -181,15 +183,19 @@ for row in "${NM_TABLE[@]}"; do
         bad "${b}: the NetworkManager connectivity-probe block was not found"; continue
     fi
     # Placement: in the sysroot before it is packaged (and so before the live/installer
-    # squashfs is cut from it). The x86 builder writes it after its build-time SELinux
-    # labelling pass, so the first-boot relabel labels it there (see PR #965); every
-    # other builder that labels at build time must write it BEFORE labelling.
+    # squashfs is cut from it), and, on a builder that labels at build time (frite,
+    # x86), BEFORE that label pass: the file is a new inode, so written after setfiles
+    # it would ship in the stage4 with no SELinux label.
     bl="$(nm_block_line "${f}" "${kind}")"
     pk="$(grep -n '^banner "Packaging stage4 tarball"' "${f}" | head -n 1 | cut -d: -f1)"
     lb="$(grep -n 'slx_label_tree "\${SYSROOT}"' "${f}" | head -n 1 | cut -d: -f1)"
     if [ -n "${pk}" ] && [ "${bl}" -lt "${pk}" ]; then ok "${b}: written before the stage4 is packaged"
     else bad "${b}: the block (line ${bl}) is not before the packaging banner (line ${pk:-none})"; fi
-    if [ -n "${lb}" ] && [ "${b}" != build-x86-host-stage4.sh ]; then
+    case "${b}" in
+        build-frite-stage4.sh|build-x86-host-stage4.sh)
+            [ -n "${lb}" ] || bad "${b}: its build-time SELinux label pass (slx_label_tree \"\${SYSROOT}\") was not found" ;;
+    esac
+    if [ -n "${lb}" ]; then
         if [ "${bl}" -lt "${lb}" ]; then ok "${b}: written before the build-time SELinux labelling"
         else bad "${b}: written after the build-time SELinux labelling (line ${lb}), so it ships unlabelled"; fi
     fi
