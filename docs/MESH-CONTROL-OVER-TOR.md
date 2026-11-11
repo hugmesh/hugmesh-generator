@@ -178,11 +178,27 @@ test rig.
   - the timed two-way switch;
   - the keeper's NEWNYM path after a 75 s Tor outage.
 
-  It is opt-in, never default CI, because it publishes a throwaway onion. **It has
-  not been run yet**, so those four cells are written but unmeasured with the shipped
-  scripts.
+  It is opt-in and never runs in default CI, because it publishes a throwaway onion.
+  **It has not been run yet**, so those four cells are written but unmeasured with the
+  shipped scripts.
 - A full node boot from KEYS sticks in this mode (QEMU) has not been run.
 - headscale starting while its own Tor is fully offline has not been measured.
+
+## Known limits
+
+- **The control name resolves only on nodes.** keys-provision writes the managed
+  `/etc/hosts` line only on nodes provisioned from a KEYS stick. A phone or operator
+  laptop that joins the mesh gets a DERP host it cannot resolve, so it has no relay
+  through the embedded region. It still reaches peers directly, or through the public
+  map if that is opted in.
+- **Boot ordering is not boot-tested.** keys-provision starts the relay and the keeper
+  (and runs the Tor reconcile) from inside its own run, before `tailscale up`. Their
+  OpenRC services also declare `after keys-provision`. No full first boot in this mode
+  has been run, so a wait like the one the tor-reconcile header describes for its
+  oneshot is possible and unmeasured.
+- **An interrupted Studio run keeps the secret key.** If a run is stopped before it
+  finishes, the control onion's secret key stays in the run's `mesh-control-onion`
+  directory. The Studio removes it only when a run completes. Delete it by hand.
 
 ## Trade-offs
 
