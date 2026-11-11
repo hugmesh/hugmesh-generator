@@ -310,12 +310,25 @@ jobs:
       # binutils (strings), file, xorriso: tests/scripts/test-verify-artifact-neutrality-frite.sh
       # runs scripts/verify-artifact-neutrality.sh, whose host preflight FAILs closed
       # without all three; the suite builds its frite FAT media with mtools (already here).
-      - run: apk add --no-cache attr bash binutils coreutils curl e2fsprogs-extra file flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
+      # grep (GNU), on all three lines, since 2026-11-11. Before that this job ran on
+      # busybox grep, which has no --include. Two guards here,
+      # tests/scripts/test-makefile-reown-skips-sysroot.sh (the "no other chown -R" scan)
+      # and tests/scripts/test-outbound-mtls-client.sh (rule 4, http:// to a TLS-serving
+      # peer), ran `grep -r --include=...` with `2>/dev/null || true`. Busybox printed
+      # "unrecognized option", exited 2, and both read that as "no matches" and PASSED.
+      # MEASURED in alpine:3 with this job's old apk set: a planted `chown -R "$WORK_DIR"`
+      # and a planted http:// URL to admin-bff both passed, and rule 4 reported
+      # "0 known-broken" against its five real exempt hits. Both guards now fail closed
+      # (a grep status above 1 is a FAIL) and carry a positive control. The preflight
+      # asserts --include WORKS, not merely that a grep exists, so losing this package
+      # turns the job red at the door. Measurements below that name "busybox grep"
+      # predate this change.
+      - run: apk add --no-cache attr bash binutils coreutils curl e2fsprogs-extra file flock gawk git git-daemon grep helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
       # xorriso: tests/qemu/launch_arm_medium_test.sh builds a real ISO9660 Frite
       # medium fixture with it (the launcher reads such media with xorriso or
       # bsdtar); without it that suite exits 2 "SKIPPING LOUDLY", a red job.
-      - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
-      - run: apk add --no-cache attr bash coreutils curl dosfstools e2fsprogs e2fsprogs-extra flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl parted py3-yaml python3 tar util-linux xz
+      - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git git-daemon grep helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
+      - run: apk add --no-cache attr bash coreutils curl dosfstools e2fsprogs e2fsprogs-extra flock gawk git git-daemon grep helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl parted py3-yaml python3 tar util-linux xz
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -346,8 +359,14 @@ jobs:
           # it at exactly this path and exits 2 (a failure here) when it is absent; its
           # package is git-daemon, which the install step names.
           [ -x "$(git --exec-path)/git-http-backend" ] || missing="$missing git-http-backend(apk:git-daemon)"
+          # GNU grep, asserted by BEHAVIOUR: `command -v grep` passes on busybox too. The
+          # reown and outbound-mTLS suites scan with `grep -r --include=...`, which busybox
+          # rejects with exit 2. Both now fail closed on that, but name it here first.
+          g="$(mktemp -d)"; printf 'x\n' > "$g/a.yaml"; printf 'x\n' > "$g/b.txt"
+          [ "$(grep -rl --include='*.yaml' x "$g")" = "$g/a.yaml" ] || missing="$missing grep-with-working---include(apk:grep)"
+          rm -rf "$g"
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp strings file xorriso git-http-backend"
+          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp strings file xorriso git-http-backend grep--include"
       - name: run suites
         shell: bash
         run: |
