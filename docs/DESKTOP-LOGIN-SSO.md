@@ -10,7 +10,7 @@ work, the greeter says why and the local path is untouched. Nothing hangs.
 
 | path | credential | needs | who |
 |------|------------|-------|-----|
-| **A. local** | the account's password in `/etc/shadow` | nothing | the `--local-pass` user (standalone), KEYS `users.json` users, the keyless first-boot fallback user |
+| **A. local** | the account's password in `/etc/shadow` | nothing | the `--local-pass` user (standalone), KEYS `users.json` users, the keyless first-boot fallback user. The `--local-pass` and fallback users are administrators only with `--local-admin` (`docs/STANDALONE-DESKTOP.md`) |
 | **B. SSO** | approval at the per-domain IdP (`https://id.<domain>`, RFC 8628 device flow) | the IdP reachable (usually over the tailnet) | anyone the IdP knows; the account is created on the device on first sign-in |
 | **B'. SSO offline** | the user's offline password (set during an online SSO sign-in) | nothing, while the bounded cache is valid | SSO-managed accounts only |
 
@@ -159,7 +159,8 @@ LTS, Orange Pi 5):
   KEYS chain to run the mapper, so baking it would strip `wheel` from KEYS users
   with nothing to replace it. A standalone SSO user gets `wheel` only while the
   IdP says `desktop-admin`. SSO OFF bakes no governance dir either: the image
-  stays ungoverned and `wheel` sudo stays.
+  stays ungoverned and `wheel` sudo stays. The local login account joins `wheel`
+  only when the build passed `--local-admin`.
 
 **Runtime** (root, on the device; contacts nothing):
 

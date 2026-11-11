@@ -165,3 +165,49 @@ def test_rendered_login_group_shows_confirm_row_and_refusal(wiz, tmp_path):
     png = os.environ.get("HUGMESH_TEST_PNG_OUT") or str(tmp_path / "home-login.png")
     assert login.grab().save(png), "could not render the login group"
     assert os.path.getsize(png) > 1000
+
+
+@pytest.mark.parametrize("role", ["standalone-thick", UNAFFILIATED_ROLE])
+def test_administrator_box_is_opt_in_and_says_what_unticked_means(wiz, tmp_path, role):
+    """Operator rule: the local login account is NOT an administrator unless asked.
+    The 'Administrator' box (--local-admin) defaults OFF, and the note under it says
+    in both states what the image will have — unticked on a standalone image means
+    no local account can use sudo (root is locked), which must not be a surprise."""
+    from hugmesh_studio.gui.pages.home import LOCAL_ADMIN_NOTE
+    home = _home_on(wiz, role)
+    QtWidgets.QApplication.processEvents()
+    login = home.login
+    assert not home.local_admin.isChecked(), "Administrator must default OFF"
+    assert "Administrator" in home.local_admin.text()
+    assert "--local-admin" in home.local_admin.text()
+    assert "KEYS-provisioned" not in home.local_admin.text(), \
+        "label still says the box only matters on a KEYS image"
+    p_box = _visible_box(home.local_admin, login)
+    p_note = _visible_box(home.local_admin_note, login)
+    assert p_box.y() < p_note.y(), "the note is not under the box"
+    assert home.local_admin_note.text() == LOCAL_ADMIN_NOTE[False]
+    assert "cannot use sudo" in home.local_admin_note.text()
+    png = os.environ.get("HUGMESH_TEST_PNG_OUT_ADMIN") or str(tmp_path / f"admin-off-{role}.png")
+    assert login.grab().save(png) and os.path.getsize(png) > 1000
+
+    home.local_admin.setChecked(True)
+    QtWidgets.QApplication.processEvents()
+    assert home.local_admin_note.text() == LOCAL_ADMIN_NOTE[True]
+    _visible_box(home.local_admin_note, login)
+
+    home.local_user.setText("magus")
+    home.local_pass.setText(PW)
+    home.local_pass_confirm.setText(PW)
+    assert home.validatePage() is True
+    assert wiz.cfg.local_admin is True
+    assert "--local-admin" in wiz.cfg.to_cli_args()
+
+
+def test_administrator_unticked_emits_no_local_admin(wiz):
+    home = _home_on(wiz, UNAFFILIATED_ROLE)
+    home.local_user.setText("magus")
+    home.local_pass.setText(PW)
+    home.local_pass_confirm.setText(PW)
+    assert home.validatePage() is True
+    assert wiz.cfg.local_admin is False
+    assert "--local-admin" not in wiz.cfg.to_cli_args()
