@@ -905,3 +905,37 @@ def test_issuing_a_token_offers_the_same_roles_shell_rule_and_lifetime_on_every_
     finally:
         dlg.close()
         dlg.deleteLater()
+
+
+# ── the Desktop step (2026-11-11): one catalog, three faces ─────────────────────────
+def test_desktop_step_catalogs_match_on_gui_tui_and_cli(wiz, capsys):
+    """The GUI page's session checkboxes, video-card checkboxes and app rows, the TUI
+    screen's listing and the CLI's --desktop-options all come from core/desktop_spec.py;
+    a face that grew its own list would go red here."""
+    from hugmesh_studio.core import desktop_cli
+    from hugmesh_studio.core import desktop_spec as ds
+    from hugmesh_studio.gui.qt import QtCore
+    from hugmesh_studio.tui.desktop_step import DesktopScreen
+    import json as _json
+    page = wiz.page(wiz._page_ids["desktop"])
+    wiz.cfg = ImageConfig(mode="cloud", role="laptop", platform="x86")
+    page.initializePage()
+    gui_apps = [page.apps_table.item(r, 0).data(QtCore.Qt.ItemDataRole.UserRole)[0]
+                for r in range(page.apps_table.rowCount())]
+    assert list(page.session_checks) == [s.name for s in ds.SESSION_CATALOG]
+    assert tuple(page.card_checks) == ds.VIDEO_CARD_TOKENS
+    assert gui_apps == [a["id"] for a in ds.app_catalog()]
+    assert list(page.py_checks) == list(ds.PYTHON_TARGET_CHOICES)
+    j = journey.Journey(".", ImageConfig(mode="cloud", role="laptop", platform="x86"))
+    tui = "\n".join(DesktopScreen().lines(j))
+    for name in page.session_checks:
+        assert name in tui
+    for app_id in gui_apps:
+        assert app_id in tui
+    assert desktop_cli.options(as_json=True) == 0
+    cli = _json.loads(capsys.readouterr().out)
+    assert [s["name"] for s in cli["sessions"]] == list(page.session_checks)
+    assert list(cli["video_cards"]) == list(page.card_checks)
+    assert [a["id"] for a in cli["apps"]] == gui_apps
+    # the same environment choices on both faces (the Role step no longer offers them)
+    assert [page.env.itemData(i) for i in range(page.env.count())] == ds.environment_choices(wiz.cfg)
