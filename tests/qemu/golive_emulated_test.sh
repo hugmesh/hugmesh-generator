@@ -28,6 +28,8 @@
 #   * an absent, truncated or empty nft table is "unknown", never "public" — including
 #     real nft's own absent-table error, which echoes "list table inet <name>" on
 #     stderr (round 2, refuter M9; the round-1 lane read that echo as public);
+#   * a posture read cut off after the table header, with no @@nftrc marker, is
+#     "unknown": a missing rc is not rc 0 (round 3, refuter F1);
 #   * status and nft must BOTH say the posture: nft alone is not enough (round 2, M3);
 #   * a driver that would accept an onion commit fails the lane, with 'n' typed.
 set -u
@@ -151,6 +153,17 @@ if [ "${tty}" = 1 ]; then
     # not a tty the lane did not drive a pty, and the driver must see no terminal.
     [ -t 0 ] || echo "tt-without-local-pty" >> "${FAKE_LOG_DIR}/notes"
     exec bash -c "${cmd}"
+fi
+# FAKE_SSH_CUT_AFTER_HEADER=1: while the go-live marker is down, a posture read loses
+# its connection right after the table header. The rest of the listing (the drop rule,
+# if there is one) and the @@nftrc marker never arrive, and ssh exits 255.
+if [ "${FAKE_SSH_CUT_AFTER_HEADER:-0}" = 1 ] && [ -e "${FAKE_GUEST}/etc/hugmesh/go-live" ]; then
+    case "${cmd}" in
+        *@@nftrc=*)
+            bash -c "${cmd}" </dev/null 2>&1 | sed '/^table inet hugmesh_release_gate {$/q'
+            echo "Connection to 127.0.0.1 closed by remote host." >&2
+            exit 255 ;;
+    esac
 fi
 if [ -t 0 ]; then exec bash -c "${cmd}" </dev/null; fi
 exec bash -c "${cmd}"
@@ -330,6 +343,20 @@ new_case emptyok; FAKE_NFT_EMPTY_WHEN_PUBLIC=1 run_lane
 eq "${RC}" 1 "empty listing: exit 1"
 has "${OUT}" "status=public nft=unknown" "empty listing: nft reads unknown"
 eq "$(printf '%s\n' "${OUT}" | grep -c 'nft=public' | tr -d ' ')" 0 "empty listing: nft never reads public"
+
+# Round 3 (refuter F1): a MISSING @@nftrc marker is not rc 0. Here the reconcile never
+# acts, so the drop rule stays loaded, but every posture read loses its connection
+# right after the table header. Read as rc 0, that header with no drop rule after it
+# would be "public", and the lane would write a PASS verdict for a device that never
+# opened 80/443.
+echo "a posture read cut off after the table header (no rc marker) is unknown, never public"
+new_case cutstream; FAKE_NFT_STUCK=1 FAKE_SSH_CUT_AFTER_HEADER=1 run_lane
+eq "${RC}" 1 "cut stream: exit 1"
+has "${OUT}" "status=public nft=unknown" "cut stream: nft reads unknown"
+eq "$(printf '%s\n' "${OUT}" | grep -c 'nft=public' | tr -d ' ')" 0 "cut stream: nft never reads public"
+has "${OUT}" "did not go public within 6s" "cut stream: the public wait times out"
+has "${OUT}" "rpi5/pki is internal again" "cut stream: rolled back (the full listing returns with the drop rule)"
+eq "$([ -e "${CASE}/evidence/verdict.txt" ] && echo present || echo absent)" absent "cut stream: no verdict.txt"
 
 echo "a table that is absent from the start is refused, not treated as public or internal"
 new_case notable0; echo "public 0" > "${CASE}/log/nft.state"

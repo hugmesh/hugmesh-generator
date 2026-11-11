@@ -286,7 +286,9 @@ ROLLBACK_PROMPT="Proceed and re-close to internal?"
 #     list table inet hugmesh_release_gate
 # That echo contains "table inet hugmesh_release_gate", so an unanchored match read a
 # MISSING table as a loaded one with no drop rule, which is "public". And a listing cut
-# off after the header (nft killed, rc != 0) also has no drop rule in it.
+# off after the header (nft killed, rc != 0) also has no drop rule in it. A read with no
+# @@nftrc marker at all (the ssh stream cut before it) has no exit status, and a
+# missing one is not 0.
 posture() {
     local out st nf nfrc
     out="$(guest "sudo -n sh -c 'hugmesh-go-live status; echo @@nft@@; nft list table inet ${TABLE}; echo @@nftrc=\$?@@'" 2>&1)"
