@@ -188,6 +188,27 @@ def test_the_refusal_names_where_how_much_and_how_short(monkeypatch, tmp_path):
     assert bd.SPACE_ENV in why            # the escape hatch is named
 
 
+def test_a_restart_names_the_earlier_build_tree_it_does_not_credit(monkeypatch, tmp_path):
+    """A RESTART reuses the session dir, so the image's wl-<id> tree from the failed run
+    is still there. The builder wipes it before rebuilding, but the check does not
+    measure it (too slow, partly root-owned, and it runs on the GUI thread). The
+    refusal must point at it, because deleting it is the operator's quickest fix."""
+    _pin_disk(monkeypatch, 43 * GIB)
+    session = tmp_path / "out" / "sessions" / "s1"
+    (session / "wl-pki.x86" / "sysroot").mkdir(parents=True)
+    drv = wd.WorklistDriver(str(tmp_path), _mesh(tmp_path, [("pki", "x86")]),
+                            host=host(), workdir=str(session))
+    problems = [p for p in drv.preflight() if "disk space" in p]
+    assert len(problems) == 1
+    assert str(session / "wl-pki.x86") in problems[0]
+    assert "does not count it as free space" in problems[0]
+    # a first run (no earlier tree) says nothing about one
+    fresh = tmp_path / "out" / "sessions" / "s2"
+    drv = wd.WorklistDriver(str(tmp_path), _mesh(tmp_path, [("pki", "x86")]),
+                            host=host(), workdir=str(fresh))
+    assert not [p for p in drv.preflight() if "earlier run" in p]
+
+
 # ── session start: block on the next image, warn on the whole list ─────────────────
 def test_preflight_blocks_when_the_first_image_cannot_fit(monkeypatch, tmp_path):
     _pin_disk(monkeypatch, 43 * GIB)      # this workstation's /home on 2026-11-11

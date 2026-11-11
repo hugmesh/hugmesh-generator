@@ -251,7 +251,9 @@ class WorklistDriver:
         materialized = self.materialize()
         if not materialized:
             return []
-        why = disk_space_refusal(materialized[0][1], self._output_dir())
+        entry, cfg = materialized[0]
+        why = disk_space_refusal(cfg, self._output_dir(), build_tree=os.path.join(
+            self._output_dir(), entry.build_subdir))
         return [why] if why else []
 
     def _output_dir_problems(self) -> list[str]:
@@ -407,7 +409,8 @@ class WorklistDriver:
             # may not hold image 5. A refused image is never dispatched: it takes the
             # normal FAILED path below, and its "!!" line is what the session record's
             # error tail keeps, instead of an ENOSPC crash an hour into the build.
-            refusal = disk_space_refusal(cfg, self._output_dir())
+            refusal = disk_space_refusal(cfg, self._output_dir(), build_tree=os.path.join(
+                self._output_dir(), entry.build_subdir))
             if refusal:
                 if on_line:
                     on_line(i, f"!! {entry.id} not started: {refusal}")

@@ -168,6 +168,45 @@ def test_failed_dispatch_records_failed_with_error_tail(monkeypatch, qapp, wiz, 
     assert tail[-1] == "line 59"
 
 
+def test_a_disk_space_refusal_is_what_the_session_record_keeps(monkeypatch, qapp, wiz, tmp_path):
+    """Defect L4: an image refused for free space before dispatch must leave its reason
+    in the finished session record's error tail. The incident's record (session
+    20261110-220215-cde67f) held only ENOSPC crash lines from builds that should never
+    have started. Here the first image fits and "fills" the disk to 43 GiB, so the
+    second x86 image is refused by run_all()'s re-check and never dispatched."""
+    import collections
+    from hugmesh_studio.core import emulation_save
+    usage = collections.namedtuple("usage", "total used free")
+    disk = {"free": 500 << 30}
+    monkeypatch.setattr(emulation_save, "_disk_usage",
+                        lambda _path: usage(1 << 42, 0, disk["free"]))
+    made = _install_fake_builddriver(monkeypatch)
+    fake = wd.BuildDriver
+    first_run = fake.run
+
+    def run_then_fill(self, cfg, backend, on_line=None):
+        code = first_run(self, cfg, backend, on_line)
+        disk["free"] = 43 << 30
+        return code
+
+    monkeypatch.setattr(fake, "run", run_then_fill)
+    base = _standalone_cfg(tmp_path)
+    _prime(wiz, WorklistConfig(base=base, entries=[
+        WorklistEntry(role="standalone-thick", platform="x86"),
+        WorklistEntry(role="standalone-thin", platform="x86")]))
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+
+    s = bs.load_all()[0]
+    assert s.status == "failed"
+    assert [img["status"] for img in s.images] == ["ok", "failed"]
+    assert [m.ran for m in made if m.ran] == [True]            # only the first dispatched
+    tail = s.error_tail["standalone-thin.x86"]
+    assert any("not enough free disk space" in ln and "43.0 GiB" in ln for ln in tail), tail
+    assert "standalone-thick.x86" not in s.error_tail
+
+
 def test_two_dispatches_get_two_session_dirs(monkeypatch, qapp, wiz, tmp_path):
     _dispatch(qapp, wiz, tmp_path, monkeypatch)
     _dispatch(qapp, wiz, tmp_path, monkeypatch)

@@ -466,13 +466,21 @@ def image_space_estimate_bytes(cfg, env=None) -> int:
     return (X86_IMAGE_SPACE_GIB if platform == "x86" else ARM_IMAGE_SPACE_GIB) * GIB
 
 
-def disk_space_refusal(cfg, out_dir: str, *, disk_usage=None, env=None) -> str:
+def disk_space_refusal(cfg, out_dir: str, *, build_tree: str = "", disk_usage=None,
+                       env=None) -> str:
     """Why the filesystem under ``out_dir`` cannot take this image now, or "" when it can.
 
     Free space comes from :func:`emulation_save.free_bytes_for`, which walks up to the
     nearest existing ancestor (a session dir does not exist before dispatch) and whose
     probe is the injectable ``emulation_save._disk_usage``. Its -1 (unknowable) never
-    refuses, the same rule :func:`emulation_save.preflight_refusal` follows."""
+    refuses, the same rule :func:`emulation_save.preflight_refusal` follows.
+
+    ``build_tree`` is this image's ``wl-<id>`` dir. On a RESTART into the same session
+    it still holds the earlier run's tree, which the builder wipes before rebuilding
+    (a non-resume build never extracts over a populated sysroot). That space is NOT
+    credited here: measuring a tens-of-GiB, partly root-owned tree is slow, and this
+    also runs on the GUI thread at dispatch. The refusal names the tree instead, so
+    the operator knows what to delete."""
     estimate = image_space_estimate_bytes(cfg, env)
     if not estimate:
         return ""
@@ -483,13 +491,17 @@ def disk_space_refusal(cfg, out_dir: str, *, disk_usage=None, env=None) -> str:
     short = need - free
     what = (f"{getattr(cfg, 'role', '') or 'this image'} "
             f"({getattr(cfg, 'platform', '') or 'x86'})")
+    earlier = (f" This image's build tree from an earlier run is still at {build_tree}. "
+               f"The builder wipes it before rebuilding, but this check does not count "
+               f"it as free space, so deleting it first is part of the answer."
+               if build_tree and os.path.isdir(build_tree) else "")
     return (f"not enough free disk space under {out_dir} for {what}: it needs about "
             f"{need / GIB:.0f} GiB ({estimate / GIB:.0f} GiB for its build tree and "
             f"images, plus a {SPACE_MARGIN_GIB} GiB margin), but only {free / GIB:.1f} GiB "
-            f"is free, {short / GIB:.1f} GiB short. Free space on that disk (earlier "
-            f"build sessions under the output folder's sessions/ are the usual bulk), "
-            f"choose an output folder on a bigger disk, or set {SPACE_ENV} to the GiB "
-            f"one image needs (0 turns this check off).")
+            f"is free, {short / GIB:.1f} GiB short.{earlier} Free space on that disk "
+            f"(earlier build sessions under the output folder's sessions/ are the usual "
+            f"bulk), choose an output folder on a bigger disk, or set {SPACE_ENV} to the "
+            f"GiB one image needs (0 turns this check off).")
 
 
 def disk_space_warning(cfgs, out_dir: str, *, disk_usage=None, env=None) -> str:
