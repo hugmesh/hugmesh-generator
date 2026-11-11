@@ -263,12 +263,13 @@ root path.
 
 ## Go live from an emulated mesh
 
-> **Status: partly landed.** The target model, the ssh path and the CLI
-> (`hugmesh_studio.core.golive_target`, group FG1) are in the tree. The GUI and TUI
-> faces (group FG2) and the proof lane (group FG3) are not yet. Until the faces merge,
-> Studio's wizard drives only **This host**, as the
-> [architecture table](#architecture--one-shared-driver-thin-front-ends) says. Read the
-> GUI, TUI and proof-lane parts of this section as the contract those changes are held to.
+> **Status: landed, except the proof lane.** The target model, the ssh path and the CLI
+> (`hugmesh_studio.core.golive_target`, group FG1) are in the tree. The GUI and TUI faces
+> (group FG2) are in the tree too: the wizard's Preflight **Target** picker, the TUI's
+> `t`, and the go-live entry on the Mesh emulation page and in `meshemu`. Booting a mesh
+> back from its save (group FG5) is in the tree as a CLI and Makefile lane only
+> ([below](#persistence-the-posture-is-ephemeral)). The harness proof lane (group FG3)
+> has not merged; read [its part](#the-proof-lane-fg3) as the contract it is held to.
 
 A mesh you boot under QEMU from Studio's mesh-emulation page (or `meshemu` in the TUI)
 can be taken live, from the Studio GUI and from the CLI, on Linux (X11 and Wayland), on
@@ -286,7 +287,7 @@ Every go-live verb (`status`, `list`, `plan`, `commit`, `rollback`) runs against
 
 | Target | What it is | When it is offered |
 | --- | --- | --- |
-| **This host** (LOCAL) | The Studio host is itself the node. This is the wizard's behaviour before this section. | `commit` is refused unless `/etc/hugmesh/release-state` exists **and** `command -v hugmesh-firewall-reconcile` finds the reconcile agent. Without them the picker greys the row with: *this host is not a HugMesh node — pick a device*. |
+| **This host** (LOCAL) | The Studio host is itself the node. This is the wizard's behaviour before this section. | Always offered. `commit` is refused unless `/etc/hugmesh/release-state` exists **and** `command -v hugmesh-firewall-reconcile` finds the reconcile agent. Without them the GUI picker still offers the row, because `status` and `plan` preview anywhere; the note under the picker says commit is refused, and why. The Flip step then refuses the commit inline with *this host is not a HugMesh node — pick a device*, and **GO LIVE** stays grey. The TUI's target line says the same, and the CLI's `targets` prints that sentence in the row's status column. |
 | **Emulated** | A running keep-alive device record: `qemu_devices.discover_devices(<work>)` for the docker lane, `qemu_windows.running(<work>)` for WHPX. | One row per running emulated **server** device. The mesh's front-door row is preselected. |
 | **Remote** (later) | Any ssh-reachable node, through the same code. | Not built yet. |
 
@@ -440,9 +441,12 @@ let a restart discard it, and revoke it at the provider. Treat a save of a devic
 planned `cloudflare-tunnel` or `duckdns` on with a token like a keys stick.
 
 Booting a mesh **from** a save, so that an emulated mesh can stay live across restarts,
-is a later follow-up (group FG5). It boots a new overlay over the saved qcow2 and never
-writes to the save. A mesh booted that way carries the saved token again. It is not
-built yet, so until then the UI must say the posture is ephemeral.
+is group FG5. It is a CLI and Makefile lane only: `make mesh-emu-up FROM_SAVE=mesh-<stamp>`
+([`tests/qemu/README.md`](../tests/qemu/README.md)). It boots a new overlay over the saved
+qcow2 and never writes to the save. A mesh booted that way carries the saved token again.
+Studio has no "Boot from save" button: one waits on an operator decision, because it lets
+an emulated node stay `public` for a long time. Studio's own start buttons boot the golden
+image, so the wizard still says the posture is ephemeral.
 
 ### Per OS
 
@@ -568,9 +572,10 @@ Still **deferred**, by design:
   `commit`). The gate today is preview, then confirm. Automated propagation probes would
   be a new driver subcommand that every front-end then surfaces.
 - **Emulated-mesh follow-ups** (see [Go live from an emulated mesh](#go-live-from-an-emulated-mesh)):
-  booting a mesh from a saved device, so an emulated posture survives a restart; the
-  **remote** target (any ssh-reachable node); and an inbound relay on the Studio host,
-  which waits on an operator decision because it exposes the workstation.
+  a Studio button to boot a mesh from its save (the CLI and Makefile lane exists; the
+  button waits on an operator decision); the **remote** target (any ssh-reachable node);
+  and an inbound relay on the Studio host, which waits on an operator decision because it
+  exposes the workstation.
 - **The other eight builders** (Frite, Jetson, Orange Pi) bake no go-live driver, on
   purpose. They bake neither firewall-reconcile nor release-state, because they are
   clients and appliances, not go-live server nodes.
