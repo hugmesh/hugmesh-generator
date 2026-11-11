@@ -423,7 +423,54 @@ class WorklistDriver:
             if on_entry_done:
                 on_entry_done(i, code)
 
+        if self.generate_keys and self._is_mesh():
+            self._hand_mesh_ca_on(on_line)
         return self.summary_exit_code()
+
+    def _hand_mesh_ca_on(self, on_line: Callable[[int, str], None] | None) -> None:
+        """Give every generated keys folder without one the pki stick's mesh CA CERTIFICATE.
+
+        The pki node's headscale serves HTTPS with a certificate from the mesh CA its
+        stick carries, and a node trusts it only through its own stick's ``certs/*.crt``
+        (docs/HEADSCALE-DERP.md). With the Domain CA keys step every stick already gets
+        ``--ca-cert``; without it the pki stick makes its own CA and the other sticks get
+        none, so they could not log in. Mirrors scripts/build-all-roles.sh. The
+        certificate only: a file that holds a private key is never copied."""
+        done = [(i, r.keys_path) for i, r in enumerate(self.results) if r.keys_ok and r.keys_path]
+        sources = [os.path.join(p, "certs", "cluster-ca.crt") for _, p in done
+                   if os.path.isfile(os.path.join(p, "certs", "cluster-ca.key"))
+                   and os.path.isfile(os.path.join(p, "certs", "cluster-ca.crt"))]
+        if not sources:
+            return
+        try:
+            with open(sources[0], "rb") as f:
+                data = f.read()
+        except OSError:
+            return
+        if b"PRIVATE KEY" in data or b"-----BEGIN CERTIFICATE-----" not in data:
+            return
+        for i, p in done:
+            certs = os.path.join(p, "certs")
+            if (os.path.isfile(os.path.join(certs, "cluster-ca.key"))
+                    or os.path.isfile(os.path.join(certs, "cluster-ca.crt"))):
+                continue
+            try:
+                os.makedirs(certs, exist_ok=True)
+                with open(os.path.join(certs, "cluster-ca.crt"), "wb") as f:
+                    f.write(data)
+            except OSError as e:
+                if on_line:
+                    on_line(i, f"!! could not copy the mesh CA into {certs}: {e} — this node "
+                               "cannot verify the mesh's headscale")
+                continue
+            if on_line:
+                on_line(i, f"mesh CA: certs/cluster-ca.crt from {os.path.dirname(os.path.dirname(sources[0]))} "
+                           "(this node trusts the mesh's headscale)")
+        others = [s for s in sources[1:] if open(s, "rb").read() != data]
+        if others and on_line:
+            on_line(done[0][0], "!! another pki stick has its OWN mesh CA ("
+                    + ", ".join(others) + "); nodes provisioned from it and from the other "
+                    "sticks do not trust each other's headscale")
 
     def _genkeys_command(self, script: str, brand: str, args: list[str],
                          osname: str | None = None,

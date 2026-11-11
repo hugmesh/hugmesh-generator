@@ -88,7 +88,9 @@ Upgrade/Connection headers through. The tailscale control channel (`/ts2021`) an
 (`/derp`) are both HTTP/1.1 upgrades. headscale's REST API (`/api/`) and `/swagger` are
 **404 at the door**: only admin-bff calls the API, and it calls it inside the compose network.
 With `TOR=1` the onion's `:443` goes through this same door, so the API stays off the onion
-too.
+too. `/derp` is answered only for loopback, private LAN, tailnet and IPv6 ULA/link-local
+sources (403 for any other): headscale's embedded relay has no client verification, so a
+published door must not publish an open relay ([`HEADSCALE-DERP.md`](HEADSCALE-DERP.md#who-can-use-the-relay)).
 
 There is deliberately **no network alias `hs.<domain>`** on the headscale container. A
 token's login server is `https://hs.<domain>:<port>`. Inside the compose network that alias
