@@ -20,7 +20,6 @@ import re
 import socket
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 import imagehash
@@ -47,27 +46,97 @@ def _verdict(task: str, tenant: str, user: str, model: str, result: dict[str, An
             "timestamp": _now(), "result": result}
 
 
-def _assert_public_image_url(url: str) -> None:
+# One detail for every image_url the guard refuses, whatever the reason. Separate
+# "does not resolve" and "non-public address" answers would let a caller learn which
+# internal names exist.
+_IMAGE_URL_REFUSED = "image_url must be a public http(s) URL"
+# One detail for every failed fetch. The underlying httpx error names the address,
+# port and failure mode (refused, timed out, reset), so echoing it would turn this
+# endpoint into a reachability probe.
+_IMAGE_URL_FETCH_FAILED = "could not fetch image_url"
+
+# TLS trust for image_url fetches. Built once. httpx.create_ssl_context() reads
+# SSL_CERT_FILE / SSL_CERT_DIR as before; the fetch client itself runs with
+# trust_env=False, so no proxy variable can route the request around the pinned
+# address.
+_TLS_CONTEXT = httpx.create_ssl_context()
+
+
+def _is_public_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True only for a globally routable unicast address.
+
+    is_global is the primary test. It refuses everything is_private does and also
+    100.64.0.0/10 (CGNAT, which is the mesh's own headscale tailnet, MagicDNS
+    100.100.100.100 included), which is_private does not cover. The explicit
+    predicates stay as well, because is_global alone accepts multicast. IPv6 forms that carry an IPv4
+    address are covered by the same predicates: an IPv4-mapped address is judged by
+    its IPv4 address, 6to4 (2002::/16) counts as private and NAT64 (64:ff9b::/96) as
+    reserved."""
+    if not ip.is_global:
+        return False
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def _resolve_public_image_url(url: str) -> tuple[httpx.URL, str]:
     """SSRF guard. image_url is user-supplied (behind the ROLE_USER be-gateway) and must
-    only reference a PUBLIC http(s) endpoint. Reject any non-http(s) scheme and any host
-    that resolves to a private / loopback / link-local / reserved address, so a user
-    cannot make the service fetch in-cluster endpoints or the cloud metadata service.
-    Residual: a DNS-rebinding TOCTOU between this check and the fetch — redirects are
-    disabled and the blast radius is a single GET whose body is only hashed, so this is
-    acceptable for the role-gated route."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise HTTPException(status_code=400, detail="image_url must be a public http(s) URL")
+    only reference a PUBLIC http(s) endpoint. The URL is parsed ONCE, by the same parser
+    that builds the request, so the guard and the fetch cannot disagree about the host.
+    Every address the host resolves to must be public (see _is_public_address);
+    one non-public answer refuses the whole URL.
+
+    Returns the parsed URL and the vetted address the fetch must connect to. The caller
+    connects to that address and does not resolve the name again, which closes the
+    DNS-rebinding window between this check and the fetch."""
+    try:
+        parsed = httpx.URL(url)
+    except (httpx.InvalidURL, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=_IMAGE_URL_REFUSED) from None
+    if parsed.scheme not in ("http", "https") or not parsed.raw_host:
+        raise HTTPException(status_code=400, detail=_IMAGE_URL_REFUSED)
+    try:
+        host = parsed.raw_host.decode("ascii")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail=_IMAGE_URL_REFUSED) from None
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
-        addrinfos = socket.getaddrinfo(parsed.hostname, port, proto=socket.IPPROTO_TCP)
-    except socket.gaierror:
-        raise HTTPException(status_code=400, detail="image_url host does not resolve")
+        addrinfos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        raise HTTPException(status_code=400, detail=_IMAGE_URL_REFUSED) from None
+    vetted: list[str] = []
     for info in addrinfos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            raise HTTPException(status_code=400, detail="image_url resolves to a non-public address")
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            raise HTTPException(status_code=400, detail=_IMAGE_URL_REFUSED) from None
+        if not _is_public_address(ip):
+            raise HTTPException(status_code=400, detail=_IMAGE_URL_REFUSED)
+        vetted.append(str(ip))
+    if not vetted:
+        raise HTTPException(status_code=400, detail=_IMAGE_URL_REFUSED)
+    return parsed, vetted[0]
+
+
+def _fetch_image_url(image_url: str) -> bytes:
+    """GET image_url from the address the guard vetted.
+
+    The request goes to the IP literal, so httpx never looks the name up itself. The
+    Host header and the TLS SNI / certificate check still use the original name
+    (httpx's documented sni_hostname request extension). Redirects are not followed,
+    and every failure returns the same generic detail."""
+    parsed, address = _resolve_public_image_url(image_url)
+    pinned = parsed.copy_with(host=address)
+    host_header = parsed.netloc.decode("ascii")
+    server_name = parsed.raw_host.decode("ascii")
+    try:
+        with httpx.Client(timeout=10.0, follow_redirects=False, trust_env=False,
+                          verify=_TLS_CONTEXT) as client:
+            r = client.get(pinned, headers={"Host": host_header},
+                           extensions={"sni_hostname": server_name})
+            r.raise_for_status()
+            return r.content
+    except httpx.HTTPError:
+        raise HTTPException(status_code=400, detail=_IMAGE_URL_FETCH_FAILED) from None
 
 
 def _decode_image(image_b64: str | None, image_url: str | None) -> bytes:
@@ -77,13 +146,7 @@ def _decode_image(image_b64: str | None, image_url: str | None) -> bytes:
         except (binascii.Error, ValueError):
             raise HTTPException(status_code=400, detail="image_b64 is not valid base64")
     if image_url:
-        _assert_public_image_url(image_url)
-        try:
-            r = httpx.get(image_url, timeout=10.0, follow_redirects=False)
-            r.raise_for_status()
-            return r.content
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=400, detail=f"could not fetch image_url: {e}")
+        return _fetch_image_url(image_url)
     raise HTTPException(status_code=400, detail="provide image_b64 or image_url")
 
 
