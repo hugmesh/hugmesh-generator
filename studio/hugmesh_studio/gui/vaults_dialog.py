@@ -89,7 +89,9 @@ class VaultsDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self._project = project
         self._volumes: list[vaults.ManagedVolume] = []
-        self._docker_down = False
+        # why the volume list could not be read ("" = it was): the status line's reason,
+        # which the disabled Delete repeats rather than guessing at a cause of its own
+        self._volumes_blocked = ""
         self.vault_entries: list[vaults.VaultEntry] = []
         self.setWindowTitle("Vaults & managed volumes")
         self.resize(820, 520)
@@ -171,8 +173,9 @@ class VaultsDialog(QtWidgets.QDialog):
         volumes, (vault_entries, vault_cap), docker_cap = payload
         self.refresh_btn.setEnabled(True)
         self._volumes = list(volumes)
-        self._docker_down = not docker_cap.available
-        if self._docker_down:
+        self._volumes_blocked = ("" if docker_cap.available
+                                 else docker_cap.detail or "the volume list could not be read")
+        if self._volumes_blocked:
             # WARNING style, not the muted grey of a summary line: this is the reason
             # the table is empty and the remedy for it, and in grey it read as a note
             self._say(" — ".join(t for t in (docker_cap.detail, docker_cap.remedy) if t),
@@ -223,8 +226,8 @@ class VaultsDialog(QtWidgets.QDialog):
             self.danger.setText("")
             self.delete_btn.setEnabled(False)
             self.delete_btn.setToolTip(
-                "Docker is not reachable, so no volume can be listed or deleted."
-                if self._docker_down and not self._volumes
+                f"No volume can be listed or deleted: {self._volumes_blocked}."
+                if self._volumes_blocked and not self._volumes
                 else "Select one volume in the table first.")
             return
         if vol.in_use:

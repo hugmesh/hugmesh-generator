@@ -337,8 +337,10 @@ class TestDockerDownSaysWhyInTheWarningColour:
 
     def test_a_failed_probe_says_so_without_a_dangling_dash(self, qapp, monkeypatch):
         """The probe's own failure carries no docker remedy: the line must not end in
-        an empty "— " where the remedy would go."""
-        self._world(monkeypatch)
+        an empty "— " where the remedy would go. Docker ANSWERS here, so the disabled
+        Delete must repeat the status line's reason, not claim Docker is down."""
+        fake, _state = self._world(monkeypatch)
+        fake.table["docker info"] = (0, "27.3.1\n", "")
 
         def boom(*_a, **_k):
             raise RuntimeError("kubectl went away")
@@ -347,6 +349,9 @@ class TestDockerDownSaysWhyInTheWarningColour:
         try:
             assert d.status.text() == "probe failed", d.status.text()
             assert styles.WARN in d.status.styleSheet()
+            assert not d.delete_btn.isEnabled()
+            assert d.delete_btn.toolTip() == "No volume can be listed or deleted: probe failed."
+            assert "docker" not in d.delete_btn.toolTip().lower()
         finally:
             d.close()
 
@@ -364,7 +369,8 @@ class TestDockerDownSaysWhyInTheWarningColour:
         d = self._dialog(qapp)
         try:
             assert not d.delete_btn.isEnabled()
-            assert "Docker is not reachable" in d.delete_btn.toolTip()
+            assert d.delete_btn.toolTip() == \
+                "No volume can be listed or deleted: the docker daemon is not reachable."
             # the walk's own detector: no visible disabled button without a reason
             silent = [b.text() for b in d.findChildren(QtWidgets.QAbstractButton)
                       if b.isVisibleTo(d) and not b.isEnabled() and b.text()
