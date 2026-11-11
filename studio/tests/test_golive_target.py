@@ -606,6 +606,13 @@ def test_an_unreachable_device_is_unknown_never_internal(tmp_path):
     assert p.sentence().startswith("unknown (device not reachable) — rpi5/pki is not "
                                    "running")
 
+    # a client image is reachable, but bakes no go-live driver: not asked, and not
+    # called unreachable either
+    desk = _target(tmp_path, label="rpi5/desk", role="desktop")
+    p = gt.read_posture(desk, run=run)
+    assert run.calls == [] and p.verdict == "unknown"
+    assert p.sentence().startswith("unknown (not read) — rpi5/desk is a desktop client")
+
     def boom(argv, **kw):
         raise subprocess.TimeoutExpired(argv, 45)
     assert gt.read_posture(_target(tmp_path), run=boom).sentence().startswith(

@@ -1025,14 +1025,17 @@ def _utc_now() -> str:
 def read_posture(target: GoLiveTarget, run=None, timeout: float = 45,
                  now: str = "") -> Posture:
     """Ask the device for its posture: one read-only ssh round trip (:func:`posture_argv`).
-    A refused target (stopped, no channel, a client) is not asked over ssh and reads
-    ``unknown (device not reachable)`` with the refusal as the reason; so does an ssh
-    that failed (exit 255, a timeout). Never raises."""
+    A refused target is never asked over ssh: one with no channel (stopped, no ssh port
+    or key) reads ``unknown (device not reachable)``, one this host will not use (a
+    client image, a docker-lane device from native Windows) ``unknown (not read)`` —
+    each with the refusal as the reason. An ssh that failed (exit 255, a timeout) is
+    not reachable either. Never raises."""
     run = run or subprocess.run
     at = now or _utc_now()
     why = refusal(target)
     if why:
-        return Posture(error=why, at=at)
+        channel = target.running and target.ssh_port > 0 and bool(target.ssh_base_argv)
+        return Posture(asked=not channel, error=why, at=at)
     try:
         r = run(posture_argv(target), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, timeout=timeout)
