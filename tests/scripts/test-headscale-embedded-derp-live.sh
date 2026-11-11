@@ -115,8 +115,10 @@ hs_log() { docker logs "${SFX}-$1" 2>&1; }
 ts_up() {
     local label="$1" hs="${SFX}-$2" login="$3" name="${SFX}-$1" key
     shift 3
-    docker exec "${hs}" headscale users create live >/dev/null 2>&1
-    key="$(docker exec "${hs}" headscale preauthkeys create --user live --expiration 1h 2>/dev/null | tail -1)"
+    # The membership user the shipped policies grant tag:hugmesh to (the tag-owners guard
+    # reads every literal `preauthkeys create --user` in the tree as a key-minting user).
+    docker exec "${hs}" headscale users create hugmesh >/dev/null 2>&1
+    key="$(docker exec "${hs}" headscale preauthkeys create --user hugmesh --expiration 1h 2>/dev/null | tail -1)"
     [ -n "${key}" ] || return 1
     CONTAINERS+=("${name}")
     docker run -d --name "${name}" --network "${NET}" "$@" -e TS_AUTHKEY="${key}" -e TS_USERSPACE=true \
