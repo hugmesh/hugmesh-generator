@@ -486,14 +486,19 @@ has one `release/X.Y` branch (`tests/scripts/test-akkoma-image-pin.sh` enforces 
 The workflow boot-tests the image before it pushes, and its signing, attestation and
 tag steps are held equal to `mesh-node-release.yml`'s by the same test.
 
-`scripts/release/repos.tsv` holds one row per repository and `scripts/release.sh`
-refuses a repository listed twice, so this image is not yet part of a whole-org run
-(the generator's row is the mesh-node image). Release it by hand until the table can
-carry a second artifact per repository:
+It is in `scripts/release/repos.tsv` as the ARTIFACT row `hugmesh-generator@akkoma`:
+a second artifact of a repository gets a row whose ID is `<repository>@<artifact>`, its
+GitHub calls go to the repository, and `--only hugmesh-generator@akkoma` names it. A
+whole-org beta run therefore classifies and tags it like any stage-9 row. Artifact rows
+are beta-only: the stable channel cuts one `release/X.Y` and opens one bump PR per
+repository, so it skips them (and refuses one named with `--only`). A stable
+`akkoma-vX.Y.Z` is cut by hand on the generator's `release/X.Y` after the mesh-node
+row's stable has cut that branch:
 
 ```
-git tag akkoma-v$(cat images/akkoma/VERSION) origin/main   # beta: the commit must be on main
-git push origin akkoma-v$(cat images/akkoma/VERSION)
+# on release/X.Y, with images/akkoma/VERSION bumped to X.Y.Z in a PR there
+git tag akkoma-vX.Y.Z origin/release/X.Y
+git push origin akkoma-vX.Y.Z
 ```
 
 ## Testing the script
