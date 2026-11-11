@@ -473,10 +473,11 @@ json_str() {
 #   1. The guest's own verdict. /usr/libexec/udev-coldplug-guard prints
 #      "udev-coldplug-guard: FAIL" when udev's coldplug never reached udevd and
 #      the one in-guest re-trigger did not recover it. udev's rules never ran
-#      for those devices: the NIC is not set up (no ssh) and, on a desktop,
-#      seat0 has no devices (no X, no greeter), so the row fails the moment
-#      that line appears. (On a node with no seat rule an untagged card is not
-#      a failure; the helper only demands the seat tag where 71-seat.rules is.)
+#      for those devices, so the NIC is not set up (no ssh) and the row fails
+#      the moment that line appears. The verdict QUOTES the guest's line rather
+#      than describing the cost itself: only the guest knows whether it has a
+#      seat rule (71-seat.rules, elogind), so only its line may say seat0 has
+#      no devices; a node row's line says what udev did not do instead.
 #   2. A login prompt with no ssh behind it. getty is spawned after the default
 #      runlevel and sshd starts inside it, so once "<host> login:" is on the
 #      console init is over. If ssh still has not answered BOOT_STALL_GRACE
@@ -493,11 +494,16 @@ BOOT_STALL_REASON=""
 BOOT_STALL_LOGIN_AT=""
 boot_stall_check() {
     local console="$1" now="$2"
-    local nm=no lost=no waited=0
+    local nm=no lost=no waited=0 guard_line=""
     BOOT_STALL_REASON=""
     [ -f "${console}" ] || return 1
     if grep -aq 'udev-coldplug-guard: FAIL' "${console}"; then
-        BOOT_STALL_REASON="udev coldplug never reached udevd and the in-guest re-trigger did not recover it: seat0 has no devices (no X, no greeter) and NetworkManager cannot manage the NIC, so ssh will never answer (console: 'udev-coldplug-guard: FAIL')"
+        # From the marker on (a serial console can glue a previous partial line
+        # and colour codes in front of it), CR dropped, bounded.
+        guard_line="$(grep -a -m1 'udev-coldplug-guard: FAIL' "${console}")"
+        guard_line="udev-coldplug-guard: FAIL${guard_line#*udev-coldplug-guard: FAIL}"
+        guard_line="${guard_line//$'\r'/}"
+        BOOT_STALL_REASON="udev coldplug never reached udevd and the in-guest re-trigger did not recover it, so udev never set those devices up and ssh will never answer (console: '${guard_line:0:400}')"
         return 0
     fi
     [ "${BOOT_STALL_GRACE:-0}" -gt 0 ] || return 1

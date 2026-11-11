@@ -5,29 +5,40 @@
 #
 #   bash tests/scripts/test-udev-coldplug-guard.sh
 #
-# The helper runs under plain `sh` against a fake sysfs tree and a fake udevadm
-# that keeps a tiny device database in files, so every scenario is the helper's
-# real code making real decisions; nothing is grepped out of it.
+# The helper runs under plain `sh` against a fake root (sysfs + the udev rules
+# dirs, through UCG_ROOT, so the helper's OWN built-in dir list is what is
+# exercised) and a fake udevadm that keeps a tiny device database in files, so
+# every scenario is the helper's real code making real decisions; nothing is
+# grepped out of it. Every run is under `timeout`: a helper that never stops
+# polling fails here instead of hanging CI.
 #
 # WHAT IT PINS:
 #   1. HEALTHY BOOTS on a desktop (seat rule, tagged card), a headless node and
 #      a headless GPU node (initialised card, NO seat rule: nodes have no
-#      elogind) -> "ok", exit 0, and NO second coldplug (a re-trigger re-runs
-#      every RUN+= rule, so it must not be routine). A masked seat rule counts
-#      as no seat rule; one in /etc alone counts as one.
-#   2. LOST COLDPLUGS: the 2026-11-10 door-1 boot (PCI, NIC and card never
+#      elogind) -> "ok", exit 0, ONE ping, and NO second coldplug (a re-trigger
+#      re-runs every RUN+= rule, so it must not be routine).
+#   2. WHICH SEAT RULE COUNTS is decided over udevd's own dirs (systemd v260.1
+#      CONF_PATHS: /etc, /run, /usr/local/lib, /usr/lib), the first dir holding
+#      the name decides, and an empty file or a /dev/null link there masks it.
+#      A rule only in a real /lib/udev/rules.d is not read by udevd 260, so it
+#      demands nothing.
+#   3. LOST COLDPLUGS: the 2026-11-10 door-1 boot (PCI, NIC and card never
 #      reached udevd); a headless node whose NIC driver is a module (no NIC class
 #      device at all, only the PCI canary sees it); an uninitialised card on a
 #      GPU node -> "LOST", exactly one re-trigger (subsystems, then devices,
 #      --action=add), "RECOVERED", exit 0. The ping comes FIRST.
-#   3. A COLDPLUG THAT STAYS LOST -> the "udev-coldplug-guard: FAIL" line the QEMU
+#   4. A COLDPLUG THAT STAYS LOST -> the "udev-coldplug-guard: FAIL" line the QEMU
 #      runner fails fast on, exit 1; it claims seat0 only where a seat rule is.
-#   4. With a seat rule, a card that is initialised but carries no "seat" tag is
+#   5. With a seat rule, a card that is initialised but carries no "seat" tag is
 #      still a lost seat device (seat0 is built from that tag).
-#   5. A ping failure is reported and the check still runs.
-#   6. Virtual NICs (no device link) and DRM connectors (no dev file) are not
+#   6. THE PING IS POLLED (PR #972 refuter, round 2). While udevd has no socket
+#      yet a ping fails at once, so one ping is no barrier: a udevd that starts
+#      listening a few polls in must be waited for, and the re-trigger must come
+#      AFTER it answers (before that, uevents go nowhere). A udevd that never
+#      answers is reported, the wait is bounded, and the check still runs.
+#   7. Virtual NICs (no device link) and DRM connectors (no dev file) are not
 #      canaries; a box with no canaries at all is fine; a long list is bounded.
-#   7. The OpenRC service orders itself need udev / after udev-trigger and runs
+#   8. The OpenRC service orders itself need udev / after udev-trigger and runs
 #      the helper; the x86 build installs both files and links the service into
 #      runlevels/SYSINIT (executed against a scratch sysroot, not read).
 set -u
@@ -55,7 +66,11 @@ TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
 #   calls        one line per invocation: its argv
 #   db/<name>    a processed device ("udevd saw it"); content = its TAGS value
 #                (empty = processed, no tags)
-#   ping_rc      exit status of `control --ping` (default 0)
+#   ping_rc      exit status of every `control --ping` (default 0)
+#   ready_after  N: udevd has NO socket until the Nth ping, which it answers
+#                (and every later one); before that a ping fails and a trigger's
+#                uevents are lost (nobody has bound the netlink socket). This is
+#                the measured udevadm behaviour while udevd is still starting.
 #   on_trigger   "recover" = a trigger initialises every device in recover.list
 #                (each line "name TAGS"), anything else = triggers change nothing
 FAKE="${TMP}/udevadm"
@@ -64,9 +79,18 @@ cat > "${FAKE}" <<'EOF'
 S="${UCG_STATE:?}"
 echo "$*" >> "${S}/calls"
 case "$1" in
-    control) exit "$(cat "${S}/ping_rc" 2>/dev/null || echo 0)" ;;
+    control)
+        if [ -f "${S}/ready_after" ]; then
+            n=$(( $(cat "${S}/pings" 2>/dev/null || echo 0) + 1 ))
+            echo "${n}" > "${S}/pings"
+            [ "${n}" -ge "$(cat "${S}/ready_after")" ] || exit 1
+            : > "${S}/ready"
+            exit 0
+        fi
+        exit "$(cat "${S}/ping_rc" 2>/dev/null || echo 0)" ;;
     settle)  exit 0 ;;
     trigger)
+        [ -f "${S}/ready_after" ] && [ ! -f "${S}/ready" ] && exit 0
         if [ "$(cat "${S}/on_trigger" 2>/dev/null)" = recover ]; then
             while read -r n t; do printf '%s\n' "${t}" > "${S}/db/${n}"; done < "${S}/recover.list"
         fi
@@ -88,8 +112,9 @@ exit 0
 EOF
 chmod +x "${FAKE}"
 
-# mk_world NAME ROLE — a fresh sysfs + rules dirs + state. ROLE is one of
-#   desktop  client/desktop image: elogind's 71-seat.rules installed, card0
+# mk_world NAME ROLE — a fresh root (sysfs + udevd's four rules dirs + a real
+# /lib/udev/rules.d) + state. ROLE is one of
+#   desktop  client/desktop image: elogind's 71-seat.rules in /usr/lib, card0
 #   gpunode  headless GPU node (backend-gpu/omnibus/edge-ai, i915/amdgpu built
 #            in): card0, but NO seat rule (nodes ship no elogind)
 #   node     headless node: no card, no seat rule
@@ -98,25 +123,26 @@ chmod +x "${FAKE}"
 # file). recover.list holds what a working coldplug writes to the db; heal
 # writes it, i.e. "this boot's coldplug reached udevd".
 PCI_DEVS="0000:00:00.0 0000:00:02.0 0000:00:03.0"
+SEAT_RULE_TEXT='SUBSYSTEM=="drm", KERNEL=="card[0-9]*", TAG+="seat", TAG+="master-of-seat"'
 mk_world() {
-    local w="${TMP}/$1" role="$2" d
-    mkdir -p "${w}/sys/class/net/eth0/device" "${w}/sys/class/net/lo" "${w}/sys/class/net/dummy0" \
-             "${w}/sys/bus/pci/devices" "${w}/rules/etc" "${w}/rules/run" "${w}/rules/usr" "${w}/state/db"
+    local w="${TMP}/$1" role="$2" d s="${TMP}/$1/root/sys"
+    mkdir -p "${s}/class/net/eth0/device" "${s}/class/net/lo" "${s}/class/net/dummy0" \
+             "${s}/bus/pci/devices" "${w}/state/db"
+    for d in etc run usr/local/lib usr/lib lib; do mkdir -p "${w}/root/${d}/udev/rules.d"; done
     : > "${w}/state/calls"; : > "${w}/state/recover.list"
     for d in ${PCI_DEVS}; do
-        mkdir -p "${w}/sys/bus/pci/devices/${d}"
+        mkdir -p "${s}/bus/pci/devices/${d}"
         printf '%s\n' "${d} " >> "${w}/state/recover.list"
     done
     printf '%s\n' "eth0 :systemd:" >> "${w}/state/recover.list"
     case "${role}" in
         desktop|gpunode)
-            mkdir -p "${w}/sys/class/drm/card0" "${w}/sys/class/drm/card0-Virtual-1"
-            echo "226:0" > "${w}/sys/class/drm/card0/dev" ;;
+            mkdir -p "${s}/class/drm/card0" "${s}/class/drm/card0-Virtual-1"
+            echo "226:0" > "${s}/class/drm/card0/dev" ;;
     esac
     case "${role}" in
         desktop)
-            printf '%s\n' 'SUBSYSTEM=="drm", KERNEL=="card[0-9]*", TAG+="seat", TAG+="master-of-seat"' \
-                > "${w}/rules/usr/71-seat.rules"
+            printf '%s\n' "${SEAT_RULE_TEXT}" > "${w}/root/usr/lib/udev/rules.d/71-seat.rules"
             printf '%s\n' "card0 :master-of-seat:uaccess:seat:" >> "${w}/state/recover.list" ;;
         gpunode)
             printf '%s\n' "card0 " >> "${w}/state/recover.list" ;;
@@ -125,22 +151,29 @@ mk_world() {
 }
 # heal WORLD — every device the coldplug would reach is in the db.
 heal() { while read -r n t; do printf '%s\n' "${t}" > "$1/state/db/${n}"; done < "$1/state/recover.list"; }
-# run_guard WORLD — run the real helper under sh; sets OUT and RC.
+# run_guard WORLD — run the real helper under sh; sets OUT and RC. PING_T
+# (default 1) is UCG_PING_TIMEOUT. 20s of `timeout` is far above any run here
+# (the slowest, a udevd that never answers, polls for PING_T=2s).
+PING_T=1
 run_guard() {
-    OUT="$(UCG_SYSFS="$1/sys" UCG_UDEVADM="${FAKE}" UCG_STATE="$1/state" \
-           UCG_RULES_DIRS="$1/rules/etc:$1/rules/run:$1/rules/usr" \
-           UCG_PING_TIMEOUT=1 UCG_SETTLE_TIMEOUT=1 sh "${HELPER}" 2>&1)"
+    OUT="$(UCG_ROOT="$1/root" UCG_UDEVADM="${FAKE}" UCG_STATE="$1/state" \
+           UCG_PING_TIMEOUT="${PING_T}" UCG_PING_INTERVAL=0.05 UCG_SETTLE_TIMEOUT=1 \
+           timeout 20 sh "${HELPER}" 2>&1)"
     RC=$?
 }
 ntrig() { grep -c '^trigger' "$1/state/calls"; }
+npings() { grep -c '^control --ping' "$1/state/calls"; }
 
-echo "1. healthy boots on every role: ok, no second coldplug"
+echo "1. healthy boots on every role: ok, one ping, no second coldplug"
 W="$(mk_world healthy-desktop desktop)"; heal "${W}"
 run_guard "${W}"
 eq "${RC}" 0 "desktop: exit 0"
 has "${OUT}" "udev-coldplug-guard: ok (5 coldplug canaries initialised: 3 pci, 1 net, 1 drm; cards seat-tagged)" "desktop: one ok line counting 3 PCI + eth0 + card0"
 eq "$(ntrig "${W}")" 0 "desktop: no re-trigger"
 lacks "${OUT}" "LOST" "desktop: nothing reported lost"
+eq "$(npings "${W}")" 1 "desktop: udevd already listening -> exactly one ping"
+lacks "${OUT}" "not listening" "desktop: no ping-wait line when the first ping is answered"
+eq "$(grep '^control' "${W}/state/calls")" "control --ping --timeout=1" "desktop: the ping gets the whole budget (--timeout=PING_TIMEOUT)"
 
 W="$(mk_world healthy-node node)"; heal "${W}"
 run_guard "${W}"
@@ -148,9 +181,9 @@ eq "${RC}" 0 "headless node: exit 0"
 has "${OUT}" "udev-coldplug-guard: ok (4 coldplug canaries initialised: 3 pci, 1 net, 0 drm; no seat rule, cards need no seat tag)" "headless node: ok line"
 eq "$(ntrig "${W}")" 0 "headless node: no re-trigger"
 
-# THE PR #972 REFUTER'S MEDIUM: an initialised card with no seat tag on a node
-# with no seat rule is HEALTHY. Before the fix this printed LOST, re-ran the
-# whole coldplug and printed the FAIL marker the QEMU runner kills rows on.
+# THE PR #972 REFUTER'S MEDIUM (round 1): an initialised card with no seat tag on
+# a node with no seat rule is HEALTHY. Before that fix this printed LOST, re-ran
+# the whole coldplug and printed the FAIL marker the QEMU runner kills rows on.
 W="$(mk_world healthy-gpunode gpunode)"; heal "${W}"
 run_guard "${W}"
 eq "${RC}" 0 "headless GPU node, untagged card, no seat rule: exit 0"
@@ -159,24 +192,45 @@ eq "$(ntrig "${W}")" 0 "headless GPU node: no re-trigger"
 lacks "${OUT}" "LOST" "headless GPU node: the untagged card is not reported lost"
 lacks "${OUT}" "FAIL" "headless GPU node: no FAIL marker for the runner to kill the row on"
 
-# A seat rule that is installed but MASKED (same name in a higher-precedence
-# dir, empty or a /dev/null link) tags nothing either.
-for mask in empty devnull; do
-    W="$(mk_world masked-${mask} desktop)"; heal "${W}"
-    printf '%s\n' "card0 :uaccess:" > "${W}/state/db/card0"
-    if [ "${mask}" = empty ]; then : > "${W}/rules/etc/71-seat.rules"
-    else ln -s /dev/null "${W}/rules/run/71-seat.rules"; fi
+echo "2. which seat rule counts: udevd's own dirs, first dir decides, masks honoured"
+# seat_world NAME — a GPU node whose card is initialised but UNTAGGED; the
+# caller places rule files. "no seat tag" in the output = the guard believes a
+# seat rule is active; "ok" with no re-trigger = it believes none is.
+seat_world() { local w; w="$(mk_world "$1" gpunode)"; heal "${w}"; echo "${w}"; }
+R=root/etc/udev/rules.d; RUN=root/run/udev/rules.d; LOC=root/usr/local/lib/udev/rules.d
+USR=root/usr/lib/udev/rules.d; LIB=root/lib/udev/rules.d
+for d in "${R}" "${RUN}" "${LOC}" "${USR}"; do
+    W="$(seat_world "only-${d//\//_}")"
+    printf '%s\n' "${SEAT_RULE_TEXT}" > "${W}/${d}/71-seat.rules"
     run_guard "${W}"
-    eq "${RC}" 0 "seat rule masked (${mask}): untagged card is fine, exit 0"
-    eq "$(ntrig "${W}")" 0 "seat rule masked (${mask}): no re-trigger"
+    has "${OUT}" "drm/card0(no seat tag)" "seat rule only in /${d#root/}: udevd reads it, so the card must be tagged"
 done
-# ...while the same rule in /etc (not masked) overrides an absent /usr copy.
-W="$(mk_world etc-rule gpunode)"; heal "${W}"
-cp "${TMP}/healthy-desktop/rules/usr/71-seat.rules" "${W}/rules/etc/71-seat.rules"
+# /lib/udev/rules.d is NOT one of udevd 260's dirs: a rule only there tags nothing.
+W="$(seat_world only-lib)"
+printf '%s\n' "${SEAT_RULE_TEXT}" > "${W}/${LIB}/71-seat.rules"
 run_guard "${W}"
-has "${OUT}" "drm/card0(no seat tag)" "seat rule in /etc only: the card must be tagged"
+eq "${RC}" 0 "seat rule only in a real /lib/udev/rules.d (udevd 260 never reads it): exit 0"
+eq "$(ntrig "${W}")" 0 "seat rule only in /lib/udev/rules.d: no re-trigger"
+has "${OUT}" "no seat rule, cards need no seat tag" "seat rule only in /lib/udev/rules.d: counted as no seat rule"
+# A mask (empty file or /dev/null link) in a higher dir hides the /usr/lib rule.
+for m in "${R}:empty" "${RUN}:devnull" "${LOC}:empty"; do
+    d="${m%%:*}"; kind="${m##*:}"
+    W="$(seat_world "mask-${kind}-${d//\//_}")"
+    printf '%s\n' "${SEAT_RULE_TEXT}" > "${W}/${USR}/71-seat.rules"
+    if [ "${kind}" = empty ]; then : > "${W}/${d}/71-seat.rules"
+    else ln -s /dev/null "${W}/${d}/71-seat.rules"; fi
+    run_guard "${W}"
+    eq "${RC}" 0 "seat rule masked in /${d#root/} (${kind}): untagged card is fine, exit 0"
+    eq "$(ntrig "${W}")" 0 "seat rule masked in /${d#root/} (${kind}): no re-trigger"
+done
+# ...and the other way round: a real rule in /etc beats a mask further down.
+W="$(seat_world etc-beats-mask)"
+printf '%s\n' "${SEAT_RULE_TEXT}" > "${W}/${R}/71-seat.rules"
+: > "${W}/${USR}/71-seat.rules"
+run_guard "${W}"
+has "${OUT}" "drm/card0(no seat tag)" "a rule in /etc beats a mask in /usr/lib: the card must be tagged"
 
-echo "2. lost coldplugs: one re-trigger recovers them"
+echo "3. lost coldplugs: one re-trigger recovers them"
 W="$(mk_world door1 desktop)"
 echo recover > "${W}/state/on_trigger"
 run_guard "${W}"
@@ -198,12 +252,12 @@ has "${first}" "control --ping" "the FIRST udevadm call is the ping (the barrier
 seq="$(grep -n -E '^(trigger --type=devices|settle)' "${W}/state/calls" | tail -2 | cut -d: -f2- | tr '\n' '|')"
 has "${seq}" "trigger --type=devices --action=add|settle" "door-1: settles after the re-trigger before re-checking"
 
-# THE REFUTER'S LOW: a headless node whose only NIC driver is a module udev
-# loads from the modalias. With the coldplug lost the module never loads, so
-# there is no NIC class device and no card: before the fix the guard printed
+# THE ROUND-1 REFUTER'S LOW: a headless node whose only NIC driver is a module
+# udev loads from the modalias. With the coldplug lost the module never loads,
+# so there is no NIC class device and no card: before that fix the guard printed
 # "ok (0 coldplug canaries initialised)". The PCI devices are still in sysfs.
 W="$(mk_world module-nic node)"
-rm -rf "${W}/sys/class/net/eth0"
+rm -rf "${W}/root/sys/class/net/eth0"
 sed -i '/^eth0 /d' "${W}/state/recover.list"
 echo recover > "${W}/state/on_trigger"
 run_guard "${W}"
@@ -221,7 +275,7 @@ run_guard "${W}"
 has "${OUT}" "LOST coldplug: 1 canary device(s) never reached udevd: drm/card0 ;" "GPU node: an uninitialised card is still lost"
 has "${OUT}" "RECOVERED" "GPU node: recovered by the re-trigger"
 
-echo "3. a coldplug that stays lost: the FAIL line the runner keys on"
+echo "4. a coldplug that stays lost: the FAIL line the runner keys on"
 W="$(mk_world stuck desktop)"
 run_guard "${W}"
 eq "${RC}" 1 "stuck: exit 1"
@@ -239,7 +293,7 @@ grep -q -F "grep -aq 'udev-coldplug-guard: FAIL'" "${ROOT}/tests/qemu/docker-ent
     && _ok "the runner greps the same 'udev-coldplug-guard: FAIL' marker" \
     || _bad "the runner does not grep 'udev-coldplug-guard: FAIL'"
 
-echo "4. with a seat rule, an initialised card without the seat tag is a lost seat device"
+echo "5. with a seat rule, an initialised card without the seat tag is a lost seat device"
 W="$(mk_world untagged desktop)"; heal "${W}"
 printf '%s\n' ":uaccess:" > "${W}/state/db/card0"
 run_guard "${W}"
@@ -254,20 +308,72 @@ printf '%s\n' ":master-of-seat:uaccess:" > "${W}/state/db/card0"
 run_guard "${W}"
 has "${OUT}" "drm/card0(no seat tag)" "near-miss: master-of-seat alone is not the seat tag"
 
-echo "5. ping failure is reported and the check still runs"
+echo "6. the ping is polled until udevd answers, bounded, and the check runs either way"
+# THE PR #972 REFUTER'S MEDIUM (round 2): the boot that lost its coldplug is one
+# where udevd was not listening yet. Its ping fails at once; a guard that pings
+# ONCE re-triggers into the same void and prints FAIL. Here udevd answers the
+# 3rd ping, and a trigger before that is lost.
+W="$(mk_world late-udevd desktop)"
+echo 3 > "${W}/state/ready_after"; echo recover > "${W}/state/on_trigger"
+PING_T=10 run_guard "${W}"
+eq "${RC}" 0 "late udevd + lost coldplug: exit 0"
+has "${OUT}" "udev-coldplug-guard: udevd was not listening yet: it answered ping 3 after" "late udevd: says it waited (the race, seen live)"
+lacks "${OUT}" "did not answer" "late udevd: no false 'did not answer' line"
+has "${OUT}" "udev-coldplug-guard: RECOVERED" "late udevd: the re-trigger, sent after udevd answered, RECOVERED"
+lacks "${OUT}" "FAIL" "late udevd: no FAIL"
+eq "$(npings "${W}")" 3 "late udevd: polled until the answer, then stopped"
+first_trig="$(grep -n '^trigger' "${W}/state/calls" | head -1 | cut -d: -f1)"
+last_ping="$(grep -n '^control --ping' "${W}/state/calls" | tail -1 | cut -d: -f1)"
+if [ -n "${first_trig}" ] && [ -n "${last_ping}" ] && [ "${first_trig}" -gt "${last_ping}" ]; then
+    _ok "late udevd: no trigger before the answered ping (calls line ${first_trig} > ${last_ping})"
+else
+    _bad "late udevd: a trigger came before udevd answered (trigger line '${first_trig}', last ping line '${last_ping}')"
+fi
+eq "$(grep '^control' "${W}/state/calls" | head -1)" "control --ping --timeout=10" "late udevd: the first poll gets the whole budget"
+# udevd never answers, coldplug lost: reported, bounded, and the check STILL runs.
+W="$(mk_world never-udevd desktop)"
+echo 999999 > "${W}/state/ready_after"
+# centiseconds since boot, the same clock the helper uses
+up_cs() { local u; read -r u _ < /proc/uptime; echo $(( ${u%.*} * 100 + 1${u#*.} - 100 )); }
+t0="$(date +%s)"; c0="$(up_cs)"
+PING_T=2 run_guard "${W}"
+t1="$(date +%s)"; c1="$(up_cs)"
+has "${OUT}" "udev-coldplug-guard: udevd did not answer a ping within 2s" "udevd never answers: says so"
+has "${OUT}" "checking anyway" "udevd never answers: says the check goes on"
+has "${OUT}" "udev-coldplug-guard: LOST coldplug" "udevd never answers: the check still ran and found the loss"
+eq "$(ntrig "${W}")" 2 "udevd never answers: still re-triggers once"
+has "${OUT}" "udev-coldplug-guard: FAIL" "udevd never answers: FAIL (the runner's fail-fast marker)"
+eq "${RC}" 1 "udevd never answers: exit 1"
+n="$(npings "${W}")"
+if [ "${n}" -gt 1 ]; then _ok "udevd never answers: polled (${n} pings), not pinged once"; else _bad "udevd never answers: pinged ${n} time(s), want a poll"; fi
+if [ $((t1 - t0)) -le 6 ]; then _ok "udevd never answers: the wait is bounded by PING_TIMEOUT ($((t1 - t0))s for 2s)"; else _bad "udevd never answers: took $((t1 - t0))s with PING_TIMEOUT=2"; fi
+# ...and it is a budget of real time, not of polls: a udevd that comes up late
+# in the 30s still gets found. (Charging each fast-failing poll a whole second
+# would give up after a fraction of PING_TIMEOUT on a real boot.)
+if [ $((c1 - c0)) -ge 150 ]; then _ok "udevd never answers: it kept polling for the whole budget ($((c1 - c0))cs of 200)"
+else _bad "udevd never answers: gave up after $((c1 - c0))cs of a 200cs budget"; fi
+# Each poll gets only the time LEFT: the first the whole 2s, the last (more
+# than 1s in) 1s, none more than the budget. A ping that blocks on a socket with
+# no event loop behind it must not stretch the wait past PING_TIMEOUT.
+tos="$(grep '^control' "${W}/state/calls" | sed -n 's/.*--timeout=//p')"
+eq "$(printf '%s\n' "${tos}" | head -1)" 2 "udevd never answers: the first poll gets the whole budget"
+eq "$(printf '%s\n' "${tos}" | tail -1)" 1 "udevd never answers: the last poll gets only the time left"
+eq "$(printf '%s\n' "${tos}" | awk '$1 > 2' | head -1)" "" "udevd never answers: no poll is given more than the budget"
+# a ping that fails on a HEALTHY world: reported, no re-trigger, exit 0
 W="$(mk_world noping desktop)"; heal "${W}"
 echo 1 > "${W}/state/ping_rc"
 run_guard "${W}"
 has "${OUT}" "udevd did not answer a ping" "noping: says so"
 eq "${RC}" 0 "noping: canaries fine -> exit 0"
+eq "$(ntrig "${W}")" 0 "noping: canaries fine -> no re-trigger"
 
-echo "6. a box with no canaries, and a lost coldplug on a big box"
-W="${TMP}/bare"; mkdir -p "${W}/sys/class/net/lo" "${W}/state/db"; : > "${W}/state/calls"
+echo "7. a box with no canaries, and a lost coldplug on a big box"
+W="${TMP}/bare"; mkdir -p "${W}/root/sys/class/net/lo" "${W}/state/db"; : > "${W}/state/calls"
 run_guard "${W}"
 eq "${RC}" 0 "no PCI, no NIC, no card: exit 0"
 eq "$(ntrig "${W}")" 0 "no PCI, no NIC, no card: no re-trigger"
 W="$(mk_world big node)"
-for i in 10 11 12 13 14 15 16 17 18 19; do mkdir -p "${W}/sys/bus/pci/devices/0000:00:${i}.0"; done
+for i in 10 11 12 13 14 15 16 17 18 19; do mkdir -p "${W}/root/sys/bus/pci/devices/0000:00:${i}.0"; done
 run_guard "${W}"
 has "${OUT}" "LOST coldplug: 14 canary device(s) never reached udevd:" "big box: counts every lost canary"
 has "${OUT}" "+6 more ; re-triggering" "big box: names the first 8, then '+6 more'"
@@ -275,7 +381,7 @@ has "${OUT}" "pci/0000:00:14.0 +6 more" "big box: the 8th name is the last one p
 lacks "${OUT}" "pci/0000:00:15.0" "big box: the 9th lost canary is counted, not named"
 has "${OUT}" "+6 more (udev never applied" "big box: the FAIL line is bounded too"
 
-echo "7. the service and the x86 build wiring"
+echo "8. the service and the x86 build wiring"
 svc="$(cat "${INITD}")"
 has "${svc}" "need udev" "service: need udev"
 has "${svc}" "after udev-trigger" "service: after udev-trigger"

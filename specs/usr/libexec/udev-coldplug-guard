@@ -26,9 +26,22 @@
 # minutes before keys-provision ran at all.
 #
 # WHAT THIS DOES.
-#   1. `udevadm control --ping`: udevd answers a ping only from inside its event
-#      loop, which it enters after the netlink bind. A reply means "udevd is
-#      listening now", which is exactly the barrier udev-trigger lacks.
+#   1. Wait for udevd: poll `udevadm control --ping` until udevd answers, for up
+#      to PING_TIMEOUT seconds in all. udevd answers a ping only from inside its
+#      event loop, which it enters after the netlink bind, so a reply means
+#      "udevd is listening now": the barrier udev-trigger lacks. ONE ping is not
+#      that barrier. While udevd has not created its sockets yet the ping cannot
+#      connect and fails AT ONCE, whatever --timeout says, and `udevadm settle`
+#      then returns 0 at once too (measured on udevadm 262 with an empty
+#      /run/udev: ping rc=1 in 0.27s, settle rc=0 in 0.01s; v260.1's
+#      udevadm-control.c and udevadm-settle.c read the same way). A boot that
+#      lost its coldplug is exactly a boot where udevd was not listening yet when
+#      udev-trigger ran, so a single ping here would let the re-trigger below go
+#      into the same void. Each poll gets only the time left (a socket that
+#      exists but has no event loop behind it yet blocks the ping until the
+#      loop answers), and the clock is /proc/uptime (CLOCK_BOOTTIME), which does
+#      not jump when the wall clock is set. When udevd needed more than one poll
+#      the helper says so: that line is the race, seen live.
 #   2. `udevadm settle`, then probe the coldplug canaries. A canary is
 #      initialised when udevadm reports USEC_INITIALIZED for it.
 #      - pci: every /sys/bus/pci/devices/*. The role-independent canary: PCI
@@ -54,8 +67,13 @@
 #      (subsystems, then devices, --action=add, the same two calls udev-trigger
 #      makes) and settle. A second coldplug re-runs RUN+= rules, so it is never
 #      done on a healthy boot.
-#   4. One console line either way. The QEMU runner greps the FAIL line to stop
-#      waiting for an ssh that cannot come (tests/qemu/docker-entrypoint.sh).
+#   4. If udevd never answers within PING_TIMEOUT it says so and still checks
+#      (and re-triggers if needed): a missing answer is no proof of a healthy
+#      coldplug.
+#   5. One verdict line either way (ok / RECOVERED / FAIL), after at most one
+#      line about the ping. The QEMU runner greps the FAIL line to stop waiting
+#      for an ssh that cannot come (tests/qemu/docker-entrypoint.sh) and quotes
+#      it, so the FAIL line names what the failure costs on THIS role.
 #
 # Exit 0 = every canary initialised (first time, or after the re-trigger).
 # Exit 1 = still missing after the re-trigger: udev never applied its rules to
@@ -64,18 +82,26 @@
 # The same plain udevadm calls udev-trigger makes, so the SELinux shape is the
 # one udev-trigger already has (initrc_t is files_unconfined_type; udevadm
 # transitions to its own domain). Overridable for the hermetic test only:
-#   UCG_SYSFS  sysfs root (default /sys)   UCG_UDEVADM  udevadm binary
-#   UCG_RULES_DIRS  colon-separated udev rules dirs, highest precedence first
-#                   (default /etc/udev/rules.d:/run/udev/rules.d:/usr/lib/udev/rules.d:/lib/udev/rules.d)
+#   UCG_ROOT     prefix for /sys and the udev rules dirs (default: none)
+#   UCG_UDEVADM  udevadm binary
 #   UCG_PING_TIMEOUT / UCG_SETTLE_TIMEOUT  seconds (defaults 30 / 60)
+#   UCG_PING_INTERVAL  seconds between pings (default 0.2)
 
 set -u
 
-SYSFS="${UCG_SYSFS:-/sys}"
+ROOT="${UCG_ROOT:-}"
+SYSFS="${ROOT}/sys"
 UDEVADM="${UCG_UDEVADM:-udevadm}"
 PING_TIMEOUT="${UCG_PING_TIMEOUT:-30}"
+PING_INTERVAL="${UCG_PING_INTERVAL:-0.2}"
 SETTLE_TIMEOUT="${UCG_SETTLE_TIMEOUT:-60}"
-RULES_DIRS="${UCG_RULES_DIRS:-/etc/udev/rules.d:/run/udev/rules.d:/usr/lib/udev/rules.d:/lib/udev/rules.d}"
+# The dirs udevd itself reads rules from, highest precedence first: systemd
+# v260.1 src/basic/constants.h CONF_PATHS("udev/rules.d"), which udev-rules.c
+# hands to conf_files_list. NOT /lib/udev/rules.d: udevd 260 never reads it
+# (Gentoo's systemd-utils 260.1 makes /lib/udev a symlink to ../usr/lib/udev
+# even on split-usr), so a seat rule that only exists there tags nothing, and
+# demanding the tag would be a false LOST on every boot.
+RULES_DIRS="${ROOT}/etc/udev/rules.d:${ROOT}/run/udev/rules.d:${ROOT}/usr/local/lib/udev/rules.d:${ROOT}/usr/lib/udev/rules.d"
 TAG="udev-coldplug-guard"
 
 say() { printf '%s: %s\n' "${TAG}" "$*"; }
@@ -173,8 +199,47 @@ fi
 
 settle() { "${UDEVADM}" settle --timeout="${SETTLE_TIMEOUT}" >/dev/null 2>&1; }
 
-if ! "${UDEVADM}" control --ping --timeout="${PING_TIMEOUT}" >/dev/null 2>&1; then
-    say "udevd did not answer a ping within ${PING_TIMEOUT}s"
+# uptime_cs — centiseconds since boot from /proc/uptime ("18245.03 ..."); empty
+# when it cannot be read. `1xx - 100` reads the fraction without the leading
+# zero that sh arithmetic would take for octal.
+uptime_cs() {
+    _u=""
+    read -r _u _ 2>/dev/null </proc/uptime || true
+    case "${_u}" in
+        [0-9]*.[0-9][0-9]) printf '%s' "$(( ${_u%.*} * 100 + 1${_u#*.} - 100 ))" ;;
+    esac
+}
+
+# wait_for_udevd — poll the ping until udevd answers (0) or PING_TIMEOUT seconds
+# have passed (1). Sets PINGS (polls made) and WAITED_CS. Without a readable
+# /proc/uptime every poll is charged one full second, so the loop still ends.
+wait_for_udevd() {
+    _t0="$(uptime_cs)"; PINGS=0; WAITED_CS=0
+    while :; do
+        _now="$(uptime_cs)"
+        if [ -n "${_t0}" ] && [ -n "${_now}" ]; then
+            WAITED_CS=$((_now - _t0))
+        else
+            WAITED_CS=$((PINGS * 100))
+        fi
+        _left=$(( (PING_TIMEOUT * 100 - WAITED_CS + 99) / 100 ))
+        [ "${_left}" -gt 0 ] || return 1
+        PINGS=$((PINGS + 1))
+        if "${UDEVADM}" control --ping --timeout="${_left}" >/dev/null 2>&1; then
+            _now="$(uptime_cs)"
+            [ -n "${_t0}" ] && [ -n "${_now}" ] && WAITED_CS=$((_now - _t0))
+            return 0
+        fi
+        sleep "${PING_INTERVAL}" 2>/dev/null || sleep 1
+    done
+}
+
+if wait_for_udevd; then
+    if [ "${PINGS}" -gt 1 ]; then
+        say "udevd was not listening yet: it answered ping ${PINGS} after $((WAITED_CS / 100)).$(( WAITED_CS % 100 / 10 ))s"
+    fi
+else
+    say "udevd did not answer a ping within ${PING_TIMEOUT}s (${PINGS} tries); checking anyway"
 fi
 settle || say "udevadm settle timed out after ${SETTLE_TIMEOUT}s"
 

@@ -24,7 +24,9 @@
 #   2. door-2 PASSES: ssh answering ends the wait before any stall verdict, even
 #      a slow ssh that answers just inside the grace.
 #   3. The guest's own verdict ("udev-coldplug-guard: FAIL", printed by
-#      specs/usr/libexec/udev-coldplug-guard) fails the row on the FIRST iteration.
+#      specs/usr/libexec/udev-coldplug-guard) fails the row on the FIRST iteration,
+#      and the row's verdict quotes that line: seat0 is named only when the guest
+#      named it (a node row has no seat manager).
 #   4. --boot-stall-grace 0 restores the old behaviour (wait the full --timeout),
 #      and a console with no login prompt yet never trips the grace.
 #   5. Only a getty prompt counts: "Local login: user X ready" does not; a CR
@@ -110,8 +112,23 @@ cp "${D1}" "${TMP}/guard-fail.console"
 printf '%s\n' "udev-coldplug-guard: FAIL: still uninitialised after the re-trigger: net/eth0 drm/card0 (seat0 will have no devices and NetworkManager will not manage the NIC)" >> "${TMP}/guard-fail.console"
 r="$(drive "${TMP}/guard-fail.console" 0 2400 300)"
 eq "$(field "${r}" 1)" FAIL "guard FAIL: the row FAILS"
-has "$(field "${r}" 2)" "seat0 has no devices" "guard FAIL: the verdict names seat0"
+has "$(field "${r}" 2)" "(console: 'udev-coldplug-guard: FAIL: still uninitialised after the re-trigger: net/eth0 drm/card0 (seat0 will have no devices and NetworkManager will not manage the NIC)')" "guard FAIL (desktop): the verdict quotes the guest's line, seat0 included"
 has "$(field "${r}" 2)" "udev-coldplug-guard: FAIL" "guard FAIL: the verdict quotes the console line"
+# A node row has no seat manager: the guest's line says so, and the runner must
+# not add a seat0 claim of its own (PR #972 refuter, round 2).
+cp "${D1}" "${TMP}/guard-fail-node.console"
+printf '%s\n' "udev-coldplug-guard: FAIL: still uninitialised after the re-trigger: pci/0000:00:03.0 net/eth0 (udev never applied its rules to them: no driver autoload, no NIC naming, no device permissions)" >> "${TMP}/guard-fail-node.console"
+r="$(drive "${TMP}/guard-fail-node.console" 0 2400 300)"
+eq "$(field "${r}" 1)" FAIL "guard FAIL (node): the row FAILS"
+lacks "$(field "${r}" 2)" "seat0" "guard FAIL (node): no seat0 claim on a row without a seat manager"
+lacks "$(field "${r}" 2)" "no X, no greeter" "guard FAIL (node): no X/greeter claim either"
+has "$(field "${r}" 2)" "udev never applied its rules to them" "guard FAIL (node): the verdict carries the guest's own cost"
+# A serial console can glue colour codes and a half line in front, and a CR after.
+printf '\033[0;32m * \033[0mChecking that the udev coldplug reached udevd ...udev-coldplug-guard: FAIL: still uninitialised after the re-trigger: net/eth0 (udev never applied its rules to them: no driver autoload, no NIC naming, no device permissions)\r\n' > "${TMP}/guard-fail-crlf.console"
+r="$(drive "${TMP}/guard-fail-crlf.console" 0 2400 300)"
+has "$(field "${r}" 2)" "(console: 'udev-coldplug-guard: FAIL: still uninitialised" "guard FAIL (serial): the quote starts at the marker"
+lacks "$(field "${r}" 2)" $'\r' "guard FAIL (serial): no CR in the verdict"
+lacks "$(field "${r}" 2)" "Checking that" "guard FAIL (serial): the glued half line is not quoted"
 t="$(field "${r}" 3)"
 if [ "${t}" -lt 10 ]; then _ok "guard FAIL: failed at ${t}s, on the first poll"; else _bad "guard FAIL: failed at ${t}s, want < 10"; fi
 r="$(drive "${TMP}/guard-fail.console" 0 2400 0)"
