@@ -26,7 +26,16 @@
 #   C. relay through the local stack's REAL TLS front: tests/stack/tls-front/default.conf
 #      itself, unedited, in stock nginx (its hs.<domain> server block: TLS on 8443,
 #      http2 on, Upgrade/Connection passed through to hugmesh-headscale:8080). Two
-#      clients forced onto DERP reach each other "via DERP(<region>)".
+#      clients forced onto DERP reach each other "via DERP(<region>)". The same front
+#      refuses /derp (403) to a source in a public range and serves it to a private one.
+#   D. the SHIPPED node path, nothing edited by hand: gen-provision-keys.sh sticks,
+#      keys-provision's own functions in the node's network namespace (HTTPS server_url
+#      on the LAN IP, a certificate from the stick's mesh CA), two workers on split
+#      networks that migrate their old http:// URL, join and relay "via DERP(hugmesh)"
+#      to an IP-literal node with a TCP payload crossing; a capture of headscale's
+#      namespace (no Tailscale lookups, no off-net attempts, with a positive control);
+#      the pki node's own client at https://127.0.0.1; a worker without the CA does not
+#      join.
 #
 # EXIT: 0 all passed; 1 an assertion failed; 2 could not run (no docker daemon, an
 # image could not be pulled) — a job FAILURE, never a skip.
@@ -37,6 +46,10 @@ PIN_SRC="${REPO}/build-x86-host-stage4.sh"
 PROV="${REPO}/specs/etc/keys-provision/provision.sh"
 FRONT_CONF="${DERP_LIVE_FRONT_CONF:-${REPO}/tests/stack/tls-front/default.conf}"  # override only to mutation-test section C
 NGINX_IMAGE="${DERP_LIVE_NGINX_IMAGE:-nginx:1.27-alpine}"
+# netshoot (bash, jq, openssl, curl, iproute2, tcpdump) runs keys-provision's functions
+# in a node's network namespace and holds the client namespaces. Pinned by digest: the
+# tag `latest` moves, and this is the build the suite was measured with.
+NSI="${DERP_LIVE_NETSHOOT_IMAGE:-nicolaka/netshoot@sha256:b09d9b21381f47a79b3cbcb30da25266dc17186ea00ae65e99fdc51396f48e70}"
 PUBLIC_URL="https://controlplane.tailscale.com/derpmap/default"
 
 P=0; F=0
@@ -52,7 +65,7 @@ TS_VER="$(sed -n 's/^TAILSCALE_VERSION="\([0-9.]*\)".*/\1/p' "${PIN_SRC}" | head
 HS_IMAGE="headscale/headscale:${HS_VER}"
 TS_IMAGE="tailscale/tailscale:v${TS_VER}"
 echo "== pinned: ${HS_IMAGE} + ${TS_IMAGE} (front: ${NGINX_IMAGE}) =="
-for img in "${HS_IMAGE}" "${TS_IMAGE}" "${NGINX_IMAGE}"; do
+for img in "${HS_IMAGE}" "${TS_IMAGE}" "${NGINX_IMAGE}" "${NSI}"; do
     docker image inspect "${img}" >/dev/null 2>&1 || docker pull -q "${img}" >/dev/null 2>&1 || cannot "could not pull ${img}"
 done
 
@@ -300,6 +313,28 @@ if ts_up r1 tls "https://${FRONT_HOST}:8443" "${DERP_ONLY[@]}" && ts_up r2 tls "
 else
     bad "the clients could not join through the TLS front"
 fi
+# Who the front relays for: /derp answers private sources only (headscale's embedded relay
+# has no client verification). The front is also put on a network in a PUBLIC range
+# (a documentation prefix, still --internal) and asked from there.
+PUBNET="${SFX}-pub"
+for sub in 198.51.100.0/24 203.0.113.0/24; do
+    docker network create --internal --subnet "${sub}" "${PUBNET}" >/dev/null 2>&1 && { EXTRA_NETS+=("${PUBNET}"); break; }
+done
+if [ "${EXTRA_NETS[*]:-}" = "${PUBNET}" ] && docker network connect "${PUBNET}" "${FR}" >/dev/null 2>&1; then
+    FR_PUB="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${PUBNET}\").IPAddress}}" "${FR}")"
+    FR_PRIV="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${NET}\").IPAddress}}" "${FR}")"
+    probe() {  # probe <network> <front address> <path>
+        docker run --rm --network "$1" --entrypoint curl "${NSI}" -sk -o /dev/null -w '%{http_code}' -m 5 \
+            --resolve "${FRONT_HOST}:8443:$2" "https://${FRONT_HOST}:8443$3" 2>/dev/null
+    }
+    pub_derp="$(probe "${PUBNET}" "${FR_PUB}" /derp/probe)"; pub_root="$(probe "${PUBNET}" "${FR_PUB}" /health)"
+    priv_derp="$(probe "${NET}" "${FR_PRIV}" /derp/probe)"
+    [ "${pub_derp}" = 403 ] && [ "${priv_derp}" = 200 ] && [ "${pub_root}" = 200 ] \
+        && ok "the front refuses /derp to a public-range source (403) and serves it to a private one (200); control stays open to both" \
+        || bad "front /derp allow-list: public /derp/probe=${pub_derp:-none} (want 403), private=${priv_derp:-none} (want 200), public /health=${pub_root:-none} (want 200)"
+else
+    bad "could not put the front on a public-range network to test its /derp allow-list"
+fi
 
 # ── D. the SHIPPED node path: HTTPS from the mesh CA, peers on split networks ──
 echo "-- D. shipped node path: gen-provision-keys sticks -> keys-provision -> headscale HTTPS; peers on split networks relay --"
@@ -316,8 +351,6 @@ echo "-- D. shipped node path: gen-provision-keys sticks -> keys-provision -> he
 # via the pki node's b-address (a second LAN that routes to the control server) and
 # has NO path to d1, so d1<->d2 traffic can only go through the embedded relay. No
 # TS_DEBUG_* knob forces DERP: the topology does.
-NSI="${DERP_LIVE_NETSHOOT_IMAGE:-nicolaka/netshoot:latest}"
-docker image inspect "${NSI}" >/dev/null 2>&1 || docker pull -q "${NSI}" >/dev/null 2>&1 || cannot "could not pull ${NSI}"
 command -v keytool >/dev/null 2>&1 && command -v ssh-keygen >/dev/null 2>&1 \
     || cannot "keytool and ssh-keygen are required to run scripts/gen-provision-keys.sh (section D)"
 NA="${SFX}-a"; NB="${SFX}-b"

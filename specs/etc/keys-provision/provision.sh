@@ -1067,6 +1067,9 @@ headscale_tls_sans() {
         for ((i = 0; i < n; i++)); do
             [ "$(jqm ".nodes[$i].role")" = "pki" ] && { jqm ".nodes[$i].ip"; jqm ".nodes[$i].name"; }
         done
+        # The in-cluster name of the selector-less headscale Service
+        # (specs/cluster/manifests/headscale), so an in-cluster https client can verify it.
+        printf '%s\n' headscale.hugmesh-pki.svc.cluster.local headscale.hugmesh-pki.svc
         printf '%s\n' "${HEADSCALE_TLS_EXTRA_SANS:-}" | tr ' ,' '\n\n'
     } 2>/dev/null | while IFS= read -r h; do
         [ -n "${h}" ] && [ "${h}" != "null" ] && headscale_tls_san_line "${h}"
@@ -1201,7 +1204,7 @@ provision_headscale_tls() {
     headscale_tls_config_set "${cfg}" off
     hp="${host}"; [[ "${host}" == *:* ]] && hp="[${host}]"
     HEADSCALE_SERVED_URL="http://${hp}:${lport}"
-    warn "headscale TLS: NO serving certificate for ${host} (the KEYS stick carries no mesh CA key, certs/cluster-ca.key, and no pre-issued headscale/tls.crt naming it) — headscale serves PLAIN HTTP at ${HEADSCALE_SERVED_URL}: nodes join, but the embedded DERP relay is NOT usable, so peers with no direct path get no relay"
+    warn "headscale TLS: NO serving certificate for ${host} (the KEYS stick carries no mesh CA key, certs/cluster-ca.key, and no pre-issued headscale/tls.crt naming it) — headscale serves PLAIN HTTP at ${HEADSCALE_SERVED_URL}: nodes whose login server is that http:// URL join, nodes given https:// do NOT, and the embedded DERP relay is NOT usable (peers with no direct path get no relay)"
     return 0
 }
 
@@ -1676,6 +1679,9 @@ control_url_tls_migrate() {
     elif ! _ctl_answers "https://${hp}/health"; then
         if _ctl_answers -k "https://${hp}/health"; then
             warn "control server ${1} presents a certificate this node does NOT trust — the join will FAIL until the mesh CA is on this KEYS stick (certs/cluster-ca.crt from the pki stick; provision_certs installs it)"
+        elif _ctl_answers "http://${hp}/health"; then
+            # Not downgraded: an https:// login server is what the stick asked for.
+            warn "control server ${1} answers only PLAIN HTTP (its headscale got no TLS certificate: no mesh CA key on the pki stick) — this node will NOT join at https://; fix the pki node, or set this stick's login_server to http://${hp} (no relay then)"
         else
             log "control server ${1} does not answer yet — its certificate could not be checked"
         fi

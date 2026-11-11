@@ -453,6 +453,13 @@ case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server https://10.77.
     *) _bad "E3b untrusted: $(grep '^tailscale up ' "${CALLS}")" ;; esac
 CURL_ANSWER=plain prov provision_tailscale "${TSM}"
 case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server http://10.77.0.13:8080 "*) _ok "E3b ...and a server still on plain http keeps the http:// URL" ;; *) _bad "E3b plain: $(grep '^tailscale up ' "${CALLS}")" ;; esac
+# An https:// login server whose headscale fell back to plain HTTP (no CA key on the pki
+# stick): NOT downgraded, and the reason the join will fail is said.
+CURL_ANSWER=plain prov provision_tailscale "$(printf '%s' "${TSM}" | jq -c '.tailscale.login_server="https://10.77.0.13:8080"')"
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server https://10.77.0.13:8080 "*)
+    printf '%s' "${POUT}" | grep -F 'answers only PLAIN HTTP' >/dev/null && _ok "E3b an https:// stick against a plain-HTTP server keeps https (no downgrade) and says why it will not join" \
+        || _bad "E3b https vs plain server not flagged: ${POUT}" ;;
+    *) _bad "E3b https vs plain: $(grep '^tailscale up ' "${CALLS}")" ;; esac
 prov provision_tailscale "$(printf '%s' "${TSM}" | jq -c '.tailscale.up_timeout="45s"')"
 case " $(grep '^tailscale up ' "${CALLS}") " in *" --timeout 45s "*) _ok "E4 .tailscale.up_timeout overrides the bound" ;; *) _bad "E4 up_timeout ignored: $(grep '^tailscale up ' "${CALLS}")" ;; esac
 prov provision_tailscale "$(printf '%s' "${TSM}" | jq -c '.tailscale.up_timeout="1d;reboot"')"

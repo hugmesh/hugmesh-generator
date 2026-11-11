@@ -285,6 +285,9 @@ for want in 10.20.30.40 127.0.0.1 10.0.0.10; do
     openssl x509 -in "${T}/def/tls.crt" -noout -checkip "${want}" 2>/dev/null | grep -F 'does match' >/dev/null \
         && ok "...naming IP ${want}" || bad "the serving certificate does not name IP ${want}"
 done
+openssl x509 -in "${T}/def/tls.crt" -noout -checkhost headscale.hugmesh-pki.svc.cluster.local 2>/dev/null | grep -F 'does match' >/dev/null \
+    && ok "...and the in-cluster headscale Service name (an in-cluster https client can verify it)" \
+    || bad "the serving certificate does not name headscale.hugmesh-pki.svc.cluster.local"
 openssl x509 -in "${T}/def/tls.crt" -noout -checkhost hm-node 2>/dev/null | grep -F 'does match' >/dev/null \
   && ! openssl x509 -in "${T}/def/tls.crt" -noout -ext subjectAltName 2>/dev/null | grep -i 'FE80' >/dev/null \
     && ok "...and the host name, but no link-local address (no client can dial one without a zone)" \

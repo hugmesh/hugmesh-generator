@@ -1167,7 +1167,7 @@ if [ "${ROLE}" = "pki" ]; then
     if [ ! -f "${OUT_DIR}/certs/cluster-ca.key" ] && [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ]; then
         _hs_sans="$(
             {
-                printf '%s\n' 127.0.0.1 ::1 localhost
+                printf '%s\n' 127.0.0.1 ::1 localhost headscale.hugmesh-pki.svc.cluster.local headscale.hugmesh-pki.svc
                 [ -f "${PROV}" ] && jq -r '[.headscale.server_url, .mesh.endpoint] | .[] | strings' "${PROV}" 2>/dev/null
                 printf '%s\n' "${HEADSCALE_URL:-}"
                 [ -f "${PROV}" ] && jq -r '.nodes // [] | .[] | select(.role == "pki") | .ip, .name | strings' "${PROV}" 2>/dev/null

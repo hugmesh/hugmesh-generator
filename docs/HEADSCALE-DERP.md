@@ -106,7 +106,7 @@ is the `server_url` host, with `DERPPort` set to the `server_url` port and `STUN
 |---|---|---|
 | control URL | `resolve_endpoint` | `https://<the node's primary LAN IPv4>:8080` unless `provision.json .headscale.server_url` / `.mesh.endpoint` or the baked `HEADSCALE_URL` say otherwise. Workers' default (`resolve_control_endpoint`, the pki node from `.nodes[]`) is https too. |
 | certificate | `provision_headscale_tls` | Issued on every provisioning run from the **mesh CA on the pki stick**, `certs/cluster-ca.{crt,key}` (written there by `gen-keystores.sh` for every pki stick; or the copy `provision_certs` left in `/etc/ssl/keys`). EC P-256 leaf, `serverAuth`, 825 days, written to `/var/lib/headscale/tls.{crt,key}` (key 0600), and named in the config's `tls_cert_path` / `tls_key_path`. |
-| names | `headscale_tls_sans` | The `server_url` host, every address on the node's interfaces (not link-local), `127.0.0.1`, `::1`, `localhost`, the host names, the pki address and name in `.nodes[]`, the override hosts. After the node's own `tailscale up`, `publish_cp_dns_record` re-issues it with the node's **tailnet address** before the headscale restart it already makes. |
+| names | `headscale_tls_sans` | The `server_url` host, every address on the node's interfaces (not link-local), `127.0.0.1`, `::1`, `localhost`, the host names, the pki address and name in `.nodes[]`, the override hosts, and the in-cluster Service name `headscale.hugmesh-pki.svc[.cluster.local]`. After the node's own `tailscale up`, `publish_cp_dns_record` re-issues it with the node's **tailnet address** before the headscale restart it already makes. |
 | trust | `provision_certs` | Every node copies its stick's `certs/*.crt` into the system trust store and runs `update-ca-certificates`. That store is what tailscaled's Go TLS stack reads, for the control channel and for DERP. keys-provision runs before tailscaled starts (`before ... tailscaled` in its init script), so the first dial already sees the CA. |
 | own client | `control_self_login_server` | The pki node's own tailscaled logs in at `https://127.0.0.1:<listen port>` (the certificate names loopback). tailscale derives the TLS port from the URL, so the "forced port-443 dial" lockout that led to the loopback login cannot strand it either. |
 
@@ -128,8 +128,11 @@ relay, verifying an **IP-literal** DERP node against the mesh CA.
 
 **No certificate to be had.** A stick with no mesh CA key and no pre-issued
 `headscale/tls.crt` that names the host cannot get HTTPS. keys-provision then serves
-**plain HTTP at the same address** (`http://<host>:8080`) and warns loudly: nodes still
-join, the relay does not work. It never leaves a dead `https://` URL behind. The QEMU
+**plain HTTP at the same address** (`http://<host>:8080`) and warns loudly. Nodes whose
+login server is that `http://` URL join; the relay does not work. A worker given the
+`https://` URL does **not** join: it is not downgraded, and its keys-provision says the
+server answers only plain HTTP. The pki node never writes a dead `https://` URL into
+its own `server_url`. The QEMU
 harness's control row is this case (its stick carries no CA), so its fleet runs on
 plain HTTP.
 
@@ -191,7 +194,11 @@ DERP map. So:
   an L4 proxy to the internet publishes an **open relay** along with the control server.
 - The **local stack's TLS front** (`tests/stack/tls-front/default.conf`) answers
   `/derp` only for loopback, private LAN, tailnet (100.64.0.0/10) and IPv6 ULA /
-  link-local sources, and 403s every other source. Its control channel is unchanged.
+  link-local sources, and 403s every other source (the live suite asks from a
+  public-range network and gets 403). Its control channel is unchanged. The check is on
+  the TCP peer address, so it only holds while the client's own address reaches nginx:
+  a hop in between that connects from a private address (docker's userland proxy, the
+  `TOR=1` tor container, an operator's reverse proxy) is let through.
 - The **cluster facade** (`scale.<domain>`: ingress-nginx -> backend gateway -> pki
   gateway -> headscale) does not carry `/derp` today. The pki gateway
   (hugmesh-gateway `SecurityConfig`, decision 79) requires `ROLE_SUPERADMIN` on every
@@ -263,6 +270,20 @@ whatever port that file names.
   today (tracked as #965).
 - **The QEMU harness** builds its own sticks with no mesh CA, so its fleet runs on the
   plain-HTTP fallback and does not exercise the HTTPS path; the live suite below does.
+- **In-cluster plaintext callers of headscale.** The pki gateway's `headscale` route
+  (`apps/20-gateway-pki.yaml`) and admin-bff's three headscale URLs
+  (`APPSTORE_SCAFFOLD_HEADSCALE_URL`, `APP_REGISTRY_HEADSCALE_ACL_BASE_URL`,
+  `APP_MESH_TOKEN_HEADSCALE_BASE_URL`) dial `http://headscale.hugmesh-pki.svc.cluster.local:8080`.
+  On a pki node that serves TLS (the default) they get `400 Client sent an HTTP request
+  to an HTTPS server`. Today that changes nothing that works: the admin-bff legs ship
+  dark and the gateway route refuses anonymous tailscale clients. Before any of them is
+  switched on it needs `https://` and the mesh CA in that caller's trust store. The
+  certificate already names the Service. A mesh published through the facade sets
+  `server_url` to the facade, and then headscale stays plain HTTP and these URLs work as
+  written.
+- **headscale's OIDC redirect URI** in Casdoor (`casdoor/init-job.yaml`) is the fixed
+  `https://scale.<domain>/oidc/callback`. It already disagreed with the LAN `server_url`
+  before this change (that file says so); the scheme change does not alter that.
 
 ## Tests
 
