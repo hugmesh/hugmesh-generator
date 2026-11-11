@@ -227,6 +227,10 @@ def test_darwin_terminal_escapes_the_applescript_string():
     script = spec.argv[2]
     assert script.startswith('tell application "Terminal" to do script "') and script.endswith('"')
     body = script[len('tell application "Terminal" to do script "'):-1]
+    import re
+    # inside the AppleScript literal no double quote may stand unescaped (it would end
+    # the string early and run the rest as AppleScript)
+    assert re.search(r'(?<!\\)"', body) is None, body
     unescaped = body.replace('\\"', '"').replace("\\\\", "\\")
     # what Terminal runs is exactly bash -c '<the command>; hold'
     words = shlex.split(unescaped)
@@ -245,7 +249,8 @@ def test_darwin_without_osascript_falls_back_to_the_terminal_list():
     ("/usr/bin/qemu-system-x86_64 -m 4096", True),
     ("bash ./build-x86-host-stage4.sh -w /out --role pki", True),
     ("bash /src/scripts/kernel-reconfig-x86.sh apply --build-root /out/wl-x", True),
-    ("/bin/bash -c sleep 1500; ps | grep qemu-system", False),     # a shell that MENTIONS it
+    ("/bin/bash -c sleep 1500; ps | grep qemu-system-x86_64", False),   # a shell that MENTIONS it
+    ("/bin/bash -c tail -f build-x86-host-stage4.sh.log", False),
     ("vim build-notes.txt", False),
 ])
 def test_busy_reason_matches_programs_not_mentions(cmdline, busy):
