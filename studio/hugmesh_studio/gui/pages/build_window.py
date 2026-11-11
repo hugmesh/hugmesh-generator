@@ -36,7 +36,7 @@ import traceback
 
 from ..qt import Qt, QtWidgets, Signal
 from ..styles import muted
-from ...core import build_sessions
+from ...core import build_sessions, kernel_reconfig
 
 __all__ = ["Action", "ACTIONS", "actions_for", "next_action", "BuildActionsWindow"]
 
@@ -49,6 +49,7 @@ _LABELS = {
     "edit": "Edit as a new build",
     "delete": "Delete",
     "log": "View errors / log",
+    "kernel": "Kernel config…",
 }
 
 
@@ -163,8 +164,16 @@ def actions_for(row) -> dict[str, Action]:
     log = Action("log", bool(has_log),
                  "" if has_log else "No build.log was found next to this tree.")
 
+    # ── kernel (core/kernel_reconfig.py: menuconfig + rebuild + re-sign + repackage) ──
+    if kind != "session" or session is None:
+        kernel = Action("kernel", False, "Kernel reconfiguration needs a recorded session.")
+    else:
+        found = kernel_reconfig.locate(session)
+        kernel = (Action("kernel", False, found) if isinstance(found, str)
+                  else Action("kernel", True))
+
     return {"resume": resume, "artifacts": artifacts, "edit": edit,
-            "delete": delete, "log": log}
+            "delete": delete, "log": log, "kernel": kernel}
 
 
 def next_action(row) -> str:
@@ -206,11 +215,12 @@ class BuildActionsWindow(QtWidgets.QWidget):
     closed = Signal()
 
     def __init__(self, row, *, on_resume=None, on_artifacts=None, on_edit=None,
-                 on_delete=None, on_log=None, parent=None):
+                 on_delete=None, on_log=None, on_kernel=None, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
         self.row = row
         self._handlers = {"resume": on_resume, "artifacts": on_artifacts,
-                          "edit": on_edit, "delete": on_delete, "log": on_log}
+                          "edit": on_edit, "delete": on_delete, "log": on_log,
+                          "kernel": on_kernel}
         self.actions = actions_for(row)
         self.setWindowTitle(f"Build — {getattr(row, 'label', 'build')}")
         self.resize(560, 300)
@@ -231,7 +241,9 @@ class BuildActionsWindow(QtWidgets.QWidget):
         lay.addWidget(loc)
 
         self.buttons: dict[str, QtWidgets.QPushButton] = {}
-        for name in (*ACTIONS, "log"):
+        # "kernel" only when the opener wired it (the Previous builds list does): a window
+        # without a handler would otherwise show one more permanently grey button.
+        for name in (*ACTIONS, "log", *(("kernel",) if on_kernel is not None else ())):
             act = self.offered(name)
             btn = QtWidgets.QPushButton(act.label)
             btn.setEnabled(act.enabled)

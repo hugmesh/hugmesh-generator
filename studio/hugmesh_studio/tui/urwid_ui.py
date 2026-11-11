@@ -19,7 +19,7 @@ from . import model
 __all__ = ["JourneyApp", "LocalAIPanel", "SessionsReview", "SessionsWindow", "run_journey",
            "run_sessions_review", "run_worklist"]
 
-_LIST_HELP = "enter=inspect  d=delete  w=worklist  r=refresh  q=quit"
+_LIST_HELP = "enter=inspect  d=delete  w=worklist  k=kernel config  r=refresh  q=quit"
 _SUB_HELP = "q/esc=back"
 
 
@@ -34,8 +34,14 @@ class SessionsReview:
     passes a callback that opens the screen over this review. Without one (a bare
     review in a test) F2 is not offered and the footer does not claim it."""
 
-    def __init__(self, open_local_ai: Callable[[], None] | None = None) -> None:
+    def __init__(self, open_local_ai: Callable[[], None] | None = None,
+                 generator_dir: str = ".") -> None:
         self._open_local_ai = open_local_ai
+        self.generator_dir = generator_dir
+        # ``k`` (kernel config) runs menuconfig IN this terminal, so the screen has to be
+        # handed back first: the MainLoop owner sets this to a suspend-run-resume wrapper
+        # (_suspender). Without one (a headless test) ``k`` says where to run it instead.
+        self.run_external: Callable[[Callable[[], None]], None] | None = None
         self.mode = "list"                 # list | detail | worklist | confirm
         self.rows: list[model.SessionRow] = []
         self.unreadable: list[str] = []
@@ -182,6 +188,35 @@ class SessionsReview:
             row = self._focused_row()
             if row is not None:
                 self.show_worklist(row)
+        elif key in ("k", "K"):
+            row = self._focused_row()
+            if row is not None:
+                self.start_kernel_config(row)
+
+    # ── kernel config (core/kernel_reconfig.py, the plain face's ``k`` flow) ────
+    def start_kernel_config(self, row: model.SessionRow) -> None:
+        from ..core import kernel_reconfig
+        t = kernel_reconfig.locate(row.session)
+        if isinstance(t, str):
+            self.status.set_text(f"kernel config: {t}")
+            return
+        if self.run_external is None:
+            self.status.set_text(
+                "kernel config: run it from a terminal — python -m hugmesh_studio "
+                f"--kernel-config {row.session.id}:{t.image_id}")
+            return
+        from .plain import prompt_yes_no
+        import sys
+
+        def flow() -> None:
+            model.kernel_config_flow(
+                row.session, self.generator_dir,
+                ask=lambda q: prompt_yes_no(sys.stdin, sys.stdout, q),
+                say=lambda s: print(s), out=sys.stdout, err=sys.stdout)
+            input("press Enter to return to the build list...")
+
+        self.run_external(flow)
+        self.refresh()
 
 
 #: Keys the footer Edit never uses; the journey frame forwards them to the body so a
@@ -253,7 +288,8 @@ class SessionsWindow:
 
     def __init__(self, generator_dir: str = ".") -> None:
         self.generator_dir = generator_dir
-        self.review = SessionsReview(open_local_ai=self.open_local_ai)
+        self.review = SessionsReview(open_local_ai=self.open_local_ai,
+                                     generator_dir=generator_dir)
         self.root = urwid.WidgetPlaceholder(self.review.frame)
         self.panel: LocalAIPanel | None = None
 
@@ -334,6 +370,7 @@ class JourneyApp:
         # the review carries its own Local AI panel, so F2 there opens the screen OVER
         # the list and q returns to the list, not to the journey's welcome screen
         self.sessions = SessionsWindow(self.journey.generator_dir)
+        self.sessions.review.run_external = getattr(self, "run_external", None)
         self.root.original_widget = self.sessions.root
 
     def _close_sessions(self) -> None:
@@ -370,6 +407,20 @@ class JourneyApp:
             self.feed(local_ai.OPEN_COMMAND)
 
 
+def _suspender(loop) -> Callable[[Callable[[], None]], None]:
+    """Run ``fn`` on the real terminal with the urwid screen handed back, then resume."""
+    def run(fn: Callable[[], None]) -> None:
+        loop.screen.stop()
+        try:
+            fn()
+        except (EOFError, KeyboardInterrupt):
+            pass
+        finally:
+            loop.screen.start()
+            loop.screen.clear()
+    return run
+
+
 def _with_ai_line_timer(loop, app) -> "urwid.MainLoop":
     """Redraw the Local AI line every few seconds (it reads files, never the network)."""
     def tick(lp, _data=None):
@@ -381,8 +432,9 @@ def _with_ai_line_timer(loop, app) -> "urwid.MainLoop":
 
 def run_journey(generator_dir: str = ".", start: str | None = None) -> int:
     app = JourneyApp(generator_dir, start)
-    _with_ai_line_timer(urwid.MainLoop(app.root, palette=_PALETTE,
-                                       unhandled_input=app.unhandled), app).run()
+    loop = urwid.MainLoop(app.root, palette=_PALETTE, unhandled_input=app.unhandled)
+    app.run_external = _suspender(loop)
+    _with_ai_line_timer(loop, app).run()
     return 0
 
 
@@ -391,8 +443,9 @@ _PALETTE = [("bold", "bold", ""), ("reversed", "standout", ""), ("muted", "dark 
 
 def run_sessions_review(generator_dir: str = ".") -> int:
     app = SessionsWindow(generator_dir)
-    _with_ai_line_timer(urwid.MainLoop(app.root, palette=_PALETTE,
-                                       unhandled_input=app.unhandled), app).run()
+    loop = urwid.MainLoop(app.root, palette=_PALETTE, unhandled_input=app.unhandled)
+    app.review.run_external = _suspender(loop)
+    _with_ai_line_timer(loop, app).run()
     return 0
 
 

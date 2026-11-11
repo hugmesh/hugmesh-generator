@@ -331,6 +331,9 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   python -m hugmesh_studio --list-sessions [--json]        # one line per session:
                                                            # id, date, roles, status, artifact count
   python -m hugmesh_studio --show-session ID [--json]      # full record + per-image outcomes
+  python -m hugmesh_studio --kernel-config SESSION[:IMAGE]  # x86: menuconfig the built kernel here,
+  python -m hugmesh_studio --kernel-config-apply SESSION[:IMAGE]  # then rebuild + re-sign + repackage
+                                                          # (also -set/-diff/-discard; docs/KERNEL-RECONFIG.md)
   python -m hugmesh_studio --session-artifacts ID [--json] # files under <out>/sessions/<ID>/
   python -m hugmesh_studio --delete-session ID --yes       # record only; REFUSES without --yes
   python -m hugmesh_studio --delete-session ID --yes --delete-artifacts

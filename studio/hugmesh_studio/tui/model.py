@@ -110,7 +110,51 @@ def session_detail_lines(row: SessionRow) -> list[str]:
     lines.append("artifacts:")
     arts = artifact_entries(s)
     lines += [f"  {name}" for name in arts] or ["  (no artifacts)"]
+    lines.append("")
+    lines += kernel_config_lines(s)
     return lines
+
+
+def kernel_config_lines(s: build_sessions.BuildSession) -> list[str]:
+    """The sessions review's kernel lines: what ``k`` would act on, or the one-sentence
+    refusal — the SAME sentence the GUI's "Kernel config…" tooltip and the CLI print
+    (core/kernel_reconfig.py), plus every reconfiguration already applied."""
+    from ..core import kernel_reconfig
+    t = kernel_reconfig.locate(s)
+    lines = [f"kernel    {t}" if isinstance(t, str) else f"kernel    {t.image_id}: {t.summary()}"]
+    for r in getattr(s, "kernel_reconfigs", None) or []:
+        if isinstance(r, dict):
+            lines.append(f"          reconfigured: {kernel_reconfig.describe_record(r)}")
+    return lines
+
+
+def kernel_config_flow(s: build_sessions.BuildSession, generator_dir: str,
+                       ask: "Callable[[str], bool]", say: "Callable[[str], None]", *,
+                       run_interactive=None, out=None, err=None) -> int:
+    """The ``k`` action, shared by both faces: refuse in one sentence, or open menuconfig
+    in THIS terminal (the urwid face suspends its screen first), show the change, and
+    on a yes stream the rebuild + re-sign + repackage. Returns the exit code."""
+    from ..core import kernel_reconfig
+    t = kernel_reconfig.locate(s)
+    if isinstance(t, str):
+        say(f"kernel config: {t}")
+        return 3
+    say(f"kernel config for {t.image_id}: {t.summary()}")
+    target = f"{s.id}:{t.image_id}"
+    find = (lambda _sid: s)
+    if ask("open menuconfig for it in this terminal?"):
+        rc = kernel_reconfig.cli("edit", target, generator_dir, out=out, err=err, find=find,
+                                 run_interactive=run_interactive)
+        if rc not in (0, None):
+            return rc
+    changes = t.pending_changes()
+    say(kernel_reconfig.format_diff(changes))
+    if not changes:
+        return 0
+    if not ask("rebuild the kernel, re-sign it and repackage the artifacts now?"):
+        say("the edit is kept; apply it later with k again (or --kernel-config-apply).")
+        return 0
+    return kernel_reconfig.cli("apply", target, generator_dir, out=out, err=err, find=find)
 
 
 def delete_refusal(s: build_sessions.BuildSession) -> str | None:

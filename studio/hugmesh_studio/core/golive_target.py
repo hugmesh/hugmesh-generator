@@ -655,7 +655,7 @@ def terminal_spec(cmd_argv: list[str], *, osname: str | None = None,
                   is_wsl: bool | None = None, wsl_distro: str | None = None,
                   has_interop: bool | None = None,
                   which: Callable[[str], str | None] | None = None,
-                  terminals=None) -> TerminalSpec | None:
+                  terminals=None, platform: str | None = None) -> TerminalSpec | None:
     """Open ``cmd_argv`` (an ``ssh -t …``) in a terminal, or None when none can be
     opened (the caller then shows the exact command to copy).
 
@@ -665,13 +665,25 @@ def terminal_spec(cmd_argv: list[str], *, osname: str | None = None,
       list, held open at the end so the driver's result stays readable;
     * WSL2 without one: Windows Terminal (``cmd.exe /c start "" wt.exe wsl.exe -d
       <distro> -- …``), else a plain console (``cmd.exe /c start "" wsl.exe …``) —
-      only when WSL interop is on."""
+      only when WSL interop is on;
+    * macOS (``platform`` = ``sys.platform`` == "darwin"; ``os.name`` is "posix" there
+      too, so it cannot tell): Terminal.app through ``osascript``, which every Mac
+      ships — a new window running ``bash -c '<command>; hold'``."""
     from .cloud_deploy import TERMINALS
     osname = osname or _host_os()
     which = which or shutil.which
     if osname == "nt":
         return TerminalSpec(list(cmd_argv), getattr(subprocess, "CREATE_NEW_CONSOLE", 0x10),
                             "nt")
+    # (Only when osascript is really there: without it a Mac falls through to the
+    # TERMINALS list like any other POSIX host — an XQuartz xterm still works.)
+    if (platform if platform is not None else sys.platform) == "darwin" and which("osascript"):
+        script = shlex.join(["bash", "-c", shlex.join(cmd_argv) + _HOLD])
+        # AppleScript string literal: backslash and double quote are the only escapes.
+        applescript = script.replace("\\", "\\\\").replace('"', '\\"')
+        return TerminalSpec(["osascript",
+                             "-e", f'tell application "Terminal" to do script "{applescript}"',
+                             "-e", 'tell application "Terminal" to activate'], 0, "darwin")
     for binary, exec_args in (terminals if terminals is not None else TERMINALS):
         if which(binary):
             script = shlex.join(cmd_argv) + _HOLD
