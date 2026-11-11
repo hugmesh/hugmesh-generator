@@ -398,6 +398,20 @@ jobs:
           # 2026-11-04, in alpine:3 with this job's apk set (checkout copied in;
           # busybox grep/sed/diff/cmp): 134 passed / 0 failed. Mutation-tested
           # on a Gentoo host: 23 planted defects, 23 caught.
+          # tests/qemu/golive_emulated_test.sh (2026-11-09): the go-live-on-an-
+          # emulated-device proof lane (tests/qemu/golive-emulated.sh). Hermetic:
+          # `ssh` is a PATH shim that records argv and runs the remote command
+          # against a throwaway guest root with the REAL hugmesh-go-live driver;
+          # it pins loopback-only destinations, plan/commit/rollback argv, commit
+          # and rollback on `ssh -tt` with 'y' typed on a pty, and NO -y /
+          # GL_ASSUME_YES / token on any argv; a rollback that never converges, an
+          # absent/truncated/empty nft table or a read cut off before its rc marker
+          # (unknown, never public) and a status/nft disagreement all fail. Needs
+          # python3 (pty) only. MEASURED, 2026-11-11, in alpine:3 (bash python3
+          # coreutils util-linux; busybox grep/sed): 121 passed / 0 failed.
+          # Mutation-tested on a Gentoo host: 18 planted defects in the lane in
+          # round 2, 17 caught; round 3's two missing-rc-marker mutants, both caught
+          # (they survived the round-2 suite). The survivor is named in the PR.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
@@ -458,6 +472,7 @@ jobs:
             tests/qemu/qemu-e2e-lane_test.sh
             tests/qemu/display_door_test.sh
             tests/qemu/display_argv_test.sh
+            tests/qemu/golive_emulated_test.sh
             tests/qemu/no_egress_argv_test.sh
             tests/requested-atoms-resolvable.sh
             tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
