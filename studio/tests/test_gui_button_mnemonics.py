@@ -210,7 +210,7 @@ def test_the_key_zip_import_button_draws_its_ampersand():
         # Geometry: QPushButton.sizeHint measures its text with Qt.TextShowMnemonic, so
         # this is the width the button actually reserves and draws.
         fm = QtGui.QFontMetrics(btn.font())
-        drawn = fm.size(Qt.TextFlag.TextShowMnemonic, btn.text()).width()
+        drawn = fm.size(int(Qt.TextFlag.TextShowMnemonic.value), btn.text()).width()
         assert drawn == fm.size(0, "Import & apply").width()
         assert drawn != fm.size(0, "Import  apply").width(), "font cannot tell them apart"
         # …and no other button or group box on the page binds a mnemonic either.
