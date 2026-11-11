@@ -53,7 +53,7 @@ import os
 
 from ..qt import Qt, QtCore, QtWidgets, Signal
 from .. import console
-from ..styles import muted
+from ..styles import ERROR, muted
 from ._scroll import scrollable
 from ...core import ansi
 from ...core import build_sessions
@@ -404,6 +404,20 @@ def hold_error_text(e: Exception, osname: str | None = None) -> str:
     return str(e)
 
 
+def blocked_reason(problems) -> str:
+    """Why the Review page's Continue is greyed, in one line ("" = it is not).
+
+    The first blocking problem verbatim, plus a count of the rest pointing at the
+    Preflight pane at the bottom of the page, which lists every one of them."""
+    problems = list(problems or ())
+    if not problems:
+        return ""
+    text = f"Continue is disabled: {problems[0]}"
+    if len(problems) > 1:
+        text += f" (+{len(problems) - 1} more — see Preflight below)"
+    return text
+
+
 class _BuilderImageWorker(QtCore.QThread):
     """Runs BuildDriver.build_builder_image() off the GUI thread (mirrors the old
     _BuildWorker — the OS-image build itself now runs on ProgressPage's WorklistDriver)."""
@@ -500,6 +514,22 @@ class BuildPage(QtWidgets.QWizardPage):
         self._assigned_keys_dir = ""
 
         lay = scrollable(self)
+
+        # ── GUI-15: WHY Continue is greyed, above the fold ─────────────────────────
+        # A blocking preflight problem used to surface ONLY in the monospace log pane
+        # at the very bottom of an ~1800px scroll page, while the summary below still
+        # read like a normal build: the operator saw a dead Continue and no reason. This
+        # line names the first problem at the top (the rest stay in the bottom pane,
+        # counted here) and is the Continue button's tooltip too — both are written by
+        # _set_problems, the one place every blocking path funnels through, and hidden
+        # (zero height) whenever nothing blocks. Plain text: a problem interpolates
+        # paths and user input, which must render as themselves.
+        self.blocked_note = QtWidgets.QLabel("")
+        self.blocked_note.setWordWrap(True)
+        self.blocked_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.blocked_note.setStyleSheet(f"color: {ERROR}; font-weight: bold;")
+        self.blocked_note.setVisible(False)
+        lay.addWidget(self.blocked_note)
 
         # ── ASK 22: the summary — the review, in one block, above the knobs ────────
         # Plain text (it interpolates an output PATH and entry ids, which must render as
@@ -1854,6 +1884,13 @@ class BuildPage(QtWidgets.QWizardPage):
 
     def _set_problems(self, problems: list[str]) -> None:
         self._problems = problems
+        note = blocked_reason(problems)
+        self.blocked_note.setText(note)
+        self.blocked_note.setVisible(bool(note))
+        try:
+            self.wiz.button(QtWidgets.QWizard.WizardButton.CommitButton).setToolTip(note)
+        except Exception:
+            pass
         self.completeChanged.emit()
 
     # ---- mesh worklist summary --------------------------------------------------
