@@ -52,7 +52,15 @@ services:
       # app.conf key is empty, so setting `origin` here makes EVERY token — however it
       # was requested — carry the one issuer the services already trust.
       origin: "http://localhost:8000"
-    ports: ["8000:8000"]
+    # LOOPBACK BY DEFAULT (NEW-15). The host publish carries a host IP, so this
+    # Casdoor (the local mesh's identity provider; its admin API can create admins,
+    # rewrite applications and set user properties) answers on this machine only.
+    # STACK_BIND_ADDR=0.0.0.0 is the explicit opt-in for LAN exposure; do that only
+    # after `make stack-seed` has moved the built-in admin off the upstream factory
+    # default (tests/stack/gen-casdoor-admin-env.sh). Containers reach it as
+    # casdoor:8000 on the compose network, which this does not change.
+    # Guard: tests/scripts/test-stack-idp-exposure.sh.
+    ports: ["${STACK_BIND_ADDR:-127.0.0.1}:8000:8000"]
 
   # ── Matrix: tuwunel ────────────────────────────────────────────────
   # tuwunel (Rust Conduit/conduwuit successor) — the SAME homeserver and image
@@ -96,7 +104,8 @@ services:
   tuwunel:
     image: ghcr.io/matrix-construct/tuwunel:v1.7.0
     volumes: [tuwunel:/var/lib/tuwunel]
-    ports: ["8008:8008"]
+    # Loopback by default, like casdoor above (STACK_BIND_ADDR opts into LAN).
+    ports: ["${STACK_BIND_ADDR:-127.0.0.1}:8008:8008"]
     environment:
       TUWUNEL_SERVER_NAME: ${MATRIX_SERVER_NAME:-localhost}
       # tuwunel's default bind is loopback-only — 0.0.0.0 so the gateway/BFF
@@ -284,7 +293,8 @@ services:
       mastodon-init: { condition: service_completed_successfully }
       mastodon-db: { condition: service_healthy }
       mastodon-redis: { condition: service_healthy }
-    ports: ["3000:3000"]
+    # Loopback by default, like casdoor above (STACK_BIND_ADDR opts into LAN).
+    ports: ["${STACK_BIND_ADDR:-127.0.0.1}:3000:3000"]
 
   mastodon-sidekiq:
     image: ghcr.io/mastodon/mastodon:v4.3.1
@@ -304,7 +314,8 @@ services:
     depends_on:
       mastodon-db: { condition: service_healthy }
       mastodon-redis: { condition: service_healthy }
-    ports: ["4000:4000"]
+    # Loopback by default, like casdoor above (STACK_BIND_ADDR opts into LAN).
+    ports: ["${STACK_BIND_ADDR:-127.0.0.1}:4000:4000"]
 
 volumes:
   casdoor-pg:

@@ -517,6 +517,7 @@ jobs:
             tests/scripts/test-stack-clone-credential.sh
             tests/scripts/test-stack-e2e-argv.sh
             tests/scripts/test-stack-fetch-repos.sh
+            tests/scripts/test-stack-idp-exposure.sh
             tests/scripts/test-stage4-pack-ownership.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
@@ -1013,6 +1014,14 @@ jobs:
     # tag:superadmin; it exits 2 (a failure here) when docker or an image is
     # unavailable. MEASURED 2026-11-04 on a Linux host with docker: 13 passed /
     # 0 failed in ~8 s, and 6 failed against the unfixed policy.
+    # tests/stack/test-stack-idp-exposure-live.sh (NEW-15) renders the real
+    # compose.local.yaml, starts casbin/casdoor:3.80.0 + postgres:16-alpine from that
+    # render under a throwaway project on a free port, and proves Casdoor refuses
+    # connections on the docker bridge gateway (the LAN view) and that the real
+    # seed-e2e.sh moves the built-in admin off the factory default. Exits 2 (a
+    # failure here) without docker. MEASURED 2026-11-11 on a Linux host with docker:
+    # 28 passed / 0 failed in ~2 min 50 s; against origin/main 39b953ad, 21 failed
+    # (incl. an admin session from the factory default via a non-loopback address).
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -1029,6 +1038,7 @@ jobs:
             tests/boot/test-gpu-worker-node-labels.sh
             tests/device-registry/test-headscale-tag-ownership.sh
             tests/device-registry/test-headscale-security-tag-live.sh
+            tests/stack/test-stack-idp-exposure-live.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

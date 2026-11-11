@@ -108,7 +108,9 @@ services:
     depends_on:
       phpbb-db: { condition: service_healthy }
     # Published for direct access; the gateway also serves it at /social/phpbb/.
-    ports: ["8081:8080"]
+    # Loopback by default (NEW-15, see compose.real.yaml casdoor): STACK_BIND_ADDR
+    # opts into LAN exposure.
+    ports: ["${STACK_BIND_ADDR:-127.0.0.1}:8081:8080"]
 
   # ── Akkoma (profile: akkoma) ──────────────────────────────────────────────
   akkoma-db:
@@ -158,7 +160,9 @@ services:
       - ./akkoma/config.exs:/var/lib/pleroma/config.exs:ro
     # The image entrypoint waits for postgres and runs `pleroma_ctl migrate`
     # itself, so no init sidecar is needed (unlike mastodon-init).
-    ports: ["4001:4000"]
+    # Loopback by default (NEW-15, see compose.real.yaml casdoor): STACK_BIND_ADDR
+    # opts into LAN exposure.
+    ports: ["${STACK_BIND_ADDR:-127.0.0.1}:4001:4000"]
 
 volumes:
   phpbb-pg:

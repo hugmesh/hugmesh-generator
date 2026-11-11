@@ -36,8 +36,9 @@ this checkout already runs, so it is isolated three ways:
 * its own host ports for the four ``${...}`` doors compose.local.yaml publishes.
 
 WHAT IT CANNOT ISOLATE, AND THEREFORE REFUSES. ``compose.real.yaml`` (included by
-compose.local.yaml) publishes Casdoor on a FIXED ``8000:8000`` and the social tier on
-fixed 8008/3000/4000, and the test issuer every token carries is
+compose.local.yaml) publishes Casdoor on a FIXED host port 8000 (on loopback by default,
+``${STACK_BIND_ADDR:-127.0.0.1}:8000:8000``) and the social tier on fixed
+8008/3000/4000, and the test issuer every token carries is
 ``http://localhost:8000``. Two meshes cannot both have that port, so while another
 mesh holds it this lane refuses and names the container holding it
 (:func:`plan_alongside`). Domains with their own Casdoor publish fixed 8001+ the same

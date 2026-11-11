@@ -1704,6 +1704,19 @@ docker-build: ## DEPRECATED: builds now default to Docker — just run `make bui
 # Casdoor issuer (http://localhost:8000); prod = the REAL issuer (CASDOOR_ISSUER
 # or https://id.<DOMAIN>; prod creds come from your env / keys USB, NOT committed).
 # SOCIAL=1 also brings up the heavy tuwunel/Mastodon tier (the `social` profile).
+#
+# STACK_BIND_ADDR (NEW-15): the host address the identity provider and the social
+# servers are published on: Casdoor :8000 (and BRAND_B's :8001, the Studio's per-domain
+# Casdoors :8001+), tuwunel :8008, Mastodon :3000/:4000, phpBB :8081, Akkoma :4001.
+# UNSET = 127.0.0.1, this machine only. The compose files read
+# ${STACK_BIND_ADDR:-127.0.0.1} themselves, so `make stack-up STACK_BIND_ADDR=0.0.0.0`
+# (a command-line variable reaches the recipe's environment) is the explicit opt-in
+# for LAN exposure; run `make stack-seed` first, which moves Casdoor's built-in admin
+# off the upstream factory-default password onto this checkout's generated
+# CASDOOR_ADMIN_PASSWORD (tests/stack/.env, tests/stack/gen-casdoor-admin-env.sh).
+# The front door (PUBLIC_HOST_PORT / PUBLIC_HTTPS_PORT / ANUBIS_HOST_PORT) is not
+# affected. Guards: tests/scripts/test-stack-idp-exposure.sh (static + stub) and
+# tests/stack/test-stack-idp-exposure-live.sh (a throwaway Casdoor).
 STACK_COMPOSE   := tests/stack/compose.local.yaml
 STACK_SRC       ?= $(CURDIR)/.stack-src
 PUBLIC_HOST_PORT ?= 8088
@@ -2326,6 +2339,7 @@ stack-up: stack-route-access-env stack-db-env stack-clone stack-certs stack-m2-c
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
 	$(STACK_ENV) POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
+	@echo "    (Casdoor, tuwunel and Mastodon listen on $${STACK_BIND_ADDR:-127.0.0.1} only; Casdoor's admin password is CASDOOR_ADMIN_PASSWORD in tests/stack/.env once make stack-seed has run)"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
 	$(if $(strip $(HEADSCALE)),@echo "    Tailnet control server (HEADSCALE=1): https://hs.$(STACK_HUGMESH_DOMAIN):$(PUBLIC_HTTPS_PORT)  |  token issuer fingerprint: make stack-mesh-token-key",)
