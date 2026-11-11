@@ -401,6 +401,7 @@ krc_preflight() {
     # The live ISO step reuses the builder's own live-root helpers; read them NOW, so a
     # renamed anchor in the builder fails here in seconds rather than after the .img.
     [ -z "${KRE[LIVE_ISO]:-}" ] || krc_live_helpers
+    krc_sudoers_gate
     for k in xz tar sfdisk losetup mount unsquashfs mksquashfs xorriso; do
         command -v "${k}" >/dev/null || krc_refuse "${k} is not on this host — run the rebuild in the builder container."
     done
@@ -635,6 +636,19 @@ krc_img_patch() {
 
 # The builder's live-pack helpers (live_root_gate, live_label_gate, live_squash_excludes),
 # read out of the builder exactly as tests/scripts/test-x86-live-root-pack.sh does.
+# The builder's build-only sudoers gate (build_sudoers_gate: the portage NOPASSWD grant
+# must never be packed), read out of the builder and run before every repack, exactly
+# as the builder runs it before each of its own packs.
+krc_sudoers_gate() {
+    local fn
+    fn="$(awk '/^build_sudoers_gate\(\) \{/{f=1} f{print} f&&/^}/{exit}' "${KRC_GEN}/build-x86-host-stage4.sh")"
+    grep -q '^build_sudoers_gate()' <<<"${fn}" \
+        || krc_fail "cannot read build_sudoers_gate out of build-x86-host-stage4.sh"
+    # shellcheck disable=SC1090
+    source <(printf '%s\n' "${fn}")
+    build_sudoers_gate || krc_refuse "The build system carries a build-only sudoers grant — refusing to repack it."
+}
+
 krc_live_helpers() {
     local blk
     blk="$(awk '/^# ── Live-ISO root pack helpers/{f=1} f&&/^umount_chroot\(\) \{/{exit} f{print}' "${KRC_GEN}/build-x86-host-stage4.sh")"

@@ -80,7 +80,7 @@ SH
 mkbr() {
     local wd="$1" br="$1/wl-pki.x86" s
     s="${br}/sysroot"
-    rm -rf "${wd}"; mkdir -p "${s}/usr/src/linux-${KV}/scripts" "${s}/usr/lib/modules/${KV}/kernel" "${s}/boot" "${s}/tmp" "${s}/var/tmp" "${br}/kernel" "${wd}/secureboot"
+    rm -rf "${wd}"; mkdir -p "${s}/usr/src/linux-${KV}/scripts" "${s}/usr/lib/modules/${KV}/kernel" "${s}/boot" "${s}/tmp" "${s}/var/tmp" "${s}/etc" "${br}/kernel" "${wd}/secureboot"
     ln -s usr/lib "${s}/lib"
     ln -s "linux-${KV}" "${s}/usr/src/linux"
     printf 'VERSION = 6\n' > "${s}/usr/src/linux-${KV}/Makefile"
@@ -304,6 +304,11 @@ else bad "result.json is not what the Studio can read: $(cat "${TMPD}/json.err")
 mkbr "${W}"; bash "${KRC}" set --build-root "${W}/wl-pki.x86" -- --set-str LOCALVERSION -hmtest >/dev/null 2>&1
 out="$(run_lib "${W}" 'krc_preflight; type live_root_gate >/dev/null && echo HELPERS-READ')"
 grep -q HELPERS-READ <<<"${out}" && ok "the preflight already holds the builder's live-root gate" || bad "preflight did not read the live helpers: ${out}"
+# the builder's build-only sudoers gate runs before any repack (read out of the builder)
+mkbr "${W}"; bash "${KRC}" set --build-root "${W}/wl-pki.x86" -- --set-str LOCALVERSION -hmtest >/dev/null 2>&1
+mkdir -p "${W}/wl-pki.x86/sysroot/etc/sudoers.d"; echo 'portage ALL=(ALL) NOPASSWD: ALL' > "${W}/wl-pki.x86/sysroot/etc/sudoers.d/build-notty"
+out="$(run_lib "${W}" 'krc_preflight')"; rc=$?
+[ "${rc}" -eq 3 ] && grep -q 'build-only sudoers grant' <<<"${out}" && ok "the builder's build-only sudoers gate refuses a repack of a sysroot that still grants portage" || bad "sudoers gate: rc=${rc} ${out}"
 # discard after an interrupted rebuild would leave the build system and the artifacts disagreeing
 printf 'stamp=S1\ndone=kernel\n' > "${W}/wl-pki.x86/kernel-reconfig/pending/apply.state"
 out="$(bash "${KRC}" discard --build-root "${W}/wl-pki.x86" 2>&1)"; rc=$?
