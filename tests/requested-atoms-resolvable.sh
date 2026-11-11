@@ -33,6 +33,11 @@
 # the completeness gate (scripts/_payload-gate-lib.sh) remains the runtime
 # backstop for the unknown ones.
 #
+# Sections F and G (defect L6, the 2026-11-10 La Frite build) pin two more ways a
+# requested atom silently never merges: the board's own profile/package.provided
+# declaring it (F, with in-suite negative controls in F'), and net-fs/cifs-utils
+# dragging the non-cross-buildable net-fs/samba into a cross build (G).
+#
 # Pure static text checks. No emerge, no chroot, no network, no root.
 #
 #   bash tests/requested-atoms-resolvable.sh   # or via: make matrix-check
@@ -266,6 +271,211 @@ for spec in specs-x86 specs-rpi5; do
     ok "${spec} declares a hardened/selinux profile"
   else
     bad "${spec}/portage/profile/parent no longer declares hardened/selinux: $(cat "${REPO}/${spec}/portage/profile/parent")"
+  fi
+done
+
+echo "-- F) a REQUESTED atom must never also be declared in the board's package.provided --"
+# The 2026-11-10 La Frite light-desktop build (defect L6): the frite, jetson,
+# orangepi4-lts and orangepi5 desktop lists all requested www-client/netsurf
+# while the SAME board's profile/package.provided declared it (netsurf cannot be
+# cross-built; see that file). Portage's answer is only a warning:
+#   WARNING: A requested package will not be merged because it is listed in
+#   package.provided:   www-client/netsurf pulled in by 'args'
+# so the emerge carries on, and hours later the requested-atom completeness gate
+# (scripts/_payload-gate-lib.sh) fails the build on an atom that was never going
+# to merge. That gate is right NOT to exempt package.provided: a requested
+# package that is absent from the image IS a degraded image. The contradiction
+# is in the spec, so it is caught here, at gate time.
+#
+# Compared by cat/pn. package.provided entries are full CPVs (cat/pn-ver); list
+# atoms may carry an operator+version, a :slot, [use] deps or ::repo. ANY overlap
+# fails, including a version-bounded request the provided version would not
+# satisfy: that spec would then build netsurf on some trees and silently skip it
+# on others, which nobody reading the list can predict.
+
+# PMS version tail: -<n>(.<n>)*<letter>?(_suffix<n>?)*(-r<n>)?. Strict on
+# purpose, so a package NAME that only contains "-<digit>" (font-bh-100dpi) is
+# never mistaken for a version.
+PMS_VER_RE='^(.+)-([0-9]+(\.[0-9]+)*[a-z]?((_alpha|_beta|_pre|_rc|_p)[0-9]*)*(-r[0-9]+)?)$'
+
+# Sets ATOM_CP to the cat/pn of a list atom ("" when the token has no category).
+# A global, not stdout: this runs once per list line (thousands), and a command
+# substitution per line would fork for each one.
+atom_cp() { # <atom>
+  local a="$1" op=""
+  a="${a%%::*}"; a="${a%%\[*}"; a="${a%%:*}"
+  case "${a}" in [\<\>=~!]*) op=1 ;; esac
+  a="${a#"${a%%[!<>=~!]*}"}"
+  if [ -n "${op}" ]; then
+    a="${a%\*}"
+    [[ "${a}" =~ ${PMS_VER_RE} ]] && a="${BASH_REMATCH[1]}"
+  fi
+  case "${a}" in */*) ATOM_CP="${a}" ;; *) ATOM_CP="" ;; esac
+}
+
+# Prints one line per finding, nothing when the spec is clean:
+#   OVERLAP|<list>:<lineno>|<requested atom>|<provided entry>
+#   BADCPV|<entry>   a package.provided token that is not cat/pn-version
+#   EMPTY|<file>     package.provided exists but no entry parsed (a pass would be vacuous)
+# A list line is requested exactly when the builders' own filter keeps it
+# (grep -v '^\s*#'), so an inline "# ..." tail is dropped and comment lines never count.
+provided_overlaps() { # <specdir>
+  local sd="$1" line tok list n
+  local pp="${sd}/portage/profile/package.provided"
+  local -A prov=()
+  [ -f "${pp}" ] || return 0
+  while IFS= read -r line || [ -n "${line}" ]; do
+    line="${line%%#*}"
+    tok=""; read -r tok _ <<<"${line}"
+    [ -n "${tok}" ] || continue
+    if [[ "${tok}" =~ ${PMS_VER_RE} ]] && [[ "${BASH_REMATCH[1]}" == [a-z0-9]*/* ]]; then
+      prov["${BASH_REMATCH[1]}"]="${tok}"
+    else
+      echo "BADCPV|${tok}"
+    fi
+  done < "${pp}"
+  if [ "${#prov[@]}" -eq 0 ]; then echo "EMPTY|${pp#"${sd}"/}"; return 0; fi
+  for list in "${sd}"/portage/packages*.list; do
+    [ -f "${list}" ] || continue
+    n=0
+    while IFS= read -r line || [ -n "${line}" ]; do
+      n=$((n+1))
+      line="${line%%#*}"
+      tok=""; read -r tok _ <<<"${line}"
+      [ -n "${tok}" ] || continue
+      atom_cp "${tok}"
+      if [ -n "${ATOM_CP}" ] && [ -n "${prov[${ATOM_CP}]+x}" ]; then
+        echo "OVERLAP|${list#"${sd}"/}:${n}|${tok}|${prov[${ATOM_CP}]}"
+      fi
+    done < "${list}"
+  done
+  return 0
+}
+
+report_provided_overlaps() { # <label> <findings>
+  local kind where atom entry
+  while IFS='|' read -r kind where atom entry; do
+    case "${kind}" in
+      OVERLAP) bad "[$1] ${where} requests ${atom}, but profile/package.provided declares ${entry}. Portage will NEVER merge it ('A requested package will not be merged because it is listed in package.provided'), so the completeness gate fails every build that requests it. Drop the request and leave a comment pointing at package.provided, or remove the provided entry together with a build that proves the package now merges." ;;
+      BADCPV)  bad "[$1] profile/package.provided entry '${where}' is not a cat/pn-version CPV. Portage rejects such entries, and this gate cannot compare it." ;;
+      EMPTY)   bad "[$1] ${where} exists but no entry parsed, so the overlap check would pass vacuously." ;;
+      *)       bad "[$1] unexpected overlap-check output: ${kind}|${where}|${atom}|${entry}" ;;
+    esac
+  done <<<"$2"
+}
+
+for plat in "${PLATFORMS[@]}"; do
+  sd="${REPO}/specs-${plat}"
+  if [ ! -f "${sd}/portage/profile/package.provided" ]; then
+    ok "[${plat}] no profile/package.provided, so nothing can shadow a requested atom"
+    continue
+  fi
+  found="$(provided_overlaps "${sd}")"
+  if [ -z "${found}" ]; then
+    ok "[${plat}] no atom requested by packages*.list is also in profile/package.provided"
+  else
+    report_provided_overlaps "${plat}" "${found}"
+  fi
+done
+# The loop above walks PLATFORMS. A board whose package.provided is not in that
+# array would never be checked, so every package.provided on disk must belong to it.
+for pp in "${REPO}"/specs-*/portage/profile/package.provided; do
+  [ -f "${pp}" ] || continue
+  plat="${pp#"${REPO}"/specs-}"; plat="${plat%%/*}"
+  case " ${PLATFORMS[*]} " in
+    *" ${plat} "*) ok "specs-${plat}/portage/profile/package.provided is covered by the PLATFORMS walk" ;;
+    *)             bad "specs-${plat}/portage/profile/package.provided exists but '${plat}' is not in PLATFORMS, so section F never checks it" ;;
+  esac
+done
+
+echo "-- F') negative controls: the overlap check sees every spelling (synthesised specs) --"
+NC_ROOT="$(mktemp -d)"
+trap 'rm -rf "${NC_ROOT}"' EXIT
+NCN=0
+# <want: OVERLAP|BADCPV|EMPTY|clean> <label> <list-file> <list-body> <provided-body>
+nc_expect() {
+  local d out
+  NCN=$((NCN+1)); d="${NC_ROOT}/specs-nc${NCN}"
+  mkdir -p "${d}/portage/profile"
+  printf '%s\n' "$5" > "${d}/portage/profile/package.provided"
+  printf 'app-editors/nano\n%s\nmedia-fonts/dejavu\n' "$4" > "${d}/portage/$3"
+  out="$(provided_overlaps "${d}")"
+  if [ "$1" = "clean" ]; then
+    [ -z "${out}" ] && ok "negative control stays clean: $2" \
+                    || bad "negative control false positive ($2): ${out}"
+  else
+    case "${out}" in
+      "$1|"*) ok "negative control caught ($1): $2" ;;
+      *)      bad "negative control MISSED ($1 expected): $2 -> '${out}'" ;;
+    esac
+  fi
+}
+NP='www-client/netsurf-3.11-r1'
+nc_expect OVERLAP "plain atom (the L6 line itself)"        packages-light-desktop.list 'www-client/netsurf' "${NP}"
+nc_expect OVERLAP "in the BASE list, not only a desktop list" packages.list            'www-client/netsurf' "${NP}"
+nc_expect OVERLAP "=cat/pn-ver"                             packages-desktop.list      '=www-client/netsurf-3.11-r1' "${NP}"
+nc_expect OVERLAP ">=cat/pn-ver the provided one cannot meet" packages-desktop.list    '>=www-client/netsurf-4' "${NP}"
+nc_expect OVERLAP "=cat/pn-ver* glob"                       packages-desktop.list      '=www-client/netsurf-3.11*' "${NP}"
+nc_expect OVERLAP "slot atom"                               packages-desktop.list      'www-client/netsurf:0' "${NP}"
+nc_expect OVERLAP "USE-dep + repo atom"                     packages-desktop.list      'www-client/netsurf[svg]::gentoo' "${NP}"
+nc_expect OVERLAP "indented, with an inline comment"        packages-live.list         '   www-client/netsurf   # browser' "${NP}"
+nc_expect OVERLAP "provided at a different version"         packages-desktop.list      'www-client/netsurf' 'www-client/netsurf-9.9_rc2-r3'
+nc_expect OVERLAP "name containing -<digit> (strict version regex)" packages.list       'media-fonts/font-bh-100dpi' 'media-fonts/font-bh-100dpi-1.0.4-r1'
+nc_expect clean   "comment-only mention"                    packages-light-desktop.list '# www-client/netsurf used to be listed here' "${NP}"
+nc_expect clean   "name that only shares a prefix"          packages-desktop.list      'www-client/netsurf-extras' "${NP}"
+nc_expect clean   "same pn, other category"                 packages-desktop.list      'dev-libs/netsurf' "${NP}"
+nc_expect BADCPV  "versionless provided entry"              packages.list              'app-misc/jq' 'www-client/netsurf'
+nc_expect BADCPV  "operator in a provided entry"            packages.list              'app-misc/jq' '>=www-client/netsurf-3.11'
+nc_expect EMPTY   "provided file with only comments"        packages.list              'app-misc/jq' '# nothing provided'
+# The real-tree walk only reaches report_provided_overlaps when a spec is broken,
+# so a green run never exercises it. Prove here that each finding kind counts as
+# a FAIL (in a subshell, so these probes leave the suite's own counters alone).
+for probe in "OVERLAP|portage/packages.list:1|www-client/netsurf|${NP}" "BADCPV|www-client/netsurf" "EMPTY|package.provided"; do
+  probe_fails="$(F=0; report_provided_overlaps nc "${probe}" >/dev/null; echo "${F}")"
+  if [ "${probe_fails}" = 1 ]; then
+    ok "report_provided_overlaps counts a ${probe%%|*} finding as a FAIL"
+  else
+    bad "report_provided_overlaps did NOT count '${probe}' as exactly one FAIL (got ${probe_fails})"
+  fi
+done
+
+echo "-- G) net-fs/cifs-utils must not drag net-fs/samba into a CROSS build --"
+# cifs-utils' default +acl hard-RDEPENDs >=net-fs/samba, and these cross
+# builders cannot build samba: its waf configure runs the BUILD host's perl and
+# needs Parse::Yapp::Driver, which samba lists in DEPEND (not BDEPEND), so it
+# only ever lands in the sysroot. Measured twice: jetson samba-4.24.6 (2026-08-15
+# fleet run) and frite samba-4.24.7 (2026-11-10), both "failed (configure phase)",
+# both followed by "cifs-utils ... dropped because it requires
+# >=net-fs/samba-4.0.0_alpha1" and a completeness-gate failure. mount.cifs needs
+# no acl: the flag only adds the cifsacl/cifsidmap helpers.
+#
+# A cross-built board that requests cifs-utils must therefore pin
+# "net-fs/cifs-utils -acl" in package.use. x86 builds natively in a chroot and
+# is not covered. CIFS_UNMEASURED lists the boards that request cifs-utils with
+# acl still on and that no build has measured yet. Each one prints a NOTE (an
+# open finding, not a silent pass). A board in it that gains the pin must be
+# moved out (FAIL until it is), and a board NOT in it that requests cifs-utils
+# with acl on FAILS, so the exposure can shrink but never grow.
+CIFS_UNMEASURED=(orangepi-zero2 orangepi-zero2w orangepi-zero3 orangepi3-lts orangepi4-lts orangepi5)
+for plat in "${PLATFORMS[@]}"; do
+  [ "${plat}" = "x86" ] && continue
+  sd="${REPO}/specs-${plat}"
+  if ! is_requested "${sd}" "net-fs/cifs-utils"; then
+    ok "[${plat}] net-fs/cifs-utils not requested; samba chain N/A"
+    continue
+  fi
+  acl="$(pkguse_flag_state "${sd}" "net-fs/cifs-utils" "acl")"
+  case " ${CIFS_UNMEASURED[*]} " in *" ${plat} "*) unmeasured=1 ;; *) unmeasured="" ;; esac
+  if [ "${acl%% *}" = "-" ]; then
+    if [ -n "${unmeasured}" ]; then
+      bad "[${plat}] now pins net-fs/cifs-utils -acl (package.use/${acl#- }) but is still in CIFS_UNMEASURED. Move it out so the pin is enforced."
+    else
+      ok "[${plat}] cifs-utils requested; package.use/${acl#- } pins -acl, so samba stays out of the cross build"
+    fi
+  elif [ -n "${unmeasured}" ]; then
+    echo "  NOTE [${plat}] requests net-fs/cifs-utils with acl ON (pulls net-fs/samba); unmeasured on this board, open finding"
+  else
+    bad "[${plat}] requests net-fs/cifs-utils with acl ON, so net-fs/samba joins the cross build, fails configure, and the completeness gate fails on cifs-utils. Pin 'net-fs/cifs-utils -acl -ads' in specs-${plat}/portage/package.use/cifs (see specs-jetson's)."
   fi
 done
 
