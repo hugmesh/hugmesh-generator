@@ -330,6 +330,24 @@ def test_plan_verbs_refuse_a_device_the_driver_cannot_reach(guest):
     assert guest.calls()[sent:] == []
 
 
+def test_this_host_on_native_windows_still_lists_the_registry(monkeypatch):
+    """The device-only gate above must not reach This host. On native Windows the
+    driver cannot run there, and the registry it reads instead is this checkout's own,
+    and real: the provider step lists it and a pick goes on (test_golive_registry)."""
+    from hugmesh_studio.core import golive_driver
+    monkeypatch.setattr(golive_driver.platform_info, "native_windows_blocker",
+                        lambda action, osname=None, runs="": "needs WSL2")
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("golive")
+    gl = j.screen()
+    assert gl.target.is_local and gl.stage == "provider"
+    text = "\n".join(gl.lines(j))
+    assert "  1. cloudflare-tunnel" in text and "needs WSL2" not in text
+    ids = [p.id for p in gl._driver(j).providers()]
+    j.feed(str(ids.index("byo-domain") + 1))
+    assert gl.stage == "domain" and gl.opts.provider == "byo-domain"
+
+
 def test_picking_a_row_takes_the_record_as_it_is_now(guest):
     j, gl = _go_live_screen(guest)
     j.feed("t")
