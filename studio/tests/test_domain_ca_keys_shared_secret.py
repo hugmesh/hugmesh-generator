@@ -13,6 +13,7 @@
 Every CA is a throwaway made in the test's temp dir (tests/_throwaway_ca.py).
 """
 import os
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -276,3 +277,157 @@ def test_the_keys_step_fails_every_stick_while_the_rename_is_refused(tmp_path,
     assert [r.keys_ok for r in drv.results] == [False, False]
     assert sum("renamed to x.example" in ln for ln in lines) >= 2, lines
     assert st.get(X) is not None and not st.get(X).own
+
+
+# ── a refused rename leaves the own CA under the OLD name: no import may use that ──
+# (#974 round 3 self-refute). The faces' own row is the NEW name. Before the gate,
+# an own-row import there was held as a SECOND own CA (the cluster-root-ca name
+# clash stopped it only when both held a root), and the next rekey_own moved the
+# first one over that row: x.example's root went with no removal step, the exact
+# loss finding 2 closed. And an extra row named like the old name took the own CA
+# over as another domain's, its signing key with it.
+def _x_chain(tmp_path):
+    """Rx and an intermediate it issued, with that intermediate's own key."""
+    rx_key = tca.key()
+    rx = tca.cert(rx_key, "x Root CA")
+    ik = tca.key()
+    icert = tca.cert(ik, "x Signing CA", issuer_key=rx_key, issuer_cert=rx,
+                     path_length=0)
+    return SimpleNamespace(
+        root_pem=tca.pem(rx),
+        root_path=tca.write(str(tmp_path), "rx.crt", tca.pem(rx)),
+        signing_path=tca.write(str(tmp_path), "xi.crt", tca.pem(icert)),
+        key_path=tca.write(str(tmp_path), "xi.key", tca.key_pem(ik)))
+
+
+def _refused_rename(tmp_path, own_root: bool):
+    """The own CA on m.example (with or without its root), Rx on x.example, and
+    the mesh renamed to x.example: the move is refused."""
+    chain = tca.Chain(tmp_path, tag="m")
+    xc = _x_chain(tmp_path)
+    st = dca.store()
+    if own_root:
+        dca.import_root(st, OWN, True, chain.root_path)
+    dca.import_signing(st, OWN, True, cert_path=chain.signing_path,
+                       key_path=chain.key_path)
+    dca.import_root(st, X, False, xc.root_path)
+    cfg = _cfg(X, X)
+    assert "renamed to x.example" in dca.rekey_own(cfg, st)
+    return chain, xc, st, cfg
+
+
+def _held(st):
+    return sorted((e.domain, e.own, e.root_pem, e.signing_pem, e.key_pem)
+                  for e in st.entries())
+
+
+@pytest.mark.parametrize("own_root", [False, True], ids=["own-signing-only",
+                                                         "own-root-and-signing"])
+def test_an_own_row_import_during_a_refused_rename_is_refused(tmp_path, own_root):
+    chain, xc, st, cfg = _refused_rename(tmp_path, own_root)
+    before = _held(st)
+    # the own row is x.example: what the GUI and the TUI pass for it
+    assert dca.domain_rows(cfg)[0] == (X, True)
+    for imp in (lambda: dca.import_signing(st, X, True, cert_path=xc.signing_path,
+                                           key_path=xc.key_path),
+                lambda: dca.import_root(st, X, True, xc.root_path),
+                # the mesh's OWN root and signing CA again, on the renamed row: a
+                # root or chain check would speak first ("another root", "does not
+                # chain") were the row's kind not checked at the top of the import
+                lambda: dca.import_root(st, X, True, chain.root_path),
+                lambda: dca.import_signing(st, X, True, cert_path=chain.signing_path,
+                                           key_path=chain.key_path)):
+        msg = _refused(imp, "the mesh's own CA is held for m.example",
+                       "ONE own CA", "Remove the CA on this row")
+        assert "another root" not in msg, msg       # the real reason speaks first
+        assert _held(st) == before
+    # and the next move still refuses: Rx is held, on its own row, as a root
+    assert "renamed to x.example" in dca.rekey_own(cfg, st)
+    assert _held(st) == before
+    assert st.get(X).root_cert().subject.rfc4514_string().endswith("CN=x Root CA")
+    assert [e.domain for e in st.entries() if e.own] == [OWN]
+
+
+def test_an_extra_row_import_never_takes_over_the_own_ca(tmp_path):
+    chain, _xc, st, cfg = _refused_rename(tmp_path, own_root=True)
+    cfg.domains.append(Domain(name=OWN))     # the old name added back as a domain
+    assert (OWN, False) in dca.domain_rows(cfg)
+    before = _held(st)
+    for imp in (lambda: dca.import_root(st, OWN, False, chain.root_path),
+                lambda: dca.import_signing(st, OWN, False,
+                                           cert_path=chain.signing_path)):
+        _refused(imp, "m.example is where the mesh's own CA is still held",
+                 "does not take it over")
+        assert _held(st) == before
+    own = st.own()
+    assert own is not None and own.domain == OWN and own.key_pem
+    assert not any(e.key_pem for e in st.entries() if not e.own)
+
+
+def test_with_no_own_ca_held_the_own_row_may_take_the_renamed_rows_ca(tmp_path):
+    """Nothing is lost here, so nothing is refused: the held root is kept, as on
+    any import, and the row becomes the mesh's own."""
+    xc = _x_chain(tmp_path)
+    st = dca.store()
+    dca.import_root(st, X, False, xc.root_path)
+    cfg = _cfg(X, X)
+    assert dca.rekey_own(cfg, st) == ""
+    e = dca.import_signing(st, X, True, cert_path=xc.signing_path,
+                           key_path=xc.key_path)
+    assert (e.domain, e.own) == (X, True) and e.key_pem and e.root_pem
+    assert dca.readiness_lines(cfg, st, ["pki"])[0].startswith("READY")
+
+
+@pytest.mark.parametrize("first", ["old-name-first", "new-name-first"])
+def test_a_move_never_overwrites_a_second_own_ca(tmp_path, first):
+    """A store no import can make any more (two own CAs, planted with put()): the
+    move refuses whichever order they were put in, and drops nothing."""
+    m = tca.Chain(tmp_path, tag="m")
+    xc = _x_chain(tmp_path)
+    st = dca.store()
+    dca.import_root(st, OWN, True, m.root_path)
+    dca.import_signing(st, OWN, True, cert_path=m.signing_path, key_path=m.key_path)
+    mine = st.get(OWN)
+    second = dca.DomainCA(domain=X, own=True,
+                          root_pem=xc.root_pem,
+                          signing_pem=b"", key_pem=b"", root_name="rx.crt",
+                          signing_name="", warnings=())
+    st.clear()
+    for e in ((mine, second) if first == "old-name-first" else (second, mine)):
+        st.put(e)
+    before = _held(st)
+    cfg = _cfg(X)
+    msg = dca.rekey_own(cfg, st)
+    assert "renamed to x.example" in msg and "a second own CA" in msg, msg
+    assert _held(st) == before
+
+
+def test_the_remedy_the_refusal_names_works_as_written(tmp_path):
+    """Remove x.example's CA and the mesh's CA moves there; to make x.example's CA
+    the mesh's own instead, remove that row's CA once more and import x.example's."""
+    _chain, xc, st, cfg = _refused_rename(tmp_path, own_root=True)
+    msg = dca.rekey_refusal(cfg, st)
+    assert "the mesh's CA moves to x.example by itself" in msg, msg
+    assert "remove the CA on that row once more" in msg, msg
+    assert dca.remove(st, X)                         # Remove on the own row
+    assert dca.rekey_own(cfg, st) == ""
+    (e,) = st.entries()
+    assert (e.domain, e.own) == (X, True)
+    assert e.root_cert().subject.rfc4514_string().endswith("CN=m Root CA")
+    # "import it again as the mesh's own" straight away is refused (another root)
+    _refused(lambda: dca.import_root(st, X, True, xc.root_path), "another root")
+    assert dca.remove(st, X)                         # once more
+    dca.import_root(st, X, True, xc.root_path)
+    dca.import_signing(st, X, True, cert_path=xc.signing_path, key_path=xc.key_path)
+    assert dca.readiness_lines(cfg, st, ["pki"])[0].startswith("READY")
+
+
+def test_admit_itself_refuses_a_second_own_ca_and_a_takeover(tmp_path):
+    """The gate every import passes, not only the imports' early sentence."""
+    _chain, xc, st, cfg = _refused_rename(tmp_path, own_root=True)
+    before = _held(st)
+    second = dca.DomainCA(domain=X, own=True, root_pem=xc.root_pem)
+    _refused(lambda: dca._admit(st, second), "ONE own CA")
+    takeover = replace(st.get(OWN), own=False)
+    _refused(lambda: dca._admit(st, takeover), "does not take it over")
+    assert _held(st) == before
