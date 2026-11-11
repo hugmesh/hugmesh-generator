@@ -34,6 +34,10 @@
 #   8. DRIFT GUARD. The display block is the same text in all three launchers
 #      apart from the one DISPLAY_GPU_ARGS line.
 #   9. windows-studio-e2e.sh's inspection VNC binds 127.0.0.1, not a bare :N.
+#  2c. --gpu x --display (#955): every launcher emits exactly one GPU, one xhci
+#      controller, one usb-kbd and one usb-tablet (or none) for every
+#      combination; launch-arm.sh folds --gpu into the door like launch-x86.sh,
+#      and launch-pi.sh, which has no --gpu, refuses it.
 #
 # WHAT IT DOES NOT PROVE. Nothing here runs QEMU: whether the container's
 # qemu-system-* accepts these options, whether a guest shows a desktop on the
@@ -337,6 +341,64 @@ run_launcher x86-gpu-disp launch-x86.sh "${X86[@]}" --gpu "${DISP[@]}"
 eq "${LAST_RC}" "0" "x86 --gpu --display spice exits 0"
 eq "$(count_elem "${LAST_ARGV}" virtio-gpu-pci)" "0" "x86 --gpu --display spice: NO bare virtio-gpu-pci (virtio-vga replaces it)"
 has_pair "${LAST_ARGV}" -device virtio-vga && _ok "x86 --gpu --display spice: virtio-vga present" || _bad "x86 --gpu --display spice: virtio-vga missing"
+
+echo "== 2c) --gpu x --display: one GPU, one xhci, one keyboard, one tablet on every launcher (#955) =="
+# Counted by DEVICE, whatever its options: `virtio-gpu-pci` and
+# `virtio-gpu-pci,edid=on` are both a GPU, `qemu-xhci` and `qemu-xhci,id=xhci`
+# both a controller. A second GPU gives the guest two heads and the SPICE viewer
+# a blank one; launch-arm.sh used to add --gpu's virtio-gpu-pci + qemu-xhci +
+# usb-kbd + usb-tablet ON TOP of the door's own set.
+count_dev() { grep -cE "^($2)(,.*)?\$" "$1" || true; }
+devices_are() { # ARGVFILE LABEL GPUS XHCIS KBDS TABLETS
+    local f label; f="$1"; label="$2"
+    eq "$(count_dev "${f}" 'virtio-gpu-pci|virtio-vga|virtio-gpu|virtio-gpu-gl-pci|ramfb|VGA|bochs-display')" "$3" "${label}: GPU devices"
+    eq "$(count_dev "${f}" 'qemu-xhci|nec-usb-xhci')" "$4" "${label}: xhci controllers"
+    eq "$(count_dev "${f}" 'usb-kbd')" "$5" "${label}: usb-kbd devices"
+    eq "$(count_dev "${f}" 'usb-tablet')" "$6" "${label}: usb-tablet devices"
+}
+#            launcher     base  gpu?   display?  -> GPU XHCI KBD TABLET
+for row in \
+    "launch-x86.sh X86  nogpu  none      0 0 0 0" \
+    "launch-x86.sh X86  gpu    none      1 0 0 0" \
+    "launch-x86.sh X86  nogpu  spice     1 1 1 1" \
+    "launch-x86.sh X86  gpu    spice     1 1 1 1" \
+    "launch-arm.sh ARM  nogpu  none      0 0 0 0" \
+    "launch-arm.sh ARM  gpu    none      1 1 1 1" \
+    "launch-arm.sh ARM  nogpu  spice     1 1 1 1" \
+    "launch-arm.sh ARM  gpu    spice     1 1 1 1" \
+    "launch-pi.sh  PI   nogpu  none      0 0 0 0" \
+    "launch-pi.sh  PI   nogpu  spice     1 1 1 1"; do
+    read -r L base gpu disp ng nx nk nt <<<"${row}"
+    case "${base}" in X86) B=("${X86[@]}") ;; ARM) B=("${ARM[@]}") ;; *) B=("${PI[@]}") ;; esac
+    extra=(); [ "${gpu}" = gpu ] && extra+=(--gpu); [ "${disp}" = spice ] && extra+=("${DISP[@]}")
+    run_launcher "gx-${base}-${gpu}-${disp}" "${L}" "${B[@]}" "${extra[@]}"
+    eq "${LAST_RC}" "0" "${L} ${gpu} ${disp}: exits 0"
+    devices_are "${LAST_ARGV}" "${L} ${gpu}/${disp}" "${ng}" "${nx}" "${nk}" "${nt}"
+done
+# The fold keeps the door's GPU (edid=on, so the viewer can resize) and says so.
+run_launcher arm-gpu-disp launch-arm.sh "${ARM[@]}" --gpu "${DISP[@]}"
+eq "$(count_elem "${LAST_ARGV}" virtio-gpu-pci,edid=on)" "1" "arm --gpu --display spice: the one GPU is the door's virtio-gpu-pci,edid=on"
+eq "$(count_elem "${LAST_ARGV}" virtio-gpu-pci)" "0" "arm --gpu --display spice: no bare virtio-gpu-pci from --gpu"
+case "${LAST_OUT}" in
+    *"--gpu folded into the display door"*) _ok "arm --gpu --display spice: says --gpu was folded into the door" ;;
+    *) _bad "arm --gpu --display spice: no 'folded' info line" ;;
+esac
+# --gpu + spice adds nothing beyond plain --display spice.
+run_launcher arm-disp-only launch-arm.sh "${ARM[@]}" "${DISP[@]}"
+if diff -u <(norm_rundir "${LAST_ARGV}") <(norm_rundir "${TMP}/arm-gpu-disp.argv") > "${TMP}/gpufold.diff"; then
+    _ok "arm: --gpu --display spice argv == --display spice argv"
+else
+    _bad "arm: --gpu changes the --display spice argv:"; sed 's/^/        /' "${TMP}/gpufold.diff" >&2
+fi
+# launch-pi.sh has no --gpu (the Pi has no greeter lane); it must refuse it,
+# not ignore it, so a caller cannot believe it got one.
+refuses_gpu_pi() {
+    run_launcher pi-gpu launch-pi.sh "${PI[@]}" --gpu "$@"
+    if [ "${LAST_RC}" -ne 0 ] && [ ! -f "${LAST_ARGV}" ]; then _ok "pi: --gpu $* is refused before QEMU"
+    else _bad "pi: --gpu $* was accepted (rc=${LAST_RC})"; fi
+}
+refuses_gpu_pi
+refuses_gpu_pi "${DISP[@]}"
 
 # ── 4) Listen address ────────────────────────────────────────────────────────
 echo "== 4) listen address: loopback by default, --display-listen honoured =="

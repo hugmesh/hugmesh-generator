@@ -13,6 +13,7 @@
 #
 # Bring up with:  make stack-up         (clone -> build -> up -d)
 # or directly:    bash gen-route-access-env.sh   (once; writes .env, see below)
+#                 bash gen-stack-db-env.sh       (once; adds the DB passwords to .env)
 #                 STACK_SRC=../../.stack-src docker compose -f compose.local.yaml up -d --build
 # Tear down:      make stack-down       (docker compose down -v)
 #
@@ -20,8 +21,24 @@
 #   CASDOOR_ISSUER_URI  test: http://localhost:8000     prod: https://id.<domain>
 #   PUBLIC_HOST_PORT    the published port the host (fe-gateway) listens on
 # All other creds are local DEV PLACEHOLDERS (or ${VAR:-default} dev defaults).
-# NO real secrets live here. The route-access-db OWNER password is the exception:
-# it is NOT spelled here at all. ROUTE_ACCESS_DB_PASSWORD lives in the
+# NO real secrets live here, and NO password is spelled here (hugmesh-generator#857):
+# every Postgres role's password and the brokers' SVC_PASSWORD are read as
+# ${KEY:?...} from the gitignored tests/stack/.env, which tests/stack/gen-stack-db-env.sh
+# fills (keys: stack-db-passwords.tsv; every `make stack-*` and scripts/stack-up.ps1
+# run it first). A missing key stops ANY compose command on this file (config, up,
+# ps, down) with a message naming that script. That is ${VAR:?}, not the
+# route-access-env-check pattern below, on purpose: a failed `up` still CREATES the
+# dependents with the empty value baked in, which for these keys would recreate a
+# running database's container with an empty password, and adoption would then read
+# that empty value back. ${VAR:?} refuses before compose touches anything. The cost
+# is that `ps`/`logs` need the keys too, so the read-only paths (`make stack-ps`,
+# `stack-logs`, `stack-onion`, the Studio's status/log/Mesh Monitor reads) pass a
+# fixed placeholder for a key that is not set yet; they create nothing, so it never
+# reaches a container. A hand-run `docker compose ps` needs the script run once
+# (any ensuring `make stack-*` target does it). An existing volume keeps the value it
+# was initialised with: the script ADOPTS it rather than mint a new one. Guard:
+# tests/scripts/test-compose-no-literal-passwords.sh. The route-access-db OWNER
+# password is handled separately, as before: ROUTE_ACCESS_DB_PASSWORD lives in the
 # gitignored, per-checkout tests/stack/.env (compose loads it by itself for this
 # file; tests/stack/gen-route-access-env.sh writes the key, `make stack-up` and
 # scripts/stack-up.ps1 run it first and also pass the value explicitly). A hand-run
@@ -152,7 +169,7 @@ services:
     image: postgres:16-alpine
     restart: "no"
     environment:
-      PGPASSWORD: adminbff
+      PGPASSWORD: ${ADMIN_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     depends_on:
       admin-bff-db: { condition: service_healthy }
     command:
@@ -250,7 +267,7 @@ services:
     environment:
       POSTGRES_DB: federation
       POSTGRES_USER: federation
-      POSTGRES_PASSWORD: federation
+      POSTGRES_PASSWORD: ${FEDERATION_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     volumes:
       - federation-pg:/var/lib/postgresql/data
     healthcheck:
@@ -266,7 +283,7 @@ services:
     environment:
       POSTGRES_DB: adminbff
       POSTGRES_USER: adminbff
-      POSTGRES_PASSWORD: adminbff
+      POSTGRES_PASSWORD: ${ADMIN_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     volumes:
       - admin-bff-pg:/var/lib/postgresql/data
     healthcheck:
@@ -283,7 +300,7 @@ services:
     environment:
       POSTGRES_DB: forumbff
       POSTGRES_USER: forumbff
-      POSTGRES_PASSWORD: forumbff
+      POSTGRES_PASSWORD: ${FORUM_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     volumes:
       - forum-bff-pg:/var/lib/postgresql/data
     healthcheck:
@@ -301,7 +318,7 @@ services:
     environment:
       POSTGRES_DB: charforgebff
       POSTGRES_USER: charforgebff
-      POSTGRES_PASSWORD: charforgebff
+      POSTGRES_PASSWORD: ${CHARFORGE_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     volumes:
       - character-forge-bff-pg:/var/lib/postgresql/data
     healthcheck:
@@ -317,7 +334,7 @@ services:
     environment:
       POSTGRES_DB: wikibff
       POSTGRES_USER: wikibff
-      POSTGRES_PASSWORD: wikibff
+      POSTGRES_PASSWORD: ${WIKI_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     volumes:
       - wiki-bff-pg:/var/lib/postgresql/data
     healthcheck:
@@ -337,7 +354,7 @@ services:
     environment:
       POSTGRES_DB: owncast_bff
       POSTGRES_USER: owncast_bff
-      POSTGRES_PASSWORD: owncast_bff
+      POSTGRES_PASSWORD: ${OWNCAST_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     volumes:
       - owncast-bff-pg:/var/lib/postgresql/data
     healthcheck:
@@ -356,7 +373,7 @@ services:
     environment:
       POSTGRES_DB: tube_bff
       POSTGRES_USER: tube_bff
-      POSTGRES_PASSWORD: tube_bff
+      POSTGRES_PASSWORD: ${TUBE_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     volumes:
       - tube-bff-pg:/var/lib/postgresql/data
     healthcheck:
@@ -757,10 +774,10 @@ services:
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_R2DBC_URL: "r2dbc:postgresql://federation-db:5432/federation"
       SPRING_R2DBC_USERNAME: federation
-      SPRING_R2DBC_PASSWORD: federation
+      SPRING_R2DBC_PASSWORD: ${FEDERATION_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       SPRING_LIQUIBASE_URL: "jdbc:postgresql://federation-db:5432/federation"
       SPRING_LIQUIBASE_USER: federation
-      SPRING_LIQUIBASE_PASSWORD: federation
+      SPRING_LIQUIBASE_PASSWORD: ${FEDERATION_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       APP_BUNDLES_STORAGE: filesystem
       APP_BUNDLES_DIR: /var/hugmesh/federation/bundles
       MANIFEST_CACHE_ENABLED: "false"
@@ -845,7 +862,7 @@ services:
       # mTLS in prod). The internal surface is how user-bff's OIDC callback provisions the
       # account + session + custody. INTERNAL_TOKEN unset -> InternalTokenWebFilter no-ops.
       SPRING_PROFILES_ACTIVE: ${ADMIN_BFF_PROFILES:-casdoor,dev}
-      SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      SVC_PASSWORD: ${SVC_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       # Provision broker (AuthController POST /provision/{matrix,mastodon}): the app
       # defaults for broker.synapse-url / broker.mastodon-url are cluster-DNS hosts,
       # unresolvable in compose — point them at the compose social tier (profile
@@ -912,10 +929,10 @@ services:
       # endpoint to validate managed mode locally. UNSET = byte-identical default.
       SPRING_R2DBC_URL: "${MANAGED_ADMIN_BFF_R2DBC_URL:-r2dbc:postgresql://admin-bff-db:5432/adminbff}"
       SPRING_R2DBC_USERNAME: adminbff
-      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_R2DBC_PASSWORD: ${ADMIN_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       SPRING_LIQUIBASE_URL: "${MANAGED_ADMIN_BFF_LIQUIBASE_URL:-jdbc:postgresql://admin-bff-db:5432/adminbff}"
       SPRING_LIQUIBASE_USER: adminbff
-      SPRING_LIQUIBASE_PASSWORD: adminbff
+      SPRING_LIQUIBASE_PASSWORD: ${ADMIN_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       # admin-bff's route mirror / url_registry / hs_tokens writes. THE ENV NAME
       # MATTERS: admin-bff excludes Spring's Cassandra auto-config and builds its
       # own session from app.mirror.cassandra.contact-point, whose placeholder is
@@ -1052,10 +1069,10 @@ services:
       # doesn't resolve in compose and the container never boots.
       SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
       SPRING_R2DBC_USERNAME: adminbff
-      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_R2DBC_PASSWORD: ${ADMIN_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       SPRING_LIQUIBASE_URL: "jdbc:postgresql://admin-bff-db:5432/adminbff"
       SPRING_LIQUIBASE_USER: adminbff
-      SPRING_LIQUIBASE_PASSWORD: adminbff
+      SPRING_LIQUIBASE_PASSWORD: ${ADMIN_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     depends_on:
       admin-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
@@ -1220,7 +1237,7 @@ services:
       # ServiceTokenBroker name), so the old line below bound NOTHING and every hsproxy
       # mint (any login mode) refused with "svc-password is unset" on the local stack.
       # Same env-name-misnomer class as the FEDERATION_BASE_URL fix in #314.
-      APP_HS_TOKEN_SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      APP_HS_TOKEN_SVC_PASSWORD: ${SVC_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       # Email domain for broker-owned Mastodon accounts (user-bff-api's mastodon mint
       # authenticates the password grant by EMAIL and the register leg must supply one:
       # <localpart>@<this-domain>). MUST be a domain mastodon-web accepts —
@@ -1236,10 +1253,10 @@ services:
       # comment for why this is needed.
       SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
       SPRING_R2DBC_USERNAME: adminbff
-      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_R2DBC_PASSWORD: ${ADMIN_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       SPRING_LIQUIBASE_URL: "jdbc:postgresql://admin-bff-db:5432/adminbff"
       SPRING_LIQUIBASE_USER: adminbff
-      SPRING_LIQUIBASE_PASSWORD: adminbff
+      SPRING_LIQUIBASE_PASSWORD: ${ADMIN_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     depends_on:
       admin-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
@@ -1335,10 +1352,10 @@ services:
       # MANAGED backing service seam (default in-stack forum-bff-db; UNSET = default).
       SPRING_R2DBC_URL: "${MANAGED_FORUM_BFF_R2DBC_URL:-r2dbc:postgresql://forum-bff-db:5432/forumbff}"
       SPRING_R2DBC_USERNAME: forumbff
-      SPRING_R2DBC_PASSWORD: forumbff
+      SPRING_R2DBC_PASSWORD: ${FORUM_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       SPRING_LIQUIBASE_URL: "${MANAGED_FORUM_BFF_LIQUIBASE_URL:-jdbc:postgresql://forum-bff-db:5432/forumbff}"
       SPRING_LIQUIBASE_USER: forumbff
-      SPRING_LIQUIBASE_PASSWORD: forumbff
+      SPRING_LIQUIBASE_PASSWORD: ${FORUM_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     depends_on:
       forum-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
@@ -1375,10 +1392,10 @@ services:
       SPRING_PROFILES_ACTIVE: casdoor
       SPRING_R2DBC_URL: "r2dbc:postgresql://character-forge-bff-db:5432/charforgebff"
       SPRING_R2DBC_USERNAME: charforgebff
-      SPRING_R2DBC_PASSWORD: charforgebff
+      SPRING_R2DBC_PASSWORD: ${CHARFORGE_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       SPRING_LIQUIBASE_URL: "jdbc:postgresql://character-forge-bff-db:5432/charforgebff"
       SPRING_LIQUIBASE_USER: charforgebff
-      SPRING_LIQUIBASE_PASSWORD: charforgebff
+      SPRING_LIQUIBASE_PASSWORD: ${CHARFORGE_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     depends_on:
       character-forge-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
@@ -1400,10 +1417,10 @@ services:
       # MANAGED backing service seam (default in-stack wiki-bff-db; UNSET = default).
       SPRING_R2DBC_URL: "${MANAGED_WIKI_BFF_R2DBC_URL:-r2dbc:postgresql://wiki-bff-db:5432/wikibff}"
       SPRING_R2DBC_USERNAME: wikibff
-      SPRING_R2DBC_PASSWORD: wikibff
+      SPRING_R2DBC_PASSWORD: ${WIKI_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       SPRING_LIQUIBASE_URL: "${MANAGED_WIKI_BFF_LIQUIBASE_URL:-jdbc:postgresql://wiki-bff-db:5432/wikibff}"
       SPRING_LIQUIBASE_USER: wikibff
-      SPRING_LIQUIBASE_PASSWORD: wikibff
+      SPRING_LIQUIBASE_PASSWORD: ${WIKI_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     depends_on:
       wiki-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
@@ -1424,10 +1441,10 @@ services:
       SPRING_PROFILES_ACTIVE: casdoor
       SPRING_R2DBC_URL: "r2dbc:postgresql://owncast-bff-db:5432/owncast_bff"
       SPRING_R2DBC_USERNAME: owncast_bff
-      SPRING_R2DBC_PASSWORD: owncast_bff
+      SPRING_R2DBC_PASSWORD: ${OWNCAST_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       SPRING_LIQUIBASE_URL: "jdbc:postgresql://owncast-bff-db:5432/owncast_bff"
       SPRING_LIQUIBASE_USER: owncast_bff
-      SPRING_LIQUIBASE_PASSWORD: owncast_bff
+      SPRING_LIQUIBASE_PASSWORD: ${OWNCAST_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
     depends_on:
       owncast-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
@@ -1457,10 +1474,10 @@ services:
       SPRING_PROFILES_ACTIVE: casdoor
       SPRING_R2DBC_URL: "r2dbc:postgresql://tube-bff-db:5432/tube_bff"
       SPRING_R2DBC_USERNAME: tube_bff
-      SPRING_R2DBC_PASSWORD: tube_bff
+      SPRING_R2DBC_PASSWORD: ${TUBE_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       SPRING_LIQUIBASE_URL: "jdbc:postgresql://tube-bff-db:5432/tube_bff"
       SPRING_LIQUIBASE_USER: tube_bff
-      SPRING_LIQUIBASE_PASSWORD: tube_bff
+      SPRING_LIQUIBASE_PASSWORD: ${TUBE_BFF_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       # tube.google.* is ESO-projected from Vault in-cluster. TokenCipher decodes the
       # DEK in its CONSTRUCTOR, so a blank value is not "fails closed when the connect
       # endpoints are exercised" — the whole service refuses to start:
