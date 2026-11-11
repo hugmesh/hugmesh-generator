@@ -341,7 +341,8 @@ import hugmesh_studio
 from hugmesh_studio.gui.qt import QtCore, QtWidgets, BINDING
 
 package = os.path.dirname(hugmesh_studio.__file__)
-expected = ["core/device-catalog.json", "core/progress-tables.json", "core/_roles-lib.sh"]
+expected = ["core/device-catalog.json", "core/progress-tables.json", "core/_roles-lib.sh",
+            "core/desktop_apps.json"]
 missing = [p for p in expected if not os.path.isfile(os.path.join(package, p))]
 html = [f for f in os.listdir(os.path.join(package, "assets")) if f.endswith(".html")]
 if missing or not html:

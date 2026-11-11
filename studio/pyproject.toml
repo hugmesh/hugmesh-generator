@@ -83,6 +83,9 @@ include = ["hugmesh_studio*"]
 # is asserted against the table directly — the shipped-tree import test next to it
 # only reaches the rows its four modules happen to load, and measured, it did not
 # notice progress-tables.json being dropped from here.
+# core/desktop_apps.json is the Desktop step's app catalog (core/desktop_spec.py reads it
+# when the step renders): without it the step cannot list apps in an installed Studio.
 [tool.setuptools.package-data]
-"hugmesh_studio.core" = ["device-catalog.json", "progress-tables.json", "_roles-lib.sh"]
+"hugmesh_studio.core" = ["device-catalog.json", "progress-tables.json", "_roles-lib.sh",
+                         "desktop_apps.json"]
 "hugmesh_studio.assets" = ["*.html"]

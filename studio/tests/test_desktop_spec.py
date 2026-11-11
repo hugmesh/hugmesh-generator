@@ -318,3 +318,14 @@ def test_passwords_file_text():
     assert ds.parse_passwords("ann:a:1\n") == {"ann": "a:1"}
     with pytest.raises(ValueError):
         ds.extra_pass_file_text(spec, {"ann": "two\nlines"})
+
+
+def test_account_lines_name_the_login_account_and_the_role_owner():
+    cfg = _laptop(local_user="ann", local_admin=False)
+    assert ds.account_lines(cfg)[0] == "Login account: ann — not an administrator (Home step)."
+    cloud = ImageConfig(mode="cloud", role="laptop", platform="x86", person_role="mod")
+    assert "Person role: mod (System step)." in ds.account_lines(cloud)
+    e = WorklistEntry(role="laptop", platform="x86", desktop_user="bob",
+                      desktop_user_roles=["admin", "games"])
+    lines = ds.account_lines(ImageConfig(mode="mesh"), e)
+    assert "Mesh person on this desktop: bob — roles admin, games (Worklist step)." in lines

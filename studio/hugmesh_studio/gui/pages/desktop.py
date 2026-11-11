@@ -697,9 +697,8 @@ class DesktopPage(QtWidgets.QWizardPage):
                                    f"{ds.ARM_FIXED_VIDEO_CARDS.get(c.platform, '')}.")
             self.cards_effective.setText("")
         # accounts
-        who = (getattr(self.wiz.cfg, "local_user", "") or "").strip() or "(the builder's default)"
-        admin = " — an administrator" if getattr(self.wiz.cfg, "local_admin", False) else " — not an administrator"
-        self.primary_state.setText(f"Login account: {who}{admin}.")
+        self.primary_state.setText("\n".join(ds.account_lines(
+            c, self._entry if self._mesh() else None)))
         # apps
         self._apps_sources()
         # pretend availability

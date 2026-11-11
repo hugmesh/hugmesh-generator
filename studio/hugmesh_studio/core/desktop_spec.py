@@ -806,13 +806,30 @@ def undo_changes(cfg, applied: Iterable[OverlayChange], *, source: str) -> None:
     store(cfg, spec)
 
 
+def account_lines(cfg, entry=None) -> list[str]:
+    """Who logs in to this desktop and with which role — owned by other steps (Home: the
+    login account and its administrator flag; System / the mesh worklist: the person's
+    role tier and grants), shown here so the Desktop step reads whole."""
+    who = (getattr(cfg, "local_user", "") or "").strip() or "(the builder's default)"
+    admin = "an administrator" if getattr(cfg, "local_admin", False) else "not an administrator"
+    out = [f"Login account: {who} — {admin} (Home step)."]
+    if entry is not None and getattr(entry, "desktop_user", ""):
+        roles = ", ".join(getattr(entry, "desktop_user_roles", None) or [entry.desktop_user_role])
+        out.append(f"Mesh person on this desktop: {entry.desktop_user} — roles {roles} "
+                   "(Worklist step).")
+    elif is_x86(cfg) and getattr(cfg, "mode", "") != "standalone":
+        out.append("Person role: " + (getattr(cfg, "person_role", "") or "derived by the builder")
+                   + " (System step).")
+    return out
+
+
 def summary_lines(cfg) -> list[str]:
     """Plain-words facts for the Review page, the assistant and the text UI."""
     if not applies(cfg):
         return ["Desktop: this image builds no desktop."]
     spec = spec_of(cfg)
     env = environment(cfg)
-    out = [f"Desktop environment: {ENVIRONMENTS[env][0]}",
+    out = account_lines(cfg) + [f"Desktop environment: {ENVIRONMENTS[env][0]}",
            "Login: LightDM greeter, local account" + (" + SSO sign-in" if _sso(cfg) else
                                                       " (SSO sign-in off on this image)")]
     if spec.sessions:
