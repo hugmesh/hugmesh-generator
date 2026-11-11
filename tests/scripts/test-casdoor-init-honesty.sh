@@ -490,7 +490,7 @@ control_says() { # <label> <subcommand> <substring> — staged tree already corr
     out="$(python3 "${CONTRACT}" "$2" "${STAGE}" 2>&1)"; rc=$?
     if [ "${rc}" -eq 0 ]; then
         bad "(3) control [$1]: the corrupted tree still PASSED — $2 is not biting"
-    elif printf '%s\n' "${out}" | grep -F -- "$3" >/dev/null; then
+    elif printf '%s\n' "${out}" | grep -F FAIL | grep -F -- "$3" >/dev/null; then
         ok "(3) control [$1]: caught by \`$2\` ($3)"
     else
         bad "(3) control [$1]: \`$2\` failed, but not with \"$3\" — caught for the wrong reason"
@@ -503,13 +503,16 @@ control_says() { # <label> <subcommand> <substring> — staged tree already corr
 # what the Job would store; the sweep used to APPEND every write to the literal's
 # list and passed all four.
 desktop_write() { # <python line(s)> — inserted just before the desktop client's write
+    # A literal \n in the spec starts another line at the same indent, so a
+    # control can define a helper (def ...:\n    ...) and then call it.
     python3 - "${INIT_JOB}" "$1" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
 anchor = ('        verb = write_application(appname, app)\n'
           '        print(f"  {verb} {appname} (PKCE public client')
 assert s.count(anchor) == 1, "control precondition: the desktop client write not found once"
-p.write_text(s.replace(anchor, "        " + sys.argv[2] + "\n" + anchor))
+lines = sys.argv[2].replace("\\n", "\n        ")
+p.write_text(s.replace(anchor, "        " + lines + "\n" + anchor))
 PY
 }
 for spec in \
@@ -521,6 +524,121 @@ for spec in \
     IFS='|' read -r what line says <<<"${spec}"
     says="$(printf '%b' "${says}")"
     if desktop_write "${line}"; then control_says "hugmesh-desktop: ${what} after the dict" devicelogin "${says}"
+    else bad "(3) control [${what}] could not be staged"; fi
+    cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
+done
+
+# (ncD9-ncD24) the same writes made through a REBINDING, an ALIAS or a helper,
+# which the sweep cannot fold. Each one changes what the Job stores, and each
+# one passed the #962 contract with rc 0 (the #962 refute listed the first five;
+# the rest are the same class). A write the sweep cannot follow must FAIL CLOSED,
+# so every one of these must fail with "cannot be read statically".
+UNREAD="cannot be read statically"
+for spec in \
+    'rebound to {**app} with signinMethods []|app = {**app, "signinMethods": []}' \
+    'rebound to dict(app, signinMethods=[])|app = dict(app, signinMethods=[])' \
+    'signinMethods aliased then cleared|m = app["signinMethods"]; m.clear()' \
+    'signinMethods set through __setitem__|app.__setitem__("signinMethods", [])' \
+    'grantTypes aliased then appended to|g = app["grantTypes"]; g.append("password")' \
+    'grantTypes extended through __iadd__|app["grantTypes"].__iadd__(["password"])' \
+    'signinMethods written through a variable key|k = "signinMethods"; app[k] = []' \
+    'the list setdefault returns is cleared|app.setdefault("signinMethods", []).clear()' \
+    'the list get returns is cleared|app.get("signinMethods").clear()' \
+    'a shallow copy shares the list and clears it|c = app.copy(); c["signinMethods"].clear()' \
+    'a local helper clears signinMethods|def _strip(a):\n    a["signinMethods"] = []\n_strip(app)' \
+    'a local helper adds the password grant|def _grant(a, g):\n    a["grantTypes"].append(g)\n_grant(app, "password")' \
+    'merged in place by the dict-union operator|app |= {"signinMethods": []}' \
+    'written by dict.update called on it directly|dict.update(app, signinMethods=[])' \
+    'a copy of the method list shares its method dicts|c = app["signinMethods"].copy(); c[1]["rule"] = "Hide password"' \
+    'a self-recursive helper (followed only so deep)|def _rec(a, n):\n    return _rec(a, n - 1) if n else None\n_rec(app, 3)'; do
+    IFS='|' read -r what line <<<"${spec}"
+    if desktop_write "${line}"; then control_says "hugmesh-desktop: ${what}" devicelogin "${UNREAD}"
+    else bad "(3) control [${what}] could not be staged"; fi
+    cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
+done
+
+# (ncD25) a call-site argument that is not the bare name: the write sends a
+# modified COPY, while every write the sweep folds is to the original.
+desktop_write_call() { # <replacement for the desktop client's write_application(...) argument list>
+    python3 - "${INIT_JOB}" "$1" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+anchor = ('        verb = write_application(appname, app)\n'
+          '        print(f"  {verb} {appname} (PKCE public client')
+assert s.count(anchor) == 1, "control precondition: the desktop client write not found once"
+p.write_text(s.replace(anchor, anchor.replace("(appname, app)", "(" + sys.argv[2] + ")")))
+PY
+}
+if desktop_write_call 'appname, {**app, "signinMethods": []}'; then
+    control_says "hugmesh-desktop: write_application gets {**app, signinMethods: []}" devicelogin "${UNREAD}"
+else bad "(3) control [non-bare write_application argument] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
+
+# (ncD26) the signinMethods list kept in a module constant: legal as long as
+# nothing else touches it (permitted below), but a later .clear() on the
+# constant empties the list the dict holds.
+desktop_methods_constant() { # [extra line inserted before the desktop write]
+    python3 - "${INIT_JOB}" "${1:-}" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+pat = re.compile(r'^( *)"signinMethods": (\[\n(?: *\{"name": "Device login".*\n)(?: *\{"name": .*\n)* *\]),\n', re.M)
+m = pat.search(s)
+assert m and len(pat.findall(s)) == 1, "control precondition: the desktop signinMethods block not found once"
+block = m.group(2)
+s = s[:m.start()] + m.group(1) + '"signinMethods": DESKTOP_METHODS,\n' + s[m.end():]
+anchor = "    def reconcile_desktop_client():\n"
+assert s.count(anchor) == 1, "control precondition: reconcile_desktop_client not found once"
+s = s.replace(anchor, "    DESKTOP_METHODS = " + block.strip() + "\n\n" + anchor)
+if sys.argv[2]:
+    w = ('        verb = write_application(appname, app)\n'
+         '        print(f"  {verb} {appname} (PKCE public client')
+    assert s.count(w) == 1, "control precondition: the desktop client write not found once"
+    s = s.replace(w, "        " + sys.argv[2] + "\n" + w)
+p.write_text(s)
+PY
+}
+if desktop_methods_constant 'DESKTOP_METHODS.clear()'; then
+    control_says "hugmesh-desktop: its signinMethods constant is cleared after use" devicelogin "${UNREAD}"
+else bad "(3) control [signinMethods constant cleared] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
+
+# (ncD27) a chained assignment binds the dict to a second, indexed name, and the
+# write goes through that one: the dict is not bound to ONE plain name, so the
+# sweep cannot know every name it is reached by.
+python3 - "${INIT_JOB}" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+needle = '        app = {\n            "owner": "admin", "name": appname,\n            "displayName": "HugMesh Desktop'
+assert s.count(needle) == 1, "control precondition: the desktop dict literal not found once"
+s = s.replace(needle, needle.replace("        app = {", "        held = [None]\n        app = held[0] = {"))
+w = ('        verb = write_application(appname, app)\n'
+     '        print(f"  {verb} {appname} (PKCE public client')
+assert s.count(w) == 1, "control precondition: the desktop client write not found once"
+p.write_text(s.replace(w, '        held[0]["signinMethods"] = []\n' + w))
+PY
+if [ $? -eq 0 ]; then control_says "hugmesh-desktop: the dict is also bound to held[0], which clears signinMethods" devicelogin "${UNREAD}"
+else bad "(3) control [chained assignment] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
+
+# ── and the other direction: shapes the sweep CAN read must still pass, so the
+# controls above are not passing off "any later line fails" ───────────────────
+permits_devicelogin() { # <label> — the staged tree is legal and must still pass
+    if python3 "${CONTRACT}" devicelogin "${STAGE}" >/dev/null 2>&1; then
+        ok "(3) control [$1]: still accepted by \`devicelogin\`"
+    else
+        bad "(3) control [$1]: \`devicelogin\` rejects a shape it can read — over-broad"
+        python3 "${CONTRACT}" devicelogin "${STAGE}" 2>&1 | grep FAIL | sed 's/^/      /'
+    fi
+}
+if desktop_methods_constant ''; then permits_devicelogin "hugmesh-desktop's signinMethods kept in an untouched module constant"
+else bad "(3) control [signinMethods constant] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
+for spec in \
+    'grantTypes extended the user-bff way|app["grantTypes"] = app["grantTypes"] + ["refresh_token"]' \
+    'a non-folded key read and written|app["expireInHours"] = 24; print(app["name"], len(app["grantTypes"]))' \
+    'a membership test on grantTypes|assert "password" not in app["grantTypes"]'; do
+    IFS='|' read -r what line <<<"${spec}"
+    if desktop_write "${line}"; then permits_devicelogin "hugmesh-desktop: ${what}"
     else bad "(3) control [${what}] could not be staged"; fi
     cp "${CLUSTER}/manifests/casdoor/init-job.yaml" "${INIT_JOB}"
 done
