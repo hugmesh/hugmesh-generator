@@ -1114,7 +1114,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 233 -> 234 on 2026-11-10 (feat/studio-nvd-key-20261110): +1 gated, +1 total —
 # tests/pentest/test-run-sca-nvd-key.sh, named by shell-suites.yml and .gitlab-ci.yml's
 # lint:run-sca-nvd-key. PREMERGE_UNGATED is untouched. Measured by running this file.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-234}"
+# 234 -> 235 on 2026-11-11 (fix/node-telemetry-egress-off, PR #965, merged with origin/main
+# 267f1a0a): +1 gated, +1 total — tests/scripts/test-node-telemetry-off.sh, named by
+# shell-suites.yml. 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the
+# merged tree. PREMERGE_UNGATED is untouched.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-235}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
