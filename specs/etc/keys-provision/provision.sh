@@ -1204,21 +1204,25 @@ headscale_effective_policy_path() {
         echo "headscale dumpConfig wrote no configuration dump, so headscale could not read its configuration"
         return 1
     fi
+    # (Every line of the awk program keeps its braces balanced and has no double quote
+    # before its last `}`, and the last `}` is followed by a space, not the closing
+    # quote: the shell-group model in
+    # tests/scripts/test-eso-provider-refs.sh reads this file line by line and counts
+    # a `{` / `}` between blanks as grouping. The END rules run in order, and the first
+    # `exit 1` ends the program.)
     res="$(awk '
         function clean(s) { gsub(/[^A-Za-z0-9_.\/:@ -]/, "?", s); return substr(s, 1, 120) }
-        /^policy:$/        { blocks++; inb = 1; next }
-        /^[^ ]/            { inb = 0; if (tolower($0) ~ /^"?policy/) odd++; next }
+        /^policy:$/          { blocks++; inb = 1; next }
+        /^[^ ]/              { inb = 0; if (tolower($0) ~ /^[^a-z0-9_ ]?policy/) odd++; next }
         inb && /^    mode: / { nm++; mode = substr($0, 11); next }
         inb && /^    path: / { np++; path = substr($0, 11); next }
-        inb                { odd++ }
-        END {
-            if (blocks != 1 || odd || nm != 1 || np > 1) { print "the dump has no single plain policy block (mode and path only)"; exit 1 }
-            if (mode == "database") { print "policy.mode is database: headscale loads whatever policy its database holds, which keys-provision cannot check before headscale starts"; exit 1 }
-            if (mode != "file") { print "policy.mode is \"" clean(mode) "\", not file"; exit 1 }
-            if (np == 0) { print "it names no policy.path: headscale would start with no policy at all (allow-all)"; exit 1 }
-            if (path !~ /^\/[A-Za-z0-9_.\/-]+$/) { print "policy.path \"" clean(path) "\" is not a plain absolute path"; exit 1 }
-            print path
-        }' "${dump}" 2>/dev/null)" || rc=1
+        inb                  { odd++ }
+        END { if (blocks != 1 || odd || nm != 1 || np > 1) { print "the dump has no single plain policy block (mode and path only)"; exit 1 } }
+        END { if (mode == "database") { print "policy.mode is database: headscale loads whatever policy its database holds, which keys-provision cannot check before headscale starts"; exit 1 } }
+        END { if (mode != "file") { print "policy.mode is \"" clean(mode) "\", not file"; exit 1 } }
+        END { if (np == 0) { print "it names no policy.path: headscale would start with no policy at all (allow-all)"; exit 1 } }
+        END { if (path !~ /^\/[A-Za-z0-9_.\/-]+$/) { print "policy.path \"" clean(path) "\" is not a plain absolute path"; exit 1 } }
+        END { print path } ' "${dump}" 2>/dev/null)" || rc=1
     rm -f "${dump}" 2>/dev/null
     [ -n "${res}" ] || { echo "the configuration dump could not be read"; return 1; }
     printf '%s\n' "${res}"
