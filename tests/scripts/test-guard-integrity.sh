@@ -1131,8 +1131,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-edge-ai-analysis-ssrf.sh, named by shell-suites.yml's debian
 # edge-ai-analysis leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on
 # the branch over origin/main 39b953ad: 238 of 280.
-# 238 -> 240 (fix/sec-new-21-20261111 over origin/main b3eafff5): +2, test-headscale-policy-fallback{,-live}.sh; GUARD_PREMERGE=0 on the merged tree: 240 of 282.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-240}"
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #926 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 240 of 282.
+# 240 -> 242 (fix/sec-new-21-20261111 over origin/main ea8d3143): +2, test-headscale-policy-fallback{,-live}.sh; GUARD_PREMERGE=0 on the merged tree: 242 of 284.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-242}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
