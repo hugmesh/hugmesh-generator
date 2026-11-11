@@ -115,8 +115,9 @@ def scan():
     """``(found, unresolved)``.
 
     ``found``: ``[(where, text)]`` — every subtitle text the source spells out, where
-    ``where`` is ``"file.py:line"`` (deduplicated by text per file; empty strings dropped,
-    an empty subtitle hides nothing).
+    ``where`` is ``"file.py:line"``, or ``"file.py:line Class.CONST"`` for a class
+    constant (deduplicated by text per file; empty strings dropped, an empty subtitle
+    hides nothing).
     ``unresolved``: ``{(file, expression)}`` — subtitle sources this scan cannot read as
     text (a parameter, a local variable, an f-string)."""
     found: list[tuple[str, str]] = []
