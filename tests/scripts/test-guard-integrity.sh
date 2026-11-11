@@ -1136,7 +1136,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
 # PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
 # PR #926 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 240 of 282.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-240}"
+# 240 -> 241 on 2026-11-11 (fix/build-l5-20261111): +1 gated, +1 total —
+# tests/scripts/test-rpi5-img-preflight.sh, named by shell-suites.yml's alpine job.
+# PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on the branch over
+# origin/main ea8d3143: 241 of 283; with its SUITES line removed, 240 of 283 + this
+# check red naming it, so the +1/+1 is this suite and nothing else.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-241}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

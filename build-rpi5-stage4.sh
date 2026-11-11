@@ -702,8 +702,9 @@ OPTIONS
         boot partition and alignment — so it flashes fast and is NOT padded
         to the size of the target USB. growroot then expands the root to fill
         the medium (or the --grow cap) on first boot, so this only needs to
-        fit the stage4 plus a little headroom.
-        Default: 9216
+        fit the stage4 plus a little headroom. A stage4 that does not fit is
+        not an error: the root is grown to the payload plus ~15%.
+        Default: 9216 (omnibus: 20480)
 
     --grow fill|none|<size>
         First-boot grow policy baked into the image (/etc/growfs.conf, read
@@ -5024,19 +5025,23 @@ STAGE4_TARBALL="${WORK_DIR}/${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.s
 # scripts/_builder-resume-lib.sh has the measurement behind this — the old
 # unconditional owner-0 flatten shipped a root:root /var/lib/tor that tor
 # refuses, so tor never started on a tor-selected node.
+#
+# What the stage4 does NOT carry: ONE list, read by both pack commands below AND by
+# build_img's pre-flight, which must measure what the .img root will actually hold.
+# The pre-flight used to `du` the whole sysroot. Under --skip-clean that counted the
+# kernel build tree in usr/src, which is never packed: the 2026-11-11 pki.rpi5 build
+# measured 15450 MiB and aborted, while its stage4 held 2786 MiB (xz --list).
+# The patterns are relative to the sysroot ('./...'), so measure from inside it.
+STAGE4_PACK_EXCLUDES=(--exclude='./usr/src' --exclude='./var/cache' --exclude='./tmp/*')
 hmr_pack_owner_args "${SYSROOT}"
 tar -C "${SYSROOT}" \
     --xattrs-include='*.*' \
     "${HMR_PACK_OWNER_ARGS[@]}" \
-    --exclude='./usr/src' \
-    --exclude='./var/cache' \
-    --exclude='./tmp/*' \
+    "${STAGE4_PACK_EXCLUDES[@]}" \
     -cJf "${STAGE4_TARBALL}" . 2>/dev/null || \
 tar -C "${SYSROOT}" \
     "${HMR_PACK_OWNER_ARGS[@]}" \
-    --exclude='./usr/src' \
-    --exclude='./var/cache' \
-    --exclude='./tmp/*' \
+    "${STAGE4_PACK_EXCLUDES[@]}" \
     -cJf "${STAGE4_TARBALL}" .
 
 info "Stage4 tarball: ${STAGE4_TARBALL}"
@@ -5064,16 +5069,24 @@ build_img() {
     # 1MiB alignment gap + 512MiB FAT boot + ROOT_MiB ext4 root + 1MiB slack.
     img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
 
-    # Pre-flight (fail in seconds, not after a long extraction): does the finished
-    # payload fit the ROOT_MiB root partition? Converts the cryptic mid-tar "No space
-    # left on device" into an upfront, actionable error. Mirrors the x86 builder.
+    # Pre-flight (before any loop device or extraction): does the payload fit the
+    # ROOT_MiB root partition? The payload is what the stage4 CARRIES, measured with
+    # the pack's own exclude list (STAGE4_PACK_EXCLUDES) from inside the sysroot, so
+    # a kernel build tree kept by --skip-clean is not counted (it is never packed).
     local payload_mib cap_mib
-    payload_mib="$(du -sxBM "${SYSROOT}" 2>/dev/null | cut -f1 | tr -dc '0-9')"
+    payload_mib="$(cd "${SYSROOT}" && du -sxBM "${STAGE4_PACK_EXCLUDES[@]}" . 2>/dev/null | cut -f1 | tr -dc '0-9')"
     cap_mib=$(( ROOT_MiB * 93 / 100 ))   # ext4 metadata + 5% reserved ≈ 7% overhead
     if [ -n "${payload_mib}" ] && [ "${payload_mib}" -gt "${cap_mib}" ]; then
-        err "Payload ${payload_mib} MiB exceeds the ${ROOT_MiB} MiB root partition (usable ~${cap_mib} MiB)."
-        err "Re-run with a bigger root, e.g.  --img-size $(( (payload_mib * 115 / 100 / 1024 + 1) * 1024 ))"
-        exit 1
+        # AUTO-GROW (was a fatal error, after hours of emerge), as the x86 builder
+        # does: size the compact root to the payload + ~15% headroom, rounded up to
+        # a GiB. growroot still expands it to the medium on first boot, so a larger
+        # compact .img costs only flash time. An explicit --img-size is grown too.
+        # img_size_mib was computed above from the old ROOT_MiB, so recompute it.
+        local new_root=$(( (payload_mib * 115 / 100 / 1024 + 1) * 1024 ))
+        warn "Payload ${payload_mib} MiB exceeds the ${ROOT_MiB} MiB root (usable ~${cap_mib} MiB) — auto-growing the .img root to ${new_root} MiB (growroot still resizes on boot)."
+        ROOT_MiB="${new_root}"
+        cap_mib=$(( ROOT_MiB * 93 / 100 ))
+        img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
     fi
     info "Pre-flight: payload ${payload_mib:-?} MiB fits the ${ROOT_MiB} MiB root (usable ~${cap_mib} MiB)"
 
