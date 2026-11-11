@@ -791,6 +791,11 @@ class BuildDriver:
             setattr(run_cfg, f, p)
         return run_cfg, mat.cleanup
 
+    def _dispatch_command(self, cfg, backend: str, local_pass_file: str | None) -> list[str]:
+        """The argv run() actually spawns: :meth:`command` with the dispatch-only
+        staged files. FleetDriver overrides it to add its own (the NVD key pointer)."""
+        return self.command(cfg, backend, local_pass_file=local_pass_file)
+
     def run(self, cfg: ImageConfig, backend: str | None = None,
             on_line: Callable[[str], None] | None = None) -> int:
         """Run the build, calling on_line for each output line. Returns the exit code.
@@ -831,9 +836,12 @@ class BuildDriver:
         pass_file: str | None = None
         cleanup_pass: Callable[[], None] = lambda: None  # noqa: E731
         try:
-            if run_cfg.local_pass:
+            # getattr: FleetDriver inherits this run() and a FleetConfig has no login
+            # password — ``run_cfg.local_pass`` raised AttributeError there (#860), so
+            # every "Build fleet now" aborted before anything was spawned.
+            if getattr(run_cfg, "local_pass", ""):
                 pass_file, cleanup_pass = secret_files.stage_local_pass(run_cfg.local_pass)
-            code = self._stream(self.command(run_cfg, backend, local_pass_file=pass_file),
+            code = self._stream(self._dispatch_command(run_cfg, backend, pass_file),
                                 watched_on_line, backend)
         finally:
             cleanup_pass()

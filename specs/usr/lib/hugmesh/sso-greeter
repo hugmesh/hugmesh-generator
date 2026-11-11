@@ -19,11 +19,14 @@
 #   * leaves the password EMPTY           -> this helper runs the RFC 8628 device
 #                                            flow against the per-domain IdP: the
 #                                            greeter shows "open <url>, enter code
-#                                            XXXX-XXXX", the user approves on any
-#                                            phone/browser, the helper verifies the
-#                                            returned token (RS256 against the
-#                                            issuer JWKS, iss/aud/exp/nbf, name ==
-#                                            the selected user) and exits 0
+#                                            XXXX-XXXX"; on a phone/browser the user
+#                                            signs in to the IdP's own page if it
+#                                            asks (password + MFA there, never on
+#                                            the greeter) and approves; the helper
+#                                            verifies the returned token (RS256
+#                                            against the issuer JWKS, iss/aud/exp/
+#                                            nbf, name == the selected user) and
+#                                            exits 0
 #                                            (`success=done`: the session starts).
 #   * types an OFFLINE password           -> for an SSO-managed account: accepted
 #                                            from the bounded local cache while it
@@ -737,7 +740,10 @@ def device_flow(user, conf):
     ceiling = conf_int(conf, "LOGIN_TIMEOUT", 30, 900)
     life = d.get("expires_in")
     wait = min(ceiling, int(life)) if isinstance(life, (int, float)) and life > 0 else ceiling
-    say("SSO sign-in for %s: open %s on any device and enter the code %s" % (user, d.get("verification_uri_complete") or uri, code))
+    # The IdP password is typed on the IdP's own page on the user's phone/browser,
+    # never into this greeter: its password box means LOCAL/offline password.
+    say("SSO sign-in for %s: open %s on your phone or any browser and enter the code %s" % (user, d.get("verification_uri_complete") or uri, code))
+    say("Sign in to %s there if it asks (MFA applies), then approve. Type your SSO password only on that page, never on this screen." % issuer_host(conf))
     say("Waiting up to %d s for your approval; press Cancel to use a local password instead." % wait)
     interval = max(1, int(d.get("interval") or 5))
     deadline = time.monotonic() + wait
