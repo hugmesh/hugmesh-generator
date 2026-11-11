@@ -5265,7 +5265,7 @@ fi
 # Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md): the node-local control
 # relay + keeper, the OIDC-defer job (staged; keys-provision links it on a pki only) and
 # the transport default keys-provision falls back to. lan bakes none of it.
-if [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
+if [ "${MESH_CONTROL_TRANSPORT:-lan}" != lan ]; then
     mkdir -p "${SYSROOT}/etc/hugmesh/registry" "${SYSROOT}/usr/sbin" "${SYSROOT}/etc/init.d"
     for _mc in hugmesh-mesh-control-relay hugmesh-headscale-oidc-defer; do
         cp "${SHARED_SPECS}/usr/sbin/${_mc}" "${SYSROOT}/usr/sbin/${_mc}"; chmod +x "${SYSROOT}/usr/sbin/${_mc}"
@@ -6160,7 +6160,7 @@ fi
 _tor_node_selected && PKGS="${PKGS} ${TOR_NODE_PACKAGES[*]}" && info "Tor NODE service: ${TOR_NODE_PACKAGES[*]} for the v3 hidden service (fe-gateway onion; keypair off-git, minted first-boot)"
 # Mesh control over Tor (OPT-IN): the same net-vpn/tor as a client (+ the pki's
 # control onion), when the tor optional service did not already add it.
-[ "${MESH_CONTROL_TRANSPORT}" != lan ] && ! _tor_node_selected && PKGS="${PKGS} ${TOR_NODE_PACKAGES[*]}" \
+[ "${MESH_CONTROL_TRANSPORT:-lan}" != lan ] && ! _tor_node_selected && PKGS="${PKGS} ${TOR_NODE_PACKAGES[*]}" \
     && info "Mesh control over Tor (${MESH_CONTROL_TRANSPORT}): ${TOR_NODE_PACKAGES[*]} as the control-plane client"
 # Network/host security stack: Squid+Privoxy (desktops), Snort (all), AIDE (opt-in).
 # WANT_PROXY_STACK was resolved at the SVCS step above.

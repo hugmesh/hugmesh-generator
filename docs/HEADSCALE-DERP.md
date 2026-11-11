@@ -182,6 +182,23 @@ on every keys-provision run (a re-provision with `.provision-force` on the stick
 `KEYS_FORCE=1`), never silently in between. Plan the re-provision before it expires; a
 pki node whose certificate expired takes the mesh's control plane and relay with it.
 
+## DERP over an onion (opt-in mesh control over Tor)
+
+The embedded region's host and port follow `server_url` (measured: `DERPPort` is the
+URL's port, so a non-443 control port works). Over an onion that means:
+
+- the onion path must carry **TLS end to end** to headscale's own listener — the clients
+  always speak TLS to a DERP node;
+- the path must be a byte pipe (a node-local relay, or an HTTP CONNECT proxy). A
+  **SOCKS proxy URL in `HTTPS_PROXY` breaks DERP**: tailscaled's derphttp sends an HTTP
+  CONNECT to whatever proxy URL is set, and Tor's SocksPort answers `501 Tor is not an
+  HTTP Proxy` (measured);
+- **DERP follows server_url**: changing headscale's `server_url` moves every client's DERP
+  host while their control URL stays put — a client that can reach only the old name loses
+  relay (measured). The opt-in therefore uses one permanent control name on every node.
+
+See [MESH-CONTROL-OVER-TOR.md](MESH-CONTROL-OVER-TOR.md).
+
 ## Who can use the relay
 
 headscale 0.23 (and 0.26) has **no client verification for its embedded relay**:
