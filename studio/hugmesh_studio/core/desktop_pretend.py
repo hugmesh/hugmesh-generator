@@ -196,10 +196,35 @@ def command(cfg, driver, backend: str | None = None) -> list[str]:
 
 # ── the machine-wide gate: one build / QEMU at a time ───────────────────────
 
-_BUSY_PROC = re.compile(r"(qemu-system|hugmesh-qemu-runner|build-[a-z0-9-]+-stage4\.sh)")
+#: A process is a build or an emulated device when the PROGRAM it runs is one: argv[0]
+#: (qemu-system-*, the QEMU runner) or, for an interpreter, argv[1] (bash
+#: ./build-<platform>-stage4.sh). Matching the whole command line would also match any
+#: shell or grep that merely MENTIONS those names (pgrep -f's self-match trap), and a
+#: gate that waits on a grep never opens.
+_BUSY_PROG = re.compile(r"^(qemu-system-[A-Za-z0-9_]+|hugmesh-qemu-runner[A-Za-z0-9_.-]*|"
+                        r"build-[a-z0-9-]+-stage4\.sh)$")
+_INTERPRETERS = ("bash", "sh", "dash", "env", "sudo", "python3", "python")
 
 
-def _proc_cmdlines() -> list[str]:
+def _busy_program(argv: list[str]) -> str:
+    """The build / QEMU program ``argv`` runs, or ""."""
+    if not argv:
+        return ""
+    first = os.path.basename(argv[0])
+    if _BUSY_PROG.match(first):
+        return first
+    if first in _INTERPRETERS:
+        for arg in argv[1:3]:
+            if arg.startswith("-"):
+                continue
+            base = os.path.basename(arg)
+            if _BUSY_PROG.match(base):
+                return base
+            break
+    return ""
+
+
+def _proc_cmdlines() -> list[list[str]]:
     out = []
     try:
         pids = [p for p in os.listdir("/proc") if p.isdigit()]
@@ -211,9 +236,10 @@ def _proc_cmdlines() -> list[str]:
             continue
         try:
             with open(f"/proc/{pid}/cmdline", "rb") as fh:
-                out.append(fh.read().replace(b"\0", b" ").decode("utf-8", "replace"))
+                raw = fh.read()
         except OSError:
             continue
+        out.append([a.decode("utf-8", "replace") for a in raw.split(b"\0") if a])
     return out
 
 
@@ -249,11 +275,11 @@ def gate(out_dir: str, *, sessions_active: bool = False, supervisor_running: boo
     if sessions_active or supervisor_running:
         return "A build is running in this Studio; the check waits until it finishes."
     procs = _proc_cmdlines() if procs is None else procs
-    for cmd in procs:
-        m = _BUSY_PROC.search(cmd)
-        if m:
+    for argv in procs:
+        prog = _busy_program(argv.split() if isinstance(argv, str) else argv)
+        if prog:
             return (f"Another build or emulated device is running on this machine "
-                    f"({m.group(1)}); builds and QEMU runs go one at a time.")
+                    f"({prog}); builds and QEMU runs go one at a time.")
     images = _docker_images_running() if images is None else images
     for img in images:
         if img.startswith("hugmesh-builder") or "hugmesh-qemu-runner" in img:

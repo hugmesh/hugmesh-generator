@@ -1188,7 +1188,7 @@ run_threading_checks() {
 # Expectation grammar: 'token'  must appear in the printed command
 #                      '!token' must NOT appear in the printed command
 #                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
-GUITHR_EXPECTED=76   # fail-closed: keep in sync with the guithr call list below
+GUITHR_EXPECTED=79   # fail-closed: keep in sync with the guithr call list below
                      # (68 on main, plus the 5 gDW* desktop-weight precedence/
                      # agreement probes from the desktop-axis-honesty branch)
                      # (66 before that — incl. the 2 orangepizero2w + 2
@@ -1400,6 +1400,24 @@ run_gui_threading_checks() {
     guithr g9-packages-drop \
         '{"platform":"x86","role":"backend","mode":"mesh","env":"test","packages_drop":"app-editors/nano"}' \
         '--packages-drop' 'app-editors/nano' 'PLAN:^PLAN_PACKAGES_DROP=app-editors/nano$'
+    # ── the Desktop step (core/desktop_spec.py -> scripts/_desktop-config-lib.sh):
+    # sessions, default session, VIDEO_CARDS override, apps (native folded into the ONE
+    # --packages-add, Flatpak), Python, the portage overlay — accepted by the REAL
+    # builder's argv validation (dc_validate) and visible in its plan; nothing on a node.
+    guithr g-desktop-step-x86 \
+        '{"platform":"x86","role":"chromebook","mode":"standalone","env":"test","desktop_spec":{"sessions":["i3","picom"],"default_session":"i3","video_cards":["intel","virgl"],"apps":[{"id":"obs-studio","label":"OBS","delivery":"native","atom":"media-video/obs-studio"},{"id":"firefox","label":"Firefox","delivery":"flatpak","flatpak":"org.mozilla.firefox","remote":"flathub"}],"python_extra_targets":["python3_13"],"use_lines":[">=media-video/ffmpeg-7.1.5 opus x264"],"keyword_lines":["=media-video/obs-studio-32.2.2 ~amd64"]}}' \
+        "--desktop-sessions 'i3 picom'" '--default-session i3' "--video-cards 'intel virgl'" \
+        '--flatpak-apps flathub:org.mozilla.firefox' '--python-extra-targets python3_13' \
+        'PLAN:^PLAN_DESKTOP_SESSIONS=i3 picom$' 'PLAN:^PLAN_DEFAULT_SESSION=i3$' \
+        'PLAN:^PLAN_PACKAGES_ADD=media-video/obs-studio x11-wm/i3 x11-misc/picom sys-apps/flatpak$' \
+        'PLAN:^PLAN_PORTAGE_OVERLAY=2 line(s)$' 'PLAN:^PLAN_VIDEO_CARDS_OVERRIDE=intel virgl$'
+    guithr g-desktop-step-rpi5 \
+        '{"platform":"rpi5","role":"rpi5-desktop","mode":"mesh","env":"test","desktop_spec":{"default_session":"openbox","sessions":["i3"],"use_lines":["media-libs/mesa vulkan"],"keyword_lines":["gui-wm/labwc ~arm64"]}}' \
+        '--default-session openbox' "--package-use 'media-libs/mesa vulkan'" '!--desktop-sessions' \
+        'PLAN:^PLAN_DEFAULT_SESSION=openbox$' 'PLAN:^PLAN_PORTAGE_OVERLAY=2 line(s)$'
+    guithr g-desktop-step-node-absent-x86 \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","desktop_spec":{"sessions":["i3"],"use_lines":["media-libs/mesa vulkan"]}}' \
+        '!--desktop-sessions' '!--package-use' 'PLAN:^PLAN_DESKTOP_SESSIONS=none$'
     # ── orchestration superdomain (WS-SUPER-B): emitted (effective <brand>.internal) for
     # a MESH build, threaded to the builder's PLAN_SUPERDOMAIN; ABSENT for standalone
     # (no orchestration plane). Default brand -> hugmesh.internal.

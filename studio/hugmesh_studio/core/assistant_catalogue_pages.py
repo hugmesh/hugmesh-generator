@@ -24,6 +24,9 @@ PAGES = {
   "localcloud_nodes",
   "mode"
  ],
+ "capable": [
+  "desktop"
+ ],
  "cluster_domain": [
   "domain_services",
   "fleet",
@@ -42,6 +45,9 @@ PAGES = {
   "mode",
   "users",
   "users_choice"
+ ],
+ "desktop": [
+  "desktop"
  ],
  "domain_ca": [
   "domains"
@@ -72,6 +78,9 @@ PAGES = {
  ],
  "extra_flags": [
   "fleet"
+ ],
+ "extra_local_passes": [
+  "desktop"
  ],
  "gpu_driver": [
   "role"
@@ -171,6 +180,9 @@ PAGES = {
  "sso": [
   "mode",
   "role"
+ ],
+ "steam": [
+  "desktop"
  ],
  "tailscale": [
   "mode",
