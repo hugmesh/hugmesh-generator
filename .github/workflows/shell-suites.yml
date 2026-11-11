@@ -389,10 +389,12 @@ jobs:
           # ssh-wait loop of docker-entrypoint.sh (fake ssh, fake clock) over the
           # captured consoles of a stalled and a healthy x86 display-door boot; the
           # second runs specs/usr/libexec/udev-coldplug-guard under busybox sh against
-          # a fake sysfs + udevadm and executes the x86 build's sysinit wiring against
-          # a scratch sysroot. MEASURED, 2026-11-10, in alpine:3 with busybox grep:
-          # 25 passed / 0 failed and 44 passed / 0 failed. Mutation-tested on a Gentoo
-          # host: 19 planted defects, 19 caught.
+          # a fake root (sysfs + udevd's rules dirs) + udevadm and executes the x86
+          # build's sysinit wiring against a scratch sysroot. MEASURED, 2026-11-11, in
+          # alpine:3 + bash coreutils (busybox sh): 33 passed / 0 failed and 107 passed
+          # / 0 failed, 40 of 40 runs green with 8 suites in parallel plus CPU load (the
+          # ping-poll checks read the clock). Mutation-tested on a Gentoo host: 36
+          # planted defects, 36 caught.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
