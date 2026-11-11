@@ -1511,6 +1511,34 @@ mesh_control_off() {
     return 0
 }
 
+# mesh_control_oidc_defer <live headscale config> — on the pki in a Tor mode, with an
+# OIDC issuer configured: first sign-in uses the sticks' pre-auth keys, and OIDC is
+# switched on once the issuer answers (hugmesh-headscale-oidc-defer, cron; headscale
+# 0.23 never retries a failed discovery itself). Called by provision_headscale AFTER the
+# KEYS config was installed — the baked config carries no oidc block.
+MESH_CONTROL_OIDC_CRON_SRC="${MESH_CONTROL_OIDC_CRON_SRC:-/etc/hugmesh/registry/cron-headscale-oidc-defer}"
+MESH_CONTROL_OIDC_CRON_DST="${MESH_CONTROL_OIDC_CRON_DST:-/etc/cron.d/hugmesh-headscale-oidc-defer}"
+mesh_control_oidc_defer() {
+    local cfg="$1"
+    if ! mesh_control_active 2>/dev/null; then
+        rm -f "${HEADSCALE_OIDC_DEFER_MARKER}" "${MESH_CONTROL_OIDC_CRON_DST}" 2>/dev/null || true
+        return 0
+    fi
+    if sed -n '/^oidc:/,/^[^ #]/p' "${cfg}" 2>/dev/null | grep -E '^[[:space:]]+issuer:[[:space:]]*["'"'"']?https?://' >/dev/null; then
+        mkdir -p "$(dirname "${HEADSCALE_OIDC_DEFER_MARKER}")"
+        : > "${HEADSCALE_OIDC_DEFER_MARKER}"
+        if [ -f "${MESH_CONTROL_OIDC_CRON_SRC}" ]; then
+            mkdir -p "$(dirname "${MESH_CONTROL_OIDC_CRON_DST}")"
+            cp -f "${MESH_CONTROL_OIDC_CRON_SRC}" "${MESH_CONTROL_OIDC_CRON_DST}" \
+                || warn "mesh control: could not install the OIDC-defer cron (${MESH_CONTROL_OIDC_CRON_DST})"
+        else
+            warn "mesh control: ${MESH_CONTROL_OIDC_CRON_SRC} is missing (image built without --mesh-control-transport?) — OIDC stays off until headscale restarts"
+        fi
+        log "mesh control: OIDC deferred until the issuer answers (hugmesh-headscale-oidc-defer); first sign-in uses the pre-auth keys"
+    fi
+    return 0
+}
+
 provision_mesh_control() {
     if ! mesh_control_active; then
         mesh_control_off
@@ -1550,16 +1578,8 @@ provision_mesh_control() {
             warn "mesh control: no headscale/control-onion/ on the pki stick — the control onion is NOT published; workers reach this node over the LAN only"
         fi
         printf 'control %s\n' "${port}" > "${MESH_CONTROL_TOR_MARKER}"
-        # First sign-in uses the sticks' pre-auth keys; OIDC is switched on once the
-        # issuer answers (headscale 0.23 never retries a failed discovery itself).
-        if grep -qE '^oidc:' /etc/headscale/config.yaml 2>/dev/null \
-           && sed -n '/^oidc:/,/^[^ #]/p' /etc/headscale/config.yaml | grep -qE '^[[:space:]]+issuer:[[:space:]]*["'"'"']?https?://'; then
-            mkdir -p "$(dirname "${HEADSCALE_OIDC_DEFER_MARKER}")"
-            : > "${HEADSCALE_OIDC_DEFER_MARKER}"
-            [ -f /etc/hugmesh/registry/cron-headscale-oidc-defer ] \
-                && cp -f /etc/hugmesh/registry/cron-headscale-oidc-defer /etc/cron.d/hugmesh-headscale-oidc-defer
-            log "mesh control: OIDC deferred until the issuer answers (hugmesh-headscale-oidc-defer); first sign-in uses the pre-auth keys"
-        fi
+        # OIDC deferral is armed by provision_headscale (mesh_control_oidc_defer), once the
+        # KEYS headscale config is the live one.
     else
         local lan_ip="" lan=""
         if [ "${t}" = "lan+onion" ]; then
@@ -1717,6 +1737,8 @@ provision_headscale() {
     # LAN workers dial this node's headscale port before go-live
     # (resolve_control_endpoint). Hand that port to the node firewall.
     headscale_lan_control_marker /etc/headscale/config.yaml
+    # Mesh control over Tor (OPT-IN): OIDC waits for its issuer (no-op on lan).
+    mesh_control_oidc_defer /etc/headscale/config.yaml
 
     chown -R headscale:headscale /etc/headscale /var/lib/headscale /run/headscale
     chmod 0600 /var/lib/headscale/*.key 2>/dev/null || true

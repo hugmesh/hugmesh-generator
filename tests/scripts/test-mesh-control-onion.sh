@@ -54,10 +54,12 @@ fn() { awk -v n="$1" '$0 ~ "^"n"\\(\\) \\{" {f=1} f {print} f && /^}/ {exit}' "$
     echo 'resolve_lan_ip() { echo 192.168.9.9; }'
     awk '/^MESH_CONTROL_LOOPBACK=/ || /^MESH_CONTROL_TRANSPORT_BAKED=/' "${PROV}"
     awk '/^MESH_CONTROL_HOSTS_TAG=/,/^HEADSCALE_OIDC_DEFER_MARKER=/' "${PROV}"
+    awk '/^MESH_CONTROL_OIDC_CRON_(SRC|DST)=/' "${PROV}"
     for f in node_is_public ipv4_literal resolve_pki_lan_ip resolve_mesh_control_transport \
              resolve_mesh_control_name resolve_mesh_control_onion resolve_mesh_control_port \
              mesh_control_active mesh_control_url resolve_endpoint resolve_control_endpoint \
-             mesh_control_hosts_line mesh_control_tailscaled_env mesh_control_off provision_mesh_control; do
+             mesh_control_hosts_line mesh_control_tailscaled_env mesh_control_off provision_mesh_control \
+             mesh_control_oidc_defer; do
         fn "${f}"
     done
 } > "${WORK}/mc.sh"
@@ -76,6 +78,7 @@ sbenv() {
     echo "MESH_CONTROL_TOR_ONLY=${SB}/etc/hugmesh/tor/mesh-control-only MESH_CONTROL_HS_DIR=${SB}/var/lib/tor/hugmesh-control"
     echo "MESH_CONTROL_TS_CONF=${SB}/etc/conf.d/tailscaled MESH_CONTROL_HOSTS=${SB}/etc/hosts"
     echo "HEADSCALE_OIDC_DEFER_MARKER=${SB}/var/lib/hugmesh/headscale-oidc-deferred MESH_CONTROL_TRANSPORT_BAKED=${SB}/etc/hugmesh/mesh-control-transport"
+    echo "MESH_CONTROL_OIDC_CRON_SRC=${SB}/etc/hugmesh/registry/cron-headscale-oidc-defer MESH_CONTROL_OIDC_CRON_DST=${SB}/etc/cron.d/hugmesh-headscale-oidc-defer"
 }
 mkdir -p "${WORK}/bin"
 for c in rc-update rc-service chown; do printf '#!/bin/sh\necho "%s $*" >> "${STUB_LOG:-/dev/null}"\nexit 0\n' "${c}" > "${WORK}/bin/${c}"; chmod +x "${WORK}/bin/${c}"; done
@@ -176,9 +179,24 @@ rm -rf "${SB}/var"; printf '%s\n' "${ONION2}" > "${SB}/keys/headscale/control-on
 run_mc "${P_}" provision_mesh_control > "${WORK}/p2.log" 2>&1
 [ ! -e "${SB}/var/lib/tor/hugmesh-control/hs_ed25519_secret_key" ] && grep -a -F 'NOT installed' "${WORK}/p2.log" >/dev/null \
     && ok "pki: a key whose hostname is not the sticks' onion is refused, loudly" || bad "pki installed a mismatched onion key"
-# OIDC deferral on the pki
-mkdir -p "${SB}/etc/headscale"
-grep -a -F '/etc/headscale/config.yaml' "${WORK}/mc.sh" >/dev/null && ok "OIDC deferral reads the live headscale config" || bad "OIDC deferral does not read /etc/headscale/config.yaml"
+# OIDC deferral on the pki, run for real against a config like the KEYS one
+awk '/^provision_headscale\(\) \{/{f=1} f; f&&/^}/{exit}' "${PROV}" > "${WORK}/ph.sh"
+awk '/headscale_lan_control_marker \/etc\/headscale\/config.yaml/{a=NR} /mesh_control_oidc_defer \/etc\/headscale\/config.yaml/{b=NR} /provision_headscale_config \/etc\/headscale\/config.yaml/{c=NR} END{exit !(c && b && b > c)}' "${WORK}/ph.sh" \
+    && ok "provision_headscale arms the OIDC deferral AFTER the KEYS config is installed" \
+    || bad "provision_headscale does not arm the OIDC deferral after installing the config"
+mkdir -p "${SB}/etc/hugmesh/registry"; echo '* * * * * root /usr/sbin/hugmesh-headscale-oidc-defer' > "${SB}/etc/hugmesh/registry/cron-headscale-oidc-defer"
+printf 'server_url: x\noidc:\n  only_start_if_oidc_is_available: false\n  # a comment\n  issuer: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"\n  client_id: a\nlog:\n  level: info\n' > "${WORK}/hs-oidc.yaml"
+printf 'server_url: x\nlog:\n  level: info\n' > "${WORK}/hs-nooidc.yaml"
+run_mc "${P_}" mesh_control_oidc_defer "${WORK}/hs-oidc.yaml" >/dev/null 2>&1
+[ -e "${SB}/var/lib/hugmesh/headscale-oidc-deferred" ] && [ -s "${SB}/etc/cron.d/hugmesh-headscale-oidc-defer" ] \
+    && ok "pki + Tor + an OIDC issuer: deferral marker + cron armed" || bad "the OIDC deferral was not armed"
+rm -rf "${SB}/var/lib/hugmesh" "${SB}/etc/cron.d"
+run_mc "${P_}" mesh_control_oidc_defer "${WORK}/hs-nooidc.yaml" >/dev/null 2>&1
+[ ! -e "${SB}/var/lib/hugmesh/headscale-oidc-deferred" ] && ok "no oidc block: nothing armed" || bad "armed with no oidc block"
+mkdir -p "${SB}/var/lib/hugmesh" "${SB}/etc/cron.d"; : > "${SB}/var/lib/hugmesh/headscale-oidc-deferred"; : > "${SB}/etc/cron.d/hugmesh-headscale-oidc-defer"
+run_mc '{"headscale":{"enabled":true},"mesh":{"control_transport":"lan"}}' mesh_control_oidc_defer "${WORK}/hs-oidc.yaml" >/dev/null 2>&1
+[ ! -e "${SB}/var/lib/hugmesh/headscale-oidc-deferred" ] && [ ! -e "${SB}/etc/cron.d/hugmesh-headscale-oidc-defer" ] \
+    && ok "lan: the deferral marker and cron are removed (OIDC as today)" || bad "lan left the OIDC deferral armed"
 
 # ── C. the relay ─────────────────────────────────────────────────────────────
 echo "-- C. hugmesh-mesh-control-relay against a socat stub --"
@@ -377,6 +395,10 @@ PY
     control "the pki server_url ignores the stable name" specs/etc/keys-provision/provision.sh \
         'if { [ -z "${ep}" ] || [ "${ep}" = "null" ]; } && mesh_control_active; then ep="$(mesh_control_url)"; fi' ':'
     control "a missing tor is not checked" specs/etc/keys-provision/provision.sh '    if ! have tor; then' '    if false; then'
+    control "provision_headscale never arms the OIDC deferral" specs/etc/keys-provision/provision.sh \
+        '    mesh_control_oidc_defer /etc/headscale/config.yaml' '    : mesh_control_oidc_defer'
+    control "the OIDC deferral misses a quoted issuer" specs/etc/keys-provision/provision.sh \
+        "issuer:[[:space:]]*[\"'\"'\"']?https?://' >/dev/null; then" "issuer:[[:space:]]*https?://' >/dev/null; then"
     control "tailscaled gets an HTTPS_PROXY" specs/etc/keys-provision/provision.sh \
         'export TS_FORCE_NOISE_443=true' 'export TS_FORCE_NOISE_443=true
 export HTTPS_PROXY=http://127.0.0.1:9080'
