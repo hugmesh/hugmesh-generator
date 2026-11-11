@@ -1131,6 +1131,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # total — tests/scripts/test-subject-revocation-ttl.sh, named by shell-suites.yml's debian
 # leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on this branch, which
 # is origin/main 39b953ad plus this change: 238 of 280.
+# MERGED (origin/main a621b468 into fix/sec-new-19-merged-a07-admin-bff-45-20261111): main
+# added no suite, so still 238 of 280, MEASURED with GUARD_PREMERGE=0 on the merged tree.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
