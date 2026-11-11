@@ -45,7 +45,9 @@ hugmesh_pretend_run() {
     local to=""
     command -v timeout >/dev/null 2>&1 && to="timeout ${HUGMESH_PRETEND_TIMEOUT}"
     # shellcheck disable=SC2086
-    NOCOLOR=true ${to} emerge --pretend --color=n --update --deep --newuse \
+    # --verbose: portage prints its "Total: N packages" plan line ONLY with it, and
+    # that line is the positive evidence hugmesh_pretend_report needs for "clean".
+    NOCOLOR=true ${to} emerge --pretend --verbose --color=n --update --deep --newuse \
         --autounmask=y --autounmask-write=n --autounmask-backtrack=y "$@" > "${log}" 2>&1
 }
 

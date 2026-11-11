@@ -23,7 +23,18 @@ while read -r name admin hash; do
         continue
     fi
     want="audio video usb plugdev games"
-    [ "${admin}" = "true" ] && want="wheel ${want}"
+    # Administrator = wheel, EXCEPT where 01-firstboot withholds it too: an image whose
+    # KEYS stick provisioned the accounts, or a desktop-governance (SSO) image, where
+    # sudo flows ONLY through the revocable desktop-sudo claim (keys-provision
+    # provision.sh desktop_governance_governed). The Studio refuses ':admin' there.
+    if [ "${admin}" = "true" ]; then
+        if [ -d /etc/hugmesh/desktop-governance ] || [ -f /var/lib/keys-provision/users.created ]; then
+            echo "Extra local account ${name}: administrator rights on this governed/KEYS image come from the SSO desktop-sudo claim, not wheel." \
+                | tee /dev/console 2>/dev/null || true
+        else
+            want="wheel ${want}"
+        fi
+    fi
     groups=""
     for g in ${want}; do
         getent group "${g}" >/dev/null 2>&1 || groupadd -r "${g}" >/dev/null 2>&1 || true

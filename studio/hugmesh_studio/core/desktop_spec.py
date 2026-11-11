@@ -122,6 +122,12 @@ FLATHUB_URL = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 #: default remote (specs/etc/keys-provision/provision.sh, flathub-disable.conf).
 GOVERNED_REMOTE = "hugmesh-discover"
 
+def pretend_backend(host) -> str:
+    """The check runs in the builder CONTAINER (docker), never as a native sudo build:
+    "" when this host has no Docker."""
+    return "docker" if getattr(host, "has_docker", False) else ""
+
+
 #: What the argv preview shows for the extra accounts' password file: the real path
 #: exists only for one dispatch (core/build_driver.py swaps it in).
 EXTRA_PASS_PLACEHOLDER = "<extra-local-passwords: typed at build time>"
@@ -567,6 +573,10 @@ def problems(cfg, spec: DesktopSpec | None = None, *, passwords: dict | None = N
         if u.name in ("root", primary) or u.name in names:
             err("users", f"{u.name!r} is root, the primary account or listed twice.")
         names.add(u.name)
+        if u.admin and governed(cfg):
+            err("users", f"{u.name}: on a governed mesh desktop sudo flows only through the SSO "
+                "desktop-sudo claim (revocable at the identity provider), so an extra local "
+                "administrator is not offered. Untick Administrator, or grant it in the IdP.")
         if passwords is not None and not (passwords.get(u.name) or ""):
             err("users", f"Type a first-login password for {u.name} (it is never saved; "
                 "the account must change it at first login).")

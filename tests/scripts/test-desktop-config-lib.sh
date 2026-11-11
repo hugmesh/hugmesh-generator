@@ -134,8 +134,8 @@ awk '$1=="ann" && $2=="false" && $3 ~ /^\$(y|6)\$/' "${list}" | grep . >/dev/nul
 awk '$1=="bob" && $2=="true" && $3 ~ /^\$(y|6)\$/' "${list}" | grep . >/dev/null && ok "bob:admin -> administrator" || bad "bob line: $(cat "${list}")"
 [ -x "${SR}/etc/local.d/02-extra-local-users.start" ] && ok "firstboot account script installed" || bad "firstboot script missing"
 grep -E 'chage -d 0' "${SR}/etc/local.d/02-extra-local-users.start" >/dev/null && ok "first login must change the password" || bad "no chage -d 0"
-grep -E '\[ "\$\{admin\}" = "true" \] && want="wheel' "${SR}/etc/local.d/02-extra-local-users.start" >/dev/null \
-    && ok "wheel only for an administrator" || bad "wheel gating not found"
+awk '/if \[ "\$\{admin\}" = "true" \]; then/{on=1} on&&/want="wheel \$\{want\}"/{f=1} END{exit !f}' \
+    "${SR}/etc/local.d/02-extra-local-users.start" && ok "wheel only for an administrator" || bad "wheel gating not found"
 grep -x 'flathub org.mozilla.firefox' "${SR}/etc/hugmesh/flatpak-apps.list" >/dev/null && grep -x 'mine org.example.App' "${SR}/etc/hugmesh/flatpak-apps.list" >/dev/null \
     && ok "flatpak-apps.list" || bad "flatpak-apps.list: $(cat "${SR}/etc/hugmesh/flatpak-apps.list" 2>&1)"
 grep -x "flathub https://dl.flathub.org/repo/flathub.flatpakrepo" "${SR}/etc/hugmesh/flatpak-remotes.list" >/dev/null && grep -x 'mine https://example.org/mine.flatpakrepo' "${SR}/etc/hugmesh/flatpak-remotes.list" >/dev/null \
@@ -245,6 +245,18 @@ body="$(awk '/chroot .*<<PRETEND/{on=1;next} on&&/^PRETEND$/{exit} on{print}' "$
 if printf '%s\n' "${body}" | grep -F -e '`' -e '$(' >/dev/null; then bad "PRETEND heredoc has a backtick or dollar-paren"; else ok "PRETEND heredoc: no backticks / dollar-parens"; fi
 printf '%s\n' "${body}" | grep -F 'hugmesh_pretend_report /tmp/hugmesh-pretend.log "\${_rc}"' >/dev/null \
     && ok "PRETEND heredoc reports with the chroot-side rc escaped" || bad "PRETEND heredoc report line"
+pbody="$(awk '/^if \$\{PRETEND_ONLY\}; then/{on=1} on{print} on&&/^    exit "\$\{_pretend_rc\}"$/{exit}' "${X86}")"
+um="$(printf '%s\n' "${pbody}" | grep -n 'umount_chroot; trap - EXIT' | head -1 | cut -d: -f1)"
+rmn="$(printf '%s\n' "${pbody}" | grep -n 'rm -rf --one-file-system "${BUILD_ROOT}"' | head -1 | cut -d: -f1)"
+[ -n "${um}" ] && [ -n "${rmn}" ] && [ "${um}" -lt "${rmn}" ] \
+    && ok "pretend removes its throwaway tree only AFTER detaching the chroot mounts" || bad "pretend cleanup order (umount=${um} rm=${rmn})"
+printf '%s\n' "${pbody}" | grep -E '^        pretend-\*\)' >/dev/null && printf '%s\n' "${pbody}" | grep -F 'hmr_stale_mounts "${SYSROOT}"' >/dev/null \
+    && ok "pretend removes only a pretend-* tree, and only with nothing left mounted" || bad "pretend cleanup guards missing"
+grep -F -- '--pretend --verbose' "${REPO}/scripts/_pretend-lib.sh" >/dev/null \
+    && ok "pretend asks for --verbose (portage prints Total: only then)" || bad "pretend lib lost --verbose"
+grep -F '[ -d /etc/hugmesh/desktop-governance ] || [ -f /var/lib/keys-provision/users.created ]' \
+    "${REPO}/scripts/desktop-config/02-extra-local-users.start" >/dev/null \
+    && ok "extra administrators get no wheel on a governed/KEYS image (01-firstboot's rule)" || bad "02 script grants wheel on governed images"
 for lib_f in scripts/_desktop-config-lib.sh scripts/_pretend-lib.sh; do
     bash -n "${REPO}/${lib_f}" && ok "${lib_f}: bash -n" || bad "${lib_f}: syntax"
 done

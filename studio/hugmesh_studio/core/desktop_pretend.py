@@ -190,8 +190,10 @@ def config_key(cfg) -> str:
 
 
 def command(cfg, driver, backend: str | None = None) -> list[str]:
-    """The argv for the check (the builder's own invocation via BuildDriver)."""
-    return driver.command(pretend_config(cfg), backend or driver.host.default_backend)
+    """The argv for the check (the builder's own invocation via BuildDriver), always in
+    the builder container: a Gentoo host's default "native" backend would make it a
+    root build behind sudo."""
+    return driver.command(pretend_config(cfg), backend or ds.pretend_backend(driver.host) or "docker")
 
 
 # ── the machine-wide gate: one build / QEMU at a time ───────────────────────
@@ -312,6 +314,8 @@ def run(cfg, driver, *, out_dir: str, on_line: Callable[[str], None] | None = No
     """Run the check (blocking — callers use a worker thread), record the log and the
     parsed result under ``<out>/pretend/<key>/`` and return it. The caller gates first."""
     why = supported(cfg)
+    if not why and backend in (None, "", "auto") and not ds.pretend_backend(driver.host):
+        why = "The check runs in the builder container, and Docker is not available here."
     if why:
         return PretendResult(status="error", reason=why)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -319,7 +323,7 @@ def run(cfg, driver, *, out_dir: str, on_line: Callable[[str], None] | None = No
     os.makedirs(rdir, exist_ok=True)
     log_path = os.path.join(rdir, f"{run_id}.log")
     lines: list[str] = []
-    backend = backend or driver.host.default_backend
+    backend = backend if backend not in (None, "", "auto") else ds.pretend_backend(driver.host)
     argv = command(cfg, driver, backend)
     with open(log_path, "w", encoding="utf-8") as log:
         log.write("$ " + " ".join(argv) + "\n")

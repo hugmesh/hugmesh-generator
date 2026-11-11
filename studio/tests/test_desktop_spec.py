@@ -329,3 +329,17 @@ def test_account_lines_name_the_login_account_and_the_role_owner():
                       desktop_user_roles=["admin", "games"])
     lines = ds.account_lines(ImageConfig(mode="mesh"), e)
     assert "Mesh person on this desktop: bob — roles admin, games (Worklist step)." in lines
+
+
+def test_a_governed_desktop_refuses_an_extra_local_administrator():
+    """sudo on a governed (SSO + KEYS) mesh desktop flows only through the revocable
+    desktop-sudo claim; 02-extra-local-users.start withholds wheel there too."""
+    mesh = _with(ImageConfig(mode="mesh", role="laptop", platform="x86"),
+                 extra_users=[ds.ExtraUser("ann", True)])
+    assert "desktop-sudo" in _errs(mesh)
+    assert _errs(_with(ImageConfig(mode="mesh", role="laptop", platform="x86"),
+                       extra_users=[ds.ExtraUser("ann", False)])) == ""
+    assert _errs(_with(_laptop(), extra_users=[ds.ExtraUser("ann", True)])) == ""
+    script = open(os.path.join(GEN, "scripts", "desktop-config", "02-extra-local-users.start"),
+                  encoding="utf-8").read()
+    assert "[ -d /etc/hugmesh/desktop-governance ] || [ -f /var/lib/keys-provision/users.created ]" in script

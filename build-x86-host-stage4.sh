@@ -6041,6 +6041,23 @@ _rc=0
 hugmesh_pretend_run /tmp/hugmesh-pretend.log --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world ${_pretend_pkgs} || _rc=\$?
 hugmesh_pretend_report /tmp/hugmesh-pretend.log "\${_rc}"
 PRETEND
+    # The pretend sysroot is a throwaway: detach what mount_chroot attached (the
+    # shared binpkg pool is bind-mounted READ-WRITE in there), prove nothing is left
+    # mounted, then remove the whole pretend-* build tree so a Re-check starts fresh
+    # and the root-owned tree never piles up. A --build-subdir that is NOT pretend-*
+    # may be a real build tree: never removed.
+    umount_chroot; trap - EXIT
+    case "${BUILD_SUBDIR}" in
+        pretend-*)
+            _pretend_left="$(hmr_stale_mounts "${SYSROOT}")"
+            if [ -n "${_pretend_left}" ]; then
+                warn "Pretend: still mounted under ${SYSROOT}; leaving the tree in place: ${_pretend_left}"
+            else
+                rm -rf --one-file-system "${BUILD_ROOT}" && rm -f "${BUILD_ROOT}.lock" \
+                    && info "Pretend: removed the throwaway build tree ${BUILD_ROOT}"
+            fi ;;
+        *) info "Pretend: --build-subdir ${BUILD_SUBDIR} is not a pretend-* tree, so it is left in place" ;;
+    esac
     case "${_pretend_rc}" in
         0) info "Pretend: clean — the resolver sees no USE/keyword wall from the seed (the real build re-checks after @world)" ;;
         3) warn "Pretend: the resolver needs the changes listed above (==> Pretend needs: ...)" ;;

@@ -307,3 +307,17 @@ def test_preflight_asks_for_a_missing_password(tmp_path):
     assert any("first-login password" in p for p in drv.preflight(cfg, "docker"))
     cfg.extra_local_passes = "ann:pw\n"
     assert not any("first-login password" in p for p in drv.preflight(cfg, "docker"))
+
+
+def test_the_check_runs_in_the_container_even_on_a_native_default_host(tmp_path):
+    """A Gentoo host defaults to the NATIVE backend (a root build behind sudo); the check
+    must still run in the builder container."""
+    gentoo = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
+                      has_kvm=False, is_root=False, builder_image="hugmesh-builder")
+    assert gentoo.default_backend == "native"
+    drv = BuildDriver(GEN, gentoo, workdir=str(tmp_path))
+    assert dp.command(_laptop(), drv)[:2] == ["docker", "run"]
+    no_docker = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
+                         has_kvm=False, is_root=False, builder_image="hugmesh-builder")
+    res = dp.run(_laptop(), BuildDriver(GEN, no_docker, workdir=str(tmp_path)), out_dir=str(tmp_path))
+    assert res.status == "error" and "Docker is not available" in res.reason
