@@ -491,11 +491,12 @@ def test_the_domains_table_draws_the_own_row_whole_and_fits_its_columns(
         cell = table.cellWidget(0, org)
         assert cell.isVisible() and cell.width() >= cell.sizeHint().width(), \
             (cell.width(), cell.sizeHint().width())
-        # no header elided ("Optional services" was, at 100 px): the retest's measure
+        # no header elided ("Optional services" was, at 100 px): at least the style's own
+        # size hint for the section, which is what Qt needs to draw the text whole
         for c in shown:
             text = str(table.model().headerData(c, Qt.Orientation.Horizontal))
-            need = hh.fontMetrics().horizontalAdvance(text) + 14
-            assert hh.sectionSize(c) >= need, (text, hh.sectionSize(c), need)
+            assert hh.sectionSize(c) >= hh.sectionSizeHint(c), \
+                (text, hh.sectionSize(c), hh.sectionSizeHint(c))
         # the own row's read-only labels: whole, or elided with "…" — never cut
         labels = [(c, table.cellWidget(0, c)) for c in shown
                   if c in (gui_domains._COL_APPLIES, gui_domains._COL_IDP,
