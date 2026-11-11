@@ -23,6 +23,8 @@ touches a real volume.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from hugmesh_studio.core import vaults
@@ -30,6 +32,7 @@ from hugmesh_studio.core.vaults import Capability, ManagedVolume
 
 pytest.importorskip("hugmesh_studio.gui.qt", reason="dialog tests need a Qt binding")
 
+from hugmesh_studio.gui import styles  # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 from hugmesh_studio.gui.vaults_dialog import VaultsDialog  # noqa: E402
 
@@ -240,6 +243,148 @@ class TestDialogDeleteArming:
         texts = [w.text() for w in d.vault_page.findChildren(QtWidgets.QLabel)]
         assert any("start the lane" in t for t in texts)
         assert not d.vault_page.findChildren(QtWidgets.QListWidget)
+
+
+class TestDockerDownSaysWhyInTheWarningColour:
+    """GUI-27 / B-12 (the copy half), from the 2026-11-11 Studio walk:
+
+    * "the docker daemon is not reachable" rendered in the muted grey of a summary
+      line, although it is the reason the table is empty — it reads as a note;
+    * its remedy said "reopen this dialog" while a Refresh button sits under it;
+    * a disabled "Delete volume" never said why (no tooltip in any state).
+
+    Driven through the REAL probe (Refresh -> off-thread probe -> _on_probe) with the
+    real ``docker_available`` over a fake ``docker info``; nothing reaches docker."""
+
+    _DOWN = (1, "", "Cannot connect to the Docker daemon at unix:///var/run/docker.sock")
+
+    def _world(self, monkeypatch, volumes=()):
+        fake = FakeRun({"docker info": self._DOWN})
+        monkeypatch.setattr(vaults, "_run", fake)
+        state = {"volumes": list(volumes)}
+        monkeypatch.setattr(vaults, "list_volumes", lambda *a, **k: list(state["volumes"]))
+        cap = Capability(False, "no vault", "start the lane")
+        monkeypatch.setattr(vaults, "vault_route", lambda *a, **k: vaults.VaultRoute("", cap))
+        monkeypatch.setattr(vaults, "list_entries", lambda *a, **k: ([], cap))
+        return fake, state
+
+    def _dialog(self, qapp):
+        d = VaultsDialog(project="hugmesh-local")
+        d.show()
+        _settle(qapp, d)
+        for _ in range(5):
+            qapp.processEvents()
+        return d
+
+    def test_the_remedy_names_the_refresh_button_not_reopening(self, monkeypatch):
+        monkeypatch.setattr(vaults, "_run", FakeRun({"docker info": self._DOWN}))
+        cap = vaults.docker_available()
+        assert cap.available is False
+        assert cap.detail == "the docker daemon is not reachable"
+        assert cap.remedy.endswith(", then press Refresh."), cap.remedy
+        assert "reopen" not in cap.remedy.lower()
+
+    def test_docker_down_is_said_in_the_warning_colour_and_a_good_refresh_clears_it(
+            self, qapp, monkeypatch, tmp_path):
+        fake, state = self._world(monkeypatch)
+        d = self._dialog(qapp)
+        try:
+            _shot(d, "vaults-dialog-docker-down.png", tmp_path)
+            text = d.status.text()
+            assert text == ("the docker daemon is not reachable — Start Docker (or, under "
+                            "WSL, enable Docker Desktop's WSL integration for this distro), "
+                            "then press Refresh."), text
+            assert styles.WARN in d.status.styleSheet()
+            r, g, b, n = _ink(d.status)
+            assert n > 50, "no text was rendered at all"
+            assert r - b > 60, ("the reason is not drawn in the warning colour", r, g, b)
+            # on screen whole at the dialog's own size: inside the tab, never cut short
+            page = d.status.parentWidget()
+            right = d.status.mapTo(page, d.status.rect().bottomRight())
+            assert right.x() <= page.width(), (right.x(), page.width())
+            assert d.status.height() >= d.status.heightForWidth(d.status.width()) - 2
+            # the remedy works: docker answers, Refresh (the button the line names)
+            fake.table["docker info"] = (0, "27.3.1\n", "")
+            state["volumes"] = [vol()]
+            d.refresh_btn.click()
+            _settle(qapp, d)
+            qapp.processEvents()
+            _shot(d, "vaults-dialog-docker-back.png", tmp_path)
+            assert d.status.text().startswith("1 volume(s) in project 'hugmesh-local'")
+            assert d.status.styleSheet() == styles.muted()
+            r, g, b, n = _ink(d.status)
+            assert n > 50 and abs(r - b) < 20, ("a stale warning colour survived", r, g, b)
+        finally:
+            d.close()
+
+    def test_every_disabled_delete_says_why_and_an_armed_one_says_what(
+            self, qapp, monkeypatch, tmp_path):
+        fake, state = self._world(monkeypatch)
+        # while the first probe is still out (its answer is queued, not delivered)
+        early = VaultsDialog(project="hugmesh-local")
+        try:
+            assert not early.delete_btn.isEnabled()
+            assert early.delete_btn.toolTip() == "Select one volume in the table first."
+        finally:
+            _settle(qapp, early)
+            early.close()
+        d = self._dialog(qapp)
+        try:
+            assert not d.delete_btn.isEnabled()
+            assert "Docker is not reachable" in d.delete_btn.toolTip()
+            # the walk's own detector: no visible disabled button without a reason
+            silent = [b.text() for b in d.findChildren(QtWidgets.QAbstractButton)
+                      if b.isVisibleTo(d) and not b.isEnabled() and b.text()
+                      and not b.toolTip()]
+            assert silent == []
+            fake.table["docker info"] = (0, "27.3.1\n", "")
+            state["volumes"] = [vol(), vol("casdoor-pg", in_use=["hugmesh-local-casdoor-db-1"])]
+            d.refresh_btn.click()
+            _settle(qapp, d)
+            qapp.processEvents()
+            d.table.clearSelection()
+            assert not d.delete_btn.isEnabled()
+            assert d.delete_btn.toolTip() == "Select one volume in the table first."
+            d.table.selectRow(1)                                 # casdoor-pg, in use
+            assert not d.delete_btn.isEnabled()
+            assert d.delete_btn.toolTip() == "'casdoor-pg' is in use — stop the mesh first."
+            d.table.selectRow(0)                                 # admin-bff-pg, free
+            assert not d.delete_btn.isEnabled()
+            assert d.delete_btn.toolTip() == \
+                "Type 'admin-bff-pg' in the box to the left to enable Delete."
+            _shot(d, "vaults-dialog-delete-disabled.png", tmp_path)
+            d.confirm.setText("admin-bff-pg")
+            assert d.delete_btn.isEnabled()
+            assert d.delete_btn.toolTip() == "Permanently delete 'admin-bff-pg'."
+            d.confirm.setText("admin-bff-p")                     # disarmed again
+            assert not d.delete_btn.isEnabled()
+            assert d.delete_btn.toolTip().startswith("Type 'admin-bff-pg'")
+        finally:
+            d.close()
+
+
+def _ink(label) -> tuple[float, float, float, int]:
+    """The mean colour of the pixels the label's TEXT covers (those far from its
+    background), and how many there are: what a person sees, not the style sheet."""
+    img = label.grab().toImage()
+    bg = img.pixelColor(0, 0)
+    tot, n = [0, 0, 0], 0
+    for y in range(img.height()):
+        for x in range(img.width()):
+            c = img.pixelColor(x, y)
+            if (abs(c.red() - bg.red()) + abs(c.green() - bg.green())
+                    + abs(c.blue() - bg.blue())) > 60:
+                tot[0] += c.red(); tot[1] += c.green(); tot[2] += c.blue()
+                n += 1
+    return (tot[0] / n, tot[1] / n, tot[2] / n, n) if n else (0.0, 0.0, 0.0, 0)
+
+
+def _shot(widget, name: str, tmp_path) -> str:
+    folder = os.environ.get("HUGMESH_SHOTS_DIR", "") or str(tmp_path)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, name)
+    assert widget.grab().save(path), path
+    return path
 
 
 class TestGetEntry:

@@ -41,6 +41,8 @@ from __future__ import annotations
 
 import os
 import re
+import sys
+import traceback
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
 from .. import console
@@ -870,7 +872,13 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
 class _ExportWorker(QtCore.QThread):
     """Runs org_export.plan / apply off the GUI thread (git archive of thirty
     repositories and pushes take minutes). ``done`` carries ("ok", value) or
-    ("error", message); ``progress`` one line per repository as apply finishes it."""
+    ("error", message); ``progress`` one line per repository as apply finishes it.
+
+    The error message is the exception's own sentence, never "RuntimeError: …": the
+    operator reads "Plan failed: <message>" on the page, and a Python class name in
+    it says nothing they can act on. The class and the traceback go to stderr (the
+    Studio log) for whoever debugs it. An exception with no message falls back to
+    its class name, so the line never reads a bare "Plan failed: "."""
     progress = Signal(object)
     done = Signal(object)
 
@@ -882,7 +890,10 @@ class _ExportWorker(QtCore.QThread):
         try:
             self.done.emit(("ok", self._fn(lambda r: self.progress.emit(r))))
         except Exception as exc:                 # noqa: BLE001 — reported inline
-            self.done.emit(("error", f"{type(exc).__name__}: {exc}"))
+            print(f"golive: org export failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            self.done.emit(("error", str(exc).strip() or type(exc).__name__))
 
 
 # the plan table's columns (tests pin the header words)
