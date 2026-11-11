@@ -25,10 +25,22 @@ others need a run of their own, because the driver takes one --domain per plan.
 Secrets: tokens are taken in masked fields, staged into a 0600 temp file handed to
 the driver as --token-file, deleted right after the run, and never persisted or
 placed in argv — GoLiveOptions has no field for a secret value at all.
+
+TARGET (core.golive_target): every verb runs against this host or a running EMULATED
+device. The Preflight step's picker lists both — a device that cannot be one greyed,
+its sentence inline under the picker — and the Mesh emulation page's "Go live from
+this mesh…" opens the wizard on its front door (``target=``). Against a device this
+host runs nothing but ssh: status/list come from the device's own baked driver, the
+Inputs step autofills from its probe, Generate streams the plan run INSIDE it and
+lists the artefacts copied back, Exposure/Provider say what each mechanism can really
+do from an emulated node, Verify/Flip carry the EPHEMERAL banner (a restart boots the
+golden image INTERNAL again), and the flip opens ``ssh -t … commit`` in a terminal —
+the device's own TTY confirm, never -y. This host's commit is refused off-node (B1).
 """
 from __future__ import annotations
 
 import os
+import re
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
 from .. import console
@@ -42,10 +54,14 @@ from ._widgets import label_finish_as_exit
 from ...core.golive_domains import (NO_EXPORT_DOMAINS_NOTE, NO_EXTRA_DOMAINS_NOTE,
                                     baked_domains, export_candidates,
                                     export_step_applies, exposure_lines, plan_rows)
-from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
+from ...core.golive_driver import (GoLiveDriver, GoLiveOptions, _MECH_MODEL,
+                                   _NO_DOMAIN_MECHANISMS)
+from ...core import golive_target, qemu_devices
 from ...core import nvd_key, org_export
 from ...core.progress_parse import ProgressParser, track_phases
 from ...tui import brand_step
+# the target's words are the TUI's, so both faces name a device identically
+from ...tui.golive import THIS_HOST, target_title  # noqa: F401 — THIS_HOST re-exported
 
 # exactly one page per slug, same order — mirrors WIZARD_PAGE_SLUGS' role for the
 # build wizard (tests pin each slug to its page class). "org-export" is the optional
@@ -114,6 +130,23 @@ def _open_url(url):
 
 
 # ── pages ────────────────────────────────────────────────────────────────────
+#: The inline colours (the Inputs step's red; a muted grey for the notes).
+_RED = "color: #c62828;"
+_MUTED = "color: gray;"
+
+
+def target_note(t: golive_target.GoLiveTarget) -> str:
+    """The one sentence under the picker for the PICKED target: where the verbs run."""
+    if t.is_local:
+        b1 = golive_target.local_node_refusal()
+        return ("Runs the checkout's driver on THIS host. "
+                + (f"Plan and status work as a preview; commit is refused: {b1}" if b1
+                   else "This host is a HugMesh node."))
+    return (f"Runs the device's OWN /usr/sbin/{golive_target.GUEST_DRIVER} over ssh "
+            f"(127.0.0.1:{t.ssh_port}) — this host runs nothing but ssh. "
+            "Commit opens an ssh terminal where the device asks you to confirm.")
+
+
 class GoLivePreflightPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -129,26 +162,154 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
             "marker (driver `commit`) — rollback is deleting it.")
         info.setWordWrap(True)
         lay.addWidget(info)
+        # ── the TARGET: which node every verb below runs against ──────────────────
+        # This host, or a running emulated device (the Mesh emulation page's keep-alive
+        # records). A device that cannot be one is listed GREYED, and why is said
+        # INLINE under the picker — a tooltip alone is unreachable on a disabled row,
+        # and a modal in page logic hangs a headless run.
+        self.target_pick = QtWidgets.QComboBox()
+        self.target_pick.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.target_pick.setToolTip(
+            "Where go-live runs: this host, or a running emulated device (its own "
+            "baked driver, over ssh). Greyed rows say why below.")
+        self.target_pick.currentIndexChanged.connect(self._picked)
+        lay.addWidget(_row("Target", self.target_pick))
+        self.target_info = QtWidgets.QLabel("")
+        self.target_info.setWordWrap(True)
+        self.target_info.setStyleSheet(_MUTED)
+        lay.addWidget(self.target_info)
+        self.target_problem = QtWidgets.QLabel("")       # the PICKED row cannot be used
+        self.target_problem.setWordWrap(True)
+        self.target_problem.setStyleSheet(_RED)
+        self.target_problem.setVisible(False)
+        lay.addWidget(self.target_problem)
+        self.target_refusals = QtWidgets.QLabel("")      # every greyed row, one line each
+        self.target_refusals.setWordWrap(True)
+        self.target_refusals.setStyleSheet(_MUTED)
+        self.target_refusals.setVisible(False)
+        lay.addWidget(self.target_refusals)
         self.status = console.attach(QtWidgets.QPlainTextEdit())
         self.status.setReadOnly(True)
         lay.addWidget(self.status, 1)
+        bl = QtWidgets.QHBoxLayout()
         btn = QtWidgets.QPushButton("Refresh status")
         btn.clicked.connect(self._refresh)
-        lay.addWidget(btn)
+        bl.addWidget(btn)
+        self.rescan_btn = QtWidgets.QPushButton("Re-scan devices")
+        self.rescan_btn.setToolTip("Re-read which emulated devices are running.")
+        self.rescan_btn.clicked.connect(self._rescan)
+        bl.addWidget(self.rescan_btn)
+        bl.addStretch(1)
+        lay.addLayout(bl)
+        self._rows: list[golive_target.GoLiveTarget] = []
 
     def initializePage(self):
+        self._fill_targets()
         self._refresh()
 
+    # ── the picker ──────────────────────────────────────────────────────────────
+    def _fill_targets(self) -> None:
+        # the picked device is RE-BOUND to its record as it is now (a restart moves it
+        # to another port and boot; a stopped device's port can go to another device)
+        # BEFORE the rows are drawn and refused — never only the rows around it
+        self.wiz.rebind_target()
+        rows = self.wiz.target_rows()
+        self._rows = rows
+        cur = self.wiz.target
+        self.target_pick.blockSignals(True)
+        self.target_pick.clear()
+        model = self.target_pick.model()
+        refused: list[str] = []
+        at = 0
+        for i, t in enumerate(rows):
+            why = self.wiz.target_refusal(t)
+            self.target_pick.addItem(target_title(t), i)
+            item = model.item(i) if hasattr(model, "item") else None
+            if why:
+                self.target_pick.setItemData(i, why, QtCore.Qt.ItemDataRole.ToolTipRole)
+                if item is not None:
+                    item.setEnabled(False)
+                refused.append(f"{target_title(t)} — {why}")
+            if t.label == cur.label and t.kind == cur.kind:
+                at = i
+        self.target_pick.setCurrentIndex(at)
+        self.target_pick.blockSignals(False)
+        self.target_refusals.setText(
+            ("Not offered:\n" + "\n".join("  • " + r for r in refused)) if refused else "")
+        self.target_refusals.setVisible(bool(refused))
+        self._say_target()
+        # the picked device may have just become refused (or usable): Next follows
+        self.completeChanged.emit()
+
+    def _rescan(self):
+        self.wiz.forget_probes()
+        self._fill_targets()
+        self._refresh()
+
+    def _picked(self, idx: int) -> None:
+        try:                                   # PyQt6 qFatals on a slot raise
+            # a person picked: the "no such device" from opening is answered
+            self.wiz.preselect_problem = ""
+            if 0 <= idx < len(self._rows):
+                # the rows were read when the picker was filled: take the device's
+                # record as it is NOW
+                self.wiz.set_target(self.wiz.fresh(self._rows[idx]))
+            self._say_target()
+            self._refresh()
+            self.completeChanged.emit()
+        except Exception as exc:               # noqa: BLE001 — said inline instead
+            self.target_problem.setText(f"Could not switch the target: {exc}")
+            self.target_problem.setVisible(True)
+
+    def _say_target(self) -> None:
+        t = self.wiz.target
+        self.target_info.setText(target_note(t))
+        # opened on a device label that is not in the work dir: the wizard stays on
+        # this host and says so until something is picked (not only before it shows)
+        why = self.wiz.target_refusal(t) or self.wiz.preselect_problem
+        self.target_problem.setText(why)
+        self.target_problem.setVisible(bool(why))
+
     def _refresh(self):
-        self.status.setPlainText(self.wiz.driver.status_text())
+        text = self.wiz.status_text()
+        js = self.wiz.journal_line()
+        self.status.setPlainText(text + (f"\n\n{js}" if js else ""))
+
+    def revisit(self) -> None:
+        """Back to this step from a later one. QWizard's Back never calls
+        initializePage on the step it returns to, so the picked device would keep the
+        binding it was picked with: re-bind it (a restart's new port and boot, or a
+        stop) and re-ask its status, exactly as a fill does."""
+        self._fill_targets()
+        self._refresh()
 
     def isComplete(self):
+        # A target that cannot be used stops here, with its sentence above.
+        if self.wiz.target_refusal(self.wiz.target):
+            return False
+        # The picked device changed since it was picked (a restart, a stop) and no
+        # fill has re-bound it yet: Next would lead on with the OLD port and boot.
+        if self.wiz.stale_binding():
+            return False
         # Native Windows: status_text() is the WSL2 sentence, but the providers are read
         # from the registry, so Next leads to the real provider list and a plan preview;
         # the verbs that run the bash driver refuse with that same sentence. Only a host
         # with NO provider at all (no registry) stops here. Other hosts: unchanged.
         d = self.wiz.driver
         return (not d.blocker() or bool(d.providers())) and super().isComplete()
+
+
+def _reach_label() -> QtWidgets.QLabel:
+    lb = QtWidgets.QLabel("")
+    lb.setWordWrap(True)
+    lb.setStyleSheet("color: #8a5a00;")
+    lb.setVisible(False)
+    return lb
+
+
+#: model -> the mechanism that maps to it (the inverse of the driver's taxonomy map)
+_MODEL_MECH = {model: mech for mech, model in _MECH_MODEL.items()}
 
 
 class GoLiveExposurePage(QtWidgets.QWizardPage):
@@ -161,6 +322,9 @@ class GoLiveExposurePage(QtWidgets.QWizardPage):
         lay = scrollable(self)
         self.group = ChoiceCardGroup(self)
         self.models = wiz.driver.models()
+        #: model -> the per-mechanism reachability line under its card (emulated
+        #: targets only: what that mechanism can and cannot do from an emulated node)
+        self.reach: dict[str, QtWidgets.QLabel] = {}
         for i, model in enumerate(self.models):
             label, desc = MODEL_LABELS.get(model, (model, ""))
             # icon names mirror the registry's model ids ("golive-<model>"); a
@@ -170,6 +334,8 @@ class GoLiveExposurePage(QtWidgets.QWizardPage):
             card.setProperty("model", model)
             self.group.add_card(card, i)
             lay.addWidget(card)
+            self.reach[model] = _reach_label()
+            lay.addWidget(self.reach[model])
         if self.models:
             self.group.button(0).setChecked(True)
         # ASK 14 — picking an exposure model IS proceeding. buttonClicked only, so
@@ -182,6 +348,11 @@ class GoLiveExposurePage(QtWidgets.QWizardPage):
         for i, model in enumerate(self.models):
             if model == self.wiz.model:
                 self.group.button(i).setChecked(True)
+        t = self.wiz.target
+        for model, lb in self.reach.items():
+            text = golive_target.mechanism_reachability(_MODEL_MECH.get(model, ""), t)
+            lb.setText(f"From {t.label}: {text}" if text else "")
+            lb.setVisible(bool(text))
 
     def validatePage(self):
         btn = self.group.checkedButton()
@@ -209,8 +380,28 @@ class GoLiveProviderPage(QtWidgets.QWizardPage):
         self.summary = QtWidgets.QLabel("")
         self.summary.setWordWrap(True)
         lay.addWidget(self.summary)
+        self.reach = _reach_label()          # emulated targets: what this one can do
+        lay.addWidget(self.reach)
+        # a provider the target CANNOT run (Tailscale Funnel on an emulated mesh, whose
+        # control plane is its own headscale): said inline and Next stays shut. The row
+        # stays pickable so the sentence can be read; a modal here hangs a headless run.
+        self.refused = QtWidgets.QLabel("")
+        self.refused.setWordWrap(True)
+        self.refused.setStyleSheet(_RED)
+        self.refused.setVisible(False)
+        lay.addWidget(self.refused)
         lay.addStretch(1)
         self.list.currentRowChanged.connect(self._changed)
+
+    def refusal(self, p=None) -> str:
+        """golive_target.headscale_refusal for the highlighted provider ("" if none)."""
+        p = p or self._current()
+        if p is None:
+            return ""
+        return golive_target.headscale_refusal(self.wiz.target, p.id, p.mechanism)
+
+    def isComplete(self):
+        return not self.refusal() and super().isComplete()
 
     def initializePage(self):
         self.list.blockSignals(True)
@@ -239,7 +430,18 @@ class GoLiveProviderPage(QtWidgets.QWizardPage):
         p = self._current()
         if p is None:
             self.summary.setText("")
+            self.reach.setVisible(False)
+            self.refused.setVisible(False)
+            self.completeChanged.emit()
             return
+        t = self.wiz.target
+        reach = golive_target.mechanism_reachability(p.mechanism, t, p.id)
+        self.reach.setText(f"From {t.label}: {reach}" if reach else "")
+        self.reach.setVisible(bool(reach))
+        why = self.refusal(p)
+        self.refused.setText(why)
+        self.refused.setVisible(bool(why))
+        self.completeChanged.emit()
         req = ", ".join(p.inputs) or "none"
         opt = ", ".join(p.optional) or "none"
         emits = MECH_EMITS.get(p.mechanism, "")
@@ -249,7 +451,7 @@ class GoLiveProviderPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         p = self._current()
-        if p is None:
+        if p is None or self.refusal(p):
             return False
         self.wiz.opts.provider = p.id
         return True
@@ -336,12 +538,19 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         odb = _file_picker(self, self.out_dir, "Artifact dir", directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.out_dir, 1); h.addWidget(odb)
-        lay.addWidget(_row("Artifact dir", w))
+        self.out_row = _row("Artifact dir", w)
+        lay.addWidget(self.out_row)
         self.keys_dir = QtWidgets.QLineEdit()
         kdb = _file_picker(self, self.keys_dir, "Keys layout dir", directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.keys_dir, 1); h.addWidget(kdb)
-        lay.addWidget(_row("Keys layout dir", w))
+        self.keys_row = _row("Keys layout dir", w)
+        lay.addWidget(self.keys_row)
+        self.remote_note = QtWidgets.QLabel("")
+        self.remote_note.setWordWrap(True)
+        self.remote_note.setStyleSheet(_MUTED)
+        self.remote_note.setVisible(False)
+        lay.addWidget(self.remote_note)
         lay.addStretch(1)
 
     def _picked(self, idx: int) -> None:
@@ -356,7 +565,7 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
             pass
 
     def _fill_domain_pick(self) -> None:
-        baked = baked_domains(self.wiz.driver.autofill_domain())
+        baked = self.wiz.baked_domain_list()
         self.domain_pick.blockSignals(True)
         self.domain_pick.clear()
         for i, name in enumerate(baked):
@@ -374,12 +583,14 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         # a stale block from a previous Next must not greet the operator on re-entry
         self.problem.setVisible(False)
         self.problem.setText("")
+        t = self.wiz.target
         if not self.domain.text().strip():
-            baked = o.domain or self.wiz.driver.autofill_domain()
+            baked = o.domain or self.wiz.cluster_domain()
             self.domain.setText(baked)
             self.domain_hint.setText(
-                "autofilled from the device's baked cluster domain" if baked and not o.domain
-                else "")
+                ("autofilled from the device's baked cluster domain" if t.is_local else
+                 f"autofilled from {t.label}'s /etc/hugmesh/cluster-domain (read over ssh)")
+                if baked and not o.domain else "")
         self._fill_domain_pick()
         offers = p.offers if p else (lambda _name: True)
         self.ingress_row.setVisible(offers("ingress-ip"))
@@ -396,6 +607,18 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         self.token_file.setText(o.token_file)
         self.out_dir.setText(o.out_dir)
         self.keys_dir.setText(o.keys_dir)
+        # an emulated target writes its artifacts inside the device (a fresh dir per
+        # run, copied back here) and keeps the token in ITS keys layout: the two
+        # host-side folders mean nothing there
+        self.out_row.setVisible(t.is_local)
+        self.keys_row.setVisible(t.is_local)
+        self.remote_note.setVisible(t.is_remote)
+        if t.is_remote:
+            self.remote_note.setText(
+                f"{t.label} writes the plan under {golive_target.GUEST_OUT_ROOT}/ inside "
+                "the device; Generate copies it back to "
+                f"{golive_target.artifacts_dir(self.wiz.work_dir, t.label)}. A token is "
+                "sent over ssh stdin into a root-only file there, deleted after the run.")
 
     def validatePage(self):
         o = self.wiz.opts
@@ -410,6 +633,15 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
                 "no baked cluster domain was found to autofill it. Enter it above.")
             self.problem.setVisible(True)
             self.domain.setFocus()
+            return False
+        ip = self.ingress_ip.text().strip() if self.ingress_row.isVisibleTo(self) else ""
+        private = golive_target.refuse_private_ingress(ip) if self.wiz.target.is_remote else ""
+        if private:
+            # the emulator's own addresses (slirp, mesh L2): no registrar record can
+            # carry one — said inline, next to the field, before any plan is run
+            self.problem.setText(private)
+            self.problem.setVisible(True)
+            self.ingress_ip.setFocus()
             return False
         self.problem.setVisible(False)          # the block is cleared
         self.problem.setText("")
@@ -539,9 +771,13 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
 
     def _preview(self):
         d, o = self.wiz.driver, self.wiz.opts
-        self.cmd.setPlainText(d.command_string("plan", o)
-                              + ("" if o.token_file or not self.wiz.token_secret
-                                 else "  # --token-file <staged 0600 temp file> added at run time"))
+        if self.wiz.target.is_remote:
+            self.cmd.setPlainText(self.wiz.remote_plan_preview())
+        else:
+            self.cmd.setPlainText(d.command_string("plan", o)
+                                  + ("" if o.token_file or not self.wiz.token_secret
+                                     else "  # --token-file <staged 0600 temp file> added "
+                                          "at run time"))
         self.exposure.setPlainText("\n".join(exposure_lines(plan_rows(d, o))))
         problems = d.preflight(o, has_secret=bool(self.wiz.token_secret))
         self.log.setPlainText("Preflight:\n  - " + "\n  - ".join(problems)
@@ -550,6 +786,10 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
     def _generate(self):
         self._preview()
         if self.worker and self.worker.isRunning():
+            return
+        why = self.wiz.stale_binding()
+        if why:                       # the plan would run on whatever holds that port now
+            console.write(self.log, f"\n!! {why}")
             return
         d, o = self.wiz.driver, self.wiz.opts
         import copy
@@ -603,13 +843,28 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
             self._apply_progress_state(self._parser.finalize(code))
             self.progress_label.setText("done" if code == 0 else "FAILED")
         if code == 0:
-            out = self.wiz.opts.out_dir or self.wiz.driver.default_out_dir
+            out = self.artifacts_folder()
+            if self.wiz.target.is_remote:
+                # the plan ran INSIDE the device; what came back is listed here, by
+                # name, so it is seen without opening a file manager
+                names = sorted(os.listdir(out)) if os.path.isdir(out) else []
+                console.write(self.log, f"artifacts copied back from "
+                              f"{self.wiz.target.label} to {out}:")
+                for n in names:
+                    console.write(self.log, f"  {n}")
+                if not names:
+                    console.write(self.log, "  (none came back — see the lines above)")
             console.write(self.log, f"artifacts in {out} — 'Open artifacts folder' shows them")
         self.generate_btn.setEnabled(True)
 
+    def artifacts_folder(self) -> str:
+        t = self.wiz.target
+        if t.is_remote:
+            return golive_target.artifacts_dir(self.wiz.work_dir, t.label)
+        return self.wiz.opts.out_dir or self.wiz.driver.default_out_dir
+
     def _open_folder(self):
-        out = self.wiz.opts.out_dir or self.wiz.driver.default_out_dir
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(self.artifacts_folder()))
 
 
 class _ExportWorker(QtCore.QThread):
@@ -1108,6 +1363,31 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
         self.apply_btn.setEnabled(False)       # one apply per plan: re-plan to run again
 
 
+def _ephemeral_banner() -> QtWidgets.QLabel:
+    """The EPHEMERAL banner of the Verify and Flip steps (emulated targets only)."""
+    lb = QtWidgets.QLabel("")
+    lb.setObjectName("golive-ephemeral")
+    lb.setWordWrap(True)
+    lb.setStyleSheet("color: #8a5a00; font-weight: bold; border: 1px solid #8a5a00; "
+                     "padding: 4px;")
+    lb.setVisible(False)
+    return lb
+
+
+def ephemeral_text(t: golive_target.GoLiveTarget) -> str:
+    """The banner's sentence for ``t`` ("" for this host: a real node keeps its
+    posture). Spelled once, in core: golive_target.EPHEMERAL_NOTE."""
+    if t.is_local:
+        return ""
+    return f"EPHEMERAL on {t.label}: {golive_target.EPHEMERAL_NOTE}."
+
+
+def _show_ephemeral(lb: QtWidgets.QLabel, t: golive_target.GoLiveTarget) -> None:
+    text = ephemeral_text(t)
+    lb.setText(text)
+    lb.setVisible(bool(text))
+
+
 class GoLiveVerifyPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -1116,6 +1396,8 @@ class GoLiveVerifyPage(QtWidgets.QWizardPage):
         self.setSubTitle("Confirm the public edge answers BEFORE flipping — the driver has no "
                          "verify subcommand, so this is an off-device checklist + a posture recheck.")
         lay = QtWidgets.QVBoxLayout(self)
+        self.ephemeral = _ephemeral_banner()
+        lay.addWidget(self.ephemeral)
         self.checklist = console.attach(QtWidgets.QPlainTextEdit())
         self.checklist.setReadOnly(True)
         lay.addWidget(QtWidgets.QLabel("Verify from OFF this network (the wizard cannot see your WAN):"))
@@ -1140,11 +1422,23 @@ class GoLiveVerifyPage(QtWidgets.QWizardPage):
             "When all of the above pass, continue to the flip step. The driver's `commit`\n"
             "only writes the marker — it does not probe the edge, so this gate is yours."
             .replace("{d}", d))
+        _show_ephemeral(self.ephemeral, self.wiz.target)
+        if self.wiz.target.is_remote:
+            reach = golive_target.mechanism_reachability(
+                self._mechanism(), self.wiz.target, self.wiz.opts.provider)
+            if reach:
+                self.checklist.appendPlainText(
+                    f"\nFrom the emulated device {self.wiz.target.label}: {reach}.")
         self.wiz.verify_ok = False
         self._recheck()
 
+    def _mechanism(self) -> str:
+        p = self.wiz.driver.provider(self.wiz.opts.provider)
+        return p.mechanism if p else ""
+
     def _recheck(self):
-        self.status.setPlainText(self.wiz.driver.status_text())
+        js = self.wiz.journal_line()
+        self.status.setPlainText(self.wiz.status_text() + (f"\n{js}" if js else ""))
         self.wiz.verify_ok = True   # advisory only; the flip arms on the typed domain
 
 
@@ -1175,6 +1469,15 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         self.warning.setWordWrap(True)
         self.warning.setStyleSheet("color: #c62828; font-weight: bold;")
         lay.addWidget(self.warning)
+        self.ephemeral = _ephemeral_banner()
+        lay.addWidget(self.ephemeral)
+        # why the flip cannot run against THIS target (this host is not a node, B1):
+        # inline, and the GO LIVE button stays greyed whatever is typed
+        self.refused = QtWidgets.QLabel("")
+        self.refused.setWordWrap(True)
+        self.refused.setStyleSheet(_RED)
+        self.refused.setVisible(False)
+        lay.addWidget(self.refused)
         info = QtWidgets.QLabel(
             "The flip runs the driver's `commit`, which writes /etc/hugmesh/go-live "
             "(root); hugmesh-firewall-reconcile converges within 60s — no reboot. It "
@@ -1206,6 +1509,12 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         bl.addWidget(self.flip_btn); bl.addWidget(self.rollback_btn)
         bl.addWidget(self.refresh_btn); bl.addStretch(1)
         lay.addLayout(bl)
+        self.revert = QtWidgets.QCheckBox(
+            "Rollback also resets release-state=internal (needed after a 'persist' "
+            "flip — otherwise the device stays public)")
+        # a persisted flip is only undone with the revert step: tick it for them
+        self.persist.toggled.connect(lambda on: on and self.revert.setChecked(True))
+        lay.addWidget(self.revert)
         self.out = QtWidgets.QLabel("")
         self.out.setWordWrap(True)
         lay.addWidget(self.out)
@@ -1230,10 +1539,28 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
                 "skip the flip and just share the .onion.")
             self.confirm.setPlaceholderText(
                 "type the domain to arm the (optional) clearnet flip — Tor needs none")
+        elif self.wiz.target.is_remote:
+            t = self.wiz.target
+            reach = golive_target.mechanism_reachability(p.mechanism if p else "", t,
+                                                         self.wiz.opts.provider)
+            self.warning.setText(f"ABOUT TO GO PUBLIC on {t.label}: its firewall accepts "
+                                 f"public 80/443 for {d} within 60s of the flip"
+                                 + (f" — {reach}." if reach else "."))
         else:
             self.warning.setText(f"ABOUT TO GO PUBLIC: {d} will accept public 80/443 "
                                  "within 60s of the flip.")
             self.confirm.setPlaceholderText("type the domain exactly to arm the flip")
+        t = self.wiz.target
+        _show_ephemeral(self.ephemeral, t)
+        if t.is_remote:
+            self.flip_btn.setText(f"GO LIVE on {t.label} — open the ssh commit in a terminal")
+            self.rollback_btn.setText(f"Rollback {t.label} (back to internal)")
+        else:
+            self.flip_btn.setText("GO LIVE — open commit in a terminal")
+            self.rollback_btn.setText("Rollback — delete the marker (back to internal)")
+        why = self.wiz.commit_refusal()
+        self.refused.setText(why)
+        self.refused.setVisible(bool(why))
         self.confirm.clear()
         self.flip_btn.setEnabled(False)
         self.out.setText("")
@@ -1241,39 +1568,58 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         self._refresh()
 
     def _refresh(self):
-        self.status.setPlainText(self.wiz.driver.status_text())
+        js = self.wiz.journal_line()
+        self.status.setPlainText(self.wiz.status_text() + (f"\n{js}" if js else ""))
 
     def _armed(self, text):
         d = self.wiz.opts.domain
-        self.flip_btn.setEnabled(bool(d) and text.strip() == d)
+        # asked again on every keystroke: the device may have stopped or restarted
+        # since this step was opened, and the refusal is said, not only greyed
+        why = self.wiz.commit_refusal()
+        self.refused.setText(why)
+        self.refused.setVisible(bool(why))
+        self.flip_btn.setEnabled(bool(d) and text.strip() == d and not why)
 
     def _report(self, ok, msg):
         self.out.setText(msg)
-        # no terminal emulator → surface the exact manual command, copyable
-        show_manual = not ok and "yourself: " in msg
-        self.manual.setVisible(show_manual)
-        if show_manual:
-            self.manual.setText(msg.split("yourself: ", 1)[1])
+        # no terminal emulator → surface the exact manual command, copyable (this
+        # host: "…run this on the device yourself: CMD"; a device: "…run this
+        # yourself in a terminal: ssh -t …")
+        m = _MANUAL_RE.search(msg) if not ok else None
+        self.manual.setVisible(m is not None)
+        if m is not None:
+            self.manual.setText(m.group(1))
 
     def _flip(self):
-        ok, msg = self.wiz.driver.run_commit_in_terminal(self.wiz.opts,
-                                                         persist=self.persist.isChecked())
+        why = self.wiz.commit_refusal()
+        if why:                                 # belt and braces: the button is greyed
+            self._report(False, why)
+            return
+        o = self.wiz.opts
+        # the driver journals what was ASKED of an emulated device (no secret), so a
+        # later status can say when a restart undid it; the device asks on its own TTY
+        ok, msg = self.wiz.driver.run_commit_in_terminal(o, persist=self.persist.isChecked())
         self._report(ok, msg)
+        if ok:
+            self._refresh()
 
     def _rollback(self):
-        if QtWidgets.QMessageBox.question(
-                self, "Rollback",
-                "Delete the go-live marker (device reverts to INTERNAL within 60s)?"
-        ) != QtWidgets.QMessageBox.StandardButton.Yes:
+        # No message box: the driver's own confirm runs on the TTY the terminal opens
+        # (the same gate as commit), and whether release-state is reset too is the
+        # inline tick beside the button — a modal in page logic hangs a headless run.
+        why = self.wiz.stale_binding()
+        if why:                                 # never a rollback on another device
+            self._report(False, why)
             return
-        revert = QtWidgets.QMessageBox.question(
-            self, "Rollback",
-            "ALSO reset release-state=internal?\n(Needed if you flipped with "
-            "'persist' — otherwise the device stays public.)"
-        ) == QtWidgets.QMessageBox.StandardButton.Yes
-        ok, msg = self.wiz.driver.run_rollback_in_terminal(revert_release_state=revert)
+        ok, msg = self.wiz.driver.run_rollback_in_terminal(
+            revert_release_state=self.revert.isChecked())
         self._report(ok, msg)
+        if ok:
+            self._refresh()
 
+
+#: where the driver's "run it yourself" sentence hands over the exact command
+_MANUAL_RE = re.compile(r"yourself(?: in a terminal)?: (.+)$", re.S)
 
 GOLIVE_WINDOW_TITLE = "HugMesh Go-Live Wizard"
 
@@ -1283,9 +1629,17 @@ class GoLiveWizard(QtWidgets.QWizard):
     the one shared driver (hugmesh-go-live-cli / -menu drive the same
     subcommands)."""
 
-    def __init__(self, generator_dir, parent=None):
+    def __init__(self, generator_dir, parent=None, target=None, work_dir: str = ""):
         super().__init__(parent)
         self.generator_dir = os.path.abspath(generator_dir)
+        #: the emulation runner's --work dir: where the keep-alive device records live
+        #: (the targets), and where plan artifacts and the journal are written
+        self.work_dir = os.path.abspath(
+            work_dir or qemu_devices.default_work_dir(self.generator_dir))
+        #: WHERE every verb runs (golive_target): this host until one is picked
+        self.target = golive_target.local_target()
+        #: why the device this wizard was opened on is not the target ("" = it is)
+        self.preselect_problem = ""
         self.driver = GoLiveDriver(self.generator_dir)
         self.opts = GoLiveOptions()
         self.model = ""             # chosen exposure model (mechanism -> model)
@@ -1312,6 +1666,179 @@ class GoLiveWizard(QtWidgets.QWizard):
         for p in self._pages:
             self.addPage(p)
         self._page_ids = dict(zip(GOLIVE_PAGE_SLUGS, self.pageIds()))
+        #: the step shown before the current one (-1: none yet) — tells a Back onto
+        #: Preflight from its first showing (which initializePage already filled)
+        self._shown_id = -1
+        self.currentIdChanged.connect(self._page_changed)
+        # AFTER the pages: the exposure models are the checkout registry's (this
+        # host's driver), never an ssh round trip made while the window is built
+        if target:
+            self.preselect_target(target)
+
+    def _page_changed(self, page_id: int) -> None:
+        """Arriving on Preflight from a LATER step is a Back: re-bind the picked device
+        there (GoLivePreflightPage.revisit), since QWizard does not re-initialise it."""
+        before, self._shown_id = self._shown_id, page_id
+        pre_id = self._page_ids.get("preflight")
+        if page_id != pre_id or before in (-1, pre_id):
+            return
+        try:                                   # PyQt6 qFatals on a slot raise
+            self.page(pre_id).revisit()
+        except Exception as exc:               # noqa: BLE001 — said inline instead
+            pre = self.page(pre_id)
+            pre.target_problem.setText(f"Could not re-read the target: {exc}")
+            pre.target_problem.setVisible(True)
+
+    # ── the TARGET (core.golive_target) ─────────────────────────────────────────────
+    def target_rows(self) -> list:
+        """This host first, then every keep-alive device in the work dir (stopped ones
+        too, so the picker can say why they are not offered), the picked one always
+        among them."""
+        try:
+            rows = golive_target.targets(self.work_dir)
+        except OSError:
+            rows = [golive_target.local_target()]
+        if self.target.is_remote and not any(
+                r.label == self.target.label and r.kind == self.target.kind for r in rows):
+            rows.append(self.target)
+        return rows
+
+    def preselect_target(self, target) -> str:
+        """Open on ``target`` — a GoLiveTarget, or a device LABEL looked up in the work
+        dir (``--go-live --go-live-target LABEL``, the Mesh emulation page). Returns ""
+        or why it was not found (the picker then stays on this host and says so)."""
+        if isinstance(target, str):
+            found = golive_target.find_target(self.target_rows(), target.strip())
+            if found is None:
+                why = (f"no running device '{target}' in {self.work_dir} — start it on the "
+                       "Mesh emulation page, then Re-scan devices")
+                self.preselect_problem = why
+                pre = self._pages[GOLIVE_PAGE_SLUGS.index("preflight")]
+                pre.target_problem.setText(why)
+                pre.target_problem.setVisible(True)
+                return why
+            target = found
+        self.set_target(target)
+        if target.is_remote:
+            self.setWindowTitle(f"{GOLIVE_WINDOW_TITLE} — {target.label}")
+        return ""
+
+    def set_target(self, target) -> None:
+        """Every verb from here on runs against ``target``: a fresh driver (its
+        provider list is the target's own `list`), and the provider picked for the
+        old target is dropped."""
+        if target.is_remote and not target.work_dir:
+            import dataclasses
+            target = dataclasses.replace(target, work_dir=self.work_dir)
+        same_device = (target.kind, target.label) == (self.target.kind, self.target.label)
+        same = same_device and golive_target.same_binding(target, self.target)
+        self.target = target
+        if not same:
+            # another device, OR the same device on another port / boot: every verb
+            # (and the probe) must go where the record says it is now
+            self.driver = GoLiveDriver(self.generator_dir,
+                                       target=target if target.is_remote else None)
+        if not same_device:
+            self.opts.provider = ""
+
+    def _fresh_rows(self) -> list:
+        try:
+            return golive_target.targets(self.work_dir)
+        except OSError:
+            return [golive_target.local_target()]
+
+    def fresh(self, target):
+        """``target``'s device as the work dir says it is NOW (golive_target.rebind):
+        a restarted device's new port and boot, or NOT running when its record says
+        stopped or is gone."""
+        return golive_target.rebind(target, self._fresh_rows())
+
+    def rebind_target(self) -> None:
+        """Re-bind the picked device to its fresh record (a new driver when it moved)."""
+        if self.target.is_remote:
+            self.set_target(self.fresh(self.target))
+
+    def stale_binding(self) -> str:
+        """"" while the picked device is still the record it was picked as; otherwise
+        what changed (golive_target.binding_change) and where to re-pick it. Checked
+        before anything that ACTS on the device: Generate, the flip, the rollback."""
+        if self.target.is_local:
+            return ""
+        why = golive_target.binding_change(self.target, self._fresh_rows())
+        return (why + " (Back to the Preflight step: Re-scan devices.)") if why else ""
+
+    def status_text(self) -> str:
+        """The picked target's `status` — or, when the device changed since it was
+        picked, why it is not asked (an ssh to its old port could reach another
+        device and show THAT device's posture as this one's)."""
+        return self.stale_binding() or self.driver.status_text()
+
+    def forget_probes(self) -> None:
+        """Re-scan: the picked device re-bound to its fresh record, and a fresh driver
+        either way, so the device is probed (and listed) again."""
+        self.rebind_target()
+        t = self.target
+        self.driver = GoLiveDriver(self.generator_dir, target=t if t.is_remote else None)
+
+    def target_refusal(self, target=None) -> str:
+        """Why ``target`` cannot be gone live from, "" when it can. Any row: its record
+        (golive_target.refusal). The PICKED device also answers the driver's blocker —
+        the probe over ssh: no answer, or no driver baked in its image (B8). This host
+        is never refused here (plan and status preview anywhere; its COMMIT has B1)."""
+        t = target or self.target
+        if t.is_local:
+            return ""
+        if (t.kind, t.label) != (self.target.kind, self.target.label):
+            return golive_target.refusal(t)
+        # the record's own refusal first (stopped, no channel), then the probe's
+        return golive_target.refusal(t) or self.driver.blocker()
+
+    def commit_refusal(self) -> str:
+        """Why the FLIP cannot run here: the picked device changed since it was picked
+        (stale_binding), the device's blocker, or — on this host — B1, this host is not
+        a HugMesh node (GoLiveDriver.commit_refusal); then a provider the device's
+        headscale cannot carry (Tailscale Funnel)."""
+        why = self.stale_binding() or self.driver.commit_refusal()
+        if why or self.target.is_local or not self.opts.provider:
+            return why
+        p = self.driver.provider(self.opts.provider)
+        return golive_target.headscale_refusal(self.target, self.opts.provider,
+                                               p.mechanism if p else "")
+
+    def cluster_domain(self) -> str:
+        """The target's baked cluster domain: this host's file, or the device's own,
+        read over ssh by the probe."""
+        return self.driver.autofill_domain()
+
+    def baked_domain_list(self) -> list[str]:
+        """The Inputs picker's list for the target (cluster domain first)."""
+        return self.driver.baked_domains()
+
+    def remote_plan_preview(self) -> str:
+        """The exact ssh the Generate step runs against an emulated target (the guest
+        out dir is stamped at run time; a token goes over ssh stdin, never argv)."""
+        import dataclasses
+        import shlex
+        t, o = self.target, self.opts
+        shown = dataclasses.replace(
+            o, out_dir=golive_target.GUEST_OUT_ROOT + "/studio-<stamp>", keys_dir="",
+            token_file=(golive_target.TOKEN_PREFIX + "XXXXXX")
+            if (o.token_file or self.token_secret) else "")
+        try:
+            line = shlex.join(golive_target.remote_verb_argv(t, "plan", shown))
+        except ValueError as exc:
+            return f"!! {exc}"
+        if shown.token_file:
+            line += ("  # the token is sent over ssh stdin into that root-only file and "
+                     "deleted after the run")
+        return line
+
+    def journal_line(self) -> str:
+        """The journal compared with the device's boot: says 'reset by a restart' when
+        the device booted again since. "" for this host / no journal."""
+        if self.target.is_local:
+            return ""
+        return golive_target.journal_status(self.work_dir, self.target)
 
     def nextId(self):
         """The default order, except that the export step is SKIPPED when no domain
@@ -1358,7 +1885,8 @@ class GoLiveWizard(QtWidgets.QWizard):
 FROM_WAYS_TAB_HINT = f"filled in from the brand's ‘{brand_step.SECTIONS[-1][1]}’ tab"
 
 
-def open_go_live(generator_dir: str, domain: str = "", current=None):
+def open_go_live(generator_dir: str, domain: str = "", current=None, target=None,
+                 work_dir: str = ""):
     """Show the Go-Live wizard with ``domain`` filled in, and return it — the receiver
     of every Brand settings ways button (``brand_step.WAYS_BUTTON``; image, Docker
     and Fleet routes alike).
@@ -1366,20 +1894,39 @@ def open_go_live(generator_dir: str, domain: str = "", current=None):
     ``current`` is the wizard this caller opened last time, if any: while it is still
     open and has not gone past the Inputs step it is reused (the new domain filled
     in, the window raised); otherwise a new wizard opens, so a run already past the
-    Inputs step is never thrown away. The caller keeps the returned wizard (a
+    Inputs step is never thrown away. ``target`` (a golive_target.GoLiveTarget or a
+    device label — the Mesh emulation page's front door) opens the wizard on that
+    device instead of this host. The caller keeps the returned wizard (a
     top-level window with no parent is closed by Python's garbage collector the
     moment nothing holds it). Shown, never exec()'d: no modal."""
     wiz = current
     reuse = False
     try:
         reuse = (wiz is not None and wiz.isVisible() and wiz.before_inputs()
-                 and os.path.abspath(generator_dir) == wiz.generator_dir)
+                 and os.path.abspath(generator_dir) == wiz.generator_dir
+                 and (not work_dir or os.path.abspath(work_dir) == wiz.work_dir)
+                 # a wizard open on another device — or on an earlier boot of this
+                 # one (another port, another started_at) — is not this run
+                 and (target is None or _same_target(wiz, target)))
     except RuntimeError:                         # its C++ side was deleted
         reuse = False
     if not reuse:
-        wiz = GoLiveWizard(generator_dir)
+        wiz = GoLiveWizard(generator_dir, target=target, work_dir=work_dir)
     wiz.preselect_domain(domain)
     wiz.show()
     wiz.raise_()
     wiz.activateWindow()
     return wiz
+
+
+def _same_target(wiz, target) -> bool:
+    """True when ``wiz`` is bound to exactly ``target``: the same device AND the same
+    boot over the same ssh channel. A LABEL is resolved against the wizard's work dir
+    first, so the comparison is with the device's record as it is now."""
+    cur = wiz.target
+    if isinstance(target, str):
+        found = golive_target.find_target(wiz._fresh_rows(), target.strip())
+        if found is None:
+            return False
+        target = found
+    return golive_target.same_binding(cur, target)
