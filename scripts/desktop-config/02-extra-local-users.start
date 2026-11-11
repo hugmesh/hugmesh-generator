@@ -1,0 +1,50 @@
+#!/bin/sh
+# 02-extra-local-users.start — create the extra local login accounts the Studio's
+# Desktop step asked for (scripts/_desktop-config-lib.sh dc_bake_desktop).
+#
+# /etc/hugmesh/extra-local-users (0600, root) holds one "NAME ADMIN HASH" line per
+# account; the HASH was made at build time with the same KDF as --local-pass, so
+# no plaintext password is on the image. Each account:
+#   * joins audio video usb plugdev games (created when missing), and wheel ONLY
+#     when ADMIN is "true" (operator rule: a local account is not an administrator
+#     unless the build asked for it);
+#   * gets its build-time password, then `chage -d 0`, so the first login must
+#     choose a new one.
+# An account that already exists is left alone (its password is never reset).
+# The list is deleted once every account is in; on any failure it stays and the
+# next boot retries — the same contract as 01-firstboot.start.
+LIST=/etc/hugmesh/extra-local-users
+[ -f "${LIST}" ] || exit 0
+ok=true
+while read -r name admin hash; do
+    [ -n "${name}" ] || continue
+    case "${name}" in \#*) continue ;; esac
+    if id "${name}" >/dev/null 2>&1; then
+        continue
+    fi
+    want="audio video usb plugdev games"
+    [ "${admin}" = "true" ] && want="wheel ${want}"
+    groups=""
+    for g in ${want}; do
+        getent group "${g}" >/dev/null 2>&1 || groupadd -r "${g}" >/dev/null 2>&1 || true
+        getent group "${g}" >/dev/null 2>&1 && groups="${groups:+${groups},}${g}"
+    done
+    if [ -n "${groups}" ]; then
+        useradd -m -G "${groups}" -s /bin/bash "${name}" || { ok=false; continue; }
+    else
+        useradd -m -s /bin/bash "${name}" || { ok=false; continue; }
+    fi
+    if printf '%s:%s\n' "${name}" "${hash}" | chpasswd -e; then
+        chage -d 0 "${name}" 2>/dev/null || true
+        echo "Extra local account ${name} created$( [ "${admin}" = "true" ] && echo ' (administrator)'); it must choose a new password at first login." \
+            | tee /dev/console 2>/dev/null || true
+    else
+        ok=false
+    fi
+done < "${LIST}"
+if ${ok}; then
+    rm -f "${LIST}" "$0"
+else
+    echo "Extra local accounts: at least one could not be created; retrying next boot." | tee /dev/console 2>/dev/null || true
+fi
+exit 0

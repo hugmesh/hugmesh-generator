@@ -1,0 +1,20 @@
+{
+  "_comment": "The Desktop step's curated app catalog (core/desktop_spec.py). Each app can be delivered NATIVE (an emerge atom, folded into --packages-add) or as a FLATPAK (an app id from a remote, installed at first boot by hugmesh-flatpak-apps). An empty atom or flatpak means that delivery is not offered. Whether a native atom resolves on this tree (keywords, USE) is what the step's emerge --pretend check is for; nothing here claims it.",
+  "apps": [
+    {"id": "firefox", "label": "Firefox", "category": "Internet", "atom": "www-client/firefox-bin", "flatpak": "org.mozilla.firefox"},
+    {"id": "thunderbird", "label": "Thunderbird", "category": "Internet", "atom": "mail-client/thunderbird-bin", "flatpak": "org.mozilla.Thunderbird"},
+    {"id": "element", "label": "Element (Matrix chat)", "category": "Internet", "atom": "net-im/element-desktop-bin", "flatpak": "im.riot.Riot"},
+    {"id": "libreoffice", "label": "LibreOffice", "category": "Office", "atom": "app-office/libreoffice-bin", "flatpak": "org.libreoffice.LibreOffice"},
+    {"id": "keepassxc", "label": "KeePassXC", "category": "Office", "atom": "app-admin/keepassxc", "flatpak": "org.keepassxc.KeePassXC"},
+    {"id": "gedit", "label": "gedit (text editor)", "category": "Office", "atom": "app-editors/gedit", "flatpak": "org.gnome.gedit"},
+    {"id": "vscodium", "label": "VSCodium", "category": "Development", "atom": "app-editors/vscodium", "flatpak": "com.vscodium.codium"},
+    {"id": "gimp", "label": "GIMP", "category": "Graphics", "atom": "media-gfx/gimp", "flatpak": "org.gimp.GIMP"},
+    {"id": "inkscape", "label": "Inkscape", "category": "Graphics", "atom": "media-gfx/inkscape", "flatpak": "org.inkscape.Inkscape"},
+    {"id": "krita", "label": "Krita", "category": "Graphics", "atom": "media-gfx/krita", "flatpak": "org.kde.krita"},
+    {"id": "blender", "label": "Blender", "category": "Graphics", "atom": "media-gfx/blender", "flatpak": "org.blender.Blender"},
+    {"id": "vlc", "label": "VLC", "category": "Media", "atom": "media-video/vlc", "flatpak": "org.videolan.VLC"},
+    {"id": "mpv", "label": "mpv", "category": "Media", "atom": "media-video/mpv", "flatpak": "io.mpv.Mpv"},
+    {"id": "audacity", "label": "Audacity", "category": "Media", "atom": "media-sound/audacity", "flatpak": "org.audacityteam.Audacity"},
+    {"id": "obs-studio", "label": "OBS Studio", "category": "Media", "atom": "media-video/obs-studio", "flatpak": "com.obsproject.Studio"}
+  ]
+}

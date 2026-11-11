@@ -1,0 +1,42 @@
+#!/sbin/openrc-run
+# hugmesh-flatpak-apps — install the Flatpak apps the Studio's Desktop step chose
+# (scripts/_desktop-config-lib.sh dc_bake_desktop), system-wide, once the machine
+# is online. Retries on every boot until every app is in, then removes itself
+# from the default runlevel.
+#
+#   /etc/hugmesh/flatpak-remotes.list  NAME URL  (a .flatpakrepo URL)
+#   /etc/hugmesh/flatpak-apps.list     REMOTE APP-ID
+#
+# A governed mesh desktop deletes flathub at provisioning; the Studio refuses a
+# flathub app there, and this service never re-adds a remote provisioning removed
+# after it ran (--if-not-exists runs only before the first successful install).
+
+description="Install the Flatpak apps chosen at build time"
+STATE=/var/lib/hugmesh/flatpak-apps.done
+
+depend() {
+    need net
+    after NetworkManager
+}
+
+start() {
+    [ -f "${STATE}" ] && return 0
+    command -v flatpak >/dev/null 2>&1 || { ewarn "flatpak is not installed"; return 0; }
+    ebegin "Installing Flatpak apps (background)"
+    (
+        ok=true
+        while read -r name url; do
+            case "${name}" in ''|\#*) continue ;; esac
+            flatpak remote-add --system --if-not-exists "${name}" "${url}" || ok=false
+        done < /etc/hugmesh/flatpak-remotes.list
+        while read -r remote app; do
+            case "${remote}" in ''|\#*) continue ;; esac
+            flatpak install --system --noninteractive -y "${remote}" "${app}" || ok=false
+        done < /etc/hugmesh/flatpak-apps.list
+        if ${ok}; then
+            mkdir -p "$(dirname "${STATE}")" && touch "${STATE}"
+            rc-update del hugmesh-flatpak-apps default >/dev/null 2>&1 || true
+        fi
+    ) >/var/log/hugmesh-flatpak-apps.log 2>&1 &
+    eend 0
+}

@@ -83,6 +83,10 @@ source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
 source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
 # shellcheck source=scripts/_portage-config-lib.sh
 source "${SCRIPT_DIR}/scripts/_portage-config-lib.sh"
+# The Studio Desktop step (sessions, default session, VIDEO_CARDS override, extra
+# local accounts, Flatpak apps, Python targets, portage overlay). Every DC_* knob
+# defaults to "emit nothing". shellcheck source=scripts/_desktop-config-lib.sh
+source "${SCRIPT_DIR}/scripts/_desktop-config-lib.sh"
 # ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
 # shellcheck source=scripts/_selinux-policy-lib.sh
 source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
@@ -417,6 +421,12 @@ MEDIA_DATA_FORCED=""    # ''|on|off — tracks an explicit --media-data/--no-med
 # may never be dropped (Decision #5).
 PACKAGES_ADD=""
 PACKAGES_DROP=""
+# --pretend-only : the Studio Desktop step's "Check with emerge --pretend". Runs
+# everything up to the payload emerge (seed, specs, overlay, make.conf, Python
+# targets), asks the resolver once (scripts/_pretend-lib.sh) and exits 0 clean /
+# 3 needs changes / 1 error. Merges, writes and packages NOTHING. Use its own
+# --build-subdir: the sysroot is a throwaway and is never an image.
+PRETEND_ONLY=false
 # ── GPU driver matrix (--gpu-driver) — all common cards, FREE drivers default ──
 # FREE drivers (open, no EULA, hardened) are the default. Only NVIDIA has a
 # proprietary DISPLAY driver; AMD/Intel "pro" = the open display driver + the
@@ -862,6 +872,33 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             (PLAN_KEY=VALUE lines) and exit 0 — no root, no
                             writes, no network. Secrets print as REDACTED.
                             Invalid role/flag combinations exit non-zero.
+  DESKTOP STEP (Studio; client/standalone desktops only; scripts/_desktop-config-lib.sh):
+      --desktop-sessions "i3 picom sway"   Extra window managers / compositors
+                            (openbox i3 picom sway wayfire labwc). A Wayland one
+                            adds USE=wayland; picom needs an X11 WM without a
+                            compositor of its own.
+      --default-session NAME  The greeter's default session (must be installed:
+                            LXDE|xfce|plasmax11|openbox|i3|sway|wayfire|labwc).
+      --video-cards "LIST"  Override the --gpu-driver VIDEO_CARDS list (intel i915
+                            amdgpu radeonsi radeon nouveau nvidia virgl vmware
+                            lavapipe zink); radeonsi adds radeon+amdgpu.
+      --extra-local-users "ann bob:admin"  Extra local accounts, created at first
+                            boot; administrator ONLY with ':admin'. Each must
+                            change its password at first login.
+      --extra-local-pass-file FILE  NAME:PASSWORD lines for those accounts
+                            (hashed at build time; never on argv).
+      --flatpak-apps "flathub:org.mozilla.firefox ..."  Flatpak apps installed
+                            system-wide once the machine is online.
+      --flatpak-remotes "name=https://.../x.flatpakrepo ..."  Extra remotes.
+      --python-extra-targets "python3_13"  Widen PYTHON_TARGETS beyond the seed's
+                            (never narrows it).
+      --python-single-target python3_13  PYTHON_SINGLE_TARGET (must be in the set).
+      --package-use "ATOM FLAG...;..."     package.use lines (zz-hugmesh-studio).
+      --accept-keywords "ATOM [~amd64];..." package.accept_keywords lines.
+      --pretend-only        Resolve @world + the payload with emerge --pretend
+                            --autounmask=y, print "==> Pretend result/needs" lines
+                            and exit 0 clean / 3 needs changes / 1 error. Nothing
+                            is merged or packaged; use a throwaway --build-subdir.
   STANDALONE hardened desktop (self-contained; no mesh / no SSO / local login):
       --standalone          Self-contained desktop: NO headscale/tailscale, NO
                             Casdoor/OIDC SSO, NO k8s/cluster tree. Boots to a
@@ -1193,6 +1230,19 @@ while [[ $# -gt 0 ]]; do
         --packages-add) PACKAGES_ADD="$2"; shift 2 ;;
         --packages-drop) PACKAGES_DROP="$2"; shift 2 ;;
         --print-plan) PRINT_PLAN=true; shift ;;
+        # ── Studio Desktop step (scripts/_desktop-config-lib.sh) ──
+        --desktop-sessions)      DC_SESSIONS="$2";        shift 2 ;;
+        --default-session)       DC_DEFAULT_SESSION="$2"; shift 2 ;;
+        --video-cards)           DC_VIDEO_CARDS="$2";     shift 2 ;;
+        --extra-local-users)     DC_EXTRA_USERS="$2";     shift 2 ;;
+        --extra-local-pass-file) DC_EXTRA_PASS_FILE="$2"; case "$2" in /*) ;; *) DC_EXTRA_PASS_FILE="${PWD}/$2" ;; esac; shift 2 ;;
+        --flatpak-apps)          DC_FLATPAK_APPS="$2";    shift 2 ;;
+        --flatpak-remotes)       DC_FLATPAK_REMOTES="$2"; shift 2 ;;
+        --python-extra-targets)  PT_EXTRA_TARGETS="$2";   shift 2 ;;
+        --python-single-target)  PT_SINGLE_TARGET="$2";   shift 2 ;;
+        --package-use)           DC_PACKAGE_USE="$2";     shift 2 ;;
+        --accept-keywords)       DC_ACCEPT_KEYWORDS="$2"; shift 2 ;;
+        --pretend-only)          PRETEND_ONLY=true;       shift ;;
         # ── STANDALONE hardened desktop (no mesh / no SSO / local login) ──
         --standalone) STANDALONE=true; shift ;;
         # ── UNAFFILIATED plain desktop (standalone + zero HugMesh affiliation) ──
@@ -2029,7 +2079,7 @@ pu_copied_for_role() { # <basename> -> 0 iff this role/driver gets the file
 assert_spec_video_cards() {
     local pud="${SPECS_DIR}/portage/package.use"
     [ -d "${pud}" ] || return 0
-    local cards; cards="$(${GPU} && gpu_video_cards "${GPU_DRIVER}" || echo "")"
+    local cards; cards="$(${GPU} && dc_effective_video_cards "$(gpu_video_cards "${GPU_DRIVER}")" || echo "")"
     local puf base offenders="" scanned=0
     for puf in "${pud}/"*; do
         [ -f "${puf}" ] || continue
@@ -2065,6 +2115,17 @@ assert_spec_video_cards() {
     fi
     [ "${scanned}" -gt 0 ] || { err "internal: no package.use files scanned for role '${ROLE}' — the VIDEO_CARDS agreement check would pass vacuously"; exit 1; }
 }
+# ── Studio Desktop step: validate every DC_* flag at ARGV time ────────────────
+# Before the VIDEO_CARDS assert below (which reads the EFFECTIVE card list, i.e.
+# a --video-cards override when one is given) and before any download.
+_dc_de_session="LXDE"; [ "${DESKTOP}" = "full" ] && _dc_de_session="xfce"
+${CAPABLE} && _dc_de_session="plasmax11"
+dc_validate "build-x86" amd64 "${ROLE_CLIENT}" true "${_dc_de_session}" "${GPU_DRIVER}" \
+    "${LOCAL_USER:-${DEFAULT_USER}}" || { err "Desktop-step flags rejected (see above)"; exit 1; }
+if ${PRETEND_ONLY} && { ${PACKAGES_ONLY} || ${RESUME}; }; then
+    err "--pretend-only cannot be combined with --packages-only or --resume (a pretend sysroot is a fresh throwaway)"
+    exit 1
+fi
 assert_spec_video_cards
 # Thin-desktop stream host (--with-sunshine): CLIENT desktops WITH a tailnet
 # only. Sunshine streams THIS node's desktop session and the fence admits it
@@ -2476,6 +2537,9 @@ _validate_pkg_atoms() { # LABEL VALUE
             err "invalid ${_lbl} atom: '${_a}' — want a category/name atom (e.g. app-editors/vim)"; exit 1; }
     done
 }
+# The Desktop step's session atoms (and sys-apps/flatpak for Flatpak apps) ride
+# the same channel as --packages-add, folded in ONCE here (the flag is last-wins).
+PACKAGES_ADD="$(dc_fold_packages_add "${PACKAGES_ADD}")"
 _validate_pkg_atoms --packages-add  "${PACKAGES_ADD}"
 _validate_pkg_atoms --packages-drop "${PACKAGES_DROP}"
 # Tier-1 mandatory atoms: the payload whose binaries the post-emerge assert
@@ -2633,6 +2697,8 @@ if ${PRINT_PLAN}; then
     _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} live_iso=${LIVE_ISO} installer_iso=${INSTALLER_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} skip_sso=${SKIP_SSO} standalone=${STANDALONE} desktop=${DESKTOP} capable=${CAPABLE} gpu_driver=${GPU_DRIVER} cuda=${NVIDIA_CUDA} encrypt_root=${ENCRYPT_ROOT} secure_boot=${SECURE_BOOT} media_data=${MEDIA_DATA} installer_ui=${INSTALLER_UI} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} unaffiliated=${UNAFFILIATED}"
     _plan PACKAGES_ADD       "${PACKAGES_ADD}"
     _plan PACKAGES_DROP      "${PACKAGES_DROP}"
+    while read -r _dck _dcv; do _plan "${_dck}" "${_dcv}"; done < <(dc_plan_lines)
+    _plan PRETEND_ONLY       "${PRETEND_ONLY}"
     exit 0
 fi
 
@@ -2642,7 +2708,7 @@ fi
 # that sits behind the graphical greeter. The Studio and the TUI refuse this
 # before dispatch; this is the same refusal for the CLI/Makefile path. After
 # --print-plan, so the plan channel (and matrix.tsv) still describe the config.
-if ${STANDALONE} && ${ROLE_CLIENT} && [ -z "${LOCAL_PASSHASH}" ]; then
+if ${STANDALONE} && ${ROLE_CLIENT} && [ -z "${LOCAL_PASSHASH}" ] && ! ${PRETEND_ONLY}; then
     err "--standalone desktop build with no --local-pass/--local-pass-file: the image would boot to a greeter nobody can log in to (root is locked; no KEYS stick, no SSO). Pass --local-pass-file FILE (preferred: keeps the password off the process list) or --local-pass PASS."
     exit 1
 fi
@@ -2700,7 +2766,8 @@ info "Build stamp: ${BUILD_TS} (UTC; brand=${BRAND}, env=${ENV})"
 # NVIDIA_PROPRIETARY/AMD_PRO/INTEL_PRO were derived there too.
 if ${GPU}; then
     GPU_USE="vulkan vaapi vdpau gbm egl gles2"
-    VIDEO_CARDS="$(gpu_video_cards "${GPU_DRIVER}")"
+    VIDEO_CARDS="$(dc_effective_video_cards "$(gpu_video_cards "${GPU_DRIVER}")")"
+    [ -n "${DC_VIDEO_CARDS}" ] && info "VIDEO_CARDS override (--video-cards): ${VIDEO_CARDS}"
     info "GPU driver: ${GPU_DRIVER} (VIDEO_CARDS='${VIDEO_CARDS}')$(${NVIDIA_PROPRIETARY} && echo ' — NVIDIA proprietary, nouveau blacklisted'; ${AMD_PRO} && echo ' — + AMDGPU-PRO Vulkan/OpenCL'; ${INTEL_PRO} && echo ' — + Intel compute/media stack')${NVIDIA_CUDA:+ + CUDA toolkit}"
 else
     GPU_USE=""
@@ -2711,6 +2778,9 @@ fi
 if ${ROLE_CLIENT}; then
     CLIENT_USE="X gtk dbus elogind udev"
     [ "${DESKTOP}" = "full" ] && CLIENT_USE="${CLIENT_USE} pulseaudio pipewire"
+    # A Wayland compositor from the Desktop step (--desktop-sessions) needs wayland.
+    _dc_use="$(dc_client_use_extra)"
+    [ -n "${_dc_use}" ] && CLIENT_USE="${CLIENT_USE} ${_dc_use}"
     INPUT_DEVICES="libinput"   # Xorg keyboard/mouse/touchpad (via x11-base/xorg-drivers)
     # Client roles keep man pages; doc/info still skipped (not needed at runtime).
     # The .mo pattern masks ONLY the empty-basename catalogs from the gettext-0.23.2
@@ -4050,6 +4120,10 @@ rm -rf "${PCS_STAGE_PU}"
 # sysroot, because an emerge run under a wrong pin installs the wrong
 # interpreter and the probe would then read its own effect back in. Fails the
 # build rather than guessing. Analysis: docs/PYTHON-TARGETS-SEED-DRIFT.md.
+# The Studio Desktop step's portage overlay (--package-use / --accept-keywords):
+# AFTER the last pcs_sync_dir of package.use and package.accept_keywords, which
+# prune any file the specs lack (dc_apply_portage_overlay explains the order).
+dc_apply_portage_overlay "${SYSROOT}" "build-x86"
 pt_apply_seed_targets "${SYSROOT}" "build-x86" \
     || { err "could not derive PYTHON_TARGETS from the stage3 seed (see above)"; exit 1; }
 # package.mask: role-independent version quarantines (e.g. the gettext-0.23.x
@@ -5092,6 +5166,9 @@ greeter-session=lightdm-gtk-greeter
 session-wrapper=/etc/lightdm/Xsession
 user-session=${_user_session}
 LIGHTDM
+    # Studio Desktop step: default session, extra local accounts, Flatpak apps.
+    dc_bake_desktop "${SYSROOT}" "build-x86" "$(${UNAFFILIATED} && echo gentoo || echo hugmesh)" \
+        || { err "Desktop-step bake failed (see above)"; exit 1; }
     # Emulated-desktop display (QEMU runner --display spice): the session-side
     # autofit applier (xrandr --auto on a virtio-gpu/qxl preferred-mode change; the
     # LXDE session has no output daemon, so without it a viewer resize is a scaled
@@ -5929,6 +6006,48 @@ cp "${SCRIPT_DIR}/scripts/_emerge-prefetch-lib.sh" "${SYSROOT}/tmp/hugmesh-emerg
 cp "${SCRIPT_DIR}/scripts/patch-portage-file-copy.py" "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py" \
     || info "WARN: sendfile-noise patcher staging failed — per-file sendfile tracebacks will spam the payload emerge log"
 # ── END sendfile-noise re-patch (lib staging) ────────────────────────────────
+# ── --pretend-only: ask the resolver once, then stop (Studio Desktop step) ─────
+# Everything above ran exactly as for a real build (seed, specs, the Desktop
+# step's overlay, make.conf, the seed's Python targets, PKGS). Here the resolver
+# is asked ONE question with --autounmask=y, so it NAMES the USE / keyword
+# changes it needs; scripts/_pretend-lib.sh prints the wire contract the Studio
+# parses and the exit status says clean (0) / needs changes (3) / error (1).
+# Nothing is merged: no portage self-update, no steam-overlay sync (native Steam
+# needs that overlay, which only a real build enables — its atoms are left out
+# of this resolution and the result says so), no kernel, no image.
+# HEREDOC SAFETY: <<PRETEND is unquoted on purpose (PKGS/EMERGE_EXCLUDE expand
+# on the host); every chroot-side expansion is backslash-escaped; no backticks
+# and no dollar-parens anywhere in it, comments included.
+if ${PRETEND_ONLY}; then
+    banner "Pretend only: resolving @world + the role payload (nothing is merged)"
+    cp "${SCRIPT_DIR}/scripts/_pretend-lib.sh" "${SYSROOT}/tmp/hugmesh-pretend-lib.sh" \
+        || { err "pretend lib staging failed (scripts/_pretend-lib.sh -> ${SYSROOT}/tmp)"; exit 1; }
+    _pretend_pkgs="${PKGS}"
+    if ${STEAM_NATIVE}; then
+        _pretend_pkgs="$(printf '%s\n' ${PKGS} | grep -av -E '^(games-util/steam|games-util/steam-launcher|games-util/steam-meta)$' | tr '\n' ' ')"
+        info "Pretend: native Steam's atoms are left out (the steam-overlay is only enabled by a real build)"
+    fi
+    _pretend_rc=0
+    chroot "${SYSROOT}" /bin/bash -o pipefail <<PRETEND || _pretend_rc=$?
+export EMERGE_DEFAULT_OPTS="--usepkg=y --binpkg-respect-use=y"
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+export DONT_MOUNT_BOOT=1
+if [ ! -d /var/db/repos/gentoo/metadata ] && ! mountpoint -q /var/db/repos/gentoo; then
+    emerge-webrsync
+fi
+HUGMESH_PRETEND_TIMEOUT=${HUGMESH_PRETEND_TIMEOUT:-2400}
+. /tmp/hugmesh-pretend-lib.sh
+_rc=0
+hugmesh_pretend_run /tmp/hugmesh-pretend.log --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world ${_pretend_pkgs} || _rc=\$?
+hugmesh_pretend_report /tmp/hugmesh-pretend.log "\${_rc}"
+PRETEND
+    case "${_pretend_rc}" in
+        0) info "Pretend: clean — the resolver sees no USE/keyword wall from the seed (the real build re-checks after @world)" ;;
+        3) warn "Pretend: the resolver needs the changes listed above (==> Pretend needs: ...)" ;;
+        *) err "Pretend: the resolution failed without naming a change (see the resolver output above)"; _pretend_rc=1 ;;
+    esac
+    exit "${_pretend_rc}"
+fi
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 # NOTE: MAKEOPTS is NOT exported here on purpose. It comes from the chroot's
 # make.conf (rendered "-j${JOBS} -l${JOBS}"). An exported MAKEOPTS env var takes

@@ -171,6 +171,14 @@ MODE_DEFAULT_ROLE = {
 # (the KEYS sticks are a mesh's): standalone and cloud skip it statically. Its material
 # lives in memory (core/domain_ca_keys.py), never in the config, so an untouched step
 # changes no argv, no saved config and no session record.
+# "desktop" (operator ask 2026-11-11: "a step to configure each desktop, login, window
+# managers on board, compositers, per build being made, users, roles, installed apps and
+# if they're native or flatpak, video drivers ... It can also configure python") sits
+# after "home" (the primary login account) and before the review. It is in NO mode's
+# static skip set: a standalone desktop, a cloud client and a mesh's desktop rows all get
+# it, and it skips ITSELF (applies_to) on a build that produces no desktop. Its data is
+# ImageConfig.desktop_spec (core/desktop_spec.py), omitted from the saved JSON while
+# empty, so an untouched step changes no argv and no saved config.
 WIZARD_PAGE_SLUGS = ("welcome", "sessions",
                      "mode", "localmesh", "phone", "quest", "deploy",
                      "e2e", "qemu", "meshemu", "localcloud",
@@ -178,7 +186,7 @@ WIZARD_PAGE_SLUGS = ("welcome", "sessions",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains_choice", "domains", "domain_services", "domain_ca_keys",
                      "users_choice", "users",
-                     "system", "vault", "home", "build", "launch", "progress")
+                     "system", "vault", "home", "desktop", "build", "launch", "progress")
 MODE_SKIPPED_PAGES = {
     # standalone/cloud build ONE image the old way (role/hardware/branding per image);
     # the mesh worklist is skipped there. mesh builds N images from a role x platform
@@ -954,7 +962,11 @@ SECURE_BOOT_CHOICES = ("", "on", "off")
 # for the live command line (the builder hashes them at build time). user_password /
 # root_password are the x86 node FALLBACK credentials (G27); local_pass / luks_pass the
 # standalone/FDE ones.
-SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
+SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password",
+                 # the Desktop step's extra local accounts' first-login passwords
+                 # (NAME:PASSWORD lines; core/desktop_spec.py) — staged to a 0600 file
+                 # at dispatch (--extra-local-pass-file), never argv, never saved.
+                 "extra_local_passes")
 
 
 # Mesh secrets store (issue #224): the HashiCorp Vault a cluster NODE seeds its
@@ -1427,6 +1439,11 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "distdir": _X86, "extra_packages": _ARM_PLATFORMS,
     # user package deltas — parsed identically by all six builders (WS-BUILDER flip).
     "packages_add": _ALL_PLATFORMS, "packages_drop": _ALL_PLATFORMS,
+    # the Desktop step (core/desktop_spec.py -> scripts/_desktop-config-lib.sh): parsed by
+    # the six DESKTOP-producing builders; desktop class only (FIELD_SCOPE below).
+    # extra_local_passes is ABSENT on purpose (like domain_ca): it is a secret that only
+    # ever reaches a builder as a 0600 FILE staged at dispatch, never as a field's flag.
+    "desktop_spec": ("x86", "rpi5", "jetson", "frite", "orangepi5", "orangepi4-lts"),
 }
 
 # Fields delivered OUT-OF-BAND — never a builder CLI flag on any platform, so absent
@@ -1755,6 +1772,12 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
        for f in THEME_FIELDS},
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
        for f in HOME_DESKTOP_FIELDS},
+    # the Desktop step: a node role builds no desktop, and its builder refuses the flags
+    # (frite has no role class: its builder decides by --desktop light|none, which
+    # core/desktop_spec.applies() mirrors, so the class rule stays off that builder)
+    "desktop_spec": FieldScope(platforms=_FIELD_PLATFORMS["desktop_spec"], classes=("desktop",),
+                               class_platforms=("x86", "rpi5", "jetson", "orangepi5",
+                                                "orangepi4-lts")),
     # --standalone means "no mesh/SSO, local user logs in with a build-time password". It is
     # a DESKTOP posture: a NODE has no local desktop session to log into. The x86 builder
     # still PARSES it on a node role, which is
@@ -3909,6 +3932,13 @@ class ImageConfig:
     # extra_packages (no merging).
     packages_add: str = ""             # atoms to add on top of the default set
     packages_drop: str = ""            # default-set atoms to remove (honoring the mandatory floor)
+    # The Desktop step (core/desktop_spec.py DesktopSpec.to_dict): extra sessions, default
+    # session, VIDEO_CARDS override, extra accounts, apps (native/flatpak), Python targets,
+    # the portage overlay + its history. OMITTED from the saved JSON while empty.
+    desktop_spec: dict = field(default_factory=dict)
+    # SECRET (SECRET_FIELDS): the extra accounts' first-login passwords, NAME:PASSWORD
+    # lines, typed at build time and never saved; staged to a 0600 file at dispatch.
+    extra_local_passes: str = ""
     # PENTEST=1 OWASP pen-test toggle — NOT a per-builder flag; a FLEET/env knob the
     # build_driver/fleet channel forwards (build-all-roles.sh / Makefile), never argv (G40).
     pentest: bool = False
@@ -3947,9 +3977,16 @@ class ImageConfig:
         # a config that never met the field keeps its bytes
         if not (d.get("cluster_domain_github_org") or "").strip():
             d.pop("cluster_domain_github_org", None)
+        # the Desktop step's spec is OMIT-WHEN-EMPTY too (core/desktop_spec.py), and its
+        # secret twin never appears unless a caller asked for secrets AND one was typed
+        if not d.get("desktop_spec"):
+            d.pop("desktop_spec", None)
+        if not include_secrets or not d.get("extra_local_passes"):
+            d.pop("extra_local_passes", None)
         if not include_secrets:
             for k in SECRET_FIELDS:
-                d[k] = ""
+                if k in d:
+                    d[k] = ""
         return d
 
     @staticmethod
@@ -4094,6 +4131,12 @@ class ImageConfig:
                 d.pop(_k)
         if "domain_ca" in d and not isinstance(d["domain_ca"], dict):
             d.pop("domain_ca")
+        # the Desktop step's spec: a hand-edited non-object is treated as ABSENT, and an
+        # object is normalised through the model (unknown keys dropped)
+        if "desktop_spec" in d:
+            from .desktop_spec import DesktopSpec
+            d["desktop_spec"] = (DesktopSpec.from_dict(d["desktop_spec"]).to_dict()
+                                 if isinstance(d["desktop_spec"], dict) else {})
         # #495: tolerate `null` / a hand-edited scalar exactly as "domains": null is
         # tolerated — treat it as ABSENT (the native empty list), which is the
         # fail-CLOSED reading: every domain then counts as unconfigured and the gate
@@ -4452,6 +4495,12 @@ class ImageConfig:
         # --packages-drop later). Fail closed on any shell/sed-meaningful character.
         validate_package_atoms(self.packages_add)
         validate_package_atoms(self.packages_drop)
+        # The Desktop step's spec rides argv as single words the builders `read -ra` /
+        # split on ';' — refuse any value outside its grammar here, the same boundary.
+        from .desktop_spec import grammar_errors
+        bad = grammar_errors(self)
+        if bad:
+            raise ValueError(f"desktop step: {bad[0]}")
 
     # ---- the canonical flag translation ------------------------------------
     @property
@@ -4807,11 +4856,16 @@ class ImageConfig:
         every legacy flat config stays byte-identical (invariant I1). Atom-charset
         validation lives in validate_identity (validate_package_atoms), not here —
         emission stays a faithful field->argv translation."""
+        from . import desktop_spec as _ds
         a: list[str] = []
-        if self.packages_add:
-            a += ["--packages-add", self.packages_add]
+        # the Desktop step's NATIVE apps ride the same flag, folded in ONCE (last-wins)
+        add = _ds.effective_packages_add(self)
+        if add:
+            a += ["--packages-add", add]
         if self.packages_drop:
             a += ["--packages-drop", self.packages_drop]
+        # the Desktop step's own flags (empty unless this image produces a desktop)
+        a += _ds.cli_args(self)
         return a
 
     def _superdomain_args(self) -> list[str]:
