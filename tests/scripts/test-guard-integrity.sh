@@ -1114,14 +1114,6 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 233 -> 234 on 2026-11-10 (feat/studio-nvd-key-20261110): +1 gated, +1 total —
 # tests/pentest/test-run-sca-nvd-key.sh, named by shell-suites.yml and .gitlab-ci.yml's
 # lint:run-sca-nvd-key. PREMERGE_UNGATED is untouched. Measured by running this file.
-# 233 -> 235 (denominator 275 -> 277) on 2026-11-10 for fix/x86-udev-door-20261110, which adds
-# TWO gated suites, both in shell-suites.yml's alpine job: tests/qemu/boot_stall_test.sh and
-# tests/scripts/test-udev-coldplug-guard.sh. MEASURED by running this file with
-# GUARD_PREMERGE=0 on that branch (base origin/main fc769fe2): '235 of 277 suites are named by
-# a pull_request-triggered workflow'; with only the two SUITES lines removed: '233 of 277' and
-# checks 3 and 7 red naming both, so the +2/+2 is these two suites and nothing else.
-# Both landed together: 234 (main, +nvd-key) + 2 (udev door) = 236 of 278, MEASURED by
-# running this file on the merge of origin/main into fix/x86-udev-door-20261110.
 # 232 -> 234 (denominator 274 -> 276) on 2026-11-09 for fix/compose-db-passwords-20261104
 # (hugmesh-generator#857), which adds TWO gated suites, both in shell-suites.yml's debian
 # leg 1: tests/scripts/test-compose-no-literal-passwords.sh and
@@ -1132,11 +1124,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # branch's 2 = 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
 # MERGED (origin/main 3e020b2b into fix/compose-db-passwords-20261104): main 234 of 276 + this
 # branch's 2 = 236 of 278, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
-# MERGED (origin/main 5d7d5b69 into fix/x86-udev-door-20261110): both blocks above raised this
-# line to 236 on their own (main 236 of 278 with #857 + studio-nvd-key; the branch 236 of 278 with the
-# udev door + studio-nvd-key), so the merge conflicted on it. main 236 of 278 + this branch's 2
-# (boot_stall_test.sh, test-udev-coldplug-guard.sh) = 238 of 280, MEASURED by running this file
-# with GUARD_PREMERGE=0 on origin/main alone (236 of 278) and on the merged tree (238 of 280).
+# +2 for fix/x86-udev-door-20261110 (hugmesh-generator#972): tests/qemu/boot_stall_test.sh and tests/scripts/test-udev-coldplug-guard.sh (shell-suites.yml alpine job), MEASURED with GUARD_PREMERGE=0 on the merge with origin/main.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a

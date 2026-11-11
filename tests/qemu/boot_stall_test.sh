@@ -123,6 +123,9 @@ eq "$(field "${r}" 1)" FAIL "guard FAIL (node): the row FAILS"
 lacks "$(field "${r}" 2)" "seat0" "guard FAIL (node): no seat0 claim on a row without a seat manager"
 lacks "$(field "${r}" 2)" "no X, no greeter" "guard FAIL (node): no X/greeter claim either"
 has "$(field "${r}" 2)" "udev never applied its rules to them" "guard FAIL (node): the verdict carries the guest's own cost"
+# Only the guest's line says what was lost; a stuck card or PCI device alone
+# does not stop ssh, so the runner must not claim it never answers.
+lacks "$(field "${r}" 2)" "ssh will never answer" "guard FAIL (node): no 'ssh will never answer' claim of the runner's own"
 # A serial console can glue colour codes and a half line in front, and a CR after.
 printf '\033[0;32m * \033[0mChecking that the udev coldplug reached udevd ...udev-coldplug-guard: FAIL: still uninitialised after the re-trigger: net/eth0 (udev never applied its rules to them: no driver autoload, no NIC naming, no device permissions)\r\n' > "${TMP}/guard-fail-crlf.console"
 r="$(drive "${TMP}/guard-fail-crlf.console" 0 2400 300)"
