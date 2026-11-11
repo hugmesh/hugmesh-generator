@@ -41,7 +41,7 @@ import shlex
 from dataclasses import MISSING, asdict, dataclass, field, fields
 from typing import Any, ClassVar
 
-from . import build_driver, platform_info
+from . import build_driver, nvd_key, platform_info
 from .build_driver import BuildDriver
 from .config import (Domain, IdentityValidationError, ImageConfig,
                      domain_rows_to_dict, validate_domain_name)
@@ -552,8 +552,20 @@ class FleetDriver(BuildDriver):
     """BuildDriver for a FleetConfig: same backends, same streaming/cancel, but
     the target is scripts/build-all-roles.sh and the options ride env knobs."""
 
-    def command(self, cfg: FleetConfig, backend: str | None = None) -> list[str]:  # type: ignore[override]
+    #: The per-run NVD key copy's path while run() is dispatching (None otherwise);
+    #: dispatch-only, so command(cfg) for the preview is byte-identical.
+    _nvd_key_file: str | None = None
+
+    def command(self, cfg: FleetConfig, backend: str | None = None,  # type: ignore[override]
+                nvd_key_file: str | None = None) -> list[str]:
+        """``nvd_key_file`` (dispatch only — run() stages it from the stored key, see
+        core/nvd_key.py) adds the POINTER ``NVD_API_KEY_FILE=<path>`` to the env knobs;
+        under docker the file is mounted read-only at nvd_key.DOCKER_SECRET_PATH and
+        the pointer names that. The key itself never reaches argv or env. Only a
+        pen-test run gets it; the preview channel passes nothing and is unchanged."""
         backend = backend or self.host.default_backend
+        if not (cfg.pentest or cfg.pentest_only):
+            nvd_key_file = None
         # self.workdir: the same runtime per-session override BuildDriver.command
         # honours (#357) — set by the GUI at dispatch, NEVER written into the
         # FleetConfig, default None, so command(cfg) without an override stays
@@ -564,6 +576,8 @@ class FleetDriver(BuildDriver):
         inner = [f"./{FLEET_SCRIPT}", "-w", "/out" if backend == "docker" else out,
                  "-j", str(cfg.jobs), *cfg.to_cli_args()]
         if backend == "native":
+            if nvd_key_file:
+                penv = {**penv, nvd_key.FILE_ENV: nvd_key_file}
             # env wrapper INSIDE the sudo boundary (sudo env_reset), same as G2
             env_wrap = ["env", *(f"{k}={v}" for k, v in penv.items())] if penv else []
             return ((["sudo"] if not self.host.is_root else [])
@@ -584,6 +598,10 @@ class FleetDriver(BuildDriver):
                     dcfg.brand_profile = cval
                     inner = [f"./{FLEET_SCRIPT}", "-w", "/out", "-j", str(cfg.jobs),
                              *dcfg.to_cli_args()]
+            if nvd_key_file:
+                asset_mounts = [*asset_mounts, "-v",
+                                f"{nvd_key_file}:{nvd_key.DOCKER_SECRET_PATH}:ro"]
+                penv = {**penv, nvd_key.FILE_ENV: nvd_key.DOCKER_SECRET_PATH}
             env_args: list[str] = []
             for k, v in penv.items():
                 env_args += ["-e", f"{k}={v}"]
@@ -603,6 +621,43 @@ class FleetDriver(BuildDriver):
                 "bash", "-c", shlex.join(inner),
             ]
         raise RuntimeError("no usable build backend (need Gentoo native or Docker)")
+
+    def _dispatch_command(self, cfg, backend, local_pass_file):  # type: ignore[override]
+        return self.command(cfg, backend, nvd_key_file=self._nvd_key_file)
+
+    def run(self, cfg: FleetConfig, backend: str | None = None,  # type: ignore[override]
+            on_line=None) -> int:
+        """BuildDriver.run (streaming, cancel, the auth-cancel and memory-cap notes),
+        plus the NVD key for a pen-test run: the stored key is copied to a private 0600
+        file for exactly this run (removed when it ends) and passed as the
+        ``NVD_API_KEY_FILE`` pointer; and every output line passes through
+        nvd_key.redact, so neither the key nor Dependency-Check's ``XXXXX-*****-XXXXX``
+        echo of it reaches the log pane, fleet.log or the session's error tail."""
+        pentest = bool(cfg.pentest or cfg.pentest_only)
+        path, cleanup = nvd_key.materialize_for_run() if pentest else (None, lambda: None)
+        sink = on_line
+        if on_line is not None:
+            redactor = nvd_key.make_redactor()
+            sink = lambda line, _s=on_line: _s(redactor(line))  # noqa: E731
+            if pentest:
+                on_line("== NVD API key: " + (
+                    "a private 0600 copy of the stored key is passed to the SCA step as "
+                    f"{nvd_key.FILE_ENV} (removed when the run ends)" if path else
+                    "none stored — " + nvd_key.PREFLIGHT_NO_KEY))
+        self._nvd_key_file = path
+        try:
+            return super().run(cfg, backend, on_line=sink)
+        finally:
+            self._nvd_key_file = None
+            cleanup()
+
+    def advisories(self, cfg: FleetConfig) -> list[str]:
+        """NON-blocking notes for the Review pane (preflight() problems refuse the run;
+        these do not): today, a pen-test run with no NVD API key stored."""
+        notes: list[str] = []
+        if (cfg.pentest or cfg.pentest_only) and not nvd_key.status().stored:
+            notes.append(nvd_key.PREFLIGHT_NO_KEY)
+        return notes
 
     def preflight(self, cfg: FleetConfig, backend: str | None = None) -> list[str]:  # type: ignore[override]
         backend = backend or self.host.default_backend

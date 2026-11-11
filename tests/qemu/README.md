@@ -610,3 +610,51 @@ space is short, it refuses the whole save, names the shortfall, and does so **be
 pausing anything**. One device failing (the runner quarantines its partial as
 `*.partial`) never touches another device's save. Core and tests:
 `studio/hugmesh_studio/core/emulation_save.py`, `studio/tests/test_emulation_save.py`.
+
+### Booting the mesh back from a save (`make mesh-emu-up FROM_SAVE=…`)
+
+What a device does inside an emulated mesh lasts only while it runs. A go-live flip is
+one example. A restart boots the golden image again, INTERNAL. To keep that state, save
+the mesh (above) and boot the set back:
+
+```bash
+make mesh-emu-up FROM_SAVE=mesh-<stamp>        # boot every saved row from its save
+PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation plan --from-save mesh-<stamp>   # preview
+./tests/qemu/run-qemu-docker.sh --keep-alive \
+    --boot-save rpi5/pki=out/qemu-runs/saves/mesh-<stamp>/rpi5_pki.qcow2   # one row, by hand
+```
+
+- **The save is never written.** The launcher creates the run overlay over the save
+  (`--img-format qcow2`: `qemu-img create -b <save> -F qcow2`), as it does over a golden.
+  You can boot one save any number of times.
+- **The golden is still needed.** The ARM/Pi kernel comes from it, so the set records which
+  build session each device ran (`artifacts` in `mesh-save.json`). The resume uses that
+  session. A different `--session` is refused.
+- **The saved identity, not a fresh one.** The saved disk opens only with the login key it
+  was provisioned with. The entrypoint therefore attaches `<label>.keys.img`, copies
+  `<label>.id_ed25519` into the run dir, and takes the record's logins from the saved
+  `users.json`. A bare `--save-device` copy has no stick, so it is refused.
+- **Only the saved rows boot.** A row with no save is dropped, so a resumed control node
+  never runs beside a fresh worker. A set with a failed device is refused, and so is a
+  mesh NIC MAC that differs from the one the saved disk was bound to.
+- The device record names its source (`"boot_save"`), and `mesh-emu-status` shows
+  "resumed from save". Starting a stopped resumed device again from its record boots
+  the same save, never its golden. A resumed device from a shared-L2 fleet is refused
+  there too, as below.
+- `--boot-save` is a `--keep-alive` lane only; the runner refuses it on the test lane,
+  which grades a FIRST boot and then powers the guest off. `assertions.sh` still runs on
+  a resumed keep-alive guest, and because its checks are written for a first boot, a
+  resumed row can grade FAIL. The device stays up either way.
+- **Where a save may sit.** Saves and boot-from-save share one rule
+  (`save_in_artifacts_refusal`, in the runner and in `core/qemu_devices.py`): a save
+  must not be inside the artifacts dir, except under `<work>/saves` when that directory
+  is itself inside the artifacts dir. So `--artifacts out` with the default
+  `--work out/qemu-runs` (images directly in `out/`) saves and boots. A save the rule
+  refuses is refused by the save, by `plan --from-save` and by the runner, with the same
+  sentence.
+- A set saved from a shared-L2 fleet (`--mesh-net`) is refused by `--from-save`, which
+  boots no mesh NIC. Resume it with the runner and the same identity file:
+  `run-qemu-docker.sh --keep-alive --mesh-net auto --identities FILE --boot-save …`.
+
+Tests: `tests/qemu/save_test.sh` (launchers, runner, entrypoint) and
+`studio/tests/test_emulation_boot_from_save.py`.

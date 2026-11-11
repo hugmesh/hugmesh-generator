@@ -75,6 +75,15 @@ PENTEST_PIPELINE ?= main
 PENTEST_ENVVARS := PENTEST='$(PENTEST)' PENTEST_ONLY='$(PENTEST_ONLY)' \
                    PENTEST_ENV='$(PENTEST_ENV)' PENTEST_SCAN='$(PENTEST_SCAN)' \
                    PENTEST_PIPELINE='$(PENTEST_PIPELINE)'
+# The pen-test's SCA step (OWASP Dependency-Check) NEEDS an activated NVD API key
+# (docs/NVD-API-KEY.md; request one at https://nvd.nist.gov/developers/request-an-api-key).
+# Pass it as a FILE: NVD_API_KEY_FILE=/path/to/0600-file make pentest. Only the PATH
+# travels — after $(SUDO) (sudo's env_reset would drop it before) and, on the Docker
+# leg, as a read-only mount at /run/secrets/nvd_api_key. The key itself never goes on
+# a command line.
+NVD_API_KEY_FILE ?=
+NVD_ENV    := $(if $(strip $(NVD_API_KEY_FILE)),env NVD_API_KEY_FILE='$(abspath $(NVD_API_KEY_FILE))')
+NVD_DOCKER := $(if $(strip $(NVD_API_KEY_FILE)),-v '$(abspath $(NVD_API_KEY_FILE))':/run/secrets/nvd_api_key:ro -e NVD_API_KEY_FILE=/run/secrets/nvd_api_key)
 
 # ── build-all-roles.sh ROLE-SELECTOR env knobs ─────────────────────────────────
 # build-all-roles.sh reads these from the ENVIRONMENT to pick the fleet
@@ -220,12 +229,20 @@ BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).
 # HOST_UID/GID the invoking user — passed into the container so a NATIVE build
-#              can chown the root-created artifacts back to them.
+#              can chown the root-created artifacts back to them. A value that
+#              arrives from the ENVIRONMENT (DOCKER_RUN's `-e HOST_UID=...`) or the
+#              command line (build-menu.sh's sudo'd native run) wins; only an
+#              unset/empty one falls back to `id -u`. It used to be a plain
+#              `HOST_UID := $(shell id -u)`, which overrides the environment, so
+#              inside the container the forwarded uid was replaced by root's 0 and
+#              every Docker-dispatched build left its images, logs and work dirs
+#              root:root (the reown chowned them to 0:0). `$(or)` keeps it
+#              simply-expanded, so `id -u` runs once.
 # SUDO         only `sudo` when NOT already root. Inside the container (root)
 #              SUDO is empty, so the native scripts run sudo-free.
 IMAGE    ?= hugmesh-builder
-HOST_UID := $(shell id -u)
-HOST_GID := $(shell id -g)
+HOST_UID := $(or $(HOST_UID),$(shell id -u))
+HOST_GID := $(or $(HOST_GID),$(shell id -g))
 SUDO     := $(shell [ "$$(id -u)" = 0 ] || echo sudo)
 
 # External-CA mount (Docker leg). CA_CERT/CA_KEY are HOST paths; only $(CURDIR)
@@ -258,7 +275,7 @@ DOCKER_RUN := docker run --rm --privileged \
   -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) \
   -e STANDALONE_FLAGS \
   -e HUGMESH_SELINUX_MODE -e HUGMESH_SELINUX_MODULES -e HUGMESH_SELINUX_TYPE -e HUGMESH_SELINUX_ENFORCE_GATE \
-  $(CA_DOCKER_MOUNTS) $(CA_DOCKER_ENV) $(IMAGE)
+  $(NVD_DOCKER) $(CA_DOCKER_MOUNTS) $(CA_DOCKER_ENV) $(IMAGE)
 
 # ensure-image — auto-build the builder image if it is missing.
 ensure-image: ## auto-build the builder image if it is missing
@@ -270,6 +287,12 @@ ensure-image: ## auto-build the builder image if it is missing
 # by DOCKER_RUN (the default path); on a bare host run it is the caller's own
 # uid, so the chown is a harmless no-op.
 #
+# It is a shell FRAGMENT, not a recipe line: every NATIVE build recipe runs it
+# through build-then-reown below, in the SAME shell as the build, so it runs
+# whether the build succeeded or failed. As its own recipe line it ran only on
+# success — make stops at the first failing line — so a failed build left
+# everything it had made root-owned.
+#
 # It must NOT descend into a build system (<work dir>/snap-build-*/sysroot). It
 # did (`chown -R ... "$(WORK_DIR)"`), and the next `--resume` built an image out
 # of a tree the operator owned: every directory in it uid 1002, sshd and tor
@@ -279,7 +302,16 @@ ensure-image: ## auto-build the builder image if it is missing
 # depth, so a custom --build-subdir is covered too. `chown -h` changes a
 # symlink itself rather than following it into the sysroot.
 define chown-artifacts
-	@[ -n "$(HOST_UID)" ] && $(SUDO) find "$(WORK_DIR)" -type d -name sysroot -prune -o -exec chown -h $(HOST_UID):$(HOST_GID) {} + 2>/dev/null || true
+[ -n "$(HOST_UID)" ] && $(SUDO) find "$(WORK_DIR)" -type d -name sysroot -prune -o -exec chown -h $(HOST_UID):$(HOST_GID) {} + 2>/dev/null || true
+endef
+
+# build-then-reown — one recipe line: run the build command $(1) in a subshell
+# (so a loop's `|| exit 1` ends only the subshell), then reown the artifacts
+# whatever its status was, then exit with that status. Use it as
+# `@$(call build-then-reown,<build command>)`; a literal comma in the command
+# would split the argument, so keep commas inside variables.
+define build-then-reown
+rc=0; ( $(1) ) || rc=$$?; $(chown-artifacts); exit $$rc
 endef
 
 # RPi5/RPi4/RPi3 board axis (--board rpi5|rpi4|rpi3 on build-rpi5-stage4.sh; ONE
@@ -307,7 +339,7 @@ ORANGEPIZERO2W_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi-zero2w-stage4.sh -
 ORANGEPIZERO3_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi-zero3-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 ORANGEPI3LTS_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi3-lts-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 ORANGEPI4LTS_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi4-lts-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
-ALL := $(ROLESET_ENVVARS) $(PENTEST_ENVVARS) $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
+ALL := $(ROLESET_ENVVARS) $(PENTEST_ENVVARS) $(BRAND_ENV) $(SUDO) $(NVD_ENV) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
 
 RPI_ROLES := pki backend frontend
 # --ram-gb for a Pi / Orange Pi NODE target, only when RAM_GB is set.
@@ -565,15 +597,15 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make build-all NATIVE=1 WORK_DIR=/out RESUME='$(RESUME)' IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
 else
-	$(ALL) $(RESUME)
-	$(chown-artifacts)
+	$(call build-then-reown,$(ALL) $(RESUME))
 endif
 
-pentest: ## run the OWASP pen-test harness only (no image build); PENTEST_SCAN/ENV/PIPELINE knobs
+pentest: ## run the OWASP pen-test harness only (no image build); PENTEST_SCAN/ENV/PIPELINE knobs; SCA needs NVD_API_KEY_FILE
 	@echo "==> Pen-test (build option): env=$(PENTEST_ENV) scan=$(PENTEST_SCAN) pipeline=$(PENTEST_PIPELINE)"
+	@[ -n "$(strip $(NVD_API_KEY_FILE))" ] || echo "==> NOTE: no NVD_API_KEY_FILE — the SCA step (OWASP Dependency-Check) needs an activated NVD API key; see docs/NVD-API-KEY.md"
 	PENTEST_ONLY=1 PENTEST=1 PENTEST_ENV='$(PENTEST_ENV)' PENTEST_SCAN='$(PENTEST_SCAN)' \
 	  PENTEST_PIPELINE='$(PENTEST_PIPELINE)' SKIP_KEYS=1 SKIP_X86=1 \
-	  $(SUDO) ./scripts/build-all-roles.sh -w $(WORK_DIR)
+	  $(SUDO) $(NVD_ENV) ./scripts/build-all-roles.sh -w $(WORK_DIR)
 
 # pentest-seed is the SEED_CMD target env/compose.env + env/local.env invoke
 # (`make -C '$(GEN_DIR)' pentest-seed ...`) from run-pentest.sh's step_seed(). It
@@ -847,8 +879,7 @@ ifndef NATIVE
 	$(DOCKER_RUN) make rebuild NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
 else
 	$(MAKE) clean NATIVE=1
-	$(ALL)
-	$(chown-artifacts)
+	$(call build-then-reown,$(ALL))
 endif
 
 rpi: ## build all 3 Pi cluster roles (.img + .fs.tar.xz each; RPI_BOARD=rpi5 [DEFAULT] | rpi4 — rpi3 is desktop-only, use rpi-desktop instead)
@@ -856,8 +887,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make rpi NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' RPI_ROLES='$(RPI_ROLES)' $(BRAND_PASS)
 else
-	@for r in $(RPI_ROLES); do echo "==> Pi $$r ($(RPI_BOARD))"; $(RPI) --role $$r || exit 1; done
-	$(chown-artifacts)
+	@$(call build-then-reown,for r in $(RPI_ROLES); do echo "==> Pi $$r ($(RPI_BOARD))"; $(RPI) --role $$r || exit 1; done)
 endif
 
 x86: ## build the 4 default x86 roles (.img + live ISO + .fs.tar.xz each)
@@ -865,8 +895,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86 NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) X86_ROLE_LIST='$(X86_ROLE_LIST)' $(BRAND_PASS)
 else
-	@for r in $(X86_ROLE_LIST); do echo "==> x86 $$r"; $(X86) --role $$r || exit 1; done
-	$(chown-artifacts)
+	@$(call build-then-reown,for r in $(X86_ROLE_LIST); do echo "==> x86 $$r"; $(X86) --role $$r || exit 1; done)
 endif
 
 # OMNIBUS_PLATFORM picks the device: x86 (DEFAULT, unchanged), rpi (Raspberry Pi
@@ -880,8 +909,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make omnibus NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
-	$(X86) --role omnibus
-	$(chown-artifacts)
+	$(call build-then-reown,$(X86) --role omnibus)
 endif
 else ifneq ($(filter rpi rpi5,$(OMNIBUS_PLATFORM)),)
 	$(MAKE) rpi-omnibus RAM_GB='$(RAM_GB)' RPI_BOARD='$(RPI_BOARD)'
@@ -956,8 +984,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86-standalone NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
-	@for r in standalone-thin standalone-thick; do echo "==> x86 $$r"; $(X86) --role $$r $(STANDALONE_FLAGS) || exit 1; done
-	$(chown-artifacts)
+	@$(call build-then-reown,for r in standalone-thin standalone-thick; do echo "==> x86 $$r"; $(X86) --role $$r $(STANDALONE_FLAGS) || exit 1; done)
 endif
 
 rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop | rpi-omnibus RAM_GB=16  (same vocabulary as x86 now; add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; RAM_GB=N passes --ram-gb (REQUIRED for omnibus); STANDALONE_FLAGS='--standalone --local-user … --local-pass-file FILE' for rpi-desktop; a standalone desktop refuses to build without a login password)
@@ -965,8 +992,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make rpi-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' RAM_GB='$(RAM_GB)' $(BRAND_PASS)
 else
-	@$(RPI) --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(RPI) --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS))
 endif
 
 x86-%: ## build ONE x86 role: make x86-backend-gpu | x86-pki | x86-standalone-thin (old spellings still work: x86-be, x86-fe, x86-be+gpu)
@@ -974,8 +1000,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
-	@$(X86) --role $* $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(X86) --role $* $(STANDALONE_FLAGS))
 endif
 
 frite: ## build the Frite light desktop (FRITE_BOARD=la-frite|le-potato, FRITE_FLAVOR=both|live|installer, FRITE_DESKTOP=light|none; STANDALONE_FLAGS='--enable-wifi …' appended verbatim)
@@ -983,8 +1008,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make frite NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(FRITE_PASS)
 else
-	@$(FRITE_BUILD) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR) --desktop $(FRITE_DESKTOP) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(FRITE_BUILD) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR) --desktop $(FRITE_DESKTOP) $(STANDALONE_FLAGS))
 endif
 
 frite-live: ## build the Frite light desktop LIVE image only (boots ephemerally off USB/SD)
@@ -998,8 +1022,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make jetson NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
 else
-	@$(JETSON_BUILD) --role $(JETSON_ROLE) --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(JETSON_BUILD) --role $(JETSON_ROLE) --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 jetson-%: ## build ONE Jetson role: make jetson-edge-ai | jetson-backend-gpu | jetson-omnibus | jetson-desktop (STANDALONE_FLAGS appended verbatim)
@@ -1007,8 +1030,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make jetson-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
 else
-	@$(JETSON_BUILD) --role $* --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(JETSON_BUILD) --role $* --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepi5: ## build the Orange Pi 5 light desktop (EXPERIMENTAL; ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5, ORANGEPI5_FLAVOR=both|live|installer; STANDALONE_FLAGS='--standalone …' appended verbatim)
@@ -1016,8 +1038,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi5 NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPI5_PASS)
 else
-	@$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor $(ORANGEPI5_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor $(ORANGEPI5_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepi5-live: ## build the Orange Pi 5 light desktop LIVE image only (boots ephemerally off USB/microSD)
@@ -1033,8 +1054,7 @@ ifndef NATIVE
 	$(DOCKER_RUN) make orangepi5-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' RAM_GB='$(RAM_GB)' $(BRAND_PASS) $(ORANGEPI5_PASS)
 else
 	@. scripts/_roles-lib.sh; hugmesh_role_board_node_role orangepi5 '$*' >/dev/null || { [ $$? -eq 2 ] && echo "ERROR: make orangepi5-$* is not a target: the Orange Pi 5 / 5 Plus node targets are orangepi5-pki | -backend | -frontend | -omnibus (the desktop is make orangepi5)." >&2; exit 1; }
-	@$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor installer --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor installer --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS))
 endif
 
 orangepizero2: ## build the Orange Pi Zero 2 HEADLESS APPLIANCE (EXPERIMENTAL; no desktop mode ever; ORANGEPIZERO2_FLAVOR=both|live|installer; STANDALONE_FLAGS='--standalone …' appended verbatim)
@@ -1042,8 +1062,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepizero2 NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPIZERO2_PASS)
 else
-	@$(ORANGEPIZERO2_BUILD) --flavor $(ORANGEPIZERO2_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPIZERO2_BUILD) --flavor $(ORANGEPIZERO2_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepizero2-live: ## build the Orange Pi Zero 2 headless appliance LIVE image only (boots ephemerally off microSD/USB)
@@ -1057,8 +1076,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepizero2w NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPIZERO2W_PASS)
 else
-	@$(ORANGEPIZERO2W_BUILD) --flavor $(ORANGEPIZERO2W_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPIZERO2W_BUILD) --flavor $(ORANGEPIZERO2W_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepizero2w-live: ## build the Orange Pi Zero 2W headless appliance LIVE image only (boots ephemerally off microSD/USB)
@@ -1072,8 +1090,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepizero3 NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPIZERO3_PASS)
 else
-	@$(ORANGEPIZERO3_BUILD) --flavor $(ORANGEPIZERO3_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPIZERO3_BUILD) --flavor $(ORANGEPIZERO3_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepizero3-live: ## build the Orange Pi Zero 3 headless appliance LIVE image only (boots ephemerally off microSD/USB)
@@ -1087,8 +1104,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi3-lts NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPI3LTS_PASS)
 else
-	@$(ORANGEPI3LTS_BUILD) --flavor $(ORANGEPI3LTS_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPI3LTS_BUILD) --flavor $(ORANGEPI3LTS_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepi3-lts-live: ## build the Orange Pi 3 LTS headless appliance LIVE image only (boots ephemerally off microSD/USB)
@@ -1102,8 +1118,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi4-lts NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPI4LTS_PASS)
 else
-	@$(ORANGEPI4LTS_BUILD) --flavor $(ORANGEPI4LTS_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPI4LTS_BUILD) --flavor $(ORANGEPI4LTS_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepi4-lts-live: ## build the Orange Pi 4 LTS light desktop LIVE image only (boots ephemerally off microSD/USB)
@@ -1119,8 +1134,7 @@ ifndef NATIVE
 	$(DOCKER_RUN) make orangepi4-lts-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' RAM_GB='$(RAM_GB)' $(BRAND_PASS) $(ORANGEPI4LTS_PASS)
 else
 	@. scripts/_roles-lib.sh; hugmesh_role_board_node_role orangepi4-lts '$*' >/dev/null || { [ $$? -eq 2 ] && echo "ERROR: make orangepi4-lts-$* is not a target: the Orange Pi 4 LTS node target is orangepi4-lts-frontend (the desktop is make orangepi4-lts)." >&2; exit 1; }
-	@$(ORANGEPI4LTS_BUILD) --flavor installer --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPI4LTS_BUILD) --flavor installer --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS))
 endif
 
 # build-everything delegates to build-all with the ROLE-SELECTOR knobs set on the
@@ -1301,8 +1315,10 @@ _MESH_EMU_ARGS = $(if $(SESSION),--session "$(SESSION)") \
   $(if $(QEMU_JOBS),--jobs $(QEMU_JOBS)) \
   --generator-dir .
 
-mesh-emu-up: ## boot the WHOLE mesh emulated: --keep-alive fan-out over the session, device registry, web front door
-	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation up $(_MESH_EMU_ARGS)
+# FROM_SAVE=<mesh-stamp|dir> boots the saved rows from a mesh save-set instead of
+# the goldens (the saves are never written; see tests/qemu/README.md).
+mesh-emu-up: ## boot the WHOLE mesh emulated: --keep-alive fan-out over the session, device registry, web front door (FROM_SAVE=mesh-<stamp> resumes a save)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation up $(_MESH_EMU_ARGS) $(if $(FROM_SAVE),--from-save "$(FROM_SAVE)")
 
 mesh-emu-status: ## reconciled per-device state + verdicts for the emulated mesh (JSON=1 for machine-readable)
 	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation status $(_MESH_EMU_ARGS) $(if $(filter 1,$(JSON)),--json)
@@ -2042,7 +2058,38 @@ STACK_HEADSCALE_FLAGS := $(if $(strip $(HEADSCALE)), -f $(STACK_HEADSCALE_COMPOS
 STACK_HEADSCALE_ENV := $(if $(strip $(HEADSCALE)), HUGMESH_DOMAIN='$(STACK_HUGMESH_DOMAIN)' HEADSCALE_MESH_ID='$(HEADSCALE_MESH_ID)',)
 STACK_HEADSCALE_DEP := $(if $(strip $(HEADSCALE)),stack-mesh-token-key,)
 STACK_ROUTE_ACCESS_ENV := ROUTE_ACCESS_DB_PASSWORD="$$(bash tests/stack/gen-route-access-env.sh --read)" 
-STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_DOMAINS_ENV)$(STACK_HEADSCALE_ENV) \
+# The local stack's per-role passwords (hugmesh-generator#857): every Postgres role
+# (federation, adminbff, forumbff, ..., casdoor, mastodon, phpbb, akkoma, games) and
+# the brokers' SVC_PASSWORD, one key each in the same gitignored tests/stack/.env.
+# The compose files read ${KEY:?...} and spell no value, so a missing key stops ANY
+# compose command on them with a message naming tests/stack/gen-stack-db-env.sh.
+# Same two steps as the route-access key above:
+#   1. stack-db-env (a prerequisite of every target that builds, creates, stops or
+#      writes to the stack: build, up, halt, down, clean, route-access-reconcile)
+#      runs the resolver: create-if-missing, never rotate, and for a volume that
+#      already exists ADOPT the value its container was created with (or the
+#      pre-#857 literal), so an existing stack keeps working unchanged. Halt/down
+#      need it too: compose interpolates the whole file before it applies
+#      profiles, so even a teardown needs every key. The READ-ONLY targets
+#      (stack-ps, stack-logs, stack-onion) do not run it, as with the route-access
+#      key: looking at a stack never mints or adopts a password (see 3).
+#   2. STACK_DB_ENV passes each key explicitly (an --env-file disables .env), READ
+#      ONLY. A value the operator EXPORTED wins, exactly as it would for compose.
+#   3. The READ-ONLY targets run compose with STACK_READ_ENV instead: the same env,
+#      except that a DB key neither exported nor in the file is passed as a fixed
+#      placeholder (STACK_DB_READ_ENV). `ps`/`logs` interpolate the whole file but
+#      create nothing, so the value goes nowhere; it only gets past ${KEY:?}, and
+#      looking at a stack works before any ensuring target has run (the operator's
+#      state the day #857 lands). Never used by a target that can create, stop or
+#      write; the Studio's status/logs reads do the same (stack_db_read_env).
+# stack-down/stack-clean strip the keys (--remove) AFTER `down -v` drops the volumes.
+# Keys: tests/stack/stack-db-passwords.tsv. Guards: tests/stack/test-gen-stack-db-env.sh,
+# tests/scripts/test-compose-no-literal-passwords.sh.
+STACK_DB_KEYS := $(shell bash tests/stack/gen-stack-db-env.sh --keys 2>/dev/null)
+STACK_DB_ENV  := $(foreach k,$(STACK_DB_KEYS),$(k)="$${$(k):-$$(bash tests/stack/gen-stack-db-env.sh --read $(k))}" )
+STACK_DB_READ_PLACEHOLDER := read-only-placeholder-not-a-password
+STACK_DB_READ_ENV := $(foreach k,$(STACK_DB_KEYS),$(k)="$${$(k):-$$(bash tests/stack/gen-stack-db-env.sh --read $(k) | grep . || echo $(STACK_DB_READ_PLACEHOLDER))}" )
+STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_DB_ENV)$(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_DOMAINS_ENV)$(STACK_HEADSCALE_ENV) \
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
@@ -2056,6 +2103,8 @@ STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$
              MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV)$(STACK_ANUBIS_ENV)$(STACK_TOR_ENV) \
              EGRESS_VPN_CONF='$(abspath $(EGRESS_VPN_CONF))' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
+# STACK_ENV with the DB keys' read-only spelling (see STACK_DB_READ_ENV above).
+STACK_READ_ENV := $(subst $(STACK_DB_ENV),$(STACK_DB_READ_ENV),$(STACK_ENV))
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
 STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
 # Alternative-backend profiles (phpBB / Akkoma). Separate from STACK_PROFILE so
@@ -2249,7 +2298,15 @@ stack-mesh-token-key: ## mint the local mesh's HugMesh-token issuer key (ed25519
 stack-route-access-env: ## ensure tests/stack/.env holds ROUTE_ACCESS_DB_PASSWORD (create-if-missing; stack-up runs it first)
 	@bash tests/stack/gen-route-access-env.sh
 
-stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## build every service from its cloned repo (no run)
+.PHONY: stack-db-env
+# Ensure tests/stack/.env holds every local-stack DB password (see STACK_DB_ENV).
+# Its exit status stops make before compose runs: docker that cannot say whether a
+# volume exists writes nothing and fails, rather than mint a value that would lock
+# that volume out.
+stack-db-env: ## ensure tests/stack/.env holds the local stack's per-role DB passwords (create-if-missing, adopts existing volumes)
+	@bash tests/stack/gen-stack-db-env.sh
+
+stack-build: stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## build every service from its cloned repo (no run)
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 
 # stack-up's LAST step reconciles gateway_route_access (the line right after
@@ -2263,7 +2320,7 @@ stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_
 # would otherwise send the seed to that server and leave this table stale.
 # stack-halt -> stack-up is the resume path, so this covers it (and the Studio,
 # which shells out to `make stack-up`). Guard: tests/stack/test-route-access-reconcile.sh.
-stack-up: stack-route-access-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
+stack-up: stack-route-access-env stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
@@ -2310,7 +2367,7 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin); the shared password is in .e2e-credentials at the repo root (minted NEW by every stack-seed; E2E_PASSWORD_KEEP=1 keeps the previous one) (not printed here: this output is persisted by the Studio run log)."
 	$(STACK_SEED_STAGE2_NOTE)
 
-stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)
+stack-halt: stack-db-env  ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)
 	# The NON-DESTRUCTIVE stop. `stack-down` below passes -v, which drops every
 	# named volume — Casdoor identity, Matrix rooms, Mastodon accounts, the phpBB
 	# board and all the BFF databases. That is the right default for a throwaway
@@ -2321,13 +2378,14 @@ stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts
 	# survives, so `make stack-up` brings the same mesh back.
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down
 
-stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
+stack-down: stack-db-env  ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
 	# Every profile is listed UNCONDITIONALLY (not via the PHPBB=1/AKKOMA=1
 	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
 	# akkoma containers and volumes orphaned while reporting success.
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
 	bash tests/stack/gen-route-access-env.sh --remove
+	bash tests/stack/gen-stack-db-env.sh --remove
 
 # stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
 # images with no registry name, i.e. ours; never the pulled postgres/cassandra/
@@ -2344,11 +2402,12 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 # project other than the checkout's own, and for hugmesh-local itself while any
 # hugmesh-img-* project is up. Only 1/true/yes keep it; 0/false/no/empty remove it.
 STACK_CLEAN_KEEP_M2_ON = $(filter 1 true yes TRUE YES True Yes,$(strip $(STACK_CLEAN_KEEP_M2)))
-stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
+stack-clean: stack-db-env  ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
 	bash tests/stack/gen-route-access-env.sh --remove
+	bash tests/stack/gen-stack-db-env.sh --remove
 	$(if $(STACK_CLEAN_KEEP_M2_ON),@echo "==> The private-maven registry $(M2_REGISTRY_NAME) is KEPT (STACK_CLEAN_KEEP_M2: another mesh shares it).",@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true)
 	$(if $(STACK_CLEAN_KEEP_M2_ON),,@rm -f $(STACK_M2_ENV))
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'
@@ -2477,7 +2536,7 @@ stack-onion: ## print the local mesh's Tor .onion address (needs `make stack-up 
 	  echo "stack-onion: $$f does not hold a v3 onion hostname (56 base32 chars + .onion): '$$onion'" >&2; exit 1; \
 	fi; \
 	if command -v docker >/dev/null 2>&1; then \
-	  running="$$($(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile tor ps -q --status running hugmesh-tor 2>/dev/null)"; \
+	  running="$$($(STACK_READ_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile tor ps -q --status running hugmesh-tor 2>/dev/null)"; \
 	  if [ -z "$$running" ]; then \
 	    echo "stack-onion: $$f names $$onion but hugmesh-tor is NOT running — a stale readout from a container that died without cleaning up. Start it: make stack-up TOR=1" >&2; exit 1; \
 	  fi; \
@@ -2518,10 +2577,10 @@ stack-tor-mechanism-check: ## OPT-IN, needs the public Tor network + a host tor 
 	HUGMESH_TOR_E2E=1 bash tests/stack/test-tor-onion-mechanism.sh
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
+	$(STACK_READ_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
+	$(STACK_READ_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) ps
 
 # Re-apply the canonical route-access seed (specs/cluster/manifests/route-access/
 # initdb/20-schema.sql) to the RUNNING stack's route-access-db, in one transaction
@@ -2537,7 +2596,7 @@ stack-ps: ## list the local stack's containers + status
 # /bff/superadmin. stack-up runs this automatically; it is exposed for a stack
 # that is already up; like stack-up it blanks POSTGRES_HOST/ROUTE_ACCESS_CONTAINER
 # so a shell export cannot redirect it. Guard: tests/stack/test-route-access-reconcile.sh.
-stack-route-access-reconcile: ## re-apply the route-access seed to the running stack's route-access-db (stack-up does this itself)
+stack-route-access-reconcile: stack-db-env ## re-apply the route-access seed to the running stack's route-access-db (stack-up does this itself)
 	$(STACK_ENV) POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 
 # ── The Gherkin (BDD) e2e lane ───────────────────────────────────────────────

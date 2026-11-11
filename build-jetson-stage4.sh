@@ -244,7 +244,7 @@ STANDALONE=false        # --standalone : local user, no mesh, LUKS2-encrypted ro
 LOCAL_USER=""           # --local-user NAME : the standalone local login account
 LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
 LOCAL_PASS_FILE=""      # --local-pass-file FILE : the same password read from a file (keeps it off argv)
-LOCAL_ADMIN=false       # --local-admin : the local account may sudo on a KEYS-provisioned image too
+LOCAL_ADMIN=false       # --local-admin : the local login account is an administrator (sudo); without it, it is not, on ANY image
 # ── LUKS2 root encryption — BAKE-TIME, unlike x86/Frite/RPi5's install-time
 # model: the Orin has no separate installer step (build_img() IS the only
 # artifact, a single ext4 root written directly by the cross-build host), so
@@ -385,6 +385,9 @@ OPTIONS
     --local-pass PASS    Plaintext; hashed at build (yescrypt, $6$ fallback), never
                           baked raw. Omit it and a random one-time password is
                           minted + printed once at first boot instead.
+    --local-admin         Make the local login account an administrator (sudo).
+                          Without it the account is NOT one on any image, and
+                          root stays locked.
 
   Root disk encryption (LUKS2; bake-time — there is no separate install step
               on this platform, so encryption happens as part of THIS build)
@@ -911,6 +914,14 @@ if ${STANDALONE} && ${ROLE_CLIENT} && [ -z "${LOCAL_PASSHASH}" ]; then
     exit 1
 fi
 
+# ── Admin is opt-in (operator rule: the local login account is not admin unless asked) ──
+# Without --local-admin the local account (or the keyless fallback account) is NOT in
+# wheel and has no sudoers grant; root stays locked. Say so at build time so a box
+# nobody can administer is never a surprise (first boot says it on the console too).
+if ! ${LOCAL_ADMIN}; then
+    warn "No --local-admin: the local login account will NOT be an administrator. On a standalone or keyless (no KEYS stick) boot root is locked, so nobody on the device can use sudo; pass --local-admin to make the local account the administrator (docs/STANDALONE-DESKTOP.md)."
+fi
+
 # ── LOUD EXPERIMENTAL banner (every real build; --print-plan exits above) ──────
 echo -e "${YELLOW}${BOLD}"
 echo "############################################################################"
@@ -1115,7 +1126,25 @@ rebrand_sysroot() {
         # agreement with what the served render produces. Default brand: the whole
         # function early-returns, so this is a byte no-op.
         # Pinned by tests/scripts/test-eso-remoteref-brand.sh.
+        # Filesystem paths on the IMAGE (/etc/hugmesh, /usr/sbin/hugmesh-*,
+        # /var/log/hugmesh-*, ...) are never renamed by a rebrand, so a path
+        # literal must not be either: hidden behind @@SDSYSFSPATH@@ first,
+        # restored last (bootstrap.sh read /etc/<org>/release-state and a cron
+        # ran /usr/sbin/<brand>-node-storage-reconcile, neither of which exists).
         sed -i \
+            -e "s#/etc/hugmesh#/etc/@@SDSYSFSPATH@@#g" \
+            -e "s#/var/lib/hugmesh#/var/lib/@@SDSYSFSPATH@@#g" \
+            -e "s#/var/log/hugmesh#/var/log/@@SDSYSFSPATH@@#g" \
+            -e "s#/var/cache/hugmesh#/var/cache/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/lib/hugmesh#/usr/lib/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/libexec/hugmesh#/usr/libexec/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/sbin/hugmesh#/usr/sbin/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/bin/hugmesh#/usr/bin/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/local/sbin/hugmesh#/usr/local/sbin/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/local/bin/hugmesh#/usr/local/bin/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/share/hugmesh#/usr/share/@@SDSYSFSPATH@@#g" \
+            -e "s#/run/hugmesh#/run/@@SDSYSFSPATH@@#g" \
+            -e "s#/opt/hugmesh#/opt/@@SDSYSFSPATH@@#g" \
             -e "s|\(~1vault-base, value: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
             -e "s|\(vault-base: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
@@ -1131,6 +1160,7 @@ rebrand_sysroot() {
             -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
             -e "s|@@SDSYSVAULTBASE@@|${_brand}|g" \
+            -e "s#@@SDSYSFSPATH@@#hugmesh#g" \
             "${f}"
     done < <(find "${SYSROOT}/etc/hugmesh" "${SYSROOT}/var/lib/hugmesh/cluster" -type f -print0 2>/dev/null)
 }

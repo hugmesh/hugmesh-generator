@@ -392,6 +392,10 @@ start nothing.
   `read:packages`; Maven reads the exported library chain from the org's package
   registry, and the Java jobs stop with a clear message when it is missing),
   `PACKAGES_READ_ACTOR` (its user name, optional) and, if wanted, the `RUNS_ON` variable.
+* The organisation secret `NVD_API_KEY` (visibility all): the exported repositories
+  carry their SCA jobs (OWASP Dependency-Check), which fail with exit 13 without an
+  activated NVD API key. The export step's NVD box sets it (`gh secret set` with the
+  value on stdin; an empty value is refused). See [`NVD-API-KEY.md`](NVD-API-KEY.md).
 * Publish the exported Java library chain from the new organisation (each library's
   `release.yml`) before the site's build job can verify the Java apps.
 * Enable Pages on the site repository (Settings -> Pages -> Source: GitHub Actions).

@@ -57,7 +57,9 @@
 #   --gpu              virtio-gpu-pci + usb-kbd + usb-tablet so the lightdm
 #                      greeter is drawn and QMP `screendump` captures it
 #                      (-display none stays: the dump comes from the virtual
-#                      framebuffer, no host display needed).
+#                      framebuffer, no host display needed). With --display
+#                      spice it adds nothing: the door's own virtio-gpu-pci,edid=on
+#                      + usb-kbd + usb-tablet are that GPU (as on launch-x86.sh).
 # Every one of these is default-off: without them the argv is byte-identical to
 # the golden-.img path, minus the -dtb that never belonged there.
 # tests/qemu/frite-emmc-install.sh is the two-phase driver on top of this.
@@ -96,6 +98,10 @@ RUN_DIR=""                     # scratch dir for the overlay/pidfile/console
 KERNEL_IMG_NAME="Image"        # the ARM builders install boot/Image (not kernel_2712.img)
 ROOT_PART="/dev/vda2"          # p1=firmware/boot, p2=ext4 root (same layout as the Pi)
 OVERLAY_SIZE="16G"             # qcow2 overlay grows so growroot can expand
+# What --img IS. "raw" (default) is a golden build artifact; "qcow2" is a STANDALONE
+# save (run-qemu-docker.sh --save-device / core/emulation_save.py) booted again —
+# boot-from-save. Either way the per-run overlay below is the only file qemu writes.
+IMG_FORMAT="raw"
 MEM="2048"
 SMP="2"
 QEMU_CPU=""                    # per-board default (TCG, no KVM on this host)
@@ -181,6 +187,7 @@ Frite media / eMMC target (all default-off; see the header):
       --emmc-boot-size BYTES   Per-boot-partition size (default ${EMMC_BOOT_SIZE}; 128K-multiple, <= 32640K).
       --emmc-rpmb-size BYTES   RPMB size (default ${EMMC_RPMB_SIZE}; 128K-multiple, <= 16384K).
       --gpu            virtio-gpu-pci + usb-kbd + usb-tablet (greeter drawn; QMP screendump).
+                       With --display spice it is folded into the door's GPU.
 
 QEMU / guest:
   -m, --mem MB         Guest RAM. Default: ${MEM}
@@ -190,6 +197,11 @@ QEMU / guest:
       --root PART      root= device. Default: ${ROOT_PART}
       --append STR     Extra kernel cmdline (appended verbatim).
       --overlay-size SZ  qcow2 overlay size. Default: ${OVERLAY_SIZE}
+      --img-format F   raw (default: a golden build .img) | qcow2 (a STANDALONE save
+                       from run-qemu-docker.sh --save-device, booted again). qcow2 puts
+                       the per-run overlay over the SAVE with -F qcow2, so the save is
+                       never written; it is not resized (it already carries the size
+                       the original run grew it to).
       --run-dir DIR    Scratch dir for overlay/pidfile/console. Default: <work>/qemu-run-arm
 
 Mesh (multi-node) networking — issue #48; all default-off:
@@ -244,6 +256,7 @@ while [[ $# -gt 0 ]]; do
         -w|--work-dir)     WORK_DIR="$2"; shift 2 ;;
         -r|--role)         ROLE="$2"; shift 2 ;;
         --img)             IMG="$2"; shift 2 ;;
+        --img-format)      IMG_FORMAT="$2"; shift 2 ;;
         --kernel)          KERNEL="$2"; shift 2 ;;
         --initrd)          INITRD="$2"; shift 2 ;;
         --dtb)             DTB="$2"; shift 2 ;;
@@ -333,6 +346,13 @@ case "${MEDIUM_BUS}" in usb|virtio) ;; *) die "--medium-bus must be usb or virti
 # ── Tool checks (arg-parse + autodetect stay usable without these) ──────────
 command -v qemu-system-aarch64 >/dev/null || die "missing qemu-system-aarch64"
 command -v qemu-img            >/dev/null || die "missing qemu-img"
+case "${IMG_FORMAT}" in
+    raw) ;;
+    # A save is only ever named explicitly: autodetect finds GOLDEN images, and a
+    # raw golden opened as qcow2 would fail at boot instead of here.
+    qcow2) [ -n "${IMG}" ] || die "--img-format qcow2 needs an explicit --img (the saved .qcow2); autodetect only finds golden images" ;;
+    *) die "--img-format must be raw or qcow2, got '${IMG_FORMAT}'" ;;
+esac
 
 # ── Medium helpers: what kind of medium, and lift one file off it ────────────
 # Format is decided by MAGIC, never by extension: the Frite builder emits
@@ -549,11 +569,28 @@ info "dtb    : ${DTB:-<none: QEMU generates the virt DTB> (board FDT name: ${BOA
 info "run dir: ${RUN_DIR}"
 
 # ── Per-run qcow2 overlay (keeps the golden .img pristine) ───────────────────
+# The overlay is DELETED and recreated just below, so --img must never be this
+# run's own overlay path — with --img-format qcow2 that would be the save itself.
+[ -z "${IMG}" ] || [ "$(readlink -m "${IMG}")" != "$(readlink -m "${OVERLAY}")" ] \
+    || die "--img ${IMG} is this run's own overlay path (${OVERLAY}); it would be deleted before boot — point --img at the save, and --run-dir somewhere else"
 rm -f "${OVERLAY}"
 if [ -n "${IMG}" ]; then
-    step "Creating qcow2 overlay over the golden image (resized to ${OVERLAY_SIZE})"
-    qemu-img create -f qcow2 -b "${IMG}" -F raw "${OVERLAY}" >/dev/null
-    qemu-img resize "${OVERLAY}" "${OVERLAY_SIZE}" >/dev/null
+    case "${IMG_FORMAT}" in
+        raw)
+            step "Creating qcow2 overlay over the golden image (resized to ${OVERLAY_SIZE})"
+            qemu-img create -f qcow2 -b "${IMG}" -F raw "${OVERLAY}" >/dev/null
+            qemu-img resize "${OVERLAY}" "${OVERLAY_SIZE}" >/dev/null ;;
+        qcow2)
+            # BOOT FROM A SAVE. The save is a standalone qcow2 (no backing file); it
+            # becomes the overlay's READ-ONLY backing, so every guest write lands in
+            # ${OVERLAY} and the save itself is never written — the same promise the
+            # golden gets. No resize: the save's virtual size IS the overlay size the
+            # original run grew it to, and qemu-img refuses to shrink without --shrink.
+            [ "$(head -c 4 "${IMG}" | od -An -tx1 | tr -d ' \n')" = "514649fb" ] \
+                || die "--img-format qcow2: ${IMG} is not a qcow2 image (no QFI magic) — pass the .qcow2 a save wrote"
+            step "Creating qcow2 overlay over the SAVED disk (read-only backing; the save is never written)"
+            qemu-img create -f qcow2 -b "${IMG}" -F qcow2 "${OVERLAY}" >/dev/null ;;
+    esac
 fi
 
 cleanup() {
@@ -641,10 +678,17 @@ QEMU_ARGS+=(
     -device virtio-net-pci,netdev=net0
     -pidfile "${PIDFILE}"
 )
+# --gpu with --display spice is FOLDED into the display door (#955), the way
+# launch-x86.sh folds it into virtio-vga: the door below already brings
+# virtio-gpu-pci,edid=on + its own qemu-xhci + usb-tablet + usb-kbd, and --gpu's
+# devices on top of it gave the guest TWO GPUs (two heads, the viewer showing a
+# blank one) and TWO xhci controllers with two keyboards and two tablets.
+GPU_DEVICES=${GPU}
+[ "${DISPLAY_MODE}" = spice ] && GPU_DEVICES=false
 # ONE xhci controller, shared by the USB medium and the --gpu input devices.
 NEED_XHCI=false
 { [ -n "${MEDIUM}" ] && [ "${MEDIUM_BUS}" = usb ]; } && NEED_XHCI=true
-${GPU} && NEED_XHCI=true
+${GPU_DEVICES} && NEED_XHCI=true
 ${NEED_XHCI} && QEMU_ARGS+=(-device qemu-xhci,id=xhci)
 if [ -n "${MEDIUM}" ]; then
     QEMU_ARGS+=(-drive "file=${MEDIUM},format=raw,if=none,id=medium,readonly=on")
@@ -660,9 +704,11 @@ if [ -n "${EMMC}" ]; then
                 -device sdhci-pci,sd-spec-version=3
                 -device "${_emmc_dev}")
 fi
-if ${GPU}; then
+if ${GPU_DEVICES}; then
     QEMU_ARGS+=(-device virtio-gpu-pci -device usb-kbd,bus=xhci.0 -device usb-tablet,bus=xhci.0)
     info "gpu    : virtio-gpu-pci + usb-kbd + usb-tablet (QMP screendump captures the greeter)"
+elif ${GPU}; then
+    info "gpu    : --gpu folded into the display door's virtio-gpu-pci,edid=on (no second GPU, xhci, keyboard or tablet)"
 fi
 if [ -n "${KEYS_IMG}" ]; then
     [ -f "${KEYS_IMG}" ] || die "keys-img not found: ${KEYS_IMG}"

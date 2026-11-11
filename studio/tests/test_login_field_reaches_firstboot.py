@@ -92,9 +92,10 @@ def _builder_standalone(plan: dict[str, str]) -> str | None:
     return m.group(1) if m else None
 
 
-def _probe(standalone: str, keys: bool) -> dict[str, str]:
+def _probe(standalone: str, keys: bool, admin: bool = False) -> dict[str, str]:
     out = subprocess.run(
-        ["bash", HARNESS, "probe", standalone, HASH6, "true" if keys else "false", "false"],
+        ["bash", HARNESS, "probe", standalone, HASH6, "true" if keys else "false",
+         "true" if admin else "false"],
         capture_output=True, text=True, timeout=60)
     facts = dict(kv.split("=", 1) for kv in out.stdout.split())
     assert facts, f"harness probe printed nothing (rc={out.returncode}): {out.stderr[-400:]}"
@@ -150,3 +151,35 @@ def test_every_shown_field_reaches_first_boot(tmp_path):
             if kp:
                 assert facts["wheel"] == "n" and facts["sudoers_d"] == "n", \
                     "additional local account on a KEYS image must not be an administrator"
+
+
+@pytest.mark.parametrize("standalone,keys", [("true", False), ("false", False), ("false", True)])
+def test_admin_is_opt_in_on_every_shape(standalone, keys):
+    # Operator rule: the local login account is NOT an administrator unless asked
+    # (--local-admin, the HomePage 'Administrator' box). The 2026-11-09 prover found a
+    # keyless boot of a cloud laptop put it in wheel anyway; standalone did the same.
+    plain = _probe(standalone, keys, admin=False)
+    assert plain["hash"] == "applied"
+    assert plain["wheel"] == "n" and plain["sudoers_d"] == "n", (
+        f"STANDALONE={standalone} KEYS={keys}: local account is an administrator "
+        "without --local-admin")
+    admin = _probe(standalone, keys, admin=True)
+    assert admin["hash"] == "applied"
+    if keys:
+        # KEYS image: sudoers.d only, never wheel (governance strips wheel sudo).
+        assert admin["sudoers_d"] == "y" and admin["wheel"] == "n"
+    else:
+        assert admin["wheel"] == "y", (
+            f"STANDALONE={standalone} keyless: --local-admin did not make it an administrator")
+    if not keys:
+        assert plain["root_locked"] == "y" and admin["root_locked"] == "y", \
+            "root must stay locked on a keyless/standalone boot, admin or not"
+
+
+def test_admin_box_is_what_emits_local_admin():
+    # The box rides the Login Password (no password => no local account to elevate).
+    base = dict(mode="standalone", role="chromebook", platform="x86", local_user="magus")
+    assert "--local-admin" not in ImageConfig(**base, local_pass=THROWAWAY).to_cli_args()
+    assert "--local-admin" in ImageConfig(**base, local_pass=THROWAWAY,
+                                          local_admin=True).to_cli_args()
+    assert ImageConfig(**base).local_admin is False, "admin must default OFF"

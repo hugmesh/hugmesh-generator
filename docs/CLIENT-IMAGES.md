@@ -383,16 +383,24 @@ are inert on real hardware.
 |---|---|---|
 | `app-emulation/spice-vdagent` + `sec-policy/selinux-vdagent` | every desktop package list; the ARM boards accept vdagent `~arm64` (the policy module is **not** keyworded — its stable version is arm64-stable, and a `~arm64` line would wall frite/orangepi) | agent mouse, clipboard, and the XRandR path when QEMU hands the config to the agent |
 | `CONFIG_VIRTIO_CONSOLE`, `CONFIG_INPUT_MISC`, `CONFIG_INPUT_UINPUT` | the guest kernel fragments, guarded by `tests/scripts/test-virtual-display-kernel.sh` (x86_64 and arm64 defconfig already carry `VIRTIO_CONSOLE` and `INPUT_MISC`; `INPUT_UINPUT` comes from the desktop fragments) | the `com.redhat.spice.0` channel and `/dev/uinput`; the ebuild's `CONFIG_CHECK` is warn-only, so without them the daemon ships inert |
-| `/usr/libexec/hugmesh/vm-autofit` (+ `/etc/xdg/autostart/hugmesh-vm-autofit.desktop`) | `specs/usr/libexec/hugmesh/`, copied by each desktop builder; neutral names on the unaffiliated x86 image | polls the virtio-gpu/qxl connector's preferred mode in sysfs and runs `xrandr --output <name> --auto` when it changes. The LXDE/openbox session has no output daemon of its own; XFCE/KDE apply hotplug themselves, and the applier skips when the X server is already on the preferred mode, so it is harmless there |
+| `/usr/libexec/hugmesh/vm-autofit` (+ `/etc/xdg/autostart/hugmesh-vm-autofit.desktop`) | `specs/usr/libexec/hugmesh/`, copied by each desktop builder; neutral names on the unaffiliated x86 image | polls the virtio-gpu/qxl connector's preferred mode in sysfs and runs `xrandr --output <name> --auto` when it changes (retried on the next poll, at most 3 times per change, when the mode did not take). The card is found by its parent's driver (`qxl`, or `virtio_gpu`) or by a `virtio*` child of the parent bound to `virtio_gpu` (the measured virtio-pci layout; virtio-mmio alike). The LXDE/openbox session has no output daemon of its own; XFCE/KDE apply hotplug themselves, and the applier skips when the X server is already on the preferred mode, so it is harmless there |
 | `/etc/local.d/20-spice-vdagent.start` | `specs/etc/local.d/`, copied by each desktop builder | starts `spice-vdagentd` **only** when the SPICE virtio port exists. The stock OpenRC script returns 1 without it, so an unconditional `rc-update add` would print a failed service on every physical boot and every non-display QEMU run |
 
 Honest status of the resize path, per stack:
 
-- **x86 (virtio-vga)** — the kernel side is complete. Whether QEMU 7.2 turns the
-  viewer's monitors-config into a virtio-gpu `ui_info` hotplug (the applier's
-  path) or hands it to `spice-vdagent` (the agent's XRandR path) is **not yet
-  measured** on a built image; both paths are shipped. The runner's device record
-  keeps `display_resize=scale` until that measurement lands.
+- **x86 (virtio-vga)** — measured on a built cloud laptop image (kernel 6.18,
+  2026-11-10): with the in-session `spice-vdagent` connected, QEMU turns the
+  viewer's monitors-config into a new **preferred** mode on the virtio-gpu
+  connector (1024x768, 1600x900, 800x1200 tracked the window), but nothing in the
+  LXDE session applies it — xrandr stayed on 1280x800 — while a manual
+  `xrandr --output Virtual-1 --auto` re-laid the desktop out at once. So the
+  applier is the path. It used to exit at start on every virtio-vga guest: on
+  that kernel `card0/device` is the PCI function (driver `virtio-pci`) and the
+  `virtio_gpu`-bound device is its `virtioN` child, which the applier now walks
+  to. The greeter and the text console do **not** follow the window (measured:
+  the framebuffer stayed 1280x800); the viewer routes monitors-config through the
+  agent, and no agent runs before a session starts. The runner's device record
+  keeps `display_resize=scale` until a live run re-measures the fixed applier.
 - **ARM boards (rpi5, frite, orangepi5, orangepi4-lts)** — their desktop kernel
   fragments now request `DRM_VIRTIO_GPU` + `VIRTIO_INPUT` + `INPUT_UINPUT` (the
   board table above), so the kernel side matches x86 on images built after those
