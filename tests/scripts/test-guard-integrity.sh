@@ -1132,7 +1132,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # edge-ai-analysis leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on
 # the branch over origin/main 39b953ad: 238 of 280.
 # 238 -> 240 (feat/headscale-embedded-derp-20261110): +2 gated, +2 total — the headscale DERP static + live suites; MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main b3eafff5.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-240}"
+# 240 -> 241 (MERGED fix/control-endpoint-lan-first-20261111 into feat/headscale-onion-control-20261111): +1 gated, +1 total —
+# tests/scripts/test-control-endpoint-lan-first.sh, named by shell-suites.yml (debian leg)
+# and .gitlab-ci.yml's orphan-guards-verify. PREMERGE_UNGATED is untouched. MEASURED by
+# running this file on the branch. 241 of 283 on the merged tree.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-241}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

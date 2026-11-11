@@ -454,9 +454,48 @@ is only an ultimate fallback.
 
 The tailscale **client** mirrors this. An empty `.tailscale.login_server` defaults to
 the same resolved endpoint on the control node. On a worker or additional control
-plane it defaults to `resolve_control_endpoint`, which takes the override, then the
-baked `HEADSCALE_URL`, then the pki node's LAN IP from `.nodes[]`. A worker never
-points at its own LAN IP.
+plane it defaults to `resolve_control_endpoint`. A worker never points at its own LAN
+IP. Precedence, highest first:
+
+1. `provision.json .headscale.server_url`;
+2. `.mesh.endpoint`;
+3. **before go-live only**: the pki node's confirmed LAN address,
+   `https://<.mesh.pki_lan_ip>:8080`. "Before go-live" is the predicate
+   `hugmesh-go-live` uses: `/etc/hugmesh/release-state` is not `public` and the
+   `/etc/hugmesh/go-live` marker is absent (an absent release-state file is
+   internal);
+4. the baked brand `HEADSCALE_URL`;
+5. the pki row of `.nodes[]` (`https://<ip>:8080`).
+
+Why step 3 exists: a worker's first boot happens before any public name answers, so
+a baked public `HEADSCALE_URL` in step 4 left a LAN-first mesh (no public DNS, IP or
+port-forward) with workers that never reached their control plane.
+`.mesh.pki_lan_ip` is written only by `gen-provision-keys.sh --pki-ip` (the Studio
+requires it for a mesh, with a static IP or a DHCP reservation behind it). The pki
+row of `.nodes[]` is the template's example address (`10.0.0.10`) unless someone
+edited it, so it stays below the baked URL. A malformed value in either is dropped,
+never interpolated.
+
+After go-live, step 3 is skipped and the baked URL wins again. A worker that must
+join a mesh that is already live, from outside its LAN, on an image without the
+public posture, sets `.mesh.endpoint`. A worker that joined over the LAN keeps that
+login server; changing it later needs `tailscale up --login-server=<new>
+--force-reauth`.
+
+**The pki side.** The pki node's own `server_url` still follows `resolve_endpoint`
+above, so a pki baked with a public `HEADSCALE_URL` advertises that URL while its
+workers dial its LAN address. Registration and the netmap do not depend on it; the
+embedded DERP region's host and the OIDC callback do. Before go-live the LAN peers
+connect directly, so relay through that host is what is lost.
+
+**The firewall.** On an `ENV=prod` x86 image, firewalld's default zone is `drop`
+and only `tailscale0`/`lo` are trusted. A worker that has not yet joined cannot use
+the tailnet, so `provision_headscale` writes headscale's listen port to
+`/etc/hugmesh/headscale-lan-control`. `hugmesh-coturn-firewall` (boot and a 60 s
+cron) then admits that port over TCP **from the RFC1918 ranges only** (one runtime
+rich rule each for `10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16`) and removes
+them when the marker goes. ARM images run no firewalld, and their nftables tables
+do not drop that port.
 
 A public facade (`scale.<domain>`) can be published later without re-imaging. The
 MagicDNS control-plane name stays stable across the IP→domain transition, so clients

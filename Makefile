@@ -179,11 +179,16 @@ ENV      ?= test
 #                headscale. Default OFF: headscale's embedded relay only, so the mesh
 #                starts and relays offline (docs/HEADSCALE-DERP.md). Same knob as the
 #                builders' --headscale-public-derp and gen-provision-keys.sh's.
-# Usage:  make build-all BRAND=acme DOMAIN=acme.example
+# PKI_LAN_IP=    the pki node's STATIC (or DHCP-reserved) LAN IPv4. Stamped on every
+#                KEYS folder (gen-provision-keys.sh --pki-ip), so a worker dials the pki
+#                on the LAN before go-live instead of a public HEADSCALE_URL that cannot
+#                answer yet. Unset: the keys step warns and workers fall back to it.
+# Usage:  make build-all BRAND=acme DOMAIN=acme.example PKI_LAN_IP=192.168.1.10
 BRAND     ?=
 DOMAIN    ?=
 HEADSCALE_URL ?=
 HEADSCALE_PUBLIC_DERP ?=
+PKI_LAN_IP ?=
 
 # ── External CA (optional) ─────────────────────────────────────────────────────
 # Point the cert generators at an EXISTING CA (cert + key) to use it as the
@@ -223,6 +228,9 @@ endif
 ifneq ($(strip $(HEADSCALE_PUBLIC_DERP)),)
 BRAND_ENV += HEADSCALE_PUBLIC_DERP=$(HEADSCALE_PUBLIC_DERP)
 endif
+ifneq ($(strip $(PKI_LAN_IP)),)
+BRAND_ENV += PKI_LAN_IP=$(PKI_LAN_IP)
+endif
 # Root SSH login toggle (empty => builder default 'no' = DISABLED). Only threaded when
 # explicitly set, so every image stays hardened-by-default unless opted in.
 ifneq ($(strip $(PERMIT_ROOT_LOGIN)),)
@@ -232,7 +240,7 @@ endif
 # BRAND_PASS — brand make-vars forwarded into the in-container `make` re-invoke
 # (the Docker dispatch path) so BRAND_FLAGS/BRAND_ENV are rebuilt identically
 # inside the builder image. brands/ is mounted at /src/brands via -v $(CURDIR):/src.
-BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
+BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' PKI_LAN_IP='$(PKI_LAN_IP)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
 
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).

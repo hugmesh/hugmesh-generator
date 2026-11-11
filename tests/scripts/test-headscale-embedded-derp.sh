@@ -247,7 +247,12 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 -s
     -keyout "${T}/other/ca.key" -out "${T}/other/ca.crt" >/dev/null 2>&1
 printf '%s\n' '{"hugmesh":{"cluster_domain":"acme.example"},"nodes":[{"name":"hm-pki","ip":"10.0.0.10","role":"pki"}]}' > "${T}/stick/provision.json"
 {
-    for fn in resolve_endpoint resolve_control_endpoint; do sed -n "/^${fn}() {/,/^}/p" "${PROV}"; done
+    # resolve_control_endpoint calls the LAN-first helpers (node_is_public, ipv4_literal,
+    # resolve_pki_lan_ip; tests/scripts/test-control-endpoint-lan-first.sh) and warn.
+    echo 'command -v warn >/dev/null 2>&1 || warn() { :; }'
+    for fn in node_is_public ipv4_literal resolve_pki_lan_ip resolve_endpoint resolve_control_endpoint; do
+        sed -n "/^${fn}() {/,/^}/p" "${PROV}"
+    done
 } > "${WORK}/ep-fns.sh"
 cat > "${T}/run.sh" <<'EOF'
 # usage: run.sh <fns> <ep-fns> <config> <stick> <server_url> <out-dir>

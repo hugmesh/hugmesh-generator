@@ -70,6 +70,11 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # certificate from the mesh CA (provision_headscale_tls), and every node trusts that
 # CA through provision_certs. An explicit http:// override is still honoured, and
 # warned about. docs/HEADSCALE-DERP.md.
+# This is the CONTROL node's own server_url. A WORKER resolves the control node
+# with resolve_control_endpoint below, which puts the pki LAN address AHEAD of
+# the baked HEADSCALE_URL until go-live; the two can therefore differ on a pki
+# baked with a public HEADSCALE_URL (only the DERP host and OIDC callback follow
+# server_url — registration and the netmap do not; docs/SECURITY.md).
 # Because peers also get MagicDNS (.mesh.magic_dns_domain) + the control node's
 # stable hostname, a LAN-IP endpoint keeps working after a public domain is
 # later published: the MagicDNS control-plane name is stable across the
@@ -102,21 +107,81 @@ resolve_endpoint() {
     echo "${ep}"
 }
 
+# Is THIS node past go-live? The same predicate hugmesh-go-live and
+# hugmesh-firewall-reconcile use: /etc/hugmesh/release-state reads "public" OR the
+# /etc/hugmesh/go-live marker exists. An absent release-state file is internal
+# (only the x86 and rpi5 builders bake one). The paths are test seams only.
+node_is_public() {
+    local rs_file="${HUGMESH_RELEASE_STATE_FILE:-/etc/hugmesh/release-state}"
+    local marker="${HUGMESH_GO_LIVE_MARKER:-/etc/hugmesh/go-live}"
+    [ -e "${marker}" ] && return 0
+    [ -r "${rs_file}" ] && [ "$(tr -d '[:space:]' < "${rs_file}" 2>/dev/null)" = "public" ]
+}
+
+# ipv4_literal <value>: true for a dotted-quad IPv4 with every octet 0-255 and
+# nothing else (no port, no whitespace, no newline). Everything that reaches a
+# login URL or /etc/hosts from the manifest passes through a gate like this.
+ipv4_literal() {
+    local v="$1" o
+    [[ "${v}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || return 1
+    local IFS=.
+    for o in ${v}; do [ "$((10#${o}))" -le 255 ] || return 1; done
+    return 0
+}
+
+# The pki node's LAN address as the OPERATOR confirmed it: provision.json
+# .mesh.pki_lan_ip, stamped by gen-provision-keys.sh --pki-ip (the Studio requires
+# it, with a static IP or a DHCP reservation behind it). Unlike .nodes[] — whose pki
+# row is the template's hand-entered example (10.0.0.10) unless someone edited it —
+# this key exists only when a real address was supplied. Empty when absent or not a
+# plain IPv4 literal (a malformed value is dropped, never interpolated).
+resolve_pki_lan_ip() {
+    local ip; ip="$(jqm '.mesh.pki_lan_ip // ""')"
+    { [ -z "${ip}" ] || [ "${ip}" = "null" ]; } && return 0
+    if ipv4_literal "${ip}"; then
+        echo "${ip}"
+    else
+        warn ".mesh.pki_lan_ip '${ip}' is not an IPv4 address — ignored" >&2
+    fi
+}
+
 # Control-node (pki) headscale endpoint as seen by a WORKER / additional CP.
 # A non-control node has no local headscale, so its mesh login_server must point
-# at the pki node, not at itself. Precedence: explicit override (server_url /
-# mesh.endpoint) else the baked brand HEADSCALE_URL else the pki node's LAN IP
-# from .nodes[] (the same inventory provision_hosts uses, so a pre-domain worker
-# still reaches the control server). Empty if none of these are known.
+# at the pki node, not at itself. Precedence (highest first):
+#   1. provision.json .headscale.server_url   (explicit override)
+#   2. provision.json .mesh.endpoint          (explicit override)
+#   3. BEFORE GO-LIVE (node_is_public false): the confirmed pki LAN address,
+#      https://<.mesh.pki_lan_ip>:8080 (the pki's headscale serves TLS itself). A worker's first boot happens before any
+#      public name exists, so the baked public HEADSCALE_URL cannot answer yet; the
+#      pki on the LAN can (the pki admits its headscale port from RFC1918 sources:
+#      hugmesh-coturn-firewall, /etc/hugmesh/headscale-lan-control).
+#   4. the baked brand HEADSCALE_URL (/etc/hugmesh/headscale-url)
+#   5. the pki row of .nodes[] (https://<ip>:8080) — the template example unless
+#      edited, so it stays BELOW the baked URL, as before.
+# After go-live step 3 is skipped and the baked URL wins again. An off-LAN worker
+# that must join a mesh which is already live, on an image that does not carry the
+# public posture, sets .mesh.endpoint. Empty if none of these are known. Diagnostics
+# go to stderr: stdout is the value.
 resolve_control_endpoint() {
     local ep=""
     ep="$(jqm '.headscale.server_url // ""')"
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then ep="$(jqm '.mesh.endpoint // ""')"; fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
+        local lan_ip; lan_ip="$(resolve_pki_lan_ip)"
+        if [ -n "${lan_ip}" ]; then
+            if node_is_public; then
+                log "control endpoint: this node is past go-live — the pki LAN address ${lan_ip} yields to the baked HEADSCALE_URL" >&2
+            else
+                ep="https://${lan_ip}:8080"
+                log "control endpoint: before go-live — dialling the pki on the LAN (${ep}), not the baked HEADSCALE_URL" >&2
+            fi
+        fi
+    fi
+    if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
         [ -r /etc/hugmesh/headscale-url ] && ep="$(tr -d '[:space:]' < /etc/hugmesh/headscale-url 2>/dev/null)"
     fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
-        local pki_ip n i
+        local pki_ip="" n i
         n="$(jqm '.nodes // [] | length')"
         for ((i = 0; i < n; i++)); do
             if [ "$(jqm ".nodes[$i].role")" = "pki" ]; then
@@ -125,7 +190,15 @@ resolve_control_endpoint() {
         done
         # https: the pki node's headscale serves TLS on its own listener by default
         # (resolve_endpoint above); control_url_tls_migrate checks the answer.
-        [ -n "${pki_ip:-}" ] && [ "${pki_ip}" != "null" ] && ep="https://${pki_ip}:8080"
+        if [ -n "${pki_ip}" ] && [ "${pki_ip}" != "null" ]; then
+            if ipv4_literal "${pki_ip}"; then
+                ep="https://${pki_ip}:8080"
+            elif [[ "${pki_ip}" =~ ^[0-9A-Fa-f:]+$ && "${pki_ip}" == *:* ]]; then
+                ep="https://[${pki_ip}]:8080"
+            else
+                warn "the pki row of .nodes[] has ip '${pki_ip}', not an IP address — not used as the control endpoint" >&2
+            fi
+        fi
     fi
     [ "${ep}" = "null" ] && ep=""
     echo "${ep}"
@@ -1259,6 +1332,37 @@ provision_headscale_config() {
     provision_headscale_derp "${cfg}"
 }
 
+# ── LAN control port: the pki's headscale, reachable from the LAN ─────────
+# Before go-live a worker dials https://<pki LAN address>:8080 (resolve_control_
+# endpoint). On an ENV=prod x86/rpi5 image firewalld's default zone is `drop` and
+# only tailscale0/lo are trusted, so that dial died at the pki's firewall: the
+# worker cannot be on the tailnet before it has joined it. This writes the port
+# headscale listens on (listen_addr in its config, default 8080) to ONE marker;
+# hugmesh-coturn-firewall (boot + 60s cron, the node's firewalld reconciler) then
+# admits <port>/tcp from the RFC1918 ranges only — never from anywhere else. A
+# listen_addr bound to loopback writes no marker (nothing to admit).
+HEADSCALE_LAN_CONTROL_MARKER="${HEADSCALE_LAN_CONTROL_MARKER:-/etc/hugmesh/headscale-lan-control}"
+headscale_lan_control_marker() {
+    local cfg="$1" la port host
+    la="$(sed -n 's/^listen_addr:[[:space:]]*//p' "${cfg}" 2>/dev/null | head -1 | tr -d "\"' ")"
+    [ -n "${la}" ] || la="0.0.0.0:8080"
+    port="${la##*:}"; host="${la%:*}"
+    if ! [[ "${port}" =~ ^[0-9]{1,5}$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; then
+        warn "headscale listen_addr '${la}' has no usable port — no LAN control port admitted"
+        rm -f "${HEADSCALE_LAN_CONTROL_MARKER}" 2>/dev/null || true
+        return 0
+    fi
+    case "${host}" in
+        127.*|localhost|"[::1]"|::1)
+            log "headscale listens on loopback only (${la}) — no LAN control port admitted"
+            rm -f "${HEADSCALE_LAN_CONTROL_MARKER}" 2>/dev/null || true
+            return 0 ;;
+    esac
+    mkdir -p "$(dirname "${HEADSCALE_LAN_CONTROL_MARKER}")"
+    printf '%s\n' "${port}" > "${HEADSCALE_LAN_CONTROL_MARKER}"
+    log "headscale LAN control port ${port}/tcp -> ${HEADSCALE_LAN_CONTROL_MARKER} (admitted from RFC1918 sources by hugmesh-coturn-firewall)"
+}
+
 provision_headscale() {
     have headscale || { log "headscale not installed — skipping"; return 0; }
     local enabled
@@ -1268,6 +1372,7 @@ provision_headscale() {
         rm -f "${HEADSCALE_DERP_STUN_MARKER}"
         rc-update del headscale default 2>/dev/null || true
         rc-service headscale stop 2>/dev/null || true
+        rm -f "${HEADSCALE_LAN_CONTROL_MARKER}" 2>/dev/null || true
         return 0
     fi
 
@@ -1367,6 +1472,10 @@ provision_headscale() {
     # rewrites the single server_url line idempotently so LAN peers can register at
     # first boot, sets the MagicDNS base domain and renders the DERP block.
     [ -f /etc/headscale/config.yaml ] && provision_headscale_config /etc/headscale/config.yaml
+
+    # LAN workers dial this node's headscale port before go-live
+    # (resolve_control_endpoint). Hand that port to the node firewall.
+    headscale_lan_control_marker /etc/headscale/config.yaml
 
     chown -R headscale:headscale /etc/headscale /var/lib/headscale /run/headscale
     chmod 0600 /var/lib/headscale/*.key 2>/dev/null || true
@@ -1730,9 +1839,10 @@ provision_tailscale() {
     # 127.0.0.1); the endpoint peers dial (resolve_endpoint: override / LAN IP)
     # still goes into headscale's server_url and the fleet's sticks. On a WORKER
     # / additional CP it is resolve_control_endpoint -> the PKI node (override /
-    # brand HEADSCALE_URL / the pki node's LAN IP from .nodes[]), never the
-    # worker's own LAN IP. So a pre-public-domain worker still reaches the
-    # control server over the LAN.
+    # before go-live the confirmed pki LAN address .mesh.pki_lan_ip / brand
+    # HEADSCALE_URL / the pki row of .nodes[]), never the worker's own LAN IP. So a
+    # pre-public-domain worker reaches the control server over the LAN even when
+    # its image was baked with a public HEADSCALE_URL that cannot answer yet.
     if [ -z "${login}" ] || [ "${login}" = "null" ]; then
         if [ "$(jqm '.headscale.enabled // false')" = "true" ]; then
             login="$(control_self_login_server)"

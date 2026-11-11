@@ -1784,7 +1784,10 @@ def test_non_argv_fields_set():
         # --brand-record (test_brand_record_copy_sites pins that hand-over).
         "login_style", "login_decor", "brand_record",
         "additional_domains", "configure_users", "qemu_device_tests",
-        "domain_services_reviewed"}
+        "domain_services_reviewed",
+        # the pki node's LAN address + its "fixed" confirmation: the KEYS channel
+        # (gen-provision-keys.sh --pki-ip), never a builder argv.
+        "pki_lan_ip", "pki_lan_ip_fixed"}
     # no flow flag may reach ANY builder argv, on any platform, in any mode
     for mode, role in (("mesh", "omnibus"), ("cloud", "desktop")):
         cfg = ImageConfig(mode=mode, role=role, platform="x86",

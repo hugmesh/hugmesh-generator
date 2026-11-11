@@ -66,6 +66,22 @@
 # (headscale 0.23 treats a STUN bind failure as fatal). The clash is logged; the fix
 # is another stun_listen_addr in that node's KEYS headscale/config.yaml (the marker,
 # and so this carve-out, follow the port).
+
+# HEADSCALE LAN CONTROL CARVE-OUT (the pki node only). Before go-live a worker
+# reaches the control plane at https://<pki LAN address>:<port> (keys-provision
+# resolve_control_endpoint) — it cannot use the tailnet, it is joining it. On an
+# ENV=prod image firewalld's default zone drops that dial. keys-provision
+# (provision_headscale) writes headscale's listen port to ONE marker:
+#
+#   /etc/hugmesh/headscale-lan-control   "<port>"  => admit <port>/tcp from the
+#                                                    RFC1918 ranges ONLY
+#
+# Admitted as firewalld RUNTIME rich rules (one per range, never --permanent: the
+# same convergence-floor model as the TURN ports), never from a public source, and
+# never through the nftables table below (which drops only the TURN port set, so it
+# has nothing to lift). Marker absent or malformed => any such rule this script
+# would have written is removed (fail-closed). Matching is by exact rule shape, so
+# an identical hand-added rule for one of these ranges is removed with it.
 #
 # FAIL-CLOSED: any render/apply error KEEPS the existing ruleset; the
 # first-ever posture (no marker) is CLOSED — deny by default, never allow.
@@ -91,6 +107,8 @@ HS_STUN_MARKER="${HUGMESH_HEADSCALE_STUN_MARKER:-/etc/hugmesh/headscale-derp-stu
 # The headscale STUN port this script last admitted in firewalld, so a port the marker
 # no longer names (it moved, or headscale's relay went away) is taken back out.
 HS_STUN_FW_STATE="${HUGMESH_HEADSCALE_STUN_FW_STATE:-/var/lib/hugmesh/headscale-derp-stun.firewalld}"
+HS_LAN_MARKER="${HUGMESH_HEADSCALE_LAN_MARKER:-/etc/hugmesh/headscale-lan-control}"
+HS_LAN_SOURCES="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 RELAY_MIN="${HUGMESH_COTURN_RELAY_MIN:-49152}"
 RELAY_MAX="${HUGMESH_COTURN_RELAY_MAX:-49200}"
 LOG_TAG="hugmesh-coturn-firewall"
@@ -133,6 +151,20 @@ if [ -n "${HS_STUN_PORT}" ] && [ "${PUBLIC}" = "present" ] && [ "${HS_STUN_PORT}
 fi
 HS_STUN_RULE=""
 [ -n "${HS_STUN_PORT}" ] && HS_STUN_RULE="        udp dport ${HS_STUN_PORT} accept  # headscale embedded DERP STUN (${HS_STUN_MARKER})"
+# headscale LAN control port (see the header): a single 1-65535 integer or nothing.
+HS_LAN_PORT=""
+if [ -e "${HS_LAN_MARKER}" ]; then
+    _hs_lan="$(tr -d '[:space:]' < "${HS_LAN_MARKER}" 2>/dev/null)"
+    if [[ "${_hs_lan}" =~ ^[0-9]{1,5}$ ]] && [ "${_hs_lan}" -ge 1 ] && [ "${_hs_lan}" -le 65535 ]; then
+        HS_LAN_PORT="${_hs_lan}"
+    else
+        warn "ignoring ${HS_LAN_MARKER}: '${_hs_lan}' is not a port number — no headscale LAN control port admitted"
+    fi
+    unset _hs_lan
+fi
+# The exact rich rule for one source range (firewall-cmd --list-rich-rules prints
+# this same spelling back).
+hs_lan_rule() { printf 'rule family="ipv4" source address="%s" port port="%s" protocol="tcp" accept' "$1" "$2"; }
 
 # ── Layer 1: the own-table nftables backstop (fail-closed gate) ──────────────
 if command -v nft >/dev/null 2>&1; then
@@ -241,6 +273,27 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
         else
             rm -f "${HS_STUN_FW_STATE}" 2>/dev/null
         fi
+        # headscale LAN control port: drop every rule of our shape that is not the
+        # wanted set (a changed port, or no marker), then admit the wanted set.
+        HS_WANT=""
+        if [ -n "${HS_LAN_PORT}" ]; then
+            for src in ${HS_LAN_SOURCES}; do HS_WANT="${HS_WANT}$(hs_lan_rule "${src}" "${HS_LAN_PORT}")"$'\n'; done
+        fi
+        while IFS= read -r r; do
+            [ -n "${r}" ] || continue
+            [[ "${r}" =~ ^rule\ family=\"ipv4\"\ source\ address=\"(10\.0\.0\.0/8|172\.16\.0\.0/12|192\.168\.0\.0/16)\"\ port\ port=\"[0-9]+\"\ protocol=\"tcp\"\ accept$ ]] || continue
+            case $'\n'"${HS_WANT}" in *$'\n'"${r}"$'\n'*) continue ;; esac
+            firewall-cmd --zone="${ZONE}" --remove-rich-rule="${r}" >/dev/null 2>&1 \
+                || warn "firewall-cmd --remove-rich-rule failed (zone ${ZONE}): ${r}"
+        done < <(firewall-cmd --zone="${ZONE}" --list-rich-rules 2>/dev/null)
+        if [ -n "${HS_LAN_PORT}" ]; then
+            for src in ${HS_LAN_SOURCES}; do
+                r="$(hs_lan_rule "${src}" "${HS_LAN_PORT}")"
+                firewall-cmd --zone="${ZONE}" --query-rich-rule="${r}" >/dev/null 2>&1 \
+                    || firewall-cmd --zone="${ZONE}" --add-rich-rule="${r}" >/dev/null 2>&1 \
+                    || warn "firewall-cmd --add-rich-rule failed (zone ${ZONE}) — headscale LAN control from ${src}"
+            done
+        fi
     fi
 else
     # No firewalld => nothing to admit here. EXPECTED on ARM images (deliberate
@@ -254,5 +307,5 @@ if [ -n "${UNPROTECTED}" ]; then
     error "firewalld layer reconciled (zone=${ZONE:-?}) but the nftables backstop is NOT loaded — exiting 1 (${UNPROTECTED})"
     exit 1
 fi
-log "applied: coturn-public=${PUBLIC} zone=${ZONE:-?} relay=${RELAY_MIN}-${RELAY_MAX}/udp headscale-stun=${HS_STUN_PORT:-none}"
+log "applied: coturn-public=${PUBLIC} zone=${ZONE:-?} relay=${RELAY_MIN}-${RELAY_MAX}/udp headscale-stun=${HS_STUN_PORT:-none} headscale-lan=${HS_LAN_PORT:-none}"
 exit 0

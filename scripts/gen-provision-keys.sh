@@ -129,6 +129,18 @@ SUPERDOMAIN="${SUPERDOMAIN:-}"
 # env/brand.conf < CLI flag.
 HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 
+# ── The pki node's LAN address (LAN-first control plane, before go-live) ────────
+# A worker's first boot happens before any public name exists, so it dials the pki
+# node's headscale on the LAN (provision.sh resolve_control_endpoint). That only
+# works when the address is REAL and does not move: give the pki a static IP or a
+# DHCP reservation and pass it here. It is stamped on EVERY stick as
+# provision.json .mesh.pki_lan_ip (the confirmed address the worker dials before
+# go-live) and as the pki row of .nodes[] (/etc/hosts, the control-plane name).
+# No mDNS: a name that only resolves on some LANs is not an address a worker can
+# rely on at first boot. Unset, nothing is stamped and the template's example pki
+# row (10.0.0.10) is left as it is — with a warning. (env: PKI_LAN_IP)
+PKI_LAN_IP="${PKI_LAN_IP:-}"
+
 # ── In-UI SSH-terminal key model: per-device sshd HOST + BFF DIAL keypairs ──────
 # The in-UI SSH terminal lets the BFF dial a device over the tailnet to drive an
 # operator console. That needs TWO per-device keypairs minted here, off-image-build:
@@ -261,6 +273,12 @@ Options:
                       node's headscale (provision.json .headscale.public_derp=true).
                       Default OFF: headscale's embedded relay only, so the mesh starts
                       and relays offline. (env/brand.conf: HEADSCALE_PUBLIC_DERP=true)
+      --pki-ip ADDR   The pki node's LAN IPv4 address — a STATIC IP or a DHCP
+                      reservation (RFC1918: 10/8, 172.16/12, 192.168/16). Stamped as
+                      provision.json .mesh.pki_lan_ip and the pki row of .nodes[] on
+                      every stick, so a worker dials the pki on the LAN before go-live
+                      instead of a public HEADSCALE_URL that cannot answer yet.
+                      (env: PKI_LAN_IP)
   -h, --help          Show this help.
 
   Mail/OAuth creds are OPTIONAL and ABSENT BY DEFAULT. NONINTERACTIVE=1 (or
@@ -297,6 +315,7 @@ while [[ $# -gt 0 ]]; do
         --foreign-mesh-trust) FOREIGN_MESH_TRUST_SRC="$2"; shift 2 ;;  # Phase 7: foreign-mesh PUBLIC verifying keys to stage
         --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;  # ALSO list the public Tailscale DERP map (default: embedded relay only)
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;          # mesh MagicDNS base_domain (permanently internal); default <BRAND>.internal
+        --pki-ip)      PKI_LAN_IP="$2"; shift 2 ;;           # the pki node's static/reserved LAN IPv4 (LAN-first control plane)
         --device-id)   DEVICE_ID="$2"; shift 2 ;;            # in-UI SSH terminal: per-device Vault-seed path segment
         --dial-user)   DIAL_USER="$2"; shift 2 ;;            # in-UI SSH terminal: unprivileged login the BFF dials as
         --no-device-ssh) GEN_DEVICE_SSH=false; shift ;;      # in-UI SSH terminal: skip host+dial keypair generation
@@ -310,6 +329,28 @@ case "${HEADSCALE_PUBLIC_DERP}" in
     false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
     *) echo "ERROR: HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')" >&2; exit 1 ;;
 esac
+# --pki-ip: checked BEFORE anything is built. A dotted-quad IPv4 in an RFC1918 range
+# — the tailnet's own 100.64/10, loopback, link-local and public addresses are not a
+# LAN address a worker can dial for the control plane.
+if [ -n "${PKI_LAN_IP}" ]; then
+    _pki_ok=false
+    if [[ "${PKI_LAN_IP}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+        _o1=$((10#${BASH_REMATCH[1]})); _o2=$((10#${BASH_REMATCH[2]}))
+        _o3=$((10#${BASH_REMATCH[3]})); _o4=$((10#${BASH_REMATCH[4]}))
+        if [ "${_o1}" -le 255 ] && [ "${_o2}" -le 255 ] && [ "${_o3}" -le 255 ] && [ "${_o4}" -le 255 ]; then
+            if [ "${_o1}" -eq 10 ] || { [ "${_o1}" -eq 172 ] && [ "${_o2}" -ge 16 ] && [ "${_o2}" -le 31 ]; } \
+               || { [ "${_o1}" -eq 192 ] && [ "${_o2}" -eq 168 ]; }; then
+                PKI_LAN_IP="${_o1}.${_o2}.${_o3}.${_o4}"   # canonical: no leading zeros
+                _pki_ok=true
+            fi
+        fi
+    fi
+    if [ "${_pki_ok}" != true ]; then
+        echo "ERROR: --pki-ip '${PKI_LAN_IP}' is not a private LAN IPv4 address (10.x, 172.16-31.x or 192.168.x) — give the pki node a static IP or a DHCP reservation on the LAN and pass that" >&2
+        exit 1
+    fi
+    unset _pki_ok _o1 _o2 _o3 _o4
+fi
 
 for t in openssl ssh-keygen python3; do
     command -v "$t" >/dev/null || { echo "ERROR: missing tool: $t" >&2; exit 1; }
@@ -496,6 +537,38 @@ json.dump(d, open(p, "w"), indent=2)
 open(p, "a").write("\n")
 PY
     echo "==> headscale DERP: public Tailscale DERP map OPTED IN -> ${PROV} (.headscale.public_derp=true)"
+fi
+
+# ── The pki node's LAN address -> provision.json (every stick) ─────────────────
+if [ -f "${PROV}" ]; then
+    if [ -n "${PKI_LAN_IP}" ]; then
+        PKI_IP="${PKI_LAN_IP}" python3 - "${PROV}" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+ip = os.environ["PKI_IP"]
+d = json.load(open(p))
+d.setdefault("mesh", {})["pki_lan_ip"] = ip
+nodes = d.get("nodes")
+if not isinstance(nodes, list):
+    nodes = d["nodes"] = []
+row = next((n for n in nodes if isinstance(n, dict) and n.get("role") == "pki"), None)
+if row is None:
+    nodes.insert(0, {"name": "hugmesh-pki", "ip": ip, "role": "pki"})
+else:
+    row["ip"] = ip
+json.dump(d, open(p, "w"), indent=2)
+open(p, "a").write("\n")
+PY
+        echo "==> pki LAN address: ${PKI_LAN_IP} -> ${PROV} (.mesh.pki_lan_ip + the pki row of .nodes[])"
+        echo "    workers dial https://${PKI_LAN_IP}:8080 before go-live — keep this address fixed (static IP or DHCP reservation)"
+    else
+        _tmpl_pki="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(next((n.get("ip","") for n in d.get("nodes") or [] if isinstance(n,dict) and n.get("role")=="pki"), ""))' "${PROV}" 2>/dev/null)"
+        echo "WARNING: no --pki-ip: the pki row of .nodes[] is still '${_tmpl_pki:-none}' (the template's example unless you edited it)." >&2
+        echo "         A worker then dials the baked HEADSCALE_URL (which cannot answer before go-live) or, with none" >&2
+        echo "         baked, that row. Pass --pki-ip with the pki node's static IP or DHCP reservation (env PKI_LAN_IP)" >&2
+        echo "         so workers find it on the LAN before go-live." >&2
+        unset _tmpl_pki
+    fi
 fi
 
 # ── Layer-B device-license registry: per-node identity + verifying key ─────────
