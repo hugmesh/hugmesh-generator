@@ -1118,6 +1118,9 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # gated suite, tests/scripts/test-keys-breakglass-root-key.sh (shell-suites.yml alpine job)
 # = 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree;
 # ungated SET stays 42.
+# MERGED (origin/main 267f1a0a into fix/worker-breakglass-root-key): main gated no new suite
+# since 3e020b2b, so this stays 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0
+# on the merged tree; ungated SET stays 42.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-235}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
