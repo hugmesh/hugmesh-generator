@@ -834,7 +834,11 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --skip-mesh           Don't install headscale/tailscale.
       --skip-tailscale      headscale only.
       --skip-kernel         Don't build the kernel.
-      --skip-clean          Keep docs/headers/symbols.
+      --skip-clean          Skip the sysroot size clean: keep docs/man/info,
+                            locales, static libraries, .pyc, debug symbols,
+                            all firmware and (uncached) the binpkg/distfiles
+                            cache. The build-only sudoers grant is removed
+                            and verified on every build regardless.
   Artifacts (.img + live ISO are the DEFAULT; installer ISO is opt-in):
       --no-img              Don't build the raw .img.
       --img-size MiB        ext4 root size in the .img (built COMPACT, not
@@ -3913,11 +3917,68 @@ else
     hmr_seed_marker_write "${BUILD_ROOT}" "${STAGE3_LOCAL}" || true
 fi
 
+# ── Build-only sudoers grant: removed on EVERY path, verified before packing ──
+# The block below gives the portage build user `NOPASSWD: ALL` inside the sysroot so
+# pkg_postinst can sudo without a tty. In an image that grant makes anything running
+# as portage (an on-device emerge, an ebuild phase on a CACHED image) root. Until
+# 2026-11-11 its removal sat inside `if ! ${SKIP_CLEAN}`, so every image built with
+# --skip-clean shipped it, and a build that failed left it in the sysroot.
+#   build_sudoers_strip  removes it: from the EXIT trap armed just before the write
+#                        (and from the chroot phase's trap, which replaces that one),
+#                        and inline at the top of the Clean phase, OUTSIDE the
+#                        --skip-clean block. Idempotent; a no-op without a sysroot.
+#   build_sudoers_gate   fails closed when the sysroot still carries it (the drop-in,
+#                        any portage NOPASSWD line, the build-added includedir).
+#                        Called before the stage4 tar and before the live-ISO
+#                        squash; the .img, fs.tar and installer ISO are built from
+#                        the stage4.
+# tests/scripts/test-x86-build-sudoers-strip.sh executes all of it.
+build_sudoers_strip() {
+    [ -n "${SYSROOT:-}" ] && [ -d "${SYSROOT}/etc" ] || return 0
+    [ "$(cd "${SYSROOT}" && pwd -P)" != / ] || return 0
+    rm -f "${SYSROOT}/etc/sudoers.d/build-notty"
+    # Revert main sudoers: restore requiretty and remove the includedir line we added
+    if [[ -f "${SYSROOT}/etc/sudoers" ]]; then
+        sed -i 's/^Defaults !requiretty/Defaults requiretty/' "${SYSROOT}/etc/sudoers"
+        sed -i '/^#includedir \/etc\/sudoers.d # build-added$/d' "${SYSROOT}/etc/sudoers"
+    fi
+}
+build_sudoers_gate() {
+    local f rc=0
+    [ -n "${SYSROOT:-}" ] && [ -d "${SYSROOT}/etc" ] \
+        || { err "build-only sudoers gate: no sysroot at '${SYSROOT:-}' to check"; return 1; }
+    if [ -e "${SYSROOT}/etc/sudoers.d/build-notty" ] || [ -L "${SYSROOT}/etc/sudoers.d/build-notty" ]; then
+        err "build-only sudoers gate: /etc/sudoers.d/build-notty is still in the sysroot"
+        rc=1
+    fi
+    # Any non-comment line naming portage (user or %group, alone or in a list) that
+    # carries NOPASSWD, in the main file or any drop-in, whatever the drop-in is called.
+    for f in "${SYSROOT}/etc/sudoers" "${SYSROOT}"/etc/sudoers.d/*; do
+        [ -f "${f}" ] || continue
+        if awk '/^[[:space:]]*#/ {next}
+                /NOPASSWD/ && /(^|[^[:alnum:]_.-])portage([^[:alnum:]_.-]|$)/ {hit=1}
+                END {exit !hit}' "${f}"; then
+            err "build-only sudoers gate: ${f#"${SYSROOT}"} grants the portage user NOPASSWD sudo"
+            rc=1
+        fi
+    done
+    if [ -f "${SYSROOT}/etc/sudoers" ] \
+       && grep -a -x -F '#includedir /etc/sudoers.d # build-added' "${SYSROOT}/etc/sudoers" >/dev/null 2>&1; then
+        err "build-only sudoers gate: /etc/sudoers still carries the build-added includedir line"
+        rc=1
+    fi
+    return "${rc}"
+}
+
 # Portage pkg_postinst calls sudo internally (as the portage build user); stage3
 # sudoers has requiretty which breaks non-interactive builds. Patch the main
 # sudoers file directly (sudoers.d may not be included by the stage3 default)
 # and grant the portage user NOPASSWD. These patches are inside the build sysroot
-# only and are never shipped — the cleanup section removes them before imaging.
+# only and are never shipped: build_sudoers_strip (above) removes them on every
+# path, --skip-clean included, and build_sudoers_gate refuses to pack them.
+# The trap goes up BEFORE the write, so a build that dies anywhere from here to the
+# chroot phase (whose own trap also strips) leaves no grant behind.
+trap 'build_sudoers_strip || true' EXIT
 if [[ -f "${SYSROOT}/etc/sudoers" ]]; then
     sed -i 's/^Defaults\s\+requiretty/Defaults !requiretty/' "${SYSROOT}/etc/sudoers"
     # Ensure sudoers.d drop-ins are loaded (stage3 may omit this)
@@ -5674,7 +5735,9 @@ umount_chroot() {
     fi
     for m in run dev sys proc; do umount -lR "${SYSROOT}/$m" 2>/dev/null || true; done
 }
-trap umount_chroot EXIT
+# Replaces the build-only sudoers trap armed at the grant (bash has one EXIT slot),
+# so it strips that grant too: a build that fails in the chroot phase leaves none.
+trap 'build_sudoers_strip || true; umount_chroot' EXIT
 mount_chroot
 # A resumed build system must be able to LINK before anything is emerged: the
 # static restore above (4b) is the fix, this is the proof, in seconds instead
@@ -7203,6 +7266,11 @@ fi
 
 # ── 8. Clean ───────────────────────────────────────────────────────
 umount_chroot; trap - EXIT
+# The build-only sudoers grant goes HERE, on every path and before anything below can
+# exit: --skip-clean keeps docs, locales, static libraries and symbols, never a root
+# grant for the portage user. build_sudoers_gate checks the result before each pack.
+build_sudoers_strip
+info "Removed the build-only sudoers grant (portage NOPASSWD drop-in, requiretty and includedir patches)"
 # Guard (shared-binpkg): the shared-pool bind must be DETACHED before ANYTHING
 # below touches var/cache/binpkgs — the uncached clean's rm -rf through a live
 # bind would empty the FLEET's pool, and the --cached embed below would copy the
@@ -7236,14 +7304,8 @@ if ${ISO_CACHED:-false} && [ -n "${X86_POOL_DIR}" ]; then
 fi
 if ! ${SKIP_CLEAN}; then
     banner "Cleaning sysroot"
-    # Remove build-only sudoers patches (added to allow portage pkg_postinst to run
-    # sudo without a tty; not needed or wanted in the deployed image).
-    rm -f "${SYSROOT}/etc/sudoers.d/build-notty"
-    # Revert main sudoers: restore requiretty and remove the includedir line we added
-    if [[ -f "${SYSROOT}/etc/sudoers" ]]; then
-        sed -i 's/^Defaults !requiretty/Defaults requiretty/' "${SYSROOT}/etc/sudoers"
-        sed -i '/^#includedir \/etc\/sudoers.d # build-added$/d' "${SYSROOT}/etc/sudoers"
-    fi
+    # (The build-only sudoers grant is NOT removed here: it went at the top of this
+    # phase, unconditionally — see build_sudoers_strip.)
     # Build-artifact bloat: binpkgs (~2.4 GiB), distfiles, docs, tmp.
     # CACHED ISO (--cached) KEEPS the binpkg cache (+ distfiles) so the installed
     # system can rebuild/extend packages OFFLINE and reinstall fast; UNCACHED prunes
@@ -7448,6 +7510,9 @@ if ! ${ROLE_CLIENT}; then
     info "NetworkManager: INACTIVE_TIMEOUT=60 (cluster node — need-net services wait for the link)"
 fi
 
+# Last look before the first pack (the stage4 is also what the .img, fs.tar and
+# installer ISO are built from): no build-only sudoers grant may ride into it.
+build_sudoers_gate || { err "the sysroot carries a build-only sudoers grant — refusing to pack it"; exit 1; }
 banner "Packaging stage4 tarball"
 # The role tag IS the role. It only ever translated because `be+gpu` carried a `+`
 # that is illegal in a filename-ish token; `backend-gpu` is filename-safe, so the
@@ -7913,6 +7978,8 @@ CHROOT
         # PLACE (same inode, label kept); live_label_gate probes it on the packed image.
         slx_label_tree "${SYSROOT}" "${SLX_TYPE}" \
             || { err "live pack: SELinux label pass failed — not squashing an unlabelled root"; exit 1; }
+        # The live root is squashed from the sysroot itself, after a second chroot.
+        build_sudoers_gate || { err "live pack: the sysroot carries a build-only sudoers grant — not squashing it"; exit 1; }
         rm -f "${ISO_DIR}/LiveOS/squashfs.img"
         # The live root must NOT carry the installed image's fstab (see the live-ISO
         # root pack helpers next to umount_chroot): swap it for the live one for the

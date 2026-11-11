@@ -1131,11 +1131,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-edge-ai-analysis-ssrf.sh, named by shell-suites.yml's debian
 # edge-ai-analysis leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on
 # the branch over origin/main 39b953ad: 238 of 280.
-# MERGED (origin/main b3eafff5 into akkoma-own-image-v3.20.1): main 238 of 280 + this
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
+# MERGED (origin/main aedbb1fd into akkoma-own-image-v3.20.1): main 239 of 281 (#983) + this
 # branch's ONE gated suite, tests/scripts/test-akkoma-image-pin.sh (shell-suites.yml
-# debian leg 1) = 239 of 281, MEASURED by running this file with GUARD_PREMERGE=0 on the
+# debian leg 1) = 240 of 282, MEASURED by running this file with GUARD_PREMERGE=0 on the
 # merged tree. PREMERGE_UNGATED is untouched.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-239}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-240}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
