@@ -508,6 +508,11 @@ jobs:
     # Hosted on purpose: `sudo apt-get` below cannot run on the Gentoo self-hosted runner.
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      # This bundle's file name when its own --self-check placed the generator tree it
+      # carries and checked that tree; empty otherwise. The publish job turns it into
+      # "generatorSeed" in releases.json and the "nothing to clone" line of the notes.
+      generator_seed: ${{ steps.seed.outputs.generator_seed }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
@@ -613,6 +618,46 @@ jobs:
             exit 1
           fi
 
+      - name: Record whether the bundle carries the generator it placed
+        id: seed
+        working-directory: studio/packaging/flatpak
+        # The release notes and the site's Downloads page tell a user there is nothing to
+        # clone ONLY for a file named in this job output. So the fact comes from what the
+        # bundle's own --self-check above did, never from its kind: it found the seed in
+        # the installed bundle, placed it without an error, and the tree the Studio
+        # resolved and checked IS that placed copy. Anything less writes an empty value
+        # and a warning, and the file is then listed as one that still needs a clone.
+        # The MSI and the tarball carry no seed yet, so their jobs have no such step.
+        run: |
+          python3 - "hugmesh-studio-${VERSION}-x86_64.flatpak" <<'PY'
+          import json, os, sys
+          name, why, placed = sys.argv[1], "", {}
+          try:
+              with open("self-check.json", encoding="utf-8") as fh:
+                  report = json.load(fh)
+          except (OSError, ValueError) as exc:
+              report, why = {}, f"self-check.json is unreadable ({exc})"
+          if not why and not isinstance(report, dict):
+              why = "self-check.json is not a report"
+          if not why:
+              placed = report.get("placed") if isinstance(report.get("placed"), dict) else {}
+              if not report.get("seed"):
+                  why = "the self-check found no seed in the bundle"
+              elif placed.get("error") or not placed.get("path"):
+                  why = f"the seed was not placed ({placed.get('error') or 'no path'})"
+              elif report.get("generator_dir") != placed.get("path"):
+                  why = (f"the Studio checked {report.get('generator_dir')}, not the placed "
+                         f"copy {placed.get('path')}")
+              elif report.get("problems"):
+                  why = "the self-check reported problems"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"generator_seed={'' if why else name}\n")
+          if why:
+              print(f"::warning::{name} is NOT recorded as carrying the generator: {why}")
+          else:
+              print(f"{name} carries the generator tree it placed at {placed['path']}")
+          PY
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: flatpak
@@ -638,6 +683,10 @@ jobs:
     # app's Qt-FREE path and so proves nothing about the aarch64 wheels.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
+    outputs:
+      # As in the x86_64 job: this bundle's file name only when its own --self-check
+      # placed and checked the generator tree it carries.
+      generator_seed: ${{ steps.seed.outputs.generator_seed }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
       ARCH: aarch64
@@ -729,6 +778,42 @@ jobs:
             exit 1
           fi
 
+      - name: Record whether the bundle carries the generator it placed
+        id: seed
+        working-directory: studio/packaging/flatpak
+        # The twin of the x86_64 job's step (tests/test_studio_release_signing.py holds the
+        # two together): the file name only when this bundle's own --self-check placed the
+        # seed it carries and checked that placed tree; empty and a warning otherwise.
+        run: |
+          python3 - "hugmesh-studio-${VERSION}-${ARCH}.flatpak" <<'PY'
+          import json, os, sys
+          name, why, placed = sys.argv[1], "", {}
+          try:
+              with open("self-check.json", encoding="utf-8") as fh:
+                  report = json.load(fh)
+          except (OSError, ValueError) as exc:
+              report, why = {}, f"self-check.json is unreadable ({exc})"
+          if not why and not isinstance(report, dict):
+              why = "self-check.json is not a report"
+          if not why:
+              placed = report.get("placed") if isinstance(report.get("placed"), dict) else {}
+              if not report.get("seed"):
+                  why = "the self-check found no seed in the bundle"
+              elif placed.get("error") or not placed.get("path"):
+                  why = f"the seed was not placed ({placed.get('error') or 'no path'})"
+              elif report.get("generator_dir") != placed.get("path"):
+                  why = (f"the Studio checked {report.get('generator_dir')}, not the placed "
+                         f"copy {placed.get('path')}")
+              elif report.get("problems"):
+                  why = "the self-check reported problems"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"generator_seed={'' if why else name}\n")
+          if why:
+              print(f"::warning::{name} is NOT recorded as carrying the generator: {why}")
+          else:
+              print(f"{name} carries the generator tree it placed at {placed['path']}")
+          PY
+
       - name: Smoke-test the bundle (Qt starts offscreen on the aarch64 wheels)
         working-directory: studio/packaging/flatpak
         # The same check as build-flatpak-local.sh's smoke test 2: PySide6 (not a PyQt6
@@ -793,6 +878,11 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       AUTHENTICODE: ${{ needs.msi.outputs.authenticode }}
+      # The installers that carry the hugmesh-generator tree, by file name, each named
+      # only by the job whose own --self-check proved it ("Record whether the bundle
+      # carries the generator it placed"). Read by releases.json and the release notes.
+      # The MSI and the tarball carry no seed yet, so nothing names them here.
+      GENERATOR_SEED: ${{ needs.flatpak.outputs.generator_seed }} ${{ needs.flatpak-aarch64.outputs.generator_seed }}
     steps:
       - name: Never overwrite a published release
         # RED, NOT A GREEN SKIP. An existing release stops this job with an error
@@ -902,16 +992,28 @@ jobs:
         # field added for signing (per-installer "sbom", top-level "checksums",
         # "signature", "provenance", "verify") is additive: the page ignores keys it does
         # not know. A "linux" + "tarball" entry is listed with the Linux downloads, and
-        # the two "linux" + "flatpak" entries carry an "arch" (x86_64 or aarch64).
+        # the two "linux" + "flatpak" entries carry an "arch" (x86_64 or aarch64). Every
+        # entry carries "generatorSeed": true only for a file GENERATOR_SEED names, and
+        # the page then drops its "clone hugmesh-generator" step for that file.
         run: |
           python3 - <<'PY'
           import hashlib, json, os, pathlib, datetime
           version = os.environ["VERSION"]
           repo = os.environ["GITHUB_REPOSITORY"]
           signed = os.environ.get("AUTHENTICODE") == "true"
+          # File names whose build job proved they carry the generator tree (the publish
+          # job's GENERATOR_SEED). Absent or empty means none: never inferred from a kind.
+          seeded = set(os.environ.get("GENERATOR_SEED", "").split())
           tag = f"studio-v{version}"
           base = f"https://github.com/{repo}/releases/download/{tag}"
           release = pathlib.Path("release")
+
+          def generator_note(name):
+              if name in seeded:
+                  return ("Carries the hugmesh-generator build scripts of this release and "
+                          "sets them up on first start, so there is nothing to clone. ")
+              return ("Does not include the hugmesh-generator build scripts yet: on first "
+                      "start Studio asks for the folder you cloned hugmesh-generator into. ")
 
           def entry(path, platform, kind, label, notes, sbom):
               data = path.read_bytes()
@@ -924,21 +1026,26 @@ jobs:
                   "size": f"{len(data) / (1024 * 1024):.0f} MB",
                   "sha256": hashlib.sha256(data).hexdigest(),
                   "notes": notes,
+                  # Read by the site's Downloads page: true only for a file named above.
+                  "generatorSeed": path.name in seeded,
               }
               if sbom and (release / sbom).exists():
                   out["sbom"] = f"{base}/{sbom}"
               return out
 
-          msi_note = ("Per-user install, no administrator rights required. "
+          def msi_note(name):
+              return ("Per-user install, no administrator rights required. "
                       + ("Authenticode-signed. " if signed else
                          "Not code-signed yet, so Windows SmartScreen will warn on first run; "
                          "verify the checksum and the GitHub attestation before running it. ")
+                      + generator_note(name)
                       + "Building images additionally needs Docker Desktop.")
           installers = []
           for path in sorted(release.iterdir()):
               if path.name.endswith(".msi"):
                   installers.append(entry(path, "windows", "msi", "Windows installer (x64)",
-                                          msi_note, f"hugmesh-studio-{version}-windows-x64.spdx.json"))
+                                          msi_note(path.name),
+                                          f"hugmesh-studio-{version}-windows-x64.spdx.json"))
               elif path.name.endswith(".flatpak"):
                   # One bundle per architecture, named hugmesh-studio-<version>-<arch>.flatpak
                   # by the flatpak jobs; the label and the arch field say which is which.
@@ -950,8 +1057,8 @@ jobs:
                       "Install with: flatpak install --user ./" + path.name + " (needs the "
                       "org.kde.Platform 6.11 runtime for " + arch + "; the bundle names Flathub "
                       "as its source, so the install offers to add that remote and fetch it). "
-                      "Point it at a hugmesh-generator checkout on first run; building images "
-                      "needs Docker on the host.", None)
+                      + generator_note(path.name)
+                      + "Building images needs Docker on the host.", None)
                   item["arch"] = arch
                   installers.append(item)
               elif path.name.endswith(".tar.gz"):
@@ -959,7 +1066,8 @@ jobs:
                       path, "linux", "tarball", "Linux tarball (x86_64, glibc 2.39+)",
                       "Unpack and run hugmesh-studio-" + version + "-linux-x86_64/hugmesh-studio. "
                       "No install step; needs glibc 2.39 or newer (Ubuntu 24.04, Debian 13, "
-                      "Fedora 40 or later). Older systems: use the Flatpak.",
+                      "Fedora 40 or later). Older systems: use the Flatpak. "
+                      + generator_note(path.name).rstrip(),
                       f"hugmesh-studio-{version}-linux-x86_64.spdx.json"))
 
           workflow = f"{repo}/.github/workflows/studio-release.yml"
@@ -1042,6 +1150,25 @@ jobs:
             win_sign="It is **not code-signed** yet (no certificate is configured), so SmartScreen will warn on first run. Verify it as below before running it."
           fi
           case "$VERSION" in *-*) stage=" (beta, pre-release)" ;; *) stage="" ;; esac
+          # Which files carry the hugmesh-generator tree: only those GENERATOR_SEED names
+          # (each proved by its own job's --self-check), never inferred from the kind.
+          gen_with=""
+          gen_without=""
+          for f in "hugmesh-studio-$VERSION-x64.msi" "hugmesh-studio-$VERSION-x86_64.flatpak" \
+                   "hugmesh-studio-$VERSION-aarch64.flatpak" "hugmesh-studio-$VERSION-linux-x86_64.tar.gz"; do
+            case " ${GENERATOR_SEED:-} " in
+              *" $f "*) gen_with="$gen_with${gen_with:+, }\`$f\`" ;;
+              *) gen_without="$gen_without${gen_without:+, }\`$f\`" ;;
+            esac
+          done
+          gen_with_note=""
+          gen_without_note=""
+          if [ -n "$gen_with" ]; then
+            gen_with_note="These carry the \`hugmesh-generator\` build scripts and cluster specs of this release, and Studio sets them up on first start, so there is nothing to clone: $gen_with."
+          fi
+          if [ -n "$gen_without" ]; then
+            gen_without_note="These do not include the \`hugmesh-generator\` build scripts yet: $gen_without. On first start Studio asks for the folder you cloned \`hugmesh-generator\` into (\`git clone https://github.com/hugmesh/hugmesh-generator\`)."
+          fi
           cat > release-notes.md <<EOF
           HugMesh Image Studio $VERSION$stage.
           ${replaced_note:+
@@ -1053,7 +1180,11 @@ jobs:
 
           **Linux aarch64** (ARM64: Raspberry Pi 4/5 desktops, Apple-silicon VMs, Ampere machines): \`hugmesh-studio-$VERSION-aarch64.flatpak\`, built on GitHub's hosted arm64 runner from the same manifest and installed the same way (\`flatpak install --user ./hugmesh-studio-$VERSION-aarch64.flatpak\`). There is no aarch64 tarball.
 
-          Every bundle carries its architecture in its name; \`flatpak install\` refuses one built for another architecture. All packages contain the same application. The Studio drives host tooling (Docker, QEMU, kubectl) rather than replacing it, and needs a \`hugmesh-generator\` checkout to read build scripts and cluster specs from: point it at one on first run.
+          Every bundle carries its architecture in its name; \`flatpak install\` refuses one built for another architecture. All packages contain the same application. The Studio drives host tooling (Docker, QEMU, kubectl) rather than replacing it.
+
+          $gen_with_note
+
+          $gen_without_note
 
           ## Verify what you downloaded
 
