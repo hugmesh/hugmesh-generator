@@ -516,3 +516,164 @@ def test_site_dispatch_sends_releases_updated(tmp_path):
     steps = _jobs()["publish"]["steps"]
     assert steps[-1] is step or steps[-1] == step
     assert "if" not in step
+
+
+# ── which packages carry the generator tree (the "nothing to clone" claim) ──────────
+SEED_STEP = "Record whether the bundle carries the generator it placed"
+FLATPAK_JOBS = {"flatpak": "x86_64", "flatpak-aarch64": "aarch64"}
+
+
+def _all_installers(rel):
+    names = [f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-x86_64.flatpak",
+             f"hugmesh-studio-{VERSION}-aarch64.flatpak",
+             f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"]
+    for name in names:
+        (rel / name).write_bytes(b"x" * 2048)
+    return names
+
+
+def _self_check(placed_path="/home/runner/.local/share/hugmesh-studio/generator", **change):
+    report = {"generator_dir": placed_path, "in_flatpak": True, "problems": [],
+              "seed": {"dir": "/app/share/hugmesh-studio", "version": VERSION,
+                       "commit": "0" * 40, "files": 3302},
+              "placed": {"path": placed_path, "action": "seeded", "error": ""}}
+    report.update(change)
+    return report
+
+
+def _seed_fact(job, tmp_path, report):
+    """Run the job's own seed-fact step against a self-check report; return what it wrote
+    to GITHUB_OUTPUT and the process."""
+    step = _step(job, SEED_STEP)
+    work = tmp_path / job
+    work.mkdir(exist_ok=True)
+    if report is not None:
+        (work / "self-check.json").write_text(
+            report if isinstance(report, str) else json.dumps(report))
+    elif (work / "self-check.json").exists():
+        (work / "self-check.json").unlink()
+    out = work / "github_output"
+    out.write_text("")
+    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_OUTPUT": str(out),
+           **({"ARCH": _jobs()[job]["env"]["ARCH"]} if "ARCH" in _jobs()[job].get("env", {}) else {})}
+    proc = _run_bash(step["run"], env, work)
+    return out.read_text(), proc
+
+
+@pytest.mark.parametrize("job", sorted(FLATPAK_JOBS))
+def test_each_flatpak_job_records_the_seed_only_from_its_own_self_check(tmp_path, job):
+    """The site and the notes stop telling a user to clone only for a file whose OWN
+    installed self-check placed the bundled tree and checked that tree. Never from the
+    kind: a Flatpak whose report says anything less is recorded as not carrying it."""
+    arch = FLATPAK_JOBS[job]
+    name = f"hugmesh-studio-{VERSION}-{arch}.flatpak"
+    steps = [s.get("name") for s in _jobs()[job]["steps"]]
+    assert steps.index(SEED_STEP) == steps.index(
+        "Smoke-test the bundle (--self-check, the generator tree it carries)") + 1
+    step = _step(job, SEED_STEP)
+    assert step["id"] == "seed" and step["working-directory"] == "studio/packaging/flatpak"
+    assert _jobs()[job]["outputs"]["generator_seed"] == "${{ steps.seed.outputs.generator_seed }}"
+
+    written, proc = _seed_fact(job, tmp_path, _self_check())
+    assert proc.returncode == 0, proc.stderr
+    assert written == f"generator_seed={name}\n", written
+
+    refused = {
+        "no seed in the bundle": _self_check(seed=None),
+        "placing failed": _self_check(placed={"path": "", "action": "", "error": "disk full"}),
+        # The same path as the tree checked, so only the error itself can refuse it.
+        "placed with an error": _self_check(placed={
+            "path": _self_check()["generator_dir"], "action": "seeded", "error": "sha256 mismatch"}),
+        "checked another tree": _self_check(generator_dir="/home/runner/work/hugmesh-generator"),
+        "problems reported": _self_check(problems=["make foo is not defined"]),
+        "not an object": "[1, 2]",
+        "not JSON": "garbage",
+        "no report at all": None,
+    }
+    for why, report in refused.items():
+        written, proc = _seed_fact(job, tmp_path, report)
+        assert proc.returncode == 0, (why, proc.stderr)
+        assert written == "generator_seed=\n", (why, written)
+        assert f"::warning::{name} is NOT recorded as carrying the generator" in proc.stdout, why
+
+
+def test_the_two_seed_fact_steps_are_twins():
+    x86 = _step("flatpak", SEED_STEP)["run"]
+    arm = _step("flatpak-aarch64", SEED_STEP)["run"]
+    assert x86.replace('"hugmesh-studio-${VERSION}-x86_64.flatpak"',
+                       '"hugmesh-studio-${VERSION}-${ARCH}.flatpak"') == arm
+
+
+def test_publish_reads_the_seed_facts_of_both_flatpak_jobs_only():
+    seed = _jobs()["publish"]["env"]["GENERATOR_SEED"]
+    assert seed.split() == ["${{", "needs.flatpak.outputs.generator_seed", "}}",
+                            "${{", "needs.flatpak-aarch64.outputs.generator_seed", "}}"], seed
+    # The MSI and the tarball carry no seed yet; their jobs must not claim one by kind.
+    for job in ("msi", "linux"):
+        assert "generator_seed" not in (_jobs()[job].get("outputs") or {}), job
+
+
+@pytest.mark.parametrize("seeded", ["both-flatpaks", "none"])
+def test_releases_json_says_per_file_whether_it_carries_the_generator(tmp_path, seeded):
+    script = _step("publish", "Generate releases.json for the documentation site")["run"]
+    rel = tmp_path / "release"
+    rel.mkdir()
+    names = _all_installers(rel)
+    flatpaks = [n for n in names if n.endswith(".flatpak")]
+    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+           "AUTHENTICODE": "false",
+           # As the publish job's env renders it: an empty output leaves a lone space.
+           "GENERATOR_SEED": " ".join(flatpaks) if seeded == "both-flatpaks" else " "}
+    proc = _run_bash(script, env, tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads((rel / "releases.json").read_text())
+    for item in data["installers"]:
+        carries = seeded == "both-flatpaks" and item["kind"] == "flatpak"
+        assert item["generatorSeed"] is carries, item
+        assert "Point it at a hugmesh-generator checkout" not in item["notes"]
+        if carries:
+            assert "nothing to clone" in item["notes"], item["notes"]
+            assert "clone" not in item["notes"].replace("nothing to clone", ""), item["notes"]
+        else:
+            assert "does not include the hugmesh-generator build scripts yet" in item["notes"].lower(), item
+            assert "folder you cloned hugmesh-generator into" in item["notes"], item["notes"]
+
+
+def test_releases_json_without_seed_facts_claims_nothing(tmp_path):
+    # An older caller (or a hand run) with no GENERATOR_SEED at all: every file says false.
+    script = _step("publish", "Generate releases.json for the documentation site")["run"]
+    rel = tmp_path / "release"
+    rel.mkdir()
+    _all_installers(rel)
+    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+           "AUTHENTICODE": "false"}
+    proc = _run_bash(script, env, tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads((rel / "releases.json").read_text())
+    assert [i["generatorSeed"] for i in data["installers"]] == [False] * 4
+
+
+@pytest.mark.parametrize("seeded", ["both-flatpaks", "none"])
+def test_release_notes_say_per_file_whether_a_clone_is_needed(tmp_path, seeded):
+    script = _step("publish", "Write the release notes")["run"]
+    flatpaks = [f"hugmesh-studio-{VERSION}-{arch}.flatpak" for arch in FLATPAK_ARCHES]
+    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+           "AUTHENTICODE": "false",
+           "GENERATOR_SEED": " ".join(flatpaks) if seeded == "both-flatpaks" else " "}
+    proc = _run_bash(script, env, tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    notes = (tmp_path / "release-notes.md").read_text()
+    assert "point it at one on first run" not in notes
+    with_line = next((l for l in notes.splitlines() if "nothing to clone" in l), "")
+    without_line = next((l for l in notes.splitlines() if "do not include" in l), "")
+    others = [f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"]
+    if seeded == "both-flatpaks":
+        for name in flatpaks:
+            assert f"`{name}`" in with_line and f"`{name}`" not in without_line, name
+        for name in others:
+            assert f"`{name}`" in without_line and f"`{name}`" not in with_line, name
+    else:
+        assert with_line == "", with_line
+        for name in flatpaks + others:
+            assert f"`{name}`" in without_line, name
+    assert "git clone https://github.com/hugmesh/hugmesh-generator" in without_line

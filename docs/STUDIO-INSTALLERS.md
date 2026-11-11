@@ -1,10 +1,17 @@
 # Studio installers — Windows MSI, Linux Flatpak and Linux tarball
 
-The HugMesh Image Studio runs from a checkout (`studio/hugmesh-studio`, or
-`python -m hugmesh_studio`). That is still the main way to use it. The installers
-exist for people who do not want to set up a Python environment first.
+The usual way to get the HugMesh Image Studio is a package from the
+[Downloads page](https://hugmesh.net/downloads) or the GitHub releases. There are four: a
+Windows MSI, a Flatpak bundle for x86_64 Linux, one for aarch64 Linux, and an x86_64 Linux
+tarball. A checkout is for developers. It is also the way to do what the Flatpak refuses
+(native sudo builds and writing images to devices), and to run the Studio on macOS and BSD,
+which have no package yet. See
+["Developer: run the Studio from a checkout"](#developer-run-the-studio-from-a-checkout).
 
-They package **the same code**. Nothing is added or removed for a packaged build.
+Every package holds **the same application code**. The Flatpaks also carry the
+hugmesh-generator build scripts of their own release. The MSI and the tarball do not include
+them yet. ["What a package gives you"](#what-a-package-gives-you) says what that means on
+first start.
 
 **To release one:** `scripts/release-studio.sh <version>`. That is the whole procedure;
 ["Cutting a release"](#cutting-a-release) below explains what it does and the one
@@ -68,20 +75,35 @@ Artifact attestations need the repository to be **public** on this org's plan. O
 private repository the attest step fails and the workflow creates no release, so the
 first release must be tagged after the repository is public.
 
-## What an installer does and does not give you
+## What a package gives you
 
 The Studio is a **front end over host tooling**. It shells out to `docker`, `make`,
-`bash`, `qemu`, `kubectl`, `lsblk` and `ssh`, and it reads the build scripts and
-cluster specs out of a `hugmesh-generator` checkout. An installer packages the app.
-It cannot package the things the app drives.
+`bash`, `qemu`, `kubectl`, `lsblk` and `ssh`. It runs the build scripts and reads the
+cluster specs of a `hugmesh-generator` tree. A package can carry that tree, but not the
+host tools.
 
-So, after installing:
+| Package | The hugmesh-generator build scripts | On first start |
+|---|---|---|
+| Flatpak, x86_64 and aarch64 (0.4.4-beta.1 and later) | **Included.** The bundle carries the tree of its own release (`share/hugmesh-studio/generator-seed.tar.gz`). | Studio places that copy in `~/.local/share/hugmesh-studio/generator` and uses it. There is nothing to clone. |
+| Windows MSI, Linux tarball | **Not included yet** ([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). | Studio shows *Choose your hugmesh-generator folder*. Clone `hugmesh-generator` (`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and Studio remembers it. |
 
-- **You still need a `hugmesh-generator` checkout.** Start the Studio with
-  `--generator-dir <path>`. Without that flag it uses the current directory. No GUI
-  dialog sets it, and the Start Menu shortcut passes no arguments and starts in the
-  install folder, so the shortcut finds no checkout. Without a checkout there are no
-  build scripts to run and no cluster specs to read.
+How the copy works and what overrides it:
+
+- **Upgrades.** Each Flatpak upgrade refreshes the placed copy to the new release. It
+  keeps your `out/`, `keys-out/` and `tests/stack/.env`.
+- **What takes precedence.** The Studio uses the first of these that is a real checkout:
+  `--generator-dir <path>`, `$HUGMESH_GENERATOR_DIR`, the checkout it is running from,
+  the working directory, a folder you picked in an earlier start, and only then the copy a
+  package carries. So a clone you name or pick still wins over the package's copy.
+- **Checking it.** `flatpak run org.hugmesh.ImageStudio --self-check` says which tree it
+  resolved and whether every script the Studio runs is there.
+- **The release data.** `releases.json` records per file whether that file carries the tree
+  (`"generatorSeed"`). The release job sets it only for a file whose own
+  `--self-check` placed and checked the bundled tree, and the
+  [Downloads page](https://hugmesh.net/downloads) drops its clone step for that file.
+
+After installing any package:
+
 - **Building images still needs Docker** (any OS), or a Gentoo host for a native
   build. The Studio's own preflight says so when a build is dispatched.
 - **Flashing a device and running an emulated mesh** need host access to block
@@ -95,6 +117,13 @@ refuses a machine the app runs on only teaches people to switch checks off.
 
 The MSI installs **per-user**, under `%LOCALAPPDATA%\HugMesh\Image Studio`. It needs
 no administrator rights and shows no UAC prompt.
+
+It does not include the hugmesh-generator build scripts yet
+([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). So on first start the
+Studio shows *Choose your hugmesh-generator folder*. Clone the repository
+(`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and the
+Studio remembers it for later starts. The Start Menu shortcut passes no arguments, so this
+chooser is the way to set the folder there.
 
 It is **not Authenticode-signed** yet; no certificate is configured. SmartScreen will
 warn you the first time you run it. Verify it as in "Verifying a download" above, or at
@@ -115,17 +144,40 @@ Get-FileHash .\hugmesh-studio-0.3.0-beta.1-x64.msi -Algorithm SHA256
 
 ## Linux
 
-The bundle needs the `org.kde.Platform` 6.11 runtime (the app is Qt, and the KDE
-runtime already ships Qt; building against GNOME would mean bundling all of Qt). Since
-this change the bundle also says where that runtime comes from (`flatpak build-bundle
---runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo`): when the installation
-has no remote with that URL, `flatpak install` asks to add it as `flathub`, then fetches
-the runtime before the app. On a machine with **no Flatpak remotes at all**:
+**The Flatpak.** Install the bundle for your machine's architecture, then start it:
 
 ```bash
 flatpak install --user ./hugmesh-studio-<version>-x86_64.flatpak
-flatpak run org.hugmesh.ImageStudio --generator-dir ~/Github/hugmesh-generator
+flatpak run org.hugmesh.ImageStudio
 ```
+
+The Flatpak carries the hugmesh-generator tree of its own release, so there is nothing
+to clone. On first start it places that copy in `~/.local/share/hugmesh-studio/generator`
+and uses it. An upgrade keeps your `out/`, `keys-out/` and `tests/stack/.env` there. A
+clone you name with `--generator-dir`, or picked in an earlier start, still wins. It
+builds with the host's Docker, which it reaches through `flatpak-spawn --host`. Native
+(sudo) builds and writing images to devices need the Studio run from a checkout.
+`flatpak run org.hugmesh.ImageStudio --self-check` says whether all of that works here.
+
+**The tarball** (x86_64 only; needs glibc 2.39 or newer: Ubuntu 24.04, Debian 13,
+Fedora 40 or later) has no install step:
+
+```bash
+tar -xzf hugmesh-studio-<version>-linux-x86_64.tar.gz
+./hugmesh-studio-<version>-linux-x86_64/hugmesh-studio
+```
+
+It does not include the hugmesh-generator build scripts yet
+([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). On first start it asks
+for the folder you cloned `hugmesh-generator` into, and remembers your pick.
+
+The Flatpak bundle needs the `org.kde.Platform` 6.11 runtime. The app is Qt, and the KDE
+runtime already ships Qt; building against GNOME would mean bundling all of Qt. The
+bundle also says where that runtime comes from (`flatpak build-bundle
+--runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo`). When the installation
+has no remote with that URL, `flatpak install` asks to add it as `flathub`, then fetches
+the runtime before the app. So the install above works even on a machine with **no
+Flatpak remotes at all**.
 
 On an ARM64 machine the file is `hugmesh-studio-<version>-aarch64.flatpak` and the
 commands are the same. Each bundle carries its architecture in its name, and `flatpak
@@ -162,14 +214,6 @@ flatpak install --user -y flathub org.kde.Platform//6.8
 flatpak install --user ./hugmesh-studio-0.3.0-beta.1-x86_64.flatpak
 ```
 
-The Flatpak carries the hugmesh-generator tree of its own release: with no
-`--generator-dir` and no clone it places that copy in
-`~/.local/share/hugmesh-studio/generator` on first start (an upgrade keeps your `out/`,
-`keys-out/` and `tests/stack/.env` there) and uses it; a clone you name or pick still
-wins. It builds with the host's Docker, which it reaches through `flatpak-spawn --host`;
-native (sudo) builds and writing images to devices need the Studio run from a checkout.
-`flatpak run org.hugmesh.ImageStudio --self-check` says whether all of that works here.
-
 The manifest requests `--filesystem=host` and `--talk-name=org.freedesktop.Flatpak`.
 Those grants are broad. They let the app use a generator tree under your home and run
 host `docker`/`qemu` through `flatpak-spawn --host`. If you would rather not grant them, run the Studio from a checkout; it
@@ -201,6 +245,27 @@ for provisioning to close, not for this bundle to pretend; the Studio for such a
 is the tarball or a checkout, neither of which touches Flatpak, or a build of the
 bundle whose `--runtime-repo` names the domain registry once that carries the KDE
 runtime.
+
+## Developer: run the Studio from a checkout
+
+A packaged Studio needs none of this. Run it from a checkout when you:
+
+- change the Studio or the build scripts;
+- need a native (sudo) Gentoo build or want to write images to devices, which the
+  Flatpak refuses;
+- are on macOS or BSD, which have no package yet.
+
+```bash
+git clone https://github.com/hugmesh/hugmesh-generator
+cd hugmesh-generator/studio
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+./hugmesh-studio            # Windows: hugmesh-studio.bat
+```
+
+A Studio run from a checkout drives that same checkout, with no flag.
+`python -m hugmesh_studio` from `studio/` does the same thing. On Linux,
+`scripts/studio-launch.sh` is a guided launcher that offers to create the venv for you.
 
 ## Versions
 
