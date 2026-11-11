@@ -8,7 +8,11 @@
 #   1. provision.json .headscale.server_url
 #   2. provision.json .mesh.endpoint
 #   3. the baked brand var HEADSCALE_URL (/etc/hugmesh/headscale-url)
-#   4. DEFAULT: http://<the pki node's primary LAN IPv4>:8080
+#   4. DEFAULT: https://<the pki node's primary LAN IPv4>:8080 — headscale itself
+#      serves TLS there (keys-provision issues its certificate from this stick's
+#      mesh CA, certs/cluster-ca.{crt,key}, and fills in tls_cert_path below),
+#      because the embedded DERP relay rides this listener and clients only speak
+#      TLS to DERP (docs/HEADSCALE-DERP.md).
 # So a node provisioned before any public DNS exists is reachable by LAN peers.
 # Set a PUBLIC facade below (or via the config above) ONLY once that domain is
 # published — traffic then flows tailscale-client -> backend gateway -> pki
@@ -16,6 +20,11 @@
 # node IP via /etc/hosts (the provision_hosts facade alias). The MagicDNS
 # control-plane name stays stable across the IP->domain transition.
 server_url: https://scale.hugmesh.net
+# Managed by keys-provision (provision_headscale_tls): set when headscale serves
+# TLS itself (the default), empty when the server_url is plain http:// or names a
+# TLS front on another port (headscale then serves plain HTTP behind it).
+tls_cert_path: ""
+tls_key_path: ""
 listen_addr: 0.0.0.0:8080
 # /metrics + /debug — bound to loopback; scrape via a node-local exporter or an
 # Endpoints that targets the pki node, and keep it off the public facade.
@@ -34,23 +43,27 @@ prefixes:
 
 # DERP relay — OFFLINE-FIRST (operator decision 2026-11-10, "Built-in relay on").
 # headscale's EMBEDDED DERP server is on and the public Tailscale DERP map is OFF,
-# so the mesh starts and relays with no internet and no traffic to Tailscale's
-# servers. (With only the public map and no internet, headscale 0.23 exits
-# "initial DERPMap is empty".) docs/HEADSCALE-DERP.md explains the whole model.
-#   * DERP itself rides headscale's own HTTP listener: clients dial /derp on the
-#     server_url host:port, so it needs NO new TCP port. STUN is UDP 3478.
+# so the mesh starts and relays with no internet, and headscale fetches nothing
+# from Tailscale's servers. (With only the public map and no internet, headscale
+# 0.23 exits "initial DERPMap is empty".) docs/HEADSCALE-DERP.md explains the whole model.
+#   * DERP itself rides headscale's own listener: clients dial /derp on the
+#     server_url host:port, so it needs NO new TCP port, but it does need TLS
+#     there (clients speak TLS to DERP; see tls_cert_path above). STUN is UDP 3478.
 #   * region_id 999 sits in the 900-999 block Tailscale leaves for private
 #     regions, so it never collides with a public region if the opt-in below
-#     adds the public map. keys-provision (provision_headscale) rewrites
-#     region_code/region_name from the brand's cluster domain at first boot.
+#     adds the public map. keys-provision (provision_headscale_derp) rewrites
+#     region_code/region_name from the brand's cluster domain at first boot, and
+#     owns this whole block: it is re-rendered from the provisioning inputs on
+#     every run (an older KEYS block is migrated; <config>.derp.bak keeps it).
 #   * ipv4/ipv6 are left unset on purpose: clients resolve the server_url host,
 #     which is the LAN IP by default and the published facade once there is one.
 #   * The DERP server key is generated on first start under headscale's state
 #     dir, next to the noise key, and survives reboots.
 # OPT-IN public map (meshes that WANT Tailscale's relays as well): builder flag
 # --headscale-public-derp, brand/env HEADSCALE_PUBLIC_DERP=true, or KEYS
-# provision.json .headscale.public_derp=true. keys-provision then swaps the
-# `urls: []` line below for the public map and turns auto-update on; the
+# provision.json .headscale.public_derp=true. keys-provision then lists the
+# public map in `urls:` below and turns auto-update on (and takes both back out
+# when the opt-in is off again); the
 # embedded region stays in the map either way.
 derp:
   server:

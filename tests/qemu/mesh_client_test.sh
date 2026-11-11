@@ -385,6 +385,10 @@ PLIB="${WORK}/prov.sh"
 sed -n '/^provision_network() {/,/^}/p' "${PROV}" | sed "s|/etc/NetworkManager|\${NMROOT}/etc/NetworkManager|g; s|/etc/conf.d|\${NMROOT}/etc/conf.d|g" >> "${PLIB}"
 extract "${PROV}" nm_apply_profiles "${PLIB}"
 extract "${PROV}" provision_tailscale "${PLIB}"
+# provision_tailscale checks every non-loopback login server's scheme
+# (control_url_tls_migrate); its curl is stubbed per test (CURL_ANSWER, below).
+extract "${PROV}" control_url_tls_migrate "${PLIB}"
+extract "${PROV}" headscale_url_parts "${PLIB}"
 grep -F 'provision_network() {' "${PLIB}" >/dev/null || { echo "could not extract provision_network" >&2; exit 2; }
 PSTUB="${WORK}/pstub"; mkdir -p "${PSTUB}"
 # nmcli: logs argv; `general status` fails when NM_DOWN=1.
@@ -392,6 +396,20 @@ printf '#!/bin/bash\necho "nmcli $*" >> "${CALLS}"\n[ "$1 $2" = "general status"
 printf '#!/bin/bash\necho "tailscale $*" >> "${CALLS}"\nexit 0\n' > "${PSTUB}/tailscale"
 printf '#!/bin/bash\n:\n' > "${PSTUB}/tailscaled"
 for t in rc-update rc-service sleep; do printf '#!/bin/bash\n:\n' > "${PSTUB}/${t}"; done
+# curl: what the control server answers. CURL_ANSWER=none (default): nothing answers
+# (000); tls: a verified HTTPS answer; untrusted: HTTPS only with -k; plain: http only.
+cat > "${PSTUB}/curl" <<'EOF'
+#!/bin/bash
+k=0; url=""
+for a in "$@"; do case "$a" in -k) k=1 ;; http://*|https://*) url="$a" ;; esac; done
+code=000
+case "${CURL_ANSWER:-none}:${url%%://*}:${k}" in
+    tls:https:*|untrusted:https:1|plain:http:*) code=200 ;;
+esac
+printf '%s' "${code}"
+[ "${code}" = 000 ] && exit 7
+exit 0
+EOF
 chmod +x "${PSTUB}"/*
 prov() {  # FUNC MANIFEST-JSON -> CALLS file content; BASE + NMROOT in the sandbox
     local d; d="${WORK}/prov-$RANDOM"; mkdir -p "${d}/keys/network" "${d}/keys/tailscale" "${d}/root"
@@ -400,7 +418,7 @@ prov() {  # FUNC MANIFEST-JSON -> CALLS file content; BASE + NMROOT in the sandb
     printf '[connection]\nid=spare\ntype=ethernet\nautoconnect=false\n' > "${d}/keys/network/spare.nmconnection"
     printf 'tskey-fixture-0123\n' > "${d}/keys/tailscale/authkey"
     CALLS="${d}/calls"; : > "${CALLS}"
-    POUT="$(CALLS="${CALLS}" NM_DOWN="${NM_DOWN:-0}" BASE="${d}/keys" MANIFEST="${d}/keys/provision.json" NMROOT="${d}/root" \
+    POUT="$(CALLS="${CALLS}" NM_DOWN="${NM_DOWN:-0}" CURL_ANSWER="${CURL_ANSWER:-none}" BASE="${d}/keys" MANIFEST="${d}/keys/provision.json" NMROOT="${d}/root" \
             PATH="${PSTUB}:${PATH}" bash -c 'set -u; . "$1"; mkdir() { command mkdir "$@" 2>/dev/null || true; }; "$2"' _ "${PLIB}" "$1" 2>&1)"
 }
 prov provision_network '{}'
@@ -423,6 +441,18 @@ case " ${up} " in
     *) _bad "E3 tailscale up has no default timeout: '${up}'" ;;
 esac
 case " ${up} " in *" --login-server http://10.77.0.13:8080 "*) _ok "E3 ...and still joins the manifest's login server" ;; *) _bad "E3 login server lost: '${up}'" ;; esac
+# E3b — the old http:// default against a control server that now serves HTTPS
+# (headscale's default since 2026-11-10): migrated when the certificate verifies,
+# migrated AND loudly flagged when it does not, kept when the server is still plain.
+CURL_ANSWER=tls prov provision_tailscale "${TSM}"
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server https://10.77.0.13:8080 "*) _ok "E3b an http://<pki>:8080 stick logs in at https://<pki>:8080 once the server's certificate verifies" ;; *) _bad "E3b no migration: $(grep '^tailscale up ' "${CALLS}") :: ${POUT}" ;; esac
+CURL_ANSWER=untrusted prov provision_tailscale "${TSM}"
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server https://10.77.0.13:8080 "*)
+    printf '%s' "${POUT}" | grep -F 'does NOT trust' >/dev/null && _ok "E3b ...and an untrusted certificate is said loudly (the mesh CA is missing from the stick)" \
+        || _bad "E3b untrusted certificate not flagged: ${POUT}" ;;
+    *) _bad "E3b untrusted: $(grep '^tailscale up ' "${CALLS}")" ;; esac
+CURL_ANSWER=plain prov provision_tailscale "${TSM}"
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server http://10.77.0.13:8080 "*) _ok "E3b ...and a server still on plain http keeps the http:// URL" ;; *) _bad "E3b plain: $(grep '^tailscale up ' "${CALLS}")" ;; esac
 prov provision_tailscale "$(printf '%s' "${TSM}" | jq -c '.tailscale.up_timeout="45s"')"
 case " $(grep '^tailscale up ' "${CALLS}") " in *" --timeout 45s "*) _ok "E4 .tailscale.up_timeout overrides the bound" ;; *) _bad "E4 up_timeout ignored: $(grep '^tailscale up ' "${CALLS}")" ;; esac
 prov provision_tailscale "$(printf '%s' "${TSM}" | jq -c '.tailscale.up_timeout="1d;reboot"')"
@@ -453,6 +483,8 @@ sed -n '/^HEADSCALE_CONFIG=/p' "${PROV}" >> "${CLIB}"
 extract "${PROV}" control_self_login_server "${CLIB}"
 extract "${PROV}" control_client_regain "${CLIB}"
 extract "${PROV}" provision_tailscale "${CLIB}"
+extract "${PROV}" control_url_tls_migrate "${CLIB}"
+extract "${PROV}" headscale_url_parts "${CLIB}"
 CSTUB="${WORK}/cstub"; mkdir -p "${CSTUB}"
 # tailscale: logs argv; `status --json` answers Online per TS_ONLINE: true | false |
 # after-restart (true only once CALLS records a tailscaled restart).
@@ -472,6 +504,7 @@ EOF
 printf '#!/bin/bash\necho "rc-service $*" >> "${CALLS}"\nexit 0\n' > "${CSTUB}/rc-service"
 printf '#!/bin/bash\necho "headscale $*" >> "${CALLS}"\nexit "${HS_RC:-0}"\n' > "${CSTUB}/headscale"
 for t in rc-update sleep tailscaled; do printf '#!/bin/bash\n:\n' > "${CSTUB}/${t}"; done
+cp "${PSTUB}/curl" "${CSTUB}/curl"   # nothing answers (CURL_ANSWER unset): URLs stay as written
 chmod +x "${CSTUB}"/*
 cprov() {  # FUNC MANIFEST-JSON [HEADSCALE-CONFIG-TEXT] -> CALLS + POUT
     local d; d="${WORK}/cprov-$RANDOM"; mkdir -p "${d}/keys/tailscale" "${d}/etc/headscale"
@@ -494,6 +527,10 @@ cprov provision_tailscale "${CTL}" $'listen_addr: "0.0.0.0:9090"\n'
 case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server http://127.0.0.1:9090 "*) _ok "E5 ...at the port headscale's listen_addr names (9090)" ;; *) _bad "E5 listen_addr port ignored: $(grep '^tailscale up ' "${CALLS}")" ;; esac
 cprov provision_tailscale "${CTL}"
 case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server http://127.0.0.1:8080 "*) _ok "E5 ...and 8080 when no config.yaml is readable" ;; *) _bad "E5 no-config fallback: $(grep '^tailscale up ' "${CALLS}")" ;; esac
+cprov provision_tailscale "${CTL}" $'server_url: https://10.77.0.13:8080\nlisten_addr: 0.0.0.0:8080\ntls_cert_path: "/var/lib/headscale/tls.crt"\n'
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server https://127.0.0.1:8080 "*) _ok "E5 ...over https://127.0.0.1 when headscale serves TLS itself (its certificate names loopback)" ;; *) _bad "E5 TLS loopback: $(grep '^tailscale up ' "${CALLS}")" ;; esac
+cprov provision_tailscale "${CTL}" $'server_url: https://hs.example.test:8080\nlisten_addr: 0.0.0.0:8080\ntls_cert_path: /etc/headscale/own.crt\n'
+case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server https://hs.example.test:8080 "*) _ok "E5 ...and at the server_url when the config names an operator's own certificate" ;; *) _bad "E5 operator cert: $(grep '^tailscale up ' "${CALLS}")" ;; esac
 cprov provision_tailscale "$(printf '%s' "${CTL}" | jq -c '.tailscale.login_server="http://mesh.example:8080"')"
 case " $(grep '^tailscale up ' "${CALLS}") " in *" --login-server http://mesh.example:8080 "*) _ok "E5 an explicit .tailscale.login_server still wins on the control node" ;; *) _bad "E5 explicit login_server lost: $(grep '^tailscale up ' "${CALLS}")" ;; esac
 cprov provision_tailscale "$(printf '%s' "${CTL}" | jq -c '.headscale.enabled=false')"

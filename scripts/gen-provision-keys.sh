@@ -1156,6 +1156,54 @@ if [ "${ROLE}" = "pki" ]; then
             exit 1
         fi
     fi
+    # headscale's serving certificate. keys-provision issues it at first boot from
+    # the mesh CA key on this stick (certs/cluster-ca.key), naming the node's real
+    # addresses, because headscale serves HTTPS itself by default (the embedded DERP
+    # relay needs TLS; docs/HEADSCALE-DERP.md). A stick that will NOT carry that key
+    # (an external CA without --ca-key-to-stick) gets the certificate here instead,
+    # for every address this manifest already names plus HEADSCALE_TLS_SANS
+    # (space/comma-separated IPs and names, e.g. the pki node's LAN address);
+    # keys-provision uses it when it names the server_url host.
+    if [ ! -f "${OUT_DIR}/certs/cluster-ca.key" ] && [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ]; then
+        _hs_sans="$(
+            {
+                printf '%s\n' 127.0.0.1 ::1 localhost
+                [ -f "${PROV}" ] && jq -r '[.headscale.server_url, .mesh.endpoint] | .[] | strings' "${PROV}" 2>/dev/null
+                printf '%s\n' "${HEADSCALE_URL:-}"
+                [ -f "${PROV}" ] && jq -r '.nodes // [] | .[] | select(.role == "pki") | .ip, .name | strings' "${PROV}" 2>/dev/null
+                printf '%s\n' "${HEADSCALE_TLS_SANS:-}" | tr ' ,' '\n\n'
+            } | sed -E 's#^https?://##; s#[/?].*$##; s#^\[([^]]+)\](:[0-9]+)?$#\1#; s#^([^:]+):[0-9]+$#\1#' \
+              | while IFS= read -r _h; do
+                    if [[ "${_h}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { [[ "${_h}" == *:* ]] && [[ "${_h}" =~ ^[0-9A-Fa-f:.]+$ ]]; }; then
+                        echo "IP:${_h}"
+                    elif [[ "${_h}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && [[ "${_h}" =~ [A-Za-z] ]]; then
+                        echo "DNS:${_h,,}"
+                    fi
+                done | awk '!seen[$0]++' | paste -sd, -
+        )"
+        _hs_tmp="$(mktemp -d)"
+        mkdir -p "${OUT_DIR}/headscale"
+        printf 'subjectAltName=%s\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\n' \
+            "${_hs_sans}" > "${_hs_tmp}/ext"
+        if ( umask 077
+             openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=headscale" \
+                 -keyout "${OUT_DIR}/headscale/tls.key" -out "${_hs_tmp}/tls.csr" \
+             && openssl x509 -req -in "${_hs_tmp}/tls.csr" -CA "${CA_CERT}" -CAkey "${CA_KEY}" \
+                 ${CA_KEY_PASS:+-passin env:CA_KEY_PASS} -set_serial "0x$(openssl rand -hex 16)" -days 825 -sha256 \
+                 -extfile "${_hs_tmp}/ext" -out "${_hs_tmp}/leaf.crt" ) >/dev/null 2>&1 \
+           && cat "${_hs_tmp}/leaf.crt" "${OUT_DIR}/certs/cluster-ca.crt" > "${OUT_DIR}/headscale/tls.crt"; then
+            chmod 0600 "${OUT_DIR}/headscale/tls.key"
+            echo "==> headscale TLS: the CA key stays off this stick, so its serving certificate is issued here"
+            echo "    (headscale/tls.{crt,key}, 825 days) for ${_hs_sans}"
+            echo "    Set HEADSCALE_TLS_SANS to the pki node's LAN address(es) if it is not listed: keys-provision"
+            echo "    serves plain HTTP (no relay for peers without a direct path) when the certificate does not name it."
+        else
+            rm -f "${OUT_DIR}/headscale/tls.key" "${OUT_DIR}/headscale/tls.crt"
+            echo "ERROR: could not issue headscale's serving certificate from ${CA_CERT}" >&2
+            rm -rf "${_hs_tmp}"; exit 1
+        fi
+        rm -rf "${_hs_tmp}"
+    fi
     if [ "${KUBEADM_CA}" = false ] && [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ]; then
         echo "==> kubeadm keeps its own CA (--no-kubeadm-ca): kubernetes/pki/ca.* not seeded"
     elif [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ]; then
@@ -1193,6 +1241,9 @@ else
         echo "  (worker) copy the cluster CA + truststore from the pki node:"
         echo "    pki:${OUT_DIR}/certs/cluster-ca.crt        -> certs/cluster-ca.crt"
         echo "    pki:${OUT_DIR}/keystores/truststore.jks    -> keystores/truststore.jks"
+        echo "  (worker) certs/cluster-ca.crt is REQUIRED to join the mesh: the pki node's headscale"
+        echo "    serves HTTPS with a certificate from that CA (docs/HEADSCALE-DERP.md), and this node"
+        echo "    trusts it only once keys-provision installs the stick's certs/*.crt. Or pass --ca-cert."
     fi
 fi
 

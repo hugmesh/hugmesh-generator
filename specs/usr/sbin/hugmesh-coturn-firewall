@@ -88,6 +88,9 @@ TABLE="hugmesh_coturn_relay"
 TS_V4_PREFIX="${HUGMESH_TS_V4_PREFIX:-100.64.0.0/10}"
 TS_V6_PREFIX="${HUGMESH_TS_V6_PREFIX:-fd7a:115c:a1e0::/48}"
 HS_STUN_MARKER="${HUGMESH_HEADSCALE_STUN_MARKER:-/etc/hugmesh/headscale-derp-stun}"
+# The headscale STUN port this script last admitted in firewalld, so a port the marker
+# no longer names (it moved, or headscale's relay went away) is taken back out.
+HS_STUN_FW_STATE="${HUGMESH_HEADSCALE_STUN_FW_STATE:-/var/lib/hugmesh/headscale-derp-stun.firewalld}"
 RELAY_MIN="${HUGMESH_COTURN_RELAY_MIN:-49152}"
 RELAY_MAX="${HUGMESH_COTURN_RELAY_MAX:-49200}"
 LOG_TAG="hugmesh-coturn-firewall"
@@ -215,10 +218,28 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
                 fi
             fi
         done
+        # A port an earlier run admitted for headscale STUN that the marker no longer
+        # names comes back out, unless the coturn pass above owns it right now.
+        HS_FW_PREV="$(tr -d '[:space:]' < "${HS_STUN_FW_STATE}" 2>/dev/null)"
+        if [[ "${HS_FW_PREV}" =~ ^[0-9]{1,5}/udp$ ]] && [ "${HS_FW_PREV}" != "${HS_FW_PORT}" ]; then
+            case " ${PORTS} " in
+                *" ${HS_FW_PREV} "*) [ "${PUBLIC}" = "present" ] && HS_FW_PREV="" ;;
+            esac
+            if [ -n "${HS_FW_PREV}" ] && firewall-cmd --zone="${ZONE}" --query-port="${HS_FW_PREV}" >/dev/null 2>&1; then
+                firewall-cmd --zone="${ZONE}" --remove-port="${HS_FW_PREV}" >/dev/null 2>&1 \
+                    && log "headscale STUN port ${HS_FW_PREV} is no longer named by ${HS_STUN_MARKER} — removed from firewalld (zone ${ZONE})" \
+                    || warn "firewall-cmd --remove-port=${HS_FW_PREV} failed (zone ${ZONE}) — stale headscale STUN port"
+            fi
+        fi
         if [ -n "${HS_FW_PORT}" ]; then
             firewall-cmd --zone="${ZONE}" --query-port="${HS_FW_PORT}" >/dev/null 2>&1 \
                 || firewall-cmd --zone="${ZONE}" --add-port="${HS_FW_PORT}" >/dev/null 2>&1 \
                 || warn "firewall-cmd --add-port=${HS_FW_PORT} failed (zone ${ZONE}) — headscale STUN"
+            mkdir -p "$(dirname "${HS_STUN_FW_STATE}")" 2>/dev/null
+            printf '%s\n' "${HS_FW_PORT}" > "${HS_STUN_FW_STATE}" 2>/dev/null \
+                || warn "could not record the admitted headscale STUN port in ${HS_STUN_FW_STATE}"
+        else
+            rm -f "${HS_STUN_FW_STATE}" 2>/dev/null
         fi
     fi
 else
