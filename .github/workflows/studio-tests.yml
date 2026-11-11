@@ -452,8 +452,10 @@ jobs:
         working-directory: studio
         env:
           QT_QPA_PLATFORM: offscreen
+        # -v: the tests marked "needs a real Mac" are this job's proof, so each one is
+        # named in the log as PASSED rather than folded into a row of dots.
         run: >-
-          "$RUNNER_TEMP/venv/bin/python" -m pytest -q
+          "$RUNNER_TEMP/venv/bin/python" -m pytest -v -rs
           tests/test_macos_packaging.py
           tests/test_macos_host.py
           tests/test_platform_macos.py

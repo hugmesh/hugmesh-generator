@@ -413,6 +413,7 @@ def _report(missing, bash=5, ok=None, problems=None, arch="arm64"):
     (_report(["bash", "grep"], bash=3), 1, False, True),  # a stock Mac, refused right
     (_report([]), 0, False, True),
     (_report(["bash"], bash=3), 1, True, False),        # the hook missed Homebrew
+    (_report(["grep"], problems=[], ok=True), 0, True, False),  # ...even with a green exit
     (_report([], bash=3), 0, True, False),
     (_report([]), 1, True, False),
     (_report(["grep"]), 0, False, False),               # missing tools, yet exit 0

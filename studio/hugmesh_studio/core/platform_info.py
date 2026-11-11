@@ -660,10 +660,14 @@ def native_build_blocker(what: str = "A native build", osname: str | None = None
     cannot build natively, because the builders write a Gentoo stage4 through chroot,
     loop devices and mount, which macOS does not have. Both say what to use instead.
 
-    ``host_os`` is a driver's ``HostInfo.os``: a host that says "windows" or "darwin"
-    is refused whatever this process runs on, and otherwise the process's own
-    ``os.name`` / ``sys.platform`` decide (``osname`` / ``sysplatform`` for tests)."""
-    kind = host_os if host_os in ("windows", "darwin") else host_kind(osname, sysplatform)
+    ``host_os`` is a driver's ``HostInfo.os`` and, when given, is the answer: the
+    driver builds for the host it was handed (detect() on the real machine, a canned
+    host in a test). Without it the process's own ``os.name`` / ``sys.platform``
+    decide (``osname`` / ``sysplatform`` for tests)."""
+    if host_os is not None:
+        kind = host_os if host_os in ("windows", "darwin") else "linux"
+    else:
+        kind = host_kind(osname, sysplatform)
     if kind == "windows":
         return (f"{what} runs sudo and bash on a Gentoo host, which the Windows build of "
                 f"the Studio cannot do. Choose the docker backend (Docker Desktop), or run "

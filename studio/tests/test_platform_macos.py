@@ -120,8 +120,11 @@ def test_the_native_fleet_backend_is_refused_on_a_mac():
 
 
 def test_native_build_blocker_follows_the_hosts_os():
+    # The driver's host is the answer, whatever this process runs on (the Windows CI
+    # job runs a Linux host's fleet preflight on real Windows).
+    assert platform_info.native_build_blocker(host_os="linux", osname="nt") == ""
     assert platform_info.native_build_blocker(host_os="linux", osname="posix",
-                                              sysplatform="linux") == ""
+                                              sysplatform="darwin") == ""
     assert "Windows" in platform_info.native_build_blocker(host_os="windows")
     assert "Gentoo chroot" in platform_info.native_build_blocker(host_os="darwin")
     assert "Gentoo chroot" in platform_info.native_build_blocker(osname="posix",
@@ -185,6 +188,15 @@ def test_folds_case_asks_the_filesystem(tmp_path):
     # a path that does not exist yet is judged by its nearest existing parent
     assert platform_info.folds_case(str(tmp_path / "a" / "b")) is False
     assert not list(tmp_path.iterdir()), "the probe file was left behind"
+
+
+def test_folds_case_reports_a_filesystem_that_folds(tmp_path, monkeypatch):
+    """The True half, on any host: a filesystem that finds the lower-case spelling of
+    the probe's upper-case name folds case (on a Mac the on_a_mac test measures APFS)."""
+    real = os.path.exists
+    monkeypatch.setattr(platform_info.os.path, "exists",
+                        lambda p: real(p) or os.path.basename(p).startswith("hmcaseprobe."))
+    assert platform_info.folds_case(str(tmp_path)) is True
 
 
 def test_folds_case_is_none_when_nothing_can_be_written(tmp_path):
@@ -385,6 +397,8 @@ def test_the_self_check_cli_prints_the_mac_line(monkeypatch, capsys):
 
 def test_a_frozen_self_check_says_it_could_not_list_the_paths(monkeypatch, capsys):
     from hugmesh_studio.core import generator_refs
+    # the Linux branch, so a stock Mac running this file is not refused for its BSD tools
+    monkeypatch.setattr(self_check.platform_info, "host_kind", lambda *a, **k: "linux")
     monkeypatch.setattr(self_check.sys, "frozen", True, raising=False)
     monkeypatch.setattr(generator_refs, "scan", lambda top: generator_refs.Refs())
     rc = self_check.run_cli(GENERATOR_DIR)
