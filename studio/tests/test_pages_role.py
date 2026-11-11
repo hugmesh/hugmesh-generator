@@ -651,3 +651,108 @@ def test_a_branded_role_keeps_both_its_look_and_its_identity(qapp):
     page = _role_page(cfg)
     assert page.validatePage()
     assert (cfg.theme, cfg.brand, cfg.brand_locked) == ("dark", "acme", True)
+
+
+# ---- GUI-03: the page is never wider than its scroll viewport ------------------------
+#
+# _scroll.scrollable() keeps the horizontal scrollbar OFF, so scroll content wider than
+# the viewport is not scrollable — its right side is simply cut. Measured on main
+# 39b953a: the posture QCheckBox (one ~330-char line; a checkbox never wraps) had a
+# 1708px minimum, forcing a 1750px content into a 1000px viewport at the 1040x780
+# default on EVERY route that shows the box (every cloud role, standalone chromebook +
+# the ARM appliances); and the four arch radios in a QHBoxLayout summed to ~933px, so
+# at the 942x552 netbook default (902px viewport) the RISC-V radio was cut on every
+# route. The device tree, search field, Image type list, machine profile, desktop/Steam
+# combos and board options all lost their right edge with them.
+
+# medium_size()'s documented defaults (wizard.py): an 800x800 screen, a 1024x600
+# netbook, and every 1080p/1440p screen.
+_DEFAULT_WINDOWS = ((736, 736), (942, 552), (1040, 780))
+
+
+def _settle():
+    from hugmesh_studio.gui.qt import QtWidgets
+    for _ in range(6):
+        QtWidgets.QApplication.processEvents()
+
+
+def _rect_in(widget, ancestor):
+    from hugmesh_studio.gui.qt import QtCore
+    return QtCore.QRect(widget.mapTo(ancestor, QtCore.QPoint(0, 0)), widget.size())
+
+
+@pytest.mark.parametrize("mode", ["standalone", "cloud"])
+def test_role_page_content_fits_its_viewport_on_every_route(wiz, mode):
+    """Every (role, platform) the mode offers, at every default window size: the scroll
+    content's MINIMUM width fits the viewport (``horizontal_overflow`` == 0), the laid-out
+    content is no wider than the viewport, and every architecture radio is fully on
+    screen — inside the viewport, inside its own row (not clipped by it), and above the
+    search field.
+
+    The radio checks are what catch a wrap that does not really wrap: a FlowLayout's
+    minimum is one item wide by construction, so a row that wraps into a fixed one-line
+    box (radios clipped, or drawn over the search field) still passes the min-width
+    check. One wizard per mode with the routes looped inside — a wizard per route would
+    cost minutes."""
+    from hugmesh_studio.gui.pages._scroll import horizontal_overflow
+    pick_mode(wiz, mode)
+    page = advance_to(wiz, wizard_mod.RolePage)
+    scroll = page._content_scroll
+    vp = scroll.viewport()
+    offenders = []
+    posture_shown = 0
+    for role, plats, _label in ROLE_CHOICES[mode]:
+        for plat in plats:
+            page.select_machine(plat)
+            assert page.select_role(role), f"{mode}: role {role} not offered on {plat}"
+            for (w, h) in _DEFAULT_WINDOWS:
+                wiz.resize(w, h)
+                _settle()
+                route = f"{mode}/{role}/{plat} @ {w}x{h}"
+                # a clamped window would make every check below vacuous
+                assert (wiz.width(), wiz.height()) == (w, h), route
+                posture_shown += page.posture_box.isVisible()
+                over = horizontal_overflow(page)
+                if over:
+                    offenders.append(
+                        f"{route}: content minimumSizeHint "
+                        f"{scroll.widget().minimumSizeHint().width()}px > viewport "
+                        f"{vp.width()}px ({over}px cut)")
+                if scroll.widget().width() > vp.width():
+                    offenders.append(f"{route}: content {scroll.widget().width()}px wide in "
+                                     f"a {vp.width()}px viewport")
+                search_top = _rect_in(page.device_search, page.machine_box).top()
+                row = page.arch_row.rect()
+                for arch, rb in page._arch_buttons.items():
+                    assert rb.isVisible(), f"{route}: {arch} radio hidden"
+                    on_vp = _rect_in(rb, vp)
+                    if on_vp.left() < 0 or on_vp.right() >= vp.width():
+                        offenders.append(f"{route}: {arch} radio spans x {on_vp.left()}.."
+                                         f"{on_vp.right()} of a {vp.width()}px viewport")
+                    if not row.contains(rb.geometry()):
+                        offenders.append(f"{route}: {arch} radio {rb.geometry()} clipped "
+                                         f"by its row {row}")
+                    if _rect_in(rb, page.machine_box).bottom() >= search_top:
+                        offenders.append(f"{route}: {arch} radio overlaps the search field")
+    # the defect lived on the posture box — a run that never showed it proves nothing
+    assert posture_shown, f"{mode}: no route showed the Image posture box"
+    assert not offenders, "Role page wider than its viewport:\n" + "\n".join(offenders)
+
+
+def test_posture_detail_is_a_wrapping_note_not_checkbox_text(qapp):
+    """The posture checkbox carries only its short label; the role list and the jetson
+    caveat live in a word-wrapped note INSIDE the posture box, so they are hidden with
+    it. (A QCheckBox cannot wrap — its text width is its minimum width.)"""
+    page = _role_page(ImageConfig(mode="cloud", role="laptop", platform="x86"))
+    assert page.standalone.text() == (
+        "Standalone (--standalone): no mesh/SSO, local user with a build-time password")
+    note = page.posture_note
+    assert note.wordWrap()
+    assert page.posture_box.isAncestorOf(note)
+    shown = note.text().replace("\u2060", "")   # the word joiners that hold "a-b" whole
+    assert "jetson" in shown and "STANDALONE-DESKTOP.md" in shown
+    assert "orangepi4-lts" in shown   # the gate offers the box there (_ENC_PLATFORMS)
+    # wider than any default viewport if laid out on one line, yet its minimum is small:
+    # that gap is the wrap doing its job
+    assert note.minimumSizeHint().width() < 400 < note.fontMetrics().horizontalAdvance(
+        note.text())
