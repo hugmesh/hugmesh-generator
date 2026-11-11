@@ -1366,7 +1366,9 @@ EOF
 # the synthetic stick it builds. No production KEYS writer (scripts/gen-provision-
 # keys.sh, keys-template/, the Studio) emits it, and verdict_test.sh fails if the
 # drop-in's name ever appears in one. It does not weaken what assertions.sh
-# grades either: nothing there inspects sudoers.
+# grades either: on a governed image that suite checks tester is NOT in wheel
+# and has no static /etc/sudoers.d/10-tester (the product's own rules), and it
+# never counts this drop-in, which is the harness's and not the image's.
 HARNESS_SUDO_HOOK="hooks/zz-hugmesh-test-harness-sudo.sh"
 # write_harness_sudo_hook KEYS_DIR USER... — write the run[] hook; returns 1 on a bad name.
 write_harness_sudo_hook() {

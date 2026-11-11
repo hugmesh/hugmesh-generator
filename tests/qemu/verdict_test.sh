@@ -1036,6 +1036,21 @@ HK_PATH="$(sed -n 's/^HARNESS_SUDO_HOOK="\(.*\)"$/\1/p' "${ENTRYPOINT}")"
 [ -n "${HK_PATH}" ] || { echo "could not read HARNESS_SUDO_HOOK from ${ENTRYPOINT}" >&2; exit 2; }
 PRF="${TMP}/provision-run-hooks.sh"; : > "${PRF}"
 extract "${PROVISION}" provision_run_hooks "${PRF}"
+# provision_run_hooks copies each hook into a private `mktemp -d -p /run` dir
+# before exec'ing it (#960): both fstabs mount /tmp noexec, so a copy there never
+# ran and EVERY run[] hook, this one included, was skipped on a real guest. That
+# is load-bearing for the fix here, so pin it on the REAL function first. Then
+# point the extracted copy at a dir this test can write: /run is root-only, and
+# without the rewrite every non-root run of this file fails 8 legs below on
+# "mktemp: failed to create directory via template '/run/keys-hook.XXXXXX'"
+# (CI's alpine job runs as root, so only local runs went red).
+grep -E 'mktemp -d -p /run keys-hook\.' "${PRF}" >/dev/null \
+    && _ok "provision_run_hooks runs a hook from a private dir under /run (exec), not the noexec /tmp" \
+    || _bad "provision_run_hooks no longer copies hooks under /run: on a real guest /tmp is noexec and the harness sudo hook would never run"
+HK_RUN="${TMP}/hk-run"; mkdir -p "${HK_RUN}"
+sed -i "s#mktemp -d -p /run #mktemp -d -p ${HK_RUN} #" "${PRF}"
+grep -F "mktemp -d -p ${HK_RUN} " "${PRF}" >/dev/null \
+    || { echo "could not repoint provision_run_hooks' private dir at ${HK_RUN}: update this rewrite" >&2; exit 2; }
 
 HK_KEYS="${TMP}/hk-keys"; HK_SUDOERS="${TMP}/hk-sudoers.d"
 hook_run() { # hook_run USERS... -> fresh HK_KEYS stick, hook run into HK_SUDOERS; prints the provision log
@@ -1071,6 +1086,7 @@ grep -qx 'alice ALL=(ALL) NOPASSWD: ALL' "${HKD}" 2>/dev/null \
 eq "$(grep -cvE '^(#|$)' "${HKD}" 2>/dev/null)" "2" "…and nobody else: exactly one rule per harness login"
 eq "$(stat -c %a "${HKD}" 2>/dev/null)" "440" "the drop-in is 0440, the mode sudo requires"
 eq "$(find "${HK_SUDOERS}" -name '*.tmp' | wc -l | tr -d ' ')" "0" "no half-written temp file is left beside it"
+eq "$(find "${HK_RUN}" -mindepth 1 | wc -l | tr -d ' ')" "0" "provision_run_hooks removed its private copy of the hook after it ran"
 if command -v visudo >/dev/null 2>&1; then
     visudo -cqf "${HKD}" && _ok "visudo accepts the drop-in" || _bad "visudo rejects the drop-in"
 else
@@ -1125,6 +1141,68 @@ hook_run 'bad name' >/dev/null 2>&1 \
     && _bad "write_harness_sudo_hook accepted a login name with a space" \
     || _ok "write_harness_sudo_hook refuses a name that is not a plain login name"
 eq "${leak}" "" "no production KEYS writer (scripts/, keys-template/, specs/, studio/) carries the harness sudo drop-in"
+
+# ── 12e. Once the harness CAN sudo there, assertions.sh grades a governed guest right ──
+# assertions.sh used to check "tester in wheel group" on every image. On a
+# governed client desktop provision_users() drops wheel by design, so as soon as
+# 12d let the suite run there, a CORRECT laptop image went from FAIL 0/0 to FAIL
+# on that line. The check now mirrors provision.sh's desktop_governance_governed()
+# (baked templates OR desktop-governance/ on the stick). Every leg below EXECUTES
+# the real assertions.sh: `id`, `blkid`, `mount` and `umount` are stubbed on PATH,
+# the stub mount copies a fixture stick, and both governance paths are env seams.
+echo
+echo "assertions.sh — tester's sudo route follows desktop governance"
+gov_assert() { # gov_assert GROUPS|- BAKED STICK STATIC (yes|no each) -> assertions.sh output
+    local fx="${TMP}/gov"
+    rm -rf "${fx}"; mkdir -p "${fx}/stub" "${fx}/sudoers.d" "${fx}/stick" "${fx}/tmp"
+    [ "$2" = yes ] && mkdir -p "${fx}/desktop-governance"
+    printf '{ "headscale": { "enabled": false } }\n' > "${fx}/stick/provision.json"
+    [ "$3" = yes ] && mkdir -p "${fx}/stick/desktop-governance"
+    [ "$4" = yes ] && echo 'tester ALL=(ALL) NOPASSWD: ALL' > "${fx}/sudoers.d/10-tester"
+    printf '#!/bin/sh\n[ "${STUB_GROUPS}" = - ] && exit 1\n[ "$1" = -nG ] && echo "${STUB_GROUPS}"\nexit 0\n' > "${fx}/stub/id"
+    printf '#!/bin/sh\necho /dev/stub-keys\n' > "${fx}/stub/blkid"
+    printf '#!/bin/sh\nfor a; do m="$a"; done\ncp -a "${STUB_STICK}/." "${m}/"\n' > "${fx}/stub/mount"
+    printf '#!/bin/sh\nfind "$1" -mindepth 1 -delete\n' > "${fx}/stub/umount"
+    chmod +x "${fx}/stub/"*
+    STUB_GROUPS="$1" STUB_STICK="${fx}/stick" PATH="${fx}/stub:${PATH}" TMPDIR="${fx}/tmp" \
+    DESKTOP_GOVERNANCE_DIR="${fx}/desktop-governance" SUDOERS_D="${fx}/sudoers.d" \
+        bash "${ASSERTIONS}" 2>&1 || true
+}
+has() { if echo "$1" | grep -F -- "$2" >/dev/null; then _ok "$3"; else _bad "$3"; fi; }
+hasnt() { if echo "$1" | grep -F -- "$2" >/dev/null; then _bad "$3"; else _ok "$3"; fi; }
+G_NOTWHEEL="tester NOT in wheel: governed image, sudo only via the desktop-sudo SSO claim"
+G_NOSTATIC="no static sudoers.d grant for tester on a governed image"
+G_WHEEL="tester in wheel group (image not desktop-governance-governed)"
+
+out="$(gov_assert 'tester audio video usb' yes no no)"
+has   "${out}" "PASS  ${G_NOTWHEEL} (templates baked into the image)" "governed (baked), tester without wheel: PASS"
+has   "${out}" "PASS  ${G_NOSTATIC} (templates baked into the image)" "governed (baked), no 10-tester: PASS"
+hasnt "${out}" "${G_WHEEL}" "…and the wheel check is not asked of a governed image"
+out="$(gov_assert 'tester wheel audio' yes no no)"
+has   "${out}" "FAIL  ${G_NOTWHEEL}" "governed, tester still in wheel (standing root): FAIL"
+out="$(gov_assert 'tester audio' yes no yes)"
+has   "${out}" "FAIL  ${G_NOSTATIC}" "governed, a static /etc/sudoers.d/10-tester grant survived: FAIL"
+out="$(gov_assert - yes no no)"
+has   "${out}" "FAIL  ${G_NOTWHEEL}" "governed, no tester at all: FAIL, not a vacuous 'not in wheel'"
+out="$(gov_assert 'tester audio' no yes no)"
+has   "${out}" "PASS  ${G_NOTWHEEL} (templates on the KEYS stick)" "governed by the STICK's desktop-governance/ (read through the real mount block)"
+out="$(gov_assert 'tester wheel audio' no no no)"
+has   "${out}" "PASS  ${G_WHEEL}" "not governed, tester in wheel: PASS (unchanged)"
+hasnt "${out}" "${G_NOTWHEEL}" "…and the governed checks are not asked of it"
+out="$(gov_assert 'tester audio' no no no)"
+has   "${out}" "FAIL  ${G_WHEEL}" "not governed, tester missing wheel: FAIL (unchanged)"
+# Lockstep with the product: assertions.sh mirrors desktop_governance_governed(), so
+# if that predicate ever reads a different path, this mirror is stale.
+GOVF="${TMP}/gov-fn.sh"; : > "${GOVF}"
+extract "${PROVISION}" desktop_governance_governed "${GOVF}"
+if grep -Fx '    [ -d /etc/hugmesh/desktop-governance ] && return 0' "${GOVF}" >/dev/null \
+   && grep -Fx '    [ -d "${BASE}/desktop-governance" ] && return 0' "${GOVF}" >/dev/null \
+   && [ "$(grep -c 'return 0' "${GOVF}")" = 2 ] \
+   && grep -F '"${DESKTOP_GOVERNANCE_DIR:-/etc/hugmesh/desktop-governance}"' "${ASSERTIONS}" >/dev/null; then
+    _ok "provision.sh's desktop_governance_governed() still decides on exactly the two paths assertions.sh reads"
+else
+    _bad "desktop_governance_governed() changed: update assertions.sh's sudo / desktop governance section to match"
+fi
 
 echo
 printf '%s: %d passed, %d failed\n' "$(basename "$0")" "${PASS}" "${FAIL}"
