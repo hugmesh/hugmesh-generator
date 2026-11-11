@@ -480,6 +480,7 @@ jobs:
             tests/scripts/test-installer-ui-node-default.sh
             tests/scripts/test-intltool-preseed.sh
             tests/scripts/test-kernel-artifact-cache.sh
+            tests/scripts/test-kernel-reconfig-x86.sh
             tests/scripts/test-kind-addon-channel.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
             tests/scripts/test-kind-doctor.sh

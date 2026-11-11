@@ -1124,7 +1124,9 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # branch's 2 = 235 of 277, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
 # MERGED (origin/main 3e020b2b into fix/compose-db-passwords-20261104): main 234 of 276 + this
 # branch's 2 = 236 of 278, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-236}"
+# feat/kernel-menuconfig-20261111 (origin/main 64e3e42f + tests/scripts/test-kernel-reconfig-x86.sh,
+# wired into shell-suites.yml): 237, MEASURED by running this file on the branch.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-237}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
