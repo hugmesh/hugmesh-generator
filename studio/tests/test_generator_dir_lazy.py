@@ -10,7 +10,9 @@ Flatpak's situation is reproduced without a Flatpak: nothing is a checkout, and
 """
 from __future__ import annotations
 
+import ast
 import io
+from pathlib import Path
 
 import pytest
 
@@ -91,3 +93,48 @@ def test_tui_worklist_view_places_nothing(no_checkout_anywhere):
                       inp=io.StringIO(""), out=io.StringIO())
     assert rc == 2
     assert no_checkout_anywhere == []
+
+
+def test_go_live_target_cli_resolves_the_default(monkeypatch, tmp_path):
+    """#931's Qt-free ``--go-live-target`` block merged after the lazy default and
+    passed ``args.generator_dir`` on raw: None, so ``--go-live-target targets`` with
+    no --generator-dir died in os.path.join (#974 refute, round 1b). It goes through
+    ``_generator_dir(args)`` like every other path."""
+    from hugmesh_studio.core import golive_target
+    monkeypatch.setattr(app, "_default_generator_dir", lambda: str(tmp_path))
+    seen = []
+    monkeypatch.setattr(golive_target, "run_studio_cli",
+                        lambda rest, gen: seen.append((list(rest), gen)) or 0)
+    assert app.main(["--go-live-target", "targets"]) == 0
+    assert seen == [(["targets"], str(tmp_path))]
+
+
+def _raw_generator_dir_reads(path: Path) -> list[str]:
+    """Every READ of a ``.generator_dir`` attribute (or ``getattr(x,
+    "generator_dir")``) in ``path`` outside its ``_generator_dir`` resolver, as
+    "file:line". Writes (``args.generator_dir = ...``) are not reads."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    allowed = [range(n.lineno, n.end_lineno + 1) for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name == "_generator_dir"]
+    assert allowed, f"{path.name} lost its _generator_dir resolver"
+    out = []
+    for n in ast.walk(tree):
+        hit = (isinstance(n, ast.Attribute) and n.attr == "generator_dir"
+               and isinstance(n.ctx, ast.Load))
+        hit = hit or (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                      and n.func.id == "getattr" and len(n.args) >= 2
+                      and isinstance(n.args[1], ast.Constant)
+                      and n.args[1].value == "generator_dir")
+        if hit and not any(n.lineno in r for r in allowed):
+            out.append(f"{path.name}:{n.lineno}")
+    return out
+
+
+@pytest.mark.parametrize("module", [app, tui_app], ids=["app", "tui_app"])
+def test_no_raw_read_of_the_generator_dir_outside_the_resolver(module):
+    """``--generator-dir`` defaults to None, so a raw ``args.generator_dir`` is None
+    on every path that did not call ``_generator_dir(args)`` first. A later merge
+    reintroduced one (the class of the #931 merge above); the behaviour tests stay
+    green on such a line until someone runs that exact flag, so pin the source."""
+    assert _raw_generator_dir_reads(Path(module.__file__)) == []
