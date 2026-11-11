@@ -17,6 +17,13 @@
 # without a route-access decision"). Both are the finding this feature exists to catch, so the
 # header's ABSENCE is asserted, not just the status.
 #
+# A BROWSER DOCUMENT NAVIGATION is a different request shape and is not probed here.
+# Since hugmesh-gateway GUI-08 the fe tier answers a GET whose Accept names
+# text/html (and whose Sec-Fetch-Mode, if sent, is `navigate`) with a 302 to
+# /login?next=<path> instead of the 401, so a hard-loaded bookmark lands on the
+# login page rather than the browser's own "HTTP ERROR 401". Every row below is
+# sent by the API client with Accept: */*, so each of them still meets the wall.
+#
 # The public floor is the CONTROL: without the 200s below, every 401 above could
 # be a dead front door rather than a wall. `/bff/login` is the ONLY anonymous
 # door into authentication and is deliberately not probed here — a wrong-password
@@ -32,7 +39,8 @@ Feature: The anonymous 401 wall at the public front door
     And the response header "www-authenticate" contains "Bearer"
     And the response header "x-route-denied" is "<absent>"
 
-    # The session-backed member surfaces (the plan's N12) and the member home.
+    # The session-backed member surfaces (the plan's N12). /home is NOT here any more:
+    # it is the host shell's public page (see the control table below).
     Examples:
       | path                     | service |
       | /bff/session             | login   |
@@ -41,7 +49,6 @@ Feature: The anonymous 401 wall at the public front door
       | /bff/user/profile        | login   |
       | /bff/user/connected-clients | login |
       | /user/                   | login   |
-      | /home                    | gateway |
       | /api/federation/manifest | gateway |
       | /_fragments/             | gateway |
 
@@ -112,6 +119,14 @@ Feature: The anonymous 401 wall at the public front door
       | /bff/public/theme                 | login   |
       | /bff/public/theme.css             | login   |
       | /api/federation/capabilities      | gateway |
+
+    # The host shell's two public pages (host-shell app.routes.ts mounts 'home' and
+    # 'about' unguarded; /home is also its DENIED_PATH). The gateway serves the same
+    # index.html '/' serves (FE_SHELL_PUBLIC_GET_PATHS, hugmesh-gateway GUI-08).
+    Examples:
+      | path   | service |
+      | /home  | gateway |
+      | /about | gateway |
 
   # The public theme projection is `DomainTheme` minus `updatedBy` — an
   # administrator's JWT subject, i.e. an email. Its presence is PII exposure to
