@@ -1127,7 +1127,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 236 -> 237 on 2026-11-11 (fix/qemu-no-egress): +1 gated, +1 total —
 # tests/qemu/no_egress_argv_test.sh, named by shell-suites.yml. PREMERGE_UNGATED is
 # untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 237 of 279.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-237}"
+# 237 -> 238 on 2026-11-11 (fix/control-endpoint-lan-first-20261111): +1 gated, +1 total —
+# tests/scripts/test-control-endpoint-lan-first.sh, named by shell-suites.yml (debian leg)
+# and .gitlab-ci.yml's orphan-guards-verify. PREMERGE_UNGATED is untouched. MEASURED by
+# running this file on the branch.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-238}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
