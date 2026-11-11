@@ -266,46 +266,91 @@ def applies(cfg) -> bool:
     return True
 
 
+def desktop_entries(worklist, mode: str = "mesh") -> list:
+    """The mesh worklist rows whose image produces a desktop (each gets its own spec)."""
+    from .config import image_class
+    out = []
+    for e in getattr(worklist, "entries", None) or []:
+        if (e.platform or "x86") not in DESKTOP_PLATFORMS:
+            continue
+        if image_class(mode, e.role) != "desktop":
+            continue
+        if e.platform == "frite" and e.desktop == "none":
+            continue
+        out.append(e)
+    return out
+
+
+def step_applies(cfg, worklist=None) -> bool:
+    """Does the Desktop step show for this walk? (GUI applies_to and the TUI walk.)
+    Mesh: when at least one worklist row builds a desktop; otherwise: when this image
+    does. Skipping it changes nothing: emission is gated on :func:`applies` anyway."""
+    if getattr(cfg, "mode", "") == "mesh":
+        return bool(desktop_entries(worklist, "mesh"))
+    return applies(cfg)
+
+
+def entry_view(cfg, entry):
+    """A config standing for one mesh row: the base with the row's role, platform,
+    weight and spec (what materialize() stamps), for the step's checks."""
+    import copy
+    view = copy.copy(cfg)
+    view.role, view.platform = entry.role, entry.platform or "x86"
+    view.desktop = entry.desktop
+    view.desktop_spec = copy.deepcopy(getattr(entry, "desktop_spec", None) or {})
+    return view
+
+
 def is_x86(cfg) -> bool:
     return (getattr(cfg, "platform", "") or "x86") == "x86"
 
 
 # ── environment: a view over cfg.desktop / cfg.capable ───────────────────────
 
-#: x86 roles whose builder arm pins the environment (it errors on a contradiction).
-_ROLE_DEFAULT_WEIGHT = {"desktop": "full", "standalone-thick": "full",
-                        "standalone-unaffiliated": "full"}
-_ROLE_LOCKED_ENV = {"standalone-thick": "plasma", "standalone-unaffiliated": "plasma"}
-_ROLE_PINNED_WEIGHT = {"standalone-thin": "thin"}
+#: x86 roles whose builder arm defaults the weight to "full" (build-x86's `desktop)`
+#: arm: `${DESKTOP_SET} || DESKTOP="full"`); the pinning roles come from
+#: config.x86_desktop_axis / role_presets_capable, the builder mirrors.
+_ROLE_DEFAULT_FULL = ("desktop",)
+
+
+def _default_weight(role: str) -> str:
+    from .config import x86_desktop_axis
+    axis = x86_desktop_axis(role)
+    if len(axis) == 1:
+        return axis[0]
+    return "full" if role in _ROLE_DEFAULT_FULL else "thin"
 
 
 def environment(cfg) -> str:
+    from .config import role_presets_capable
     if not is_x86(cfg):
         return "lxde"
     role = getattr(cfg, "role", "")
-    if role in _ROLE_LOCKED_ENV or getattr(cfg, "capable", False):
+    if role_presets_capable(role) or getattr(cfg, "capable", False):
         return "plasma"
-    weight = getattr(cfg, "desktop", "") or _ROLE_DEFAULT_WEIGHT.get(role, "thin")
+    weight = getattr(cfg, "desktop", "") or _default_weight(role)
     return "xfce" if weight == "full" else "lxde"
 
 
 def environment_lock(cfg) -> str:
     """Why the environment cannot change here ("" when it can)."""
+    from .config import role_presets_capable
     plat = getattr(cfg, "platform", "") or "x86"
     if plat != "x86":
         return (f"The {plat} desktop ships LXDE only (its builder has one desktop "
                 "package set); more environments on ARM are a later step.")
     role = getattr(cfg, "role", "")
-    if role in _ROLE_LOCKED_ENV:
+    if role_presets_capable(role):
         return f"The {role} role IS the most-capable (Plasma) payload; pick another role to change it."
     return ""
 
 
 def environment_choices(cfg) -> list[str]:
+    from .config import x86_desktop_axis
     if environment_lock(cfg):
         return [environment(cfg)]
-    role = getattr(cfg, "role", "")
-    if role in _ROLE_PINNED_WEIGHT:            # standalone-thin: thin, or thin + capable
+    axis = x86_desktop_axis(getattr(cfg, "role", ""))
+    if axis == ("thin",):                     # standalone-thin: thin, or thin + capable
         return ["lxde", "plasma"]
     return list(ENVIRONMENTS)
 
@@ -317,14 +362,12 @@ def set_environment(cfg, env: str) -> None:
         raise ValueError(f"environment {env!r} is not available for this image")
     if not is_x86(cfg) or environment_lock(cfg):
         return
-    role = getattr(cfg, "role", "")
-    default_weight = _ROLE_DEFAULT_WEIGHT.get(role, "thin")
     if env == "plasma":
         cfg.capable = True
         return
     cfg.capable = False
     weight = "full" if env == "xfce" else "thin"
-    cfg.desktop = "" if weight == default_weight else weight
+    cfg.desktop = "" if weight == _default_weight(getattr(cfg, "role", "")) else weight
 
 
 def de_session(cfg) -> str:

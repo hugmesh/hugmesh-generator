@@ -52,7 +52,7 @@ hugmesh_pretend_run() {
 # hugmesh_pretend_needs LOG -> "KIND line" for every change portage named
 hugmesh_pretend_needs() {
     # tr: emerge prints its spinner with \r and \b; drop them before matching.
-    tr -d '\r\b' < "$1" | awk '
+    tr -d '\r\b\000' < "$1" | awk '
         /^The following USE changes are necessary to proceed/      { kind = "package.use"; next }
         /^The following keyword changes are necessary to proceed/  { kind = "accept_keywords"; next }
         /^The following mask changes are necessary to proceed/     { kind = "mask"; next }
@@ -101,7 +101,7 @@ hugmesh_pretend_report() {
         done
     fi
     printf '===== PRETEND RESOLVER OUTPUT =====\n'
-    tr -d '\r\b' < "${log}" | grep -a -v -E '^[[:space:]]*$' | tail -n 200 || true
+    tr -d '\r\b\000' < "${log}" | grep -a -v -E '^[[:space:]]*$' | tail -n 200 || true
     printf '===== END PRETEND RESOLVER OUTPUT =====\n'
     return "${ret}"
 }

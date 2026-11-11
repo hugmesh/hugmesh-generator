@@ -1,0 +1,24 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 14.82 s (backtrack: 0/20).
+
+[ebuild  N     ] media-libs/x264-0.0.20240513::gentoo  USE="-10bit -interlaced pic -static-libs threads" 
+[ebuild  N    ~] media-video/obs-studio-32.2.2::gentoo  USE="alsa pipewire pulseaudio -browser -decklink" 
+
+The following keyword changes are necessary to proceed:
+ (see "package.accept_keywords" in the portage(5) man page for more details)
+# required by media-video/obs-studio (argument)
+=media-video/obs-studio-32.2.2 ~amd64
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by media-video/obs-studio-32.2.2::gentoo
+# required by media-video/obs-studio (argument)
+>=media-video/ffmpeg-7.1.5 opus x264
+
+Use --autounmask-write to write changes to config files (honoring
+CONFIG_PROTECT). Carefully examine the list of proposed changes,
+paying special attention to mask or keyword changes that may expose
+experimental or unstable packages.
