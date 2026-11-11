@@ -413,6 +413,10 @@ _BRAND_IDENTITY_NOTE = (
     "step and bake under neutral names.")
 
 
+# The fields NetworkPage refuses on Next (GUI-20), in _refuse_malformed's order.
+_REFUSABLE_FIELDS = ("cluster_domain", "games_domain", "superdomain", "egress_vpn")
+
+
 def _refusal_label(name: str) -> QtWidgets.QLabel:
     """A hidden red inline-refusal label (the hostname_error / login_err look)."""
     label = QtWidgets.QLabel("")
@@ -2011,6 +2015,9 @@ class NetworkPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         c = self.wiz.cfg
+        # what the refusable fields held BEFORE this collect — _refuse_malformed puts a
+        # refused one back, so a value the build rejects is never written through
+        prior = {f: getattr(c, f) for f in _REFUSABLE_FIELDS}
         c.tailscale = self.tailscale.isChecked()
         c.sso = self.sso.isChecked()
         c.headscale_url = self.headscale_url.text().strip()
@@ -2259,9 +2266,9 @@ class NetworkPage(QtWidgets.QWizardPage):
             "optional_services", "exclude_services", "enable_games", "anubis",
             "managed_services",
         ))
-        return self._refuse_malformed(c)
+        return self._refuse_malformed(c, prior)
 
-    def _refuse_malformed(self, c) -> bool:
+    def _refuse_malformed(self, c, prior: dict) -> bool:
         """Refuse Next, inline, on a value this page just collected that the build would
         reject anyway (GUI-20). True when there is nothing to refuse.
 
@@ -2277,7 +2284,14 @@ class NetworkPage(QtWidgets.QWizardPage):
         test is BuildDriver.preflight's. Each refusal names the CAPTION the operator typed
         into, sits under that field, opens the section it lives in, and is scrolled into
         view (the fleet.py Domains-step precedent: a refusal nobody can see is a modal's
-        worst property without the modal)."""
+        worst property without the modal).
+
+        A refused field is put back to ``prior`` (what it held before this collect) —
+        the hostname refusal's "never written through" rule. Otherwise the bad value
+        stays in the config, and a person who walks Back and switches flow instead of
+        fixing it (cloud -> standalone hides the apex; mesh -> cloud makes the Tailscale
+        Root Domain a read-only display) carries it onto a flow with no field to fix it,
+        to meet it again at Review as "Cannot assemble this build"."""
         apex = games = ""
         if _cluster_identity_applies(c):
             apex = domain_name_problem("Public Apex Domain", c.cluster_domain)
@@ -2300,14 +2314,15 @@ class NetworkPage(QtWidgets.QWizardPage):
                           "the VPN profile with Browse…, or clear the field for no "
                           "egress VPN.")
         shown = []
-        for label, section, text in (
-                (self.domain_error, self.identity_section, apex),
-                (self.games_domain_error, self.identity_section, games),
-                (self.superdomain_error, self.mesh_section, superdomain),
-                (self.egress_error, self.egress_section, egress)):
+        for field, label, section, text in (
+                ("cluster_domain", self.domain_error, self.identity_section, apex),
+                ("games_domain", self.games_domain_error, self.identity_section, games),
+                ("superdomain", self.superdomain_error, self.mesh_section, superdomain),
+                ("egress_vpn", self.egress_error, self.egress_section, egress)):
             label.setText(text)
             label.setVisible(bool(text))
             if text:
+                setattr(c, field, prior[field])
                 section.set_expanded(True)
                 shown.append(label)
         if shown:

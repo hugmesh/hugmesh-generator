@@ -720,6 +720,7 @@ class SystemPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         c = self.wiz.cfg
+        prior_user = c.user        # put back if -u is refused below (never written through)
         # hostname: per IMAGE on a mesh worklist (issue #229) — the entries carry it
         # and the base is blanked; the single field only writes the config outside
         # mesh. Refusals are inline (hostname_error), never modal.
@@ -796,9 +797,13 @@ class SystemPage(QtWidgets.QWizardPage):
         # invalid local_user" at Review. LAST, after every other field is collected:
         # collect_all() re-runs validatePage and ignores its answer, so an early return
         # here would silently drop the person role and the credentials from the config.
+        # A refused value is put back rather than left in the config (the hostname
+        # refusal's "never written through" rule), so a Back-and-switch-flow cannot
+        # carry it to Review on a flow that hides this row.
         problem = username_problem("Default user", c.user) if c.user else ""
         self.user_error.setText(problem)
         self.user_error.setVisible(bool(problem))
         if problem:
+            c.user = prior_user
             return False
         return True

@@ -390,3 +390,83 @@ def test_password_refusals_still_win_first(wiz):
     wiz.next()
     assert wiz.currentId() == before
     assert "do not match" in home.login_err.text()
+
+
+# ── a refused value is never written through (the hostname precedent) ─────────────
+# Without this the refusal still left the bad value in the config: a person who then
+# walked Back and switched flow (standalone -> mesh hides the login group; cloud ->
+# standalone hides the apex) carried a value the build rejects onto a flow with no
+# field to fix it, and met it again at Review as "Cannot assemble this build".
+
+def _refuse_and_keep_prior(wiz, page, set_bad, field, bad):
+    prior = getattr(wiz.cfg, field)
+    assert prior != bad
+    set_bad()
+    type_login_password(page)
+    before = wiz.currentId()
+    wiz.next()
+    assert wiz.currentId() == before, f"{field}={bad!r} passed Next"
+    assert getattr(wiz.cfg, field) == prior, f"refused {field} was written through"
+    wiz.collect_all()                        # Review / save collect: same answer
+    assert getattr(wiz.cfg, field) == prior, f"collect_all wrote refused {field}"
+
+
+def test_refused_network_values_are_never_written_through(wiz, monkeypatch):
+    net = _cloud_network(wiz)
+    _refuse_and_keep_prior(wiz, net, lambda: net.domain.setText("not a domain!"),
+                           "cluster_domain", "not a domain!")
+    net.domain.setText(wiz.cfg.cluster_domain)
+    _refuse_and_keep_prior(wiz, net, lambda: net.games_domain.setText("games!"),
+                           "games_domain", "games!")
+    net.games_domain.clear()
+    _refuse_and_keep_prior(wiz, net, lambda: net.egress.setText("garbage endpoint"),
+                           "egress_vpn", "garbage endpoint")
+
+
+def test_refused_superdomain_is_never_written_through(wiz):
+    _mesh(wiz)
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    _refuse_and_keep_prior(wiz, net, lambda: net.superdomain.setText("Bad Root!"),
+                           "superdomain", "Bad Root!")
+
+
+def test_refused_default_user_is_never_written_through(wiz):
+    _mesh(wiz)
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    _refuse_and_keep_prior(wiz, sysp, lambda: sysp.user.setText("Root User"),
+                           "user", "Root User")
+
+
+def test_refused_local_user_does_not_ride_into_a_mesh_flow(wiz):
+    """The measured path: refuse 'Bad User' on a standalone Home step, go Back to Mode,
+    pick mesh — where the login group is hidden. The value must not come along."""
+    pick_mode(wiz, "standalone")
+    home = advance_to(wiz, wizard_mod.HomePage)
+    _refuse_and_keep_prior(wiz, home, lambda: home.local_user.setText("Bad User"),
+                           "local_user", "Bad User")
+    from _helpers import back_to
+    back_to(wiz, wizard_mod.ModePage)
+    pick_mode(wiz, "mesh")
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "pki.x86")
+    advance_to(wiz, wizard_mod.HomePage)
+    assert wiz.cfg.local_user != "Bad User"
+    wiz.cfg.validate_identity()          # what Review's assembly would have refused
+
+
+def test_refused_local_user_is_not_written_by_an_earlier_password_refusal(wiz):
+    """The mismatch refusal returns early; it must not write a refused Local User on
+    its way out either."""
+    pick_mode(wiz, "standalone")
+    home = advance_to(wiz, wizard_mod.HomePage)
+    prior = wiz.cfg.local_user
+    home.local_user.setText("Bad User")
+    home.local_pass.setText("one-password")
+    home.local_pass_confirm.setText("another-password")
+    before = wiz.currentId()
+    wiz.next()
+    assert wiz.currentId() == before and "do not match" in home.login_err.text()
+    assert wiz.cfg.local_user == prior
+    home.local_pass_confirm.setText("one-password")
+    _refused(wiz, home.login_err, caption="Local User", value="Bad User")
+    assert wiz.cfg.local_user == prior

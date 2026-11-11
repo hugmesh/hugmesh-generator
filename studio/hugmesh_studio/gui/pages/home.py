@@ -858,7 +858,13 @@ class HomePage(QtWidgets.QWizardPage):
         # matters and the one that is gated: it is a SECRET_FIELD that would otherwise
         # ride the shared mesh base onto every node image.
         login_ok = capability_allows_flow(local_login_applies, c, self.wiz)
-        c.local_user = self.local_user.text().strip() or c.local_user
+        # GUI-20: a Local User the allowlist refuses is NOT written (the hostname rule:
+        # never written through) — checked here, before the password refusals below
+        # can return early, and reported LAST, after the whole collect (see the end).
+        typed_user = self.local_user.text().strip() or c.local_user
+        user_problem = username_problem("Local User", typed_user) if login_ok else ""
+        if not user_problem:
+            c.local_user = typed_user
         if login_ok and self.local_pass.text() != self.local_pass_confirm.text():
             self.login_err.setText(
                 "The two passwords do not match. Type the same password in both "
@@ -917,10 +923,12 @@ class HomePage(QtWidgets.QWizardPage):
         # passed Next and surfaced at Review as "Cannot assemble this build: invalid
         # local_user". Only while the login group is ON SCREEN (login_ok): where it is
         # hidden the operator has no field to fix, so refusing there would be a Next that
-        # cannot be satisfied. LAST, after every field above is collected, because
-        # collect_all() re-runs validatePage and ignores its answer. Same label and same
-        # scroll as the password refusals' surface: under the group, brought into view.
-        problem = username_problem("Local User", c.local_user) if login_ok else ""
+        # cannot be satisfied. Reported LAST, after every field above is collected,
+        # because collect_all() re-runs validatePage and ignores its answer; the value
+        # itself was never written (above), so a Back to Mode and a switch to mesh —
+        # where this group is hidden — cannot carry it, unfixable, to Review. Same label
+        # and scroll as the password refusals: under the group, brought into view.
+        problem = user_problem
         if problem:
             self.login_err.setText(problem)
             self.login_err.setVisible(True)
