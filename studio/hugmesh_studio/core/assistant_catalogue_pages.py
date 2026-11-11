@@ -144,6 +144,12 @@ PAGES = {
  "pentest": [
   "fleet"
  ],
+ "pki_lan_ip": [
+  "fleet"
+ ],
+ "pki_lan_ip_fixed": [
+  "fleet"
+ ],
  "platform": [
   "build",
   "packages_dialog",
