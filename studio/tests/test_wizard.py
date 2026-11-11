@@ -517,8 +517,9 @@ def test_mesh_worklist_multiselect_builds_entries_and_prunes_domain_refs(wiz):
 
 def test_worklist_per_row_encryption_column_and_jetson_disabled(wiz):
     """spec 4: each buildable node row gets a default/on/off Encryption combo; the
-    jetson row shows a DISABLED 'off — jetson cannot encrypt' cell (no combo). The
-    fleet-wide LUKS-passphrase scoping hint is present."""
+    jetson row shows a DISABLED 'off' cell whose tooltip says why (no combo; GUI-29
+    pins its fit in test_pages_worklist_columns.py). The fleet-wide LUKS-passphrase
+    scoping hint is present."""
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
     # a normal node row has an editable combo defaulting to "default" (inherit Home)
