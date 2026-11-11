@@ -41,7 +41,7 @@ from __future__ import annotations
 # moved to _widgets.py for their one remaining consumer. Importing Qt "just in case" would
 # leave the next reader a working import for the very idiom this page is now defined by
 # not having.
-from ..qt import QtWidgets
+from ..qt import QtCore, QtWidgets
 from ._scroll import scrollable
 # Imported as a MODULE, not by name, purely so this page can prefer core.config's named
 # predicate the moment it exists without an import-time hard dependency on it — see
@@ -86,6 +86,7 @@ from ._gating import (
 from ._widgets import _file_picker, _row, collapsible
 # one sentence and one rule for both faces (the TUI Network step shows the same)
 from ...tui.network_step import brand_mirror_text, brand_mirrored
+from ...core.validate import domain_name_problem
 
 # ── DEFINITE OFF: why there is no tri-state left on this page ────────────────────────
 # Operator, verbatim (asks 1 + 4): "gui studio should leave optional services and edge ai
@@ -412,6 +413,16 @@ _BRAND_IDENTITY_NOTE = (
     "step and bake under neutral names.")
 
 
+def _refusal_label(name: str) -> QtWidgets.QLabel:
+    """A hidden red inline-refusal label (the hostname_error / login_err look)."""
+    label = QtWidgets.QLabel("")
+    label.setObjectName(name)
+    label.setWordWrap(True)
+    label.setStyleSheet("color: #c62828;")
+    label.setVisible(False)
+    return label
+
+
 def _identity_help_text(brand: bool, cluster: bool, superdomain_on_screen: bool) -> str:
     """The "Identity & Domain" help line, COMPOSED from what the section still contains.
 
@@ -662,11 +673,21 @@ class NetworkPage(QtWidgets.QWizardPage):
         # permanently-internal Tailscale root domain in the mesh-networking section below.
         self.domain_row = _row("Public Apex Domain", self.domain)
         il.addWidget(self.domain_row)
+        # The inline refusals on this page (GUI-20): a red label directly under each
+        # field a Next can be refused for, never a modal (validatePage runs headless).
+        # Before these, a malformed apex / games domain, Tailscale root domain or a
+        # missing egress profile passed Next and surfaced pages later as "Cannot assemble
+        # this build" (or only in Review's preflight pane), worded against the config
+        # field rather than the caption the operator typed into.
+        self.domain_error = _refusal_label("domain_error")
+        il.addWidget(self.domain_error)
         # games domain (G6, x86+rpi5): the games.<domain> host + games OIDC issuer.
         self.games_domain = QtWidgets.QLineEdit()
         self.games_domain.setPlaceholderText("games.<cluster domain>  (empty = builder default)")
         self.games_domain_row = _row("Games Domain", self.games_domain)
         il.addWidget(self.games_domain_row)
+        self.games_domain_error = _refusal_label("games_domain_error")
+        il.addWidget(self.games_domain_error)
         # release state (G4, x86+rpi5): the baked Layer-3 nftables / go-live posture.
         self.release_state = QtWidgets.QComboBox()
         self.release_state.addItems(("default", *RELEASE_STATE_CHOICES))
@@ -747,6 +768,8 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.superdomain = QtWidgets.QLineEdit()
         self.superdomain_row = _row("Tailscale Root Domain", self.superdomain)
         cp.addWidget(self.superdomain_row)
+        self.superdomain_error = _refusal_label("superdomain_error")
+        cp.addWidget(self.superdomain_error)
         # ASK 8's "this mesh also hosts other domains" CHECKBOX used to sit here, under
         # the superdomain row. ASK 19 promoted that decision to its own choice-card
         # screen (gui/pages/domains_choice.py) in the ModePage idiom — "proceed with the
@@ -779,6 +802,8 @@ class NetworkPage(QtWidgets.QWizardPage):
             "profile (optional). Lock it to stop a managed node's user removing it."))
         self.egress_field_row = _row("Egress VPN", w)
         eg.addWidget(self.egress_field_row)
+        self.egress_error = _refusal_label("egress_error")
+        eg.addWidget(self.egress_error)
         self.egress_locked = QtWidgets.QCheckBox("Lock the egress VPN")
         eg.addWidget(self.egress_locked)
         self.egress_section = collapsible("Egress VPN", self.egress_box)
@@ -1374,6 +1399,10 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.identity_reason.setVisible(bool(reasons))
         self.egress.setText(c.egress_vpn)
         self.egress_locked.setChecked(c.egress_vpn_locked)
+        # a refusal from an earlier visit describes values this visit has just re-seeded
+        for label in (self.domain_error, self.games_domain_error, self.superdomain_error,
+                      self.egress_error):
+            label.setVisible(False)
         # same rule for the edge_ai role's auto-check (G11: jetson greys out too)
         edge_on = _on_off(c.edge_ai_service)
         if c.role in ("edge-ai", "edge_ai"):
@@ -2230,4 +2259,63 @@ class NetworkPage(QtWidgets.QWizardPage):
             "optional_services", "exclude_services", "enable_games", "anubis",
             "managed_services",
         ))
-        return True
+        return self._refuse_malformed(c)
+
+    def _refuse_malformed(self, c) -> bool:
+        """Refuse Next, inline, on a value this page just collected that the build would
+        reject anyway (GUI-20). True when there is nothing to refuse.
+
+        Run LAST, on the values as COLLECTED — after every scope gate above and
+        clear_unsupported — for two reasons. (1) What is checked is exactly what reaches
+        the argv: a hidden or platform-cleared field is already back at its default
+        here, so a value the operator cannot see is never refused. (2) collect_all()
+        re-runs validatePage and ignores its answer, so an early return would silently
+        drop every field below the bad one from a Review/save collect.
+
+        The checks are the build's own: validate_domain_name is what validate_identity
+        applies to --cluster-domain / --games-domain / --superdomain, and the egress file
+        test is BuildDriver.preflight's. Each refusal names the CAPTION the operator typed
+        into, sits under that field, opens the section it lives in, and is scrolled into
+        view (the fleet.py Domains-step precedent: a refusal nobody can see is a modal's
+        worst property without the modal)."""
+        apex = games = ""
+        if _cluster_identity_applies(c):
+            apex = domain_name_problem("Public Apex Domain", c.cluster_domain)
+            if apex and brand_mirrored(c):
+                # read-only here on a mesh (#654): say where it CAN be changed
+                apex += (f" On a mesh it is set in the {plain_words.term('superbrand')} "
+                         "step at the top of the Branding page — use the button above.")
+            if c.games_domain:
+                games = domain_name_problem("Games Domain", c.games_domain)
+        superdomain = ""
+        if c.mode == "mesh" and c.superdomain:
+            superdomain = domain_name_problem("Tailscale Root Domain", c.superdomain)
+        egress = ""
+        drv = getattr(self.wiz, "driver", None)
+        if c.egress_vpn and drv is not None:
+            missing = drv.missing_host_path(c.egress_vpn)
+            if missing:
+                where = "" if missing == c.egress_vpn else f" (looked for {missing})"
+                egress = (f"Egress VPN: there is no file at {c.egress_vpn!r}{where}. Pick "
+                          "the VPN profile with Browse…, or clear the field for no "
+                          "egress VPN.")
+        shown = []
+        for label, section, text in (
+                (self.domain_error, self.identity_section, apex),
+                (self.games_domain_error, self.identity_section, games),
+                (self.superdomain_error, self.mesh_section, superdomain),
+                (self.egress_error, self.egress_section, egress)):
+            label.setText(text)
+            label.setVisible(bool(text))
+            if text:
+                section.set_expanded(True)
+                shown.append(label)
+        if shown:
+            # AFTER the layout pass the setVisible calls only POSTED, or the scroll uses
+            # the hidden label's stale geometry (fleet.py's measured lesson)
+            QtCore.QCoreApplication.sendPostedEvents(
+                None, QtCore.QEvent.Type.LayoutRequest)
+            scroll = getattr(self, "_content_scroll", None)
+            if scroll is not None:
+                scroll.ensureWidgetVisible(shown[0])
+        return not shown

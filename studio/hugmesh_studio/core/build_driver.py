@@ -644,6 +644,15 @@ class BuildDriver:
         is usually $HOME. Typed ``brands/example.conf`` is the case this exists for."""
         return os.path.normpath(p if os.path.isabs(p) else os.path.join(self.generator_dir, p))
 
+    def missing_host_path(self, p: str) -> str:
+        """'' when ``p`` passes the existence test :meth:`preflight` applies to a path
+        field's value; otherwise the host path it was looked for at. For a wizard page
+        that refuses a missing file on the field it was typed into instead of at Review:
+        same resolution (:meth:`_host_path` — relative means relative to the generator
+        checkout, never the Studio's cwd), same ``os.path.exists``."""
+        host = self._host_path(p)
+        return "" if os.path.exists(host) else host
+
     def _docker_path(self, value: str, index: int) -> tuple[list[str], str | None]:
         """One host path value -> (extra docker args, its in-container value), or
         ``([], None)`` when it must be left exactly as it is.

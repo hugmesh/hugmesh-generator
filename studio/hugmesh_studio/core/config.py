@@ -4435,7 +4435,7 @@ class ImageConfig:
         if self.hostname:
             validate_domain_name(self.hostname)   # a hostname is a DNS label/name
         if self.user:
-            validate_username(self.user)
+            validate_username(self.user, "user")   # not "local_user": a different field
         if self.timezone and not _TIMEZONE_RE.fullmatch(self.timezone):
             raise IdentityValidationError(
                 f"invalid timezone: {self.timezone!r} — rejected by the identity allowlist")
