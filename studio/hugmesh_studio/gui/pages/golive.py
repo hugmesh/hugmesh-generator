@@ -33,9 +33,11 @@ this mesh…" opens the wizard on its front door (``target=``). Against a device
 host runs nothing but ssh: status/list come from the device's own baked driver, the
 Inputs step autofills from its probe, Generate streams the plan run INSIDE it and
 lists the artefacts copied back, Exposure/Provider say what each mechanism can really
-do from an emulated node, Verify/Flip carry the EPHEMERAL banner (a restart boots the
-golden image INTERNAL again), and the flip opens ``ssh -t … commit`` in a terminal —
-the device's own TTY confirm, never -y. This host's commit is refused off-node (B1).
+do from an emulated node, Verify/Flip carry the EPHEMERAL banner (the next boot starts
+from the golden image or a save, never from this run's disk), every status pane leads
+with the posture READ from the device (both witnesses — never inferred from a
+restart), and the flip opens ``ssh -t … commit`` in a terminal — the device's own TTY
+confirm, never -y. This host's commit is refused off-node (B1).
 """
 from __future__ import annotations
 
@@ -273,8 +275,9 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
 
     def _refresh(self):
         text = self.wiz.status_text()
-        js = self.wiz.journal_line()
-        self.status.setPlainText(text + (f"\n\n{js}" if js else ""))
+        rep = self.wiz.device_report()
+        # the device's own posture FIRST: the pane is short, and that is its answer
+        self.status.setPlainText((f"{rep}\n\n" if rep else "") + text)
 
     def revisit(self) -> None:
         """Back to this step from a later one. QWizard's Back never calls
@@ -1437,8 +1440,8 @@ class GoLiveVerifyPage(QtWidgets.QWizardPage):
         return p.mechanism if p else ""
 
     def _recheck(self):
-        js = self.wiz.journal_line()
-        self.status.setPlainText(self.wiz.status_text() + (f"\n{js}" if js else ""))
+        rep = self.wiz.device_report()
+        self.status.setPlainText((f"{rep}\n\n" if rep else "") + self.wiz.status_text())
         self.wiz.verify_ok = True   # advisory only; the flip arms on the typed domain
 
 
@@ -1568,8 +1571,8 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         self._refresh()
 
     def _refresh(self):
-        js = self.wiz.journal_line()
-        self.status.setPlainText(self.wiz.status_text() + (f"\n{js}" if js else ""))
+        rep = self.wiz.device_report()
+        self.status.setPlainText((f"{rep}\n\n" if rep else "") + self.wiz.status_text())
 
     def _armed(self, text):
         d = self.wiz.opts.domain
@@ -1833,12 +1836,20 @@ class GoLiveWizard(QtWidgets.QWizard):
                      "deleted after the run")
         return line
 
-    def journal_line(self) -> str:
-        """The journal compared with the device's boot: says 'reset by a restart' when
-        the device booted again since. "" for this host / no journal."""
-        if self.target.is_local:
+    def device_report(self) -> str:
+        """golive_target.device_report for the picked device: the posture READ from it
+        now (both witnesses; "unknown (device not reachable)" when it cannot be asked),
+        the save it booted from and the posture that save was taken in, and the journal.
+        A picked binding that went stale is NOT asked — an ssh to its old port could
+        reach another device and show that one's posture as this one's. "" for this
+        host."""
+        t = self.target
+        if t.is_local:
             return ""
-        return golive_target.journal_status(self.work_dir, self.target)
+        stale = self.stale_binding()
+        posture = (golive_target.Posture(asked=False, error="re-scan the devices first")
+                   if stale else golive_target.read_posture(t))
+        return golive_target.device_report(self.work_dir, t, posture)
 
     def nextId(self):
         """The default order, except that the export step is SKIPPED when no domain

@@ -111,6 +111,10 @@ class GoLiveScreen:
         self.work_dir = ""                     # "" = qemu_devices.default_work_dir
         self._rows: list = []
         self.run_log: list[str] = []           # the last s / l / p output
+        #: the picked device's posture as it said it at the last ``s`` (read over ssh,
+        #: both witnesses); None until then. The plan screen redraws on every key, so
+        #: it shows this reading with its time instead of sshing per redraw.
+        self.posture: golive_target.Posture | None = None
         #: what ``b`` on the first step returns to when opened OVER another screen
         self.back_to = "Brand settings"
         # the export step's state: config files added with `c FILE`, the picked
@@ -185,6 +189,7 @@ class GoLiveScreen:
         if (old[0].kind, old[0].label) != (target.kind, target.label):
             self.opts.provider = ""
         self.run_log = []
+        self.posture = None                     # read from ANOTHER binding
         return ""
 
     def fresh(self, j, target):
@@ -203,6 +208,7 @@ class GoLiveScreen:
         if not golive_target.same_binding(fresh, t):
             self.target, self.driver = fresh, None
             self.run_log = []
+            self.posture = None                 # it was the earlier boot's
         return golive_target.refusal(self.target) or (
             self._driver(j).blocker() if self.target.running else "")
 
@@ -518,9 +524,13 @@ class GoLiveScreen:
         if reach:
             out.append(f"from {t.label}: {reach}")
         out.append(f"EPHEMERAL on {t.label}: {golive_target.EPHEMERAL_NOTE}.")
-        js = golive_target.journal_status(self._work(j), t)
-        if js:
-            out.append(js)
+        # the last reading (s), never a guess; a stale pick is not quoted at all
+        if self.stale_binding(j):
+            posture = golive_target.Posture(asked=False, error="t, then r: re-scan")
+        else:
+            posture = self.posture or golive_target.Posture(
+                asked=False, error="s reads it from the device")
+        out += golive_target.device_report(self._work(j), t, posture).splitlines()
         tok = (f"token file (sent over ssh stdin, never argv): {self.opts.token_file}"
                if self.opts.token_file else
                "token: none (tf PATH names a HOST file whose content is sent over ssh "
@@ -548,9 +558,9 @@ class GoLiveScreen:
         lines: list[str] = []
         if verb == "status":
             lines = d.status_text().splitlines()
-            js = golive_target.journal_status(self._work(j), self.target)
-            if js:
-                lines.append(js)
+            # both witnesses, read from the device now (the plan screen quotes it)
+            self.posture = golive_target.read_posture(self.target)
+            lines.append(f"device posture now: {self.posture.sentence()}")
         elif verb == "list":
             for pr in d.providers():
                 reach = golive_target.mechanism_reachability(pr.mechanism, self.target,

@@ -81,6 +81,20 @@ def _no_node_image_meshes_up(monkeypatch):
     monkeypatch.setattr(local_stack_node, "running_img_projects", lambda: [])
 
 
+@pytest.fixture(autouse=True)
+def _no_save_posture_ssh(monkeypatch):
+    """A mesh save reads each device's go-live posture over ssh before pausing it
+    (core.emulation_save._read_device_posture). Tests fabricate device records on the
+    harness's REAL loopback port range (223xx), where this workstation may be running
+    real devices, so no test may ask one by accident: the default reader records
+    "not read" here. Tests of the reader keep a reference to the real function (taken
+    at import, before this runs) or inject ``read_posture=`` themselves."""
+    from hugmesh_studio.core import emulation_save, golive_target
+    unread = golive_target.Posture(asked=False, error="tests ask no device over ssh")
+    monkeypatch.setattr(emulation_save, "_read_device_posture",
+                        lambda dev: unread.as_record())
+
+
 def _live_qapplication():
     """The process's QApplication, or None — without ever raising, and without
     importing Qt into a run that has not already imported it.

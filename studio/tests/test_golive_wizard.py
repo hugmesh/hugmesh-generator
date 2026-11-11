@@ -27,6 +27,9 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 CANNED_STATUS = ("Go-live status\n  release-state: internal (default — no file)\n"
                  "  go-live marker: absent\n  posture: INTERNAL")
+#: the real ``status_text`` (the autouse pin below replaces it): a test that asserts on
+#: what the DEVICE says puts it back, so the fake guest's own status is what shows
+_REAL_STATUS_TEXT = golive_mod.GoLiveDriver.status_text
 
 
 @pytest.fixture(autouse=True)
@@ -556,7 +559,9 @@ def test_verify_and_flip_show_the_ephemeral_banner_for_a_device(emu_wiz):
     assert "REHEARSAL" in ver.checklist.toPlainText()
     flip = advance_to(emu_wiz, golive_mod.GoLiveFlipPage)
     assert flip.ephemeral.isVisible()
-    assert "a restart boots the golden image INTERNAL again" in flip.ephemeral.text()
+    assert "the next boot starts again from the golden image (in whatever posture it " \
+        "bakes) or from a Save (in the posture it was saved in)" in flip.ephemeral.text()
+    assert "INTERNAL" not in flip.ephemeral.text()
     assert "rpi5/pki" in flip.flip_btn.text()
     # the warning does not promise the internet: from a device this is a rehearsal
     assert "ABOUT TO GO PUBLIC on rpi5/pki" in flip.warning.text()
@@ -644,14 +649,105 @@ def test_flip_without_a_terminal_shows_the_exact_ssh_command(emu_wiz, launched,
     assert "hugmesh-go-live commit --provider byo-domain --domain mesh.example" in cmd
 
 
-def test_a_restart_since_the_commit_is_said(emu_wiz, guest, monkeypatch):
+def test_a_restart_since_the_commit_is_said_and_the_posture_is_read(emu_wiz, guest,
+                                                                     monkeypatch):
+    """A commit journalled during an EARLIER boot; the device is PUBLIC now (a restart
+    from a golden built public, or a re-commit). The pane says WHEN the journal was
+    written and what the device SAYS — never 'reset by a restart … INTERNAL'."""
+    monkeypatch.setattr(golive_mod.GoLiveDriver, "status_text", _REAL_STATUS_TEXT)
     golive_target.write_journal(
         golive_target.GoLiveTarget(kind=golive_target.KIND_DOCKER, label="rpi5/pki",
                                    started_at="2026-11-01T00:00:00Z",
                                    work_dir=guest.work_dir),
         "commit", "byo-domain", "mesh.example")
+    fake.set_public(guest)
     flip = _at_flip(emu_wiz)
-    assert "reset by a restart" in flip.status.toPlainText()
+    shown = flip.status.toPlainText()
+    assert "during an earlier boot (the device booted again at 2026-11-09T20:00:00Z)" \
+        in shown
+    assert "): PUBLIC — both witnesses say public (hugmesh-go-live status; nft table" in shown
+    assert "INTERNAL" not in shown and "reset by a restart" not in shown
+
+
+def _boot_from_a_save_taken_while_public(guest, tmp_path):
+    """rpi5/pki: committed during boot 1, saved while PUBLIC, booted again (boot 2)
+    from that save — the go-live round-2 prover's live sequence, on the fake guest."""
+    import json
+    sdir = tmp_path / "work" / "saves" / "mesh-20261111T152704Z"
+    sdir.mkdir(parents=True)
+    disk = sdir / "rpi5_pki.qcow2"
+    disk.write_text("qcow2")
+    (sdir / "mesh-save.json").write_text(json.dumps({
+        "session": "mesh-20261111T152704Z", "created_at": "2026-11-11T15:30:29Z",
+        "devices": [{"label": "rpi5/pki", "target": str(disk), "ok": True,
+                     "golive_posture": golive_target.Posture(
+                         status="public", nft="public", reachable=True).as_record()}]}))
+    first = fake.register(guest, label="rpi5/pki", started_at="2026-11-11T15:11:59Z")
+    golive_target.write_journal(golive_target.target_from_device(first, guest.work_dir),
+                                "commit", "byo-domain", "mesh.example",
+                                now="2026-11-11T15:26:38Z")
+    fake.register(guest, label="rpi5/pki", started_at="2026-11-11T15:31:13Z",
+                  boot_save=str(disk))
+    fake.set_public(guest)
+
+
+def test_every_pane_after_a_boot_from_a_save_taken_while_public_says_public(
+        qapp, guest, tmp_path, monkeypatch):
+    """The live defect on the GUI face (gui-13-rescan-after-restart-rebound.png): the
+    pane said 'effective posture: public' and, under it, 'reset by a restart (…
+    INTERNAL)'. Every pane now LEADS with the posture read from the device, then the
+    save it booted from and the posture that save was taken in, then the journal."""
+    monkeypatch.setattr(golive_mod.GoLiveDriver, "status_text", _REAL_STATUS_TEXT)
+    _boot_from_a_save_taken_while_public(guest, tmp_path)
+    w = golive_mod.GoLiveWizard(GENERATOR_DIR, target="rpi5/pki")
+    w.show()
+    try:
+        pre = advance_to(w, golive_mod.GoLivePreflightPage)
+        ver = None
+        flip = _at_flip(w)
+        ver = w.page(w.pageIds()[[type(w.page(i)).__name__ for i in w.pageIds()]
+                                 .index("GoLiveVerifyPage")])
+        for pane in (pre.status, ver.status, flip.status):
+            shown = pane.toPlainText()
+            first = shown.splitlines()[0]
+            assert first.startswith("device posture now (read ") and \
+                first.endswith("): PUBLIC — both witnesses say public (hugmesh-go-live "
+                               "status; nft table inet hugmesh_release_gate)")
+            assert ("booted from a save taken while PUBLIC (mesh-20261111T152704Z, "
+                    "saved 2026-11-11T15:30:29Z)") in shown
+            assert "commit launched from this host" in shown
+            assert "during an earlier boot (the device booted again at " \
+                "2026-11-11T15:31:13Z)" in shown
+            assert "effective posture:   public" in shown
+            assert "INTERNAL" not in shown and "reset by a restart" not in shown
+        # what a person SEES on the Flip page, whose pane is capped short: the posture
+        # line is the first thing in it and is drawn whole inside the viewport
+        _shoot(w, "golive-flip-after-boot-from-save-public", tmp_path)
+        st = flip.status
+        assert st.isVisible() and w.rect().contains(_rect_in(st, w))
+        block = st.firstVisibleBlock()
+        assert block.text().startswith("device posture now")
+        geo = st.blockBoundingGeometry(block).translated(st.contentOffset())
+        assert geo.top() >= 0 and geo.bottom() <= st.viewport().height(), \
+            (geo, st.viewport().height())
+        # ... and its verdict is inside the pane's width, not scrolled off to the right
+        lead = block.text()[:block.text().index("both witnesses say public")
+                            + len("both witnesses say public")]
+        assert st.fontMetrics().horizontalAdvance(lead) <= st.viewport().width(), \
+            (lead, st.viewport().width())
+        # unreachable now: unknown, never a guess — the save and the journal still said
+        monkeypatch.setenv("FAKE_GUEST_DOWN", "1")
+        flip._refresh()
+        shown = flip.status.toPlainText()
+        assert shown.splitlines()[0].endswith("): unknown (device not reachable) — ssh to "
+                                              "rpi5/pki failed (exit 255): ssh: connect to "
+                                              "host 127.0.0.1 port 22401: Connection "
+                                              "refused")
+        assert "booted from a save taken while PUBLIC" in shown
+        assert "INTERNAL" not in shown
+    finally:
+        w.close()
+        w.deleteLater()
 
 
 def test_this_host_off_node_cannot_flip_whatever_is_typed(wiz, baked_domain, monkeypatch,
@@ -733,15 +829,28 @@ def test_rescan_after_a_restart_rebinds_to_the_new_port_and_boot(emu_wiz, guest)
     emu_wiz.opts.provider = "byo-domain"
     golive_target.write_journal(emu_wiz.target, "commit", "byo-domain", "mesh.example",
                                 confirmed=True)
-    assert "reset by a restart" not in emu_wiz.journal_line()
+    assert "earlier boot" not in emu_wiz.device_report()
     _restart(guest)                                  # new port, new boot
+    # stale: the old port is NOT asked for a posture (it may be another device's now)
+    asked = len([c for c in guest.calls() if "@@nftrc" in c[-1]])
+    report = emu_wiz.device_report()
+    assert report.startswith("device posture: unknown (not read) — re-scan the devices")
+    assert len([c for c in guest.calls() if "@@nftrc" in c[-1]]) == asked
     pre.rescan_btn.click()
     assert emu_wiz.target.ssh_port == 22999
     assert emu_wiz.target.started_at == "2026-11-10T09:00:00Z"
     assert emu_wiz.driver.target.ssh_port == 22999, "the driver still sshes the OLD port"
     assert _flip_port(emu_wiz) == "22999"
-    assert "reset by a restart" in emu_wiz.journal_line()
-    assert "reset by a restart" in pre.status.toPlainText()
+    assert "during an earlier boot" in emu_wiz.device_report()
+    assert "during an earlier boot" in pre.status.toPlainText()
+    # INTERNAL here because the DEVICE says so (no marker in the fake guest), read
+    # with both witnesses — not because it restarted
+    assert "): INTERNAL — both witnesses say internal (hugmesh-go-live status; nft" \
+        in emu_wiz.device_report()
+    assert "reset by a restart" not in emu_wiz.device_report()
+    # the posture read after the re-scan went to the NEW port too
+    reads = [c for c in guest.calls() if "@@nftrc" in c[-1]]
+    assert reads[-1][reads[-1].index("-p") + 1] == "22999"
     assert "127.0.0.1:22999" in pre.target_info.text()
     # the same device: the provider picked for it is kept
     assert emu_wiz.opts.provider == "byo-domain"

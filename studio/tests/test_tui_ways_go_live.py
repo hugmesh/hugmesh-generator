@@ -211,9 +211,77 @@ def test_the_plan_runs_on_the_device_and_the_flip_is_handed_over(guest):
     assert "  records.txt" in text and "  zone.db" in text
     assert "exited 0" in j.status
     j.feed("s")
-    assert "posture: INTERNAL" in "\n".join(j.lines())
+    text = "\n".join(j.lines())
+    assert "effective posture:   internal" in text
+    assert "device posture now: INTERNAL — both witnesses say internal " in text
     j.feed("l")
     assert "byo-domain files" in "\n".join(j.lines())
+
+
+def _boot_from_a_save_taken_while_public(guest, tmp_path):
+    """rpi5/pki: this host's commit journalled during boot 1, then a save taken while
+    PUBLIC, then boot 2 from that save (the saved disk carries the marker)."""
+    import json
+    from hugmesh_studio.core import golive_target as gt
+    sdir = tmp_path / "work" / "saves" / "mesh-20261111T152704Z"
+    sdir.mkdir(parents=True)
+    disk = sdir / "rpi5_pki.qcow2"
+    disk.write_text("qcow2")
+    (sdir / "mesh-save.json").write_text(json.dumps({
+        "session": "mesh-20261111T152704Z", "created_at": "2026-11-11T15:30:29Z",
+        "devices": [{"label": "rpi5/pki", "target": str(disk), "ok": True,
+                     "golive_posture": gt.Posture(status="public", nft="public",
+                                                  reachable=True).as_record()}]}))
+    first = fake.register(guest, label="rpi5/pki", started_at="2026-11-11T15:11:59Z")
+    gt.write_journal(gt.target_from_device(first, guest.work_dir), "commit",
+                     "byo-domain", "example.invalid", rc=0, now="2026-11-11T15:26:38Z")
+    fake.register(guest, label="rpi5/pki", started_at="2026-11-11T15:31:13Z",
+                  boot_save=str(disk))
+    fake.set_public(guest)
+
+
+def test_s_after_a_boot_from_a_save_taken_while_public_says_public(guest, tmp_path):
+    """The live defect on the TUI face (tui-rebind.txt): the plan screen and `s`
+    printed 'reset by a restart (… INTERNAL)' beside the device's own 'public'."""
+    _boot_from_a_save_taken_while_public(guest, tmp_path)
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    text = "\n".join(j.lines())
+    # before `s`: nothing was read, and nothing is guessed
+    assert "device posture: unknown (not read) — s reads it from the device" in text
+    assert "booted from a save taken while PUBLIC (mesh-20261111T152704Z" in text
+    assert "during an earlier boot (the device booted again at 2026-11-11T15:31:13Z)" in text
+    assert "INTERNAL" not in text and "reset by a restart" not in text
+    j.feed("s")
+    text = "\n".join(j.lines())
+    assert "effective posture:   public" in text
+    assert "device posture now: PUBLIC — both witnesses say public (hugmesh-go-live " \
+        "status; nft table inet hugmesh_release_gate)" in text
+    assert "): PUBLIC — " in text                    # the plan screen quotes the read
+    assert "INTERNAL" not in text and "reset by a restart" not in text
+
+
+def test_s_while_the_reconcile_lags_says_mixed_and_unreachable_says_unknown(
+        guest, monkeypatch):
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    fake.set_public(guest)                           # committed; nft not caught up yet
+    monkeypatch.setenv("FAKE_GUEST_NFT", "internal")
+    j.feed("s")
+    text = "\n".join(j.lines())
+    assert "device posture now: MIXED — hugmesh-go-live status says public, the nft " \
+        "release gate says internal" in text
+    monkeypatch.setenv("FAKE_GUEST_NFT", "absent")  # no table loaded: never "public"
+    j.feed("s")
+    assert "the nft release gate says unknown (table inet hugmesh_release_gate absent " \
+        "or unreadable)" in "\n".join(j.lines())
+    monkeypatch.setenv("FAKE_GUEST_DOWN", "1")
+    j.feed("s")
+    text = "\n".join(j.lines())
+    assert "device posture now: unknown (device not reachable) — ssh to rpi5/pki " \
+        "failed (exit 255)" in text
 
 
 def test_a_token_file_reaches_the_device_over_stdin_only(guest, tmp_path):

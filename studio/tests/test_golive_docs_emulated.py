@@ -61,8 +61,10 @@ EXPECTED_REACH = {
     "funnel": "refused",
 }
 
-EPHEMERAL = ("this posture lasts until the device stops; a restart boots the golden "
-             "image INTERNAL again — Save the device to keep a copy")
+EPHEMERAL = ("this posture lives on this run's disk only: the next boot starts again "
+             "from the golden image (in whatever posture it bakes) or from a Save (in "
+             "the posture it was saved in) — Save the device to keep it; Status reads "
+             "the posture from the device itself")
 REHEARSAL = ("REHEARSAL — the posture flips inside the emulated node, but nothing "
              "outside this workstation can reach it; the harness publishes loopback ssh only")
 TUNNEL_LABEL = ("can be really reachable (outbound only); but the tunnel token is consumed "
@@ -178,10 +180,19 @@ def test_cloudflare_token_claim_matches_specs(section: str):
 
 
 # ── persistence ──────────────────────────────────────────────────────────────────
-def test_ephemeral_banner_and_restart_reset(section: str):
+def test_ephemeral_banner_and_status_reads_the_device(section: str):
     flat = _flat(section)
     assert EPHEMERAL in flat
-    assert "*reset by a restart*" in flat
+    # the posture is read, never inferred: the doc says so, names both witnesses and
+    # the words every face prints, and no longer promises an INTERNAL restart
+    assert "**Status never infers the posture.**" in flat
+    assert "`hugmesh-go-live status`" in flat
+    assert "`nft list table inet hugmesh_release_gate`" in flat
+    assert "`unknown (device not reachable)`" in flat
+    assert "*during an earlier boot*" in flat
+    assert "*booted from a save taken while PUBLIC (mesh-…, saved …)*" in flat
+    assert "`golive_posture` in `mesh-save.json`" in flat
+    assert "reset by a restart" not in flat and "INTERNAL again" not in flat
     assert "`<work>/golive/<label>.json`" in flat
     assert "It holds no secrets" in flat
 
@@ -513,6 +524,13 @@ def test_section_matches_the_golive_target_core(tmp_path, section: str):
     js = gt.journal_status(str(tmp_path), t)
     assert "did NOT go through" in js and "last commit from this host" in js
     assert gt.read_journal(str(tmp_path), t.label)["refused"]["rc"] == 1
+    import dataclasses
+    later = dataclasses.replace(t, started_at="2099-01-01T00:00:00Z")
+    assert "during an earlier boot" in gt.journal_status(str(tmp_path), later)
+    # the posture words the section quotes are the core's own
+    assert gt.Posture(error="x").sentence().startswith("unknown (device not reachable)")
+    assert gt._NFT_HEADER_RE.pattern.startswith("^table inet hugmesh_release_gate")
+    assert gt.RELEASE_GATE_TABLE == "hugmesh_release_gate"
 
     # the probe reads what the flow says it reads
     for path in PROBE_READS:

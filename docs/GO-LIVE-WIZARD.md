@@ -385,14 +385,33 @@ A running device's disk is a per-run qcow2 **overlay** over the golden image, an
 overlay is created on every boot. So the flipped posture **lasts only while the device
 runs**. The Flip page shows an EPHEMERAL banner:
 
-> this posture lasts until the device stops; a restart boots the golden image INTERNAL again — Save the device to keep a copy
+> this posture lives on this run's disk only: the next boot starts again from the golden image (in whatever posture it bakes) or from a Save (in the posture it was saved in) — Save the device to keep it; Status reads the posture from the device itself
 
-**Status** compares the host journal against the running record's `started_at`. When
-they differ it reports *reset by a restart* instead of claiming the device is still
-public.
+**Status never infers the posture.** Every face (CLI `status`, the GUI's Preflight,
+Verify and Flip panes, the TUI's `s`) reads it from the device in one read-only ssh round
+trip, with the same two witnesses the proof lane uses: `hugmesh-go-live status`
+(`effective posture:`) and `nft list table inet hugmesh_release_gate` (loaded with the
+80/443 drop rule = internal, loaded without it = public, absent or unreadable =
+unknown). It prints `device posture now (read <UTC time>): PUBLIC` or `INTERNAL` when
+both witnesses agree, and `MIXED` with both values while
+`hugmesh-firewall-reconcile`'s 60 s cron has not yet caught up. When the device
+cannot be asked (stopped, no ssh, ssh failed) it prints `unknown (device not
+reachable)` and the reason. It never guesses.
+
+The host journal says *when* this host asked: a journal written during an earlier
+boot (its `started_at` differs from the running record's) reads *during an earlier
+boot*, and says nothing about the posture, because the boot since may have come from
+the golden image or from a save taken while the device was public.
+
+A device booted from a **Save mesh** set also says which save and the posture the save
+was taken in: *booted from a save taken while PUBLIC (mesh-…, saved …)*. Save mesh
+reads each device's posture with the same two witnesses just before it pauses it, and
+records it as `golive_posture` in `mesh-save.json`. A set saved before this was
+recorded says that its posture was not recorded.
 
 `commit --persist-public` does not change this. It bakes `release-state=public` into the
-running overlay, which the next boot discards like everything else.
+running overlay, which the next boot discards like everything else (unless the device
+was saved first).
 
 #### What the guest keeps
 
