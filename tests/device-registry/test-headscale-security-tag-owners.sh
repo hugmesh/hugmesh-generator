@@ -42,6 +42,8 @@
 #      headscale_guard_ssh_sources) flags and narrows every other source under every
 #      spelling headscale reads, on the policy AND on the bootstrap it falls back on.
 #      Negative controls put tag:hugmesh back as a source and require a failure.
+#      Because per-node edges now share the superadmin source, the Layer-A fallback
+#      (revocation_safe_fallback) is checked to still drop a revoked per-node edge.
 # The live proof that headscale really refuses a self-advertised tag:superadmin under
 # this policy, and that only the force-tagged superadmin gets a Tailscale SSH session,
 # is test-headscale-security-tag-live.sh (needs docker).
@@ -375,6 +377,35 @@ owner_ln="$(grep -n 'headscale_policy_owned_security_tags "\${policy_file}"' <<<
 if [ -n "${call_ln}" ] && [ -n "${owner_ln}" ] && [ "${call_ln}" -lt "${owner_ln}" ]; then
     ok "provision_headscale runs the ssh-source guard on policy.hujson + the bootstrap, before the owner check"
 else bad "provision_headscale does not run headscale_guard_ssh_sources before the owner check (guard line '${call_ln}', owner line '${owner_ln}')"; fi
+
+echo "== Layer-A fallback: a revoked superadmin-sourced per-node edge stays revoked =="
+# The renderer sources every per-node edge from tag:superadmin, the same src as the
+# break-glass mesh edge. revocation_safe_fallback (what runs while headscale refuses a
+# new policy) must still drop the per-node edge the refused policy revoked: break-glass
+# is that src AND a tag:mesh_* dst. Uses the REAL rendered shape from 2b.
+if [ -f "${RENDERED}" ] && declare -F revocation_safe_fallback >/dev/null; then
+    FB="${WORK}/fallback"; mkdir -p "${FB}"
+    strip "${RENDERED}" > "${FB}/prev.json"
+    TAG_B_FB="tag:$(dev_tag_for_fp fpB)"
+    strip "${RENDERED}" | jq --arg b "${TAG_B_FB}" '.ssh |= map(select(.dst != [$b]))' > "${FB}/rejected.json"
+    serves_fb() { jq -e --arg d "$2" 'any(.ssh[]?; .dst == [$d])' "$1" >/dev/null 2>&1; }
+    if revocation_safe_fallback "${FB}/prev.json" "${FB}/rejected.json" "${FB}/out.json"; then
+        ! serves_fb "${FB}/out.json" "${TAG_B_FB}" \
+            && ok "fallback drops the revoked per-node edge to ${TAG_B_FB} although its src is tag:superadmin" \
+            || bad "fallback kept the revoked per-node edge to ${TAG_B_FB} (src tag:superadmin taken for break-glass)"
+        serves_fb "${FB}/out.json" "${MESH_TAG}" && serves_fb "${FB}/out.json" "tag:$(dev_tag_for_fp fpA)" \
+            && ok "fallback keeps the break-glass mesh edge and the still-licensed per-node edge" \
+            || bad "fallback lost the break-glass mesh edge or the still-licensed per-node edge"
+    else bad "revocation_safe_fallback could not narrow the rendered policy"; fi
+    printf '%s' '{bad' > "${FB}/rejected-bad.json"
+    if revocation_safe_fallback "${FB}/prev.json" "${FB}/rejected-bad.json" "${FB}/out2.json"; then
+        [ "$(jq -c '[.ssh[].dst[]]' "${FB}/out2.json")" = "[\"${MESH_TAG}\"]" ] \
+            && ok "an unparseable refused policy leaves only the break-glass mesh edge" \
+            || bad "an unparseable refused policy left $(jq -c '[.ssh[].dst[]]' "${FB}/out2.json") (want only ${MESH_TAG})"
+    else bad "revocation_safe_fallback failed on an unparseable refused policy"; fi
+else
+    bad "no rendered policy or no revocation_safe_fallback to check"
+fi
 
 echo "== negative controls (ssh sources) =="
 MUT_R="${WORK}/mut-ssh-renderer.sh"
