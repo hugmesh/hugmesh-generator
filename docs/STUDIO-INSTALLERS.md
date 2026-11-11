@@ -447,7 +447,8 @@ The executable inside the bundle is also the command-line tool:
 - **A case-sensitive folder for the build output.** A build writes a Linux kernel tree
   and a Gentoo root into its output directory, and APFS ignores case by default. The
   build preflight checks the folder itself and refuses one that ignores case. The fix
-  takes free space from the Mac's disk and repartitions nothing:
+  takes free space from the Mac's disk, repartitions nothing and needs no sudo (the new
+  volume is writable by you):
 
   ```sh
   diskutil apfs addVolume "$(diskutil info -plist / | plutil -extract APFSContainerReference raw -)" 'Case-sensitive APFS' HugMeshBuild
@@ -467,7 +468,7 @@ The executable inside the bundle is also the command-line tool:
 | Started with Finder's PATH, the app finds Homebrew's GNU tools through its own PATH hook | **Proven** (the frozen app's `--self-check --json`) |
 | A stock Mac (no Homebrew tools) is refused with the `brew install` line | **Proven** |
 | `--self-check` from a checkout parses every generator script with bash 5 | **Proven** |
-| A case-insensitive output folder is refused; the remedy's `diskutil`/`plutil` command prints the boot volume's APFS container | **Proven** |
+| A case-insensitive output folder is refused. The remedy, run as written, adds a case-sensitive volume without sudo, and a folder on it clears the refusal. | **Proven** (the volume is added, checked and deleted on both runners) |
 | A command opened in Terminal.app runs and its `.command` file deletes itself | **Proven** (`open -a Terminal` on the runner) |
 | `sysctl` architecture and Hypervisor.framework probes | **Proven** against both runners' real output |
 | An image **build** through Docker Desktop, colima or OrbStack | **Not proven, and labelled EXPERIMENTAL in the preflight.** GitHub's macOS runners have no nested virtualisation, so no Docker. The output folder is bind-mounted from macOS into the VM, and device nodes and extended attributes over that mount are untested. The follow-up is a Docker named volume as the work directory, with an export step. |
