@@ -22,7 +22,10 @@ said "not installed" on a Mac that had Docker running. :func:`install` (called f
   4. colima's and OrbStack's.
 
 Only directories that exist are added, nothing already on PATH is added twice, and off
-macOS it does nothing.
+macOS it does nothing. They go in just BEFORE the first system directory (/usr/bin,
+/bin, /usr/sbin, /sbin), which is the front of launchd's PATH: ahead of the BSD tools
+they must shadow, but behind anything a person put first on purpose, such as an
+activated virtualenv's bin, whose ``python3`` must not lose to Homebrew's.
 
 THE GNU USERLAND. macOS ships bash 3.2 (the last GPLv2 release) and BSD sed, find,
 grep, stat and date. The generator's scripts use bash 4 (associative arrays, ``${x,,}``,
@@ -81,6 +84,9 @@ MIN_BASH = 4
 
 _PROBE_TIMEOUT_S = 5
 
+#: The directories holding macOS's own (BSD) tools: the additions go before the first.
+SYSTEM_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
+
 
 def is_macos(sysplatform: str | None = None) -> bool:
     return (sysplatform or sys.platform) == "darwin"
@@ -111,15 +117,18 @@ def path_additions(environ=None, *, isdir=os.path.isdir, home: str | None = None
 
 def install(environ=None, *, sysplatform: str | None = None, isdir=os.path.isdir,
             home: str | None = None) -> list[str]:
-    """Prepend :func:`path_additions` to ``environ["PATH"]`` (``os.environ`` by
-    default). Returns what was added; [] off macOS and on a second call."""
+    """Put :func:`path_additions` into ``environ["PATH"]`` (``os.environ`` by default)
+    just before its first :data:`SYSTEM_DIRS` entry (at the end when it has none).
+    Returns what was added; [] off macOS and on a second call."""
     if not is_macos(sysplatform):
         return []
     environ = os.environ if environ is None else environ
     added = path_additions(environ, isdir=isdir, home=home)
     if added:
-        rest = environ.get("PATH") or ""
-        environ["PATH"] = os.pathsep.join(added + ([rest] if rest else []))
+        parts = [p for p in (environ.get("PATH") or "").split(os.pathsep) if p]
+        at = next((i for i, p in enumerate(parts) if p.rstrip("/") in SYSTEM_DIRS),
+                  len(parts))
+        environ["PATH"] = os.pathsep.join(parts[:at] + added + parts[at:])
     return added
 
 

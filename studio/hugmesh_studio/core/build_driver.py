@@ -1080,7 +1080,9 @@ class BuildDriver:
             f"    diskutil apfs addVolume \"$(diskutil info -plist / | plutil -extract "
             f"APFSContainerReference raw -)\" 'Case-sensitive APFS' HugMeshBuild\n"
             f"then use /Volumes/HugMeshBuild/out (it shares free space with your Mac's "
-            f"disk; nothing is repartitioned)."]
+            f"disk; nothing is repartitioned). Docker Desktop and OrbStack share /Volumes "
+            f"already; colima shares only your home folder, so add the volume to the "
+            f"mounts in ~/.colima/default/colima.yaml and run `colima restart`."]
 
     def preflight_warnings(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
         """ADVISORY warnings (empty = nothing to say) — a PARALLEL channel to

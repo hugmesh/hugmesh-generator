@@ -157,6 +157,7 @@ def test_a_case_folding_output_dir_blocks_a_mac_build(tmp_path, monkeypatch):
     said = [p for p in problems if "ignores case" in p]
     assert said and str(out) in said[0] and "diskutil apfs addVolume" in said[0], problems
     assert "APFSContainerReference" in said[0] and "Case-sensitive APFS" in said[0]
+    assert "colima restart" in said[0]          # colima shares only the home folder
     for answer in (False, None):
         monkeypatch.setattr(platform_info, "folds_case", lambda path, a=answer: a)
         assert not any("ignores case" in p for p in driver.preflight(ImageConfig(), "docker"))

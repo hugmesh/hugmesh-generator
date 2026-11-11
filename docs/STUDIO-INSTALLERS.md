@@ -453,7 +453,10 @@ The executable inside the bundle is also the command-line tool:
   diskutil apfs addVolume "$(diskutil info -plist / | plutil -extract APFSContainerReference raw -)" 'Case-sensitive APFS' HugMeshBuild
   ```
 
-  Then use `/Volumes/HugMeshBuild/out` as the output directory.
+  Then use `/Volumes/HugMeshBuild/out` as the output directory. Docker Desktop and
+  OrbStack share `/Volumes` with their VM already. colima shares only your home folder
+  (its FAQ), so add the volume to `mounts:` in `~/.colima/default/colima.yaml` and run
+  `colima restart`.
 
 ### What works on a Mac, and how far it is proven
 

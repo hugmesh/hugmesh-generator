@@ -68,6 +68,24 @@ def test_install_prepends_on_a_mac_only_and_only_once():
     assert empty["PATH"] == "/opt/homebrew/bin"
 
 
+def test_install_keeps_an_activated_venv_ahead_of_homebrew():
+    """A Studio started from a checkout with its venv activated: Homebrew's python3
+    must not shadow the venv's (first_run and org_export start `python3` by name), and
+    Homebrew's GNU tools must still shadow the BSD ones in /usr/bin."""
+    present = ("/opt/homebrew/opt/gnu-sed/libexec/gnubin", "/opt/homebrew/bin")
+    env = {"PATH": "/Users/op/gen/studio/.venv/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+           "HOME": "/Users/op"}
+    macos_host.install(env, sysplatform="darwin", isdir=_dirs(*present))
+    parts = env["PATH"].split(":")
+    assert parts[0] == "/Users/op/gen/studio/.venv/bin"
+    assert parts.index("/opt/homebrew/opt/gnu-sed/libexec/gnubin") < parts.index("/usr/bin")
+    assert parts.index("/opt/homebrew/bin") < parts.index("/usr/bin")
+    # no system dir at all: appended, nothing the person chose is displaced
+    env = {"PATH": "/a/bin:/b/bin", "HOME": "/Users/op"}
+    macos_host.install(env, sysplatform="darwin", isdir=_dirs("/opt/homebrew/bin"))
+    assert env["PATH"] == "/a/bin:/b/bin:/opt/homebrew/bin"
+
+
 def test_app_main_installs_the_hook_before_anything_spawns():
     import inspect
     from hugmesh_studio import app
