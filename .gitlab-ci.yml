@@ -3798,6 +3798,8 @@ orphan-guards-verify:
     # 128 passed / 0 failed in 94 s (the one `unshare -Ur` leg SKIPs in a
     # container; the suite re-runs itself against 28 mutated copies of the
     # library) and tests/scripts/test-makefile-reown-skips-sysroot.sh 9 / 0.
+    # That suite now drives the real Makefile with `make` (already on the apk line):
+    # 21 / 0 on 2026-11-10, measured in alpine:3 as root, not in this image.
     # squashfs-tools: tests/scripts/test-x86-live-root-pack.sh EXECUTES the builder's live
     # pack block (mksquashfs) and its live-root gate (unsquashfs) against a fixture
     # sysroot; without them the executable half of that guard cannot run.

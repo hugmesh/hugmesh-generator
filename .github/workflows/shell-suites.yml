@@ -367,7 +367,11 @@ jobs:
           # root (checkout copied in; busybox sed, grep and find): 128 passed / 0
           # failed in 98 s (the one `unshare -Ur` leg SKIPs here — user namespaces
           # are blocked in a container — and its stat-shim twin covers the pass
-          # path) and 9 / 0. Their sibling
+          # path) and 9 / 0. The reown suite grew on 2026-11-10 (the reown must reach
+          # the host user: HOST_UID from DOCKER_RUN's env, and the reown on a FAILED
+          # build too, 19 build targets driven through the real Makefile with stub
+          # builders, plus mutations M4-M8): MEASURED in alpine:3 as root with this
+          # job's busybox sed/grep/find, 21 passed / 0 failed in ~6 s. Their sibling
           # tests/scripts/test-builder-unmount-real.sh needs `unshare -Urm` and exits
           # 2 SKIPPED-LOUDLY in this image (measured the same way), so it is NOT
           # listed: see PREMERGE_UNGATED and `make builder-unmount-real-check`.
@@ -440,6 +444,7 @@ jobs:
             tests/qemu/qemu-e2e-lane_test.sh
             tests/qemu/display_door_test.sh
             tests/qemu/display_argv_test.sh
+            tests/qemu/no_egress_argv_test.sh
             tests/requested-atoms-resolvable.sh
             tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
             tests/scripts/test-anubis-env-gate.sh

@@ -237,12 +237,20 @@ BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).
 # HOST_UID/GID the invoking user — passed into the container so a NATIVE build
-#              can chown the root-created artifacts back to them.
+#              can chown the root-created artifacts back to them. A value that
+#              arrives from the ENVIRONMENT (DOCKER_RUN's `-e HOST_UID=...`) or the
+#              command line (build-menu.sh's sudo'd native run) wins; only an
+#              unset/empty one falls back to `id -u`. It used to be a plain
+#              `HOST_UID := $(shell id -u)`, which overrides the environment, so
+#              inside the container the forwarded uid was replaced by root's 0 and
+#              every Docker-dispatched build left its images, logs and work dirs
+#              root:root (the reown chowned them to 0:0). `$(or)` keeps it
+#              simply-expanded, so `id -u` runs once.
 # SUDO         only `sudo` when NOT already root. Inside the container (root)
 #              SUDO is empty, so the native scripts run sudo-free.
 IMAGE    ?= hugmesh-builder
-HOST_UID := $(shell id -u)
-HOST_GID := $(shell id -g)
+HOST_UID := $(or $(HOST_UID),$(shell id -u))
+HOST_GID := $(or $(HOST_GID),$(shell id -g))
 SUDO     := $(shell [ "$$(id -u)" = 0 ] || echo sudo)
 
 # External-CA mount (Docker leg). CA_CERT/CA_KEY are HOST paths; only $(CURDIR)
@@ -287,6 +295,12 @@ ensure-image: ## auto-build the builder image if it is missing
 # by DOCKER_RUN (the default path); on a bare host run it is the caller's own
 # uid, so the chown is a harmless no-op.
 #
+# It is a shell FRAGMENT, not a recipe line: every NATIVE build recipe runs it
+# through build-then-reown below, in the SAME shell as the build, so it runs
+# whether the build succeeded or failed. As its own recipe line it ran only on
+# success — make stops at the first failing line — so a failed build left
+# everything it had made root-owned.
+#
 # It must NOT descend into a build system (<work dir>/snap-build-*/sysroot). It
 # did (`chown -R ... "$(WORK_DIR)"`), and the next `--resume` built an image out
 # of a tree the operator owned: every directory in it uid 1002, sshd and tor
@@ -296,7 +310,16 @@ ensure-image: ## auto-build the builder image if it is missing
 # depth, so a custom --build-subdir is covered too. `chown -h` changes a
 # symlink itself rather than following it into the sysroot.
 define chown-artifacts
-	@[ -n "$(HOST_UID)" ] && $(SUDO) find "$(WORK_DIR)" -type d -name sysroot -prune -o -exec chown -h $(HOST_UID):$(HOST_GID) {} + 2>/dev/null || true
+[ -n "$(HOST_UID)" ] && $(SUDO) find "$(WORK_DIR)" -type d -name sysroot -prune -o -exec chown -h $(HOST_UID):$(HOST_GID) {} + 2>/dev/null || true
+endef
+
+# build-then-reown — one recipe line: run the build command $(1) in a subshell
+# (so a loop's `|| exit 1` ends only the subshell), then reown the artifacts
+# whatever its status was, then exit with that status. Use it as
+# `@$(call build-then-reown,<build command>)`; a literal comma in the command
+# would split the argument, so keep commas inside variables.
+define build-then-reown
+rc=0; ( $(1) ) || rc=$$?; $(chown-artifacts); exit $$rc
 endef
 
 # RPi5/RPi4/RPi3 board axis (--board rpi5|rpi4|rpi3 on build-rpi5-stage4.sh; ONE
@@ -582,8 +605,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make build-all NATIVE=1 WORK_DIR=/out RESUME='$(RESUME)' IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
 else
-	$(ALL) $(RESUME)
-	$(chown-artifacts)
+	$(call build-then-reown,$(ALL) $(RESUME))
 endif
 
 pentest: ## run the OWASP pen-test harness only (no image build); PENTEST_SCAN/ENV/PIPELINE knobs; SCA needs NVD_API_KEY_FILE
@@ -865,8 +887,7 @@ ifndef NATIVE
 	$(DOCKER_RUN) make rebuild NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
 else
 	$(MAKE) clean NATIVE=1
-	$(ALL)
-	$(chown-artifacts)
+	$(call build-then-reown,$(ALL))
 endif
 
 rpi: ## build all 3 Pi cluster roles (.img + .fs.tar.xz each; RPI_BOARD=rpi5 [DEFAULT] | rpi4 — rpi3 is desktop-only, use rpi-desktop instead)
@@ -874,8 +895,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make rpi NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' RPI_ROLES='$(RPI_ROLES)' $(BRAND_PASS)
 else
-	@for r in $(RPI_ROLES); do echo "==> Pi $$r ($(RPI_BOARD))"; $(RPI) --role $$r || exit 1; done
-	$(chown-artifacts)
+	@$(call build-then-reown,for r in $(RPI_ROLES); do echo "==> Pi $$r ($(RPI_BOARD))"; $(RPI) --role $$r || exit 1; done)
 endif
 
 x86: ## build the 4 default x86 roles (.img + live ISO + .fs.tar.xz each)
@@ -883,8 +903,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86 NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) X86_ROLE_LIST='$(X86_ROLE_LIST)' $(BRAND_PASS)
 else
-	@for r in $(X86_ROLE_LIST); do echo "==> x86 $$r"; $(X86) --role $$r || exit 1; done
-	$(chown-artifacts)
+	@$(call build-then-reown,for r in $(X86_ROLE_LIST); do echo "==> x86 $$r"; $(X86) --role $$r || exit 1; done)
 endif
 
 # OMNIBUS_PLATFORM picks the device: x86 (DEFAULT, unchanged), rpi (Raspberry Pi
@@ -898,8 +917,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make omnibus NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
-	$(X86) --role omnibus
-	$(chown-artifacts)
+	$(call build-then-reown,$(X86) --role omnibus)
 endif
 else ifneq ($(filter rpi rpi5,$(OMNIBUS_PLATFORM)),)
 	$(MAKE) rpi-omnibus RAM_GB='$(RAM_GB)' RPI_BOARD='$(RPI_BOARD)'
@@ -974,8 +992,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86-standalone NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
-	@for r in standalone-thin standalone-thick; do echo "==> x86 $$r"; $(X86) --role $$r $(STANDALONE_FLAGS) || exit 1; done
-	$(chown-artifacts)
+	@$(call build-then-reown,for r in standalone-thin standalone-thick; do echo "==> x86 $$r"; $(X86) --role $$r $(STANDALONE_FLAGS) || exit 1; done)
 endif
 
 rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop | rpi-omnibus RAM_GB=16  (same vocabulary as x86 now; add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; RAM_GB=N passes --ram-gb (REQUIRED for omnibus); STANDALONE_FLAGS='--standalone --local-user … --local-pass-file FILE' for rpi-desktop; a standalone desktop refuses to build without a login password)
@@ -983,8 +1000,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make rpi-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' RAM_GB='$(RAM_GB)' $(BRAND_PASS)
 else
-	@$(RPI) --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(RPI) --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS))
 endif
 
 x86-%: ## build ONE x86 role: make x86-backend-gpu | x86-pki | x86-standalone-thin (old spellings still work: x86-be, x86-fe, x86-be+gpu)
@@ -992,8 +1008,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
-	@$(X86) --role $* $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(X86) --role $* $(STANDALONE_FLAGS))
 endif
 
 frite: ## build the Frite light desktop (FRITE_BOARD=la-frite|le-potato, FRITE_FLAVOR=both|live|installer, FRITE_DESKTOP=light|none; STANDALONE_FLAGS='--enable-wifi …' appended verbatim)
@@ -1001,8 +1016,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make frite NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(FRITE_PASS)
 else
-	@$(FRITE_BUILD) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR) --desktop $(FRITE_DESKTOP) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(FRITE_BUILD) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR) --desktop $(FRITE_DESKTOP) $(STANDALONE_FLAGS))
 endif
 
 frite-live: ## build the Frite light desktop LIVE image only (boots ephemerally off USB/SD)
@@ -1016,8 +1030,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make jetson NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
 else
-	@$(JETSON_BUILD) --role $(JETSON_ROLE) --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(JETSON_BUILD) --role $(JETSON_ROLE) --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 jetson-%: ## build ONE Jetson role: make jetson-edge-ai | jetson-backend-gpu | jetson-omnibus | jetson-desktop (STANDALONE_FLAGS appended verbatim)
@@ -1025,8 +1038,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make jetson-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
 else
-	@$(JETSON_BUILD) --role $* --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(JETSON_BUILD) --role $* --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepi5: ## build the Orange Pi 5 light desktop (EXPERIMENTAL; ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5, ORANGEPI5_FLAVOR=both|live|installer; STANDALONE_FLAGS='--standalone …' appended verbatim)
@@ -1034,8 +1046,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi5 NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPI5_PASS)
 else
-	@$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor $(ORANGEPI5_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor $(ORANGEPI5_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepi5-live: ## build the Orange Pi 5 light desktop LIVE image only (boots ephemerally off USB/microSD)
@@ -1051,8 +1062,7 @@ ifndef NATIVE
 	$(DOCKER_RUN) make orangepi5-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' RAM_GB='$(RAM_GB)' $(BRAND_PASS) $(ORANGEPI5_PASS)
 else
 	@. scripts/_roles-lib.sh; hugmesh_role_board_node_role orangepi5 '$*' >/dev/null || { [ $$? -eq 2 ] && echo "ERROR: make orangepi5-$* is not a target: the Orange Pi 5 / 5 Plus node targets are orangepi5-pki | -backend | -frontend | -omnibus (the desktop is make orangepi5)." >&2; exit 1; }
-	@$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor installer --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor installer --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS))
 endif
 
 orangepizero2: ## build the Orange Pi Zero 2 HEADLESS APPLIANCE (EXPERIMENTAL; no desktop mode ever; ORANGEPIZERO2_FLAVOR=both|live|installer; STANDALONE_FLAGS='--standalone …' appended verbatim)
@@ -1060,8 +1070,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepizero2 NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPIZERO2_PASS)
 else
-	@$(ORANGEPIZERO2_BUILD) --flavor $(ORANGEPIZERO2_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPIZERO2_BUILD) --flavor $(ORANGEPIZERO2_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepizero2-live: ## build the Orange Pi Zero 2 headless appliance LIVE image only (boots ephemerally off microSD/USB)
@@ -1075,8 +1084,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepizero2w NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPIZERO2W_PASS)
 else
-	@$(ORANGEPIZERO2W_BUILD) --flavor $(ORANGEPIZERO2W_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPIZERO2W_BUILD) --flavor $(ORANGEPIZERO2W_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepizero2w-live: ## build the Orange Pi Zero 2W headless appliance LIVE image only (boots ephemerally off microSD/USB)
@@ -1090,8 +1098,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepizero3 NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPIZERO3_PASS)
 else
-	@$(ORANGEPIZERO3_BUILD) --flavor $(ORANGEPIZERO3_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPIZERO3_BUILD) --flavor $(ORANGEPIZERO3_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepizero3-live: ## build the Orange Pi Zero 3 headless appliance LIVE image only (boots ephemerally off microSD/USB)
@@ -1105,8 +1112,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi3-lts NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPI3LTS_PASS)
 else
-	@$(ORANGEPI3LTS_BUILD) --flavor $(ORANGEPI3LTS_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPI3LTS_BUILD) --flavor $(ORANGEPI3LTS_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepi3-lts-live: ## build the Orange Pi 3 LTS headless appliance LIVE image only (boots ephemerally off microSD/USB)
@@ -1120,8 +1126,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi4-lts NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPI4LTS_PASS)
 else
-	@$(ORANGEPI4LTS_BUILD) --flavor $(ORANGEPI4LTS_FLAVOR) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPI4LTS_BUILD) --flavor $(ORANGEPI4LTS_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
 orangepi4-lts-live: ## build the Orange Pi 4 LTS light desktop LIVE image only (boots ephemerally off microSD/USB)
@@ -1137,8 +1142,7 @@ ifndef NATIVE
 	$(DOCKER_RUN) make orangepi4-lts-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' RAM_GB='$(RAM_GB)' $(BRAND_PASS) $(ORANGEPI4LTS_PASS)
 else
 	@. scripts/_roles-lib.sh; hugmesh_role_board_node_role orangepi4-lts '$*' >/dev/null || { [ $$? -eq 2 ] && echo "ERROR: make orangepi4-lts-$* is not a target: the Orange Pi 4 LTS node target is orangepi4-lts-frontend (the desktop is make orangepi4-lts)." >&2; exit 1; }
-	@$(ORANGEPI4LTS_BUILD) --flavor installer --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS)
-	$(chown-artifacts)
+	@$(call build-then-reown,$(ORANGEPI4LTS_BUILD) --flavor installer --role $* $(RAM_FLAGS) $(STANDALONE_FLAGS))
 endif
 
 # build-everything delegates to build-all with the ROLE-SELECTOR knobs set on the
