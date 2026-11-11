@@ -541,13 +541,19 @@ def test_journal_round_trip_has_no_secret_and_says_when_not_what(tmp_path):
     # nft exited 0 but printed no anchored header: not loaded
     (_posture_out("public", "  table inet hugmesh_release_gate {\n}\n"),
      ("public", "unknown", True)),
-    # an exit 0 with the header but a listing that is NOT our table's
+    # an exit 0 with the header but a listing that is NOT our table's — nor one whose
+    # name merely starts with ours
     (_posture_out("internal", "table inet other {\n}\n"), ("internal", "unknown", True)),
+    (_posture_out("public", "table inet hugmesh_release_gate_v2 {\n}\n"),
+     ("public", "unknown", True)),
     # cut short before nft's exit status: a missing rc is not 0, and not complete
     (_posture_out("public", NFT_PUBLIC, nftrc=None, end=False), ("public", "unknown", False)),
     # a driver whose status does not say public/internal; ANSI colour is ignored
     (_posture_out("weird", NFT_INTERNAL), ("unknown", "internal", True)),
     ("\x1b[0;32m" + POSTURE_PUBLIC_OUT, ("public", "public", True)),
+    # the FIRST `effective posture:` line is the driver's (the lane's head -n1)
+    ("effective posture:   public\neffective posture:   internal\n@@nft@@\n" + NFT_PUBLIC
+     + "@@nftrc=0@@\n@@end@@\n", ("public", "public", True)),
     ("", ("unknown", "unknown", False)),
 ])
 def test_parse_posture_follows_the_proof_lanes_rules(out, want):
@@ -609,6 +615,7 @@ def test_an_unreachable_device_is_unknown_never_internal(tmp_path):
         posture_rc=1, posture_err="sudo: a password is required\n"))
     assert p.reachable and p.verdict == "unknown"
     assert "neither witness could be read" in p.sentence()
+    assert "the answer was cut short (exit 1): sudo: a password is required" in p.sentence()
     for q in (p, gt.Posture(error="x"), gt.Posture(asked=False)):
         assert "INTERNAL" not in q.sentence() and "internal" not in q.sentence()
 
