@@ -499,23 +499,19 @@ def check_route_access(root):
 # ONLY explicit exception is the literal pattern '/'). So this platform must
 # not SHIP a gateway_route_access row its own admin API can never recreate.
 #
-# Bounded to the ONE row that could not be closed: the pki-gateway headscale
-# catch-all (bug #15, r(PKI, "/**", "ROLE_SUPERADMIN") in hugmesh-gateway's
-# CanonicalSeed.pki(), mirrored here). It is genuinely open-ended —
-# apps/20-gateway-pki.yaml's `headscale` route matches Host=scale.hugmesh.net
-# with NO Path predicate, so ANY path on that Host must floor to SUPERADMIN or
-# the pre-bug-#15 hole reopens. Replacing it with a finite set of addressable
-# prefixes would mean fabricating an enumeration of headscale's own external,
-# evolving HTTP surface — a missed endpoint silently REOPENS bug #15 the next
-# time headscale gains one — or moving its enforcement out of
-# gateway_route_access entirely (a materially bigger, separately-authorised
-# change). Neither is done; hugmesh-admin-bff-api#57 records the residual.
+# ZERO exceptions (decision 79 = B, hugmesh-admin-bff-api#57, 2026-09-23).
+# The one row decision 61 had to leave — the pki-gateway headscale catch-all
+# (bug #15) — is gone: hugmesh-gateway#40 (f0faca1) moved that floor into the
+# gateway's SecurityConfig, which requires ROLE_SUPERADMIN for every request on
+# the `headscale` route's Host (apps/20-gateway-pki.yaml, Host=scale.<domain>,
+# no Path predicate) ahead of PUBLIC_PATHS and ahead of the route-access
+# filter, and dropped the row from CanonicalSeed.pki() and
+# compose/route-access-seed.sql. This seed dropped it in the same decision.
 #
-# What this DOES buy: the set of bare-'/**' rows can never grow past this one
-# without a test change forcing the addition to be argued.
-BARE_DOUBLE_STAR_EXCEPTIONS = {
-    ("hugmesh-pki-gateway", "ROLE_SUPERADMIN"),
-}
+# The exceptions set stays as the mechanism (an exception has to be argued
+# here, in a reviewed diff), but it is EMPTY: any bare '/**' row is a finding,
+# and a non-empty set whose row is absent is a finding too.
+BARE_DOUBLE_STAR_EXCEPTIONS = frozenset()
 
 
 def check_route_access_no_bare_wildcard(root):
@@ -526,7 +522,9 @@ def check_route_access_no_bare_wildcard(root):
     text = open(schema, encoding="utf-8").read()
     bad = []
     seen_exceptions = set()
+    parsed = 0
     for m in ROW_FULL_RE.finditer(text):
+        parsed += 1
         gateway, pattern, role, allow = m.group(1), m.group(2), m.group(3), m.group(4)
         if pattern != "/**":
             continue
@@ -535,28 +533,35 @@ def check_route_access_no_bare_wildcard(root):
             seen_exceptions.add(key)
             continue
         bad.append("(%s, '/**', %s, %s)" % (gateway, role, allow))
+    if parsed == 0:
+        # With zero exceptions, "no bare row found" is the green answer, so a row
+        # reader that stopped matching the INSERT shape would pass vacuously.
+        fail("[route-access-wildcard]",
+             "20-schema.sql parsed to ZERO gateway_route_access rows — the row shape "
+             "changed under ROW_FULL_RE, so 'no bare /** row' would be vacuous")
+        return
     if bad:
         fail("[route-access-wildcard]",
              "20-schema.sql ships a bare '/**' gateway_route_access row the admin-bff "
              "route-access CRUD can never recreate (AdminController.addRouteRule refuses "
              "any url_pattern whose first path segment is a bare wildcard): %s. Decision 61 "
-             "= refuse (hugmesh-generator#347): replace it with explicit prefix rows, or if "
-             "it is a genuinely open-ended catch-all like the pki headscale row, add it to "
-             "BARE_DOUBLE_STAR_EXCEPTIONS here with the SAME reasoning that row carries."
+             "= refuse (hugmesh-generator#347) and decision 79 = B "
+             "(hugmesh-admin-bff-api#57) leave ZERO exceptions: replace it with explicit "
+             "prefix rows, or move a Host-wide floor into the gateway SecurityConfig the "
+             "way the pki headscale catch-all was (hugmesh-gateway#40)."
              % "; ".join(bad))
         return
     missing = BARE_DOUBLE_STAR_EXCEPTIONS - seen_exceptions
     if missing:
         fail("[route-access-wildcard]",
              "the documented bare-'/**' exception(s) %s are no longer in 20-schema.sql — "
-             "either the row was silently dropped (re-opening bug #15 if it was the pki "
-             "headscale row) or BARE_DOUBLE_STAR_EXCEPTIONS is stale; update whichever "
-             "changed." % sorted(missing))
+             "either the row was silently dropped or BARE_DOUBLE_STAR_EXCEPTIONS is "
+             "stale; update whichever changed." % sorted(missing))
         return
     ok("[route-access-wildcard]",
-       "20-schema.sql ships no bare '/**' gateway_route_access row beyond the %d "
-       "documented exception(s), each of which is still present"
-       % len(BARE_DOUBLE_STAR_EXCEPTIONS))
+       "20-schema.sql ships no bare '/**' gateway_route_access row among its %d "
+       "parsed rows (%d documented exception(s); decision 79 = B leaves none)"
+       % (parsed, len(BARE_DOUBLE_STAR_EXCEPTIONS)))
 
 
 # ── 6) Vault PKI issuing roles ───────────────────────────────────────────────

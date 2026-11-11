@@ -12,8 +12,8 @@
 // /bff/user/** profile and password surface the real gateway ALLOWs.
 // Nothing is copied by hand any more.
 //
-// Rows: 158 total — hugmesh-be-gateway 56, hugmesh-fe-gateway 89, hugmesh-pki-gateway 4, hugmesh-superadmin-gateway 9
-// Pattern shapes: literal 24, prefix-glob 131, root-glob 1, segment-glob 2
+// Rows: 157 total — hugmesh-be-gateway 56, hugmesh-fe-gateway 89, hugmesh-pki-gateway 3, hugmesh-superadmin-gateway 9
+// Pattern shapes: literal 24, prefix-glob 131, segment-glob 2
 //
 // Every seed row is UNSCOPED (no domain) and UNPINNED (no casdoor_user):
 // the INSERT names exactly (gateway, url_pattern, role, allow), which the
@@ -26,7 +26,6 @@ export const ROUTE_ACCESS_SEED: readonly RouteRule[] = [
   { gateway: 'hugmesh-pki-gateway', urlPattern: '/api/auth/**', role: 'ROLE_USER', allow: true },
   { gateway: 'hugmesh-pki-gateway', urlPattern: '/login/**', role: 'PUBLIC', allow: true },
   { gateway: 'hugmesh-pki-gateway', urlPattern: '/.well-known/**', role: 'PUBLIC', allow: true },
-  { gateway: 'hugmesh-pki-gateway', urlPattern: '/**', role: 'ROLE_SUPERADMIN', allow: true },
   { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/pleroma/admin/**', role: 'ROLE_MOD', allow: true },
   { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/pleroma/admin/**', role: 'ROLE_ADMIN', allow: true },
   { gateway: 'hugmesh-be-gateway', urlPattern: '/api/pleroma/admin/**', role: 'ROLE_MOD', allow: true },
