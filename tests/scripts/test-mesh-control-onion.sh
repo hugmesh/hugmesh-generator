@@ -306,19 +306,23 @@ else bad "gen-provision-keys pki (Tor) failed: $(tail -2 "${WORK}/k-pki.log" | t
 if gk "${WORK}/k-lan" --role host --pki-ip 192.168.1.10; then
     expect "lan stick: no .mesh.control_* keys" "0" "$(jq '[.mesh | keys[] | select(startswith("control_"))] | length' "${WORK}/k-lan/provision.json")"
 else bad "gen-provision-keys lan failed"; fi
-refuse() {  # refuse <label> <args...>
-    local l="$1"; shift
+refuse() {  # refuse <label> <reason (fixed string the refusal must give)> <args...>
+    local l="$1" why="$2"; shift 2
+    # The REASON is asserted, not just a non-zero exit: on a host without tor a run that
+    # skipped the consent check still fails (it cannot mint), for a different reason.
     if gk "${WORK}/k-no" "$@"; then bad "accepted: ${l}"
-    elif [ -e "${WORK}/k-no" ]; then bad "refused only after building: ${l}"; else ok "refused before anything is built: ${l}"; fi
-    rm -rf "${WORK}/k-no"
+    elif [ -e "${WORK}/k-no" ]; then bad "refused only after building: ${l}"
+    elif ! grep -a -F -- "${why}" "${WORK}/k-no.log" >/dev/null; then bad "refused for another reason: ${l} ($(grep -a ERROR "${WORK}/k-no.log" | head -1))"
+    else ok "refused before anything is built: ${l}"; fi
+    rm -rf "${WORK}/k-no" "${WORK}/k-no.log"
 }
-refuse "a Tor transport without --mesh-control-onion-dir" --role host --pki-ip 192.168.1.10 --mesh-control-transport onion
-refuse "lan+onion without --pki-ip" --role host --mesh-control-transport lan+onion --mesh-control-onion-dir "${OD}"
-refuse "an empty onion dir without the mint consent" --role host --mesh-control-transport onion --mesh-control-onion-dir "${WORK}/empty"
-refuse "an .onion as the control name" --role host --mesh-control-transport onion --mesh-control-onion-dir "${OD}" --mesh-control-name "${ONION}"
-refuse "an unknown transport" --role host --mesh-control-transport tor
+refuse "a Tor transport without --mesh-control-onion-dir" "needs --mesh-control-onion-dir" --role host --pki-ip 192.168.1.10 --mesh-control-transport onion
+refuse "lan+onion without --pki-ip" "lan+onion needs --pki-ip" --role host --mesh-control-transport lan+onion --mesh-control-onion-dir "${OD}"
+refuse "an empty onion dir without the mint consent" "Pass --mesh-control-onion-mint" --role host --mesh-control-transport onion --mesh-control-onion-dir "${WORK}/empty"
+refuse "an .onion as the control name" "is not a dotted DNS name" --role host --mesh-control-transport onion --mesh-control-onion-dir "${OD}" --mesh-control-name "${ONION}"
+refuse "an unknown transport" "must be lan, lan+onion or onion" --role host --mesh-control-transport tor
 mkdir -p "${WORK}/nohost"; head -c 96 /dev/urandom > "${WORK}/nohost/hs_ed25519_secret_key"
-refuse "minting over an existing secret key" --role host --mesh-control-transport onion --mesh-control-onion-dir "${WORK}/nohost" --mesh-control-onion-mint
+refuse "minting over an existing secret key" "refusing to mint over it" --role host --mesh-control-transport onion --mesh-control-onion-dir "${WORK}/nohost" --mesh-control-onion-mint
 cp -r "${OD}" "${WORK}/gone"; rm -f "${WORK}/gone/hs_ed25519_secret_key"
 gk "${WORK}/k-gone" --role pki --pki-ip 192.168.1.10 --mesh-control-transport onion --mesh-control-onion-dir "${WORK}/gone" \
     && bad "a pki stick was made without the secret key" || ok "a pki stick whose secret key was removed is refused (re-mint, re-make every stick)"
