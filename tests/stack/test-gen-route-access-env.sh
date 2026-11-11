@@ -285,8 +285,11 @@ if [ "${rc}" -eq 0 ]; then ok "the check's script, value set: exits 0"; else bad
 if docker compose version >/dev/null 2>&1; then
   # compose renders without a daemon. Empty: the four consumers get the failing JVM
   # option. Set: the no-op property, and the value reaches neither guard.
-  r_empty="$(cd "${WORK}" && ROUTE_ACCESS_DB_PASSWORD= docker compose -p ra-guard-test -f "${COMPOSE}" config 2>/dev/null)"
-  r_set="$(cd "${WORK}" && ROUTE_ACCESS_DB_PASSWORD=feedc0de0123 docker compose -p ra-guard-test -f "${COMPOSE}" config 2>/dev/null)"
+  # The per-role DB keys are ${KEY:?} (hugmesh-generator#857): give each a dummy so
+  # the render reaches the route-access guards this section is about.
+  dbk="$(bash "${HERE}/gen-stack-db-env.sh" --keys 2>/dev/null | sed 's/$/=guard/' | tr '\n' ' ')"
+  r_empty="$(cd "${WORK}" && env ${dbk} ROUTE_ACCESS_DB_PASSWORD= docker compose -p ra-guard-test -f "${COMPOSE}" config 2>/dev/null)"
+  r_set="$(cd "${WORK}" && env ${dbk} ROUTE_ACCESS_DB_PASSWORD=feedc0de0123 docker compose -p ra-guard-test -f "${COMPOSE}" config 2>/dev/null)"
   n_bad="$(grep -c 'JAVA_TOOL_OPTIONS: -XX:+ROUTE_ACCESS_DB_PASSWORD_REQUIRED' <<<"${r_empty}")"
   n_ok="$(grep -c 'JAVA_TOOL_OPTIONS: -Dhugmesh.guard.XX:+ROUTE_ACCESS_DB_PASSWORD_REQUIRED' <<<"${r_set}")"
   if [ "${n_bad}" = 4 ] && [ "${n_ok}" = 4 ]; then ok "compose renders the failing JVM option when empty (4) and the no-op property when set (4)"; else bad "rendered guards: empty ${n_bad}/4, set ${n_ok}/4"; fi
@@ -309,7 +312,9 @@ for m in re.finditer(r"^([A-Za-z0-9_.-]+):([^=\n][^\n]*)\n((?:\t[^\n]*\n|[ \t]*#
     if name.startswith("."):
         continue
     rec = [ln for ln in body.splitlines() if ln.startswith("\t")]
-    if not any("$(STACK_ENV)" in ln for ln in rec):
+    # STACK_READ_ENV (the read-only targets, hugmesh-generator#857) is STACK_ENV with
+    # placeholder DB keys; it carries this key the same way.
+    if not any("$(STACK_ENV)" in ln or "$(STACK_READ_ENV)" in ln for ln in rec):
         continue
     if any(re.search(r"\$\(COMPOSE_CMD\).*\s(up|run|create)(\s|$)", ln) for ln in rec):
         creators += 1
@@ -357,9 +362,14 @@ printf '%s\n' "${ROUTE_ACCESS_DB_PASSWORD-<unset>}" >> "${COMPOSE_STUB_LOG}"
 EOF
   chmod +x "${WORK}/bin/compose-stub"
   E7="${WORK}/make.env"; L7="${WORK}/compose.log"; : > "${L7}"
+  # The stack targets also run stack-db-env (hugmesh-generator#857). Point it at a
+  # file in WORK holding every key already, so it neither touches the checkout's
+  # tests/stack/.env nor asks docker anything (this section counts docker calls).
+  E7DB="${WORK}/make-db.env"
+  STACK_DB_ENV_FILE="${E7DB}" DOCKER="${WORK}/bin/docker" STUB_VOLUME_EXISTS=0 bash "${HERE}/gen-stack-db-env.sh" >/dev/null 2>&1
   mk7() { # mk7 <volume-state> <make args…> : real make, env file in WORK, stubs only
     local v="$1"; shift
-    (cd "${REPO}" && ROUTE_ACCESS_DB_ENV="${E7}" ROUTE_ACCESS_DB_LEGACY_ENV="${E7}.legacy" \
+    (cd "${REPO}" && STACK_DB_ENV_FILE="${E7DB}" ROUTE_ACCESS_DB_ENV="${E7}" ROUTE_ACCESS_DB_LEGACY_ENV="${E7}.legacy" \
        DOCKER="${WORK}/bin/docker" STUB_VOLUME_EXISTS="${v}" COMPOSE_STUB_LOG="${L7}" ROUTE_ACCESS_DB_PASSWORD= \
        timeout 60 make --no-print-directory "$@" COMPOSE_CMD="${WORK}/bin/compose-stub")
   }

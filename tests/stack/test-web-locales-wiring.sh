@@ -246,7 +246,10 @@ if docker compose version >/dev/null 2>&1; then
     input="${pair%%:*}"; want="${pair##*:}"
     assigns="$(stack_env "$input" | tr '\n' ' ' | sed "s/'//g")"
     [ -n "$assigns" ] || { bad "D: make produced no WEB_LOCALES env for ${input}"; continue; }
-    resolved="$(eval "env ${assigns} docker compose -f '${COMPOSE_FILE}' config" 2>/dev/null \
+    # The per-role DB keys are ${KEY:?} (hugmesh-generator#857): dummies, so the
+    # render runs; only the locale build args are read from it.
+    dbk="$(bash "${REPO_ROOT}/tests/stack/gen-stack-db-env.sh" --keys 2>/dev/null | sed 's/$/=guard/' | tr '\n' ' ')"
+    resolved="$(eval "env ${dbk} ${assigns} docker compose -f '${COMPOSE_FILE}' config" 2>/dev/null \
       | python3 -c '
 import sys, yaml
 doc = yaml.safe_load(sys.stdin) or {}

@@ -119,8 +119,9 @@ if ! pg -v ON_ERROR_STOP=1 -1 <"${SQL}" >"${LOG}" 2>&1; then
 fi
 
 after="$(count_rows)"
-# Sum the command tags. Only the seed INSERT inserts; the two DELETEs are the
-# de-dup and the '/apidocs/**' retirement; the UPDATEs are the NULL backfill and
+# Sum the command tags. Only the seed INSERT inserts; the DELETEs are the
+# de-dup and the retirements (/apidocs, the games rows, the pki bare double-star);
+# the UPDATEs are the NULL backfill and
 # the two mfa_required flips (all three write mfa_required and nothing else).
 inserted="$(awk '$1=="INSERT"{n+=$3} END{print n+0}' "${LOG}")"
 deleted="$(awk '$1=="DELETE"{n+=$2} END{print n+0}' "${LOG}")"

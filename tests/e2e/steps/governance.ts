@@ -184,7 +184,7 @@ export const TS_MIRROR_ROWS: RouteRow[] = ROUTE_ACCESS.map((r) => ({
  * equivalence scenario below, at 7473 of 14760 triples.
  *
  * The four shapes, from the oracle's own `antMatch`:
- *   '/**'          matches EVERY path (the pki-gateway floor row is one)
+ *   '/**'          matches EVERY path (no seed ships one since decision 79)
  *   '<prefix>/**'  the prefix itself, '<prefix>/', or any '/'-delimited subpath;
  *                  it must NOT swallow a textual sibling ('/admin/**' rejects
  *                  '/administrator')
