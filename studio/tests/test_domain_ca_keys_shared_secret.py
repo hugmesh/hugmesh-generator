@@ -10,6 +10,13 @@
    move is refused: nothing is dropped, the checklist says why, and the KEYS step of
    every stick fails with that sentence.
 
+#974 refute, round 1b (LOW): the EC check derived the key's scalar on the root's
+curve AS IT WAS, so a scalar past that curve's order was "out of range, not reused":
+``d + n(P-256)`` on P-384 or P-521 was taken and the pki stick got a key whose
+scalar mod n(P-256) is the root's ``d``. The scalar is now reduced modulo the root
+curve's order, and the x-coordinate is compared, so ``n - d`` (the point ``-Q``)
+is the root's secret too.
+
 Every CA is a throwaway made in the test's temp dir (tests/_throwaway_ca.py).
 """
 import os
@@ -29,6 +36,17 @@ from hugmesh_studio.core.config import Domain, ImageConfig            # noqa: E4
 from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
 from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry  # noqa: E402
 
+#: The group order of P-256 (SEC 2), written out here independently of the module's
+#: table, which test_the_curve_order_table_is_each_curves_group_order pins.
+N256 = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+#: EC shapes: (the key's curve, the key's scalar from the P-256 root's d)
+EC_SHAPES = {
+    "ec-scalar-other-curve": (ec.SECP384R1, lambda d: d),
+    "ec-scalar-plus-order-p384": (ec.SECP384R1, lambda d: d + N256),
+    "ec-scalar-plus-order-p521": (ec.SECP521R1, lambda d: d + 3 * N256),
+    "ec-negated-scalar": (ec.SECP256R1, lambda d: N256 - d),
+    "ec-negated-scalar-other-curve": (ec.SECP384R1, lambda d: N256 - d),
+}
 OWN = "m.example"
 X = "x.example"
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
@@ -91,10 +109,11 @@ class _Crafted:
         elif shape == "rsa-shared-prime":
             self.rx_key = tca.key("rsa")
             self.key = _shares_one_prime(self.rx_key)
-        else:                                       # EC scalar reused on another curve
+        else:                                       # the P-256 root's d, re-encoded
+            curve, scalar_of = EC_SHAPES[shape]
             self.rx_key = ec.generate_private_key(ec.SECP256R1())
             scalar = self.rx_key.private_numbers().private_value
-            self.key = ec.derive_private_key(scalar, ec.SECP384R1())
+            self.key = ec.derive_private_key(scalar_of(scalar), curve())
         self.ro_key = tca.key("rsa") if shape.startswith("rsa") else tca.key()
         self.ro = tca.cert(self.ro_key, "m Root CA")
         self.rx = tca.cert(self.rx_key, "x Root CA")
@@ -108,9 +127,9 @@ class _Crafted:
         self.key_path = tca.write(d, "s.key", tca.key_pem(self.key))
 
 
-SHAPES = ["rsa-same-n", "rsa-shared-prime", "ec-scalar-other-curve"]
+SHAPES = ["rsa-same-n", "rsa-shared-prime", *EC_SHAPES]
 NEEDLE = {"rsa-same-n": "same RSA modulus", "rsa-shared-prime": "RSA prime factor",
-          "ec-scalar-other-curve": "EC private scalar"}
+          **{shape: "EC private scalar" for shape in EC_SHAPES}}
 
 
 @pytest.mark.parametrize("shape", SHAPES)
@@ -179,6 +198,39 @@ def test_shared_secret_names_each_shape(tmp_path):
         c = _Crafted(tmp_path / shape, shape)
         assert NEEDLE[shape] in dca._shared_root_secret(c.key, c.rx_key.public_key())
         assert dca._shared_root_secret(c.key, c.ro_key.public_key()) == ""
+
+
+@pytest.mark.parametrize("name", dca.ALLOWED_EC_CURVES)
+def test_the_curve_order_table_is_each_curves_group_order(name):
+    """The library takes scalars 1..n-1 only (n - 1 derives, n is refused), and
+    (n - 1)G = -G: the same x as G, the other y. So the table's n is the order."""
+    curve = {"secp256r1": ec.SECP256R1, "secp384r1": ec.SECP384R1,
+             "secp521r1": ec.SECP521R1}[name]()
+    n = dca._EC_ORDER[name]
+    g = ec.derive_private_key(1, curve).public_key().public_numbers()
+    minus_g = ec.derive_private_key(n - 1, curve).public_key().public_numbers()
+    assert (minus_g.x, minus_g.y != g.y) == (g.x, True)
+    with pytest.raises(ValueError):
+        ec.derive_private_key(n, curve)
+
+
+def test_ec_scalars_that_are_not_the_roots_secret_are_still_taken():
+    """No false refusal and no exception (materialize() runs this): a multiple of
+    the root's order, an off-by-one, and a root on a curve the table does not
+    know (only a poisoned store can hold one), with the key's scalar past its
+    order."""
+    rx = ec.generate_private_key(ec.SECP256R1())
+    d = rx.private_numbers().private_value
+    for scalar, curve in ((N256, ec.SECP384R1), (2 * N256, ec.SECP521R1),
+                          (d + 1, ec.SECP256R1), (d + N256 + 1, ec.SECP384R1)):
+        k = ec.derive_private_key(scalar, curve())
+        assert dca._shared_root_secret(k, rx.public_key()) == "", (scalar, curve)
+    k1 = ec.generate_private_key(ec.SECP256K1())
+    big = ec.derive_private_key(2 ** 520, ec.SECP521R1())
+    assert dca._shared_root_secret(big, k1.public_key()) == ""
+    # ...and the plain reuse on such a curve is still seen (s as it is)
+    same = ec.derive_private_key(k1.private_numbers().private_value, ec.SECP384R1())
+    assert "EC private scalar" in dca._shared_root_secret(same, k1.public_key())
 
 
 # ── finding 2: a rename of the mesh's domain onto a held extra-domain row ────────

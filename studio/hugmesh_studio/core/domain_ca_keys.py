@@ -61,8 +61,9 @@ Safety rules (each one pinned by a test):
   - a key that carries a held root's SECRET under another public half
     (:func:`_shared_root_secret`): an RSA modulus sharing a prime factor with a
     root's (the same ``n`` under another public exponent is a different SPKI, and
-    it is the root's key), or an EC private scalar that gives a root's public point
-    on the root's own curve.
+    it is the root's key), or an EC private scalar that, reduced modulo the order
+    of the root's curve, gives that root's public point or its negation on the
+    root's own curve (``d + k*n`` and ``n - d`` both give ``d``).
 
   It is checked on :func:`import_signing`, re-checked on :func:`import_root` for
   ANY domain (so the reverse order -- the key first, the matching root later, even
@@ -147,6 +148,18 @@ NOT_TAKEN = (
 #: Thresholds (stated in the PR and on refusal).
 MIN_RSA_BITS = 2048
 ALLOWED_EC_CURVES = ("secp256r1", "secp384r1", "secp521r1")
+#: The group order n of each curve in ALLOWED_EC_CURVES (SEC 2), for
+#: :func:`_shared_root_secret`: on a curve of order n the scalars s and s mod n are
+#: one secret. A test pins each against the library (n - 1 derives, n is refused).
+_EC_ORDER = {
+    "secp256r1": int("FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551",
+                     16),
+    "secp384r1": int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF5"
+                     "81A0DB248B0A77AECEC196ACCC52973", 16),
+    "secp521r1": int("01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+                     "A51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E9138640"
+                     "9", 16),
+}
 EXPIRY_WARN_DAYS = 30
 
 #: KEYS profile that carries the signing key (gen-provision-keys.sh --role pki).
@@ -582,7 +595,7 @@ def root_key_invariant_problem(entries) -> str:
       to it -- must not equal the public half of ANY held root, of ANY domain;
     * nor may the key carry such a root's secret under another public half
       (:func:`_shared_root_secret`: an RSA modulus with a common prime factor, an
-      EC scalar reused on the root's curve).
+      EC scalar that is the root's, up to sign and the root curve's order).
 
     :func:`import_signing` and :func:`import_root` call this with the entries the
     import WOULD leave (so neither order slips through), and :func:`materialize`
@@ -629,8 +642,12 @@ def _shared_root_secret(key, root_public) -> str:
       public exponent is the crafted case (a different SPKI, the root's own ``p`` and
       ``q``); any common factor is enough, since ``gcd`` then factors the root's
       modulus and its private exponent follows.
-    * EC: the key's private scalar, used on the ROOT's curve, gives the root's public
-      point (one secret scalar reused on another curve).
+    * EC: the key's private scalar ``s``, reduced modulo the order ``n`` of the
+      ROOT's curve and used on that curve, gives the root's public point ``Q`` or its
+      negation ``-Q`` (the same x-coordinate). ``s = d + k*n`` on a larger curve and
+      ``s = n - d`` on the root's own curve both hand over the root's ``d``. A curve
+      outside :data:`_EC_ORDER` (not importable, only a poisoned store) is checked
+      with ``s`` as it is.
 
     Otherwise "" (no other pair of key types can share a secret this way: Ed25519
     and Ed448 keys have one curve each, so a reuse is an equal SPKI). Says what is
@@ -648,15 +665,27 @@ def _shared_root_secret(key, root_public) -> str:
         return ""
     if (isinstance(key, ec.EllipticCurvePrivateKey)
             and isinstance(root_public, ec.EllipticCurvePublicKey)):
-        scalar = key.private_numbers().private_value
+        raw = key.private_numbers().private_value
+        order = _EC_ORDER.get(root_public.curve.name)
+        scalar = raw % order if order else raw
         try:
             on_root_curve = ec.derive_private_key(scalar, root_public.curve)
         except (ValueError, TypeError):
-            return ""           # the scalar is out of range for that curve: not reused
-        if _spki(on_root_curve.public_key()) == _spki(root_public):
-            return ("uses the same EC private scalar as" if
-                    key.curve.name == root_public.curve.name else
-                    f"reuses, on {key.curve.name}, the EC private scalar of")
+            # 0 (the key's scalar was a multiple of n), or out of range for a curve
+            # of unknown order: no key on the root's curve, so not reused
+            return ""
+        mine = on_root_curve.public_key().public_numbers()
+        theirs = root_public.public_numbers()
+        if mine.x != theirs.x:
+            return ""
+        negated = mine.y != theirs.y        # -Q: the scalar is n - d
+        if key.curve.name == root_public.curve.name:
+            return ("uses the negated EC private scalar (n - d) of" if negated
+                    else "uses the same EC private scalar as")
+        if negated or scalar != raw:
+            return (f"carries, on {key.curve.name}, the EC private scalar (up to "
+                    f"sign and the order of {root_public.curve.name}) of")
+        return f"reuses, on {key.curve.name}, the EC private scalar of"
     return ""
 
 
