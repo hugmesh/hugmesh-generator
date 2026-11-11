@@ -110,11 +110,13 @@ def test_only_publish_writes_and_only_publish_can_sign():
 
 def test_no_other_workflow_can_sign():
     """Over EVERY workflow file: a job that can mint a signing identity (id-token) or
-    store attestations is one of the two release workflows' publish jobs and nothing
-    else. The cut workflow in particular writes contents and actions only: it creates
+    store attestations is one of the three release workflows' publish jobs and nothing
+    else (Studio, the mesh-node image, and the hugmesh-akkoma image, whose
+    akkoma-release.yml is mesh-node-release.yml with the names swapped). The cut workflow in particular writes contents and actions only: it creates
     the tag and starts the publishing run, it never signs."""
     workflows = os.path.join(GENERATOR_DIR, ".github", "workflows")
-    allowed = {("studio-release.yml", "publish"), ("mesh-node-release.yml", "image")}
+    allowed = {("studio-release.yml", "publish"), ("mesh-node-release.yml", "image"),
+               ("akkoma-release.yml", "image")}
     seen = set()
     for name in sorted(os.listdir(workflows)):
         if not name.endswith((".yml", ".yaml")):
