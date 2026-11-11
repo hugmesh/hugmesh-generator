@@ -650,8 +650,8 @@ krc_live_iso() {
     local src="${WD}/${KRE[LIVE_ISO]}" tree="${KRC_WORK}/live-root" oldsq="${KRC_WORK}/old.sqfs" newsq="${KRC_WORK}/squashfs.img" comp
     banner "Building LIVE image (bootable ISO: grub-mkrescue + squashfs)"
     info "Patching ${KRE[LIVE_ISO]}: the squashfs root's kernel and modules, /boot/vmlinuz and /boot/initramfs.img"
-    xorriso -indev "${src}" -osirrox on -extract /LiveOS/squashfs.img "${oldsq}" >/dev/null 2>&1 \
-        || krc_fail "cannot extract /LiveOS/squashfs.img from ${KRE[LIVE_ISO]}"
+    xorriso -indev "${src}" -osirrox on -extract /LiveOS/squashfs.img "${oldsq}" > "${KRC_WORK}/xorriso-extract.log" 2>&1 \
+        || { tail -n 20 "${KRC_WORK}/xorriso-extract.log" >&2; krc_fail "cannot extract /LiveOS/squashfs.img from ${KRE[LIVE_ISO]}"; }
     comp="$(unsquashfs -s "${oldsq}" 2>/dev/null | sed -n 's/^Compression //p' | head -1)"; comp="${comp:-xz}"
     rm -rf "${tree}"
     unsquashfs -no-progress -d "${tree}" "${oldsq}" >/dev/null || krc_fail "unsquashfs of the live root failed"
@@ -672,8 +672,8 @@ krc_live_iso() {
         -boot_image any replay -hfsplus off \
         -map "${newsq}" /LiveOS/squashfs.img \
         -map "${SYSROOT}/boot/vmlinuz" /boot/vmlinuz \
-        -map "${SYSROOT}/boot/initramfs-live.img" /boot/initramfs.img >/dev/null 2>&1 \
-        || { rm -f "${NEW_LIVE}"; krc_fail "xorriso could not rewrite the live ISO"; }
+        -map "${SYSROOT}/boot/initramfs-live.img" /boot/initramfs.img > "${KRC_WORK}/xorriso-live.log" 2>&1 \
+        || { tail -n 20 "${KRC_WORK}/xorriso-live.log" >&2; rm -f "${NEW_LIVE}"; krc_fail "xorriso could not rewrite the live ISO"; }
     rm -f "${newsq}"
     info "Live ISO: ${NEW_LIVE} ($(du -sh "${NEW_LIVE}" | cut -f1))"
 }
@@ -686,8 +686,8 @@ krc_installer_iso() {
     # archive the builder put on this ISO are carried over untouched (never re-minted).
     xorriso -indev "${src}" -outdev "${NEW_INSTALLER}" -volid "${KRE[INSTALL_VOLID]}" -joliet on \
         -rm "/stage4/${KRE[STAGE4]}" -- \
-        -map "${NEW_STAGE4}" "/stage4/$(basename "${NEW_STAGE4}")" >/dev/null 2>&1 \
-        || { rm -f "${NEW_INSTALLER}"; krc_fail "xorriso could not rewrite the installer ISO"; }
+        -map "${NEW_STAGE4}" "/stage4/$(basename "${NEW_STAGE4}")" > "${KRC_WORK}/xorriso-installer.log" 2>&1 \
+        || { tail -n 20 "${KRC_WORK}/xorriso-installer.log" >&2; rm -f "${NEW_INSTALLER}"; krc_fail "xorriso could not rewrite the installer ISO"; }
     info "Installer ISO: ${NEW_INSTALLER}"
 }
 

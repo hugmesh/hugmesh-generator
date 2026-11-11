@@ -66,6 +66,24 @@ session at `/out`, exactly as for the build).
 The rebuild never stores into the signed-kernel cache: an edited kernel is never served
 to another image.
 
+## An interrupted rebuild resumes
+
+`apply` keeps a step journal in `<build-root>/kernel-reconfig/pending/apply.state`. It
+records each finished step (kernel, sign, label, stage4, img, live, installer) and what
+that step produced. A cancelled or killed rebuild then picks up after the last finished
+step under the same stamp, so the new artifacts keep one timestamp. `discard` refuses
+once the build system already carries the edited kernel, because finishing is the only
+way to bring the artifacts back in line with it.
+
+The clean step strips the build system's static libraries. They are read out of the
+stage3 seed the build recorded (`<build-root>/sysroot.seed`), which is looked for under
+`/shared/seed/amd64` in the container, `<out>/shared/seed/amd64` beside the session, or
+`--seed-dir`.
+
+Every `xz` is memory-bounded. Decompression runs single-threaded, and compression is
+capped at half of the free memory. An unbounded multi-threaded decompression of a `-9`
+image was OOM-killed on a busy 31 GiB host.
+
 ## When it refuses (one sentence each)
 
 | Situation | What you see |
@@ -80,6 +98,8 @@ to another image.
 | Edit drops a hardening option | The edited kernel config fails the build's hardening asserts: … — nothing was rebuilt. |
 | Out-of-tree modules (e.g. NVIDIA) | This image carries out-of-tree kernel modules (…) built against its current kernel; … |
 | Not enough disk | Repackaging needs about N GiB free under …; M GiB is available. |
+| The clean step stripped the static libraries and the seed is gone | The build system's static libraries were stripped by its clean step and the seed it came from (…) is not in any seed folder (…) — rebuild the image. |
+| An interrupted rebuild, then Discard | An interrupted kernel rebuild already put the edited kernel into this image's build system — run the rebuild again to finish it; … |
 | No terminal window can be opened | No terminal window could be opened on this desktop — run this in a terminal: `<the exact command>` |
 
 ## Where the window opens
