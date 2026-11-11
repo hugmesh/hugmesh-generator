@@ -1020,8 +1020,9 @@ jobs:
     # connections on the docker bridge gateway (the LAN view) and that the real
     # seed-e2e.sh moves the built-in admin off the factory default. Exits 2 (a
     # failure here) without docker. MEASURED 2026-11-11 on a Linux host with docker:
-    # 28 passed / 0 failed in ~2 min 50 s; against origin/main 39b953ad, 21 failed
-    # (incl. an admin session from the factory default via a non-loopback address).
+    # 30 passed / 0 failed in 25 s (images cached) to ~3 min; against origin/main
+    # 39b953ad, 22 failed (incl. an admin session from the factory default via a
+    # non-loopback address).
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

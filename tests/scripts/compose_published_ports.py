@@ -20,7 +20,8 @@ RULES
   3. An identity provider or homeserver (IDP_IMAGE / IDP_SERVICE below) may never be a
      DOORS exception.
   4. FAIL CLOSED on a shape this line reader cannot judge (long-syntax ports, an entry
-     it cannot split), never skip it.
+     it cannot split, a `ports:` key anywhere but directly under a service, e.g. in an
+     x- anchor block or at another indentation), never skip it.
 Python 3 stdlib only, no PyYAML (the pre-merge job's image has none): it reads lines.
 
 Exit 0 clean, 1 findings (file:line: service: why), 2 usage. --count prints a summary
@@ -162,6 +163,7 @@ def scan_file(path, label):
     # collect (lineno, service, entry) first; the image may follow the ports block
     entries = []
     images = {}
+    judged_ports_lines = set()
     ports_open, ports_indent = False, 0
     for n, raw in enumerate(lines, 1):
         line = strip_comment(raw).rstrip()
@@ -203,6 +205,7 @@ def scan_file(path, label):
                 continue
         m = PORTS_RE.match(line)
         if m and indent == 4:
+            judged_ports_lines.add(n)
             rest = m.group(1).strip()
             if rest:
                 items = split_flow(rest)
@@ -213,6 +216,14 @@ def scan_file(path, label):
                     entries.append((n, svc, unquote(it)))
             else:
                 ports_open, ports_indent = True, 4
+    # Any other `ports:` key (an x- anchor, a flow-style service, another indentation)
+    # is a publish this reader cannot attribute: refuse rather than skip it.
+    for n, raw in enumerate(lines, 1):
+        if n not in judged_ports_lines and re.match(r"^\s*[\"']?ports[\"']?\s*:", strip_comment(raw)):
+            findings.append(f"{label}:{n}: a ports: key outside the services.<name>.ports "
+                            "shape this guard reads; move it under its service")
+        elif n not in judged_ports_lines and re.search(r"[{,]\s*[\"']?ports[\"']?\s*:", strip_comment(raw)):
+            findings.append(f"{label}:{n}: a flow-style ports: entry this guard cannot read")
     for n, s, entry in entries:
         published += 1
         image = images.get(s, "")

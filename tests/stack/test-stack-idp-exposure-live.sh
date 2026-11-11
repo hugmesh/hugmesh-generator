@@ -19,6 +19,10 @@
 # against it (SEED_CASDOOR_ONLY=1). Asserted:
 #   [render]  every identity-provider/homeserver publish renders host_ip 127.0.0.1 with
 #             STACK_BIND_ADDR unset, and 0.0.0.0 when it is set (the opt-in works);
+#   [sweep]   with EVERY profile compose.local.yaml defines, every published port of
+#             every service renders a loopback host_ip, except the three front doors
+#             (fe-gateway, https-front, anubis). compose's own render, so no YAML shape
+#             (anchors, flow style, indentation) can hide a publish from it;
 #   [door]    the live Casdoor answers on loopback and REFUSES the connection on a
 #             non-loopback address of this host (the docker bridge gateway, and the
 #             default-route source address when there is one): the LAN view;
@@ -102,6 +106,12 @@ render() { # render [VAR=value ...] -> JSON on stdout
 render > "${WORK}/default.json" \
   || { echo "FATAL: docker compose config failed: $(grep -v 'is not set' "${WORK}/render.err" | head -3)" >&2; exit 2; }
 render STACK_BIND_ADDR=0.0.0.0 > "${WORK}/optin.json" || { echo "FATAL: opt-in render failed" >&2; exit 2; }
+(cd "${WORK}/render" && env -u STACK_BIND_ADDR -u COMPOSE_PROJECT_NAME ROUTE_ACCESS_DB_PASSWORD=idpx \
+   docker compose -p "${PROJECT}" -f stack/compose.local.yaml \
+     --profile social --profile brandb --profile phpbb --profile akkoma --profile games \
+     --profile tor --profile anubis --profile edge-ai-tts --profile media-poisoner --profile headscale \
+     config --format json 2>"${WORK}/render-all.err") > "${WORK}/all.json" \
+  || { echo "FATAL: all-profile render failed: $(grep -v 'is not set' "${WORK}/render-all.err" | head -3)" >&2; exit 2; }
 
 echo "-- [render] identity provider / homeserver publishes, as compose will run them --"
 for svc in casdoor casdoor-brandb tuwunel mastodon-web mastodon-streaming akkoma phpbb; do
@@ -112,6 +122,25 @@ for svc in casdoor casdoor-brandb tuwunel mastodon-web mastodon-streaming akkoma
   [ "${o}" = "0.0.0.0" ] && ok "${svc}: STACK_BIND_ADDR=0.0.0.0 opts into every interface" \
     || bad "${svc}: STACK_BIND_ADDR=0.0.0.0 rendered host_ip '${o}' (the opt-in does not reach it)"
 done
+
+echo "-- [sweep] every published port, every profile, as compose renders it --"
+# The front doors the LAN is meant to use (tests/scripts/compose_published_ports.py DOORS).
+DOORS="hugmesh-fe-gateway hugmesh-https-front hugmesh-anubis"
+# '|'-separated, not TAB: IFS treats a TAB as whitespace and would collapse an EMPTY
+# host_ip (the very defect) into the next field.
+jq -r '.services | to_entries[] | .key as $s | (.value.ports // [])[] | "\($s)|\(.host_ip // "")|\(.published)->\(.target)"' \
+  "${WORK}/all.json" > "${WORK}/published.tsv"
+total="$(wc -l < "${WORK}/published.tsv" | tr -d ' ')"
+open_ports=""
+while IFS='|' read -r svc hip port; do
+  case " ${DOORS} " in *" ${svc} "*) continue ;; esac
+  case "${hip}" in 127.0.0.1|::1) ;; *) open_ports="${open_ports} ${svc}(${hip:-every-interface}:${port})" ;; esac
+done < "${WORK}/published.tsv"
+# 11 publishes on 2026-11-11 (8 loopback incl. the Tor SOCKS client, 3 doors).
+[ "${total}" -ge 11 ] && ok "vacuity floor: ${total} published ports rendered (>= 11)" \
+  || bad "only ${total} published ports rendered: the profiles did not take effect"
+[ -z "${open_ports}" ] && ok "every non-door publish renders a loopback host_ip" \
+  || bad "publishes on a non-loopback host_ip:${open_ports}"
 
 # ── bring up casdoor + casdoor-db from the render, on a free port ────────────
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
@@ -137,9 +166,20 @@ if ! docker compose -p "${PROJECT}" -f "${RUN}" up -d casdoor >"${WORK}/up.log" 
   exit 2
 fi
 BASE="http://127.0.0.1:${PORT}"
-t=0
+t=0; restarts=0
 until [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "${BASE}/api/get-account" 2>/dev/null)" = 200 ]; do
-  [ "${t}" -ge "${WAIT_S}" ] && { echo "FATAL: Casdoor did not answer on ${BASE} within ${WAIT_S}s: $(docker compose -p "${PROJECT}" -f "${RUN}" logs --tail 5 casdoor 2>&1 | tail -5)" >&2; exit 2; }
+  [ "${t}" -ge "${WAIT_S}" ] && { echo "FATAL: Casdoor did not answer on ${BASE} within ${WAIT_S}s: $(docker compose -p "${PROJECT}" -f "${RUN}" logs --tail 25 casdoor 2>&1 | grep -v -E '^\S+\s+\|\s+\s*/go/' | tail -12)" >&2; exit 2; }
+  # compose.real.yaml gives casdoor no restart policy. A fresh postgres volume answers
+  # pg_isready from initdb's TEMPORARY server, which then restarts; a Casdoor that
+  # connects in that window panics in CreateTables and stays down (seen once in five
+  # runs here). Start it again, a bounded number of times, rather than fail the proof
+  # on a start-up race the stack itself has.
+  state="$(docker compose -p "${PROJECT}" -f "${RUN}" ps -a --format '{{.State}}' casdoor 2>/dev/null | head -1)"
+  if [ "${state}" = exited ] && [ "${restarts}" -lt 3 ]; then
+    restarts=$((restarts + 1))
+    echo "  (casdoor exited during start-up; starting it again, ${restarts}/3)"
+    docker compose -p "${PROJECT}" -f "${RUN}" up -d casdoor >/dev/null 2>&1 || true
+  fi
   sleep 3; t=$((t + 3))
 done
 echo "  (Casdoor answering on ${BASE} after ${t}s)"

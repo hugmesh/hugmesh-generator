@@ -141,6 +141,10 @@ neg long-syntax compose.x.yaml $'services:\n  casdoor:\n    image: casbin/casdoo
 neg override-tag compose.x.yaml $'services:\n  akkoma:\n    image: x/akkoma:1\n    ports: !override ["4001:4000"]' 'akkoma: an identity provider'
 neg idp-as-door compose.local.yaml $'services:\n  hugmesh-fe-gateway:\n    image: casbin/casdoor:3.80.0\n    ports: ["8088:8080"]' 'hugmesh-fe-gateway: an identity provider'
 neg new-service compose.local.yaml $'services:\n  something-new:\n    image: busybox\n    ports: ["9999:9999"]' "something-new: port '9999:9999' names no host IP"
+# Shapes a line reader cannot attribute must fail CLOSED, not be skipped.
+neg anchor-block compose.x.yaml $'x-pub: &pub\n  ports: ["8000:8000"]\nservices:\n  casdoor:\n    <<: *pub\n    image: casbin/casdoor' 'a ports: key outside'
+neg flow-service compose.x.yaml $'services:\n  casdoor: { image: casbin/casdoor, ports: ["8000:8000"] }' 'a flow-style ports: entry'
+neg deep-indent compose.x.yaml $'services:\n    casdoor:\n      image: casbin/casdoor\n      ports: ["8000:8000"]' 'a ports: key outside'
 mkdir -p "${WORK}/pos"
 cat > "${WORK}/pos/compose.local.yaml" <<'EOF'
 services:
