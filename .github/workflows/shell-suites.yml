@@ -391,11 +391,13 @@ jobs:
           # it pins loopback-only destinations, plan/commit/rollback argv, commit
           # and rollback on `ssh -tt` with 'y' typed on a pty, and NO -y /
           # GL_ASSUME_YES / token on any argv; a rollback that never converges, an
-          # absent/truncated/empty nft table (unknown, never public) and a status/nft
-          # disagreement all fail. Needs python3 (pty) only. MEASURED, 2026-11-10,
-          # in alpine:3 (bash python3 coreutils util-linux; busybox grep/sed):
-          # 115 passed / 0 failed. Mutation-tested on a Gentoo host (round 2):
-          # 18 planted defects in the lane, 17 caught; the survivor is named in the PR.
+          # absent/truncated/empty nft table or a read cut off before its rc marker
+          # (unknown, never public) and a status/nft disagreement all fail. Needs
+          # python3 (pty) only. MEASURED, 2026-11-11, in alpine:3 (bash python3
+          # coreutils util-linux; busybox grep/sed): 121 passed / 0 failed.
+          # Mutation-tested on a Gentoo host: 18 planted defects in the lane in
+          # round 2, 17 caught; round 3's two missing-rc-marker mutants, both caught
+          # (they survived the round-2 suite). The survivor is named in the PR.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
