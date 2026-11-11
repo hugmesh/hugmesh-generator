@@ -444,6 +444,7 @@ jobs:
             tests/qemu/qemu-e2e-lane_test.sh
             tests/qemu/display_door_test.sh
             tests/qemu/display_argv_test.sh
+            tests/qemu/no_egress_argv_test.sh
             tests/requested-atoms-resolvable.sh
             tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
             tests/scripts/test-anubis-env-gate.sh
