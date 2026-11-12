@@ -61,6 +61,7 @@ from ._gating import (
     capability_allows_flow, clear_unsupported, gate_widgets, gate_widgets_role_class,
     platform_supports,
 )
+from ._scroll import scrollable
 from ._widgets import _row
 
 # Node fallback creds are only MEANINGFUL when an x86 node-class image is being built
@@ -291,7 +292,11 @@ class SystemPage(QtWidgets.QWizardPage):
         self.setTitle("System identity")
         self.setSubTitle("The host identity baked into this node/desktop image — "
                          "hostname, timezone, default account and who the image is for.")
-        lay = QtWidgets.QVBoxLayout(self)
+        # Scrolls (pages/_scroll.py): a mesh worklist gives one hostname row per image,
+        # and with seven images the page's minimum (410 px) passed the 405 px page of
+        # the 942x552 netbook window. Qt then squeezed every editor below its own height
+        # and cut the placeholder names in half (GUI-13).
+        lay = scrollable(self)
         lay.addWidget(_muted(_IDENTITY_HINT))
         self.hostname = QtWidgets.QLineEdit()
         self.hostname.setPlaceholderText("Leave blank to use the role-derived hostname")
