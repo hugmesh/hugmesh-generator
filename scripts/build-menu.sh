@@ -116,8 +116,8 @@ OPT_CHARACTER_STUDIO="no"     # yes => --with-character-studio: VN character-stu
 OPT_CHARACTER_FORGE="no"      # yes => --with-character-forge: 3D character maker (BFF db+api + remote at /character-forge)
 # ── OPTIONAL services catalog (cluster roles; specs/cluster/optional-services.yaml) ─
 # Comma list of user-level slugs {akkoma,tuwunel,phpbb,games,owncast,tube,
-# character-studio,character-forge}. Empty = builder default (akkoma tuwunel
-# phpbb); the literal 'none' = EXPLICITLY none (=> --optional-services ""). The
+# character-studio,character-forge}. Empty = builder default (tuwunel phpbb;
+# akkoma is off until its image is published); the literal 'none' = EXPLICITLY none (=> --optional-services ""). The
 # checklist supersedes the lone character-studio/character-forge toggles above —
 # they are kept in sync both ways.
 OPT_SERVICES=""
@@ -677,8 +677,311 @@ _arm_standalone_flags() {
     local bf=""
     [ -n "${ARM_LOCAL_PASS}" ] && [ -n "${LOGIN_PASS_REL}" ] && bf+=" --local-pass-file ${LOGIN_PASS_REL}"
     [ -n "${ARM_LUKS_PASS}" ]  && bf+=" --luks-pass $(_shell_quote "${ARM_LUKS_PASS}")"
+    # The Desktop options (desktop_screen), before the escape hatch so it can override.
+    [ -n "${DESKTOP_FLAGS}" ] && bf+=" ${DESKTOP_FLAGS}"
     [ -n "${OPT_EXTRA_FLAGS}" ] && bf+=" ${OPT_EXTRA_FLAGS}"
     printf '%s' "${bf# }"
+}
+
+# ── Desktop step (the Studio's, shared) ─────────────────────────────────────────
+# The Desktop options (environment, Steam, window managers and compositors, default
+# session, GPU driver, VIDEO_CARDS, login account, extra accounts, apps native or
+# Flatpak, Flatpak remotes, Python, portage overlay, the emerge --pretend check) are
+# the Studio's Desktop step, read from ONE model: studio/hugmesh_studio/core/
+# desktop_spec.py through core/desktop_menu.py (Qt-free, stdlib only), the way
+# local_mesh_screen runs core.local_mesh. So this menu offers the same options, greys
+# the same ones with the same reasons (Steam/i3/VIDEO_CARDS on an ARM board, ...) and
+# emits the same builder flags as the GUI, the text UI and the CLI; nothing about them
+# is re-typed here. studio/tests/test_desktop_option_parity.py drives every option
+# through this menu too.
+#
+# The choices live per make target in ${STATE_DIR}/desktop/<target>.json (no secret).
+# The extra accounts' first-login passwords are typed masked into DESK_PASSES (memory
+# only, never menu.conf) and reach the builder as a 0600 NAME:PASSWORD file beside the
+# login password (_stage_desk_passes), never on argv.
+DESK_STATE_DIR="${STATE_DIR}/desktop"
+declare -A DESK_PASSES=()
+DESK_LOCAL_PASS=""            # x86 laptop/chromebook/desktop login password (masked, never saved)
+DESKTOP_FLAGS=""; DESKTOP_BLOCK=""; DESK_PASS_REL=""
+
+# _desk_target TARGET — is TARGET one the Desktop step knows (a desktop image)?
+_desk_target() {
+    case "$1" in
+        x86-standalone-thin|x86-standalone-thick|x86-standalone-unaffiliated|x86-laptop|x86-chromebook|x86-desktop) return 0 ;;
+        rpi-desktop|jetson-desktop|frite|orangepi5|orangepi4-lts) return 0 ;;
+    esac
+    return 1
+}
+_desk_state() { printf '%s/%s.json' "${DESK_STATE_DIR}" "$1"; }
+
+# _desk_unavailable — prints why the Desktop options cannot run here (rc 0), or
+# nothing (rc 1) when they can.
+_desk_unavailable() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        printf '%s' "python3 is required for the Desktop options (they share the Studio's model, studio/hugmesh_studio/core/desktop_spec.py). Install python3, or use 'Extra builder flags'."
+        return 0
+    fi
+    if ! PYTHONPATH="${REPO_DIR}/studio" python3 -c 'import hugmesh_studio.core.desktop_menu' >/dev/null 2>&1; then
+        printf '%s' "python3 cannot import hugmesh_studio.core.desktop_menu from ${REPO_DIR}/studio, so the Desktop options cannot be read here. Use 'Extra builder flags'."
+        return 0
+    fi
+    return 1
+}
+
+# _desk TARGET CMD ARGS... — run the shared model for TARGET. The fields the x86
+# standalone screen already owns (GPU driver, Steam, login user) are handed in, and
+# left out of its flags, so each flag has ONE owner.
+_desk() {
+    local target="$1"; shift
+    local -a o=()
+    case "${target}" in
+        x86-standalone*) o+=(--owned gpu,steam,user --gpu "${OPT_SA_GPU}" --steam "${OPT_SA_STEAM}" --user "${OPT_SA_USER}") ;;
+        frite) o+=(--frite-desktop "${OPT_FRITE_DESKTOP}") ;;
+    esac
+    case " ${OPT_EXTRA_FLAGS} " in *" --standalone "*) o+=(--standalone) ;; esac
+    mkdir -p "${DESK_STATE_DIR}" 2>/dev/null || true
+    ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/studio" python3 -m hugmesh_studio.core.desktop_menu \
+        "${target}" "$(_desk_state "${target}")" "$@" "${o[@]}" )
+}
+
+# _desk_set TARGET TAG VALUE... — change one option; on a refusal say why (inline in
+# the next screen's prompt via DESK_SAID) and return 1.
+DESK_SAID=""
+_desk_set() {
+    local target="$1" out rc
+    out="$(_desk "$@" 2>&1)"; rc=$?
+    DESK_SAID="${out}"
+    [ "${rc}" -eq 0 ]
+}
+
+# _stage_desk_passes — write the extra accounts' first-login passwords (DESK_PASSES)
+# as NAME:PASSWORD lines into a 0600 file in the login-password dir (0700, under the
+# checkout so the docker leg sees it at the same relative path). Parent shell only.
+_stage_desk_passes() {
+    DESK_PASS_REL=""
+    [ "${#DESK_PASSES[@]}" -gt 0 ] || return 0
+    if [ -z "${LOGIN_PASS_DIR}" ] || [ ! -d "${LOGIN_PASS_DIR}" ]; then
+        ( umask 077; mkdir -p "${REPO_DIR}/.hugmesh-secrets" ) || return 1
+        LOGIN_PASS_DIR="$(umask 077; mktemp -d "${REPO_DIR}/.hugmesh-secrets/login.XXXXXX")" || { LOGIN_PASS_DIR=""; return 1; }
+    fi
+    local n
+    ( umask 077; for n in "${!DESK_PASSES[@]}"; do printf '%s:%s\n' "${n}" "${DESK_PASSES[${n}]}"; done \
+        > "${LOGIN_PASS_DIR}/extra-local-pass" ) || return 1
+    DESK_PASS_REL=".hugmesh-secrets/${LOGIN_PASS_DIR##*/}/extra-local-pass"
+}
+
+# _desktop_compose TARGET — DESKTOP_FLAGS (the Desktop step's builder flags, one
+# shell-quoted string) or DESKTOP_BLOCK (why the build must not start). Nothing runs,
+# and nothing changes on the make command line, until the Desktop options were opened
+# and changed for TARGET (its state file exists).
+_desktop_compose() {
+    local target="$1" errf out rc
+    DESKTOP_FLAGS=""; DESKTOP_BLOCK=""
+    _desk_target "${target}" || return 0
+    [ -f "$(_desk_state "${target}")" ] || return 0
+    if DESKTOP_BLOCK="$(_desk_unavailable)"; then
+        DESKTOP_BLOCK="Desktop options are saved for ${target}, but ${DESKTOP_BLOCK}"
+        return 0
+    fi
+    DESKTOP_BLOCK=""
+    _stage_desk_passes || { DESKTOP_BLOCK="could not stage the extra accounts' passwords"; return 0; }
+    errf="$(mktemp "${STATE_DIR}/desk-err.XXXXXX")"
+    out="$(_desk "${target}" flags --pass-file "${DESK_PASS_REL}" 2>"${errf}")"; rc=$?
+    if [ "${rc}" -ne 0 ]; then
+        DESKTOP_BLOCK="$(cat "${errf}")"
+        [ -n "${DESKTOP_BLOCK}" ] || DESKTOP_BLOCK="the Desktop options could not be read (rc ${rc})"
+    else
+        DESKTOP_FLAGS="${out}"
+    fi
+    rm -f "${errf}"
+    # --packages-add is read last-wins by every builder: one in 'Extra builder flags'
+    # would silently drop the native apps picked here.
+    case " ${DESKTOP_FLAGS} " in *" --packages-add "*)
+        case " ${OPT_EXTRA_FLAGS} " in *" --packages-add "*)
+            DESKTOP_BLOCK="'Extra builder flags' carries --packages-add too, and the builder keeps only the LAST one, so the native apps picked in the Desktop options would be dropped. Move those atoms into the Desktop options (Apps, native -> add by hand), or drop the native apps there." ;;
+        esac ;;
+    esac
+    return 0
+}
+
+# desktop_label TARGET — one line for the menu item that opens the Desktop options.
+desktop_label() {
+    local why
+    if why="$(_desk_unavailable)"; then printf 'Desktop options .... (unavailable: python3)'; return 0; fi
+    if [ -f "$(_desk_state "$1")" ]; then printf 'Desktop options .... (changed; window managers, apps, accounts, Python, overlay)'
+    else printf 'Desktop options .... (defaults; window managers, apps, accounts, Python, overlay)'; fi
+}
+
+# desktop_screen TARGET LABEL — the Desktop step for one make target.
+desktop_screen() {
+    local target="$1" label="$2" why rows probs choice tag st lbl text
+    if why="$(_desk_unavailable)"; then ui_msg "Desktop options" "${why}"; return 0; fi
+    DESK_SAID=""
+    while :; do
+        rows="$(_desk "${target}" rows 2>&1)" || { ui_msg "Desktop options" "${rows}"; return 0; }
+        probs="$(_desk "${target}" problems 2>/dev/null)"
+        local -a items=()
+        while IFS=$'\t' read -r tag st lbl text; do
+            [ -n "${tag}" ] || continue
+            case "${st}" in
+                live) items+=("${tag}" "${lbl} ..... ${text}") ;;
+                info) items+=("${tag}" "${lbl} ..... (information)") ;;
+                *)    items+=("${tag}" "${lbl} ..... (not on this image: select for why)") ;;
+            esac
+        done <<< "${rows}"
+        items+=(done "‹ done")
+        local prompt="Desktop options for ${label}: the Studio's Desktop step (same options, rules and builder flags)."
+        [ -n "${DESK_SAID}" ] && prompt+=$'\n'"Last change: ${DESK_SAID}"
+        [ -n "${probs}" ] && prompt+=$'\n'"${probs}"
+        choice="$(ui_menu "Desktop — ${label}" "${prompt}" "${items[@]}")" || return 0
+        DESK_SAID=""
+        [ "${choice}" = done ] && return 0
+        st="$(printf '%s\n' "${rows}" | awk -F'\t' -v t="${choice}" '$1 == t { print $2; exit }')"
+        text="$(printf '%s\n' "${rows}" | awk -F'\t' -v t="${choice}" '$1 == t { print $4; exit }')"
+        lbl="$(printf '%s\n' "${rows}" | awk -F'\t' -v t="${choice}" '$1 == t { print $3; exit }')"
+        case "${st}" in
+            live) _desk_edit "${target}" "${choice}" "${lbl}" ;;
+            *)    ui_msg "${lbl}" "${text}" ;;
+        esac
+    done
+}
+
+# _desk_choices TARGET TAG — the TAG's choices (VALUE\tLABEL\tSTATE\tREASON lines,
+# without the kind line).
+_desk_choices() { _desk "$1" choices "$2" 2>/dev/null | tail -n +2; }
+
+# _desk_pick_list TARGET TAG TITLE PROMPT — a checklist over TAG's choices; greyed
+# choices are listed in the prompt with their reason, never offered. Prints the pick.
+_desk_pick_list() {
+    local target="$1" tag="$2" title="$3" prompt="$4" v l s r
+    local -a items=()
+    while IFS=$'\t' read -r v l s r; do
+        [ -n "${v}" ] || continue
+        case "${s}" in
+            grey) prompt+=$'\n'"Not here: ${l}: ${r}" ;;
+            *)    items+=("${v}" "${l}" "${s}") ;;
+        esac
+    done <<< "$(_desk_choices "${target}" "${tag}")"
+    [ "${#items[@]}" -gt 0 ] || { ui_msg "${title}" "${prompt}"; return 1; }
+    ui_checklist "${title}" "${prompt}" "${items[@]}"
+}
+
+# _desk_pick_one TARGET TAG TITLE PROMPT — a menu over TAG's choices. Prints the pick.
+_desk_pick_one() {
+    local target="$1" tag="$2" title="$3" prompt="$4" v l s r
+    local -a items=()
+    while IFS=$'\t' read -r v l s r; do
+        [ -n "${v}" ] || continue
+        [ "${s}" = grey ] && { prompt+=$'\n'"Not here: ${l}: ${r}"; continue; }
+        items+=("${v}" "${l}$([ "${s}" = on ] && echo '   (current)')")
+    done <<< "$(_desk_choices "${target}" "${tag}")"
+    [ "${#items[@]}" -gt 0 ] || return 1
+    ui_menu "${title}" "${prompt}" "${items[@]}"
+}
+
+# _desk_edit TARGET TAG LABEL — change one live option.
+_desk_edit() {
+    local target="$1" tag="$2" lbl="$3" kind v sub name pw
+    kind="$(_desk "${target}" choices "${tag}" 2>/dev/null | head -n 1)"
+    case "${kind}" in
+        menu)
+            v="$(_desk_pick_one "${target}" "${tag}" "${lbl}" "${lbl}:")" || return 0
+            _desk_set "${target}" set "${tag}" "${v}" || return 0
+            # The x86 standalone screen owns these two: keep its value in step.
+            case "${target}:${tag}" in
+                x86-standalone*:gpu_driver) OPT_SA_GPU="${v}" ;;
+                x86-standalone*:steam)      OPT_SA_STEAM="${v}" ;;
+            esac ;;
+        checklist)
+            v="$(_desk_pick_list "${target}" "${tag}" "${lbl}" "${lbl} (tick what this image carries):")" || return 0
+            _desk_set "${target}" set "${tag}" ${v} ;;
+        apps)
+            sub="$(ui_menu "${lbl}" "${lbl}:" pick "Pick from the catalog" add "Add one by hand ($([ "${tag}" = apps_native ] && echo 'category/name atom' || echo 'REMOTE:app.id'))" rm "Remove one added by hand" back "‹ back")" || return 0
+            case "${sub}" in
+                pick) v="$(_desk_pick_list "${target}" "${tag}" "${lbl}" "${lbl}: an app picked here leaves the other delivery.")" || return 0
+                      _desk_set "${target}" set "${tag}" ${v} ;;
+                add)  v="$(ui_input "${lbl}" "$([ "${tag}" = apps_native ] && echo 'Atom (category/name)' || echo 'REMOTE:app.id (e.g. flathub:org.gimp.GIMP)')" "")"
+                      [ -n "${v}" ] && _desk_set "${target}" set "${tag}" add "${v}" ;;
+                rm)   v="$(_desk_pick_one "${target}" "${tag}" "${lbl}" "Remove which?")" || return 0
+                      _desk_set "${target}" set "${tag}" rm "${v}" ;;
+            esac ;;
+        python)
+            sub="$(ui_menu "${lbl}" "Python targets only ever WIDEN the stage3 seed's set:" extra "Extra PYTHON_TARGETS" single "PYTHON_SINGLE_TARGET" back "‹ back")" || return 0
+            case "${sub}" in
+                extra)  v="$(_desk_pick_list "${target}" python "${lbl}" "Extra PYTHON_TARGETS:")" || return 0
+                        _desk_set "${target}" set python ${v} ;;
+                single) v="$(ui_menu "${lbl}" "PYTHON_SINGLE_TARGET:" - "the seed's own" python3_12 python3_12 python3_13 python3_13 python3_14 python3_14 python3_15 python3_15)" || return 0
+                        _desk_set "${target}" set python single "${v}" ;;
+            esac ;;
+        lines)
+            sub="$(ui_menu "${lbl}" "${lbl}:" add "Add NAME=https://…flatpakrepo" rm "Remove one" back "‹ back")" || return 0
+            case "${sub}" in
+                add) v="$(ui_input "${lbl}" "NAME=https://URL.flatpakrepo" "")"; [ -n "${v}" ] && _desk_set "${target}" set "${tag}" add "${v}" ;;
+                rm)  v="$(_desk_pick_one "${target}" "${tag}" "${lbl}" "Remove which?")" || return 0
+                     _desk_set "${target}" set "${tag}" rm "${v}" ;;
+            esac ;;
+        overlay)
+            sub="$(ui_menu "${lbl}" "One line each; no wildcards, no video_cards_*/python_* flags, only this image's testing keyword:" use "Add a package.use line (ATOM FLAG ...)" kw "Add an accept_keywords line (ATOM ~ARCH)" rm "Remove a line" back "‹ back")" || return 0
+            case "${sub}" in
+                use|kw) v="$(ui_input "${lbl}" "$([ "${sub}" = use ] && echo 'package.use line' || echo 'accept_keywords line')" "")"
+                        [ -n "${v}" ] && _desk_set "${target}" set overlay "${sub}" add "${v}" ;;
+                rm) local -a lines=(); local k l s r i=0
+                    while IFS=$'\t' read -r k l s r; do [ -n "${k}" ] && { lines+=("${k}:${l#* }"); }; done <<< "$(_desk_choices "${target}" overlay)"
+                    [ "${#lines[@]}" -gt 0 ] || return 0
+                    local -a it=(); for i in "${!lines[@]}"; do it+=("${i}" "${lines[${i}]}"); done
+                    v="$(ui_menu "${lbl}" "Remove which line?" "${it[@]}")" || return 0
+                    k="${lines[${v}]%%:*}"; l="${lines[${v}]#*:}"
+                    _desk_set "${target}" set overlay "${k}" rm "${l}" ;;
+            esac ;;
+        users)
+            sub="$(ui_menu "${lbl}" "Extra local accounts: NOT administrators unless you say so; each must choose a new password at first login. Passwords are typed masked and never saved." add "Add an account" pass "Type an account's first-login password again" rm "Remove an account" back "‹ back")" || return 0
+            case "${sub}" in
+                add)  name="$(ui_input "${lbl}" "Login name (lowercase letters, digits, _ and -)" "")"; [ -n "${name}" ] || return 0
+                      local adm=noadmin; ui_yesno "${lbl}" "Make ${name} an administrator (sudo)? Default: no." && adm=admin
+                      pw="$(ui_password_confirmed "${lbl}" "First-login password for ${name} (hashed at build time, never saved)" "")"
+                      _desk_set "${target}" set extra_users add "${name}" "${adm}" || return 0
+                      [ -n "${pw}" ] && DESK_PASSES["${name}"]="${pw}" ;;
+                pass) name="$(_desk_pick_one "${target}" extra_users "${lbl}" "Which account?")" || return 0
+                      pw="$(ui_password_confirmed "${lbl}" "First-login password for ${name}" "")"
+                      [ -n "${pw}" ] && DESK_PASSES["${name}"]="${pw}" ;;
+                rm)   name="$(_desk_pick_one "${target}" extra_users "${lbl}" "Remove which?")" || return 0
+                      _desk_set "${target}" set extra_users rm "${name}" && unset 'DESK_PASSES[$name]' ;;
+            esac
+            pw="" ;;
+        account)
+            local cur; cur="$(_desk_choices "${target}" primary_account | awk -F'\t' '$1 == "name" { print $2 }')"
+            case "${target}" in x86-standalone*) cur="${OPT_SA_USER}" ;; esac
+            name="$(ui_input "${lbl}" "Login account name (the desktop greeter's local login)" "${cur}")"; [ -n "${name}" ] || return 0
+            local adm=noadmin; ui_yesno "${lbl}" "Make ${name} an administrator (sudo)? Default: no." && adm=admin
+            _desk_set "${target}" set primary_account "${name}" "${adm}" || return 0
+            case "${target}" in
+                x86-standalone*) OPT_SA_USER="${name}" ;;
+                x86-laptop|x86-chromebook|x86-desktop)
+                    DESK_LOCAL_PASS="$(ui_password_confirmed "${lbl}" "Login password for ${name} (blank = keep the KEYS/SSO default; hashed at build time, never saved)" "${DESK_LOCAL_PASS}")" ;;
+            esac ;;
+        action)
+            sub="$(ui_menu "${lbl}" "Runs the builder's own emerge --pretend for this configuration in its container (minutes; one check or build at a time on this machine). Nothing is built or installed." check "Check" apply "Check, and record portage's own suggested lines in the overlay" back "‹ back")" || return 0
+            [ "${sub}" = back ] && return 0
+            local -a pa=(pretend --generator-dir "${REPO_DIR}"); [ "${sub}" = apply ] && pa+=(--apply)
+            local res; res="$(_desk "${target}" "${pa[@]}" 2>&1)"
+            ui_msg "${lbl}" "${res}" ;;
+        *) ui_msg "${lbl}" "Nothing to choose here." ;;
+    esac
+    return 0
+}
+
+# desktop_prebuild TARGET LABEL — the last stop before a desktop target builds: open
+# the Desktop options, build, or go back. rc 0 = build.
+desktop_prebuild() {
+    local target="$1" label="$2" c
+    while :; do
+        c="$(ui_menu "${label}" "Ready to build ${label}." desktop "$(desktop_label "${target}")" build "★ BUILD this image" back "‹ back")" || return 1
+        case "${c}" in
+            desktop) desktop_screen "${target}" "${label}" ;;
+            build)   return 0 ;;
+            *)       return 1 ;;
+        esac
+    done
 }
 
 # ── Compose the make command for a given selection ──────────────────────────────
@@ -692,8 +995,12 @@ build_make_cmd() {
     # The login password for THIS target, as a private file (see _stage_login_pass).
     case "${target}" in
         x86-standalone*) _stage_login_pass "${SA_LOCAL_PASS}" ;;
+        x86-laptop|x86-chromebook|x86-desktop) _stage_login_pass "${DESK_LOCAL_PASS}" ;;
         *)               _stage_login_pass "${ARM_LOCAL_PASS}" ;;
     esac
+    # The Desktop options for this target (DESKTOP_FLAGS / DESKTOP_BLOCK); nothing at
+    # all unless they were opened and changed for it.
+    _desktop_compose "${target}"
     # standalone-unaffiliated: the role PRESETS a neutral (brand-free) identity and
     # the builder HARD-ERRORS on any brand/branding/seed-code flag — so this menu
     # must never emit them for that one target (not even the BRAND= profile
@@ -1019,6 +1326,15 @@ build_make_cmd() {
             esac
             bf+=" --installer-ui ${OPT_INSTALLER_UI}"
         fi
+        # The login password a client desktop's Desktop options took (masked, never
+        # saved), as a private file like the standalone one.
+        case "${target}" in
+            x86-laptop|x86-chromebook|x86-desktop)
+                [ -n "${DESK_LOCAL_PASS}" ] && [ -n "${LOGIN_PASS_REL}" ] && bf+=" --local-pass-file ${LOGIN_PASS_REL}" ;;
+        esac
+        # The Desktop options (desktop_screen: the Studio's Desktop step), before the
+        # escape hatch.
+        [ -n "${DESKTOP_FLAGS}" ] && bf+=" ${DESKTOP_FLAGS}"
         # Extra builder flags — the verbatim escape hatch, LAST so they can override.
         [ -n "${OPT_EXTRA_FLAGS}" ] && bf+=" ${OPT_EXTRA_FLAGS}"
         [ -n "${bf}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${bf# }")
@@ -1062,6 +1378,14 @@ _warn_dropped_opts() {
 launch_build() {
     local runlog="${STATE_DIR}/run-$(date +%Y%m%d-%H%M%S).log"
     local -a launch=()
+    # The Desktop options said this build must not start (build_make_cmd ->
+    # _desktop_compose): say why, drop the staged secrets, start nothing.
+    if [ -n "${DESKTOP_BLOCK}" ]; then
+        ui_msg "Desktop options" "Not started: ${DESKTOP_BLOCK}"
+        [ -n "${LOGIN_PASS_DIR}" ] && rm -rf -- "${LOGIN_PASS_DIR}"
+        LOGIN_PASS_DIR=""; LOGIN_PASS_REL=""; DESKTOP_BLOCK=""
+        return 1
+    fi
     # A NATIVE build runs as root. We must NOT let an inner, no-tty `sudo` (under
     # setsid) try to re-authenticate — with sudo's default tty-scoped credential
     # timestamp it cannot, and the detached build would die instantly. Instead:
@@ -1355,7 +1679,7 @@ services_screen() {
     # legacy lone character-studio toggle migrated in as a pre-checked box.
     local cur
     if [ -z "${OPT_SERVICES}" ]; then
-        cur="akkoma,tuwunel,phpbb"
+        cur="tuwunel,phpbb"
         [ "${OPT_CHARACTER_STUDIO}" = yes ] && cur="${cur},character-studio"
         [ "${OPT_CHARACTER_FORGE}" = yes ] && cur="${cur},character-forge"
     elif [ "${OPT_SERVICES}" = none ]; then
@@ -1380,7 +1704,7 @@ services_screen() {
     done
     local sel
     sel="$(ui_checklist "Optional services" \
-        "OPTIONAL user-level services baked onto CLUSTER images (defaults: akkoma+tuwunel+phpbb ON; games/owncast/tube/character-studio/character-forge OFF). Unchecked slugs are pruned from the baked GitOps tree:" \
+        "OPTIONAL user-level services baked onto CLUSTER images (defaults: tuwunel+phpbb ON; akkoma (image not yet published)/games/owncast/tube/character-studio/character-forge OFF). Unchecked slugs are pruned from the baked GitOps tree:" \
         "${rows[@]}")" || return 0
     # space-separated tags -> the persisted comma list ('' selection = EXPLICIT none)
     set -- ${sel}
@@ -1595,7 +1919,7 @@ options_screen() {
             orangepi5fleet "Orange Pi 5 in fleet  ${orangepi5_fleet_l}   (adds Orange Pi 5 to full fleet; ORANGEPI5=1; EXPERIMENTAL)" \
             pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only; SCA needs NVD_API_KEY_FILE — nvd.nist.gov/developers/request-an-api-key)" \
             edge-ai  "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (backend-gpu/omnibus; edge-ai role always on)" \
-            services "Optional services ... ${OPT_SERVICES:-<default: akkoma,tuwunel,phpbb>}" \
+            services "Optional services ... ${OPT_SERVICES:-<default: tuwunel,phpbb>}" \
             managed  "Managed backing svcs  ${OPT_MANAGED_SERVICES:-<all self-hosted>}   (point a datastore at a hosted cloud endpoint; default self-hosted)" \
             tor      "Tor v3 onion ........ $([ "${OPT_TOR_ONION}" = yes ] && echo on || echo off)   (node service; exposes fe-gateway as .onion; default off)" \
             sunshine "Thin-desktop host ... $([ "${OPT_SUNSHINE}" = yes ] && echo on || echo off)   (Sunshine on tailnet CLIENT desktops; Quest/Moonlight opens it; default off)" \
@@ -1732,7 +2056,10 @@ single_role_screen() {
             # --standalone only composes onto --role desktop — the masked secrets
             # prompt is only meaningful there (a cluster-node role would just
             # ignore/reject --local-pass/--luks-pass).
-            if [ "${role}" = desktop ]; then arm_secrets_prompt "Pi ${role} (${OPT_RPI_BOARD})" required || return 0; fi
+            if [ "${role}" = desktop ]; then
+                arm_secrets_prompt "Pi ${role} (${OPT_RPI_BOARD})" required || return 0
+                desktop_prebuild rpi-desktop "Pi desktop (${OPT_RPI_BOARD})" || return 0
+            fi
             save_conf
             build_make_cmd "rpi-${role}" "Pi ${role} (${OPT_RPI_BOARD}, ${OPT_PATH}, ENV=${OPT_ENV})" 1
             launch_build ;;
@@ -1754,6 +2081,11 @@ single_role_screen() {
             [ "${role}" = back ] && return 0
             case "${role}" in
                 standalone-thin|standalone-thick|standalone-unaffiliated) standalone_screen "${role}" ;;
+                laptop|chromebook|desktop)
+                   desktop_prebuild "x86-${role}" "x86 ${role}" || return 0
+                   save_conf
+                   build_make_cmd "x86-${role}" "x86 ${role} (${OPT_PATH}, ENV=${OPT_ENV})" 1
+                   launch_build ;;
                 *) build_make_cmd "x86-${role}" "x86 ${role} (${OPT_PATH}, ENV=${OPT_ENV})" 1
                    launch_build ;;
             esac ;;
@@ -1787,7 +2119,10 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
             [ "${kflavor}" = back ] && return 0
             OPT_JETSON_KFLAVOR="${kflavor}"
             # --standalone only composes onto --role desktop, same reasoning as rpi5.
-            if [ "${role}" = desktop ]; then arm_secrets_prompt "Jetson ${role} (${OPT_JETSON_BOARD})" required || return 0; fi
+            if [ "${role}" = desktop ]; then
+                arm_secrets_prompt "Jetson ${role} (${OPT_JETSON_BOARD})" required || return 0
+                desktop_prebuild jetson-desktop "Jetson desktop (${OPT_JETSON_BOARD})" || return 0
+            fi
             save_conf
             build_make_cmd "jetson-${role}" "Jetson ${role} (${OPT_JETSON_BOARD}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
             launch_build ;;
@@ -1831,6 +2166,7 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
             [ "${flavor}" = back ] && return 0
             OPT_ORANGEPI5_FLAVOR="${flavor}"
             arm_secrets_prompt "Orange Pi 5 ${board}" required || return 0
+            desktop_prebuild orangepi5 "Orange Pi 5 ${board} desktop" || return 0
             save_conf
             build_make_cmd orangepi5 "Orange Pi 5 ${board} (${flavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
             launch_build ;;
@@ -1956,6 +2292,7 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
             [ "${wflavor}" = back ] && return 0
             OPT_ORANGEPI4LTS_FLAVOR="${wflavor}"
             arm_secrets_prompt "Orange Pi 4 LTS light desktop" required || return 0
+            desktop_prebuild orangepi4-lts "Orange Pi 4 LTS light desktop" || return 0
             save_conf
             build_make_cmd orangepi4-lts "Orange Pi 4 LTS light desktop (${wflavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
             launch_build ;;
@@ -2007,6 +2344,7 @@ standalone_screen() {
             kernel  "Kernel built-in .... ${OPT_SA_KBUILTIN}   (=y vs modules)"
             egress  "Egress VPN ......... ${OPT_SA_EGRESS:-<none>}"
             luks    "Unattended LUKS pass $([ -n "${SA_LUKS_PASS}" ] && echo '(set — advanced)' || echo '(installer prompts — recommended)')"
+            desktop "$(desktop_label "x86-${role}")"
             build   "★ BUILD this image (live ISO + stage4 + .fs.tar.xz + installer ISO)"
             back    "‹ back"
         )
@@ -2047,6 +2385,7 @@ standalone_screen() {
             kernel)  OPT_SA_KBUILTIN="$([ "${OPT_SA_KBUILTIN}" = yes ] && echo no || echo yes)" ;;
             egress)  OPT_SA_EGRESS="$(ui_input "Egress VPN" "Path to a WireGuard .conf / OpenVPN .ovpn (empty = none)" "${OPT_SA_EGRESS}")" ;;
             luks)    SA_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase into the installer ISO (ADVANCED; blank = installer prompts at install)" "${SA_LUKS_PASS}")" ;;
+            desktop) desktop_screen "x86-${role}" "x86 ${role}" ;;
             build)   save_conf
                      # A standalone image has no KEYS stick and no SSO: this password
                      # IS the only way in (root is locked). Refuse rather than build an
@@ -2522,7 +2861,10 @@ frite_screen() {
         back "‹ back")" || return 0
     [ "${desk}" = back ] && return 0
     OPT_FRITE_DESKTOP="${desk}"
-    if [ "${OPT_FRITE_DESKTOP}" = none ]; then arm_secrets_prompt "Frite ${board}"; else arm_secrets_prompt "Frite ${board}" required || return 0; fi
+    if [ "${OPT_FRITE_DESKTOP}" = none ]; then arm_secrets_prompt "Frite ${board}"; else
+        arm_secrets_prompt "Frite ${board}" required || return 0
+        desktop_prebuild frite "Frite ${board} light desktop" || return 0
+    fi
     save_conf
     build_make_cmd frite "Frite ${board} (${flavor}, desktop=${OPT_FRITE_DESKTOP})" 1
     launch_build

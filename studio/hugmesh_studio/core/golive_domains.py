@@ -47,6 +47,7 @@ __all__ = [
     "onion_exports",
     "onion_override_problem", "exposure_rows", "exposure_lines", "plan_rows",
     "export_candidates", "export_step_applies", "NO_EXPORT_DOMAINS_NOTE",
+    "NO_DOMAIN_HINT_GUI", "NO_DOMAIN_HINT_TUI",
 ]
 
 #: Said where the "Export to GitHub org" step would be, when no domain names an org
@@ -66,6 +67,14 @@ NO_EXTRA_DOMAINS_NOTE = (
     "This device carries no domain beyond its cluster domain (/etc/hugmesh/domains is "
     "baked only into client images). Each Go-Live run exposes ONE domain; to expose "
     "another, run it again and type that domain.")
+
+#: What the exposure table says when no domain is known yet — and HOW to give one,
+#: which is the one thing the two faces cannot word alike: the GUI types it into its
+#: Inputs step's Public domain field, while the TUI has no Inputs step at all (its
+#: domain is typed with ``t NAME`` on the domain stage, one ``b`` back from the plan).
+#: A face that showed the other's remedy sent the operator to a step it does not have.
+NO_DOMAIN_HINT_GUI = "type one on the Inputs step"
+NO_DOMAIN_HINT_TUI = "b goes back to the domain step, where t NAME types one"
 
 # the builders' --domains element shape (_validate_dnsname): lowercase dotted host
 _DNS_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
@@ -396,10 +405,13 @@ def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
     return rows
 
 
-def exposure_lines(rows) -> list[str]:
-    """The rows as text — the ONE rendering both faces show (parity-pinned)."""
+def exposure_lines(rows, hint: str = NO_DOMAIN_HINT_GUI) -> list[str]:
+    """The rows as text — the ONE rendering both faces show (parity-pinned for every
+    non-empty plan). Only the empty plan differs by face: ``hint`` says how THIS face
+    gives the run a domain (:data:`NO_DOMAIN_HINT_GUI`, the default, or
+    :data:`NO_DOMAIN_HINT_TUI`)."""
     if not rows:
-        return ["(no domain known yet — type one on the Inputs step)"]
+        return [f"(no domain known yet — {hint})"]
     width = max(len(w) for w, _ in rows)
     return [f"{w.ljust(width)}  {h}" for w, h in rows]
 

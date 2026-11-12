@@ -148,8 +148,23 @@ Feature: the unaffiliated x86 standalone build strips every platform identity be
   # N15 — the anonymous-visitor boundary, the plan's only network step and the
   # only reason an unaffiliated device ever meets a mesh. CALIBRATION FIRST:
   # /login/ and / must answer 200 text/html from the same door in the same run,
-  # or the 401s below are a dead door, not a deny. Read-only GETs, no cookie
-  # jar; the gateway 401s, it does not redirect anonymous callers to /login.
+  # or the 401s below are a dead door, not a deny. Read-only GETs, no cookie jar.
+  #
+  # THE REQUEST SHAPE MATTERS (hugmesh-gateway GUI-08). curl sends Accept: */*, so
+  # none of these is a browser page load, and each gated path gets the 401 and no
+  # redirect, /home and /about included. "Any gated path answering 200 text/html to
+  # a jar-less request is a real finding" (the plan's own words) stays true for
+  # every request shaped like these.
+  #
+  # A BROWSER is answered differently since GUI-08, and that half is NOT probed
+  # here: a top-level page load of a gated path is sent to /login?next=<path>
+  # instead of the bare 401, and a page load of /home or /about, the host shell's
+  # two public pages, is served. features/rbac/anonymous-401-wall.feature holds
+  # those rows (they need a mesh whose gateway carries hugmesh-gateway#68). This
+  # scenario stays the floor under both: it passes against a gateway from before
+  # that change and after it, so this lane's offline gate
+  # (tests/scripts/test-e2e-cli-lane.sh runs it against whatever stack is up)
+  # does not depend on which gateway the stack was built from.
   @env:docker @service:gateway @layer:gateway
   Scenario: an anonymous visitor at a live mesh gets the sign-in form and nothing else
     When I run the shell script:
@@ -165,7 +180,7 @@ Feature: the unaffiliated x86 standalone build strips every platform identity be
     When I run the shell script:
       """
       set -uo pipefail
-      for p in /admin/ /mod/ /user/ /apidocs /social/ /home /admin/remoteEntry.json /mod/remoteEntry.json /bff/session; do
+      for p in /admin/ /mod/ /user/ /apidocs /social/ /home /about /admin/remoteEntry.json /mod/remoteEntry.json /bff/session; do
         printf 'gated %s -> %s loc=%s\n' "$p" "$(curl -sk -o /dev/null -m 15 -w '%{http_code}' "$HUGMESH_BDD_BASE_URL$p")" "$(curl -sk -o /dev/null -m 15 -w '%{redirect_url}' "$HUGMESH_BDD_BASE_URL$p")"
       done
       """

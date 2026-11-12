@@ -588,10 +588,15 @@ class FleetDriver(BuildDriver):
         if backend == "native":
             if nvd_key_file:
                 penv = {**penv, nvd_key.FILE_ENV: nvd_key_file}
-            # env wrapper INSIDE the sudo boundary (sudo env_reset), same as G2
+            # env wrapper INSIDE the elevation boundary (sudo/pkexec env_reset), same
+            # as G2. The prefix is BuildDriver's single source (_elevation_prefix): a
+            # GUI launch elevates through sudo -A + the Qt askpass or pkexec, a
+            # terminal launch through plain sudo, root through nothing — and
+            # _kill_native_group signals the tree through the SAME prefix. A
+            # hard-coded ["sudo"] here sent a GUI fleet's password prompt to a
+            # terminal nobody can see.
             env_wrap = ["env", *(f"{k}={v}" for k, v in penv.items())] if penv else []
-            return ((["sudo"] if not self.host.is_root else [])
-                    + env_wrap + ["bash", *inner])
+            return self._elevation_prefix() + env_wrap + ["bash", *inner]
         if backend == "docker":
             # --config forwarded to every builder IN THE CONTAINER: the host spelling of
             # a brands/*.conf does not exist there (the repo is at /src), which is the
@@ -710,8 +715,19 @@ class FleetDriver(BuildDriver):
             # is always False on Windows (no geteuid), so the root sentence below was the
             # one shown there, and no Administrator shell could ever clear it.
             problems.append(native_refusal)
-        elif backend == "native" and not self.host.is_root:
-            problems.append("Native build needs root (the Studio will prepend sudo).")
+        # BuildDriver.preflight's rule (#382), which this override never reached: the
+        # driver prepends the elevation itself, so a non-root native fleet is refused
+        # ONLY where nothing can elevate. "not root => block" was the pre-2026-07-17
+        # bug BuildDriver removed — a GUI Studio is never root, so on the operator's
+        # own Gentoo host (where "auto" IS native) no fleet could ever start. The
+        # Flatpak refusal is BuildDriver's too: there the native backend cannot run.
+        elif backend == "native" and getattr(self.host, "in_flatpak", False):
+            from . import flatpak_host
+            problems.append(flatpak_host.native_build_blocker())
+        elif backend == "native" and not self.host.is_root and not self._can_elevate():
+            problems.append(
+                "Native build needs root and no elevation helper is available — install "
+                "sudo or pkexec (polkit), or run the Studio as root.")
         if cfg.brand_profile and not os.path.exists(
                 os.path.join(self.generator_dir, cfg.brand_profile)
                 if not os.path.isabs(cfg.brand_profile) else cfg.brand_profile):

@@ -394,7 +394,7 @@ def build(question: str, where: Optional[Where], history: "list[dict] | None" = 
           env: Optional[dict] = None, generator_dir: Optional[str] = None,
           ctx_tokens: Optional[int] = None, index: Optional["adocs.Index"] = None,
           snippets: Optional[list] = None, files_block: str = "",
-          k: int = 5) -> Prompt:
+          pretend_block: str = "", k: int = 5) -> Prompt:
     """Assemble the system message and the trimmed history for ``question``."""
     from . import local_ai_status as lai
     env = dict(os.environ if env is None else env)
@@ -412,6 +412,13 @@ def build(question: str, where: Optional[Where], history: "list[dict] | None" = 
         fmt = CHANGE_FORMAT
     if files_block:
         fmt = (fmt + "\n\n" if fmt else "") + DIFF_FORMAT
+    if pretend_block and where.slug == "desktop":
+        # the Desktop step's portage tool (core/assistant_portage.py): the model reads
+        # the last emerge --pretend run and proposes overlay lines in a portage block
+        from .assistant_portage import PORTAGE_FORMAT
+        fmt = (fmt + "\n\n" if fmt else "") + PORTAGE_FORMAT
+    else:
+        pretend_block = ""
     rules_block = rules + ("\n\n# Change format\n" + fmt if fmt else "")
     where_text = render_where(where)
     try:
@@ -428,7 +435,8 @@ def build(question: str, where: Optional[Where], history: "list[dict] | None" = 
             index = adocs.Index()
     snippet_budget = min(CAPS["snippets"], max(0, room - tokens(primer) - tokens(rules_block)
                                                 - tokens(where_text) - tokens(options_text)
-                                                - tokens(question) - tokens(files_block)))
+                                                - tokens(question) - tokens(files_block)
+                                                - tokens(pretend_block)))
     if snippets is None:
         want_k = 1 if files_block else k
         chunks = adocs.retrieve(question, where, index=index, budget_tokens=snippet_budget,
@@ -446,7 +454,8 @@ def build(question: str, where: Optional[Where], history: "list[dict] | None" = 
 
     parts = {"primer": scrub(primer), "rules": rules_block, "where": scrub(where_text),
              "options": scrub(options_text), "snippets": scrub(snippets_text, strict=False),
-             "files": scrub(files_block, strict=False)}
+             "files": scrub(files_block, strict=False),
+             "pretend": scrub(pretend_block, strict=False)}
     dropped: list = []
     fixed = tokens(question) + 20
 
@@ -477,6 +486,8 @@ def build(question: str, where: Optional[Where], history: "list[dict] | None" = 
         blocks.append("# Snippets\n" + parts["snippets"])
     if parts["files"]:
         blocks.append("# Files\n" + parts["files"])
+    if parts["pretend"]:
+        blocks.append("# emerge --pretend\n" + parts["pretend"])
     system = "\n\n".join(blocks)
     budget = {k: tokens(v) for k, v in parts.items()}
     budget.update({"question": tokens(question), "history": hist_tokens,

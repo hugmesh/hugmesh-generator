@@ -28,7 +28,7 @@ from hugmesh_studio.gui.pages import domains as gui_domains            # noqa: E
 from hugmesh_studio.gui.pages import localcloud_nodes as gui_lc        # noqa: E402
 from hugmesh_studio.gui.pages import vault as gui_vault                # noqa: E402
 from hugmesh_studio.gui.pages import welcome as gui_welcome            # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets                            # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtCore, QtWidgets                # noqa: E402
 from hugmesh_studio.tui import domains_step, journey, themes           # noqa: E402
 from hugmesh_studio.tui import e2e as tui_e2e                          # noqa: E402
 from hugmesh_studio.tui import localcloud as tui_lc                    # noqa: E402
@@ -378,6 +378,546 @@ def test_localmesh_domain_steps_are_hosted_on_both_faces(wiz):
 def test_the_own_row_reads_the_same_on_both_faces():
     assert (domains_step.OWN_APPLIES, domains_step.OWN_IDP, domains_step.OWN_CA) == \
         (gui_domains._OWN_APPLIES, gui_domains._OWN_IDP, gui_domains._OWN_CA)
+
+
+# ── GUI-22 (GUI retest 2026-11-11): the own row is the FIRST row, and is drawn whole ──
+#: How every face names the own row. The GUI table numbers its rows from 1 (Qt's
+#: vertical header) and the TUI from 1 ("1 (own)", "Row 1 is …"); the help text said
+#: "Row 0", which is a row nobody can see.
+FIRST_ROW = "The first row is this mesh's OWN domain"
+
+
+def _localmesh_domains_step(wiz, prod=False):
+    """Welcome -> Local Docker mesh -> Generate -> Env & brand -> Domains. ``prod``
+    picks the prod environment on the way, where the own row's name is typed here."""
+    from hugmesh_studio.gui.pages import localmesh as gui_lm
+    wiz.next()
+    mode = wiz.currentPage()
+    mode._buttons["localmesh"].setChecked(True)
+    mode._on_mode_toggled()
+    wiz.next()
+    wiz.currentPage()._buttons["generate"].setChecked(True)
+    wiz.next()
+    ctl = wiz.page(wiz._page_ids["localmesh"])
+    if prod:
+        ctl.env_prod.setChecked(True)
+    wiz.next()
+    assert isinstance(wiz.currentPage(), gui_lm.LocalMeshDomainsPage), \
+        type(wiz.currentPage()).__name__
+    return ctl
+
+
+def _image_domains_page(wiz):
+    from _helpers import check_worklist_rows, enable_additional_domains, pick_mode
+    pick_mode(wiz, "mesh")
+    check_worklist_rows(advance_to(wiz, wizard_mod.WorklistPage), "omnibus.x86")
+    enable_additional_domains(wiz)
+    return advance_to(wiz, wizard_mod.DomainsPage)
+
+
+def test_the_own_row_is_the_first_row_in_the_same_words_on_every_face(
+        wiz, monkeypatch, tmp_path):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    # the TUI: the own row is numbered 1, and its help says so
+    j = journey.Journey(GENERATOR_DIR)
+    j.feed("")                                  # welcome -> mode
+    j.feed("1")                                 # Local Docker mesh
+    j.feed("2")                                 # Generate a new mesh
+    assert j.screen().stage == "domains"
+    tui = "\n".join(j.lines())
+    assert "Row 1 is this mesh's OWN domain" in tui and "1 (own)" in tui
+    # the GUI: both hosts of the table open their help with the same sentence, and
+    # neither still says "row 0" anywhere in it
+    image = _image_domains_page(wiz)
+    assert image.is_own_row(0)
+    assert image.table.model().headerData(0, Qt.Orientation.Vertical) == 1
+    helps = [image.table_help.text()]
+    wiz.close()
+    wiz2 = wizard_mod.StudioWizard(GENERATOR_DIR)
+    wiz2.show()
+    try:
+        ctl = _localmesh_domains_step(wiz2)
+        table = ctl.domains_table
+        assert table.is_own_row(0)
+        assert table.table.model().headerData(0, Qt.Orientation.Vertical) == 1
+        helps.append(ctl.domains_help.text())
+        # the refusal to remove it says the same thing
+        table.table.selectRow(0)
+        table._remove()
+        assert table.row_note.text().startswith("The first row is this mesh's own domain")
+    finally:
+        wiz2.close()
+    for text in helps:
+        assert text.startswith(FIRST_ROW + ":") or text.startswith(FIRST_ROW + " ("), text
+        assert "row 0" not in text.lower(), text
+
+
+def test_the_prod_route_calls_the_apex_row_the_first_row_in_every_sentence(
+        wiz, monkeypatch, tmp_path):
+    """Round 2: three more sentences on the generate-a-new-mesh PROD route said "row 0"
+    beside a table that numbers the row 1: the note under the Mesh overlay step's
+    mirror, the blank-apex note, and the refusal of an apex that is no domain name."""
+    from hugmesh_studio.gui.pages import localmesh as gui_lm
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    ctl = _localmesh_domains_step(wiz, prod=True)
+    said = [ctl.boot_domain_note.text()]
+    wiz.next()                                  # a blank apex is a note, not a refusal
+    assert isinstance(wiz.currentPage(), gui_lm.LocalMeshDomainServicesPage)
+    said.append(ctl.domains_note.text())
+    assert "public apex domain in the first row" in said[-1], said[-1]
+    wiz.back()
+    ctl.domains_table.table.item(0, gui_domains._COL_NAME).setText("Not A Domain")
+    before = wiz.currentId()
+    wiz.next()                                  # refused, inline
+    assert wiz.currentId() == before
+    said.append(ctl.domains_note.text())
+    assert said[-1].startswith("the first row: not a domain name: 'Not A Domain'"), said[-1]
+    for text in said:
+        assert "the first row" in text and "row 0" not in text.lower(), text
+
+
+def test_a_refused_org_names_its_row_by_the_number_the_table_shows(qapp):
+    """The org refusal counted rows from 0, so the own row was "row 0" and the first
+    added one "row 1" beside a vertical header that says 1 and 2."""
+    host = gui_domains.DomainsTableWidget(cfg=None)
+    try:
+        host.fill([], "mesh.example")
+        host._add("chat.example", "Chat")
+        table = host.table
+        for row in (0, 1):
+            # a trailing hyphen: the cell lets it be typed, the rule refuses it
+            table.cellWidget(row, gui_domains._COL_ORG).setText("acme-")
+        shown = [table.model().headerData(r, Qt.Orientation.Vertical) for r in (0, 1)]
+        assert shown == [1, 2]
+        assert [p.split(":")[0] for p in host.org_problems()] == \
+            ["row 1 (mesh.example)", "row 2 (chat.example)"]
+    finally:
+        host.close()
+        host.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        qapp.processEvents()
+
+
+#: The window sizes the 2026-11-11 retest walked, and the two routes that host the
+#: table, plus one narrower than any of them (where the columns MUST give width back).
+#: Where the viewport holds every column whole the own row's labels must be whole:
+#: always on the local-mesh route (four columns to the image flow's six), at the two
+#: larger sizes on the image flow. Everywhere else a label may be ELIDED — drawn
+#: ending in ‘…’ with its whole text in the tooltip — but never CUT.
+#: The third field is how many domains are ADDED under the own row. An added row's Base
+#: CA picker asks for 300 px on the image flow, so there the own row's labels share the
+#: give with it from 1040x780 down; the local-mesh route has no such column.
+_WALKED = [((1200, 800), "image", 0, True), ((1040, 780), "image", 0, True),
+           ((942, 552), "image", 0, None), ((760, 560), "image", 0, None),
+           ((1200, 800), "localmesh", 0, True), ((1040, 780), "localmesh", 0, True),
+           ((942, 552), "localmesh", 0, True),
+           ((1040, 780), "image", 1, None), ((942, 552), "image", 1, None),
+           ((942, 552), "localmesh", 1, True)]
+
+
+def _click_add_domain(host):
+    add, = [b for b in host.findChildren(QtWidgets.QPushButton)
+            if b.text() == "Add domain"]
+    add.click()
+
+
+@pytest.mark.parametrize("size,route,added,whole", _WALKED,
+                         ids=[f"{r}-{w}x{h}" + "+row" * n for (w, h), r, n, _ in _WALKED])
+def test_the_domains_table_draws_the_own_row_whole_and_fits_its_columns(
+        qapp, monkeypatch, tmp_path, size, route, added, whole):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    wiz = wizard_mod.StudioWizard(GENERATOR_DIR)
+    wiz.show()
+    try:
+        # walked and drawn at the wizard's own size, THEN resized: the fit must follow
+        host = (_image_domains_page(wiz) if route == "image"
+                else _localmesh_domains_step(wiz).domains_table)
+        for _ in range(added):
+            _click_add_domain(host)
+        for _ in range(20):
+            qapp.processEvents()
+        wiz.resize(*size)
+        for _ in range(20):
+            qapp.processEvents()
+        table = host.table
+        hh = table.horizontalHeader()
+        viewport = table.viewport().width()
+        shown = [c for c in range(table.columnCount()) if not hh.isSectionHidden(c)]
+        # every column inside the viewport: no horizontal scroll, the org cell whole
+        assert table.horizontalScrollBar().maximum() == 0, (route, size)
+        org = gui_domains._COL_ORG
+        assert hh.sectionViewportPosition(org) + hh.sectionSize(org) <= viewport
+        # the org column is not the one that takes the spare room any more: it was
+        # stretched over 315-773 px, a third to two thirds of the table
+        assert hh.sectionSize(org) < viewport // 3, (hh.sectionSize(org), viewport)
+        # ...and it never gives room back either: its line edit keeps its full size
+        cell = table.cellWidget(0, org)
+        assert cell.isVisible() and cell.width() >= cell.sizeHint().width(), \
+            (cell.width(), cell.sizeHint().width())
+        # no header elided ("Optional services" was, at 100 px): at least the style's own
+        # size hint for the section, which is what Qt needs to draw the text whole
+        for c in shown:
+            text = str(table.model().headerData(c, Qt.Orientation.Horizontal))
+            assert hh.sectionSize(c) >= hh.sectionSizeHint(c), \
+                (text, hh.sectionSize(c), hh.sectionSizeHint(c))
+        # the own row's read-only labels: whole, or elided with "…" — never cut
+        labels = [(c, table.cellWidget(0, c)) for c in shown
+                  if c in (gui_domains._COL_APPLIES, gui_domains._COL_IDP,
+                           gui_domains._COL_CA)]
+        assert labels and host.is_own_row(0)
+        for c, lab in labels:
+            full = getattr(lab, "full_text", lab.text)()
+            room = lab.contentsRect().width()
+            if lab.text() == full:
+                assert lab.fontMetrics().horizontalAdvance(full) <= room, \
+                    f"{full!r} cut at {room}px with no ellipsis"
+            else:
+                assert not whole, f"{full!r} elided at {room}px on {route} {size}"
+                assert lab.text().endswith("…") and full.startswith(lab.text()[:-1])
+                assert lab.fontMetrics().horizontalAdvance(lab.text()) <= room
+            assert full in lab.toolTip(), (full, lab.toolTip())
+        shots = os.environ.get("HUGMESH_SHOTS_DIR") or str(tmp_path)
+        os.makedirs(shots, exist_ok=True)
+        assert wiz.grab().save(os.path.join(
+            shots, f"gui22-{route}-domains-{size[0]}x{size[1]}{'+row' * added}.png"))
+    finally:
+        wiz.close()
+        wiz.deleteLater()
+
+
+#: The installed styles among the ones the layout suites measure. One that is not
+#: installed here is not a case — never a skip.
+_FIT_STYLES = [s for s in ("Fusion", "Windows", "Breeze", "Oxygen")
+               if s in QtWidgets.QStyleFactory.keys()]
+
+
+@pytest.mark.parametrize("style_name", _FIT_STYLES)
+def test_the_fit_gives_a_cell_widget_its_whole_width_in_every_style(qapp, style_name):
+    """The view draws a cell WIDGET inside the style's item-text margins (Breeze: 3 px a
+    side), so a column fitted to the widget's size hint alone left Breeze's org cell
+    2 px short of it and its Sign-in label elided with room to spare. The style is set
+    on the widget tree, never on the application (see test_fleet_window_layout.py)."""
+    style = QtWidgets.QStyleFactory.create(style_name)
+    host = gui_domains.DomainsTableWidget(cfg=None)
+    try:
+        host.fill([], "mesh.example")                  # the own row alone
+        for w in [host, *host.findChildren(QtWidgets.QWidget)]:
+            w.setStyle(style)
+        host.resize(1200, 300)
+        host.show()
+        for _ in range(20):
+            qapp.processEvents()
+        table = host.table
+        assert host.is_own_row(0)
+        for c in (gui_domains._COL_IDP, gui_domains._COL_ORG):
+            cell = table.cellWidget(0, c)
+            assert cell.isVisible() and cell.width() >= cell.sizeHint().width(), \
+                (style_name, c, cell.width(), cell.sizeHint().width())
+        label = table.cellWidget(0, gui_domains._COL_IDP)
+        assert label.text() == label.full_text(), (style_name, label.text())
+    finally:
+        host.close()
+        host.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        qapp.processEvents()
+    del style                                          # after the table is gone
+
+
+# ── GUI-22 round 2: a cell that is TYPED in keeps its room, and the fit follows it ───
+# Round 1's fit measured the Domain column by its text alone and re-ran only on a resize,
+# a row or a cell widget. On the generate-a-new-local-mesh PROD route the own row's name
+# is typed on this step (it is the public apex) and starts EMPTY, so the column dropped
+# to its header (52 px, where Qt's default section had given it 100) and stayed there
+# once the name was committed: "example.com" was drawn "exam…" beside a 613 px Title.
+#: Names wider than the typing room (126 and 156 px at the offscreen font), which only a
+#: RE-FIT can draw whole. The first is the reviewer's added-row example.
+_WIDE_NAMES = ("community.example.org", "shop.community.example.org")
+
+
+def _settle(qapp, n=20):
+    for _ in range(n):
+        qapp.processEvents()
+
+
+def _size_tag(size):
+    return "default" if size is None else "minimum" if size == (1, 1) \
+        else f"{size[0]}x{size[1]}"
+
+
+def _item_fit(table, row, column):
+    """``(asks, has)`` for the ITEM at (row, column): the width its delegate asks for to
+    draw the text on one line, and the width of the rect the style gives that text. The
+    view cuts the text short with ‘…’ exactly when it asks for more than it has."""
+    index = table.model().index(row, column)
+    opt = QtWidgets.QStyleOptionViewItem()
+    table.initViewItemOption(opt)
+    opt.rect = table.visualRect(index)
+    has = table.style().subElementRect(
+        QtWidgets.QStyle.SubElement.SE_ItemViewItemText, opt, table).width()
+    return table.sizeHintForIndex(index).width(), has
+
+
+def _type_in_cell(qapp, table, row, column, text):
+    """Type ``text`` into an item cell the way a person does: open the cell's editor,
+    type, commit. The editor is the one line edit in the viewport that is no org cell."""
+    table.setCurrentCell(row, column)
+    table.editItem(table.item(row, column))
+    _settle(qapp, 5)
+    editor, = [w for w in table.viewport().findChildren(QtWidgets.QLineEdit)
+               if not isinstance(w, gui_domains._OrgCell) and w.isVisible()]
+    editor.setText(text)
+    delegate = table.itemDelegate()
+    delegate.commitData.emit(editor)
+    delegate.closeEditor.emit(
+        editor, QtWidgets.QAbstractItemDelegate.EndEditHint.SubmitModelCache)
+    _settle(qapp)
+    assert table.item(row, column).text() == text
+
+
+def _assert_fitted(table, where):
+    """What every fit leaves behind: no sideways scroll, the org cell whole and inside
+    the viewport (#647), no header elided."""
+    hh = table.horizontalHeader()
+    org = gui_domains._COL_ORG
+    assert table.horizontalScrollBar().maximum() == 0, where
+    assert hh.sectionViewportPosition(org) + hh.sectionSize(org) \
+        <= table.viewport().width(), where
+    cell = table.cellWidget(0, org)
+    assert cell.width() >= cell.sizeHint().width(), (where, cell.width())
+    for c in range(table.columnCount()):
+        if not hh.isSectionHidden(c):
+            assert hh.sectionSize(c) >= hh.sectionSizeHint(c), (where, c)
+
+
+#: The wizard's own size, the two retest sizes the review measured at, one narrower.
+_TYPED_AT = [None, (1200, 800), (942, 552), (760, 560)]
+
+
+@pytest.mark.parametrize("size", _TYPED_AT, ids=[_size_tag(s) for s in _TYPED_AT])
+def test_the_prod_apex_cell_has_room_to_type_in_and_the_fit_follows_the_name(
+        qapp, monkeypatch, tmp_path, size):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    wiz = wizard_mod.StudioWizard(GENERATOR_DIR)
+    wiz.show()
+    try:
+        host = _localmesh_domains_step(wiz, prod=True).domains_table
+        _settle(qapp)
+        if size:
+            wiz.resize(*size)
+            _settle(qapp)
+        table, name = host.table, gui_domains._COL_NAME
+        hh = table.horizontalHeader()
+        item = table.item(0, name)
+        assert host.is_own_row(0) and item.text() == ""
+        assert item.flags() & Qt.ItemFlag.ItemIsEditable
+        shots = os.environ.get("HUGMESH_SHOTS_DIR") or str(tmp_path)
+        os.makedirs(shots, exist_ok=True)
+
+        def shot(what):
+            table.clearSelection()
+            _settle(qapp, 3)
+            assert wiz.grab().save(os.path.join(
+                shots, f"gui22-prod-apex-{what}-{_size_tag(size)}.png"))
+
+        # EMPTY: the cell the apex is typed into keeps at least the width Qt's default
+        # section gave it before the fit (100 px; it was fitted down to the header's 52)
+        typing_room = hh.defaultSectionSize()
+        assert hh.sectionSize(name) >= typing_room, (hh.sectionSize(name), typing_room)
+        _assert_fitted(table, ("empty", size))
+        shot("empty")
+        # TYPED, and committed through the cell's own editor: drawn whole. The review's
+        # apex first, then names only a re-fit can make room for.
+        for typed in ("example.com",) + _WIDE_NAMES:
+            _type_in_cell(qapp, table, 0, name, typed)
+            asks, has = _item_fit(table, 0, name)
+            assert asks <= has, f"{typed!r} is cut: it asks {asks}px and has {has}px"
+            assert hh.sectionSize(name) >= typing_room
+            _assert_fitted(table, (typed, size))
+            shot(typed)
+        wide = hh.sectionSize(name)
+        # WRITTEN by the page, not typed (a loaded record lands in this cell that way)
+        item.setText("apex." + _WIDE_NAMES[1])
+        _settle(qapp)
+        asks, has = _item_fit(table, 0, name)
+        assert asks <= has, f"a written name is cut: it asks {asks}px and has {has}px"
+        _assert_fitted(table, ("written", size))
+        # CLEARED: the room goes back to Title, but never below the typing room
+        _type_in_cell(qapp, table, 0, name, "")
+        assert typing_room <= hh.sectionSize(name) < wide, (hh.sectionSize(name), wide)
+        _assert_fitted(table, ("cleared", size))
+        # ...and the fit is at rest: nothing it does asks for another one
+        fired = []
+        table._fit_timer.timeout.connect(lambda: fired.append(1))
+        _settle(qapp, 50)
+        assert not fired and not table._fit_timer.isActive()
+    finally:
+        wiz.close()
+        wiz.deleteLater()
+
+
+def _nothing_else_gives(table):
+    """Whether every shown column but Domain is as narrow as the fit ever makes it: its
+    header (Title: ten characters), GitHub org apart, which gives nothing. Only then
+    does the fit take width from the Domain column."""
+    hh = table.horizontalHeader()
+    title_floor = table.fontMetrics().averageCharWidth() * 10
+    for c in range(table.columnCount()):
+        if hh.isSectionHidden(c) or c in (gui_domains._COL_NAME, gui_domains._COL_ORG):
+            continue
+        floor = table.header_need(c)
+        if c == gui_domains._COL_TITLE:
+            floor = max(floor, title_floor)
+        if hh.sectionSize(c) > floor:
+            return False
+    return True
+
+
+#: Both routes, at the wizard's own size and at a retest size; and the local-mesh route
+#: at the wizard's MINIMUM size, where the columns no longer fit and Title — with no
+#: text of its own on that route — was fitted down to its header (33 px for 70).
+#: The third field: whether the viewport has room for the widest name in EVERY style.
+#: Where it may not (seven columns at the wizard's own size under Breeze or Oxygen; the
+#: minimum size), the name may be cut, but only once no other column has anything left
+#: to give.
+_ADDED_AT = [("image", None, None), ("image", (1200, 800), True),
+             ("image", (942, 552), True), ("localmesh", None, True),
+             ("localmesh", (942, 552), True), ("localmesh", (1, 1), None)]
+
+
+@pytest.mark.parametrize("route,size,whole", _ADDED_AT,
+                         ids=[f"{r}-{_size_tag(s)}" for r, s, _ in _ADDED_AT])
+def test_an_added_rows_typed_cells_have_room_and_its_name_is_drawn_whole(
+        qapp, monkeypatch, tmp_path, route, size, whole):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    wiz = wizard_mod.StudioWizard(GENERATOR_DIR)
+    wiz.show()
+    try:
+        host = (_image_domains_page(wiz) if route == "image"
+                else _localmesh_domains_step(wiz).domains_table)
+        _settle(qapp)
+        if size:
+            wiz.resize(*size)                 # (1, 1): Qt holds it at its minimum size
+            _settle(qapp)
+        table = host.table
+        hh = table.horizontalHeader()
+        name, title = gui_domains._COL_NAME, gui_domains._COL_TITLE
+        _click_add_domain(host)
+        _settle(qapp)
+        row = table.rowCount() - 1
+        assert row == 1 and host.is_own_row(0) and not host.is_own_row(row)
+        for c in (name, title):
+            assert table.item(row, c).text() == ""
+            assert table.item(row, c).flags() & Qt.ItemFlag.ItemIsEditable
+        # the new row's two typed cells have room before anything is typed in them
+        chars = table.fontMetrics().averageCharWidth()
+        assert hh.sectionSize(name) >= hh.defaultSectionSize(), hh.sectionSize(name)
+        assert hh.sectionSize(title) >= chars * 10, (hh.sectionSize(title), chars)
+        _assert_fitted(table, (route, size, "added"))
+        # and a name typed into it is drawn whole: the column follows what is typed
+        for typed in _WIDE_NAMES:
+            _type_in_cell(qapp, table, row, name, typed)
+            asks, has = _item_fit(table, row, name)
+            assert asks <= has or (not whole and _nothing_else_gives(table)), \
+                f"{typed!r} is cut: it asks {asks}px and has {has}px"
+            assert hh.sectionSize(title) >= chars * 10
+            _assert_fitted(table, (route, size, typed))
+        shots = os.environ.get("HUGMESH_SHOTS_DIR") or str(tmp_path)
+        os.makedirs(shots, exist_ok=True)
+        table.clearSelection()
+        _settle(qapp, 3)
+        assert wiz.grab().save(os.path.join(
+            shots, f"gui22-{route}-added-row-typed-{_size_tag(size)}.png"))
+    finally:
+        wiz.close()
+        wiz.deleteLater()
+
+
+def test_the_fit_never_takes_from_the_org_column_and_takes_typing_room_last(qapp):
+    """The whole give-back order, asked of the fit directly at every viewport width: a
+    drawn window never gets narrow enough to reach its last step, which is why a fit
+    that also took width from GitHub org (#647) passed every drawn case."""
+    host = gui_domains.DomainsTableWidget(cfg=None)
+    try:
+        host.fill([], "mesh.example")
+        host._add()                                    # a row whose cells are typed in
+        table = host.table
+        for c in range(table.columnCount()):
+            table.setColumnHidden(c, False)            # all seven, as on the image flow
+        cols = list(range(table.columnCount()))
+        name, title, org = (gui_domains._COL_NAME, gui_domains._COL_TITLE,
+                            gui_domains._COL_ORG)
+        need = {c: table.column_need(c) for c in cols}
+        least = {c: table.header_need(c) for c in cols}
+        chars = table.fontMetrics().averageCharWidth()
+        least[title] = max(least[title], chars * 10)   # a title: never under ten characters
+        least[org] = need[org]                         # the org cell: never under its need
+        # a typed-in Domain cell asks for its typing room even while it is empty
+        assert need[name] >= table.horizontalHeader().defaultSectionSize() > least[name]
+        assert need[title] >= least[title]
+        floor = sum(least.values())
+        for room in range(0, sum(need.values()) + 200):
+            w = table.fit_widths(room)
+            assert w[org] == need[org], (room, w[org])
+            assert all(w[c] >= least[c] for c in cols), (room, w)
+            # exactly the viewport (no gap, no scroll) until even the floors do not fit
+            assert sum(w.values()) == max(room, floor), (room, w)
+            if w[name] < need[name]:
+                # the typing room is the LAST width given back: by then every other
+                # column is already at its floor
+                assert all(w[c] == least[c] for c in cols if c != name), (room, w)
+    finally:
+        host.close()
+        host.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        qapp.processEvents()
+
+
+def test_a_name_nobody_can_type_in_is_still_fitted_to_its_text(qapp):
+    """The typing room is for cells that are typed in. The image flow's own row and a
+    test mesh's are read-only, so a table that holds only such a row keeps the widths
+    round 1 gave it; the room arrives with the first row that can be typed in."""
+    host = gui_domains.DomainsTableWidget(cfg=None)     # the own name is not typed here
+    try:
+        host.fill([], "a.example")
+        table, name = host.table, gui_domains._COL_NAME
+        room = table.horizontalHeader().defaultSectionSize()
+        assert not table.item(0, name).flags() & Qt.ItemFlag.ItemIsEditable
+        assert table.typing_room(name) == 0 and table.column_need(name) < room
+        host._add()
+        assert table.item(1, name).flags() & Qt.ItemFlag.ItemIsEditable
+        assert table.typing_room(name) >= room and table.column_need(name) >= room
+        # ...and leaves with the last one
+        table.removeRow(1)
+        assert table.typing_room(name) == 0 and table.column_need(name) < room
+    finally:
+        host.close()
+        host.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        qapp.processEvents()
+
+
+def test_the_typing_room_grows_with_the_font(qapp):
+    """Qt's default section is a pixel count; at a large font it is a handful of
+    characters. The typing room is also never under fourteen average characters."""
+    host = gui_domains.DomainsTableWidget(cfg=None, own_name_editable=lambda: True)
+    try:
+        font = host.font()
+        font.setPointSize(20)
+        host.setFont(font)
+        host.fill([], "")                              # a prod own row, not typed yet
+        host.resize(1200, 300)
+        host.show()
+        _settle(qapp)
+        table = host.table
+        hh = table.horizontalHeader()
+        chars = table.fontMetrics().averageCharWidth()
+        assert chars * 14 > hh.defaultSectionSize(), (chars, hh.defaultSectionSize())
+        assert hh.sectionSize(gui_domains._COL_NAME) >= chars * 14
+    finally:
+        host.close()
+        host.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        qapp.processEvents()
 
 
 @pytest.mark.parametrize("cfg", [
@@ -907,6 +1447,53 @@ def test_issuing_a_token_offers_the_same_roles_shell_rule_and_lifetime_on_every_
         dlg.deleteLater()
 
 
+# ── Kernel config… (core/kernel_reconfig.py): one action, one sentence, every face ──
+def test_kernel_config_is_offered_by_every_face():
+    """The Build page button, the Previous builds list, the per-build window, both TUI
+    faces and the CLI all offer the same action under the same name."""
+    import argparse
+    import re
+    from hugmesh_studio.gui.pages import build_window as gui_bw
+    from hugmesh_studio.gui.pages import progress as gui_progress
+    from hugmesh_studio.gui.pages import sessions_widget as gui_sw
+    from hugmesh_studio.tui import plain as tui_plain
+    assert gui_progress._KERNEL_BTN_TEXT == gui_bw._LABELS["kernel"] == "Kernel config…"
+    assert gui_sw.PreviousBuildsWidget.ROW_ACTIONS["kernel"] == "_open_kernel_config"
+    assert "k NUMBER=kernel config" in tui_plain._HELP
+    try:
+        from hugmesh_studio.tui import urwid_ui
+    except ImportError:            # urwid is optional; the plain face is the floor
+        urwid_ui = None
+    if urwid_ui is not None:
+        assert "k=kernel config" in urwid_ui._LIST_HELP
+    src = open(os.path.join(STUDIO_ROOT, "hugmesh_studio", "app.py"), encoding="utf-8").read()
+    for flag in ("--kernel-config", "--kernel-config-set", "--kernel-config-diff",
+                 "--kernel-config-apply", "--kernel-config-discard"):
+        assert re.search(r'add_argument\("%s"' % re.escape(flag), src), flag
+    del argparse
+
+
+def test_kernel_config_refusal_reads_the_same_on_every_face(tmp_path, capsys):
+    """An ARM-only session: the per-build window's reason, the TUI detail line, the TUI
+    ``k`` flow and the CLI all carry the SAME core sentence, word for word."""
+    from hugmesh_studio.core import kernel_reconfig as kr
+    from hugmesh_studio.gui.pages import build_window as gui_bw
+    from hugmesh_studio.tui import model as tui_model
+    from _kernel_reconfig_fixture import make_session
+    s = make_session(str(tmp_path), platform="rpi5")
+    sentence = kr.NOT_X86.format(board="rpi5")
+
+    class Row:
+        kind, status, label, when, session, location = "session", "complete", "x", "", s, s.workdir
+    assert gui_bw.actions_for(Row())["kernel"].reason == sentence
+    assert f"kernel    {sentence}" in tui_model.session_detail_lines(tui_model.SessionRow(s, "complete"))
+    said = []
+    assert tui_model.kernel_config_flow(s, GENERATOR_DIR, ask=lambda q: True, say=said.append) == 3
+    assert said == [f"kernel config: {sentence}"]
+    assert kr.cli("diff", s.id, GENERATOR_DIR) == 3
+    assert capsys.readouterr().err.strip() == f"refused: {sentence}"
+
+
 def test_go_live_names_targets_and_their_limits_identically_on_both_faces(
         qapp, tmp_path, monkeypatch):
     """The emulated-target words are spelled ONCE: the picker rows (GUI Preflight) and
@@ -945,3 +1532,99 @@ def test_go_live_names_targets_and_their_limits_identically_on_both_faces(
     assert golive_target.EPHEMERAL_NOTE in gui_golive.ephemeral_text(w.target)
     assert gui_meshemu.GO_LIVE_ACTION == tui_meshemu.GO_LIVE_ACTION
     w.deleteLater()
+# ── the Desktop step (2026-11-11): one catalog, three faces ─────────────────────────
+def test_desktop_step_catalogs_match_on_gui_tui_and_cli(wiz, capsys):
+    """The GUI page's session checkboxes, video-card checkboxes and app rows, the TUI
+    screen's listing and the CLI's --desktop-options all come from core/desktop_spec.py;
+    a face that grew its own list would go red here."""
+    from hugmesh_studio.core import desktop_cli
+    from hugmesh_studio.core import desktop_spec as ds
+    from hugmesh_studio.gui.qt import QtCore
+    from hugmesh_studio.tui.desktop_step import DesktopScreen
+    import json as _json
+    page = wiz.page(wiz._page_ids["desktop"])
+    wiz.cfg = ImageConfig(mode="cloud", role="laptop", platform="x86")
+    page.initializePage()
+    gui_apps = [page.apps_table.item(r, 0).data(QtCore.Qt.ItemDataRole.UserRole)[0]
+                for r in range(page.apps_table.rowCount())]
+    assert list(page.session_checks) == [s.name for s in ds.SESSION_CATALOG]
+    assert tuple(page.card_checks) == ds.VIDEO_CARD_TOKENS
+    assert gui_apps == [a["id"] for a in ds.app_catalog()]
+    assert list(page.py_checks) == list(ds.PYTHON_TARGET_CHOICES)
+    j = journey.Journey(".", ImageConfig(mode="cloud", role="laptop", platform="x86"))
+    tui = "\n".join(DesktopScreen().lines(j))
+    for name in page.session_checks:
+        assert name in tui
+    for app_id in gui_apps:
+        assert app_id in tui
+    assert desktop_cli.options(as_json=True) == 0
+    cli = _json.loads(capsys.readouterr().out)
+    assert [s["name"] for s in cli["sessions"]] == list(page.session_checks)
+    assert list(cli["video_cards"]) == list(page.card_checks)
+    assert [a["id"] for a in cli["apps"]] == gui_apps
+    # the same environment choices on both faces (the Role step no longer offers them)
+    assert [page.env.itemData(i) for i in range(page.env.count())] == ds.environment_choices(wiz.cfg)
+
+
+# ── GUI-28 (B-10): the previous-builds RESTART gate is one answer on both faces ──────
+@pytest.mark.parametrize("case", ["active", "workdir_gone", "services", "ok",
+                                  "pre_feature", "fleet_flat"])
+def test_the_restart_gate_refuses_the_same_sessions_with_the_same_words(
+        case, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from hugmesh_studio.core import build_sessions
+    from hugmesh_studio.core import domain_services as ds
+    from hugmesh_studio.core.worklist import WorklistConfig
+    from hugmesh_studio.gui.pages.sessions_widget import PreviousBuildsWidget
+    from hugmesh_studio.tui import model as tui_model
+    monkeypatch.setattr(build_sessions, "is_active", lambda s: case == "active")
+    cfg = ImageConfig(mode="mesh", additional_domains=True,
+                      domains=[Domain(name="a.example")])
+    if case != "pre_feature":
+        ds.record_reviewed(cfg, ["a.example"])
+    if case in ("services", "fleet_flat"):
+        cfg.domains.append(Domain(name="late.example"))
+    workdir = str(tmp_path / "gone") if case == "workdir_gone" else str(tmp_path)
+    config = cfg.to_dict() if case == "fleet_flat" else WorklistConfig(base=cfg).to_dict()
+    s = SimpleNamespace(id="s1", workdir=workdir, config=config,
+                        kind="fleet" if case == "fleet_flat" else "wizard",
+                        blanked_secrets=[], held_secret_files=[])
+    ok, why = PreviousBuildsWidget.can_restart(s)
+    tui_why = tui_model.restart_refusal(s)
+    assert (ok, why) == (tui_why is None, tui_why or "")
+    assert ok is (case in ("ok", "pre_feature", "fleet_flat"))
+
+
+# ── GUI-28 round 2: a REDO keeps its mode on the Mode step of both faces ─────────────
+@pytest.mark.parametrize("mode, role", [("mesh", "omnibus"), ("cloud", "laptop"),
+                                        ("standalone", "standalone-thick")])
+def test_a_redone_config_keeps_its_mode_on_the_mode_step_of_both_faces(
+        wiz, mode, role, tmp_path):
+    """``ModePage.initializePage`` re-selects ``cfg.mode``'s card, so the GUI's Next
+    keeps a loaded configuration's mode. The TUI's Enter on the mode menu must take
+    the same card — it used to take "standalone" whatever had been loaded, which
+    dropped a mesh's worklist and cleared its domains."""
+    from types import SimpleNamespace
+
+    from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry, synthesize
+    cfg = ImageConfig(mode=mode, role=role, platform="x86", brand="acme",
+                      output_dir=str(tmp_path / "out"))
+    wl = (WorklistConfig(base=cfg, entries=[WorklistEntry(role="pki", platform="x86")])
+          if mode == "mesh" else synthesize(cfg))
+    data = wl.to_dict()
+    wiz.load_session(data)                        # the GUI's Redo
+    page = advance_to(wiz, wizard_mod.ModePage)
+    assert page._selected_mode() == mode          # its card is the checked one
+    j = journey.Journey(GENERATOR_DIR)
+    assert j.load_session(SimpleNamespace(id="s1", label="", kind="wizard", config=data,
+                                          blanked_secrets=[])) == ""
+    j.feed("")                                    # welcome: a plain Enter
+    assert j.slug == "mode"
+    wiz.next()                                    # the GUI's Next on the Mode step
+    j.feed("")                                    # the TUI's Enter on the mode menu
+    assert wiz.cfg.mode == j.cfg.mode == mode
+    assert wiz.cfg.role == j.cfg.role == role
+    assert [e.id for e in wiz.worklist.entries] == [e.id for e in j.worklist.entries]
+    # the rule itself, by name: what Enter takes is the card the GUI has checked
+    assert journey.mode_enter_choice(j.cfg) == mode

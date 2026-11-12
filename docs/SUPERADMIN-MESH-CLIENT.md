@@ -65,6 +65,12 @@ before go-live (the node is not past go-live and the baked URL does not answer a
 control server), the pki node's fixed LAN address `http://<.mesh.pki_lan_ip>:8080`,
 then the baked brand var `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`), then
 `http://<primary-LAN-IPv4>:8080`. See
+`provision.json .headscale.server_url`, then `provision.json .mesh.endpoint`, then
+the baked brand var `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`), then
+`https://<primary-LAN-IPv4>:8080` (headscale serves TLS there with a certificate from
+the mesh CA, so this machine must trust that CA: install the pki stick's
+`certs/cluster-ca.crt` into its trust store first; see
+[`HEADSCALE-DERP.md`](HEADSCALE-DERP.md#every-node-needs-the-mesh-ca)). See
 [`keys-template/headscale/config.yaml`](../keys-template/headscale/config.yaml)
 and `specs/etc/keys-provision/provision.sh` for endpoint resolution.
 

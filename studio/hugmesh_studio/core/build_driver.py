@@ -106,6 +106,24 @@ def _path_flag(field: str) -> str:
 DOCKER_LOCAL_PASS_PATH = "/assets/local-pass/local-pass"
 
 
+#: The Desktop step's extra local accounts' passwords (NAME:PASSWORD lines): staged
+#: like the login password, mounted read-only here under docker. The argv a preview
+#: shows carries desktop_spec.EXTRA_PASS_PLACEHOLDER; dispatch swaps the real path in.
+DOCKER_EXTRA_PASS_PATH = "/assets/extra-local-pass/extra-local-passes"
+
+
+def _swap_extra_pass(argv: list[str], path: str) -> list[str]:
+    """``argv`` with the Desktop step's ``--extra-local-pass-file <placeholder>`` pair
+    pointing at ``path`` (the file staged for this one run)."""
+    from .desktop_spec import EXTRA_PASS_PLACEHOLDER
+    out = list(argv)
+    for k in range(len(out) - 1):
+        if out[k] == "--extra-local-pass-file" and out[k + 1] == EXTRA_PASS_PLACEHOLDER:
+            out[k + 1] = path
+            break
+    return out
+
+
 def _swap_local_pass(argv: list[str], secret: str, path: str) -> list[str]:
     """``argv`` with its structured ``--local-pass <secret>`` pair replaced by
     ``--local-pass-file <path>``. Only the FIRST pair carrying exactly ``secret`` is
@@ -895,7 +913,8 @@ class BuildDriver:
         return env
 
     def command(self, cfg: ImageConfig, backend: str | None = None,
-                local_pass_file: str | None = None) -> list[str]:
+                local_pass_file: str | None = None,
+                extra_pass_file: str | None = None) -> list[str]:
         """The builder invocation for ``cfg``. ``local_pass_file`` (dispatch only —
         run()/iter_run() stage it) moves the login password off argv: the argv's
         ``--local-pass PASS`` becomes ``--local-pass-file PATH`` (docker: the file
@@ -917,6 +936,10 @@ class BuildDriver:
                  "-j", str(cfg.jobs), *self._shared_assets_args(out), *cfg.to_cli_args()]
         if local_pass_file and cfg.local_pass:
             inner = _swap_local_pass(inner, cfg.local_pass, local_pass_file)
+        # the Desktop step's extra accounts: a run stages their passwords (run/iter_run)
+        extra_pass_file = extra_pass_file or getattr(self, "_extra_pass_file", None)
+        if extra_pass_file:
+            inner = _swap_extra_pass(inner, extra_pass_file)
         penv = self._passthrough_env(cfg)
         if backend == "native":
             # run in the generator dir; needs root for the chroot/loop ops.
@@ -938,6 +961,12 @@ class BuildDriver:
                     dinner = swapped
                     asset_mounts = [*asset_mounts, "-v",
                                     f"{local_pass_file}:{DOCKER_LOCAL_PASS_PATH}:ro"]
+            if extra_pass_file:
+                swapped = _swap_extra_pass(dinner, DOCKER_EXTRA_PASS_PATH)
+                if swapped != dinner:
+                    dinner = swapped
+                    asset_mounts = [*asset_mounts, "-v",
+                                    f"{extra_pass_file}:{DOCKER_EXTRA_PASS_PATH}:ro"]
             env_args: list[str] = []
             for k, v in penv.items():
                 env_args += ["-e", f"{k}={v}"]
@@ -1169,6 +1198,20 @@ class BuildDriver:
             setattr(run_cfg, f, p)
         return run_cfg, mat.cleanup
 
+    def _stage_extra_pass(self, cfg) -> Callable[[], None]:
+        """Stage the Desktop step's extra accounts' passwords (a 0600 file for this one
+        run; command() swaps it in for the preview placeholder) and return the cleanup."""
+        text = getattr(cfg, "extra_local_passes", "") or ""
+        if not text:
+            return lambda: None
+        path, cleanup = secret_files.stage_secret_file("extra-local-passes", text.encode("utf-8"))
+        self._extra_pass_file = path
+
+        def _done() -> None:
+            self._extra_pass_file = None
+            cleanup()
+        return _done
+
     def _dispatch_command(self, cfg, backend: str, local_pass_file: str | None) -> list[str]:
         """The argv run() actually spawns: :meth:`command` with the dispatch-only
         staged files. FleetDriver overrides it to add its own (the NVD key pointer)."""
@@ -1219,8 +1262,12 @@ class BuildDriver:
             # every "Build fleet now" aborted before anything was spawned.
             if getattr(run_cfg, "local_pass", ""):
                 pass_file, cleanup_pass = secret_files.stage_local_pass(run_cfg.local_pass)
-            code = self._stream(self._dispatch_command(run_cfg, backend, pass_file),
-                                watched_on_line, backend)
+            cleanup_extra = self._stage_extra_pass(run_cfg)
+            try:
+                code = self._stream(self._dispatch_command(run_cfg, backend, pass_file),
+                                    watched_on_line, backend)
+            finally:
+                cleanup_extra()
         finally:
             cleanup_pass()
             cleanup_held()
@@ -1270,10 +1317,14 @@ class BuildDriver:
         try:
             if cfg.local_pass:
                 pass_file, cleanup_pass = secret_files.stage_local_pass(cfg.local_pass)
-            proc = self._spawn(self.command(cfg, backend, local_pass_file=pass_file), backend)
-            assert proc.stdout is not None
-            yield from (line.rstrip("\n") for line in proc.stdout)
-            proc.wait()
+            cleanup_extra = self._stage_extra_pass(cfg)
+            try:
+                proc = self._spawn(self.command(cfg, backend, local_pass_file=pass_file), backend)
+                assert proc.stdout is not None
+                yield from (line.rstrip("\n") for line in proc.stdout)
+                proc.wait()
+            finally:
+                cleanup_extra()
         finally:
             cleanup_pass()
 
@@ -1292,6 +1343,31 @@ class BuildDriver:
         cmd = self._elevation_prefix() + ["kill", f"-{sig}", f"-{self._pgid}"]
         guard_elevation(cmd)          # the kill elevates through the same prefix
         subprocess.run(cmd, capture_output=True, check=False, env=self._elevation_env())
+
+    # ---- kernel reconfiguration (core/kernel_reconfig.py) -------------------
+    @property
+    def container_name(self) -> str:
+        """The ``--name`` this driver stamps on its docker runs (cancel's handle)."""
+        return self._container_name
+
+    def reconfig_context(self, backend: str | None = None, *, live_container: str = ""):
+        """How "Kernel config…" reaches root from THIS driver: the same backend, builder
+        image and generator mount as the build, the same elevation prefix (``sudo -A`` +
+        askpass for a GUI driver), and this driver's container name so :meth:`cancel`
+        stops a running rebuild. ``live_container`` is a build container still running
+        (menuconfig mid-build goes in with ``docker exec``). No behaviour change for builds."""
+        from .kernel_reconfig import RunContext
+        b = backend or self.host.default_backend
+        return RunContext(backend=b, generator_dir=self.generator_dir,
+                          builder_image=self.host.builder_image, container=live_container,
+                          run_container_name=self._container_name,
+                          elevation=self._elevation_prefix() if b == "native" else [])
+
+    def stream_command(self, cmd: list[str], on_line: Callable[[str], None] | None,
+                       backend: str) -> int:
+        """Stream an arbitrary command through the build's own spawn: guard_elevation,
+        the askpass env, the process group / container name cancel() reaches."""
+        return self._stream(cmd, on_line, backend)
 
     def cancel(self) -> None:
         """Stop the in-flight build honestly, per backend (design 2.5). Idempotent and
@@ -1348,6 +1424,20 @@ class BuildDriver:
         if backend == "none":
             problems.append(("No build backend: " + win_docker) if win_docker else
                             "No build backend: install Docker (any OS) or run on a Gentoo host.")
+        # The Desktop step's extra accounts need their first-login passwords TYPED for
+        # this run (never saved): a reloaded config has none, and the builder would
+        # refuse an account without one after the dispatch.
+        try:
+            from . import desktop_spec as _ds
+            if _ds.applies(cfg):
+                _typed = _ds.parse_passwords(getattr(cfg, "extra_local_passes", "") or "")
+                _missing = [u.name for u in _ds.spec_of(cfg).extra_users if not _typed.get(u.name)]
+                if _missing:
+                    problems.append("Type the first-login password for the extra local "
+                                    "account(s) " + ", ".join(_missing) + " on the Desktop step "
+                                    "(passwords are never saved with the config).")
+        except Exception:                       # noqa: BLE001 — a malformed spec: to_cli_args says so
+            pass
         if not os.path.exists(os.path.join(self.generator_dir, cfg.builder_script)):
             problems.append(f"builder script {cfg.builder_script} not found in {self.generator_dir}"
                             + (" (Jetson support is EXPERIMENTAL — hardware validation pending)"

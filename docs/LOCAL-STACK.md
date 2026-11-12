@@ -259,13 +259,23 @@ ships only dev placeholders, so nothing secret is committed.
 |---|---|
 | http://localhost:8088 | **Front door** — fe-gateway (Angular host + remotes, /bff, /_fragments, /be) |
 | https://localhost:8488 | **Front door (HTTPS)** — same fe-gateway via the `https-front` TLS terminator; per-machine CA at `tests/stack/.tls-front/ca.crt` (knob: `PUBLIC_HTTPS_PORT`) |
-| http://localhost:8000 | Casdoor (OIDC identity) — **admin/seed transport only**, not the login path; the browser never uses it (in-cluster it has no public ingress) |
-| http://localhost:8008 | tuwunel / Matrix (only with `SOCIAL=1`) |
-| http://localhost:3000 | Mastodon web (only with `SOCIAL=1`) |
-| http://localhost:4000 | Mastodon streaming (only with `SOCIAL=1`) |
-| http://localhost:8081 | phpBB (only with `PHPBB=1`) — alternative forum |
-| http://localhost:4001 | Akkoma (only with `AKKOMA=1`) — alternative fediverse server |
+| http://localhost:8000 | Casdoor (OIDC identity) — **admin/seed transport only**, not the login path; the browser never uses it (in-cluster it has no public ingress). **Loopback only** (see below) |
+| http://localhost:8008 | tuwunel / Matrix (only with `SOCIAL=1`). Loopback only |
+| http://localhost:3000 | Mastodon web (only with `SOCIAL=1`). Loopback only |
+| http://localhost:4000 | Mastodon streaming (only with `SOCIAL=1`). Loopback only |
+| http://localhost:8081 | phpBB (only with `PHPBB=1`) — alternative forum. Loopback only |
+| http://localhost:4001 | Akkoma (only with `AKKOMA=1`) — alternative fediverse server. Loopback only |
 | (not published) | Cassandra (gateway revocation list + URL registry) — reachable only inside the compose network as `cassandra:9042` |
+
+**Only the front door is a LAN door.** Casdoor (`:8000`, and `BRAND_B`'s `:8001` and the
+Studio's per-domain Casdoors on `:8001`+), tuwunel, Mastodon, phpBB and Akkoma are
+published on `${STACK_BIND_ADDR:-127.0.0.1}`: unset, they answer on this machine only.
+Until 2026-11-11 they were published on every interface while Casdoor's built-in admin
+kept the upstream factory-default password, so any machine on the LAN could sign in to
+the mesh's identity provider as its admin (NEW-15). `make stack-up STACK_BIND_ADDR=0.0.0.0`
+is the explicit opt-in for LAN exposure; run `make stack-seed` first (it moves the admin
+off the factory default, see "Casdoor admin password" below). Guards:
+`tests/scripts/test-stack-idp-exposure.sh` and `tests/stack/test-stack-idp-exposure-live.sh`.
 
 The fe-gateway routes (`tests/stack/gateway-routes/fe/`) fan out from the front
 door to `/admin/**`, `/login/**`, `/social/**` (matrix/mastodon/forum/phpbb),
@@ -420,8 +430,8 @@ Casdoor apply hook — the same machinery the cluster/pentest seeds use):
    **presence** of the marker role). The compose Casdoor boots **empty**, so
    the script first creates the org + the `ROLE_*` objects, then applies users +
    role members and pre-mints per-persona JWTs into `tests/stack/.seed-e2e/jwt-cache`
-   (usable as `SNAP_PREMINT_DIR`). Default admin creds are the fresh-casdoor dev
-   default (`admin`/`123`); override `CASDOOR_ADMIN_PASS` otherwise.
+   (usable as `SNAP_PREMINT_DIR`). The seed signs in as Casdoor's built-in admin with
+   this checkout's generated password; see "Casdoor admin password" below.
 3. **Matrix (tuwunel)**: users `e2e-mod` + `e2e-user`, registered from the
    host over the public CS-API (UIAA `m.login.dummy`; no container exec, because the
    distroless tuwunel image has no shell); **public room X**
@@ -441,6 +451,32 @@ The script is **idempotent** (probe-before-create everywhere; safe to re-run)
 and **fail-honest**. Every unmet dependency dies with a message naming it (which
 service, which bring-up command). It never prints success for something it did
 not verify.
+
+### Casdoor admin password
+
+casbin/casdoor gives its built-in admin (`built-in/admin`) a public factory-default
+password when it starts on an empty database. The compose stack no longer keeps it:
+
+- `tests/stack/gen-casdoor-admin-env.sh` mints one random value per checkout into the
+  gitignored, `0600` `tests/stack/.env` as `CASDOOR_ADMIN_PASSWORD` (the first
+  `make stack-seed` runs it). Read it with
+  `bash tests/stack/gen-casdoor-admin-env.sh --read` to sign in to Casdoor's own UI.
+- Every `make stack-seed` signs in with that value. When it does not work yet but the
+  factory default still does (a fresh Casdoor volume, or a stack created before
+  2026-11-11), the seed moves the admin onto it with `/api/set-password` and then
+  proves the factory default is refused. A stack that is already moved costs one
+  login and no write. This is the compose twin of the cluster's
+  `manifests/casdoor/init-job.yaml` admin reconcile.
+- `CASDOOR_ADMIN_PASS` exported in the shell wins over the file. The factory default
+  is refused as a value.
+- If neither value signs in (the file lost the key, or another checkout seeded this
+  Casdoor), the seed stops and changes nothing: put the old value back in
+  `tests/stack/.env`, or `make stack-down` (drops the data) for a fresh Casdoor.
+- `tests/stack/derive-games-admin.sh` only reads the value; it never mints one.
+- The key is kept by `make stack-down`: the next stack's fresh Casdoor is moved onto
+  the same value by its first seed.
+- The Studio's per-domain Casdoors (`:8001`+) are bound to loopback too, but nothing
+  seeds their admin yet, so they still carry the factory default on this machine.
 
 ### What remains UNVERIFIABLE on compose (honest limitations)
 

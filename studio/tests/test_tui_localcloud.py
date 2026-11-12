@@ -239,7 +239,7 @@ def test_tui_gate_bridges_a_tor_mesh_into_x86_and_rpi5_node_argv(tmp_path, monke
     assert "--with-tor" in x86.to_cli_args()
     argv = rpi.to_cli_args()
     svcs = argv[argv.index("--optional-services") + 1].split()
-    assert "tor" in svcs and {"akkoma", "tuwunel", "phpbb"} <= set(svcs)
+    assert "tor" in svcs and {"tuwunel", "phpbb"} <= set(svcs)
     assert "net-vpn/tor" in pc.adhoc_atoms(x86)
     assert "net-vpn/tor" in pc.adhoc_atoms(rpi)
 

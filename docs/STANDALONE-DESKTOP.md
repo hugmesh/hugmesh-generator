@@ -459,8 +459,18 @@ the front-ends: graphical **Calamares** (Qt; Ubuntu-style), **text/ncurses**
 (`install-x86.sh --interactive`) and **unattended CLI**
 (`install-x86.sh --unattended`, reads the baked manifest). `--cached` embeds the
 binpkg cache for **offline rebuild and fast reinstall**; `--uncached` (default) is
-lean. `--bundle-source` (standalone default) ships the generator source and
-`hugmesh-regenerate`, so the desktop can **build a fresh customized ISO**.
+lean. `--bundle-source` (standalone default) ships the generator source at
+`/usr/share/hugmesh/generator-src` and `hugmesh-regenerate`, so the desktop can
+**build a fresh customized ISO**. The bundle rides in every x86 artifact (live ISO,
+stage4, `.img`, fs tarball, installer). It used to sit under `/usr/src`, which every
+artifact drops whole because it holds the kernel's module-signing key, so no
+installed system had it.
+The bundle is the generator's **tracked** files (`git ls-files`, or the
+`.hugmesh-bundle-files` manifest in a bundled tree). Local keys, credentials and other
+gitignored state in the checkout never ship, and the build fails if a key-shaped file
+reaches the staged tree. From a directory that is neither a git checkout git can read
+nor a bundled tree (a worktree mounted alone into the build container, a tarball copy),
+the build goes on without the bundle and without `hugmesh-regenerate`, and warns.
 
 ## Verifying images under emulation
 

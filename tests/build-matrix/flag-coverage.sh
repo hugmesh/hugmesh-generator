@@ -47,6 +47,7 @@ all --print-plan — harness-only dry-run flag (this suite's own probe channel)
 all --help — usage text, not an image option
 all --no-grow — pure alias of '--grow none' (the fielded spelling)
 x86 --nvidia — pure alias of '--gpu-driver nvidia' (the fielded matrix spelling)
+x86 --pretend-only — the Desktop step's emerge --pretend check, not an image option: core/desktop_pretend.py appends it to its own throwaway run (own --build-subdir), never to a build
 x86 --nvidia-driver — back-compat open|proprietary alias of --gpu-driver
 x86 --skip-mesh — alias posture; the Studio emits the explicit --no-tailscale pair
 x86 --skip-sso — alias posture; the Studio emits the explicit --no-sso pair
@@ -74,6 +75,9 @@ jetson --target — host-side cross-toolchain plumbing, deliberately not a GUI k
 jetson --standalone — parsed then HARD-BLOCKED platform-wide (single boot+root partition); the Studio raises pre-emission by the same contract
 jetson --encrypt-root — parsed then HARD-BLOCKED platform-wide (see --standalone); the Studio raises pre-emission
 jetson --luks-pass — only meaningful with the hard-blocked --encrypt-root; Studio emission is unreachable on this platform by the same contract
+jetson --optional-services — the optional-services selection (2026-11-12: jetson now gates its baked cluster tree with gate_optional_services, which needs the flag to be told what to keep), CLI-first on Jetson: the Studio's services fields emit --optional-services/--exclude-services for x86 + rpi5 only (config.py _services_args; PLATFORM_FIELD_SUPPORT has no jetson), so a Studio Jetson build gets the builder default (tuwunel phpbb, plus edge-ai on the edge-ai and omnibus roles). Fielding it on Jetson is a Studio follow-up. Pinned by tests/scripts/test-selected-services-only.sh A4 and tests/scripts/test-akkoma-image-pin.sh [defaults]
+jetson --all-services — the optional-services selection (2026-11-12: jetson now gates its baked cluster tree with gate_optional_services, which needs the flag to be told what to keep), CLI-first on Jetson: the Studio's services fields emit --optional-services/--exclude-services for x86 + rpi5 only (config.py _services_args; PLATFORM_FIELD_SUPPORT has no jetson), so a Studio Jetson build gets the builder default (tuwunel phpbb, plus edge-ai on the edge-ai and omnibus roles). Fielding it on Jetson is a Studio follow-up. Pinned by tests/scripts/test-selected-services-only.sh A4 and tests/scripts/test-akkoma-image-pin.sh [defaults]
+jetson --exclude-services — the optional-services selection (2026-11-12: jetson now gates its baked cluster tree with gate_optional_services, which needs the flag to be told what to keep), CLI-first on Jetson: the Studio's services fields emit --optional-services/--exclude-services for x86 + rpi5 only (config.py _services_args; PLATFORM_FIELD_SUPPORT has no jetson), so a Studio Jetson build gets the builder default (tuwunel phpbb, plus edge-ai on the edge-ai and omnibus roles). Fielding it on Jetson is a Studio follow-up. Pinned by tests/scripts/test-selected-services-only.sh A4 and tests/scripts/test-akkoma-image-pin.sh [defaults]
 orangepi5 --user-password — deprecated no-op on this builder (warn+ignore)
 orangepi5 --root-password — deprecated no-op on this builder (warn+ignore)
 orangepi5 --specs-dir — host-side build plumbing, deliberately not a GUI knob
@@ -186,6 +190,16 @@ BASELINES = {
     "orangepi4-lts": dict(mode="cloud", role="orangepi4-lts", platform="orangepi4-lts"),
 }
 
+DESKTOP_SAMPLE = {
+    "sessions": ["i3", "sway"], "default_session": "openbox", "video_cards": ["intel"],
+    "extra_users": [{"name": "ann", "admin": True}],
+    "apps": [{"id": "firefox", "label": "Firefox", "delivery": "flatpak",
+              "flatpak": "org.mozilla.firefox", "remote": "flathub"}],
+    "flatpak_remotes": {"mine": "https://example.org/mine.flatpakrepo"},
+    "python_extra_targets": ["python3_13"], "python_single_target": "python3_13",
+    "use_lines": ["media-libs/mesa vulkan"], "keyword_lines": ["gui-wm/labwc"],
+}
+
 # field -> LIST of override dicts (tri-states get an on AND an off variant so
 # both case arms of a --with-x/--no-x pair count as fielded).
 SAMPLES = {
@@ -215,6 +229,7 @@ SAMPLES = {
     "headscale_version": [{"headscale_version": "0.23"}],
     "tailscale_version": [{"tailscale_version": "1.60"}],
     "skip_tailscale": [{"skip_tailscale": True}],
+    "headscale_public_derp": [{"headscale_public_derp": True}],
     "gpu_driver": [{"gpu_driver": "nvidia"}], "nvidia_cuda": [{"nvidia_cuda": True}],
     "kernel_builtin": [{"kernel_builtin": True}],
     "enable_wifi": [{"enable_wifi": True}], "enable_bluetooth": [{"enable_bluetooth": True}],
@@ -336,6 +351,11 @@ SAMPLES = {
     "extra_packages": [{"extra_packages": "app-editors/vim"}],
     "packages_add": [{"packages_add": "app-editors/vim"}],
     "packages_drop": [{"packages_drop": "app-editors/vim"}],
+    # the Desktop step: every flag it can emit, on a DESKTOP role of each board (the
+    # shared rpi5/jetson baselines are node roles, where it emits nothing by design)
+    "desktop_spec": [{"desktop_spec": DESKTOP_SAMPLE},
+                     {"role": "rpi5-desktop", "desktop_spec": DESKTOP_SAMPLE},
+                     {"role": "jetson-desktop", "desktop_spec": DESKTOP_SAMPLE}],
 }
 
 # structural axes (role/env/board/flavor/desktop) are deliberately absent from

@@ -1,0 +1,7 @@
+
+## hugmesh-akkoma (images/akkoma/hugmesh-vm.args, appended to rel/vm.args.eex):
+## Erlang distribution listens on loopback only. The node is pleroma@127.0.0.1 and
+## pleroma_ctl reaches it over rpc from inside the same container, so nothing off
+## the pod's loopback ever needs the distribution port. ERL_EPMD_ADDRESS (image
+## ENV) does the same for epmd.
+-kernel inet_dist_use_interface {127,0,0,1}

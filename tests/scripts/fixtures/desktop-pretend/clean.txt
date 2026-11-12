@@ -1,0 +1,10 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 8.10 s (backtrack: 0/20).
+
+[ebuild     U  ] sys-apps/foo-1.2::gentoo [1.1::gentoo] 
+[ebuild  N     ] x11-wm/i3-4.24::gentoo  
+
+Total: 2 packages (1 upgrade, 1 new), Size of downloads: 1,234 KiB

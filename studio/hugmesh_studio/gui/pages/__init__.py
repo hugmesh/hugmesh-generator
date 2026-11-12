@@ -31,6 +31,7 @@ from .users import UsersPage
 from .system import SystemPage
 from .vault import VaultPage
 from .home import HomePage
+from .desktop import DesktopPage
 from .build import BuildPage
 from .launch import LaunchPage
 
@@ -52,5 +53,5 @@ __all__ = [
     "BrandingPage", "NetworkPage", "KeyZipPage",
     "DomainsChoicePage", "DomainsPage", "DomainServicesPage", "DomainCAKeysPage",
     "UsersChoicePage", "UsersPage",
-    "SystemPage", "VaultPage", "HomePage", "BuildPage", "LaunchPage", "ProgressPage",
+    "SystemPage", "VaultPage", "HomePage", "DesktopPage", "BuildPage", "LaunchPage", "ProgressPage",
 ]

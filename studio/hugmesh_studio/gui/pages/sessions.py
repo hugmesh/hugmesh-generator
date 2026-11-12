@@ -17,7 +17,8 @@ behind the Welcome screen's REVIEW PRIOR SESSIONS card — the same widgets unde
 from __future__ import annotations
 
 from ... import advanced_mode
-from ..qt import QtWidgets
+from ..qt import Qt, QtWidgets
+from ._scroll import scrollable
 from .sessions_widget import PreviousBuildsWidget
 
 
@@ -42,7 +43,11 @@ class SessionsPage(QtWidgets.QWizardPage):
             "Restart, redo, inspect or delete a previous build — or load a saved "
             "configuration to pick up where you left off. Next continues into a new "
             "build with whatever is loaded.")
-        lay = QtWidgets.QVBoxLayout(self)
+        # Scroll, never clip (_scroll.py): the Previous-builds box grows by its
+        # gate_note when a button is greyed, and in a window the operator has made
+        # short the note used to be squeezed over the Delete row and cut off.
+        lay = scrollable(self, squeeze_first=True)
+        self._content_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btns = QtWidgets.QHBoxLayout()
         load = QtWidgets.QPushButton("Load config…")
         load.setToolTip("Reopen a previously saved image configuration (or worklist).")

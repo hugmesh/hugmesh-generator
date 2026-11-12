@@ -1,0 +1,25 @@
+{
+  "_comment": "The Desktop step's curated app catalog (core/desktop_spec.py). Each app can be delivered NATIVE (an emerge atom, folded into --packages-add) or as a FLATPAK (an app id from a remote, installed at first boot by hugmesh-flatpak-apps). An empty atom or flatpak means that delivery is not offered. Whether a native atom resolves on this tree (keywords, USE) is what the step's emerge --pretend check is for; nothing here claims it. NATIVE_ARCHES / FLATPAK_ARCHES (Gentoo arch names; absent = every arch) record only a STRUCTURAL fact: the delivery does not exist for the other arches at all (a binary package with no arm64 keyword, a Flathub app built for x86_64 only), measured 2026-11-12. The Studio greys that delivery on such an image and refuses it with *_why. Keyword stability is never recorded here.",
+  "apps": [
+    {"id": "firefox", "label": "Firefox", "category": "Internet", "atom": "www-client/firefox-bin", "flatpak": "org.mozilla.firefox"},
+    {"id": "thunderbird", "label": "Thunderbird", "category": "Internet", "atom": "mail-client/thunderbird-bin", "flatpak": "org.mozilla.Thunderbird",
+     "native_arches": ["amd64"], "native_why": "thunderbird-bin is built for amd64 only",
+     "flatpak_arches": ["amd64"], "flatpak_why": "Flathub builds it for x86_64 only"},
+    {"id": "element", "label": "Element (Matrix chat)", "category": "Internet", "atom": "net-im/element-desktop-bin", "flatpak": "im.riot.Riot"},
+    {"id": "libreoffice", "label": "LibreOffice", "category": "Office", "atom": "app-office/libreoffice-bin", "flatpak": "org.libreoffice.LibreOffice",
+     "native_arches": ["amd64"], "native_why": "libreoffice-bin is built for amd64 only"},
+    {"id": "keepassxc", "label": "KeePassXC", "category": "Office", "atom": "app-admin/keepassxc", "flatpak": "org.keepassxc.KeePassXC"},
+    {"id": "gedit", "label": "gedit (text editor)", "category": "Office", "atom": "app-editors/gedit", "flatpak": "org.gnome.gedit"},
+    {"id": "vscodium", "label": "VSCodium", "category": "Development", "atom": "app-editors/vscodium", "flatpak": "com.vscodium.codium"},
+    {"id": "gimp", "label": "GIMP", "category": "Graphics", "atom": "media-gfx/gimp", "flatpak": "org.gimp.GIMP"},
+    {"id": "inkscape", "label": "Inkscape", "category": "Graphics", "atom": "media-gfx/inkscape", "flatpak": "org.inkscape.Inkscape"},
+    {"id": "krita", "label": "Krita", "category": "Graphics", "atom": "media-gfx/krita", "flatpak": "org.kde.krita"},
+    {"id": "blender", "label": "Blender", "category": "Graphics", "atom": "media-gfx/blender", "flatpak": "org.blender.Blender",
+     "flatpak_arches": ["amd64"], "flatpak_why": "Flathub builds it for x86_64 only"},
+    {"id": "vlc", "label": "VLC", "category": "Media", "atom": "media-video/vlc", "flatpak": "org.videolan.VLC"},
+    {"id": "mpv", "label": "mpv", "category": "Media", "atom": "media-video/mpv", "flatpak": "io.mpv.Mpv"},
+    {"id": "audacity", "label": "Audacity", "category": "Media", "atom": "media-sound/audacity", "flatpak": "org.audacityteam.Audacity"},
+    {"id": "obs-studio", "label": "OBS Studio", "category": "Media", "atom": "media-video/obs-studio", "flatpak": "com.obsproject.Studio",
+     "flatpak_arches": ["amd64"], "flatpak_why": "Flathub builds it for x86_64 only"}
+  ]
+}

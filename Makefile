@@ -180,10 +180,18 @@ ENV      ?= test
 #                on the LAN before go-live instead of a public HEADSCALE_URL that cannot
 #                answer yet. Unset: the keys step warns and workers fall back to it.
 # Usage:  make build-all BRAND=acme DOMAIN=acme.example PKI_LAN_IP=192.168.1.10
+# HEADSCALE_PUBLIC_DERP=true  ALSO list Tailscale's public DERP map in the pki node's
+#                headscale. Default OFF: headscale's embedded relay only, so the mesh
+#                starts and relays offline (docs/HEADSCALE-DERP.md). Same knob as the
+#                builders' --headscale-public-derp and gen-provision-keys.sh's.
+# Usage:  make build-all BRAND=acme DOMAIN=acme.example
 BRAND     ?=
 DOMAIN    ?=
 HEADSCALE_URL ?=
+HEADSCALE_PUBLIC_DERP ?=
 PKI_LAN_IP ?=
+
+
 
 # ── External CA (optional) ─────────────────────────────────────────────────────
 # Point the cert generators at an EXISTING CA (cert + key) to use it as the
@@ -222,6 +230,8 @@ BRAND_ENV += HEADSCALE_URL=$(HEADSCALE_URL)
 endif
 ifneq ($(strip $(PKI_LAN_IP)),)
 BRAND_ENV += PKI_LAN_IP=$(PKI_LAN_IP)
+ifneq ($(strip $(HEADSCALE_PUBLIC_DERP)),)
+BRAND_ENV += HEADSCALE_PUBLIC_DERP=$(HEADSCALE_PUBLIC_DERP)
 endif
 # Root SSH login toggle (empty => builder default 'no' = DISABLED). Only threaded when
 # explicitly set, so every image stays hardened-by-default unless opted in.
@@ -232,7 +242,7 @@ endif
 # BRAND_PASS — brand make-vars forwarded into the in-container `make` re-invoke
 # (the Docker dispatch path) so BRAND_FLAGS/BRAND_ENV are rebuilt identically
 # inside the builder image. brands/ is mounted at /src/brands via -v $(CURDIR):/src.
-BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' PKI_LAN_IP='$(PKI_LAN_IP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
+BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' PKI_LAN_IP='$(PKI_LAN_IP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
 
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).
@@ -281,7 +291,7 @@ endif
 DOCKER_RUN := docker run --rm --privileged \
   -v $(CURDIR):/src -v $(WORK_DIR):/out -w /src \
   -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) \
-  -e STANDALONE_FLAGS \
+  -e STANDALONE_FLAGS -e STANDALONE_THIN_FLAGS -e STANDALONE_THICK_FLAGS \
   -e HUGMESH_SELINUX_MODE -e HUGMESH_SELINUX_MODULES -e HUGMESH_SELINUX_TYPE -e HUGMESH_SELINUX_ENFORCE_GATE \
   $(NVD_DOCKER) $(CA_DOCKER_MOUNTS) $(CA_DOCKER_ENV) $(IMAGE)
 
@@ -456,6 +466,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         quest-plan quest-detect quest-mdm-enroll quest-enroll quest-ingest quest-status quest-wizard \
         deploy-plan deploy-apply deploy-status deploy-destroy \
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate qemu-mesh qemu-mesh-enumerate \
+        qemu-mirror qemu-mirror-list qemu-mirror-down \
         playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-route-access-reconcile stack-e2e stack-e2e-list \
@@ -986,13 +997,23 @@ prebuild-binaries: ## prebuild a platform's role-union binpkg pool (ARCH=x86|rpi
 # Docker-dispatch hop's OWN additional, buggier re-quoting.
 STANDALONE_FLAGS ?=
 export STANDALONE_FLAGS
+# x86-standalone builds TWO images from one invocation, thin (LXDE) and thick
+# (Plasma). STANDALONE_FLAGS goes to both, so a Desktop-step flag that is right for
+# one only (--default-session LXDE, picom without i3/openbox, --capable) would be
+# refused on the other. These two go to ONE leg each, after STANDALONE_FLAGS:
+#   make x86-standalone STANDALONE_FLAGS='--local-user ann --local-pass-file F' \
+#        STANDALONE_THIN_FLAGS='--default-session LXDE' STANDALONE_THICK_FLAGS='--desktop-sessions i3'
+# (Same quoting rule as STANDALONE_FLAGS; exported and forwarded with -e alike.)
+STANDALONE_THIN_FLAGS ?=
+STANDALONE_THICK_FLAGS ?=
+export STANDALONE_THIN_FLAGS STANDALONE_THICK_FLAGS
 
-x86-standalone: ## build BOTH hardened standalone NVIDIA desktops (thin+thick; LUKS FDE installer + all 4 artifacts; REQUIRES STANDALONE_FLAGS='--local-user NAME --local-pass-file FILE')
+x86-standalone: ## build BOTH hardened standalone NVIDIA desktops (thin+thick; LUKS FDE installer + all 4 artifacts; REQUIRES STANDALONE_FLAGS='--local-user NAME --local-pass-file FILE'; STANDALONE_THIN_FLAGS / STANDALONE_THICK_FLAGS go to one leg each)
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86-standalone NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
-	@$(call build-then-reown,for r in standalone-thin standalone-thick; do echo "==> x86 $$r"; $(X86) --role $$r $(STANDALONE_FLAGS) || exit 1; done)
+	@$(call build-then-reown,echo "==> x86 standalone-thin"; $(X86) --role standalone-thin $(STANDALONE_FLAGS) $(STANDALONE_THIN_FLAGS) || exit 1; echo "==> x86 standalone-thick"; $(X86) --role standalone-thick $(STANDALONE_FLAGS) $(STANDALONE_THICK_FLAGS) || exit 1)
 endif
 
 rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop | rpi-omnibus RAM_GB=16  (same vocabulary as x86 now; add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; RAM_GB=N passes --ram-gb (REQUIRED for omnibus); STANDALONE_FLAGS='--standalone --local-user … --local-pass-file FILE' for rpi-desktop; a standalone desktop refuses to build without a login password)
@@ -1257,6 +1278,20 @@ qemu-mesh: ## boot a 3-node emulated k8s cluster (opt-in; HUGMESH_QEMU_MESH=1; C
 qemu-mesh-enumerate: ## plan the 3-node emulated cluster (L2 spec, MACs/IPs, ports, launcher argv; nothing boots)
 	tests/qemu/mesh-cluster.sh --dry-run \
 	  $(if $(CP_ROLE),--cp-role $(CP_ROLE),) $(if $(WORKER_ROLE),--worker-role $(WORKER_ROLE),)
+
+# Host-side registry mirror for the emulated cluster's CNI (issue #516): Calico
+# (pinned by specs/cluster/apps/01-calico.yaml) + the Tigera operator chart +
+# ArgoCD's images, served on 127.0.0.1:$(MIRROR_PORT) = 10.0.2.2 to the guests'
+# user-mode NIC. Fill it before `MESH_CLUSTER_GATE_READY=1 make qemu-mesh`.
+MIRROR_PORT ?= 5000
+qemu-mirror: ## start + fill the host registry mirror for emulated-cluster CNI images (docker, helm)
+	tests/qemu/registry-mirror.sh up --port $(MIRROR_PORT)
+
+qemu-mirror-list: ## list the image set the host registry mirror serves (pulls nothing)
+	tests/qemu/registry-mirror.sh --dry-run --port $(MIRROR_PORT)
+
+qemu-mirror-down: ## remove the host registry mirror container (only if it is the mirror's own)
+	tests/qemu/registry-mirror.sh down
 
 # SELinux AVC workout (issue #45): boot ONE image, drive the workloads
 # specs/selinux/*.te confine, harvest AVCs, and emit the narrowing report
@@ -1712,6 +1747,19 @@ docker-build: ## DEPRECATED: builds now default to Docker — just run `make bui
 # Casdoor issuer (http://localhost:8000); prod = the REAL issuer (CASDOOR_ISSUER
 # or https://id.<DOMAIN>; prod creds come from your env / keys USB, NOT committed).
 # SOCIAL=1 also brings up the heavy tuwunel/Mastodon tier (the `social` profile).
+#
+# STACK_BIND_ADDR (NEW-15): the host address the identity provider and the social
+# servers are published on: Casdoor :8000 (and BRAND_B's :8001, the Studio's per-domain
+# Casdoors :8001+), tuwunel :8008, Mastodon :3000/:4000, phpBB :8081, Akkoma :4001.
+# UNSET = 127.0.0.1, this machine only. The compose files read
+# ${STACK_BIND_ADDR:-127.0.0.1} themselves, so `make stack-up STACK_BIND_ADDR=0.0.0.0`
+# (a command-line variable reaches the recipe's environment) is the explicit opt-in
+# for LAN exposure; run `make stack-seed` first, which moves Casdoor's built-in admin
+# off the upstream factory-default password onto this checkout's generated
+# CASDOOR_ADMIN_PASSWORD (tests/stack/.env, tests/stack/gen-casdoor-admin-env.sh).
+# The front door (PUBLIC_HOST_PORT / PUBLIC_HTTPS_PORT / ANUBIS_HOST_PORT) is not
+# affected. Guards: tests/scripts/test-stack-idp-exposure.sh (static + stub) and
+# tests/stack/test-stack-idp-exposure-live.sh (a throwaway Casdoor).
 STACK_COMPOSE   := tests/stack/compose.local.yaml
 STACK_SRC       ?= $(CURDIR)/.stack-src
 PUBLIC_HOST_PORT ?= 8088
@@ -2063,7 +2111,7 @@ STACK_MESH_TOKEN_DIR := tests/stack/.mesh-token
 STACK_HEADSCALE_COMPOSE := tests/stack/compose.headscale.yaml
 STACK_HEADSCALE_PROFILE := $(if $(strip $(HEADSCALE)), --profile headscale,)
 STACK_HEADSCALE_FLAGS := $(if $(strip $(HEADSCALE)), -f $(STACK_HEADSCALE_COMPOSE),)
-STACK_HEADSCALE_ENV := $(if $(strip $(HEADSCALE)), HUGMESH_DOMAIN='$(STACK_HUGMESH_DOMAIN)' HEADSCALE_MESH_ID='$(HEADSCALE_MESH_ID)',)
+STACK_HEADSCALE_ENV := $(if $(strip $(HEADSCALE)), HUGMESH_DOMAIN='$(STACK_HUGMESH_DOMAIN)' HEADSCALE_MESH_ID='$(HEADSCALE_MESH_ID)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)',)
 STACK_HEADSCALE_DEP := $(if $(strip $(HEADSCALE)),stack-mesh-token-key,)
 STACK_ROUTE_ACCESS_ENV := ROUTE_ACCESS_DB_PASSWORD="$$(bash tests/stack/gen-route-access-env.sh --read)" 
 # The local stack's per-role passwords (hugmesh-generator#857): every Postgres role
@@ -2334,6 +2382,7 @@ stack-up: stack-route-access-env stack-db-env stack-clone stack-certs stack-m2-c
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
 	$(STACK_ENV) POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
+	@echo "    (Casdoor, tuwunel and Mastodon listen on $${STACK_BIND_ADDR:-127.0.0.1} only; Casdoor's admin password is CASDOOR_ADMIN_PASSWORD in tests/stack/.env once make stack-seed has run)"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
 	$(if $(strip $(HEADSCALE)),@echo "    Tailnet control server (HEADSCALE=1): https://hs.$(STACK_HUGMESH_DOMAIN):$(PUBLIC_HTTPS_PORT)  |  token issuer fingerprint: make stack-mesh-token-key",)
