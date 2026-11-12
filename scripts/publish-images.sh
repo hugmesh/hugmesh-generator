@@ -132,6 +132,11 @@ done
 [ -n "${DEST}" ] || { echo "Missing --dest" >&2; usage 2; }
 
 SECRET_SCAN="${SCRIPT_DIR}/secret-scan.sh"
+# selinux_arch_json: whether an image carries SELinux, from its arch token
+# (riscv64 ships "no SELinux"; hugmesh-generator#1059). Same source as the
+# builders' summary line.
+# shellcheck source=scripts/_selinux-posture-lib.sh
+source "${SCRIPT_DIR}/_selinux-posture-lib.sh"
 # The scan gate is load-bearing: a missing scanner is a refusal, never a skip.
 [ -f "${SECRET_SCAN}" ] || die "scripts/secret-scan.sh not found next to this script — the fail-closed scan gate cannot run"
 
@@ -246,12 +251,12 @@ XZ_MAGIC="fd377a585a00"
 
 _role_alias() { case "$1" in backend) echo be ;; frontend) echo fe ;; *) echo "$1" ;; esac; }
 
-F_PATH=(); F_BASE=(); F_ID=(); F_ROLE=(); F_PLATFORM=(); F_KIND=(); F_BUILT=()
+F_PATH=(); F_BASE=(); F_ID=(); F_ROLE=(); F_PLATFORM=(); F_KIND=(); F_BUILT=(); F_ARCH=()
 for f in "${CANDIDATES[@]}"; do
     base="$(basename "${f}")"
     [ -s "${f}" ] || die "poisoned session tree: ${base} is EMPTY (0 bytes) — refusing to publish a hollow artifact"
     [[ "${base}" =~ ${SHAPE} ]] || die "poisoned session tree: ${base} wears an artifact suffix but not the builders' <brand>-<platform>-<arch>-<role>-<env>-<stamp> naming — cannot confirm provenance, refusing the whole export"
-    brandplat="${BASH_REMATCH[1]}"; role="${BASH_REMATCH[3]}"
+    brandplat="${BASH_REMATCH[1]}"; arch="${BASH_REMATCH[2]}"; role="${BASH_REMATCH[3]}"
     stamp="${BASH_REMATCH[5]}";     kind="${BASH_REMATCH[6]}"
     # Content magic: the name says image, the bytes must agree.
     case "${kind}" in
@@ -283,7 +288,7 @@ for f in "${CANDIDATES[@]}"; do
     fi
     F_PATH+=("${f}"); F_BASE+=("${base}")
     F_ROLE+=("$(_role_alias "${role}")"); F_PLATFORM+=("${platform}")
-    F_ID+=("$(_role_alias "${role}").${platform}"); F_KIND+=("${kind}")
+    F_ID+=("$(_role_alias "${role}").${platform}"); F_KIND+=("${kind}"); F_ARCH+=("${arch}")
     F_BUILT+=("${stamp:0:4}-${stamp:4:2}-${stamp:6:2}T${stamp:9:2}:${stamp:11:2}:${stamp:13:2}Z")
 done
 
@@ -295,19 +300,19 @@ if [ -n "${IMAGES_FILTER}" ]; then
         for id in "${F_ID[@]}"; do [ "${id}" = "${w}" ] && found=1; done
         [ "${found}" -eq 1 ] || die "--images ${w}: no artifact of session ${SESSION_ID} has that id (available: $(printf '%s\n' "${F_ID[@]}" | sort -u | paste -sd' ' -))"
     done
-    K_PATH=(); K_BASE=(); K_ID=(); K_ROLE=(); K_PLATFORM=(); K_KIND=(); K_BUILT=()
+    K_PATH=(); K_BASE=(); K_ID=(); K_ROLE=(); K_PLATFORM=(); K_KIND=(); K_BUILT=(); K_ARCH=()
     for i in "${!F_PATH[@]}"; do
         keep=0
         for w in "${WANT[@]}"; do [ "${F_ID[$i]}" = "${w}" ] && keep=1; done
         if [ "${keep}" -eq 1 ]; then
             K_PATH+=("${F_PATH[$i]}"); K_BASE+=("${F_BASE[$i]}"); K_ID+=("${F_ID[$i]}")
             K_ROLE+=("${F_ROLE[$i]}"); K_PLATFORM+=("${F_PLATFORM[$i]}")
-            K_KIND+=("${F_KIND[$i]}"); K_BUILT+=("${F_BUILT[$i]}")
+            K_KIND+=("${F_KIND[$i]}"); K_BUILT+=("${F_BUILT[$i]}"); K_ARCH+=("${F_ARCH[$i]}")
         fi
     done
     F_PATH=("${K_PATH[@]}"); F_BASE=("${K_BASE[@]}"); F_ID=("${K_ID[@]}")
     F_ROLE=("${K_ROLE[@]}"); F_PLATFORM=("${K_PLATFORM[@]}")
-    F_KIND=("${K_KIND[@]}"); F_BUILT=("${K_BUILT[@]}")
+    F_KIND=("${K_KIND[@]}"); F_BUILT=("${K_BUILT[@]}"); F_ARCH=("${K_ARCH[@]}")
 fi
 
 # ── stage (sibling of --dest, atomically moved into place at the end) ────────
@@ -396,6 +401,7 @@ _flavor_for() {  # _flavor_for <id> — mesh-manifest flavor when jq can join it
         printf '      "platform": "%s",\n' "$(_jesc "${F_PLATFORM[$i]}")"
         printf '      "flavor": "%s",\n'   "$(_jesc "${flavor}")"
         printf '      "kind": "%s",\n'     "$(_jesc "${F_KIND[$i]}")"
+        printf '      "selinux": %s,\n'   "$(selinux_arch_json "${F_ARCH[$i]}")"
         printf '      "file": "%s",\n'     "$(_jesc "${F_BASE[$i]}")"
         printf '      "bytes": %s,\n'      "${bytes}"
         printf '      "sha256": "%s",\n'   "${sha}"

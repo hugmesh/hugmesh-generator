@@ -386,7 +386,7 @@ Every claim here is read off the wizard in `studio/hugmesh_studio/gui/`.
 
 Skipped in mesh. Mesh picks role and platform on the worklist screen instead.
 
-You pick three things, top to bottom. First the **architecture** (x86-64, ARM64, ARMv7, RISC-V 64). Then a **device** from a searchable tree grouped by vendor family: 51 devices across 11 families today, with a Status column. Then the **image type**, a list of only the roles that device supports in the mode you are in.
+You pick three things, top to bottom. First the **architecture** (x86-64, ARM64, ARMv7, RISC-V 64). RISC-V 64 is labelled "no SELinux": riscv64 images ship without it, because Gentoo has no hardened or SELinux riscv profile (see [the build matrix](BUILD-MATRIX.md#selinux-by-architecture)). Then a **device** from a searchable tree grouped by vendor family: 51 devices across 11 families today, with a Status column. Then the **image type**, a list of only the roles that device supports in the mode you are in.
 
 The catalogue is honest rather than tidy. Unsupported devices are listed with the reason they cannot be built, and you cannot select them. 27 of the 51 are in that state, including everything under ARMv7 and RISC-V. A device that is buildable but has no image type in *this* mode is also unselectable, with an inline note saying which path does offer it. Search matches the device name, its SoC, and its family or vendor.
 

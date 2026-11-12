@@ -209,6 +209,9 @@ source "${SCRIPT_DIR}/scripts/_portage-config-lib.sh"
 # ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
 # shellcheck source=scripts/_selinux-policy-lib.sh
 source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
+# Whether this image carries SELinux, worded the same in every build summary and
+# in publish-manifest.json (riscv64 ships "no SELinux"; hugmesh-generator#1059).
+source "${SCRIPT_DIR}/scripts/_selinux-posture-lib.sh"
 # ── END shared block: SELinux node-policy lib ─────────────────────────────────
 # Requested-atom completeness gate (cross-build twin of build-x86-host-stage4.sh's
 # in-chroot gate, PR #461/#465): after the --keep-going payload emerge, every
@@ -2829,6 +2832,7 @@ echo "  Flavor:           ${OPIZ3_FLAVOR}"
 echo "  ENV:              ${ENV}   (cluster domain: ${CLUSTER_DOMAIN})"
 echo "  Brand:            ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}"
 echo "  Hostname:         ${HOSTNAME}"
+selinux_summary_line arm64 "${SPECS_DIR}"
 echo "  Standalone:       ${STANDALONE}   Encrypt-root (LUKS2): ${ENCRYPT_ROOT}"
 echo ""
 echo "  Mesh + provisioning (SAME as every other client image):"
