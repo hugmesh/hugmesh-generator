@@ -392,7 +392,7 @@ def test_flow_quotes_the_core_wording(section: str):
     assert REACH_LINE in flat
 
 
-# ── the section against what has landed (FG1 #927, FG2, FG5 #932; FG3 still open) ──
+# ── the section against what has landed (FG1 #927, FG2, FG5 #932, FG3 #926) ────────
 def test_status_callout_says_what_has_landed(section: str):
     flat = _flat(section)
     assert "**Status: specification." not in flat, "FG1 is in the tree; the callout is stale"
@@ -418,8 +418,8 @@ def test_status_callout_says_what_has_landed(section: str):
     assert "(group FG5) is in the tree as a CLI and Makefile lane only" in flat
     assert "`make mesh-emu-up FROM_SAVE=mesh-<stamp>`" in flat
     assert "is a later follow-up (group FG5)" not in flat
-    # FG3 (the harness proof lane) has not merged: the callout still says so. When it
-    # lands, this goes red on purpose, and the callout must be updated with it.
+    # FG3 (the harness proof lane) landed in #926. The callout names the script, and
+    # the "has not merged" wording must not come back while the lane is in the tree.
     lane = [f for f in os.listdir(os.path.join(REPO, "tests", "qemu"))
             if "golive" in f or "go-live" in f]
     if not lane:
@@ -427,6 +427,9 @@ def test_status_callout_says_what_has_landed(section: str):
     else:
         assert "The harness proof lane (group FG3) has not merged" not in flat, (
             f"FG3's proof lane is in the tree ({lane}): update the status callout")
+        assert "`tests/qemu/golive-emulated.sh`" in flat, (
+            "the status callout no longer names the FG3 proof-lane script")
+        assert "golive-emulated.sh" in lane
 
 
 def _fake_target(gt, tmp_path):

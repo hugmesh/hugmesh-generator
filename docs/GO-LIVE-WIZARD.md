@@ -263,13 +263,14 @@ root path.
 
 ## Go live from an emulated mesh
 
-> **Status: landed, except the proof lane.** The target model, the ssh path and the CLI
+> **Status: landed.** The target model, the ssh path and the CLI
 > (`hugmesh_studio.core.golive_target`, group FG1) are in the tree. The GUI and TUI faces
 > (group FG2) are in the tree too: the wizard's Preflight **Target** picker, the TUI's
 > `t`, and the go-live entry on the Mesh emulation page and in `meshemu`. Booting a mesh
 > back from its save (group FG5) is in the tree as a CLI and Makefile lane only
 > ([below](#persistence-the-posture-is-ephemeral)). The harness proof lane (group FG3)
-> has not merged; read [its part](#the-proof-lane-fg3) as the contract it is held to.
+> is in the tree as `tests/qemu/golive-emulated.sh`: it drives a device that is already
+> running and publishes nothing ([its part](#the-proof-lane-fg3)).
 
 A mesh you boot under QEMU from Studio's mesh-emulation page (or `meshemu` in the TUI)
 can be taken live, from the Studio GUI and from the CLI, on Linux (X11 and Wayland), on
