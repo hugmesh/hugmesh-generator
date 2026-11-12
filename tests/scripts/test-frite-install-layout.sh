@@ -268,7 +268,7 @@ CONF_LABEL="$(mtype -i "${IMG}@@${P1_OFF}" ::/extlinux/extlinux.conf 2>/dev/null
 for want in /Image /initrd.img "/dtb/${DTB}" /LiveOS/squashfs.img "/stage4/$(basename "${STAGE4}")" /boot/extlinux/extlinux.conf "/boot/dtb/${DTB}" /boot/initrd.img /install-frite.sh /encrypt-root; do
     mdir -i "${IMG}@@${P1_OFF}" "::${want}" >/dev/null 2>&1 && ok "on the FAT: ${want}" || bad "missing on the FAT: ${want}"
 done
-FDT_IN_CONF="$(mtype -i "${IMG}@@${P1_OFF}" ::/extlinux/extlinux.conf 2>/dev/null | awk '$1 == "FDT" {print $2}')"
+FDT_IN_CONF="$(mtype -i "${IMG}@@${P1_OFF}" ::/extlinux/extlinux.conf 2>/dev/null | awk '$1 == "FDT" {print $2; exit}')"   # the DEFAULT label's (first); the SELinux rescue/test labels repeat it
 [ "${FDT_IN_CONF}" = "/dtb/${DTB}" ] && ok "extlinux FDT line names the staged DTB (${FDT_IN_CONF})" || bad "extlinux FDT line: '${FDT_IN_CONF}'"
 # u-boot in the user area, u-boot doc/board/amlogic order: sectors from 1, then 444 bytes.
 # byte-range digests (busybox cmp has no -i/-n; sha256sum is in both userlands)

@@ -119,6 +119,16 @@ FOREIGN_MESH_TRUST_SRC="${FOREIGN_MESH_TRUST_SRC:-}"
 # internal zone. Precedence: built-in (<brand>.internal) < env/brand.conf < CLI flag.
 SUPERDOMAIN="${SUPERDOMAIN:-}"
 
+# ── headscale DERP relay: public Tailscale map OPT-IN (default OFF) ─────────────
+# The pki node's headscale runs its EMBEDDED DERP relay with no public map, so the
+# mesh starts and relays offline (docs/HEADSCALE-DERP.md). HEADSCALE_PUBLIC_DERP=true
+# (env/brand.conf) or --headscale-public-derp stamps provision.json
+# .headscale.public_derp=true, and keys-provision then ALSO lists Tailscale's public
+# map. Left unset, the key is not written, so an image baked with the builders'
+# --headscale-public-derp keeps its own choice. Precedence: built-in (off) <
+# env/brand.conf < CLI flag.
+HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
+
 # ── In-UI SSH-terminal key model: per-device sshd HOST + BFF DIAL keypairs ──────
 # The in-UI SSH terminal lets the BFF dial a device over the tailnet to drive an
 # operator console. That needs TWO per-device keypairs minted here, off-image-build:
@@ -247,6 +257,10 @@ Options:
       --no-device-ssh In-UI SSH terminal: skip generating the per-device sshd HOST
                       keypair + BFF DIAL keypair + ingest metadata (default: ON —
                       each image is one device). (env: GEN_DEVICE_SSH=false)
+      --headscale-public-derp  ALSO list Tailscale's public DERP map in the pki
+                      node's headscale (provision.json .headscale.public_derp=true).
+                      Default OFF: headscale's embedded relay only, so the mesh starts
+                      and relays offline. (env/brand.conf: HEADSCALE_PUBLIC_DERP=true)
   -h, --help          Show this help.
 
   Mail/OAuth creds are OPTIONAL and ABSENT BY DEFAULT. NONINTERACTIVE=1 (or
@@ -281,6 +295,7 @@ while [[ $# -gt 0 ]]; do
         --vpn-src)     VPN_SRC="$2"; shift 2 ;;               # egress-VPN: provider .conf/.ovpn to stage (own domain)
         --vpn-domain)  VPN_DOMAIN="$2"; shift 2 ;;            # egress-VPN: the node's own brand domain
         --foreign-mesh-trust) FOREIGN_MESH_TRUST_SRC="$2"; shift 2 ;;  # Phase 7: foreign-mesh PUBLIC verifying keys to stage
+        --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;  # ALSO list the public Tailscale DERP map (default: embedded relay only)
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;          # mesh MagicDNS base_domain (permanently internal); default <BRAND>.internal
         --device-id)   DEVICE_ID="$2"; shift 2 ;;            # in-UI SSH terminal: per-device Vault-seed path segment
         --dial-user)   DIAL_USER="$2"; shift 2 ;;            # in-UI SSH terminal: unprivileged login the BFF dials as
@@ -289,6 +304,12 @@ while [[ $# -gt 0 ]]; do
         *)             echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
 done
+
+case "${HEADSCALE_PUBLIC_DERP}" in
+    true|1|yes|on)     HEADSCALE_PUBLIC_DERP=true ;;
+    false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
+    *) echo "ERROR: HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')" >&2; exit 1 ;;
+esac
 
 for t in openssl ssh-keygen python3; do
     command -v "$t" >/dev/null || { echo "ERROR: missing tool: $t" >&2; exit 1; }
@@ -460,6 +481,21 @@ PY
     echo "    -> ${PROV} (.mesh.magic_dns_domain + .mesh.cp_dns_name)"
     echo "    -> ${OUT_DIR}/kubernetes/kubeadm-config.yaml (controlPlaneEndpoint + certSANs)"
     echo "    permanently internal — never go-live-flipped (distinct from cluster_domain)"
+fi
+
+# ── headscale DERP: public Tailscale map opt-in -> provision.json ──────────────
+# Only an opt-in is stamped (see HEADSCALE_PUBLIC_DERP above): an absent key lets a
+# builder-baked /etc/hugmesh/headscale-public-derp marker decide at first boot.
+if [ "${HEADSCALE_PUBLIC_DERP}" = true ] && [ -f "${PROV}" ]; then
+    python3 - "${PROV}" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault("headscale", {})["public_derp"] = True
+json.dump(d, open(p, "w"), indent=2)
+open(p, "a").write("\n")
+PY
+    echo "==> headscale DERP: public Tailscale DERP map OPTED IN -> ${PROV} (.headscale.public_derp=true)"
 fi
 
 # ── Layer-B device-license registry: per-node identity + verifying key ─────────
@@ -1123,6 +1159,54 @@ if [ "${ROLE}" = "pki" ]; then
             exit 1
         fi
     fi
+    # headscale's serving certificate. keys-provision issues it at first boot from
+    # the mesh CA key on this stick (certs/cluster-ca.key), naming the node's real
+    # addresses, because headscale serves HTTPS itself by default (the embedded DERP
+    # relay needs TLS; docs/HEADSCALE-DERP.md). A stick that will NOT carry that key
+    # (an external CA without --ca-key-to-stick) gets the certificate here instead,
+    # for every address this manifest already names plus HEADSCALE_TLS_SANS
+    # (space/comma-separated IPs and names, e.g. the pki node's LAN address);
+    # keys-provision uses it when it names the server_url host.
+    if [ ! -f "${OUT_DIR}/certs/cluster-ca.key" ] && [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ]; then
+        _hs_sans="$(
+            {
+                printf '%s\n' 127.0.0.1 ::1 localhost headscale.hugmesh-pki.svc.cluster.local headscale.hugmesh-pki.svc
+                [ -f "${PROV}" ] && jq -r '[.headscale.server_url, .mesh.endpoint] | .[] | strings' "${PROV}" 2>/dev/null
+                printf '%s\n' "${HEADSCALE_URL:-}"
+                [ -f "${PROV}" ] && jq -r '.nodes // [] | .[] | select(.role == "pki") | .ip, .name | strings' "${PROV}" 2>/dev/null
+                printf '%s\n' "${HEADSCALE_TLS_SANS:-}" | tr ' ,' '\n\n'
+            } | sed -E 's#^https?://##; s#[/?].*$##; s#^\[([^]]+)\](:[0-9]+)?$#\1#; s#^([^:]+):[0-9]+$#\1#' \
+              | while IFS= read -r _h; do
+                    if [[ "${_h}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { [[ "${_h}" == *:* ]] && [[ "${_h}" =~ ^[0-9A-Fa-f:.]+$ ]]; }; then
+                        echo "IP:${_h}"
+                    elif [[ "${_h}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && [[ "${_h}" =~ [A-Za-z] ]]; then
+                        echo "DNS:${_h,,}"
+                    fi
+                done | awk '!seen[$0]++' | paste -sd, -
+        )"
+        _hs_tmp="$(mktemp -d)"
+        mkdir -p "${OUT_DIR}/headscale"
+        printf 'subjectAltName=%s\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\n' \
+            "${_hs_sans}" > "${_hs_tmp}/ext"
+        if ( umask 077
+             openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=headscale" \
+                 -keyout "${OUT_DIR}/headscale/tls.key" -out "${_hs_tmp}/tls.csr" \
+             && openssl x509 -req -in "${_hs_tmp}/tls.csr" -CA "${CA_CERT}" -CAkey "${CA_KEY}" \
+                 ${CA_KEY_PASS:+-passin env:CA_KEY_PASS} -set_serial "0x$(openssl rand -hex 16)" -days 825 -sha256 \
+                 -extfile "${_hs_tmp}/ext" -out "${_hs_tmp}/leaf.crt" ) >/dev/null 2>&1 \
+           && cat "${_hs_tmp}/leaf.crt" "${OUT_DIR}/certs/cluster-ca.crt" > "${OUT_DIR}/headscale/tls.crt"; then
+            chmod 0600 "${OUT_DIR}/headscale/tls.key"
+            echo "==> headscale TLS: the CA key stays off this stick, so its serving certificate is issued here"
+            echo "    (headscale/tls.{crt,key}, 825 days) for ${_hs_sans}"
+            echo "    Set HEADSCALE_TLS_SANS to the pki node's LAN address(es) if it is not listed: keys-provision"
+            echo "    serves plain HTTP (no relay for peers without a direct path) when the certificate does not name it."
+        else
+            rm -f "${OUT_DIR}/headscale/tls.key" "${OUT_DIR}/headscale/tls.crt"
+            echo "ERROR: could not issue headscale's serving certificate from ${CA_CERT}" >&2
+            rm -rf "${_hs_tmp}"; exit 1
+        fi
+        rm -rf "${_hs_tmp}"
+    fi
     if [ "${KUBEADM_CA}" = false ] && [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ]; then
         echo "==> kubeadm keeps its own CA (--no-kubeadm-ca): kubernetes/pki/ca.* not seeded"
     elif [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ]; then
@@ -1160,6 +1244,9 @@ else
         echo "  (worker) copy the cluster CA + truststore from the pki node:"
         echo "    pki:${OUT_DIR}/certs/cluster-ca.crt        -> certs/cluster-ca.crt"
         echo "    pki:${OUT_DIR}/keystores/truststore.jks    -> keystores/truststore.jks"
+        echo "  (worker) certs/cluster-ca.crt is REQUIRED to join the mesh: the pki node's headscale"
+        echo "    serves HTTPS with a certificate from that CA (docs/HEADSCALE-DERP.md), and this node"
+        echo "    trusts it only once keys-provision installs the stick's certs/*.crt. Or pass --ca-cert."
     fi
 fi
 

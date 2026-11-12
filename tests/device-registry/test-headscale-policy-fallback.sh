@@ -108,7 +108,9 @@ extract() { awk -v fn="$1" '$0 ~ "^" fn "\\(\\) \\{" {p=1} p {print} p && /^}/ {
 SRC="${WORK}/extracted.sh"; : > "${SRC}"
 for fn in headscale_policy_owned_security_tags headscale_deny_all_policy headscale_stage_deny_all_policy \
           headscale_policy_unprotected headscale_effective_policy_path headscale_config_gate \
-          headscale_refuse_config provision_headscale publish_cp_dns_record; do
+          headscale_refuse_config provision_headscale publish_cp_dns_record \
+          provision_headscale_config provision_headscale_tls headscale_url_parts \
+          headscale_listen_port headscale_tls_cert_path headscale_tls_config_set; do
     body="$(extract "${fn}")"
     if [ -n "${body}" ]; then printf '%s\n\n' "${body}" >> "${SRC}"
     else bad "${fn}() not found in $(basename "${PROVISION}")"; fi
@@ -283,7 +285,7 @@ run_scenario() {
         chown() { [ ! -e "${HSB}/etc/headscale/config.dump.yaml" ] || echo "$*" >> "${HSB}/chown-saw-dump"; }
         logger() { echo "$*" >> "${HSB}/syslog"; }
         resolve_endpoint() { [ -z "${ENDPOINT:-}" ] || echo "${ENDPOINT}"; }; resolve_magic_dns_domain() { :; }; resolve_ssh_user() { echo superadmin; }
-        approve_mesh_routes_now() { :; }; provision_headscale_derp() { :; }
+        approve_mesh_routes_now() { :; }; provision_headscale_derp() { :; }; headscale_tls_cover_address() { :; }
         mv() { # fault injection: fail when the SOURCE (next-to-last argument) matches
             local mv_src="${*: -2:1}"
             if [ -n "${FAIL_MV_RE:-}" ] && [[ "${mv_src}" =~ ${FAIL_MV_RE} ]]; then return 1; fi

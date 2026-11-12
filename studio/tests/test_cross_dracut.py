@@ -88,23 +88,92 @@ def test_binfmt_constants_match_the_shell_library():
     assert cross_dracut.DEFAULT_INTERP == interp.group(1)
 
 
+# The fail-fast refusal, read structurally: a column-0 gate, an indented
+# ``if ! dracut_cross_preflight_ok; then`` inside it, and ``exit 1`` DIRECTLY in that
+# refusal's own body (8 spaces, before its own 4-space ``fi``). Every builder also has
+# a second, column-0 ``if ! dracut_cross_preflight_ok`` (the waf-family preflight)
+# whose ``exit 1`` is nested under ``if [ -n "${_exec_blockers}" ]``: it refuses only
+# when the package set holds a target-exec atom, never because of --encrypt-root, so it
+# must not count — and it does not, being neither inside a gate nor at that indent.
+_GATED_PREFLIGHT = re.compile(
+    r'^if (?P<gate>[^\n]+); then\n'
+    r'(?:(?!fi\n)[^\n]*\n)*?'
+    r'    if ! dracut_cross_preflight_ok; then\n'
+    r'(?P<body>(?:(?!    fi\n)[^\n]*\n)*?)'
+    r'    fi\n', re.M)
+
+# The gates that are true on EVERY --encrypt-root build that gets this far: one led by
+# ${ENCRYPT_ROOT} itself (the platform builders), or one true on every real build at all
+# (Frite since #858: it chroots under qemu-aarch64 for the build-time SELinux labels on
+# every build, so the same refusal now runs whether or not the root is encrypted;
+# --packages-only exits before any of this).
+_FDE_GATE = re.compile(
+    r'^(?:\$\{ENCRYPT_ROOT\} && \$\{BUILD_(?:INSTALLER|ISO)\}(?: && .*)?|! \$\{PACKAGES_ONLY\})$')
+
+
+def fde_preflight_gates(src: str) -> list:
+    """The gates of every fail-fast qemu-aarch64 refusal in a builder's source that
+    refuses an --encrypt-root build (see :data:`_GATED_PREFLIGHT`, :data:`_FDE_GATE`)."""
+    return [m.group("gate") for m in _GATED_PREFLIGHT.finditer(src)
+            if _FDE_GATE.match(m.group("gate"))
+            and re.search(r"^        exit 1$", m.group("body"), re.M)]
+
+
 def test_every_cross_fde_platform_really_has_the_fail_fast_preflight():
     """CROSS_FDE_PLATFORMS is the set whose builder REFUSES on --encrypt-root without a
     usable qemu-aarch64. Read that claim off each builder rather than trusting the list:
-    the preflight is an ``if ${ENCRYPT_ROOT} && ${BUILD_...}`` block that calls
-    ``dracut_cross_preflight_ok`` and ``exit 1``."""
+    the preflight is an ``if ! dracut_cross_preflight_ok`` refusal that ``exit 1``s,
+    inside a gate that every --encrypt-root build passes through (one led by
+    ``${ENCRYPT_ROOT}``, or Frite's every-real-build ``! ${PACKAGES_ONLY}``)."""
     assert cross_dracut.CROSS_FDE_PLATFORMS, "the set went empty"
     assert "x86" not in cross_dracut.CROSS_FDE_PLATFORMS
     assert "jetson" not in cross_dracut.CROSS_FDE_PLATFORMS   # no FDE path at all
     for plat in cross_dracut.CROSS_FDE_PLATFORMS:
         path = os.path.join(GENERATOR_DIR, BUILDER_SCRIPTS[plat])
         src = open(path, encoding="utf-8").read()
-        m = re.search(r'^if \$\{ENCRYPT_ROOT\} && \$\{BUILD_(?:INSTALLER|ISO)\}.*?^fi$',
-                      src, re.M | re.S)
-        assert m, f"{plat}: no ${{ENCRYPT_ROOT}}-gated preflight block in {path}"
-        block = m.group(0)
-        assert "dracut_cross_preflight_ok" in block, plat
-        assert "exit 1" in block, plat
+        assert fde_preflight_gates(src), (
+            f"{plat}: no fail-fast qemu-aarch64 refusal gated on --encrypt-root (or on "
+            f"every real build) in {path}")
+
+
+def test_the_preflight_reader_tells_a_refusal_from_its_look_alikes():
+    """The reader above, against the shapes it has to tell apart. Each builder carries
+    BOTH a real refusal and the waf-family look-alike, so a reader that accepted the
+    look-alike would pass every platform with its real refusal deleted."""
+    refusal = ("    dracut_cross_register_qemu || true\n"
+               "    if ! dracut_cross_preflight_ok; then\n"
+               "        err \"no qemu\"\n"
+               "        exit 1\n"
+               "    fi\n"
+               "    info \"ok\"\n")
+    waf = ("dracut_cross_register_qemu || true\n"
+           "if ! dracut_cross_preflight_ok; then\n"
+           "    _b=\"$(x)\"\n"
+           "    if [ -n \"${_b}\" ]; then\n"
+           "        err \"waf\"\n"
+           "        exit 1\n"
+           "    fi\n"
+           "    warn \"no waf\"\n"
+           "fi\n")
+    enc = "if ${ENCRYPT_ROOT} && ${BUILD_INSTALLER} && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY}; }; then\n"
+    every = "if ! ${PACKAGES_ONLY}; then\n"
+    assert fde_preflight_gates(enc + refusal + "fi\n" + waf) == [enc[3:-7]]
+    assert fde_preflight_gates(every + refusal + "fi\n" + waf) == ["! ${PACKAGES_ONLY}"]
+    assert fde_preflight_gates("if ${ENCRYPT_ROOT} && ${BUILD_ISO}; then\n" + refusal
+                               + "fi\n") == ["${ENCRYPT_ROOT} && ${BUILD_ISO}"]
+    # the waf look-alike alone: not a refusal of --encrypt-root
+    assert fde_preflight_gates(waf) == []
+    # a refusal that warns and goes on is not a refusal
+    assert fde_preflight_gates(enc + refusal.replace("exit 1", "true") + "fi\n") == []
+    # the right refusal under a gate an --encrypt-root build can skip
+    assert fde_preflight_gates("if ${BUILD_DESKTOP}; then\n" + refusal + "fi\n") == []
+    # an exit 1 that belongs to ANOTHER if inside the refusal does not count
+    nested = refusal.replace("        exit 1\n",
+                             "        if [ -n x ]; then\n            exit 1\n        fi\n")
+    assert fde_preflight_gates(enc + nested + "fi\n") == []
+    # the reader stops at the gate's own fi: a refusal in a LATER block is not inside it
+    assert fde_preflight_gates(enc + "    true\nfi\nif ${BUILD_DESKTOP}; then\n"
+                               + refusal + "fi\n") == []
 
 
 def test_the_x86_builder_has_no_such_preflight():

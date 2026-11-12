@@ -116,7 +116,11 @@ def test_the_level_is_only_read_inside_the_compress_gate():
                 if "${COMPRESS_LEVEL}" in ln and "COMPRESS_LEVEL=" not in ln]
         assert uses, BUILDER_SCRIPTS[platform]
         for ln in uses:
-            assert ("xz -T0" in ln or "info " in ln or "_plan " in ln), \
+            # `_krc_kv COMPRESS_LEVEL` is the x86 kernel-reconfiguration contract
+            # (kernel-reconfig.env): it RECORDS the level so a rebuilt .img is recompressed
+            # with the same preset, and changes nothing about this build.
+            assert ("xz -T0" in ln or "info " in ln or "_plan " in ln
+                    or "_krc_kv COMPRESS_LEVEL" in ln), \
                 f"{BUILDER_SCRIPTS[platform]}: COMPRESS_LEVEL read outside the " \
                 f"--compress path: {ln.strip()!r}"
 

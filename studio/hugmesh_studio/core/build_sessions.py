@@ -244,6 +244,13 @@ class BuildSession:
     restarts: int = 0                 # RESTART count (== len(runs) - 1)
     runs: list = field(default_factory=list)         # dispatch timestamps, oldest first
     history: list = field(default_factory=list)      # prior runs' outcomes (RESTART)
+    # Applied kernel reconfigurations (core/kernel_reconfig.record): one row per
+    # "Kernel config…" rebuild — {image, stamp, old_kver, new_kver, old_build_ts,
+    # new_build_ts, signed, sbverify, changes[symbols], artifacts{name: sha256},
+    # superseded}. Appended, never rewritten. A RESTART/REDO rebuilds the kernel from the
+    # fragments, so the record says what the artifacts carried at the time, not now.
+    # Omitted from the saved record when empty, so older records are unchanged.
+    kernel_reconfigs: list = field(default_factory=list)
 
     def path(self) -> str:
         return os.path.join(sessions_dir(), f"{self.id}.json")
@@ -255,6 +262,8 @@ class BuildSession:
         d["history"] = _saved_form(self.history)    # RESTART archives `images` here
         if not d.get("held_domain_ca"):
             d.pop("held_domain_ca", None)
+        if not d.get("kernel_reconfigs"):
+            d.pop("kernel_reconfigs", None)
         return d
 
     @classmethod
@@ -862,4 +871,9 @@ def format_session_detail(s: BuildSession) -> str:
         lines.append(f"  image {img.get('id', '?')}: {img.get('role', '?')}"
                      f" · {img.get('platform') or 'x86'}"
                      f" · {img.get('status', '?')}{suffix}")
+    if s.kernel_reconfigs:
+        from .kernel_reconfig import describe_record
+        for row in s.kernel_reconfigs:
+            if isinstance(row, dict):
+                lines.append(f"  kernel reconfigured: {describe_record(row)}")
     return "\n".join(lines)

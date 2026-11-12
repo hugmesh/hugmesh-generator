@@ -1,0 +1,200 @@
+[ebuild  N     ] sec-policy/selinux-gpg-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-policykit-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-loadkeys-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-vlock-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-container-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-kerberos-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-rpcbind-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-kubernetes-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-networkmanager-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] app-containers/runc-1.4.3::gentoo  USE="seccomp (selinux) -apparmor -test" 2894 KiB
+[ebuild  N     ] sec-policy/selinux-vdagent-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-snort-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-privoxy-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-apache-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-squid-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-dmidecode-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sys-apps/dmidecode-3.7::gentoo  USE="(selinux) -verify-sig" 73 KiB
+[ebuild  N     ] sec-policy/selinux-switcheroo-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sys-power/switcheroo-control-3.0::gentoo  USE="(selinux) -gtk-doc -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" VIDEO_CARDS="amdgpu nouveau" 33 KiB
+[ebuild  N     ] sec-policy/selinux-devicekit-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-cryfs-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-fwupd-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-bubblewrap-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sys-apps/bubblewrap-0.12.0::gentoo  USE="(selinux) -test" 124 KiB
+[ebuild  N     ] sec-policy/selinux-apm-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-modemmanager-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-accountsd-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-wm-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] net-nds/rpcbind-1.2.8::gentoo  USE="(selinux) -debug -remotecalls -systemd -tcpd -warmstarts" 127 KiB
+[ebuild  N     ] sec-policy/selinux-rpc-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-docker-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-screen-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-entropyd-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-sudo-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-firewalld-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-ppp-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-makewhatis-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] app-text/mandoc-1.14.6-r1::gentoo  USE="(selinux) -cgi -system-man -test" 681 KiB
+[ebuild  N     ] sys-libs/efivar-39-r1:0/1::gentoo  USE="-test" 453 KiB
+[ebuild  N     ] sys-boot/efibootmgr-18-r2::gentoo  45 KiB
+[ebuild  N     ] sys-boot/grub-2.14-r5:2/2.14-r5::gentoo  USE="branding device-mapper fonts mount nls themes -doc -efiemu -libzfs -protect -sdl -secureboot (-test) -truetype -verify-sig" GRUB_PLATFORMS="efi-64 pc -coreboot -efi-32 -emu -ieee1275 (-loongson) -multiboot -qemu (-qemu-mips) -uboot -xen -xen-32 -xen-pvh" 8881 KiB
+[ebuild  N     ] sys-boot/os-prober-1.82::gentoo  27 KiB
+[ebuild  N     ] sec-policy/selinux-dracut-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-mandb-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-openrc-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N     ] sec-policy/selinux-shutdown-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild   R    ] sys-apps/sysvinit-3.15::gentoo  USE="nls (selinux*) (-ibm) -static -verify-sig" 236 KiB
+[ebuild  N     ] app-crypt/mit-krb5-1.22.2-r2::gentoo  USE="keyutils nls pkinit (selinux) -doc -lmdb -openldap -test -xinetd" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="-aes" 8543 KiB
+[ebuild  N     ] virtual/krb5-0-r1::gentoo  ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] gui-libs/gtk-4.20.4:4::gentoo  USE="X introspection vulkan (-aqua) -broadway -cloudproviders -colord -cups -examples -gstreamer -gtk-doc -sysprof -test -wayland" CPU_FLAGS_X86="-f16c" 15644 KiB
+[ebuild  N     ] sys-kernel/dracut-112::gentoo  USE="(selinux) -debug -dracut-cpio -systemd -test" 588 KiB
+[ebuild  N     ] sys-apps/haveged-1.9.21::gentoo  USE="(selinux) -static-libs -threads" 505 KiB
+[ebuild  N     ] sec-policy/selinux-virt-2.20260616_p1::gentoo  SELINUX_POLICY_TYPES="mcs mls strict targeted" 0 KiB
+[ebuild  N    ~] app-containers/containerd-2.4.0::gentoo  USE="btrfs cri device-mapper seccomp (selinux) -apparmor -test" 11925 KiB
+[ebuild  N    ~] sys-cluster/kubelet-1.37.0::gentoo  USE="(selinux)" 0 KiB
+[ebuild  N    ~] sys-cluster/kubeadm-1.37.0::gentoo  USE="(selinux)" 0 KiB
+[ebuild  N     ] net-fs/nfs-utils-2.8.5::gentoo  USE="(caps) libmount nfsv3 nfsv4 (selinux) uuid -junction -kerberos -ldap -nfsdctl -sasl -tcpd" 978 KiB
+[ebuild  N     ] x11-wm/openbox-3.6.1-r11:3::gentoo  USE="nls (selinux) -branding -debug -imlib -session -startup-notification -svg -xdg" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 941 KiB
+[ebuild  N     ] sys-power/acpid-2.0.34-r1::gentoo  USE="(selinux)" 157 KiB
+[ebuild  N     ] app-crypt/gocryptfs-2.6.1-r1::gentoo  USE="(selinux) -test -verify-sig" 3093 KiB
+[ebuild  N     ] net-proxy/privoxy-4.0.0::gentoo  USE="acl fast-redirects force image-blocking ipv6 mbedtls (selinux) ssl stats threads zlib -brotli -client-tags -compression -editor -extended-host-patterns -extended-statistics -external-filters -fuzz -graceful-termination -jit -lfs -openssl -png-images -sanitize -toggle -tools -whitelists" 1706 KiB
+[ebuild   R    ] sys-apps/man-db-2.13.1-r1::gentoo  USE="manpager nls seccomp (selinux*) zlib -static-libs -verify-sig" 2061 KiB
+[ebuild     UD ] app-crypt/gnupg-2.5.21::gentoo [2.5.24-r2::gentoo] USE="alternatives bzip2 nls readline (selinux*) smartcard ssl tofu -doc -ldap -test -tools -tpm -usb -user-socket (-verify-sig) -wks-server" 8157 KiB
+[ebuild  N     ] app-admin/sudo-1.9.17_p2::gentoo  USE="nls pam secure-path (selinux) sendmail ssl -gcrypt -ldap -offensive -sasl -skey -sssd -verify-sig" 5324 KiB
+[ebuild  N     ] net-dialup/ppp-2.5.4:0/2.5.4::gentoo  USE="pam (selinux) -activefilter -atm -systemd" 990 KiB
+[ebuild   R    ] sys-apps/openrc-0.63.3::gentoo  USE="(audit*) netifrc pam (selinux*) sysvinit unicode -bash -debug -newnet -s6 -sysv-utils" 262 KiB
+[ebuild   R    ] sys-apps/shadow-4.20.2:0/6::gentoo  USE="acl (audit*) nls pam (selinux*) -skey (-split-usr) -su -systemd -test -verify-sig" 2238 KiB
+[ebuild  N     ] sys-auth/elogind-255.24::gentoo  USE="acl (audit) pam policykit (selinux) -cgroup-hybrid -debug -doc -test" 2094 KiB
+[ebuild  N     ] sys-apps/dbus-1.16.2::gentoo  USE="X elogind (selinux) -debug -doc -static-libs -systemd -test -valgrind" ABI_X86="(64) -32 (-x32)" 1090 KiB
+[ebuild  N     ] gnome-base/dconf-0.49.0::gentoo  USE="-gtk-doc -test" 121 KiB
+[ebuild  N     ] sys-auth/polkit-126-r3::gentoo  USE="elogind gtk introspection nls pam (selinux) -examples -kde -systemd -test" 446 KiB
+[ebuild  N     ] app-accessibility/at-spi2-core-2.58.8:2::gentoo  USE="X introspection -dbus-broker -gtk-doc -systemd -test" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 576 KiB
+[ebuild  N     ] net-libs/libpcap-1.10.7::gentoo  USE="dbus netlink -bluetooth -rdma -remote -static-libs -test -usb -verify-sig -yydebug" ABI_X86="(64) -32 (-x32)" 972 KiB
+[ebuild  N     ] net-misc/modemmanager-1.24.2:0/1::gentoo  USE="elogind introspection mbim qmi qrtr (selinux) udev -gtk-doc -policykit -systemd -test -vala" 1483 KiB
+[ebuild  N     ] net-libs/daq-2.0.7-r1::gentoo  USE="afpacket dump ipv6 pcap -ipq -nfq -static-libs" 509 KiB
+[ebuild  N     ] x11-misc/xdg-utils-1.2.1-r11::gentoo  USE="X dbus -doc -gnome -perl -plasma" 287 KiB
+[ebuild  N     ] kde-frameworks/kf-env-6:6::gentoo  0 KiB
+[ebuild  N     ] sys-libs/libnvme-1.16.2:0/1::gentoo  USE="dbus json ssl -debug -examples -io-uring -keyutils -python -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 820 KiB
+[ebuild  N     ] sys-libs/libblockdev-3.5.0:0/3::gentoo  USE="cryptsetup nvme tools -device-mapper -escrow -gtk-doc -introspection -lvm -python -smart -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 1164 KiB
+[ebuild  N     ] sys-fs/udisks-2.11.2:2::gentoo  USE="acl daemon elogind introspection nls (selinux) -debug -lvm -smart -systemd" 1932 KiB
+[ebuild  N     ] sys-apps/fwupd-2.1.7::gentoo  USE="elogind gnutls readline (selinux) -amdgpu -bash-completion -bluetooth -gtk-doc -introspection -minimal -modemmanager -policykit (-seccomp) -systemd -test -tpm -uefi -valgrind -verify-sig" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 4941 KiB
+[ebuild  N     ] sys-apps/accountsservice-26.27.3:0/1::gentoo  USE="elogind introspection (selinux) -doc -gtk-doc -systemd -test -vala -xcrypt" 657 KiB
+[ebuild  N     ] dev-libs/atk-2.46.0::gentoo  USE="introspection" ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] dev-python/dbus-python-1.4.0-r1::gentoo  USE="-doc -examples -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 165 KiB
+[ebuild  N     ] net-wireless/wpa_supplicant-2.11-r4::gentoo  USE="ap dbus fils mbo mesh readline (selinux) -broadcom-sta -eap-sim -eapol-test -gui -macsec -p2p -privsep -smartcard -tkip -uncommon-eap-types -wep -wps" 3752 KiB
+[ebuild  N     ] net-misc/networkmanager-1.56.1::gentoo  USE="(audit) concheck elogind introspection modemmanager nss ppp (selinux) tools wext wifi -bluetooth -connection-sharing -debug -dhclient -dhcpcd -gnutls -gtk-doc -iptables -iwd -libedit -nbft -nftables -ofono -ovs -policykit -psl -resolvconf -syslog -systemd -teamd -test -vala" ABI_X86="(64) -32 (-x32)" 6118 KiB
+[ebuild  N     ] x11-libs/gtk+-3.24.52:3::gentoo  USE="X introspection wayland (-aqua) -broadway -cloudproviders -colord -cups -examples -gtk-doc -sysprof -test -vim-syntax -xinerama" ABI_X86="(64) -32 (-x32)" 13260 KiB
+[ebuild  N    ~] lxde-base/lxsession-0.5.6::gentoo  USE="nls -upower" 306 KiB
+[ebuild  N     ] x11-themes/adwaita-icon-theme-legacy-46.2::gentoo  2009 KiB
+[ebuild  N     ] x11-themes/adwaita-icon-theme-49.0::gentoo  USE="-branding" 4410 KiB
+[ebuild  N     ] virtual/freedesktop-icon-theme-0-r4::gentoo  0 KiB
+[ebuild  N     ] dev-libs/keybinder-0.3.2-r300:3::gentoo  USE="introspection" 371 KiB
+[ebuild  N     ] x11-libs/libwnck-43.3:3::gentoo  USE="introspection -gtk-doc -startup-notification -tools" 446 KiB
+[ebuild   R    ] sys-libs/pam-1.7.2::gentoo  USE="(audit*) elogind* nls (selinux*) -berkdb -debug -examples -nis -systemd -verify-sig" ABI_X86="(64) -32 (-x32)" 500 KiB
+[ebuild   R    ] sys-auth/passwdqc-2.1.0-r1::gentoo  USE="(audit*) -verify-sig" 206 KiB
+[ebuild   R    ] sys-auth/pambase-20251104-r1::gentoo  USE="(caps*) elogind* nullok passwdqc (selinux*) yescrypt -debug -gnome-keyring -homed -minimal -mktemp -pam_krb5 (-pam_ssh) -pwhistory -pwquality -securetty -sha512 -sssd -systemd" 5 KiB
+[ebuild  N     ] x11-base/xorg-server-21.1.24:0/21.1.24::gentoo  USE="elogind (selinux) udev xorg -debug -minimal -suid -systemd -test -unwind -xcsecurity -xephyr -xnest -xvfb" 4954 KiB
+[ebuild  N     ] x11-drivers/xf86-input-libinput-1.5.0::gentoo  323 KiB
+[ebuild  N     ] x11-drivers/xf86-video-nouveau-1.0.18::gentoo  537 KiB
+[ebuild  N     ] x11-drivers/xf86-video-amdgpu-25.0.0-r1::gentoo  USE="udev" 74 KiB
+[ebuild  N     ] x11-drivers/xf86-video-ati-22.0.0::gentoo  USE="udev" 739 KiB
+[ebuild     UD ] net-misc/openssh-10.4_p1-r1::gentoo [10.6_p2::gentoo] USE="(audit*) pam seccomp (selinux*) ssl (-debug) -kerberos -ldns -libedit -livecd -security-key -static -test -verify-sig" 2268 KiB
+[ebuild   R    ] sys-apps/kbd-2.10.0::gentoo  USE="bzip2 nls pam (selinux*) zlib -lzma -test -xkb -zstd" 1747 KiB
+[ebuild   R    ] sys-process/procps-4.0.6:0/1-ng::gentoo  USE="elogind* kill ncurses nls (selinux*) (unicode) -modern-top -skill -static-libs -systemd -test -verify-sig" ABI_X86="(64) -32 (-x32)" 1544 KiB
+[ebuild  N     ] sys-libs/pam_wrapper-1.1.8::gentoo  USE="-test" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 92 KiB
+[ebuild  N     ] net-firewall/firewalld-2.5.2::gentoo  USE="(selinux) -gui -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 1415 KiB
+[ebuild  N     ] sys-process/cronie-1.7.2-r1::gentoo  USE="anacron (audit) inotify pam (selinux)" 267 KiB
+[ebuild  N     ] app-misc/screen-4.9.1-r2::gentoo  USE="pam (selinux) -debug -multiuser -nethack" 1017 KiB
+[ebuild  N     ] net-fs/cifs-utils-7.5::gentoo  USE="ads (caps) pam python -acl -creds -systemd" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 414 KiB
+[ebuild  N     ] lxde-base/lxappearance-0.6.4-r2::gentoo  107 KiB
+[ebuild  N     ] www-client/netsurf-3.11-r1::gentoo  USE="gif gtk javascript jpeg png psl svg svgtiny webp -bmp -fbcon -rosprite -truetype" 4211 KiB
+[ebuild  N     ] app-emulation/spice-vdagent-0.22.1::gentoo  USE="gtk (selinux) -systemd" 162 KiB
+[ebuild  N     ] net-proxy/squid-7.7::gentoo  USE="(caps) htcp pam (selinux) ssl wccp wccpv2 -ecap -esi -gnutls -kerberos -ldap -logrotate -mysql -nis -perl -postgres -qos -radius -samba -sasl -snmp -sqlite -ssl-crtd -systemd -test -tproxy -valgrind -verify-sig" 2381 KiB
+[ebuild  N    ~] net-analyzer/snort-2.9.20-r1::gentoo  USE="active-response flexresp3 gre (libtirpc) non-ether-decoders perfprofiling ppm react (selinux) threads -control-socket -debug -file-inspect -high-availability -inline-init-failopen -large-pcap-64bit -linux-smp-stats -open-appid -reload-error-restart -shared-rep -side-channel -sourcefire" LUA_SINGLE_TARGET="luajit" 6846 KiB
+[ebuild  N     ] app-crypt/libsecret-0.21.7::gentoo  USE="crypt gcrypt introspection pam (test-rust) vala -gnutls -gtk-doc -test -tpm" ABI_X86="(64) -32 (-x32)" 203 KiB
+[ebuild  N     ] app-crypt/gcr-4.4.0.1-r1:4/gcr-4.4-gck-2.2::gentoo  USE="gtk introspection vala -gnutls -gtk-doc -systemd -test" 728 KiB
+[ebuild  N     ] app-crypt/gcr-3.41.2-r2:0/1::gentoo  USE="X gtk introspection vala -gtk-doc -systemd -test -wayland" 1011 KiB
+[ebuild  N     ] gnome-base/gnome-keyring-48.0-r1::gentoo  USE="(caps) pam (selinux) ssh-agent -systemd -test" 750 KiB
+[ebuild  N     ] virtual/secret-service-0-r2::gentoo  0 KiB
+[ebuild   R    ] app-crypt/pinentry-1.3.3::gentoo  USE="X* (caps*) gtk* ncurses (selinux*) -efl -emacs -keyring -qt6 (-verify-sig) -wayland" 607 KiB
+[ebuild  N     ] net-libs/libnma-1.10.6-r2::gentoo  USE="X introspection pkcs11 -gtk-doc -vala" 687 KiB
+[ebuild  N     ] gnome-base/gvfs-1.58.4::gentoo  USE="elogind gcr http sftp udev udisks -afp -archive -bluray -cdda -cdr -fuse -gnome-online-accounts -google -gphoto2 -ios -keyring -mtp -nfs -onedrive -policykit -samba -systemd -test -zeroconf" 1266 KiB
+[ebuild  N    ~] x11-libs/libfm-1.3.2-r1:0/5.3.1::gentoo  USE="automount gtk -debug -doc -examples -exif -udisks -vala" 0 KiB
+[ebuild  N     ] gnome-extra/nm-applet-1.36.0::gentoo  USE="modemmanager (selinux) -appindicator -teamd" 1878 KiB
+[ebuild  N    ~] lxde-base/lxpanel-0.10.1-r2::gentoo  USE="alsa -wifi" 1512 KiB
+[ebuild  N    ~] x11-misc/pcmanfm-1.3.2-r2::gentoo  USE="-debug" 415 KiB
+[ebuild  N     ] dev-qt/qtbase-6.11.2-r2:6/6.11.2::gentoo  USE="X concurrent dbus gtk gui icu libinput libproxy network nls opengl sql sqlite ssl udev vulkan wayland widgets xml (zstd) -accessibility -brotli -cups -custom-cflags -eglfs -evdev -gles2-only -gssapi -io-uring -journald -mysql -oci8 -odbc -postgres -renderdoc -sctp -syslog -test -tslib" 49398 KiB
+[ebuild  N     ] dev-qt/qttools-6.11.2:6/6.11.2::gentoo  USE="assistant linguist opengl qdbus vulkan widgets (zstd) -custom-cflags -designer -distancefieldgenerator -gles2-only -kmap2qmap -pixeltool -qdoc -qml -qmlls -qtattributionsscanner -qtdiag -qtplugininfo" LLVM_SLOT="22 -17 -18 -19 -20 -21" 9992 KiB
+[ebuild  N     ] dev-qt/qttranslations-6.11.2:6/6.11.2::gentoo  USE="-custom-cflags" 1652 KiB
+[ebuild  N     ] kde-frameworks/kwidgetsaddons-6.29.0:6/6.29::gentoo  USE="-debug -designer -test" 4131 KiB
+[ebuild  N     ] kde-frameworks/breeze-icons-6.29.0:6/6.29::gentoo  USE="-test" 2058 KiB
+[ebuild  N     ] kde-frameworks/karchive-6.29.0:6/6.29::gentoo  USE="crypt zstd -debug -test" 812 KiB
+[ebuild  N     ] dev-qt/qtsvg-6.11.2:6/6.11.2::gentoo  USE="-custom-cflags -test" 2287 KiB
+[ebuild  N     ] dev-qt/qtshadertools-6.11.2:6/6.11.2::gentoo  USE="-custom-cflags -test" 1189 KiB
+[ebuild  N     ] kde-frameworks/kdbusaddons-6.29.0:6/6.29::gentoo  USE="X -debug -test" 46 KiB
+[ebuild  N     ] kde-frameworks/kglobalaccel-6.29.0:6/6.29::gentoo  USE="X -debug -test" 2177 KiB
+[ebuild  N     ] kde-frameworks/kitemviews-6.29.0:6/6.29::gentoo  USE="-debug -designer -test" 2134 KiB
+[ebuild  N     ] kde-frameworks/kcodecs-6.29.0:6/6.29::gentoo  USE="-debug -test" 2421 KiB
+[ebuild  N     ] dev-libs/appstream-1.0.6:0/5::gentoo  USE="introspection qt6 -apt -compose -doc -systemd -test -vala" 2673 KiB
+[ebuild  N     ] kde-frameworks/attica-6.29.0:6/6.29::gentoo  USE="-debug -test" 67 KiB
+[ebuild  N     ] sys-auth/polkit-qt-0.201.1::gentoo  58 KiB
+[ebuild  N     ] kde-frameworks/ksecretd-services-6.29.0:6::gentoo  USE="-systemd" 374 KiB
+[ebuild  N     ] dev-libs/qcoro-0.13.0::gentoo  USE="dbus network -examples -qml -test -websockets" 160 KiB
+[ebuild  N     ] kde-frameworks/kidletime-6.29.0:6/6.29::gentoo  USE="X -debug -wayland -xscreensaver" 31 KiB
+[ebuild  N     ] dev-libs/plasma-wayland-protocols-1.21.0::gentoo  USE="-test" 49 KiB
+[ebuild  N     ] dev-qt/qtdeclarative-6.11.2-r1:6/6.11.2::gentoo  USE="network opengl sql ssl vulkan wayland widgets -accessibility -custom-cflags -jit -qmlls -svg" 37872 KiB
+[ebuild  N     ] kde-frameworks/kconfig-6.29.0:6/6.29::gentoo  USE="dbus qml -debug -test" 383 KiB
+[ebuild  N     ] kde-frameworks/kcoreaddons-6.29.0:6/6.29::gentoo  USE="dbus -debug -test" 2466 KiB
+[ebuild  N     ] kde-frameworks/ki18n-6.29.0:6/6.29::gentoo  USE="-debug -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 (-python3_15)" 2978 KiB
+[ebuild  N     ] kde-frameworks/kguiaddons-6.29.0-r1:6/6.29::gentoo  USE="X dbus -debug -test -wayland" 95 KiB
+[ebuild  N     ] kde-frameworks/kirigami-6.29.0-r1:6/6.29::gentoo  USE="openmp -debug -examples -test" 662 KiB
+[ebuild  N     ] kde-frameworks/kwindowsystem-6.29.0:6/6.29::gentoo  USE="X -debug -test -wayland" 2267 KiB
+[ebuild  N     ] dev-qt/qt5compat-6.11.2:6/6.11.2::gentoo  USE="gui icu qml -custom-cflags -test" 14279 KiB
+[ebuild  N     ] kde-frameworks/sonnet-6.29.0:6/6.29::gentoo  USE="hunspell qml -aspell -debug -designer -test" 2358 KiB
+[ebuild  N     ] kde-frameworks/kitemmodels-6.29.0:6/6.29::gentoo  USE="-debug -test" 385 KiB
+[ebuild  N     ] kde-frameworks/solid-6.29.0:6/6.29::gentoo  USE="-debug -ios -test" 311 KiB
+[ebuild  N     ] dev-qt/qtquicktimeline-6.11.2:6/6.11.2::gentoo  USE="-custom-cflags -test" 96 KiB
+[ebuild  N     ] kde-frameworks/kcolorscheme-6.29.0:6/6.29::gentoo  USE="-debug" 51 KiB
+[ebuild  N     ] kde-frameworks/kcrash-6.29.0:6/6.29::gentoo  USE="X -debug -test" 34 KiB
+[ebuild  N     ] kde-frameworks/knotifications-6.29.0:6/6.29::gentoo  USE="-debug" 67 KiB
+[ebuild  N     ] kde-frameworks/kdoctools-6.29.0:6/6.29::gentoo  USE="nls -debug -test" 451 KiB
+[ebuild  N     ] kde-frameworks/kpackage-6.29.0:6/6.29::gentoo  USE="-debug -man -test" 179 KiB
+[ebuild  N     ] kde-frameworks/kcompletion-6.29.0:6/6.29::gentoo  USE="-debug -designer -test" 2204 KiB
+[ebuild  N    ~] sys-libs/kpmcore-26.08.1:6/10::gentoo  USE="-debug" 667 KiB
+[ebuild  N     ] app-crypt/qca-2.3.10-r1:2::gentoo  USE="ssl -botan -debug -doc -examples -gcrypt -gpg -logger -nss -pkcs11 -sasl -softstore -test" 747 KiB
+[ebuild  N     ] kde-frameworks/kstatusnotifieritem-6.29.0:6/6.29::gentoo  USE="X -debug -test" 50 KiB
+[ebuild  N     ] dev-qt/qtquick3d-6.11.2:6/6.11.2::gentoo  USE="opengl vulkan -custom-cflags -test" 68309 KiB
+[ebuild  N     ] kde-plasma/plasma-activities-6.6.6-r1:6/7::gentoo  USE="-debug -doc -test" 62 KiB
+[ebuild  N     ] kde-frameworks/kiconthemes-6.29.0:6/6.29::gentoo  USE="-debug -designer -test" 1226 KiB
+[ebuild  N     ] kde-frameworks/kservice-6.29.0:6/6.29::gentoo  USE="man -debug -test" 2319 KiB
+[ebuild  N     ] kde-frameworks/kconfigwidgets-6.29.0:6/6.29::gentoo  USE="-debug -designer -test" 2436 KiB
+[ebuild  N     ] kde-frameworks/kjobwidgets-6.29.0:6/6.29::gentoo  USE="X -debug -test" 2148 KiB
+[ebuild  N     ] dev-qt/qtmultimedia-6.11.2:6/6.11.2::gentoo  USE="X dbus ffmpeg opengl qml v4l vaapi vulkan -alsa -custom-cflags -eglfs -gstreamer -pipewire -pulseaudio -test -wayland" 10015 KiB
+[ebuild  N     ] kde-frameworks/ktextwidgets-6.29.0:6/6.29::gentoo  USE="-debug -designer -speech -test" 2388 KiB
+[ebuild  N     ] kde-plasma/kde-cli-tools-common-6.6.6-r1::gentoo  USE="handbook" 623 KiB
+[ebuild  N     ] kde-frameworks/ksvg-6.29.0:6/6.29::gentoo  USE="-debug -test" 85 KiB
+[ebuild  N     ] kde-frameworks/kxmlgui-6.29.0:6/6.29::gentoo  USE="-debug -designer -test" 2810 KiB
+[ebuild  N     ] kde-frameworks/kbookmarks-6.29.0:6/6.29::gentoo  USE="-debug -test" 1069 KiB
+[ebuild  N     ] kde-frameworks/kded-6.29.0:6/6.29::gentoo  USE="man -debug" 34 KiB
+[ebuild  N     ] kde-frameworks/prison-6.29.0:6/6.29::gentoo  USE="qml -debug -test" 57 KiB
+[ebuild  N     ] kde-frameworks/qqc2-desktop-style-6.29.0:6/6.29::gentoo  USE="-debug -test" 91 KiB
+[ebuild  N     ] kde-frameworks/kwallet-6.29.0-r1:6/6.29::gentoo  USE="-debug -minimal -test" 33 KiB
+[ebuild  N     ] kde-frameworks/kwallet-runtime-6.29.0-r1:6/6.29::gentoo  USE="X (keyring) (legacy-kwallet) man -debug -gpg -test" 0 KiB
+[ebuild  N     ] kde-frameworks/kio-6.29.0:6/6.29::gentoo  USE="X acl handbook kwallet -debug -designer -test -wayland" 3502 KiB
+[ebuild  N     ] kde-frameworks/kcmutils-6.29.0:6/6.29::gentoo  USE="-debug -test" 2347 KiB
+[ebuild  N     ] kde-frameworks/kparts-6.29.0:6/6.29::gentoo  USE="-debug -test" 2303 KiB
+[ebuild  N     ] kde-plasma/keditfiletype-6.6.6-r1::gentoo  USE="-debug -test" 0 KiB
+[ebuild  N     ] kde-frameworks/knewstuff-6.29.0:6/6.29::gentoo  USE="-debug -designer -opds" 2978 KiB
+[ebuild  N     ] kde-frameworks/purpose-6.29.0:6/6.29::gentoo  USE="-bluetooth -debug -test -webengine" 192 KiB
+[ebuild  N     ] kde-plasma/libplasma-6.6.6-r1:6/7::gentoo  USE="-debug -doc -gles2-only -test" 1926 KiB
+[ebuild  N    ~] app-admin/calamares-3.4.2-r1::gentoo  USE="-debug -livecd -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 4825 KiB
+[ebuild  N     ] dev-libs/kirigami-addons-1.12.1:6::gentoo  USE="-debug -test" 2750 KiB
+[ebuild  N     ] media-video/pipewire-1.6.8:0/0.4::gentoo  USE="X dbus elogind readline (selinux) ssl -bluetooth -doc -echo-cancel -extra -ffmpeg -fftw -flatpak -gsettings -gstreamer -ieee1394 -jack-client -jack-sdk -libcamera -loudness -lv2 -man -modemmanager -pipewire-alsa -pulseaudio -roc -sofa -sound-server (-system-service) -systemd -test -v4l -zeroconf" ABI_X86="(64) -32 (-x32)" 2089 KiB
+[ebuild  N     ] media-video/wireplumber-0.5.15:0/0.5::gentoo  USE="elogind -doc (-system-service) -systemd -test" LUA_SINGLE_TARGET="lua5-4 -lua5-3" 467 KiB
+[ebuild  N     ] sys-apps/xdg-desktop-portal-1.20.4-r1::gentoo  USE="seccomp udev -flatpak -geolocation -gstreamer -systemd -test" 1201 KiB
+[ebuild  N     ] sys-apps/flatpak-1.18.1::gentoo  USE="X seccomp -doc -introspection -policykit -systemd -test" 1324 KiB
+[ebuild  N     ] kde-plasma/discover-6.6.6-r1:6::gentoo  USE="firmware flatpak -debug -snap -telemetry -test -webengine" 1121 KiB
+[ebuild  N     ] x11-misc/lightdm-1.32.0-r5::gentoo  USE="X (audit) elogind gnome gtk introspection -non-root -systemd -vala" 508 KiB
+[ebuild  N     ] x11-misc/lightdm-gtk-greeter-2.0.9-r1::gentoo  USE="-appindicator -branding" 589 KiB
+Total: 687 packages (41 downgrades, 617 new, 4 in new slots, 25 reinstalls), Size of downloads: 4185606 KiB

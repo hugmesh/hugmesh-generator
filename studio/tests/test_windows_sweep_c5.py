@@ -31,6 +31,26 @@ def _isolated_state_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
+#: The QApplication the two Sessions-page tests build their widgets on, HELD for the
+#: whole module. ``QApplication.instance() or QApplication([...])`` written as a bare
+#: statement drops the new application on the spot; Python frees it, and the widget built
+#: on the next line aborts the interpreter ("Fatal Python error: Aborted", rc 134). So
+#: this file, run on its own, died at the first of them, and passed only inside a run
+#: where an earlier file had left an application alive (the Windows job's list).
+#: tests/test_qt_suite_guards.py fails on any test file that drops one again.
+_QAPP = []
+
+
+def _qapp():
+    """The held QApplication. Imports Qt lazily: this file also runs in the Qt-free
+    pull-request job, where only the two tests that call this one skip."""
+    from hugmesh_studio.gui.qt import QtWidgets
+    if not _QAPP:
+        _QAPP.append(QtWidgets.QApplication.instance()
+                     or QtWidgets.QApplication(["c5"]))
+    return _QAPP[0]
+
+
 def _finished_session(tmp_path):
     # a space and non-ASCII in the out dir, as under C:\Users\Jörg Müller\...
     out = tmp_path / "out dir Jörg"
@@ -219,7 +239,7 @@ def test_sessions_page_delete_refusal_is_shown(tmp_path, monkeypatch):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from hugmesh_studio.gui.pages import sessions_widget as sw
     from hugmesh_studio.gui.qt import QtWidgets
-    QtWidgets.QApplication.instance() or QtWidgets.QApplication(["c5"])
+    _qapp()
     s = _kept_tree(tmp_path, monkeypatch)
     shown = []
     monkeypatch.setattr(QtWidgets.QMessageBox, "exec",
@@ -292,7 +312,6 @@ def test_non_object_image_rows_never_crash_the_sessions_page(tmp_path):
     pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding installed")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from hugmesh_studio.gui.pages import sessions_widget as sw
-    from hugmesh_studio.gui.qt import QtWidgets
     _write_record({"id": "20261030-020000-aaaaaa", "status": "failed",
                    "images": [1, {"id": "a", "status": "failed"}]})
     s = bs.find("20261030-020000-aaaaaa")
@@ -301,7 +320,7 @@ def test_non_object_image_rows_never_crash_the_sessions_page(tmp_path):
     assert r.status_text().endswith("failed · 1 of 2 images")
     assert "[None] None" in sw._SessionDetailDialog._body(r)
 
-    QtWidgets.QApplication.instance() or QtWidgets.QApplication(["c5"])
+    _qapp()
 
     class _Wiz:
         class cfg:

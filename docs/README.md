@@ -20,6 +20,7 @@ The docs for the image/infra layer. State key used throughout:
 - [`DEVOPS.md`](DEVOPS.md) — GitLab CI, runner, binhost, build distribution.
 - [`BUILD-MATRIX.md`](BUILD-MATRIX.md) — the canonical platform×role×env build matrix, the four build channels (CLI / make / ncurses menu / Studio GUI), the **all-options-in-all-menus** rule + the `make matrix-check` harness (✅).
 - [`IMAGE-INVENTORY.md`](IMAGE-INVENTORY.md) — generated full cross-product of every advertised image × every build channel (131 distinct images, 68 with a channel gap); regenerate with `scripts/emit-image-inventory.py`, gated by `make inventory-check` — do not hand-edit.
+- [`KERNEL-RECONFIG.md`](KERNEL-RECONFIG.md) — **Kernel config…** on the Build page: menuconfig a built x86 image, then rebuild only the kernel, re-sign the UKI with the build's key and repackage the stage4/.img/ISOs (`scripts/kernel-reconfig-x86.sh`); also why the live ISO no longer ships the module-signing key. Proven on a real build: the key fix, menuconfig mid-build, the kernel rebuild, re-signing and stage4. ⚠️ The `.img` patch and the live-squashfs repack have not yet run end to end on a real build, and no boot of a rebuilt image has been proven; the two ISO rewrites were run by hand on real ISOs.
 - [`SHARED-BINPKG.md`](SHARED-BINPKG.md) — the shared per-arch binpkg pools, stage3 seed cache and fleet distfiles, plus the CHOST/`-mcpu` pool-fingerprint guard (✅ mechanism + guard shipped; ⚠️ the compile-once speedup itself is still owed a real cross-build to prove).
 - [`BINPKG-MEASUREMENT-PLAN.md`](BINPKG-MEASUREMENT-PLAN.md) — the protocol and the log-reading instrument (`make binpkg-reuse-report`) for the compile-once binpkg speedup that `SHARED-BINPKG.md` lists as unproven, plus what the fingerprint guard does and does not prove (✅ harness, tested on synthetic logs and real-log excerpts; ⚠️ no real measurement yet — operator-only).
 - [`PYTHON-TARGETS-SEED-DRIFT.md`](PYTHON-TARGETS-SEED-DRIFT.md) — why `PYTHON_TARGETS`/`PYTHON_SINGLE_TARGET` are **derived from the stage3 seed** and never hardcoded. It covers portage's make.conf-replaces vs package.use-adds semantics, the two mirror-image fleet failures a frozen `python3_NN` caused (2026-07-16 autounmask wall, 2026-07-29 `dev-python` slot conflict), and what the guard now asserts. **Read this before touching a `python3_NN` literal anywhere.**
@@ -70,6 +71,7 @@ The docs for the image/infra layer. State key used throughout:
 - [`GAMES-APPSTORE.md`](GAMES-APPSTORE.md) — per-domain FOSS game-server catalog + instance lifecycle.
 - [`EDGE-AI.md`](EDGE-AI.md) — GPU inference node serving an OpenAI-compatible model API to the mesh (DEFAULT-OFF, GPU-gated).
 - [`LOCAL-AI-ASSISTANT.md`](LOCAL-AI-ASSISTANT.md) — set up Ollama on your own PC from the CLI, choose a local coding model for an 8 GB GPU, run a code assistant on a scratch copy of the mesh code (`scripts/local-ai-bench.sh` measures the models on your machine), and run it all without Claude: `scripts/local-ai.sh` (queue, worker, drafts, chat, watch), the Studio's Local AI bar on every page, the text UI's F2 screen, and `--local-ai-status` / `--local-ai-prompt` on the command line.
+- [`HEADSCALE-DERP.md`](HEADSCALE-DERP.md) — headscale's built-in DERP relay (on by default, offline-first), the public Tailscale map opt-in (`--headscale-public-derp` / `HEADSCALE_PUBLIC_DERP`), and the ports it needs.
 - [`COTURN.md`](COTURN.md) — TURN/STUN relay for Matrix (tuwunel) audio/video (DEFAULT-OFF, runtime-only slug).
 - [`GROUP-CALL-SFU.md`](GROUP-CALL-SFU.md) — MatrixRTC group calls on a LiveKit SFU (🔭 design + staged plan; client half dark in matrix-ui, server half not built).
 - [`TOR-HIDDEN-SERVICE.md`](TOR-HIDDEN-SERVICE.md) — Tor v3 hidden-service (onion) gateway exposure (DEFAULT-OFF).
@@ -88,6 +90,7 @@ The docs for the image/infra layer. State key used throughout:
 - [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) — per-user device images (FD-04 ✅ shipped; FD-06/07/08 + desktop-app governance 🔭 deferred).
 - [`MDM.md`](MDM.md) — the fourth onboarding form (✅ merged): verified GrapheneOS onto a USB-connected Pixel → attest → Headwind MDM enroll → mesh enroll → escrowed enterprise profile → device-registry ingest (`scripts/phone-wizard.sh`); real pre-deploy gaps remain (see its Deferred section).
 - [`STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md) — hardened standalone NVIDIA desktop images (not a cluster node).
+- [`design/PLATFORM-EXPANSION.md`](design/PLATFORM-EXPANSION.md) — Studio hosts beyond Linux and Windows (macOS finish, BSD, Solaris and illumos), a 64-bit Solaris omnibus option, RISC-V and MIPS images, and what happens to every planned device (🔭 design only; every lane is held until the operator confirms).
 
 ## Testing
 

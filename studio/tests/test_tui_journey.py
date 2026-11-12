@@ -427,7 +427,8 @@ def test_external_idp_is_listed_but_refused_with_the_reason():
 # ── the walk ends in a config the GUI/CLI can build ────────────────────────────────
 def test_standalone_walk_saves_a_loadable_config(tmp_path):
     path = tmp_path / "standalone.json"
-    script = "\n".join(["", "", "", "", "", "", "", "", f"s {path}", "q"]) + "\n"
+    # the ninth Enter walks the Desktop step (2026-11-11), which a standalone desktop visits
+    script = "\n".join(["", "", "", "", "", "", "", "", "", f"s {path}", "q"]) + "\n"
     text = _run_plain(script)
     assert f"saved to {path}" in text
     cfg = ImageConfig.load(str(path))
