@@ -480,9 +480,9 @@ def main(argv=None) -> int:
 
     if args.desktop_pretend:
         from .core import desktop_cli
-        if not _generator_dir_or_say(args.generator_dir):
+        if not _generator_dir_or_say(_generator_dir(args)):
             return 2
-        return desktop_cli.pretend(args.desktop_pretend, generator_dir=args.generator_dir,
+        return desktop_cli.pretend(args.desktop_pretend, generator_dir=_generator_dir(args),
                                    image=args.image, as_json=args.json,
                                    apply_fixes=args.apply_portage_fixes,
                                    backend=None if args.backend == "auto" else args.backend)
