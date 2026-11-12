@@ -11,7 +11,7 @@ Runs on the ubuntu-latest runner, never in a guest. Two modes:
 
                  python3 tests/guest-facts/runner_side.py image --out DIR \\
                      --action vmactions/freebsd-vm@SHA --release 15.1 \\
-                     --data-dir "$RUNNER_TEMP/vm-data" --actions-dir "$RUNNER_WORKSPACE/../_actions"
+                     --data-dir "$HOME/vm-data" --actions-dir "$RUNNER_WORKSPACE/../_actions"
 
   summarize  after every guest job: read the per-guest fixture directories and
              write SUMMARY.md (which install line worked, per guest; the DragonFly
@@ -106,7 +106,33 @@ def _worked(rows: list[dict[str, str]], component: str, os_only: bool = False) -
                 continue
             return f"`{r['line']}` ({r['kind']})"
     tried = sum(1 for r in rows if r["component"] == component and not (os_only and r["kind"] == "pip"))
-    return f"none worked ({tried} tried)"
+    return f"none worked ({tried} tried)" if tried else "not tried"
+
+
+def _os_statement(rows: list[dict[str, str]], component: str, guest_dir: str) -> str:
+    """FOUND / NOT FOUND / NOT TRIED for a module from the OS packages (pip excluded).
+
+    NOT FOUND is a measurement: at least one OS line ran and the module still did not
+    import. When no line ran, the statement is NOT TRIED, its cause is read from the
+    python rows of install.tsv, and the catalog search is cited only if it was recorded.
+    """
+    result = _worked(rows, component, os_only=True)
+    if result != "not tried":
+        return f"NOT FOUND ({result})" if result.startswith("none worked") else f"FOUND {result}"
+    py_rows = [r for r in rows if r["component"] == "python"]
+    if not py_rows:
+        cause = "install.tsv has no python rows"
+    elif not any(r["imports"] == "yes" for r in py_rows):
+        cause = f"no Python 3.11+ after {len(py_rows)} python line(s)"
+    else:
+        cause = "a Python 3.11+ was found, but no line for it was recorded"
+    search = os.path.join(guest_dir, f"search-{component}.txt")
+    if os.path.exists(search):
+        hits = _first_line(search)
+        cited = f"catalog search rc {_rc(search)}, first line: {hits}, in search-{component}.txt"
+    else:
+        cited = "catalog search not recorded"
+    return f"NOT TRIED ({cause}; {cited})"
 
 
 def summarize(root: str) -> int:
@@ -147,11 +173,10 @@ def summarize(root: str) -> int:
         else:
             sizing_lines.append(f"- {guest}: no sizing run")
         if guest == "dragonfly":
-            urwid_os = _worked(inst, "urwid", os_only=True)
-            pyqt = _worked(inst, "pyqt6", os_only=True)
+            # The GUI binding the design names for DragonFly is PyQt6, not PySide6.
             dragonfly = (f"DragonFly {_first_line(os.path.join(d, 'uname-r.txt'))} (the release the VM action booted): "
-                         f"urwid from the OS packages: {'FOUND ' + urwid_os if 'none worked' not in urwid_os else 'NOT FOUND (' + urwid_os + ')'}; "
-                         f"PyQt6 from the OS packages: {'FOUND ' + pyqt if 'none worked' not in pyqt else 'NOT FOUND (' + pyqt + ')'}.")
+                         f"urwid from the OS packages: {_os_statement(inst, 'urwid', d)}; "
+                         f"PyQt6 from the OS packages: {_os_statement(inst, 'pyqt6', d)}.")
     contract = sorted(set.intersection(*green_sets)) if green_sets else []
     lines += ["", dragonfly, "", "## Contract sizing (named-file text-UI and CLI list)", ""] + sizing_lines
     lines += ["", f"{len(contract)} files were green on every guest whose sizing run finished "

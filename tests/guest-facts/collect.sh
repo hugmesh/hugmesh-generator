@@ -22,10 +22,15 @@
 # `isainfo` exists only on SunOS, `sysctl` does not exist on Solaris. Every probe
 # records its command line, its output and `rc=N`, and one row in probes.tsv.
 # The script always exits 0 so the VM action copies OUTDIR back to the runner.
+#
+# It reads no knob from the environment: the workflow sets no `envs:`, so nothing a
+# person could set on the runner reaches this script (only GITHUB_* and CI do).
 set -u
 
-guest=${1:?usage: collect.sh GUEST OUTDIR}
-out=${2:?usage: collect.sh GUEST OUTDIR}
+guest=${1:-} out=${2:-}
+if [ -z "$guest" ] || [ -z "$out" ]; then
+  echo "usage: collect.sh GUEST OUTDIR" >&2; exit 0
+fi
 repo=$(pwd)
 mkdir -p "$out" || exit 0
 out=$(cd "$out" && pwd)
@@ -118,8 +123,22 @@ probe selfcheck-stock sh -c 'cd studio && exec python3 -m hugmesh_studio --self-
 printf 'component\tkind\tinstall_rc\timports\tline\n' > "$out/install.tsv"
 n_try=0
 
+# Catalog search terms, one per component. A term has to match the package names the
+# static lines use. FreeBSD ports name PyQt6 py3NN-qt6-pyqt (devel/py-qt6-pyqt:
+# PKGNAMEPREFIX py3NN-qt6-, PORTNAME pyqt), so `pyqt6` would miss it; DragonFly's
+# DPorts derive from those ports. The OpenBSD and NetBSD terms are not yet checked
+# against their catalogs; the recorded search output is what settles them.
+case "$guest" in
+  freebsd|dragonfly) t_urwid=urwid t_pyside=pyside6 t_pyqt=qt6-pyqt ;;
+  openbsd|netbsd)    t_urwid=urwid t_pyside=pyside6 t_pyqt=qt6 ;;
+  *)                 t_urwid=urwid t_pyside=pyside6 t_pyqt=pyqt6 ;;
+esac
+
 find_python() {
   # The newest python3.N with N >= 11 in the usual prefixes (ports, pkgsrc, IPS, ooce).
+  # 3.11 is the floor issue #1048 asks about. The Studio itself declares >=3.10, but a
+  # 3.10 floor would record a guest's stock 3.10 as "preinstalled" and its 3.11+ lines
+  # would never run, so no 3.10 line is offered either: it could never count.
   _best="" _bm=0
   for _d in /usr/local/bin /usr/pkg/bin /usr/bin /opt/ooce/bin /opt/local/bin; do
     for _p in "$_d"/python3.[0-9] "$_d"/python3.[0-9][0-9]; do
@@ -197,7 +216,7 @@ if [ -n "$py" ]; then
 else
   case "$guest" in
     freebsd)   install python "" python3 "pkg install -y python311" "pkg install -y python312" ;;
-    dragonfly) install python "" python3 "pkg install -y python311" "pkg install -y python312" "pkg install -y python310" ;;
+    dragonfly) install python "" python3 "pkg install -y python311" "pkg install -y python312" ;;
     openbsd)   install python "" python "pkg_add -I python%3.12" "pkg_add -I python%3.13" "pkg_add -I python%3.11" ;;
     netbsd)    install python "" python3 "pkgin -y install python312" "pkgin -y install python313" "pkgin -y install python311" ;;
     solaris)   install python "" python-31 "pkg install --accept runtime/python-311" "pkg install --accept runtime/python-313" ;;
@@ -216,24 +235,31 @@ probe python-chosen sh -c "echo '$py'; ${py:-false} -VV"
 if [ -n "$py" ]; then
   case "$guest" in
     freebsd|dragonfly)
-      install urwid urwid urwid "pkg install -y py$pyv-urwid"
-      install pyside6 PySide6 pyside6 "pkg install -y py$pyv-pyside6"
-      install pyqt6 PyQt6 pyqt6 "pkg install -y py$pyv-qt6-pyqt" "pkg install -y py$pyv-pyqt6" ;;
+      install urwid urwid "$t_urwid" "pkg install -y py$pyv-urwid"
+      install pyside6 PySide6 "$t_pyside" "pkg install -y py$pyv-pyside6"
+      install pyqt6 PyQt6 "$t_pyqt" "pkg install -y py$pyv-qt6-pyqt" "pkg install -y py$pyv-pyqt6" ;;
     openbsd)
-      install urwid urwid urwid "pkg_add -I py3-urwid"
-      install pyside6 PySide6 pyside6 "pkg_add -I py3-pyside6"
-      install pyqt6 PyQt6 qt6 "pkg_add -I py3-qt6" "pkg_add -I py3-PyQt6" ;;
+      install urwid urwid "$t_urwid" "pkg_add -I py3-urwid"
+      install pyside6 PySide6 "$t_pyside" "pkg_add -I py3-pyside6"
+      install pyqt6 PyQt6 "$t_pyqt" "pkg_add -I py3-qt6" "pkg_add -I py3-PyQt6" ;;
     netbsd)
-      install urwid urwid urwid "pkgin -y install py$pyv-urwid"
-      install pyside6 PySide6 pyside6 "pkgin -y install py$pyv-pyside6"
-      install pyqt6 PyQt6 qt6 "pkgin -y install py$pyv-qt6" "pkgin -y install py$pyv-PyQt6" ;;
+      install urwid urwid "$t_urwid" "pkgin -y install py$pyv-urwid"
+      install pyside6 PySide6 "$t_pyside" "pkgin -y install py$pyv-pyside6"
+      install pyqt6 PyQt6 "$t_pyqt" "pkgin -y install py$pyv-qt6" "pkgin -y install py$pyv-PyQt6" ;;
     *)
       # SunOS: the design expects no Qt 6 binding and urwid from pip. The catalog
       # searches are what make "not packaged" a measured statement.
-      install urwid urwid urwid "pkg install library/python/urwid-$pyv"
-      install pyside6 PySide6 pyside6
-      install pyqt6 PyQt6 pyqt6 ;;
+      install urwid urwid "$t_urwid" "pkg install library/python/urwid-$pyv"
+      install pyside6 PySide6 "$t_pyside"
+      install pyqt6 PyQt6 "$t_pyqt" ;;
   esac
+else
+  # No Python 3.11+: nothing could import a module, so no line is tried (install.tsv
+  # has no urwid/PySide6/PyQt6 rows and the summary says NOT TRIED). The catalog
+  # searches still run, so what the OS offers is on record, not assumed.
+  search urwid "$t_urwid" > /dev/null
+  search pyside6 "$t_pyside" > /dev/null
+  search pyqt6 "$t_pyqt" > /dev/null
 fi
 
 # ── 4. the venv (--system-site-packages, so the OS packages above are visible) ──
@@ -277,7 +303,7 @@ fi
 if [ -n "$vpy" ] && [ -f "$out/contract-candidates.txt" ]; then
   probe contract-sizing "$vpy" tests/guest-facts/size_contract.py run \
     --repo "$repo" --list "$out/contract-candidates.txt" --out "$out/contract-sizing.tsv" \
-    --budget "${GUEST_FACTS_SIZING_BUDGET:-2400}"
+    --budget 2400
 fi
 
 rm -rf "$work"

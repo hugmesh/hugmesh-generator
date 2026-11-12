@@ -7,12 +7,20 @@
 #   - it changes no Studio code and is not part of studio-tests.yml;
 #   - it runs only when a person dispatches it (never on push or pull_request, never
 #     from a release workflow), so it gates nothing;
-#   - every action is pinned by commit SHA, the token is read-only, no secret is
-#     referenced and no env is forwarded into a guest;
+#   - every action is pinned by commit SHA, the token is read-only and no secret is
+#     referenced. No VM step sets `envs:`; the pinned actions still send GITHUB_* and
+#     CI into the guest over ssh SendEnv whatever `envs:` says. GITHUB_TOKEN is not in
+#     the step env, so no secret is among them;
 #   - each guest image is third-party (anyvm-org builders), so the image it booted is
 #     hashed ON THE RUNNER and recorded beside the facts (image.tsv);
 #   - checkout does not persist credentials: the workspace is rsynced into the guest,
-#     and a persisted token would travel with .git/config.
+#     and a persisted token would travel with .git/config;
+#   - data-dir is $HOME/vm-data (the action expands $HOME), OUTSIDE $HOME/work. The
+#     action rsyncs all of $HOME/work into the guest, excluding only _actions and
+#     _PipelineMapping, so a data-dir under runner.temp (<work>/_temp) would push the
+#     guest's own extracted qcow2 and its ssh key into the guest and back;
+#   - disable-cache is on: with the cache on, anyvm moves the qcow2 into the cache
+#     dir, and the digest step would find nothing to hash.
 #
 # Seven x86-64 guests, each at an explicit release so the fixture names what booted:
 #   freebsd 15.1, openbsd 8.0, netbsd 11.1, dragonfly 6.4.2 (the release this action
@@ -102,7 +110,7 @@ jobs:
           release: '15.1'
           sync: rsync
           disable-cache: 'true'
-          data-dir: ${{ runner.temp }}/vm-data
+          data-dir: $HOME/vm-data
           run: sh tests/guest-facts/collect.sh freebsd guest-facts-out/freebsd
 
       - name: OpenBSD 8.0
@@ -112,7 +120,7 @@ jobs:
           release: '8.0'
           sync: rsync
           disable-cache: 'true'
-          data-dir: ${{ runner.temp }}/vm-data
+          data-dir: $HOME/vm-data
           run: sh tests/guest-facts/collect.sh openbsd guest-facts-out/openbsd
 
       - name: NetBSD 11.1
@@ -122,7 +130,7 @@ jobs:
           release: '11.1'
           sync: rsync
           disable-cache: 'true'
-          data-dir: ${{ runner.temp }}/vm-data
+          data-dir: $HOME/vm-data
           run: sh tests/guest-facts/collect.sh netbsd guest-facts-out/netbsd
 
       - name: DragonFly 6.4.2
@@ -132,7 +140,7 @@ jobs:
           release: '6.4.2'
           sync: rsync
           disable-cache: 'true'
-          data-dir: ${{ runner.temp }}/vm-data
+          data-dir: $HOME/vm-data
           run: sh tests/guest-facts/collect.sh dragonfly guest-facts-out/dragonfly
 
       - name: Solaris 11.4
@@ -142,7 +150,7 @@ jobs:
           release: '11.4'
           sync: rsync
           disable-cache: 'true'
-          data-dir: ${{ runner.temp }}/vm-data
+          data-dir: $HOME/vm-data
           run: sh tests/guest-facts/collect.sh solaris guest-facts-out/solaris
 
       - name: OmniOS r151060
@@ -152,7 +160,7 @@ jobs:
           release: 'r151060'
           sync: rsync
           disable-cache: 'true'
-          data-dir: ${{ runner.temp }}/vm-data
+          data-dir: $HOME/vm-data
           run: sh tests/guest-facts/collect.sh omnios guest-facts-out/omnios
 
       - name: OpenIndiana 202610
@@ -162,7 +170,7 @@ jobs:
           release: '202610'
           sync: rsync
           disable-cache: 'true'
-          data-dir: ${{ runner.temp }}/vm-data
+          data-dir: $HOME/vm-data
           run: sh tests/guest-facts/collect.sh openindiana guest-facts-out/openindiana
 
       - name: Record the guest image digest
@@ -173,7 +181,7 @@ jobs:
         run: |
           python3 tests/guest-facts/runner_side.py image --out "$OUT" \
             --action "$ACTION" --release "$RELEASE" \
-            --data-dir "$RUNNER_TEMP/vm-data" --actions-dir "$RUNNER_WORKSPACE/../_actions"
+            --data-dir "$HOME/vm-data" --actions-dir "$RUNNER_WORKSPACE/../_actions"
           cat "$OUT/image.tsv"
 
       - name: Upload this guest's facts

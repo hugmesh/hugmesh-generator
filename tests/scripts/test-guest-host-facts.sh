@@ -8,24 +8,46 @@
 #   1. it runs ONLY on workflow_dispatch (no push, pull_request, schedule or
 #      workflow_call), and no release workflow names it;
 #   2. the token is read-only (top-level contents: read; no job widens it), no
-#      `secrets.` is referenced, and no VM step forwards env into a guest (`envs:`)
-#      or overrides the action's token;
+#      `secrets.` is referenced, and no VM step sets `envs:` or overrides the action's
+#      token. (The pinned actions still send GITHUB_* and CI to the guest over ssh
+#      SendEnv whatever `envs:` says; no secret is among them.)
 #   3. every `uses:` is pinned to a 40-hex commit SHA;
 #   4. every checkout sets persist-credentials: false (the workspace is rsynced into
 #      the guest, and a persisted token would travel in .git/config);
 #   5. the matrix is exactly the seven guests, and each guest has exactly one VM step
 #      whose pin, release and collect.sh argument agree with its matrix row;
 #   6. the image digest is recorded on the runner and every guest's facts are
-#      uploaded even when the VM step failed (if: always()).
+#      uploaded even when the VM step failed (if: always());
+#   6a. every VM step sets disable-cache: 'true' (with the cache on, anyvm MOVES the
+#      qcow2 into the cache dir and the digest step finds nothing) and data-dir:
+#      $HOME/vm-data, the same directory the digest step hashes. The actions rsync
+#      $HOME/work into the guest excluding only _actions and _PipelineMapping, so a
+#      data-dir under runner.temp (<work>/_temp) or the workspace would copy the
+#      guest's own boot image and ssh key into the guest;
+#   6b. the summary job runs if: always(), lays the fixtures out under
+#      out/tests/guest-facts/fixtures and uploads `out` as guest-host-facts, so the
+#      artifact is a plain unzip at the repository root.
 # It also pins the helpers the workflow runs:
-#   7. collect.sh is POSIX sh (`sh -n`), never `set -e`, and always ends `exit 0`, so
-#      a failed probe is data and the action still copies the facts back;
-#   8. size_contract.py `candidates` drops a test file that names a Qt binding or the
-#      GUI package and keeps one that does not;
+#   7. collect.sh is POSIX sh (`sh -n`), never `set -e`, and every `exit` in it is
+#      `exit 0` (no `${1:?}` aborts either), so a failed probe is data and the action
+#      still copies the facts back; it builds the venv with --system-site-packages,
+#      runs the stock --self-check before the first install line, searches the
+#      urwid/PySide6/PyQt6 catalogs even when no Python 3.11+ appeared, and reads no
+#      GUEST_FACTS_* knob (no VM step sets `envs:`, so only GITHUB_* and CI reach a
+#      guest and such a knob could never be set). Its try_line/imports
+#      pair is run with stubs: a line whose module does not import is recorded
+#      imports=no, one whose module imports is recorded imports=yes;
+#   7a. argv_session.py, run against a fake studio package, logs the argv of the
+#      processes each step starts, under that step's name, with the checkout path
+#      scrubbed;
+#   8. size_contract.py `candidates` drops a test file that names a Qt binding, a Qt
+#      module, the qtbot fixture or the GUI package and keeps one that does not;
 #   9. runner_side.py `summarize` reports a guest with no fixtures as missing (never a
 #      filled-in row), states the DragonFly OS-package result as FOUND or NOT FOUND,
-#      and cuts contract-list.txt only from guests whose sizing run finished;
-#      `image` refuses (rc 1) when no image file was found to hash.
+#      checks PyQt6 (not PySide6) for DragonFly's GUI, says NOT TRIED (never NOT
+#      FOUND) when no line was tried, and cuts contract-list.txt only from guests
+#      whose sizing run finished; `image` refuses (rc 1) when no image file was found
+#      to hash, even when it found anyvm.py, and records the sha256 of one it did find.
 #  10. FIXTURES: once tests/guest-facts/fixtures/ exists (committed from a dispatched
 #      run), every one of the seven guests has an image.tsv with a 64-hex image
 #      sha256, an install.tsv and uname output, and SUMMARY.md has a row per guest and
@@ -141,6 +163,27 @@ up = [s for s in steps if str(s.get("uses", "")).startswith("actions/upload-arti
 if len(up) != 1 or str(up[0].get("if", "")).strip() != "always()":
     problems.append("upload: the per-guest upload must exist once and run if: always()")
 
+DATA_DIR = "$HOME/vm-data"
+for s in vm_steps:
+    w = s.get("with") or {}
+    if str(w.get("disable-cache", "")).strip().lower() != "true":
+        problems.append(f"cache: VM step {s.get('name')!r} does not set disable-cache: 'true'")
+    dd = str(w.get("data-dir", ""))
+    if dd != DATA_DIR:
+        problems.append(f"data-dir: VM step {s.get('name')!r} data-dir is {dd!r}, want {DATA_DIR!r} (outside the synced work tree)")
+if len(img) == 1 and f'--data-dir "{DATA_DIR}"' not in str(img[0].get("run", "")):
+    problems.append(f"data-dir: the image digest step does not hash --data-dir \"{DATA_DIR}\"")
+
+summary = (wf.get("jobs") or {}).get("summary") or {}
+if str(summary.get("if", "")).strip() != "always()" or summary.get("needs") != "guest":
+    problems.append("summary: the summary job must need guest and run if: always()")
+sruns = " ".join(str(st.get("run", "")) for st in summary.get("steps") or [])
+if "root=out/tests/guest-facts/fixtures" not in sruns or 'runner_side.py summarize --root "$root"' not in sruns:
+    problems.append("summary: fixtures are not laid out under out/tests/guest-facts/fixtures and summarized there")
+sup = [st for st in summary.get("steps") or [] if str(st.get("uses", "")).startswith("actions/upload-artifact@")]
+if len(sup) != 1 or (sup[0].get("with") or {}).get("path") != "out" or (sup[0].get("with") or {}).get("name") != "guest-host-facts":
+    problems.append("summary: the summary must upload `out` once as guest-host-facts")
+
 for p in problems:
     print(p)
 sys.exit(1 if problems else 0)
@@ -203,6 +246,12 @@ if [ -f "${WF}" ]; then
   mutate wrong-arg   "vm-step:"     "text.replace('collect.sh solaris guest-facts-out/solaris', 'collect.sh omnios guest-facts-out/solaris', 1)"
   mutate no-always   "digest:"      "text.replace('      - name: Record the guest image digest\n        if: always()\n', '      - name: Record the guest image digest\n', 1)"
   mutate up-always   "upload:"      "text.replace('      - name: Upload this guest\\'s facts\n        if: always()\n', '      - name: Upload this guest\\'s facts\n', 1)"
+  mutate no-datadir  "data-dir:"    "text.replace('          data-dir: \$HOME/vm-data\n', '', 1)"
+  mutate temp-data   "data-dir:"    "text.replace('          data-dir: \$HOME/vm-data\n', '          data-dir: \${{ runner.temp }}/vm-data\n', 1)"
+  mutate img-data    "data-dir:"    "text.replace('--data-dir \"\$HOME/vm-data\"', '--data-dir \"\$RUNNER_TEMP/vm-data\"', 1)"
+  mutate cache-on    "cache:"       "text.replace(\"          disable-cache: 'true'\n\", '', 1)"
+  mutate sum-always  "summary:"     "text.replace('    needs: guest\n    if: always()\n', '    needs: guest\n', 1)"
+  mutate sum-root    "summary:"     "text.replace('root=out/tests/guest-facts/fixtures', 'root=out/fixtures', 1)"
 fi
 
 # ── 7: collect.sh ────────────────────────────────────────────────────────────
@@ -219,7 +268,103 @@ if [ ! -f "${C}" ]; then bad "missing tests/guest-facts/collect.sh"; else
   if ${psh} -n "${C}" 2>"${TMP}/shn.err"; then ok "collect.sh parses under ${psh} -n"; else bad "collect.sh: ${psh} -n: $(head -1 "${TMP}/shn.err")"; fi
   if grep -Eq '^[[:space:]]*set[[:space:]]+-[a-z]*e' "${C}"; then bad "collect.sh uses set -e: one failed probe would abort the facts"; else ok "collect.sh never uses set -e"; fi
   [ "$(grep -v '^[[:space:]]*$' "${C}" | tail -1)" = "exit 0" ] && ok "collect.sh ends with exit 0" || bad "collect.sh does not end with exit 0"
+  # Static rules on the code with comments stripped (a comment may say "exits 0").
+  python3 - "${C}" > "${TMP}/collect-static.out" 2>&1 <<'PY'
+import re
+import sys
+
+lines = []
+for raw in open(sys.argv[1], encoding="utf-8").read().splitlines():
+    code = re.sub(r"(^|\s)#.*$", "", raw)      # `${x##*y}` has no space before its #
+    lines.append(code)
+code = "\n".join(lines)
+problems = []
+exits = re.findall(r"(?<![\w-])exit\b[ \t]*([^\s;|&)}]*)", code)
+if not exits or any(e != "0" for e in exits):
+    problems.append(f"exit: every exit must be `exit 0`, found {['exit ' + e for e in exits]}")
+if re.search(r"\$\{[A-Za-z0-9_]+:?\?", code):
+    problems.append("exit: a ${VAR:?} expansion aborts the script with a non-zero status")
+if not re.search(r'probe venv "\$py" -m venv --system-site-packages "\$venv"', code):
+    problems.append("venv: the venv is not built with --system-site-packages (the design's install path)")
+for comp in ("urwid", "pyside6", "pyqt6"):
+    # the no-Python branch: the catalog is still searched, so NOT TRIED has evidence
+    if not re.search(rf"^\s*search {comp} \"\$t_\w+\" > /dev/null$", code, re.M):
+        problems.append(f"search: the {comp} catalog search does not run when no Python 3.11+ was found")
+if re.search(r"GUEST_FACTS_", code):
+    problems.append("knob: collect.sh reads a GUEST_FACTS_* variable, but no VM step sets envs: (only GITHUB_* and CI reach a guest)")
+stock = [i for i, ln in enumerate(lines) if re.match(r"\s*probe selfcheck-stock .*--self-check", ln)]
+first_install = [i for i, ln in enumerate(lines)
+                 if re.match(r"\s*([\w|]+\)\s+)?install (python|urwid|pyside6|pyqt6) ", ln)]
+if len(stock) != 1 or not first_install or stock[0] > first_install[0]:
+    problems.append("self-check: the stock --self-check probe must run once, before the first install line")
+for p in problems:
+    print(p)
+sys.exit(1 if problems else 0)
+PY
+  if [ $? -eq 0 ]; then ok "collect.sh: every exit is exit 0, venv uses --system-site-packages, stock --self-check precedes the installs, catalogs searched without Python, no GUEST_FACTS_* knob"
+  else while IFS= read -r line; do bad "collect.sh: ${line}"; done < "${TMP}/collect-static.out"; fi
+
+  # Behaviour of try_line/imports, run with stubs (no package manager, no root):
+  # the two functions are cut out of the real file, so a mutation there is seen here.
+  B="${TMP}/tryline"; mkdir -p "${B}"
+  awk '/^(imports|try_line)\(\) \{/{on=1} on{print} on&&/^}/{on=0}' "${C}" > "${B}/funcs.sh"
+  printf '#!/bin/sh\n[ "$1" = -c ] && [ "$2" = "import goodmod" ]\n' > "${B}/py"; chmod +x "${B}/py"
+  cat > "${B}/drive.sh" <<'SH'
+out=$1 py=$1/py n_try=0
+probe() { shift; "$@" > /dev/null 2>&1; }
+as_root() { "$@"; }
+. "$out/funcs.sh"
+printf 'component\tkind\tinstall_rc\timports\tline\n' > "$out/install.tsv"
+try_line urwid static badmod "true"; echo "bad=$?"
+try_line urwid static goodmod "exit 3"; echo "good=$?"
+SH
+  if sh "${B}/drive.sh" "${B}" > "${B}/drive.out" 2>&1 \
+     && grep -qx 'bad=1' "${B}/drive.out" && grep -qx 'good=0' "${B}/drive.out" \
+     && [ "$(sed -n 2p "${B}/install.tsv")" = "$(printf 'urwid\tstatic\t0\tno\ttrue')" ] \
+     && [ "$(sed -n 3p "${B}/install.tsv")" = "$(printf 'urwid\tstatic\t3\tyes\texit 3')" ]; then
+    ok "try_line records imports=no for a module that does not import and imports=yes (with the line's rc) for one that does"
+  else bad "try_line/imports: $(tr '\n' ' ' < "${B}/drive.out") | $(tr '\t\n' ', ' < "${B}/install.tsv" 2>/dev/null)"; fi
 fi
+
+# ── 7a: argv_session.py against a fake studio package ───────────────────────
+echo "== argv_session.py =="
+A="${TMP}/argv"; mkdir -p "${A}/repo/studio/hugmesh_studio"
+: > "${A}/repo/studio/hugmesh_studio/__init__.py"
+cat > "${A}/repo/studio/hugmesh_studio/tui.py" <<'PY'
+import os, subprocess, sys
+sys.stdin.read()
+subprocess.run([sys.executable, "-c", "pass", "marker-tui", os.getcwd()], check=True)
+PY
+cat > "${A}/repo/studio/hugmesh_studio/__main__.py" <<'PY'
+import os
+os.system("true marker-print")
+PY
+if python3 "${GF}/argv_session.py" --repo "${A}/repo" --out "${A}/out" --timeout 60 > "${A}/run.out" 2>&1; then
+  python3 - "${A}/out" > "${A}/check.out" 2>&1 <<'PY'
+import json
+import sys
+
+out = sys.argv[1]
+recs = [json.loads(ln) for ln in open(f"{out}/argv-log.jsonl", encoding="utf-8") if ln.strip()]
+tui = [r for r in recs if r["step"] == "tui" and r["event"] == "subprocess.Popen" and "marker-tui" in r["argv"]]
+prt = [r for r in recs if r["step"] == "print" and r["event"] == "os.system" and r["argv"] == ["true marker-print"]]
+problems = []
+if not tui or tui[0]["argv"][-1] != "<repo>/studio":
+    problems.append(f"the tui step's child argv is not logged with <repo> scrubbed: {recs}")
+if not prt:
+    problems.append(f"the print step's os.system argv is not logged: {recs}")
+if any(set(r) != {"step", "event", "argv"} for r in recs):
+    problems.append("a log record carries more than step, event and argv")
+steps = [ln.split("\t")[:2] for ln in open(f"{out}/steps.tsv", encoding="utf-8").read().splitlines()[1:]]
+if steps != [["tui", "0"], ["print", "0"]]:
+    problems.append(f"steps.tsv: {steps}")
+for p in problems:
+    print(p)
+sys.exit(1 if problems else 0)
+PY
+  if [ $? -eq 0 ]; then ok "argv_session logs each step's child argv (subprocess and os.system) under its step, scrubbed, argv only"
+  else while IFS= read -r line; do bad "argv_session: ${line}"; done < "${A}/check.out"; fi
+else bad "argv_session failed: $(head -1 "${A}/run.out")"; fi
 
 # ── 8: contract candidates ───────────────────────────────────────────────────
 echo "== size_contract.py candidates =="
@@ -230,10 +375,13 @@ printf 'from PyQt6 import sip\n' > "${TMP}/cand/studio/tests/test_qt_pyqt.py"
 printf 'app = QApplication([])\n' > "${TMP}/cand/studio/tests/test_qt_app.py"
 printf 'from hugmesh_studio.gui.pages import role\n' > "${TMP}/cand/studio/tests/test_gui_role.py"
 printf 'from hugmesh_studio import config, gui\n' > "${TMP}/cand/studio/tests/test_gui_import.py"
+printf 'def test_w(qtbot):\n    pass\n' > "${TMP}/cand/studio/tests/test_qt_qtbot.py"
+printf 'from PySide6 import QtWidgets\n' > "${TMP}/cand/studio/tests/test_qt_widgets.py"
+printf 'from ..gui import main_window\n' > "${TMP}/cand/studio/tests/test_gui_relative.py"
 printf 'x = 1\n' > "${TMP}/cand/studio/tests/helper_not_a_test.py"
 if python3 "${GF}/size_contract.py" candidates --repo "${TMP}/cand" > "${TMP}/cand.out" 2>&1; then
   if [ "$(cat "${TMP}/cand.out")" = "tests/test_plain_cli.py" ]; then
-    ok "candidates keeps the Qt-free test file and drops PySide6, gui-package and non-test files"
+    ok "candidates keeps the Qt-free test file and drops PySide6, PyQt6, QApplication, qtbot, gui-package and non-test files"
   else bad "candidates listed: $(tr '\n' ' ' < "${TMP}/cand.out")"; fi
 else bad "candidates failed: $(head -1 "${TMP}/cand.out")"; fi
 
@@ -276,6 +424,8 @@ mk_guest netbsd yes no finished
   printf 'tests/test_a.py\t0\tgreen\t1\t0\t0\t0\t1.0\t1 passed\n'
   printf 'tests/test_b.py\t1\tred\t0\t1\t0\t0\t1.0\t1 failed\n'
 } > "${R}/netbsd/contract-sizing.tsv"
+# DragonFly's GUI binding is PyQt6 (design section 3): a working PySide6 must not count.
+printf 'pyside6\tstatic\t0\tyes\tpkg install -y py311-pyside6\n' >> "${R}/dragonfly/install.tsv"
 if python3 "${GF}/runner_side.py" summarize --root "${R}" > "${TMP}/sum.out" 2>&1; then
   S="${R}/SUMMARY.md"
   grep -q '^| solaris | (missing) |' "${S}" && ok "a guest with no fixtures is reported (missing)" || bad "solaris (no fixtures) is not reported as missing"
@@ -289,12 +439,46 @@ if python3 "${GF}/runner_side.py" summarize --root "${R}" > "${TMP}/sum.out" 2>&
     ok "contract-list.txt = green on every FINISHED sizing run (budget-cut openbsd excluded, netbsd red drops test_b)"
   else bad "contract-list.txt: $(tr '\n' ' ' < "${R}/contract-list.txt")"; fi
 else bad "summarize failed: $(head -1 "${TMP}/sum.out")"; fi
+# A DragonFly guest where no Python 3.11+ appeared, so no urwid/PyQt6 line was tried:
+# the summary must say NOT TRIED, never NOT FOUND (nothing was measured).
+R2="${TMP}/sum-untried"; mkdir -p "${R2}/dragonfly"
+printf '$ uname -r\n6.4-RELEASE\nrc=0\n' > "${R2}/dragonfly/uname-r.txt"
+{
+  printf 'component\tkind\tinstall_rc\timports\tline\n'
+  printf 'python\tstatic\t1\tno\tpkg install -y python311\n'
+  printf 'python\tstatic\t1\tno\tpkg install -y python312\n'
+} > "${R2}/dragonfly/install.tsv"
+# The urwid catalog search was recorded and the PyQt6 one was not: each is cited as it is.
+printf '$ pkg search -q urwid\npy39-urwid-2.1.2\nrc=0\n' > "${R2}/dragonfly/search-urwid.txt"
+if python3 "${GF}/runner_side.py" summarize --root "${R2}" > "${TMP}/sum2.out" 2>&1; then
+  if grep -q '^DragonFly .*urwid from the OS packages: NOT TRIED (no Python 3.11+ after 2 python line(s); catalog search rc 0, first line: py39-urwid-2.1.2, in search-urwid.txt).*PyQt6 from the OS packages: NOT TRIED (no Python 3.11+ after 2 python line(s); catalog search not recorded)' "${R2}/SUMMARY.md" \
+     && ! grep -q 'NOT FOUND' "${R2}/SUMMARY.md"; then
+    ok "the DragonFly line says NOT TRIED (not NOT FOUND) when no Python 3.11+ let a line be tried, citing only the searches recorded"
+  else bad "DragonFly untried line: $(grep '^DragonFly' "${R2}/SUMMARY.md")"; fi
+else bad "summarize (untried) failed: $(head -1 "${TMP}/sum2.out")"; fi
+
 mkdir -p "${TMP}/empty-data"
 if python3 "${GF}/runner_side.py" image --out "${TMP}/img" --action vmactions/x@y --release 1 \
      --data-dir "${TMP}/empty-data" --actions-dir "${TMP}/none" > "${TMP}/img.out" 2>&1; then
   bad "image exited 0 with no image file to hash"
 elif grep -q "no image file" "${TMP}/img.out"; then ok "image refuses (rc 1) when there is no image file to hash"
 else bad "image failed for another reason: $(head -1 "${TMP}/img.out")"; fi
+# anyvm.py alone (the action is there, the image is not) is still no image.
+mkdir -p "${TMP}/acts/vmactions/x/y/anyvm"
+head -c 2097152 /dev/zero > "${TMP}/acts/vmactions/x/y/anyvm/anyvm.py"
+if python3 "${GF}/runner_side.py" image --out "${TMP}/img2" --action vmactions/x@y --release 1 \
+     --data-dir "${TMP}/empty-data" --actions-dir "${TMP}/acts" > "${TMP}/img2.out" 2>&1; then
+  bad "image exited 0 having found only anyvm.py"
+else ok "image refuses (rc 1) when it found anyvm.py but no image"; fi
+# A real image file is hashed on the runner and recorded.
+mkdir -p "${TMP}/data/v1"
+head -c 1048576 /dev/zero > "${TMP}/data/v1/guest.qcow2"; printf 'x' >> "${TMP}/data/v1/guest.qcow2"
+want=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "${TMP}/data/v1/guest.qcow2")
+if python3 "${GF}/runner_side.py" image --out "${TMP}/img3" --action vmactions/x@y --release 1 \
+     --data-dir "${TMP}/data" --actions-dir "${TMP}/acts" > "${TMP}/img3.out" 2>&1 \
+   && grep -q "^image	v1/guest.qcow2	1048577	${want}\$" "${TMP}/img3/image.tsv"; then
+  ok "image records the sha256 of the image it found"
+else bad "image did not record the image digest: $(head -1 "${TMP}/img3.out") $(tr '\t\n' ', ' < "${TMP}/img3/image.tsv" 2>/dev/null)"; fi
 
 # ── 10: committed fixtures ───────────────────────────────────────────────────
 echo "== fixtures =="
