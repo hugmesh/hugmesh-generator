@@ -14,7 +14,7 @@ proof-of-work gate decided by the build's ENV with no way to say otherwise from 
 """
 from __future__ import annotations
 
-from ..core import plain_words
+from ..core import mesh_control, pki_lan, plain_words
 from ..core.config import (
     ANUBIS_CHOICES, ANUBIS_LABELS, PLATFORM_FIELD_SUPPORT, SERVICE_DESCRIPTIONS,
     UNAFFILIATED_ROLE, _OPI_NODE_PLATFORMS, anubis_locked, anubis_shown,
@@ -24,10 +24,76 @@ from ..core.config import (
 #: What each command word sets. Longest spelling first is irrelevant (exact match).
 _WORDS = {"d": "", "default": "", "on": "on", "off": "off"}
 
-NOT_PORTED_NOTE = ("Only the anubis row of this step is ported to the TUI — configure "
-                   "the rest of it (domain, tailnet, egress, the other services) in the "
-                   "GUI (python -m hugmesh_studio); Enter keeps their defaults and "
-                   "continues.")
+NOT_PORTED_NOTE = ("Only the anubis row and, on a mesh, the PKI LAN address of this step "
+                   "are ported to the TUI — configure the rest of it (domain, tailnet, "
+                   "egress, the other services) in the GUI (python -m hugmesh_studio); "
+                   "Enter keeps their defaults and continues.")
+
+
+def pki_lan_lines(cfg) -> list[str]:
+    """The PKI LAN address rows (mesh only) — the GUI Network page's row, same words
+    (core/pki_lan.py). The line under them is what the build will refuse, if anything."""
+    if getattr(cfg, "mode", "") != "mesh":
+        return []
+    ip = cfg.pki_lan_ip or "-"
+    fixed = "yes" if cfg.pki_lan_ip_fixed else "no"
+    out = ["", pki_lan.WHY,
+           f"  {pki_lan.LABEL_IP}  {ip}",
+           f"  fixed (static IP or DHCP reservation)  {fixed}"]
+    problem = pki_lan.problem(cfg)
+    if problem:
+        first = problem.split(". ")[0].rstrip(".")
+        out.append(f"! the build will refuse until this is set: {first}.")
+    t = mesh_control.transport(cfg)
+    out += ["", mesh_control.QUESTION, f"  transport  {mesh_control.LABELS[t]}"]
+    if t != "lan":
+        out += [mesh_control.WHY,
+                f"  mint  {'yes' if cfg.mesh_control_onion_mint else 'no'}  ({mesh_control.MINT_LABEL})"]
+        clash = mesh_control.name_problem(cfg)
+        if clash:
+            out.append(f"! the build will refuse: {clash}")
+    return out
+
+
+def pki_lan_feed(cfg, line: str) -> str | None:
+    """Handle ``ip ADDR`` / ``ip -`` / ``fixed on|off`` on a mesh: the status line, or
+    None when ``line`` is not one of these commands."""
+    if getattr(cfg, "mode", "") != "mesh":
+        return None
+    verb, _, arg = line.strip().partition(" ")
+    verb, arg = verb.lower(), arg.strip()
+    if verb == "ip":
+        if arg in ("", "-"):
+            cfg.pki_lan_ip = ""
+            return f"{pki_lan.LABEL_IP} cleared"
+        err = pki_lan.ip_error(arg)
+        if err:
+            return f"{pki_lan.LABEL_IP} not changed: {err}"
+        cfg.pki_lan_ip = pki_lan.canonical(arg)
+        return f"{pki_lan.LABEL_IP} -> {cfg.pki_lan_ip}"
+    if verb == "transport":
+        if arg not in mesh_control.LABELS:
+            return "transport takes lan, lan+onion or onion"
+        cfg.mesh_control_transport = "" if arg == "lan" else arg
+        if arg == "lan":
+            cfg.mesh_control_onion_mint = False
+        clash = mesh_control.name_problem(cfg)
+        return f"transport -> {mesh_control.LABELS[arg]}" + (f" — {clash}" if clash else "")
+    if verb == "mint":
+        if mesh_control.transport(cfg) == "lan":
+            return "mint applies to a Tor transport only (transport lan+onion|onion first)"
+        cfg.mesh_control_onion_mint = arg.lower() in ("on", "yes", "y", "1")
+        return "mint -> " + ("yes" if cfg.mesh_control_onion_mint else "no")
+    if verb == "fixed":
+        if arg.lower() in ("on", "yes", "y", "1"):
+            cfg.pki_lan_ip_fixed = True
+        elif arg.lower() in ("off", "no", "n", "0"):
+            cfg.pki_lan_ip_fixed = False
+        else:
+            return "fixed takes on or off"
+        return "fixed (static IP or DHCP reservation) -> " + (
+            "yes" if cfg.pki_lan_ip_fixed else "no")
+    return None
 
 
 def brand_mirrored(cfg) -> bool:
@@ -115,7 +181,10 @@ class NetworkScreen:
         out.append("Default leaves anubis to the build; Force on and Force off say it "
                    "either way." if not why else
                    "This row cannot be changed here: " + why + ".")
+        pki = pki_lan_lines(j.cfg)
+        out += pki
         out.append("commands: 1=cycle · default · on · off"
+                   + (" · ip ADDR · fixed on|off · transport lan|lan+onion|onion · mint on|off" if pki else "")
                    + (f" · s={plain_words.term('superbrand')} step" if mirror else "")
                    + " · Enter=continue")
         return out
@@ -130,6 +199,10 @@ class NetworkScreen:
             if self._state(cfg)[1]:
                 cfg.anubis = ""
             j.advance()
+            return
+        pki_status = pki_lan_feed(cfg, line)
+        if pki_status is not None:
+            j.status = pki_status
             return
         if word == "s" and brand_mirrored(cfg):
             # the window's "Go back to the superbrand step" button: Branding, with the

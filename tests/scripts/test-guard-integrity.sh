@@ -1569,6 +1569,11 @@ PREMERGE_UNGATED=(
   # tests/stack/test-tor-flip-wiring.sh drives it against stub harnesses (#585).
   tests/stack/test-tor-onion-mechanism.sh
   tests/stack/test-web-locales-wiring.sh
+  # OPT-IN BY DESIGN, never default CI: it publishes a THROWAWAY onion on the real Tor
+  # network (a test headscale with no real users) and needs docker plus internet for
+  # Tor. The offline half — every script it drives, against stubs — IS pre-merge gated:
+  # tests/scripts/test-mesh-control-onion.sh. Run it by hand on a host with docker.
+  tests/scripts/test-mesh-control-onion-live.sh
 )
 if [ -n "${GUARD_PREMERGE_UNGATED+x}" ]; then UNGATED_TEXT="${GUARD_PREMERGE_UNGATED}"
 else UNGATED_TEXT="$(printf '%s\n' "${PREMERGE_UNGATED[@]}")"; fi

@@ -48,6 +48,8 @@
 #   * It never leaves the device public. Once a commit has been typed, an EXIT trap
 #     rolls back on every failure path and says so loudly if even that fails.
 #
+# The posture is EPHEMERAL on an emulated row: a restart boots the golden image
+# INTERNAL again. That is fine here — the lane rolls back anyway.
 # The posture is EPHEMERAL on an emulated row: the next boot starts again from the
 # golden image (in whatever posture it bakes) or from a save (in the posture it was
 # saved in). That is fine here — the lane rolls back anyway.

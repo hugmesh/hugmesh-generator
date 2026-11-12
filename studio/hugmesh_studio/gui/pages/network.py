@@ -48,6 +48,7 @@ from ._scroll import scrollable
 # _cluster_identity_applies() for why both routes are the same rule and neither is a
 # page-local copy of it.
 from ...core import config as _config
+from ...core import mesh_control, pki_lan
 from ...core import plain_words
 from ...core.config import (
     ANUBIS_CHOICES,
@@ -190,7 +191,9 @@ _HELP_HEADSCALE_URL = (
     "The mesh control-server URL this image talks to. Baked to "
     "/etc/hugmesh/headscale-url and delivered to the builder as the HEADSCALE_URL "
     "environment variable — not a CLI flag, so it is never platform-greyed. Empty = "
-    "local-first: the control node uses its own LAN IP.")
+    "local-first: the control node uses its own LAN IP. On a mesh, workers dial the "
+    "PKI LAN Address below instead until go-live (a public URL cannot answer "
+    "before then).")
 _HELP_HEADSCALE_VERSION = (
     "Pin the version of Headscale, the control server that runs the tailnet "
     "(--headscale-version). Empty = whatever the builder ships.")
@@ -783,6 +786,58 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.superdomain = QtWidgets.QLineEdit()
         self.superdomain_row = _row("Tailscale Root Domain", self.superdomain)
         cp.addWidget(self.superdomain_row)
+        # The pki node's LAN address (core/pki_lan.py) — MESH ONLY. Every other node
+        # dials it before go-live, so a mesh build refuses without it (the Review page /
+        # WorklistDriver.preflight); this row says why, takes the address, and asks
+        # for the "it is fixed" confirmation. A malformed address is refused right here,
+        # inline (no dialog — a modal in page logic hangs the headless tests).
+        self.pki_lan_box = QtWidgets.QWidget()
+        pl = QtWidgets.QVBoxLayout(self.pki_lan_box)
+        pl.setContentsMargins(0, 0, 0, 0)
+        self.pki_lan_why = _hint(pki_lan.WHY)
+        pl.addWidget(self.pki_lan_why)
+        self.pki_lan_ip = QtWidgets.QLineEdit()
+        self.pki_lan_ip.setPlaceholderText("e.g. 192.168.1.10  (the PKI node's fixed LAN IPv4)")
+        self.pki_lan_ip_row = _row(pki_lan.LABEL_IP, self.pki_lan_ip)
+        pl.addWidget(self.pki_lan_ip_row)
+        self.pki_lan_fixed = QtWidgets.QCheckBox(pki_lan.LABEL_FIXED)
+        pl.addWidget(self.pki_lan_fixed)
+        self.pki_lan_note = QtWidgets.QLabel()
+        self.pki_lan_note.setWordWrap(True)
+        self.pki_lan_note.setStyleSheet("color: #b00020;")
+        pl.addWidget(self.pki_lan_note)
+        cp.addWidget(self.pki_lan_box)
+        self.pki_lan_ip.textChanged.connect(self._pki_lan_changed)
+        self.pki_lan_fixed.toggled.connect(self._pki_lan_changed)
+        # Mesh control over Tor (core/mesh_control.py) — MESH ONLY, OPT-IN, default
+        # "Local network only". A Tor choice needs the operator's consent to create the
+        # control onion's key on this computer (it goes onto the PKI stick only); the
+        # build refuses without it (WorklistDriver.preflight), and so does an image
+        # whose builder cannot bake Tor (only x86 and rpi5 can).
+        self.mesh_control_box = QtWidgets.QWidget()
+        mc = QtWidgets.QVBoxLayout(self.mesh_control_box)
+        mc.setContentsMargins(0, 0, 0, 0)
+        self.mesh_control_q = QtWidgets.QLabel(mesh_control.QUESTION)
+        self.mesh_control_q.setWordWrap(True)
+        mc.addWidget(self.mesh_control_q)
+        self.mesh_control_transport = QtWidgets.QComboBox()
+        for value, label in mesh_control.CHOICES:
+            self.mesh_control_transport.addItem(label, value)
+        mc.addWidget(self.mesh_control_transport)
+        self.mesh_control_why = _hint(mesh_control.WHY)
+        mc.addWidget(self.mesh_control_why)
+        self.mesh_control_mint = QtWidgets.QCheckBox(mesh_control.MINT_LABEL)
+        mc.addWidget(self.mesh_control_mint)
+        # Why a Tor choice cannot use this superdomain (core/mesh_control.name_problem):
+        # inline, never a dialog; validatePage refuses with the same words.
+        self.mesh_control_note = QtWidgets.QLabel("")
+        self.mesh_control_note.setWordWrap(True)
+        self.mesh_control_note.setStyleSheet("color: #b00020;")
+        self.mesh_control_note.setVisible(False)
+        mc.addWidget(self.mesh_control_note)
+        cp.addWidget(self.mesh_control_box)
+        self.mesh_control_transport.currentIndexChanged.connect(self._mesh_control_changed)
+        self.superdomain.textChanged.connect(self._mesh_control_changed)
         self.superdomain_error = _refusal_label("superdomain_error")
         cp.addWidget(self.superdomain_error)
         # ASK 8's "this mesh also hosts other domains" CHECKBOX used to sit here, under
@@ -1344,6 +1399,16 @@ class NetworkPage(QtWidgets.QWizardPage):
                 f"{c.brand or 'hugmesh'}.internal  (empty = derived)")
         else:
             self.superdomain.setText(c.effective_superdomain())
+        # pki LAN address: a mesh concept (an image that joins no mesh dials no pki).
+        self.pki_lan_box.setVisible(mesh)
+        self.pki_lan_ip.setText(c.pki_lan_ip)
+        self.pki_lan_fixed.setChecked(bool(c.pki_lan_ip_fixed))
+        self._pki_lan_changed()
+        self.mesh_control_box.setVisible(mesh)
+        idx = self.mesh_control_transport.findData(mesh_control.transport(c))
+        self.mesh_control_transport.setCurrentIndex(max(idx, 0))
+        self.mesh_control_mint.setChecked(bool(c.mesh_control_onion_mint))
+        self._mesh_control_changed()
         self.brand_profile.setText(c.brand_profile)
         self.brand.setText(c.brand)
         self.brand_title.setText(c.brand_title)
@@ -2027,6 +2092,46 @@ class NetworkPage(QtWidgets.QWizardPage):
                                   and bool(getattr(self, "_service_offered", {}).get(
                                       "tor", True)))
 
+    def _pki_lan_changed(self, *_):
+        """Re-say what is missing about the pki LAN address, live, under the row. The
+        same words the build's refusal uses (core/pki_lan.problem), minus the WHY the
+        hint above already shows."""
+        ip_text = self.pki_lan_ip.text().strip()
+        err = pki_lan.ip_error(ip_text)
+        if err:
+            msg = f"{pki_lan.LABEL_IP}: {err}."
+        elif not ip_text:
+            msg = (f"{pki_lan.LABEL_IP} is required for a mesh: the build will refuse "
+                   "until it is set and confirmed fixed.")
+        elif not self.pki_lan_fixed.isChecked():
+            msg = ("Tick the box once the address is a static IP or a DHCP reservation: "
+                   "the build will refuse until it is confirmed fixed.")
+        else:
+            msg = ""
+        self.pki_lan_note.setText(msg)
+        self.pki_lan_note.setVisible(bool(msg))
+
+    def _mesh_control_name_problem(self) -> str:
+        """core/mesh_control.name_problem for what the page shows NOW (the transport and
+        the superdomain field), without writing either into the config."""
+        t = self.mesh_control_transport.currentData() or "lan"
+        brand = (self.brand.text().strip() or getattr(self.wiz.cfg, "brand", "")
+                 or _field_default("brand"))
+        probe = ImageConfig(mode="mesh", brand=brand, superdomain=self.superdomain.text().strip(),
+                            mesh_control_transport="" if t == "lan" else t)
+        return mesh_control.name_problem(probe)
+
+    def _mesh_control_changed(self, *_):
+        """The consent box means something only for a Tor transport, and the why-text
+        is shown with it; a superdomain the control name cannot be derived from is said
+        under the choice, live."""
+        tor = (self.mesh_control_transport.currentData() or "lan") != "lan"
+        self.mesh_control_mint.setEnabled(tor)
+        self.mesh_control_why.setVisible(tor)
+        msg = self._mesh_control_name_problem() if tor else ""
+        self.mesh_control_note.setText(msg)
+        self.mesh_control_note.setVisible(bool(msg))
+
     def validatePage(self):
         c = self.wiz.cfg
         # what the refusable fields held BEFORE this collect — _refuse_malformed puts a
@@ -2043,6 +2148,27 @@ class NetworkPage(QtWidgets.QWizardPage):
         # DERIVED value read-only — never write it back (would pin the derived string).
         if c.mode == "mesh":
             c.superdomain = self.superdomain.text().strip()
+            # The pki LAN address: a malformed one stops the page here, inline. An
+            # EMPTY or unconfirmed one does not (the walk may continue and be saved);
+            # the build refuses it with the same words (WorklistDriver.preflight).
+            ip_text = self.pki_lan_ip.text().strip()
+            err = pki_lan.ip_error(ip_text)
+            if err:
+                self.pki_lan_note.setText(f"{pki_lan.LABEL_IP}: {err}.")
+                self.pki_lan_note.setVisible(True)
+                return False
+            c.pki_lan_ip = pki_lan.canonical(ip_text)
+            c.pki_lan_ip_fixed = self.pki_lan_fixed.isChecked()
+            t = self.mesh_control_transport.currentData() or "lan"
+            # A Tor choice whose control name would fall inside the superdomain stops the
+            # page here, inline (headscale would refuse to start on the pki).
+            msg = self._mesh_control_name_problem() if t != "lan" else ""
+            if msg:
+                self.mesh_control_note.setText(msg)
+                self.mesh_control_note.setVisible(True)
+                return False
+            c.mesh_control_transport = "" if t == "lan" else t
+            c.mesh_control_onion_mint = t != "lan" and self.mesh_control_mint.isChecked()
         # ── the identity rows, collected ONLY while their axis has them on screen ──
         # THE HOUSE RULE, both halves. initializePage hides a row it does not apply to,
         # and a hidden QLineEdit KEEPS its text — so a collect that ignores scope here would let

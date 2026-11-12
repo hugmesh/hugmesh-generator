@@ -41,7 +41,7 @@ import shlex
 from dataclasses import MISSING, asdict, dataclass, field, fields
 from typing import Any, ClassVar
 
-from . import build_driver, nvd_key, platform_info
+from . import build_driver, nvd_key, pki_lan, platform_info
 from .build_driver import BuildDriver
 from .config import (Domain, IdentityValidationError, ImageConfig,
                      domain_rows_to_dict, validate_domain_name)
@@ -266,6 +266,15 @@ class FleetConfig:
     mode: ClassVar[str] = "mesh"
     # ── brand mesh (the same env channel BuildDriver forwards for G2) ──
     headscale_url: str = ""            # HEADSCALE_URL baked by the x86/rpi5/frite builders
+    # The pki node's fixed LAN address (core/pki_lan.py): PKI_LAN_IP, which
+    # build-all-roles.sh hands to every gen-provision-keys.sh call through its env.
+    # Required when the run makes KEYS folders, with the "fixed" confirmation.
+    pki_lan_ip: str = ""               # PKI_LAN_IP
+    pki_lan_ip_fixed: bool = False     # static IP / DHCP reservation confirmed
+    # Mesh control over Tor (core/mesh_control.py; OPT-IN): MESH_CONTROL_TRANSPORT for
+    # the x86/rpi5 builders and every keys run, MESH_CONTROL_ONION_MINT=1 the consent.
+    mesh_control_transport: str = ""   # "" / lan | lan+onion | onion
+    mesh_control_onion_mint: bool = False
     # ── pass-through builder args (forwarded to EVERY per-role builder) ──
     env: str = ""                      # --env test|prod ("" = the builders' default test)
     brand_profile: str = ""            # --config brands/*.conf
@@ -394,6 +403,14 @@ class FleetConfig:
     def validate(self) -> None:
         if self.cluster_domain:
             validate_domain_name(self.cluster_domain)
+        if self.mesh_control_transport not in ("", "lan", "lan+onion", "onion"):
+            raise IdentityValidationError(
+                f"mesh_control_transport must be lan, lan+onion or onion, not "
+                f"{self.mesh_control_transport!r}")
+        if self.pki_lan_ip:
+            err = pki_lan.ip_error(self.pki_lan_ip)
+            if err:
+                raise IdentityValidationError(f"{pki_lan.LABEL_IP}: {err}")
         for d in self.domains:
             if (d.name or "").strip():
                 validate_domain_name(d.name.strip())
@@ -504,6 +521,8 @@ class FleetConfig:
             ("SKIP_KEYS", self.skip_keys),
             ("PENTEST", self.pentest), ("PENTEST_ONLY", self.pentest_only),
             ("WITH_TOR", self.with_tor),
+            ("MESH_CONTROL_ONION_MINT", self.mesh_control_onion_mint
+             and self.mesh_control_transport not in ("", "lan")),
         ):
             if val:
                 env[var] = "1"
@@ -527,6 +546,9 @@ class FleetConfig:
             ("PENTEST_ENV", self.pentest_env), ("PENTEST_SCAN", self.pentest_scan),
             ("PENTEST_PIPELINE", self.pentest_pipeline),
             ("HEADSCALE_URL", self.headscale_url),
+            ("PKI_LAN_IP", pki_lan.canonical(self.pki_lan_ip)),
+            ("MESH_CONTROL_TRANSPORT", "" if self.mesh_control_transport == "lan"
+             else self.mesh_control_transport),
             ("OPTIONAL_SERVICES", self._services_words()),
         ):
             if val:
@@ -737,4 +759,15 @@ class FleetDriver(BuildDriver):
         reason = fleet_gate_reason(cfg)
         if reason:
             problems.append(reason)
+        # The KEYS folders need the pki node's fixed LAN address (core/pki_lan.py) —
+        # the same rule the image route's keys step refuses on. A run that makes no
+        # folders (SKIP_KEYS / pen-test only) has no stick to stamp.
+        if not (cfg.skip_keys or cfg.pentest_only):
+            pki_problem = pki_lan.problem(cfg)
+            if pki_problem:
+                problems.append(pki_problem)
+            if cfg.mesh_control_transport not in ("", "lan") and not cfg.mesh_control_onion_mint:
+                from . import mesh_control
+                problems.append(f"{mesh_control.LABELS[cfg.mesh_control_transport]}: tick "
+                                f"'{mesh_control.MINT_LABEL}'.")
         return problems

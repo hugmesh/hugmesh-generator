@@ -111,6 +111,12 @@ PAGES = {
  "managed_services": [
   "network"
  ],
+ "mesh_control_onion_mint": [
+  "fleet"
+ ],
+ "mesh_control_transport": [
+  "fleet"
+ ],
  "mode": [
   "build",
   "deploy",
@@ -143,6 +149,12 @@ PAGES = {
   "users_choice"
  ],
  "pentest": [
+  "fleet"
+ ],
+ "pki_lan_ip": [
+  "fleet"
+ ],
+ "pki_lan_ip_fixed": [
   "fleet"
  ],
  "platform": [

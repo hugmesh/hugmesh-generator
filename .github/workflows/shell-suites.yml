@@ -694,6 +694,8 @@ jobs:
               tests/scripts/test-cassandra-cluster-wiring.sh
               tests/scripts/test-client-connect-routes.sh
               tests/scripts/test-compose-no-literal-passwords.sh
+              tests/scripts/test-control-endpoint-lan-first.sh
+              tests/scripts/test-mesh-control-onion.sh
               tests/scripts/test-db-connection-budget.sh
               tests/scripts/test-deeplink-remote-coverage.sh
               tests/desktop-governance/test-sso-greeter.sh
@@ -1149,6 +1151,17 @@ jobs:
     # of a Tailscale name, with a positive control) and a worker without the CA that
     # must not join. Exits 2 without docker or an image. MEASURED 2026-11-11 on a
     # Linux host with docker, images cached: 43 passed / 0 failed in about 5 min.
+    # tests/scripts/test-mesh-control-headscale-start.sh STARTS the pinned headscale on
+    # the config keys-provision's own functions render from a Tor-mode pki stick made by
+    # scripts/gen-provision-keys.sh with NO --mesh-control-name (mesh control over Tor,
+    # docs/MESH-CONTROL-OVER-TOR.md): no stubbed resolver, server_url asserted to be the
+    # control name before headscale starts. Round 1's default (hs.<superdomain>) made
+    # headscale exit "server_url cannot contain the base_domain"; this suite's negative
+    # control is that pairing, and its other cells check keys-provision's clash rule
+    # against headscale's own verdict. It also reaches /key through the shipped relay's
+    # 7443 forward with only the mesh CA trusted, and joins a worker through its relay
+    # on the LAN path. No Tor, no internet (--internal networks). Exits 2 without docker
+    # or an image.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -1172,6 +1185,7 @@ jobs:
             tests/device-registry/test-headscale-security-tag-live.sh
             tests/device-registry/test-headscale-tag-minters-live.sh
             tests/scripts/test-headscale-embedded-derp-live.sh
+            tests/scripts/test-mesh-control-headscale-start.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do
@@ -1210,6 +1224,11 @@ jobs:
     # LAYERA_BFF_PIN (a full 40-hex commit of hugmesh/hugmesh-admin-bff-api) whenever
     # the BFF side of the contract changes; the run-suites step asserts the checkout
     # is that commit. The suite exits 1 (never 0, never 3) when the checkout is absent.
+    # MEASURED 2026-11-11 in alpine:3 with this job's apk set and CI=true, against the
+    # BFF fix commit pinned below: 24 passed / 0 failed in ~11 s (its negative controls
+    # include three runs of test-layer-a-headscale-acl.sh on an absent or partial
+    # sibling). Against hugmesh-admin-bff-api main de019243 (the pre-fix golden): 2
+    # failed (the golden DIFFERS; owners on tag:superadmin and tag:dev_*).
     #
     # WHAT THE PIN MAY BE: a commit on the BFF's main, or the head commit of a BFF
     # pull request. A change to the shared golden has to land in both repositories,

@@ -86,6 +86,7 @@ from ...core.fleet import (FLEET_LANE_NOTE, JOBS_RANGE, WITH_TOR_NOTE, FleetConf
                            FleetDomains, FleetDriver, commit_fleet_domains,
                            fleet_domain_fields, fleet_domains_from_config,
                            seed_fleet_domains)
+from ...core import mesh_control, pki_lan
 from ...core import plain_words
 from ...tui.superbrand_step import session_for
 from ._nvd_key_widget import NvdKeyWidget
@@ -482,6 +483,18 @@ class FleetPage(QtWidgets.QWidget):
         self.headscale_url.setPlaceholderText(
             "brand mesh control server (HEADSCALE_URL env — baked to /etc/hugmesh/headscale-url)")
         sl.addWidget(_row("Headscale URL", self.headscale_url))
+        # The pki node's fixed LAN address (core/pki_lan.py): PKI_LAN_IP for every
+        # KEYS folder. FleetDriver.preflight refuses a run that makes folders without
+        # it; the hint says why, the same words as the image route's Network page.
+        self.pki_lan_why = QtWidgets.QLabel(pki_lan.WHY)
+        self.pki_lan_why.setWordWrap(True)
+        self.pki_lan_why.setStyleSheet("color: gray;")
+        sl.addWidget(self.pki_lan_why)
+        self.pki_lan_ip = QtWidgets.QLineEdit()
+        self.pki_lan_ip.setPlaceholderText("e.g. 192.168.1.10  (PKI_LAN_IP — the PKI node's fixed LAN IPv4)")
+        sl.addWidget(_row(pki_lan.LABEL_IP, self.pki_lan_ip))
+        self.pki_lan_fixed = QtWidgets.QCheckBox(pki_lan.LABEL_FIXED)
+        sl.addWidget(self.pki_lan_fixed)
         self.output_dir = QtWidgets.QLineEdit()
         od_btn = _file_picker(self, self.output_dir, "Output directory", directory=True)
         od = QtWidgets.QWidget(); oh = QtWidgets.QHBoxLayout(od); oh.setContentsMargins(0, 0, 0, 0)
@@ -515,6 +528,13 @@ class FleetPage(QtWidgets.QWidget):
         self.with_tor_note.setWordWrap(True)
         self.with_tor_note.setStyleSheet("color: gray;")
         nl.addWidget(self.with_tor_note)
+        # Mesh control over Tor (core/mesh_control.py; OPT-IN, default lan).
+        self.mesh_control_transport = QtWidgets.QComboBox()
+        for value, label in mesh_control.CHOICES:
+            self.mesh_control_transport.addItem(label, value)
+        nl.addWidget(_row("First-boot control path", self.mesh_control_transport))
+        self.mesh_control_mint = QtWidgets.QCheckBox(mesh_control.MINT_LABEL)
+        nl.addWidget(self.mesh_control_mint)
         self.optional_services = QtWidgets.QLineEdit()
         # short enough to be whole in the field at the window's default size (the
         # long form was elided at its right edge); the rest is the tooltip
@@ -695,6 +715,11 @@ class FleetPage(QtWidgets.QWidget):
             pentest_scan=self.pentest_scan.currentData(),
             pentest_pipeline=self.pentest_pipeline.currentData(),
             headscale_url=self.headscale_url.text().strip(),
+            pki_lan_ip=self.pki_lan_ip.text().strip(),
+            pki_lan_ip_fixed=self.pki_lan_fixed.isChecked(),
+            mesh_control_transport=("" if (self.mesh_control_transport.currentData() or "lan") == "lan"
+                                    else self.mesh_control_transport.currentData()),
+            mesh_control_onion_mint=self.mesh_control_mint.isChecked(),
             env=self.env.currentData(),
             brand_profile=self.brand_profile.text().strip(),
             cluster_domain=self.cluster_domain.text().strip(),
@@ -764,6 +789,11 @@ class FleetPage(QtWidgets.QWidget):
         combo(self.pentest_scan, cfg.pentest_scan)
         combo(self.pentest_pipeline, cfg.pentest_pipeline)
         self.headscale_url.setText(cfg.headscale_url)
+        self.pki_lan_ip.setText(cfg.pki_lan_ip)
+        self.pki_lan_fixed.setChecked(bool(cfg.pki_lan_ip_fixed))
+        self.mesh_control_transport.setCurrentIndex(
+            max(self.mesh_control_transport.findData(cfg.mesh_control_transport or "lan"), 0))
+        self.mesh_control_mint.setChecked(bool(cfg.mesh_control_onion_mint))
         combo(self.env, cfg.env)
         self.brand_profile.setText(cfg.brand_profile)
         self.cluster_domain.setText(cfg.cluster_domain)

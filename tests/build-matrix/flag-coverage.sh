@@ -158,6 +158,14 @@ frite --with-tailscale — keep the tailnet client on a --standalone ARM desktop
 jetson --with-tailscale — keep the tailnet client on a --standalone ARM desktop (docs/DESKTOP-LOGIN-SSO.md situation 2: on a tailnet, never mesh-associated), CLI-first: the Studio's tailscale field reaches ARM only as --skip-mesh when it is OFF (config.py: the arm builders had no --with-tailscale), so a Studio standalone ARM build keeps today's no-tailnet default; emitting it for a standalone ARM build with the field ON is a Studio follow-up. Pinned (executed --print-plan + plants) by tests/scripts/test-desktop-sso-bake.sh
 orangepi5 --with-tailscale — keep the tailnet client on a --standalone ARM desktop (docs/DESKTOP-LOGIN-SSO.md situation 2: on a tailnet, never mesh-associated), CLI-first: the Studio's tailscale field reaches ARM only as --skip-mesh when it is OFF (config.py: the arm builders had no --with-tailscale), so a Studio standalone ARM build keeps today's no-tailnet default; emitting it for a standalone ARM build with the field ON is a Studio follow-up. Pinned (executed --print-plan + plants) by tests/scripts/test-desktop-sso-bake.sh
 orangepi4-lts --with-tailscale — keep the tailnet client on a --standalone ARM desktop (docs/DESKTOP-LOGIN-SSO.md situation 2: on a tailnet, never mesh-associated), CLI-first: the Studio's tailscale field reaches ARM only as --skip-mesh when it is OFF (config.py: the arm builders had no --with-tailscale), so a Studio standalone ARM build keeps today's no-tailnet default; emitting it for a standalone ARM build with the field ON is a Studio follow-up. Pinned (executed --print-plan + plants) by tests/scripts/test-desktop-sso-bake.sh
+frite --mesh-control-transport — parsed only to REFUSE a Tor transport (this builder cannot bake Tor; lan is its only value); the Studio field is x86+rpi5 by design (docs/MESH-CONTROL-OVER-TOR.md)
+jetson --mesh-control-transport — parsed only to REFUSE a Tor transport (this builder cannot bake Tor; lan is its only value); the Studio field is x86+rpi5 by design (docs/MESH-CONTROL-OVER-TOR.md)
+orangepi5 --mesh-control-transport — parsed only to REFUSE a Tor transport (this builder cannot bake Tor; lan is its only value); the Studio field is x86+rpi5 by design (docs/MESH-CONTROL-OVER-TOR.md)
+orangepizero2 --mesh-control-transport — parsed only to REFUSE a Tor transport (this builder cannot bake Tor; lan is its only value); the Studio field is x86+rpi5 by design (docs/MESH-CONTROL-OVER-TOR.md)
+orangepizero2w --mesh-control-transport — parsed only to REFUSE a Tor transport (this builder cannot bake Tor; lan is its only value); the Studio field is x86+rpi5 by design (docs/MESH-CONTROL-OVER-TOR.md)
+orangepizero3 --mesh-control-transport — parsed only to REFUSE a Tor transport (this builder cannot bake Tor; lan is its only value); the Studio field is x86+rpi5 by design (docs/MESH-CONTROL-OVER-TOR.md)
+orangepi3-lts --mesh-control-transport — parsed only to REFUSE a Tor transport (this builder cannot bake Tor; lan is its only value); the Studio field is x86+rpi5 by design (docs/MESH-CONTROL-OVER-TOR.md)
+orangepi4-lts --mesh-control-transport — parsed only to REFUSE a Tor transport (this builder cannot bake Tor; lan is its only value); the Studio field is x86+rpi5 by design (docs/MESH-CONTROL-OVER-TOR.md)
 EOF
 
 allow_reason() { # platform flag -> print reason, rc 0 if allowlisted
@@ -219,6 +227,7 @@ SAMPLES = {
     "tailscale_version": [{"tailscale_version": "1.60"}],
     "skip_tailscale": [{"skip_tailscale": True}],
     "headscale_public_derp": [{"headscale_public_derp": True}],
+    "mesh_control_transport": [{"mesh_control_transport": "lan+onion"}],
     "gpu_driver": [{"gpu_driver": "nvidia"}], "nvidia_cuda": [{"nvidia_cuda": True}],
     "kernel_builtin": [{"kernel_builtin": True}],
     "enable_wifi": [{"enable_wifi": True}], "enable_bluetooth": [{"enable_bluetooth": True}],

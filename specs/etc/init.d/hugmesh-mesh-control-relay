@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+# The node-local relay behind the mesh control name (OPT-IN Tor fallback,
+# docs/MESH-CONTROL-OVER-TOR.md). keys-provision links it only on a node whose KEYS
+# say .mesh.control_transport lan+onion|onion; inert everywhere else.
+
+description="Mesh control relay (control name -> pki on the LAN, else its onion via Tor)"
+supervisor=supervise-daemon
+command="/usr/sbin/hugmesh-mesh-control-relay"
+command_args="listen"
+output_log="/var/log/hugmesh-mesh-control-relay.log"
+error_log="/var/log/hugmesh-mesh-control-relay.log"
+respawn_delay=2
+
+depend() {
+    need net
+    use logger tor
+    after keys-provision
+    before tailscaled
+}
+
+start_pre() {
+    checkpath -d -m 0755 /run/hugmesh/mesh-control
+    [ -r /etc/hugmesh/mesh-control/relay.conf ] || {
+        eerror "no /etc/hugmesh/mesh-control/relay.conf — keys-provision did not configure the relay"
+        return 1
+    }
+}
