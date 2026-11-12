@@ -1513,12 +1513,13 @@ PREMERGE_UNGATED=(
   # the path to a shell-suites job, delete this entry and raise PREMERGE_BASELINE by
   # one to the number this file then prints.
   tests/scripts/test-password-rotation-per-run.sh
-  # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
-  # builder that bakes the cluster tree without resolving the gate at all, two
+  # RED ON MAIN, and the reds are real defects rather than suite bugs (its A4, a
+  # jetson builder that baked the cluster tree without resolving the gate at all,
+  # went green on 2026-11-12 when jetson began calling gate_optional_services): two
   # selection-rendered artefacts the boot path still sources from git, a git
   # baseline that ships three services ON, the reconciler master switch
   # deliberately off pending the hardcoded-app cut-over, and a missing ArgoCD
-  # resources-finalizer — A4 B2 B3 C5b C7. (Its C8 leg was ALSO red under the
+  # resources-finalizer — B2 B3 C5b C7. (Its C8 leg was ALSO red under the
   # entry written on 2026-08-26; that text was stale. hugmesh-admin-bff-api PR #43
   # merged 2026-08-27 07:04 UTC, the handler is on that repo's main, and C8
   # measures green. It had been reading a working tree 9 commits behind its own
@@ -1527,8 +1528,8 @@ PREMERGE_UNGATED=(
   # lint:selected-services-only-chain instead. It ALSO needs the
   # hugmesh-admin-bff-api checkout for its C8 leg and reports UNVERIFIED + exits 3
   # without it, which a hosted runner cannot satisfy. Not an exemption: EACH of the
-  # five reds has a control that plants the fix and requires it to go green
-  # (A4 NC10e, B2 NC21, B3 NC22, C5b NC23, C7 NC14).
+  # four reds has a control that plants the fix and requires it to go green
+  # (B2 NC21, B3 NC22, C5b NC23, C7 NC14).
   tests/scripts/test-selected-services-only.sh
   # RED ON MAIN on real cross-repo defects (re-measured 2026-09-23, #584):
   # meshbridge is in the generator's CRD enum + seed CRs while the controller's

@@ -111,7 +111,8 @@
 #       call inside a function nothing invokes turned it fully green. A4 now
 #       requires the gate to be RESOLVED, --optional-services to be PARSED, the
 #       call to be REACHABLE, and to run AFTER the copy under the same guard stack.
-#       (NC10b, NC10c, NC10d; NC10e plants the fix and requires green.)
+#       (NC10b, NC10c, NC10d; NC10e plants the fix and requires green; NC10f
+#       deletes jetson's real call, which A4 must name.)
 #   C1  keyed on "some generator carries the selector". ArgoCD applies `selector`
 #       PER GENERATOR, so a second selector-less list generator deployed its whole
 #       element list unconditionally and C1 still said PASS. Now: every generator.
@@ -137,15 +138,17 @@
 #       before the endpoint merged, so it does not. NOTHING here measures that.
 #
 # ── THIS GUARD IS STILL RED, AND STILL ON PURPOSE ───────────────────────────
-# A4 B2 B3 C5b C7 name defects that are LIVE on this tree (C8 went green when its
-# sibling's PR #43 merged). It is therefore NOT wired into the pre-merge
+# B2 B3 C5b C7 name defects that are LIVE on this tree (C8 went green when its
+# sibling's PR #43 merged; A4 went green on 2026-11-12, when build-jetson-stage4.sh
+# began sourcing the gate library and calling gate_optional_services after its
+# tree copy). It is therefore NOT wired into the pre-merge
 # pull_request gate — a red suite there blocks every PR in the repo — but recorded
 # in PREMERGE_UNGATED with that reason and gated in .gitlab-ci.yml, exactly as
 # tests/scripts/test-optional-service-slug-closure.sh and
 # tests/stack/test-gateway-auth-flag-parity.sh are. Do not "fix" a red check by
-# relaxing it — fix the tree. EVERY ONE of the five has a control that plants the
-# FIX and requires the check to go GREEN: A4 NC10e, B2 NC21, B3 NC22, C5b NC23,
-# C7 NC14. (V2's .gitlab-ci.yml claimed that of six; it was true of two.)
+# relaxing it — fix the tree. EVERY ONE of the four has a control that plants the
+# FIX and requires the check to go GREEN: B2 NC21, B3 NC22, C5b NC23, C7 NC14
+# (and A4 keeps NC10e, now a re-plant of jetson's call in its real position). (V2's .gitlab-ci.yml claimed that of six; it was true of two.)
 #
 # ── HOUSE FAILURE MODES THIS FILE IS BUILT AGAINST ──────────────────────────
 #  * EMPTY DERIVATION. Every list below is derived, and every derivation ABORTS
@@ -2457,28 +2460,26 @@ negative_controls() {
 
   _reset() { rm -rf "${SB}"; cp -r "${MASTER}" "${SB}"; }
 
-  # _plant_jetson_gate <file> <mode:unreachable|early|fixed> — give
-  # build-jetson-stage4.sh the two things A4 needs BESIDES a call (the sourced
-  # gate library and --optional-services parsing), so the three modes differ in
-  # exactly ONE thing: WHERE the call is. That is what makes NC10c/NC10d/NC10e a
+  # _plant_jetson_gate <file> <mode:removed|unreachable|early|fixed> — move
+  # build-jetson-stage4.sh's ONE real gate call. Since 2026-11-12 jetson sources
+  # the gate library, parses --optional-services and calls gate_optional_services
+  # right after its tree copy, so A4 is green on the real tree. Each mode deletes
+  # that real call (exactly one, or the helper dies) and then puts a call back in
+  # at most ONE place, so the four modes differ in exactly one thing: WHERE the
+  # call is, or that there is none. That keeps NC10c/NC10d/NC10e/NC10f a
   # measurement of reachability and ordering rather than of the other two legs.
   _plant_jetson_gate() {
     SC_F="$1" SC_MODE="$2" python3 - <<'PY'
-import os, sys
+import os, re, sys
 p = os.environ["SC_F"]; mode = os.environ["SC_MODE"]
 L = open(p, encoding="utf-8").read().split("\n")
-L[1:1] = [
-    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
-    'source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"',
-    'while [ $# -gt 0 ]; do',
-    '    case "$1" in',
-    '        --optional-services) OPTIONAL_SERVICES="$2"; shift 2 ;;',
-    '        *) shift ;;',
-    '    esac',
-    'done',
-    '',
-]
-if mode == "fixed":
+real = [i for i, l in enumerate(L) if re.match(r"^\s*gate_optional_services(\s|$)", l)]
+if len(real) != 1:
+    sys.exit("anchor: expected ONE real gate_optional_services call in jetson, found %d" % len(real))
+del L[real[0]]
+if mode == "removed":
+    pass
+elif mode == "fixed":
     for i, l in enumerate(L):
         if l.strip().startswith('info "Baked shared cluster GitOps tree'):
             L[i + 1:i + 1] = ["        gate_optional_services"]
@@ -2989,6 +2990,22 @@ PY
       && nc_ok "NC10e jetson sources the lib, parses --optional-services and gates AFTER the copy -> A4 green (not stuck red)" \
       || { nc_bad "NC10e A4 stayed $(status_of "${OUT}" A4) with the real fix planted — A4 is stuck"; grep -E '^  FAIL A4|^         build-jetson' "${OUT}" | sed 's/^/        | /'; }
   else nc_bad "NC10e mutation changed nothing"; fi
+
+  # ── NC10f — A4: jetson's real gate call deleted ──────────────────────────
+  # Until 2026-11-12 this WAS the tree: jetson baked specs/cluster with no gate,
+  # so a Jetson cluster image applied every optional service's Application
+  # (akkoma included, at its unpublished placeholder digest). Deleting the one
+  # real call must turn A4 red again and name jetson.
+  _reset; f="${SB}/build-jetson-stage4.sh"; cp "${f}" "${PRE}"
+  _plant_jetson_gate "${f}" removed
+  if changed "${f}" "${PRE}"; then
+    run_legs "${SB}" "${OUT}" static
+    if [ "$(status_of "${OUT}" A4)" = "FAIL" ] && has_line "${OUT}" 'build-jetson-stage4\.sh bakes the cluster tree with NO gate_optional_services call'; then
+      nc_ok "NC10f jetson's real gate call deleted -> A4 RED naming jetson"
+    else
+      nc_bad "NC10f A4 is $(status_of "${OUT}" A4) with jetson's gate call deleted"
+    fi
+  else nc_bad "NC10f mutation changed nothing"; fi
 
   # ── NC12d — B1: the root apply reached through a VARIABLE and a FUNCTION ──
   # The mutation that defeated V2's B1. The filename literal sits six lines above

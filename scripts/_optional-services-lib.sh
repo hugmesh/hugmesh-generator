@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # _optional-services-lib.sh — the ONE implementation of the OPTIONAL-SERVICE
 # selection gate + its renderers, sourced by EVERY stage4 builder that bakes the
-# cluster GitOps tree (build-rpi5-stage4.sh, build-x86-host-stage4.sh).
+# cluster GitOps tree (build-rpi5-stage4.sh, build-x86-host-stage4.sh and, since
+# 2026-11-12, build-jetson-stage4.sh, which used to bake the tree ungated).
 #
 # WHY THIS FILE EXISTS (2026-08-26). Until this commit each builder carried its
 # OWN copy of gate_optional_services() and the ~13 _opt_* helpers. They were
