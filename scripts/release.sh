@@ -9,6 +9,9 @@
 #   scripts/release.sh --apply --from java          # resume at a phase (re-running skips DONE work anyway)
 #   scripts/release.sh --apply --only hugmesh-admin-ui   # act on these repos only (repeatable);
 #                                                   # stages with none of them are skipped, never a stop
+#   scripts/release.sh --apply --only hugmesh-generator@akkoma
+#                                                   # an ARTIFACT row: a repository's second artifact
+#                                                   # (repos.tsv; beta channel only)
 #   scripts/release.sh --urls                       # only list the packages that are not public yet
 #   scripts/release.sh --channel stable             # dry run of a stable cut: release/X.Y per repo
 #   scripts/release.sh --channel stable --apply     # cut, bump PRs, tag, next-beta PRs (asks first)
@@ -135,12 +138,29 @@ FROM_I=$(phase_index "$FROM") || die "--from: unknown phase '$FROM' (phases: ${P
 # ── the table ────────────────────────────────────────────────────────────────
 [ -r "$TABLE" ] || die "cannot read the repo table $TABLE"
 ROWS=()
+# A row's first column is its ID. Usually that is the repository; a repository that
+# publishes a SECOND artifact with its own tag prefix and workflow (hugmesh-generator:
+# the mesh-node image AND hugmesh-akkoma) gets one more row whose ID is
+# <repository>@<artifact>. Every GitHub call takes the repository, ${id%@*}, which is
+# the ID itself for every ordinary row; everything else (state, --only, --expect, the
+# printed plan) is keyed by the ID. Artifact rows are BETA-ONLY: the stable channel
+# cuts one release/X.Y and opens one bump PR per repository, and two rows of one
+# repository would collide on both, so `--channel stable` skips them (and refuses one
+# named with --only).
 declare -A T_STAGE=() T_KIND=() T_VFILE=() T_PREFIX=() T_WF=() T_PKGS=() T_MIRRORS=()
+ARTIFACT_SKIPPED=()
 while IFS='|' read -r st repo kind vfile prefix wf pkgs mirrors; do
   case "$st" in ''|'#'*) continue ;; esac
   case "$st" in [1-9]) ;; *) die "$TABLE: bad stage '$st' for '$repo'" ;; esac
   case "$kind" in mvn|img) ;; *) die "$TABLE: bad kind '$kind' for '$repo'" ;; esac
   [ -n "$repo" ] && [ -n "$vfile" ] && [ -n "$prefix" ] && [ -n "$wf" ] && [ -n "$pkgs" ] || die "$TABLE: incomplete row for '$repo'"
+  case "$repo" in
+    *@*)
+      [[ "$repo" =~ ^[A-Za-z0-9._-]+@[a-z0-9-]+$ ]] || die "$TABLE: bad artifact row id '$repo' (expected <repository>@<artifact>, artifact in [a-z0-9-])"
+      [ "$kind" = img ] || die "$TABLE: artifact row '$repo' must be kind img"
+      if [ "$CHANNEL" = stable ]; then ARTIFACT_SKIPPED+=("$repo"); continue; fi
+      ;;
+  esac
   [ -z "${T_STAGE[$repo]:-}" ] || die "$TABLE: '$repo' is listed twice"
   ROWS+=("$repo")
   T_STAGE[$repo]=$st; T_KIND[$repo]=$kind; T_VFILE[$repo]=$vfile; T_PREFIX[$repo]=$prefix; T_WF[$repo]=$wf; T_PKGS[$repo]=$pkgs; T_MIRRORS[$repo]=${mirrors:-}
@@ -154,7 +174,12 @@ while IFS='|' read -r st repo kind vfile prefix wf pkgs mirrors; do
   done
 done < "$TABLE"
 [ ${#ROWS[@]} -gt 0 ] || die "$TABLE has no rows"
-for o in "${ONLY[@]}"; do [ -n "${T_STAGE[$o]:-}" ] || die "--only $o: not a repo in $TABLE"; done
+for o in "${ONLY[@]}"; do
+  for a in "${ARTIFACT_SKIPPED[@]}"; do
+    [ "$o" = "$a" ] && die "--only $o: an artifact row (<repository>@<artifact>) releases on the beta channel only; this script has no stable path for a second artifact of one repository"
+  done
+  [ -n "${T_STAGE[$o]:-}" ] || die "--only $o: not a repo in $TABLE"
+done
 for o in "${!EXPECT[@]}"; do [ -n "${T_STAGE[$o]:-}" ] || die "--expect $o: not a repo in $TABLE"; done
 for m in "${MERGES[@]}"; do [[ "$m" =~ ^[A-Za-z0-9._-]+#[0-9]+$ ]] || die "--merge '$m': expected <repo>#<number>"; done
 if [ -n "$STUDIO" ] && [ "$STUDIO" != none ] && [ "$STUDIO" != next ] && [ "$CHANNEL" = beta ]; then
@@ -176,7 +201,7 @@ stage_title() {
     6) echo "Gateway overlays be/fe/pki (FROM the gateway image; need 5)" ;;
     7) echo "Java BFF/API images (need 1-4)" ;;
     8) echo "Angular UI images (no Maven dependency)" ;;
-    9) echo "Games, forum-api (PHP), mesh-node (no Maven dependency)" ;;
+    9) echo "Games, forum-api (PHP), mesh-node, hugmesh-akkoma (no Maven dependency)" ;;
   esac
 }
 stage_deps() {
@@ -244,7 +269,7 @@ is_stable() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 # b64-decoded file at a ref, via the contents API
 file_at() { # repo ref path
   local b
-  b=$(ghq api "repos/$ORG/$1/contents/$3?ref=$2" --jq .content) || return 1
+  b=$(ghq api "repos/$ORG/${1%@*}/contents/$3?ref=$2" --jq .content) || return 1
   printf '%s' "$b" | base64 -d 2>/dev/null
 }
 
@@ -334,7 +359,7 @@ load_org_secrets() {
 # secret_present repo NAME -> prints where; names only, never a value
 secret_present() {
   local repo_secrets line vis
-  if ! repo_secrets=$(ghq secret list -R "$ORG/$1" --json name -q '.[].name'); then echo "repo secret list unreadable"; return 1; fi
+  if ! repo_secrets=$(ghq secret list -R "$ORG/${1%@*}" --json name -q '.[].name'); then echo "repo secret list unreadable"; return 1; fi
   if printf '%s\n' "$repo_secrets" | grep -axF -- "$2" >/dev/null; then echo repo; return 0; fi
   if [ "$ORG_SECRETS_STATE" = ok ]; then
     line=$(printf '%s\n' "$ORG_SECRETS" | grep -a "^$2=" || true)
@@ -360,9 +385,9 @@ declare -A S_STATE=() S_REASON=() S_NOTE=() S_SHA=() S_VER=() S_TAG=() S_RERUN=(
 # tag_commit repo tag -> prints the COMMIT sha; rc 0 found, 1 absent, 2 cannot tell
 tag_commit() {
   local out typ sha
-  if out=$(GH api "repos/$ORG/$1/git/ref/tags/$2" --jq '.object.type+" "+.object.sha' 2>&1); then
+  if out=$(GH api "repos/$ORG/${1%@*}/git/ref/tags/$2" --jq '.object.type+" "+.object.sha' 2>&1); then
     read -r typ sha <<<"$out"
-    if [ "$typ" = tag ]; then sha=$(ghq api "repos/$ORG/$1/git/tags/$sha" --jq .object.sha) || { echo "annotated tag $2 unreadable"; return 2; }; fi
+    if [ "$typ" = tag ]; then sha=$(ghq api "repos/$ORG/${1%@*}/git/tags/$sha" --jq .object.sha) || { echo "annotated tag $2 unreadable"; return 2; }; fi
     printf '%s' "$sha"; return 0
   fi
   case "$out" in *'HTTP 404'*|*'"status":"404"'*|*'Not Found'*) return 1 ;; esac
@@ -376,14 +401,14 @@ commits_since() {
   local base=$2
   shift 2
   local cmp ahead shas p pfx rel n=0 s
-  cmp=$(ghq api "repos/$ORG/$repo/compare/$base...${CS_REF:-main}" --jq '(.ahead_by|tostring), .commits[].sha') || { echo "?"; return 1; }
+  cmp=$(ghq api "repos/$ORG/${repo%@*}/compare/$base...${CS_REF:-main}" --jq '(.ahead_by|tostring), .commits[].sha') || { echo "?"; return 1; }
   ahead=$(printf '%s\n' "$cmp" | head -1)
   if [ $# -eq 0 ]; then echo "$ahead"; return 0; fi
   shas=$(printf '%s\n' "$cmp" | tail -n +2)
   rel=""
   for p in "$@"; do
     pfx=${p%%\**}; pfx=${pfx%/}
-    rel="$rel"$'\n'"$(ghq api "repos/$ORG/$repo/commits?sha=${CS_REF:-main}&path=$pfx&per_page=100" --jq '.[].sha' || true)"
+    rel="$rel"$'\n'"$(ghq api "repos/$ORG/${repo%@*}/commits?sha=${CS_REF:-main}&path=$pfx&per_page=100" --jq '.[].sha' || true)"
   done
   for s in $shas; do printf '%s\n' "$rel" | grep -axF -- "$s" >/dev/null && n=$((n+1)); done
   echo "$n"
@@ -429,7 +454,7 @@ tag_run_unpublished() {
   local ver=${S_VER[$1]} tag=${S_TAG[$1]}
   age=$(run_age_days "$created")
   if [ "$age" -ge "$RERUN_MAX_DAYS" ]; then echo "it is $age days old, and GitHub cannot re-run it"; return 1; fi
-  facts=$(ghq run view "$rid" -R "$ORG/$repo" --json attempt,jobs \
+  facts=$(ghq run view "$rid" -R "$ORG/${repo%@*}" --json attempt,jobs \
           -q '"attempt\t\(.attempt // 1)", (.jobs[] as $j | $j.steps[]? | "\(.conclusion // "")\t\($j.name)\t\(.name)")') \
     || { echo "its jobs are unreadable"; return 1; }
   while IFS=$'\t' read -r con job step; do
@@ -452,14 +477,14 @@ tag_run_unpublished() {
       2) echo "cannot tell whether $p:$ver was published"; return 1 ;;
     esac
   done
-  rc=0; ghs release view "$tag" -R "$ORG/$repo" --json tagName >/dev/null || rc=$?
+  rc=0; ghs release view "$tag" -R "$ORG/${repo%@*}" --json tagName >/dev/null || rc=$?
   case "$rc" in
     0) echo "GitHub Release $tag exists"; return 1 ;;
     4) ;;
     *) echo "cannot tell whether GitHub Release $tag exists"; return 1 ;;
   esac
   if ! [[ "${fjob,,}" =~ $PREFLIGHT_JOB_RE ]] && ! [[ "${fstep,,}" =~ $PREFLIGHT_STEP_RE ]]; then
-    echo "it published nothing, but it failed in '$failed', a test or build of the tagged commit itself, which a re-run repeats (if it was a flake: gh run rerun $rid --failed -R $ORG/$repo)"
+    echo "it published nothing, but it failed in '$failed', a test or build of the tagged commit itself, which a re-run repeats (if it was a flake: gh run rerun $rid --failed -R $ORG/${repo%@*})"
     return 1
   fi
   echo "failed in '$failed' before it published anything (no ${T_PKGS[$repo]// /, } $ver, no GitHub Release $tag)"
@@ -478,8 +503,8 @@ classify_beta() {
   S_STATE[$repo]=REFUSE; S_REASON[$repo]=""; S_NOTE[$repo]=""; S_SHA[$repo]=""; S_VER[$repo]=""; S_TAG[$repo]=""
   S_RERUN[$repo]=""; S_BUSY[$repo]=""; S_TAGRUN[$repo]=""; S_OLD[$repo]=""; S_TAGRERUN[$repo]=""
 
-  sha=$(ghq api "repos/$ORG/$repo/git/ref/heads/main" --jq .object.sha || true)
-  if [ -z "$sha" ]; then S_REASON[$repo]="cannot read main: gh api repos/$ORG/$repo/git/ref/heads/main"; return; fi
+  sha=$(ghq api "repos/$ORG/${repo%@*}/git/ref/heads/main" --jq .object.sha || true)
+  if [ -z "$sha" ]; then S_REASON[$repo]="cannot read main: gh api repos/$ORG/${repo%@*}/git/ref/heads/main"; return; fi
   S_SHA[$repo]=$sha
   ver=$(read_version "$repo" "$sha" "$vfile" || true)
   S_VER[$repo]=$ver
@@ -492,7 +517,7 @@ classify_beta() {
   # newest stable X.Y.Z decides whether main's beta line has already shipped (#855). A failed
   # read is REFUSE, never "no tags": an empty listing would skip both checks and read READY.
   # (No tags under the prefix is an empty 200, which is a success here.)
-  tags=$(ghq api "repos/$ORG/$repo/git/matching-refs/tags/$prefix" --jq '.[].ref') || { S_REASON[$repo]="cannot read tags: gh api repos/$ORG/$repo/git/matching-refs/tags/$prefix"; return; }
+  tags=$(ghq api "repos/$ORG/${repo%@*}/git/matching-refs/tags/$prefix" --jq '.[].ref') || { S_REASON[$repo]="cannot read tags: gh api repos/$ORG/${repo%@*}/git/matching-refs/tags/$prefix"; return; }
   stable=$(newest_stable "$tags" "$prefix")
 
   wft=$(file_at "$repo" "$sha" ".github/workflows/$wf" || true)
@@ -504,23 +529,23 @@ classify_beta() {
   if [ "$rc" = 2 ]; then S_REASON[$repo]="cannot tell whether tag $tag exists: $tc"; return; fi
   if [ "$rc" = 0 ]; then
     # Published (or being published). A published beta is never re-tagged.
-    run=$(ghq run list -R "$ORG/$repo" --workflow "$wf" --branch "$tag" --limit 1 \
+    run=$(ghq run list -R "$ORG/${repo%@*}" --workflow "$wf" --branch "$tag" --limit 1 \
           --json databaseId,status,conclusion,createdAt -q '.[]|[(.databaseId|tostring),.status,(.conclusion//""),.createdAt]|join("|")' || true)
     IFS='|' read -r rid rst rcon rcreated <<<"${run:-}"
     if [ -z "${rid:-}" ]; then
-      S_REASON[$repo]="tag $tag exists (${tc:0:12}) but no $wf run for it was found: look at https://github.com/$ORG/$repo/actions"; return
+      S_REASON[$repo]="tag $tag exists (${tc:0:12}) but no $wf run for it was found: look at https://github.com/$ORG/${repo%@*}/actions"; return
     fi
     S_TAGRUN[$repo]=$rid
     if [ "$rst" != completed ]; then
-      S_STATE[$repo]=RUNNING; S_NOTE[$repo]="tag $tag run $rid is $rst: gh run watch $rid -R $ORG/$repo"; return
+      S_STATE[$repo]=RUNNING; S_NOTE[$repo]="tag $tag run $rid is $rst: gh run watch $rid -R $ORG/${repo%@*}"; return
     fi
     if [ "$rcon" != success ]; then
       if why=$(tag_run_unpublished "$repo" "$rid" "${rcreated:-}"); then
         # Nothing went out, so the beta number is not burned: re-run the run, do not bump.
         S_TAGRERUN[$repo]=$rid
-        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon', but it $why. The beta number is not burned, so do NOT bump: gh run rerun $rid --failed -R $ORG/$repo (this stage offers it). That fixes a cause outside the tagged commit (a package that was not published yet, a flaky step); if the cause is in the commit itself, the re-run fails the same way: then fix it on main and bump $vfile to $(next_beta "$ver" "$stable")"
+        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon', but it $why. The beta number is not burned, so do NOT bump: gh run rerun $rid --failed -R $ORG/${repo%@*} (this stage offers it). That fixes a cause outside the tagged commit (a package that was not published yet, a flaky step); if the cause is in the commit itself, the re-run fails the same way: then fix it on main and bump $vfile to $(next_beta "$ver" "$stable")"
       else
-        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon' (no re-run: $why). A published beta is never re-tagged: read gh run view $rid --log-failed -R $ORG/$repo, fix it on main, bump $vfile to $(next_beta "$ver" "$stable") and run this again"
+        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon' (no re-run: $why). A published beta is never re-tagged: read gh run view $rid --log-failed -R $ORG/${repo%@*}, fix it on main, bump $vfile to $(next_beta "$ver" "$stable") and run this again"
       fi
       return
     fi
@@ -594,14 +619,14 @@ check_unreleased() {
   # does not count): a red run means the tag run would push :<version> and then die, which
   # burns that version number.
   if [ "$pushref" = yes ]; then
-    run=$(ghq run list -R "$ORG/$repo" --workflow "$wf" --branch "$ref" --event push --limit 1 \
+    run=$(ghq run list -R "$ORG/${repo%@*}" --workflow "$wf" --branch "$ref" --event push --limit 1 \
           --json databaseId,headSha,status,conclusion,createdAt -q '.[]|[(.databaseId|tostring),.headSha,.status,(.conclusion//""),.createdAt]|join("|")' || true)
     IFS='|' read -r rid rsha rst rcon rcreated <<<"${run:-}"
     if [ -z "${rid:-}" ]; then
       reasons+=("no push-to-$ref run of $wf found: push a commit to $ref (the next merge starts one)")
     elif [ "$rst" != completed ]; then
       S_BUSY[$repo]=$rid
-      reasons+=("$ref push run $rid (${rsha:0:8}) is still $rst: wait for it (gh run watch $rid -R $ORG/$repo)")
+      reasons+=("$ref push run $rid (${rsha:0:8}) is still $rst: wait for it (gh run watch $rid -R $ORG/${repo%@*})")
     elif [ "$rcon" != success ]; then
       age=$(run_age_days "$rcreated")
       if [ "$age" -ge "$RERUN_MAX_DAYS" ]; then
@@ -609,7 +634,7 @@ check_unreleased() {
         reasons+=("last $ref push run $rid (${rsha:0:8}) is $rcon and $age days old: GitHub cannot re-run it. Push a commit to $ref (the next merge creates a new push run)")
       else
         S_RERUN[$repo]=$rid
-        reasons+=("last $ref push run $rid (${rsha:0:8}) is $rcon: fix the cause, then gh run rerun $rid --failed -R $ORG/$repo (the rerun phase does this)")
+        reasons+=("last $ref push run $rid (${rsha:0:8}) is $rcon: fix the cause, then gh run rerun $rid --failed -R $ORG/${repo%@*} (the rerun phase does this)")
       fi
     elif [ "$rsha" != "$sha" ]; then
       # main's HEAD has no push run of its own. Without a paths filter that run is still to
@@ -617,13 +642,13 @@ check_unreleased() {
       # commit whose release workflow never ran on main. With a paths filter it is fine only
       # when nothing since the green run touches those paths.
       if [ ${#paths[@]} -eq 0 ]; then
-        reasons+=("$ref is ${sha:0:8} but the latest $ref push run of $wf ($rid, green) is at ${rsha:0:8}: $ref's HEAD has no push run yet (just merged, Actions lagging, or [skip ci]). Wait for it (https://github.com/$ORG/$repo/actions); if none ever comes, push a commit to $ref")
+        reasons+=("$ref is ${sha:0:8} but the latest $ref push run of $wf ($rid, green) is at ${rsha:0:8}: $ref's HEAD has no push run yet (just merged, Actions lagging, or [skip ci]). Wait for it (https://github.com/$ORG/${repo%@*}/actions); if none ever comes, push a commit to $ref")
       else
         n=$(CS_REF=$ref commits_since "$repo" "$rsha" "${paths[@]}" || true)
         if [ "$n" = 0 ]; then
           S_NOTE[$repo]="last $ref push run $rid green at ${rsha:0:8} ($ref is ${sha:0:8}; no commit since it under ${paths[*]}, so no push run is due)"
         else
-          reasons+=("$ref is ${sha:0:8} and has ${n} commit(s) under ${paths[*]} since ${rsha:0:8}, where the latest $ref push run $rid is green; their push run has not appeared yet: wait for it (https://github.com/$ORG/$repo/actions)")
+          reasons+=("$ref is ${sha:0:8} and has ${n} commit(s) under ${paths[*]} since ${rsha:0:8}, where the latest $ref push run $rid is green; their push run has not appeared yet: wait for it (https://github.com/$ORG/${repo%@*}/actions)")
         fi
       fi
     else
@@ -732,7 +757,7 @@ stable_reset() {
 # channel_pr repo -> the URL of the open per-repo "Release channels" PR, or a description
 channel_pr() {
   local u
-  u=$(ghq pr list -R "$ORG/$1" --state open --search "$CHANNEL_PR_TITLE in:title" --json url -q '.[0].url // empty' || true)
+  u=$(ghq pr list -R "$ORG/${1%@*}" --state open --search "$CHANNEL_PR_TITLE in:title" --json url -q '.[0].url // empty' || true)
   if [ -n "$u" ]; then printf '%s' "$u"; else printf 'the "%s: beta from main, stable from release/X.Y" PR for %s/%s (none is open yet)' "$CHANNEL_PR_TITLE" "$ORG" "$1"; fi
 }
 # channel_missing <workflow text> -> prints what is missing; rc 0 when both markers are there
@@ -748,7 +773,7 @@ channel_missing() {
 # stable_tags repo prefix -> every plain X.Y.Z tag of the repo, one per line
 stable_tags() {
   local t v
-  for t in $(ghq api "repos/$ORG/$1/git/matching-refs/tags/$2" --jq '.[].ref' || true); do
+  for t in $(ghq api "repos/$ORG/${1%@*}/git/matching-refs/tags/$2" --jq '.[].ref' || true); do
     v=${t#refs/tags/$2}
     is_stable "$v" && echo "$v"
   done
@@ -1064,37 +1089,37 @@ bump_files() { python3 -I -c 'import json,sys; [print(x) for x in json.load(open
 bump_pr() {
   local repo=$1 base=$2 head=$3 mode=$4 target=$5 title=$6
   local bsha tree commit url body rc=0 tf cf
-  url=$(ghq pr list -R "$ORG/$repo" --head "$head" --state open --json url -q '.[0].url // empty' || true)
+  url=$(ghq pr list -R "$ORG/${repo%@*}" --head "$head" --state open --json url -q '.[0].url // empty' || true)
   if [ -n "$url" ]; then say "    $repo: PR already open: $url"; S_PRURL[$repo]=$url; return 0; fi
-  bsha=$(ghq api "repos/$ORG/$repo/git/ref/heads/$base" --jq .object.sha) || { say "  STOP $repo: cannot read $base"; return 1; }
+  bsha=$(ghq api "repos/$ORG/${repo%@*}/git/ref/heads/$base" --jq .object.sha) || { say "  STOP $repo: cannot read $base"; return 1; }
   bump_compute "$repo" "$bsha" "$mode" "$target" || true
   if [ -n "$(bump_field left || true)" ]; then
     say "  STOP $repo: the bump on $base ${bsha:0:12} is not mechanical:"; bump_field left | sed 's/^/      /'; rm -f "$BUMP_JSON"; return 1
   fi
   if [ -z "$(bump_files)" ]; then say "    $repo: $base ${bsha:0:12} already carries $target; no PR needed"; rm -f "$BUMP_JSON"; return 0; fi
-  tree=$(ghq api "repos/$ORG/$repo/git/commits/$bsha" --jq .tree.sha) || { say "  STOP $repo: cannot read the tree of $base"; return 1; }
+  tree=$(ghq api "repos/$ORG/${repo%@*}/git/commits/$bsha" --jq .tree.sha) || { say "  STOP $repo: cannot read the tree of $base"; return 1; }
   tf=$(mktemp "${TMPDIR:-/tmp}/release-tree.XXXXXX"); cf=$(mktemp "${TMPDIR:-/tmp}/release-commit.XXXXXX")
   python3 -I -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
 print(json.dumps({"base_tree": sys.argv[2], "tree": [{"path": p, "mode": "100644", "type": "blob", "content": c} for p, c in d["changed"].items()]}))' "$BUMP_JSON" "$tree" > "$tf"
-  tree=$(GH api -X POST "repos/$ORG/$repo/git/trees" --input "$tf" --jq .sha) || rc=1
+  tree=$(GH api -X POST "repos/$ORG/${repo%@*}/git/trees" --input "$tf" --jq .sha) || rc=1
   if [ "$rc" = 0 ]; then
     python3 -I -c 'import json, sys; print(json.dumps({"message": sys.argv[1], "tree": sys.argv[2], "parents": [sys.argv[3]]}))' "$title" "$tree" "$bsha" > "$cf"
-    commit=$(GH api -X POST "repos/$ORG/$repo/git/commits" --input "$cf" --jq .sha) || rc=1
+    commit=$(GH api -X POST "repos/$ORG/${repo%@*}/git/commits" --input "$cf" --jq .sha) || rc=1
   fi
   rm -f "$tf" "$cf"
   [ "$rc" = 0 ] || { rm -f "$BUMP_JSON"; say "  STOP $repo: creating the bump commit failed"; return 1; }
-  if ghq api "repos/$ORG/$repo/git/ref/heads/$head" --jq .object.sha >/dev/null; then
-    GH api -X PATCH "repos/$ORG/$repo/git/refs/heads/$head" -f "sha=$commit" -F force=true --jq '"    moved "+.ref' || { say "  STOP $repo: moving $head failed"; return 1; }
+  if ghq api "repos/$ORG/${repo%@*}/git/ref/heads/$head" --jq .object.sha >/dev/null; then
+    GH api -X PATCH "repos/$ORG/${repo%@*}/git/refs/heads/$head" -f "sha=$commit" -F force=true --jq '"    moved "+.ref' || { say "  STOP $repo: moving $head failed"; return 1; }
   else
-    GH api -X POST "repos/$ORG/$repo/git/refs" -f "ref=refs/heads/$head" -f "sha=$commit" --jq '"    created "+.ref' || { say "  STOP $repo: creating $head failed"; return 1; }
+    GH api -X POST "repos/$ORG/${repo%@*}/git/refs" -f "ref=refs/heads/$head" -f "sha=$commit" --jq '"    created "+.ref' || { say "  STOP $repo: creating $head failed"; return 1; }
   fi
   body=$(printf 'Opened by scripts/release.sh --channel stable (hugmesh-generator, docs/RELEASING.md). One mechanical commit:\n\n%s\n' "$(bump_field summary | sed 's/^/- /')")
   if [ -n "$(bump_field notes)" ]; then body=$(printf '%s\n\nBefore merging:\n\n%s\n' "$body" "$(bump_field notes | sed 's/^/- /')"); fi
   body=$(printf '%s\n\nComments and prose that still name a beta version are left for a human. The release script tags this repo only after this PR is merged into %s and its push run there is green.\n' "$body" "$base")
   rm -f "$BUMP_JSON"
-  url=$(GH pr create -R "$ORG/$repo" --draft --base "$base" --head "$head" --title "$title" --body "$body") || { say "  STOP $repo: gh pr create failed"; return 1; }
+  url=$(GH pr create -R "$ORG/${repo%@*}" --draft --base "$base" --head "$head" --title "$title" --body "$body") || { say "  STOP $repo: gh pr create failed"; return 1; }
   S_PRURL[$repo]=$url
   say "    $repo: draft PR $url"
 }
@@ -1110,8 +1135,8 @@ classify_stable() {
   S_RERUN[$repo]=""; S_BUSY[$repo]=""; S_TAGRUN[$repo]=""; S_OLD[$repo]=""; S_TAGRERUN[$repo]=""
   stable_reset "$repo"
 
-  msha=$(ghq api "repos/$ORG/$repo/git/ref/heads/main" --jq .object.sha || true)
-  if [ -z "$msha" ]; then S_REASON[$repo]="cannot read main: gh api repos/$ORG/$repo/git/ref/heads/main"; return; fi
+  msha=$(ghq api "repos/$ORG/${repo%@*}/git/ref/heads/main" --jq .object.sha || true)
+  if [ -z "$msha" ]; then S_REASON[$repo]="cannot read main: gh api repos/$ORG/${repo%@*}/git/ref/heads/main"; return; fi
   S_MSHA[$repo]=$msha
   mver=$(read_version "$repo" "$msha" "$vfile" || true)
   S_MVER[$repo]=$mver
@@ -1139,7 +1164,7 @@ classify_stable() {
     S_VER[$repo]=$s; S_TAG[$repo]=$tag; S_REF[$repo]=main
   fi
 
-  rbrc=0; rbsha=$(ghs api "repos/$ORG/$repo/git/ref/heads/$rb" --jq .object.sha) || rbrc=$?
+  rbrc=0; rbsha=$(ghs api "repos/$ORG/${repo%@*}/git/ref/heads/$rb" --jq .object.sha) || rbrc=$?
   case "$rbrc" in
     0) ;;
     4) rbsha="" ;;
@@ -1150,16 +1175,16 @@ classify_stable() {
   if [ "$rc" = 2 ]; then S_REASON[$repo]="cannot tell whether tag $tag exists: $tc"; return; fi
   if [ "$rc" = 0 ]; then
     [ -n "$rbsha" ] && S_REF[$repo]=$rb
-    run=$(ghq run list -R "$ORG/$repo" --workflow "$wf" --branch "$tag" --limit 1 \
+    run=$(ghq run list -R "$ORG/${repo%@*}" --workflow "$wf" --branch "$tag" --limit 1 \
           --json databaseId,status,conclusion,createdAt -q '.[]|[(.databaseId|tostring),.status,(.conclusion//""),.createdAt]|join("|")' || true)
     IFS='|' read -r rid rst rcon rcreated <<<"${run:-}"
-    if [ -z "${rid:-}" ]; then S_REASON[$repo]="tag $tag exists (${tc:0:12}) but no $wf run for it was found: look at https://github.com/$ORG/$repo/actions"; return; fi
+    if [ -z "${rid:-}" ]; then S_REASON[$repo]="tag $tag exists (${tc:0:12}) but no $wf run for it was found: look at https://github.com/$ORG/${repo%@*}/actions"; return; fi
     S_TAGRUN[$repo]=$rid
-    if [ "$rst" != completed ]; then S_STATE[$repo]=RUNNING; S_NOTE[$repo]="tag $tag run $rid is $rst: gh run watch $rid -R $ORG/$repo"; return; fi
+    if [ "$rst" != completed ]; then S_STATE[$repo]=RUNNING; S_NOTE[$repo]="tag $tag run $rid is $rst: gh run watch $rid -R $ORG/${repo%@*}"; return; fi
     if [ "$rcon" != success ]; then
       if why=$(tag_run_unpublished "$repo" "$rid" "${rcreated:-}"); then
         S_TAGRERUN[$repo]=$rid
-        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon', but it $why. Nothing was published, so: gh run rerun $rid --failed -R $ORG/$repo (this stage offers it)"
+        S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon', but it $why. Nothing was published, so: gh run rerun $rid --failed -R $ORG/${repo%@*} (this stage offers it)"
       else
         S_REASON[$repo]="tag $tag exists and its run $rid is '$rcon' (no re-run: $why). A published version is never re-tagged: fix forward on $rb with --version $xy.$(( ${s##*.} + 1 ))"
       fi
@@ -1183,7 +1208,7 @@ classify_stable() {
 
   if [ -z "$rbsha" ]; then
     if [ "${S_MODE[$repo]}" = patch ]; then
-      reasons+=("$rb does not exist in $ORG/$repo: a patch release (--version) tags an existing release branch; cut $xy first with scripts/release.sh --channel stable")
+      reasons+=("$rb does not exist in $ORG/${repo%@*}: a patch release (--version) tags an existing release branch; cut $xy first with scripts/release.sh --channel stable")
     elif [ "${S_MSTATE[$repo]}" != DONE ]; then
       reasons+=("$rb does not exist, and a cut needs main's beta ${mver} published with nothing since it, but main is ${S_MSTATE[$repo]}: ${S_MWHY[$repo]}")
     fi
@@ -1213,7 +1238,7 @@ classify_stable() {
   ver=$(read_version "$repo" "$rbsha" "$vfile" || true)
   S_RBVER[$repo]=$ver
   if [ "$ver" != "$s" ]; then
-    pr=$(ghq pr list -R "$ORG/$repo" --head "$BUMP_PREFIX/stable-$s" --state open --json url -q '.[0].url // empty' || true)
+    pr=$(ghq pr list -R "$ORG/${repo%@*}" --head "$BUMP_PREFIX/stable-$s" --state open --json url -q '.[0].url // empty' || true)
     S_PRURL[$repo]=$pr
     if [ ${#reasons[@]} -gt 0 ]; then S_REASON[$repo]=$(printf '%s; ' "${reasons[@]}"); S_REASON[$repo]=${S_REASON[$repo]%; }; return; fi
     S_STATE[$repo]=NEEDS-PR
@@ -1282,12 +1307,12 @@ phase_cut() {
   for r in "${todo[@]}"; do
     # main is read again right before the branch is created: the branch must point at the
     # commit whose beta was checked, never at something merged since.
-    cur=$(ghq api "repos/$ORG/$r/git/ref/heads/main" --jq .object.sha || true)
+    cur=$(ghq api "repos/$ORG/${r%@*}/git/ref/heads/main" --jq .object.sha || true)
     if [ "$cur" != "${S_MSHA[$r]}" ]; then
       say "  STOP $r: main moved ${S_MSHA[$r]:0:8} -> ${cur:0:8} after it was checked; ${S_RB[$r]} was not created. next: $(resume_cmd cut)"
       return 1
     fi
-    GH api -X POST "repos/$ORG/$r/git/refs" -f "ref=refs/heads/${S_RB[$r]}" -f "sha=${S_MSHA[$r]}" --jq '"    created "+.ref+" -> "+.object.sha' \
+    GH api -X POST "repos/$ORG/${r%@*}/git/refs" -f "ref=refs/heads/${S_RB[$r]}" -f "sha=${S_MSHA[$r]}" --jq '"    created "+.ref+" -> "+.object.sha' \
       || { say "  STOP $r: creating ${S_RB[$r]} failed. next: $(resume_cmd cut)"; return 1; }
     classify "$r"
   done
@@ -1406,7 +1431,7 @@ pause_for() { # message -> 0 when the operator pressed Enter, 1 on q / EOF
 find_new_run() { # repo workflow branch event since-id -> prints the id of a run newer than since-id
   local repo=$1 wf=$2 br=$3 ev=$4 since=$5 i id
   for i in $(seq 1 "$TRIES"); do
-    id=$(ghq run list -R "$ORG/$repo" --workflow "$wf" ${br:+--branch "$br"} ${ev:+--event "$ev"} --limit 5 \
+    id=$(ghq run list -R "$ORG/${repo%@*}" --workflow "$wf" ${br:+--branch "$br"} ${ev:+--event "$ev"} --limit 5 \
           --json databaseId -q "[.[]|select(.databaseId > ${since:-0})][0].databaseId // empty" || true)
     [ -n "$id" ] && { echo "$id"; return 0; }
     sleep "$POLL"
@@ -1415,14 +1440,14 @@ find_new_run() { # repo workflow branch event since-id -> prints the id of a run
 }
 watch_run() { # repo id -> 0 when green
   local repo=$1 id=$2 concl
-  say "    watching https://github.com/$ORG/$repo/actions/runs/$id"
-  GH run watch "$id" -R "$ORG/$repo" --exit-status --interval "$POLL" >/dev/null 2>&1 || true
-  concl=$(GH run view "$id" -R "$ORG/$repo" --json conclusion -q .conclusion 2>/dev/null || echo unknown)
+  say "    watching https://github.com/$ORG/${repo%@*}/actions/runs/$id"
+  GH run watch "$id" -R "$ORG/${repo%@*}" --exit-status --interval "$POLL" >/dev/null 2>&1 || true
+  concl=$(GH run view "$id" -R "$ORG/${repo%@*}" --json conclusion -q .conclusion 2>/dev/null || echo unknown)
   say "    run $id: ${concl:-unknown}"
   if [ "$concl" != success ]; then
-    GH run view "$id" -R "$ORG/$repo" --json jobs \
+    GH run view "$id" -R "$ORG/${repo%@*}" --json jobs \
       -q '.jobs[]|select(.conclusion!="success" and .conclusion!="skipped")|"    failed job: "+.name+" ["+(.steps|map(select(.conclusion=="failure"))|map(.name)|join("; "))+"]"' 2>/dev/null || true
-    say "    next: gh run view $id --log-failed -R $ORG/$repo"
+    say "    next: gh run view $id --log-failed -R $ORG/${repo%@*}"
     return 1
   fi
 }
@@ -1459,17 +1484,17 @@ tag_and_watch() {
   local wf=${T_WF[$repo]}
   local ref=${S_REF[$repo]:-main}
   local cur id
-  cur=$(ghq api "repos/$ORG/$repo/git/ref/heads/$ref" --jq .object.sha || true)
+  cur=$(ghq api "repos/$ORG/${repo%@*}/git/ref/heads/$ref" --jq .object.sha || true)
   if [ "$cur" != "$sha" ]; then
     say "  STOP $repo: $ref moved ${sha:0:8} -> ${cur:0:8} after it was checked; nothing was tagged."
     say "    A new push run starts for ${cur:0:8}. Wait for it, then: $(resume_cmd "$CUR_PHASE")"
     return 1
   fi
-  if ! GH api -X POST "repos/$ORG/$repo/git/refs" -f "ref=refs/tags/$tag" -f "sha=$sha" --jq '"    tagged "+.ref+" -> "+.object.sha'; then
+  if ! GH api -X POST "repos/$ORG/${repo%@*}/git/refs" -f "ref=refs/tags/$tag" -f "sha=$sha" --jq '"    tagged "+.ref+" -> "+.object.sha'; then
     say "  STOP $repo: creating tag $tag failed. next: $(resume_cmd "$CUR_PHASE")"; return 1
   fi
   if ! id=$(find_new_run "$repo" "$wf" "$tag" "" 0); then
-    say "  STOP $repo: no $wf run appeared for $tag within $((TRIES * POLL)) s: https://github.com/$ORG/$repo/actions"; return 1
+    say "  STOP $repo: no $wf run appeared for $tag within $((TRIES * POLL)) s: https://github.com/$ORG/${repo%@*}/actions"; return 1
   fi
   watch_run "$repo" "$id" || return 1
   print_artifacts "$repo" "${S_VER[$repo]}"
@@ -1481,14 +1506,14 @@ rerun_tag_run() {
   local r=$1
   local id=${S_TAGRERUN[$1]}
   local before now i
-  before=$(ghq run view "$id" -R "$ORG/$r" --json attempt -q '.attempt // 1' || echo 1)
-  say "  -> gh run rerun $id --failed -R $ORG/$r (tag ${S_TAG[$r]})"
-  if ! GH run rerun "$id" --failed -R "$ORG/$r"; then
-    say "  STOP $r: the re-run of $id was refused: https://github.com/$ORG/$r/actions/runs/$id"; return 1
+  before=$(ghq run view "$id" -R "$ORG/${r%@*}" --json attempt -q '.attempt // 1' || echo 1)
+  say "  -> gh run rerun $id --failed -R $ORG/${r%@*} (tag ${S_TAG[$r]})"
+  if ! GH run rerun "$id" --failed -R "$ORG/${r%@*}"; then
+    say "  STOP $r: the re-run of $id was refused: https://github.com/$ORG/${r%@*}/actions/runs/$id"; return 1
   fi
   # wait for the new attempt, so the watch does not read the old attempt's result
   for i in $(seq 1 "$TRIES"); do
-    now=$(ghq run view "$id" -R "$ORG/$r" --json attempt,status -q '"\(.attempt // 1) \(.status)"' || true)
+    now=$(ghq run view "$id" -R "$ORG/${r%@*}" --json attempt,status -q '"\(.attempt // 1) \(.status)"' || true)
     [ "${now%% *}" != "${before:-1}" ] || [ "${now#* }" != completed ] && break
     sleep "$POLL"
   done
@@ -1528,7 +1553,7 @@ tag_stage() {
   # A tag whose run failed before it published anything: re-run that run (no bump needed).
   if [ ${#tagrr[@]} -gt 0 ]; then
     if [ "$MODE" = dry ]; then
-      for r in "${tagrr[@]}"; do say "  would: gh run rerun ${S_TAGRERUN[$r]} --failed -R $ORG/$r (tag ${S_TAG[$r]}: its run published nothing), then watch it"; done
+      for r in "${tagrr[@]}"; do say "  would: gh run rerun ${S_TAGRERUN[$r]} --failed -R $ORG/${r%@*} (tag ${S_TAG[$r]}: its run published nothing), then watch it"; done
     else
       if ! confirm "Re-run the failed jobs of ${#tagrr[@]} tag run(s) that published nothing (${tagrr[*]})?"; then
         say "  stage $st skipped by the operator. next: $(resume_cmd "$CUR_PHASE")"; return 1
@@ -1592,13 +1617,13 @@ rerun_red() {
     fi
   done
   if [ "$MODE" = dry ]; then
-    for r in "${todo[@]}"; do say "  would: gh run rerun ${S_RERUN[$r]} --failed -R $ORG/$r, then watch it"; done
+    for r in "${todo[@]}"; do say "  would: gh run rerun ${S_RERUN[$r]} --failed -R $ORG/${r%@*}, then watch it"; done
     return "$rc"
   fi
   confirm "Re-run the failed jobs of ${#todo[@]} red main push run(s) (${todo[*]})?" || { say "  skipped. next: $(resume_cmd "$CUR_PHASE")"; return 1; }
   for r in "${todo[@]}"; do
-    say "  -> gh run rerun ${S_RERUN[$r]} --failed -R $ORG/$r"
-    if ! GH run rerun "${S_RERUN[$r]}" --failed -R "$ORG/$r"; then
+    say "  -> gh run rerun ${S_RERUN[$r]} --failed -R $ORG/${r%@*}"
+    if ! GH run rerun "${S_RERUN[$r]}" --failed -R "$ORG/${r%@*}"; then
       say "    the re-run was refused (a run older than $RERUN_MAX_DAYS days cannot be re-run): push a commit to main, then $(resume_cmd "$CUR_PHASE")"; rc=1; continue
     fi
     sleep "$POLL"
@@ -1691,7 +1716,7 @@ for e in d.get("packages", []):
 }
 site_where() { # repo package -> where it shows on hugmesh.net
   local line
-  line=$(printf '%s\n' "$SITE_MAP" | awk -F'|' -v r="$1" -v p="$2" '$1==r && ($2==p || $2=="*") {print $3"/"$4; exit}')
+  line=$(printf '%s\n' "$SITE_MAP" | awk -F'|' -v r="${1%@*}" -v p="$2" '$1==r && ($2==p || $2=="*") {print $3"/"$4; exit}')
   if [ -n "$line" ]; then echo "hugmesh.net/downloads (${line%%/*}: ${line#*/})"; else echo "not listed on hugmesh.net"; fi
 }
 
@@ -1704,6 +1729,7 @@ phase_preflight() {
   local st r blk pub cnt
   say "release.sh --channel $CHANNEL: mode=$MODE  $(date -u +%FT%TZ)  table=$(shown "$TABLE")  rows=${#ROWS[@]}"
   [ ${#ONLY[@]} -gt 0 ] && say "  --only: ${ONLY[*]} (every row is still checked; only these are acted on)"
+  [ ${#ARTIFACT_SKIPPED[@]} -gt 0 ] && say "  stable channel: skipping artifact row(s) ${ARTIFACT_SKIPPED[*]} (beta-only: one release/X.Y and one bump PR per repository)"
   [ ${#EXPECT[@]} -gt 0 ] && say "  --expect: $(for r in "${!EXPECT[@]}"; do printf '%s=%s ' "$r" "${EXPECT[$r]}"; done)"
   GH auth status >/dev/null 2>&1 || die "gh is not logged in (GH_TOKEN/GITHUB_TOKEN are unset for every call): gh auth login"
   load_org_secrets
@@ -1742,7 +1768,7 @@ phase_merge() {
   if [ ${#MERGES[@]} -eq 0 ]; then say "  no --merge given"; return 0; fi
   for m in "${MERGES[@]}"; do
     repo=${m%#*}; n=${m##*#}
-    IFS='|' read -r st draft oid base < <(ghq pr view "$n" -R "$ORG/$repo" --json state,isDraft,mergeCommit,baseRefName -q '[.state,(.isDraft|tostring),(.mergeCommit.oid//""),(.baseRefName//"main")]|join("|")' || printf 'UNREADABLE|||main\n')
+    IFS='|' read -r st draft oid base < <(ghq pr view "$n" -R "$ORG/${repo%@*}" --json state,isDraft,mergeCommit,baseRefName -q '[.state,(.isDraft|tostring),(.mergeCommit.oid//""),(.baseRefName//"main")]|join("|")' || printf 'UNREADABLE|||main\n')
     base=${base:-main}
     case "$st" in
       MERGED) say "  $m: already merged (${oid:0:12})"; continue ;;
@@ -1750,17 +1776,17 @@ phase_merge() {
       *) say "  STOP $m: PR is $st; nothing merged. next: drop --merge $m, then $(resume_cmd merge)"; return 1 ;;
     esac
     if [ "$MODE" = dry ]; then
-      say "  would:$([ "$draft" = true ] && printf ' gh pr ready %s -R %s/%s;' "$n" "$ORG" "$repo") gh pr merge $n -R $ORG/$repo --squash --delete-branch, then wait for $base's new push run"
+      say "  would:$([ "$draft" = true ] && printf ' gh pr ready %s -R %s/%s;' "$n" "$ORG" "$repo") gh pr merge $n -R $ORG/${repo%@*} --squash --delete-branch, then wait for $base's new push run"
       continue
     fi
     confirm "Merge $m (squash, delete branch)$([ "$draft" = true ] && printf ', marking it ready first')?" || { say "  skipped $m. next: $(resume_cmd merge)"; return 1; }
     pre=0
     if [ -n "${T_WF[$repo]:-}" ]; then
-      pre=$(ghq run list -R "$ORG/$repo" --workflow "${T_WF[$repo]}" --branch "$base" --event push --limit 1 --json databaseId -q '.[].databaseId' || echo 0)
+      pre=$(ghq run list -R "$ORG/${repo%@*}" --workflow "${T_WF[$repo]}" --branch "$base" --event push --limit 1 --json databaseId -q '.[].databaseId' || echo 0)
     fi
-    if [ "$draft" = true ]; then GH pr ready "$n" -R "$ORG/$repo" || { say "  STOP $m: gh pr ready failed"; return 1; }; fi
-    GH pr merge "$n" -R "$ORG/$repo" --squash --delete-branch || { say "  STOP $m: gh pr merge failed (checks, review or conflicts): https://github.com/$ORG/$repo/pull/$n"; return 1; }
-    oid=$(ghq pr view "$n" -R "$ORG/$repo" --json mergeCommit -q '.mergeCommit.oid' || true)
+    if [ "$draft" = true ]; then GH pr ready "$n" -R "$ORG/${repo%@*}" || { say "  STOP $m: gh pr ready failed"; return 1; }; fi
+    GH pr merge "$n" -R "$ORG/${repo%@*}" --squash --delete-branch || { say "  STOP $m: gh pr merge failed (checks, review or conflicts): https://github.com/$ORG/${repo%@*}/pull/$n"; return 1; }
+    oid=$(ghq pr view "$n" -R "$ORG/${repo%@*}" --json mergeCommit -q '.mergeCommit.oid' || true)
     say "  merged $m -> ${oid:0:12}"
     [ -n "${T_WF[$repo]:-}" ] || continue
     wft=$(file_at "$repo" "$base" ".github/workflows/${T_WF[$repo]}" || true)
@@ -1771,7 +1797,7 @@ phase_merge() {
     [ "$pushref" = yes ] || continue
     if [ -n "$(printf '%s\n' "$facts" | tail -n +2)" ] && [ -n "$oid" ]; then
       local files hit=no g
-      files=$(ghq api "repos/$ORG/$repo/commits/$oid" --jq '.files[].filename' || true)
+      files=$(ghq api "repos/$ORG/${repo%@*}/commits/$oid" --jq '.files[].filename' || true)
       while IFS= read -r g; do
         [ -n "$g" ] || continue
         printf '%s\n' "$files" | grep -a "^${g%%\**}" >/dev/null && hit=yes
@@ -1781,7 +1807,7 @@ phase_merge() {
     if id=$(find_new_run "$repo" "${T_WF[$repo]}" "$base" push "${pre:-0}"); then
       watch_run "$repo" "$id" || say "  (the release checks below will report it)"
     else
-      say "  STOP $m: no new ${T_WF[$repo]} push run appeared within $((TRIES * POLL)) s, so $repo cannot be released yet: https://github.com/$ORG/$repo/actions"
+      say "  STOP $m: no new ${T_WF[$repo]} push run appeared within $((TRIES * POLL)) s, so $repo cannot be released yet: https://github.com/$ORG/${repo%@*}/actions"
       say "    Wait for it, then: $(resume_cmd merge)   (a merged PR is skipped)"
       return 1
     fi
