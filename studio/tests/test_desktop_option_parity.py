@@ -469,3 +469,21 @@ def test_the_menu_falls_back_with_a_reason_without_python(tmp_path):
                        capture_output=True, text=True, timeout=60)
     assert "unavailable: python3" in p.stdout, p.stdout + p.stderr
     assert "BLOCK=Desktop options are saved for x86-laptop, but python3 is required" in p.stdout
+
+
+@pytest.mark.parametrize("target", ["x86-standalone-thick", "x86-standalone-unaffiliated",
+                                    "x86-laptop", "x86-chromebook", "x86-desktop",
+                                    "rpi-desktop", "jetson-desktop", "frite", "orangepi5",
+                                    "orangepi4-lts"])
+def test_the_menu_carries_the_options_on_every_desktop_target(target, tmp_path):
+    """Every make target the Desktop options open on hands them to its builder (the x86
+    targets through the x86 flag string, the ARM ones through _arm_standalone_flags)."""
+    _out, log = run_menu(tmp_path, target, "python", ["extra", "python3_13"])
+    assert "SAID=\n" in log, log
+    out, log = run_menu(tmp_path, target, "overlay", ["use", "media-gfx/gimp lua"])
+    assert "BLOCK=\n" in log, log
+    flags = [x.replace("'", "") for x in out.splitlines() if x.startswith("STANDALONE_FLAGS=")]
+    assert len(flags) == 1, out
+    assert "--python-extra-targets python3_13" in flags[0]
+    assert "--package-use media-gfx/gimp lua" in flags[0]
+    assert flags[0].count("--package-use") == 1
