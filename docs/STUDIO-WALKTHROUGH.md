@@ -284,7 +284,7 @@ The run envelope is one box. Every knob in it is a field of the same object that
 - Guest RAM — default 2048 MB.
 - Boot timeout — default 2400 s. A first boot under ARM emulation runs a full-filesystem SELinux relabel before sshd starts.
 - Assertion timeout — default 0, meaning the entrypoint's own default, with no flag emitted. This clock is separate from the boot timeout.
-- Extra guest logins — additional wheel accounts created on every guest, beyond the payload's own `tester`.
+- Extra guest logins — additional sudo-capable accounts created on every guest, beyond the payload's own `tester`. They get sudo through wheel, except on a desktop-governance-governed client desktop. There, sudo comes from the IdP claim only, and the harness's test-only NOPASSWD drop-in gives these logins sudo instead.
 - Image cache cap — default unbounded. Every `.img.xz` row is decompressed once and kept.
 
 Buttons: **List devices** (lists what would run, boots nothing), **Run device tests**, **Read verdicts** (re-reads files and records; starts and stops nothing), **Cancel** (reaches the whole process group, docker children included).
@@ -325,7 +325,7 @@ Mesh-wide: Start mesh, Stop all, Refresh, Cancel. Per device: Start, Stop, an SS
 Traps:
 
 - The QMP button reads **"Reset (ends guest)"** and means it. Every launcher runs qemu with `-no-reboot`, so a QMP `system_reset` shuts the guest down and exits; it does not reboot. It sits behind an inline confirm tick for that reason. Power off also ends the guest, the orderly way. Either way, only Start brings the row back, and that is a full emulated boot.
-- The guests ship `PermitRootLogin no`, and the assertions check that it stays that way. Reach root by logging in as a wheel user and running `sudo -i`; the login dropdown offers that as its own row.
+- The guests ship `PermitRootLogin no`, and the assertions check that it stays that way. Reach root by logging in as one of the harness's logins and running `sudo -i`; the login dropdown offers that as its own row. On a governed client desktop these logins are not in wheel, and their sudo comes from the harness's test-only drop-in.
 - Exiting Studio from this page leaves the emulated devices running. The verbs on the page start and stop them.
 
 Downstream: nothing reaches the image config. Terminal.
