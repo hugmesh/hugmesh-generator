@@ -518,6 +518,52 @@ remedies. One asymmetry: **native builds cannot be memory-capped by the Studio**
 host, prefer the Docker backend. On hosts without `/proc/meminfo` (Windows/macOS) behaviour
 falls back to the old rules: no cap, jobs = `min(cores, 8)`, no warnings.
 
+## Free-space guard (2026-11-10 full-disk incident)
+
+A build session is checked against the disk under its output folder **before** anything is
+dispatched, and again **before every queued image**. A 23-image session that ran for 1.5 hours
+into a full disk is why: its first image died at the `.img` step and four more after it, and
+the record held `No space left on device` crashes where a refusal belonged.
+
+- **At session start** the first image must fit, or the Review and Progress pages refuse (no
+  build is started, nothing is written). When the first image fits but the whole worklist
+  does not, they show a **warning** and the session may start.
+- **Before each image** the check runs again. An image that no longer fits is never started.
+  It is marked failed with a `!! <image> not started: not enough free disk space ...` line,
+  which the session record keeps, and the images after it still get their turn (an ARM image
+  may fit where an x86 one did not).
+
+| Image | Counted as | Of which its build system (`wl-<id>/sysroot`) |
+|---|---|---|
+| x86 | 55 GiB | 23 GiB |
+| ARM (rpi5, jetson, frite, Orange Pi) | 20 GiB | 7 GiB |
+
+Every image also needs 10 GiB left free on top. `HUGMESH_BUILD_IMAGE_SPACE` replaces the
+per-image figure with a number of GiB (the margin still applies); `0`, `off` or `none` turns
+the check off, and anything else is ignored so that a typo never does. When free space cannot
+be read, nothing is refused.
+
+**Restart.** A restart builds into the same session folder, where each image's build system
+from the earlier run still is. What that holds is not needed a second time: with **Resume**
+ticked (`--resume`, pre-ticked when build trees exist) the builder continues from it, and
+without it the builder rebuilds it in the same place. So the check counts it, up to the
+build-system figure in the table, and never tells you to delete it:
+
+- The check at session start runs on the GUI thread and does not read the tree. It takes a
+  populated build system as finished and refuses only an image that would not fit even then
+  (x86: under 42 GiB free, not under 65).
+- Right before an image starts, on the build thread, its build system is measured when the
+  answer depends on it, and only what is found is counted. A run that died early leaves a few
+  GiB, and that image needs nearly its whole figure again. Measuring takes from seconds to
+  minutes (a line in the log says it started), stops as soon as enough is found, gives up
+  after 5 minutes with what it has, and stops when you press Stop.
+- A build tree with no extracted system in it (no `sysroot/etc/gentoo-release`, the builders'
+  own test) is not counted: the builder starts that one over.
+
+Not covered: the fleet window (`build-all-roles.sh`) and builds started from a terminal.
+The figures are flat per platform and assume `--compress` (the default): an x86 `--capable`
+desktop, a Jetson, an omnibus node on ARM, or an uncompressed x86 build can need more.
+
 Tray-only (mesh-node controller):
 
 ```sh
@@ -670,7 +716,8 @@ reused as is).
 python -m hugmesh_studio.tui                       # the guided journey (welcome screen
                                                    #   first — the GUI wizard's page order)
 python -m hugmesh_studio.tui --sessions            # sessions review (build history):
-                                                   #   status · artifacts · delete-with-confirm
+                                                   #   status · why an image was not started
+                                                   #   · artifacts · delete-with-confirm
 python -m hugmesh_studio.tui --worklist SESSION_ID # read-only worklist table for one session
 python -m hugmesh_studio.tui --meshemu SESSION     # whole-mesh emulation status list
 python -m hugmesh_studio.tui --fleet               # fleet build (scripts/build-all-roles.sh)

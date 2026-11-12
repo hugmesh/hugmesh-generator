@@ -46,5 +46,15 @@ Pods and ClusterIP services on one node are meant to be reachable from any node
 The pki node's policy (`policy.hujson`) lets `tag:hugmesh` reach the two CIDRs on
 all ports. It deliberately has no any-to-any rule between nodes. SSH rides its own
 `ssh` block, and the control node's first verified Layer-A sync re-renders the
-policy. Without a loaded policy, headscale falls back to allow-all with no tags
-and no route approval.
+policy. keys-provision never starts headscale without a policy it has checked:
+when the stick's policy can be neither used nor narrowed and there is no clean
+baked bootstrap policy, or there is no policy at all, it stages a deny-all policy
+(nodes join but reach nothing, no tag can be self-assigned) and marks the node
+UNPROTECTED in `/run/hugmesh/firewall-health/`. It also checks that headscale
+will read that policy: any `headscale/config.yaml` on the stick must keep
+`policy.mode: file` and `policy.path: /etc/headscale/policy.hujson`. A config that
+names another file, names none (headscale itself would then run allow-all, with no
+tags and no route approval), selects `mode: database` or uses a relative path is
+refused: headscale is not started (marked `state=not-started`) and the config is
+moved aside to `/etc/headscale/config.yaml.refused` until the node is
+re-provisioned with a fixed stick.

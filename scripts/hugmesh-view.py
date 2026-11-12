@@ -125,7 +125,9 @@ domain by its own name; it is read only together with the shipped catalog.
 NOT SUPPORTED, ON PURPOSE
 -------------------------
 WebSocket upgrades are not proxied (Vault's and ArgoCD's terminal panes will not
-work through this tool; their HTTP UIs do). This is a loopback development aid:
+work through this tool; their HTTP UIs do). Server-Sent Events ARE: a
+`text/event-stream` response is relayed line by line as it arrives instead of
+being read whole, so a live feed (Mastodon's streaming timeline) works here. This is a loopback development aid:
 it binds 127.0.0.1 only, disables upstream certificate verification by design,
 and must never be exposed off the workstation.
 """
@@ -134,6 +136,7 @@ from __future__ import annotations
 import argparse
 import glob
 import gzip
+import http.client
 import http.server
 import json
 import os
@@ -566,6 +569,21 @@ def is_textual(content_type: str) -> bool:
     return any(t in ct for t in TEXTUAL)
 
 
+def is_event_stream(content_type: str) -> bool:
+    """A Server-Sent Events response: it never ends, so it cannot be read whole.
+
+    `_relay` reads a normal response to the end before it sends the browser a
+    single byte, because the rewrite and the recomputed Content-Length need the
+    whole body. An event stream has no end: the upstream keeps it open and sends
+    a frame (or a heartbeat) every few seconds. Read whole, the browser never got
+    even the status line. mastodon-ui's live timeline
+    (GET /bff/user/mastodon/api/v1/streaming/user) then sat at "connecting"
+    forever, neither live nor polling (GUI-35). Such responses are relayed line
+    by line instead, see `_relay_stream`.
+    """
+    return (content_type or "").lower().split(";", 1)[0].strip() == "text/event-stream"
+
+
 def decompress(payload: bytes, encoding: str) -> bytes:
     enc = (encoding or "").lower().strip()
     if enc == "gzip":
@@ -906,14 +924,30 @@ def make_handler(entry: Entry, upstream: str, hostmap: dict[str, str],
             # Location rewrite below. See NoFollowRedirects.
             opener = urllib.request.build_opener(
                 urllib.request.HTTPSHandler(context=ctx), NoFollowRedirects)
+            stream = None
             try:
                 resp = opener.open(req, timeout=60)
-                status, hdrs, payload = resp.status, resp.headers, resp.read()
+                status, hdrs = resp.status, resp.headers
+                # An event stream is relayed as it arrives, never read whole
+                # (is_event_stream says why). Only an identity-encoded one: the
+                # Accept-Encoding forced above makes that the normal case, and a
+                # compressed stream could not be rewritten line by line.
+                if (self.command != "HEAD"
+                        and is_event_stream(hdrs.get("Content-Type"))
+                        and (hdrs.get("Content-Encoding") or "identity").lower()
+                        == "identity"):
+                    stream, payload = resp, b""
+                else:
+                    payload = resp.read()
             except urllib.error.HTTPError as exc:      # 3xx/4xx/5xx: bodies too
                 status, hdrs, payload = exc.code, exc.headers, exc.read()
             except Exception as exc:                   # upstream down / TLS fail
                 self._fail(f"hugmesh-view [{entry.name}]: upstream {url} "
                            f"failed: {exc}\n")
+                return
+
+            if stream is not None:
+                self._relay_stream(status, hdrs, stream)
                 return
 
             payload = decompress(payload, hdrs.get("Content-Encoding"))
@@ -947,6 +981,57 @@ def make_handler(entry: Entry, upstream: str, hostmap: dict[str, str],
             self.end_headers()
             if not bodyless:
                 self.wfile.write(payload)
+
+        def _relay_stream(self, status, hdrs, resp):
+            """Relay an event stream frame by frame, as HTTP/1.1 chunks.
+
+            Same header treatment as a whole response (hop-by-hop and HSTS
+            dropped, Location/cookie/CSP rewritten), but there is no length to
+            send, so the body goes out chunked. Each LINE is rewritten on its
+            own: an SSE field never spans lines, so a hostname can never be cut
+            in half by a read boundary. A line is flushed the moment it is
+            complete, which is what makes the frame reach the browser in time.
+            """
+            self.send_response(status)
+            for k, v in hdrs.items():
+                lk = k.lower()
+                if lk in STRIP_DOWN:
+                    continue
+                if lk == "location":
+                    v = rewrite_text(v, hostmap)
+                elif lk == "set-cookie":
+                    v = rewrite_cookie(v)
+                elif lk in ("content-security-policy",
+                            "content-security-policy-report-only"):
+                    v = rewrite_csp(v, hostmap)
+                    if not v.strip():
+                        continue
+                self.send_header(k, v)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            try:
+                while True:
+                    try:
+                        line = resp.readline()
+                    except (OSError, http.client.HTTPException):
+                        break              # upstream dropped or went silent
+                    if not line:
+                        break              # upstream ended the stream
+                    try:
+                        line = rewrite_text(line.decode("utf-8"),
+                                            hostmap).encode("utf-8")
+                    except UnicodeDecodeError:
+                        pass
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(line), line))
+                    self.wfile.flush()
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+            except OSError:
+                # The browser went away (tab closed, EventSource re-dialled).
+                # Nothing to tell it; just stop reading the upstream.
+                self.close_connection = True
+            finally:
+                resp.close()
 
         def _fail(self, message: str):
             msg = message.encode()
