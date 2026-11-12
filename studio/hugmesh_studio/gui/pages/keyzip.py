@@ -208,16 +208,14 @@ class KeyZipPage(QtWidgets.QWizardPage):
         # and mesh (superadmin node); standalone skips it (MODE_SKIPPED_PAGES).
         if self.wiz.cfg.mode == "cloud":
             self.setSubTitle(
-                "This builds a client desktop that JOINS an existing mesh (tailnet + "
-                "SSO). Bring in the keys, certs, egress-VPN and branding your domain "
-                "admin generated for you — browse to the .zip, or paste their "
-                "remote-config link and fetch it.")
+                "This client desktop JOINS an existing mesh (tailnet + SSO). Bring in the "
+                "keys, certs, egress-VPN and branding your domain admin generated: browse "
+                "to the .zip, or fetch their link.")
         else:  # mesh node
             self.setSubTitle(
-                "Bring in fleet key material an admin prepared — including the "
-                "Secure-Boot signing key so the node signs with the key already "
-                "enrolled in the fleet firmware. Browse to the .zip, or paste a "
-                "remote-config link and fetch it.")
+                "Bring in the fleet key material an admin prepared, including the "
+                "Secure-Boot key the fleet firmware already trusts. Browse to the .zip, "
+                "or paste a remote-config link and fetch it.")
 
     def _apply(self, zip_path: str):
         """Extract + wire a key-zip into the ImageConfig. Shared by Import (browse to a

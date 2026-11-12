@@ -1165,3 +1165,130 @@ def test_keyzip_page_unchecking_the_box_overrides_the_wizard_default(
         assert not manifest_path.exists()
     finally:
         w.deleteLater()
+
+
+# ---- GUI-14: no step's subtitle is cut off by the wizard header ----------------------
+#
+# Qt's ModernStyle header holds TWO lines of subtitle and clips the rest — no ellipsis,
+# no scroll bar, no tooltip (QWizardHeader::setup sizes the label for "Pq\nPq" and pins
+# the header's maximum height to it). The Mode step stopped at "…test lanes), MESH",
+# Domains at "…with a generated random" and the Secrets store at "…so first-boot". A
+# subtitle is now one or two short sentences; anything longer is said in the page body.
+
+#: The wizard's default size on the screens medium_size() documents: 1080p (1040x780), a
+#: 1024x600 netbook (942x552) and an 800x800 screen (736x736, the narrowest header).
+_HEADER_SIZES = ((942, 552), (1040, 780), (736, 736))
+
+
+def _outside_every_page(wiz, label):
+    return not any(wiz.page(pid).isAncestorOf(label) for pid in wiz.pageIds())
+
+
+def _header_subtitle_label(wiz, text):
+    """The header's subtitle QLabel, found by the text it shows. QWizardHeader is
+    private, so this is the one visible label, outside every page, that carries it."""
+    labels = [lab for lab in wiz.findChildren(QtWidgets.QLabel)
+              if lab.text() == text and lab.isVisible() and _outside_every_page(wiz, lab)]
+    assert len(labels) == 1, \
+        f"expected the header's one subtitle label showing {text[:40]!r}, found {len(labels)}"
+    return labels[0]
+
+
+def _every_subtitle(wiz):
+    """``[(where, text)]``: each registered page's subtitle as built, each ``*SUBTITLE``
+    class constant those pages carry (the local mesh steps' docked variants, read from
+    the live class so an f-string is evaluated), and every subtitle the page modules
+    spell out for later — per mode in initializePage — found in the source by
+    tests/_subtitles.py. Deduplicated by text."""
+    import _subtitles
+    out, seen = [], set()
+
+    def add(where, text):
+        if text and text not in seen:
+            seen.add(text)
+            out.append((where, text))
+
+    for pid in wiz.pageIds():
+        page = wiz.page(pid)
+        add(f"{type(page).__name__} (as built)", page.subTitle())
+        for klass in type(page).__mro__:
+            for name, value in vars(klass).items():
+                if name.endswith("SUBTITLE") and isinstance(value, str):
+                    add(f"{klass.__name__}.{name}", value)
+    found, _unresolved = _subtitles.scan()
+    for where, text in found:
+        add(where, text)
+    return out
+
+
+@pytest.mark.parametrize("size", _HEADER_SIZES, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_no_step_subtitle_is_cut_off_by_the_wizard_header(wiz, qapp, size):
+    """Every subtitle any Studio wizard step can show fits the header's two lines at
+    each default window size: ``heightForWidth(width) <= height`` on the header's own
+    label.
+
+    Each text is shown on the CURRENT page, which is exactly what navigating to its page
+    would put in the header: QWizard rebuilds the header from the current page on every
+    page change and on every setSubTitle of the current page (QWizardPrivate::
+    updateLayout -> QWizardHeader::setup), and the label's width comes from the window,
+    not the page. Doing it this way reaches the per-mode and docked variants too, without
+    running thirty initializePage()s and their probes. The real routes are walked by
+    the test below."""
+    wiz.resize(*size)
+    qapp.processEvents()
+    assert (wiz.width(), wiz.height()) == size, \
+        f"the wizard did not take {size[0]}x{size[1]} (it is {wiz.width()}x{wiz.height()})"
+    page = wiz.currentPage()
+    saved = page.subTitle()
+    subtitles = _every_subtitle(wiz)
+    # not vacuous: every registered page that has a subtitle is in the set, and the
+    # source scan contributed the texts no page shows until later
+    wheres = [w for w, _t in subtitles]
+    built = [w for w in wheres if w.endswith("(as built)")]
+    assert len(built) == sum(1 for pid in wiz.pageIds() if wiz.page(pid).subTitle()) >= 30
+    assert any(w.startswith("keyzip.py:") for w in wheres), "no per-mode variant was read"
+    assert any(w.endswith(".DOCKED_SUBTITLE") for w in wheres), "no docked variant was read"
+    assert len(subtitles) >= len(built) + 10, "the source scan found next to nothing"
+    cut = []
+    try:
+        page.setSubTitle("GUI-14 header sentinel")
+        qapp.processEvents()
+        label = _header_subtitle_label(wiz, "GUI-14 header sentinel")
+        assert label.wordWrap()
+        for where, text in subtitles:
+            page.setSubTitle(text)
+            qapp.processEvents()
+            assert label.text() == text, f"the header is not showing {where}"
+            need = label.heightForWidth(label.width())
+            if need > label.height():
+                cut.append(f"{where}: needs {need}px, the header gives {label.height()}px "
+                           f"at {label.width()}px wide ({len(text)} chars): {text[:70]}…")
+    finally:
+        page.setSubTitle(saved)
+    assert not cut, (f"{len(cut)} subtitle(s) cut off at {size[0]}x{size[1]} — keep a "
+                     "subtitle to one or two short sentences and say the rest in the page "
+                     "body:\n  " + "\n  ".join(cut))
+
+
+def _assert_header_whole(wiz, qapp, where):
+    qapp.processEvents()
+    sub = wiz.currentPage().subTitle()
+    label = _header_subtitle_label(wiz, sub)
+    need = label.heightForWidth(label.width())
+    assert need <= label.height(), \
+        f"{where}: the subtitle needs {need}px and the header gives {label.height()}px — " \
+        f"it is cut off at {wiz.width()}x{wiz.height()}: {sub[:70]}…"
+
+
+@pytest.mark.parametrize("size", [(942, 552), (1040, 780)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_reported_routes_show_their_whole_subtitle(wiz, qapp, size):
+    """The three steps GUI-14 found cut off, reached the way an operator reaches them:
+    Mode, then the mesh flow's Domains and Secrets store steps."""
+    wiz.resize(*size)
+    pick_mode(wiz, "mesh")
+    _assert_header_whole(wiz, qapp, "Mode")
+    enable_additional_domains(wiz)
+    advance_to(wiz, wizard_mod.DomainsPage)
+    _assert_header_whole(wiz, qapp, "Domains")
+    advance_to(wiz, wizard_mod.VaultPage)
+    _assert_header_whole(wiz, qapp, "Secrets store")

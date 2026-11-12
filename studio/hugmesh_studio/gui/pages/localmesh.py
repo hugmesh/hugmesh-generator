@@ -739,12 +739,11 @@ class _LocalMeshWrites(MeshWrites):
 
 class LocalMeshPage(QtWidgets.QWizardPage):
     #: The subtitle once the bottom panel holds the actions, the stages and the table.
+    #: Two lines at most — the wizard header clips the rest mid-sentence (GUI-14).
     DOCKED_SUBTITLE = (
-        "Everything is chosen. Press 'Generate & start' on the panel's Local mesh tab "
-        "(at the bottom of this window) to mint the credentials and bring the mesh up "
-        "on THIS machine; the panel's Mesh run and Running mesh tabs report what "
-        "happens. This is the end of this path: Exit closes the Studio; the mesh keeps "
-        "running in Docker.")
+        "Press 'Generate & start' on the panel's Local mesh tab (at the bottom) to bring "
+        "the mesh up; its Mesh run tab reports progress. Exit closes the Studio; the mesh "
+        "keeps running.")
 
     def __init__(self, wiz):
         super().__init__()
@@ -808,11 +807,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "the running stack has not been checked yet — the readiness probe has "
             "not reported."]
         self.setTitle("Bring-up and monitor")
-        self.setSubTitle("Everything is chosen. Press 'Generate && start' to mint the "
-                         "credentials and bring the mesh up on THIS machine; the "
-                         "stages and the running-mesh table below report what happens. "
-                         "This is the end of this path: Exit closes the Studio; the "
-                         "mesh keeps running in Docker.")
+        # Two lines at most — the wizard header clips the rest mid-sentence (GUI-14).
+        self.setSubTitle("Press 'Generate && start' to bring the mesh up on THIS "
+                         "machine; the stages and table below report what happens. "
+                         "Exit closes the Studio; the mesh keeps running in Docker.")
         self.setFinalPage(True)
         # Pressing the final button here does nothing but close the Studio — no
         # build, no apply, no write, no state commit — so it says so (_widgets:
@@ -5421,15 +5419,14 @@ class LocalMeshJoinPage(_LocalMeshStep):
 
     SECTION = "join"
     TITLE = "Join an existing mesh with a key"
+    # Two lines at most, both of them — the wizard header clips the rest (GUI-14).
     SUBTITLE = ("Run a HugMesh mesh node on THIS machine in Docker with a "
                 "tailnet/headscale auth key — no server hardware, no image build. "
-                "This is the end of this path: Exit closes the Studio; the node keeps "
-                "running in Docker.")
+                "Exit closes the Studio; the node keeps running.")
     DOCKED_SUBTITLE = (
-        "Run a HugMesh mesh node on THIS machine in Docker with a tailnet/headscale auth "
-        "key — no server hardware, no image build. Its status line and output are in "
-        "the panel at the bottom of this window (Mesh run tab). Exit closes the Studio; "
-        "the node keeps running in Docker.")
+        "Run a mesh node on THIS machine in Docker with a tailnet auth key; its output "
+        "is on the panel's Mesh run tab, at the bottom. Exit closes the Studio; the node "
+        "keeps running.")
 
     def __init__(self, wiz):
         super().__init__(wiz)
@@ -5465,8 +5462,7 @@ class LocalMeshEnvPage(_LocalMeshStep):
     TITLE = "Environment and brand"
     SUBTITLE = ("Where this mesh lives and whose name it carries: a LAN-only test "
                 f"mesh or a public prod one, the {plain_words.term('superbrand')} that "
-                "governs it (create one, or pick an existing profile), and the "
-                "superadmin account the bring-up mints.")
+                "governs it, and the superadmin the bring-up mints.")
 
     def initializePage(self):
         super().initializePage()
@@ -5497,10 +5493,11 @@ class LocalMeshDomainsPage(_LocalMeshStep):
 
     SECTION = "domains"
     TITLE = "Domains"
-    SUBTITLE = ("Every domain this mesh serves, its own domain first. Each one gets "
-                "its own service page on the next step, and the mesh will not start "
-                "while any domain here has never been through it. A row whose sign-in "
-                "is ‘Own’ gets its own (its Identity tab, next step, says which).")
+    # Two lines at most — the wizard header clips the rest mid-sentence (GUI-14). What
+    # ‘Own’ sign-in means is the help above the table.
+    SUBTITLE = ("Every domain this mesh serves, its own domain first. Each gets its own "
+                "service page on the next step, and the mesh will not start until every "
+                "domain has been through it.")
 
     def initializePage(self):
         super().initializePage()
@@ -5590,7 +5587,7 @@ class LocalMeshIdpPage(_LocalMeshStep):
     TITLE = "Identity provider"
     SUBTITLE = ("Who signs users in: the default every domain inherits (a domain can "
                 "choose its own on its Identity tab). Casdoor is built in and needs "
-                "nothing; the note says how far another provider goes locally.")
+                "nothing.")
 
 
 class LocalMeshOverlayPage(_LocalMeshStep):
@@ -5622,14 +5619,14 @@ class LocalMeshReviewPage(_LocalMeshStep):
 
     SECTION = "review"
     TITLE = "Saved meshes and the plan"
-    SUBTITLE = ("What a bring-up will generate and start, and the meshes already "
-                "saved on this machine. The plan itself is read-only; a saved row's "
-                "Start or Restore does run docker, and its output appears below.")
+    # Two lines at most, both of them — the wizard header clips the rest (GUI-14).
+    SUBTITLE = ("What a bring-up will generate and start, and the meshes saved on this "
+                "machine. The plan is read-only; a saved row's Start or Restore runs "
+                "docker, with its output below.")
     DOCKED_SUBTITLE = (
-        "What a bring-up will generate and start, and the meshes already saved on this "
-        "machine. The plan itself is read-only; a saved row's Start or Restore does run "
-        "docker, and its output appears in the panel at the bottom of this window (Mesh "
-        "run tab).")
+        "What a bring-up will generate and start, and the meshes saved on this machine. "
+        "The plan is read-only; a saved row's Start or Restore runs docker (output: the "
+        "panel's Mesh run tab).")
 
     def _claim(self) -> None:
         # THE RUN SURFACE COMES WITH THE TABLE. The saved-mesh rows are not a preview:
