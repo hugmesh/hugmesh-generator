@@ -493,7 +493,7 @@
       "status": "experimental",
       "reason": "hardware validation pending — no ROCK 5B has booted an image from this repo; fail-loud preflight. A board row on the Orange Pi 5 builder (--board rock-5b): mainline u-boot rock5b-rk3588_defconfig + mainline DTB rockchip/rk3588-rock-5b.dtb (found upstream, studio/evidence/mainline-evidence.json), same rkbin DDR-init + TF-A BL31 chain as the Orange Pi 5. The light desktop plus the pki/backend/frontend/omnibus cluster node roles (EXPERIMENTAL; nodes are installer-only; omnibus needs 16 GB+ RAM, backend 8 GB+)",
       "role_allow": null,
-      "notes": "the 'orangepi5' builder with --board rock-5b: light desktop (board + flavor axes) + cluster node pki/backend/frontend/omnibus (installer; RAM 4/8/16/32 GB; omnibus 16 GB+, backend 8 GB+)"
+      "notes": "the 'orangepi5' builder with --board rock-5b: light desktop (board + flavor axes) + cluster node pki/backend/frontend/omnibus (installer; omnibus 16 GB+ RAM, backend 8 GB+)"
     },
     {
       "id": "nanopc-t6",
@@ -505,7 +505,7 @@
       "status": "experimental",
       "reason": "hardware validation pending — no NanoPC-T6 has booted an image from this repo; fail-loud preflight. A board row on the Orange Pi 5 builder (--board nanopc-t6): mainline u-boot nanopc-t6-rk3588_defconfig + mainline DTB rockchip/rk3588-nanopc-t6.dtb (found upstream, studio/evidence/mainline-evidence.json), same rkbin DDR-init + TF-A BL31 chain as the Orange Pi 5. The light desktop plus the pki/backend/frontend/omnibus cluster node roles (EXPERIMENTAL; nodes are installer-only; omnibus needs 16 GB+ RAM, backend 8 GB+)",
       "role_allow": null,
-      "notes": "the 'orangepi5' builder with --board nanopc-t6: light desktop (board + flavor axes) + cluster node pki/backend/frontend/omnibus (installer; RAM 4/8/16/32 GB; omnibus 16 GB+, backend 8 GB+)"
+      "notes": "the 'orangepi5' builder with --board nanopc-t6: light desktop (board + flavor axes) + cluster node pki/backend/frontend/omnibus (installer; omnibus 16 GB+ RAM, backend 8 GB+)"
     },
     {
       "id": "rk3588-generic",
