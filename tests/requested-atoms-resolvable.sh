@@ -36,7 +36,7 @@
 # Sections F and G (defect L6, the 2026-11-10 La Frite build) pin two more ways a
 # requested atom silently never merges: the board's own profile/package.provided
 # declaring it (F, with in-suite negative controls in F'), and net-fs/cifs-utils
-# dragging the non-cross-buildable net-fs/samba into a cross build (G).
+# dragging the non-cross-buildable net-fs/samba into a cross build (G, with G').
 #
 # Pure static text checks. No emerge, no chroot, no network, no root.
 #
@@ -457,25 +457,98 @@ echo "-- G) net-fs/cifs-utils must not drag net-fs/samba into a CROSS build --"
 # moved out (FAIL until it is), and a board NOT in it that requests cifs-utils
 # with acl on FAILS, so the exposure can shrink but never grow.
 CIFS_UNMEASURED=(orangepi-zero2 orangepi-zero2w orangepi-zero3 orangepi3-lts orangepi4-lts orangepi5)
+
+# Is <cat/pn> requested by any of the spec's packages*.list, in ANY spelling
+# (operator+version, :slot, [use], ::repo, indentation, an inline comment)? Uses
+# section F's atom_cp, so a request cannot dodge G with a spelling F would catch.
+# (is_requested above matches the bare atom only; the sections that use it keep it.)
+requests_cp() { # <specdir> <cat/pn>
+  local list line tok
+  for list in "$1"/portage/packages*.list; do
+    [ -f "${list}" ] || continue
+    while IFS= read -r line || [ -n "${line}" ]; do
+      line="${line%%#*}"
+      tok=""; read -r tok _ <<<"${line}"
+      [ -n "${tok}" ] || continue
+      atom_cp "${tok}"
+      [ "${ATOM_CP}" = "$2" ] && return 0
+    done < "${list}"
+  done
+  return 1
+}
+
+# One board's verdict, on stdout:
+#   NA               net-fs/cifs-utils is not requested
+#   PINNED|<file>    requested, and package.use/<file> leaves acl off
+#   UNMEASURED       requested with acl on; the board is in CIFS_UNMEASURED (NOTE)
+#   STALE|<file>     pinned, but the board is still in CIFS_UNMEASURED
+#   ACLON            requested with acl on; the board is not in CIFS_UNMEASURED
+cifs_verdict() { # <specdir> <plat>
+  local acl unmeasured=""
+  if ! requests_cp "$1" "net-fs/cifs-utils"; then echo "NA"; return 0; fi
+  acl="$(pkguse_flag_state "$1" "net-fs/cifs-utils" "acl")"
+  case " ${CIFS_UNMEASURED[*]} " in *" $2 "*) unmeasured=1 ;; esac
+  if [ "${acl%% *}" = "-" ]; then
+    if [ -n "${unmeasured}" ]; then echo "STALE|${acl#- }"; else echo "PINNED|${acl#- }"; fi
+  elif [ -n "${unmeasured}" ]; then
+    echo "UNMEASURED"
+  else
+    echo "ACLON"
+  fi
+}
+
+report_cifs_verdict() { # <plat> <verdict>
+  case "$2" in
+    NA)         ok "[$1] net-fs/cifs-utils not requested; samba chain N/A" ;;
+    PINNED\|*)  ok "[$1] cifs-utils requested; package.use/${2#PINNED|} pins -acl, so samba stays out of the cross build" ;;
+    STALE\|*)   bad "[$1] now pins net-fs/cifs-utils -acl (package.use/${2#STALE|}) but is still in CIFS_UNMEASURED. Move it out so the pin is enforced." ;;
+    UNMEASURED) echo "  NOTE [$1] requests net-fs/cifs-utils with acl ON (pulls net-fs/samba); unmeasured on this board, open finding" ;;
+    ACLON)      bad "[$1] requests net-fs/cifs-utils with acl ON, so net-fs/samba joins the cross build, fails configure, and the completeness gate fails on cifs-utils. Pin 'net-fs/cifs-utils -acl -ads' in specs-$1/portage/package.use/cifs (see specs-jetson's)." ;;
+    *)          bad "[$1] unexpected cifs-utils verdict: '$2'" ;;
+  esac
+}
+
 for plat in "${PLATFORMS[@]}"; do
   [ "${plat}" = "x86" ] && continue
-  sd="${REPO}/specs-${plat}"
-  if ! is_requested "${sd}" "net-fs/cifs-utils"; then
-    ok "[${plat}] net-fs/cifs-utils not requested; samba chain N/A"
-    continue
-  fi
-  acl="$(pkguse_flag_state "${sd}" "net-fs/cifs-utils" "acl")"
-  case " ${CIFS_UNMEASURED[*]} " in *" ${plat} "*) unmeasured=1 ;; *) unmeasured="" ;; esac
-  if [ "${acl%% *}" = "-" ]; then
-    if [ -n "${unmeasured}" ]; then
-      bad "[${plat}] now pins net-fs/cifs-utils -acl (package.use/${acl#- }) but is still in CIFS_UNMEASURED. Move it out so the pin is enforced."
-    else
-      ok "[${plat}] cifs-utils requested; package.use/${acl#- } pins -acl, so samba stays out of the cross build"
-    fi
-  elif [ -n "${unmeasured}" ]; then
-    echo "  NOTE [${plat}] requests net-fs/cifs-utils with acl ON (pulls net-fs/samba); unmeasured on this board, open finding"
+  report_cifs_verdict "${plat}" "$(cifs_verdict "${REPO}/specs-${plat}" "${plat}")"
+done
+
+echo "-- G') negative controls: the cifs-utils/samba verdict (synthesised specs) --"
+# A green real tree only exercises the verdicts the boards happen to produce
+# today, so each verdict and each request spelling is proven on a synthesised
+# spec. 'ncboard' is not in CIFS_UNMEASURED; orangepi5 is.
+# <want> <label> <plat> <list-file> <list-body> [<package.use file> <body>]...
+gc_expect() {
+  local want="$1" label="$2" plat="$3" d out
+  NCN=$((NCN+1)); d="${NC_ROOT}/specs-gc${NCN}"
+  mkdir -p "${d}/portage/package.use"
+  printf 'app-editors/nano\n%s\n' "$5" > "${d}/portage/$4"
+  shift 5
+  while [ "$#" -ge 2 ]; do printf '%s\n' "$2" > "${d}/portage/package.use/$1"; shift 2; done
+  out="$(cifs_verdict "${d}" "${plat}")"
+  case "${out}" in
+    "${want}"|"${want}|"*) ok "G negative control: ${label} -> ${out}" ;;
+    *)                     bad "G negative control MISSED (${want} expected): ${label} -> '${out}'" ;;
+  esac
+}
+gc_expect ACLON      "requested in the BASE list, no package.use"            ncboard   packages.list         'net-fs/cifs-utils'
+gc_expect ACLON      "versioned, slotted, USE-dep, inline-comment request"   ncboard   packages-desktop.list '  >=net-fs/cifs-utils-7.0:0[caps]::gentoo  # mount.cifs'
+gc_expect ACLON      "-ads only: acl stays on"                               ncboard   packages.list         'net-fs/cifs-utils' cifs 'net-fs/cifs-utils -ads'
+gc_expect ACLON      "a LATER package.use file turns acl back on"            ncboard   packages.list         'net-fs/cifs-utils' cifs 'net-fs/cifs-utils -acl -ads' zz-local 'net-fs/cifs-utils acl'
+gc_expect PINNED     "plain pin"                                             ncboard   packages.list         'net-fs/cifs-utils' cifs 'net-fs/cifs-utils -acl -ads'
+gc_expect PINNED     "versioned pin"                                         ncboard   packages-desktop.list '=net-fs/cifs-utils-7.7' cifs '>=net-fs/cifs-utils-7 -acl'
+gc_expect NA         "comment-only mention"                                  ncboard   packages.list         '# net-fs/cifs-utils used to be listed here'
+gc_expect NA         "a name that only shares a prefix"                      ncboard   packages.list         'net-fs/cifs-utils-extras'
+gc_expect UNMEASURED "acl on, board in CIFS_UNMEASURED"                      orangepi5 packages.list         'net-fs/cifs-utils'
+gc_expect STALE      "pinned, board still in CIFS_UNMEASURED"                orangepi5 packages.list         'net-fs/cifs-utils' cifs 'net-fs/cifs-utils -acl -ads'
+# Each verdict must land in the right bucket: a FAIL, a PASS, or a NOTE that is
+# neither (subshells, so these probes leave the suite's own counters alone).
+for probe in "ACLON:0 1" "STALE|cifs:0 1" "UNMEASURED:0 0" "PINNED|cifs:1 0" "NA:1 0" "bogus:0 1"; do
+  got="$(P=0; F=0; report_cifs_verdict nc "${probe%%:*}" >/dev/null; echo "${P} ${F}")"
+  if [ "${got}" = "${probe#*:}" ]; then
+    ok "report_cifs_verdict counts '${probe%%:*}' as PASS/FAIL ${probe#*:}"
   else
-    bad "[${plat}] requests net-fs/cifs-utils with acl ON, so net-fs/samba joins the cross build, fails configure, and the completeness gate fails on cifs-utils. Pin 'net-fs/cifs-utils -acl -ads' in specs-${plat}/portage/package.use/cifs (see specs-jetson's)."
+    bad "report_cifs_verdict counts '${probe%%:*}' as PASS/FAIL ${got}, expected ${probe#*:}"
   fi
 done
 

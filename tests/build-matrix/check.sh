@@ -2614,7 +2614,10 @@ run_portage_config_sync_checks() {
 # frite, jetson). The six orangepi boards in G's CIFS_UNMEASURED print a NOTE,
 # not an assertion; moving one out of that list adds a leg here. Verified by
 # running the delegate standalone: 61 assertions, 0 failed.
-RAR_EXPECTED=61
+# 77 = 61 + 16 from G' (a mutation run found G could be made vacuous): 10
+# synthesised cifs-utils verdict controls and 6 report-bucket probes. Verified by
+# running the delegate standalone: 77 assertions, 0 failed.
+RAR_EXPECTED=77
 RAR_PASS=0; RAR_FAIL=0
 run_requested_atoms_checks() {
     local out="${TMP_DIR}/reqatoms.out"
