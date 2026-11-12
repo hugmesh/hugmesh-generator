@@ -25,6 +25,7 @@
         "path": "configs/rock5b-rk3588_defconfig",
         "blob": "da5fb3a2c30283a6ffdfb8176e40fc37e3f13db6",
         "match": "default",
+        "names": "rockchip/rk3588-rock-5b",
         "dt_source": "dts/upstream/src/arm64/rockchip/rk3588-rock-5b.dts",
         "also": []
       },
@@ -47,6 +48,7 @@
         "path": "configs/nanopc-t6-rk3588_defconfig",
         "blob": "ba9a5adece7c940899a801d817c91f34ac3fc243",
         "match": "default",
+        "names": "rockchip/rk3588-nanopc-t6",
         "dt_source": "dts/upstream/src/arm64/rockchip/rk3588-nanopc-t6.dts",
         "also": []
       },
@@ -65,7 +67,7 @@
       "dt": "rockchip/rk3588s-orangepi-5-pro",
       "u-boot": {
         "status": "not found",
-        "searched": "all 1534 configs/*_defconfig at v2026.10, for rockchip/rk3588s-orangepi-5-pro as CONFIG_DEFAULT_DEVICE_TREE or in CONFIG_OF_LIST"
+        "searched": "all 1534 configs/*_defconfig at v2026.10, for rockchip/rk3588s-orangepi-5-pro (or legacy rk3588s-orangepi-5-pro) as CONFIG_DEFAULT_DEVICE_TREE or in CONFIG_OF_LIST"
       },
       "linux": {
         "status": "found",
@@ -86,6 +88,7 @@
         "path": "configs/orangepi-5-max-rk3588_defconfig",
         "blob": "0861df962cf66151cfc32c65e809cd693616b3e5",
         "match": "default",
+        "names": "rockchip/rk3588-orangepi-5-max",
         "dt_source": "dts/upstream/src/arm64/rockchip/rk3588-orangepi-5-max.dts",
         "also": []
       },
@@ -108,6 +111,7 @@
         "path": "configs/starfive_visionfive2_defconfig",
         "blob": "6fd43544a0c462488e6a91a1949460a0b4500ec3",
         "match": "default",
+        "names": "starfive/jh7110-starfive-visionfive-2-v1.3b",
         "dt_source": "dts/upstream/src/riscv/starfive/jh7110-starfive-visionfive-2-v1.3b.dts",
         "also": []
       },
@@ -130,6 +134,7 @@
         "path": "configs/spacemit_k1_defconfig",
         "blob": "fa352c9a7b326103bf856c53b2fbd877ccbcc535",
         "match": "of-list",
+        "names": "spacemit/k1-bananapi-f3",
         "dt_source": "dts/upstream/src/riscv/spacemit/k1-bananapi-f3.dts",
         "also": []
       },

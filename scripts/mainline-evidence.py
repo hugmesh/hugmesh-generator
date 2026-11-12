@@ -7,13 +7,20 @@ upstream trees at release tags and, per board, the mainline device-tree name to 
 blobs, ``configs/`` only) and records, per board:
 
 * **U-Boot**: every ``configs/*_defconfig`` is read, and a defconfig matches when its
-  ``CONFIG_DEFAULT_DEVICE_TREE`` or one of its ``CONFIG_OF_LIST`` entries is the board's
-  device tree. A defconfig that names it as the default wins over one that only lists
-  it. The device-tree source must also exist in U-Boot at the tag
-  (``dts/upstream/src/<arch>/<dt>.dts``, or ``arch/<arch>/dts/<name>.dts``), or the
-  match does not count: a defconfig that names a tree U-Boot cannot build is not a pair.
-* **Linux**: ``arch/<arch>/boot/dts/<dt>.dts`` exists at the tag, AND the Makefile in
-  that directory builds ``<name>.dtb``.
+  ``CONFIG_DEFAULT_DEVICE_TREE`` or one of its ``CONFIG_OF_LIST`` entries names the
+  board's device tree, in one of the two spellings U-Boot uses. A defconfig that names
+  it as the default wins over one that only lists it. The source the spelling points
+  at must also exist in U-Boot at the tag, or the match does not count (a defconfig
+  that names a tree U-Boot cannot build is not a pair):
+
+  - the upstream spelling ``<vendor>/<name>`` (``CONFIG_OF_UPSTREAM``) needs
+    ``dts/upstream/src/<arch>/<vendor>/<name>.dts``;
+  - the legacy bare spelling ``<name>`` needs ``arch/<u-boot arch>/dts/<name>.dts``.
+    U-Boot keeps its own trees flat, and arm64 boards use ``arch/arm/dts``.
+
+* **Linux**: ``arch/<arch>/boot/dts/<dt>.dts`` exists at the tag, AND a ``dtb-...``
+  rule in that directory's Makefile builds ``<name>.dtb`` (not a commented-out rule,
+  and not only an input to a composite ``<x>-dtbs :=`` overlay).
 
 Each part is "found" (with the path and the git blob id at the tag) or "not found"
 (with what was searched). A board's verdict is "found" only when both parts are.
@@ -44,8 +51,12 @@ GENERATOR_DIR = os.path.dirname(HERE)
 # the Studio does not read it at run time and must not ship it.
 DEFAULT_EVIDENCE = os.path.join(GENERATOR_DIR, "studio", "evidence", "mainline-evidence.json")
 
-# catalog arch -> the directory name both trees use for it.
+# catalog arch -> the directory name the Linux tree (and U-Boot's dts/upstream copy of
+# it) uses for it.
 ARCH_DIRS = {"arm64": "arm64", "riscv64": "riscv", "armv7": "arm"}
+# catalog arch -> U-Boot's own arch directory, which holds its legacy (non-upstream)
+# trees. U-Boot has no arch/arm64: arm64 boards live under arch/arm.
+UBOOT_ARCH_DIRS = {"arm64": "arm", "riscv64": "riscv", "armv7": "arm"}
 
 FOUND = "found"
 NOT_FOUND = "not found"
@@ -61,17 +72,46 @@ def defconfig_trees(text: str) -> tuple[str, list[str]]:
     return default, of_list
 
 
-def match_defconfigs(defconfigs: dict[str, str], dt: str) -> list[tuple[str, str]]:
-    """Every (defconfig name, how) whose trees include ``dt``; "default" matches first,
-    then "of-list", each group sorted by name."""
+def match_defconfigs(defconfigs: dict[str, str], dt: str) -> list[tuple[str, str, str]]:
+    """Every (defconfig name, how, spelling) whose trees name ``dt``, as the upstream
+    spelling (``dt`` itself, ``vendor/name``) or the legacy bare one (``name``).
+    "default" matches come first, then "of-list", each group sorted by name."""
+    base = dt.rsplit("/", 1)[-1]
+    spellings = [dt] if base == dt else [dt, base]
     hits = []
     for name, text in defconfigs.items():
         default, of_list = defconfig_trees(text)
-        if default == dt:
-            hits.append((0, name, "default"))
-        elif dt in of_list:
-            hits.append((1, name, "of-list"))
-    return [(n, how) for _rank, n, how in sorted(hits)]
+        if default in spellings:
+            hits.append((0, name, "default", default))
+        else:
+            listed = next((sp for sp in spellings if sp in of_list), None)
+            if listed is not None:
+                hits.append((1, name, "of-list", listed))
+    return [(n, how, sp) for _rank, n, how, sp in sorted(hits)]
+
+
+def uboot_source(arch: str, spelling: str) -> str:
+    """The U-Boot path a defconfig's tree name points at: the upstream copy for a
+    ``vendor/name`` spelling, U-Boot's own flat directory for a bare ``name``."""
+    if "/" in spelling:
+        return f"dts/upstream/src/{ARCH_DIRS[arch]}/{spelling}.dts"
+    return f"arch/{UBOOT_ARCH_DIRS[arch]}/dts/{spelling}.dts"
+
+
+_DTB_RULE = re.compile(r"^dtb-(?:\$\([A-Za-z0-9_]+\)|[A-Za-z0-9_]*)\s*(?:\+=|:=|=)(.*)$")
+
+
+def makefile_builds(text: str, dtb: str) -> bool:
+    """True when a ``dtb-...`` rule in the kbuild Makefile ``text`` lists ``dtb``.
+    Continuation lines are joined and comments dropped first; a ``<x>-dtbs :=``
+    composite line is not a dtb rule, so a tree that is only an overlay input does
+    not count."""
+    joined = re.sub(r"\\\n", " ", text)
+    for line in joined.splitlines():
+        m = _DTB_RULE.match(line.split("#", 1)[0].strip())
+        if m and dtb in m.group(1).split():
+            return True
+    return False
 
 
 def _git(args: list[str], cwd: str | None = None) -> str:
@@ -111,29 +151,30 @@ def lookup_uboot(repo: str, tag: str, arch: str, dt: str) -> dict:
             with open(os.path.join(cfg_dir, name), encoding="utf-8", errors="replace") as fh:
                 defconfigs[name] = fh.read()
     hits = match_defconfigs(defconfigs, dt)
-    adir = ARCH_DIRS[arch]
+    present = (_paths(repo, f"dts/upstream/src/{ARCH_DIRS[arch]}")
+               | _paths(repo, f"arch/{UBOOT_ARCH_DIRS[arch]}/dts"))
     base = dt.rsplit("/", 1)[-1]
-    sources = sorted(
-        p for p in _paths(repo, f"dts/upstream/src/{adir}") | _paths(repo, f"arch/{adir}/dts")
-        if p in (f"dts/upstream/src/{adir}/{dt}.dts", f"arch/{adir}/dts/{base}.dts"))
-    searched = (f"all {len(defconfigs)} configs/*_defconfig at {tag}, for {dt} as "
+    spelled = dt if base == dt else f"{dt} (or legacy {base})"
+    searched = (f"all {len(defconfigs)} configs/*_defconfig at {tag}, for {spelled} as "
                 "CONFIG_DEFAULT_DEVICE_TREE or in CONFIG_OF_LIST")
     if not hits:
         return {"status": NOT_FOUND, "searched": searched}
-    name, how = hits[0]
-    if not sources:
+    paired = [(n, how, sp) for n, how, sp in hits if uboot_source(arch, sp) in present]
+    if not paired:
+        name, _how, sp = hits[0]
         return {"status": NOT_FOUND,
-                "searched": (f"{searched}: configs/{name} names it, but no "
-                             f"dts/upstream/src/{adir}/{dt}.dts or arch/{adir}/dts/{base}.dts "
-                             f"exists at {tag}")}
+                "searched": (f"{searched}: configs/{name} names {sp}, but no "
+                             f"{uboot_source(arch, sp)} exists at {tag}")}
+    name, how, sp = paired[0]
     return {
         "status": FOUND,
         "defconfig": name,
         "path": f"configs/{name}",
         "blob": _blob(repo, f"configs/{name}"),
         "match": how,
-        "dt_source": sources[0],
-        "also": [n for n, _h in hits[1:]],
+        "names": sp,
+        "dt_source": uboot_source(arch, sp),
+        "also": [n for n, _h, _s in paired[1:]],
     }
 
 
@@ -146,10 +187,9 @@ def lookup_linux(repo: str, tag: str, arch: str, dt: str) -> dict:
     if dts not in present:
         return {"status": NOT_FOUND, "searched": f"{dts} at {tag}"}
     makefile = f"{vendor_dir}/Makefile"
-    if makefile not in present or not re.search(
-            rf"(?<![\w.-]){re.escape(base)}\.dtb\b", _show(repo, makefile)):
+    if makefile not in present or not makefile_builds(_show(repo, makefile), f"{base}.dtb"):
         return {"status": NOT_FOUND,
-                "searched": f"{dts} exists at {tag}, but {makefile} does not build {base}.dtb"}
+                "searched": f"{dts} exists at {tag}, but no dtb rule in {makefile} builds {base}.dtb"}
     return {"status": FOUND, "path": dts, "blob": _blob(repo, dts), "makefile": makefile}
 
 

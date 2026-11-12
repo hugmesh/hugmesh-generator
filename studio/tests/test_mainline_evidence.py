@@ -14,8 +14,11 @@ mainline U-Boot defconfig and kernel device tree, looked up at named release tag
    wrote the evidence is itself tested without touching the network.
 
 x86-64 rows are the one exemption: they boot through UEFI, with no U-Boot defconfig
-or device tree to look up. Every other arch is checked, including one the catalog
-gains later (a new arch must not slip past the guard by not being on a list).
+or device tree to look up. The exemption needs more than the row's own arch field: its
+family must be an x86-64 family and its builder the x86 one, so relabelling an arm64
+board as x86-64 does not slip it past the guard. Every other arch is checked, including
+one the catalog gains later (a new arch must not slip past the guard by not being on a
+list).
 Evidence is necessary for promotion, never sufficient.
 
 Pure-core: no Qt import.
@@ -45,12 +48,15 @@ NOT_FOUND = "not found"
 # The boards hugmesh-generator#1057 names. The evidence may list more, never fewer.
 CANDIDATES = {"rock-5b", "nanopc-t6", "visionfive-2", "bpi-f3", "opi5-pro", "opi5-max"}
 
-# The arches the guard exempts: they boot without a U-Boot defconfig or device tree.
-# Exempting is explicit; an arch not named here is checked, known or not.
-EXEMPT_ARCHES = frozenset({"x86-64"})
+# The arches the guard exempts (they boot without a U-Boot defconfig or device tree),
+# each with the one builder platform an exempt row may use. Exempting is explicit; an
+# arch not named here is checked, known or not.
+EXEMPT_ARCHES = {"x86-64": "x86"}
 
-# Evidence boards' arch -> the directory name both upstream trees use for it.
+# Evidence boards' arch -> the directory name the Linux tree (and U-Boot's
+# dts/upstream copy of it) uses for it, and U-Boot's own flat legacy directory.
 DT_ARCHES = {"arm64": "arm64", "riscv64": "riscv", "armv7": "arm"}
+UBOOT_DT_ARCHES = {"arm64": "arm", "riscv64": "riscv", "armv7": "arm"}
 
 # Every non-x86 row that was experimental or supported when this guard landed
 # (2026-11-12). Frozen: a new promotion goes through the evidence file, not this list.
@@ -61,6 +67,11 @@ GRANDFATHERED = frozenset({
     "orange-pi-zero3", "orange-pi-3-lts", "orange-pi-4-lts",
     "rpi400", "rpi-cm4", "rpi500", "rpi-cm5",
 })
+# A tripwire on the list above: the sha256 of its sorted ids, one per line. Adding a
+# row to GRANDFATHERED (to promote it without evidence) fails
+# test_grandfathered_list_is_frozen. Dropping a demoted row is the one legitimate
+# edit, and it changes this pin too, in the same reviewed diff.
+GRANDFATHERED_SHA256 = "b53d8e2f67a6d3f279f745bb691a43c2dec9559ca65ecea2e1bf605e343f5791"
 
 _BLOB = re.compile(r"^[0-9a-f]{40}$")
 
@@ -75,20 +86,33 @@ def _evidence() -> dict:
 
 
 def _catalog_rows() -> list[SimpleNamespace]:
-    """The catalog read fresh from disk (not dc's cache), as plain rows."""
+    """The catalog read fresh from disk (not dc's cache), as plain rows; each carries
+    its family's arch and its builder platform for the exemption check."""
     raw = _load(dc.CATALOG_PATH)
+    fam_arch = {f["id"]: f["arch"] for f in raw["families"]}
     return [SimpleNamespace(id=d["id"], arch=d["arch"], status=d["status"],
-                            reason=d.get("reason", "")) for d in raw["devices"]]
+                            reason=d.get("reason", ""),
+                            family_arch=fam_arch.get(d.get("family")),
+                            platform=(d.get("builder") or {}).get("platform"))
+            for d in raw["devices"]]
+
+
+def _exempt(r) -> bool:
+    """An x86-64 row is exempt only when its family is x86-64 too and it builds with
+    the x86 builder: the row's own arch field alone is not trusted."""
+    platform = EXEMPT_ARCHES.get(r.arch)
+    return platform is not None and r.family_arch == r.arch and r.platform == platform
 
 
 def promotion_violations(rows, evidence: dict, grandfathered=GRANDFATHERED) -> list[str]:
-    """One sentence per catalog row that is promoted (status not "unsupported") on any
-    arch outside EXEMPT_ARCHES, is not grandfathered, and has no "found" verdict in ``evidence``.
-    The ONE predicate: the real assertion and every negative case below call it."""
+    """One sentence per catalog row that is promoted (status not "unsupported"), is not
+    exempt (see _exempt), is not grandfathered, and has no "found" verdict in
+    ``evidence``. The ONE predicate: the real assertion and every negative case below
+    call it."""
     verdicts = {b["id"]: b.get("verdict") for b in evidence["boards"]}
     out = []
     for r in rows:
-        if r.status == "unsupported" or r.arch in EXEMPT_ARCHES or r.id in grandfathered:
+        if r.status == "unsupported" or _exempt(r) or r.id in grandfathered:
             continue
         v = verdicts.get(r.id)
         if v != FOUND:
@@ -134,8 +158,13 @@ def test_every_found_part_names_its_path_and_blob_and_every_miss_says_what_was_s
             assert u["path"] == f"configs/{u['defconfig']}" and u["defconfig"].endswith("_defconfig")
             assert _BLOB.match(u["blob"]), b["id"]
             assert u["match"] in ("default", "of-list"), b["id"]
-            assert u["dt_source"] in (f"dts/upstream/src/{adir}/{dt}.dts",
-                                      f"arch/{adir}/dts/{base}.dts"), b["id"]
+            # the defconfig names the tree as vendor/name (upstream copy) or as the bare
+            # legacy name (U-Boot's own flat directory); the source must sit where that
+            # spelling points
+            assert u["names"] in (dt, base), b["id"]
+            want = (f"dts/upstream/src/{adir}/{dt}.dts" if u["names"] == dt
+                    else f"arch/{UBOOT_DT_ARCHES[b['arch']]}/dts/{base}.dts")
+            assert u["dt_source"] == want, (b["id"], u["dt_source"], want)
         if k["status"] == FOUND:
             assert k["path"] == f"arch/{adir}/boot/dts/{dt}.dts", b["id"]
             assert k["makefile"] == f"{os.path.dirname(k['path'])}/Makefile", b["id"]
@@ -178,7 +207,15 @@ def test_grandfathered_rows_are_still_promoted_non_x86_catalog_rows():
         assert rows[rid].status != "unsupported", (
             f"{rid}: demoted to unsupported, so it loses its grandfathered place; remove "
             "it from GRANDFATHERED (promoting it again then needs mainline evidence)")
-        assert rows[rid].arch not in EXEMPT_ARCHES, rid
+        assert not _exempt(rows[rid]), rid
+
+
+def test_grandfathered_list_is_frozen():
+    import hashlib
+    digest = hashlib.sha256("\n".join(sorted(GRANDFATHERED)).encode()).hexdigest()
+    assert digest == GRANDFATHERED_SHA256, (
+        "GRANDFATHERED changed. A promotion goes through mainline-evidence.json, not this "
+        "list; the only legitimate edit is dropping a demoted row (then update the pin)")
 
 
 def test_promoting_each_real_not_found_board_is_refused():
@@ -198,8 +235,12 @@ def test_promotion_guard_negative_cases_do_not_depend_on_todays_upstream():
     """Synthetic rows, so the guard stays tested after upstream fills today's gaps."""
     ev = {"boards": [{"id": "board-miss", "verdict": NOT_FOUND},
                      {"id": "board-hit", "verdict": FOUND}]}
-    row = lambda rid, status, arch="arm64": SimpleNamespace(id=rid, status=status, arch=arch,
-                                                            reason="")
+    fam = {"x86-64": "x86-64"}
+    plat = {"x86-64": "x86"}
+    row = lambda rid, status, arch="arm64", family_arch=None, platform=None: SimpleNamespace(
+        id=rid, status=status, arch=arch, reason="",
+        family_arch=family_arch or fam.get(arch, "arm64"),
+        platform=platform or plat.get(arch, "rpi5"))
     # a "not found" row, promoted to either status, is refused
     assert promotion_violations([row("board-miss", "experimental")], ev, frozenset())
     assert promotion_violations([row("board-miss", "supported")], ev, frozenset())
@@ -211,6 +252,12 @@ def test_promotion_guard_negative_cases_do_not_depend_on_todays_upstream():
     assert promotion_violations([row("board-hit", "experimental")], ev, frozenset()) == []
     assert promotion_violations([row("board-miss", "unsupported")], ev, frozenset()) == []
     assert promotion_violations([row("board-none", "supported", "x86-64")], ev, frozenset()) == []
+    # an x86-64 label alone does not exempt: an arm64-family row relabelled x86-64, or
+    # an x86-64 row on a board builder, is still refused
+    assert promotion_violations([row("board-none", "experimental", "x86-64",
+                                     family_arch="arm64")], ev, frozenset())
+    assert promotion_violations([row("board-none", "experimental", "x86-64",
+                                     platform="orangepi5")], ev, frozenset())
     assert promotion_violations([row("board-none", "supported")], ev,
                                 frozenset({"board-none"})) == []
 
@@ -232,10 +279,36 @@ def test_defconfig_trees_and_matching_rank_the_default_tree_first():
     assert me.defconfig_trees("CONFIG_ARM=y\n") == ("", [])
     cfgs = {"z_defconfig": text, "a_defconfig": 'CONFIG_OF_LIST="vendor/board-a"\n',
             "c_defconfig": 'CONFIG_DEFAULT_DEVICE_TREE="vendor/board-a-plus"\n'}
-    assert me.match_defconfigs(cfgs, "vendor/board-a") == [("z_defconfig", "default"),
-                                                            ("a_defconfig", "of-list")]
-    assert me.match_defconfigs(cfgs, "vendor/board-b") == [("z_defconfig", "of-list")]
+    assert me.match_defconfigs(cfgs, "vendor/board-a") == [
+        ("z_defconfig", "default", "vendor/board-a"), ("a_defconfig", "of-list", "vendor/board-a")]
+    assert me.match_defconfigs(cfgs, "vendor/board-b") == [("z_defconfig", "of-list", "vendor/board-b")]
     assert me.match_defconfigs(cfgs, "vendor/board") == []
+    # the legacy bare spelling matches too, and says so
+    legacy = {"l_defconfig": 'CONFIG_DEFAULT_DEVICE_TREE="board-a"\n'}
+    assert me.match_defconfigs(legacy, "vendor/board-a") == [("l_defconfig", "default", "board-a")]
+    assert me.match_defconfigs(legacy, "other/board-a-x") == []
+
+
+def test_uboot_source_follows_the_spelling_and_uboot_arch_layout():
+    me = _load_script()
+    assert me.uboot_source("arm64", "rockchip/a") == "dts/upstream/src/arm64/rockchip/a.dts"
+    assert me.uboot_source("arm64", "a") == "arch/arm/dts/a.dts"       # no arch/arm64 in U-Boot
+    assert me.uboot_source("riscv64", "spacemit/b") == "dts/upstream/src/riscv/spacemit/b.dts"
+    assert me.uboot_source("riscv64", "b") == "arch/riscv/dts/b.dts"
+
+
+def test_makefile_builds_reads_only_real_dtb_rules():
+    me = _load_script()
+    mk = ("dtb-$(CONFIG_ARCH_ROCKCHIP) += alpha.dtb\n"
+          "dtb-y += gamma-plus.dtb x-gamma.dtb\n"
+          "# dtb-y += theta.dtb\n"
+          "dtb-$(CONFIG_ARCH_ROCKCHIP) += iota-ov.dtb\n"
+          "iota-ov-dtbs := iota.dtb iota-ov.dtbo\n"
+          "dtb-$(CONFIG_ARCH_ROCKCHIP) += \\\n\tkappa.dtb \\\n\tlambda.dtb\n")
+    for dtb in ("alpha.dtb", "iota-ov.dtb", "kappa.dtb", "lambda.dtb"):
+        assert me.makefile_builds(mk, dtb), dtb
+    for dtb in ("gamma.dtb", "theta.dtb", "iota.dtb", "plus.dtb"):
+        assert not me.makefile_builds(mk, dtb), dtb
 
 
 def _git_env(tmp_path) -> dict:
@@ -268,15 +341,39 @@ def test_the_lookup_script_finds_pairs_and_names_each_miss(tmp_path):
         "configs/multi_defconfig": ('CONFIG_DEFAULT_DEVICE_TREE="spacemit/other"\n'
                                     'CONFIG_OF_LIST="spacemit/other spacemit/beta"\n'),
         "configs/nodts_defconfig": 'CONFIG_DEFAULT_DEVICE_TREE="rockchip/delta"\n',
+        "configs/zeta_defconfig": 'CONFIG_DEFAULT_DEVICE_TREE="rockchip/zeta"\n',
+        # an upstream spelling whose only source is a same-named LEGACY file: no pair
+        "configs/sm-foo_defconfig": 'CONFIG_DEFAULT_DEVICE_TREE="spacemit/foo"\n',
+        # a legacy bare spelling, its source in U-Boot's arch/arm (there is no arch/arm64)
+        "configs/legacy-mu_defconfig": 'CONFIG_DEFAULT_DEVICE_TREE="mu"\n',
+        # a legacy bare name that only an OF_LIST carries
+        "configs/legacy-multi_defconfig": ('CONFIG_DEFAULT_DEVICE_TREE="other"\n'
+                                           'CONFIG_OF_LIST="other nu"\n'),
+        # names alpha by its bare legacy name, which has no source: it sorts before
+        # alpha-soc_defconfig but is no pair, so neither the pick nor "also"
+        "configs/alpha-legacy_defconfig": 'CONFIG_DEFAULT_DEVICE_TREE="alpha"\n',
         "dts/upstream/src/arm64/rockchip/alpha.dts": "/dts-v1/;\n",
+        "dts/upstream/src/arm64/rockchip/zeta.dts": "/dts-v1/;\n",
         "dts/upstream/src/riscv/spacemit/beta.dts": "/dts-v1/;\n",
+        "arch/riscv/dts/foo.dts": "/dts-v1/;\n",
+        "arch/arm/dts/mu.dts": "/dts-v1/;\n",
+        "arch/arm/dts/nu.dts": "/dts-v1/;\n",
     }, "v2099.01", env)
     linux = _repo(tmp_path / "linux", {
         "arch/arm64/boot/dts/rockchip/alpha.dts": "/dts-v1/;\n",
         "arch/arm64/boot/dts/rockchip/gamma.dts": "/dts-v1/;\n",
         "arch/arm64/boot/dts/rockchip/delta.dts": "/dts-v1/;\n",
+        "arch/arm64/boot/dts/rockchip/theta.dts": "/dts-v1/;\n",
+        "arch/arm64/boot/dts/rockchip/iota.dts": "/dts-v1/;\n",
+        "arch/arm64/boot/dts/rockchip/mu.dts": "/dts-v1/;\n",
+        # gamma only as a suffix AND a prefix variant, theta only commented out, iota
+        # only as the input of a composite overlay: none of the three is built
         "arch/arm64/boot/dts/rockchip/Makefile":
-            "dtb-$(CONFIG_ARCH_ROCKCHIP) += alpha.dtb\ndtb-y += gamma-plus.dtb delta.dtb\n",
+            ("dtb-$(CONFIG_ARCH_ROCKCHIP) += alpha.dtb\n"
+             "dtb-y += gamma-plus.dtb x-gamma.dtb delta.dtb\n"
+             "# dtb-y += theta.dtb\n"
+             "dtb-y += iota-ov.dtb\niota-ov-dtbs := iota.dtb iota-ov.dtbo\n"
+             "dtb-$(CONFIG_ARCH_ROCKCHIP) += \\\n\tmu.dtb\n"),
         "arch/riscv/boot/dts/spacemit/beta.dts": "/dts-v1/;\n",
         "arch/riscv/boot/dts/spacemit/Makefile": "dtb-y += beta.dtb\n",
     }, "v9.1", env)
@@ -291,6 +388,12 @@ def test_the_lookup_script_finds_pairs_and_names_each_miss(tmp_path):
             {"id": "gamma", "arch": "arm64", "dt": "rockchip/gamma"},     # no defconfig, no .dtb rule
             {"id": "delta", "arch": "arm64", "dt": "rockchip/delta"},     # defconfig, no U-Boot dts
             {"id": "eps", "arch": "arm64", "dt": "rockchip/eps"},         # nowhere
+            {"id": "zeta", "arch": "arm64", "dt": "rockchip/zeta"},       # U-Boot only
+            {"id": "foo", "arch": "riscv64", "dt": "spacemit/foo"},       # wrong-layout source
+            {"id": "mu", "arch": "arm64", "dt": "rockchip/mu"},           # legacy bare name
+            {"id": "nu", "arch": "arm64", "dt": "rockchip/nu"},           # ...in OF_LIST only
+            {"id": "theta", "arch": "arm64", "dt": "rockchip/theta"},     # commented-out rule
+            {"id": "iota", "arch": "arm64", "dt": "rockchip/iota"},       # overlay input only
         ]}), encoding="utf-8")
 
     run = lambda *a: subprocess.run([sys.executable, SCRIPT, "--evidence", str(ev_path), *a],
@@ -305,19 +408,38 @@ def test_the_lookup_script_finds_pairs_and_names_each_miss(tmp_path):
     assert got["alpha"]["verdict"] == FOUND
     assert got["alpha"]["u-boot"]["defconfig"] == "alpha-soc_defconfig"
     assert got["alpha"]["u-boot"]["match"] == "default"
+    assert got["alpha"]["u-boot"]["also"] == []         # alpha-legacy_defconfig is no pair
     assert got["alpha"]["linux"]["makefile"] == "arch/arm64/boot/dts/rockchip/Makefile"
     assert got["beta"]["verdict"] == FOUND
     assert (got["beta"]["u-boot"]["defconfig"], got["beta"]["u-boot"]["match"]) == \
         ("multi_defconfig", "of-list")
     assert got["gamma"]["u-boot"]["status"] == NOT_FOUND
-    assert "all 3 configs/*_defconfig at v2099.01" in got["gamma"]["u-boot"]["searched"]
+    assert "all 8 configs/*_defconfig at v2099.01" in got["gamma"]["u-boot"]["searched"]
     assert got["gamma"]["linux"]["status"] == NOT_FOUND          # gamma-plus.dtb is not gamma.dtb
-    assert "does not build gamma.dtb" in got["gamma"]["linux"]["searched"]
+    assert "no dtb rule in arch/arm64/boot/dts/rockchip/Makefile builds gamma.dtb" in got["gamma"]["linux"]["searched"]
     assert got["delta"]["u-boot"]["status"] == NOT_FOUND
-    assert "configs/nodts_defconfig names it" in got["delta"]["u-boot"]["searched"]
+    assert "configs/nodts_defconfig names rockchip/delta" in got["delta"]["u-boot"]["searched"]
     assert got["delta"]["linux"]["status"] == FOUND and got["delta"]["verdict"] == NOT_FOUND
     assert got["eps"]["linux"] == {"status": NOT_FOUND,
                                    "searched": "arch/arm64/boot/dts/rockchip/eps.dts at v9.1"}
+    # U-Boot found, Linux not: the verdict follows the missing part
+    assert got["zeta"]["u-boot"]["status"] == FOUND
+    assert got["zeta"]["linux"]["status"] == NOT_FOUND and got["zeta"]["verdict"] == NOT_FOUND
+    # spacemit/foo needs dts/upstream/src/riscv/spacemit/foo.dts; arch/riscv/dts/foo.dts
+    # is a different tree, so it does not pair
+    assert got["foo"]["u-boot"]["status"] == NOT_FOUND
+    assert "no dts/upstream/src/riscv/spacemit/foo.dts" in got["foo"]["u-boot"]["searched"]
+    # a legacy bare name pairs with U-Boot's arch/arm/dts, and the evidence records it
+    assert got["mu"]["verdict"] == FOUND
+    assert (got["mu"]["u-boot"]["names"], got["mu"]["u-boot"]["dt_source"]) == \
+        ("mu", "arch/arm/dts/mu.dts")
+    assert got["alpha"]["u-boot"]["names"] == "rockchip/alpha"
+    nu = got["nu"]["u-boot"]
+    assert (nu["status"], nu["defconfig"], nu["match"], nu["names"], nu["dt_source"]) == \
+        (FOUND, "legacy-multi_defconfig", "of-list", "nu", "arch/arm/dts/nu.dts")
+    for rid in ("theta", "iota"):
+        assert got[rid]["linux"]["status"] == NOT_FOUND, rid
+        assert f"builds {rid}.dtb" in got[rid]["linux"]["searched"], rid
     for key in ("u-boot", "linux"):
         commit = subprocess.run(["git", "rev-parse", "v9.1^{commit}" if key == "linux"
                                  else "v2099.01^{commit}"], cwd=tmp_path / key, env=env,
