@@ -333,7 +333,11 @@ def test_account_lines_name_the_login_account_and_the_role_owner():
 
 def test_a_governed_desktop_refuses_an_extra_local_administrator():
     """sudo on a governed (SSO + KEYS) mesh desktop flows only through the revocable
-    desktop-sudo claim; 02-extra-local-users.start withholds wheel there too."""
+    desktop-sudo claim; 02-extra-local-users.start grants nothing there either. It keys
+    on keys-provision's OWN marker (keys-users.created), never users.created, which
+    01-firstboot touches for its local account in the same boot (that withheld wheel
+    from every standalone and --local-pass image). The per-shape EFFECT (real 01, then
+    02, on one root) is tests/scripts/test-desktop-config-lib.sh section 4b."""
     mesh = _with(ImageConfig(mode="mesh", role="laptop", platform="x86"),
                  extra_users=[ds.ExtraUser("ann", True)])
     assert "desktop-sudo" in _errs(mesh)
@@ -342,7 +346,12 @@ def test_a_governed_desktop_refuses_an_extra_local_administrator():
     assert _errs(_with(_laptop(), extra_users=[ds.ExtraUser("ann", True)])) == ""
     script = open(os.path.join(GEN, "scripts", "desktop-config", "02-extra-local-users.start"),
                   encoding="utf-8").read()
-    assert "[ -d /etc/hugmesh/desktop-governance ] || [ -f /var/lib/keys-provision/users.created ]" in script
+    assert "[ -d /etc/hugmesh/desktop-governance ]" in script
+    assert "/var/lib/keys-provision/keys-users.created" in script
+    assert "users.created ]" not in script.replace("keys-users.created", "")
+    prov = open(os.path.join(GEN, "specs", "etc", "keys-provision", "provision.sh"),
+                encoding="utf-8").read()
+    assert 'KEYS_USERS_MARKER="${STATE_DIR}/keys-users.created"' in prov
 
 
 # ── catalog deliveries that do not exist for the image's arch ──────────────────────────

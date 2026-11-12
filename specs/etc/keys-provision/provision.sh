@@ -45,6 +45,13 @@ STATE_DIR="/var/lib/keys-provision"
 LOG="/var/log/keys-provision.log"
 DONE_MARKER="${STATE_DIR}/done"
 USERS_MARKER="${STATE_DIR}/users.created"
+# keys-users.created: written ONLY here, beside users.created, with "governed" or
+# "ungoverned". users.created is ALSO touched by 01-firstboot for its own local account,
+# so it cannot say "KEYS made the users"; 02-extra-local-users.start (the Studio's extra
+# accounts) runs after the KEYS media is unmounted and reads this one to grant an extra
+# administrator the way 01-firstboot grants --local-admin (sudoers.d on a KEYS image,
+# nothing on a governed one).
+KEYS_USERS_MARKER="${STATE_DIR}/keys-users.created"
 FIND_RETRIES="${KEYS_FIND_RETRIES:-15}"   # USB enumeration can be slow
 
 mkdir -p "${STATE_DIR}"
@@ -269,6 +276,16 @@ desktop_governance_governed() {
     return 1
 }
 
+# mark_keys_users — record that KEYS provisioning created accounts (see KEYS_USERS_MARKER).
+mark_keys_users() {
+    touch "${USERS_MARKER}"
+    if desktop_governance_governed; then
+        echo governed > "${KEYS_USERS_MARKER}"
+    else
+        echo ungoverned > "${KEYS_USERS_MARKER}"
+    fi
+}
+
 provision_users() {
     local f="${BASE}/users.json"
     [ -f "${f}" ] || f="${MANIFEST}"          # users may live in provision.json
@@ -359,7 +376,7 @@ provision_users() {
                 log "Granted sudo to ${name} (nopasswd=${nopw})"
             fi
         fi
-        touch "${USERS_MARKER}"
+        mark_keys_users
     done
 
     # root account
@@ -378,7 +395,7 @@ provision_users() {
             printf 'root:%s\n' "${rhash}" | chpasswd -e && log "Set root password hash"
         fi
         install_root_keys "${f}"
-        touch "${USERS_MARKER}"
+        mark_keys_users
     fi
 }
 

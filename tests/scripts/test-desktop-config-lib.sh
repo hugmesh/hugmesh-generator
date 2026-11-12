@@ -134,8 +134,6 @@ awk '$1=="ann" && $2=="false" && $3 ~ /^\$(y|6)\$/' "${list}" | grep . >/dev/nul
 awk '$1=="bob" && $2=="true" && $3 ~ /^\$(y|6)\$/' "${list}" | grep . >/dev/null && ok "bob:admin -> administrator" || bad "bob line: $(cat "${list}")"
 [ -x "${SR}/etc/local.d/02-extra-local-users.start" ] && ok "firstboot account script installed" || bad "firstboot script missing"
 grep -E 'chage -d 0' "${SR}/etc/local.d/02-extra-local-users.start" >/dev/null && ok "first login must change the password" || bad "no chage -d 0"
-awk '/if \[ "\$\{admin\}" = "true" \]; then/{on=1} on&&/want="wheel \$\{want\}"/{f=1} END{exit !f}' \
-    "${SR}/etc/local.d/02-extra-local-users.start" && ok "wheel only for an administrator" || bad "wheel gating not found"
 grep -x 'flathub org.mozilla.firefox' "${SR}/etc/hugmesh/flatpak-apps.list" >/dev/null && grep -x 'mine org.example.App' "${SR}/etc/hugmesh/flatpak-apps.list" >/dev/null \
     && ok "flatpak-apps.list" || bad "flatpak-apps.list: $(cat "${SR}/etc/hugmesh/flatpak-apps.list" 2>&1)"
 grep -x "flathub https://dl.flathub.org/repo/flathub.flatpakrepo" "${SR}/etc/hugmesh/flatpak-remotes.list" >/dev/null && grep -x 'mine https://example.org/mine.flatpakrepo' "${SR}/etc/hugmesh/flatpak-remotes.list" >/dev/null \
@@ -154,6 +152,63 @@ lib "dc_bake_desktop '${SR3}' t" >/dev/null
 after="$(cd "${SR3}" && find . | sort; cd "${SR3}" && find . -type f -exec md5sum {} + | sort)"
 [ "$(cd "${SR3}" && find . | wc -l)" -eq 4 ] && [ "${before}" = "$(cd "${SR3}" && find . -type f -exec md5sum {} + | sort)" ] \
     && ok "no Desktop flags -> the sysroot is untouched" || bad "bake with nothing set changed the sysroot: ${after}"
+
+echo "== 4b. first boot: the real 01-firstboot, then 02-extra-local-users, on one root"
+# The EFFECT, per image shape: can an extra ':admin' account sudo (sudoers.d line, or
+# wheel WITH an active %wheel line), and can a plain one not? 01 runs first in the same
+# boot and touches users.created for its own account, which 02 used to read as "KEYS made
+# the users" and withhold wheel on every standalone and --local-pass image.
+# shellcheck source=tests/scripts/lib/firstboot-harness.sh
+. "${REPO}/tests/scripts/lib/firstboot-harness.sh"
+TMPL="${REPO}/specs/etc/local.d/01-firstboot.start.tmpl"
+EXTRA_SRC="${EXTRA_SRC:-${REPO}/scripts/desktop-config/02-extra-local-users.start}"
+FB_HASH='$y$j9T$abcdefghijklmnop$0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef'
+# boot_shape NAME STANDALONE HASH KEYS(no|ungoverned|governed) BAKED_GOV(yes|no)
+boot_shape() {
+    local r="${TMP}/fb-$1"
+    rm -rf "${r}"; make_root "${r}"
+    [ "$4" != no ] && keys_provisioned "${r}" alice "$4"
+    [ "$5" = yes ] && mkdir -p "${r}/etc/hugmesh/desktop-governance"
+    mkdir -p "${r}/etc/hugmesh"
+    printf 'ann true %s\ncarl false %s\n' "${FB_HASH}" "${FB_HASH}" > "${r}/etc/hugmesh/extra-local-users"
+    render "${r}" "$3" "$2" false
+    run_fb "${r}"
+    render_extra "${r}"
+    run_extra "${r}"
+    echo "${r}"
+}
+# expect NAME ROOT ANN(y|n) HOW(wheel|sudoers.d|-)
+expect() {
+    local n="$1" r="$2" want="$3" how="$4" got
+    got="$(can_sudo "${r}" ann)"
+    [ "${got}" = "${want}" ] && ok "${n}: ann:admin can sudo = ${want}" \
+        || bad "${n}: ann:admin can sudo = ${got}, want ${want} (groups: $(cat "${r}/groups.ann" 2>&1); out: $(tr '\n' ' ' < "${r}/extra.out"))"
+    [ "$(can_sudo "${r}" carl)" = n ] && ok "${n}: carl (no :admin) cannot sudo" || bad "${n}: carl can sudo"
+    case "${how}" in
+        wheel)     grep -qE '(^|[:,])wheel(,|$)' "${r}/groups.ann" && [ -z "$(ls -A "${r}/etc/sudoers.d" 2>/dev/null)" ] \
+                       && ok "${n}: granted through wheel, no sudoers.d file" || bad "${n}: not a wheel grant" ;;
+        sudoers.d) ! grep -qE '(^|[:,])wheel(,|$)' "${r}/groups.ann" && [ "$(stat -c %a "${r}/etc/sudoers.d/90-local-ann" 2>/dev/null)" = 440 ] \
+                       && ! grep -q '^%wheel' "${r}/etc/sudoers" \
+                       && ok "${n}: granted through sudoers.d/90-local-ann (0440), not wheel, no %wheel line added" || bad "${n}: not a sudoers.d grant" ;;
+        -)         ! grep -qE '(^|[:,])wheel(,|$)' "${r}/groups.ann" && [ ! -e "${r}/etc/sudoers.d/90-local-ann" ] \
+                       && ok "${n}: no wheel, no sudoers.d grant" || bad "${n}: a grant landed on a governed image" ;;
+    esac
+    if [ "${want}" = y ]; then
+        grep -q 'ann created (administrator, via ' "${r}/extra.out" && ok "${n}: says administrator" || bad "${n}: no administrator line: $(cat "${r}/extra.out")"
+    else
+        ! grep -q 'administrator, via' "${r}/extra.out" && grep -q 'NOT made an administrator' "${r}/extra.out" \
+            && ok "${n}: says NOT an administrator, never '(administrator)'" || bad "${n}: wrong message: $(cat "${r}/extra.out")"
+    fi
+    [ ! -e "${r}/etc/hugmesh/extra-local-users" ] && ok "${n}: list removed after success" || bad "${n}: list left behind"
+}
+expect "standalone + --local-pass"        "$(boot_shape sa-pass true  "${FB_HASH}" no no)" y wheel
+expect "standalone, no --local-pass"      "$(boot_shape sa-nopass true "" no no)" y wheel
+expect "mesh keyless + --local-pass"      "$(boot_shape m-pass false "${FB_HASH}" no no)" y wheel
+expect "mesh keyless, no --local-pass"    "$(boot_shape m-nopass false "" no no)" y wheel
+expect "KEYS (ungoverned) + --local-pass" "$(boot_shape keys-pass false "${FB_HASH}" ungoverned no)" y sudoers.d
+expect "KEYS (ungoverned), no local pass" "$(boot_shape keys-nopass false "" ungoverned no)" y sudoers.d
+expect "governed from the KEYS stick"     "$(boot_shape gov-keys false "${FB_HASH}" governed no)" n -
+expect "governed, templates baked"        "$(boot_shape gov-baked false "" ungoverned yes)" n -
 
 echo "== 5. Python targets"
 PS="${TMP}/py"; mkdir -p "${PS}/etc/portage/package.use" "${PS}/usr/lib/python3.13" "${PS}/var/db/pkg/dev-lang/python-3.13.5"
@@ -289,9 +344,6 @@ printf '%s\n' "${pbody}" | grep -E '^        pretend-\*\)' >/dev/null && printf 
     && ok "pretend removes only a pretend-* tree, and only with nothing left mounted" || bad "pretend cleanup guards missing"
 grep -F -- '--pretend --verbose' "${REPO}/scripts/_pretend-lib.sh" >/dev/null \
     && ok "pretend asks for --verbose (portage prints Total: only then)" || bad "pretend lib lost --verbose"
-grep -F '[ -d /etc/hugmesh/desktop-governance ] || [ -f /var/lib/keys-provision/users.created ]' \
-    "${REPO}/scripts/desktop-config/02-extra-local-users.start" >/dev/null \
-    && ok "extra administrators get no wheel on a governed/KEYS image (01-firstboot's rule)" || bad "02 script grants wheel on governed images"
 for lib_f in scripts/_desktop-config-lib.sh scripts/_pretend-lib.sh; do
     bash -n "${REPO}/${lib_f}" && ok "${lib_f}: bash -n" || bad "${lib_f}: syntax"
 done
