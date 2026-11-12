@@ -23,6 +23,10 @@ builder MEANT to write.
     idp_issuer_render.py count <application.yaml> <git-dir> <literal>...
         JSON {"error", "counts": {literal: occurrences in the render}}.
 
+    idp_issuer_render.py match <application.yaml> <git-dir> <regex>
+        JSON {"error", "matches": [group 1 of every match in the render]}.
+        Used for Casdoor's app.conf `origin`, which lives inside a string.
+
     idp_issuer_render.py helm <application.yaml> <chart-dir>
         `helm template` of a git-served chart with the Application's inline
         spec.source.helm.values, as ArgoCD runs it. JSON as for `env`.
@@ -172,6 +176,13 @@ def main():
             return 1
         print(json.dumps({"error": None, "counts": {lit: text.count(lit) for lit in sys.argv[4:]}}))
         return 0
+    if cmd == "match":
+        text, err = build(sys.argv[3], app_patches(sys.argv[2]))
+        if err:
+            print(json.dumps({"error": err}))
+            return 1
+        print(json.dumps({"error": None, "matches": re.findall(sys.argv[4], text)}))
+        return 0
     if cmd == "helm":
         text, err = helm_render(sys.argv[2], sys.argv[3])
         if err:
@@ -180,7 +191,7 @@ def main():
         print(json.dumps({"error": None, "env": env_map(text),
                           "text_sha": hashlib.sha256(text.encode()).hexdigest()}))
         return 0
-    print("usage: idp_issuer_render.py env|oracle|count|helm ...", file=sys.stderr)
+    print("usage: idp_issuer_render.py env|oracle|count|match|helm ...", file=sys.stderr)
     return 2
 
 

@@ -422,6 +422,10 @@ IDP_ROWS=(
   "34b-wiki-bff-api.yaml|wiki-bff-api|Deployment/hugmesh-wiki-bff-api/hugmesh-wiki-bff-api/CASDOOR_JWKS_URI|jwks"
 )
 GATEWAY_APPS=(20-gateway-be.yaml 20-gateway-fe.yaml 20-gateway-pki.yaml 22-gateway-superadmin.yaml)
+# The minter: Casdoor's app.conf `origin`, carried by apps/05 the same way.
+MINTER_APP=05-casdoor.yaml
+MINTER_DIR=casdoor
+ORIGIN_RE='origin = "([^"]*)"'
 
 # THE CENSUS (issue #530's measurement): every file under specs/cluster/manifests
 # with an `https://id.` literal, and what it is. A new one goes red here until it
@@ -432,10 +436,13 @@ GATEWAY_APPS=(20-gateway-be.yaml 20-gateway-fe.yaml 20-gateway-pki.yaml 22-gatew
 #   per-domain - the casdoor-domains ApplicationSet already patches it per domain
 #   prose    - a comment, or a code fallback that the env above overrides
 #   carrier  - the idp-trust value surface this section pins (kustomization.yaml)
+#   minter   - Casdoor's own `origin`: the `iss` it mints. Off an external-IdP mesh
+#              (gate_casdoor_apps), but it must follow the validators everywhere
+#              else, so it is carried too and checked for agreement in (7e)
 IDP_CENSUS=(
   "admin-bff-api/deployment.yaml|moved"
   "akkoma/akkoma.yaml|held"
-  "casdoor/app-conf-configmap.yaml|off-path"
+  "casdoor/app-conf-configmap.yaml|minter"
   "casdoor-games/app-conf-configmap.yaml|off-path"
   "casdoor-domain/app-conf-configmap.yaml|prose"
   "casdoor-domain/deployment.yaml|prose"
@@ -473,6 +480,7 @@ IDP_CENSUS=(
   "tube/kustomization.yaml|carrier"
   "user-bff-api/kustomization.yaml|carrier"
   "wiki-bff-api/kustomization.yaml|carrier"
+  "casdoor/kustomization.yaml|carrier"
 )
 MAN="${REPO}/specs/cluster/manifests"
 census_tree="$(cd "${MAN}" && grep -rlaF 'https://id.' . | sed 's|^\./||' | sort)"
@@ -483,9 +491,9 @@ n_tree=$(printf '%s\n' "${census_tree}" | grep -c .)
   || bad "census: tree and table differ -- unclassified: $(comm -23 <(echo "${census_tree}") <(echo "${census_table}") | tr '\n' ' ')| stale: $(comm -13 <(echo "${census_tree}") <(echo "${census_table}") | tr '\n' ' ')"
 for c in "${IDP_CENSUS[@]}"; do
   IFS='|' read -r f cls <<<"${c}"
-  case "${cls}" in moved|carrier) : ;; *) continue ;; esac
+  case "${cls}" in moved|carrier|minter) : ;; *) continue ;; esac
   d="${f%%/*}"
-  printf '%s\n' "${IDP_ROWS[@]}" | cut -d'|' -f2 | grep -qxF "${d}" \
+  { [ "${d}" = "${MINTER_DIR}" ] || printf '%s\n' "${IDP_ROWS[@]}" | cut -d'|' -f2 | grep -xF "${d}" >/dev/null; } \
     && ok "census: ${f} (${cls}) has a render row" \
     || bad "census: ${f} is classified ${cls} but no IDP_ROWS entry renders ${d}"
 done
@@ -526,6 +534,21 @@ jget() { python3 -c 'import json,sys;d=json.loads(sys.argv[1]);v=d
 for k in sys.argv[2:]: v=(v or {}).get(k)
 print(v if isinstance(v,str) else json.dumps(v))' "$@"; }
 IDP_APPS="$(printf '%s\n' "${IDP_ROWS[@]}" | cut -d'|' -f1,2 | sort -u)"
+ALL_APPS="$(printf '%s\n%s|%s\n' "${IDP_APPS}" "${MINTER_APP}" "${MINTER_DIR}")"
+# A copy of the GIT manifests with every idp-trust replacement removed: the tree as
+# it was before #530, plus inert local-config carriers. (7b) and (7d) use it.
+NR="${TMPROOT}/no-repl"; rm -rf "${NR}"; cp -r "${MAN}" "${NR}"
+while IFS='|' read -r _app _dir; do
+  python3 - "${NR}/${_dir}/kustomization.yaml" <<'PY'
+import sys, yaml
+p = sys.argv[1]
+k = yaml.safe_load(open(p))
+k["replacements"] = [r for r in k.get("replacements", []) if r.get("source", {}).get("name") != "idp-trust"]
+if not k["replacements"]:
+    k.pop("replacements")
+yaml.safe_dump(k, open(p, "w"), sort_keys=False)
+PY
+done <<<"${ALL_APPS}"
 
 # rows_moved <app-file> <git-manifests-root> -> prints one line per row: OK|BAD <detail>
 rows_moved() {
@@ -560,7 +583,7 @@ PY
     && ok "${app}: serves ${path} from git (a sed over the baked copy is inert)" \
     || bad "${app}: serves '${path}', expected specs/cluster/manifests/${dir}"
   [ "${nops}" -eq 1 ] && ok "${app}: carries the idp-trust op" || bad "${app}: carries ${nops} idp-trust op(s), expected 1"
-done <<<"${IDP_APPS}"
+done <<<"${ALL_APPS}"
 if [ -f "${BOOT}" ]; then
   leak=$(grep -na 'kubectl apply' "${BOOT}" | grep -a 'CLUSTER_DIR' | grep -acE 'manifests/[a-z]' )
   lp=$(grep -na 'kubectl apply' "${BOOT}" | grep -a 'CLUSTER_DIR' | grep -acE 'manifests/local-path')
@@ -572,20 +595,24 @@ fi
 echo "-- (7b) a casdoor mesh renders byte-identically: the ops and values equal the defaults"
 while IFS='|' read -r app dir; do
   f="${REPO}/specs/cluster/apps/${app}"
+  # The whole mechanism (op + carrier + replacements) against neither: equal
+  # bytes. Comparing only with/without the op would miss a replacement that
+  # writes into the WRONG place, because the carrier default would still feed it.
   strip_idp_ops "${f}" "${TMPROOT}/stripped.yaml"
   a="$(python3 "${IDP_RENDER}" env "${f}" "${MAN}/${dir}")"
-  b="$(python3 "${IDP_RENDER}" env "${TMPROOT}/stripped.yaml" "${MAN}/${dir}")"
+  b="$(python3 "${IDP_RENDER}" env "${TMPROOT}/stripped.yaml" "${NR}/${dir}")"
   [ "$(jget "${a}" error)" = "null" ] || { bad "${app}: render errored -- $(jget "${a}" error | head -c 300)"; continue; }
+  [ "$(jget "${b}" error)" = "null" ] || { bad "${app}: the no-replacements render errored -- $(jget "${b}" error | head -c 300)"; continue; }
   [ "$(jget "${a}" text_sha)" = "$(jget "${b}" text_sha)" ] \
-    && ok "${app}: the default op is a byte no-op on ${dir}" \
-    || bad "${app}: the default op CHANGES the ${dir} render"
+    && ok "${app}: op + replacements are a byte no-op on ${dir} at the casdoor defaults" \
+    || bad "${app}: op + replacements CHANGE the ${dir} render at the casdoor defaults"
   # The carrier is local-config: kustomize must drop it. If it is emitted, every
   # mesh gains a stray ConfigMap and the "byte-identical" claim above is false.
   c="$(python3 "${IDP_RENDER}" count "${f}" "${MAN}/${dir}" "idp-trust" "platform.hugmesh.net/idp-")"
   [ "$(python3 -c 'import json,sys;print(sum(json.loads(sys.argv[1])["counts"].values()))' "${c}")" = "0" ] \
     && ok "${app}: the idp-trust carrier is not emitted (local-config holds)" \
     || bad "${app}: the idp-trust carrier or its annotations reach the ${dir} render: $(jget "${c}" counts)"
-done <<<"${IDP_APPS}"
+done <<<"${ALL_APPS}"
 for g in "${GATEWAY_APPS[@]}"; do
   f="${REPO}/specs/cluster/apps/${g}"
   strip_gateway_casdoor "${f}" "${TMPROOT}/gw-stripped.yaml"
@@ -678,23 +705,13 @@ if [ -d "${K}" ]; then
     [ "${nb}" -gt 0 ] && ok "control (no op) ${app}: the check goes red (${nb} env unmoved)" \
       || bad "control (no op) ${app}: the check stays GREEN without the op -- it measures nothing"
   done <<<"${IDP_APPS}"
-  # (ii) drop the idp-trust replacements from a copy of the GIT manifests
-  NR="${TMPROOT}/no-repl"; rm -rf "${NR}"; cp -r "${MAN}" "${NR}"
+  # (ii) the same rewritten Applications against the no-replacements copy
   while IFS='|' read -r app dir; do
-    python3 - "${NR}/${dir}/kustomization.yaml" <<'PY'
-import sys, yaml
-p = sys.argv[1]
-k = yaml.safe_load(open(p))
-k["replacements"] = [r for r in k.get("replacements", []) if r.get("source", {}).get("name") != "idp-trust"]
-if not k["replacements"]:
-    k.pop("replacements")
-yaml.safe_dump(k, open(p, "w"), sort_keys=False)
-PY
     nb=$(rows_moved "${K}/apps/${app}" "${NR}" | grep -c '^BAD')
     [ "${nb}" -gt 0 ] && ok "control (no replacements) ${dir}: the check goes red (${nb} env unmoved)" \
       || bad "control (no replacements) ${dir}: the check stays GREEN without replacements -- it measures nothing"
   done <<<"${IDP_APPS}"
-  rm -rf "${NR}" "${TMPROOT}/ctl"
+  rm -rf "${TMPROOT}/ctl"
   # (iii) the gateways without their inline casdoor values
   for g in "${GATEWAY_APPS[@]}"; do
     strip_gateway_casdoor "${K}/apps/${g}" "${TMPROOT}/gw-ctl.yaml"
@@ -707,6 +724,70 @@ PY
 else
   bad "no rewritten tree kept from (7c) -- the negative controls did not run"
 fi
+
+echo "-- (7e) a custom-domain CASDOOR mesh: the minter and every validator agree on \`iss\`"
+# rebrand_sysroot rewrites the baked ops above to https://id.<CLUSTER_DOMAIN> on any
+# non-default domain, external IdP or not. On a casdoor mesh the tokens' `iss` is
+# Casdoor's app.conf origin, so it must move with them. akkoma is the one validator
+# left behind (its directory is held by another open PR): a named follow-up.
+origin_of() { jget "$(python3 "${IDP_RENDER}" match "$1" "$2" "${ORIGIN_RE}")" matches; }
+for b in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
+  unset -f _sed_rep_escape rebrand_sysroot rewrite_idp_sysroot
+  for fn in _sed_rep_escape rebrand_sysroot rewrite_idp_sysroot; do
+    s="$(extract_fn "${fn}" "${REPO}/${b}")"
+    [ -n "${s}" ] || { bad "${b}: could not extract ${fn}"; continue 2; }
+    eval "${s}" || { bad "${b}: ${fn} does not parse"; continue 2; }
+  done
+  for corner in "custom-domain hugmesh hugmesh" "branded acme widgetco"; do
+    read -r label brand org <<<"${corner}"
+    dom=example.org; want="https://id.${dom}"
+    SYSROOT="${TMPROOT}/idp-sr"; rm -rf "${SYSROOT}"
+    C="${SYSROOT}/var/lib/hugmesh/cluster"
+    mkdir -p "${C}" "${SYSROOT}/etc/hugmesh"
+    cp -r "${REPO}/specs/cluster/apps" "${C}/"
+    BRAND="${brand}" ORG="${org}" BRAND_TITLE="Acme Mesh" CLUSTER_DOMAIN="${dom}" GAMES_DOMAIN=acme.games rebrand_sysroot
+    IDP=casdoor IDP_ISSUER="" IDP_JWKS="" CLUSTER_DOMAIN="${dom}" rewrite_idp_sysroot
+    tag="${b} ${label} casdoor"
+    o="$(origin_of "${C}/apps/${MINTER_APP}" "${MAN}/${MINTER_DIR}")"
+    [ "${o}" = "[\"${want}\"]" ] \
+      && ok "${tag}: Casdoor mints iss ${want}" \
+      || bad "${tag}: Casdoor's origin renders ${o}, want [\"${want}\"] -- the minter does not follow the validators"
+    while IFS='|' read -r app dir; do
+      j="$(python3 "${IDP_RENDER}" env "${C}/apps/${app}" "${MAN}/${dir}")"
+      for row in "${IDP_ROWS[@]}"; do
+        IFS='|' read -r a d key role <<<"${row}"
+        [ "${a}" = "${app}" ] || continue
+        got="$(jget "${j}" env "${key}")"
+        case "${role}" in
+          issuer) exp="${want}" ;;
+          tenancy-issuer) exp="${GAMES_REALM_ISS}=default,${want}=default" ;;
+          *) continue ;;
+        esac
+        [ "${got}" = "${exp}" ] \
+          && ok "${tag}: ${app} ${key##*/} agrees with the minter" \
+          || bad "${tag}: ${app} ${key##*/} is '${got}', the minter says '${exp}'"
+      done
+    done <<<"${IDP_APPS}"
+    for g in "${GATEWAY_APPS[@]}"; do
+      j="$(python3 "${IDP_RENDER}" helm "${C}/apps/${g}" "${REPO}/specs/cluster/charts/hugmesh-gateway")"
+      gi=$(python3 -c 'import json,sys;e=json.loads(sys.argv[1])["env"];print(sorted({v for k,v in e.items() if k.endswith("/CASDOOR_ISSUER_URI")}))' "${j}")
+      [ "${gi}" = "['${want}']" ] && ok "${tag}: ${g} agrees with the minter" \
+        || bad "${tag}: ${g} validates against ${gi}, the minter says ${want}"
+    done
+    if [ "${b}" = "build-x86-host-stage4.sh" ] && [ "${label}" = "custom-domain" ]; then
+      # Controls: without apps/05's op, or without casdoor's replacement, the
+      # minter stays on the git literal and the agreement check must catch it.
+      strip_idp_ops "${C}/apps/${MINTER_APP}" "${TMPROOT}/c05.yaml"
+      o="$(origin_of "${TMPROOT}/c05.yaml" "${MAN}/${MINTER_DIR}")"
+      [ "${o}" != "[\"${want}\"]" ] && ok "control (no op) ${MINTER_APP}: the minter stays on ${o}" \
+        || bad "control (no op) ${MINTER_APP}: the minter moved WITHOUT its op -- the check measures nothing"
+      o="$(origin_of "${C}/apps/${MINTER_APP}" "${NR}/${MINTER_DIR}")"
+      [ "${o}" != "[\"${want}\"]" ] && ok "control (no replacements) ${MINTER_DIR}: the minter stays on ${o}" \
+        || bad "control (no replacements) ${MINTER_DIR}: the minter moved WITHOUT its replacement -- the check measures nothing"
+    fi
+  done
+done
+rm -rf "${TMPROOT}/idp-sr" "${NR}"
 
 echo
 echo "== ${P} passed, ${F} failed =="

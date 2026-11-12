@@ -384,11 +384,29 @@ THIS_REPO = "https://github.com/hugmesh/hugmesh-generator.git"
 def npath(p):
     p = posixpath.normpath(str(p).strip().strip("/")) if str(p).strip() else ""
     return "" if p == "." else p
+IDP_OP = re.compile(r"^- \{ op: replace, path: /metadata/annotations/platform\.hugmesh\.net~1idp-[a-z-]+, value: \"[^\"]*\" \}$")
+def idp_trust_only(k):
+    if not isinstance(k, dict) or set(k) != {"patches"} or not k["patches"]:
+        return False
+    for p in k["patches"]:
+        if set(p) != {"target", "patch"} or p["target"] != {"version": "v1", "kind": "ConfigMap", "name": "idp-trust"}:
+            return False
+        lines = [l for l in str(p["patch"]).splitlines() if l.strip()]
+        if not lines or not all(IDP_OP.match(l.strip()) for l in lines):
+            return False
+    return True
 def strict_source(src, want_path, where):
     check(src.get("repoURL") == THIS_REPO and src.get("targetRevision") == "main",
           f"[app] {where}: the source is this repository's main (repoURL={src.get('repoURL')!r}, targetRevision={src.get('targetRevision')!r})")
     check(npath(src.get("path", "")) == want_path, f"[app] {where}: spec.source.path is {want_path}, the directory rendered below (got {src.get('path')!r}; a parent overlay re-pins the image behind this check)")
     extra = sorted(set(src) - {"repoURL", "targetRevision", "path"})
+    # ONE exception (issue #530): the IdP issuer op. It may only replace
+    # platform.hugmesh.net/idp-* annotations on the local-config idp-trust
+    # ConfigMap, which kustomize never emits; the directory's `replacements` copy
+    # them onto APP_TENANCY_* env. It cannot reach an image, a name or a namespace.
+    # Pinned by tests/scripts/test-eso-remoteref-brand.sh section (7).
+    if extra == ["kustomize"] and idp_trust_only(src["kustomize"]):
+        extra = []
     check(not extra, f"[app] {where}: spec.source carries nothing but repoURL/targetRevision/path (got {extra}): a kustomize images/patches/namePrefix override is applied by argocd-repo-server before the build and never reaches the render below")
 # Every Application allowed to touch the games path or namespace, and what it renders.
 # casdoor-games shares the namespace; its render is held to the same image rules below.
@@ -1680,9 +1698,12 @@ expect_red "the backend pinned to a branch tag" "never a floating name" 'rep(M+"
 expect_red "m1: the placeholder with a digest riding along" "no digest rides with the placeholder" 'rep(M+"games/kustomization.yaml", "newTag: sha-3ae21def10e8", "newTag: needs-hugmesh-games-pr52")'
 expect_red "m3: a JSON6902 patch replaces the container image with ghcr :main" "nothing patches the container image" 'rep(M+"games/kustomization.yaml", "patches:\n", "patches:\n  - target: { kind: Deployment, name: hugmesh-games }\n    patch: |\n      - op: replace\n        path: /spec/template/spec/containers/0/image\n        value: ghcr.io/hugmesh/hugmesh-games/backend:main\n")'
 expect_red "a strategic-merge patch sets an allowed-looking image behind the pin" "nothing patches the container image" 'rep(M+"games/kustomization.yaml", "patches:\n", "patches:\n  - patch: |\n      apiVersion: apps/v1\n      kind: Deployment\n      metadata: { name: hugmesh-games }\n      spec: { template: { spec: { containers: [ { name: games, image: registry.hugmesh.net/hugmesh/hugmesh-games/backend:sha-3ae21def10e8 } ] } } }\n")'
-expect_red "n1: the Application overrides the image with kustomize.images (ghcr :main)" "spec.source carries nothing but" 'rep("specs/cluster/apps/50-games.yaml", "    path: specs/cluster/manifests/games\n", "    path: specs/cluster/manifests/games\n    kustomize:\n      images:\n        - registry.hugmesh.net/hugmesh/hugmesh-games/backend=ghcr.io/hugmesh/hugmesh-games/backend:main\n")'
-expect_red "n1b: the Application overrides the image to the first-party host, pre-#52 build" "spec.source carries nothing but" 'rep("specs/cluster/apps/50-games.yaml", "    path: specs/cluster/manifests/games\n", "    path: specs/cluster/manifests/games\n    kustomize:\n      images:\n        - registry.hugmesh.net/hugmesh/hugmesh-games/backend=registry.hugmesh.net/hugmesh/hugmesh-games/backend:sha-f111cfe3382d\n")'
-expect_red "n2: the Application carries a JSON6902 image patch" "spec.source carries nothing but" 'rep("specs/cluster/apps/50-games.yaml", "    path: specs/cluster/manifests/games\n", "    path: specs/cluster/manifests/games\n    kustomize:\n      patches:\n        - target: { kind: Deployment, name: hugmesh-games }\n          patch: |-\n            - op: replace\n              path: /spec/template/spec/containers/0/image\n              value: ghcr.io/hugmesh/hugmesh-games/backend:main\n")'
+# n1/n1b/n2 inject INTO the existing kustomize block: 50-games.yaml carries the
+# issue #530 idp-trust op, and a second `kustomize:` key would be read as the last
+# one wins, i.e. the injection would vanish and the control would test nothing.
+expect_red "n1: the Application overrides the image with kustomize.images (ghcr :main)" "spec.source carries nothing but" 'rep("specs/cluster/apps/50-games.yaml", "    kustomize:\n", "    kustomize:\n      images:\n        - registry.hugmesh.net/hugmesh/hugmesh-games/backend=ghcr.io/hugmesh/hugmesh-games/backend:main\n")'
+expect_red "n1b: the Application overrides the image to the first-party host, pre-#52 build" "spec.source carries nothing but" 'rep("specs/cluster/apps/50-games.yaml", "    kustomize:\n", "    kustomize:\n      images:\n        - registry.hugmesh.net/hugmesh/hugmesh-games/backend=registry.hugmesh.net/hugmesh/hugmesh-games/backend:sha-f111cfe3382d\n")'
+expect_red "n2: the Application carries a JSON6902 image patch" "spec.source carries nothing but" 'rep("specs/cluster/apps/50-games.yaml", "      patches:\n", "      patches:\n        - target: { kind: Deployment, name: hugmesh-games }\n          patch: |-\n            - op: replace\n              path: /spec/template/spec/containers/0/image\n              value: ghcr.io/hugmesh/hugmesh-games/backend:main\n")'
 expect_red "n3: the Application points at a parent overlay that re-pins the image" "spec.source.path is specs/cluster/manifests/games" 'rep("specs/cluster/apps/50-games.yaml", "    path: specs/cluster/manifests/games\n", "    path: specs/cluster/overlays/games-main\n")
 os.makedirs(os.path.join(root, "specs/cluster/overlays/games-main"), exist_ok=True)
 open(os.path.join(root, "specs/cluster/overlays/games-main/kustomization.yaml"), "w").write("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - ../../manifests/games\nimages:\n  - name: registry.hugmesh.net/hugmesh/hugmesh-games/backend\n    newName: ghcr.io/hugmesh/hugmesh-games/backend\n    newTag: main\n    digest: \"\"\n")'

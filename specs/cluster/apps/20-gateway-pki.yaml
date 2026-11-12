@@ -20,6 +20,8 @@ spec:
     helm:
       releaseName: hugmesh-pki-gateway
       values: |
+        instance:
+          name: hugmesh-pki-gateway
         # THE IDENTITY PROVIDER this gateway validates tokens against (issue #530).
         # The chart is served from git, so its values.yaml defaults are the SAME
         # bytes on every mesh; these two lines are in this BAKED Application, which
@@ -29,8 +31,6 @@ spec:
         casdoor:
           issuerUri: https://id.hugmesh.net
           jwksUri: http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks
-        instance:
-          name: hugmesh-pki-gateway
         # PULL SECRET OVERRIDE — hugmesh-pki only. The chart default is
         # `harbor-registry` (correct for the be/fe gateways, whose namespaces no
         # chart is released into), but THIS release lands in hugmesh-pki, which
