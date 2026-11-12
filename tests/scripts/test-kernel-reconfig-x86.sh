@@ -20,6 +20,9 @@
 #   8  signing is strict: sbsign failure and sbverify failure are fatal, the old signed
 #      UKI is never replaced by an unsigned one; an image built unsigned stays unsigned
 #   9  grub.cfg initrd rewrite (literal, dots are not wildcards; proven after)
+#  9b  the live root repack: no kernel tree / module-signing key in the new live root,
+#      #980's bundle tree kept, and the builder's REAL live-root gate refuses a key the
+#      strip cannot reach
 #  10  pins against the builder: the stage4 exclude set, the live dracut call, no
 #      kernel-cache store from the reconfig path
 #  11  the builder half: the `reconfigured` marker forces a cache MISS and removes the
@@ -396,6 +399,80 @@ grep -q 'chainloader /EFI/Linux/hugmesh.efi' "${TMPD}/grub.cfg" && ok "the UKI c
 sed "s/initramfs-6.0.1-gentoo/initramfs-6X0.1-gentoo/" "${TMPD}/grub.cfg" > "${TMPD}/grub2.cfg"; sed -i "s/${KV}-hmtest/6X0.1-gentoo/" "${TMPD}/grub2.cfg"
 out="$(KRC_LIB_ONLY=1 bash -c 'source "$1"; krc_grub_rewrite "$2" "$3" "$4"' _ "${KRC}" "${TMPD}/grub2.cfg" "${KV}" "${KV}-hmtest" 2>&1)"; rc=$?
 [ "${rc}" -ne 0 ] && grep -q 'initramfs-6X0.1-gentoo' "${TMPD}/grub2.cfg" && ok "the old release is matched LITERALLY (6X0.1 is not 6.0.1) and a no-op rewrite fails" || bad "rewrite treated dots as wildcards or passed a no-op: rc=${rc}"
+
+echo "-- 9b) the live root repack: the module-signing key never rides in (#980) --"
+# krc_live_iso and the builder's live_root_gate run for real; only the squashfs and
+# ISO tools are stood in for (a "squashfs" here is a tar, listed exactly as
+# `unsquashfs -ls -d ''` lists one: "/usr/src/..."), so the case runs on any host.
+# The old live root carries what a pre-#980 live ISO shipped: the kernel tree with its
+# module-signing PRIVATE key under usr/src. The bundle tree #980 moved to
+# /usr/share/hugmesh/generator-src must survive the repack.
+LIVE_STUBS='
+unsquashfs() {
+    case "$1" in
+        -s) echo "Compression xz" ;;
+        -no-progress) mkdir -p "$3"; tar -C "$3" -xf "$4" ;;
+        -ls) tar -tf "${@: -1}" | sed -e "s#^\./##" -e "s#/\$##" -e "/^\$/d" -e "s#^#/#" ;;
+        -cat) tar -xOf "$2" "./$3" ;;
+        *) return 9 ;;
+    esac
+}
+mksquashfs() { tar -C "$1" -cf "$2" . ; }
+xorriso() {
+    local a=("$@") i out="" dev="" sq=""
+    for ((i = 0; i < ${#a[@]}; i++)); do
+        case "${a[i]}" in
+            -extract) out="${a[i+2]}" ;;
+            -outdev) dev="${a[i+1]}" ;;
+            -map) [ "${a[i+2]}" = /LiveOS/squashfs.img ] && sq="${a[i+1]}" ;;
+        esac
+    done
+    if [ -n "${out}" ]; then cp "${LIVE_FIXTURE}" "${out}"; else cp "${sq}" "${LIVE_CAPTURE}"; echo iso > "${dev}"; fi
+}'
+mk_live_fixture() {   # mk_live_fixture <tar> [extra path to plant a key at]
+    local r="${TMPD}/oldlive"
+    rm -rf "${r}"; mkdir -p "${r}"/{proc,sys,dev,run,etc,boot} "${r}/usr/lib/modules/${KV}/kernel" \
+        "${r}/usr/src/linux-${KV}/certs" "${r}/usr/share/hugmesh/generator-src"
+    ln -s usr/lib "${r}/lib"
+    printf 'tmpfs / tmpfs defaults 0 0\n' > "${r}/etc/fstab"
+    echo PRIVATE > "${r}/usr/src/linux-${KV}/certs/signing_key.pem"
+    echo x509 > "${r}/usr/src/linux-${KV}/certs/signing_key.x509"
+    echo 'all:' > "${r}/usr/share/hugmesh/generator-src/Makefile"
+    echo ko > "${r}/usr/lib/modules/${KV}/kernel/a.ko"
+    echo k > "${r}/boot/vmlinuz"; echo live > "${r}/boot/initramfs-live.img"
+    if [ -n "${2:-}" ]; then mkdir -p "$(dirname "${r}/$2")"; echo PRIVATE > "${r}/$2"; fi
+    tar -C "${r}" -cf "$1" .
+}
+live_run() {
+    mkbr "${W}"; S="${W}/wl-pki.x86/sysroot"
+    mkdir -p "${S}/usr/lib/modules/${KV}-hmtest/kernel"; echo newko > "${S}/usr/lib/modules/${KV}-hmtest/kernel/a.ko"
+    echo newlive > "${S}/boot/initramfs-live.img"; rm -f "${TMPD}/captured.sqfs"
+    run_lib "${W}" "LIVE_FIXTURE='${TMPD}/live.sqfs'; LIVE_CAPTURE='${TMPD}/captured.sqfs'
+${LIVE_STUBS}"'
+krc_read_env; krc_live_helpers
+live_label_gate() { echo LABEL-GATE-STUBBED; }   # SELinux xattrs: a fixture has none (test-x86-live-root-pack.sh owns it)
+OLD_KVER='"${KV}"'; NEW_KVER='"${KV}"'-hmtest; NEW_TS=20261112T000000Z
+KRC_WORK="${BUILD_ROOT:-${SYSROOT%/sysroot}}/kernel-reconfig/work-test"; mkdir -p "${KRC_WORK}"
+krc_live_iso && echo "NEW_LIVE=${NEW_LIVE}"'
+}
+mk_live_fixture "${TMPD}/live.sqfs"
+out="$(live_run)"; rc=$?
+lst="$(tar -tf "${TMPD}/captured.sqfs" 2>/dev/null)"
+if [ "${rc}" -eq 0 ] && [ -n "${lst}" ] && ! grep -qE 'signing_key|usr/src/linux' <<<"${lst}"; then
+    ok "the repacked live root carries no kernel tree and no module-signing key"
+else bad "live repack: rc=${rc} key/tree in the new live root: $(grep -E 'signing_key|usr/src/linux' <<<"${lst}" | tr '\n' ' ') ${out}"; fi
+grep -qx './usr/share/hugmesh/generator-src/Makefile' <<<"${lst}" \
+    && ok "the --bundle-source tree (#980's /usr/share/hugmesh/generator-src) survives the repack" || bad "bundle tree lost in the live repack"
+grep -q "^./usr/lib/modules/${KV}-hmtest/kernel/a.ko$" <<<"${lst}" && ! grep -q "^./usr/lib/modules/${KV}/" <<<"${lst}" \
+    && grep -q '^NEW_LIVE=.*-20261112T000000Z\.live\.iso$' <<<"${out}" \
+    && ok "the new release's modules replace the old ones and a new live ISO is named" || bad "live root modules/ISO wrong: ${out}"
+# A key the usr/src strip cannot reach: the builder's REAL live_root_gate must refuse
+# the repacked root, and no new live ISO is left behind.
+mk_live_fixture "${TMPD}/live.sqfs" root/signing_key.pem
+out="$(live_run)"; rc=$?
+[ "${rc}" -ne 0 ] && grep -q 'module-signing PRIVATE key' <<<"${out}" && grep -q 'fails the builder.s live-root gate' <<<"${out}" \
+    && [ -z "$(ls "${W}"/*-20261112T000000Z.live.iso 2>/dev/null)" ] \
+    && ok "a key left anywhere in the repacked root is refused by the builder's own live-root gate" || bad "live-root gate not enforced on the repack: rc=${rc} ${out}"
 
 echo "-- 10) pins against the builder --"
 excl() { grep -oE -- "--exclude=['\"]?[^'\" ]+" "$1" | sed -E "s/--exclude=['\"]?//; s/\\$\\{KRE\\[DEFAULT_USER\\]\\}/\${DEFAULT_USER}/" | sort -u; }
