@@ -7,6 +7,7 @@ screen's Brand settings are both driven; the Docker mesh screen embeds the same
 ``DomainServicesScreen``, so the same handler serves it.
 """
 import os
+import re
 
 import pytest
 
@@ -211,9 +212,276 @@ def test_the_plan_runs_on_the_device_and_the_flip_is_handed_over(guest):
     assert "  records.txt" in text and "  zone.db" in text
     assert "exited 0" in j.status
     j.feed("s")
-    assert "posture: INTERNAL" in "\n".join(j.lines())
+    text = "\n".join(j.lines())
+    assert "effective posture:   internal" in text
+    # the reading carries its read time wherever it is printed — the plan screen's
+    # own line and the s output under it — and the output says which verb and when
+    at = gl.posture.at
+    assert _STAMP.fullmatch(at), at
+    said = (f"device posture at the last s (read {at}): INTERNAL — both witnesses say "
+            "internal (hugmesh-go-live status; nft table inet hugmesh_release_gate)")
+    assert _posture_lines(text) == [said, said]
+    assert f"output of s (read {at}):" in text
     j.feed("l")
-    assert "byo-domain files" in "\n".join(j.lines())
+    text = "\n".join(j.lines())
+    assert "byo-domain files" in text
+    # the list is the device's registry as read when it was picked: no read time
+    assert "\noutput of l:\n" in text and "output of s" not in text
+    j.feed("p")
+    assert _STAMP.fullmatch(_output_stamp("\n".join(j.lines()), "p"))
+
+
+#: a read time, as golive_target.utc_now writes it
+_STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
+
+
+def _posture_lines(text: str) -> list[str]:
+    """Every line of the screen that states the device's posture, unindented."""
+    return [ln.strip() for ln in text.splitlines()
+            if ln.strip().startswith("device posture")]
+
+
+def _output_stamp(text: str, verb: str) -> str:
+    """The time in the plan screen's ``output of VERB (read|run …):`` heading: s
+    READS the device, p RUNS a plan on it."""
+    word = "run" if verb == "p" else "read"
+    m = re.search(rf"^output of {verb} \({word} ([^)]*)\):$", text, re.M)
+    assert m, text
+    return m.group(1)
+
+
+def _no_posture_is_called_now(text: str) -> None:
+    """The plan screen redraws on every key without asking the device, so nothing on
+    it may call a reading "now", and every reading that IS quoted has its time."""
+    assert "posture now" not in text, text
+    for ln in _posture_lines(text):
+        assert ln.startswith("device posture: unknown (not read) — ") or re.match(
+            r"device posture at the last s \(read \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\): ",
+            ln), ln
+
+
+def _boot_from_a_save_taken_while_public(guest, tmp_path):
+    """rpi5/pki: this host's commit journalled during boot 1, then a save taken while
+    PUBLIC, then boot 2 from that save (the saved disk carries the marker)."""
+    import json
+    from hugmesh_studio.core import golive_target as gt
+    sdir = tmp_path / "work" / "saves" / "mesh-20261111T152704Z"
+    sdir.mkdir(parents=True)
+    disk = sdir / "rpi5_pki.qcow2"
+    disk.write_text("qcow2")
+    (sdir / "mesh-save.json").write_text(json.dumps({
+        "session": "mesh-20261111T152704Z", "created_at": "2026-11-11T15:30:29Z",
+        "devices": [{"label": "rpi5/pki", "target": str(disk), "ok": True,
+                     "golive_posture": gt.Posture(status="public", nft="public",
+                                                  reachable=True).as_record()}]}))
+    first = fake.register(guest, label="rpi5/pki", started_at="2026-11-11T15:11:59Z")
+    gt.write_journal(gt.target_from_device(first, guest.work_dir), "commit",
+                     "byo-domain", "example.invalid", rc=0, now="2026-11-11T15:26:38Z")
+    fake.register(guest, label="rpi5/pki", started_at="2026-11-11T15:31:13Z",
+                  boot_save=str(disk))
+    fake.set_public(guest)
+
+
+def test_s_after_a_boot_from_a_save_taken_while_public_says_public(guest, tmp_path):
+    """The live defect on the TUI face (tui-rebind.txt): the plan screen and `s`
+    printed 'reset by a restart (… INTERNAL)' beside the device's own 'public'."""
+    _boot_from_a_save_taken_while_public(guest, tmp_path)
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    text = "\n".join(j.lines())
+    # before `s`: nothing was read, and nothing is guessed
+    assert "device posture: unknown (not read) — s reads it from the device" in text
+    assert "booted from a save taken while PUBLIC (mesh-20261111T152704Z" in text
+    assert "during an earlier boot (the device booted again at 2026-11-11T15:31:13Z)" in text
+    assert "INTERNAL" not in text and "reset by a restart" not in text
+    _no_posture_is_called_now(text)
+    j.feed("s")
+    text = "\n".join(j.lines())
+    assert "effective posture:   public" in text
+    said = (f"device posture at the last s (read {gl.posture.at}): PUBLIC — both "
+            "witnesses say public (hugmesh-go-live status; nft table inet "
+            "hugmesh_release_gate)")
+    # the plan screen quotes the read, and so does the s output: same words, same time
+    assert _posture_lines(text) == [said, said]
+    assert "INTERNAL" not in text and "reset by a restart" not in text
+    _no_posture_is_called_now(text)
+
+
+def test_s_while_the_reconcile_lags_says_mixed_and_unreachable_says_unknown(
+        guest, monkeypatch):
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    fake.set_public(guest)                           # committed; nft not caught up yet
+    monkeypatch.setenv("FAKE_GUEST_NFT", "internal")
+    j.feed("s")
+    text = "\n".join(j.lines())
+    assert f"device posture at the last s (read {gl.posture.at}): MIXED — " \
+        "hugmesh-go-live status says public, the nft release gate says internal" in text
+    _no_posture_is_called_now(text)
+    monkeypatch.setenv("FAKE_GUEST_NFT", "absent")  # no table loaded: never "public"
+    j.feed("s")
+    text = "\n".join(j.lines())
+    assert "the nft release gate says unknown (table inet hugmesh_release_gate absent " \
+        "or unreadable)" in text
+    # an unloaded table is not a reconcile lag: no promise that it converges
+    assert all("converges them" not in ln for ln in _posture_lines(text))
+    assert len(_posture_lines(text)) == 2
+    monkeypatch.setenv("FAKE_GUEST_DOWN", "1")
+    j.feed("s")
+    text = "\n".join(j.lines())
+    assert f"device posture at the last s (read {gl.posture.at}): unknown (device not " \
+        "reachable) — ssh to rpi5/pki failed (exit 255)" in text
+    _no_posture_is_called_now(text)
+
+
+# ── round 2 of #1007: nothing an EARLIER boot said stays on the plan screen ──────────
+# The plan screen redraws on every key and never sshes to draw. Whatever it quotes
+# from the device (the posture line, the s / l / p output) was read at some earlier
+# moment from some binding: it is shown with its read time while the pick is still
+# that binding, withheld the moment it is not, and dropped on a re-bind or a pick.
+
+def _nftrc_calls(guest) -> int:
+    return len([c for c in guest.calls() if "@@nftrc" in c[-1]])
+
+
+def _s_at_boot_one_then_boot_from_a_public_save(guest, tmp_path):
+    """`s` reads INTERNAL at boot 1; the device is then booted from a save taken
+    while PUBLIC — same ssh port, new started_at. Returns (j, gl, boot-1 read time)."""
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    j.feed("s")
+    assert "INTERNAL — both witnesses say internal" in "\n".join(j.lines())
+    at = gl.posture.at
+    _boot_from_a_save_taken_while_public(guest, tmp_path)
+    assert gl.target.ssh_port == 22401               # the port did not move: only the boot
+    return j, gl, at
+
+
+def test_a_restart_withholds_what_the_earlier_boot_said(guest, tmp_path):
+    """The refuter's P8: the header was right ('unknown (not read)'), but the output
+    section went on showing boot 1's `s` — 'device posture now: INTERNAL — both
+    witnesses say internal' and the driver's own 'effective posture: internal' —
+    while the device was PUBLIC."""
+    j, gl, at = _s_at_boot_one_then_boot_from_a_public_save(guest, tmp_path)
+    asked = _nftrc_calls(guest)
+    text = "\n".join(j.lines())                      # any key: the screen redraws
+    assert _posture_lines(text) == ["device posture: unknown (not read) — t, then r: "
+                                    "re-scan"]
+    assert "INTERNAL" not in text and "both witnesses" not in text
+    assert "effective posture" not in text and "go-live marker" not in text
+    # the output is withheld, and says so (which verb, when, and how to get it back)
+    assert (f"output of s (read {at}): not shown — it was read before rpi5/pki "
+            "changed, so it is not this device's word any more (t, then r: re-scan).") \
+        in text
+    assert not any(ln.startswith("  domain (cluster):") for ln in text.splitlines())
+    # the save line is the CURRENT boot's (it did boot from that save)
+    assert "booted from a save taken while PUBLIC (mesh-20261111T152704Z" in text
+    assert _nftrc_calls(guest) == asked, "a redraw asked the device"
+    _no_posture_is_called_now(text)
+    # the plan's output is the earlier boot's word just as much
+    j2, gl2 = _go_live_screen(guest)
+    fake.register(guest, label="rpi5/pki")           # back on the golden, boot 1
+    _pick_target(j2, gl2, "rpi5/pki")
+    _to_plan(j2, gl2, "byo-domain")
+    j2.feed("p")
+    assert "==> Plan summary ready" in "\n".join(j2.lines())
+    _restart(guest, port=22401, started_at="2026-11-11T17:00:00Z")
+    text = "\n".join(j2.lines())
+    assert "==> Plan summary ready" not in text and "artifacts copied back" not in text
+    assert re.search(r"^output of p \(run [^)]*\): not shown — ", text, re.M), text
+
+
+def test_r_drops_the_earlier_boots_reading_and_output(guest, tmp_path):
+    """`t`, `r` re-binds the pick to the new boot: its posture is unread again and
+    nothing of boot 1 is left — not on the screen, and not held to come back."""
+    j, gl, _at = _s_at_boot_one_then_boot_from_a_public_save(guest, tmp_path)
+    j.feed("")                                       # back to the providers
+    j.feed("t")
+    j.feed("r")
+    assert gl.target.started_at == "2026-11-11T15:31:13Z"
+    assert gl.posture is None and gl.run_log == [] and gl.run_log_of == ""
+    j.feed("")
+    _to_plan(j, gl, "byo-domain")
+    text = "\n".join(j.lines())
+    assert _posture_lines(text) == ["device posture: unknown (not read) — s reads it "
+                                    "from the device"]
+    assert "INTERNAL" not in text and "output of" not in text
+    assert "sudo hugmesh-go-live commit" in text     # re-bound: the flip is handed over
+    j.feed("s")
+    text = "\n".join(j.lines())
+    assert [ln.split("): ")[1][:6] for ln in _posture_lines(text)] == ["PUBLIC", "PUBLIC"]
+    assert "INTERNAL" not in text
+
+
+def test_picking_the_device_again_drops_the_earlier_boots_reading(guest, tmp_path):
+    """The other way to a fresh binding: `t`, then its NUMBER (set_target)."""
+    j, gl, _at = _s_at_boot_one_then_boot_from_a_public_save(guest, tmp_path)
+    j.feed("")
+    _pick_target(j, gl, "rpi5/pki")
+    assert gl.target.started_at == "2026-11-11T15:31:13Z"
+    assert gl.posture is None and gl.run_log == [] and gl.run_log_of == ""
+    _to_plan(j, gl, "byo-domain")
+    text = "\n".join(j.lines())
+    assert _posture_lines(text) == ["device posture: unknown (not read) — s reads it "
+                                    "from the device"]
+    assert "INTERNAL" not in text and "output of" not in text
+
+
+def test_a_reading_is_never_called_now_after_the_operators_own_flip(guest):
+    """The refuter's P6: `s` reads INTERNAL, the operator pastes the commit into
+    another terminal and answers y; the plan screen went on saying 'device posture
+    now … INTERNAL'. It is the last s's reading, and is labelled as that."""
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    j.feed("s")
+    at = gl.posture.at
+    fake.set_public(guest)                           # the flip, in another terminal
+    asked = _nftrc_calls(guest)
+    j.feed("ip 203.0.113.10")                        # any key: the screen redraws
+    text = "\n".join(j.lines())
+    assert _nftrc_calls(guest) == asked              # a redraw does not ask the device
+    assert _posture_lines(text) == [f"device posture at the last s (read {at}): INTERNAL "
+                                    "— both witnesses say internal (hugmesh-go-live "
+                                    "status; nft table inet hugmesh_release_gate)"]
+    _no_posture_is_called_now(text)
+    j.feed("s")                                      # asked again: the device's answer
+    text = "\n".join(j.lines())
+    assert "): PUBLIC — both witnesses say public" in text and "INTERNAL" not in text
+    _no_posture_is_called_now(text)
+
+
+def test_a_stale_pick_reports_the_current_boot_not_the_one_it_picked(guest, tmp_path):
+    """The refuter's P7: picked while booted from a save taken while PUBLIC, then
+    restarted from its golden image. The screen kept 'booted from a save taken while
+    PUBLIC' and measured the journal against the boot that was over."""
+    _boot_from_a_save_taken_while_public(guest, tmp_path)
+    j, gl = _go_live_screen(guest)
+    _pick_target(j, gl, "rpi5/pki")
+    _to_plan(j, gl, "byo-domain")
+    assert "booted from a save taken while PUBLIC" in "\n".join(j.lines())
+    save = gl.target.boot_save
+    fake.set_public(guest, False)
+    fake.register(guest, label="rpi5/pki", started_at="2026-11-11T16:00:00Z")  # golden
+    text = "\n".join(j.lines())
+    assert _posture_lines(text) == ["device posture: unknown (not read) — t, then r: "
+                                    "re-scan"]
+    assert "booted from" not in text and "PUBLIC" not in text
+    assert "during an earlier boot (the device booted again at 2026-11-11T16:00:00Z)" \
+        in text
+    assert "booted again at 2026-11-11T15:31:13Z)" not in text.split("!! ")[0]
+    # stopped (its record still names the save its next Start resumes from): not a
+    # boot that is running — said as the LAST boot, and that it is not running
+    fake.register(guest, label="rpi5/pki", started_at="2026-11-11T16:00:00Z",
+                  state="stopped", boot_save=save)
+    text = "\n".join(j.lines())
+    assert ("last booted from a save taken while PUBLIC (mesh-20261111T152704Z, saved "
+            "2026-11-11T15:30:29Z) — it is not running now") in text
+    assert "\nbooted from" not in text
+    assert "stopped since it was picked" in text
 
 
 def test_a_token_file_reaches_the_device_over_stdin_only(guest, tmp_path):

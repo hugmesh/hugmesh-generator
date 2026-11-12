@@ -46,9 +46,59 @@ def test_targets_and_status_run_headless_with_no_qt(tmp_path, monkeypatch):
     r = _studio("--go-live-target", "status", "--target", "rpi5/pki", "--work",
                 guest.work_dir, env=env)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "posture: INTERNAL" in r.stdout
+    assert "effective posture:   internal" in r.stdout
+    # the posture read from the device (both witnesses), never inferred
+    assert "): INTERNAL — both witnesses say internal (hugmesh-go-live status; nft" in r.stdout
     assert "QT-MODULES: []" in r.stderr
     assert any(c[-1] == "sudo -n hugmesh-go-live status" for c in guest.calls())
+    assert any("@@nftrc" in c[-1] for c in guest.calls())
+
+
+def test_status_after_a_boot_from_a_save_taken_while_public(tmp_path, monkeypatch):
+    """The live defect, headless: a device booted from a save taken while PUBLIC, with
+    this host's commit journalled during the EARLIER boot. Status prints what the
+    device says (public, both witnesses), the save and the posture it was taken in, and
+    the journal's WHEN — no 'reset by a restart', no INTERNAL."""
+    import json
+    from hugmesh_studio.core import golive_target
+    guest, env = _env(tmp_path, monkeypatch)
+    sdir = tmp_path / "work" / "saves" / "mesh-20261111T152704Z"
+    sdir.mkdir(parents=True)
+    disk = sdir / "rpi5_pki.qcow2"
+    disk.write_text("qcow2")
+    saved = golive_target.Posture(status="public", nft="public", reachable=True,
+                                  at="2026-11-11T15:30:20Z").as_record()
+    (sdir / "mesh-save.json").write_text(json.dumps({
+        "session": "mesh-20261111T152704Z", "created_at": "2026-11-11T15:30:29Z",
+        "devices": [{"label": "rpi5/pki", "target": str(disk), "ok": True,
+                     "golive_posture": saved}]}))
+    first = fake.register(guest, label="rpi5/pki", started_at="2026-11-11T15:11:59Z")
+    golive_target.write_journal(golive_target.target_from_device(first, guest.work_dir),
+                                "commit", "byo-domain", "example.invalid", rc=0,
+                                now="2026-11-11T15:26:38Z")
+    fake.register(guest, label="rpi5/pki", started_at="2026-11-11T15:31:13Z",
+                  boot_save=str(disk))
+    fake.set_public(guest)                       # the saved disk carried the marker
+    r = _studio("--go-live-target", "status", "--target", "rpi5/pki", "--work",
+                guest.work_dir, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = r.stdout
+    assert "effective posture:   public" in out
+    assert "): PUBLIC — both witnesses say public (hugmesh-go-live status; nft table" in out
+    assert ("booted from a save taken while PUBLIC (mesh-20261111T152704Z, saved "
+            "2026-11-11T15:30:29Z)") in out
+    assert ("last commit from this host: byo-domain example.invalid at "
+            "2026-11-11T15:26:38Z — during an earlier boot (the device booted again at "
+            "2026-11-11T15:31:13Z)") in out
+    assert "INTERNAL" not in out and "reset by a restart" not in out
+    # unreachable now: unknown, never a guess; the save and the journal still said
+    env["FAKE_GUEST_DOWN"] = "1"
+    r = _studio("--go-live-target", "status", "--target", "rpi5/pki", "--work",
+                guest.work_dir, env=env)
+    assert r.returncode == 2
+    assert ": unknown (device not reachable) — " in r.stdout
+    assert "booted from a save taken while PUBLIC" in r.stdout
+    assert "INTERNAL" not in r.stdout
 
 
 def test_plan_runs_inside_the_device(tmp_path, monkeypatch):
