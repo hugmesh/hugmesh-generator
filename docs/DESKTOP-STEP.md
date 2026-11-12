@@ -30,6 +30,62 @@ The extra accounts' first-login passwords are kept in `ImageConfig.extra_local_p
 (`_stage_extra_pass`) writes them to a 0600 file for that one run. The file is mounted
 read-only under docker, and the path replaces the placeholder that the argv preview shows.
 
+## Every option, every face
+
+Every face that can build a standalone desktop offers each Desktop option, or shows it
+greyed with the reason. The reasons come from one function, `option_state()` in
+`desktop_spec.py`, so every face says the same thing. The faces:
+
+- the Studio window's Desktop step (the GPU driver and the login account are the
+  Hardware and Home steps' rows; the Desktop step shows them and links there);
+- the text UI's Desktop step, which also takes `gpu PRESET` and
+  `login NAME [admin] [pass=FILE]` because its Hardware and Home steps are not ported;
+- the CLI: a config JSON for `--print-command`, `--desktop-options` (every option, where
+  it lives in the JSON, and on which builder's image it is not offered and why) and
+  `--desktop-pretend`;
+- `make menu` (`scripts/build-menu.sh`): a "Desktop options" item on the x86 standalone
+  screen, and a stop before building on x86 laptop/chromebook/desktop, Pi desktop,
+  Jetson desktop, Frite (light), Orange Pi 5 desktop and Orange Pi 4 LTS. The menu does
+  not re-type the catalog or the rules. It runs `core/desktop_menu.py`, the way it already
+  runs `core/local_mesh.py`, and renders the rows, choices and builder flags it prints.
+  The choices live per target in `~/.local/state/hugmesh-build-menu/desktop/` and hold no
+  secret. Extra accounts' passwords are typed masked and go to the builder as a 0600
+  NAME:PASSWORD file next to the login password. Without python3 the item says why, and a
+  saved choice then stops the build (`launch_build`) rather than being dropped silently.
+  On an ARM board the menu reads the image as a mesh desktop unless "Extra builder flags"
+  carries `--standalone`.
+- `make x86-standalone` builds thin AND thick from one call. `STANDALONE_FLAGS` goes to
+  both. `STANDALONE_THIN_FLAGS` / `STANDALONE_THICK_FLAGS` go to one leg each, for a flag
+  that suits only one of them (`--default-session LXDE`, picom without i3, `--capable`).
+
+| Option | Studio window | Text UI | CLI (config JSON) | make menu |
+|---|---|---|---|---|
+| Environment (LXDE/XFCE/Plasma) | Environment | `env` | `desktop` + `capable` | Desktop environment |
+| Steam (x86) | Steam | `steam` | `steam` | standalone screen's Steam, or Steam delivery |
+| Login manager (LightDM, fixed) | Login section | shown | `--desktop-options` | information row |
+| openbox (always on) | ticked, fixed | shown | `--desktop-options` | information row |
+| i3, picom, sway, wayfire, labwc (x86) | checkboxes | `s +NAME` | `desktop_spec.sessions` | Window managers / compositors |
+| Default session | combo | `default` | `desktop_spec.default_session` | Default session |
+| GPU driver (x86) | Hardware step | `gpu` | `gpu_driver` | standalone screen's GPU driver, or GPU driver preset |
+| VIDEO_CARDS override (x86) | checkboxes | `cards` | `desktop_spec.video_cards` | VIDEO_CARDS override |
+| Login account and administrator | Home step | `login` | `local_user`, `local_admin` | Login account |
+| Extra accounts | table + masked passwords | `user add NAME [admin] pass=FILE` | `desktop_spec.extra_users` (passwords at build time) | Extra local accounts (masked) |
+| Apps, native / Flatpak | apps table | `app` | `desktop_spec.apps` | Apps, native / Apps, Flatpak |
+| Flatpak remotes | Flatpak remotes | `remote` | `desktop_spec.flatpak_remotes` | Flatpak remotes |
+| Python | checkboxes + single target | `py` | `desktop_spec.python_*` | Python targets |
+| Portage overlay | two editors | `use` / `kw` | `desktop_spec.use_lines` / `keyword_lines` | Portage overlay |
+| emerge --pretend (x86) | button + apply | `p` / `a` / `u` | `--desktop-pretend [--apply-portage-fixes]` | the check, or check and apply |
+| AI assistant for portage walls | Local AI dock | greyed, with the reason | greyed, with the reason | greyed, with the reason |
+
+Greyed on ARM boards, with the reason, on every face: Environment (one LXDE set),
+Steam, the five extra window managers and compositors (the ARM builders do not parse
+`--desktop-sessions`), the GPU driver and VIDEO_CARDS (fixed by the SoC) and the pretend
+check (no pretend mode in the ARM builders). On a governed mesh desktop, Flatpak remotes
+are greyed (provisioning keeps only `hugmesh-discover`). `studio/tests/test_desktop_option_parity.py`
+holds the option list frozen. For each live option and each face, it sets the option
+through that face and checks the builder argv. For each greyed one, it checks every face
+shows the same reason.
+
 ## The flags and the builders
 
 `scripts/_desktop-config-lib.sh` is the one place every desktop builder turns these flags

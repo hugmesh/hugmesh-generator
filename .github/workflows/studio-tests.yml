@@ -60,6 +60,10 @@ on:
       # reads the same file. A drift there lands ONLY in the Makefile, so without
       # this path the gate would not run on the change it exists to catch.
       - 'Makefile'
+      # studio/tests/test_desktop_option_parity.py drives the make menu's Desktop
+      # options (it sources this script and runs its real handler) and reads the
+      # flags the desktop builders parse. A menu change lands only here.
+      - 'scripts/build-menu.sh'
       # hugmesh-generator#591: the named-file pin suite below, and the scripts its
       # fleet pins run (test_fleet_tor.py executes the REAL build-all-roles.sh
       # against stub builders and reads the rpi5 builder's default service line).

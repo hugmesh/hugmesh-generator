@@ -19,9 +19,62 @@ from . import desktop_pretend as dp
 from . import desktop_spec as ds
 
 
+#: Where each Desktop option lives in a config JSON (this face is JSON-driven:
+#: ``--config FILE --print-command``), or what to run. Keyed by desktop_spec.OPTION_IDS.
+CONFIG_KEYS = {
+    "environment": "desktop (thin|full) + capable (true = Plasma)",
+    "steam": "steam (native|flatpak|none)",
+    "login_manager": "(fixed: LightDM + GTK greeter; nothing to set)",
+    "openbox": "(always on board; nothing to set)",
+    "i3": "desktop_spec.sessions += \"i3\"",
+    "picom": "desktop_spec.sessions += \"picom\"",
+    "sway": "desktop_spec.sessions += \"sway\"",
+    "wayfire": "desktop_spec.sessions += \"wayfire\"",
+    "labwc": "desktop_spec.sessions += \"labwc\"",
+    "default_session": "desktop_spec.default_session",
+    "gpu_driver": "gpu_driver",
+    "video_cards": "desktop_spec.video_cards",
+    "primary_account": "local_user + local_admin (the password is a secret: typed at build time)",
+    "extra_users": "desktop_spec.extra_users [{name, admin}] (passwords are secrets: typed at "
+                   "build time in the Studio window or the make menu; --print-command shows "
+                   + json.dumps(ds.EXTRA_PASS_PLACEHOLDER) + ")",
+    "apps_native": "desktop_spec.apps [{id, delivery: native, atom}]",
+    "apps_flatpak": "desktop_spec.apps [{id, delivery: flatpak, flatpak, remote}]",
+    "flatpak_remotes": "desktop_spec.flatpak_remotes {name: url}",
+    "python": "desktop_spec.python_extra_targets / python_single_target",
+    "overlay": "desktop_spec.use_lines / keyword_lines",
+    "pretend": "--desktop-pretend CONFIG [--apply-portage-fixes]",
+    "assistant": "(the Studio window's Local AI dock only)",
+}
+
+#: One representative image per desktop builder, for the availability table.
+_SAMPLE_TARGETS = ("x86-standalone-thin", "x86-standalone-thick", "rpi-desktop",
+                   "jetson-desktop", "frite", "orangepi5", "orangepi4-lts")
+
+
+def option_table() -> list[dict]:
+    """Every Desktop option, where it lives in a config, and whether it is offered on
+    each desktop builder's image (and why not) — the same rule the GUI, text UI and
+    make menu use (desktop_spec.option_state)."""
+    from . import desktop_menu as dm
+    samples = []
+    for t in _SAMPLE_TARGETS:
+        cfg, _meta = dm.load(t, "", dm._parse(["--standalone"])[1])
+        samples.append((t, cfg))
+    out = []
+    for oid, label in ds.OPTIONS:
+        states = {}
+        for t, cfg in samples:
+            st, text = ds.option_state(cfg, oid, "cli")
+            states[t] = {"state": st, "text": text if st != "live" else ""}
+        out.append({"id": oid, "label": label, "config": CONFIG_KEYS[oid], "images": states})
+    return out
+
+
 def options(*, as_json: bool = False, out=None) -> int:
     out = out or sys.stdout
     data = {
+        "options": option_table(),
         "platforms": list(ds.DESKTOP_PLATFORMS),
         "environments": {k: {"label": v[0], "session": v[1]} for k, v in ds.ENVIRONMENTS.items()},
         "login_manager": ds.LOGIN_MANAGER_NOTE,
@@ -70,6 +123,12 @@ def options(*, as_json: bool = False, out=None) -> int:
     print("  rules:", file=out)
     for r in data["rules"]:
         print(f"    - {r}", file=out)
+    print("  every option (config key; images where it is not offered, and why):", file=out)
+    for o in data["options"]:
+        print(f"    {o['id']}: {o['config']}", file=out)
+        for t, st in o["images"].items():
+            if st["state"] == "grey":
+                print(f"      not on {t}: {st['text']}", file=out)
     return 0
 
 

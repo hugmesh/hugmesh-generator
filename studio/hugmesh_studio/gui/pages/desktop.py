@@ -119,6 +119,10 @@ class DesktopPage(QtWidgets.QWizardPage):
         self.problems.setWordWrap(True)
         self.problems.setVisible(False)
         lay.addWidget(self.problems)
+        # Every option this image does not offer, and why (desktop_spec.option_state —
+        # the text UI, the CLI and the make menu print the same list).
+        self.greyed = _note()
+        lay.addWidget(self.greyed)
 
         # ── environment ──
         self.env_box, el = _section("Desktop environment")
@@ -723,6 +727,12 @@ class DesktopPage(QtWidgets.QWizardPage):
             c, self._entry if self._mesh() else None)))
         # apps
         self._apps_sources()
+        rst, rwhy = ds.option_state(c, "flatpak_remotes", "gui")
+        self.remotes.setEnabled(rst == "live")
+        self.remotes.setToolTip("" if rst == "live" else rwhy)
+        greyed = ds.greyed_lines(c, "gui")
+        self.greyed.setText("Not on this image:\n" + "\n".join(greyed) if greyed else "")
+        self.greyed.setVisible(bool(greyed))
         # pretend availability
         why = dp.supported(self._pretend_cfg())
         running = self._worker is not None

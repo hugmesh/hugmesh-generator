@@ -940,3 +940,136 @@ def _sso(cfg) -> bool:
         return bool(cfg.sso_enabled())
     except Exception:  # noqa: BLE001
         return False
+
+
+# ── the option list every face offers (GUI page, text UI, CLI, make menu) ────
+
+#: Every option the Desktop step has, in display order. Each face (gui/pages/desktop.py,
+#: tui/desktop_step.py, core/desktop_cli.py --desktop-options, scripts/build-menu.sh via
+#: core/desktop_menu.py) offers each one LIVE, or shows it greyed with the reason from
+#: :func:`option_state`. studio/tests/test_desktop_option_parity.py holds a frozen copy
+#: of these ids and drives every face over every one.
+OPTIONS: tuple[tuple[str, str], ...] = (
+    ("environment", "Desktop environment"),
+    ("steam", "Steam delivery"),
+    ("login_manager", "Login manager"),
+    ("openbox", "Openbox window manager"),
+    ("i3", "i3 window manager"),
+    ("picom", "picom compositor"),
+    ("sway", "Sway (Wayland)"),
+    ("wayfire", "Wayfire (Wayland)"),
+    ("labwc", "labwc (Wayland)"),
+    ("default_session", "Default session"),
+    ("gpu_driver", "GPU driver preset"),
+    ("video_cards", "VIDEO_CARDS override"),
+    ("primary_account", "Login account"),
+    ("extra_users", "Extra local accounts"),
+    ("apps_native", "Apps, native"),
+    ("apps_flatpak", "Apps, Flatpak"),
+    ("flatpak_remotes", "Flatpak remotes"),
+    ("python", "Python targets"),
+    ("overlay", "Portage overlay (package.use / accept_keywords)"),
+    ("pretend", "emerge --pretend check"),
+    ("assistant", "AI assistant for portage walls"),
+)
+OPTION_IDS = tuple(o for o, _ in OPTIONS)
+OPTION_LABELS = dict(OPTIONS)
+#: The window managers / compositors a face may tick (openbox is always on board).
+SESSION_OPTION_IDS = tuple(s.name for s in SESSION_CATALOG if s.name not in ALWAYS_ON_SESSIONS)
+#: The faces :func:`option_state` knows.
+SURFACES = ("gui", "tui", "cli", "menu")
+
+ASSISTANT_GUI_ONLY = (
+    "The AI assistant's portage card is in the Studio window's Local AI dock only (it "
+    "needs the check's result beside the chat). Here, apply portage's own suggestion "
+    "instead: run the emerge --pretend check, then apply what portage names.")
+
+
+def option_state(cfg, oid: str, surface: str = "gui") -> tuple[str, str]:
+    """("live" | "info" | "grey", text) for option ``oid`` on this image, in face
+    ``surface``. "live": offered, text = what it is set to now; "info": shown, nothing to
+    choose (text says what it is); "grey": shown but not offered, text = why."""
+    if oid not in OPTION_LABELS:
+        raise KeyError(oid)
+    plat = getattr(cfg, "platform", "") or "x86"
+    x86 = is_x86(cfg)
+    if not applies(cfg):
+        return "grey", "This image builds no desktop."
+    spec = spec_of(cfg)
+    mesh = getattr(cfg, "mode", "") == "mesh"
+    if oid == "environment":
+        lock = environment_lock(cfg)
+        if lock:
+            return "grey", lock
+        if mesh and surface in ("tui", "menu"):
+            return "grey", "In a mesh build each row's weight is set on the Worklist step."
+        return "live", ENVIRONMENTS[environment(cfg)][0]
+    if oid == "steam":
+        if not x86:
+            return "grey", f"Steam is x86-only (there is no arm64 Steam client); the {plat} image has none."
+        if mesh:
+            return "grey", "Steam delivery is an x86 single-image choice (not per mesh row)."
+        return "live", getattr(cfg, "steam", "") or "builder default"
+    if oid == "login_manager":
+        return "info", LOGIN_MANAGER_NOTE
+    if oid == "openbox":
+        return "info", "Openbox is on every desktop image (always on board; nothing to choose)."
+    if oid in SESSION_OPTION_IDS:
+        if not x86:
+            return "grey", (f"x86 only: the {plat} builder does not parse --desktop-sessions; "
+                            "its desktop is LXDE with openbox.")
+        return "live", "on" if oid in spec.sessions else "off"
+    if oid == "default_session":
+        return "live", spec.default_session or de_session(cfg)
+    if oid == "gpu_driver":
+        if not x86:
+            return "grey", (f"Fixed by the {plat} SoC (VIDEO_CARDS={ARM_FIXED_VIDEO_CARDS.get(plat, '')}); "
+                            "there is no driver preset to pick.")
+        if mesh and surface in ("tui", "menu"):
+            return "grey", "In a mesh build the GPU driver is set per image on the Studio window's Hardware step."
+        return "live", getattr(cfg, "gpu_driver", "auto") or "auto"
+    if oid == "video_cards":
+        if not x86:
+            return "grey", f"VIDEO_CARDS is fixed by the {plat} SoC ({ARM_FIXED_VIDEO_CARDS.get(plat, '')})."
+        return "live", " ".join(spec.video_cards) or f"from the GPU driver ({effective_video_cards(cfg, spec) or 'none'})"
+    if oid == "primary_account":
+        who = (getattr(cfg, "local_user", "") or "").strip() or "(builder default)"
+        return "live", who + (" (administrator)" if getattr(cfg, "local_admin", False) else "")
+    if oid == "extra_users":
+        return "live", ", ".join(u.name + (":admin" if u.admin else "") for u in spec.extra_users) or "none"
+    if oid == "apps_native":
+        return "live", " ".join(a.id for a in spec.apps if a.delivery == "native") or "none"
+    if oid == "apps_flatpak":
+        return "live", " ".join(a.id for a in spec.apps if a.delivery == "flatpak") or "none"
+    if oid == "flatpak_remotes":
+        if governed(cfg):
+            return "grey", (f"A governed mesh desktop keeps only the {GOVERNED_REMOTE} remote "
+                            "(provisioning deletes every other one).")
+        return "live", " ".join(sorted(spec.flatpak_remotes)) or "flathub only"
+    if oid == "python":
+        return "live", (" ".join(spec.python_extra_targets) or "seed set") + (
+            f", single {spec.python_single_target}" if spec.python_single_target else "")
+    if oid == "overlay":
+        return "live", f"{len(spec.use_lines)} package.use, {len(spec.keyword_lines)} accept_keywords"
+    if oid == "pretend":
+        from . import desktop_pretend          # imports this module: resolve lazily
+        why = desktop_pretend.supported(cfg)
+        if why:
+            return "grey", why
+        return "live", (spec.last_pretend or {}).get("status", "not checked yet")
+    if oid == "assistant":
+        if surface == "gui":
+            return "live", "Local AI dock"
+        return "grey", ASSISTANT_GUI_ONLY
+    raise KeyError(oid)
+
+
+def greyed_lines(cfg, surface: str) -> list[str]:
+    """"Label: why" for every option this face shows greyed on this image (the GUI page,
+    the text UI and the CLI print the same list)."""
+    out = []
+    for oid in OPTION_IDS:
+        st, text = option_state(cfg, oid, surface)
+        if st == "grey":
+            out.append(f"{OPTION_LABELS[oid]}: {text}")
+    return out

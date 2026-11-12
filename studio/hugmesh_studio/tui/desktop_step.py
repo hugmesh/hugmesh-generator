@@ -21,7 +21,9 @@ COMMANDS = (
     ("steam default|native|flatpak|none", "Steam delivery (x86)"),
     ("s +i3 -picom ...", "add/remove window managers and compositors (x86)"),
     ("default NAME|-", "the greeter's default session"),
+    ("gpu PRESET", "the GPU driver preset (x86: all-free, nvidia, amd-free, ...)"),
     ("cards LIST|-", "choose VIDEO_CARDS yourself (x86), '-' = the GPU driver's list"),
+    ("login NAME [admin] [pass=FILE]", "the login account (not an administrator unless 'admin')"),
     ("user add NAME [admin] pass=FILE", "an extra local account (password: FILE's first line)"),
     ("user rm NAME", "remove an extra account"),
     ("app ID native|flatpak|off", "a catalog app and how it is delivered"),
@@ -114,6 +116,10 @@ class DesktopScreen:
         if spec.use_lines or spec.keyword_lines:
             out.append("  package.use: " + ("; ".join(spec.use_lines) or "-"))
             out.append("  accept_keywords: " + ("; ".join(spec.keyword_lines) or "-"))
+        greyed = ds.greyed_lines(c, "tui")
+        if greyed:
+            out.append("  Not here (and why):")
+            out += [f"    {x}" for x in greyed]
         probs = ds.problems(c, passwords=ds.parse_passwords(j.cfg.extra_local_passes))
         if probs:
             out.append("")
@@ -181,6 +187,8 @@ class DesktopScreen:
                 return "steam default|native|flatpak|none"
             j.cfg.steam = "" if args[0] == "default" else args[0]
             return f"Steam: {args[0]}"
+        if cmd in ("gpu", "login"):
+            return self._account_or_gpu(j, c, cmd, args)
         if cmd == "s":
             for t in args:
                 name = t.lstrip("+-")
@@ -290,6 +298,33 @@ class DesktopScreen:
             return f"not changed: {bad[0]}"
         self._store(j, spec)
         return ""
+
+    def _account_or_gpu(self, j, c, cmd: str, args: list[str]) -> str:
+        """``gpu PRESET`` and ``login NAME [admin] [pass=FILE]``: the two fields the
+        Hardware and Home steps own in the Studio window (not ported to this text UI),
+        set here so every Desktop option is reachable from it."""
+        oid = "gpu_driver" if cmd == "gpu" else "primary_account"
+        st, why = ds.option_state(c, oid, "tui")
+        if st != "live":
+            return why
+        if cmd == "gpu":
+            from ..core.config import GPU_DRIVER_CHOICES
+            if not args or args[0] not in GPU_DRIVER_CHOICES:
+                return "gpu " + "|".join(GPU_DRIVER_CHOICES)
+            j.cfg.gpu_driver = args[0]
+            return f"GPU driver: {args[0]}"
+        from ..core.validate import validate_username
+        if not args:
+            return "login NAME [admin] [pass=FILE]"
+        validate_username(args[0])
+        j.cfg.local_user = args[0]
+        j.cfg.local_admin = "admin" in args[1:]
+        pw = [a for a in args[1:] if a.startswith("pass=")]
+        if pw:
+            j.cfg.local_pass = _password_from(pw[0])
+        return (f"login account: {args[0]}" + (" (administrator)" if j.cfg.local_admin else "")
+                + ("; password read (never saved: retype it in the Studio window to build)"
+                   if pw else ""))
 
     def run_pretend(self, j, *, driver=None, out_dir: str = "") -> str:
         cfg = self._pretend_cfg(j)
