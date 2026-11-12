@@ -16,6 +16,9 @@ Writes:
     icon-<n>.png   for n in 16 32 48 64 128 256   (Flatpak hicolor, Linux .desktop)
     hugmesh-studio.ico                            (WiX / Windows shortcut)
     hugmesh-studio.png                            (256px, the canonical single file)
+    hugmesh-studio.iconset/                       (with --iconset: the ten files macOS's
+                                                   `iconutil -c icns` turns into the
+                                                   .app's icon; build-macos-app.sh)
 
 The .ico is assembled with Pillow when it is available. Without Pillow the PNGs are
 still written and the .ico is SKIPPED with a clear message rather than a traceback —
@@ -34,10 +37,21 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 SIZES = (16, 32, 48, 64, 128, 256)
 
+#: An .iconset is a directory iconutil reads by FILE NAME: every point size at 1x and
+#: at 2x (Retina), ten files in all. A missing or misnamed one makes iconutil fail
+#: with "Invalid Iconset", so the names are spelt out rather than derived.
+ICONSET = (("icon_16x16.png", 16), ("icon_16x16@2x.png", 32),
+           ("icon_32x32.png", 32), ("icon_32x32@2x.png", 64),
+           ("icon_128x128.png", 128), ("icon_128x128@2x.png", 256),
+           ("icon_256x256.png", 256), ("icon_256x256@2x.png", 512),
+           ("icon_512x512.png", 512), ("icon_512x512@2x.png", 1024))
+
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", default="build/icons", help="output directory")
+    ap.add_argument("--iconset", action="store_true",
+                    help="also write hugmesh-studio.iconset/ for macOS's iconutil")
     args = ap.parse_args(argv)
 
     # Imported after QT_QPA_PLATFORM is set, and after argparse so --help works on a
@@ -79,6 +93,17 @@ def main(argv: list[str] | None = None) -> int:
                   Qt.AspectRatioMode.KeepAspectRatio,
                   Qt.TransformationMode.SmoothTransformation).save(canonical, "PNG")
     written.append(canonical)
+
+    if args.iconset:
+        iconset = os.path.join(args.out, "hugmesh-studio.iconset")
+        os.makedirs(iconset, exist_ok=True)
+        for name, size in ICONSET:
+            path = os.path.join(iconset, name)
+            if not source.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                                 Qt.TransformationMode.SmoothTransformation).save(path, "PNG"):
+                print(f"error: could not write {path}", file=sys.stderr)
+                return 1
+            written.append(path)
 
     ico = os.path.join(args.out, "hugmesh-studio.ico")
     if _write_ico(written, ico, args.out):

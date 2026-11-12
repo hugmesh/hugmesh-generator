@@ -59,6 +59,7 @@ from ...core import ansi
 from ...core import build_sessions
 from ...core import cross_dracut
 from ...core import flash_targets
+from ...core import platform_info
 from ...core import qemu_tests
 from ...core import root_size_floor
 from ...core import secret_files
@@ -316,6 +317,11 @@ _JOBS_HELP = (
     + ("The Windows Studio cannot read this PC's memory, so a docker build gets a "
        "container memory cap only when <tt>HUGMESH_BUILD_MEMORY</tt> sets one; Docker "
        "Desktop's own memory limit applies either way.</p></qt>" if os.name == "nt" else
+       "On a Mac every build runs in the Linux VM of Docker Desktop, colima or "
+       "OrbStack, so the memory that counts is that VM's (set in the runtime's own "
+       "settings); a docker build gets a container cap only when "
+       "<tt>HUGMESH_BUILD_MEMORY</tt> sets one.</p></qt>"
+       if platform_info.host_kind() == "darwin" else
        "A docker build additionally runs under a container memory cap "
        "(<tt>HUGMESH_BUILD_MEMORY</tt>) that protects the host; a native build has no "
        "such ceiling.</p></qt>"))
@@ -523,9 +529,10 @@ class BuildPage(QtWidgets.QWizardPage):
         # The row wrappers are kept as attributes only where a later gate touches them;
         # these four are ungated, so the tooltip set here is the one that survives.
         self.backend = QtWidgets.QComboBox()
-        # No "native" on Windows: it is sudo + bash on a Gentoo host, and Windows 11's
-        # own sudo.exe made the elevation preflight pass before the build failed.
-        self.backend.addItems(["auto", "docker"] if os.name == "nt"
+        # No "native" on Windows or macOS: it is sudo + bash + a Gentoo chroot, and
+        # both have a sudo (Windows 11's sudo.exe) that let the elevation preflight
+        # pass before the build failed.
+        self.backend.addItems(["auto", "docker"] if platform_info.builds_in_docker_vm()
                               else ["auto", "native", "docker"])
         self.backend.setToolTip(_BACKEND_HELP)
         backend_row = _row("Backend", self.backend)

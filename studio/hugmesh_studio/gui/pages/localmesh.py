@@ -3541,7 +3541,16 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def _on_mesh_state(self, running: bool, detail: str):
         self._mesh_up = running
-        if running and LocalMeshBootstrap.teardown_refusal():
+        refusal = LocalMeshBootstrap.teardown_refusal() if running else ""
+        if running and platform_info.blocker_kind(refusal) == "darwin":
+            # A Mac missing Homebrew's GNU tools: Stop is refused too, but nothing
+            # about it is Windows'. Say what clears it, here.
+            from ...core.macos_host import BREW_INSTALL
+            self._mesh_state_label.setText(
+                f"Mesh state: RUNNING — {detail}. This Mac cannot stop it yet (Stop "
+                f"runs `make` and bash scripts that need the GNU tools): run "
+                f"`{BREW_INSTALL}`, restart the Studio, then stop it.")
+        elif running and refusal:
             # Native Windows: this Studio can neither start nor stop it (both are
             # bash recipes), so "stop it first" would advise a press it refuses.
             self._mesh_state_label.setText(

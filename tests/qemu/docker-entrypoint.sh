@@ -215,7 +215,8 @@ MESH_JOIN_WAIT="${MESH_JOIN_WAIT:-1800}"
 #     is attached instead and the saved key is copied into this run dir, so the
 #     record's ssh_key and a later re-save both work exactly as for a golden run.
 #   * the RECORD notes it ("boot_save"), so a reader can tell a resumed device
-#     from a fresh one (the go-live journal says "resumed from save").
+#     from a fresh one (mesh-emu-status says "resumed from save", and the go-live
+#     faces "booted from a save taken while <posture>").
 # The sibling names are emulation_save.py's KEYS_IMAGE_SUFFIX / LOGIN_KEY_SUFFIX /
 # KEYS_DIR_SUFFIX, spelled from the save's own stem.
 BOOT_SAVE=""
