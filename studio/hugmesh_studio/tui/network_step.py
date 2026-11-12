@@ -49,6 +49,9 @@ def pki_lan_lines(cfg) -> list[str]:
     if t != "lan":
         out += [mesh_control.WHY,
                 f"  mint  {'yes' if cfg.mesh_control_onion_mint else 'no'}  ({mesh_control.MINT_LABEL})"]
+        clash = mesh_control.name_problem(cfg)
+        if clash:
+            out.append(f"! the build will refuse: {clash}")
     return out
 
 
@@ -74,7 +77,8 @@ def pki_lan_feed(cfg, line: str) -> str | None:
         cfg.mesh_control_transport = "" if arg == "lan" else arg
         if arg == "lan":
             cfg.mesh_control_onion_mint = False
-        return f"transport -> {mesh_control.LABELS[arg]}"
+        clash = mesh_control.name_problem(cfg)
+        return f"transport -> {mesh_control.LABELS[arg]}" + (f" — {clash}" if clash else "")
     if verb == "mint":
         if mesh_control.transport(cfg) == "lan":
             return "mint applies to a Tor transport only (transport lan+onion|onion first)"

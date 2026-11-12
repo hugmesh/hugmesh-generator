@@ -179,10 +179,12 @@ fi
 # node whose KEYS choose .mesh.control_transport lan+onion|onion:
 #   "client"          a worker: Tor is a CLIENT for the node-local control relay
 #                     (hugmesh-mesh-control-relay, SocksPort 127.0.0.1:9050);
-#   "control <port>"  the pki: ALSO publish the dedicated CONTROL onion from
-#                     /var/lib/tor/hugmesh-control (its key was minted at KEYS time
-#                     and installed from the pki stick), HiddenServicePort
-#                     <port> -> 127.0.0.1:<port> (headscale's own TLS listener).
+#   "control <port> <target>"  the pki: ALSO publish the dedicated CONTROL onion
+#                     from /var/lib/tor/hugmesh-control (its key was minted at KEYS
+#                     time and installed from the pki stick), HiddenServicePort
+#                     <port> -> 127.0.0.1:<target> (the control port every node dials,
+#                     7443, onto headscale's own TLS listener, 8080). "control <port>"
+#                     alone means <target> = <port>.
 # Either way the torrc gains a cookie-authenticated ControlSocket in the DataDirectory
 # (the relay keeper's SIGNAL NEWNYM). /etc/hugmesh/tor/mesh-control-only — written when
 # the tor optional service was NOT selected at build time — drops the fe-gateway
@@ -192,15 +194,17 @@ fi
 MC_FILE="/etc/hugmesh/tor/mesh-control"
 MC_ONLY_FILE="/etc/hugmesh/tor/mesh-control-only"
 MC_HS_DIR="/var/lib/tor/hugmesh-control"
-MC_ROLE="" MC_PORT=""
+MC_ROLE="" MC_PORT="" MC_TARGET=""
 if [ -r "${R}${MC_FILE}" ]; then
     _mc="$(_trim "$(head -1 "${R}${MC_FILE}" 2>/dev/null)")"
     if [ "${_mc}" = client ]; then
         MC_ROLE=client
-    elif [[ "${_mc}" =~ ^control\ ([0-9]{1,5})$ ]] && [ "${BASH_REMATCH[1]}" -ge 1 ] && [ "${BASH_REMATCH[1]}" -le 65535 ]; then
-        MC_ROLE=control; MC_PORT="${BASH_REMATCH[1]}"
+    elif [[ "${_mc}" =~ ^control\ ([0-9]{1,5})(\ ([0-9]{1,5}))?$ ]] \
+         && [ "$((10#${BASH_REMATCH[1]}))" -ge 1 ] && [ "$((10#${BASH_REMATCH[1]}))" -le 65535 ] \
+         && [ "$((10#${BASH_REMATCH[3]:-${BASH_REMATCH[1]}}))" -ge 1 ] && [ "$((10#${BASH_REMATCH[3]:-${BASH_REMATCH[1]}}))" -le 65535 ]; then
+        MC_ROLE=control; MC_PORT="$((10#${BASH_REMATCH[1]}))"; MC_TARGET="$((10#${BASH_REMATCH[3]:-${BASH_REMATCH[1]}}))"
     else
-        log "ignoring malformed ${MC_FILE} ('${_mc}': want 'client' or 'control <port>')"
+        log "ignoring malformed ${MC_FILE} ('${_mc}': want 'client' or 'control <port> [<target port>]')"
     fi
 fi
 MC_ONLY=false
@@ -366,10 +370,12 @@ EOT
     if [ "${MC_ROLE}" = control ]; then
         cat <<EOT
 # The pki's dedicated CONTROL onion (key minted at KEYS time, pki stick only) ->
-# headscale's own TLS listener. Never the fe-gateway onion, never exported.
+# headscale's own TLS listener. Never the fe-gateway onion, never exported. Everyone
+# who knows the address reaches ALL of headscale's HTTP surface and its embedded DERP
+# relay through it (docs/MESH-CONTROL-OVER-TOR.md "Who can reach the control onion").
 HiddenServiceDir ${MC_HS_DIR}
 HiddenServiceVersion 3
-HiddenServicePort ${MC_PORT} 127.0.0.1:${MC_PORT}
+HiddenServicePort ${MC_PORT} 127.0.0.1:${MC_TARGET}
 EOT
     fi
     for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do

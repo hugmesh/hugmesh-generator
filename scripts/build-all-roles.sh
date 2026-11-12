@@ -781,12 +781,30 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
     fi
 fi
 
-# The control onion's SECRET key leaves this computer on the pki stick only: once every
-# keys folder above is made, it is removed (the address stays, for a later worker stick).
-if [ -n "${MESH_CONTROL_ONION_DIR:-}" ] && [ -e "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" ]; then
-    rm -f "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" "${MESH_CONTROL_ONION_DIR}/hs_ed25519_public_key"
-    echo "==> mesh control: removed the control onion's secret key from ${MESH_CONTROL_ONION_DIR} (it is on the pki stick only)"
-fi
+# The control onion's SECRET key leaves this computer on the pki stick only: it is
+# removed here ONLY on positive evidence that the pki stick holds it — a keys folder of
+# THIS run carries a byte-identical copy at headscale/control-onion/. A failed pki keys
+# run had its partial folder removed above, so its key stays for the re-run the failure
+# message asks for; SKIP_KEYS=1 made no stick, so the key stays. The address stays
+# either way, for a later worker stick.
+mesh_control_forget_secret() {
+    local d="${MESH_CONTROL_ONION_DIR:-}" k
+    [ -n "${d}" ] && [ -e "${d}/hs_ed25519_secret_key" ] || return 0
+    if [ "${SKIP_KEYS:-0}" = "1" ]; then
+        echo "==> mesh control: SKIP_KEYS=1 made no stick — the control onion's secret key stays in ${d}"
+        return 0
+    fi
+    for k in "${WORK_DIR}"/keys-*/headscale/control-onion/hs_ed25519_secret_key; do
+        if [ -f "${k}" ] && cmp -s "${k}" "${d}/hs_ed25519_secret_key"; then
+            rm -f "${d}/hs_ed25519_secret_key" "${d}/hs_ed25519_public_key"
+            echo "==> mesh control: removed the control onion's secret key from ${d} (the pki stick ${k%/headscale/control-onion/hs_ed25519_secret_key} holds it)"
+            return 0
+        fi
+    done
+    echo "!! mesh control: no keys folder of this run holds the control onion's secret key — it STAYS in ${d} (make the pki stick from it, then delete it)" >&2
+    return 0
+}
+mesh_control_forget_secret
 
 echo
 echo "==> Done. Products in ${WORK_DIR}:"

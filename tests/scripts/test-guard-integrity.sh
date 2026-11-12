@@ -1208,6 +1208,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-mesh-control-onion.sh (shell-suites.yml debian leg, orphan-guards-
 # verify) and tests/scripts/test-mesh-control-onion-live.sh, which joins PREMERGE_UNGATED
 # (opt-in on the real Tor network by design).
+# Merge of origin/main 96e0f6df into feat/headscale-onion-control-20261111: MEASURED with GUARD_PREMERGE=0 on the merged tree: 247 of 290.
+# 247 -> 248 (feat/headscale-onion-control-20261111, round 2): +1 gated, +1 total —
+# tests/scripts/test-mesh-control-headscale-start.sh, named by shell-suites.yml's host
+# docker job (it starts the pinned headscale). PREMERGE_UNGATED is untouched. MEASURED
+# with GUARD_PREMERGE=0 on the branch merged with origin/main 96e0f6df: 248 of 291.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-263}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a

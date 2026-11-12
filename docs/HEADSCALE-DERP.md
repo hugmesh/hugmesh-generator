@@ -197,7 +197,11 @@ URL's port, so a non-443 control port works). Over an onion that means:
   host while their control URL stays put — a client that can reach only the old name loses
   relay (measured). The opt-in therefore uses one permanent control name on every node.
 
-See [MESH-CONTROL-OVER-TOR.md](MESH-CONTROL-OVER-TOR.md).
+- **the control onion publishes the relay to anyone with its address**: onion
+  connections reach headscale from Tor on `127.0.0.1`, so the RFC1918-only carve-out
+  below never applies to them (see *Who can use the relay*).
+
+See [MESH-CONTROL-OVER-TOR.md](MESH-CONTROL-OVER-TOR.md#who-can-reach-the-control-onion).
 
 ## Who can use the relay
 

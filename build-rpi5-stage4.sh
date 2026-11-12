@@ -4134,19 +4134,17 @@ else
     rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
 fi
 # Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md): the node-local control
-# relay + keeper, the OIDC-defer job (staged; keys-provision links it on a pki only) and
-# the transport default keys-provision falls back to. lan bakes none of it.
+# relay + keeper and the transport default keys-provision falls back to. lan bakes none
+# of it. (In a Tor mode headscale runs without OIDC: keys-provision removes the block.)
 if [ "${MESH_CONTROL_TRANSPORT:-lan}" != lan ]; then
-    mkdir -p "${SYSROOT}/etc/hugmesh/registry" "${SYSROOT}/usr/sbin" "${SYSROOT}/etc/init.d"
-    for _mc in hugmesh-mesh-control-relay hugmesh-headscale-oidc-defer; do
-        cp "${SHARED_SPECS}/usr/sbin/${_mc}" "${SYSROOT}/usr/sbin/${_mc}"; chmod +x "${SYSROOT}/usr/sbin/${_mc}"
-    done
+    mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/etc/init.d"
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-mesh-control-relay" "${SYSROOT}/usr/sbin/hugmesh-mesh-control-relay"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-mesh-control-relay"
     for _mc in hugmesh-mesh-control-relay hugmesh-mesh-control-keeper; do
         cp "${SHARED_SPECS}/etc/init.d/${_mc}" "${SYSROOT}/etc/init.d/${_mc}"; chmod +x "${SYSROOT}/etc/init.d/${_mc}"
     done
-    cp "${SHARED_SPECS}/etc/cron.d/hugmesh-headscale-oidc-defer" "${SYSROOT}/etc/hugmesh/registry/cron-headscale-oidc-defer"
     echo "${MESH_CONTROL_TRANSPORT}" > "${SYSROOT}/etc/hugmesh/mesh-control-transport"
-    info "Baked mesh control over Tor (${MESH_CONTROL_TRANSPORT}): relay + keeper + OIDC defer; keys-provision links them from the KEYS stick"
+    info "Baked mesh control over Tor (${MESH_CONTROL_TRANSPORT}): relay + keeper; keys-provision links them from the KEYS stick"
 else
     rm -f "${SYSROOT}/etc/hugmesh/mesh-control-transport"
 fi

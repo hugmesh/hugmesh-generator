@@ -830,8 +830,16 @@ class NetworkPage(QtWidgets.QWizardPage):
         mc.addWidget(self.mesh_control_why)
         self.mesh_control_mint = QtWidgets.QCheckBox(mesh_control.MINT_LABEL)
         mc.addWidget(self.mesh_control_mint)
+        # Why a Tor choice cannot use this superdomain (core/mesh_control.name_problem):
+        # inline, never a dialog; validatePage refuses with the same words.
+        self.mesh_control_note = QtWidgets.QLabel("")
+        self.mesh_control_note.setWordWrap(True)
+        self.mesh_control_note.setStyleSheet("color: #b00020;")
+        self.mesh_control_note.setVisible(False)
+        mc.addWidget(self.mesh_control_note)
         cp.addWidget(self.mesh_control_box)
         self.mesh_control_transport.currentIndexChanged.connect(self._mesh_control_changed)
+        self.superdomain.textChanged.connect(self._mesh_control_changed)
         # ASK 8's "this mesh also hosts other domains" CHECKBOX used to sit here, under
         # the superdomain row. ASK 19 promoted that decision to its own choice-card
         # screen (gui/pages/domains_choice.py) in the ModePage idiom — "proceed with the
@@ -2103,12 +2111,26 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.pki_lan_note.setText(msg)
         self.pki_lan_note.setVisible(bool(msg))
 
+    def _mesh_control_name_problem(self) -> str:
+        """core/mesh_control.name_problem for what the page shows NOW (the transport and
+        the superdomain field), without writing either into the config."""
+        t = self.mesh_control_transport.currentData() or "lan"
+        brand = (self.brand.text().strip() or getattr(self.wiz.cfg, "brand", "")
+                 or _field_default("brand"))
+        probe = ImageConfig(mode="mesh", brand=brand, superdomain=self.superdomain.text().strip(),
+                            mesh_control_transport="" if t == "lan" else t)
+        return mesh_control.name_problem(probe)
+
     def _mesh_control_changed(self, *_):
         """The consent box means something only for a Tor transport, and the why-text
-        is shown with it."""
+        is shown with it; a superdomain the control name cannot be derived from is said
+        under the choice, live."""
         tor = (self.mesh_control_transport.currentData() or "lan") != "lan"
         self.mesh_control_mint.setEnabled(tor)
         self.mesh_control_why.setVisible(tor)
+        msg = self._mesh_control_name_problem() if tor else ""
+        self.mesh_control_note.setText(msg)
+        self.mesh_control_note.setVisible(bool(msg))
 
     def validatePage(self):
         c = self.wiz.cfg
@@ -2142,6 +2164,13 @@ class NetworkPage(QtWidgets.QWizardPage):
                 c.pki_lan_ip = pki_lan.canonical(ip_text)
                 c.pki_lan_ip_fixed = self.pki_lan_fixed.isChecked()
             t = self.mesh_control_transport.currentData() or "lan"
+            # A Tor choice whose control name would fall inside the superdomain stops the
+            # page here, inline (headscale would refuse to start on the pki).
+            msg = self._mesh_control_name_problem() if t != "lan" else ""
+            if msg:
+                self.mesh_control_note.setText(msg)
+                self.mesh_control_note.setVisible(True)
+                return False
             c.mesh_control_transport = "" if t == "lan" else t
             c.mesh_control_onion_mint = t != "lan" and self.mesh_control_mint.isChecked()
         # ── the identity rows, collected ONLY while their axis has them on screen ──
