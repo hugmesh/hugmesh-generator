@@ -905,3 +905,43 @@ def test_issuing_a_token_offers_the_same_roles_shell_rule_and_lifetime_on_every_
     finally:
         dlg.close()
         dlg.deleteLater()
+
+
+def test_go_live_names_targets_and_their_limits_identically_on_both_faces(
+        qapp, tmp_path, monkeypatch):
+    """The emulated-target words are spelled ONCE: the picker rows (GUI Preflight) and
+    the `t` list (TUI), the per-mechanism reachability, the EPHEMERAL sentence, and the
+    Mesh emulation action on the front door."""
+    import _golive_fake_guest as fake
+    from hugmesh_studio.core import golive_target
+    from hugmesh_studio.gui.pages import golive as gui_golive
+    from hugmesh_studio.gui.pages import mesh_emulation as gui_meshemu
+    from hugmesh_studio.tui import golive as tui_golive
+    from hugmesh_studio.tui import meshemu as tui_meshemu
+    guest = fake.install(tmp_path, monkeypatch)
+    fake.register(guest, label="rpi5/pki")
+    fake.register(guest, label="x86/laptop", platform="x86", role="laptop", port=22402)
+    monkeypatch.setattr(gui_golive.qemu_devices, "default_work_dir",
+                        lambda _gen: guest.work_dir)
+    w = gui_golive.GoLiveWizard(GENERATOR_DIR, target="rpi5/pki")
+    pre = w.page(w._page_ids["preflight"])
+    pre.initializePage()
+    gui_rows = [pre.target_pick.itemText(i) for i in range(pre.target_pick.count())]
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("golive")
+    screen = j.screen()
+    screen.work_dir = guest.work_dir
+    tui_rows = [tui_golive.target_title(t) for t in screen.target_rows(j)]
+    assert gui_rows == tui_rows
+    assert gui_rows[0] == tui_golive.THIS_HOST == gui_golive.THIS_HOST
+    # the reachability line under each exposure card is the TUI's provider sub-line
+    exp = w.page(w._page_ids["exposure"])
+    exp.initializePage()
+    assert screen.set_target(j, w.target) == ""
+    tui_text = "\n".join(screen.lines(j))
+    for model, lb in exp.reach.items():
+        if lb.text():
+            assert lb.text().split(": ", 1)[1] in tui_text, model
+    assert golive_target.EPHEMERAL_NOTE in gui_golive.ephemeral_text(w.target)
+    assert gui_meshemu.GO_LIVE_ACTION == tui_meshemu.GO_LIVE_ACTION
+    w.deleteLater()

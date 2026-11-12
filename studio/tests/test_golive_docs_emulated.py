@@ -392,20 +392,41 @@ def test_flow_quotes_the_core_wording(section: str):
     assert REACH_LINE in flat
 
 
-# ── the section against core.golive_target (FG1, merged as #927) ──────────────────
+# ── the section against what has landed (FG1 #927, FG2, FG5 #932; FG3 still open) ──
 def test_status_callout_says_what_has_landed(section: str):
     flat = _flat(section)
     assert "**Status: specification." not in flat, "FG1 is in the tree; the callout is stale"
     assert ("The target model, the ssh path and the CLI "
             "(`hugmesh_studio.core.golive_target`, group FG1) are in the tree.") in flat
-    # The faces are not: the wizard has no target picker on this tree yet. When FG2
-    # lands, this goes red on purpose, and the callout must be updated with it.
+    # FG2 (the faces) is in the tree: the wizard has its target picker, the TUI its
+    # target list. The callout says so, and no longer says the wizard drives only
+    # this host.
     page = _read("studio", "hugmesh_studio", "gui", "pages", "golive.py")
-    if "target_pick" not in page:
-        assert "The GUI and TUI faces (group FG2) and the proof lane (group FG3) are not yet" in flat
+    tui = _read("studio", "hugmesh_studio", "tui", "golive.py")
+    assert "target_pick" in page and "def _lines_target" in tui
+    assert "faces (group FG2) and the proof lane (group FG3) are not yet" not in flat, (
+        "FG2's target picker is in the tree: update the status callout")
+    assert "The GUI and TUI faces (group FG2) are in the tree too" in flat
+    assert "Studio's wizard drives only **This host**" not in flat
+    # FG5 (boot from a save) is in the tree as a CLI/Makefile lane, with no GUI button:
+    # the callout and the Persistence part say exactly that, and the wizard still
+    # calls the posture ephemeral.
+    makefile = _read("Makefile")
+    assert "--from-save" in makefile and "FROM_SAVE" in makefile
+    assert "from_save" not in page.lower(), (
+        "a GUI boot-from-save entry exists: update the callout and Persistence")
+    assert "(group FG5) is in the tree as a CLI and Makefile lane only" in flat
+    assert "`make mesh-emu-up FROM_SAVE=mesh-<stamp>`" in flat
+    assert "is a later follow-up (group FG5)" not in flat
+    # FG3 (the harness proof lane) has not merged: the callout still says so. When it
+    # lands, this goes red on purpose, and the callout must be updated with it.
+    lane = [f for f in os.listdir(os.path.join(REPO, "tests", "qemu"))
+            if "golive" in f or "go-live" in f]
+    if not lane:
+        assert "The harness proof lane (group FG3) has not merged" in flat
     else:
-        assert "faces (group FG2) and the proof lane (group FG3) are not yet" not in flat, (
-            "FG2's target picker is in the tree: update the status callout")
+        assert "The harness proof lane (group FG3) has not merged" not in flat, (
+            f"FG3's proof lane is in the tree ({lane}): update the status callout")
 
 
 def _fake_target(gt, tmp_path):

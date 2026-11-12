@@ -76,6 +76,7 @@ __all__ = [
     "GUEST_DRIVER", "GUEST_OUT_ROOT", "TOKEN_PREFIX",
     "GoLiveTarget", "Probe", "TerminalSpec",
     "local_target", "target_from_device", "target_from_whpx", "targets", "find_target",
+    "same_binding", "rebind", "binding_change",
     "refusal", "local_node_refusal", "probe_argv", "parse_probe", "probe",
     "probe_refusal", "remote_argv", "remote_verb_argv", "stage_token_remote",
     "remove_token_remote", "guest_out_dir", "fetch_artifacts", "artifacts_dir",
@@ -240,6 +241,60 @@ def find_target(rows: list[GoLiveTarget], label: str) -> GoLiveTarget | None:
     if label in ("", "local", LOCAL_LABEL):
         return next((t for t in rows if t.is_local), None)
     return next((t for t in rows if t.label == label), None)
+
+
+def _binding(t: GoLiveTarget) -> tuple:
+    return (t.kind, t.label, t.ssh_port, t.started_at, t.running, t.ssh_base_argv)
+
+
+def same_binding(a: GoLiveTarget, b: GoLiveTarget) -> bool:
+    """True when ``a`` and ``b`` are the same BOOT of the same device over the same ssh
+    channel (port, key, user), not merely the same label. A keep-alive device that
+    restarts comes back on the first free port of the harness's range with a new
+    started_at, and a stopped device's port can be handed to another device
+    (tests/qemu/run-qemu-docker.sh claim_port) — so a label alone does not say where
+    an ssh would land."""
+    return _binding(a) == _binding(b)
+
+
+def rebind(target: GoLiveTarget, rows: list[GoLiveTarget]) -> GoLiveTarget:
+    """``target``'s device as ``rows`` (a fresh :func:`targets` read) says it is NOW.
+    LOCAL is returned as it is. A device whose record is gone is returned NOT running,
+    so :func:`refusal` turns it away instead of anything being sent to its old port."""
+    if target.is_local:
+        return target
+    fresh = next((r for r in rows if (r.kind, r.label) == (target.kind, target.label)),
+                 None)
+    if fresh is None:
+        return dataclasses.replace(target, running=False)
+    if target.work_dir and not fresh.work_dir:
+        fresh = dataclasses.replace(fresh, work_dir=target.work_dir)
+    return fresh
+
+
+def binding_change(target: GoLiveTarget, rows: list[GoLiveTarget]) -> str:
+    """"" while ``target`` is still the device's current record; otherwise the sentence
+    that says what changed since it was picked (stopped, or restarted on another port
+    or boot) — the faces refuse to run or hand over a commit/rollback until the device
+    is picked again from a re-scan."""
+    if target.is_local:
+        return ""
+    fresh = rebind(target, rows)
+    if same_binding(fresh, target):
+        return ""
+    name = target.label or "the device"
+    if not fresh.running:
+        return (f"{name} has stopped since it was picked (it was on ssh port "
+                f"{target.ssh_port}, which another device may now hold) — re-scan the "
+                "devices and pick it again before anything is sent to it.")
+    moved = []
+    if fresh.ssh_port != target.ssh_port:
+        moved.append(f"ssh port {target.ssh_port} -> {fresh.ssh_port}")
+    if fresh.started_at != target.started_at:
+        moved.append(f"booted again at {fresh.started_at or '?'}")
+    return (f"{name} restarted since it was picked ({'; '.join(moved) or 'its record changed'})"
+            " — what was read from it belongs to the earlier boot, which a restart reset "
+            "to INTERNAL. Re-scan the devices and pick it again before the flip.")
 
 
 # ── refusals ────────────────────────────────────────────────────────────────────────
