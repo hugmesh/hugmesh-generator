@@ -1079,6 +1079,13 @@ jobs:
     # tag:superadmin; it exits 2 (a failure here) when docker or an image is
     # unavailable. MEASURED 2026-11-04 on a Linux host with docker: 13 passed /
     # 0 failed in ~8 s, and 6 failed against the unfixed policy.
+    # tests/device-registry/test-headscale-tag-minters-live.sh runs the same pinned
+    # headscale and tailscale with keys minted by the REAL minters: the whole
+    # keys-provision engine (inside the kindest/node image the gpu-labels suite
+    # above already pulls) from a keys-template-shaped stick, and the Studio's
+    # mint_preauth_key; then the real Layer-A apply path of gen-headscale-policy.sh
+    # and the real hugmesh-headscale-forcetags. Exit 2 (a failure here) when docker
+    # or an image is unavailable.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -1095,6 +1102,7 @@ jobs:
             tests/boot/test-gpu-worker-node-labels.sh
             tests/device-registry/test-headscale-tag-ownership.sh
             tests/device-registry/test-headscale-security-tag-live.sh
+            tests/device-registry/test-headscale-tag-minters-live.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do
