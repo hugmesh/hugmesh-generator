@@ -1150,7 +1150,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # .gitlab-ci.yml desktop job. PREMERGE_UNGATED untouched. MEASURED with GUARD_PREMERGE=0
 # on the tree merged with origin/main aedbb1fd.
 # 243 -> 244 after merging origin/main 96e0f6df (#926/#972/#966 took main to 243): the same
-# +1 gated, +1 total for tests/scripts/test-desktop-config-lib.sh. MEASURED with GUARD_PREMERGE=0.
+# +1 gated, +1 total for tests/scripts/test-desktop-config-lib.sh. MEASURED with GUARD_PREMERGE=0
+# on the tree merged with origin/main 96e0f6df: 244 of 286.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-244}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
