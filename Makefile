@@ -179,11 +179,19 @@ ENV      ?= test
 #                headscale. Default OFF: headscale's embedded relay only, so the mesh
 #                starts and relays offline (docs/HEADSCALE-DERP.md). Same knob as the
 #                builders' --headscale-public-derp and gen-provision-keys.sh's.
+# MESH_CONTROL_TRANSPORT=lan|lan+onion|onion  how nodes reach headscale before go-live
+#                (docs/MESH-CONTROL-OVER-TOR.md). Default lan: unchanged. The Tor
+#                transports add tor + socat + hugmesh-mesh-control to x86/rpi5 node
+#                images; the other boards refuse them. Same knob as the builders'
+#                --mesh-control-transport and gen-provision-keys.sh's.
+# MESH_CONTROL_NAME=NAME  the control name to bake (default: the KEYS stick's).
 # Usage:  make build-all BRAND=acme DOMAIN=acme.example
 BRAND     ?=
 DOMAIN    ?=
 HEADSCALE_URL ?=
 HEADSCALE_PUBLIC_DERP ?=
+MESH_CONTROL_TRANSPORT ?=
+MESH_CONTROL_NAME ?=
 
 # ── External CA (optional) ─────────────────────────────────────────────────────
 # Point the cert generators at an EXISTING CA (cert + key) to use it as the
@@ -223,6 +231,12 @@ endif
 ifneq ($(strip $(HEADSCALE_PUBLIC_DERP)),)
 BRAND_ENV += HEADSCALE_PUBLIC_DERP=$(HEADSCALE_PUBLIC_DERP)
 endif
+ifneq ($(strip $(MESH_CONTROL_TRANSPORT)),)
+BRAND_ENV += MESH_CONTROL_TRANSPORT=$(MESH_CONTROL_TRANSPORT)
+endif
+ifneq ($(strip $(MESH_CONTROL_NAME)),)
+BRAND_ENV += MESH_CONTROL_NAME=$(MESH_CONTROL_NAME)
+endif
 # Root SSH login toggle (empty => builder default 'no' = DISABLED). Only threaded when
 # explicitly set, so every image stays hardened-by-default unless opted in.
 ifneq ($(strip $(PERMIT_ROOT_LOGIN)),)
@@ -232,7 +246,7 @@ endif
 # BRAND_PASS — brand make-vars forwarded into the in-container `make` re-invoke
 # (the Docker dispatch path) so BRAND_FLAGS/BRAND_ENV are rebuilt identically
 # inside the builder image. brands/ is mounted at /src/brands via -v $(CURDIR):/src.
-BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
+BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' MESH_CONTROL_TRANSPORT='$(MESH_CONTROL_TRANSPORT)' MESH_CONTROL_NAME='$(MESH_CONTROL_NAME)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
 
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).
@@ -2972,6 +2986,24 @@ mesh-node-launcher-parity-check: ## Windows vs Linux mesh-node launchers pass do
 # # ; ? @ tab, and a newline via ALTER USER), then booted against postgres:16-alpine:
 # /api/health ok, the password in no stream, the seeded catalog present (hugmesh-generator#848).
 # Throwaway containers with unique names, removed on exit. Needs docker; exits 2 without it.
+# mesh-control-onion-check: the OFFLINE guard for mesh control over Tor
+# (docs/MESH-CONTROL-OVER-TOR.md): the onion key mint against a tor-verified vector, the
+# reconcile's torrc (byte-identical with no marker), the relay/keeper/front agent on stubs,
+# keys-provision's precedence (a public HEADSCALE_URL must not win pre-go-live) and its
+# hosts/tailscaled blocks (no proxy variable), flag parity across every builder.
+.PHONY: mesh-control-onion-check
+mesh-control-onion-check: ## Mesh control over Tor: offline guard (mint, torrc, relay, precedence, flag parity)
+	bash tests/scripts/test-mesh-control-onion.sh
+
+# mesh-control-onion-live-check: OPT-IN, on the REAL Tor network (never in default CI). It
+# publishes a THROWAWAY onion for a throwaway headscale (no real users, no real mesh key),
+# runs the pinned headscale + tailscale through the shipped relay, front and keeper, and
+# deletes the onion keys on exit. Needs docker and outbound internet; exits 2 without them.
+# Set HUGMESH_LIVE_TOR=1 to consent; without it the suite refuses (exit 2).
+.PHONY: mesh-control-onion-live-check
+mesh-control-onion-live-check: ## Mesh control over Tor on the REAL Tor network (opt-in: HUGMESH_LIVE_TOR=1; docker; throwaway onion)
+	bash tests/scripts/test-mesh-control-onion-live.sh
+
 .PHONY: casdoor-render-boot-check
 casdoor-render-boot-check: ## Every Casdoor boots on the conf its initContainer renders from a hostile Vault password (docker, throwaway)
 	bash tests/casdoor/test-casdoor-render-boot.sh

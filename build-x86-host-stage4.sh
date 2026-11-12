@@ -274,6 +274,13 @@ HEADSCALE_VERSION="0.23.0"
 # offline (docs/HEADSCALE-DERP.md). --headscale-public-derp or env/brand.conf
 # HEADSCALE_PUBLIC_DERP=true bakes /etc/hugmesh/headscale-public-derp.
 HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
+# Opt-in: how nodes reach headscale before go-live (docs/MESH-CONTROL-OVER-TOR.md).
+# lan (default) changes nothing. lan+onion / onion add tor + socat and the
+# hugmesh-mesh-control agent, so every node dials one stable control name that its
+# own relay answers (the pki's LAN front, else the pki's control onion over Tor).
+# --mesh-control-transport / env/brand.conf MESH_CONTROL_TRANSPORT.
+MESH_CONTROL_TRANSPORT="${MESH_CONTROL_TRANSPORT:-lan}"
+MESH_CONTROL_NAME="${MESH_CONTROL_NAME:-}"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
@@ -705,6 +712,14 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --headscale-public-derp  Also list Tailscale's public DERP map in headscale.
                             Default OFF: the embedded relay only, offline-first
                             (docs/HEADSCALE-DERP.md). (env/brand.conf: HEADSCALE_PUBLIC_DERP=true)
+      --mesh-control-transport lan|lan+onion|onion
+                            How nodes reach headscale before go-live. Default lan
+                            (unchanged). lan+onion: the pki's LAN front, else its
+                            control onion over Tor; onion: Tor only. Adds net-vpn/tor +
+                            net-misc/socat + hugmesh-mesh-control to a cluster-node image
+                            (docs/MESH-CONTROL-OVER-TOR.md). (env: MESH_CONTROL_TRANSPORT)
+      --mesh-control-name NAME  The control name to bake (default: the KEYS
+                            stick's, else hs.<superdomain label>-control.internal).
       --tailscale-version V Default: ${TAILSCALE_VERSION}
       --seed-url URL        amd64 stage3 index URL.
       --enable-wifi         Re-enable WiFi (DISABLED by default: rfkill block +
@@ -1127,6 +1142,8 @@ while [[ $# -gt 0 ]]; do
         --root-password) ROOT_PASS="$2"; shift 2 ;;
         --headscale-version) HEADSCALE_VERSION="$2"; shift 2 ;;
         --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
+        --mesh-control-transport) MESH_CONTROL_TRANSPORT="$2"; shift 2 ;;
+        --mesh-control-name) MESH_CONTROL_NAME="$2"; shift 2 ;;
         --tailscale-version) TAILSCALE_VERSION="$2"; shift 2 ;;
         --seed-url) SEED_STAGE3_URL="$2"; shift 2 ;;
         --enable-wifi) ENABLE_WIFI=true; shift ;;
@@ -1309,6 +1326,15 @@ case "${HEADSCALE_PUBLIC_DERP}" in
     false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
     *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
 esac
+# --mesh-control-transport / --mesh-control-name: one spelling, checked before any work.
+case "${MESH_CONTROL_TRANSPORT}" in
+    lan|lan+onion|onion) ;;
+    "") MESH_CONTROL_TRANSPORT=lan ;;
+    *) err "--mesh-control-transport must be lan, lan+onion or onion (got '${MESH_CONTROL_TRANSPORT}')"; exit 1 ;;
+esac
+if [ -n "${MESH_CONTROL_NAME}" ] && ! [[ "${MESH_CONTROL_NAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]; then
+    err "--mesh-control-name '${MESH_CONTROL_NAME}' is not a lower-case hostname"; exit 1
+fi
 
 # Comma tolerance: accept "akkoma,tuwunel" (the CSV spelling GUIs/configs tend to
 # emit) as well as the native space-separated list — normalized HERE, right after
@@ -1712,6 +1738,16 @@ esac
 TOR_NODE_PACKAGES=(net-vpn/tor)
 TOR_NODE_SERVICES=(tor hugmesh-tor-reconcile)
 _tor_node_selected() { ! ${ROLE_CLIENT} && _opt_selected tor; }
+# ── Mesh control over Tor: its OWN predicate (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md) ──
+# --mesh-control-transport lan+onion|onion puts a Tor CLIENT (and, on the pki, the
+# dedicated control onion) on a cluster node. That is NOT "tor selected": the
+# fe-gateway onion, PLAN_TOR_ONION, the tor NetworkPolicy and the tor cron (ingress
+# admission + the signed export sync) all stay with _tor_node_selected. When tor is
+# here only for mesh control, /etc/hugmesh/tor/gateway-onion=off tells
+# hugmesh-tor-reconcile to render no fe-gateway onion at all.
+MESH_CONTROL_PACKAGES=(net-vpn/tor net-misc/socat)
+MESH_CONTROL_SERVICES=(tor hugmesh-tor-reconcile hugmesh-mesh-control)
+_mesh_control_selected() { ! ${ROLE_CLIENT} && [ "${MESH_CONTROL_TRANSPORT}" != lan ]; }
 
 # ── UNAFFILIATED plain desktop (composable: --unaffiliated onto any client/
 # standalone role, or the standalone-unaffiliated role arm above). Runs BEFORE
@@ -1842,6 +1878,12 @@ if ${ROLE_CLIENT} && _opt_selected tor; then
     for _tor_s in ${OPTIONAL_SERVICES}; do [ "${_tor_s}" = tor ] || _tor_kept="${_tor_kept} ${_tor_s}"; done
     OPTIONAL_SERVICES="${_tor_kept# }"
     unset _tor_kept _tor_s
+fi
+# Mesh control over Tor on a CLIENT role: refused, not dropped — the flag was asked for
+# explicitly, and a desktop is not a cluster node (it has no relay to run).
+if ${ROLE_CLIENT} && [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
+    err "--mesh-control-transport ${MESH_CONTROL_TRANSPORT} is for cluster-node roles (pki backend frontend omnibus …); '${ROLE}' is a client role"
+    exit 1
 fi
 
 # ── Cluster-only optional services: CLIENT roles never carry them (#615) ──────────
@@ -2635,6 +2677,8 @@ if ${PRINT_PLAN}; then
     # will do, from the SAME predicate + arrays they call — `off`, or the packages and
     # runlevel services a tor-selected node image carries.
     _plan TOR_ONION          "$(_tor_node_selected && echo "on packages=${TOR_NODE_PACKAGES[*]} services=${TOR_NODE_SERVICES[*]}" || echo off)"
+    # Additive: the mesh control transport, from the SAME predicate + arrays the gates use.
+    _plan MESH_CONTROL       "$(_mesh_control_selected && echo "${MESH_CONTROL_TRANSPORT} packages=${MESH_CONTROL_PACKAGES[*]} services=${MESH_CONTROL_SERVICES[*]} gateway-onion=$(_tor_node_selected && echo on || echo off)${MESH_CONTROL_NAME:+ name=${MESH_CONTROL_NAME}}" || echo lan)"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
     _plan SSO_ISSUER         "$(${SKIP_SSO} && echo none || echo "${SSO_ISSUER:-https://id.${CLUSTER_DOMAIN}}")"
@@ -4374,6 +4418,11 @@ cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-export-sync"      "${SYSROOT}/usr/sbin/
 cp "${SHARED_SPECS}/usr/lib/hugmesh/tor-verify.sh"         "${SYSROOT}/usr/lib/hugmesh/tor-verify.sh"
 cp "${SHARED_SPECS}/etc/init.d/hugmesh-tor-reconcile"      "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile";      chmod +x "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/hugmesh-tor-reconcile"      "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile"
+# Mesh control over Tor (opt-in, docs/MESH-CONTROL-OVER-TOR.md): the TLS front / relay +
+# keeper agent and its supervised OpenRC service. Baked inert; linked only by
+# _mesh_control_selected and started only when keys-provision writes its conf.
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-mesh-control"         "${SYSROOT}/usr/sbin/hugmesh-mesh-control";         chmod +x "${SYSROOT}/usr/sbin/hugmesh-mesh-control"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-mesh-control"       "${SYSROOT}/etc/init.d/hugmesh-mesh-control";       chmod +x "${SYSROOT}/etc/init.d/hugmesh-mesh-control"
 mkdir -p "${SYSROOT}/usr/share/hugmesh/generator/scripts" "${SYSROOT}/usr/share/hugmesh/generator/templates"
 cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"  "${SYSROOT}/usr/share/hugmesh/generator/scripts/gen-keystores.sh";  chmod +x "${SYSROOT}/usr/share/hugmesh/generator/scripts/gen-keystores.sh"
 cp "${SCRIPT_DIR}/generate-brand-repos.sh"   "${SYSROOT}/usr/share/hugmesh/generator/generate-brand-repos.sh";   chmod +x "${SYSROOT}/usr/share/hugmesh/generator/generate-brand-repos.sh"
@@ -4973,6 +5022,20 @@ if [ "${HEADSCALE_PUBLIC_DERP}" = true ]; then
 else
     rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
 fi
+# Mesh control over Tor (opt-in): the transport + name keys-provision falls back to when
+# the KEYS stick does not say; gateway-onion=off when tor is here ONLY for mesh control.
+if _mesh_control_selected; then
+    mkdir -p "${SYSROOT}/etc/hugmesh/tor"
+    echo "${MESH_CONTROL_TRANSPORT}" > "${SYSROOT}/etc/hugmesh/mesh-control-transport"
+    if [ -n "${MESH_CONTROL_NAME}" ]; then echo "${MESH_CONTROL_NAME}" > "${SYSROOT}/etc/hugmesh/mesh-control-name"
+    else rm -f "${SYSROOT}/etc/hugmesh/mesh-control-name"; fi
+    if _tor_node_selected; then rm -f "${SYSROOT}/etc/hugmesh/tor/gateway-onion"
+    else echo off > "${SYSROOT}/etc/hugmesh/tor/gateway-onion"; fi
+    info "Baked MESH_CONTROL_TRANSPORT=${MESH_CONTROL_TRANSPORT} -> /etc/hugmesh/mesh-control-transport$(_tor_node_selected || printf ' (gateway onion off: tor runs for mesh control only)')"
+else
+    rm -f "${SYSROOT}/etc/hugmesh/mesh-control-transport" "${SYSROOT}/etc/hugmesh/mesh-control-name" \
+          "${SYSROOT}/etc/hugmesh/tor/gateway-onion"
+fi
 # Mesh secrets store (#224): the Vault connection facts keys-provision seeds ESO
 # from when the KEYS manifest has no .vault block. "" = byte no-op; client = warn.
 bake_vault_conf
@@ -5311,7 +5374,19 @@ if _tor_node_selected; then
         info "OPTIONAL_SERVICES: tor selected — linked ${TOR_NODE_SERVICES[*]} + @reboot/24h cron (reconcile converges the running daemon; v3 onion keypair off-git, minted first-boot)"
     fi
 fi
+# Mesh control over Tor (opt-in): tor + its reconcile + hugmesh-mesh-control. NOT the
+# tor cron above (fe-gateway ingress admission + the signed export sync are tor-selected
+# only); the reconcile runs at boot, and keys-provision runs it on first boot.
+if _mesh_control_selected; then
+    for _mc_s in "${MESH_CONTROL_SERVICES[@]}"; do
+        case " ${SVCS[*]} " in *" ${_mc_s} "*) ;; *) SVCS+=("${_mc_s}") ;; esac
+    done
+    unset _mc_s
+    info "MESH_CONTROL_TRANSPORT=${MESH_CONTROL_TRANSPORT} — linked ${MESH_CONTROL_SERVICES[*]}"
+fi
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
+# A shared / --resume sysroot may carry a mesh-control link from an earlier opted-in run.
+_mesh_control_selected || rm -f "${SYSROOT}/etc/runlevels/default/hugmesh-mesh-control"
 # Belt-and-suspenders for shared / --resume sysroots: `ln -sf` only ADDS, so a prior
 # role's run can leave a headscale runlevel symlink behind that a worker/client image
 # would background-start. Remove it unless THIS role runs the control server. (Same
@@ -5790,6 +5865,8 @@ fi
 # not carry it. net-vpn/tor inherits USE=selinux from a SELinux node profile, giving the
 # upstream tor_t confinement the reconcile agent's hugmesh_tor.te references.
 _tor_node_selected && PKGS="${PKGS} ${TOR_NODE_PACKAGES[*]}" && info "Tor NODE service: ${TOR_NODE_PACKAGES[*]} for the v3 hidden service (fe-gateway onion; keypair off-git, minted first-boot)"
+# Mesh control over Tor (opt-in): the tor client + socat the relay / TLS front run on.
+_mesh_control_selected && PKGS="${PKGS} ${MESH_CONTROL_PACKAGES[*]}" && info "Mesh control over Tor (${MESH_CONTROL_TRANSPORT}): ${MESH_CONTROL_PACKAGES[*]}"
 # Network/host security stack: Squid+Privoxy (desktops), Snort (all), AIDE (opt-in).
 # WANT_PROXY_STACK was resolved at the SVCS step above.
 ${WANT_PROXY_STACK} && PKGS="${PKGS} net-proxy/squid net-proxy/privoxy" && info "Proxy stack: Squid + Privoxy (Firefox wired to 127.0.0.1:8118 -> :3128)"

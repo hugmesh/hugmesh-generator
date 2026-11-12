@@ -279,6 +279,13 @@ HEADSCALE_VERSION="0.23.0"
 # offline (docs/HEADSCALE-DERP.md). --headscale-public-derp or env/brand.conf
 # HEADSCALE_PUBLIC_DERP=true bakes /etc/hugmesh/headscale-public-derp.
 HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
+# Opt-in: how nodes reach headscale before go-live (docs/MESH-CONTROL-OVER-TOR.md).
+# lan (default) changes nothing. lan+onion / onion add tor + socat and the
+# hugmesh-mesh-control agent, so every node dials one stable control name that its
+# own relay answers (the pki's LAN front, else the pki's control onion over Tor).
+# --mesh-control-transport / env/brand.conf MESH_CONTROL_TRANSPORT.
+MESH_CONTROL_TRANSPORT="${MESH_CONTROL_TRANSPORT:-lan}"
+MESH_CONTROL_NAME="${MESH_CONTROL_NAME:-}"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
@@ -372,6 +379,8 @@ OPTIONS
     --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
     --headscale-public-derp  Also list Tailscale's public DERP map (default: the
                             embedded relay only — offline-first, docs/HEADSCALE-DERP.md).
+    --mesh-control-transport lan  Only lan here (this board carries no tor/relay;
+                            docs/MESH-CONTROL-OVER-TOR.md). --mesh-control-name NAME is parsed too.
     --with-tailscale      Keep the tailnet client on a --standalone desktop (dropped
                           by default) so the greeter SSO can reach an IdP over a
                           tailnet; the image stays standalone (ungoverned).
@@ -527,6 +536,8 @@ while [[ $# -gt 0 ]]; do
         --packages-drop)      PACKAGES_DROP="$2";         shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";     shift 2 ;;
         --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
+        --mesh-control-transport) MESH_CONTROL_TRANSPORT="$2"; shift 2 ;;
+        --mesh-control-name) MESH_CONTROL_NAME="$2"; shift 2 ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";     shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;      shift   ;;
@@ -563,6 +574,21 @@ case "${HEADSCALE_PUBLIC_DERP}" in
     false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
     *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
 esac
+# --mesh-control-transport / --mesh-control-name: one spelling, checked before any work.
+case "${MESH_CONTROL_TRANSPORT}" in
+    lan|lan+onion|onion) ;;
+    "") MESH_CONTROL_TRANSPORT=lan ;;
+    *) err "--mesh-control-transport must be lan, lan+onion or onion (got '${MESH_CONTROL_TRANSPORT}')"; exit 1 ;;
+esac
+if [ -n "${MESH_CONTROL_NAME}" ] && ! [[ "${MESH_CONTROL_NAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]; then
+    err "--mesh-control-name '${MESH_CONTROL_NAME}' is not a lower-case hostname"; exit 1
+fi
+# This board's images carry neither tor nor the mesh-control relay (it refuses the tor
+# slug for the same reason), so only the default transport is buildable here.
+if [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
+    err "--mesh-control-transport ${MESH_CONTROL_TRANSPORT}: this board's images carry no tor, socat or hugmesh-mesh-control relay — only lan is supported here (x86 and rpi5 build the Tor transports; docs/MESH-CONTROL-OVER-TOR.md)"
+    exit 1
+fi
 
 # Default work directory: ./out under CWD (local + gitignored)
 [ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/out"

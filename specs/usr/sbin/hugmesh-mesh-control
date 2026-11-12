@@ -1,0 +1,265 @@
+#!/bin/bash
+# hugmesh-mesh-control — reach the mesh control plane over the LAN, else over Tor.
+#
+# OPT-IN and DEFAULT-OFF (docs/MESH-CONTROL-OVER-TOR.md). A mesh whose KEYS / build
+# chose `.mesh.control_transport` lan+onion or onion runs this on EVERY node; the
+# default `lan` never writes the config file below, so this agent stays inert and
+# nothing about the node changes.
+#
+# THE MODEL. Every node dials ONE stable control name, https://<control_name>:<port>
+# (default hs.<superdomain>:7443), and that name resolves to a node-local address
+# through a managed /etc/hosts block keys-provision writes:
+#
+#   ROLE=front  the headscale (pki) node. A TLS front for headscale's plain HTTP
+#               listener, signed by the mesh CA with SANs <control_name> and the
+#               control onion. lan+onion binds every address on <port> (the LAN leg
+#               the workers dial, and the loopback the control onion and this node's
+#               own clients use); onion binds 127.77.0.1 only. tor publishes the
+#               dedicated control onion (/var/lib/tor/hugmesh-control) to
+#               127.77.0.1:<port> — never the fe-gateway onion, whose pki gateway
+#               refuses anonymous tailscale clients on /ts2021 and /derp.
+#   ROLE=relay  every other node. A plain TCP relay on 127.77.0.1:<port> that picks
+#               an upstream PER CONNECTION: the pki's LAN front when the background
+#               probe last found it answering (lan+onion only), else the control onion
+#               through the node's own tor SocksPort on ONE fixed SOCKS user, so every
+#               connection shares one warm rendezvous circuit.
+#
+# headscale's server_url is that same https URL, so the embedded DERP region's host is
+# the control name too: DERP rides the relay exactly like control, and tailscaled needs
+# NO proxy variables (keys-provision sets only TS_FORCE_NOISE_443=true for it).
+#
+# WHY THESE SHAPES (measured on the real Tor network with the pinned headscale 0.23.0
+# and tailscale 1.78.1; the numbers are in the doc):
+#   * a fresh Tor circuit per connection missed tailscaled's ~5 s TLS budget (one
+#     client never joined in 150 s) — hence one isolation user for every connection;
+#   * after tor lost and regained the network, a relay with no keeper livelocked for
+#     over 253 s; a keeper opening a stream every 20 s on the SAME isolation brought
+#     the client back 24 s after it started — hence the keeper below;
+#   * 3 of 23 proxy-mode joins stalled on a rendezvous circuit tor believed alive;
+#     SIGNAL NEWNYM cleared one. The keeper sends NEWNYM after KEEPER_FAILS failures
+#     in a row. That recovery path is the least proven piece (see the doc).
+#   * the port is NOT 443: ingress-nginx binds the wildcard :443 (and its admission
+#     webhook :8443) with hostNetwork on the pki node (internal release state) and the
+#     backend node (public), and Linux refuses a 127.77.0.1:443 bind beside a wildcard
+#     :443 listener (EADDRINUSE, measured). 7443 is used by nothing in this repo.
+#
+# PRIVILEGE. The OpenRC service runs this as root because the keeper reads tor's
+# control cookie. The socat listeners load the TLS key as root, then every accepted
+# connection is handled by a child that has switched to `nobody` (socat su-d=, measured:
+# root listener, `nobody` per-connection children, TLS handshake done in the child).
+#
+# SUBCOMMANDS
+#   run          the supervised daemon (OpenRC hugmesh-mesh-control, supervise-daemon)
+#   upstream     one relay connection on stdio (socat EXEC child; not for humans)
+#   probe        one LAN probe, updating the cached verdict the relay reads
+#   newnym       ask the local tor for fresh circuits (cookie auth on its ControlSocket)
+#   status       the parsed config and the cached state
+#
+# CONFIG /etc/hugmesh/mesh-control/conf (written by keys-provision, strict KEY=VALUE,
+# every value validated here; a bad file makes every subcommand refuse):
+#   ROLE=front|relay  TRANSPORT=lan+onion|onion  NAME=<host>  PORT=<1-65535>
+#   LAN=<ipv4|host>:<port> (relay, lan+onion)    ONION=<56 base32>.onion (relay)
+#   BACKEND=127.0.0.1:<port> (front: headscale's own listener)
+#
+# TEST SEAM: HUGMESH_MC_ROOT prefixes every filesystem path (empty on a node);
+# tests/scripts/test-mesh-control-onion.sh points it at a sandbox and stubs socat.
+set -uo pipefail
+
+R="${HUGMESH_MC_ROOT:-}"
+CONF="${R}/etc/hugmesh/mesh-control/conf"
+TLS_CRT="${R}/etc/hugmesh/mesh-control/tls.crt"
+TLS_KEY="${R}/etc/hugmesh/mesh-control/tls.key"
+STATE="${R}/run/hugmesh/mesh-control"
+LAN_OK="${STATE}/lan-ok"
+KEEPER_OK="${STATE}/onion-ok"
+LOG="${R}/var/log/hugmesh-mesh-control.log"
+LOOPBACK="127.77.0.1"
+SOCKS_HOST="127.0.0.1"
+SOCKS_PORT="9050"
+SOCKS_USER="hugmesh-mesh-control"       # the ONE isolation every relay connection shares
+TOR_CONTROL="${R}/var/lib/tor/control/control"            # tor refuses a ControlSocket in the distro 0755 /run/tor (measured)
+TOR_COOKIE="${R}/var/lib/tor/control/control.authcookie"
+DROP_USER="${HUGMESH_MC_DROP_USER:-nobody}"
+PROBE_EVERY="${HUGMESH_MC_PROBE_EVERY:-5}"       # seconds between LAN probes
+KEEPER_EVERY="${HUGMESH_MC_KEEPER_EVERY:-20}"    # seconds between keeper streams (measured value)
+KEEPER_TIMEOUT="${HUGMESH_MC_KEEPER_TIMEOUT:-25}"
+KEEPER_FAILS="${HUGMESH_MC_KEEPER_FAILS:-3}"     # consecutive failures before NEWNYM
+SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+
+log() { printf '[hugmesh-mesh-control %s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >>"${LOG}" 2>/dev/null || true; }
+die() { log "ERROR: $*"; echo "hugmesh-mesh-control: $*" >&2; exit 1; }
+
+_HOST_RE='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+_ONION_RE='^[a-z2-7]{56}\.onion$'
+_HOSTPORT_RE='^([0-9]{1,3}(\.[0-9]{1,3}){3}|[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?):([0-9]{1,5})$'
+
+_port_ok() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+
+# Parse + validate the config. Bash builtins only (no grep: a NUL byte cannot make a
+# check fail open, and busybox behaves like GNU here).
+ROLE="" TRANSPORT="" NAME="" PORT="" LAN="" ONION="" BACKEND="" CONF_ERR=""
+load_conf() {
+    [ -r "${CONF}" ] || { CONF_ERR="no ${CONF#"${R}"} (mesh control over Tor is not configured on this node)"; return 1; }
+    local line k v
+    while IFS= read -r line || [ -n "${line}" ]; do
+        case "${line}" in ''|'#'*) continue ;; esac
+        [[ "${line}" =~ ^([A-Z]+)=(.*)$ ]] || { CONF_ERR="malformed line in ${CONF#"${R}"}: ${line}"; return 1; }
+        k="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
+        case "${k}" in
+            ROLE) ROLE="${v}" ;; TRANSPORT) TRANSPORT="${v}" ;; NAME) NAME="${v}" ;;
+            PORT) PORT="${v}" ;; LAN) LAN="${v}" ;; ONION) ONION="${v}" ;; BACKEND) BACKEND="${v}" ;;
+            *) CONF_ERR="unknown key ${k} in ${CONF#"${R}"}"; return 1 ;;
+        esac
+    done < "${CONF}"
+    case "${ROLE}" in front|relay) ;; *) CONF_ERR="ROLE must be front or relay (got '${ROLE}')"; return 1 ;; esac
+    case "${TRANSPORT}" in lan+onion|onion) ;; *) CONF_ERR="TRANSPORT must be lan+onion or onion (got '${TRANSPORT}')"; return 1 ;; esac
+    [[ "${NAME}" =~ ${_HOST_RE} ]] || { CONF_ERR="NAME is not a hostname: '${NAME}'"; return 1; }
+    _port_ok "${PORT}" || { CONF_ERR="PORT is not a port number: '${PORT}'"; return 1; }
+    if [ -n "${LAN}" ]; then
+        [[ "${LAN}" =~ ${_HOSTPORT_RE} ]] && _port_ok "${BASH_REMATCH[4]}" \
+            || { CONF_ERR="LAN is not host:port: '${LAN}'"; return 1; }
+    fi
+    if [ -n "${ONION}" ]; then
+        [[ "${ONION}" =~ ${_ONION_RE} ]] || { CONF_ERR="ONION is not a v3 onion hostname: '${ONION}'"; return 1; }
+    fi
+    if [ "${ROLE}" = relay ]; then
+        [ -n "${ONION}" ] || { CONF_ERR="a relay needs ONION (the control onion address)"; return 1; }
+        [ "${TRANSPORT}" = onion ] && LAN=""      # onion-only never takes the LAN leg
+    else
+        [[ "${BACKEND}" =~ ^127\.0\.0\.1:([0-9]{1,5})$ ]] && _port_ok "${BASH_REMATCH[1]}" \
+            || { CONF_ERR="a front needs BACKEND=127.0.0.1:<port> (headscale's own listener), got '${BACKEND}'"; return 1; }
+    fi
+    return 0
+}
+
+# One SOCKS4A stream to the control onion on the shared isolation, stdin/stdout piped.
+_onion_addr() { printf 'SOCKS4A:%s:%s:%s,socksport=%s,socksuser=%s' \
+    "${SOCKS_HOST}" "${ONION}" "${PORT}" "${SOCKS_PORT}" "${SOCKS_USER}"; }
+
+cmd_upstream() {
+    load_conf || { log "upstream refused: ${CONF_ERR}"; exit 1; }
+    # LAN first, from the CACHED verdict (no inline probe: a dead LAN would cost every
+    # connection the probe timeout inside tailscaled's ~5 s TLS budget).
+    if [ "${TRANSPORT}" = "lan+onion" ] && [ -n "${LAN}" ] && [ -e "${LAN_OK}" ]; then
+        exec socat STDIO "TCP:${LAN},connect-timeout=3"
+    fi
+    exec socat STDIO "$(_onion_addr)"
+}
+
+# One LAN probe: a plain TCP connect to the pki front within 2 s. Writes or removes
+# the verdict the relay reads; prints up|down. Not run for onion-only.
+cmd_probe() {
+    load_conf || die "${CONF_ERR}"
+    mkdir -p "${STATE}" 2>/dev/null || true
+    if [ "${ROLE}" != relay ] || [ "${TRANSPORT}" != "lan+onion" ] || [ -z "${LAN}" ]; then
+        rm -f "${LAN_OK}"; echo "n/a"; return 0
+    fi
+    if timeout 3 socat /dev/null "TCP:${LAN},connect-timeout=2" >/dev/null 2>&1; then
+        if [ ! -e "${LAN_OK}" ]; then log "LAN front ${LAN} answers — new connections take the LAN"; fi
+        : > "${LAN_OK}"; echo up
+    else
+        if [ -e "${LAN_OK}" ]; then log "LAN front ${LAN} stopped answering — new connections take the onion"; fi
+        rm -f "${LAN_OK}"; echo down
+    fi
+}
+
+# SIGNAL NEWNYM over tor's ControlSocket with cookie auth (the torrc
+# hugmesh-tor-reconcile renders for mesh control declares both).
+cmd_newnym() {
+    [ -S "${TOR_CONTROL}" ] || { log "NEWNYM skipped: no tor ControlSocket at ${TOR_CONTROL#"${R}"}"; return 1; }
+    [ -r "${TOR_COOKIE}" ] || { log "NEWNYM skipped: cannot read ${TOR_COOKIE#"${R}"}"; return 1; }
+    local hex out
+    hex="$(od -An -v -tx1 "${TOR_COOKIE}" 2>/dev/null | tr -d ' \n')"
+    [[ "${hex}" =~ ^[0-9a-f]{64}$ ]] || { log "NEWNYM skipped: the control cookie is not 32 bytes"; return 1; }
+    out="$(printf 'AUTHENTICATE %s\r\nSIGNAL NEWNYM\r\nQUIT\r\n' "${hex}" \
+        | timeout 10 socat -t 5 - "UNIX-CONNECT:${TOR_CONTROL}" 2>/dev/null)"
+    # Two "250 OK" lines: one for AUTHENTICATE, one for SIGNAL (QUIT's "250 closing").
+    local oks=0 l
+    while IFS= read -r l; do case "${l}" in "250 OK"*) oks=$((oks + 1)) ;; esac; done <<<"${out}"
+    if [ "${oks}" -ge 2 ]; then log "sent SIGNAL NEWNYM to tor"; return 0; fi
+    log "NEWNYM refused by tor: $(printf '%s' "${out}" | tr '\r\n' '  ' | cut -c1-160)"
+    return 1
+}
+
+# The keeper: a stream to the control onion every KEEPER_EVERY seconds on the relay's
+# own isolation, so a tailscaled connection never waits for a cold circuit; NEWNYM
+# after KEEPER_FAILS failures in a row (then the count starts over).
+_keeper_loop() {
+    local fails=0 t0 dt
+    while :; do
+        t0="$(date +%s)"
+        if timeout "${KEEPER_TIMEOUT}" socat /dev/null "$(_onion_addr)" >/dev/null 2>&1; then
+            dt=$(( $(date +%s) - t0 ))
+            if [ "${fails}" -gt 0 ] || [ ! -e "${KEEPER_OK}" ]; then log "keeper: control onion answers (${dt}s)"; fi
+            fails=0; : > "${KEEPER_OK}"
+        else
+            fails=$((fails + 1)); rm -f "${KEEPER_OK}"
+            log "keeper: control onion did not answer (${fails} in a row)"
+            if [ "${fails}" -ge "${KEEPER_FAILS}" ]; then
+                cmd_newnym || true
+                fails=0
+            fi
+        fi
+        sleep "${KEEPER_EVERY}"
+    done
+}
+
+_probe_loop() {
+    while :; do
+        cmd_probe >/dev/null 2>&1 || true
+        sleep "${PROBE_EVERY}"
+    done
+}
+
+cmd_run() {
+    load_conf || die "${CONF_ERR}"
+    mkdir -p "${STATE}" 2>/dev/null || true
+    rm -f "${LAN_OK}" "${KEEPER_OK}"
+    if [ "${ROLE}" = front ]; then
+        [ -r "${TLS_CRT}" ] && [ -r "${TLS_KEY}" ] \
+            || die "front: ${TLS_CRT#"${R}"} / ${TLS_KEY#"${R}"} missing (gen-provision-keys --mesh-control-transport writes them to the pki stick)"
+        local bind=""
+        [ "${TRANSPORT}" = onion ] && bind=",bind=${LOOPBACK}"
+        log "front: TLS ${NAME}:${PORT}${bind:+ on ${LOOPBACK} only} -> headscale ${BACKEND}"
+        exec socat "OPENSSL-LISTEN:${PORT}${bind},reuseaddr,fork,cert=${TLS_CRT},key=${TLS_KEY},verify=0,su-d=${DROP_USER}" \
+            "TCP:${BACKEND},connect-timeout=5"
+    fi
+    # relay: one synchronous probe first so the very first connection already knows
+    # whether the LAN answers, then the probe + keeper loops beside the listener.
+    cmd_probe >/dev/null 2>&1 || true
+    local pids=()
+    trap 'kill "${pids[@]}" 2>/dev/null; exit 0' TERM INT
+    if [ "${TRANSPORT}" = "lan+onion" ] && [ -n "${LAN}" ]; then
+        _probe_loop & pids+=($!)
+    fi
+    _keeper_loop & pids+=($!)
+    log "relay: ${LOOPBACK}:${PORT} for ${NAME} -> $([ "${TRANSPORT}" = "lan+onion" ] && [ -n "${LAN}" ] && echo "LAN ${LAN} when it answers, else ")onion ${ONION:0:8}…:${PORT} via tor ${SOCKS_HOST}:${SOCKS_PORT}"
+    socat "TCP-LISTEN:${PORT},bind=${LOOPBACK},reuseaddr,fork,su-d=${DROP_USER}" "EXEC:${SELF} upstream" &
+    pids+=($!)
+    local listener=$!
+    wait "${listener}"
+    local rc=$?
+    kill "${pids[@]}" 2>/dev/null
+    log "relay listener exited (${rc}) — the supervisor restarts it"
+    exit "${rc}"
+}
+
+cmd_status() {
+    if ! load_conf; then echo "${CONF_ERR}"; return 1; fi
+    echo "role=${ROLE} transport=${TRANSPORT} name=${NAME} port=${PORT}"
+    if [ "${ROLE}" = relay ]; then
+        echo "lan=${LAN:-none} lan_answers=$([ -e "${LAN_OK}" ] && echo yes || echo no)"
+        echo "onion=${ONION} keeper_ok=$([ -e "${KEEPER_OK}" ] && echo yes || echo no)"
+    else
+        echo "backend=${BACKEND}"
+    fi
+}
+
+case "${1:-}" in
+    run)      cmd_run ;;
+    upstream) cmd_upstream ;;
+    probe)    cmd_probe ;;
+    newnym)   cmd_newnym ;;
+    status)   cmd_status ;;
+    *) echo "usage: $(basename "$0") run|upstream|probe|newnym|status" >&2; exit 2 ;;
+esac

@@ -1,0 +1,38 @@
+#!/sbin/openrc-run
+
+description="Mesh control plane over the LAN, else Tor: headscale's TLS front (pki) or the node-local relay + keeper (every other node)"
+
+# OPT-IN, DEFAULT-OFF (docs/MESH-CONTROL-OVER-TOR.md). Linked into the default
+# runlevel only on images built with --mesh-control-transport lan+onion|onion, and
+# started by keys-provision only when /etc/hugmesh/mesh-control/conf exists (the KEYS
+# stick or the bake chose a Tor transport). With no conf the service refuses to start,
+# so a stray link changes nothing.
+#
+# supervise-daemon restarts the agent if it exits (a listener that died, a tor that
+# was restarted underneath the relay). The agent itself runs as root only to read
+# tor's control cookie for SIGNAL NEWNYM; every accepted connection is handled by a
+# socat child running as `nobody`.
+
+command="/usr/sbin/hugmesh-mesh-control"
+command_args="run"
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=0
+output_log="/var/log/hugmesh-mesh-control.out"
+error_log="/var/log/hugmesh-mesh-control.out"
+
+depend() {
+    need net
+    use dns logger tor
+    # keys-provision writes the conf, the TLS material and the /etc/hosts block first;
+    # tor (when this node uses the onion) brings up the SocksPort the relay dials.
+    after keys-provision tor
+}
+
+start_pre() {
+    [ -r /etc/hugmesh/mesh-control/conf ] || {
+        eerror "no /etc/hugmesh/mesh-control/conf: mesh control over Tor is not configured on this node"
+        return 1
+    }
+    checkpath -d -m 0755 /run/hugmesh/mesh-control
+}

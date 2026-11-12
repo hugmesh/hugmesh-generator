@@ -129,6 +129,25 @@ SUPERDOMAIN="${SUPERDOMAIN:-}"
 # env/brand.conf < CLI flag.
 HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 
+# ── Mesh control over Tor (OPT-IN; default lan = unchanged) ────────────────────
+# docs/MESH-CONTROL-OVER-TOR.md. lan+onion / onion make every node dial one stable
+# control name (https://<name>:7443) that a node-local relay answers: the pki's LAN
+# front when it answers, else the pki's DEDICATED control onion through the node's
+# own tor. A worker can only know that onion before its first boot if the onion's
+# key is minted HERE, on the build host, onto the pki stick — which relaxes the
+# in-situ custody rule the fe-gateway onion keeps (minted on the node, never leaves
+# it). So the pki run needs the explicit consent flag --mesh-control-onion-mint.
+# Worker runs take the onion ADDRESS (never the key) and the CA certificate from the
+# pki's output with --mesh-control-from <pki KEYS dir>, or --mesh-control-onion.
+# Precedence: built-in (lan) < env/brand.conf < CLI flag.
+MESH_CONTROL_TRANSPORT="${MESH_CONTROL_TRANSPORT:-}"
+MESH_CONTROL_NAME="${MESH_CONTROL_NAME:-}"
+MESH_CONTROL_LAN="${MESH_CONTROL_LAN:-}"
+MESH_CONTROL_ONION="${MESH_CONTROL_ONION:-}"
+MESH_CONTROL_FROM="${MESH_CONTROL_FROM:-}"
+MESH_CONTROL_ONION_MINT=false
+MESH_CONTROL_PORT=7443
+
 # ── In-UI SSH-terminal key model: per-device sshd HOST + BFF DIAL keypairs ──────
 # The in-UI SSH terminal lets the BFF dial a device over the tailnet to drive an
 # operator console. That needs TWO per-device keypairs minted here, off-image-build:
@@ -261,6 +280,23 @@ Options:
                       node's headscale (provision.json .headscale.public_derp=true).
                       Default OFF: headscale's embedded relay only, so the mesh starts
                       and relays offline. (env/brand.conf: HEADSCALE_PUBLIC_DERP=true)
+      --mesh-control-transport lan|lan+onion|onion
+                      How nodes reach headscale before go-live (docs/MESH-CONTROL-OVER-TOR.md).
+                      Default lan: unchanged. lan+onion: the pki's LAN front, else its
+                      control onion over Tor; onion: Tor only. Needs images built with
+                      the same --mesh-control-transport (tor + socat on every node).
+                      (env/brand.conf: MESH_CONTROL_TRANSPORT)
+      --mesh-control-name NAME  The control name every node dials (default
+                      hs.<superdomain label>-control.internal; must NOT contain the
+                      superdomain: headscale 0.23 refuses a server_url that does).
+      --mesh-control-lan HOST[:PORT]  The pki's LAN address for lan+onion (default:
+                      the pki entry of .nodes[]; use a static IP or DHCP reservation).
+      --mesh-control-onion-mint  pki only, REQUIRED for lan+onion/onion: CONSENT to
+                      mint the control onion's key on THIS host, onto the pki stick
+                      (mesh-control/onion/). It never goes on a worker stick.
+      --mesh-control-from DIR  worker: take the control onion ADDRESS, LAN address,
+                      control name and certs/cluster-ca.crt from the pki's KEYS dir.
+      --mesh-control-onion HOST  worker: the control onion address, given directly.
   -h, --help          Show this help.
 
   Mail/OAuth creds are OPTIONAL and ABSENT BY DEFAULT. NONINTERACTIVE=1 (or
@@ -296,6 +332,12 @@ while [[ $# -gt 0 ]]; do
         --vpn-domain)  VPN_DOMAIN="$2"; shift 2 ;;            # egress-VPN: the node's own brand domain
         --foreign-mesh-trust) FOREIGN_MESH_TRUST_SRC="$2"; shift 2 ;;  # Phase 7: foreign-mesh PUBLIC verifying keys to stage
         --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;  # ALSO list the public Tailscale DERP map (default: embedded relay only)
+        --mesh-control-transport) MESH_CONTROL_TRANSPORT="$2"; shift 2 ;;  # lan (default) | lan+onion | onion
+        --mesh-control-name)  MESH_CONTROL_NAME="$2"; shift 2 ;;
+        --mesh-control-lan)   MESH_CONTROL_LAN="$2"; shift 2 ;;
+        --mesh-control-onion-mint) MESH_CONTROL_ONION_MINT=true; shift ;;  # pki: consent to mint the control onion key here
+        --mesh-control-from)  MESH_CONTROL_FROM="$2"; shift 2 ;;
+        --mesh-control-onion) MESH_CONTROL_ONION="$2"; shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;          # mesh MagicDNS base_domain (permanently internal); default <BRAND>.internal
         --device-id)   DEVICE_ID="$2"; shift 2 ;;            # in-UI SSH terminal: per-device Vault-seed path segment
         --dial-user)   DIAL_USER="$2"; shift 2 ;;            # in-UI SSH terminal: unprivileged login the BFF dials as
@@ -400,6 +442,40 @@ case "${ROLE}" in
             ROLE="${_kp}"
         fi ;;
 esac
+
+# ── Mesh control over Tor: refuse a half-specified opt-in BEFORE anything is built ──
+case "${MESH_CONTROL_TRANSPORT}" in
+    ""|lan) MESH_CONTROL_TRANSPORT=lan ;;
+    lan+onion|onion) : ;;
+    *) echo "ERROR: --mesh-control-transport must be lan, lan+onion or onion (got '${MESH_CONTROL_TRANSPORT}')" >&2; exit 1 ;;
+esac
+if [ "${MESH_CONTROL_TRANSPORT}" = lan ]; then
+    for _v in MESH_CONTROL_NAME MESH_CONTROL_LAN MESH_CONTROL_ONION MESH_CONTROL_FROM; do
+        [ -z "${!_v}" ] || { echo "ERROR: ${_v} is only used with --mesh-control-transport lan+onion or onion" >&2; exit 1; }
+    done
+    [ "${MESH_CONTROL_ONION_MINT}" = false ] \
+        || { echo "ERROR: --mesh-control-onion-mint is only used with --mesh-control-transport lan+onion or onion" >&2; exit 1; }
+else
+    if [ "${ROLE}" = pki ]; then
+        [ "${MESH_CONTROL_ONION_MINT}" = true ] || {
+            echo "ERROR: --mesh-control-transport ${MESH_CONTROL_TRANSPORT} on the pki stick needs --mesh-control-onion-mint:" >&2
+            echo "       the control onion's key must be minted NOW, on this host, so worker sticks can carry" >&2
+            echo "       its address before their first boot. That relaxes the in-situ custody the fe-gateway" >&2
+            echo "       onion keeps (its key is minted on the node and never leaves it); the flag is the consent." >&2
+            exit 1; }
+        [ -z "${MESH_CONTROL_FROM}${MESH_CONTROL_ONION}" ] \
+            || { echo "ERROR: --mesh-control-from/--mesh-control-onion are for worker sticks; the pki stick mints its own" >&2; exit 1; }
+    else
+        [ "${MESH_CONTROL_ONION_MINT}" = false ] \
+            || { echo "ERROR: --mesh-control-onion-mint is pki-only: a ${ROLE} stick never carries the control onion's key" >&2; exit 1; }
+        if [ -n "${MESH_CONTROL_FROM}" ] && [ ! -f "${MESH_CONTROL_FROM}/provision.json" ]; then
+            echo "ERROR: --mesh-control-from ${MESH_CONTROL_FROM} has no provision.json (point it at the pki stick's KEYS dir)" >&2; exit 1
+        fi
+    fi
+    if [ -n "${MESH_CONTROL_ONION}" ] && ! [[ "${MESH_CONTROL_ONION}" =~ ^[a-z2-7]{56}\.onion$ ]]; then
+        echo "ERROR: --mesh-control-onion '${MESH_CONTROL_ONION}' is not a v3 onion hostname" >&2; exit 1
+    fi
+fi
 echo "==> Building ${OUT_DIR} from ${TEMPLATE} (role=${ROLE})"
 rm -rf "${OUT_DIR}"
 cp -r "${TEMPLATE}" "${OUT_DIR}"
@@ -1205,10 +1281,121 @@ for _tc in "${TRUST_CERTS[@]}"; do
     echo "  certs/${_tn}.crt (trusted on this node)"
 done
 
+# ── Mesh control over Tor -> the KEYS bundle (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md) ──
+if [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
+    echo; echo "==> Mesh control over Tor: transport ${MESH_CONTROL_TRANSPORT}"
+    _mc_sd="${EFFECTIVE_SUPERDOMAIN}"
+    _mc_from_json() { [ -n "${MESH_CONTROL_FROM}" ] || return 0
+        python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1])).get("mesh",{}).get(sys.argv[2]) or ""; print(v)' \
+            "${MESH_CONTROL_FROM}/provision.json" "$1" 2>/dev/null; }
+    [ -n "${MESH_CONTROL_NAME}" ] || MESH_CONTROL_NAME="$(_mc_from_json control_name)"
+    [ -n "${MESH_CONTROL_NAME}" ] || MESH_CONTROL_NAME="hs.${_mc_sd%%.*}-control.internal"
+    MESH_CONTROL_NAME="$(printf '%s' "${MESH_CONTROL_NAME}" | tr '[:upper:]' '[:lower:]')"
+    [[ "${MESH_CONTROL_NAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
+        || { echo "ERROR: --mesh-control-name '${MESH_CONTROL_NAME}' is not a hostname" >&2; exit 1; }
+    case "${MESH_CONTROL_NAME}" in
+        *"${_mc_sd}"*) echo "ERROR: the control name '${MESH_CONTROL_NAME}' contains the superdomain '${_mc_sd}' — headscale 0.23 refuses a server_url that contains its MagicDNS base_domain (\"server_url cannot contain the base_domain\"); pick a name outside it" >&2; exit 1 ;;
+    esac
+    # LAN leg (lan+onion): the flag, else the pki dir's, else this manifest's pki .nodes[] ip.
+    _mc_lan=""
+    if [ "${MESH_CONTROL_TRANSPORT}" = "lan+onion" ]; then
+        _mc_lan="${MESH_CONTROL_LAN}"
+        [ -n "${_mc_lan}" ] || _mc_lan="$(_mc_from_json control_lan)"
+        [ -n "${_mc_lan}" ] || _mc_lan="$(python3 -I -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+print(next((n.get("ip","") for n in d.get("nodes",[]) if n.get("role")=="pki"),""))' "${PROV}" 2>/dev/null)"
+        [ -n "${_mc_lan}" ] || { echo "ERROR: lan+onion needs the pki's LAN address: --mesh-control-lan, or a role=pki entry in .nodes[]" >&2; exit 1; }
+        [[ "${_mc_lan}" == *:* ]] || _mc_lan="${_mc_lan}:${MESH_CONTROL_PORT}"
+        [[ "${_mc_lan}" =~ ^([0-9]{1,3}(\.[0-9]{1,3}){3}|[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?):[0-9]{1,5}$ ]] \
+            || { echo "ERROR: the pki LAN address '${_mc_lan}' is not host:port" >&2; exit 1; }
+        if [ "${_mc_lan%:*}" = "10.0.0.10" ]; then
+            echo "WARNING: the pki LAN address is still the template's EXAMPLE 10.0.0.10 — set the real one" >&2
+            echo "         (a static IP or a DHCP reservation) with --mesh-control-lan or in .nodes[]" >&2
+        fi
+    fi
+    _mc_onion=""
+    if [ "${ROLE}" = pki ]; then
+        # The control onion's key, minted here with openssl + python3 (no tor needed).
+        mkdir -p "${OUT_DIR}/mesh-control"
+        _mc_tmp="$(mktemp -d)"
+        ( umask 077; openssl genpkey -algorithm ed25519 -outform DER -out "${_mc_tmp}/k.der" 2>/dev/null ) \
+            && openssl pkey -inform DER -in "${_mc_tmp}/k.der" -pubout -outform DER -out "${_mc_tmp}/p.der" 2>/dev/null \
+            && _mc_onion="$(python3 -I "${SCRIPT_DIR}/onion-v3-key.py" "${_mc_tmp}/k.der" "${_mc_tmp}/p.der" "${OUT_DIR}/mesh-control/onion")"
+        rm -rf "${_mc_tmp}"
+        [[ "${_mc_onion}" =~ ^[a-z2-7]{56}\.onion$ ]] \
+            || { echo "ERROR: minting the control onion key failed (openssl with Ed25519 + python3 needed)" >&2; exit 1; }
+        echo "  mesh-control/onion/ (the control onion's KEYPAIR — pki stick only; minted with your consent)"
+        echo "  control onion: ${_mc_onion}"
+        # headscale's TLS: SANs <control name> + <control onion>, signed by the cluster CA.
+        _mc_ca_crt="${OUT_DIR}/certs/cluster-ca.crt"; _mc_ca_key="${OUT_DIR}/certs/cluster-ca.key"; _mc_pass=()
+        if [ ! -f "${_mc_ca_key}" ] && [ -n "${CA_KEY}" ]; then
+            _mc_ca_key="${CA_KEY}"
+            [ -z "${CA_KEY_PASS}" ] || { export CA_KEY_PASS; _mc_pass=(-passin env:CA_KEY_PASS); }
+        fi
+        [ -f "${_mc_ca_crt}" ] && [ -f "${_mc_ca_key}" ] \
+            || { echo "ERROR: no cluster CA to sign headscale's control certificate (certs/cluster-ca.{crt,key} after gen-keystores.sh)" >&2; exit 1; }
+        _mc_tmp="$(mktemp -d)"
+        printf 'subjectAltName=DNS:%s,DNS:%s\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature\nbasicConstraints=critical,CA:FALSE\n' \
+            "${MESH_CONTROL_NAME}" "${_mc_onion}" > "${_mc_tmp}/ext"
+        ( umask 077; openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "${OUT_DIR}/mesh-control/tls.key" 2>/dev/null ) \
+            && openssl req -new -key "${OUT_DIR}/mesh-control/tls.key" -subj "/CN=${MESH_CONTROL_NAME}" -out "${_mc_tmp}/csr" 2>/dev/null \
+            && openssl x509 -req -in "${_mc_tmp}/csr" -CA "${_mc_ca_crt}" -CAkey "${_mc_ca_key}" "${_mc_pass[@]}" \
+                   -CAcreateserial -CAserial "${_mc_tmp}/serial" -days 825 -sha256 -extfile "${_mc_tmp}/ext" \
+                   -out "${OUT_DIR}/mesh-control/tls.crt" 2>/dev/null \
+            || { rm -rf "${_mc_tmp}"; echo "ERROR: signing headscale's control certificate failed" >&2; exit 1; }
+        rm -rf "${_mc_tmp}"
+        chmod 0600 "${OUT_DIR}/mesh-control/tls.key"
+        openssl verify -CAfile "${_mc_ca_crt}" "${OUT_DIR}/mesh-control/tls.crt" >/dev/null 2>&1 \
+            || { echo "ERROR: the control certificate does not verify against certs/cluster-ca.crt" >&2; exit 1; }
+        echo "  mesh-control/tls.{crt,key} (headscale's TLS front: ${MESH_CONTROL_NAME}, ${_mc_onion})"
+    else
+        _mc_onion="${MESH_CONTROL_ONION}"
+        [ -n "${_mc_onion}" ] || _mc_onion="$(_mc_from_json control_onion)"
+        [[ "${_mc_onion}" =~ ^[a-z2-7]{56}\.onion$ ]] \
+            || { echo "ERROR: a ${ROLE} stick needs the control onion ADDRESS: --mesh-control-from <pki KEYS dir> or --mesh-control-onion" >&2; exit 1; }
+        if [ ! -f "${OUT_DIR}/certs/cluster-ca.crt" ] && [ -n "${MESH_CONTROL_FROM}" ] && [ -f "${MESH_CONTROL_FROM}/certs/cluster-ca.crt" ]; then
+            mkdir -p "${OUT_DIR}/certs"
+            openssl x509 -in "${MESH_CONTROL_FROM}/certs/cluster-ca.crt" -out "${OUT_DIR}/certs/cluster-ca.crt" 2>/dev/null \
+                || { echo "ERROR: ${MESH_CONTROL_FROM}/certs/cluster-ca.crt is not a PEM certificate" >&2; exit 1; }
+            echo "  certs/cluster-ca.crt (from ${MESH_CONTROL_FROM}: tailscaled verifies headscale's control certificate with it)"
+        fi
+        [ -f "${OUT_DIR}/certs/cluster-ca.crt" ] \
+            || { echo "ERROR: a ${ROLE} stick for ${MESH_CONTROL_TRANSPORT} needs certs/cluster-ca.crt (tailscaled verifies the control certificate against the system trust store): --ca-cert or --mesh-control-from" >&2; exit 1; }
+    fi
+    MC_T="${MESH_CONTROL_TRANSPORT}" MC_N="${MESH_CONTROL_NAME}" MC_P="${MESH_CONTROL_PORT}" MC_L="${_mc_lan}" MC_O="${_mc_onion}" \
+        python3 -I - "${PROV}" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+d = json.load(open(p))
+m = d.setdefault("mesh", {})
+m["control_transport"] = os.environ["MC_T"]
+m["control_name"] = os.environ["MC_N"]
+m["control_port"] = int(os.environ["MC_P"])
+m["control_onion"] = os.environ["MC_O"]
+if os.environ["MC_L"]:
+    m["control_lan"] = os.environ["MC_L"]
+else:
+    m.pop("control_lan", None)
+json.dump(d, open(p, "w"), indent=2)
+open(p, "a").write("\n")
+PY
+    echo "  -> ${PROV} (.mesh.control_transport/_name/_port/_onion${_mc_lan:+/_lan})"
+    echo "  every node dials https://${MESH_CONTROL_NAME}:${MESH_CONTROL_PORT}${_mc_lan:+ (LAN ${_mc_lan} first)}"
+    [ "${ROLE}" = pki ] && echo "  worker sticks: --mesh-control-transport ${MESH_CONTROL_TRANSPORT} --mesh-control-from ${OUT_DIR}"
+fi
+
 # ── Placement guard: only the pki stick may carry a CA private key ─────────────
 # certs/ and kubernetes/pki/ are copied onto the node (/etc/ssl/keys,
 # /etc/kubernetes/pki); a worker needs no private key in either.
 if [ "${ROLE}" != "pki" ]; then
+    # Mesh control over Tor: neither the control onion's key nor headscale's TLS key.
+    # (By NAME: an hs_ed25519_secret_key is raw bytes no `PRIVATE KEY-----` grep sees.)
+    for _f in mesh-control/onion/hs_ed25519_secret_key mesh-control/tls.key; do
+        if [ -e "${OUT_DIR}/${_f}" ]; then
+            echo "ERROR: ${_f} landed on a ${ROLE} stick; only the pki stick carries it" >&2
+            exit 1
+        fi
+    done
     for _d in certs kubernetes/pki; do
         [ -d "${OUT_DIR}/${_d}" ] || continue
         if grep -rla -- 'PRIVATE KEY-----' "${OUT_DIR}/${_d}" >/dev/null; then

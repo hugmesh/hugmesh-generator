@@ -172,10 +172,63 @@ if [ -r "${R}${DOMAINS_FILE}" ]; then
     done < "${R}${DOMAINS_FILE}"
 fi
 
+# ── Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md) ──────────────
+# Two more inputs, both ABSENT on every image that did not opt in, so the torrc
+# rendered below is then byte-for-byte what it was before they existed:
+#   /etc/hugmesh/tor/gateway-onion  "off": this tor runs ONLY for mesh control (the
+#       'tor' optional service was not selected). No fe-gateway onion is rendered,
+#       primary or per-domain, and their exports are withdrawn. The builders bake it.
+#   /etc/hugmesh/tor/mesh-control   "relay": a ControlSocket (cookie auth) so the
+#       relay's keeper can send SIGNAL NEWNYM. "front <host:port> <port>": that
+#       ControlSocket plus the DEDICATED control-plane onion (HiddenServiceDir
+#       /var/lib/tor/hugmesh-control; its key was minted onto the pki KEYS stick and
+#       staged here by keys-provision), publishing <port> -> headscale's TLS front.
+#       Never the fe-gateway onion: the pki gateway refuses anonymous tailscale
+#       clients on /ts2021 and /derp. keys-provision writes this file.
+# The control onion's hostname is NOT exported: the KEYS sticks already carry it, and
+# every *.hostname under the export dir is read as a Tor DOMAIN onion (by
+# hugmesh-tor-ingress-admit, and by the withdraw loop at the end of this agent).
+GATEWAY_FILE="/etc/hugmesh/tor/gateway-onion"
+MC_FILE="/etc/hugmesh/tor/mesh-control"
+HS_CONTROL_DIR="/var/lib/tor/hugmesh-control"
+# tor refuses a ControlSocket in a directory anyone but tor can list (the distro
+# /run/tor is 0755), so the socket and its cookie get their own 0700 directory.
+CONTROL_DIR="/var/lib/tor/control"
+_first_line() {  # FILE -> its first non-blank, non-comment line, trimmed
+    local _l
+    [ -r "$1" ] || return 1
+    while IFS= read -r _l || [ -n "${_l}" ]; do
+        _l="$(_trim "${_l}")"
+        case "${_l}" in ''|'#'*) continue ;; esac
+        printf '%s' "${_l}"
+        return 0
+    done < "$1"
+    return 1
+}
+GATEWAY=true
+if _g="$(_first_line "${R}${GATEWAY_FILE}")" && [ "${_g}" = "off" ]; then
+    GATEWAY=false
+    DOMAIN_SLUGS=()
+fi
+MC_MODE="" MC_UPSTREAM="" MC_PORT=""
+if _m="$(_first_line "${R}${MC_FILE}")"; then
+    _mu="" _mp=""
+    if [[ "${_m}" =~ ^front[[:space:]]+([^[:space:]]+)[[:space:]]+([0-9]{1,5})$ ]]; then
+        _mu="${BASH_REMATCH[1]}"; _mp="${BASH_REMATCH[2]}"
+    fi
+    if [ "${_m}" = "relay" ]; then
+        MC_MODE=relay
+    elif [ -n "${_mu}" ] && [[ "${_mu}" =~ ${_UPSTREAM_RE} ]] && [ "${_mp}" -ge 1 ] && [ "${_mp}" -le 65535 ]; then
+        MC_MODE=front; MC_UPSTREAM="${_mu}"; MC_PORT="${_mp}"
+    else
+        log "ignoring malformed ${MC_FILE} entry '${_m}' (want 'relay' or 'front <host:port> <port>') — no mesh-control stanza"
+    fi
+fi
+
 # Every onion this node serves has its hostname minted (tor writes it when it first
 # loads the HiddenServiceDir, seconds after it starts).
 _all_minted() {
-    [ -s "${R}${HS_DIR}/hostname" ] || return 1
+    if ${GATEWAY}; then [ -s "${R}${HS_DIR}/hostname" ] || return 1; fi
     local _s
     for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
         [ -s "${R}${HS_DOMAIN_ROOT}/${_s}/hostname" ] || return 1
@@ -191,7 +244,12 @@ _export() {  # SRC DEST LABEL
     fi
 }
 _export_all() {
-    _export "${R}${HS_DIR}/hostname" "${R}${EXPORT_DIR}/hostname" "primary"
+    if ${GATEWAY}; then
+        _export "${R}${HS_DIR}/hostname" "${R}${EXPORT_DIR}/hostname" "primary"
+    elif [ -e "${R}${EXPORT_DIR}/hostname" ]; then
+        rm -f "${R}${EXPORT_DIR}/hostname"
+        log "withdrew the primary onion export (${GATEWAY_FILE} says off: tor runs for mesh control only)"
+    fi
     local _s
     for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
         _export "${R}${HS_DOMAIN_ROOT}/${_s}/hostname" "${R}${EXPORT_DIR}/${_s}.hostname" "domain '${_s}'"
@@ -271,6 +329,20 @@ if [ "${#DOMAIN_SLUGS[@]}" -gt 0 ]; then
         _owned+=("${R}${HS_DOMAIN_ROOT}/${_s}")
     done
 fi
+if [ -n "${MC_MODE}" ]; then
+    mkdir -p "${R}${CONTROL_DIR}" 2>/dev/null || true
+    _owned+=("${R}${CONTROL_DIR}")
+fi
+if [ "${MC_MODE}" = front ]; then
+    mkdir -p "${R}${HS_CONTROL_DIR}" 2>/dev/null || true
+    _owned+=("${R}${HS_CONTROL_DIR}")
+    # keys-provision staged the pre-minted keypair as root; tor must own it.
+    for _f in "${R}${HS_CONTROL_DIR}"/*; do
+        [ -f "${_f}" ] || continue
+        chown "${TOR_USER}:${TOR_USER}" "${_f}" 2>/dev/null || true
+        chmod 0600 "${_f}" 2>/dev/null || true
+    done
+fi
 chown "${TOR_USER}:${TOR_USER}" "${_owned[@]}" 2>/dev/null || true
 chmod 0700 "${_owned[@]}" 2>/dev/null || true
 chmod 0700 "${R}${EXPORT_DIR}" 2>/dev/null || true
@@ -303,12 +375,18 @@ Log notice syslog
 DataDirectory ${DATA_DIR}
 # Node-local SOCKS proxy (pods reach it via the tor-onion-marked NetworkPolicy).
 SocksPort 127.0.0.1:9050
+EOT
+    # (Split from the block above only so mesh control can leave it out: with no
+    # gateway-onion marker the concatenation is byte-for-byte the old single heredoc.)
+    if ${GATEWAY}; then
+        cat <<EOT
 # The mesh's primary onion. Keypair minted into HiddenServiceDir on first start and
 # persisted there (OFF-GIT, tor:tor 0700).
 HiddenServiceDir ${HS_DIR}
 HiddenServiceVersion 3
 HiddenServicePort 443 ${UPSTREAM}
 EOT
+    fi
     for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
         cat <<EOT
 # Tor domain '${_s}' (its own onion, the SAME gateway; told apart by the onion Host).
@@ -317,6 +395,25 @@ HiddenServiceVersion 3
 HiddenServicePort 443 ${UPSTREAM}
 EOT
     done
+    if [ -n "${MC_MODE}" ]; then
+        cat <<EOT
+# Mesh control over Tor (docs/MESH-CONTROL-OVER-TOR.md): the door the relay's keeper
+# sends SIGNAL NEWNYM through. Root reads the cookie; nobody else can list the dir.
+ControlSocket ${CONTROL_DIR}/control
+CookieAuthentication 1
+CookieAuthFile ${CONTROL_DIR}/control.authcookie
+EOT
+    fi
+    if [ "${MC_MODE}" = front ]; then
+        cat <<EOT
+# The DEDICATED control-plane onion: headscale's TLS front (never the fe-gateway).
+# Its keypair was minted onto the pki KEYS stick, so workers know the address before
+# their first boot.
+HiddenServiceDir ${HS_CONTROL_DIR}
+HiddenServiceVersion 3
+HiddenServicePort ${MC_PORT} ${MC_UPSTREAM}
+EOT
+    fi
 } > "${_cand}"
 
 if command -v tor >/dev/null 2>&1; then
@@ -427,5 +524,5 @@ if ${BOOT_ONESHOT} && ! _all_minted; then
     _spawn_export_waiter
 fi
 
-log "reconcile complete (upstream=${UPSTREAM}, domains=${#DOMAIN_SLUGS[@]})"
+log "reconcile complete (upstream=${UPSTREAM}, domains=${#DOMAIN_SLUGS[@]}${MC_MODE:+, mesh-control=${MC_MODE}}$(${GATEWAY} || printf ', gateway onion off'))"
 exit 0
