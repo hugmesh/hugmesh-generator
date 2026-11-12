@@ -1005,6 +1005,68 @@ i_sync="$(grep -n '^sync$' "${RPII}" | head -1 | cut -d: -f1)"
     && ok "I8: rpi5 installer re-derives them after its last cmdline.txt/config.txt edit (NVMe/LUKS root=) and before sync" \
     || bad "I8: rpi5 installer derivation missing/misplaced (last-edit=${i_last:-?} derive=${i_der:-none} sync=${i_sync:-?})"
 
+# I9) Cross-built python extensions under the BUILD host's suffix (#944 prove lane,
+# 2026-11-11): the rpi5 image shipped _semanage.cpython-314-x86_64-linux-gnu.so, an
+# aarch64 ELF, so the target python could not import it and `semanage login` (the
+# root login mapping) failed on first boot; a Frite sysroot had the same for
+# _selinux (a top-level symlink into selinux/). slx_fix_cross_python_ext EXECUTED.
+echo "-- I9) cross-built python extensions get the target's suffix --"
+PX="${TMP}/pyext"; SP="${PX}/usr/lib/python3.14/site-packages"; mkdir -p "${SP}/selinux"
+mk_elf() {  # mk_elf <path> <e_machine-low-byte, octal> [class] [data]
+    { printf '\177ELF'; printf "\\$(printf '%03o' "${3:-2}")\\$(printf '%03o' "${4:-1}")\\001"
+      printf '\000%.0s' 1 2 3 4 5 6 7 8 9; printf '\003\000'; printf "\\$2\\000"
+      head -c 64 /dev/zero; } > "$1"
+}
+X=cpython-314-x86_64-linux-gnu.so; A=cpython-314-aarch64-linux-gnu.so
+mk_elf "${SP}/_semanage.${X}" 267                       # 0xb7 = EM_AARCH64 (183)
+mk_elf "${SP}/selinux/_selinux.${X}" 267
+ln -s "selinux/_selinux.${X}" "${SP}/_selinux.${X}"
+mk_elf "${SP}/_audit.so" 267                            # the plain .so imports already
+mk_elf "${SP}/_hostlib.${X}" 076                        # 0x3e = EM_X86_64: a real host ELF
+mk_elf "${SP}/_twin.${X}" 267; mk_elf "${SP}/_twin.${A}" 267; cp "${SP}/_twin.${A}" "${PX}/twin.before"
+printf 'not an elf\n' > "${SP}/_text.${X}"
+mk_elf "${SP}/_be.${X}" 267 2 2                         # big-endian: not ours to judge
+ln -s "/usr/lib/python3.14/site-packages/selinux/_selinux.${X}" "${SP}/_abs.${X}"   # absolute = sysroot-relative
+ln -s "nowhere.${X}" "${SP}/_dangle.${X}"
+o="$( . "${LIB}"; slx_fix_cross_python_ext "${PX}" aarch64 2>&1 )"; rc=$?
+[ "${rc}" = 0 ] && ok "I9: slx_fix_cross_python_ext returns 0 on a mixed tree" || bad "I9: rc=${rc}: ${o}"
+[ -L "${SP}/_semanage.${A}" ] && [ "$(readlink "${SP}/_semanage.${A}")" = "_semanage.${X}" ] \
+    && ok "I9: _semanage (aarch64 ELF, x86_64 suffix) gets its ${A} twin, linked to the original" \
+    || bad "I9: no ${A} twin for _semanage: $(ls -la "${SP}" | grep semanage)"
+[ -L "${SP}/selinux/_selinux.${A}" ] && [ -L "${SP}/_selinux.${A}" ] && [ -f "$(readlink -f "${SP}/_selinux.${A}")" ] \
+    && ok "I9: _selinux: the file in selinux/ AND the top-level symlink both get a twin, and the top-level one resolves" \
+    || bad "I9: _selinux twins missing or dangling: $(ls -la "${SP}" "${SP}/selinux" | grep _selinux)"
+[ -L "${SP}/_abs.${A}" ] && ok "I9: an absolute symlink is resolved inside the sysroot, not on the build host" || bad "I9: absolute-link entry not handled: ${o}"
+[ ! -e "${SP}/_hostlib.${A}" ] && ok "I9: a real x86_64 ELF is left alone (only reported)" || bad "I9: a host-machine ELF got an aarch64 twin"
+[ ! -e "${SP}/_text.${A}" ] && [ ! -e "${SP}/_be.${A}" ] && ! [ -L "${SP}/_dangle.${A}" ] \
+    && ok "I9: non-ELF, big-endian and dangling entries are left alone" || bad "I9: a non-ELF/big-endian/dangling entry got a twin"
+[ ! -L "${SP}/_twin.${A}" ] && cmp -s "${SP}/_twin.${A}" "${PX}/twin.before" \
+    && ok "I9: an existing target-suffixed twin is never replaced" || bad "I9: the existing _twin.${A} was replaced"
+[ ! -e "${SP}/_audit.cpython-314-aarch64-linux-gnu.so" ] && [ -f "${SP}/_audit.so" ] && [ -e "${SP}/_semanage.${X}" ] \
+    && ok "I9: nothing is renamed or removed (plain .so and the originals stay)" || bad "I9: an original was renamed/removed"
+n1="$(find "${PX}" | sort | md5sum)"
+o="$( . "${LIB}"; slx_fix_cross_python_ext "${PX}" aarch64 2>&1 )"; rc=$?
+[ "${rc}" = 0 ] && [ "$(find "${PX}" | sort | md5sum)" = "${n1}" ] \
+    && ok "I9: a second run is a no-op (idempotent)" || bad "I9: second run rc=${rc} or changed the tree: ${o}"
+( . "${LIB}"; slx_fix_cross_python_ext "${PX}" riscv64 ) >/dev/null 2>&1 \
+    && bad "I9: an unsupported target arch returned 0" || ok "I9: an unsupported target arch fails the call"
+for b in "${ALL_BUILDERS[@]}"; do
+    bn="${b##*/}"; bnc="${TMP}/${bn}.nc9"; grep -nvE '^[[:space:]]*#' "${b}" > "${bnc}"
+    l_fix="$({ grep -E -m1 '^[0-9]+:slx_fix_cross_python_ext "\$\{SYSROOT\}" aarch64 \\$' "${bnc}" || true; } | cut -d: -f1)"
+    l_ffl="$({ grep -E -m1 '^[0-9]+:    \|\| \{ err "could not give the cross-built python extensions' "${bnc}" || true; } | cut -d: -f1)"
+    if [ "${bn}" = build-x86-host-stage4.sh ]; then
+        [ -z "${l_fix}" ] && ok "I9: ${bn} (native build) does not call it" || bad "I9: the native x86 builder calls the cross-suffix fix"
+        continue
+    fi
+    l_emg="$({ grep -E '^[0-9]+:[[:space:]]*(if ! )?cross_emerge ' "${bnc}" || true; } | tail -1 | cut -d: -f1)"
+    l_frz="$({ grep -E -m1 '^[0-9]+:slx_store_install_modules "\$\{SYSROOT\}"' "${bnc}" || true; } | cut -d: -f1)"
+    [ -n "${l_frz}" ] || l_frz="$({ grep -E -m1 '^[0-9]+:STAGE4(_TARBALL)?="\$\{WORK_DIR\}' "${bnc}" || true; } | cut -d: -f1)"
+    [ -n "${l_fix}" ] && [ -n "${l_ffl}" ] && [ "${l_ffl}" = $((l_fix + 1)) ] && [ -n "${l_emg}" ] && [ "${l_emg}" -lt "${l_fix}" ] \
+        && [ -n "${l_frz}" ] && [ "${l_fix}" -lt "${l_frz}" ] \
+        && ok "I9: ${bn} fixes python extension suffixes after its last cross-emerge and before its sysroot is labelled/packed (fatal)" \
+        || bad "I9: ${bn}: fix=${l_fix:-none} fail-line=${l_ffl:-none} last-cross-emerge=${l_emg:-?} frozen-at=${l_frz:-?}"
+done
+
 echo
 echo "== selinux sysroot labels: ${P} passed, ${F} failed, ${S} skipped (skips are NOT passes) =="
 [ "${F}" -eq 0 ]

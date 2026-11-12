@@ -564,6 +564,64 @@ slx_ship_bootpath_files() {
     _slx_say "boot-path files: /srv shipped, /etc/tmpfiles.d/portage-tmpdir.conf masks portage's tmpfiles entry"
 }
 
+# ── slx_fix_cross_python_ext <sysroot> <target-arch> ─────────────────────────
+# A cross-built python extension can carry the BUILD host's suffix: measured in the
+# #944 rpi5 image (2026-11-11), /usr/lib/python3.14/site-packages held
+# _semanage.cpython-314-x86_64-linux-gnu.so — an aarch64 ELF — and in a Frite
+# sysroot _selinux.cpython-314-x86_64-linux-gnu.so (a symlink into selinux/, same
+# suffix). The target's python only imports .cpython-3NN-aarch64-linux-gnu.so,
+# .abi3.so and .so, so `semanage` died with "No module named '_semanage'": the
+# root login mapping failed (provision_selinux at first boot on the ARM images,
+# slx_map_root_login in Frite's qemu chroot at build time) and no operator could
+# run semanage on the node at all. Which package comes out wrong varies by binpkg,
+# so this checks every one: for each <name>.cpython-3NN-x86_64-linux-gnu.so (file or
+# symlink) under the sysroot's python trees whose ELF is the TARGET machine, it
+# adds <name>.cpython-3NN-<target>-linux-gnu.so -> <the original>, in the same
+# directory. Nothing is renamed (a symlink chain into the original keeps working);
+# an existing target-suffixed twin is left alone; a real host-machine ELF is only
+# reported. Every ARM builder calls this after its last cross-emerge.
+slx_fix_cross_python_ext() {
+    local sysroot="${1:?slx_fix_cross_python_ext: sysroot required}" arch="${2:?target arch required}"
+    local host_sfx=x86_64-linux-gnu want_em tgt_sfx
+    case "${arch}" in
+        aarch64|arm64) want_em=183; tgt_sfx=aarch64-linux-gnu ;;   # EM_AARCH64
+        *) _slx_fail "python extension suffixes: unsupported target arch '${arch}'"; return 1 ;;
+    esac
+    local f base twin res lnk hops magic em fixed=0 kept=0 roots=() r
+    for r in "${sysroot}/usr/lib" "${sysroot}/usr/lib64"; do [ -d "${r}" ] && roots+=("${r}"); done
+    [ "${#roots[@]}" -gt 0 ] || { _slx_say "python extension suffixes: no /usr/lib in ${sysroot} — nothing to check"; return 0; }
+    while IFS= read -r -d '' f; do
+        base="${f##*/}"
+        twin="${f%/*}/${base%-"${host_sfx}".so}-${tgt_sfx}.so"
+        if [ -e "${twin}" ] || [ -L "${twin}" ]; then kept=$((kept + 1)); continue; fi
+        # Resolve inside the sysroot (an absolute link target is sysroot-relative).
+        res="${f}"; hops=0
+        while [ -L "${res}" ]; do
+            hops=$((hops + 1))
+            [ "${hops}" -le 8 ] || { _slx_fail "python extension suffixes: ${f#"${sysroot}"}: symlink loop"; return 1; }
+            lnk="$(readlink "${res}")" || { _slx_fail "python extension suffixes: cannot read link ${res}"; return 1; }
+            case "${lnk}" in /*) res="${sysroot}${lnk}" ;; *) res="${res%/*}/${lnk}" ;; esac
+        done
+        if [ ! -f "${res}" ]; then
+            _slx_say "python extension suffixes: ${f#"${sysroot}"} dangles — left alone"; continue
+        fi
+        magic="$(od -An -tx1 -N6 "${res}" 2>/dev/null | tr -d ' \n')"
+        # \177ELF, ELFCLASS64 (02), ELFDATA2LSB (01): e_machine is a little-endian u16 at 18.
+        if [ "${magic}" != 7f454c460201 ]; then
+            _slx_say "python extension suffixes: ${f#"${sysroot}"} is not a 64-bit little-endian ELF — left alone"; continue
+        fi
+        em="$(od -An -tu1 -j18 -N2 "${res}" 2>/dev/null | awk '{ print $1 + 256 * $2 }')"
+        if [ "${em}" != "${want_em}" ]; then
+            _slx_say "python extension suffixes: ${f#"${sysroot}"} is ELF machine ${em:-?}, not the target's ${want_em} — left alone"; continue
+        fi
+        ln -s "${base}" "${twin}" \
+            || { _slx_fail "python extension suffixes: cannot link ${twin#"${sysroot}"} -> ${base}"; return 1; }
+        _slx_say "python extension suffixes: ${twin#"${sysroot}"} -> ${base} (a ${arch} ELF under the build host's suffix)"
+        fixed=$((fixed + 1))
+    done < <(find "${roots[@]}" -path '*/python3*' -name "*.cpython-3*-${host_sfx}.so" \( -type f -o -type l \) -print0 2>/dev/null)
+    _slx_say "python extension suffixes: ${fixed} linked to the ${tgt_sfx} suffix, ${kept} already had one"
+}
+
 # ── slx_ship_enforce_gate <sysroot> <shared_specs> ───────────────────────────
 # Ship specs/etc/init.d/selinux-enforce-gate the way sibling OpenRC services are
 # shipped (cp + chmod +x into ${SYSROOT}/etc/init.d, mirroring the

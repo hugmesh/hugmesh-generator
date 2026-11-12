@@ -1198,6 +1198,9 @@ gate_run() {
                          printf '%s' "${FX_AUSEARCH_OUT:-}"; printf '%s' "${FX_AUSEARCH_ERR:-}" >&2
                          return "${FX_AUSEARCH_RC:-0}"; }
       dmesg()          { printf '%s' "${FX_DMESG_OUT:-}"; return 0; }
+      # pidof: "is auditd running?" — no by default (this host's real auditd, if any,
+      # must never decide a fixture); FX_AUDITD_RUNNING=1 says yes.
+      pidof()          { [ "${FX_AUDITD_RUNNING:-0}" = 1 ]; }
       rc-update()      { echo "rc-update $*" >> "${G}/calls"; return 0; }
       # shellcheck disable=SC1090
       source "${SVC}"
@@ -1212,6 +1215,7 @@ gate_run() {
       # case points AUSEARCH/DMESG at a path that does not exist to take them away.
       AUSEARCH="${FX_AUSEARCH_BIN:-ausearch}"; AUDIT_LOG="${G}/audit.log"; DMESG="${FX_DMESG_BIN:-dmesg}"
       AVC_SCRATCH_DIR="${G}"
+      AUDITD_INITD="${G}/auditd-initd"   # absent unless a case creates it (the image ships auditd)
       # The allow-list is a plain assignment in the shipped file (empty); a case may
       # set FX_AVC_ALLOW_ERE to exercise a populated one.
       [ -n "${FX_AVC_ALLOW_ERE+x}" ] && AVC_ALLOW_ERE="${FX_AVC_ALLOW_ERE}"
@@ -1229,9 +1233,9 @@ gate_fixture() {
     export FX_SEMODULE_RC=0 FX_GETENFORCE=Permissive FX_SELINUX_ENABLED_RC=0
     # ausearch's real answer on a clean boot: nothing on stdout, rc=1, "<no matches>".
     export FX_RESTORECON_OUT="" FX_AUSEARCH_OUT="" FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR=$'<no matches>\n'
-    export FX_AUSEARCH_BIN=ausearch FX_DMESG_BIN=dmesg FX_DMESG_OUT=""
+    export FX_AUSEARCH_BIN=ausearch FX_DMESG_BIN=dmesg FX_DMESG_OUT="" FX_AUDITD_RUNNING=0
     unset FX_AVC_ALLOW_ERE
-    rm -f "${G}/audit.log"
+    rm -rf "${G}/audit.log" "${G}/audit.log".[0-9]* "${G}/auditd-initd"
 }
 gate_flipped()  { grep -q '^setenforce 1' "$1/calls" 2>/dev/null; }
 gate_enforcing() { grep -q '^SELINUX=enforcing' "$1/config" 2>/dev/null; }
@@ -1376,6 +1380,51 @@ o="$(gate_run "${G}" yes)"
 { gate_flipped "${G}" && printf '%s' "${o}" | grep 'without a clean' >/dev/null && printf '%s' "${o}" | grep 'reading .*audit.log directly' >/dev/null; } \
     && ok "POSITIVE CONTROL: ausearch 'Error opening' + a clean, readable audit.log flips, and says it fell back and why" \
     || bad "ausearch 'Error opening' with a clean audit.log: no flip or no fallback message (the fallback is closed by accident): ${o}"
+gate_fixture "${TMP}/gavc-reset"
+
+# ── D-run-ringbuffer: a clean dmesg is NOT a clean boot on an image that runs auditd.
+# Measured on the #944 x86 .img and rpi5 images (2026-11-11, prove lane): with
+# audit.log hidden, ausearch said "Error opening ... (No such file or directory)",
+# the gate fell through to dmesg, found 0 denials there and said CLEAN — while
+# audit.log held 6-12 denials from that very boot (the U4/U5/U6/T12/C2 cases).
+# Once auditd is connected the kernel hands it every record and printk's none, so
+# the ring buffer is empty of AVCs BY DESIGN; reading it as the whole record is
+# fail-open. dmesg may still ADD denials (early boot, backlog overflow), but on an
+# image that ships or runs auditd it can never stand in for the audit log.
+fx_auditd_image()      { printf '#!/sbin/openrc-run\n' > "$1/auditd-initd"; chmod +x "$1/auditd-initd"; }
+fx_rb_initd_nolog()    { fx_auditd_image "$1"; export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}" FX_DMESG_OUT='[ 1.0] SELinux:  Initializing.'; }
+fx_rb_running_nolog()  { export FX_AUDITD_RUNNING=1 FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}" FX_DMESG_OUT=''; }
+fx_rb_noas_initd()     { fx_auditd_image "$1"; export FX_AUSEARCH_BIN=/nonexistent/ausearch FX_DMESG_OUT='[ 1.0] SELinux:  Initializing.'; }
+fx_rb_log_unreadable() { mkdir -p "$1/audit.log"; export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}" FX_DMESG_OUT=''; }
+fx_rb_log_dir_nodmesg(){ mkdir -p "$1/audit.log"; export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}" FX_DMESG_BIN=/nonexistent/dmesg; }
+fx_rb_rotated_avc()    { fx_auditd_image "$1"; export FX_AUSEARCH_BIN=/nonexistent/ausearch; : > "$1/audit.log"; printf '%s\n' "${REC_TMPF_EARLY}" > "$1/audit.log.1"; }
+REC_TMPF_EARLY='type=AVC msg=audit(1793853120.1:5): avc:  denied  { write } for  pid=402 comm="systemd-tmpfile" name="/" dev="sda2" scontext=system_u:system_r:systemd_tmpfiles_t:s0 tcontext=system_u:object_r:root_t:s0 tclass=dir permissive=1'
+gate_blocks "ring buffer: ausearch cannot open the log, no audit.log, the image ships auditd, dmesg clean (T12)" fx_rb_initd_nolog
+gate_blocks "ring buffer: auditd RUNNING, ausearch cannot open the log, dmesg rc0 empty (U4/U6/C2)" fx_rb_running_nolog
+gate_blocks "ring buffer: no ausearch, no audit.log, the image ships auditd, dmesg clean" fx_rb_noas_initd
+gate_blocks "audit.log is a DIRECTORY ([ -r ] is true, grep reads nothing), dmesg clean (T11)" fx_rb_log_unreadable
+gate_blocks "audit.log is a DIRECTORY, no dmesg (T11)" fx_rb_log_dir_nodmesg
+gate_blocks "audit.log fallback: this boot's denial is in the ROTATED audit.log.1" fx_rb_rotated_avc
+fx_rb_rotated_dir()    { fx_auditd_image "$1"; export FX_AUSEARCH_BIN=/nonexistent/ausearch; : > "$1/audit.log"; mkdir -p "$1/audit.log.1"; }
+gate_blocks "audit.log fallback: a rotation that cannot be read (audit.log.1 is a directory)" fx_rb_rotated_dir
+G="${TMP}/grb1"; gate_fixture "${G}"; touch "${G}/marker"; fx_rb_running_nolog "${G}"
+o="$(gate_run "${G}" yes)"
+printf '%s' "${o}" | grep 'cannot stand in for the audit log' >/dev/null \
+    && ok "ring buffer refused as the whole record: the gate says why" || bad "ring-buffer refusal without its reason: ${o}"
+# Positive controls: each one keeps a fallback OPEN that the cases above must not close by accident.
+G="${TMP}/grb2"; gate_fixture "${G}"; touch "${G}/marker"; fx_auditd_image "${G}"
+export FX_AUDITD_RUNNING=1 FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}"; : > "${G}/audit.log"; : > "${G}/audit.log.1"
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "POSITIVE CONTROL: auditd running, ausearch untrusted, a clean readable audit.log (+ clean rotation) flips" \
+    || bad "auditd running + clean readable audit.log did not flip (the audit.log fallback is closed by accident): ${o}"
+G="${TMP}/grb3"; gate_fixture "${G}"; touch "${G}/marker"; fx_auditd_image "${G}"; export FX_AUDITD_RUNNING=1
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "POSITIVE CONTROL: auditd running + ausearch's trusted '<no matches>' flips (the normal clean boot)" \
+    || bad "the normal clean boot on an auditd image did not flip: ${o}"
+G="${TMP}/grb4"; gate_fixture "${G}"; touch "${G}/marker"; fx_auditd_image "${G}"; export FX_AUDITD_RUNNING=1 FX_DMESG_OUT="${DMESG_HUG}"
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && bad "auditd running, ausearch clean, a denial only in dmesg: flipped (dmesg no longer ADDS denials): ${o}" \
+    || ok "auditd running, ausearch clean, a denial only in dmesg: still blocks (dmesg still adds)"
 gate_fixture "${TMP}/gavc-reset"
 
 # ── D-run-scope: EVERY boot-path denial counts (#863 refute, blocker 2). The check
