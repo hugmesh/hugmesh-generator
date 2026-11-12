@@ -32,7 +32,7 @@ The verifier re-serialises and refuses a payload that is not already canonical.
 | `domain` | string | lower-case DNS name with at least two labels (the access domain) |
 | `role` | string | one of `user`, `mod`, `admin`, `superadmin` |
 | `shell` | bool | shell access; only `admin` and `superadmin` may be `true` |
-| `login_server` | string | `https://host[:port]` with an optional trailing `/`, nothing else; `host` is the domain or a name under it |
+| `login_server` | string | `https://host[:port]` with an optional trailing `/`, nothing else; `host` is the domain or a name under it. Or a Tor v3 onion, `http://` or `https://<56 characters>.onion[:port]` (see below) |
 | `auth_key` | string | the headscale pre-auth key; no whitespace |
 | `issued` | int | Unix seconds; not before 2020-01-01, not more than 5 minutes in the future |
 | `expires` | int | Unix seconds; after `issued`, at most 90 days later |
@@ -41,6 +41,27 @@ The verifier re-serialises and refuses a payload that is not already canonical.
 | `id` | string | optional (default `""`); random, e.g. 16 hex characters |
 
 No other fields are allowed.
+
+### An onion login server
+
+A `login_server` may be a Tor v3 onion address. It is checked as one: exactly 56
+characters of the onion alphabet (`a-z`, `2-7`) before `.onion`, with the v3 version byte
+and checksum (Tor rend-spec-v3, "Encoding onion addresses"), so a mistyped character is
+refused instead of naming another service. A v2 (16-character) address, a name in front
+of the address (`hs.<onion>.onion`) and anything after the port are refused, each with
+its own sentence. `http://` is accepted for an onion only: Tor encrypts and authenticates
+the connection to the onion's key. An onion has no place in DNS, so the
+"inside the access domain" rule does not apply to it; the issuer's signature is what
+binds it to the token.
+
+The token carries an onion as written, and the tray passes it to `tailscale up
+--login-server=` unchanged. Joining through it needs two things the token cannot supply:
+the joining computer's tailscale needs a route into Tor (the Studio's own mesh node does
+not set one up), and headscale must be published on that onion. The local Docker
+mesh's own `.onion` (`TOR=1`) serves its web front door, not headscale, which is only
+reachable as `hs.<domain>`. The window, the text interface and the command line say
+so beside an onion login server. A Studio from before onion login servers were accepted
+refuses such a token when it verifies it.
 
 ## Trust
 

@@ -39,7 +39,8 @@ from typing import Callable, Optional
 from ..core import mesh_token as mt
 
 __all__ = ["MeshTokenScreen", "TITLE", "FINGERPRINT_NOTE", "SHELL_ONLY_TIP",
-           "NO_KEY", "MINT_NOTE", "DEFAULT_USER", "lifetime_text", "mint_argv", "mint_line"]
+           "NO_KEY", "MINT_NOTE", "DEFAULT_USER", "lifetime_text", "mint_argv", "mint_line",
+           "login_hint", "LOGIN_EMPTY"]
 
 #: The dialog's title, word for word (test_tui_gui_parity pins it).
 TITLE = "Issue a HugMesh token"
@@ -69,6 +70,15 @@ DEFAULT_USER = (f"default: the container's {mt.HEADSCALE_USER_LABEL} label, else
                 f"{mt.DEFAULT_MINT_USER} (u USER names another)")
 
 DEFAULT_LIFETIME_S = 7 * 86400
+
+#: The login server row while none is typed: both forms a login server can take.
+LOGIN_EMPTY = "(type it: l URL — https://hs.example.org or http://<56 characters>.onion)"
+
+
+def login_hint(url: str, domain: str) -> str:
+    """The line said under the login server: :func:`core.mesh_token.login_server_hint`
+    (the same words in the window, the text interface and the command line)."""
+    return mt.login_server_hint(url, domain)
 
 
 def lifetime_text(seconds: int) -> str:
@@ -202,10 +212,14 @@ class MeshTokenScreen:
                f"  access domain  {self.domain or '(type it: d DOMAIN)'}",
                f"  role           {self.role}   ({roles})",
                f"  shell access   {shell}",
-               f"  login server   {self.login_server or '(type it: l URL)'}",
-               f"  lifetime       {lifetime_text(self.lifetime_s)} (at most "
-               f"{mt.MAX_LIFETIME_S // 86400}d)",
-               f"  pre-auth key   {key}"]
+               f"  login server   {self.login_server or LOGIN_EMPTY}"]
+        # the window's inline line under Login server, word for word
+        hint = login_hint(self.login_server, self.domain)
+        if hint:
+            out.append(f"                 {hint}")
+        out += [f"  lifetime       {lifetime_text(self.lifetime_s)} (at most "
+                f"{mt.MAX_LIFETIME_S // 86400}d)",
+                f"  pre-auth key   {key}"]
         if self.source == "mint":
             out.append(f"  headscale user {self.hs_user or DEFAULT_USER}")
             found = "(the running one labelled or named like headscale)"
@@ -222,7 +236,8 @@ class MeshTokenScreen:
         if self.result:
             out.append("")
         out += ["commands: m NAME=mesh · d DOMAIN=access domain · r N|ROLE=role · s=shell "
-                "access on/off · l URL=login server (https://host[:port]) · e 7d|12h="
+                "access on/off · l URL=login server (https://host[:port], or a Tor v3 onion "
+                "http(s)://<56 characters>.onion[:port]) · e 7d|12h="
                 "lifetime · k PATH=the pre-auth key's file · mint=mint it instead (prints "
                 "the command) · u USER|-=headscale user for mint (optional) · "
                 "c NAME|-=headscale container for mint · i=issue (sign) · "

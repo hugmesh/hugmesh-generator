@@ -423,3 +423,69 @@ def test_the_local_mesh_page_opens_it_prefilled(page, monkeypatch):
     page.issue_token_btn.click()
     assert opened == [(want["mesh"], want["domain"], want["login_server"])]
     _settle(QtWidgets.QApplication.instance(), page._issue_token_dialog)
+
+
+# ── an onion login server (operator report 2026-11-12: "the uri field doesn't seem
+# to accept the onion uri") ──────────────────────────────────────────────────────
+ONION = "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
+
+
+def test_the_login_server_field_shows_the_onion_form(qapp, monkeypatch):
+    dlg = _dialog(qapp, monkeypatch)
+    assert ".onion" in dlg.login_server.placeholderText()
+    assert mt.ONION_EXAMPLE in dlg.login_server.toolTip()
+    assert not dlg.login_hint.isVisibleTo(dlg)        # nothing typed, nothing said
+
+
+def test_an_onion_login_server_is_issued_and_carried_in_the_token(qapp, monkeypatch, core):
+    dlg = _dialog(qapp, monkeypatch)
+    _fill(dlg, role="user", shell=False)
+    dlg.login_server.setText(f"http://{ONION}")
+    # said inline as it is typed: accepted, with what an onion needs
+    assert dlg.login_hint.isVisibleTo(dlg)
+    assert dlg.login_hint.text() == mt.ONION_NOTE
+    dlg.auth_key.setText(PASTED)
+    dlg.issue_btn.click()
+    _settle(qapp, dlg)
+    assert core["issue"]["login_server"] == f"http://{ONION}"
+    assert mt.parse(dlg.token())[0].login_server == f"http://{ONION}"
+    assert dlg.status.text().startswith("Issued: user in example.org")
+    assert dlg.login_hint.text() == mt.ONION_NOTE      # still said beside the field
+
+
+@pytest.mark.parametrize("url,needle", [
+    ("http://expyuzz4wqqyqhjn.onion", "v2 onion address"),
+    (f"http://e{ONION[1:]}", "checksum does not match"),
+    (f"https://{ONION}/login", "Drop '/login'"),
+])
+def test_a_malformed_onion_is_refused_inline_and_on_issue(qapp, monkeypatch, core, url,
+                                                          needle):
+    dlg = _dialog(qapp, monkeypatch)
+    _fill(dlg, role="user", shell=False)
+    dlg.login_server.setText(url)
+    assert needle in dlg.login_hint.text()
+    dlg.auth_key.setText(PASTED)
+    dlg.issue_btn.click()
+    _settle(qapp, dlg)
+    assert needle in dlg.status.text()
+    assert core["order"] == []                         # nothing created, nothing signed
+    assert dlg.token() == ""
+
+
+def test_the_onion_note_is_drawn_whole_above_the_next_row(qapp, monkeypatch):
+    """Looked at, not only asserted on text: at the dialog's own size the inline line
+    is not drawn over the Lifetime row, and it is as tall as its wrapped text."""
+    dlg = _dialog(qapp, monkeypatch, domain="example.org", login_server=f"http://{ONION}")
+    dlg.show()
+    for _ in range(20):
+        qapp.processEvents()
+    try:
+        hint = dlg.login_hint
+        top = hint.mapTo(dlg, hint.rect().topLeft()).y()
+        lifetime_top = dlg.lifetime.mapTo(dlg, dlg.lifetime.rect().topLeft()).y()
+        assert hint.isVisible() and hint.text() == mt.ONION_NOTE
+        assert hint.height() >= hint.heightForWidth(hint.width())
+        assert top + hint.heightForWidth(hint.width()) <= lifetime_top
+        assert dlg.rect().contains(hint.geometry())
+    finally:
+        dlg.close()

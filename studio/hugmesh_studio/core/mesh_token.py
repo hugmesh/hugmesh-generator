@@ -380,6 +380,117 @@ def _issuer_key(issuer: str) -> str:
     return " ".join(issuer.split()[:2])
 
 
+# ── the login server: a host in the access domain, or a v3 onion ─────────────────────
+#: How a login server is written, for the fields' placeholders, tooltips and help.
+LOGIN_SERVER_FORMS = ("https://host[:port] inside the access domain, or a Tor v3 onion "
+                      "http(s)://<56 characters>.onion[:port]")
+
+#: A v3 onion for examples — a well-known public one (it passes the checksum).
+ONION_EXAMPLE = "http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
+
+#: Said next to an onion login server, by the CLI, the window and the text interface:
+#: what the token cannot do on its own.
+ONION_NOTE = ("An onion login server is reached over Tor: the joining computer's "
+              "tailscale needs a route into Tor (the Studio's own mesh node does not set "
+              "one up), and headscale must be published on that onion. The local Docker "
+              "mesh's own .onion serves its web front door, not headscale.")
+
+_LOGIN_RE = re.compile(r"(https?)://([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?/?")
+_ONION_ALPHABET = frozenset("abcdefghijklmnopqrstuvwxyz234567")
+
+
+def onion_problem(host: str) -> str:
+    """Why ``host`` (ending in ``.onion``) is not a usable Tor v3 onion address, or "".
+    A v3 address is 56 base32 characters encoding the service's ed25519 key, a
+    two-byte checksum and the version byte 3 (Tor rend-spec-v3, "Encoding onion
+    addresses"), so a mistyped character fails the checksum instead of naming some
+    other service."""
+    name = host.lower()[:-len(".onion")]
+    if "." in name:
+        return (f"{host} has a name in front of the onion address; use the bare "
+                f"{name.rsplit('.', 1)[-1] or '<address>'}.onion.")
+    bad = sorted(set(name) - _ONION_ALPHABET)
+    if len(name) == 16 and not bad:
+        return (f"{host} is a v2 onion address. Tor retired v2 onions in 2021; use the "
+                f"service's v3 address (56 characters before .onion).")
+    if len(name) != 56:
+        return (f"{host} is not a Tor v3 onion address: it has {len(name)} characters "
+                f"before .onion, and a v3 address has 56.")
+    if bad:
+        return (f"{host} is not a Tor v3 onion address: {''.join(bad)!r} is outside the "
+                f"onion alphabet (the letters a-z and the digits 2-7).")
+    raw = base64.b32decode(name.upper())
+    key, checksum, version = raw[:32], raw[32:34], raw[34]
+    if version != 3 or hashlib.sha3_256(
+            b".onion checksum" + key + bytes([version])).digest()[:2] != checksum:
+        return (f"{host} is not a Tor v3 onion address: its checksum does not match, so "
+                f"a character is mistyped.")
+    return ""
+
+
+def is_onion_login(url: str) -> bool:
+    """Whether ``url`` is a login server this module accepts AS an onion."""
+    m = _LOGIN_RE.fullmatch(url or "")
+    return bool(m) and m.group(2).lower().endswith(".onion") \
+        and not onion_problem(m.group(2))
+
+
+def login_server_problem(url: str, domain: str | None) -> str:
+    """Why ``url`` cannot be a token's login server for the access ``domain``, or "".
+    The one rule the issuer, the verifier and every face (window, text interface,
+    command line) apply. ``domain=None`` checks the URL alone (a face asking while the
+    access domain is still empty); the issuer and the verifier always pass it.
+
+    * A host on the clear web: ``https://host[:port]`` with an optional trailing
+      ``/``, host the access domain or a name under it (the node joins only its own
+      domain's control plane).
+    * A Tor v3 onion: ``http://`` or ``https://<56 characters>.onion[:port]``. Tor
+      encrypts and authenticates the connection to the onion's own key, so ``http``
+      is as private there as https is on the clear web; and an onion has no place in
+      DNS, so it cannot sit "under" an access domain — the issuer's signature binds
+      it to the token instead. A v2 address, a wrong length or alphabet, a mistyped
+      character (the v3 checksum) or a name in front of the address is refused.
+
+    Nothing else — no path, query or whitespace: the URL lands in ``TS_EXTRA_ARGS``,
+    which the tailscale container word-splits, so whitespace (or a path carrying it)
+    would smuggle extra ``tailscale up`` flags in."""
+    what = f"The token's login server {url!r}"
+    m = _LOGIN_RE.fullmatch(url or "")
+    if not m:
+        base = re.fullmatch(r"(https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?)(/[!-~]*)", url or "")
+        drop = (f" Drop {base.group(2)!r}: use {base.group(1)}." if base
+                and _LOGIN_RE.fullmatch(base.group(1)) else "")
+        return (f"{what} must be {LOGIN_SERVER_FORMS}, with only a host and optional "
+                f"port: no path, spaces or anything else.{drop}")
+    scheme, host, port = m.group(1), m.group(2).lower(), m.group(3)
+    if port is not None and not 0 < int(port) < 65536:
+        return f"{what} names port {port}, which is not between 1 and 65535."
+    if host.endswith(".onion"):
+        why = onion_problem(host)
+        return f"{what} is refused: {why}" if why else ""
+    if scheme != "https":
+        return (f"{what} must be an https:// URL with only a host and optional port "
+                f"(plain http is accepted only for a Tor .onion, which Tor encrypts).")
+    if domain is not None and host != domain and not host.endswith("." + domain):
+        return (f"The token's login server {host} is outside its access domain {domain}, "
+                f"so the node would join another domain's control plane. It is refused.")
+    return ""
+
+
+def login_server_hint(url: str, domain: str) -> str:
+    """The line every face says under the login server as it is typed: why it is
+    refused (:func:`login_server_problem`), else :data:`ONION_NOTE` for an onion, else
+    "". The domain rule is left out while the access domain is still empty (issuing
+    applies it all the same)."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    why = login_server_problem(url, (domain or "").strip() or None)
+    if why:
+        return why
+    return ONION_NOTE if is_onion_login(url) else ""
+
+
 # ── field checks shared by issue and verify ──────────────────────────────────────────
 def check_fields(g: MeshGrant, *, now: float | None = None) -> None:
     """Raise :class:`TokenError` (``invalid`` / ``expired``) unless every field of the
@@ -396,20 +507,9 @@ def check_fields(g: MeshGrant, *, now: float | None = None) -> None:
         raise TokenError("invalid", f"The token grants shell access to the role "
                                     f"{g.role!r}; only {' and '.join(SHELL_ROLES)} can "
                                     f"hold shell access, so it is refused.")
-    # The URL lands in TS_EXTRA_ARGS, which the tailscale container word-splits: any
-    # whitespace (or a path carrying it) would smuggle extra `tailscale up` flags in.
-    if not re.fullmatch(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?", g.login_server):
-        raise TokenError("invalid", f"The token's login server {g.login_server!r} must be "
-                                    f"an https:// URL with only a host and optional port.")
-    parts = urlsplit(g.login_server)
-    host = (parts.hostname or "").lower()
-    if not host:
-        raise TokenError("invalid", f"The token's login server {g.login_server!r} must be "
-                                    f"an https:// URL.")
-    if host != g.domain and not host.endswith("." + g.domain):
-        raise TokenError("invalid", f"The token's login server {host} is outside its access "
-                                    f"domain {g.domain}, so the node would join another "
-                                    f"domain's control plane. It is refused.")
+    why = login_server_problem(g.login_server, g.domain)
+    if why:
+        raise TokenError("invalid", why)
     if not g.auth_key or any(c.isspace() for c in g.auth_key):
         raise TokenError("invalid", "The token carries no usable pre-auth key.")
     if not _ISSUER_RE.match(_issuer_key(g.issuer)):
@@ -1542,6 +1642,8 @@ def _cli_issue(args) -> int:
                   f"{SERVER_DECIDES}")
     else:
         server = SERVER_DECIDES
+    if is_onion_login(g.login_server):
+        server = f"{server}\n{ONION_NOTE}"
     print(f"\nGrants: {g.describe()}\nIssuer: {fingerprint(g.issuer)} (give the "
           f"recipient this fingerprint separately)\n{server}", file=sys.stderr)
     return 0
@@ -1561,8 +1663,8 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--role", required=True, choices=ROLES)
     i.add_argument("--shell", action="store_true", help=f"grant shell access "
                    f"({' or '.join(SHELL_ROLES)} only)")
-    i.add_argument("--login-server", required=True, help="https:// headscale URL inside "
-                   "the domain")
+    i.add_argument("--login-server", required=True, help="the headscale URL: "
+                   + LOGIN_SERVER_FORMS)
     src = i.add_mutually_exclusive_group(required=True)
     src.add_argument("--authkey-file", help="file holding the pre-auth key (kept off the "
                      "command line)")
