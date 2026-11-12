@@ -73,6 +73,23 @@ The output follows a pinned contract, which `core/desktop_pretend.py` parses:
     ==> Pretend needs: accept_keywords <line>
     ===== PRETEND RESOLVER OUTPUT ===== ... ===== END PRETEND RESOLVER OUTPUT =====
 
+Portage names a needed change in one of two forms, and the parser reads both:
+
+- the autounmask lists, "The following USE / keyword changes are necessary to
+  proceed:" followed by the lines it would write;
+- a hint under an unsatisfied dependency, which is how the real OBS run's ffmpeg wall
+  came out (the keyword change for obs-studio was listed, the USE change was not):
+
+      emerge: there are no ebuilds built with USE flags to satisfy ">=media-video/ffmpeg-6.1:=[nvenc?,opus,x264]".
+      !!! One of the following packages is required to complete your request:
+      - media-video/ffmpeg-8.1.2::gentoo (Change USE: +opus +x264)
+
+  The first alternative is the change to the dependency itself (a second one, when
+  portage prints it, changes the parent's USE instead), and it becomes
+  `package.use >=media-video/ffmpeg-8.1.2 opus x264`. A hint that carries anything
+  besides the USE change (", this change violates use flag constraints ...", "Missing
+  IUSE") is not named, so that result is an error for the operator to read.
+
 The exit status is 0 for clean, 3 for needs and 1 for error. The check fails closed:
 `clean` needs exit 0, the `Total: N packages` plan line (which portage prints only with
 `--verbose`) and no named change. Nothing is merged. The run uses its own
