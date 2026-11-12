@@ -56,8 +56,6 @@ Then two cards. Pick one:
 
 **Start building** is pre-selected, so Next or Enter with no other input takes the ordinary path. **Clicking a card both selects it and advances**; there is no confirm step. Space, Return or Enter on a focused card does the same, and the arrow keys move the selection between cards. Back works if you overshoot.
 
-(A third card, **Start a local mesh**, was removed on 2026-08-26. It duplicated the build menu's own **Local Docker mesh** card. That flow is now reached through **Start building**; see `STUDIO-WIZARD-FLOW.md`.)
-
 One exception: a **Restart** from a prior session sets the wizard's start page to the build-progress page. You never see this screen on that path.
 
 ### Prior sessions — only if you asked for it
@@ -75,7 +73,7 @@ Welcome's second card is the only way in. Its own Next continues to the build me
 Seven actions:
 
 - **Open build window** — opens the per-build actions window. Clicking or activating a row opens the same one.
-- **Restart** — rebuilds the same config into the *same* workdir; existing artifacts are reused or overwritten. The confirm dialog has a "Resume from existing build tree (`--resume`)" checkbox, pre-checked when `wl-` build trees already sit in that workdir (an x86 build resumed from a tree that is not root's, that cannot get its static libraries back from the seed it came from, or that cannot link a C program stops in its first minutes with one sentence saying to rebuild without `--resume`: untick the box and restart, which wipes and re-extracts that tree as root — hugmesh-generator#659). It lists any secrets that were not saved with the session and any secret *files* held in memory only. Accepting jumps to the build-progress page, which re-runs the full preflight before it launches and prompts for those held files. Restart is greyed, with the reason as its tooltip and in a line under the buttons, while another Studio process is running the session, or when the recorded config names a domain with no recorded services (use Redo). If the artifact directory is gone, the click offers Redo instead. (A fleet run restarts through the fleet window.)
+- **Restart** — rebuilds the same config into the *same* workdir; existing artifacts are reused or overwritten. The confirm dialog has a "Resume from existing build tree (`--resume`)" checkbox, pre-checked when `wl-` build trees already sit in that workdir (an x86 build resumed from a tree that is not root's, that cannot get its static libraries back from the seed it came from, or that cannot link a C program stops in its first minutes with one sentence saying to rebuild without `--resume`: untick the box and restart, which wipes and re-extracts that tree as root — hugmesh-generator#659). It lists any secrets that were not saved with the session and any secret *files* held in memory only. Accepting jumps to the build-progress page, which re-runs the full preflight before it launches and prompts for those held files. That preflight includes the free-space check, which on a restart counts what each image's build tree (`wl-<id>/sysroot`) already holds: the build continues from it with the box ticked and rebuilds it in the same place without, so a restart needs less free space than a first build and is never told to delete those trees (see [Free-space guard](../studio/README.md#free-space-guard-2026-11-10-full-disk-incident)). Restart is greyed, with the reason as its tooltip and in a line under the buttons, while another Studio process is running the session, or when the recorded config names a domain with no recorded services (use Redo). If the artifact directory is gone, the click offers Redo instead. (A fleet run restarts through the fleet window.)
 - **Redo (edit as new)** — loads that session's config back into the wizard as a new session and returns you to Welcome, where you walk the pages and edit. A fresh session id and workdir are minted at build time. If the session did not save some passwords, the top of Welcome names them. Re-enter them before you build.
 - **Open artifacts** — opens the build directory in your file manager. Disabled when the directory is gone, or when the record is unreadable and names no directory.
 - **View errors/log** — shows the persisted per-image error tails, or the tail of the legacy shared `build.log` for a discovered unmanaged tree. For a stale `running` record it says the process is gone; it never upgrades that to "complete".
@@ -253,7 +251,7 @@ Downstream: nothing. Terminal.
 
 ### Run e2e tests
 
-Added 2026-08-27 at the operator's request — *"remove QEMU device emulation menu item as it does not do anything that cannot be done from the other menu, but add the run e2e tests button"*. It holds the mode-menu slot that the **QEMU device tests** card used to hold. That card is gone. The page behind it remains, and this screen is its door.
+This screen is the door to the **QEMU device tests** page, which has no card of its own on the build menu.
 
 Two arms, chosen by radio.
 
@@ -272,7 +270,7 @@ The 35 handwritten spec files (`tests/e2e/specs/NN-*.spec.ts`) are a separate la
 
 ### QEMU device tests
 
-Reached from **Run e2e tests**, and from nowhere else in the menu; its own card was removed 2026-08-27. (The post-build opt-in is unaffected. The Build screen's "run the QEMU emulated-device tests" checkbox still runs this same containerized harness when a build finishes, with no menu involved.) The page stayed because it is the only place in Studio that can spawn the Playwright-on-an-emulated-device harness and the SELinux AVC workout. Mesh emulation offers neither.
+Reached from **Run e2e tests**, and from nowhere else in the menu. (The post-build opt-in is unaffected. The Build screen's "run the QEMU emulated-device tests" checkbox still runs this same containerized harness when a build finishes, with no menu involved.) The page stayed because it is the only place in Studio that can spawn the Playwright-on-an-emulated-device harness and the SELinux AVC workout. Mesh emulation offers neither.
 
 This is the **test** lane of emulation: ephemeral asserted boots. It boots a session's images, checks they provisioned correctly, and powers them off. Two arms, chosen by radio.
 
@@ -284,7 +282,7 @@ The run envelope is one box. Every knob in it is a field of the same object that
 - Guest RAM — default 2048 MB.
 - Boot timeout — default 2400 s. A first boot under ARM emulation runs a full-filesystem SELinux relabel before sshd starts.
 - Assertion timeout — default 0, meaning the entrypoint's own default, with no flag emitted. This clock is separate from the boot timeout.
-- Extra guest logins — additional wheel accounts created on every guest, beyond the payload's own `tester`.
+- Extra guest logins — additional sudo-capable accounts created on every guest, beyond the payload's own `tester`. They get sudo through wheel, except on a desktop-governance-governed client desktop. There, sudo comes from the IdP claim only, and the harness's test-only NOPASSWD drop-in gives these logins sudo instead.
 - Image cache cap — default unbounded. Every `.img.xz` row is decompressed once and kept.
 
 Buttons: **List devices** (lists what would run, boots nothing), **Run device tests**, **Read verdicts** (re-reads files and records; starts and stops nothing), **Cancel** (reaches the whole process group, docker children included).
@@ -325,7 +323,7 @@ Mesh-wide: Start mesh, Stop all, Refresh, Cancel. Per device: Start, Stop, an SS
 Traps:
 
 - The QMP button reads **"Reset (ends guest)"** and means it. Every launcher runs qemu with `-no-reboot`, so a QMP `system_reset` shuts the guest down and exits; it does not reboot. It sits behind an inline confirm tick for that reason. Power off also ends the guest, the orderly way. Either way, only Start brings the row back, and that is a full emulated boot.
-- The guests ship `PermitRootLogin no`, and the assertions check that it stays that way. Reach root by logging in as a wheel user and running `sudo -i`; the login dropdown offers that as its own row.
+- The guests ship `PermitRootLogin no`, and the assertions check that it stays that way. Reach root by logging in as one of the harness's logins and running `sudo -i`; the login dropdown offers that as its own row. On a governed client desktop these logins are not in wheel, and their sudo comes from the harness's test-only drop-in.
 - Exiting Studio from this page leaves the emulated devices running. The verbs on the page start and stop them.
 
 Downstream: nothing reaches the image config. Terminal.

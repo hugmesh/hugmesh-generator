@@ -125,7 +125,7 @@ import threading
 from ..qt import Qt, QtWidgets
 from .. import console
 from ..styles import MUTED, WARN, muted
-from ...core import emulation, qemu_tests, qemu_windows
+from ...core import emulation, platform_info, qemu_tests, qemu_windows
 from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
@@ -145,6 +145,16 @@ _RESULT_HEADERS = ("Device", "State", "Verdict", "Passed", "Failed", "What it sa
 #: Where the persistent half of emulation went, said ON the page rather than only
 #: in this docstring. One line, always visible on the "use existing images" arm.
 _CONSOLE_POINTER = ("Persistent emulated devices live on the Mesh emulation page.")
+
+
+def _root_blocker_html(blocker: str) -> str:
+    """``emulation.playwright_root_blocker()`` for a RichText label. Its Linux and
+    Windows sentences are single lines shown as they always were; the Mac one (the
+    GNU tools are missing) is multi-line, and RichText would run its ``brew install``
+    line into the prose (``common.blocker_html``)."""
+    if platform_info.blocker_kind(blocker) == "darwin":
+        return common.blocker_html(blocker)
+    return blocker
 
 
 class QemuPage(QtWidgets.QWizardPage):
@@ -685,7 +695,7 @@ class QemuPage(QtWidgets.QWizardPage):
         build whose tests were then silently dropped."""
         blocker = qemu_tests.native_blocker()
         if blocker:
-            return (f'<span style="color:{WARN}">{html.escape(blocker)}</span> '
+            return (f'<span style="color:{WARN}">{common.blocker_html(blocker)}</span> '
                     "<b>Next</b> still configures an image build, but the tests will "
                     "<b>not</b> run after it here.")
         return ("The tests will run automatically when the build you configure next "
@@ -731,6 +741,15 @@ class QemuPage(QtWidgets.QWizardPage):
 
     def _docker_answered_paint(self, answer):
         blocker = qemu_tests.native_blocker()
+        if platform_info.blocker_kind(blocker) == "darwin":
+            # A Mac missing Homebrew's GNU tools: the sentence carries its whole remedy
+            # (one brew line, then restart). Nothing of the Windows note below applies:
+            # there is no WSL2 here, and QEMU for Windows is not a Mac's backend.
+            self.docker_note.setText(
+                f'<span style="color:{WARN}">{common.blocker_html(blocker)}</span>')
+            self._docker_ok = False
+            self._sync_controls()
+            return
         if blocker:
             # Docker Desktop being up says nothing here: the lanes are bash scripts.
             # The one lane that does run natively boots a device and asserts nothing,
@@ -1010,7 +1029,8 @@ class QemuPage(QtWidgets.QWizardPage):
                          for a in emulation.playwright_argv(self.plan, opts)))
             blocker = emulation.playwright_root_blocker()
             self.pw_note.setText(
-                f'<span style="color:{WARN}">{blocker}</span>' if blocker else
+                f'<span style="color:{WARN}">{_root_blocker_html(blocker)}</span>'
+                if blocker else
                 f'<span style="color:{MUTED}">Running as root: this lane can boot '
                 "from here.</span>")
         self._sync_controls()
@@ -1035,7 +1055,8 @@ class QemuPage(QtWidgets.QWizardPage):
         if not (list_only or dry_run):
             blocker = emulation.playwright_root_blocker()
             if blocker:
-                self.note.setText(f'<span style="color:{WARN}">{blocker}</span>')
+                self.note.setText(
+                    f'<span style="color:{WARN}">{_root_blocker_html(blocker)}</span>')
                 console.write(self.log, f"!! refused: {blocker}")
                 return
         opts = dataclasses.replace(opts, list_only=list_only, dry_run=dry_run)

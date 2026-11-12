@@ -7,6 +7,7 @@ established ``from ..wizard import _file_picker, _row`` import.
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
+from ..styles import muted
 
 
 class NoWheelComboBox(QtWidgets.QComboBox):
@@ -168,6 +169,20 @@ def label_finish_as_exit(page) -> None:
     that is not final, so the text simply goes unrendered on the other arm.
     """
     page.setButtonText(QtWidgets.QWizard.WizardButton.FinishButton, EXIT_BUTTON_TEXT)
+
+
+def page_intro(text: str) -> QtWidgets.QLabel:
+    """The muted, word-wrapped explanation at the top of a step's body.
+
+    The wizard header shows TWO lines of subtitle and clips the rest mid-sentence, with
+    no ellipsis, scroll bar or tooltip: Qt's ModernStyle header is sized for exactly
+    two (QWizardHeader::setup). So a step's subtitle stays one or two short sentences,
+    and what else it has to say goes here, in the body, which wraps and scrolls
+    (GUI-14 — tests/test_wizard.py measures every subtitle in the real header)."""
+    lab = QtWidgets.QLabel(text)
+    lab.setWordWrap(True)
+    lab.setStyleSheet(muted())
+    return lab
 
 
 def _row(label, widget):

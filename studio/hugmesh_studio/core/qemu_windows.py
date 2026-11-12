@@ -64,6 +64,21 @@ BACKEND_WHPX = "whpx"
 #: TUI key and the CLI ``--backend`` choices can never drift.
 BACKENDS = ((BACKEND_DOCKER, "Docker container (Linux or WSL2)"),
             (BACKEND_WHPX, "QEMU for Windows (WHPX)"))
+#: The Docker backend's label on a Mac, where it runs in neither Linux nor WSL2 but in
+#: the Linux VM of Docker Desktop, colima or OrbStack.
+DOCKER_LABEL_MACOS = "Docker container (this Mac's Docker VM)"
+
+
+def backends(osname: str | None = None, sysplatform: str | None = None) -> tuple:
+    """The backends THIS host's chooser offers. On a Mac that is the Docker backend
+    alone, labelled in the Mac's words: QEMU for Windows can never boot anything
+    there, and offering it (the text UI's switch key landed on it) led only to a
+    refusal that pointed back at Docker. Everywhere else it is :data:`BACKENDS`
+    itself, unchanged."""
+    from . import platform_info
+    if platform_info.host_kind(osname, sysplatform) != "darwin":
+        return BACKENDS
+    return ((BACKEND_DOCKER, DOCKER_LABEL_MACOS),)
 
 WINGET_ID = "SoftwareFreedomConservancy.QEMU"
 INSTALL_HINT = f"winget install --id {WINGET_ID} -e"
@@ -822,4 +837,6 @@ def run_studio_cli(rest: list[str], generator_dir: str) -> int:
 
 
 if __name__ == "__main__":
+    from .entry import bootstrap as _bootstrap   # the Mac PATH hook: core/entry.py
+    _bootstrap()
     raise SystemExit(main())

@@ -114,6 +114,14 @@ To give the newly joined device SSH reach, do this on the control node:
    `invalid_tags`, because the policy lists `tag:superadmin` with the empty owner list
    `[]`. So nobody can forge the SSH source.
 
+4. **Open a session.** From the tagged device, `ssh <privileged user>@<node's tailnet
+   IP>` (or `tailscale ssh`). Every shipped policy carries one `acls` rule for this,
+   `tag:superadmin → tag:hugmesh:22`, so the connection reaches the node; before
+   2026-11-11 no policy had it and the session timed out. Root is refused, and so is
+   every node that is only a mesh member: `tag:superadmin` is the only source any
+   `ssh` rule names. The netmap updates without a reconnect (measured on headscale
+   0.23.0 + tailscale 1.78.1: about a second after the force-tag pass).
+
 ## Why the allowlist step is deliberately manual (not a bug)
 
 v1 **deliberately leaves** the `superadmin-machines.txt` step manual. It is the

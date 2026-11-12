@@ -44,6 +44,7 @@ from ..core import assistant_tips as atips
 from ..core import local_ai_models as lam
 from ..core import local_ai_status as lai
 from ..core import ollama_docker as odk
+from ..core import platform_info
 
 __all__ = ["OPEN_COMMAND", "FOOTER_KEY", "LocalAIScreen", "Standalone", "status_line",
            "plain_status_line"]
@@ -106,13 +107,20 @@ _HELP = [
 #: mode starts nothing and Docker mode starts only the container, never the worker.
 _WINDOWS_START_HELP = ("  start      in Docker mode, start the Studio's Ollama container "
                        "(the queue worker needs WSL2)")
+#: The same line on a Mac without Homebrew's GNU tools: the note above it gives the
+#: ``brew install`` line, and WSL2 is not a Mac's answer to anything.
+_MACOS_START_HELP = ("  start      in Docker mode, start the Studio's Ollama container "
+                     "(the queue worker needs the GNU tools named above)")
 
 
-def _help_lines(windows: bool) -> list[str]:
-    """The help under the screen; ``windows`` = the native-Windows note is shown."""
+def _help_lines(windows: bool, kind: str = "windows") -> list[str]:
+    """The help under the screen; ``windows`` = the native-Windows note is shown, and
+    ``kind`` is that note's ``platform_info.blocker_kind`` ("darwin" for the Mac
+    note)."""
     if not windows:
         return list(_HELP)
-    return [_WINDOWS_START_HELP if ln.startswith("  start ") else ln for ln in _HELP]
+    start = _MACOS_START_HELP if kind == "darwin" else _WINDOWS_START_HELP
+    return [start if ln.startswith("  start ") else ln for ln in _HELP]
 
 
 class LocalAIScreen:
@@ -247,8 +255,9 @@ class LocalAIScreen:
         note = lai.windows_worker_note()
         if note:
             # the lines below are the bash script: PowerShell cannot run them (an
-            # unquoted path with spaces besides), so say what is true here instead
-            out += ["", note, ""]
+            # unquoted path with spaces besides), so say what is true here instead.
+            # Line by line: the Mac note has its brew command on a line of its own.
+            out += ["", *note.splitlines(), ""]
         else:
             cmds = odk.commands_for(self.generator_dir)
             out += ["", "Run it yourself:  " + cmds["todo"], "                  " + cmds["chat"], ""]
@@ -260,7 +269,7 @@ class LocalAIScreen:
             out += ["conversation:"] + [f"  {t}" for t in self.transcript[-12:]] + [""]
         if self.message:
             out += [self.message, ""]
-        return out + _help_lines(bool(note))
+        return out + _help_lines(bool(note), platform_info.blocker_kind(note))
 
     def where_page_only(self, j) -> actxt.Where:
         """The page half only (no file reads): for the tip line."""

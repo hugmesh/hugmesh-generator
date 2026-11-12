@@ -21,6 +21,18 @@ build their rows into the returned layout exactly as they did into the old
 creates the layout. ``setWidgetResizable(True)`` keeps the content the full width
 of the viewport (no horizontal scrollbar); a vertical scrollbar appears only when
 the content is taller than the viewport.
+
+That "full width" is a floor, not a ceiling. The content can never be squeezed below
+its own ``minimumSizeHint()``, so one child that cannot shrink — a long QCheckBox
+(checkbox text never wraps), a QHBoxLayout row of radios — makes the content WIDER
+than the viewport, and with the horizontal scrollbar off the excess is simply cut:
+the controls on the right are drawn past the edge and cannot be reached (GUI-03: the
+Role page's posture checkbox forced a 1750px content into a 1000px viewport).
+Keeping the scrollbar off is deliberate — a sideways-scrolling wizard page is its own
+defect — so the rule for a scrollable page is: every row must be able to WRAP. Long
+text goes in a word-wrapped QLabel, a row of many buttons goes in
+``flow_layout.flow_box``. ``horizontal_overflow`` is the measurement page tests use
+to hold a page to that rule.
 """
 from ..qt import Qt, QtWidgets
 
@@ -65,3 +77,16 @@ def scrollable(page: QtWidgets.QWidget, *,
     # handle stays because identity is the only correct way to name it.)
     page._content_scroll = scroll
     return content_layout
+
+
+def horizontal_overflow(page: QtWidgets.QWidget) -> int:
+    """How many pixels of ``page``'s scroll content cannot fit its viewport — 0 when
+    it fits.
+
+    Measured from the content's ``minimumSizeHint()`` (what the layout CANNOT go
+    below) rather than its current width, so it reports the defect even before the
+    page has been shown or resized. A pure measurement: it changes nothing, so a test
+    or a walker can call it on a live page at any window size. Raises AttributeError
+    on a page that was never passed through ``scrollable()``."""
+    scroll = page._content_scroll
+    return max(0, scroll.widget().minimumSizeHint().width() - scroll.viewport().width())

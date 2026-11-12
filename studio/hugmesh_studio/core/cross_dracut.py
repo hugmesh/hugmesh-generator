@@ -90,10 +90,12 @@ def cross_fde_rows(rows) -> list[str]:
 # ── the operator-facing text (one wording, used by the Home step AND the Review
 # summary, so the two can never say different things) ────────────────────────────────
 
-def cross_fde_note(ids: list[str], ready: bool, osname: str | None = None) -> str:
+def cross_fde_note(ids: list[str], ready: bool, osname: str | None = None,
+                   sysplatform: str | None = None) -> str:
     """What ask 21 costs on the listed ARM rows, in the operator's terms. Empty when no
     row is affected — this must never become blanket boilerplate on an all-x86 flow.
-    ``osname`` is ``os.name`` unless a test passes another."""
+    ``osname`` / ``sysplatform`` are ``os.name`` / ``sys.platform`` unless a test passes
+    others."""
     if not ids:
         return ""
     which = ", ".join(ids)
@@ -101,13 +103,21 @@ def cross_fde_note(ids: list[str], ready: bool, osname: str | None = None) -> st
             "produces the installer artifact for each of these (--encrypt-root forces "
             "it on), and the encrypted root needs an arm64 disk-boot initramfs built "
             "under a static qemu-aarch64.")
-    if (osname or os.name) == "nt":
+    from .platform_info import host_kind
+    kind = host_kind(osname, sysplatform)
+    if kind == "windows":
         # There is no /proc here: the registration that counts lives in Docker
         # Desktop's Linux VM, which this process cannot read, so "NO registration"
         # (and "turn encryption off") was said on every Windows host.
         tail = ("The registration that counts is in Docker Desktop's Linux VM, which the "
                 "Windows Studio cannot inspect: the builder's cross-dracut preflight "
                 "checks it when each of these rows starts, and says so if it is missing.")
+    elif kind == "darwin":
+        # A Mac has no binfmt_misc at all: the one that counts is inside the Docker VM.
+        tail = ("The registration that counts is in the Linux VM of Docker Desktop, "
+                "colima or OrbStack, which the Studio cannot inspect from macOS: the "
+                "builder's cross-dracut preflight checks it when each of these rows "
+                "starts, and says so if it is missing.")
     elif ready:
         tail = ("This host has qemu-aarch64 registered for binfmt "
                 f"({qemu_interp()}), which the builder container shares — the "

@@ -223,8 +223,20 @@ class DomainCAKeysPage(QtWidgets.QWizardPage):
     def _run(self, fn) -> None:
         try:
             e = fn()
-        except dca.CAImportError as err:
+        except dca.CAImportError as err:        # first: it is a ValueError too
             self._done(f"Not imported: {err}.")
+            return
+        except OSError as err:
+            # the core refuses these itself; this is the backstop, so a file the
+            # Studio cannot read is a sentence here, never the crash dialog
+            self._done(f"Not imported: cannot read {err.filename or 'the file'}: "
+                       f"{err.strerror or err}.")
+            return
+        except ValueError:
+            # a certificate field the parser rejects (cryptography's raw asn1 text
+            # means nothing to the person importing)
+            self._done("Not imported: something in this file does not parse, so it "
+                       "cannot be checked and was not taken.")
             return
         finally:
             # whatever happened (an unexpected error included), the passphrase does
