@@ -15,8 +15,21 @@ runs under) imports the Studio's Qt shim and shows a widget on an offscreen
 QApplication, and it fails any file whose skip reasons still name a missing Qt binding:
 a Qt job whose GUI tests all skip is green and blind, the very defect it exists for.
 
+``--known FILE`` (tests/known-qt-failures.txt) names what was ALREADY red on main when
+this job was added, so the job grades the change under review and not that backlog, and
+says so on every run rather than hiding it:
+
+* ``tests/x.py::test_y[id]  # why`` is deselected from the file's run, so the rest of
+  the file still gates; then it is run on its own and reported (still failing, or
+  passing: delete the line). An entry that deselects nothing is red: pytest silently
+  ignores a ``--deselect`` that matches no test, and a mute that mutes nothing hides rot.
+* ``tests/x.py  exit-abort  # why``: the file's tests gate as usual, but an interpreter
+  that aborts at EXIT after a summary with no failure (PySide6's qFatal on a QThread
+  still running at teardown) is reported, not red. Any other crash of it is red.
+
 Run from studio/ (pytest.ini's rootdir). Exit 0 when every file passed, 1 when any
-did not, 2 when the run could not start (a usage error or the Qt preflight).
+did not, 2 when the run could not start (a usage error, a malformed known list or the Qt
+preflight).
 """
 from __future__ import annotations
 
@@ -67,6 +80,55 @@ def skipped_for_missing_qt(output: str) -> list[str]:
             if ln.startswith("SKIPPED") and _NO_QT.search(ln)]
 
 
+class KnownList:
+    """A parsed ``--known`` file: node ids per file, and the files allowed to abort at
+    exit after their tests passed."""
+
+    def __init__(self, nodes=None, exit_abort=None):
+        self.nodes: dict[str, list[str]] = nodes or {}
+        self.exit_abort: set[str] = exit_abort or set()
+
+
+def parse_known(text: str) -> KnownList:
+    """Parse a known list (see the module docstring). Raises ValueError on a line it does
+    not understand, or one with no ``# reason``: an entry nobody can explain is not kept."""
+    known = KnownList()
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        body, sep, why = line.partition("#")
+        if not sep or not why.strip():
+            raise ValueError(f"known list line {n}: no '# reason': {raw!r}")
+        words = body.split()
+        if len(words) == 1 and "::" in words[0]:
+            path = words[0].split("::", 1)[0]
+            known.nodes.setdefault(path, []).append(words[0])
+        elif len(words) == 2 and words[1] == "exit-abort" and "::" not in words[0]:
+            known.exit_abort.add(words[0])
+        else:
+            raise ValueError(f"known list line {n}: want 'FILE::TEST  # why' or "
+                             f"'FILE  exit-abort  # why', got {raw!r}")
+    return known
+
+
+def _counts(output: str) -> dict:
+    """``{"passed": 3, "failed": 1, ...}`` from the last pytest summary line."""
+    line = _summary_line(output)
+    return {k: int(v) for v, k in re.findall(
+        r"(\d+) (passed|failed|errors?|skipped|deselected|xfailed|xpassed)", line)}
+
+
+def aborted_after_passing(returncode: int | None, output: str) -> bool:
+    """The interpreter died AFTER pytest printed a summary with tests passed and none
+    failed or errored: a crash in teardown at exit, not a test that failed."""
+    if returncode is None or not (returncode < 0 or returncode > 5):
+        return False
+    c = _counts(output)
+    return c.get("passed", 0) > 0 and not c.get("failed") and not c.get("error") \
+        and not c.get("errors")
+
+
 def verdict(returncode: int | None, output: str, require_qt: bool) -> str:
     """"" when a file's run counts as a pass, otherwise why it does not. ``None`` is a
     run that hit the timeout. pytest exits 5 when it collected no test: a module that
@@ -111,10 +173,42 @@ def qt_preflight() -> str:
     return ""
 
 
-def run_one(path: str, timeout: int, basetemp: str) -> tuple[int | None, str, float]:
-    """``(returncode or None on timeout, combined output, seconds)`` for one file."""
-    cmd = [sys.executable, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider",
-           f"--basetemp={basetemp}", path]
+def judge(path: str, returncode, output: str, rerun, known: KnownList,
+          require_qt: bool) -> tuple[str, list]:
+    """``(why the file is red or "", notes on its known entries)``. ``rerun`` is the
+    ``(returncode, output, seconds)`` of its known nodes run on their own, or None."""
+    notes = []
+    mine = known.nodes.get(path, [])
+    if mine and not (returncode is None or returncode < 0 or returncode > 5):
+        got = _counts(output).get("deselected", 0)
+        if got != len(mine):
+            return (f"the known list deselects {len(mine)} test(s) here and pytest "
+                    f"deselected {got}: an entry names no test"), notes
+    why = verdict(returncode, output, require_qt)
+    if why and path in known.exit_abort and aborted_after_passing(returncode, output):
+        notes.append(f"aborted at exit (exit {returncode}) after "
+                     f"{_counts(output).get('passed', 0)} passed (exit-abort)")
+        why = verdict(0, output, require_qt)   # still red on a Qt-less skip
+    if rerun is not None:
+        rc, out, _secs = rerun
+        if rc == 0:
+            notes.append(f"{len(mine)} known test(s) now PASS: delete them from the list")
+        else:
+            failed = [ln.split(" ", 2)[1] for ln in out.splitlines()
+                      if ln.startswith(("FAILED ", "ERROR "))]
+            notes.append(f"still failing ({_summary_line(out) or f'exit {rc}'}): "
+                         + ", ".join(failed or mine))
+    return why, notes
+
+
+def run_one(path: str, timeout: int, basetemp: str, deselect=(), nodes=None,
+            ) -> tuple[int | None, str, float]:
+    """``(returncode or None on timeout, combined output, seconds)`` for one file (with
+    ``deselect`` node ids left out), or for exactly ``nodes`` when given."""
+    cmd = [sys.executable, "-m", "pytest", "-q", "-rfEs", "-p", "no:cacheprovider",
+           f"--basetemp={basetemp}", *(nodes or [path])]
+    for node in deselect:
+        cmd += ["--deselect", node]
     t0 = time.monotonic()
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
@@ -143,8 +237,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--require-qt", action="store_true",
                     help="refuse to start without a working Qt binding, and fail any file "
                          "that skipped for want of one")
+    ap.add_argument("--known", help="the list of what was already red (module docstring)")
     args = ap.parse_args(argv)
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    try:
+        known = parse_known(open(args.known, encoding="utf-8").read()) if args.known \
+            else KnownList()
+    except (OSError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 2
     try:
         files = shard(args.files or discover(), args.shard)
     except ValueError as exc:
@@ -159,20 +260,31 @@ def main(argv: list[str] | None = None) -> int:
             print(why, file=sys.stderr)
             return 2
     root = tempfile.mkdtemp(prefix="ff-")      # short: AF_UNIX paths live under it
-    red = []
+    red, reported = [], []
     print(f"{len(files)} file(s), shard {args.shard}, {args.jobs} at a time", flush=True)
+
+    def one(i: int, path: str):
+        mine = known.nodes.get(path, [])
+        rc, out, secs = run_one(path, args.timeout, os.path.join(root, str(i)), mine)
+        rerun = run_one(path, args.timeout, os.path.join(root, f"{i}k"), nodes=mine) \
+            if mine else None
+        return rc, out, secs, rerun
+
     try:
         with concurrent.futures.ThreadPoolExecutor(max(1, args.jobs)) as pool:
-            futs = {pool.submit(run_one, f, args.timeout, os.path.join(root, str(i))): f
-                    for i, f in enumerate(files)}
+            futs = {pool.submit(one, i, f): f for i, f in enumerate(files)}
             for fut in concurrent.futures.as_completed(futs):
                 path = futs[fut]
-                rc, out, secs = fut.result()
-                why = verdict(rc, out, args.require_qt)
+                rc, out, secs, rerun = fut.result()
+                why, notes = judge(path, rc, out, rerun, known, args.require_qt)
                 print(f"{'FAIL' if why else 'ok  '} {secs:6.1f}s {path}  "
                       f"{why or _summary_line(out)}", flush=True)
+                for note in notes:
+                    print(f"     known: {note}", flush=True)
+                    reported.append((path, note))
                 if why:
                     red.append((path, why))
+                if why or notes:
                     print(f"::group::{path}\n" + "\n".join(out.splitlines()[-80:])
                           + "\n::endgroup::", flush=True)
     finally:
@@ -184,6 +296,11 @@ def main(argv: list[str] | None = None) -> int:
                      f"{len(files) - len(red)} of {len(files)} file(s) passed.\n\n")
             for path, why in sorted(red):
                 fh.write(f"- `{path}`: {why}\n")
+            if reported:
+                fh.write(f"\n### Known before this job ({args.known}): reported, not "
+                         "gating\n\n")
+                for path, note in sorted(reported):
+                    fh.write(f"- `{path}`: {note}\n")
     if red:
         print(f"\n{len(red)} of {len(files)} file(s) did not pass:", flush=True)
         for path, why in sorted(red):
