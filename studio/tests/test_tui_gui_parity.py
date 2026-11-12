@@ -1485,3 +1485,67 @@ def test_go_live_names_targets_and_their_limits_identically_on_both_faces(
     assert golive_target.EPHEMERAL_NOTE in gui_golive.ephemeral_text(w.target)
     assert gui_meshemu.GO_LIVE_ACTION == tui_meshemu.GO_LIVE_ACTION
     w.deleteLater()
+
+
+# ── GUI-28 (B-10): the previous-builds RESTART gate is one answer on both faces ──────
+@pytest.mark.parametrize("case", ["active", "workdir_gone", "services", "ok",
+                                  "pre_feature", "fleet_flat"])
+def test_the_restart_gate_refuses_the_same_sessions_with_the_same_words(
+        case, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from hugmesh_studio.core import build_sessions
+    from hugmesh_studio.core import domain_services as ds
+    from hugmesh_studio.core.worklist import WorklistConfig
+    from hugmesh_studio.gui.pages.sessions_widget import PreviousBuildsWidget
+    from hugmesh_studio.tui import model as tui_model
+    monkeypatch.setattr(build_sessions, "is_active", lambda s: case == "active")
+    cfg = ImageConfig(mode="mesh", additional_domains=True,
+                      domains=[Domain(name="a.example")])
+    if case != "pre_feature":
+        ds.record_reviewed(cfg, ["a.example"])
+    if case in ("services", "fleet_flat"):
+        cfg.domains.append(Domain(name="late.example"))
+    workdir = str(tmp_path / "gone") if case == "workdir_gone" else str(tmp_path)
+    config = cfg.to_dict() if case == "fleet_flat" else WorklistConfig(base=cfg).to_dict()
+    s = SimpleNamespace(id="s1", workdir=workdir, config=config,
+                        kind="fleet" if case == "fleet_flat" else "wizard",
+                        blanked_secrets=[], held_secret_files=[])
+    ok, why = PreviousBuildsWidget.can_restart(s)
+    tui_why = tui_model.restart_refusal(s)
+    assert (ok, why) == (tui_why is None, tui_why or "")
+    assert ok is (case in ("ok", "pre_feature", "fleet_flat"))
+
+
+# ── GUI-28 round 2: a REDO keeps its mode on the Mode step of both faces ─────────────
+@pytest.mark.parametrize("mode, role", [("mesh", "omnibus"), ("cloud", "laptop"),
+                                        ("standalone", "standalone-thick")])
+def test_a_redone_config_keeps_its_mode_on_the_mode_step_of_both_faces(
+        wiz, mode, role, tmp_path):
+    """``ModePage.initializePage`` re-selects ``cfg.mode``'s card, so the GUI's Next
+    keeps a loaded configuration's mode. The TUI's Enter on the mode menu must take
+    the same card — it used to take "standalone" whatever had been loaded, which
+    dropped a mesh's worklist and cleared its domains."""
+    from types import SimpleNamespace
+
+    from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry, synthesize
+    cfg = ImageConfig(mode=mode, role=role, platform="x86", brand="acme",
+                      output_dir=str(tmp_path / "out"))
+    wl = (WorklistConfig(base=cfg, entries=[WorklistEntry(role="pki", platform="x86")])
+          if mode == "mesh" else synthesize(cfg))
+    data = wl.to_dict()
+    wiz.load_session(data)                        # the GUI's Redo
+    page = advance_to(wiz, wizard_mod.ModePage)
+    assert page._selected_mode() == mode          # its card is the checked one
+    j = journey.Journey(GENERATOR_DIR)
+    assert j.load_session(SimpleNamespace(id="s1", label="", kind="wizard", config=data,
+                                          blanked_secrets=[])) == ""
+    j.feed("")                                    # welcome: a plain Enter
+    assert j.slug == "mode"
+    wiz.next()                                    # the GUI's Next on the Mode step
+    j.feed("")                                    # the TUI's Enter on the mode menu
+    assert wiz.cfg.mode == j.cfg.mode == mode
+    assert wiz.cfg.role == j.cfg.role == role
+    assert [e.id for e in wiz.worklist.entries] == [e.id for e in j.worklist.entries]
+    # the rule itself, by name: what Enter takes is the card the GUI has checked
+    assert journey.mode_enter_choice(j.cfg) == mode
