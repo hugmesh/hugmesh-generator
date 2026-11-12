@@ -77,8 +77,9 @@
 # ------------------------------------------
 # The other half of the save: boot a row again from the standalone qcow2 a mesh
 # save wrote, so what was done inside the emulated device (a go-live posture, a
-# provisioned cluster) survives a restart instead of the golden booting INTERNAL
-# again. Three rules, each load-bearing:
+# provisioned cluster) survives a restart instead of the next boot starting again
+# from the golden image, in whatever posture that image bakes. Three rules, each
+# load-bearing:
 #
 #   * THE SAVE IS NEVER WRITTEN. The launcher puts the per-run overlay over it
 #     (qemu-img create -b SAVE -F qcow2), exactly as it does over the golden, so a

@@ -34,9 +34,18 @@ THE FLOW (each step is one function below, and each argv is pinned by a test):
 5. :func:`write_journal` — ``<work>/golive/<label>.json`` (provider, domain, the
    device's started_at, UTC time, exit code; no secrets). A commit/rollback that
    exited non-zero (refused, declined, ssh failed) is kept apart as ``refused`` and
-   never becomes the recorded action. :func:`reset_by_restart` compares it
-   with the live record: an emulated device boots its golden image INTERNAL again, so
-   a posture flipped inside it lasts only until it stops.
+   never becomes the recorded action. :func:`earlier_boot` says when the journal
+   belongs to an earlier boot of the device — a FACT about the record, never a
+   posture: a device can boot again from its golden image (whatever that image
+   bakes) or from a save (whatever it held when it was saved), so nothing here infers
+   the posture from a restart.
+6. The posture is READ, never inferred: :func:`read_posture` asks the device itself
+   over one read-only ssh round trip — the two witnesses the go-live proof lane uses,
+   ``hugmesh-go-live status`` and the anchored ``nft list table inet
+   hugmesh_release_gate`` check — and says ``unknown (device not reachable)`` when it
+   cannot ask. :func:`device_report` is what every face shows under the device's
+   status: that reading, the save the device booted from (with the posture the save
+   was taken in, recorded by core.emulation_save), and the journal.
 
 WHAT IS REFUSED (each with a sentence, :func:`refusal`): a target that is not running
 or has no ssh port or key (no channel to it); a client role or a platform whose image
@@ -81,7 +90,11 @@ __all__ = [
     "probe_refusal", "remote_argv", "remote_verb_argv", "stage_token_remote",
     "remove_token_remote", "guest_out_dir", "fetch_artifacts", "artifacts_dir",
     "run_plan", "commit_argv", "rollback_argv", "terminal_spec", "journal_path",
-    "write_journal", "read_journal", "reset_by_restart", "journal_status",
+    "write_journal", "read_journal", "earlier_boot", "journal_status",
+    "POSTURE_PUBLIC", "POSTURE_INTERNAL", "POSTURE_MIXED", "POSTURE_UNKNOWN",
+    "RELEASE_GATE_TABLE", "Posture", "posture_argv", "parse_posture", "read_posture",
+    "posture_phrase", "posture_line", "READ_NOW", "utc_now", "save_origin", "boot_origin",
+    "device_report",
     "mechanism_reachability", "refuse_private_ingress", "EPHEMERAL_NOTE",
     "HEADSCALE_REFUSED_PROVIDERS", "HEADSCALE_REFUSED_MECHANISMS", "headscale_refusal",
     "add_cli_arguments", "run_studio_cli", "main",
@@ -139,9 +152,12 @@ _PRIVATE_INGRESS_NETS = (ipaddress.ip_network("10.0.2.0/24"),
 HEADSCALE_REFUSED_PROVIDERS = frozenset({"tailscale-funnel"})
 HEADSCALE_REFUSED_MECHANISMS = frozenset({"funnel"})
 
-#: Shown on the Flip step for every emulated target.
-EPHEMERAL_NOTE = ("this posture lasts until the device stops; a restart boots the golden "
-                  "image INTERNAL again — Save the device to keep a copy")
+#: Shown on the Flip step for every emulated target. It says what a boot starts from,
+#: never what posture that is: Status reads the device itself (:func:`read_posture`).
+EPHEMERAL_NOTE = ("this posture lives on this run's disk only: the next boot starts "
+                  "again from the golden image (in whatever posture it bakes) or from a "
+                  "Save (in the posture it was saved in) — Save the device to keep it; "
+                  "Status reads the posture from the device itself")
 
 
 # ── the target ──────────────────────────────────────────────────────────────────────
@@ -160,6 +176,9 @@ class GoLiveTarget:
     ssh_key: str = ""
     ssh_user: str = ""
     work_dir: str = ""
+    #: The HOST path of the save this boot of the device started from ("" = its
+    #: golden image) — the record's ``boot_save`` (qemu_devices.Device).
+    boot_save: str = ""
 
     @property
     def is_local(self) -> bool:
@@ -197,7 +216,7 @@ def target_from_device(dev: qemu_devices.Device, work_dir: str = "") -> GoLiveTa
         kind=KIND_DOCKER, label=dev.label, ssh_base_argv=tuple(base),
         running=dev.is_running, platform=dev.platform, role=dev.role,
         started_at=dev.started_at, ssh_port=dev.ssh_host_port, ssh_key=dev.ssh_key,
-        ssh_user=dev.ssh_user, work_dir=work_dir)
+        ssh_user=dev.ssh_user, work_dir=work_dir, boot_save=dev.boot_save)
 
 
 def target_from_whpx(rec: dict, work_dir: str = "") -> GoLiveTarget:
@@ -293,8 +312,8 @@ def binding_change(target: GoLiveTarget, rows: list[GoLiveTarget]) -> str:
     if fresh.started_at != target.started_at:
         moved.append(f"booted again at {fresh.started_at or '?'}")
     return (f"{name} restarted since it was picked ({'; '.join(moved) or 'its record changed'})"
-            " — what was read from it belongs to the earlier boot, which a restart reset "
-            "to INTERNAL. Re-scan the devices and pick it again before the flip.")
+            " — what was read from it belongs to the earlier boot, not this one. Re-scan "
+            "the devices and pick it again before the flip.")
 
 
 # ── refusals ────────────────────────────────────────────────────────────────────────
@@ -802,9 +821,11 @@ def read_journal(work_dir: str, label: str) -> dict | None:
     return rec if isinstance(rec, dict) else None
 
 
-def reset_by_restart(journal: dict | None, target: GoLiveTarget) -> bool:
-    """True when the journal was written for an EARLIER boot of this device: the
-    golden image came back INTERNAL, whatever the journal says was committed."""
+def earlier_boot(journal: dict | None, target: GoLiveTarget) -> bool:
+    """True when the journal was written during an EARLIER boot of this device (its
+    started_at is not the live record's). A fact about the record ONLY: the boot since
+    may have come from the golden image or from a save taken while it was public, so
+    this says nothing about the posture — :func:`read_posture` asks the device."""
     if not journal or not target.is_remote:
         return False
     then = str(journal.get("started_at") or "")
@@ -830,9 +851,10 @@ def journal_status(work_dir: str, target: GoLiveTarget) -> str:
             head = f"last {act} attempt from this host did NOT go through"
         what = (f"{head}: {j.get('provider') or '-'} {j.get('domain') or ''} at "
                 f"{j.get('at', '?')}").replace("  ", " ")
-        if reset_by_restart(j, target):
-            what += (f" — reset by a restart (the device booted again at "
-                     f"{target.started_at or '?'}, INTERNAL)")
+        if earlier_boot(j, target):
+            # WHEN, never WHAT: the posture now is the device's own reading.
+            what += (f" — during an earlier boot (the device booted again at "
+                     f"{target.started_at or '?'})")
         said.append(what)
     ref = j.get("refused")
     if isinstance(ref, dict) and ref.get("action"):
@@ -842,6 +864,281 @@ def journal_status(work_dir: str, target: GoLiveTarget) -> str:
                      f"{ref.get('provider') or '-'} {ref.get('domain') or ''} at "
                      f"{ref.get('at', '?')}").replace("  ", " "))
     return "; ".join(said)
+
+
+# ── the posture, read from the device (never inferred) ─────────────────────────────
+POSTURE_PUBLIC = "public"
+POSTURE_INTERNAL = "internal"
+POSTURE_MIXED = "mixed"
+POSTURE_UNKNOWN = "unknown"
+
+#: The reconcile-owned netfilter table (specs/usr/sbin/hugmesh-firewall-reconcile).
+RELEASE_GATE_TABLE = "hugmesh_release_gate"
+
+#: ONE read-only round trip, BOTH witnesses — the same script the go-live proof lane
+#: (tests/qemu/golive-emulated.sh) and the live prover's witness run: what the driver
+#: says (``effective posture:``) and what netfilter enforces (the table, then nft's
+#: exit status). ``@@end@@`` says the answer was not cut short.
+_POSTURE_SCRIPT = (f"{GUEST_DRIVER} status; echo @@nft@@; "
+                   f"nft list table inet {RELEASE_GATE_TABLE}; echo @@nftrc=$?@@; "
+                   "echo @@end@@")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_STATUS_POSTURE_RE = re.compile(r"^effective posture:[ \t]*([a-z]*)")
+#: "Loaded" is nft's exit 0 AND the table's own header at the START of a line. When the
+#: table is absent, real nft exits 1 and echoes ``list table inet hugmesh_release_gate``
+#: — an unanchored match read that MISSING table as a loaded one with no drop rule,
+#: i.e. public (the FG3 lane's finding, kept here).
+_NFT_HEADER_RE = re.compile(r"^table inet " + RELEASE_GATE_TABLE + r" \{")
+_NFT_DROP_RE = re.compile(r"tcp dport \{ ?80, ?443 ?\} drop")
+_NFT_RC_RE = re.compile(r"^@@nftrc=([0-9]+)@@$")
+
+
+@dataclass(frozen=True)
+class Posture:
+    """What the device itself says its posture is: the driver's ``status`` and the nft
+    release gate, each public | internal | unknown. ``reachable`` is False when no
+    answer came back (no channel, ssh failed); ``asked`` is False when nothing was
+    sent at all (the picked binding is stale, say). ``at`` is when it was read (UTC)."""
+    status: str = POSTURE_UNKNOWN
+    nft: str = POSTURE_UNKNOWN
+    reachable: bool = False
+    asked: bool = True
+    error: str = ""
+    at: str = ""
+
+    @property
+    def verdict(self) -> str:
+        """public | internal when BOTH witnesses say it; unknown when neither could be
+        read; mixed otherwise (one says public, the other internal or nothing)."""
+        if not self.reachable:
+            return POSTURE_UNKNOWN
+        if self.status == self.nft and self.status in (POSTURE_PUBLIC, POSTURE_INTERNAL):
+            return self.status
+        if self.status == POSTURE_UNKNOWN and self.nft == POSTURE_UNKNOWN:
+            return POSTURE_UNKNOWN
+        return POSTURE_MIXED
+
+    def _why_unknown(self) -> str:
+        if not self.asked:
+            return "not read"
+        if not self.reachable:
+            return "device not reachable"
+        return "the device answered, but neither witness could be read"
+
+    def phrase(self) -> str:
+        """Short: ``PUBLIC``, ``INTERNAL``, ``MIXED (…)`` or ``unknown (why)`` — what a
+        save's manifest is quoted as ("booted from a save taken while PUBLIC")."""
+        v = self.verdict
+        if v in (POSTURE_PUBLIC, POSTURE_INTERNAL):
+            return v.upper()
+        if v == POSTURE_MIXED:
+            return (f"MIXED (hugmesh-go-live status {self.status}, the nft release gate "
+                    f"{self.nft})")
+        return f"unknown ({self._why_unknown()})"
+
+    def sentence(self) -> str:
+        """The whole reading, for a face: both witnesses named, or why there is none."""
+        v = self.verdict
+        if v in (POSTURE_PUBLIC, POSTURE_INTERNAL):
+            # the verdict and "both" first: a face's pane may be narrow
+            return (f"{v.upper()} — both witnesses say {v} (hugmesh-go-live status; nft "
+                    f"table inet {RELEASE_GATE_TABLE})")
+        if v == POSTURE_MIXED:
+            nft = (self.nft if self.nft != POSTURE_UNKNOWN else
+                   f"unknown (table inet {RELEASE_GATE_TABLE} absent or unreadable)")
+            said = (f"MIXED — hugmesh-go-live status says {self.status}, the nft release "
+                    f"gate says {nft}")
+            if POSTURE_UNKNOWN not in (self.status, self.nft):
+                # both read, and they disagree: the reconcile has not caught up yet. An
+                # unreadable witness (no table loaded, no driver) is not a lag, and
+                # nothing promises it converges.
+                said += ("; hugmesh-firewall-reconcile converges them at boot and every "
+                         "60 s, so read it again in a minute")
+            return said
+        return (f"unknown ({self._why_unknown()})"
+                + (f" — {self.error}" if self.error else ""))
+
+    def as_record(self) -> dict:
+        """Plain data (a save manifest's ``golive_posture``); ``posture`` is the verdict,
+        written for a reader and recomputed from the witnesses on the way back in."""
+        return {"posture": self.verdict, "status": self.status, "nft": self.nft,
+                "reachable": self.reachable, "asked": self.asked, "error": self.error,
+                "at": self.at}
+
+    @classmethod
+    def from_record(cls, rec: object) -> "Posture":
+        if not isinstance(rec, dict):
+            return cls(asked=False, error="no posture was recorded")
+        known = (POSTURE_PUBLIC, POSTURE_INTERNAL, POSTURE_UNKNOWN)
+
+        def word(key: str) -> str:
+            w = str(rec.get(key) or "")
+            return w if w in known else POSTURE_UNKNOWN
+        return cls(status=word("status"), nft=word("nft"),
+                   reachable=bool(rec.get("reachable")),
+                   asked=bool(rec.get("asked", True)), error=str(rec.get("error") or ""),
+                   at=str(rec.get("at") or ""))
+
+
+def posture_argv(target: GoLiveTarget) -> list[str]:
+    return remote_argv(target, ["sudo", "-n", "sh", "-c", _POSTURE_SCRIPT])
+
+
+def parse_posture(text: str) -> tuple[str, str, bool]:
+    """``(status, nft, complete)`` from :data:`_POSTURE_SCRIPT`'s stdout, by the proof
+    lane's rules: status is the FIRST ``effective posture:`` line (public | internal,
+    else unknown); nft is unknown unless nft exited 0 AND the anchored table header is
+    there, then internal when the 80/443 drop rule is in the table and public when it
+    is not. A missing ``@@nftrc`` marker is not an exit 0. ``complete`` is False when
+    the answer stopped before ``@@end@@``."""
+    status, seen_status = POSTURE_UNKNOWN, False
+    nft_lines: list[str] = []
+    rc = ""
+    section = "status"
+    complete = False
+    for raw in (text or "").splitlines():
+        line = _ANSI_RE.sub("", raw.rstrip("\r"))
+        if line == "@@end@@":
+            complete = True
+            break
+        if line == "@@nft@@":
+            section = "nft"
+            continue
+        m = _NFT_RC_RE.match(line)
+        if m:
+            rc, section = m.group(1), "after"
+            continue
+        if section == "status" and not seen_status:
+            m = _STATUS_POSTURE_RE.match(line)
+            if m:
+                seen_status = True
+                if m.group(1) in (POSTURE_PUBLIC, POSTURE_INTERNAL):
+                    status = m.group(1)
+        elif section == "nft":
+            nft_lines.append(line)
+    if rc != "0" or not any(_NFT_HEADER_RE.match(ln) for ln in nft_lines):
+        nft = POSTURE_UNKNOWN
+    elif any(_NFT_DROP_RE.search(ln) for ln in nft_lines):
+        nft = POSTURE_INTERNAL
+    else:
+        nft = POSTURE_PUBLIC
+    return status, nft, complete
+
+
+def utc_now() -> str:
+    """Now, as every read time and journal entry here is written (UTC, to the second)."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def read_posture(target: GoLiveTarget, run=None, timeout: float = 45,
+                 now: str = "") -> Posture:
+    """Ask the device for its posture: one read-only ssh round trip (:func:`posture_argv`).
+    A refused target is never asked over ssh: one with no channel (stopped, no ssh port
+    or key) reads ``unknown (device not reachable)``, one this host will not use (a
+    client image, a docker-lane device from native Windows) ``unknown (not read)`` —
+    each with the refusal as the reason. An ssh that failed (exit 255, a timeout) is
+    not reachable either. Never raises."""
+    run = run or subprocess.run
+    at = now or utc_now()
+    why = refusal(target)
+    if why:
+        channel = target.running and target.ssh_port > 0 and bool(target.ssh_base_argv)
+        return Posture(asked=not channel, error=why, at=at)
+    try:
+        r = run(posture_argv(target), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        return Posture(error=f"ssh to {target.label} failed: {e}", at=at)
+    err = (r.stderr or "").strip().splitlines()
+    tail = f": {err[-1]}" if err else ""
+    if r.returncode == 255:
+        # ssh's own exit status: the connection failed, the device was not asked
+        return Posture(error=f"ssh to {target.label} failed (exit 255){tail}", at=at)
+    status, nft, complete = parse_posture(r.stdout or "")
+    error = "" if complete else f"the answer was cut short (exit {r.returncode}){tail}"
+    return Posture(status=status, nft=nft, reachable=True, error=error, at=at)
+
+
+def posture_phrase(rec: object) -> str:
+    """A recorded posture (a save manifest's ``golive_posture``) in a few words."""
+    if not isinstance(rec, dict):
+        return "not recorded"
+    return Posture.from_record(rec).phrase()
+
+
+def save_origin(boot_save: str) -> str:
+    """``boot_save`` (a saved disk) and the posture its save was TAKEN in — core.
+    emulation_save reads it from the device right before pausing it and writes it in
+    the set's manifest: "a save taken while PUBLIC (mesh-…, saved …)". A save with no
+    manifest beside it, or one written before the posture was recorded, says so."""
+    from .emulation_save import saved_device_entry   # lazy: it imports this module
+    found = saved_device_entry(boot_save)
+    name = str(found.get("session") or os.path.basename(os.path.dirname(boot_save))
+               or boot_save)
+    when = f", saved {found['created_at']}" if found.get("created_at") else ""
+    rec = found.get("golive_posture")
+    if not isinstance(rec, dict):
+        return (f"a save ({name}{when}) whose go-live posture was not recorded when it "
+                "was saved")
+    saved = Posture.from_record(rec)
+    was = "its posture was " if saved.verdict == POSTURE_UNKNOWN else ""
+    return f"a save taken while {was}{saved.phrase()} ({name}{when})"
+
+
+def boot_origin(target: GoLiveTarget) -> str:
+    """"" for this host or a boot from the golden image; for a boot from a save, which
+    save and the posture it was taken in (:func:`save_origin`). That is the posture
+    the disk came up with — what the device says NOW is :func:`read_posture`'s. A
+    record that is not running (stopped, or gone) has no boot to speak of: its line
+    says *last* booted, and that it is not running."""
+    if target.is_local or not target.boot_save:
+        return ""
+    origin = save_origin(target.boot_save)
+    if not target.running:
+        return f"last booted from {origin} — it is not running now"
+    return f"booted from {origin}"
+
+
+#: ``when`` for a reading printed as it is taken (CLI ``status``, a GUI pane's refresh).
+READ_NOW = "now"
+
+
+def posture_line(posture: Posture, when: str = READ_NOW) -> str:
+    """The one posture line every face prints. A reading that was taken carries WHEN
+    it was read: ``device posture now (read <UTC>): …`` where the face reads as it
+    prints, ``device posture <when> (read <UTC>): …`` where it quotes an earlier
+    reading (the TUI's plan screen: ``at the last s``). A reading with no time on it
+    is never called ``now``. Nothing sent at all is ``device posture: unknown (not
+    read) — why``: no ``now``, and no time, because there was no read."""
+    if not posture.asked:
+        return f"device posture: {posture.sentence()}"
+    if not posture.at:
+        return f"device posture (read time not recorded): {posture.sentence()}"
+    return f"device posture {when} (read {posture.at}): {posture.sentence()}"
+
+
+def device_report(work_dir: str, target: GoLiveTarget, posture: Posture, *,
+                  when: str = READ_NOW) -> str:
+    """What every face shows under an emulated device's status, one fact per line: the
+    posture the device reported (``posture`` — :func:`read_posture`, or an unasked
+    Posture when the face must not ssh) with its read time (:func:`posture_line`), the
+    save it booted from, and the journal of what this host asked of it. "" for this
+    host.
+
+    ``target`` must be the device's CURRENT record: the save line and the journal's
+    "earlier boot" test are both made against it. A face whose pick went stale passes
+    the fresh record (:func:`rebind`), never the one it picked — that one's save and
+    started_at belong to a boot that is over."""
+    if target.is_local:
+        return ""
+    lines = [posture_line(posture, when)]
+    origin = boot_origin(target)
+    if origin:
+        lines.append(origin)
+    js = journal_status(work_dir, target)
+    if js:
+        lines.append(js)
+    return "\n".join(lines)
 
 
 # ── honest per-mechanism labels ─────────────────────────────────────────────────────
@@ -953,12 +1250,23 @@ def run_cli(args, *, out=None, call=None, isatty=None) -> int:
     blocker = drv.blocker()
     if blocker:
         say(f"!! {blocker}")
+        if args.verb == "status" and t.is_remote:
+            # No guess: a device that could not be reached reads "unknown", with the
+            # save it booted from and the journal still said. Which "unknown" is
+            # read_posture's to say for a record this host refuses (it sends nothing:
+            # a client image is "not read", a stopped device "not reachable") and
+            # for a guest that answered the probe but bakes no driver (it IS asked:
+            # nft can say what it is). Only a probe that got no answer is said here.
+            if refusal(t) or not drv.probe().error:
+                posture = read_posture(t)
+            else:
+                posture = Posture(error=blocker, at=utc_now())
+            say(device_report(work, t, posture))
         return 2
     if args.verb == "status":
         say(drv.status_text())
-        js = journal_status(work, t) if t.is_remote else ""
-        if js:
-            say(js)
+        if t.is_remote:
+            say(device_report(work, t, read_posture(t)))
         return 0
     if args.verb == "list":
         for pr in drv.providers():
