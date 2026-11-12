@@ -408,7 +408,7 @@ second one. What moves:
 | `pom.xml` | the project's own `<version>`; every `<parent>`, dependency, plugin or extension with `groupId` `net.hugmesh` whose artifact a row of `repos.tsv` publishes, to that artifact's stable from the same run; every `<artifact>.version` property of such an artifact. Found by element, never by line number. Comments are left alone |
 | `package.json` | `version`, and its `package-lock.json` (`version` and `packages[""].version`) |
 | `composer.json`, `VERSION` | the version |
-| `repos.tsv` `mirrors` column | `frontend/package.json` (character-forge), `README.md:Version` and `CHANGELOG.md:heading` (auth-core), `gateway-pin` (the be/fe/pki `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN`, to the gateway's stable) |
+| `repos.tsv` `mirrors` column | `frontend/package.json` (character-forge), `README.md:Version` and `CHANGELOG.md:heading` (auth-core), `README.md:currently` and `README.md:jar` (federation-api: every ``currently `X.Y.Z` `` and every `target/<artifact>-X.Y.Z.jar`, which its `ReadmeFactsGuardTest` pins to the pom), `gateway-pin` (the be/fe/pki `PINNED_GATEWAY_IMAGE` / `GATEWAY_IMAGE_PIN`, to the gateway's stable). A `<file>:<kind>` whose file has no such spelling refuses the bump, and an unknown kind stops the script when it reads the table |
 
 Left for a person, and said in the PR: auth-core's `CHANGELOG.md` gets a `## X.Y.Z`
 heading with a TODO line where the release notes go (its metadata test needs the prose),
