@@ -265,7 +265,8 @@ class Device:
     def resumed_from_save(self) -> bool:
         """True when this device booted from a save rather than its golden image —
         so whatever posture the save carried (a go-live flip, a provisioned cluster)
-        is on the disk again, instead of the golden's first-boot INTERNAL state."""
+        is on the disk again, instead of the golden's first-boot state (the go-live
+        faces read the posture from the device rather than assume either)."""
         return bool(self.boot_save)
 
 
