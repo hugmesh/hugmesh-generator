@@ -46,6 +46,7 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 WORKFLOW = os.path.join(GENERATOR_DIR, ".github", "workflows", "studio-release.yml")
 WIN_LOCK = os.path.join(STUDIO_ROOT, "packaging", "wix", "windows-build-requirements.txt")
 LINUX_REQS = os.path.join(STUDIO_ROOT, "packaging", "linux-build-requirements.txt")
+MACOS_SCRIPT = os.path.join(STUDIO_ROOT, "packaging", "build-macos-app.sh")
 
 REPO = "hugmesh/hugmesh-generator"
 
@@ -59,8 +60,15 @@ VERSION = _current_version()
 TAG = f"studio-v{VERSION}"
 IDENTITY = f"https://github.com/{REPO}/.github/workflows/studio-release.yml@refs/tags/{TAG}"
 ISSUER = "https://token.actions.githubusercontent.com"
-HOSTED = {"ubuntu-latest", "ubuntu-24.04", "ubuntu-24.04-arm", "windows-latest"}
+HOSTED = {"ubuntu-latest", "ubuntu-24.04", "ubuntu-24.04-arm", "windows-latest",
+          "macos-15", "macos-15-intel"}
 FLATPAK_ARCHES = ("x86_64", "aarch64")
+#: The two macOS build jobs: job name -> (hosted runner, the arch its .dmg is built for).
+#: macos-15 is Apple silicon and macos-15-intel is Intel, the same two images the
+#: `macos` job of studio-tests.yml proves build-macos-app.sh on.
+MACOS_JOBS = {"macos": ("macos-15", "arm64"), "macos-intel": ("macos-15-intel", "x86_64")}
+DMGS = [f"hugmesh-studio-{VERSION}-macos-{arch}.dmg" for _runner, arch in MACOS_JOBS.values()]
+BUILD_JOBS = {"msi", "linux", "flatpak", "flatpak-aarch64", *MACOS_JOBS}
 
 
 def _text() -> str:
@@ -205,16 +213,16 @@ def test_release_uploads_every_signed_file_and_stays_a_prerelease():
     release = next(s for s in _jobs()["publish"]["steps"]
                    if s.get("uses", "").startswith("softprops/action-gh-release@"))
     files = release["with"]["files"].split()
-    for want in ("release/*.msi", "release/*.flatpak", "release/*.tar.gz", "release/*.spdx.json",
-                 "release/SHA256SUMS", "release/SHA256SUMS.sigstore.json", "release/releases.json"):
+    for want in ("release/*.msi", "release/*.flatpak", "release/*.tar.gz", "release/*.dmg",
+                 "release/*.spdx.json", "release/SHA256SUMS", "release/SHA256SUMS.sigstore.json", "release/releases.json"):
         assert want in files, want
     assert release["with"]["body_path"] == "release-notes.md"
     assert release["with"]["prerelease"] == "${{ contains(env.VERSION, '-') }}"
     assert release["with"]["make_latest"] == "${{ contains(env.VERSION, '-') && 'false' || 'true' }}"
 
 
-def test_publish_needs_all_four_builds_and_collect_requires_all_four_files(tmp_path):
-    assert set(_jobs()["publish"]["needs"]) == {"version", "msi", "linux", "flatpak", "flatpak-aarch64"}
+def test_publish_needs_every_build_and_collect_requires_every_installer(tmp_path):
+    assert set(_jobs()["publish"]["needs"]) == {"version", *BUILD_JOBS}
     script = _step("publish", "Collect the installers")["run"]
     art = tmp_path / "artifacts"
     (art / "msi").mkdir(parents=True)
@@ -231,13 +239,22 @@ def test_publish_needs_all_four_builds_and_collect_requires_all_four_files(tmp_p
     assert proc.returncode != 0 and "linux-x86_64.tar.gz is missing" in proc.stdout, proc
     (art / "linux").mkdir()
     (art / "linux" / f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz").write_bytes(b"tgz")
+    # Each .dmg arrives in its own artifact directory; one missing stops the publish,
+    # and so does the other.
+    for (_runner, arch), dmg in zip(MACOS_JOBS.values(), DMGS):
+        proc = _run_bash(script, env, tmp_path)
+        assert proc.returncode != 0 and f"release/{dmg} is missing" in proc.stdout, (dmg, proc)
+        (art / f"macos-{arch}").mkdir()
+        (art / f"macos-{arch}" / dmg).write_bytes(b"dmg")
+        # The checksum file next to it is not an installer and is not collected.
+        (art / f"macos-{arch}" / f"{dmg}.sha256").write_text("x  " + dmg)
     proc = _run_bash(script, env, tmp_path)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     collected = sorted(f.name for f in (tmp_path / "release").iterdir())
     assert collected == sorted([f"hugmesh-studio-{VERSION}-x64.msi",
                                 f"hugmesh-studio-{VERSION}-x86_64.flatpak",
                                 f"hugmesh-studio-{VERSION}-aarch64.flatpak",
-                                f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"]), collected
+                                f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz", *DMGS]), collected
 
 
 def test_sha256sums_lists_installers_and_sboms_and_tolerates_a_missing_sbom(tmp_path):
@@ -246,19 +263,22 @@ def test_sha256sums_lists_installers_and_sboms_and_tolerates_a_missing_sbom(tmp_
     rel.mkdir()
     for name in (f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-x86_64.flatpak",
                  f"hugmesh-studio-{VERSION}-aarch64.flatpak",
-                 f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"):
+                 f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz", *DMGS):
         (rel / name).write_bytes(name.encode())
     proc = _run_bash(script, {"PATH": "/usr/bin:/bin"}, rel)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     lines = (rel / "SHA256SUMS").read_text().splitlines()
-    assert len(lines) == 4, lines
+    assert len(lines) == 6, lines
     # Both Flatpaks are in the signed list: the aarch64 bundle is verified like the rest.
     for arch in FLATPAK_ARCHES:
         assert any(l.endswith(f"  hugmesh-studio-{VERSION}-{arch}.flatpak") for l in lines), (arch, lines)
+    # And both .dmg files: cosign signs this list, so a .dmg missing from it is unsigned.
+    for dmg in DMGS:
+        assert any(l.endswith(f"  {dmg}") for l in lines), (dmg, lines)
     (rel / f"hugmesh-studio-{VERSION}-linux-x86_64.spdx.json").write_text("{}")
     proc = _run_bash(script, {"PATH": "/usr/bin:/bin"}, rel)
     lines = (rel / "SHA256SUMS").read_text().splitlines()
-    assert len(lines) == 5 and any(l.endswith(".spdx.json") for l in lines), lines
+    assert len(lines) == 7 and any(l.endswith(".spdx.json") for l in lines), lines
 
 
 # ── Linux tarball ──────────────────────────────────────────────────────────────────
@@ -339,6 +359,18 @@ def test_release_notes_carry_verify_commands_with_the_signing_identity(tmp_path,
         assert f"`hugmesh-studio-{VERSION}-{arch}.flatpak`" in notes, arch
         assert f"flatpak install --user ./hugmesh-studio-{VERSION}-{arch}.flatpak" in notes, arch
     assert "**Linux aarch64**" in notes and "**Linux x86_64**" in notes
+    # Both .dmg files, each named once for its kind of Mac, and the two things a Mac user
+    # must know before downloading: the app is signed ad hoc and not notarized (Gatekeeper
+    # refuses its first start), and building images on a Mac is EXPERIMENTAL.
+    mac = next((p for p in notes.split("\n\n") if p.startswith("**macOS**")), "")
+    assert mac, notes
+    for dmg in DMGS:
+        assert f"`{dmg}`" in mac, dmg
+    assert "Apple silicon" in mac and "Intel" in mac
+    assert "signed ad hoc" in mac and "not notarized" in mac and "Open Anyway" in mac
+    assert "EXPERIMENTAL" in mac
+    assert "macos-15" in mac and "macos-15-intel" in mac
+    assert f"shasum -a 256 {DMGS[0]}" in notes, "no checksum line a Mac can run"
     assert ("(beta, pre-release)" in notes) == ("-" in VERSION)
     regexp = re.search(r"--certificate-identity-regexp '([^']+)'", notes).group(1)
     assert re.fullmatch(regexp, IDENTITY), regexp
@@ -353,13 +385,13 @@ def test_release_notes_carry_verify_commands_with_the_signing_identity(tmp_path,
 
 
 @pytest.mark.parametrize("signed", ["true", "false"])
-def test_releases_json_lists_all_four_packages_and_the_signature_material(tmp_path, signed):
+def test_releases_json_lists_every_package_and_the_signature_material(tmp_path, signed):
     script = _step("publish", "Generate releases.json for the documentation site")["run"]
     rel = tmp_path / "release"
     rel.mkdir()
     for name in (f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-x86_64.flatpak",
                  f"hugmesh-studio-{VERSION}-aarch64.flatpak",
-                 f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz",
+                 f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz", *DMGS,
                  f"hugmesh-studio-{VERSION}-linux-x86_64.spdx.json", "SHA256SUMS"):
         (rel / name).write_bytes(b"x" * 2048)
     env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
@@ -370,8 +402,9 @@ def test_releases_json_lists_all_four_packages_and_the_signature_material(tmp_pa
     # The fields the site's page reads today are all still there.
     assert data["version"] == VERSION and data["notesUrl"].endswith(f"/releases/tag/{TAG}")
     kinds = {(i["platform"], i["kind"]) for i in data["installers"]}
-    assert kinds == {("windows", "msi"), ("linux", "flatpak"), ("linux", "tarball")}
-    assert len(data["installers"]) == 4, [i["file"] for i in data["installers"]]
+    assert kinds == {("windows", "msi"), ("linux", "flatpak"), ("linux", "tarball"),
+                     ("macos", "dmg")}
+    assert len(data["installers"]) == 6, [i["file"] for i in data["installers"]]
     # One Flatpak per architecture, told apart by file, label and the "arch" field.
     flatpaks = {i["arch"]: i for i in data["installers"] if i["kind"] == "flatpak"}
     assert set(flatpaks) == set(FLATPAK_ARCHES), flatpaks
@@ -379,8 +412,19 @@ def test_releases_json_lists_all_four_packages_and_the_signature_material(tmp_pa
         assert item["file"] == f"hugmesh-studio-{VERSION}-{arch}.flatpak"
         assert item["label"] == f"Flatpak bundle ({arch})"
         assert arch in item["notes"]
-    assert len({i["label"] for i in data["installers"]}) == 4, "two installers share a label"
-    assert all("arch" not in i for i in data["installers"] if i["kind"] != "flatpak")
+    # One .dmg per kind of Mac, told apart the same way.
+    dmgs = {i["arch"]: i for i in data["installers"] if i["kind"] == "dmg"}
+    assert set(dmgs) == {arch for _runner, arch in MACOS_JOBS.values()}, dmgs
+    assert dmgs["arm64"]["label"] == "macOS disk image (Apple silicon)"
+    assert dmgs["x86_64"]["label"] == "macOS disk image (Intel)"
+    for arch, item in dmgs.items():
+        assert item["file"] == f"hugmesh-studio-{VERSION}-macos-{arch}.dmg"
+        for words in ("signed ad hoc", "not notarized", "Open Anyway", "EXPERIMENTAL",
+                      "brew install bash coreutils gnu-sed findutils grep make"):
+            assert words in item["notes"], (arch, words, item["notes"])
+        assert "sbom" not in item, "no macOS SBOM is written, so none may be linked"
+    assert len({i["label"] for i in data["installers"]}) == 6, "two installers share a label"
+    assert all("arch" not in i for i in data["installers"] if i["kind"] not in ("flatpak", "dmg"))
     for item in data["installers"]:
         assert set(item) >= {"platform", "kind", "label", "file", "url", "size", "sha256", "notes"}
         assert item["url"] == f"https://github.com/{REPO}/releases/download/{TAG}/{item['file']}"
@@ -409,6 +453,107 @@ def test_releases_json_refuses_a_flatpak_of_an_unknown_architecture(tmp_path):
     proc = _run_bash(script, env, tmp_path)
     assert proc.returncode != 0 and "riscv64.flatpak: not a bundle of a known architecture" in proc.stderr, proc
     assert not (rel / "releases.json").exists()
+
+
+@pytest.mark.parametrize("name", ["macos-universal2.dmg", "macos-aarch64.dmg", "x86_64.dmg"])
+def test_releases_json_refuses_a_dmg_of_an_unknown_architecture(tmp_path, name):
+    # The same rule for the .dmg: its label (Apple silicon or Intel) comes from the file
+    # name, so a name neither macOS job writes is a stop, not an invented label.
+    script = _step("publish", "Generate releases.json for the documentation site")["run"]
+    rel = tmp_path / "release"
+    rel.mkdir()
+    (rel / f"hugmesh-studio-{VERSION}-{name}").write_bytes(b"x" * 2048)
+    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+           "AUTHENTICODE": "false"}
+    proc = _run_bash(script, env, tmp_path)
+    assert proc.returncode != 0 and f"{name}: not a disk image of a known architecture" in proc.stderr, proc
+    assert not (rel / "releases.json").exists()
+
+
+# ── the two macOS jobs ─────────────────────────────────────────────────────────────
+def _upload(job: str) -> dict:
+    return next(s for s in _jobs()[job]["steps"]
+                if s.get("uses", "").startswith("actions/upload-artifact@"))
+
+
+def test_macos_jobs_run_the_script_the_pull_request_job_proves():
+    """Each .dmg is built by studio/packaging/build-macos-app.sh, the SAME script (and the
+    same arguments) the `macos` job of studio-tests.yml runs on every Studio pull
+    request, on the same two hosted images. Read-only like every build job, the
+    version from the version job, the arch named literally so check_macos_bundle.py
+    holds the frozen executable to it."""
+    jobs = _jobs()
+    tests = yaml.safe_load(open(os.path.join(GENERATOR_DIR, ".github", "workflows",
+                                             "studio-tests.yml"), encoding="utf-8"))
+    proven = {(i["runner"], i["arch"]) for i in tests["jobs"]["macos"]["strategy"]["matrix"]["include"]}
+    assert set(MACOS_JOBS.values()) == proven, (MACOS_JOBS, proven)
+    for job, (runner, arch) in MACOS_JOBS.items():
+        spec = jobs[job]
+        assert spec["runs-on"] == runner, job
+        assert spec["needs"] == "version", job
+        assert "permissions" not in spec, f"build job {job} must stay read-only"
+        assert spec["env"] == {"VERSION": "${{ needs.version.outputs.version }}", "ARCH": arch}, job
+        runs = "\n".join(s.get("run", "") for s in spec["steps"])
+        assert "--only-binary=:all: -r studio/packaging/macos-build-requirements.txt" in runs
+        assert "brew install bash coreutils gnu-sed findutils grep make" in runs
+        build = _step(job, "Build, check and smoke-test the app, then pack the .dmg")["run"]
+        for arg in ("bash studio/packaging/build-macos-app.sh", '--python "$RUNNER_TEMP/venv/bin/python"',
+                    '--version "$VERSION"', '--arch "$ARCH"', '--dist "$RUNNER_TEMP/dist"',
+                    "--gui-smoke", "--require-gnu"):
+            assert arg in build, (job, arg)
+        assert "--no-dmg" not in build
+        names = [s.get("name") for s in spec["steps"]]
+        assert names.index("The runner must really be the job's arch") < names.index(
+            "Build, check and smoke-test the app, then pack the .dmg")
+        # The artifact (macos-arm64, macos-x86_64) and the file are named from ARCH, so
+        # the twins share every step and still upload under two names.
+        upload = _upload(job)
+        assert upload["with"]["name"] == "macos-${{ env.ARCH }}", job
+        assert upload["with"]["if-no-files-found"] == "error"
+        paths = upload["with"]["path"].splitlines()
+        assert "${{ runner.temp }}/dist/hugmesh-studio-*-macos-${{ env.ARCH }}.dmg" in paths, paths
+        assert not any(p.endswith(".png") for p in paths), "the GUI screenshot is not a release file"
+
+
+def test_the_two_macos_jobs_are_twins():
+    # Only the runner and ARCH differ: one job's steps are the other's, so a fix to one
+    # cannot silently miss the other.
+    a, b = _jobs()["macos"], _jobs()["macos-intel"]
+    assert a["steps"] == b["steps"]
+    assert {k: v for k, v in a.items() if k not in ("runs-on", "env")} == \
+        {k: v for k, v in b.items() if k not in ("runs-on", "env")}
+    # Two artifacts of one name would make the second upload fail: ARCH tells them apart.
+    assert a["env"]["ARCH"] != b["env"]["ARCH"]
+
+
+def test_the_dmg_names_are_the_ones_the_build_script_writes():
+    # build-macos-app.sh's dmg_name is the one source of the file name; the publish job's
+    # list must be what it writes, or "Collect the installers" stops every release.
+    proc = subprocess.run(["bash", "-c", 'source "$1"; for a in arm64 x86_64; do dmg_name "$2" "$a"; done',
+                           "_", MACOS_SCRIPT, VERSION], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.split() == DMGS, proc.stdout
+    collect = _step("publish", "Collect the installers")["run"]
+    for arch in ("arm64", "x86_64"):
+        assert f'"hugmesh-studio-$VERSION-macos-{arch}.dmg"' in collect, arch
+
+
+def test_the_macos_arch_check_refuses_the_other_mac(tmp_path):
+    """A mislabelled runner would build the other arch under this arch's name. The
+    check runs `uname -m` (arm64 or x86_64 on a Mac) before anything is built."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for job, (_runner, arch) in MACOS_JOBS.items():
+        other = "x86_64" if arch == "arm64" else "arm64"
+        script = _step(job, "The runner must really be the job's arch")["run"]
+        env = {"PATH": f"{bindir}:/usr/bin:/bin", "ARCH": arch}
+        (bindir / "uname").write_text(f"#!/bin/sh\necho {other}\n")
+        (bindir / "uname").chmod(0o755)
+        proc = _run_bash(script, env, tmp_path)
+        assert proc.returncode != 0 and f"builds the {arch} .dmg but this runner is {other}" in proc.stdout, proc
+        (bindir / "uname").write_text(f"#!/bin/sh\necho {arch}\n")
+        proc = _run_bash(script, env, tmp_path)
+        assert proc.returncode == 0, proc
 
 
 # ── the aarch64 Flatpak job ────────────────────────────────────────────────────────
@@ -660,7 +805,7 @@ FLATPAK_JOBS = {"flatpak": "x86_64", "flatpak-aarch64": "aarch64"}
 def _all_installers(rel):
     names = [f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-x86_64.flatpak",
              f"hugmesh-studio-{VERSION}-aarch64.flatpak",
-             f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"]
+             f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz", *DMGS]
     for name in names:
         (rel / name).write_bytes(b"x" * 2048)
     return names
@@ -742,8 +887,8 @@ def test_publish_reads_the_seed_facts_of_both_flatpak_jobs_only():
     seed = _jobs()["publish"]["env"]["GENERATOR_SEED"]
     assert seed.split() == ["${{", "needs.flatpak.outputs.generator_seed", "}}",
                             "${{", "needs.flatpak-aarch64.outputs.generator_seed", "}}"], seed
-    # The MSI and the tarball carry no seed yet; their jobs must not claim one by kind.
-    for job in ("msi", "linux"):
+    # The MSI, the tarball and the .dmg carry no seed yet; their jobs must not claim one.
+    for job in ("msi", "linux", *MACOS_JOBS):
         assert "generator_seed" not in (_jobs()[job].get("outputs") or {}), job
 
 
@@ -784,7 +929,7 @@ def test_releases_json_without_seed_facts_claims_nothing(tmp_path):
     proc = _run_bash(script, env, tmp_path)
     assert proc.returncode == 0, proc.stderr
     data = json.loads((rel / "releases.json").read_text())
-    assert [i["generatorSeed"] for i in data["installers"]] == [False] * 4
+    assert [i["generatorSeed"] for i in data["installers"]] == [False] * 6
 
 
 @pytest.mark.parametrize("seeded", ["both-flatpaks", "none"])
@@ -800,7 +945,8 @@ def test_release_notes_say_per_file_whether_a_clone_is_needed(tmp_path, seeded):
     assert "point it at one on first run" not in notes
     with_line = next((l for l in notes.splitlines() if "nothing to clone" in l), "")
     without_line = next((l for l in notes.splitlines() if "do not include" in l), "")
-    others = [f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"]
+    others = [f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz",
+              *DMGS]
     if seeded == "both-flatpaks":
         for name in flatpaks:
             assert f"`{name}`" in with_line and f"`{name}`" not in without_line, name

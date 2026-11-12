@@ -1,5 +1,6 @@
 # HugMesh Image Studio — installer build, signing and release
-# (Windows MSI, Linux Flatpak for x86_64 and aarch64, Linux PyInstaller tarball).
+# (Windows MSI, Linux Flatpak for x86_64 and aarch64, Linux PyInstaller tarball, and the
+# macOS .app in a .dmg for Apple silicon and Intel).
 #
 # THIS IS A NEW PATTERN FOR THIS ORG, deliberately. Every other release.yml in the
 # fleet means "build a container image and push it to GHCR". This workflow publishes
@@ -56,7 +57,8 @@
 #
 # SIGNING (all in the publish job, all BEFORE the release is created, so a signing
 # failure leaves no release behind):
-#   * SHA256SUMS lists every published file (installers for every arch, tarball, SBOMs).
+#   * SHA256SUMS lists every published file (installers for every arch, tarball, both
+#     .dmg files, SBOMs).
 #   * cosign signs SHA256SUMS keyless (Sigstore, GitHub OIDC). The bundle
 #     SHA256SUMS.sigstore.json carries signature, certificate and transparency-log
 #     entry. The job verifies its own signature against the exact workflow identity
@@ -81,7 +83,7 @@
 # Artifact attestations need a PUBLIC repository on this org's plan: on a private
 # repository the attest step fails, the job stops, and nothing is released. That is
 # intended: nothing unsigned is published.
-name: Studio release (MSI + Flatpak + tarball)
+name: Studio release (MSI + Flatpak + tarball + macOS .dmg)
 
 on:
   workflow_dispatch:
@@ -673,7 +675,7 @@ jobs:
         # the installed bundle, placed it without an error, and the tree the Studio
         # resolved and checked IS that placed copy. Anything less writes an empty value
         # and a warning, and the file is then listed as one that still needs a clone.
-        # The MSI and the tarball carry no seed yet, so their jobs have no such step.
+        # The MSI, the tarball and the .dmg carry no seed yet, so their jobs have no such step.
         run: |
           python3 - "hugmesh-studio-${VERSION}-x86_64.flatpak" <<'PY'
           import json, os, sys
@@ -905,8 +907,147 @@ jobs:
             studio/packaging/flatpak/hugmesh-studio-*-aarch64.flatpak.sha256
           if-no-files-found: error
 
+  macos:
+    # "HugMesh Image Studio.app" in a .dmg, built by studio/packaging/build-macos-app.sh:
+    # the SAME script, with the same arguments, that the `macos` job of studio-tests.yml
+    # runs on every Studio pull request, on the same two hosted images. So what a pull
+    # request proves (the freeze, Info.plist, the Mach-O arch, the cocoa plugin, the ad
+    # hoc signature, --self-check under Finder's PATH, a real cocoa window, the .dmg's
+    # contents) is what this release ships. tests/test_studio_release_signing.py holds
+    # both jobs to that, and to each other.
+    #
+    # TWIN JOBS, like the two Flatpak jobs: `macos` (macos-15, Apple silicon, arm64) and
+    # `macos-intel` (macos-15-intel, x86_64). Only runs-on and ARCH differ; the steps are
+    # identical and name their artifact and file from ARCH. Pinned by image version, not
+    # macos-latest, so the macOS floor the bundle is built on cannot move silently.
+    #
+    # SIGNED AD HOC, NOT NOTARIZED. PyInstaller signs the bundle ad hoc (Apple silicon
+    # refuses an unsigned executable). No Developer ID exists for this org, so Gatekeeper
+    # refuses the first start of a downloaded copy until the user clicks Open Anyway; the
+    # release notes and releases.json say so. Image builds on a Mac are EXPERIMENTAL: no
+    # hosted macOS runner has Docker, so no Mac image build has been proven anywhere.
+    #
+    # The GNU userland is installed with Homebrew exactly as in the pull-request job, so
+    # the smoke runs with --require-gnu: the frozen app, started with launchd's PATH,
+    # must find bash 4+ and the GNU tools through its own PATH hook. Nothing from
+    # Homebrew is frozen into the bundle (PyInstaller packs the build venv only).
+    #
+    # Read-only like every build job: the publish job checksums, cosign-signs and
+    # attests both .dmg files with the other installers.
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: arm64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: The runner must really be the job's arch
+        # The .dmg's name is a promise about its contents; check_macos_bundle.py then
+        # holds the frozen executable's Mach-O arch to the same ARCH.
+        run: |
+          have=$(uname -m)
+          if [ "$have" != "$ARCH" ]; then
+            echo "::error::this job builds the $ARCH .dmg but this runner is $have"
+            exit 1
+          fi
+          echo "runner arch: $have"
+
+      - name: Install the pinned build dependencies into a build venv
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --only-binary=:all: -r studio/packaging/macos-build-requirements.txt
+          "$RUNNER_TEMP/venv/bin/python" -m pip freeze
+
+      - name: Install the GNU userland the docs ask for
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: brew install bash coreutils gnu-sed findutils grep make
+
+      - name: Build, check and smoke-test the app, then pack the .dmg
+        run: >-
+          bash studio/packaging/build-macos-app.sh
+          --python "$RUNNER_TEMP/venv/bin/python"
+          --version "$VERSION"
+          --arch "$ARCH"
+          --dist "$RUNNER_TEMP/dist"
+          --gui-smoke
+          --require-gnu
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: macos-${{ env.ARCH }}
+          path: |
+            ${{ runner.temp }}/dist/hugmesh-studio-*-macos-${{ env.ARCH }}.dmg
+            ${{ runner.temp }}/dist/hugmesh-studio-*-macos-${{ env.ARCH }}.dmg.sha256
+          if-no-files-found: error
+
+  macos-intel:
+    # The twin of the `macos` job on GitHub's Intel image (see its comment). Its steps
+    # are that job's, word for word (test_the_two_macos_jobs_are_twins), so a fix to one
+    # cannot miss the other.
+    needs: version
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: x86_64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: The runner must really be the job's arch
+        # The .dmg's name is a promise about its contents; check_macos_bundle.py then
+        # holds the frozen executable's Mach-O arch to the same ARCH.
+        run: |
+          have=$(uname -m)
+          if [ "$have" != "$ARCH" ]; then
+            echo "::error::this job builds the $ARCH .dmg but this runner is $have"
+            exit 1
+          fi
+          echo "runner arch: $have"
+
+      - name: Install the pinned build dependencies into a build venv
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --only-binary=:all: -r studio/packaging/macos-build-requirements.txt
+          "$RUNNER_TEMP/venv/bin/python" -m pip freeze
+
+      - name: Install the GNU userland the docs ask for
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: brew install bash coreutils gnu-sed findutils grep make
+
+      - name: Build, check and smoke-test the app, then pack the .dmg
+        run: >-
+          bash studio/packaging/build-macos-app.sh
+          --python "$RUNNER_TEMP/venv/bin/python"
+          --version "$VERSION"
+          --arch "$ARCH"
+          --dist "$RUNNER_TEMP/dist"
+          --gui-smoke
+          --require-gnu
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: macos-${{ env.ARCH }}
+          path: |
+            ${{ runner.temp }}/dist/hugmesh-studio-*-macos-${{ env.ARCH }}.dmg
+            ${{ runner.temp }}/dist/hugmesh-studio-*-macos-${{ env.ARCH }}.dmg.sha256
+          if-no-files-found: error
+
   publish:
-    needs: [version, msi, linux, flatpak, flatpak-aarch64]
+    needs: [version, msi, linux, flatpak, flatpak-aarch64, macos, macos-intel]
     # Only a studio-v* tag ref publishes: the tag push itself, or a dispatch ON that tag
     # with "publish" ticked (the re-run path). A dispatch on main never does, ticked or not.
     if: ${{ startsWith(github.ref, 'refs/tags/studio-v') && (github.event_name == 'push' || inputs.publish) }}
@@ -927,7 +1068,7 @@ jobs:
       # The installers that carry the hugmesh-generator tree, by file name, each named
       # only by the job whose own --self-check proved it ("Record whether the bundle
       # carries the generator it placed"). Read by releases.json and the release notes.
-      # The MSI and the tarball carry no seed yet, so nothing names them here.
+      # The MSI, the tarball and the .dmg carry no seed yet, so nothing names them here.
       GENERATOR_SEED: ${{ needs.flatpak.outputs.generator_seed }} ${{ needs.flatpak-aarch64.outputs.generator_seed }}
     steps:
       - name: Never overwrite a published release
@@ -1003,12 +1144,14 @@ jobs:
 
       - name: Collect the installers
         # Every installer the build jobs promise, by name: the MSI, BOTH Flatpaks (one
-        # per architecture) and the tarball. A missing one is an error, never a release
-        # with fewer files than the notes describe.
+        # per architecture), the tarball and BOTH .dmg files (Apple silicon and Intel).
+        # A missing one is an error, never a release with fewer files than the notes
+        # describe. The .dmg.sha256 files beside them are not collected: SHA256SUMS is
+        # the signed list.
         run: |
           mkdir -p release
-          find artifacts -type f \( -name '*.msi' -o -name '*.flatpak' -o -name '*.tar.gz' -o -name '*.spdx.json' \) -exec cp {} release/ \;
-          for want in "hugmesh-studio-$VERSION-x64.msi" "hugmesh-studio-$VERSION-x86_64.flatpak" "hugmesh-studio-$VERSION-aarch64.flatpak" "hugmesh-studio-$VERSION-linux-x86_64.tar.gz"; do
+          find artifacts -type f \( -name '*.msi' -o -name '*.flatpak' -o -name '*.tar.gz' -o -name '*.dmg' -o -name '*.spdx.json' \) -exec cp {} release/ \;
+          for want in "hugmesh-studio-$VERSION-x64.msi" "hugmesh-studio-$VERSION-x86_64.flatpak" "hugmesh-studio-$VERSION-aarch64.flatpak" "hugmesh-studio-$VERSION-linux-x86_64.tar.gz" "hugmesh-studio-$VERSION-macos-arm64.dmg" "hugmesh-studio-$VERSION-macos-x86_64.dmg"; do
             [ -s "release/$want" ] || { echo "::error::release/$want is missing"; exit 1; }
           done
           ls -la release
@@ -1029,7 +1172,7 @@ jobs:
         working-directory: release
         run: |
           shopt -s nullglob
-          files=(*.msi *.flatpak *.tar.gz *.spdx.json)
+          files=(*.msi *.flatpak *.tar.gz *.dmg *.spdx.json)
           sha256sum -- "${files[@]}" > SHA256SUMS
           cat SHA256SUMS
 
@@ -1038,7 +1181,8 @@ jobs:
         # field added for signing (per-installer "sbom", top-level "checksums",
         # "signature", "provenance", "verify") is additive: the page ignores keys it does
         # not know. A "linux" + "tarball" entry is listed with the Linux downloads, and
-        # the two "linux" + "flatpak" entries carry an "arch" (x86_64 or aarch64). Every
+        # the two "linux" + "flatpak" entries carry an "arch" (x86_64 or aarch64), as do
+        # the two "macos" + "dmg" entries (arm64 or x86_64). Every
         # entry carries "generatorSeed": true only for a file GENERATOR_SEED names, and
         # the page then drops its "clone hugmesh-generator" step for that file.
         run: |
@@ -1086,6 +1230,19 @@ jobs:
                          "verify the checksum and the GitHub attestation before running it. ")
                       + generator_note(name)
                       + "Building images additionally needs Docker Desktop.")
+
+          # build-macos-app.sh's dmg_name: hugmesh-studio-<version>-macos-<arch>.dmg.
+          MAC_LABELS = {"arm64": "Apple silicon", "x86_64": "Intel"}
+
+          def dmg_note(name):
+              return ("Open the disk image and drag HugMesh Image Studio to Applications; "
+                      "macOS 13 or newer. The app is signed ad hoc, not with a Developer ID, "
+                      "and not notarized, so macOS refuses its first start: open it once, then "
+                      "click Open Anyway in System Settings > Privacy & Security. Verify the "
+                      "checksum and the GitHub attestation before that. Image builds on a Mac "
+                      "are EXPERIMENTAL: they run in a Docker VM (Docker Desktop, colima or "
+                      "OrbStack) and need the GNU tools (brew install bash coreutils gnu-sed "
+                      "findutils grep make). " + generator_note(name).rstrip())
           installers = []
           for path in sorted(release.iterdir()):
               if path.name.endswith(".msi"):
@@ -1105,6 +1262,15 @@ jobs:
                       "as its source, so the install offers to add that remote and fetch it). "
                       + generator_note(path.name)
                       + "Building images needs Docker on the host.", None)
+                  item["arch"] = arch
+                  installers.append(item)
+              elif path.name.endswith(".dmg"):
+                  arch = path.name[len(f"hugmesh-studio-{version}-macos-"):-len(".dmg")]
+                  if (not path.name.startswith(f"hugmesh-studio-{version}-macos-")
+                          or arch not in MAC_LABELS):
+                      raise SystemExit(f"{path.name}: not a disk image of a known architecture")
+                  item = entry(path, "macos", "dmg", f"macOS disk image ({MAC_LABELS[arch]})",
+                               dmg_note(path.name), None)
                   item["arch"] = arch
                   installers.append(item)
               elif path.name.endswith(".tar.gz"):
@@ -1201,7 +1367,8 @@ jobs:
           gen_with=""
           gen_without=""
           for f in "hugmesh-studio-$VERSION-x64.msi" "hugmesh-studio-$VERSION-x86_64.flatpak" \
-                   "hugmesh-studio-$VERSION-aarch64.flatpak" "hugmesh-studio-$VERSION-linux-x86_64.tar.gz"; do
+                   "hugmesh-studio-$VERSION-aarch64.flatpak" "hugmesh-studio-$VERSION-linux-x86_64.tar.gz" \
+                   "hugmesh-studio-$VERSION-macos-arm64.dmg" "hugmesh-studio-$VERSION-macos-x86_64.dmg"; do
             case " ${GENERATOR_SEED:-} " in
               *" $f "*) gen_with="$gen_with${gen_with:+, }\`$f\`" ;;
               *) gen_without="$gen_without${gen_without:+, }\`$f\`" ;;
@@ -1225,6 +1392,8 @@ jobs:
           **Linux x86_64**: \`hugmesh-studio-$VERSION-x86_64.flatpak\` (install with \`flatpak install --user ./hugmesh-studio-$VERSION-x86_64.flatpak\`; needs the org.kde.Platform 6.11 runtime, and the bundle names Flathub as the place to fetch it from, so the install offers to add that remote when the runtime is missing), or \`hugmesh-studio-$VERSION-linux-x86_64.tar.gz\` (unpack and run \`hugmesh-studio\`; needs glibc 2.39 or newer).
 
           **Linux aarch64** (ARM64: Raspberry Pi 4/5 desktops, Apple-silicon VMs, Ampere machines): \`hugmesh-studio-$VERSION-aarch64.flatpak\`, built on GitHub's hosted arm64 runner from the same manifest and installed the same way (\`flatpak install --user ./hugmesh-studio-$VERSION-aarch64.flatpak\`). There is no aarch64 tarball.
+
+          **macOS** 13 or newer: \`hugmesh-studio-$VERSION-macos-arm64.dmg\` for Apple silicon, \`hugmesh-studio-$VERSION-macos-x86_64.dmg\` for Intel, built on GitHub's hosted \`macos-15\` and \`macos-15-intel\` runners. Open it and drag the app to Applications. The app is **signed ad hoc, not with a Developer ID, and not notarized**, so macOS refuses its first start: open it once, then click **Open Anyway** in System Settings → Privacy & Security. Image builds on a Mac are **EXPERIMENTAL**: they run in a Docker VM (Docker Desktop, colima or OrbStack), need the GNU tools (\`brew install bash coreutils gnu-sed findutils grep make\`), and no image build on a Mac has been proven yet.
 
           Every bundle carries its architecture in its name; \`flatpak install\` refuses one built for another architecture. All packages contain the same application. The Studio drives host tooling (Docker, QEMU, kubectl) rather than replacing it.
 
@@ -1265,7 +1434,7 @@ jobs:
             SHA256SUMS
           \`\`\`
 
-          On Windows, \`Get-FileHash .\\hugmesh-studio-$VERSION-x64.msi -Algorithm SHA256\` must print the MSI's line in \`SHA256SUMS\`.
+          On Windows, \`Get-FileHash .\\hugmesh-studio-$VERSION-x64.msi -Algorithm SHA256\` must print the MSI's line in \`SHA256SUMS\`. On a Mac, \`shasum -a 256 hugmesh-studio-$VERSION-macos-arm64.dmg\` (or the \`x86_64\` one) must print the .dmg's line.
 
           SBOMs (SPDX JSON) list the Python packages frozen into the MSI and the tarball. \`releases.json\` is the data file for the Downloads page on hugmesh.net.
           EOF
@@ -1296,6 +1465,7 @@ jobs:
             release/*.msi
             release/*.flatpak
             release/*.tar.gz
+            release/*.dmg
             release/*.spdx.json
             release/SHA256SUMS
             release/SHA256SUMS.sigstore.json
