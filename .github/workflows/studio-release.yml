@@ -37,9 +37,13 @@
 # ticked and the version typed into confirm). A republish replaces every file of the
 # release with new bytes, so every checksum, signature and attestation changes and
 # anyone who downloaded earlier can no longer verify what they have; the release
-# notes and the run summary then say so. The old green-skip gates (eleven `if:` lines
-# that let a run publish nothing and still pass) are gone: they were deleted by hand on
-# main on 2026-10-22, and a green skip is exactly what nobody notices.
+# notes and the run summary then say so. The version job asks the same question
+# first ("Refuse an existing release before anything is built"), so a re-run or a
+# dispatch of a version that is already out fails in seconds instead of after seven
+# minutes of builds; the publish job's check stays the last guard. The old green-skip
+# gates (eleven `if:` lines that let a run publish nothing and still pass) are gone:
+# they were deleted by hand on main on 2026-10-22, and a green skip is exactly what
+# nobody notices.
 #
 # RUNNERS: GITHUB-HOSTED ONLY (operator rule, 2026-10-21). Every download that is
 # published must be built and signed on GitHub's own runners. So every job here names
@@ -167,6 +171,47 @@ jobs:
         run: |
           echo "::error::publish was ticked on $REF, which never publishes. To release: scripts/release-studio.sh <version>, or Actions > Cut a Studio release"
           exit 1
+
+      - name: Refuse an existing release before anything is built
+        # The publish job's "Never overwrite a published release" step is the guard that
+        # counts, but it runs only after the msi, linux and both flatpak jobs. The re-run
+        # of run 41047656293 on 2026-11-06 built for seven minutes and then got
+        # "studio-v0.3.0-beta.3 already exists; nothing was changed". This step asks the
+        # same question before any build starts, and decides the same way: an existing
+        # release is RED unless republish=true, republish=true with no release is RED,
+        # and anything other than gh's own "release not found" is RED, never a guess.
+        #
+        # It runs only when the publish job would run: this `if:` is the publish job's
+        # `if:` word for word. A build-only dispatch, on main or on a tag without
+        # "publish" ticked, never asks. The publish job still asks again at the end,
+        # because a release can appear while the builds run.
+        #
+        # contents: read (the workflow default) is enough to read a release, so this job
+        # stays without a permissions block like every job except publish.
+        if: startsWith(github.ref, 'refs/tags/studio-v') && (github.event_name == 'push' || inputs.publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.read.outputs.version }}
+          REPUBLISH: ${{ inputs.republish }}
+        run: |
+          if out=$(gh release view "studio-v$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1); then
+            if [ "$REPUBLISH" = "true" ]; then
+              echo "::warning::release studio-v$VERSION exists and republish=true: the publish job will replace its files, and every checksum, signature and attestation changes"
+            else
+              echo "::error::release studio-v$VERSION already exists; refused before any build ran, nothing was changed. To replace its files on purpose (every checksum changes): scripts/release-studio.sh $VERSION --republish"
+              exit 1
+            fi
+          else
+            case "$out" in
+              *"release not found"*)
+                if [ "$REPUBLISH" = "true" ]; then
+                  echo "::error::republish was requested but release studio-v$VERSION does not exist; run a normal release"
+                  exit 1
+                fi
+                echo "release studio-v$VERSION does not exist yet; this run may publish it" ;;
+              *) echo "::error::could not tell whether release studio-v$VERSION exists: $out"; exit 1 ;;
+            esac
+          fi
 
       - name: Say whether this run will publish
         if: always()
