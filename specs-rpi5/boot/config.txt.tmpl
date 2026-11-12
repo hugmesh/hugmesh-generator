@@ -49,3 +49,21 @@ dtparam=pwr_led_activelow=off
 
 [all]
 arm_boost=1
+
+# ── SELinux rescue / enforcing trial (no boot menu on a Pi) ──────────────────────
+# The builder and the installer write three files next to this one, derived from
+# the final cmdline.txt (same root=, same hardening, one extra token):
+#   cmdline-rescue.txt          ... enforcing=0  PERMISSIVE RESCUE. If an enforcing
+#                               policy breaks the boot: put this card/disk in any
+#                               computer and add the line
+#                                   cmdline=cmdline-rescue.txt
+#                               at the very end of this file. Remove it to go back.
+#   cmdline-enforcing-test.txt  ... enforcing=1  used by tryboot.txt;
+#   tryboot.txt                 this file + cmdline=cmdline-enforcing-test.txt.
+#                               Pi 4/5 firmware boots it ONCE when its tryboot flag is
+#                               set, then returns to this file by itself. Set the flag
+#                               with (sysvinit; `reboot "0 tryboot"` is systemd's form
+#                               and a usage error here):
+#                                   reboot -m "0 tryboot"
+#                               -m implies -f: it syncs and restarts without running
+#                               the shutdown runlevel, so stop what must stop first.

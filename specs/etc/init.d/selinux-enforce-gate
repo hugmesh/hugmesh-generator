@@ -106,60 +106,174 @@ check_modules() {
     return 0
 }
 
-# Where the AVC record is read from, in order of preference. Variables for the
-# same reason as the paths above: the D-run leg of test-selinux-policy-install.sh
-# points them at fixtures to execute every branch, including the fail-closed one.
+# Where the AVC record is read from. Variables for the same reason as the paths
+# above: the D-run leg of test-selinux-policy-install.sh points them at fixtures to
+# execute every branch, including the fail-closed one.
 : "${AUSEARCH:=ausearch}"
 : "${AUDIT_LOG:=/var/log/audit/audit.log}"
 : "${DMESG:=dmesg}"
+# Scratch file for ausearch's stderr (its verdict lives there, see below).
+: "${AVC_SCRATCH_DIR:=/run}"
+# "Does this image run auditd?" (see audit_daemon_in_use()). Every builder links
+# auditd into the default runlevel; a variable for the same reason as the paths.
+: "${AUDITD_INITD:=/etc/init.d/auditd}"
 
-# avc_records — print this node's AVC/USER_AVC records on stdout, or return 1
-# when NO source can be read. Sources, best first:
-#   ausearch -ts boot     this boot only (the check the gate was written for);
-#   audit.log             every boot auditd ever logged here — STRICTER than
-#                         "this boot", which is the right way to be wrong;
-#   dmesg                 the kernel ring buffer (auditd absent): no boot window
-#                         either, and it can have wrapped, so it is the last resort.
-# Used to be `command -v ausearch || return 0`: an image without audit tools
-# passed the AVC check by construction. Now such an image refuses to flip.
-avc_records() {
-    local out rc
-    if command -v "${AUSEARCH}" >/dev/null 2>&1; then
-        # ausearch: 0 = matches, 1 = "<no matches>" (a clean boot), >1 = error.
-        out="$("${AUSEARCH}" -m AVC,USER_AVC -ts boot 2>/dev/null)"; rc=$?
-        if [ "${rc}" -le 1 ]; then printf '%s\n' "${out}"; return 0; fi
-        ewarn "flip-gate: ${AUSEARCH} failed (rc=${rc}); falling back to ${AUDIT_LOG}"
-    fi
-    if [ -r "${AUDIT_LOG}" ]; then
-        ewarn "flip-gate: reading ${AUDIT_LOG} directly (no ausearch): every boot's AVCs count, not just this one"
-        grep -E '^type=(AVC|USER_AVC) ' "${AUDIT_LOG}"
-        return 0
-    fi
-    if command -v "${DMESG}" >/dev/null 2>&1 && out="$("${DMESG}" 2>/dev/null)"; then
-        ewarn "flip-gate: reading AVCs from the kernel ring buffer (no ausearch, no ${AUDIT_LOG}): it may have wrapped"
-        printf '%s\n' "${out}" | grep -E 'avc: +(denied|granted)'
-        return 0
-    fi
+# ausearch_records — print this boot's AVC/USER_AVC records from ausearch, or return
+# 1 when ausearch's answer cannot be trusted (the caller then falls back).
+#
+# ausearch's exit status alone does NOT tell "clean" from "could not read":
+#   rc=0  records found;
+#   rc=1  "<no matches>" on stderr — but ALSO every error path: an unopenable log
+#         ("Error opening /var/log/audit/audit.log (...)"), a bad option or message
+#         type ("Invalid ..."), no memory. The source returns 1 for those BEFORE it
+#         prints "<no matches>", so the two never appear together.
+# The old `rc <= 1 => clean` therefore passed a node whose audit log could not be
+# read. Now rc=1 is clean ONLY when stderr carries "<no matches>" and nothing that
+# reads like an error; anything else is "not answered".
+#
+# --input-logs is load-bearing: without it ausearch reads STDIN whenever stdin is a
+# pipe (is_pipe(0) in ausearch.c), finds nothing there, and answers "<no matches>".
+# Never add --raw/-r: raw output suppresses the "<no matches>" line this relies on.
+ausearch_records() {
+    local out rc err ef
+    command -v "${AUSEARCH}" >/dev/null 2>&1 || return 1
+    ef="$(mktemp "${AVC_SCRATCH_DIR}/selinux-enforce-gate.XXXXXX" 2>/dev/null)" || {
+        ewarn "flip-gate: cannot create a scratch file in ${AVC_SCRATCH_DIR} for ausearch's stderr — not trusting ausearch"
+        return 1
+    }
+    out="$("${AUSEARCH}" --input-logs -m AVC,USER_AVC -ts boot 2>"${ef}" </dev/null)"; rc=$?
+    err="$(cat "${ef}" 2>/dev/null)"; rm -f "${ef}"
+    case "${rc}" in
+        0)
+            # Records found. An error line next to them means a PARTIAL read (one of
+            # the rotated logs could not be opened): the missing part is unknown.
+            if printf '%s\n' "${err}" | grep -iE 'error|invalid|cannot|can.t|denied|no memory' >/dev/null; then
+                ewarn "flip-gate: ${AUSEARCH} found records but also said: ${err}"
+                return 1
+            fi
+            printf '%s\n' "${out}"; return 0 ;;
+        1)
+            if printf '%s\n' "${err}" | grep -E '^<no matches>$' >/dev/null \
+               && ! printf '%s\n' "${err}" | grep -iE 'error|invalid|cannot|can.t|denied|no memory' >/dev/null; then
+                return 0   # a clean boot: no AVC/USER_AVC record at all
+            fi
+            ewarn "flip-gate: ${AUSEARCH} rc=1 without a clean '<no matches>' (stderr: ${err:-<empty>}) — not a clean boot, an unread log" ;;
+        *)
+            ewarn "flip-gate: ${AUSEARCH} failed (rc=${rc}; stderr: ${err:-<empty>})" ;;
+    esac
     return 1
 }
 
+# audit_daemon_in_use — 0 when the kernel's AVC records go (or went) to auditd rather
+# than to the ring buffer: auditd is running, the image ships it, or an audit log
+# exists in any form (even one this gate cannot read). Once auditd connects the
+# kernel hands it every record and printk's none, so on such a node a dmesg with
+# no denials says nothing about the boot.
+audit_daemon_in_use() {
+    pidof auditd >/dev/null 2>&1 && return 0
+    [ -e "${AUDITD_INITD}" ] && return 0
+    [ -e "${AUDIT_LOG}" ] && return 0
+    return 1
+}
+
+# audit_log_records — print the AVC/USER_AVC records of ${AUDIT_LOG} AND its
+# rotations (${AUDIT_LOG}.1 ...: auditd rotates mid-boot on a busy node, and this
+# boot's early records then sit in .1), or return 1 when any of them cannot be
+# read. Each one must be a readable REGULAR file and grep must have read it (rc 0
+# or 1): `[ -r ]` is true for a directory, and grep on one prints nothing — that
+# used to count as "audit.log read, no denials" (T11, 2026-11-11 prove lane).
+audit_log_records() {
+    local f rc
+    [ -f "${AUDIT_LOG}" ] && [ -r "${AUDIT_LOG}" ] || return 1
+    for f in "${AUDIT_LOG}" "${AUDIT_LOG}".[0-9]*; do
+        [ -e "${f}" ] || [ -L "${f}" ] || continue   # the unmatched glob
+        if ! { [ -f "${f}" ] && [ -r "${f}" ]; }; then
+            ewarn "flip-gate: ${f} exists but is not a readable regular file — the audit log cannot be read whole"
+            return 1
+        fi
+        grep -E '^type=(AVC|USER_AVC) ' "${f}"; rc=$?
+        if [ "${rc}" -gt 1 ]; then
+            ewarn "flip-gate: grep could not read ${f} (rc=${rc})"
+            return 1
+        fi
+    done
+    return 0
+}
+
+# avc_records — print this node's AVC/USER_AVC records on stdout, or return 1 when
+# the record cannot be read WHOLE. Sources:
+#   ausearch -ts boot     this boot only (the check the gate was written for), when
+#                         ausearch_records() trusts its answer; otherwise
+#   audit.log (+ .N)      every boot auditd ever logged here — STRICTER than "this
+#                         boot", which is the right way to be wrong;
+#   dmesg                 ALWAYS added when readable, not only as a last resort.
+#                         Before auditd connects the kernel printk's every record
+#                         (kauditd_hold_skb) and holds at most audit_backlog_limit
+#                         of them for auditd; the overflow is DROPPED from the audit
+#                         stream and survives only in the ring buffer. A boot-path
+#                         denial from early boot can therefore be missing from
+#                         audit.log and present in dmesg. Duplicates are harmless:
+#                         any one denial blocks.
+# dmesg ADDS denials; it stands in for the audit log ONLY on a node that has no
+# audit daemon (audit_daemon_in_use() false), where the kernel printk's every record.
+# On every hugmesh image auditd runs, so a dmesg with no denials is no evidence: the
+# 2026-11-11 prove lane hid audit.log on booted x86 and rpi5 images and this gate
+# said CLEAN from an empty ring buffer while audit.log held 6-12 denials.
+# Used to be `command -v ausearch || return 0`: an image without audit tools passed
+# the AVC check by construction. An image where nothing can be read refuses to flip.
+avc_records() {
+    local out have=0
+    if out="$(ausearch_records)"; then
+        printf '%s\n' "${out}"; have=1
+    elif out="$(audit_log_records)"; then
+        ewarn "flip-gate: reading ${AUDIT_LOG} directly: every boot's AVCs count, not just this one"
+        printf '%s\n' "${out}"; have=1
+    fi
+    if command -v "${DMESG}" >/dev/null 2>&1 && out="$("${DMESG}" 2>/dev/null)"; then
+        printf '%s\n' "${out}" | grep -E 'avc: +denied'
+        if [ "${have}" != 1 ]; then
+            if audit_daemon_in_use; then
+                ewarn "flip-gate: the kernel ring buffer cannot stand in for the audit log: this node runs auditd, which receives the AVC records instead of dmesg — and neither ${AUSEARCH} nor ${AUDIT_LOG} could be read"
+            else
+                ewarn "flip-gate: reading AVCs from the kernel ring buffer only (no audit daemon, no trusted ${AUSEARCH}, no ${AUDIT_LOG}): it may have wrapped"
+                have=1
+            fi
+        fi
+    fi
+    [ "${have}" = 1 ]
+}
+
+# ── THE ALLOW-LIST: denials that may stand at flip time ─────────────────────────
+# EMPTY, and a plain assignment on purpose: /etc/conf.d/selinux-enforce-gate is
+# sourced BEFORE this file, so an operator's conf.d cannot widen it. An entry is an
+# ERE matched against one denial record. Add one only with (a) the measured record
+# quoted in the comment next to it, (b) why it is dontaudit-equivalent noise (the
+# access is not needed and its denial changes nothing under enforcing), and (c) a
+# reviewed PR. "It shows up on every boot" is not (b): that is what enforcing breaks.
+AVC_ALLOW_ERE=''
+
 check_avc_clean() {
-    local d='container_t|container_runtime_t|spc_t|kernel_t|init_t|otel_collector_t|localpath_provisioner_t|localpath_provisioner_helper_t'
-    # The hugmesh host domains this wiring now actually loads — an AVC against any
-    # of them is exactly the signal the INFERRED-WIDE rules must be narrowed
-    # against, so it must block the flip just like the core/exemplar domains do.
-    d="${d}|hugmesh_authkeys_t|hugmesh_device_registry_sync_t|hugmesh_domain_reconcile_t"
-    d="${d}|hugmesh_node_storage_t|hugmesh_policy_sync_t|hugmesh_tor_reconcile_t"
-    d="${d}|hugmesh_vpn_runner_t|hugmesh_vpn_reconcile_t"
-    local recs
+    # EVERY boot-path denial counts, whatever its source domain. This check used to
+    # look only at container/kernel_t/init_t/hugmesh_* domains, so the 25 denials
+    # behind #863 (NetworkManager_t, systemd_tmpfiles_t, local_login_t, udev_t) were
+    # all outside it and the original boot would still have FLIPPED. A denial in any
+    # domain is a service that enforcing breaks.
+    # Keyed on the decision ('avc:  denied'), not on the record type: USER_AVC also
+    # carries "avc:  received policyload notice" (dbus, every boot) and auditallow
+    # instruments log "avc:  granted"; neither is a denial.
+    local recs denials
     if ! recs="$(avc_records)"; then
-        ewarn "flip-gate: no ${AUSEARCH}, no readable ${AUDIT_LOG}, no ${DMESG} — the AVC record cannot be read, refusing to flip"
+        ewarn "flip-gate: no trusted ${AUSEARCH}, no readable ${AUDIT_LOG}, and ${DMESG} cannot stand in for them — the AVC record cannot be read, refusing to flip"
         return 1
     fi
-    # Drain to /dev/null rather than `| grep -q`: a -q that exits on the first
-    # match can SIGPIPE the writer and, under pipefail, turn a FOUND into a miss.
-    if printf '%s\n' "${recs}" | grep -E "(scontext|tcontext)=[^ ]*:(${d}):" >/dev/null; then
-        ewarn "flip-gate: outstanding AVCs for core/custom domains — staying permissive"
+    denials="$(printf '%s\n' "${recs}" | grep -E 'avc: +denied')"
+    # Apply the allow-list only when it has an entry: `grep -vE ''` drops EVERY line.
+    if [ -n "${AVC_ALLOW_ERE}" ] && [ -n "${denials}" ]; then
+        denials="$(printf '%s\n' "${denials}" | grep -vE "${AVC_ALLOW_ERE}")"
+    fi
+    if [ -n "${denials}" ]; then
+        ewarn "flip-gate: $(printf '%s\n' "${denials}" | wc -l) outstanding AVC denial(s) this boot — staying permissive. First ones:"
+        printf '%s\n' "${denials}" | head -n 5 | while read -r _d; do ewarn "flip-gate:   ${_d}"; done
         return 1
     fi
     return 0

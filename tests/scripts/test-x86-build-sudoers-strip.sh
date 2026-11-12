@@ -62,6 +62,11 @@ for fn in build_sudoers_strip build_sudoers_gate; do
     awk -v re="^${fn}\\\\(\\\\) \\\\{\$" '$0 ~ re {f=1} f {print} f && /^\}$/ {exit}' "${BUILDER}" > "${TMPD}/${fn}.sh"
 done
 cat "${TMPD}/build_sudoers_strip.sh" "${TMPD}/build_sudoers_gate.sh" > "${TMPD}/funcs.sh"
+# The Clean phase calls the lib's slx_ship_bootpath_files (/srv + the portage-tmpdir
+# mask) where the builder used to ship them inline: the REAL function and its two
+# message helpers, so the shared-specs mask below is what it installs.
+awk '/^_slx_(say|fail)\(\)/ {print} /^slx_ship_bootpath_files\(\) \{$/ {f=1} f {print} f && /^\}$/ {f=0}' \
+    "${REPO}/scripts/_selinux-policy-lib.sh" >> "${TMPD}/funcs.sh"
 # The grant write: from its comment to the next phase header (exclusive).
 awk '/^# Portage pkg_postinst calls sudo internally/ {f=1}
      f && /^# ── 4\. Install spec files/ {exit}

@@ -26,3 +26,30 @@ LABEL orangepizero2w
     FDT /dtb/@@OPIZ2W_DTB@@
 @@OPIZ2W_INITRD_LINE@@
     APPEND @@OPIZ2W_APPEND@@
+
+# ── SELinux entries (#863 refute, blockers 3 and 4) ─────────────────────────────
+# DEFAULT above is unchanged; these two are picked from the boot menu on the serial
+# console (U-Boot shows it because of the MENU TITLE line; the Jetson's L4TLauncher
+# lists every LABEL). Same kernel, FDT, initrd and cmdline as the default, plus ONE
+# token: the kernel takes the LAST enforcing=, and libselinux lets it override
+# /etc/selinux/config.
+#   orangepizero2w-selinux-rescue          enforcing=0  boot a node whose enforcing policy
+#                                   breaks its boot (permissive, for this boot only)
+#   orangepizero2w-selinux-enforcing-test  enforcing=1  try enforcing for ONE boot without
+#                                   touching /etc/selinux/config
+# The installers rewrite root= with a per-line sed, so these APPEND lines get the
+# installed root= exactly like the default's.
+
+LABEL orangepizero2w-selinux-rescue
+    MENU LABEL @@BRAND_TITLE@@ headless appliance (SELinux permissive rescue)
+    LINUX /@@OPIZ2W_KERNEL_IMG@@
+    FDT /dtb/@@OPIZ2W_DTB@@
+@@OPIZ2W_INITRD_LINE@@
+    APPEND @@OPIZ2W_APPEND@@ enforcing=0
+
+LABEL orangepizero2w-selinux-enforcing-test
+    MENU LABEL @@BRAND_TITLE@@ headless appliance (SELinux enforcing (test))
+    LINUX /@@OPIZ2W_KERNEL_IMG@@
+    FDT /dtb/@@OPIZ2W_DTB@@
+@@OPIZ2W_INITRD_LINE@@
+    APPEND @@OPIZ2W_APPEND@@ enforcing=1
