@@ -255,9 +255,13 @@ already exists, the phase is DONE.
 `hugmesh/hugmesh.github.io`. It reads versions from the published GitHub Releases and
 the registry, and what it lists comes from that repository's `release-sources.json`.
 Each release workflow's "notify hugmesh.github.io" step needs the secret
-`SITE_DISPATCH_TOKEN`, which is not set. So the site refreshes only on its own cron
-unless phase 12 dispatches it. Phase 13 prints, per artifact, which Downloads group it
-appears in, or "not listed".
+`SITE_DISPATCH_TOKEN`. It has been an organization secret since 2026-11-10, but GitHub
+refused it with a 403 on the first release that used it (Studio run 42882326209), so
+until it is re-issued with Contents: read and write on `hugmesh/hugmesh.github.io` the
+site refreshes only on its own cron unless phase 12 dispatches it. In
+`studio-release.yml` and `mesh-node-release.yml` a refused dispatch is a warning, not
+a red release; most other repositories' `release.yml` still fail the run on it.
+Phase 13 prints, per artifact, which Downloads group it appears in, or "not listed".
 
 ## Troubleshooting (the real failures from the 2026-10-29 release)
 
