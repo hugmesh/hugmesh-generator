@@ -36,12 +36,32 @@ that ISO could sign a module that every kernel of the same build accepts under
 `lockdown=integrity`. The live pack now excludes `usr/src` (`live_squash_excludes`, both
 arms), and `live_root_gate` refuses a squashfs whose listing still names
 `signing_key.pem` or a `usr/src/linux*/certs/` dir, in both its listing arms
-(`unsquashfs`, and `rdsquashfs`, whose paths have no leading slash). The `--bundle-source`
-generator tree moved out of `/usr/src` to `/usr/share/hugmesh/generator-src` so the
-whole-directory exclude does not take it along. Live ISOs built
+(`unsquashfs`, and `rdsquashfs`, whose paths have no leading slash). The name match
+takes any `signing_key*.pem*` (a `.pem.bak` copy is the same key) and the basename of a
+non-default `CONFIG_MODULE_SIG_KEY`. With neither lister on the host the gate refuses
+instead of passing unchecked. The `--bundle-source` generator tree moved out of
+`/usr/src` to `/usr/share/hugmesh/generator-src` so the whole-directory exclude does not
+take it along. Live ISOs built
 before the fix, and images whose kernel came from the same cache entry, share a key that
 has to be treated as public. Rotating it means invalidating the x86 kernel cache and
 rebuilding.
+
+**The bundled generator source is tracked files only (fixed 2026-11-12).** A generator
+checkout in use holds gitignored secrets: `keys-out/` (cluster CA key, vault token,
+keystore passwords, OIDC client secrets), `tests/stack/.tls-front/ca.key`,
+`.e2e-credentials`, `.stack-src/`, local tool state, and with `-w` pointed inside the checkout
+the Secure Boot key. `--bundle-source` used to tar the whole checkout minus `.git` and
+`out/`, so all of that rode into every artifact built with the bundle. That meant the
+live ISO on older builds, and every artifact once the bundle left `/usr/src`. The Studio
+always asks for the bundle. The builder now stages only what `git ls-files` lists (or, in
+a bundled tree without `.git`, the `.hugmesh-bundle-files` manifest the previous bundle
+wrote). With neither, the build goes on without the bundle and warns. It never falls
+back to tarring the tree. A sysroot reused from an earlier run loses any bundle it holds
+when this build does not bundle. Tracked files shaped like a key or
+credential are left out, and `bundle_source_gate` re-checks the staged tree and fails the
+build on any key- or credential-shaped name or PEM private-key header. Images built with
+`--bundle-source` from a checkout holding such files before this fix carry them, and
+those secrets have to be rotated.
 
 The x86 kernel's post-`olddefconfig` hardening asserts and its compile/install/UKI recipe
 are two plain scripts, `scripts/_x86-kernel-asserts.sh` and

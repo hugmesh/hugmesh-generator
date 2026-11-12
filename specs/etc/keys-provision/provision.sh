@@ -62,7 +62,14 @@ have() { command -v "$1" >/dev/null 2>&1; }
 #   2. provision.json .mesh.endpoint
 #   3. the baked brand var HEADSCALE_URL (written to /etc/hugmesh/headscale-url
 #      at build time — env does not survive to first boot)
-#   4. DEFAULT: http://<primary-LAN-IPv4>:8080
+#   4. DEFAULT: https://<primary-LAN-IPv4>:8080
+# HTTPS by default (operator decision 2026-11-10, "Built-in relay on"): headscale's
+# embedded DERP relay rides the server_url listener and tailscale clients only ever
+# speak TLS to a DERP node, so a plain http:// default left peers with no direct
+# path without a relay. headscale itself terminates TLS on its listener with a
+# certificate from the mesh CA (provision_headscale_tls), and every node trusts that
+# CA through provision_certs. An explicit http:// override is still honoured, and
+# warned about. docs/HEADSCALE-DERP.md.
 # Because peers also get MagicDNS (.mesh.magic_dns_domain) + the control node's
 # stable hostname, a LAN-IP endpoint keeps working after a public domain is
 # later published: the MagicDNS control-plane name is stable across the
@@ -79,7 +86,7 @@ resolve_lan_ip() {
     esac
 }
 
-# Resolve the mesh control-server endpoint (full URL, e.g. http://1.2.3.4:8080).
+# Resolve the mesh control-server endpoint (full URL, e.g. https://1.2.3.4:8080).
 resolve_endpoint() {
     local ep=""
     ep="$(jqm '.headscale.server_url // ""')"
@@ -89,7 +96,7 @@ resolve_endpoint() {
     fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
         local lan; lan="$(resolve_lan_ip)"
-        [ -n "${lan}" ] && ep="http://${lan}:8080"
+        [ -n "${lan}" ] && ep="https://${lan}:8080"
     fi
     [ "${ep}" = "null" ] && ep=""
     echo "${ep}"
@@ -116,7 +123,9 @@ resolve_control_endpoint() {
                 pki_ip="$(jqm ".nodes[$i].ip")"; break
             fi
         done
-        [ -n "${pki_ip:-}" ] && [ "${pki_ip}" != "null" ] && ep="http://${pki_ip}:8080"
+        # https: the pki node's headscale serves TLS on its own listener by default
+        # (resolve_endpoint above); control_url_tls_migrate checks the answer.
+        [ -n "${pki_ip:-}" ] && [ "${pki_ip}" != "null" ] && ep="https://${pki_ip}:8080"
     fi
     [ "${ep}" = "null" ] && ep=""
     echo "${ep}"
@@ -938,12 +947,541 @@ headscale_policy_owned_security_tags() {
     [ "${rc}" -eq 0 ] || [ "${rc}" -eq 4 ]
 }
 
+# ── headscale DERP relay: offline-first, public map opt-in ─────────────────────
+# Operator decision 2026-11-10 ("Built-in relay on"): the shipped configs turn
+# headscale's EMBEDDED DERP server on and ship NO public DERP map (urls: []), so the
+# mesh starts and relays with no internet, and headscale itself fetches nothing from
+# Tailscale. docs/HEADSCALE-DERP.md is the full write-up. Relaying also needs TLS on
+# the server_url listener; the next section (provision_headscale_tls) provides it.
+# This step owns the live config's top-level derp: block DECLARATIVELY: whichever
+# config is live (baked or KEYS-supplied), the block is rewritten on every run from
+# what the provisioning inputs say.
+#   1. Region name from the brand's cluster domain (region_code = its first label,
+#      region_name = "<domain> embedded relay"). region_id keeps the config's value
+#      when it is in the private 900-999 block (else 999), so it never collides with
+#      a public region id when the opt-in adds the public map.
+#   2. The embedded server is ON. A config that turns it off AND lists DERP relays of
+#      its own (derp.urls other than the public map, or derp.paths) runs its own
+#      relays, and that choice is kept. Every other "off" is migrated, which is what
+#      makes a KEYS stick written before 2026-11-10 (embedded off, only the public
+#      map) start offline instead of exiting "initial DERPMap is empty".
+#   3. The OPT-IN public map. resolve_headscale_public_derp: provision.json
+#      .headscale.public_derp (true/false) wins, else the baked
+#      /etc/hugmesh/headscale-public-derp marker (builder --headscale-public-derp /
+#      HEADSCALE_PUBLIC_DERP=true), else OFF. ON lists the public map after any URLs
+#      of the operator's own and turns derp auto-update on; OFF takes it out again,
+#      so switching the opt-in off really switches it off.
+#   A rewrite that changes more than the region name first keeps the file as it was
+#   in <config>.derp.bak (once: the first, operator-written version is the one worth
+#   keeping).
+#   4. Records the embedded STUN port in /etc/hugmesh/headscale-derp-stun for the node
+#      firewall (hugmesh-coturn-firewall admits exactly that UDP port; nothing else).
+HEADSCALE_PUBLIC_DERP_URL="https://controlplane.tailscale.com/derpmap/default"
+HEADSCALE_PUBLIC_DERP_MARKER="/etc/hugmesh/headscale-public-derp"
+HEADSCALE_DERP_STUN_MARKER="/etc/hugmesh/headscale-derp-stun"
+
+# true|false — is the public Tailscale DERP map opted in for this node?
+resolve_headscale_public_derp() {
+    local v
+    # NOT `// ""`: jq's alternative operator treats an explicit false as absent.
+    v="$(jqm 'if .headscale.public_derp == null then "" else (.headscale.public_derp | tostring) end')"
+    case "${v}" in
+        true|false) echo "${v}"; return 0 ;;
+    esac
+    if [ -r "${HEADSCALE_PUBLIC_DERP_MARKER}" ] \
+       && [ "$(tr -d '[:space:]' < "${HEADSCALE_PUBLIC_DERP_MARKER}" 2>/dev/null)" = "true" ]; then
+        echo true; return 0
+    fi
+    echo false
+}
+
+# Prints "<enabled> <stun_port>" read from the derp.server block of a headscale
+# config (enabled = true|false; port empty when unset/unparseable).
+headscale_derp_server_state() {
+    awk '
+        /^[^[:space:]#]/ { top = $0; sub(/:.*/, "", top); sub_ = "" }
+        top == "derp" && /^  [^[:space:]#]/ { sub_ = $1; sub(/:$/, "", sub_) }
+        top == "derp" && sub_ == "server" && /^    enabled:/ { en = $2 }
+        top == "derp" && sub_ == "server" && /^    stun_listen_addr:/ {
+            a = $2; gsub(/["\047]/, "", a); n = split(a, parts, ":"); port = parts[n]
+        }
+        END { printf "%s %s\n", (en == "true" ? "true" : "false"), port }
+    ' "$1" 2>/dev/null
+}
+
+# headscale_derp_render <config> <public-url> <opt-in true|false> <region_code> <region_name>
+# Rewrites the top-level derp: block in place (see the header). Prints one line per
+# semantic change ("note: ..."); exit 0 = written or already right, 1 = not rewritten.
+headscale_derp_render() {
+    python3 - "$@" <<'PY'
+import os, re, sys
+path, public, optin, code, name = sys.argv[1:6]
+optin = optin == "true"
+text = open(path, encoding="utf-8").read()
+lines = text.splitlines(keepends=True)
+start = next((i for i, l in enumerate(lines) if re.match(r"^derp:\s*(#.*)?$", l)), None)
+end = len(lines)
+if start is not None:
+    end = next((j for j in range(start + 1, len(lines)) if re.match(r"^[^\s#]", lines[j])), len(lines))
+    # Blank lines and column-0 comments just above the next key belong to that key.
+    while end > start + 1 and (not lines[end - 1].strip() or lines[end - 1].startswith("#")):
+        end -= 1
+body = lines[start + 1:end] if start is not None else []
+
+def scalar(v):
+    v = v.strip()
+    if v and v[0] in "\"'":
+        k = v.find(v[0], 1)
+        return v[1:k] if k > 0 else v[1:]
+    return re.sub(r"\s+#.*$", "", v).strip()
+
+def inline_list(v):
+    v = re.sub(r"\s+#.*$", "", v.strip())
+    if not (v.startswith("[") and v.endswith("]")):
+        return [scalar(v)] if v else []
+    return [(a or b or c).strip() for a, b, c in
+            re.findall(r"\"([^\"]*)\"|'([^']*)'|([^,\s][^,]*)", v[1:-1]) if (a or b or c).strip()]
+
+server, server_keys, urls, paths, other, other_keys = {}, [], [], [], {}, []
+cur, ind = None, None
+for l in body:
+    if not l.strip() or l.lstrip().startswith("#"):
+        continue
+    m = re.match(r"^(\s+)(\S.*?)\s*$", l.rstrip("\n"))
+    if not m:
+        continue
+    sp, rest = len(m.group(1)), m.group(2)
+    ind = sp if ind is None else ind
+    km = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$", rest)
+    if sp == ind:
+        cur = km.group(1) if km else None
+        if not km or cur == "server":
+            continue
+        if cur in ("urls", "paths"):
+            (urls if cur == "urls" else paths).extend(inline_list(km.group(2)))
+        elif cur not in other:
+            other[cur] = km.group(2); other_keys.append(cur)
+    elif cur == "server" and km and km.group(1) not in server:
+        server[km.group(1)] = km.group(2); server_keys.append(km.group(1))
+    elif cur in ("urls", "paths"):
+        im = re.match(r"^-\s*(.*)$", rest)
+        if im:
+            (urls if cur == "urls" else paths).append(scalar(im.group(1)))
+
+def q(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+def bare(s):
+    return s if re.fullmatch(r"[A-Za-z0-9_./-]+", s) else q(s)
+
+notes = []
+own_urls = [u for u in urls if u != public]
+enabled = scalar(server.get("enabled", "false")).lower() == "true"
+if not enabled and not (own_urls or paths):
+    enabled = True
+    notes.append("embedded DERP server turned ON (the config had it off and lists no DERP relays of its own)")
+new_urls = own_urls + ([public] if optin else [])
+if (public in urls) != optin:
+    notes.append("public Tailscale DERP map " + ("listed (opt-in on)" if optin else "removed (opt-in off)"))
+rid = scalar(server.get("region_id", ""))
+rid = rid if re.fullmatch(r"9[0-9][0-9]", rid) else "999"
+aa = scalar(server.get("automatically_add_embedded_derp_region", "true")).lower()
+auto = "true" if public in new_urls else (other.get("auto_update_enabled", "false") if own_urls else "false")
+block = [
+    "derp:\n", "  server:\n",
+    "    enabled: %s\n" % ("true" if enabled else "false"),
+    "    region_id: %s\n" % rid,
+    "    region_code: %s\n" % q(code or scalar(server.get("region_code", "")) or "hugmesh"),
+    "    region_name: %s\n" % q(name or scalar(server.get("region_name", "")) or "hugmesh embedded relay"),
+    "    stun_listen_addr: %s\n" % q(scalar(server.get("stun_listen_addr", "")) or "0.0.0.0:3478"),
+    "    private_key_path: %s\n" % bare(scalar(server.get("private_key_path", "")) or "/var/lib/headscale/derp_server_private.key"),
+    "    automatically_add_embedded_derp_region: %s\n" % ("false" if aa == "false" else "true"),
+]
+canon = {"enabled", "region_id", "region_code", "region_name", "stun_listen_addr",
+         "private_key_path", "automatically_add_embedded_derp_region"}
+block += ["    %s: %s\n" % (k, server[k]) for k in server_keys if k not in canon]
+block.append("  urls: [%s]\n" % ", ".join(q(u) for u in new_urls))
+block.append("  paths: [%s]\n" % ", ".join(q(p) for p in paths))
+block.append("  auto_update_enabled: %s\n" % scalar(auto))
+block.append("  update_frequency: %s\n" % (scalar(other.get("update_frequency", "")) or "24h"))
+block += ["  %s: %s\n" % (k, other[k]) for k in other_keys if k not in ("auto_update_enabled", "update_frequency")]
+if start is None:
+    out = lines + ([] if not lines or lines[-1].endswith("\n") else ["\n"]) + ["\n"] + block
+    notes.append("derp: block added (the config had none)")
+else:
+    out = lines[:start] + block + lines[end:]
+new = "".join(out)
+if new != text:
+    if notes and not os.path.exists(path + ".derp.bak"):
+        open(path + ".derp.bak", "w", encoding="utf-8").write(text)
+    tmp = path + ".derp.tmp"
+    open(tmp, "w", encoding="utf-8").write(new)
+    os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+    os.replace(tmp, path)
+for n in notes:
+    print("note: " + n)
+PY
+}
+
+provision_headscale_derp() {
+    local cfg="$1"
+    [ -f "${cfg}" ] || return 0
+
+    # 1. Region name from the brand's cluster domain (fail-closed hostname gate, the
+    #    same one base_domain uses: no sed metachars, no quotes, no newlines).
+    local dom code="" name=""
+    dom="$(jqm '.hugmesh.cluster_domain // ""')"
+    { [ -z "${dom}" ] || [ "${dom}" = "null" ]; } && [ -r /etc/hugmesh/cluster-domain ] \
+        && dom="$(tr -d '[:space:]' < /etc/hugmesh/cluster-domain 2>/dev/null)"
+    dom="$(printf '%s' "${dom}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "${dom}" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+        code="${dom%%.*}"; name="${dom} embedded relay"
+    elif [ -n "${dom}" ] && [ "${dom}" != "null" ]; then
+        warn "headscale DERP: cluster domain '${dom}' is not a valid hostname — keeping the configured region name"
+    fi
+
+    # 2+3. The whole derp: block, declaratively.
+    local pub notes
+    pub="$(resolve_headscale_public_derp)"
+    if ! command -v python3 >/dev/null 2>&1; then
+        warn "headscale DERP: python3 is missing — the derp: block of ${cfg} is left as written"
+    elif notes="$(headscale_derp_render "${cfg}" "${HEADSCALE_PUBLIC_DERP_URL}" "${pub}" "${code}" "${name}")"; then
+        [ -n "${code}" ] && log "headscale DERP: embedded region named ${code} (${name})"
+        [ "${pub}" = true ] && log "headscale DERP: public Tailscale DERP map OPTED IN (${HEADSCALE_PUBLIC_DERP_URL}) next to the embedded region"
+        if [ -n "${notes}" ]; then
+            while IFS= read -r n; do log "headscale DERP: ${n#note: }"; done <<<"${notes}"
+            [ -f "${cfg}.derp.bak" ] && log "headscale DERP: ${cfg}.derp.bak keeps the config as it was before the first such rewrite"
+        fi
+    else
+        warn "headscale DERP: could not rewrite the derp: block of ${cfg} — left as written"
+    fi
+
+    # 4. Firewall hand-off: the embedded server's STUN port, or no marker at all.
+    local en port
+    read -r en port <<<"$(headscale_derp_server_state "${cfg}")"
+    mkdir -p "$(dirname "${HEADSCALE_DERP_STUN_MARKER}")"
+    if [ "${en}" = "true" ] && [[ "${port}" =~ ^[0-9]{1,5}$ ]] && [ "${port}" -ge 1 ] && [ "${port}" -le 65535 ]; then
+        printf '%s\n' "${port}" > "${HEADSCALE_DERP_STUN_MARKER}"
+        log "headscale DERP: embedded relay ON, STUN ${port}/udp handed to the node firewall"
+    else
+        rm -f "${HEADSCALE_DERP_STUN_MARKER}"
+        if [ "${en}" = "true" ]; then
+            warn "headscale DERP: embedded relay ON but stun_listen_addr has no usable port — the node firewall admits no STUN port"
+        elif ! grep -qE '^  urls: \[.+\]|^    - https?://|^  paths: \[.+\]' "${cfg}"; then
+            warn "headscale DERP: embedded relay OFF and no DERP map either — headscale will refuse to start (initial DERPMap is empty)"
+        fi
+    fi
+}
+
+# ── headscale TLS: the embedded relay needs an HTTPS server_url ─────────────────
+# Tailscale clients always speak TLS to a DERP node, and headscale serves /derp on
+# its own listener at the server_url host:port. With a plain http:// server_url the
+# map still holds the embedded region and STUN answers, but the relay refuses every
+# client ("tls: first record does not look like a TLS handshake", measured), so peers
+# with no direct path between them get no relay at all. So:
+#   * resolve_endpoint's DEFAULT is https://<LAN IP>:8080, and
+#   * headscale TERMINATES TLS ITSELF on that listener (tls_cert_path/tls_key_path),
+#     with a serving certificate from the MESH CA the KEYS stick carries
+#     (certs/cluster-ca.{crt,key}, written by gen-keystores.sh for every pki stick).
+#   * Every node trusts that CA the way it already trusts cluster-ca.crt:
+#     provision_certs copies KEYS certs/*.crt into the system trust store, which is
+#     the store tailscaled's Go TLS stack reads, for the control channel and for DERP.
+# What serves TLS is read from the resolved server_url (provision_headscale_tls):
+#   http://...                       plain HTTP as written (an explicit override):
+#                                    the mesh works, the relay does not (warned).
+#   https://<host>:<listen port>     headscale serves TLS itself (the default).
+#   https://<host>[:<other port>]    a TLS FRONT in front of headscale (the published
+#                                    facade, an operator's proxy): headscale stays
+#                                    plain behind it, and the front must pass /derp.
+# The certificate names every address this node can be dialled at: the server_url
+# host, every address on its interfaces, loopback (the control node's own client logs
+# in at https://127.0.0.1:<port>), its host names, the pki address from .nodes[], and
+# its tailnet address once it has one (publish_cp_dns_record re-issues with it). It
+# is issued on every provisioning run from the CA key on the stick (or the copy
+# provision_certs left in /etc/ssl/keys), valid HEADSCALE_TLS_DAYS days. A stick with
+# no CA key (an external CA kept off the stick) uses the headscale/tls.{crt,key}
+# gen-provision-keys.sh issued for it when that names the server_url host. With
+# neither, headscale stays on plain http at the same address and that is said loudly.
+HEADSCALE_TLS_CERT="${HEADSCALE_TLS_CERT:-/var/lib/headscale/tls.crt}"
+HEADSCALE_TLS_KEY="${HEADSCALE_TLS_KEY:-/var/lib/headscale/tls.key}"
+HEADSCALE_TLS_DAYS="${HEADSCALE_TLS_DAYS:-825}"
+HEADSCALE_TLS_INSTALLED_CA_CRT="${HEADSCALE_TLS_INSTALLED_CA_CRT:-/usr/local/share/ca-certificates/cluster-ca.crt}"
+HEADSCALE_TLS_INSTALLED_CA_KEY="${HEADSCALE_TLS_INSTALLED_CA_KEY:-/etc/ssl/keys/cluster-ca.key}"
+
+# headscale_url_parts <url> -> "<scheme> <host> <port>" (port empty when the URL names
+# none; an IPv6 host without its brackets). rc 1 for anything else.
+headscale_url_parts() {
+    local hp
+    [[ "$1" =~ ^(https?)://([^/?#@]+)(/[^[:space:]]*)?$ ]] || return 1
+    local scheme="${BASH_REMATCH[1]}"; hp="${BASH_REMATCH[2]}"
+    if [[ "${hp}" =~ ^\[([0-9A-Fa-f:.]+)\](:([0-9]{1,5}))?$ ]] \
+       || [[ "${hp}" =~ ^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)(:([0-9]{1,5}))?$ ]]; then
+        local host="${BASH_REMATCH[1]}" port
+        if [[ "${hp}" == \[* ]]; then port="${BASH_REMATCH[3]}"; else port="${BASH_REMATCH[4]}"; fi
+        printf '%s %s %s\n' "${scheme}" "${host}" "${port}"
+        return 0
+    fi
+    return 1
+}
+
+# headscale_listen_port <config> -> the port listen_addr names (8080 when unreadable).
+headscale_listen_port() {
+    local la port
+    la="$(sed -n 's/^listen_addr:[[:space:]]*//p' "$1" 2>/dev/null | head -1 | tr -d "\"' ")"
+    port="${la##*:}"
+    [[ "${port}" =~ ^[0-9]{1,5}$ ]] || port=8080
+    echo "${port}"
+}
+
+# headscale_tls_cert_path <config> -> the tls_cert_path value ("" when unset/empty).
+headscale_tls_cert_path() {
+    sed -n 's/^tls_cert_path:[[:space:]]*//p' "$1" 2>/dev/null | head -1 | sed -e 's/[[:space:]]#.*$//' | tr -d "\"' "
+}
+
+# headscale_tls_config_set <config> on|off — declares tls_cert_path/tls_key_path:
+# on = this node's managed pair, off = empty (plain HTTP on the listener).
+headscale_tls_config_set() {
+    local cfg="$1" c="" k="" key val
+    [ "$2" = on ] && { c="${HEADSCALE_TLS_CERT}"; k="${HEADSCALE_TLS_KEY}"; }
+    [ -s "${cfg}" ] && [ -n "$(tail -c1 "${cfg}")" ] && echo >> "${cfg}"
+    for key in tls_cert_path tls_key_path; do
+        val="${c}"; [ "${key}" = tls_key_path ] && val="${k}"
+        if grep -q "^${key}:" "${cfg}"; then
+            sed -i "s|^${key}:.*|${key}: \"${val}\"|" "${cfg}"
+        else
+            printf '%s: "%s"\n' "${key}" "${val}" >> "${cfg}"
+        fi
+    done
+}
+
+# headscale_tls_san_line <name> -> "IP:<addr>" | "DNS:<name>" | nothing (not usable).
+headscale_tls_san_line() {
+    local h="$1"
+    h="${h#[}"; h="${h%]}"
+    if [[ "${h}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then echo "IP:${h}"
+    elif [[ "${h}" == *:* ]] && [[ "${h}" =~ ^[0-9A-Fa-f:.]+$ ]]; then
+        case "${h,,}" in fe80:*) return 0 ;; esac   # link-local needs a zone; no client dials it
+        echo "IP:${h}"
+    elif [[ "${h}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && [[ "${h}" =~ [A-Za-z] ]]; then
+        echo "DNS:${h,,}"
+    fi
+}
+
+# headscale_tls_sans <server_url host> -> the SAN list, one per line, deduplicated.
+headscale_tls_sans() {
+    local h n i
+    {
+        printf '%s\n' "$1" 127.0.0.1 ::1 localhost
+        ip -o addr show 2>/dev/null | awk '{print $4}' | sed 's|/.*||'
+        hostname 2>/dev/null; hostname -f 2>/dev/null
+        command -v tailscale >/dev/null 2>&1 && tailscale ip 2>/dev/null
+        for h in "$(jqm '.headscale.server_url // ""')" "$(jqm '.mesh.endpoint // ""')" \
+                 "$(tr -d '[:space:]' < /etc/hugmesh/headscale-url 2>/dev/null)"; do
+            headscale_url_parts "${h}" 2>/dev/null | awk '{print $2}'
+        done
+        n="$(jqm '.nodes // [] | length')"
+        [[ "${n}" =~ ^[0-9]+$ ]] || n=0
+        for ((i = 0; i < n; i++)); do
+            [ "$(jqm ".nodes[$i].role")" = "pki" ] && { jqm ".nodes[$i].ip"; jqm ".nodes[$i].name"; }
+        done
+        # The in-cluster name of the selector-less headscale Service
+        # (specs/cluster/manifests/headscale), so an in-cluster https client can verify it.
+        printf '%s\n' headscale.hugmesh-pki.svc.cluster.local headscale.hugmesh-pki.svc
+        printf '%s\n' "${HEADSCALE_TLS_EXTRA_SANS:-}" | tr ' ,' '\n\n'
+    } 2>/dev/null | while IFS= read -r h; do
+        [ -n "${h}" ] && [ "${h}" != "null" ] && headscale_tls_san_line "${h}"
+    done | awk '!seen[$0]++'
+}
+
+# headscale_tls_ca_pair -> "<ca.crt> <ca.key>" of a matching mesh CA pair: the KEYS
+# stick's, else the copies provision_certs installed. rc 1 when there is none.
+headscale_tls_ca_pair() {
+    local crt key a b
+    for crt in "${BASE:-/nonexistent}/certs/cluster-ca.crt" "${HEADSCALE_TLS_INSTALLED_CA_CRT}"; do
+        for key in "${BASE:-/nonexistent}/certs/cluster-ca.key" "${HEADSCALE_TLS_INSTALLED_CA_KEY}"; do
+            [ -f "${crt}" ] && [ -s "${crt}" ] && [ -f "${key}" ] && [ -s "${key}" ] || continue
+            # The PEM public keys themselves, not a digest of them: a digest of two
+            # failed extractions is the digest of nothing, and those match.
+            a="$(openssl x509 -in "${crt}" -noout -pubkey 2>/dev/null)"
+            b="$(openssl pkey -in "${key}" -pubout 2>/dev/null)"
+            if [[ "${a}" == *"BEGIN PUBLIC KEY"* ]] && [ "${a}" = "${b}" ]; then
+                echo "${crt} ${key}"; return 0
+            fi
+            # stderr: this function's stdout is the pair its caller captures.
+            [ "${crt%/*}" = "${key%/*}" ] && warn "headscale TLS: ${key} is not the key of ${crt} — not used" >&2
+        done
+    done
+    return 1
+}
+
+# headscale_tls_covers <cert> <host> — rc 0 when <cert> is in date and names <host>.
+headscale_tls_covers() {
+    local out
+    openssl x509 -in "$1" -noout -checkend 86400 >/dev/null 2>&1 || return 1
+    if [[ "$2" =~ ^[0-9.]+$ ]] || [[ "$2" == *:* ]]; then
+        out="$(openssl x509 -in "$1" -noout -checkip "$2" 2>/dev/null)"
+    else
+        out="$(openssl x509 -in "$1" -noout -checkhost "$2" 2>/dev/null)"
+    fi
+    case "${out}" in *" does match certificate"*) return 0 ;; esac
+    return 1
+}
+
+# headscale_tls_issue <server_url host> — issue the serving certificate from the mesh
+# CA into HEADSCALE_TLS_CERT/KEY (leaf + CA, key 0600). rc 1 = no CA pair / failed.
+headscale_tls_issue() {
+    local pair crt key d san
+    pair="$(headscale_tls_ca_pair)" || return 1
+    read -r crt key <<<"${pair}"
+    d="$(mktemp -d)" || return 1
+    headscale_tls_sans "$1" > "${d}/sans"
+    san="$(paste -sd, "${d}/sans")"
+    printf 'subjectAltName=%s\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\n' \
+        "${san}" > "${d}/ext"
+    if ( umask 077
+         openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "${d}/tls.key" \
+             -out "${d}/tls.csr" -subj "/CN=$(printf '%s' "$1" | tr -cd 'A-Za-z0-9.:-')" \
+         && openssl x509 -req -in "${d}/tls.csr" -CA "${crt}" -CAkey "${key}" -set_serial "0x$(openssl rand -hex 16)" \
+             -days "${HEADSCALE_TLS_DAYS}" -sha256 -extfile "${d}/ext" -out "${d}/leaf.crt" \
+         && openssl x509 -in "${crt}" -out "${d}/ca.pem" ) >/dev/null 2>&1; then
+        mkdir -p "$(dirname "${HEADSCALE_TLS_CERT}")" "$(dirname "${HEADSCALE_TLS_KEY}")"
+        cat "${d}/leaf.crt" "${d}/ca.pem" > "${HEADSCALE_TLS_CERT}.tmp" && chmod 0644 "${HEADSCALE_TLS_CERT}.tmp"
+        cp "${d}/tls.key" "${HEADSCALE_TLS_KEY}.tmp" && chmod 0600 "${HEADSCALE_TLS_KEY}.tmp"
+        mv -f "${HEADSCALE_TLS_KEY}.tmp" "${HEADSCALE_TLS_KEY}" && mv -f "${HEADSCALE_TLS_CERT}.tmp" "${HEADSCALE_TLS_CERT}"
+        log "headscale TLS: serving certificate issued from the mesh CA (${crt}), valid ${HEADSCALE_TLS_DAYS} days, for ${san}"
+        rm -rf "${d}"
+        return 0
+    fi
+    rm -rf "${d}"
+    warn "headscale TLS: issuing the serving certificate from ${crt} failed"
+    return 1
+}
+
+# headscale_tls_material <server_url host> — make HEADSCALE_TLS_CERT/KEY a pair that
+# names <host>: issue it from the mesh CA, else take the stick's pre-issued
+# headscale/tls.{crt,key}, else keep a pair an earlier run left. rc 1 = none.
+headscale_tls_material() {
+    headscale_tls_issue "$1" && return 0
+    local pc="${BASE:-/nonexistent}/headscale/tls.crt" pk="${BASE:-/nonexistent}/headscale/tls.key"
+    if [ -s "${pc}" ] && [ -s "${pk}" ]; then
+        if headscale_tls_covers "${pc}" "$1"; then
+            mkdir -p "$(dirname "${HEADSCALE_TLS_CERT}")"
+            cp -f "${pc}" "${HEADSCALE_TLS_CERT}" && chmod 0644 "${HEADSCALE_TLS_CERT}" \
+                && cp -f "${pk}" "${HEADSCALE_TLS_KEY}" && chmod 0600 "${HEADSCALE_TLS_KEY}" \
+                && { log "headscale TLS: using the KEYS stick's pre-issued headscale/tls.crt (it names ${1})"; return 0; }
+        else
+            warn "headscale TLS: the KEYS stick's headscale/tls.crt does not name ${1} (or is out of date) — not used"
+        fi
+    fi
+    if [ -s "${HEADSCALE_TLS_CERT}" ] && [ -s "${HEADSCALE_TLS_KEY}" ] && headscale_tls_covers "${HEADSCALE_TLS_CERT}" "$1"; then
+        log "headscale TLS: keeping the serving certificate an earlier run issued (it names ${1})"
+        return 0
+    fi
+    return 1
+}
+
+# provision_headscale_tls <config> <server_url> — decide who serves TLS for
+# <server_url> (see the header), make it so in <config>, and set HEADSCALE_SERVED_URL
+# to the URL headscale will actually answer at (https -> http only when no
+# certificate can be had).
+provision_headscale_tls() {
+    local cfg="$1" url="$2" parts scheme host port lport cur hp
+    HEADSCALE_SERVED_URL="${url}"
+    lport="$(headscale_listen_port "${cfg}")"
+    cur="$(headscale_tls_cert_path "${cfg}")"
+    if [ -n "${cur}" ] && [ "${cur}" != "${HEADSCALE_TLS_CERT}" ]; then
+        log "headscale TLS: ${cfg} names its own certificate (${cur}) — left as written"
+        return 0
+    fi
+    if grep -Eq "^tls_letsencrypt_hostname:[[:space:]]*[\"']?[A-Za-z0-9]" "${cfg}"; then
+        log "headscale TLS: ${cfg} uses Let's Encrypt (tls_letsencrypt_hostname) — left as written"
+        return 0
+    fi
+    if ! parts="$(headscale_url_parts "${url}")"; then
+        warn "headscale TLS: server_url '${url}' is not scheme://host[:port] — headscale stays on plain HTTP"
+        headscale_tls_config_set "${cfg}" off
+        return 0
+    fi
+    read -r scheme host port <<<"${parts}"
+    if [ "${scheme}" = http ]; then
+        headscale_tls_config_set "${cfg}" off
+        warn "headscale TLS: server_url ${url} is plain http (an explicit override) — nodes join, but the embedded DERP relay is NOT usable over it (clients speak TLS to DERP), so peers with no direct path get no relay. Drop the override (the default is https://<LAN IP>:${lport}) or front headscale with TLS (docs/HEADSCALE-DERP.md)"
+        return 0
+    fi
+    if [ "${port:-443}" != "${lport}" ]; then
+        headscale_tls_config_set "${cfg}" off
+        log "headscale TLS: server_url ${url} names a TLS front (port ${port:-443}; headscale listens on ${lport}) — headscale stays plain HTTP behind it, and that front must pass /derp with its Upgrade header for the relay to work (docs/HEADSCALE-DERP.md)"
+        return 0
+    fi
+    if headscale_tls_material "${host}"; then
+        headscale_tls_config_set "${cfg}" on
+        log "headscale TLS: headscale serves HTTPS itself on :${lport} (${HEADSCALE_TLS_CERT}); the embedded DERP relay rides it"
+        return 0
+    fi
+    headscale_tls_config_set "${cfg}" off
+    hp="${host}"; [[ "${host}" == *:* ]] && hp="[${host}]"
+    HEADSCALE_SERVED_URL="http://${hp}:${lport}"
+    warn "headscale TLS: NO serving certificate for ${host} (the KEYS stick carries no mesh CA key, certs/cluster-ca.key, and no pre-issued headscale/tls.crt naming it) — headscale serves PLAIN HTTP at ${HEADSCALE_SERVED_URL}: nodes whose login server is that http:// URL join, nodes given https:// do NOT, and the embedded DERP relay is NOT usable (peers with no direct path get no relay)"
+    return 0
+}
+
+# headscale_tls_cover_address <addr> — on a node whose headscale serves this node's
+# managed certificate, re-issue it when it does not name <addr> yet (the tailnet
+# address, known only after the control node's own `tailscale up`). rc 0 = it names it
+# now (or TLS is not ours to manage); the caller restarts headscale anyway.
+headscale_tls_cover_address() {
+    local cfg="${HEADSCALE_CONFIG:-/etc/headscale/config.yaml}" host
+    [ "$(headscale_tls_cert_path "${cfg}")" = "${HEADSCALE_TLS_CERT}" ] || return 0
+    headscale_tls_covers "${HEADSCALE_TLS_CERT}" "$1" && return 0
+    host="$(sed -n 's/^server_url:[[:space:]]*//p' "${cfg}" | head -1 | tr -d "\"' ")"
+    host="$(headscale_url_parts "${host}" 2>/dev/null | awk '{print $2}')"
+    HEADSCALE_TLS_EXTRA_SANS="$1" headscale_tls_issue "${host:-$1}" || return 1
+    chown headscale:headscale "${HEADSCALE_TLS_CERT}" "${HEADSCALE_TLS_KEY}" 2>/dev/null || true
+    return 0
+}
+
+# provision_headscale_config <config> — the config-stage of provision_headscale:
+# server_url (resolve_endpoint; https by default), who serves TLS for it, the MagicDNS
+# base domain, and the DERP block. Run on the live config BEFORE headscale starts.
+provision_headscale_config() {
+    local cfg="$1" endpoint dnsdom
+    [ -f "${cfg}" ] || return 0
+    endpoint="$(resolve_endpoint)"
+    if [ -n "${endpoint}" ]; then
+        provision_headscale_tls "${cfg}" "${endpoint}"
+        endpoint="${HEADSCALE_SERVED_URL:-${endpoint}}"
+        # Escape sed replacement metacharacters in the URL.
+        local esc; esc="$(printf '%s' "${endpoint}" | sed -e 's/[&|\\/]/\\&/g')"
+        sed -i "s|^server_url:.*|server_url: ${esc}|" "${cfg}"
+        log "headscale server_url set to ${endpoint}"
+    else
+        warn "Could not resolve a mesh endpoint (no config + no LAN IP) — keeping baked server_url"
+    fi
+    # Overridable MagicDNS base domain.
+    dnsdom="$(resolve_magic_dns_domain)"
+    if [ -n "${dnsdom}" ]; then
+        # dnsdom (.mesh.magic_dns_domain) is interpolated into a '|'-delimited sed
+        # writing MagicDNS base_domain. Validate fail-closed as a hostname (rejects
+        # the sed metachars '| & \' and newlines) then escape, so a malformed manifest
+        # value cannot corrupt or inject config.yaml.
+        if [[ "${dnsdom}" =~ ^[a-z0-9.-]+$ ]]; then
+            local dnsdom_esc; dnsdom_esc="$(printf '%s' "${dnsdom}" | sed -e 's/[&|\\/]/\\&/g')"
+            sed -i "s|^\(\s*\)base_domain:.*|\1base_domain: ${dnsdom_esc}|" "${cfg}"
+            log "headscale MagicDNS base_domain set to ${dnsdom}"
+        else
+            warn "headscale MagicDNS base_domain '${dnsdom}' is not a valid hostname ([a-z0-9.-]) — leaving baked default"
+        fi
+    fi
+    # Embedded DERP region name + public-map opt-in + STUN firewall hand-off.
+    provision_headscale_derp "${cfg}"
+}
+
 provision_headscale() {
     have headscale || { log "headscale not installed — skipping"; return 0; }
     local enabled
     enabled="$(jqm '.headscale.enabled // false')"
     if [ "${enabled}" != "true" ]; then
         log "headscale disabled in manifest — removing from runlevel"
+        rm -f "${HEADSCALE_DERP_STUN_MARKER}"
         rc-update del headscale default 2>/dev/null || true
         rc-service headscale stop 2>/dev/null || true
         return 0
@@ -1086,36 +1624,12 @@ provision_headscale() {
     policy_file=/etc/headscale/policy.hujson
     # ── Local-first endpoint: rewrite server_url BEFORE starting the server ──
     # The baked config.yaml ships server_url=http://127.0.0.1:8080 (a placeholder
-    # that loopback-only peers cannot reach). Resolve the real endpoint
-    # (configured override else this node's LAN IP) and rewrite the single
-    # server_url line idempotently so LAN peers can register at first boot.
-    if [ -f /etc/headscale/config.yaml ]; then
-        local endpoint dnsdom
-        endpoint="$(resolve_endpoint)"
-        if [ -n "${endpoint}" ]; then
-            # Escape sed replacement metacharacters in the URL.
-            local esc; esc="$(printf '%s' "${endpoint}" | sed -e 's/[&|\\/]/\\&/g')"
-            sed -i "s|^server_url:.*|server_url: ${esc}|" /etc/headscale/config.yaml
-            log "headscale server_url set to ${endpoint}"
-        else
-            warn "Could not resolve a mesh endpoint (no config + no LAN IP) — keeping baked server_url"
-        fi
-        # Overridable MagicDNS base domain.
-        dnsdom="$(resolve_magic_dns_domain)"
-        if [ -n "${dnsdom}" ]; then
-            # dnsdom (.mesh.magic_dns_domain) is interpolated into a '|'-delimited sed
-            # writing MagicDNS base_domain. Validate fail-closed as a hostname (rejects
-            # the sed metachars '| & \' and newlines) then escape, so a malformed manifest
-            # value cannot corrupt or inject config.yaml.
-            if [[ "${dnsdom}" =~ ^[a-z0-9.-]+$ ]]; then
-                local dnsdom_esc; dnsdom_esc="$(printf '%s' "${dnsdom}" | sed -e 's/[&|\\/]/\\&/g')"
-                sed -i "s|^\(\s*\)base_domain:.*|\1base_domain: ${dnsdom_esc}|" /etc/headscale/config.yaml
-                log "headscale MagicDNS base_domain set to ${dnsdom}"
-            else
-                warn "headscale MagicDNS base_domain '${dnsdom}' is not a valid hostname ([a-z0-9.-]) — leaving baked default"
-            fi
-        fi
-    fi
+    # that loopback-only peers cannot reach). provision_headscale_config resolves the
+    # real endpoint (configured override else https://<this node's LAN IP>:8080),
+    # makes headscale serve TLS for it when it should (provision_headscale_tls),
+    # rewrites the single server_url line idempotently so LAN peers can register at
+    # first boot, sets the MagicDNS base domain and renders the DERP block.
+    [ -f /etc/headscale/config.yaml ] && provision_headscale_config /etc/headscale/config.yaml
 
     # CONFIG GATE. Every check above is on /etc/headscale/policy.hujson, but headscale
     # loads the policy its EFFECTIVE configuration names (policy.mode, policy.path), and
@@ -1467,6 +1981,10 @@ publish_cp_dns_record() {
                 | grep -E '^100\.' | head -1)"
     fi
     [ -n "${tip}" ] || { warn "No tailnet IP yet for CP DNS record ${cpname} — skipping"; return 0; }
+    # The restart below also picks up a serving certificate that names this node's
+    # tailnet address, which only exists now (provision_headscale_tls).
+    headscale_tls_cover_address "${tip}" \
+        || warn "headscale TLS: could not add the tailnet address ${tip} to the serving certificate"
 
     # Build a managed extra_records block and splice it into config.yaml,
     # replacing any previous managed block. headscale 0.23.x accepts an inline
@@ -1517,7 +2035,10 @@ PY
 
 # ── The control node's own mesh client ─────────────────────────────
 # Where the CONTROL node's own tailscaled logs in: headscale on loopback, at the
-# port config.yaml's listen_addr names (8080 unless the image changed it).
+# port config.yaml's listen_addr names (8080 unless the image changed it), over
+# https when headscale serves TLS itself (provision_headscale_tls: the default since
+# 2026-11-10; its certificate names 127.0.0.1, and this node trusts the mesh CA
+# through provision_certs), else over http.
 #
 # Why loopback and not resolve_endpoint (the LAN / mesh address the FLEET dials).
 # Observed 2026-11-04 (rpi5 pki, tailscale 1.78.1 against headscale 0.23.0 on
@@ -1542,13 +2063,25 @@ PY
 # costing the control node its session. The FLEET still dials the address
 # resolve_endpoint gives; that is a worker-side exposure to the same lockout
 # and is documented, not changed, here.
+# With https://127.0.0.1:<port> (headscale serving TLS) the same file derives
+# httpsPort=<port> and httpPort=80: the forced TLS dial goes to headscale's own
+# listener, so a forced "443" dial now reaches it too. An https server_url is also
+# what moves the FLEET out of that lockout: its clients' TLS dial is headscale's port.
 HEADSCALE_CONFIG="${HEADSCALE_CONFIG:-/etc/headscale/config.yaml}"
 control_self_login_server() {
-    local port="" la
+    local port="" la tls scheme=http
     la="$(sed -n 's/^listen_addr:[[:space:]]*//p' "${HEADSCALE_CONFIG}" 2>/dev/null | head -1 | tr -d "\"' ")"
     port="${la##*:}"
     [[ "${port}" =~ ^[0-9]{1,5}$ ]] || port=8080
-    printf 'http://127.0.0.1:%s' "${port}"
+    # The certificate keys-provision issues (provision_headscale_tls) names 127.0.0.1;
+    # an operator's own tls_cert_path may not, so that case keeps the server_url.
+    tls="$(sed -n 's/^tls_cert_path:[[:space:]]*//p' "${HEADSCALE_CONFIG}" 2>/dev/null | head -1 | sed -e 's/[[:space:]]#.*$//' | tr -d "\"' ")"
+    if [ -n "${tls}" ] && [ "${tls}" != "${HEADSCALE_TLS_CERT:-/var/lib/headscale/tls.crt}" ]; then
+        la="$(sed -n 's/^server_url:[[:space:]]*//p' "${HEADSCALE_CONFIG}" 2>/dev/null | head -1 | tr -d "\"' ")"
+        [ -n "${la}" ] && { printf '%s' "${la}"; return 0; }
+    fi
+    [ -n "${tls}" ] && scheme=https
+    printf '%s://127.0.0.1:%s' "${scheme}" "${port}"
 }
 
 # After the headscale restart publish_cp_dns_record makes: wait for headscale to
@@ -1590,6 +2123,54 @@ control_client_regain() {
 }
 
 # ── Tailscale client ───────────────────────────────────────────────
+# control_url_tls_migrate <login-url> — check the control server this node is about
+# to log in to, and set CONTROL_URL to the URL to use. Since 2026-11-10 the pki
+# node's headscale serves HTTPS on its own port by default (provision_headscale_tls),
+# so a stick written for the old default, http://<pki>:<port>, would dial plain HTTP
+# at a TLS listener. With curl available and the server answering:
+#   http://<host>:<port> whose server now speaks TLS -> https://<host>:<port>
+#     (migrated; when the certificate does not verify against this node's trust store,
+#     that is said loudly: the mesh CA is missing from this stick);
+#   http:// that still answers plain HTTP -> kept, with the relay limit stated;
+#   https:// whose certificate this node does not trust -> kept, said loudly.
+# A server that does not answer yet is left as written. Any HTTP status counts as an
+# answer (a front may protect /health); only the TLS layer is being asked.
+control_url_tls_migrate() {
+    CONTROL_URL="$1"
+    command -v curl >/dev/null 2>&1 || return 0
+    local parts scheme host port hp to="${CONTROL_PROBE_TIMEOUT:-5}"
+    parts="$(headscale_url_parts "$1")" || return 0
+    read -r scheme host port <<<"${parts}"
+    hp="${host}"; [[ "${host}" == *:* ]] && hp="[${host}]"
+    [ -n "${port}" ] && hp="${hp}:${port}"
+    _ctl_answers() { [ "$(curl -sS "$@" -m "${to}" -o /dev/null -w '%{http_code}' 2>/dev/null)" != "000" ]; }
+    if [ "${scheme}" = http ]; then
+        [ -n "${port}" ] && [ "${port}" != 80 ] || return 0
+        if _ctl_answers "https://${hp}/health"; then
+            CONTROL_URL="https://${hp}"
+            log "control server ${1} now serves HTTPS (its certificate verifies against this node's trust store) — logging in at ${CONTROL_URL}"
+        elif _ctl_answers -k "https://${hp}/health"; then
+            CONTROL_URL="https://${hp}"
+            warn "control server ${1} now serves HTTPS with a certificate this node does NOT trust — logging in at ${CONTROL_URL} will FAIL until the mesh CA is on this KEYS stick (certs/cluster-ca.crt from the pki stick; provision_certs installs it)"
+        elif _ctl_answers "http://${hp}/health"; then
+            warn "control server ${1} serves plain HTTP — this node joins, but the embedded DERP relay cannot carry its traffic (docs/HEADSCALE-DERP.md)"
+        else
+            log "control server ${1} does not answer yet — logging in at it as written"
+        fi
+    elif ! _ctl_answers "https://${hp}/health"; then
+        if _ctl_answers -k "https://${hp}/health"; then
+            warn "control server ${1} presents a certificate this node does NOT trust — the join will FAIL until the mesh CA is on this KEYS stick (certs/cluster-ca.crt from the pki stick; provision_certs installs it)"
+        elif _ctl_answers "http://${hp}/health"; then
+            # Not downgraded: an https:// login server is what the stick asked for.
+            warn "control server ${1} answers only PLAIN HTTP (its headscale got no TLS certificate: no mesh CA key on the pki stick) — this node will NOT join at https://; fix the pki node, or set this stick's login_server to http://${hp} (no relay then)"
+        else
+            log "control server ${1} does not answer yet — its certificate could not be checked"
+        fi
+    fi
+    unset -f _ctl_answers
+    return 0
+}
+
 provision_tailscale() {
     have tailscaled || { log "tailscaled not installed — skipping"; return 0; }
     local enabled
@@ -1641,6 +2222,12 @@ provision_tailscale() {
         fi
         [ -n "${login}" ] && log "tailscale login_server defaulted to ${login}"
     fi
+    # Any login server but the control node's own loopback one: check it speaks the
+    # scheme the URL says (the old http:// default moved to https).
+    case "${login}" in
+        ""|null|http://127.0.0.1:*|https://127.0.0.1:*) ;;
+        *) control_url_tls_migrate "${login}"; login="${CONTROL_URL:-${login}}" ;;
+    esac
     up_args="$(jqm '.tailscale.up_args // ""')"
     if [ -n "${authkey}" ]; then
         local cmd=(tailscale up --authkey "${authkey}")
@@ -3608,10 +4195,44 @@ selinux_policy_loaded() {
 # warn loudly + persist the reason where the enforce-gate looks for it.
 selinux_provision_failed() {
     warn "SELinux: $*"
-    warn "SELinux: this image was BUILT selinux-aware but first boot ends WITHOUT a working policy load."
+    # Callers include a failed root login MAPPING after a good policy load, so this
+    # line must not claim the load failed: the reason above says which step it was.
+    warn "SELinux: this image was BUILT selinux-aware but first-boot SELinux setup did NOT complete (the step that failed is named above; the policy itself may still have loaded)."
     warn "SELinux: recording ${SELINUX_FAIL_MARKER}; /etc/init.d/selinux-enforce-gate refuses to flip while it exists."
     warn "SELinux: fix the load, then re-provision (KEYS_FORCE=1 or .provision-force) to clear it."
     echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" >> "${SELINUX_FAIL_MARKER}"
+}
+
+# selinux_map_root_login <type> — map the root login to __default__'s SELinux user and
+# range, so genhomedircon writes a /root line and the relabel below gives /root
+# user_home_dir_t. The refpolicy store's seusers names only __default__; with no
+# root: line /root labels default_t and local_login_t is denied { search } on it at
+# every console login (3 of the 25 boot-path AVCs #863 answered). The x86 and Frite
+# builders map it at BUILD time (slx_map_root_login in scripts/_selinux-policy-lib.sh);
+# the other ARM images build their store HERE, at first boot, so they map it here
+# (#863 refute, blocker 3). Idempotent: an existing root: line is left alone.
+# A failed mapping on a selinux-aware image is recorded like a failed load: the
+# enforce-gate must not flip a node whose console login enforcing would deny.
+selinux_map_root_login() {
+    local type="$1" aware="$2" seusers="/etc/selinux/$1/seusers" def seuser range err
+    _rootmap_fail() {
+        if [ "${aware}" = 1 ]; then selinux_provision_failed "root login mapping: $*"; else warn "SELinux: root login mapping: $*"; fi
+    }
+    [ -r "${seusers}" ] || { _rootmap_fail "${seusers} missing — /root stays default_t"; return 0; }
+    if grep -E '^root:' "${seusers}" >/dev/null; then
+        log "SELinux: root login already mapped ($(grep -E '^root:' "${seusers}" | head -1))"
+        return 0
+    fi
+    def="$(grep -E '^__default__:' "${seusers}" | head -1)"
+    seuser="$(printf '%s' "${def}" | cut -d: -f2)"; range="$(printf '%s' "${def}" | cut -d: -f3-)"
+    [ -n "${seuser}" ] || { _rootmap_fail "${seusers} has no usable __default__ line ('${def}')"; return 0; }
+    have semanage || { _rootmap_fail "no semanage on this image (sys-apps/selinux-python) — /root stays default_t"; return 0; }
+    log "SELinux: mapping the root login: semanage login -S ${type} -a -s ${seuser} -r ${range:-s0} root"
+    err="$(semanage login -S "${type}" -a -s "${seuser}" -r "${range:-s0}" root 2>&1)" \
+        || { _rootmap_fail "semanage login failed: $(printf '%s' "${err}" | tr '\n' ' ')"; return 0; }
+    grep -E "^root:${seuser}:" "${seusers}" >/dev/null \
+        || { _rootmap_fail "${seusers} still has no 'root:${seuser}:' line after semanage"; return 0; }
+    log "SELinux: root login mapped to ${seuser} (${range:-s0}); the relabel gives /root user_home_dir_t"
 }
 
 provision_selinux() {
@@ -3754,6 +4375,9 @@ EOF
             warn "SELinux mode=enforcing AND hugmesh node policy loaded: those modules' INFERRED-WIDE rules have not been narrowed against a real AVC pass. Prefer permissive + /etc/init.d/selinux-enforce-gate."
     fi
     # ── END hugmesh node-policy load ──
+    # After the store is built and loaded, BEFORE the relabel: the mapping changes
+    # file_contexts.homedirs, which the relabel then applies to /root.
+    selinux_map_root_login "${type}" "${aware}"
     log "Relabelling filesystem (this can take a while)"
     local relabel_ok=1
     # LIVE OVERLAY ROOT: SKIP THE FULL WALK (#503, D3). On the live ISO / is a tmpfs

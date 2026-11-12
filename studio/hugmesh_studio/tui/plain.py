@@ -69,15 +69,21 @@ def prompt_yes_no(inp: IO[str], out: IO[str], question: str) -> bool:
 _HELP = ("commands: NUMBER=inspect · d NUMBER=delete · w NUMBER=worklist table · "
          "k NUMBER=kernel config · r=refresh · local-ai=the Local AI screen · q=quit")
 
+#: The GUI's other Previous-builds buttons (B-10), on a line of their own ABOVE the
+#: commands line, which keeps the Local AI status line directly under that one.
+_HELP_BUILDS = ("build actions: s NUMBER=restart · e NUMBER=redo (edit as new) · "
+                "a=delete all finished")
+
 
 def _print_list(out: IO[str], rows: list[model.SessionRow], unreadable: list[str]) -> None:
     _say(out, "previous builds (newest first):")
     if not rows:
         _say(out, "  (no build sessions recorded yet)")
-    for i, row in enumerate(rows, 1):
-        _say(out, "  " + model.session_line(row, i))
-    for path in unreadable:
-        _say(out, f"  ! unreadable record skipped: {path}")
+    for i, entry in enumerate(model.list_entries(rows, unreadable), 1):
+        _say(out, "  " + (model.unreadable_line(entry, i)
+                          if isinstance(entry, model.UnreadableRow)
+                          else model.session_line(entry, i)))
+    _say(out, _HELP_BUILDS)
     _say(out, _HELP)
     _say(out, local_ai.plain_status_line())
 
@@ -100,7 +106,8 @@ def run_local_ai(inp: IO[str], out: IO[str], generator_dir: str = ".") -> bool:
     return True
 
 
-def _pick(rows: list[model.SessionRow], token: str) -> model.SessionRow | None:
+def _pick(rows: list, token: str):
+    """The row numbered ``token`` (1-based) of ``rows``, or None."""
     try:
         index = int(token)
     except ValueError:
@@ -134,6 +141,60 @@ def _delete_flow(inp: IO[str], out: IO[str], row: model.SessionRow) -> None:
         _say(out, build_sessions.not_deleted_reason(s))
 
 
+def _delete_unreadable_flow(inp: IO[str], out: IO[str], row: model.UnreadableRow) -> None:
+    """An unreadable record: one confirm, then the unlink — and what is true after it."""
+    if not prompt_yes_no(inp, out, f"delete this unreadable record file {row.path}?"):
+        _say(out, "kept.")
+        return
+    _ok, said = model.delete_unreadable(row)
+    _say(out, said)
+
+
+def _delete_all_flow(inp: IO[str], out: IO[str], rows: list[model.SessionRow]) -> None:
+    """"Delete all finished…": every record but an active build's, through
+    ``build_sessions.prune`` — then, as a separate answer defaulting to NO, their
+    artifact trees (the GUI's checkbox, which starts unticked)."""
+    if not rows:
+        _say(out, "nothing to delete: no readable build session is recorded.")
+        return
+    if not prompt_yes_no(inp, out, model.DELETE_ALL_QUESTION):
+        _say(out, "kept.")
+        return
+    remove = prompt_yes_no(inp, out, "ALSO delete their build artifacts on disk?")
+    deleted, skipped = build_sessions.prune(remove_artifacts=remove)
+    _say(out, model.delete_all_result(deleted, skipped))
+
+
+def _restart_flow(inp: IO[str], out: IO[str], row: model.SessionRow) -> bool:
+    """RESTART: the GUI's gate, then the hand-over (the TUI runs no builds). True when
+    the gate said Redo and the person took it — the GUI's "Load its config into the
+    wizard now (Redo)?" question."""
+    why = model.restart_refusal(row.session)
+    if why is not None:
+        _say(out, "not restarted: " + why)
+        return "Redo" in why and prompt_yes_no(
+            inp, out, "Load its config into the journey now (Redo)?")
+    for line in model.restart_handover_lines(row.session):
+        _say(out, line)
+    return False
+
+
+def _redo(inp: IO[str], out: IO[str], s: build_sessions.BuildSession,
+          generator_dir: str, journey) -> int | None:
+    """REDO: the recorded configuration into the journey. ``None`` keeps the review
+    open (refused); otherwise the review is over and this is its exit code — the
+    journey that opened it resumes on its first screen, or (``--sessions``, no journey
+    underneath) a journey starts here with the configuration loaded."""
+    target = journey if journey is not None else journey_mod.Journey(generator_dir)
+    why = target.load_session(s)
+    if why:
+        _say(out, f"not redone: {why}")
+        return None
+    if journey is None:
+        return run_journey(inp, out, generator_dir=generator_dir, journey=target)
+    return 0
+
+
 def print_meshemu(out: IO[str], generator_dir: str, session_name: str) -> bool:
     """The whole-mesh emulation status list for ONE session, headlessly (#69):
     plan summary + the per-device section-status table. False when no session of
@@ -156,17 +217,19 @@ def print_meshemu(out: IO[str], generator_dir: str, session_name: str) -> bool:
 
 
 def run_journey(inp: IO[str] | None = None, out: IO[str] | None = None, *,
-                generator_dir: str = ".", start: str | None = None) -> int:
+                generator_dir: str = ".", start: str | None = None,
+                journey: "journey_mod.Journey | None" = None) -> int:
     """The JOURNEY loop (plain face): welcome -> the canonical page walk.
 
     One screen per iteration — render the current screen's lines, prompt, feed
     the answer back into the shared :class:`~.journey.Journey` state machine.
     The "sessions" entry point drops into the existing sessions-review loop and
     resumes the journey when it quits (the GUI's welcome -> sessions -> back
-    shape). EOF quits, as everywhere in this face."""
+    shape). EOF quits, as everywhere in this face. ``journey`` runs one that already
+    holds state (a REDO from ``--sessions`` loaded a configuration into it)."""
     inp = inp if inp is not None else sys.stdin
     out = out if out is not None else sys.stdout
-    j = journey_mod.Journey(generator_dir)
+    j = journey if journey is not None else journey_mod.Journey(generator_dir)
     if start:                     # an expert entry point (--fleet / --go-live, #587)
         j.goto(start)
     while not j.done:
@@ -184,7 +247,8 @@ def run_journey(inp: IO[str] | None = None, out: IO[str] | None = None, *,
         if j.effect == "sessions":
             # the review owns the terminal until it quits; then the journey
             # resumes right where it was (the welcome screen).
-            run_sessions_review(inp=inp, out=out, generator_dir=generator_dir)
+            run_sessions_review(inp=inp, out=out, generator_dir=generator_dir,
+                                journey=j)
     return 0
 
 
@@ -195,8 +259,12 @@ def print_worklist(out: IO[str], s: build_sessions.BuildSession) -> None:
 
 
 def run_sessions_review(inp: IO[str] | None = None, out: IO[str] | None = None, *,
-                        generator_dir: str = ".") -> int:
-    """The SESSIONS REVIEW loop (plain face). Returns a process exit code."""
+                        generator_dir: str = ".", journey=None) -> int:
+    """The SESSIONS REVIEW loop (plain face). Returns a process exit code.
+
+    ``journey`` is the journey that opened the review (welcome -> Review prior
+    sessions); a REDO loads into it and returns. Without one (``--sessions``) a REDO
+    starts the journey here."""
     inp = inp if inp is not None else sys.stdin
     out = out if out is not None else sys.stdout
     rows, unreadable = model.session_rows()
@@ -217,13 +285,38 @@ def run_sessions_review(inp: IO[str] | None = None, out: IO[str] | None = None, 
                 return 0
             _print_list(out, rows, unreadable)
             continue
+        if answer.lower() in ("a", "delete-all"):
+            _delete_all_flow(inp, out, rows)
+            rows, unreadable = model.session_rows()
+            _print_list(out, rows, unreadable)
+            continue
         verb, _, arg = answer.partition(" ")
-        if verb.lower() in ("d", "delete"):
-            row = _pick(rows, arg.strip())
+        # ONE numbering: the sessions, then the unreadable records (model.list_entries)
+        entries = model.list_entries(rows, unreadable)
+        if verb.lower() in ("s", "restart", "e", "redo"):
+            row = _pick(entries, arg.strip())
             if row is None:
                 _say(out, f"no such session number: {arg.strip() or '(missing)'}")
                 continue
-            _delete_flow(inp, out, row)
+            redo = verb.lower() in ("e", "redo")
+            if isinstance(row, model.UnreadableRow):
+                _say(out, model.unreadable_refusal("redo" if redo else "restart"))
+                continue
+            if not redo and not _restart_flow(inp, out, row):
+                continue
+            code = _redo(inp, out, row.session, generator_dir, journey)
+            if code is not None:
+                return code
+            continue
+        if verb.lower() in ("d", "delete"):
+            row = _pick(entries, arg.strip())
+            if row is None:
+                _say(out, f"no such session number: {arg.strip() or '(missing)'}")
+                continue
+            if isinstance(row, model.UnreadableRow):
+                _delete_unreadable_flow(inp, out, row)
+            else:
+                _delete_flow(inp, out, row)
             rows, unreadable = model.session_rows()
             _print_list(out, rows, unreadable)
             continue
@@ -238,16 +331,22 @@ def run_sessions_review(inp: IO[str] | None = None, out: IO[str] | None = None, 
                 out=out, err=out)
             continue
         if verb.lower() in ("w", "worklist"):
-            row = _pick(rows, arg.strip())
+            row = _pick(entries, arg.strip())
             if row is None:
                 _say(out, f"no such session number: {arg.strip() or '(missing)'}")
                 continue
+            if isinstance(row, model.UnreadableRow):
+                _say(out, model.unreadable_refusal("worklist"))
+                continue
             print_worklist(out, row.session)
             continue
-        row = _pick(rows, verb)
+        row = _pick(entries, verb)
         if row is None:
             _say(out, f"unrecognised command: {answer}")
+            _say(out, _HELP_BUILDS)
             _say(out, _HELP)
             continue
-        for line in model.session_detail_lines(row):
+        for line in (model.unreadable_detail_lines(row)
+                     if isinstance(row, model.UnreadableRow)
+                     else model.session_detail_lines(row)):
             _say(out, line)

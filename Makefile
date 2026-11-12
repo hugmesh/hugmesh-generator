@@ -175,10 +175,15 @@ ENV      ?= test
 #                an explicit flag overrides the profile).
 # HEADSCALE_URL= override the brand's own headscale control server (its own mesh).
 #                Passed through as an env var the brand/mesh setup honors.
+# HEADSCALE_PUBLIC_DERP=true  ALSO list Tailscale's public DERP map in the pki node's
+#                headscale. Default OFF: headscale's embedded relay only, so the mesh
+#                starts and relays offline (docs/HEADSCALE-DERP.md). Same knob as the
+#                builders' --headscale-public-derp and gen-provision-keys.sh's.
 # Usage:  make build-all BRAND=acme DOMAIN=acme.example
 BRAND     ?=
 DOMAIN    ?=
 HEADSCALE_URL ?=
+HEADSCALE_PUBLIC_DERP ?=
 
 # ── External CA (optional) ─────────────────────────────────────────────────────
 # Point the cert generators at an EXISTING CA (cert + key) to use it as the
@@ -215,6 +220,9 @@ BRAND_ENV :=
 ifneq ($(strip $(HEADSCALE_URL)),)
 BRAND_ENV += HEADSCALE_URL=$(HEADSCALE_URL)
 endif
+ifneq ($(strip $(HEADSCALE_PUBLIC_DERP)),)
+BRAND_ENV += HEADSCALE_PUBLIC_DERP=$(HEADSCALE_PUBLIC_DERP)
+endif
 # Root SSH login toggle (empty => builder default 'no' = DISABLED). Only threaded when
 # explicitly set, so every image stays hardened-by-default unless opted in.
 ifneq ($(strip $(PERMIT_ROOT_LOGIN)),)
@@ -224,7 +232,7 @@ endif
 # BRAND_PASS — brand make-vars forwarded into the in-container `make` re-invoke
 # (the Docker dispatch path) so BRAND_FLAGS/BRAND_ENV are rebuilt identically
 # inside the builder image. brands/ is mounted at /src/brands via -v $(CURDIR):/src.
-BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
+BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
 
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).
@@ -448,6 +456,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         quest-plan quest-detect quest-mdm-enroll quest-enroll quest-ingest quest-status quest-wizard \
         deploy-plan deploy-apply deploy-status deploy-destroy \
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate qemu-mesh qemu-mesh-enumerate \
+        qemu-mirror qemu-mirror-list qemu-mirror-down \
         playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-route-access-reconcile stack-e2e stack-e2e-list \
@@ -1249,6 +1258,20 @@ qemu-mesh: ## boot a 3-node emulated k8s cluster (opt-in; HUGMESH_QEMU_MESH=1; C
 qemu-mesh-enumerate: ## plan the 3-node emulated cluster (L2 spec, MACs/IPs, ports, launcher argv; nothing boots)
 	tests/qemu/mesh-cluster.sh --dry-run \
 	  $(if $(CP_ROLE),--cp-role $(CP_ROLE),) $(if $(WORKER_ROLE),--worker-role $(WORKER_ROLE),)
+
+# Host-side registry mirror for the emulated cluster's CNI (issue #516): Calico
+# (pinned by specs/cluster/apps/01-calico.yaml) + the Tigera operator chart +
+# ArgoCD's images, served on 127.0.0.1:$(MIRROR_PORT) = 10.0.2.2 to the guests'
+# user-mode NIC. Fill it before `MESH_CLUSTER_GATE_READY=1 make qemu-mesh`.
+MIRROR_PORT ?= 5000
+qemu-mirror: ## start + fill the host registry mirror for emulated-cluster CNI images (docker, helm)
+	tests/qemu/registry-mirror.sh up --port $(MIRROR_PORT)
+
+qemu-mirror-list: ## list the image set the host registry mirror serves (pulls nothing)
+	tests/qemu/registry-mirror.sh --dry-run --port $(MIRROR_PORT)
+
+qemu-mirror-down: ## remove the host registry mirror container (only if it is the mirror's own)
+	tests/qemu/registry-mirror.sh down
 
 # SELinux AVC workout (issue #45): boot ONE image, drive the workloads
 # specs/selinux/*.te confine, harvest AVCs, and emit the narrowing report
@@ -2055,7 +2078,7 @@ STACK_MESH_TOKEN_DIR := tests/stack/.mesh-token
 STACK_HEADSCALE_COMPOSE := tests/stack/compose.headscale.yaml
 STACK_HEADSCALE_PROFILE := $(if $(strip $(HEADSCALE)), --profile headscale,)
 STACK_HEADSCALE_FLAGS := $(if $(strip $(HEADSCALE)), -f $(STACK_HEADSCALE_COMPOSE),)
-STACK_HEADSCALE_ENV := $(if $(strip $(HEADSCALE)), HUGMESH_DOMAIN='$(STACK_HUGMESH_DOMAIN)' HEADSCALE_MESH_ID='$(HEADSCALE_MESH_ID)',)
+STACK_HEADSCALE_ENV := $(if $(strip $(HEADSCALE)), HUGMESH_DOMAIN='$(STACK_HUGMESH_DOMAIN)' HEADSCALE_MESH_ID='$(HEADSCALE_MESH_ID)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)',)
 STACK_HEADSCALE_DEP := $(if $(strip $(HEADSCALE)),stack-mesh-token-key,)
 STACK_ROUTE_ACCESS_ENV := ROUTE_ACCESS_DB_PASSWORD="$$(bash tests/stack/gen-route-access-env.sh --read)" 
 # The local stack's per-role passwords (hugmesh-generator#857): every Postgres role

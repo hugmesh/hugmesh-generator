@@ -66,10 +66,26 @@ if ! ( cd "${upper}" && find . -xdev -print0 ) > "${list}" 2>/dev/null; then
     rm -f "${list}"
     fail "find failed in ${upper} — nothing was relabelled"
 fi
+# The rewrite to merged paths goes through a SECOND file, not a pipe into xargs:
+# /bin/sh has no pipefail, so in `sed ... | xargs ...` only xargs' status was seen.
+# A sed that died (no -z, a read error, ENOSPC on /run) fed xargs an empty or short
+# list, `xargs -r` ran nothing and returned 0, and the hook logged "relabelled N"
+# with the upper layer still tmpfs_t. Each step's status is now checked on its own.
+mlist="${list}.merged"
+if ! sed -z 's#^\.##; s#^$#/#' "${list}" > "${mlist}" 2>/dev/null; then
+    rm -f "${list}" "${mlist}"
+    fail "sed could not rewrite the upper-layer path list to merged paths — restorecon was NOT run on ${upper}"
+fi
 n="$(tr -cd '\000' < "${list}" | wc -c)"
-rc_up=0
-sed -z 's#^\.##; s#^$#/#' "${list}" | xargs -0 -r restorecon -F || rc_up=$?
+n_m="$(tr -cd '\000' < "${mlist}" | wc -c)"
 rm -f "${list}"
+if [ "${n_m}" -ne "${n}" ]; then
+    rm -f "${mlist}"
+    fail "the merged path list has ${n_m} entries, the upper layer ${n} — restorecon was NOT run on ${upper}"
+fi
+rc_up=0
+xargs -0 -r restorecon -F < "${mlist}" || rc_up=$?
+rm -f "${mlist}"
 if [ "${rc_up}" -ne 0 ] || [ "${rc_dev}" -ne 0 ]; then
     fail "restorecon returned ${rc_up} on the ${n} upper-layer path(s) under ${upper} (xargs status; 123 = at least one batch failed) and ${rc_dev} on /dev"
 fi

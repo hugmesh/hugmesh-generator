@@ -109,7 +109,13 @@ def actions_for(row) -> dict[str, Action]:
     active = bool(session is not None and build_sessions.is_active(session))
 
     # ── resume ──────────────────────────────────────────────────────────────────
-    if kind != "session":
+    if kind == "unreadable":
+        # NOT the pre-session reason below: this row IS a session record, one that
+        # could not be read. The list says the same (sessions_widget._refusals).
+        resume = Action("resume", False,
+                        "This record could not be parsed, so there is no "
+                        "configuration to resume from.")
+    elif kind != "session":
         resume = Action("resume", False,
                         "No config snapshot exists for a pre-session build — there is "
                         "nothing to resume from.")
@@ -143,7 +149,11 @@ def actions_for(row) -> dict[str, Action]:
         artifacts = Action("artifacts", True)
 
     # ── edit (REDO: load the config back into the wizard as a NEW build) ─────────
-    if kind != "session":
+    if kind == "unreadable":
+        edit = Action("edit", False,
+                      "This record could not be parsed, so there is no "
+                      "configuration to edit.")
+    elif kind != "session":
         edit = Action("edit", False,
                       "No config snapshot exists for a pre-session build.")
     else:

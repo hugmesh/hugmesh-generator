@@ -47,6 +47,9 @@ release the node image is tested against. At every start its entrypoint does the
      door.
    - The embedded DERP server is on (region 999) and the public DERP map is off. The local
      mesh must not depend on the internet, and headscale 0.23 refuses an empty DERP map.
+     The node configs ship the same relay since 2026-11-10; `HEADSCALE_PUBLIC_DERP=true`
+     (`make stack-up HEADSCALE=1 HEADSCALE_PUBLIC_DERP=true`) also lists Tailscale's
+     public map. See [`HEADSCALE-DERP.md`](HEADSCALE-DERP.md).
 2. It renders `/etc/headscale/policy.hujson` from the **device** template,
    `specs/etc/headscale/policy.hujson.tmpl`, which is mounted read-only. The render is what
    `specs/usr/sbin/gen-headscale-policy.sh` produces on a node whose signed export is empty:
@@ -85,7 +88,9 @@ Upgrade/Connection headers through. The tailscale control channel (`/ts2021`) an
 (`/derp`) are both HTTP/1.1 upgrades. headscale's REST API (`/api/`) and `/swagger` are
 **404 at the door**: only admin-bff calls the API, and it calls it inside the compose network.
 With `TOR=1` the onion's `:443` goes through this same door, so the API stays off the onion
-too.
+too. `/derp` is answered only for loopback, private LAN, tailnet and IPv6 ULA/link-local
+sources (403 for any other): headscale's embedded relay has no client verification, so a
+published door must not publish an open relay ([`HEADSCALE-DERP.md`](HEADSCALE-DERP.md#who-can-use-the-relay)).
 
 There is deliberately **no network alias `hs.<domain>`** on the headscale container. A
 token's login server is `https://hs.<domain>:<port>`. Inside the compose network that alias
