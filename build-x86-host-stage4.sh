@@ -5348,6 +5348,23 @@ if _tor_node_selected; then
     fi
 fi
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
+
+# udev coldplug guard (SYSINIT, every role). udev-trigger can fire its coldplug
+# before systemd-udevd has bound its uevent socket, and those uevents are lost:
+# no seat tags (seat0 without devices, no X), no NIC initialisation (no
+# NetworkManager, no ssh). Seen on 1 of 2 display-door boots of the x86 laptop
+# image on 2026-11-10. The guard pings udevd, checks the PCI + NIC + DRM canaries
+# (a card's seat tag only where 71-seat.rules is installed: node roles have no
+# elogind, so a GPU node's card is never tagged) and re-runs the coldplug once
+# only when they are missing; see the helper for the mechanism. Neutral names (no brand), so --unaffiliated images carry it as is.
+# Sysinit, not default: it has to finish before elogind, NetworkManager and the
+# display manager start, and the SVCS loop above only writes runlevels/default.
+install -D -m 0755 "${SHARED_SPECS}/usr/libexec/udev-coldplug-guard" "${SYSROOT}/usr/libexec/udev-coldplug-guard"
+install -D -m 0755 "${SHARED_SPECS}/etc/init.d/udev-coldplug-guard" "${SYSROOT}/etc/init.d/udev-coldplug-guard"
+mkdir -p "${SYSROOT}/etc/runlevels/sysinit"
+ln -sf /etc/init.d/udev-coldplug-guard "${SYSROOT}/etc/runlevels/sysinit/udev-coldplug-guard"
+[ -L "${SYSROOT}/etc/runlevels/sysinit/udev-trigger" ] \
+    || warn "runlevels/sysinit has no udev-trigger link: udev-coldplug-guard orders itself after a service this image does not run"
 # Belt-and-suspenders for shared / --resume sysroots: `ln -sf` only ADDS, so a prior
 # role's run can leave a headscale runlevel symlink behind that a worker/client image
 # would background-start. Remove it unless THIS role runs the control server. (Same
