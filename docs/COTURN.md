@@ -1,9 +1,8 @@
 # coturn — TURN/STUN relay for Matrix (tuwunel) audio/video
 
-> **Status: OPTIONAL service, DEFAULT-OFF, ships dark.** A default build deploys
-> NO coturn pod and changes NOTHING for existing Matrix calls. Clients keep their
-> current host-only ICE behaviour (`iceServers: []`). Turning coturn on is an
-> explicit, reversible, per-domain runtime add.
+coturn is optional and off by default. A default build deploys no coturn pod, and
+Matrix calls keep their current host-only behaviour (`iceServers: []`). Turning it on is
+a per-domain change at run time, and you can turn it off again.
 
 ## 1. What it is and why
 

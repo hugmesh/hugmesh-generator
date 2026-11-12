@@ -1325,6 +1325,7 @@ _PROFILE_SERVICE_OWNERS: dict[str, dict[str, str | None]] = {
         "mastodon-db": None, "mastodon-redis": None, "mastodon-web": None,
         "mastodon-sidekiq": None, "mastodon-streaming": None,
         "mastodon-init": None, "mastodon-autoconfirm": None,
+        "mastodon-front": None,
     },
 }
 

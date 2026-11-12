@@ -11,8 +11,9 @@ builds never answered "what does this domain provide". The choice now has its ow
 the build/mesh-start gate requires; this cell REPORTS what that step recorded. It is a
 MIRROR, not a store — ``validatePage`` takes each row's slugs from ``cfg`` by name and
 falls back to the cell only for a row ``cfg`` does not know yet, because
-``collect_all()`` re-enters itself through ``BuildPage._preview`` and would otherwise
-make this page the last writer and discard the step's whole recording. This table
+``collect_all()`` re-runs this page's ``validatePage`` AFTER the services step (every
+Review-page preview does, through ``BuildPage._preview``) and would otherwise make this
+page a later writer and discard the step's whole recording. This table
 remains the sole writer of WHICH domains exist and of every other column. Those slugs are provisioning INPUT only — nothing in this repo reads
 ``domains[].optional_services`` back, they do not change which services the image bakes,
 and #496 is why they do not yet decide what the cluster runs either.
@@ -982,13 +983,13 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         #: ``pages/domain_services.py``, for the same reason.
         self._cfg_seen = None
         self.setTitle("Domains & their services")
+        # Two lines at most: the wizard header clips the rest mid-sentence (GUI-14 — the
+        # longer subtitle stopped at "…with a generated random"). What it went on to
+        # say is the body's: the table help (services are read-only here, picked per
+        # domain on the next step) and the default-admin note under the table.
         self.setSubTitle(
             "Every domain this mesh serves: its own domain first, then the OTHER "
-            "domains you add. Which optional services each one provides is picked on "
-            "the next step, which gives every domain its own page; this table SHOWS "
-            "what is recorded. "
-            "Every domain you add here is given its own default admin with a "
-            "generated random password (surfaced on the next, Users, step).")
+            "domains you add. Each one's optional services are picked on the next step.")
         lay = QtWidgets.QVBoxLayout(self)
         # read-only header naming the Tailscale root domain (spec 5): all mesh nodes
         # join it, it is never a table row and is never attachable.
@@ -1231,11 +1232,14 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         (``_refresh_services_cells``), so on a forward walk they still hold the
         pre-step slugs. And this validatePage does NOT run only when the operator
         leaves this page: ``collect_all()`` re-runs every visited page's validatePage,
-        ``BuildPage._preview`` calls ``collect_all()``, and ``BuildPage.validatePage``
-        calls ``_preview`` — so collect_all re-enters itself and the LAST writer in
-        one Build->Launch transition is this method, hundreds of times over. Reading
-        the cached cell back would therefore discard the operator's whole selection
-        somewhere they never look, while the gate still passed because the reviewed
+        and the Review page calls it on arrival and (through ``BuildPage._preview``)
+        on every option edit, "Refresh preview" and Continue — so this method runs
+        again AFTER the services step, long after the operator left this page. (It
+        used to run hundreds of times per Continue, because collect_all re-entered
+        itself through ``BuildPage.validatePage``; collect_all is one pass now, and
+        this rule never depended on the count.) Reading the cached cell back would
+        therefore discard the operator's whole selection somewhere they never look,
+        while the gate still passed because the reviewed
         marker survives: the required page satisfied, its answer thrown away.
 
         So the slugs come from ``cfg`` BY NAME whenever that domain is still there,
