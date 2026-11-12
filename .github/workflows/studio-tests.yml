@@ -67,6 +67,12 @@ on:
       - 'scripts/build-all-roles.sh'
       - 'scripts/_roles-lib.sh'
       - 'build-rpi5-stage4.sh'
+      # hugmesh-generator#1061: studio/tests/test_rk3588_board_rows.py RUNS the Orange Pi 5
+      # builder's --print-plan and launch-arm.sh's board table, and reads matrix.tsv. A
+      # board row that drifts in any of them lands only there.
+      - 'build-orangepi5-stage4.sh'
+      - 'tests/qemu/launch-arm.sh'
+      - 'tests/build-matrix/matrix.tsv'
       # studio/tests/test_studio_installers_doc.py holds the installers page's "clone
       # hugmesh-generator" rows to the release jobs that prove a package carries the
       # tree. The page and the release workflow are both outside studio/, and a change
