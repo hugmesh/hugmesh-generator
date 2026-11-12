@@ -402,7 +402,16 @@ headscale so the rewritten file is the one in force.
 - **SSH is a separate, default-deny block.** `tailscale up --ssh` is on by default
   (`.tailscale.ssh`). The `ssh` section of the policy allows only the privileged
   user (`@@TS_SSH_USER@@`, rewritten by keys-provision; root and other accounts are
-  denied). The image bakes `policy.bootstrap.hujson`, which first boot stages as
+  denied), and only from `tag:superadmin`: every `ssh` rule's source in every
+  shipped and rendered policy is `tag:superadmin` and nothing else. Tailscale SSH
+  answers :22 itself, so the device's sshd key checks are not on that path and
+  whoever a rule names as its source gets a privileged session; `tag:hugmesh` and the
+  role tags are self-applied by every node holding a pre-auth key, so they are never
+  a source. The one :22 rule in `acls` is `tag:superadmin → tag:hugmesh:22`; without
+  it the superadmin's session could not reach the node. keys-provision refuses a
+  KEYS-stick policy (and a stick-supplied bootstrap) whose `ssh` rules name any other
+  source, under every spelling headscale reads: it stages the clean bootstrap or
+  removes those sources. The image bakes `policy.bootstrap.hujson`, which first boot stages as
   `/etc/headscale/policy.hujson` unless the KEYS stick carries its own
   `headscale/policy.hujson` (that wins). On the control node, `gen-headscale-policy.sh`
   (Layer A of the device-license registry) re-renders it from
@@ -418,8 +427,7 @@ headscale so the rewritten file is the one in force.
   [`docs/DEVICE-REGISTRY-KEY-ROTATION.md`](DEVICE-REGISTRY-KEY-ROTATION.md).
   `specs/etc/headscale/policy.hujson` is a reference copy that the builders no
   longer bake; neither it nor `keys-template/headscale/policy.hujson` carries the
-  any-to-any rule, though the header comments of both still describe the old
-  full-mesh policy.
+  any-to-any rule.
 - **Pods/services as one LAN.** Each node advertises the cluster pod
   (`10.244.0.0/16`) and service (`10.96.0.0/12`) CIDRs
   (`--advertise-routes=...`) and accepts approved routes (`--accept-routes`).

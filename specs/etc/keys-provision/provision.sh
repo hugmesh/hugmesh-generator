@@ -775,6 +775,130 @@ provision_certs() {
 }
 
 # ── Headscale (self-hosted Tailscale control server) ───────────────
+# headscale_policy_unprivileged_ssh_sources <policy.hujson>
+# Prints, one per line, every Tailscale SSH source (an ssh rule's src entry) that is
+# not tag:superadmin. Exit 0 = the policy was read (empty output means every ssh rule
+# names tag:superadmin only); exit 1 = it could not be read, so nothing can be said.
+# WHY: Tailscale SSH (`tailscale up --ssh`, on by default) answers :22 itself, so the
+# device's sshd key checks are not on that path; whoever an ssh rule names as src gets
+# a session as the privileged user. tag:hugmesh and the role tags are self-applied by
+# every node that holds a pre-auth key, and autogroup:member, "*" and the "hugmesh"
+# user are every node too, so any of them as src gives every member a privileged
+# session as soon as anything opens :22 to members (measured on headscale 0.23.0 +
+# tailscale 1.78.1). tag:superadmin is owned by nobody and only
+# hugmesh-headscale-forcetags assigns it, so it is the one source allowed. (An
+# ownerless tag is not enough on its own: tag:mesh_<id> is ownerless too, and the
+# control node forces it on EVERY node.)
+# The policy is read the way headscale reads it: headscale's Go JSON decoder matches
+# member names case-insensitively ("SSH", "Src") and takes repeated members, so jq
+# streams the document and every member whose name folds to "ssh" (top level) or
+# "src" (in a rule) counts, every repeat included. A member name with a non-ASCII
+# character at either level (Go also folds some of those, e.g. U+017F to "s"), an
+# ssh member that is not a list of objects, or a src that is not a list of strings
+# makes the policy unreadable. Same line-comment strip as the owner check below.
+headscale_policy_unprivileged_ssh_sources() {
+    sed -e 's#//.*$##' "$1" 2>/dev/null | jq -ner --stream '
+        [inputs | select(length == 2)] as $leaves
+        | if ($leaves | length) == 0 then error("empty policy") else . end
+        | if any($leaves[]; (.[0] | length) == 0 or (.[0][0] | type) != "string") then error("not an object") else . end
+        | if any($leaves[]; .[0][0] | explode | any(. > 127)) then error("non-ASCII member name") else . end
+        | [$leaves[] | select((.[0][0] | ascii_downcase) == "ssh")] as $ssh
+        | if any($ssh[]; ((.[0] | length) == 1 and .[1] != [] and .[1] != null)
+                         or ((.[0] | length) > 1 and (.[0][1] | type) != "number")
+                         or ((.[0] | length) == 2 and .[1] != {})
+                         or ((.[0] | length) > 2 and (.[0][2] | type) != "string"))
+          then error("ssh is not a list of rules") else . end
+        | if any($ssh[]; (.[0] | length) > 2 and (.[0][2] | explode | any(. > 127))) then error("non-ASCII member name in an ssh rule") else . end
+        | [$ssh[] | select((.[0] | length) > 2 and (.[0][2] | ascii_downcase) == "src")] as $src
+        | if any($src[]; ((.[0] | length) == 3 and .[1] != [] and .[1] != null)
+                         or ((.[0] | length) == 4 and ((.[0][3] | type) != "number" or (.[1] | type) != "string"))
+                         or (.[0] | length) > 4)
+          then error("src is not a list of strings") else . end
+        | [$src[] | select((.[0] | length) == 4) | .[1] | select(. != "tag:superadmin")] | unique[]' 2>/dev/null
+    local rc=$?
+    # jq -e exits 4 when there was no output at all (a clean policy) — that is a read.
+    [ "${rc}" -eq 0 ] || [ "${rc}" -eq 4 ]
+}
+
+# headscale_policy_narrow_ssh_sources <policy.hujson>: rewrite the file in place with
+# every ssh source but tag:superadmin removed, under every spelling headscale reads
+# (see above), and every ssh rule left with no source dropped. Top-level members with
+# a non-ASCII name go too. The result must pass headscale_policy_unprivileged_ssh_sources
+# before it replaces the file (temp file + rename). Comments are lost. Returns 1, file
+# untouched, when the policy cannot be parsed or the result is not clean.
+headscale_policy_narrow_ssh_sources() {
+    local f="$1" tmp="$1.ssh-narrowed.$$" left=""
+    if sed -e 's#//.*$##' "${f}" 2>/dev/null | jq '
+            if type != "object" then error("not an object") else . end
+            | with_entries(select(.key | explode | all(. <= 127)))
+            | with_entries(
+                if (.key | ascii_downcase) == "ssh" then
+                    .value |= (if type == "array" then
+                        [ .[] | select(type == "object")
+                          | with_entries(select(.key | explode | all(. <= 127)))
+                          | with_entries(if (.key | ascii_downcase) == "src" then
+                                .value |= (if type == "array" then map(select(. == "tag:superadmin")) else [] end)
+                              else . end)
+                          | select(any(to_entries[]; (.key | ascii_downcase) == "src" and (.value | length) > 0)) ]
+                      else [] end)
+                else . end)' > "${tmp}" 2>/dev/null \
+       && left="$(headscale_policy_unprivileged_ssh_sources "${tmp}")" && [ -z "${left}" ] \
+       && mv -f "${tmp}" "${f}" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "${tmp}" 2>/dev/null
+    return 1
+}
+
+# headscale_guard_ssh_sources <policy.hujson> <policy.bootstrap.hujson>: the KEYS-stick
+# guard for Tailscale SSH sources. Runs before the security-tag owner check in
+# provision_headscale, on the policy headscale is about to load AND on the bootstrap
+# policy that check falls back on (a stick's *.hujson are copied over /etc/headscale,
+# so the "baked" bootstrap can be the stick's too):
+#   * a bootstrap that names any ssh source but tag:superadmin is narrowed in place,
+#     or set aside (renamed *.refused) when it cannot be, so nothing falls back on it;
+#   * a policy that does is NOT loaded as is: the (now clean) bootstrap is staged in
+#     its place, else the policy itself is narrowed;
+#   * a policy that cannot be read is replaced by a clean bootstrap when there is
+#     one. Otherwise it is left to the owner check below, which handles an unreadable
+#     policy the same way, and this returns 1.
+headscale_guard_ssh_sources() {
+    local policy="$1" boot="$2" found="" readable=1
+    if [ -f "${boot}" ]; then
+        found="$(headscale_policy_unprivileged_ssh_sources "${boot}")" || readable=0
+        if [ "${readable}" = 0 ] || [ -n "${found}" ]; then
+            if [ "${readable}" = 1 ] && headscale_policy_narrow_ssh_sources "${boot}"; then
+                warn "headscale: ${boot} granted Tailscale SSH to non-privileged source(s): $(printf '%s' "${found}" | tr '\n' ' ')— removed them (only tag:superadmin may be an ssh source)"
+            elif mv -f "${boot}" "${boot}.refused" 2>/dev/null; then
+                warn "headscale: ${boot} grants Tailscale SSH to a non-privileged source or cannot be read, and could not be narrowed — set aside as ${boot}.refused"
+            else
+                warn "headscale: ${boot} grants Tailscale SSH to a non-privileged source and could neither be narrowed nor set aside"
+            fi
+        fi
+    fi
+    [ -f "${policy}" ] || return 0
+    found="" readable=1
+    found="$(headscale_policy_unprivileged_ssh_sources "${policy}")" || readable=0
+    [ "${readable}" = 1 ] && [ -z "${found}" ] && return 0
+    if [ "${readable}" = 0 ]; then
+        warn "headscale: ${policy} could not be parsed to check its Tailscale SSH sources — not loading it as is"
+    else
+        warn "headscale: ${policy} grants Tailscale SSH to non-privileged source(s): $(printf '%s' "${found}" | tr '\n' ' ')— every node holding a pre-auth key could open a session as the privileged user; not loading it as is"
+    fi
+    local boot_found=""
+    if [ -f "${boot}" ] && boot_found="$(headscale_policy_unprivileged_ssh_sources "${boot}")" \
+       && [ -z "${boot_found}" ] && cp -f "${boot}" "${policy}"; then
+        warn "headscale: staged the baked BOOTSTRAP policy instead — fix the KEYS headscale/policy.hujson (ssh rules name tag:superadmin only)"
+        return 0
+    fi
+    if [ "${readable}" = 1 ] && headscale_policy_narrow_ssh_sources "${policy}"; then
+        warn "headscale: no clean bootstrap policy — removed the non-privileged ssh source(s) from ${policy} instead"
+        return 0
+    fi
+    warn "headscale: ${policy} — no clean bootstrap policy and its ssh sources could not be narrowed; the owner check decides what is loaded"
+    return 1
+}
+
 # headscale_policy_owned_security_tags <policy.hujson>
 # Prints, one per line, every SECURITY tag (tag:superadmin, tag:mesh_*, tag:dev_*,
 # tag:dom_*) that the policy gives ANY owner. Exit 0 = the policy was read (an empty
@@ -857,6 +981,12 @@ provision_headscale() {
     local policy_file=""
     if   [ -f "${BASE}/headscale/policy.hujson" ]; then policy_file=/etc/headscale/policy.hujson
     elif [ -f /etc/headscale/policy.hujson ];      then policy_file=/etc/headscale/policy.hujson
+    fi
+    # Tailscale SSH may be granted to tag:superadmin only (headscale_guard_ssh_sources).
+    # Checked BEFORE the owner check below, on the policy and on the bootstrap that
+    # check falls back on, so whichever of them ends up loaded names no member source.
+    if [ -n "${policy_file}" ]; then
+        headscale_guard_ssh_sources /etc/headscale/policy.hujson /etc/headscale/policy.bootstrap.hujson || true
     fi
     # A policy that gives a SECURITY tag an owner lets every pre-auth key holder
     # claim that tag (see headscale_policy_owned_security_tags). A USB override (or a

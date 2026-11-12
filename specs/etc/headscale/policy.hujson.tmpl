@@ -24,11 +24,12 @@
   //       tag:dev_<fp> per export node, each with an EMPTY owner list (no user
   //       may self-apply them; they are SERVER-FORCED via
   //       hugmesh-headscale-forcetags at approval).
-  //   * the ssh-edges marker — EXACTLY the predicate-permitted ssh accepts (one
-  //       per export node: src=advisory tag:hugmesh, dst=tag:dev_<fp>,
-  //       users=node-local privileged ssh user) PLUS the ALWAYS-emitted
-  //       SUPERADMIN mesh rule (src:[tag:superadmin], dst:[tag:mesh_<MESH_ID>],
-  //       users:[<ssh user>]).
+  //   * the ssh-edges marker — the ALWAYS-emitted SUPERADMIN mesh rule
+  //       (src:[tag:superadmin], dst:[tag:mesh_<MESH_ID>], users:[<ssh user>])
+  //       PLUS one accept per export node (src:[tag:superadmin],
+  //       dst:[tag:dev_<fp>], users:[<ssh user>]). Every ssh rule's src is
+  //       tag:superadmin and nothing else; see "Who may open a Tailscale SSH
+  //       session" below.
   //
   // The FOUR FIXES embodied here:
   //   [FIX-SERVERTAG]  security tags (tag:superadmin, tag:mesh_*, tag:dev_*)
@@ -51,17 +52,19 @@
   //                    kept (k8s, not SSH).
   //   [FIX-DENY22]     headscale ssh is itself default-deny, so the generated
   //                    ssh[] block (the ONLY accepts) IS the default-deny on :22.
-  //   [FIX-OIDC-USERS] DEFERRED — src identity is still the advisory
-  //                    tag:hugmesh (the reusable preauth key still gates JOIN);
-  //                    per-operator SOURCE authenticity + per-key %f pinning stay
-  //                    in Layer-B (the load-bearing boundary). See the PR body.
+  //   [FIX-OIDC-USERS] DEFERRED — there is no per-operator tailnet identity yet,
+  //                    so no ssh rule can name an operator. Until there is, every
+  //                    ssh src is tag:superadmin (server-forced, owned by nobody),
+  //                    never tag:hugmesh: see "Who may open a Tailscale SSH
+  //                    session" below.
   //
   // hujson = JSON + comments + trailing commas; headscale parses it natively.
 
   // ── Who may apply which tags ──────────────────────────────────────────────
   // tag:hugmesh and the role tags (pki/be/fe/host) stay self-applied, so they
   // stay owned by "hugmesh" (data-plane membership: CIDR rule + route
-  // auto-approval ONLY; tag:hugmesh is NO LONGER a :22 src/dst). This matters
+  // auto-approval; tag:hugmesh is NEVER an ssh or :22 source, and as a :22
+  // destination it admits tag:superadmin only). This matters
   // after approval too: `headscale nodes tag -t` REPLACES the forced-tag list,
   // so once hugmesh-headscale-forcetags runs, a node keeps tag:hugmesh only
   // through its own --advertise-tags. tag:superadmin is owned by NOBODY ([])
@@ -72,8 +75,9 @@
   //   MEMBERSHIP tags — tag:hugmesh + the role tags tag:pki/be/fe/host. Owned
   //   by "hugmesh", the MEMBERSHIP user every pre-auth key is minted for
   //   (keys-provision, the Studio's --mint, the web issuer). A node self-applies
-  //   them at join. tag:hugmesh is data-plane membership only (CIDR rule + route
-  //   auto-approval; it is NOT a :22 dst).
+  //   them at join. tag:hugmesh is data-plane membership (CIDR rule + route
+  //   auto-approval). It is never an ssh or :22 SOURCE; as a :22 destination it
+  //   admits tag:superadmin only.
   //
   //   SECURITY tags — tag:superadmin, tag:mesh_*, tag:dev_*, tag:dom_*. Owned by
   //   NO user (empty owner list). headscale 0.23 gives a node the UNION of its
@@ -108,18 +112,47 @@
   // ── Access rules (default-deny) ───────────────────────────────────────────
   // KEPT: the k8s pod/ClusterIP "one-LAN" data-plane rule. The any-to-any
   // tag:hugmesh -> tag:hugmesh:* :22 hole is DROPPED [FIX-DROPMESHRULE].
+  // The second rule is the ONLY way to :22: a Tailscale SSH session is a TCP
+  // connection to :22, so the packet filter must let it through before the ssh
+  // block below is even consulted. Without it the superadmin rule was inert
+  // (measured on headscale 0.23.0 + tailscale 1.78.1: the connection never
+  // reached the node). Its src is tag:superadmin only, the same as every ssh
+  // rule. dst is the membership tag rather than tag:mesh_<MESH_ID> so this
+  // template keeps exactly two splice markers (the local stack renders it too);
+  // which nodes accept a SESSION is still decided by the ssh block's dst.
   "acls": [
     {
       "action": "accept",
       "src": ["tag:hugmesh"],
       "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
+    },
+    {
+      "action": "accept",
+      "src": ["tag:superadmin"],
+      "dst": ["tag:hugmesh:22"]
     }
   ],
 
-  // ── Tailscale SSH — generated default-deny per-edge block ─────────────────
+  // ── Who may open a Tailscale SSH session ──────────────────────────────────
+  // ONLY tag:superadmin. Tailscale SSH answers :22 itself (`tailscale up --ssh`,
+  // on by default), so the device's sshd key checks (Layer-B) are NOT on this
+  // path: whoever an ssh rule names as src gets a session as the privileged
+  // user, and nothing else stands in the way. tag:hugmesh is self-applied by
+  // every node that holds a pre-auth key, and so are the role tags, so naming
+  // any of them (or autogroup:member, "*", the "hugmesh" user) as src would give
+  // every member a privileged session as soon as anything opens :22 to members
+  // (measured: one member-to-member :22 accept was enough). tag:superadmin is
+  // owned by nobody and only hugmesh-headscale-forcetags assigns it, from
+  // /etc/hugmesh/registry/superadmin-machines.txt. keys-provision refuses a KEYS
+  // stick policy whose ssh rules name any other source.
+  //
   // headscale ssh is default-deny; the accepts spliced below are the ONLY SSH
-  // surface. Each export operator yields exactly one accept to its node's
-  // server-forced tag:dev_<fp>; the SUPERADMIN mesh rule is always appended.
+  // surface. The SUPERADMIN mesh rule comes first; each export operator then
+  // yields one accept to its node's server-forced tag:dev_<fp>. Until
+  // per-operator identities exist ([FIX-OIDC-USERS]) those per-node accepts
+  // share the superadmin source, so they open nothing the mesh rule does not;
+  // they keep the export-driven per-node shape that an operator source will
+  // later slot into.
   "ssh": [@@HUGMESH_SSH_EDGES@@
   ]
 }

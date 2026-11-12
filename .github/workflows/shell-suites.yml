@@ -1141,16 +1141,33 @@ jobs:
     # LAYERA_BFF_PIN (a full 40-hex commit of hugmesh/hugmesh-admin-bff-api) whenever
     # the BFF side of the contract changes; the run-suites step asserts the checkout
     # is that commit. The suite exits 1 (never 0, never 3) when the checkout is absent.
-    # MEASURED 2026-11-11 in alpine:3 with this job's apk set and CI=true, against the
-    # BFF fix commit pinned below: 24 passed / 0 failed in ~11 s (its negative controls
-    # include three runs of test-layer-a-headscale-acl.sh on an absent or partial
-    # sibling). Against hugmesh-admin-bff-api main de019243 (the pre-fix golden): 2
-    # failed (the golden DIFFERS; owners on tag:superadmin and tag:dev_*).
+    #
+    # WHAT THE PIN MAY BE: a commit on the BFF's main, or the head commit of a BFF
+    # pull request. A change to the shared golden has to land in both repositories,
+    # and the pull request here cannot be green until the BFF's copy exists, so the
+    # pin names the BFF pull request's head. It does NOT have to move when that pull
+    # request is squash-merged: GitHub keeps the head under refs/pull/<n>/head after
+    # the merge and after the branch is deleted, and serves it to the checkout's
+    # `fetch --depth=1 origin <sha>`. Seen on run 43168293125: #159's head 1fb23d8f
+    # was fetched 83 minutes after #159 was squash-merged as 0b5ba2ec, when no branch
+    # held it. This job compares bytes, not history, so moving the pin to the squash
+    # commit later changes nothing unless the squash changed a fixture. Two things DO
+    # need a pin bump: a further commit on the BFF pull request, and any later change
+    # to the BFF's compiler or fixtures. Never force-push a pinned BFF branch.
+    #
+    # THE PIN NOW: hugmesh-admin-bff-api#161's head (the compiler sources every ssh
+    # rule from tag:superadmin and emits the one :22 accept, like the renderer here).
+    # MEASURED 2026-11-11 in alpine:3 with this job's apk set and CI=true, against
+    # that commit: 24 passed / 0 failed in 9 s (its negative controls include three
+    # runs of test-layer-a-headscale-acl.sh on an absent or partial sibling). Against
+    # the previous pin 1fb23d8f and against hugmesh-admin-bff-api main 93460e29 (both
+    # carry the golden whose per-node ssh src is tag:hugmesh): 1 failed (the golden
+    # DIFFERS).
     timeout-minutes: 10
     container:
       image: alpine:3
     env:
-      LAYERA_BFF_PIN: 1fb23d8f2602b867c98297b8506a5f3e5b3a8916
+      LAYERA_BFF_PIN: 0163b9ebef31f2a02b79bd131aa44b36abfdace7
     steps:
       - run: apk add --no-cache bash coreutils diffutils gawk git grep jq openssl sed
       - uses: actions/checkout@v4

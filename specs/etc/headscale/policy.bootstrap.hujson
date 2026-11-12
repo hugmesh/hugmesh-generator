@@ -44,7 +44,7 @@
   // entry is also refused when advertised, but headscale 0.23 fails EVERY map
   // update when a rule names an unlisted tag that no node carries as forced,
   // which is why the rendered policy lists the tags its rules name. This file's
-  // only rule names tag:hugmesh. A preauth key is NOT a guard here: headscale
+  // rules name tag:hugmesh and tag:superadmin, both listed above. A preauth key is NOT a guard here: headscale
   // mints a key carrying tag:superadmin whatever tagOwners says, so the key
   // minters (provisioning, the Studio, admin-bff) must only ever ask for
   // tag:hugmesh plus a role tag.
@@ -70,26 +70,43 @@
   // ── Access rules (default-deny; only these accepts apply) ─────────────────
   // KEPT: the k8s "one-LAN" pod/ClusterIP data-plane rule. DROPPED: the
   // any-to-any tag:hugmesh -> tag:hugmesh:* rule (the :22 hole).
+  // The second rule is the ONLY way to :22, and only from tag:superadmin: a
+  // Tailscale SSH session is a TCP connection to :22, so without it the ssh rule
+  // below could never be used (measured on headscale 0.23.0 + tailscale 1.78.1).
   "acls": [
     {
       "action": "accept",
       "src": ["tag:hugmesh"],
       "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
+    },
+    {
+      "action": "accept",
+      "src": ["tag:superadmin"],
+      "dst": ["tag:hugmesh:22"]
     }
   ],
 
-  // ── Tailscale SSH — bootstrap window only (#66 behaviour) ─────────────────
-  // A SINGLE conservative accept so the privileged operator can reach nodes
-  // during provisioning. keys-provision rewrites @@TS_SSH_USER@@ to the
-  // provisioned privileged user (provision.json .tailscale.ssh_user) before
-  // `headscale policy set`. headscale SSH is itself default-deny, so this one
-  // accept IS the whole SSH surface in the bootstrap window. The FIRST verified
-  // Layer-A sync OVERWRITES this with the per-edge generated block (and removes
-  // the @@TS_SSH_USER@@ placeholder entirely).
+  // ── Tailscale SSH — bootstrap window only ─────────────────────────────────
+  // A SINGLE conservative accept so the superadmin can reach nodes during
+  // provisioning. keys-provision rewrites @@TS_SSH_USER@@ to the provisioned
+  // privileged user (provision.json .tailscale.ssh_user) before `headscale
+  // policy set`. headscale SSH is itself default-deny, so this one accept IS the
+  // whole SSH surface in the bootstrap window. The FIRST verified Layer-A sync
+  // OVERWRITES this with the generated block (and removes the @@TS_SSH_USER@@
+  // placeholder entirely).
+  //
+  // src is tag:superadmin and NOTHING else. Tailscale SSH answers :22 itself, so
+  // the device's sshd key checks are not on this path: whoever src names gets a
+  // session as the privileged user. It used to be tag:hugmesh, which every node
+  // holding a pre-auth key self-applies, so one member-to-member :22 accept would
+  // have given every member that session (measured). tag:superadmin is owned by
+  // nobody; a node gets it only from hugmesh-headscale-forcetags
+  // (/etc/hugmesh/registry/superadmin-machines.txt on the control node).
+  // keys-provision refuses a policy whose ssh rules name any other source.
   "ssh": [
     {
       "action": "accept",
-      "src": ["tag:hugmesh"],
+      "src": ["tag:superadmin"],
       "dst": ["tag:hugmesh"],
       "users": ["@@TS_SSH_USER@@"]
     }
