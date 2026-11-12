@@ -345,9 +345,9 @@ MESH_INFRA_TITLE = "The mesh's own infrastructure (chosen once for the whole mes
 #: The Domains step's prod line while row 0 (the public apex) is blank. Shown on ENTRY
 #: and kept live as row 0 is typed (GUI-21): it used to be written only by the step's
 #: own Next, which then moved on, so nobody saw it until the plan's BLOCKERS.
-PROD_APEX_NOTE = ("A prod mesh needs its public apex domain in the first row — the "
-                  "minted issuer and superadmin align with it. The mesh cannot "
-                  "start without it.")
+PROD_APEX_NOTE = ("A prod mesh needs its public apex domain in row 0 — the minted "
+                  "issuer and superadmin align with it. The mesh cannot start "
+                  "without it.")
 
 
 _IDP_JWKS_HINTS = {
@@ -1377,15 +1377,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         lay = QtWidgets.QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
         self.domains_help = QtWidgets.QLabel(
-            "The first row is this mesh's OWN domain: on a test mesh the brand-default "
-            "apex (fixed — a test mesh publishes nothing), on a prod mesh the public apex, "
+            "Row 0 is this mesh's OWN domain: on a test mesh the brand-default apex "
+            "(fixed — a test mesh publishes nothing), on a prod mesh the public apex, "
             "typed here (it is what the minted issuer and superadmin align with; the "
             "Mesh overlay step shows it read-only). Add every OTHER domain this mesh "
             "serves below. ‘Sign-in’ = Superdomain (the mesh's central sign-in) or Own "
             "(its own: by default a Casdoor of its own beside the central one — host "
             "ports 8001, 8002, … in row order — or its own Entra, Cognito or OIDC "
             "provider, chosen on the domain's Identity tab on the next step). "
-            "‘Optional services’ is READ-ONLY here: every domain — the first row "
+            "‘Optional services’ is READ-ONLY here: every domain — this row 0 "
             "included — gets its own page on the ‘Domain services’ step that follows, "
             "and a mesh start refuses while any domain here has never been through "
             "it, naming the domain.")
@@ -1480,8 +1480,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         problems = added_row_problems([d.name for d in md.domains[1:]], md.own_name)
         own = (md.own_name or "").strip()
         if self.env_prod.isChecked() and own and not DOMAIN_NAME_RE.match(own):
-            problems.insert(0, f"the first row: not a domain name: {own!r} "
-                               "(lowercase dotted hostname, e.g. example.org)")
+            problems.insert(0, f"row 0: not a domain name: {own!r} (lowercase "
+                               "dotted hostname, e.g. example.org)")
         return problems
 
     def _commit_domains(self) -> bool:
@@ -1857,8 +1857,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # (_seed_domains flips it): one domain field the operator types, one place it
         # is shown again. A host with no steps (LocalMeshDialog) keeps it editable.
         self.boot_domain_note = QtWidgets.QLabel(
-            "Set on the ‘Domains’ step (the first row, this mesh's own domain); shown "
-            "here read-only so the overlay and the domains table can never disagree.")
+            "Set on the ‘Domains’ step (row 0, this mesh's own domain); shown here "
+            "read-only so the overlay and the domains table can never disagree.")
         self.boot_domain_note.setWordWrap(True)
         self.boot_domain_note.setStyleSheet("color: gray;")
         self.boot_domain_note.setVisible(False)

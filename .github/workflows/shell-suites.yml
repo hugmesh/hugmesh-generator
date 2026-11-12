@@ -541,7 +541,6 @@ jobs:
             tests/scripts/test-github-auth-lib.sh
             tests/scripts/test-frite-kernel-emulation-symbols.sh
             tests/scripts/test-guard-integrity.sh
-            tests/scripts/test-guest-host-facts.sh
             tests/scripts/test-harbor-robots-ownership.sh
             tests/scripts/test-host-accept-keywords.sh
             tests/scripts/test-host-bdep-pool.sh

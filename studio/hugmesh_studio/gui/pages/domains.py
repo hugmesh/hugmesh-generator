@@ -80,7 +80,7 @@ import copy
 import html
 import os
 
-from ..qt import Qt, QtCore, QtWidgets
+from ..qt import Qt, QtWidgets
 from ..styles import WARN, muted
 from ...core import plain_words
 from ...core.config import (CLIENT_CA_INHERITANCE_NOTE, DOMAIN_FIELDS, DOMAIN_IDP_OWN,
@@ -323,213 +323,6 @@ class _ServicesCell(QtWidgets.QLabel):
         return list(self._slugs)
 
 
-class _OwnCellLabel(QtWidgets.QLabel):
-    """One of the own row's read-only cells (‘Applies to’, ‘Sign-in’, ‘Base CA’).
-
-    When its column is narrower than the text it draws the text ELIDED, ending in ‘…’,
-    instead of cutting it off mid-word with nothing to say so (GUI-22: "All images
-    (this me", "Superdomain Casd"). The whole text is always in the tooltip, ahead of
-    the own-row explanation. :meth:`sizeHint` stays the WHOLE text's width, because it
-    is what the table's column fit asks for; only :meth:`text` is the elided one, the
-    convention of the other elided labels here (``_lookeditor.ElidedLabel``)."""
-
-    def __init__(self, text: str, tip: str = ""):
-        super().__init__()
-        self._full = text
-        self.setToolTip(f"{text}\n\n{tip}" if tip else text)
-        self._elide()
-
-    def full_text(self) -> str:
-        return self._full
-
-    def sizeHint(self):  # noqa: N802 (Qt override)
-        m = self.contentsMargins()
-        return QtCore.QSize(
-            self.fontMetrics().horizontalAdvance(self._full) + m.left() + m.right()
-            + 2 * self.margin(), super().sizeHint().height())
-
-    def minimumSizeHint(self):  # noqa: N802 (Qt override)
-        return QtCore.QSize(self.fontMetrics().horizontalAdvance("…"),
-                            super().minimumSizeHint().height())
-
-    def _elide(self) -> None:
-        width = self.contentsRect().width() - 2 * self.margin()
-        shown = (self._full if self.fontMetrics().horizontalAdvance(self._full) <= width
-                 else self.fontMetrics().elidedText(
-                     self._full, Qt.TextElideMode.ElideRight, max(0, width)))
-        if shown != super().text():
-            super().setText(shown)
-
-    def resizeEvent(self, event):  # noqa: N802 (Qt override)
-        super().resizeEvent(event)
-        self._elide()
-
-
-#: The columns that give width back when the viewport is narrower than every column's
-#: content, in the order they give it (see :class:`_DomainsGrid`). Title gives first,
-#: down to ``_TITLE_FLOOR_CHARS`` average characters (a title wraps; it was 70 px, about
-#: ten, for its whole life); then the cells that can draw less than their text — the
-#: services summary wraps, the own row's labels elide, the combos elide — in proportion
-#: to how far each is over its header; the domain name (its item text elides) last.
-#: GitHub org is in no group: it never gives, so it stays whole and in the viewport.
-_FIT_GIVE_ORDER = ((_COL_TITLE,), (_COL_SERVICES, _COL_APPLIES, _COL_IDP, _COL_CA),
-                   (_COL_NAME,))
-_TITLE_FLOOR_CHARS = 10
-#: The columns whose cells are ITEMS the operator may type in, and the room such a
-#: column is asked for — in average characters — while one of its cells can be typed
-#: in: a domain name (every added row's, and the own row's on a prod local mesh, where
-#: it is the public apex) and a title. The fit measures a column by its text, and a
-#: cell nobody has typed in yet has none: left to that, the apex cell was fitted down
-#: to its header, 52 px (GUI-22 round 2). Fourteen characters is about the 100 px Qt's
-#: default section gave the Domain column before the fit — which it is never under
-#: either, see :meth:`_DomainsGrid.typing_room` — and ten is Title's floor.
-_TYPING_CHARS = {_COL_NAME: 14, _COL_TITLE: _TITLE_FLOOR_CHARS}
-#: Breathing room past a header's or a cell's own size hint, so no text sits flush
-#: against the grid line (the cell is the section less that line).
-_FIT_PAD = 4
-
-
-class _DomainsGrid(QtWidgets.QTableWidget):
-    """The domains table, its column widths FITTED to the viewport (GUI-22).
-
-    It used to leave every column at Qt's 100 px default and stretch the LAST one, so
-    the GitHub org cell spread over 570-770 px while the own row's ‘Applies to’ and
-    ‘Sign-in’ texts (195 and 252 px) were cut at 99 px and the ‘Optional services’
-    header was elided. Now each shown column is given what its header and its widest
-    cell ask for. A viewport wider than that gives the surplus to Title; a narrower one
-    takes it back in ``_FIT_GIVE_ORDER``, never below a column's header (so no header
-    is elided) and never from GitHub org (#647: a control nobody can scroll to is not
-    there). Only when even those floors do not fit does a horizontal scrollbar appear.
-
-    A column the operator TYPES in (``_TYPING_CHARS``) is asked for its typing room
-    however short or empty its text is: the cell a name goes into is not fitted to the
-    text it does not have yet. That room is width like any other, though: Domain gives
-    it back LAST, and only once every other column is at its floor, rather than push
-    the org cell out of the viewport.
-
-    The fit re-runs — coalesced on a zero-length timer — whenever what it measures
-    changes: the viewport is resized, a row is inserted or removed, an item's data
-    changes (a name typed into a cell and committed, or written by the host), a cell
-    widget is set, a column is shown or hidden, the font or style changes. A host that
-    changes a cell WIDGET's text in place calls :meth:`schedule_fit` itself."""
-
-    def __init__(self, rows: int, columns: int):
-        super().__init__(rows, columns)
-        self._fit_timer = QtCore.QTimer(self)
-        self._fit_timer.setSingleShot(True)
-        self._fit_timer.setInterval(0)
-        self._fit_timer.timeout.connect(self.fit_columns)
-        self.horizontalHeader().setStretchLastSection(False)
-        self.model().rowsInserted.connect(self.schedule_fit)
-        self.model().rowsRemoved.connect(self.schedule_fit)
-        # an ITEM's text is part of what the fit measures: a name typed into a cell and
-        # committed, or written by the host (a loaded record), re-fits like a new row
-        self.model().dataChanged.connect(self.schedule_fit)
-
-    def schedule_fit(self, *_args) -> None:
-        timer = getattr(self, "_fit_timer", None)
-        if timer is not None:
-            timer.start()
-
-    def setCellWidget(self, row, column, widget):  # noqa: N802 (Qt override)
-        super().setCellWidget(row, column, widget)
-        self.schedule_fit()
-
-    def setColumnHidden(self, column, hide):  # noqa: N802 (Qt override)
-        super().setColumnHidden(column, hide)
-        self.schedule_fit()
-
-    def resizeEvent(self, event):  # noqa: N802 (Qt override: the VIEWPORT's resize)
-        super().resizeEvent(event)
-        self.schedule_fit()
-
-    def changeEvent(self, event):  # noqa: N802 (Qt override)
-        super().changeEvent(event)
-        if event.type() in (QtCore.QEvent.Type.FontChange,
-                            QtCore.QEvent.Type.StyleChange):
-            self.schedule_fit()
-
-    def header_need(self, column: int) -> int:
-        """The width at which ``column``'s header is drawn whole."""
-        return self.horizontalHeader().sectionSizeHint(column) + _FIT_PAD
-
-    def cell_margin(self) -> int:
-        """How much narrower than its cell the view draws a cell WIDGET: the style's
-        item-text margins, which ``QStyledItemDelegate.updateEditorGeometry`` takes
-        off both sides (none in Fusion, 3 px a side in Breeze). The grid line is
-        already in ``sizeHintForColumn``."""
-        opt = QtWidgets.QStyleOptionViewItem()
-        self.initViewItemOption(opt)
-        opt.rect = QtCore.QRect(0, 0, 1000, 30)
-        text = self.style().subElementRect(
-            QtWidgets.QStyle.SubElement.SE_ItemViewItemText, opt, self)
-        return max(0, opt.rect.width() - text.width())
-
-    def typing_room(self, column: int) -> int:
-        """The least width ``column`` is asked for while one of its cells can be TYPED
-        in, however short or empty the text in it is; 0 for a column nobody types in
-        (a column of cell widgets, or one whose every item is read-only)."""
-        chars = _TYPING_CHARS.get(column)
-        if chars is None or not any(
-                item is not None and bool(item.flags() & Qt.ItemFlag.ItemIsEditable)
-                for item in (self.item(r, column) for r in range(self.rowCount()))):
-            return 0
-        room = self.fontMetrics().averageCharWidth() * chars
-        if column == _COL_NAME:
-            # ...and never under what the cell had before the fit: Qt's default section
-            room = max(room, self.horizontalHeader().defaultSectionSize())
-        return room
-
-    def column_need(self, column: int) -> int:
-        """The width at which ``column``'s header and every cell are drawn whole, and
-        a cell that is typed in has its typing room."""
-        return max(self.header_need(column), self.typing_room(column),
-                   self.sizeHintForColumn(column) + self.cell_margin() + _FIT_PAD)
-
-    def _floor(self, column: int) -> int:
-        if column == _COL_TITLE:
-            return max(self.header_need(column),
-                       self.fontMetrics().averageCharWidth() * _TITLE_FLOOR_CHARS)
-        return self.header_need(column)
-
-    def fit_widths(self, room: int) -> dict:
-        """``{column: width}`` for the shown columns in a viewport ``room`` px wide."""
-        hh = self.horizontalHeader()
-        width = {c: self.column_need(c) for c in range(self.columnCount())
-                 if not hh.isSectionHidden(c)}
-        over = sum(width.values()) - room
-        for group in _FIT_GIVE_ORDER:
-            if over <= 0:
-                break
-            slack = {c: max(0, width[c] - self._floor(c)) for c in group if c in width}
-            total = sum(slack.values())
-            if total <= 0:
-                continue
-            take = min(over, total)
-            for c, s in slack.items():
-                # its share, rounded up, but never more than is still over
-                give = min(s, -(-take * s // total), over)
-                width[c] -= give
-                over -= give
-        if over < 0:
-            stretch = _COL_TITLE if _COL_TITLE in width else max(width, default=None)
-            if stretch is not None:
-                width[stretch] -= over
-        return width
-
-    def fit_columns(self) -> None:
-        try:
-            hh = self.horizontalHeader()
-            for c, w in self.fit_widths(self.viewport().width()).items():
-                if hh.sectionSize(c) != w:
-                    hh.resizeSection(c, w)
-        except Exception:                       # noqa: BLE001 — PyQt6 qFatal guard
-            import sys
-            import traceback
-            print("domains: swallowed exception in fit_columns", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-
-
 #: The row fields the table has a cell for (or reads from the services step by name).
 #: Every other field is carried over from the config's row, by the field list.
 _ROW_FIELDS_WITH_CELL = ("name", "title", "optional_services", "images", "idp", "tor",
@@ -562,7 +355,7 @@ class DomainsTableBody:
         # the choice is made on the 'Domain services' step, one page per domain, which
         # is the step the build/mesh-start gate requires. 'Applies to' fills Domain.images
         # (mesh only; hidden in cloud where the single image attaches implicitly).
-        self.table = _DomainsGrid(0, 7)
+        self.table = QtWidgets.QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
             ["Domain", "Title", "Optional services", "Applies to", "Sign-in",
              "Base CA", "GitHub org"])
@@ -603,15 +396,16 @@ class DomainsTableBody:
             "provisioning input today — it records the intent with the domain. Add "
             "the PEM files on the Secrets store step (later in this wizard); until "
             "you have, every row here offers only ‘None’.")
+        self.table.horizontalHeader().setStretchLastSection(True)
         # SEVEN columns have to fit the wizard's default width (measured: a 679 px
-        # table viewport), and the appended GitHub org column must end inside it — at
-        # Qt's 100 px default each it ended at 700, reachable only by a horizontal
-        # scroll nobody makes (#647: a control a person cannot see is not there). The
-        # widths are FITTED to the viewport by _DomainsGrid (GUI-22): each column gets
-        # what its header and cells need, the surplus goes to Title rather than to the
-        # org cell, and a narrow viewport takes width back from the columns that can
-        # draw less than their text (the own row's labels elide) — never from the org
-        # column, whose cell keeps room for "exampleorg" whole.
+        # table viewport). At Qt's 100 px default each, the appended GitHub org
+        # column started at 600 and ended at 700 — drawn, but only reachable by a
+        # horizontal scroll nobody makes (#647: a control a person cannot see is not
+        # there). Titles are short, so Title gives up 20 px and the stretched last
+        # section (the org cell) takes what is left — at least Qt's 100 px section
+        # minimum, room for "exampleorg" to show whole (a 39-char slug scrolls inside
+        # the line edit). Title is 70 px so 570 + 100 fits with a few pixels spare.
+        self.table.setColumnWidth(_COL_TITLE, 70)
         # A host with no worklist (the local docker mesh) hides Applies-to; one with
         # no Secrets-store step hides Base CA — the column would offer one answer
         # ("None") and name a step the route does not have.
@@ -741,8 +535,7 @@ class DomainsTableBody:
             if problem:
                 item = self.table.item(r, _COL_NAME)
                 name = item.text().strip() if item else ""
-                # numbered as the table numbers it: the vertical header counts from 1
-                out.append(f"row {r + 1} ({name or 'unnamed'}): {problem}")
+                out.append(f"row {r} ({name or 'unnamed'}): {problem}")
         return out
 
     def _add_own(self, name: str, title: str = "", services=None,
@@ -764,8 +557,9 @@ class DomainsTableBody:
                                  _ServicesCell(services, reviewed=reviewed))
         for col, text in ((_COL_APPLIES, _OWN_APPLIES), (_COL_IDP, _OWN_IDP),
                           (_COL_CA, _OWN_CA)):
-            lab = _OwnCellLabel(text, _OWN_TIP)
+            lab = QtWidgets.QLabel(text)
             lab.setStyleSheet(muted())
+            lab.setToolTip(_OWN_TIP)
             self.table.setCellWidget(0, col, lab)
         self._set_org_cell(0, github_org)
         self._refresh_summary_cells()
@@ -799,8 +593,8 @@ class DomainsTableBody:
                 continue
             self.table.removeRow(idx)
         self.row_note.setText(
-            "The first row is this mesh's own domain — it is always served and cannot "
-            "be removed here." if refused else "")
+            "Row 0 is this mesh's own domain — it is always served and cannot be "
+            "removed here." if refused else "")
         self.row_note.setVisible(refused)
 
     def _refresh_applies_to(self):
@@ -866,8 +660,6 @@ class DomainsTableBody:
             elif self.is_own_row(r):
                 cell.set_slugs(getattr(cfg, "cluster_domain_services", None),
                                reviewed=(name in done))
-        # a summary's text changed in place: the column it sits in may need more room
-        self.table.schedule_fit()
         self._refresh_summary_cells()
 
     def brand_summaries(self) -> list[tuple[str, str]]:
@@ -1000,9 +792,9 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         # STEP 5 clarity: what the two editable columns are FOR (the 'Applies to' column
         # is mesh-only and hidden in cloud — see initializePage).
         self.table_help = QtWidgets.QLabel(
-            "The first row is this mesh's OWN domain (the cluster domain from the "
-            "Network step): always served, never removable, its services picked on the "
-            "next step like every other domain's. "
+            "Row 0 is this mesh's OWN domain (the cluster domain from the Network "
+            "step): always served, never removable, its services picked on the next "
+            "step like every other domain's. "
             "‘Title’ = this domain's display name, read by cluster provisioning from "
             "the mesh manifest — it is not shown anywhere on a cloud build. ‘Optional "
             "services’ = the per-domain service slugs this domain provides, READ-ONLY "

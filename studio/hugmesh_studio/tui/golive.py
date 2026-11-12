@@ -45,10 +45,9 @@ import os
 import shlex
 
 from ..core import golive_target, nvd_key, org_export, qemu_devices
-from ..core.golive_domains import (NO_DOMAIN_HINT_TUI, NO_EXPORT_DOMAINS_NOTE,
-                                   NO_EXTRA_DOMAINS_NOTE, baked_domains,
-                                   export_candidates, export_step_applies,
-                                   exposure_lines, plan_rows)
+from ..core.golive_domains import (NO_EXPORT_DOMAINS_NOTE, NO_EXTRA_DOMAINS_NOTE,
+                                   baked_domains, export_candidates,
+                                   export_step_applies, exposure_lines, plan_rows)
 from ..core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
 from .nvd_step import SECRET_PROMPT, NvdCommands
 from .nvd_step import HELP as NVD_HELP
@@ -359,15 +358,6 @@ class GoLiveScreen:
             f" · b=back to {self.back_to}" if self._over(j) else "")]
         return out
 
-    def provider_usage(self, j, count: int) -> str:
-        """The provider step's usage line — what an empty Enter gets."""
-        if count <= 0:
-            return "no provider is listed to pick (t picks another target)"
-        span = "1" if count == 1 else f"1-{count}"
-        return (f"pick a provider: type its NUMBER ({span}) and Enter · t=pick the "
-                "target" + (f" · b=back to {self.back_to}" if self._over(j)
-                            else " · q=quit"))
-
     def _over(self, j) -> bool:
         """True when this screen was opened over Brand settings (its Ways section's
         ``go-live``), so b on the first step closes it again."""
@@ -383,11 +373,6 @@ class GoLiveScreen:
         providers, blocker = self._providers_or_blocker(j)
         if blocker:
             j.status = blocker               # not "no such provider": there are none here
-            return
-        if line == "":
-            # Enter on the FIRST stage has nothing to continue to and no default to
-            # take: say how to pick, not "no such provider: ''"
-            j.status = self.provider_usage(j, len(providers))
             return
         try:
             n = int(line)
@@ -451,10 +436,8 @@ class GoLiveScreen:
     # ── plan ────────────────────────────────────────────────────────────────────
     def plan_lines(self, j) -> list[str]:
         """The exposure lines — ``exposure_lines(plan_rows(...))``, the GUI Generate
-        step's exact text for every plan that has a row. An EMPTY plan names this
-        face's remedy (``b``, then ``t NAME``): the GUI's says "the Inputs step", a
-        step this screen does not have."""
-        return exposure_lines(plan_rows(self._driver(j), self.opts), NO_DOMAIN_HINT_TUI)
+        step's exact text."""
+        return exposure_lines(plan_rows(self._driver(j), self.opts))
 
     # ── the plan's inputs (the GUI Inputs step's fields) ────────────────────────────
     def _offered_inputs(self, j) -> list:

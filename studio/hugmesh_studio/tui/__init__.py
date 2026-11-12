@@ -29,9 +29,7 @@ Phase-1 flows (the #49 audit's GUI-only capabilities, closed here first):
 
 * **sessions review** — the durable build-session records (core/build_sessions.py):
   per-session status (crash-honest, ``is_stale`` rendered but never written back),
-  the artifact listing, and delete-with-confirm — an unreadable record is listed and
-  deletable too; restart (the GUI's gate, then a hand-over: the TUI runs no builds),
-  redo (the recorded configuration into the journey) and delete all finished;
+  the artifact listing, and delete-with-confirm;
 * **worklist table** — a read-only view of an existing session's mesh worklist
   (rows + per-image status).
 
