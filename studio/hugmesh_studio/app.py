@@ -335,6 +335,25 @@ def main(argv=None) -> int:
                          "three-way guard as the GUI's delete affordance.")
     ap.add_argument("--yes", action="store_true",
                     help="with --delete-session: the required explicit confirmation.")
+    # ── kernel reconfiguration (core/kernel_reconfig.py; x86 images) ────────
+    ap.add_argument("--kernel-config", metavar="SESSION[:IMAGE]",
+                    help="open menuconfig for a built x86 image's kernel IN THIS TERMINAL "
+                         "(on a copy of the build's own .config), then print the change. "
+                         "IMAGE defaults to the session's first x86 image.")
+    ap.add_argument("--kernel-config-set", metavar="SESSION[:IMAGE]",
+                    help="a scripted kernel config edit: scripts/config with "
+                         "--kernel-config-args (e.g. \"--set-str LOCALVERSION -hmtest\")")
+    ap.add_argument("--kernel-config-args", metavar="ARGS", default="",
+                    help="with --kernel-config-set: the scripts/config arguments as ONE string, given with = "
+                         "(--kernel-config-args=\"--set-str LOCALVERSION -hmtest\")")
+    ap.add_argument("--kernel-config-diff", metavar="SESSION[:IMAGE]",
+                    help="print the pending kernel config change, symbol by symbol")
+    ap.add_argument("--kernel-config-apply", metavar="SESSION[:IMAGE]",
+                    help="rebuild the kernel + modules from the pending edit, re-sign the "
+                         "UKI with the key the build used and repackage the stage4, .img, "
+                         "fs.tar and ISOs (streams; refuses in one sentence when it cannot)")
+    ap.add_argument("--kernel-config-discard", metavar="SESSION[:IMAGE]",
+                    help="drop the pending kernel config edit")
     ap.add_argument("--delete-artifacts", action="store_true",
                     help="with --delete-session: ALSO remove the session's "
                          "<out>/sessions/<id>/ artifact tree (guarded by the same "
@@ -712,6 +731,22 @@ def main(argv=None) -> int:
             return 1
         print()
         return 0
+
+    kc = [(v, getattr(args, f"kernel_config_{v}" if v != "edit" else "kernel_config"))
+          for v in ("edit", "set", "diff", "apply", "discard")]
+    kc = [(v, a) for v, a in kc if a]
+    if kc:
+        # Qt-free: every decision lives in core/kernel_reconfig.py, shared with the GUI
+        # panel and the TUI.
+        from .core import kernel_reconfig
+        if len(kc) > 1:
+            print("error: give one --kernel-config* action at a time", file=sys.stderr)
+            return 2
+        if not _generator_dir_or_say(args.generator_dir):
+            return 2
+        verb, target = kc[0]
+        return kernel_reconfig.cli(verb, target, args.generator_dir,
+                                   config_args=args.kernel_config_args)
 
     if args.list_sessions or args.show_session or args.session_artifacts \
             or args.delete_session:

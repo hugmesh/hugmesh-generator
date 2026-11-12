@@ -1,6 +1,8 @@
 #!/bin/bash
 # _x86-kernel-install.sh <jobs> <root-label> <uki-name> [kernel-tree] — compile and install
 # the x86 kernel from an ALREADY-ASSERTED .config: bzImage + modules, modules_install,
+# make install (the unversioned /boot/vmlinuz), the disk initramfs and the UNSIGNED UKI
+# (/boot/<uki-name minus .efi>-unsigned.efi). Signing is NOT here: it happens on the host,
 # make install (the unversioned /boot/vmlinuz), the disk initramfs and the UNSIGNED UKIs
 # (/boot/<uki-name minus .efi><suffix>-unsigned.efi, one per HM_UKI_VARIANTS entry). Signing is NOT here: it happens on the host,
 # outside the sysroot, so the key never enters the image (build-x86-host-stage4.sh's

@@ -570,6 +570,7 @@ ALLOW_MISSING_PACKAGES=false
 # --allow-missing-packages class (never a Studio field); the emission itself is
 # failure-tolerant either way (WARN + no plan, never an aborted build).
 EMERGE_PLAN_ENABLED=true
+# --bundle-source : ship the generator source in the image (BUNDLE_SOURCE_DIR) + a
 # --bundle-source : ship the generator's TRACKED source in the image (BUNDLE_SOURCE_DIR) + a
 # regenerate helper, so you can build a fresh customized ISO from the running desktop.
 # Default ON for standalone (self-hosting appliance).
@@ -5872,6 +5873,7 @@ live_root_gate() {
     [ -n "${_all}" ] || { err "live-root gate: cannot list ${sq} — refusing to ship a live root nobody checked for the module-signing key"; return 1; }
     # unsquashfs prints "/usr/src/...", rdsquashfs "file usr/src/..." (no leading slash):
     # the certs/ alternative accepts either, or a renamed key would pass the rdsquashfs arm.
+    _leak="$(grep -E 'signing_key\.pem([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/' <<<"${_all}" | head -3)" || true
     # The name alternative takes any signing_key*.pem* (a signing_key.pem.bak copy is the
     # same key), and the basename of a non-default CONFIG_MODULE_SIG_KEY (file paths
     # only; a pkcs11: URI names no file) read from the sysroot's kernel config.
