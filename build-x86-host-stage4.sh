@@ -1817,6 +1817,13 @@ if ${STANDALONE}; then
     info "STANDALONE desktop: no mesh / no SSO / no k8s; local user '${LOCAL_USER}'; LUKS FDE on install; media-data auto-detect=${MEDIA_DATA}"
 fi
 
+# tailscaled version floor (scripts/_download-lib.sh): the shared init script passes
+# --no-logs-no-support, which tailscaled only accepts from 1.32.0 on. Refuse an older
+# --tailscale-version HERE, after the --standalone posture above has settled whether
+# tailscale ships at all and before any download, instead of shipping a mesh client
+# that exits on an unknown flag.
+${SKIP_MESH} || ${SKIP_TAILSCALE} || dlv_tailscale_version_ok "${TAILSCALE_VERSION}" || exit 1
+
 # ── Tor NODE service: CLIENT roles never carry it (hugmesh-generator#583) ─────────
 # ROLE_CLIENT is FINAL only from here: the role case block sets it for the desktop
 # roles, and the UNAFFILIATED -> STANDALONE folds above set it for everything else
@@ -7458,6 +7465,27 @@ pcs_unquiet_sendfile_noise "${SYSROOT}"
 # dev, run, plus var/cache/distfiles and the local user's home — no tmp), so a file
 # left in ${SYSROOT}/tmp rides into the ISO's rootfs.
 rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
+
+# ── NetworkManager: no connectivity probe (cluster-node roles) ──
+# The networkmanager package ships /usr/lib/NetworkManager/conf.d/20-connectivity.conf,
+# which polls a fixed public URL (nmcheck.gnome.org) every few minutes, forever: an
+# unsolicited phone-home from a self-hosted mesh, and DNS noise on an offline or
+# egress-filtered LAN. A server has no captive portal to detect; a client desktop keeps
+# the package default. HERE, before the build-time label pass below: this is a NEW
+# file, so unlike the package-owned conf.d/NetworkManager (rewritten in place after the
+# pass, keeping its label) it has no label until setfiles runs, and the stage4 tar is
+# packed from the sysroot with no further pass. ROLE_CLIENT is final long before here
+# and the file is not package-owned, so no later emerge can replace it. 90- so it sorts
+# after the package's own conf.d files. Pinned by tests/scripts/test-node-telemetry-off.sh.
+if ! ${ROLE_CLIENT}; then
+    mkdir -p "${SYSROOT}/etc/NetworkManager/conf.d"
+    printf '%s\n' \
+        '# Written by the HugMesh builder (cluster-node roles): no connectivity probe' \
+        '# to a public URL. Delete this file to restore the package default.' \
+        '[connectivity]' \
+        'enabled=false' > "${SYSROOT}/etc/NetworkManager/conf.d/90-hugmesh-no-connectivity-check.conf"
+    info "NetworkManager: connectivity check OFF (cluster node — no public probe URL)"
+fi
 
 # ── BUILD-TIME SELINUX LABELS (#503) ─────────────────────────────────────────
 # Labels and the hugmesh modules are BUILD ARTIFACTS: every carrier below (stage4,

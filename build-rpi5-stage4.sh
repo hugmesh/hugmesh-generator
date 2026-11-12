@@ -1560,6 +1560,13 @@ if ${STANDALONE}; then
     info "STANDALONE desktop: $([ "${MESH_FORCED}" = on ] && echo 'tailnet client kept (--with-tailscale), no mesh association' || echo 'no mesh'); local user '${LOCAL_USER}'; LUKS2-encrypted root (installer ISO)"
 fi
 
+# tailscaled version floor (scripts/_download-lib.sh): the shared init script passes
+# --no-logs-no-support, which tailscaled only accepts from 1.32.0 on. Refuse an older
+# --tailscale-version HERE, after the --standalone posture above has settled whether
+# tailscale ships at all and before any download, instead of shipping a mesh client
+# that exits on an unknown flag.
+${SKIP_MESH} || ${SKIP_TAILSCALE} || dlv_tailscale_version_ok "${TAILSCALE_VERSION}" || exit 1
+
 # --encrypt-root independent of --standalone: forces the installer ISO, since
 # encryption happens at INSTALL time (specs-rpi5/installer/install.sh), not by
 # writing the default .img directly. The plaintext .img (if also produced)
@@ -5012,6 +5019,18 @@ if ! ${ROLE_CLIENT}; then
         '# (containerd, kubelet, the host firewall, tor) starts on a slow boot too.' \
         'INACTIVE_TIMEOUT=60' > "${SYSROOT}/etc/conf.d/NetworkManager"
     info "NetworkManager: INACTIVE_TIMEOUT=60 (cluster node — need-net services wait for the link)"
+    # No connectivity check on a cluster node. NetworkManager's default probe
+    # fetches a fixed public URL (nmcheck.gnome.org) every few minutes, on every
+    # node, forever: an unsolicited phone-home from a self-hosted mesh, and DNS
+    # noise on an offline or egress-filtered LAN. A server has no captive portal
+    # to detect. 90- so it sorts after the package's own conf.d files.
+    mkdir -p "${SYSROOT}/etc/NetworkManager/conf.d"
+    printf '%s\n' \
+        '# Written by the HugMesh builder (cluster-node roles): no connectivity probe' \
+        '# to a public URL. Delete this file to restore the package default.' \
+        '[connectivity]' \
+        'enabled=false' > "${SYSROOT}/etc/NetworkManager/conf.d/90-hugmesh-no-connectivity-check.conf"
+    info "NetworkManager: connectivity check OFF (cluster node — no public probe URL)"
 fi
 
 banner "Packaging stage4 tarball"
