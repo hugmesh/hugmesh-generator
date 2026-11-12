@@ -531,7 +531,12 @@ class WorklistDriver:
             # Domain CA keys: written for THIS call only and removed in the finally
             # below. The key path reaches the pki profile only (args_for).
             st = self.ca_store or domain_ca_keys.store()
-            domain_ca_keys.rekey_own(base, st)
+            moved = domain_ca_keys.rekey_own(base, st)
+            if moved:
+                # the mesh's domain was renamed onto a row holding another
+                # domain's CA: no stick is made from a store that does not follow
+                # the config (every stick fails its keys step, with the reason)
+                raise domain_ca_keys.CAImportError(moved)
             if profile == domain_ca_keys.KEY_PROFILE:
                 # The go-live checklist gates the KEY: while it is not READY no CA
                 # key is placed, and this pki stick is not made with a throwaway CA

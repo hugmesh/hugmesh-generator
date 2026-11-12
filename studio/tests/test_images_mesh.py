@@ -1067,11 +1067,25 @@ class _FakeDocker:
         self.downs: list[list[str]] = []
         self.calls: list[list[str]] = []
         self.other: list[list[str]] = []
+        # per compose call: (cwd, --project-directory, what cwd held, COMPOSE_* seen)
+        self.compose_dirs: list[tuple] = []
 
     def __call__(self, argv, *a, **kw):
         argv = [str(x) for x in argv] if isinstance(argv, (list, tuple)) else argv
         if not isinstance(argv, list) or argv[:1] != ["docker"]:
             return self.real_run(argv, *a, **kw)
+        if argv[1:3] == ["compose", "--project-directory"]:
+            # the label stop runs from an EMPTY dir that is its project directory
+            # (studio-lows follow-up to #937 round 4); recorded, then matched as
+            # the plain `docker compose -p <p> down` it is
+            cwd = kw.get("cwd")
+            env = kw.get("env")
+            self.compose_dirs.append((
+                cwd, argv[3], sorted(os.listdir(cwd)) if cwd and os.path.isdir(cwd)
+                else None,
+                None if env is None else sorted(k for k in env
+                                                if k.upper().startswith("COMPOSE_"))))
+            argv = argv[:2] + argv[4:]
         if not (argv[1:3] == ["ps", "-q"] or argv[1:3] == ["compose", "-p"]):
             self.other.append(argv)
             return subprocess.CompletedProcess(argv, 1, "", "no docker here")
@@ -1335,3 +1349,194 @@ def test_round4_the_img_project_probe_reads_compose_labels(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda argv, *a, **kw:
                         subprocess.CompletedProcess(argv, 1, "", "denied"))
     assert local_stack_node.probe_running_img_projects() is None
+
+
+# ── 11. #937 round-4 refute follow-ups (studio-lows) ───────────────────────────
+#  (1) the native Windows gate comes FIRST in down() (before the record's lane
+#      stop) and guards the CLI `images_mesh stop` / halt_by_label too;
+#  (2) an unanswered `docker inspect` is said as such, never "not a HugMesh mesh";
+#  (3) the four mutations the refuter found surviving are killed here;
+#  (4) the KEPT sentence's plural;
+#  (5) the label stop runs from an empty project directory, with no COMPOSE_* env.
+def _pin_native_windows(monkeypatch):
+    from functools import partial
+    from hugmesh_studio.core import platform_info
+    monkeypatch.setattr(platform_info, "native_windows_blocker",
+                        partial(platform_info.native_windows_blocker, osname="nt"))
+
+
+def test_followup_down_on_native_windows_refuses_before_the_lane_stop(
+        checkout, makes, fake_docker):
+    rec = _ran_then_worktree_gone(checkout)
+    proj = saved_meshes.record_project(rec)
+    fake_docker.running[proj] = ["c1"]
+    boot = LocalMeshBootstrap.for_record(checkout, rec)
+    assert callable(boot.lane_stop) and boot.lane_refusal
+    ok, lines = boot.down(osname="nt")
+    assert not ok and len(lines) == 1, lines
+    assert "WSL2" in lines[0], lines
+    assert fake_docker.calls == [] and fake_docker.downs == []
+    assert fake_docker.running[proj] == ["c1"]
+
+
+def test_followup_the_cli_stop_and_halt_by_label_refuse_on_native_windows(
+        checkout, makes, fake_docker, monkeypatch, capsys):
+    rec = _ran_then_worktree_gone(checkout)
+    proj = saved_meshes.record_project(rec)
+    fake_docker.running[proj] = ["c1"]
+    ok, lines = images_mesh.halt_by_label(proj, osname="nt")
+    assert not ok and "WSL2" in lines[0], lines
+    ok, lines = images_mesh.AlongsideMesh(checkout, rec).stop(osname="nt")
+    assert not ok and "WSL2" in lines[0], lines
+    _pin_native_windows(monkeypatch)            # the CLI: this host IS native Windows
+    rc = images_mesh.main(["--generator-dir", checkout, "stop", rec.id])
+    out = capsys.readouterr().out
+    assert rc == 1 and "WSL2" in out, out
+    assert fake_docker.calls == [] and fake_docker.downs == []
+
+
+def test_followup_a_stop_with_its_worktree_present_is_gated_too(checkout, makes,
+                                                                fake_docker):
+    """AlongsideMesh.stop's own gate: the worktree path (`make stack-halt` in it) is
+    refused on native Windows as well, not only the label path."""
+    rec = _img_record(checkout)
+    lane = images_mesh.AlongsideMesh(checkout, rec)
+    ok, msg = lane.prepare_worktree()
+    assert ok, msg
+    ok, lines = lane.stop(osname="nt")
+    assert not ok and "WSL2" in lines[0], lines
+    assert not [m for m in makes if m["target"] != "probe_state"], makes
+    assert fake_docker.calls == []
+
+
+def test_followup_halt_by_label_with_no_docker_answer_stops_nothing(monkeypatch):
+    """Mutation R2: 'docker did not answer' must never read as 'nothing to stop'."""
+    monkeypatch.setattr(images_mesh, "project_running_ids", lambda p: None)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("no compose call may run")))
+    ok, lines = images_mesh.halt_by_label("hugmesh-img-abc")
+    assert not ok, lines
+    assert "docker did not answer" in lines[0] and "nothing to stop" not in lines[0]
+
+
+def test_followup_halt_by_label_fails_when_docker_stops_answering_after_down(
+        monkeypatch):
+    """Mutation R4: after a down that returned 0, an unanswered re-check (after=None)
+    is a FAILURE (whether it stopped is not known), never a success."""
+    answers = iter([["c1", "c2"], None])
+    monkeypatch.setattr(images_mesh, "project_running_ids", lambda p: next(answers))
+    monkeypatch.setattr(local_stack_node, "_compose_base", lambda: ["docker", "compose"])
+    monkeypatch.setattr(subprocess, "run", lambda argv, *a, **k:
+                        subprocess.CompletedProcess(argv, 0, "", ""))
+    ok, lines = images_mesh.halt_by_label("hugmesh-img-abc")
+    assert not ok and "stop FAILED" in lines[0], lines
+
+
+def test_followup_a_locked_stale_registration_is_kept(checkout, tmp_path):
+    """Mutation R5: a LOCKED registration is never removed, even with its dir gone."""
+    import shutil
+    wt = str(tmp_path / "locked-worktree")
+    subprocess.run(["git", "-C", checkout, "worktree", "add", "-q", "--detach", wt,
+                    "HEAD"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", checkout, "worktree", "lock", wt], check=True,
+                   capture_output=True)
+    shutil.rmtree(wt)
+    msg = images_mesh.drop_stale_registration(checkout, wt)
+    assert "locked" in msg and "left as it is" in msg, msg
+    assert wt in _git_worktrees(checkout)
+
+
+def test_followup_losing_another_registration_is_reported(monkeypatch, tmp_path):
+    """Mutation R6: the 'every other registration is still listed' check. If the
+    remove ever took another registration with it, the result says which."""
+    mine = str(tmp_path / "mine")
+    other = str(tmp_path / "other")
+    regs = iter([
+        [{"path": str(tmp_path / "repo"), "locked": False, "prunable": False},
+         {"path": mine, "locked": False, "prunable": True},
+         {"path": other, "locked": False, "prunable": True}],
+        [{"path": str(tmp_path / "repo"), "locked": False, "prunable": False}],
+    ])
+    monkeypatch.setattr(images_mesh, "_worktree_registrations", lambda repo: next(regs))
+    removed = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, *a, **k: removed.append(argv)
+                        or subprocess.CompletedProcess(argv, 0, "", ""))
+    msg = images_mesh.drop_stale_registration(str(tmp_path / "repo"), mine)
+    assert "also lost" in msg and other in msg, msg
+    assert removed and removed[0][-1] == mine
+
+
+def test_followup_an_unanswered_inspect_is_not_called_a_non_mesh(monkeypatch):
+    """docker did not say which compose project holds 8000: say exactly that, with
+    the Stop remedy, never "not a HugMesh mesh (it belongs to no compose project)"."""
+    monkeypatch.setattr(images_mesh, "port_free", lambda p: p != 8000)
+    monkeypatch.setattr(images_mesh, "port_holder", lambda p: "hugmesh-img-abc-casdoor-1")
+    monkeypatch.setattr(images_mesh, "container_project", lambda name: None)
+    why = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig()) \
+        .fixed_port_refusal()
+    assert "8000" in why and "docker did not say who holds it" in why, why
+    assert "not a HugMesh mesh" not in why and "no compose project" in why
+    assert "Stop on its row in Saved meshes" in why and "images_mesh stop" in why
+    assert "Nothing was started" in why
+
+
+@pytest.mark.parametrize("rc,stdout,want", [
+    (0, "hugmesh-img-abc\n", "hugmesh-img-abc"),
+    (0, "<no value>\n", ""),                 # docker answered: no compose label
+    (1, "", None),                           # docker did not answer
+    (0, "\n", None),                         # an empty reply says nothing either
+])
+def test_followup_container_project_tells_no_label_from_no_answer(monkeypatch, rc,
+                                                                  stdout, want):
+    monkeypatch.setattr(subprocess, "run", lambda argv, *a, **k:
+                        subprocess.CompletedProcess(argv, rc, stdout, ""))
+    assert images_mesh.container_project("c") == want
+
+
+def test_followup_container_project_with_no_docker_is_no_answer(monkeypatch):
+    def gone(*a, **k):
+        raise FileNotFoundError("docker")
+    monkeypatch.setattr(subprocess, "run", gone)
+    assert images_mesh.container_project("c") is None
+
+
+@pytest.mark.parametrize("up,want,once", [
+    (["hugmesh-img-a"], "hugmesh-img-a is running (a mesh started beside a node-image "
+     "build) and builds from it", "once that mesh is stopped"),
+    (["hugmesh-img-a", "hugmesh-img-b"], "hugmesh-img-a and hugmesh-img-b are running "
+     "(meshes started beside node-image builds) and build from it",
+     "once those meshes are stopped"),
+    (["hugmesh-img-a", "hugmesh-img-b", "hugmesh-img-c"],
+     "hugmesh-img-a, hugmesh-img-b and hugmesh-img-c are running (meshes started "
+     "beside node-image builds) and build from it", "once those meshes are stopped"),
+])
+def test_followup_the_kept_sentence_agrees_in_number(monkeypatch, up, want, once):
+    monkeypatch.setattr(local_stack_node, "running_img_projects", lambda: up)
+    args, says = local_stack_node.LocalStackNode(GENERATOR_DIR)._clean_args()
+    assert args == ["STACK_CLEAN_KEEP_M2=1"]
+    assert want in says and f"clean again {once} to remove" in says, says
+
+
+def test_followup_the_label_stop_loads_no_stray_compose_file(
+        checkout, makes, fake_docker, monkeypatch, tmp_path):
+    """`docker compose -p <p> down` with no file still LOOKS for a compose.yaml (cwd
+    and up) and an .env (project dir), and reads COMPOSE_FILE. The label stop runs
+    from a fresh empty dir that is its --project-directory, with no COMPOSE_* env,
+    and removes that dir afterwards."""
+    rec = _ran_then_worktree_gone(checkout)
+    proj = saved_meshes.record_project(rec)
+    fake_docker.running[proj] = ["c1"]
+    stray = tmp_path / "stray-cwd"
+    stray.mkdir()
+    (stray / "compose.yaml").write_text("services: {x: {image: nope}}\n")
+    (stray / ".env").write_text("COMPOSE_PROJECT_NAME=hugmesh-local\n")
+    monkeypatch.chdir(stray)
+    monkeypatch.setenv("COMPOSE_FILE", str(stray / "compose.yaml"))
+    monkeypatch.setenv("COMPOSE_PROFILES", "social")
+    ok, lines = images_mesh.AlongsideMesh(checkout, rec).stop()
+    assert ok, lines
+    assert fake_docker.downs == [["docker", "compose", "-p", proj, "down"]]
+    ((cwd, project_dir, listing, compose_env),) = fake_docker.compose_dirs
+    assert cwd and cwd == project_dir and cwd != str(stray), (cwd, project_dir)
+    assert listing == [] and compose_env == [], (listing, compose_env)
+    assert not os.path.exists(cwd), "the empty project dir was left behind"

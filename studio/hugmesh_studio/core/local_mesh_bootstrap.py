@@ -2047,17 +2047,21 @@ class LocalMeshBootstrap:
         volumes are KEPT, see LocalStackNode.stop) + the mesh overlay
         (LocalMeshNode.stop()). ``clean()`` is the one that drops volumes."""
         log: list[str] = []
+        # FIRST, before any stop path (the record's own lane included): a native
+        # Windows Studio stops nothing. One sentence, nothing touched: a mesh seen
+        # here was started from the WSL2 Studio on the same Docker engine, and that
+        # Studio is the one to stop it. (The lane_stop path used to run before this
+        # gate, so a record whose worktree was gone ran `docker compose ... down`
+        # from a native Windows Studio — #937 refute, round 4.)
+        blocker = self.teardown_refusal(osname)
+        if blocker:
+            return False, [blocker]
         if self.lane_refusal:
             if callable(self.lane_stop):
                 # the record's own stop: by compose project label, never the
                 # checkout's mesh and never the overlay (PR #937 round 4)
                 return self.lane_stop()
             return False, [self.lane_refusal]
-        blocker = self.teardown_refusal(osname)
-        if blocker:
-            # One sentence, nothing touched: a mesh seen here was started from the WSL2
-            # Studio on the same Docker engine, and that Studio is the one to stop it.
-            return False, [blocker]
         stack = self._stack_node()
         # WHAT the stop did, in words. `make stack-down` echoes its whole STACK_ENV
         # command line and compose says nothing when there is nothing to remove, so a

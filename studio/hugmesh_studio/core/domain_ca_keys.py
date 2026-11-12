@@ -57,7 +57,13 @@ Safety rules (each one pinned by a test):
   - the key of a certificate that is self-signed BY SIGNATURE: the certificate's
     own public key verifies its signature, whatever its issuer and subject names
     say (a "signing CA" that names a root as issuer but is signed by its own key
-    is that root's key under another name).
+    is that root's key under another name); and
+  - a key that carries a held root's SECRET under another public half
+    (:func:`_shared_root_secret`): an RSA modulus sharing a prime factor with a
+    root's (the same ``n`` under another public exponent is a different SPKI, and
+    it is the root's key), or an EC private scalar that, reduced modulo the order
+    of the root's curve, gives that root's public point or its negation on the
+    root's own curve (``d + k*n`` and ``n - d`` both give ``d``).
 
   It is checked on :func:`import_signing`, re-checked on :func:`import_root` for
   ANY domain (so the reverse order -- the key first, the matching root later, even
@@ -67,7 +73,16 @@ Safety rules (each one pinned by a test):
 * the held root is fixed until the domain's CA is removed, in every state (with
   or without a signing CA held): :func:`import_root` refuses a different root,
   and a root bundled with a signing import (PKCS#12 or a combined PEM) must be the
-  held root, byte for byte;
+  held root, byte for byte. A RENAME of the mesh's own domain does not change
+  that either: :func:`rekey_own` moves the own CA through :func:`_admit`, and
+  refuses (nothing moved, the checklist NOT ready, every KEYS step failed with the
+  sentence) when the new name already holds a CA (:func:`rekey_refusal`);
+* a held row keeps its kind, and the mesh holds ONE own CA: no import turns the
+  mesh's own CA into another domain's row, and no own-row import is held while the
+  own CA sits under another name (:func:`_row_kind_problem`, in :func:`_admit` and
+  at the top of each import). A refused rename leaves the own CA under the mesh's
+  old name, and without this an own-row import there made a second own CA that the
+  next :func:`rekey_own` moved over the other domain's row, dropping its root;
 * the KEYS generation places the signing key only when the go-live checklist
   (:func:`readiness`) is READY: a not-ready checklist fails the pki stick's keys
   step with the reason (:func:`placement_refusal`), it never builds that stick with
@@ -133,6 +148,18 @@ NOT_TAKEN = (
 #: Thresholds (stated in the PR and on refusal).
 MIN_RSA_BITS = 2048
 ALLOWED_EC_CURVES = ("secp256r1", "secp384r1", "secp521r1")
+#: The group order n of each curve in ALLOWED_EC_CURVES (SEC 2), for
+#: :func:`_shared_root_secret`: on a curve of order n the scalars s and s mod n are
+#: one secret. A test pins each against the library (n - 1 derives, n is refused).
+_EC_ORDER = {
+    "secp256r1": int("FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551",
+                     16),
+    "secp384r1": int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF5"
+                     "81A0DB248B0A77AECEC196ACCC52973", 16),
+    "secp521r1": int("01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+                     "A51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E9138640"
+                     "9", 16),
+}
 EXPIRY_WARN_DAYS = 30
 
 #: KEYS profile that carries the signing key (gen-provision-keys.sh --role pki).
@@ -565,7 +592,10 @@ def root_key_invariant_problem(entries) -> str:
     * its certificate must not be signed by its own key (:func:`_signed_by_own_key`,
       names ignored): such a certificate is a root;
     * the key's public half -- and the certificate's, which an import already ties
-      to it -- must not equal the public half of ANY held root, of ANY domain.
+      to it -- must not equal the public half of ANY held root, of ANY domain;
+    * nor may the key carry such a root's secret under another public half
+      (:func:`_shared_root_secret`: an RSA modulus with a common prime factor, an
+      EC scalar that is the root's, up to sign and the root curve's order).
 
     :func:`import_signing` and :func:`import_root` call this with the entries the
     import WOULD leave (so neither order slips through), and :func:`materialize`
@@ -585,14 +615,77 @@ def root_key_invariant_problem(entries) -> str:
         key = serialization.load_pem_private_key(e.key_pem, password=None)
         held = {_spki(key.public_key()), _spki(sc.public_key())}
         for re_, rc in roots:
+            where = ("this domain" if re_.domain == e.domain and re_.own == e.own
+                     else _entry_label(re_))
             if _spki(rc.public_key()) in held:
-                where = ("this domain" if re_.domain == e.domain and re_.own == e.own
-                         else _entry_label(re_))
                 return (f"the signing key for {_entry_label(e)} is the key of the "
                         f"root CA held for {where} ({_cn(rc)}): {_ROOT_KEY_NEVER}, "
                         "whichever domain holds that root and whatever certificate "
                         "carries its key. Import an intermediate with its own key "
                         "as the signing CA")
+            shared = _shared_root_secret(key, rc.public_key())
+            if shared:
+                return (f"the signing key for {_entry_label(e)} {shared} the root CA "
+                        f"held for {where} ({_cn(rc)}), so holding it is holding that "
+                        f"root's private key: {_ROOT_KEY_NEVER}. Import an "
+                        "intermediate with a freshly generated key of its own as the "
+                        "signing CA")
+    return ""
+
+
+def _shared_root_secret(key, root_public) -> str:
+    """"" unless the private ``key`` carries the SECRET of the root whose public key
+    is ``root_public`` while its public half (SPKI) differs -- the shapes an SPKI
+    comparison cannot see (PR #938 refute, round 3):
+
+    * RSA: the two moduli share a prime factor. The same modulus ``n`` under another
+      public exponent is the crafted case (a different SPKI, the root's own ``p`` and
+      ``q``); any common factor is enough, since ``gcd`` then factors the root's
+      modulus and its private exponent follows.
+    * EC: the key's private scalar ``s``, reduced modulo the order ``n`` of the
+      ROOT's curve and used on that curve, gives the root's public point ``Q`` or its
+      negation ``-Q`` (the same x-coordinate). ``s = d + k*n`` on a larger curve and
+      ``s = n - d`` on the root's own curve both hand over the root's ``d``. A curve
+      outside :data:`_EC_ORDER` (not importable, only a poisoned store) is checked
+      with ``s`` as it is.
+
+    Otherwise "" (no other pair of key types can share a secret this way: Ed25519
+    and Ed448 keys have one curve each, so a reuse is an equal SPKI). Says what is
+    shared, for the refusal sentence."""
+    import math
+
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
+    if isinstance(key, rsa.RSAPrivateKey) and isinstance(root_public, rsa.RSAPublicKey):
+        n_key = key.public_key().public_numbers().n
+        n_root = root_public.public_numbers().n
+        if n_key == n_root:
+            return "has the same RSA modulus (another public exponent) as"
+        if math.gcd(n_key, n_root) != 1:
+            return "shares an RSA prime factor with"
+        return ""
+    if (isinstance(key, ec.EllipticCurvePrivateKey)
+            and isinstance(root_public, ec.EllipticCurvePublicKey)):
+        raw = key.private_numbers().private_value
+        order = _EC_ORDER.get(root_public.curve.name)
+        scalar = raw % order if order else raw
+        try:
+            on_root_curve = ec.derive_private_key(scalar, root_public.curve)
+        except (ValueError, TypeError):
+            # 0 (the key's scalar was a multiple of n), or out of range for a curve
+            # of unknown order: no key on the root's curve, so not reused
+            return ""
+        mine = on_root_curve.public_key().public_numbers()
+        theirs = root_public.public_numbers()
+        if mine.x != theirs.x:
+            return ""
+        negated = mine.y != theirs.y        # -Q: the scalar is n - d
+        if key.curve.name == root_public.curve.name:
+            return ("uses the negated EC private scalar (n - d) of" if negated
+                    else "uses the same EC private scalar as")
+        if negated or scalar != raw:
+            return (f"carries, on {key.curve.name}, the EC private scalar (up to "
+                    f"sign and the order of {root_public.curve.name}) of")
+        return f"reuses, on {key.curve.name}, the EC private scalar of"
     return ""
 
 
@@ -664,10 +757,50 @@ def trust_name_problem(entries) -> str:
     return ""
 
 
+def _row_kind_problem(st: DomainCAStore, domain: str, own: bool) -> str:
+    """"" unless holding an entry for ``domain`` as ``own`` would turn the mesh's own
+    CA into another domain's row, or leave TWO own CAs; else why, one sentence.
+
+    Both shapes come from a refused rename (:func:`rekey_refusal`), which leaves the
+    own CA under the mesh's OLD name while the faces' own row is the NEW name:
+
+    * an own-row import there made a second own CA, and the next :func:`rekey_own`
+      moved the first one over it, dropping the root that row held (whichever
+      domain's CA the import had taken over);
+    * an import on another domain's row named like that old name took the own CA
+      over as that domain's, its signing key with it (an extra domain never holds
+      a key).
+
+    Turning another domain's row into the mesh's own when no own CA is held loses
+    nothing (the held root is kept, as on any import) and is not refused."""
+    prior = st.get(domain)
+    if prior is not None and prior.own and not own:
+        return (f"{domain} is where the mesh's own CA is still held, under the mesh's "
+                "old name (the mesh's domain was renamed and its CA has not followed: "
+                "the checklist says why), with its signing key. An import on another "
+                f"domain's row does not take it over. Let the mesh's CA follow the "
+                f"rename first, or rename the mesh's domain back to {domain}")
+    if own:
+        other = next((e for e in st.entries() if e.own and e.domain != domain), None)
+        if other is not None:
+            here = domain or "the unnamed own domain"
+            return (f"the mesh's own CA is held for {other.domain or 'the unnamed own domain'}"
+                    f" and has not followed the rename to {here} (the checklist says "
+                    "why), and the mesh holds ONE own CA: a second one here would be "
+                    "overwritten when the first one moves. Remove the CA on this row "
+                    f"on the {STEP_TITLE} step so the mesh's CA can move here, or "
+                    "rename the mesh's domain back")
+    return ""
+
+
 def _admit(st: DomainCAStore, entry: DomainCA) -> DomainCA:
     """The ONE gate every import passes before anything is held: the root-key
     invariant and the trust-file names, over the store as the import would leave
-    it."""
+    it. The row's kind first (:func:`_row_kind_problem`): it names the real reason
+    where a chain or root check would otherwise speak first."""
+    kind = _row_kind_problem(st, entry.domain, entry.own)
+    if kind:
+        raise CAImportError(kind)
     after = _with(st, entry)
     for prob in (root_key_invariant_problem(after), trust_name_problem(after)):
         if prob:
@@ -697,19 +830,73 @@ def own_label(cfg) -> str:
     return own if own else "this mesh's own domain (no name set yet)"
 
 
-def rekey_own(cfg, st: DomainCAStore | None = None) -> None:
+def rekey_refusal(cfg, st: DomainCAStore | None = None) -> str:
+    """"" unless the mesh's own CA cannot follow a rename of the mesh's domain, else
+    why (one sentence: both faces, the checklist and the KEYS step).
+
+    It cannot when the new name is a row that already holds a CA -- another
+    domain's, or (a store no import can make any more, :func:`_row_kind_problem`)
+    a second own one: moving the own entry there would overwrite that row, and its
+    held root would be gone with no removal step -- the root is fixed until
+    removal (PR #938 refute, round 3). Nothing is moved.
+
+    The remedy names what the faces can do: their only row for the new name is
+    the mesh's own row, which shows the CA held there, so Remove on it removes
+    THAT CA and the mesh's CA then moves there by itself. Importing that domain's
+    CA "again as the mesh's own" right after is refused (the row then holds the
+    mesh's root), so to use it as the mesh's own the mesh's CA is removed from
+    that row too, first."""
+    st = st or store()
+    own = own_domain(cfg)
+    # the own CA that would MOVE (not st.own(), whose pick among two own entries
+    # follows insertion order and could be the one already under the new name)
+    mine = next((e for e in st.entries() if e.own and e.domain != own), None)
+    if mine is None:
+        return ""
+    there = st.get(own)
+    if there is None:
+        return ""
+    held = ("its root CA " + _cn(there.root_cert()) if there.root_pem else
+            "its signing CA " + _cn(there.signing_cert()))
+    whose = "another domain's CA" if not there.own else "a second own CA"
+    return (f"the mesh's own domain was renamed to {own}, which already holds "
+            f"{whose} ({held}); the mesh's CA (held for "
+            f"{mine.domain or 'the unnamed own domain'}) was not moved onto it, so "
+            f"neither CA was lost. Remove {own}'s CA on the {STEP_TITLE} step and "
+            f"the mesh's CA moves to {own} by itself (to make {own}'s CA the "
+            "mesh's own instead, remove the CA on that row once more and import "
+            f"{own}'s there), or rename the mesh's domain back")
+
+
+def rekey_own(cfg, st: DomainCAStore | None = None) -> str:
     """Keep the own-domain entry keyed by the CURRENT cluster_domain (an operator may
     rename it after importing); extra-domain entries that left the table are dropped
-    so a stale CA can never reach a stick."""
+    so a stale CA can never reach a stick.
+
+    The move goes through :func:`_admit` like any import, and is REFUSED -- nothing
+    moved, the sentence returned -- when the new name already holds another
+    domain's CA (:func:`rekey_refusal`): a rename never silently drops a held root.
+    Returns "" when the store now follows the config."""
     st = st or store()
     own = own_domain(cfg)
     names = {d for d, _own in domain_rows(cfg)}
+    refusal = rekey_refusal(cfg, st)
     for e in st.entries():
         if e.own and e.domain != own:
+            if refusal:
+                continue
+            moved = replace(e, domain=own)
+            # _admit checks the store as the move would leave it: the old key is
+            # gone first, so put the entry back if the move is refused
             st.remove(e.domain)
-            st.put(replace(e, domain=own))
+            try:
+                _admit(st, moved)
+            except CAImportError as exc:
+                st.put(e)
+                refusal = str(exc)
         elif not e.own and e.domain not in names:
             st.remove(e.domain)
+    return refusal
 
 
 # ── imports (every path validates fully before anything is held) ────────────────
@@ -795,6 +982,9 @@ def import_signing(st: DomainCAStore, domain: str, own: bool, *,
     :class:`CAImportError`; nothing is held on refusal."""
     _need_crypto()
     _check_domain(domain, own)
+    kind = _row_kind_problem(st, domain, own)
+    if kind:
+        raise CAImportError(kind)
     prior = st.get(domain)
     key = None
     warns: list[str] = []
@@ -888,6 +1078,9 @@ def import_root(st: DomainCAStore, domain: str, own: bool, cert_path: str, *,
     (the root key stays offline); a held signing CA must chain to the new root."""
     _need_crypto()
     _check_domain(domain, own)
+    kind = _row_kind_problem(st, domain, own)
+    if kind:
+        raise CAImportError(kind)
     data = _read(cert_path)
     if _has_private_key(data):
         raise CAImportError("this file carries a private key: a root CA key is never "
@@ -979,6 +1172,18 @@ def _expiry_text(cert, now) -> str:
     return f"valid until {_not_after(cert):%Y-%m-%d} ({days} days)"
 
 
+#: The checklist item, and the Signing key cell, of another domain's row named like
+#: the mesh's OLD name while a refused rename keeps the mesh's own CA there (#974
+#: refute, round 1b: the row read "not taken (certificates only) | ready" while it
+#: held the signing key, and its Remove removed the mesh's CA).
+OLD_NAME_ROW = ("this row holds the mesh's OWN CA{key}, still under the mesh's old "
+                "name {domain} (the rename to {own} has not moved it: see that row), "
+                "not a CA of this domain. Removing this row's CA removes the mesh's "
+                "CA{key}. Let the mesh's CA follow the rename first, or rename the "
+                "mesh's domain back to {domain}")
+OLD_NAME_KEY_CELL = "held: the mesh's own CA (old name)"
+
+
 def readiness(cfg, st: DomainCAStore | None = None, profiles=None,
               now: _dt.datetime | None = None) -> list[Check]:
     """The per-domain go-live checklist. ``profiles`` is the KEYS profile of every
@@ -989,6 +1194,10 @@ def readiness(cfg, st: DomainCAStore | None = None, profiles=None,
         label = own_label(cfg) if own else domain
         e = st.get(domain)
         if own:
+            moved = rekey_refusal(cfg, st)
+            if moved:
+                out.append(Check(label, False, moved))
+                continue
             if e is None or not e.signing_pem:
                 out.append(Check(label, False,
                                  "no signing CA imported: each pki stick would mint a "
@@ -1004,6 +1213,15 @@ def readiness(cfg, st: DomainCAStore | None = None, profiles=None,
                              "signing key not held: import it again (keys are never "
                              "saved, so a Studio restart forgets them)"))
         else:
+            if e is not None and e.own:
+                # A refused rename (rekey_refusal) left the mesh's own CA under its
+                # old name, and that name is back as another domain's row: the row
+                # shows the MESH's CA and its signing key, not a certificates-only
+                # CA of this domain, and removing it removes the mesh's CA.
+                out.append(Check(label, False, OLD_NAME_ROW.format(
+                    domain=domain, own=own_label(cfg),
+                    key=" and its signing key" if e.key_pem else "")))
+                continue
             if e is not None and e.root_pem and not e.signing_pem:
                 rc = e.root_cert()
                 out.append(Check(label, True, f"root CA {_cn(rc)} (certificate only), "
@@ -1076,6 +1294,8 @@ def row_cells(cfg, st: DomainCAStore | None = None,
         if own:
             key = ("held (pki stick only)" if e and e.key_pem
                    else "needed" if e and e.signing_pem else "-")
+        elif e is not None and e.own:
+            key = OLD_NAME_KEY_CELL if e.key_pem else "-"
         else:
             key = "not taken (certificates only)"
         checks = [c for c in readiness(cfg, st, profiles) if c.domain == label]
