@@ -81,11 +81,15 @@ sys-auth/polkit
 # ── Minimal apps ───────────────────────────────────────────────────
 media-gfx/feh
 app-editors/nano
-# A minimal, modern browser. NetSurf is dramatically lighter than Chromium/
-# Firefox and cross-compiles cleanly for arm64 — appropriate for a 512MB SBC.
-# Swap for www-client/firefox-bin only on the 1 GB SKU if a full browser is
-# required (it is HEAVY — see the SKU note in RUNNING.md).
-www-client/netsurf
+# No browser is REQUESTED here. www-client/netsurf used to be listed, but this
+# board's profile/package.provided also lists it (its duktape binding generator
+# needs net-libs/nsgenbind as a native build tool the cross host lacks), so portage
+# never merges it ("will not be merged because it is listed in package.provided")
+# and the requested-atom completeness gate (scripts/_payload-gate-lib.sh) then
+# failed EVERY desktop build of this board on a package nobody could build. The
+# image never shipped a browser; the list now says so. Re-add www-client/netsurf
+# here only together with removing it from package.provided and a working
+# cross build of it (prover B, La Frite build 2026-11-10/11).
 
 # ── Fonts (so the lean desktop is legible out of the box) ──────────
 media-fonts/dejavu

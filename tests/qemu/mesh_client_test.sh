@@ -52,11 +52,15 @@ awk '/^TS_TAGS="tag:hugmesh"$/ {on=1}
      on && h && /^EOF$/ {exit}' "${ENTRY}" > "${WORK}/payload.sh"
 grep -F '"tailscale": {' "${WORK}/payload.sh" >/dev/null \
     || { echo "could not extract the payload block from ${ENTRY}" >&2; exit 2; }
+# The run[] hook path is set above the extracted block (next to the hook writer);
+# read it from the entrypoint rather than restating it here.
+HSH="$(sed -n 's/^HARNESS_SUDO_HOOK="\(.*\)"$/\1/p' "${ENTRY}")"
+[ -n "${HSH}" ] || { echo "could not read HARNESS_SUDO_HOOK from ${ENTRY}" >&2; exit 2; }
 # payload ROLE HS_ENABLED MESH_NET MESH_IP RENDEZVOUS WAIT -> KEYS dir in ${KS}, log in ${PLOG}
 payload() {
     KS="${WORK}/keys-$1-$RANDOM"; mkdir -p "${KS}"
     PLOG="$(ROLE="$1" HS_ENABLED="$2" MESH_NET="$3" MESH_IP="$4" MESH_RENDEZVOUS="$5" MESH_JOIN_WAIT="$6" \
-            KEYS_SRC="${KS}" K8S_ROLE=worker timeout 30 bash -c '
+            KEYS_SRC="${KS}" K8S_ROLE=worker HARNESS_SUDO_HOOK="${HSH}" timeout 30 bash -c '
         set -uo pipefail
         step(){ echo "STEP $*"; }; info(){ echo "INFO $*"; }; warn(){ echo "WARN $*"; }; die(){ echo "DIE $*"; exit 9; }
         . "$1"' _ "${WORK}/payload.sh" 2>&1)"

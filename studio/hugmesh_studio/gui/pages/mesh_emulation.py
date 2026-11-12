@@ -372,8 +372,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self.setTitle("Mesh emulation")
         self.setSubTitle(
             "Boot every image of a finished build session as persistent emulated "
-            "devices and drive the whole mesh locally — status per device, ssh "
-            "logins, the QEMU console, disk saves, and the mesh's web front door.")
+            "devices and drive the whole mesh locally: status, ssh, the QEMU console, "
+            "disk saves, the web front door.")
         # Terminal side-flow: the final button does nothing but close the Studio (the
         # emulated devices keep running — the verbs on this page are what start and
         # stop them), so it says Exit (_widgets.label_finish_as_exit).
@@ -429,13 +429,18 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         backend_row = QtWidgets.QHBoxLayout()
         backend_row.addWidget(QtWidgets.QLabel("Emulation backend:"))
         self.backend_combo = QtWidgets.QComboBox()
-        for key, text in qemu_windows.BACKENDS:
+        for key, text in qemu_windows.backends():
             self.backend_combo.addItem(text, key)
         self.backend_combo.setToolTip(
             "Docker container: the full lanes — every device of the mesh, the QMP "
             "console, saves — through the bash runner (Linux, or the Studio inside "
             "WSL2). QEMU for Windows (WHPX): ONE x86 device at a time — a thin desktop "
-            "or a single node — with no bash, Docker or WSL2.")
+            "or a single node — with no bash, Docker or WSL2."
+            if self.backend_combo.count() > 1 else
+            # a Mac: one backend, so nothing about the Windows one applies
+            "Docker container: the full lanes — every device of the mesh, the QMP "
+            "console, saves — through the bash runner, inside this Mac's Docker VM "
+            "(Docker Desktop, colima or OrbStack).")
         backend_row.addWidget(self.backend_combo)
         # The options for the NEXT QEMU for Windows start; shown only on that backend.
         self.whpx_opts = QtWidgets.QWidget()
@@ -782,8 +787,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         else:
             blocker = qemu_tests.native_blocker()
             self.docker_note.setText(
-                f'<span style="color:{WARN}">{html.escape(blocker)}</span>' if blocker
-                else common.docker_note_html(self._docker_answer))
+                f'<span style="color:{WARN}">{common.blocker_html(blocker)}</span>'
+                if blocker else common.docker_note_html(self._docker_answer))
         self._sync_controls()
 
     # ── QEMU for Windows (WHPX) ─────────────────────────────────────────────────
@@ -2338,7 +2343,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 return False, []
             for res in report.results:
                 if res.ok:
-                    on_line(f"saved {res.label} -> {res.target}")
+                    on_line(f"saved {res.label} -> {res.target} (go-live posture when "
+                            f"saved: {golive_target.posture_phrase(res.golive_posture)})")
                     for piece in res.keys_copied:
                         on_line(f"  keys: {piece}")
                     if res.keys_error:

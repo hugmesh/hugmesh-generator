@@ -167,8 +167,8 @@ class _FleetWorker(QtCore.QThread):
     def run(self):
         # NEVER let an exception escape this thread (#373). BuildDriver._spawn raises
         # ElevationRefused before the Popen under HUGMESH_STUDIO_NO_ELEVATION (the
-        # operator's headless/CI knob), and FleetDriver prepends sudo on a non-root native
-        # host. Escaping a reimplemented QThread.run, PyQt6 qFatals the process (rc 134);
+        # operator's headless/CI knob), and FleetDriver prepends sudo -A / pkexec on a
+        # non-root native host. Escaping a reimplemented QThread.run, PyQt6 qFatals the process (rc 134);
         # with crashlog installed the thread merely dies with `done` NEVER emitted, so
         # FleetPage._done never closes the tee/stop button and the session stays
         # 'running'. Mirrors progress._WorklistWorker.run.
@@ -224,7 +224,10 @@ class FleetPage(QtWidgets.QWidget):
     def __init__(self, generator_dir: str, parent=None):
         super().__init__(parent)
         self.generator_dir = generator_dir
-        self.driver = FleetDriver(generator_dir)
+        # graphical=True, as the wizard's BuildDriver: a non-root native fleet elevates
+        # through sudo -A + the Qt askpass (or pkexec), never a bare `sudo` whose
+        # password prompt goes to a terminal the GUI does not have.
+        self.driver = FleetDriver(generator_dir, graphical=True)
         self.worker = None
         # session plumbing (the BuildPage._pending_session_workdir precedent):
         # the id is minted lazily on entering Review so preview == dispatch;
@@ -1071,7 +1074,8 @@ class FleetPage(QtWidgets.QWidget):
             return
         problems = self.driver.preflight(cfg, self._backend())
         # advisories never refuse the run (_start checks preflight() only)
-        notes = "".join(f"\n  note: {n}" for n in self.driver.advisories(cfg))
+        notes = "".join(f"\n  note: {n}"
+                        for n in self.driver.advisories(cfg, self._backend()))
         if problems:
             self.problems.setPlainText(
                 "Preflight:\n" + "\n".join(f"  - {p}" for p in problems) + notes)

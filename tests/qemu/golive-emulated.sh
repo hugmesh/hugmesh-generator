@@ -50,6 +50,9 @@
 #
 # The posture is EPHEMERAL on an emulated row: a restart boots the golden image
 # INTERNAL again. That is fine here — the lane rolls back anyway.
+# The posture is EPHEMERAL on an emulated row: the next boot starts again from the
+# golden image (in whatever posture it bakes) or from a save (in the posture it was
+# saved in). That is fine here — the lane rolls back anyway.
 #
 # Exit status: 0 = every step proved; 1 = a step failed (the device was rolled back);
 # 2 = refused before touching the device (bad arguments, no record, not running, no

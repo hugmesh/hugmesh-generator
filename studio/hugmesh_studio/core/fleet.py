@@ -600,10 +600,15 @@ class FleetDriver(BuildDriver):
         if backend == "native":
             if nvd_key_file:
                 penv = {**penv, nvd_key.FILE_ENV: nvd_key_file}
-            # env wrapper INSIDE the sudo boundary (sudo env_reset), same as G2
+            # env wrapper INSIDE the elevation boundary (sudo/pkexec env_reset), same
+            # as G2. The prefix is BuildDriver's single source (_elevation_prefix): a
+            # GUI launch elevates through sudo -A + the Qt askpass or pkexec, a
+            # terminal launch through plain sudo, root through nothing — and
+            # _kill_native_group signals the tree through the SAME prefix. A
+            # hard-coded ["sudo"] here sent a GUI fleet's password prompt to a
+            # terminal nobody can see.
             env_wrap = ["env", *(f"{k}={v}" for k, v in penv.items())] if penv else []
-            return ((["sudo"] if not self.host.is_root else [])
-                    + env_wrap + ["bash", *inner])
+            return self._elevation_prefix() + env_wrap + ["bash", *inner]
         if backend == "docker":
             # --config forwarded to every builder IN THE CONTAINER: the host spelling of
             # a brands/*.conf does not exist there (the repo is at /src), which is the
@@ -629,12 +634,14 @@ class FleetDriver(BuildDriver):
                 env_args += ["-e", f"{k}={v}"]
             return [
                 "docker", "run", "--rm", "--privileged",
+                # Apple silicon: the builder image is x86_64 ([] elsewhere).
+                *platform_info.docker_platform_args(self.host),
                 # THE lane the 2026-07-15 host freeze came from — a fleet build, in an
                 # unbounded container, on a desktop that was also being used. It was
                 # also the only lane with no cap at all: BuildDriver capped memory for
                 # single images and this one inherited nothing. Same wrapper, same
                 # knobs, same byte-identical argv when limits are off.
-                *build_driver.docker_limit_args(),
+                *build_driver.docker_limit_args(self.host),
                 "-v", f"{self.generator_dir}:/src",
                 "-v", f"{out}:/out",
                 *asset_mounts,
@@ -673,12 +680,18 @@ class FleetDriver(BuildDriver):
             self._nvd_key_file = None
             cleanup()
 
-    def advisories(self, cfg: FleetConfig) -> list[str]:
+    def advisories(self, cfg: FleetConfig, backend: str | None = None) -> list[str]:
         """NON-blocking notes for the Review pane (preflight() problems refuse the run;
-        these do not): today, a pen-test run with no NVD API key stored."""
+        these do not): a pen-test run with no NVD API key stored, and, for a docker
+        build on a Mac, BuildDriver's macOS warnings (EXPERIMENTAL, the Docker VM's
+        memory and CPUs). This is the channel the fleet window shows; it never called
+        preflight_warnings(), so a Mac fleet build was told none of them. ``backend``
+        is the host's default unless given."""
+        backend = backend or self.host.default_backend
         notes: list[str] = []
         if (cfg.pentest or cfg.pentest_only) and not nvd_key.status().stored:
             notes.append(nvd_key.PREFLIGHT_NO_KEY)
+        notes += self._macos_docker_warnings(backend)
         return notes
 
     def preflight(self, cfg: FleetConfig, backend: str | None = None) -> list[str]:  # type: ignore[override]
@@ -707,16 +720,26 @@ class FleetDriver(BuildDriver):
             problems.append(
                 f"Docker builder image '{self.host.builder_image}' not found — build it "
                 f"first: {' '.join(self.builder_image_build_command())}")
-        if backend == "native" and platform_info.native_windows_blocker("A native fleet build"):
+        native_refusal = platform_info.native_build_blocker(
+            "A native fleet build", host_os=getattr(self.host, "os", None))
+        if backend == "native" and native_refusal:
             # BuildDriver.preflight's refusal, which this override never reached. is_root
             # is always False on Windows (no geteuid), so the root sentence below was the
             # one shown there, and no Administrator shell could ever clear it.
+            problems.append(native_refusal)
+        # BuildDriver.preflight's rule (#382), which this override never reached: the
+        # driver prepends the elevation itself, so a non-root native fleet is refused
+        # ONLY where nothing can elevate. "not root => block" was the pre-2026-07-17
+        # bug BuildDriver removed — a GUI Studio is never root, so on the operator's
+        # own Gentoo host (where "auto" IS native) no fleet could ever start. The
+        # Flatpak refusal is BuildDriver's too: there the native backend cannot run.
+        elif backend == "native" and getattr(self.host, "in_flatpak", False):
+            from . import flatpak_host
+            problems.append(flatpak_host.native_build_blocker())
+        elif backend == "native" and not self.host.is_root and not self._can_elevate():
             problems.append(
-                "A native fleet build runs sudo and bash on a Gentoo host, which the "
-                "Windows build of the Studio cannot do. Choose the docker backend (Docker "
-                "Desktop), or run the Studio inside WSL2.")
-        elif backend == "native" and not self.host.is_root:
-            problems.append("Native build needs root (the Studio will prepend sudo).")
+                "Native build needs root and no elevation helper is available — install "
+                "sudo or pkexec (polkit), or run the Studio as root.")
         if cfg.brand_profile and not os.path.exists(
                 os.path.join(self.generator_dir, cfg.brand_profile)
                 if not os.path.isabs(cfg.brand_profile) else cfg.brand_profile):
@@ -725,6 +748,10 @@ class FleetDriver(BuildDriver):
             cfg.validate()
         except IdentityValidationError as e:
             problems.append(str(e))
+        # BuildDriver.preflight's macOS refusals (an output folder on a filesystem that
+        # ignores case), which this override never reached either: the fleet mounts the
+        # same -v <out>:/out and fails the same way, partway through.
+        problems += self._macos_docker_problems(cfg, backend)
         # THE PER-DOMAIN SERVICES GATE (#587) — the same seam every other build route
         # calls. Here, so "Build fleet now" (FleetPage._start refuses on any preflight
         # problem, inline) and a previous-builds RESTART both refuse BEFORE

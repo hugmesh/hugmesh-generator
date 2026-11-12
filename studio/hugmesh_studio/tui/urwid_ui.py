@@ -21,10 +21,23 @@ __all__ = ["JourneyApp", "LocalAIPanel", "SessionsReview", "SessionsWindow", "ru
 
 _LIST_HELP = "enter=inspect  d=delete  w=worklist  r=refresh  q=quit"
 _SUB_HELP = "q/esc=back"
+#: The GUI's other Previous-builds buttons (B-10), on a footer line of their own.
+_LIST_HELP_BUILDS = "build actions: s=restart  e=redo (edit as new)  a=delete all finished"
+#: list keys that act on ONE build — an unreadable record says why not (only d applies)
+_BUILD_KEYS = {"w": "worklist", "s": "restart", "e": "redo"}
 
 
 def _text_lines(lines: list[str]) -> urwid.ListBox:
     return urwid.ListBox(urwid.SimpleListWalker([urwid.Text(ln) for ln in lines]))
+
+
+def _end_in_view(box: urwid.ListBox) -> None:
+    """Open ``box`` scrolled to its LAST line instead of its first. A page that fits
+    the terminal renders exactly as before; a taller one shows its end, and its top is
+    a Page Up away. Focusing the last line is all it takes: a ListBox leaves no row
+    empty under its last widget while there are lines above to fill it with."""
+    if len(box.body):
+        box.set_focus(len(box.body) - 1)
 
 
 class SessionsReview:
@@ -39,8 +52,17 @@ class SessionsReview:
         self.mode = "list"                 # list | detail | worklist | confirm
         self.rows: list[model.SessionRow] = []
         self.unreadable: list[str] = []
-        self._confirm_row: model.SessionRow | None = None
-        self._confirm_stage = ""           # record | artifacts
+        #: how REDO reaches the journey (its owner sets it, as JourneyApp does): load a
+        #: session's configuration there and answer "" (the journey now owns the
+        #: screen) or why it refused. None (a bare review): ``e`` says so. The mode
+        #: list above gains ``restart`` (the hand-over screen).
+        self.on_redo: Callable[[build_sessions.BuildSession], str] | None = None
+        #: the list's ONE numbering: rows, then unreadable records (model.list_entries)
+        self.entries: list = []
+        self._confirm_row = None           # a SessionRow, or an UnreadableRow
+        self._viewing: model.UnreadableRow | None = None   # its detail screen is up
+        #: record | artifacts | unreadable | all | all-artifacts | redo
+        self._confirm_stage = ""
         self.status = urwid.Text("")
         self.ai_line = urwid.Text(("muted", self._ai_text()))
         self.frame = urwid.Frame(
@@ -55,15 +77,26 @@ class SessionsReview:
         items: list[urwid.Widget] = []
         if not self.rows:
             items.append(urwid.Text("  (no build sessions recorded yet)"))
-        for i, row in enumerate(self.rows, 1):
-            button = urwid.Button(model.session_line(row, i),
-                                  on_press=self._on_row, user_data=row)
-            items.append(urwid.AttrMap(button, None, focus_map="reversed"))
-        for path in self.unreadable:
-            items.append(urwid.Text(f"  ! unreadable record skipped: {path}"))
+        self._viewing = None
+        self.entries = model.list_entries(self.rows, self.unreadable)
+        #: (list widget, its entry), matched by identity: the placeholder line above
+        #: shifts every position by one when only unreadable records exist
+        self._entry_items: list[tuple[urwid.Widget, object]] = []
+        for i, entry in enumerate(self.entries, 1):
+            # an unreadable record is a BUTTON like every build, so focus reaches it
+            # and d deletes it
+            unreadable = isinstance(entry, model.UnreadableRow)
+            button = urwid.Button(
+                model.unreadable_line(entry, i) if unreadable
+                else model.session_line(entry, i),
+                on_press=self._on_unreadable if unreadable else self._on_row,
+                user_data=entry)
+            item = urwid.AttrMap(button, None, focus_map="reversed")
+            self._entry_items.append((item, entry))
+            items.append(item)
         self.mode = "list"
         self.frame.body = urwid.ListBox(urwid.SimpleFocusListWalker(items))
-        self._set_help(_LIST_HELP)
+        self._set_help(_LIST_HELP_BUILDS + "\n" + _LIST_HELP)
 
     def _ai_text(self) -> str:
         return local_ai.status_line(key_hint=self._open_local_ai is not None)
@@ -75,30 +108,49 @@ class SessionsReview:
     def refresh_ai_line(self) -> None:
         self.ai_line.set_text(("muted", self._ai_text()))
 
-    def _focused_row(self) -> model.SessionRow | None:
-        if self.mode != "list" or not self.rows:
+    def _focused_entry(self):
+        """The focused list entry — a SessionRow or an UnreadableRow — or None."""
+        if self.mode != "list" or not self.entries:
             return None
-        widget, _pos = self.frame.body.get_focus()
-        base = getattr(widget, "base_widget", widget)
-        if isinstance(base, urwid.Button):
-            for i, item in enumerate(self.frame.body.body):
-                if item is widget:
-                    return self.rows[i] if i < len(self.rows) else None
-        return None
+        # ``ListBox.focus`` — ``get_focus()`` is gone from current urwid (5.x raises
+        # AttributeError), which made d and w crash the whole TUI on the list
+        widget = self.frame.body.focus
+        return next((entry for item, entry in self._entry_items if item is widget), None)
+
+    def _focused_row(self) -> model.SessionRow | None:
+        """The focused BUILD (None on an unreadable record, which is no build)."""
+        entry = self._focused_entry()
+        return entry if isinstance(entry, model.SessionRow) else None
 
     def _on_row(self, _button: urwid.Button, row: model.SessionRow) -> None:
         self.show_detail(row)
 
+    def _open(self, mode: str, body: urwid.Widget, help_text: str) -> None:
+        """Show another screen of the review (detail, worklist, hand-over, a question).
+        The status line answered something on the screen being left — a refusal about
+        ONE build, the result of a delete — so it does not follow the person onto the
+        next one. (It used to stay until something overwrote it: "not restarted: …
+        running in another Studio process" sat under the hand-over, the worklist and
+        the delete questions of every other build, and under the list again after
+        them.) A result is still shown where it happened: ``refresh`` itself never
+        clears the line, because every action sets its answer and then refreshes."""
+        self.status.set_text("")
+        self.mode = mode
+        self.frame.body = body
+        self._set_help(help_text)
+
+    def _on_unreadable(self, _button: urwid.Button, row: model.UnreadableRow) -> None:
+        self._open("detail", _text_lines(model.unreadable_detail_lines(row)),
+                   "d=delete this record file  q/esc=back")
+        self._viewing = row
+
     def show_detail(self, row: model.SessionRow) -> None:
-        self.mode = "detail"
-        self.frame.body = _text_lines(model.session_detail_lines(row))
-        self._set_help(_SUB_HELP)
+        self._viewing = None
+        self._open("detail", _text_lines(model.session_detail_lines(row)), _SUB_HELP)
 
     def show_worklist(self, row: model.SessionRow) -> None:
-        self.mode = "worklist"
         headers, rows = model.worklist_table(row.session)
-        self.frame.body = _text_lines(model.format_table(headers, rows))
-        self._set_help(_SUB_HELP)
+        self._open("worklist", _text_lines(model.format_table(headers, rows)), _SUB_HELP)
 
     # ── delete-with-confirm ──────────────────────────────────────────────────
     def start_delete(self, row: model.SessionRow) -> None:
@@ -111,20 +163,81 @@ class SessionsReview:
         self._show_confirm(
             f"Delete session {row.session.id} ({row.session.label or 'no label'})?")
 
+    def start_delete_unreadable(self, row: model.UnreadableRow) -> None:
+        self._viewing = None
+        self._confirm_row = row
+        self._confirm_stage = "unreadable"
+        self._show_confirm(f"Delete this unreadable record file?\n{row.path}")
+
+    def start_delete_all(self) -> None:
+        """"Delete all finished…": the GUI's question, then the artifact trees as a
+        separate answer (No is the default focus, as the GUI's checkbox starts off)."""
+        if not self.rows:
+            self.status.set_text("nothing to delete: no readable build session is "
+                                 "recorded.")
+            return
+        self._confirm_row = None
+        self._confirm_stage = "all"
+        self._show_confirm(model.DELETE_ALL_QUESTION)
+
+    def start_restart(self, row: model.SessionRow) -> None:
+        """RESTART: the GUI's gate; a refusal naming Redo offers the Redo (the GUI's
+        question), any other refusal is said; a clear gate shows the hand-over — the
+        TUI runs no builds."""
+        why = model.restart_refusal(row.session)
+        if why is not None and "Redo" in why:
+            self._confirm_row = row
+            self._confirm_stage = "redo"
+            self._show_confirm(f"Restart not possible: {why}\n\n"
+                               "Load its config into the journey now (Redo)?")
+            return
+        if why is not None:
+            self.status.set_text(f"not restarted: {why}")
+            return
+        self._open("restart", _text_lines(model.restart_handover_lines(row.session)),
+                   _SUB_HELP)
+
+    def redo(self, row: model.SessionRow) -> None:
+        """REDO: the recorded configuration into the journey (``on_redo``)."""
+        self._confirm_row = None
+        if self.on_redo is None:
+            self.status.set_text("not redone: this review has no journey to load into "
+                                 "— open it from the journey (Review prior sessions)")
+            self.refresh()
+            return
+        why = self.on_redo(row.session)
+        if why:
+            self.status.set_text(f"not redone: {why}")
+            self.refresh()
+
     def _show_confirm(self, question: str) -> None:
-        self.mode = "confirm"
         yes = urwid.Button("Yes", on_press=self._confirm_yes)
         no = urwid.Button("No", on_press=self._confirm_no)
-        self.frame.body = urwid.ListBox(urwid.SimpleFocusListWalker([
+        self._open("confirm", urwid.ListBox(urwid.SimpleFocusListWalker([
             urwid.Text(question), urwid.Divider(),
             urwid.AttrMap(no, None, focus_map="reversed"),      # No is the default focus
             urwid.AttrMap(yes, None, focus_map="reversed"),
-        ]))
-        self._set_help("enter=choose  q/esc=cancel")
+        ])), "enter=choose  q/esc=cancel")
 
     def _confirm_yes(self, _button=None) -> None:
-        row = self._confirm_row
-        if row is None:
+        stage, row = self._confirm_stage, self._confirm_row
+        if stage == "all":
+            self._confirm_stage = "all-artifacts"
+            self._show_confirm("ALSO delete their build artifacts on disk?")
+            return
+        if stage == "all-artifacts":
+            self._delete_all(remove_artifacts=True)
+            return
+        if stage == "unreadable" and isinstance(row, model.UnreadableRow):
+            self._confirm_row = None
+            _ok, said = model.delete_unreadable(row)
+            self.status.set_text(said)
+            self.refresh()
+            return
+        if stage == "redo" and isinstance(row, model.SessionRow):
+            self.redo(row)
+            return
+        if not isinstance(row, model.SessionRow):
             self.refresh()
             return
         if self._confirm_stage == "record" and model.artifact_entries(row.session):
@@ -137,7 +250,11 @@ class SessionsReview:
         if self._confirm_stage == "artifacts":
             self._delete(remove_artifacts=False)      # record yes, artifacts no
             return
-        self.status.set_text("kept.")
+        if self._confirm_stage == "all-artifacts":
+            self._delete_all(remove_artifacts=False)  # records yes, artifacts no
+            return
+        self.status.set_text("not restarted." if self._confirm_stage == "redo"
+                             else "kept.")
         self._confirm_row = None
         self.refresh()
 
@@ -151,6 +268,12 @@ class SessionsReview:
                 + (" and its artifacts." if remove_artifacts else " (record only)."))
         elif row is not None:
             self.status.set_text(build_sessions.not_deleted_reason(row.session))
+        self.refresh()
+
+    def _delete_all(self, *, remove_artifacts: bool) -> None:
+        self._confirm_row = None
+        deleted, skipped = build_sessions.prune(remove_artifacts=remove_artifacts)
+        self.status.set_text(model.delete_all_result(deleted, skipped))
         self.refresh()
 
     # ── input ────────────────────────────────────────────────────────────────
@@ -170,9 +293,29 @@ class SessionsReview:
                 self._confirm_row = None          # a half-answered delete question is dropped
                 self._open_local_ai()
             return
+        if self.mode == "detail" and key in ("d", "D") and self._viewing is not None:
+            self.start_delete_unreadable(self._viewing)       # d on its detail screen
+            return
         if self.mode != "list":
             return
+        entry = self._focused_entry()
+        if isinstance(entry, model.UnreadableRow) and key.lower() in _BUILD_KEYS:
+            self.status.set_text(model.unreadable_refusal(_BUILD_KEYS[key.lower()]))
+            return
+        if key in ("a", "A"):
+            self.start_delete_all()
+            return
+        if key in ("s", "S") and isinstance(entry, model.SessionRow):
+            self.start_restart(entry)
+            return
+        if key in ("e", "E") and isinstance(entry, model.SessionRow):
+            self.redo(entry)
+            return
+        if key in ("d", "D") and isinstance(entry, model.UnreadableRow):
+            self.start_delete_unreadable(entry)
+            return
         if key in ("r", "R"):
+            self.status.set_text("")       # a fresh read: the last answer was about the old one
             self.refresh()
         elif key in ("d", "D"):
             row = self._focused_row()
@@ -291,7 +434,8 @@ class JourneyApp:
     :class:`SessionsReview` widget and returns here when it exits.
     """
 
-    def __init__(self, generator_dir: str = ".", start: str | None = None) -> None:
+    def __init__(self, generator_dir: str = ".", start: str | None = None, *,
+                 sessions_only: bool = False) -> None:
         self.journey = journey_mod.Journey(generator_dir)
         if start:                 # an expert entry point (--fleet / --go-live, #587)
             self.journey.goto(start)
@@ -308,7 +452,12 @@ class JourneyApp:
             focus_part="footer")           # every keystroke lands in the Edit
         self.root = urwid.WidgetPlaceholder(self.frame)
         self.sessions: SessionsWindow | None = None
+        #: ``tui --sessions``: the review IS the app (q on its list quits), until a REDO
+        #: loads a configuration and hands the screen to the journey underneath
+        self.sessions_only = sessions_only
         self.sync()
+        if sessions_only:
+            self._open_sessions()
 
     def sync(self) -> None:
         """Re-render the current journey screen (lines + prompt) into the frame."""
@@ -335,6 +484,21 @@ class JourneyApp:
         # the list and q returns to the list, not to the journey's welcome screen
         self.sessions = SessionsWindow(self.journey.generator_dir)
         self.root.original_widget = self.sessions.root
+        self.sessions.review.on_redo = self._redo_from_sessions
+
+    def _redo_from_sessions(self, session) -> str:
+        """The review's REDO: load into the journey and show it ("" once done)."""
+        why = self.journey.load_session(session)
+        if why:
+            return why
+        self.sessions_only = False          # the journey owns the terminal now
+        self._close_sessions()
+        # The Redo's message ends with what was NOT loaded — a secret the record never
+        # held — which the GUI raises as a dialog. Here it is the last lines of a
+        # welcome screen taller than an 80x24 terminal, where it sat below the fold:
+        # this one screen opens at its end, so the message is read without scrolling.
+        _end_in_view(self.frame.body)
+        return ""
 
     def _close_sessions(self) -> None:
         self.sessions = None
@@ -361,6 +525,8 @@ class JourneyApp:
             try:
                 self.sessions.unhandled(key)
             except urwid.ExitMainLoop:
+                if self.sessions_only:
+                    raise                   # `tui --sessions`: q on the list quits
                 self._close_sessions()
             return
         if key == "enter":
@@ -390,7 +556,8 @@ _PALETTE = [("bold", "bold", ""), ("reversed", "standout", ""), ("muted", "dark 
 
 
 def run_sessions_review(generator_dir: str = ".") -> int:
-    app = SessionsWindow(generator_dir)
+    # the journey sits under the review so a REDO has somewhere to load into
+    app = JourneyApp(generator_dir, sessions_only=True)
     _with_ai_line_timer(urwid.MainLoop(app.root, palette=_PALETTE,
                                        unhandled_input=app.unhandled), app).run()
     return 0

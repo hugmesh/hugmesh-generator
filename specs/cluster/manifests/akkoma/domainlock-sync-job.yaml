@@ -2,7 +2,7 @@
 #
 # This is the akkoma-side reconcile that realizes ROLE_MASTODON_DOMAINLOCKED
 # ("Mastodon local-only") into the live set the ForceLocalForUsers MRF reads at
-# delivery time (manifests/akkoma/mrf/force_local_for_users_policy.ex —
+# delivery time (images/akkoma/mrf/force_local_for_users_policy.ex —
 # `force_local?/1` reads Pleroma config key {:mrf_force_local, :forced_actors}).
 # It mirrors admin-sync-job.yaml exactly (the ROLE_MOD/ROLE_ADMIN -> --moderator/
 # --admin reconcile): runAsNonRoot, drop ALL caps, readOnlyRootFilesystem,
@@ -15,7 +15,7 @@
 # future posts federate again; past local-only posts correctly stay local.
 #
 # GATED / DARK: gated by homeserver.domainlock.enabled — wired into the akkoma
-# kustomization ONLY when enabled (so a plain akkoma:stable deploy without the MRF
+# kustomization ONLY when enabled (so a deploy that has not turned the MRF on
 # never runs this). With the gate off (default) the force-local set is never
 # materialized and the MRF (if even present) is a no-op for every actor.
 #
@@ -113,13 +113,15 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000            # read access to the 0440 config file
         seccompProfile: { type: RuntimeDefault }
       containers:
-        # Runs from the CUSTOM akkoma image (the one with the MRF compiled in) so
-        # pleroma_ctl + the same config the akkoma pod serves are present. Pin the
-        # SAME digest as akkoma.yaml's custom image.
+        # Runs from hugmesh-akkoma (images/akkoma/, the MRF compiled in) so
+        # pleroma_ctl + the same config the akkoma pod serves are present. Same
+        # digest as akkoma.yaml (tests/scripts/test-akkoma-image-pin.sh).
         - name: sync
-          image: REPLACE_WITH_CUSTOM_AKKOMA_IMAGE   # built from manifests/akkoma/Dockerfile; pin a digest, match akkoma.yaml
+          image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:0000000000000000000000000000000000000000000000000000000000000000   # PLACEHOLDER digest: hugmesh-akkoma is not published yet (images/akkoma/README.md, "Pinning")
           command: ["python3", "/script/sync.py"]
           env:
             - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
@@ -135,11 +137,15 @@ spec:
             - { name: script,  mountPath: /script, readOnly: true }
             - { name: config,  mountPath: /etc/akkoma, readOnly: true }
             - { name: casdoor, mountPath: /secrets/casdoor, readOnly: true }
+            # RELEASE_TMP=/tmp (generated sys.config + Erlang cookie); read-only root.
+            - { name: tmp,     mountPath: /tmp }
       volumes:
         - name: script
           configMap: { name: akkoma-domainlock-sync-script, defaultMode: 0555 }
         - name: config
-          configMap: { name: akkoma-config }
+          configMap: { name: akkoma-config, defaultMode: 0440 }
+        - name: tmp
+          emptyDir: {}
         # ESO-materialized from Vault — never committed. Reuses casdoor-app-secrets
         # (the same OAuth2 client the admin-sync Job uses to read role membership).
         - name: casdoor

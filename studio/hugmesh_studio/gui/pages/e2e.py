@@ -88,7 +88,7 @@ from ...core.local_mesh_bootstrap import (LocalMeshBootstrap,
                                           LocalMeshBootstrapConfig,
                                           discover_brands)
 from ._scroll import scrollable
-from ._widgets import label_finish_as_exit, own_probe, probe_running
+from ._widgets import label_finish_as_exit, own_probe, page_intro, probe_running
 from .localmesh import _E2ECatalogueProbe, _E2EGateProbe, _MeshWorker
 
 #: The tri-state seed. Before the first probe answers, the Run door is shut and this
@@ -123,15 +123,19 @@ class E2EPage(QtWidgets.QWizardPage):
         self._gate_env: str | None = None
 
         self.setTitle("Run e2e tests")
+        # Two lines at most: the wizard header clips the rest mid-sentence (GUI-14). What
+        # the page does is the body's first line.
         self.setSubTitle(
-            "Run the end-to-end suite against a mesh that is ALREADY running. This "
-            "page starts no mesh: it chooses which one to drive, says why a run is "
-            "blocked when it is, and streams the run below. This is the end of this "
-            "path unless you pick the emulated-device lanes; Exit closes the Studio.")
+            "Run the end-to-end suite against a mesh that is ALREADY running; this page "
+            "starts no mesh. Exit closes the Studio unless you pick the emulated-device "
+            "lanes.")
         self.setFinalPage(True)
         label_finish_as_exit(self)
 
         lay = scrollable(self)
+        lay.addWidget(page_intro(
+            "Choose which mesh to drive below. The page says why a run is blocked when "
+            "it is, and streams the run underneath."))
 
         # ── the two arms ───────────────────────────────────────────────────────
         self.arm_suite = QtWidgets.QRadioButton(

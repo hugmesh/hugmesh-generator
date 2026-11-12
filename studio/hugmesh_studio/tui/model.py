@@ -11,7 +11,15 @@ Honesty rules inherited from the GUI lane (gui/pages/build_window.actions_for):
 * an ACTIVE session (genuinely running right now) is never deletable — the refusal
   carries its reason instead of failing silently;
 * artifact listings come from the real workdir; a missing/empty dir is an honest
-  "(no artifacts)", never a fabricated list.
+  "(no artifacts)", never a fabricated list;
+* an UNREADABLE record is a row like any other (the GUI lists it, B-11): numbered after
+  the sessions, and delete — a plain unlink, checked afterwards — is the one action it
+  takes; every other verb says why not instead of doing nothing;
+* RESTART is gated exactly as the GUI's ``PreviousBuildsWidget.can_restart`` (an active
+  build, a deleted workdir, the per-domain services gate) and then HANDED OVER: the TUI
+  runs no builds, so it says what the restart would do and where to start it, never
+  pretends to have dispatched one. REDO loads the recorded configuration into the
+  journey — the twin of ``StudioWizard.load_session``.
 """
 from __future__ import annotations
 
@@ -21,9 +29,12 @@ from dataclasses import dataclass
 from ..core import build_sessions
 
 __all__ = [
-    "SessionRow", "display_status", "session_rows", "artifact_entries",
-    "image_lines", "session_detail_lines", "delete_refusal", "worklist_table",
-    "format_table", "session_line",
+    "SessionRow", "UnreadableRow", "display_status", "session_rows", "list_entries",
+    "artifact_entries", "image_lines", "verdict_lines", "session_detail_lines",
+    "delete_refusal", "worklist_table", "format_table", "session_line", "unreadable_line",
+    "unreadable_detail_lines", "unreadable_refusal", "delete_unreadable",
+    "restart_refusal", "restart_handover_lines", "redo_refusal", "DELETE_ALL_QUESTION",
+    "delete_all_result",
 ]
 
 #: Render string for a running record whose recorded pid is gone on this host —
@@ -38,6 +49,18 @@ class SessionRow:
     status: str
 
 
+@dataclass(frozen=True)
+class UnreadableRow:
+    """A record file ``scan`` could not parse: listed, never rewritten, and deletable."""
+    path: str
+
+
+#: Why an unreadable record takes no verb but delete — the GUI's per-build window says
+#: "This record could not be parsed, so it points at no build directory."
+UNREADABLE_WHY = ("could not be parsed, so it names no build and points at no build "
+                  "directory — only delete (removing the file) applies")
+
+
 def display_status(s: build_sessions.BuildSession) -> str:
     """The status string a UI should render: ``is_stale`` is a render hint, so a
     stale "running" record reads as interrupted without ever mutating the record."""
@@ -49,6 +72,40 @@ def session_rows() -> tuple[list[SessionRow], list[str]]:
     unreadable/corrupt record files (surfaced, never rewritten — ``scan``'s rule)."""
     sessions, unreadable = build_sessions.scan()
     return [SessionRow(s, display_status(s)) for s in sessions], unreadable
+
+
+def list_entries(rows: list[SessionRow],
+                 unreadable: list[str]) -> list["SessionRow | UnreadableRow"]:
+    """The review's ONE numbering: the sessions newest-first, then every unreadable
+    record — so ``d NUMBER`` reaches a corrupt record the same way it reaches a build."""
+    return [*rows, *(UnreadableRow(p) for p in unreadable)]
+
+
+def unreadable_line(row: UnreadableRow, index: int) -> str:
+    """``  4. ! unreadable record zz.json — only delete applies`` (the file's name; its
+    detail screen and the delete question show the whole path)."""
+    return (f"{index:3d}. ! unreadable record {os.path.basename(row.path)} — only "
+            "delete applies")
+
+
+def unreadable_detail_lines(row: UnreadableRow) -> list[str]:
+    return [f"record    {row.path}", "status    unreadable record", "",
+            f"This record file {UNREADABLE_WHY}."]
+
+
+def unreadable_refusal(verb: str) -> str:
+    """What every verb but delete says on an unreadable row."""
+    return f"no {verb} for an unreadable record: it {UNREADABLE_WHY}"
+
+
+def delete_unreadable(row: UnreadableRow) -> tuple[bool, str]:
+    """Unlink the record file and report what is TRUE afterwards: ``delete_path``
+    swallows every error, so the file is looked for again rather than assumed gone."""
+    build_sessions.delete_path(row.path)
+    if os.path.lexists(row.path):
+        return False, (f"not deleted: {row.path} is still there (it could not be "
+                       "removed — check its folder's permissions)")
+    return True, f"deleted the unreadable record {row.path}."
 
 
 def session_line(row: SessionRow, index: int) -> str:
@@ -86,6 +143,27 @@ def image_lines(s: build_sessions.BuildSession) -> list[str]:
     return lines
 
 
+def verdict_lines(s: build_sessions.BuildSession) -> list[str]:
+    """Why an image ended as it did, in the Studio's own words: every ``!! `` line in
+    the record's error tails. That prefix is how the build runner marks its OWN
+    verdicts (an image it refused to start for lack of disk space, a cancelled
+    password prompt, a memory-cap kill, a builder that could not be spawned), as
+    opposed to builder output. One line each, led by the image id.
+
+    The GUI's previous-builds list prints the whole tail. A terminal detail screen
+    cannot afford forty builder lines per image, but without these a refused image
+    reads ``failed (exit 1)`` here and nothing says it was never started."""
+    out: list[str] = []
+    tails = s.error_tail if isinstance(s.error_tail, dict) else {}
+    for image_id, tail in tails.items():
+        for line in tail if isinstance(tail, list) else []:
+            if not isinstance(line, str) or not line.startswith("!! "):
+                continue
+            text = line[3:].strip()
+            out.append(text if text.startswith(f"{image_id} ") else f"{image_id}: {text}")
+    return out
+
+
 def session_detail_lines(row: SessionRow) -> list[str]:
     """The detail screen, as plain lines both faces render verbatim."""
     s = row.session
@@ -106,6 +184,11 @@ def session_detail_lines(row: SessionRow) -> list[str]:
     lines.append("images:")
     imgs = image_lines(s)
     lines += [f"  {ln}" for ln in imgs] or ["  (none recorded)"]
+    why = verdict_lines(s)
+    if why:
+        lines.append("")
+        lines.append("why (the Studio's own verdicts; the log has the builder's output):")
+        lines += [f"  {ln}" for ln in why]
     lines.append("")
     lines.append("artifacts:")
     arts = artifact_entries(s)
@@ -121,6 +204,104 @@ def delete_refusal(s: build_sessions.BuildSession) -> str | None:
         return ("this build is running right now — stop it in the Studio that owns "
                 "it first (an active session's record and artifacts are never "
                 "removed out from under it)")
+    return None
+
+
+# ── restart / redo / delete all (the GUI's Previous builds buttons) ───────────────────
+#: The GUI's "Delete all finished…" question, word for word.
+DELETE_ALL_QUESTION = ("Delete every finished build-session record? "
+                       "Sessions still running are kept.")
+
+
+def delete_all_result(deleted: int, skipped: int) -> str:
+    """What ``build_sessions.prune`` did — the GUI's sentence."""
+    return f"Deleted {deleted}; skipped {skipped} still running."
+
+
+def _services_refusal(s: build_sessions.BuildSession) -> str:
+    """The per-domain services arm of the restart gate (#495) — the same reading as
+    the GUI's ``sessions_widget._session_services_refusal``: the RECORD's own config
+    is what a restart re-dispatches, and a record that does not parse is let through
+    (the dispatch preflight refuses an unusable one)."""
+    cfg_dict = getattr(s, "config", None)
+    if not isinstance(cfg_dict, dict):
+        return ""
+    try:
+        from ..core import worklist as worklist_mod
+        from ..core.domain_services import restart_gate_reason
+        base = worklist_mod.WorklistConfig.from_dict(cfg_dict).base
+    except Exception:                          # noqa: BLE001 — the GUI's own rule
+        return ""
+    return restart_gate_reason(base)
+
+
+def restart_refusal(s: build_sessions.BuildSession) -> str | None:
+    """``None`` when the session may be restarted; otherwise the GUI's reason, arm for
+    arm (``PreviousBuildsWidget.can_restart`` — test_tui_gui_parity pins the match).
+    A reason that names Redo is the one the GUI answers by offering the Redo."""
+    if build_sessions.is_active(s):
+        return ("This session appears to be running in another Studio "
+                "process — stop it there first.")
+    if not os.path.isdir(s.workdir):
+        return ("Its artifact directory no longer exists:\n"
+                f"{s.workdir}\nUse Redo to build it as a new session.")
+    return _services_refusal(s) or None
+
+
+def restart_handover_lines(s: build_sessions.BuildSession) -> list[str]:
+    """What a restart of ``s`` would do, and where it runs. The TUI runs no builds (its
+    Build screen says so too), so after the gate passes this is the honest end of the
+    verb: what the GUI's Restart does with THIS record — its own confirmation text for
+    a wizard build, the fleet window for a fleet run — then the route to the button."""
+    if s.kind == "fleet":
+        # The GUI asks no "Rebuild into …?" question about a fleet run and warns about
+        # no secrets (a fleet configuration holds none): its Restart returns into the
+        # fleet window before either (PreviousBuildsWidget._restart), and that window's
+        # Review step is the confirmation. Saying the wizard's sentence here described
+        # a dialog the GUI never shows for this record.
+        return [f"Restart session {s.id} is a fleet run: the GUI reopens its fleet "
+                "window on the Review step with this run's configuration, pinned to "
+                f"this record and its build directory {s.workdir}",
+                "  nothing is rebuilt before that step: ‘Build fleet now’ there is the "
+                "confirmation, and the prior outcome is kept in the record's history.",
+                "The TUI does not run builds. Restart it from the GUI: python -m "
+                "hugmesh_studio → Review prior sessions → select this build → Restart "
+                "(its fleet window opens on the Review step, pinned to this record)."]
+    from ..core import secret_files
+    out = [f"Restart session {s.id} rebuilds into {s.workdir}",
+           "  existing artifacts will be reused/overwritten."]
+    if s.blanked_secrets:
+        out.append("  NOTE: these secrets were NOT saved with the session and will be "
+                   "empty: " + ", ".join(s.blanked_secrets))
+    need = secret_files.missing_for_restart(getattr(s, "held_secret_files", []))
+    if need:
+        labels = secret_files.FIELD_LABELS
+        out.append("  These secret files were held in memory only (never saved) — the "
+                   "restart asks for them again before the build starts: " + ", ".join(
+                       f"{r.get('name', '?')} "
+                       f"({labels.get(r.get('field', ''), r.get('field', ''))})"
+                       for r in need))
+    out += ["The TUI does not run builds. Restart it from the GUI: python -m "
+            "hugmesh_studio → Review prior sessions → select this build → Restart "
+            "(the build starts on the Build progress page)."]
+    return out
+
+
+def redo_refusal(s: build_sessions.BuildSession) -> str | None:
+    """``None`` when REDO can load ``s``'s recorded configuration into the journey;
+    otherwise why not. A fleet run is not a wizard configuration (the GUI's Redo opens
+    the fleet window for it), and a snapshot that no longer parses loads nothing."""
+    if s.kind == "fleet":
+        return ("a fleet run is redone in the GUI's fleet window (python -m "
+                "hugmesh_studio → Review prior sessions → Redo); the TUI's fleet flow "
+                "(--fleet) does not load a recorded run")
+    if not isinstance(s.config, dict) or not s.config:
+        return "its record carries no configuration snapshot to load"
+    try:
+        from ..core import worklist as worklist_mod
+        worklist_mod.WorklistConfig.from_dict(s.config)
+    except Exception as exc:                   # noqa: BLE001 — said, never raised
+        return f"its recorded configuration no longer loads: {exc}"
     return None
 
 
