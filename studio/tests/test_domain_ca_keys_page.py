@@ -339,6 +339,44 @@ def test_a_malformed_certificate_is_an_inline_refusal_and_clears_the_passphrase(
         assert dca.store().entries() == ()
 
 
+# ── an unopenable file is an inline refusal, not the crash dialog (build audit L7) ─
+def test_a_key_path_that_does_not_open_is_an_inline_refusal(
+        wiz, monkeypatch, tmp_path):
+    page = _to_page(wiz)
+    chain = tca.Chain(tmp_path)
+    d = str(tmp_path / "a-directory")
+    os.mkdir(d)
+    page.table.selectRow(0)
+    page.passphrase.setText("typed-passphrase")
+    _picks(monkeypatch, chain.signing_path, d)
+    page._import_files()              # called directly: a raise reaches the test
+    assert page.note.text().startswith("Not imported: cannot read"), page.note.text()
+    assert page.passphrase.text() == ""
+    assert dca.store().entries() == ()
+
+
+@pytest.mark.parametrize("exc, needle", [
+    (PermissionError(13, "Permission denied", "/keys/ca.key"),
+     "cannot read /keys/ca.key: Permission denied"),
+    (ValueError("error parsing asn1 value: ParseError { kind: ShortData }"),
+     "does not parse"),
+])
+def test_a_read_or_parse_error_past_the_core_is_still_an_inline_refusal(
+        wiz, exc, needle):
+    # the backstop in _run: whatever the core lets through of these two kinds is a
+    # sentence on the page (and never cryptography's raw asn1 text)
+    page = _to_page(wiz)
+    page.passphrase.setText("typed-passphrase")
+
+    def fail():
+        raise exc
+    page._run(fail)
+    assert page.note.text().startswith("Not imported:"), page.note.text()
+    assert needle in page.note.text(), page.note.text()
+    assert "asn1" not in page.note.text()
+    assert page.passphrase.text() == ""
+
+
 def test_an_unexpected_error_still_clears_the_passphrase(wiz):
     page = _to_page(wiz)
     page.passphrase.setText("typed-passphrase")

@@ -199,8 +199,14 @@ def _read(path: str) -> bytes:
     if size > MAX_HELD_BYTES:
         raise CAImportError(f"{os.path.basename(path)} is {size} bytes, far larger "
                             "than any certificate or key; it is not one")
-    with open(path, "rb") as fh:
-        return fh.read()
+    # getsize only stats the path: a key this user may not read (mode 000, another
+    # owner's file) or a directory passes it and fails HERE, which must be the same
+    # refusal on every face, not a crash dialog (build audit 2026-11-11, L7)
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError as e:
+        raise CAImportError(f"cannot read {path}: {e.strerror or e}") from None
 
 
 def _has_private_key(data: bytes) -> bool:
@@ -326,16 +332,28 @@ def _signature_problem(cert, what: str) -> str:
 
 
 def _is_ca_problem(cert, what: str) -> str:
+    # cryptography parses ALL extensions on the first touch of .extensions, so a
+    # certificate that loaded fine raises a bare ValueError here when any one of
+    # them is malformed. Named as a refusal of THIS certificate, so the check never
+    # raises (build audit 2026-11-11, L8); the imports' wrapper stays the backstop
+    # for every other lazily parsed field.
     from cryptography import x509
     try:
-        bc = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+        exts = cert.extensions
+    except Exception as e:      # noqa: BLE001 - narrowed by _parse_error
+        if not _parse_error(e):
+            raise
+        return (f"the {what} has an extension that does not parse, so it cannot be "
+                "checked and was not taken")
+    try:
+        bc = exts.get_extension_for_class(x509.BasicConstraints).value
     except x509.ExtensionNotFound:
         return (f"the {what} is not a certificate authority (it has no "
                 "basicConstraints CA:TRUE)")
     if not bc.ca:
         return f"the {what} is not a certificate authority (basicConstraints CA:FALSE)"
     try:
-        ku = cert.extensions.get_extension_for_class(x509.KeyUsage).value
+        ku = exts.get_extension_for_class(x509.KeyUsage).value
     except x509.ExtensionNotFound:
         return ""
     if not ku.key_cert_sign:
