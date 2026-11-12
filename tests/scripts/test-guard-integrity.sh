@@ -1145,6 +1145,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #926 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 240 of 282.
 # PR #972 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 242 of 284.
 # PR #966 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 243 of 285.
+# PR #984 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 244 of 286.
+# PR #1016 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 245 of 287.
 # 239 -> 240 on 2026-11-11 (feat/desktop-config-20261111): +1 gated, +1 total —
 # tests/scripts/test-desktop-config-lib.sh, named by shell-suites.yml (alpine) and the
 # .gitlab-ci.yml desktop job. PREMERGE_UNGATED untouched. MEASURED with GUARD_PREMERGE=0
@@ -1152,7 +1154,10 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # 243 -> 244 after merging origin/main 96e0f6df (#926/#972/#966 took main to 243): the same
 # +1 gated, +1 total for tests/scripts/test-desktop-config-lib.sh. MEASURED with GUARD_PREMERGE=0
 # on the tree merged with origin/main 96e0f6df: 244 of 286.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-244}"
+# 245 -> 246 after merging origin/main 365ace63 (#984/#1016 took main to 245): the same
+# +1 gated, +1 total for tests/scripts/test-desktop-config-lib.sh. MEASURED with GUARD_PREMERGE=0
+# on the tree merged with origin/main 365ace63: 246 of 288.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-246}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
@@ -1364,6 +1369,12 @@ PREMERGE_UNGATED=(
   # pwsh; Pester 5.6.1 must be installed), DELETE this entry and raise PREMERGE_BASELINE
   # by one to the number this file then prints.
   tests/docker-mesh-node/test-launcher-parity.sh
+  # NOT for want of the hugmesh-admin-bff-api sibling (public now; shell-suites.yml's
+  # layer-a job checks it out at a pin): its two policy-mode checks are red against the
+  # BFF's `database` declaration by design until the #634 cut-over (#634 item 4). Its
+  # cross-repo fixture identity leg IS gated, as test-layer-a-bff-fixture-identity.sh.
+  # TO CLOSE THIS: after #634, add it to the layer-a job, DELETE this entry, raise
+  # PREMERGE_BASELINE by one.
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
   # Offline, bash + python3 only, 48 passed / 0 failed on 2026-10-14 (#654 D12:
