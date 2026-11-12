@@ -57,6 +57,15 @@ never be trusted or reused anywhere real. Reporting them is not needed:
   --rotate-sql KEY` prints the one-shot `ALTER ROLE` that replaces it without
   dropping data. `tests/scripts/test-compose-no-literal-passwords.sh` fails on any
   literal password value in `tests/stack/compose*.yaml`.
+- casbin/casdoor's factory-default admin password, named `CASDOOR_BOOTSTRAP_PASSWORD`
+  in `specs/cluster/manifests/casdoor/init-job.yaml` and `tests/stack/seed-e2e.sh`. It
+  is upstream's public bootstrap value, used only to take a fresh Casdoor's admin over
+  once; both then prove it no longer signs in. No script defaults the admin password to
+  it: the local stack's admin password is generated per checkout into the gitignored
+  `tests/stack/.env` (`tests/stack/gen-casdoor-admin-env.sh`), and the local stack
+  publishes Casdoor, tuwunel and Mastodon on loopback only unless `STACK_BIND_ADDR`
+  says otherwise. `tests/scripts/test-stack-idp-exposure.sh` fails on a literal
+  default or on a published port without a loopback host IP.
 - Token- and key-shaped strings inside tests and fixtures (for example the
   secret-scanner and redaction test cases). They are fake.
 

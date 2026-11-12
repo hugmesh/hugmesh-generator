@@ -28,10 +28,16 @@
 #                                                     #  "ROLE_MOD":[..],"ROLE_GAMES_ADMIN":[..]}
 #                                                     # (implies --dry-run)
 #
-# ENV (the same names seed-e2e.sh uses, same defaults — the compose dev Casdoor):
+# ENV (the same names seed-e2e.sh uses — the compose dev Casdoor):
 #   CASDOOR_URL          default http://localhost:8000
 #   CASDOOR_ADMIN_USER   default admin
-#   CASDOOR_ADMIN_PASS   default 123        (never printed)
+#   CASDOOR_ADMIN_PASS   NO DEFAULT VALUE (NEW-15; never printed). Unset, it is READ
+#                        from this checkout's tests/stack/.env (CASDOOR_ADMIN_PASSWORD,
+#                        via gen-casdoor-admin-env.sh --read; CASDOOR_ADMIN_ENV_FILE
+#                        overrides the file), which `make stack-seed` mints and moves
+#                        Casdoor's admin onto. This script never mints or rotates it:
+#                        with neither set it stops and names `make stack-seed`.
+#                        --fixture needs no password at all.
 #   CASDOOR_ORG          default hugmesh
 #   GAMES_ADMIN_ROLE     default ROLE_GAMES_ADMIN   (the role this script OWNS)
 #   GAMES_ROLE           default ROLE_GAMES
@@ -59,7 +65,8 @@ set -euo pipefail
 
 CASDOOR_URL="${CASDOOR_URL:-http://localhost:8000}"
 CASDOOR_ADMIN_USER="${CASDOOR_ADMIN_USER:-admin}"
-CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS:-123}"
+# No literal default (NEW-15): resolved on the live path only, see casdoor_login.
+CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS:-}"
 CASDOOR_ORG="${CASDOOR_ORG:-hugmesh}"
 GAMES_ADMIN_ROLE="${GAMES_ADMIN_ROLE:-ROLE_GAMES_ADMIN}"
 GAMES_ROLE="${GAMES_ROLE:-ROLE_GAMES}"
@@ -71,7 +78,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --fixture) FIXTURE="${2:?--fixture needs a file}"; DRY_RUN=1; shift 2 ;;
-    -h|--help) sed -n '2,45p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,51p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "derive-games-admin: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -115,9 +122,16 @@ casdoor_login() {
   local me
   local name
   local payload
+  if [ -z "${CASDOOR_ADMIN_PASS}" ]; then
+    # READ ONLY: seed-e2e.sh is what mints the value and moves Casdoor onto it.
+    CASDOOR_ADMIN_PASS="$(bash "$(dirname "${BASH_SOURCE[0]}")/gen-casdoor-admin-env.sh" --read)" \
+      || die "could not read this checkout's Casdoor admin password (tests/stack/gen-casdoor-admin-env.sh --read; its message is above)"
+    [ -n "${CASDOOR_ADMIN_PASS}" ] \
+      || die "no Casdoor admin password: CASDOOR_ADMIN_PASS is unset and tests/stack/.env holds no CASDOOR_ADMIN_PASSWORD. Run make stack-seed first (it creates one and moves Casdoor's admin onto it), or export CASDOOR_ADMIN_PASS."
+  fi
   CJ="$(mktemp "${TMPDIR:-/tmp}/derive-games-admin.cj.XXXXXX")"
-  payload="$(jq -nc --arg u "${CASDOOR_ADMIN_USER}" --arg p "${CASDOOR_ADMIN_PASS}" \
-    '{application:"app-built-in",organization:"built-in",username:$u,password:$p,type:"login",autoSignin:true}')"
+  payload="$(DGA_USER="${CASDOOR_ADMIN_USER}" DGA_PW="${CASDOOR_ADMIN_PASS}" jq -nc \
+    '{application:"app-built-in",organization:"built-in",username:env.DGA_USER,password:env.DGA_PW,type:"login",autoSignin:true}')"
   casdoor_call POST "/api/login" "${payload}" >/dev/null \
     || die "Casdoor admin login failed at ${CASDOOR_URL} (CASDOOR_ADMIN_USER/CASDOOR_ADMIN_PASS)"
   # Prove the session: a 200/ok from /api/login is not one (casdoor-init once

@@ -81,6 +81,19 @@ class WelcomePage(QtWidgets.QWizardPage):
         # the cards + two paragraphs can outgrow a small window: scroll, never clip
         lay = scrollable(self)
 
+        # REDO lands here (StudioWizard.load_session restart()s to this page), and a
+        # record that blanked plaintext secrets says so HERE, inline, at the top
+        # (sessions_widget.redo_secrets_note). A modal popped after the wizard had
+        # already moved used to say it instead (GUI-26). Hidden until a Redo sets it;
+        # every restart clears it (initializePage).
+        self.landing_note = QtWidgets.QLabel("")
+        self.landing_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.landing_note.setWordWrap(True)
+        # bold WARN, as this page's other warnings are drawn (_intro_html)
+        self.landing_note.setStyleSheet(f"color: {WARN}; font-weight: bold;")
+        self.landing_note.setVisible(False)
+        lay.addWidget(self.landing_note)
+
         # the hugmesh explainer, with the README getting-started guide one click away
         self.explainer = QtWidgets.QLabel(self._explainer_html())
         self.explainer.setWordWrap(True)
@@ -197,6 +210,26 @@ class WelcomePage(QtWidgets.QWizardPage):
         if not warning:
             return ""
         return (f'<b style="color:{WARN}">{_as_html(warning)}</b><br><br>')
+
+    # ── the landing note (Redo) ──────────────────────────────────────────────────
+    def initializePage(self):
+        # QWizard.restart() re-initialises the start page, and every restart that is
+        # not a Redo (Load config, a reset, a Redo of a record that kept everything)
+        # must not carry an earlier Redo's note forward.
+        super().initializePage()
+        self.show_landing_note("")
+
+    def show_landing_note(self, text: str) -> None:
+        """Show ``text`` at the top of this page, or hide the note for "".
+
+        A note is shown from the top of the page: Redo has just sent the operator
+        here, and in a short window this page still holds the scroll offset it was
+        left at (the Review card sits below the fold there), which cut the note's
+        first line off."""
+        self.landing_note.setText(text)
+        self.landing_note.setVisible(bool(text))
+        if text:
+            self._content_scroll.verticalScrollBar().setValue(0)
 
     # ── selection / flow ─────────────────────────────────────────────────────────
     def _selected_choice(self):

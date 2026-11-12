@@ -22,7 +22,7 @@ from ..qt import QtCore, QtGui, QtWidgets
 from .. import console
 from ..styles import WARN
 from . import build_window
-from ...core import build_sessions
+from ...core import build_sessions, kernel_reconfig
 from ...core import secret_files
 from ...core import session_locations
 from ...core.domain_services import restart_gate_reason
@@ -39,6 +39,38 @@ _STATUS_GLYPH = {
 }
 
 _STATUS_FILTERS = ("all", "complete", "failed", "running", "stopped", "unknown")
+
+# The reasons the Previous-builds button row states BEFORE a click, as the greyed
+# button's tooltip and in the note under the buttons. A button that cannot act is
+# disabled with its reason. It is never left enabled to refuse through a modal after
+# the click (GUI-26: B-06/B-07). The click-time guards in the handlers re-check the
+# same facts; that is the defence against a race, not the explanation.
+IN_USE_REASON = ("This session appears to be running in another Studio process — "
+                 "stop it there first.")
+UNREADABLE_RESTART_REASON = "This record could not be read — nothing to restart/redo."
+UNREADABLE_ARTIFACTS_REASON = "Record unreadable: no artifact directory recorded."
+UNMANAGED_RESTART_REASON = ("No config snapshot exists for a pre-session build — "
+                            "Restart/Redo need one.")
+MISSING_DIR_REASON = "The artifact directory no longer exists."
+
+#: How often a row greyed as running elsewhere is asked again (``_liveness``).
+LIVENESS_RECHECK_MS = 2000
+
+
+def redo_secrets_note(session) -> str:
+    """What the page REDO lands on says about the secrets the record did not keep, or
+    "" when it kept them all. It is shown inline on that page (WelcomePage.landing_note).
+    A modal popped after the wizard had already moved left the note behind the page
+    it was about."""
+    blanked = list(getattr(session, "blanked_secrets", None) or [])
+    if not blanked:
+        return ""
+    label = getattr(session, "label", "") or getattr(session, "id", "") or "this session"
+    return "\n".join(
+        [f"Redo loaded “{label}” as a new build. Its passwords were not saved "
+         "with the session:"]
+        + [f"• {k.replace('_', '-')} was NOT saved (plaintext secret) — re-enter it "
+           "before building from this config" for k in blanked])
 
 
 def row_identity(row) -> tuple[str, str] | None:
@@ -306,6 +338,12 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self.open_btn.clicked.connect(self._open_artifacts)
         self.log_btn = QtWidgets.QPushButton("View errors/log")
         self.log_btn.clicked.connect(self._view_log)
+        # "Kernel config…" (core/kernel_reconfig.py): menuconfig a built x86 image, then
+        # rebuild + re-sign + repackage. Enabled only when the selected session HAS a
+        # reconfigurable x86 image; the reason is the tooltip otherwise.
+        self.kernel_btn = QtWidgets.QPushButton("Kernel config…")
+        self.kernel_btn.clicked.connect(self._open_kernel_config)
+        self._kernel_windows: dict = {}
         # destructive actions keep their own row rather than their own side — a session
         # record is a cheap unlink, artifacts a confirmed opt-in; both refuse an
         # in-progress build. Separation of intent survives the reflow.
@@ -315,12 +353,31 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self.delete_all_btn.clicked.connect(self._delete_all)
         for row_i, row_btns in enumerate((
                 (self.open_window_btn, self.restart_btn, self.redo_btn),
-                (self.open_btn, self.log_btn),
+                (self.open_btn, self.log_btn, self.kernel_btn),
                 (self.delete_btn, self.delete_all_btn))):
             for col_i, b in enumerate(row_btns):
                 btns.addWidget(b, row_i, col_i)
         btns.setColumnStretch(3, 1)     # keep the buttons left-packed
         lay.addLayout(btns)
+        # WHY a button above is greyed, stated in the open as the per-build window's
+        # note does. A tooltip only reaches someone already hovering a disabled
+        # button. Plain, word-wrapped text in the palette's own colour: a long reason
+        # wraps instead of widening the wizard (the grid comment above), and it stays
+        # readable under any theme. Hidden whenever nothing is refused.
+        self.gate_note = QtWidgets.QLabel("")
+        self.gate_note.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.gate_note.setWordWrap(True)
+        self.gate_note.setVisible(False)
+        lay.addWidget(self.gate_note)
+        # A greyed button cannot be clicked to find out whether its reason still
+        # holds. While the highlighted row is refused as running elsewhere, the gate
+        # is asked again on this timer, so the grey lifts by itself once that Studio
+        # process is gone. _update_buttons starts and stops it, and it stops itself
+        # out of view (_recheck_liveness). (Before the buttons were greyed, the click
+        # itself asked.)
+        self._liveness = QtCore.QTimer(self)
+        self._liveness.setInterval(LIVENESS_RECHECK_MS)
+        self._liveness.timeout.connect(self._recheck_liveness)
         self._update_buttons()
 
     # ---- data --------------------------------------------------------------------
@@ -460,50 +517,188 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         # pins for the duration of one action and restores afterwards.
         if self._pinned_row is not None:
             return self._pinned_row
+        return self._table_row()
+
+    def _table_row(self) -> _RowData | None:
+        """The row the TABLE has highlighted, whatever is pinned. The button row under
+        the table describes this row and no other (``_update_buttons``)."""
         rows = {ix.row() for ix in self.table.selectedIndexes()}
         if len(rows) != 1:
             return None
         i = rows.pop()
         return self._row_data[i] if 0 <= i < len(self._row_data) else None
 
+    def _refusals(self, r) -> dict:
+        """action -> the reason it is refused for row ``r``, for every refusal this
+        row can know before a click ("restart", "redo", "artifacts", "delete"). An
+        action that is absent is not refused here. A Restart whose artifact directory
+        is gone stays enabled: its click OFFERS Redo (a documented confirm), it does
+        not refuse.
+
+        Never raises. It runs inside ``_update_buttons``, a Qt slot reached from
+        ``initializePage``, and an escaping exception there aborts the Studio under
+        PyQt6. A session whose gates cannot be computed keeps Restart and Delete
+        enabled, and their click-time guards answer instead."""
+        if r is None:
+            return {}
+        if r.kind == "unreadable":
+            return {"restart": UNREADABLE_RESTART_REASON,
+                    "redo": UNREADABLE_RESTART_REASON,
+                    "artifacts": UNREADABLE_ARTIFACTS_REASON}
+        why = {}
+        if r.kind == "unmanaged":
+            why["restart"] = why["redo"] = UNMANAGED_RESTART_REASON
+        elif r.kind == "session":
+            try:
+                if build_sessions.is_active(r.session):
+                    why["restart"] = why["delete"] = IN_USE_REASON
+                else:
+                    services = _session_services_refusal(r.session)
+                    if services:
+                        why["restart"] = services
+            except Exception:                  # noqa: BLE001 - a slot: never abort
+                import sys
+                import traceback
+                print("sessions_widget: swallowed exception in _refusals",
+                      file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
+        if not os.path.isdir(r.location or ""):
+            why["artifacts"] = MISSING_DIR_REASON
+        return why
+
+    def _show_refusals(self, why: dict) -> None:
+        """Fill ``gate_note`` from :meth:`_refusals`: one line per distinct reason,
+        naming the buttons it greys in the order they are laid out."""
+        named = ((self.restart_btn, "restart"), (self.redo_btn, "redo"),
+                 (self.open_btn, "artifacts"), (self.delete_btn, "delete"))
+        lines: dict = {}
+        for btn, action in named:
+            reason = why.get(action)
+            if reason:
+                lines.setdefault(reason, []).append(btn.text())
+        text = "\n".join(f"{', '.join(labels)}: {reason}"
+                         for reason, labels in lines.items())
+        self.gate_note.setText(text)
+        self.gate_note.setVisible(bool(text))
+
+    def _recheck_liveness(self) -> None:
+        """Ask again what the highlighted row refuses: on every ``_liveness`` tick, and
+        whenever this widget comes back into view (``showEvent``). When the answer
+        changed, every open per-build window re-derives its own buttons, so the
+        windows and the list agree. Out of view nothing is asked: nobody can see the
+        buttons, and coming back into view asks at once.
+
+        It reads the record already in memory, as the click-time guards do. The list
+        itself is reloaded from disk on the next visit to the page.
+
+        A timer slot and an event handler: under PyQt6 an escaping exception aborts
+        the Studio. A check that fails says so once and stops asking, rather than
+        every two seconds; the buttons then stay as they are until the row is selected
+        again."""
+        try:
+            if not self.isVisible():
+                self._liveness.stop()
+                return
+            said = self.gate_note.text()
+            self._update_buttons()
+            if self.gate_note.text() != said:
+                self._rebind_build_windows()
+        except Exception:                      # noqa: BLE001 - a slot: never abort
+            import sys
+            import traceback
+            print("sessions_widget: swallowed exception in _recheck_liveness",
+                  file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            self._liveness.stop()
+
+    def showEvent(self, ev):  # noqa: N802 (Qt override)
+        """Back in view: the page was returned to, or the window was reopened from the
+        tray with this page still on it (no ``initializePage``, so no reload)."""
+        try:
+            super().showEvent(ev)
+        finally:
+            self._recheck_liveness()
+
     def _update_buttons(self) -> None:
-        r = self._selected()
+        # The TABLE's row, never the pin (_selected): these buttons sit under the table
+        # and describe its highlighted row. A per-build window's action pins ITS row,
+        # and this gate runs while that pin is held: the window's Delete reloads the
+        # list, and a fleet run's session_changed or the _liveness tick can arrive
+        # while its confirm is open. A gate that read the pin left the highlighted
+        # row's Restart and Delete enabled with no reason, to refuse through a modal
+        # after the click.
+        r = self._table_row()
         # "Open build window" mirrors row activation EXACTLY: open_build_window()
         # accepts every row kind (an unreadable record's window still offers Delete,
         # honestly gated inside by build_window.actions_for), so the only guard —
         # the same one _open_build_window() applies — is that one row is selected.
         self.open_window_btn.setEnabled(r is not None)
         is_session = r is not None and r.kind == "session"
-        self.restart_btn.setEnabled(is_session)
-        self.redo_btn.setEnabled(is_session)
-        if r is not None and r.kind == "unmanaged":
-            tip = ("No config snapshot exists for a pre-session build — "
-                   "Restart/Redo need one.")
-            self.restart_btn.setToolTip(tip)
-            self.redo_btn.setToolTip(tip)
-        else:
-            self.restart_btn.setToolTip("")
-            self.redo_btn.setToolTip("")
-        loc_exists = r is not None and os.path.isdir(
-            r.location if r.kind != "unreadable" else "")
-        self.open_btn.setEnabled(bool(loc_exists))
-        self.open_btn.setToolTip("" if loc_exists else
-                                 "The artifact directory no longer exists."
-                                 if r is not None else "")
+        # Every refusal knowable BEFORE a click (_refusals) disables its button and
+        # names the reason, as the tooltip and in gate_note. The handlers still re-run
+        # their guards at click time against a race.
+        why = self._refusals(r)
+        if IN_USE_REASON not in why.values():
+            self._liveness.stop()
+        elif not self._liveness.isActive():
+            self._liveness.start()
+        self.restart_btn.setEnabled(is_session and "restart" not in why)
+        self.restart_btn.setToolTip(why.get("restart", ""))
+        self.redo_btn.setEnabled(is_session and "redo" not in why)
+        self.redo_btn.setToolTip(why.get("redo", ""))
+        self.open_btn.setEnabled(r is not None and "artifacts" not in why)
+        self.open_btn.setToolTip(why.get("artifacts", ""))
         has_log = (is_session
                    or (r is not None and r.kind == "unmanaged" and r.unmanaged.has_log)
                    or (r is not None and r.kind == "unreadable"))
         self.log_btn.setEnabled(bool(r is not None and has_log))
-        # Delete: any selected row is deletable (record unlink / tree rmtree); an ACTIVE
-        # session shows the blocked reason (the hard guard still re-runs at click time).
-        self.delete_btn.setEnabled(r is not None)
-        if is_session and build_sessions.is_active(r.session):
-            self.delete_btn.setToolTip(
-                "This session is running in another Studio process — stop it there "
-                "first.")
-        else:
-            self.delete_btn.setToolTip("")
+        # Delete: any selected row is deletable (record unlink / tree rmtree) except an
+        # ACTIVE session, which is disabled with the reason.
+        self.delete_btn.setEnabled(r is not None and "delete" not in why)
+        self.delete_btn.setToolTip(why.get("delete", ""))
+        self._show_refusals(why)
         self.delete_all_btn.setEnabled(bool(self._row_data))
+        kwhy = (kernel_reconfig.locate(r.session) if is_session else
+                "Kernel reconfiguration needs a recorded session." if r is not None else "")
+        kok = is_session and not isinstance(kwhy, str)
+        self.kernel_btn.setEnabled(bool(kok))
+        self.kernel_btn.setToolTip("" if kok else (kwhy if isinstance(kwhy, str) else ""))
+
+    def _on_kernel_applied(self, _row=None) -> None:
+        """A rebuild was recorded: re-read the list (new artifacts, the session record).
+        A bound method, not a lambda — Qt drops it with this widget."""
+        try:
+            self.refresh()
+        except Exception:                        # noqa: BLE001 - a slot
+            pass
+
+    def _open_kernel_config(self) -> None:
+        """Open (or raise) the non-modal kernel config window for the selected session."""
+        try:
+            r = self._selected()
+            if r is None or r.kind != "session":
+                return
+            win = self._kernel_windows.get(r.session.id)
+            try:
+                alive = win is not None and win.isWindow()
+            except RuntimeError:                 # its C++ side is gone: open a new one
+                alive = False
+            if not alive:
+                from ._kernel_reconfig_panel import KernelConfigWindow
+                # NO destroyed-signal hook: a closure over this widget that runs while
+                # Qt tears it down raises inside a slot, and PyQt6 then aborts the
+                # Studio (measured: the suite's teardown died exactly that way). A dead
+                # entry is detected above instead.
+                win = KernelConfigWindow(self.wiz.generator_dir, r.session, parent=self.window())
+                win.panel.applied.connect(self._on_kernel_applied)
+                self._kernel_windows[r.session.id] = win
+            else:
+                win.panel.bind(r.session)
+            win.show()
+            win.raise_()
+        except Exception:                        # noqa: BLE001 - a slot: never abort
+            import traceback
+            traceback.print_exc()
 
     # ---- ASK 15: click a build -> its own window -------------------------------------
     def _row_clicked(self, row: int, _col: int) -> None:
@@ -530,7 +725,8 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
     #: its guards (can_restart, the missing-secrets refusal, the fleet routing, the
     #: delete confirmation). One implementation, two faces.
     ROW_ACTIONS = {"resume": "_restart", "artifacts": "_open_artifacts",
-                   "edit": "_redo", "delete": "_delete", "log": "_view_log"}
+                   "edit": "_redo", "delete": "_delete", "log": "_view_log",
+                   "kernel": "_open_kernel_config"}
 
     def row_for_identity(self, ident):
         """The listed row with this :func:`row_identity`, or None when none matches.
@@ -620,6 +816,7 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             on_edit=lambda r: self.act_on_row(r, "edit"),
             on_delete=lambda r: self.act_on_row(r, "delete"),
             on_log=lambda r: self.act_on_row(r, "log"),
+            on_kernel=lambda r: self.act_on_row(r, "kernel"),
             parent=self.window())
         self._build_windows.append(win)
         win.destroyed.connect(
@@ -648,8 +845,7 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         unconfigured domain. Its remedy is Redo, which is the route that exists from
         here: Redo loads the same configuration into the wizard, where the step is."""
         if build_sessions.is_active(session):
-            return False, ("This session appears to be running in another Studio "
-                           "process — stop it there first.")
+            return False, IN_USE_REASON
         if not os.path.isdir(session.workdir):
             return False, ("Its artifact directory no longer exists:\n"
                            f"{session.workdir}\nUse Redo to build it as a new session.")
@@ -726,12 +922,15 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             fleet.open_fleet_window(self.wiz, session=s, reuse_record=False)
             return
         self.wiz.load_session(s.config)
-        if s.blanked_secrets:
-            QtWidgets.QMessageBox.warning(
-                self, "Passwords not saved",
-                "\n".join(f"{k.replace('_', '-')} was NOT saved (plaintext secret) — "
-                          "re-enter it before building from this config"
-                          for k in s.blanked_secrets))
+        # load_session restart()ed the wizard, so the current page IS where Redo
+        # landed (Welcome). The unsaved-passwords note is said there, inline, after
+        # the restart: Welcome's initializePage clears it, so a later Load config or
+        # Redo never shows a stale one. A modal here popped over a wizard that had
+        # already moved (GUI-26).
+        note = redo_secrets_note(s)
+        show = getattr(self.wiz.currentPage(), "show_landing_note", None)
+        if note and show is not None:
+            show(note)
 
     def _open_artifacts(self) -> None:
         r = self._selected()
@@ -753,10 +952,9 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         if r.kind == "session":
             s = r.session
             if build_sessions.is_active(s):    # re-evaluated at click time, never cached
-                QtWidgets.QMessageBox.warning(
-                    self, "Delete refused",
-                    "This session appears to be running in another Studio process — "
-                    "stop it there first.")
+                # The button is already disabled for an active session (_refusals); this
+                # answers only a build that started between the selection and the click.
+                QtWidgets.QMessageBox.warning(self, "Delete refused", IN_USE_REASON)
                 return
             box = QtWidgets.QMessageBox(self)
             box.setWindowTitle("Delete build session")

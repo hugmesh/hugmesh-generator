@@ -102,6 +102,7 @@ non-monotonically across a path). The conceptual steps:
 | 5 | The Tailscale root domain + the other domains | the Headscale / mesh-networking group on `network.py` · `domains_choice.py` · `domains.py` · `domain_services.py` (each domain's services) |
 | 6 | Per-domain admins + named users | `domains.py` (default admin) · `users_choice.py` · `users.py` |
 | 7 | Network identity / egress / security + home / encryption / login / packages | `network.py` (standalone) · `system.py` · `vault.py` (mesh) · `home.py` |
+| 8 | The desktop: environment, login screen, window managers/compositors, video cards, extra accounts, apps (native/Flatpak), Python, portage overlay + emerge --pretend | `desktop.py` (skips itself when the build makes no desktop) |
 
 ## Per-path physical page sequence (what the user actually clicks through)
 
@@ -112,7 +113,7 @@ collected into `cfg`.
 
 - **Mesh node** (`mesh`) — skips role/hardware (branding is no longer skipped: it
   also hosts the mesh web-login theme):
-  `welcome → mode → idp → worklist → branding → network → keyzip → domains_choice → domains → domain_services → domain_ca_keys → users_choice → users → system → vault → home → build → launch → progress`
+  `welcome → mode → idp → worklist → branding → network → keyzip → domains_choice → domains → domain_services → domain_ca_keys → users_choice → users → system → vault → home → desktop → build → launch → progress`
   (`domains` shows only if the Domains choice screen asked for more domains, and `users`
   only if the Users choice screen asked to name users. `domain_services` shows on every mesh
   flow, because the mesh's own domain always gets a services page.)
@@ -127,10 +128,10 @@ collected into `cfg`.
   Docker after the Studio closes.)
 - **Mesh desktop client** (`cloud`) — skips idp, worklist, the two choice screens and the
   secrets store:
-  `welcome → mode → role → hardware → branding → network → keyzip → domains → domain_services → users → system → home → build → launch → progress`
+  `welcome → mode → role → hardware → branding → network → keyzip → domains → domain_services → users → system → home → desktop → build → launch → progress`
 - **Standalone Gentoo desktop** (`standalone`) — skips idp/worklist/keyzip, the whole
   domains and users group, and the secrets store:
-  `welcome → mode → role → hardware → branding → network → system → home → build → launch → progress`
+  `welcome → mode → role → hardware → branding → network → system → home → desktop → build → launch → progress`
   **The unaffiliated role walks the identical
   sequence.** It used to be this same walk *minus* `branding`, because
   `BrandingPage.applies_to` removed the page for that role; the 2026-08-26
@@ -166,7 +167,8 @@ becomes applicable again is reachable and emitted again.
 | Machine hardware scan | `hardware.py` | the synthetic `this-machine-scan` profile row on `role.py` |
 | "Themes" (web login) vs "Desktop theme" | both, retitled | the bare "Themes" label — the web group was "Web login theme", mesh-only; since 2026-10-21 it is the Look tab of the mesh's own domain on the Domain services step, and the Branding page only points there |
 | "Seed stack code" | branded images | `home.py` on an unaffiliated image |
-| Image posture / `--capable` / desktop weight | roles where they genuinely compose | roles whose builder arm already pins them (`role_presets_standalone` / `role_presets_capable`) |
+| Image posture | roles where it genuinely composes | roles whose builder arm already pins it (`role_presets_standalone`) |
+| Desktop environment (`--desktop` weight, `--capable`) / Steam | the Desktop step (`desktop.py`), greyed with the reason where the role pins it (`x86_desktop_axis` / `role_presets_capable`) | the image-type screen (`role.py`), which only points there since 2026-11-11 |
 | Sunshine | tailnet client desktops | standalone mode |
 | "Unaffiliated" | the role ROW | the composable checkbox, on the `standalone-unaffiliated` role only (it stays on the other standalone roles, and greys out with a reason in cloud mode) |
 | "Start a local mesh" | the mode menu | the welcome screen |
