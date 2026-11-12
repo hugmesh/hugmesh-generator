@@ -705,6 +705,9 @@ python -m hugmesh_studio.tui                       # the guided journey (welcome
 python -m hugmesh_studio.tui --sessions            # sessions review (build history):
                                                    #   status · why an image was not started
                                                    #   · artifacts · delete-with-confirm
+                                                   #   (an unreadable record too) · restart
+                                                   #   (the GUI's gate, then where to run it)
+                                                   #   · redo into the journey · delete all
 python -m hugmesh_studio.tui --worklist SESSION_ID # read-only worklist table for one session
 python -m hugmesh_studio.tui --meshemu SESSION     # whole-mesh emulation status list
 python -m hugmesh_studio.tui --fleet               # fleet build (scripts/build-all-roles.sh)

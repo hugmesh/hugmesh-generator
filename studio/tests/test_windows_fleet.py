@@ -17,7 +17,7 @@ import os
 
 import pytest
 
-from hugmesh_studio.core import platform_info
+from hugmesh_studio.core import build_driver, platform_info
 from hugmesh_studio.core.fleet import FleetConfig, FleetDriver
 from hugmesh_studio.core.platform_info import HostInfo
 
@@ -53,10 +53,14 @@ def test_native_fleet_on_windows_names_docker_and_wsl2_not_root(as_native_window
     assert not any("needs root" in p for p in problems), problems
 
 
-def test_native_fleet_off_windows_keeps_the_root_sentence(as_posix):
-    # Linux/WSL is unchanged: a non-root native fleet still gets the root refusal.
+def test_native_fleet_off_windows_is_not_refused_for_not_being_root(as_posix, monkeypatch):
+    # Linux/WSL: no WSL2 sentence. And no root sentence either (GUI-04): that refusal
+    # was the pre-2026-07-17 BuildDriver bug — the driver elevates through sudo/pkexec
+    # itself, so a non-root native fleet is refused only when neither exists
+    # (tests/test_fleet.py). This test used to pin the bug.
+    monkeypatch.setattr(build_driver.shutil, "which", lambda name: f"/usr/bin/{name}")
     problems = FleetDriver(GENERATOR_DIR, LINUX_HOST).preflight(FleetConfig(), "native")
-    assert "Native build needs root (the Studio will prepend sudo)." in problems, problems
+    assert not any("needs root" in p for p in problems), problems
     assert not any("WSL2" in p for p in problems), problems
 
 

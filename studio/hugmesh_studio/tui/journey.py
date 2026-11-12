@@ -19,7 +19,10 @@ PARITY RULES (what the tests pin):
   pages where a Qt binding exists);
 * committing a mode mirrors ``gui/pages/mode.py::validatePage`` — same transient
   side-flow flags, same config resets — so a config walked through the TUI and one
-  walked through the GUI serialize identically for equivalent picks.
+  walked through the GUI serialize identically for equivalent picks;
+* a plain Enter on the mode menu takes the card the GUI's Mode step has CHECKED —
+  the mode the configuration already holds (``mode_enter_choice``, the twin of
+  ``ModePage.initializePage``), so a REDO walked with Enter keeps what it loaded.
 
 Every screen follows one small protocol (``enter/lines/prompt/feed``) so BOTH
 faces — the plain numbered prompts and the urwid renderer — drive exactly the
@@ -55,7 +58,7 @@ from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _Local
 __all__ = [
     "PAGE_ORDER", "SIDE_FLOW_SLUGS", "WELCOME_CHOICES", "WELCOME_TARGET",
     "MODE_CHOICES", "MODE_DEFAULT_CHOICE", "PENDING_NOTE", "Journey",
-    "README_GETTING_STARTED", "VAULT_COMMANDS",
+    "README_GETTING_STARTED", "VAULT_COMMANDS", "mode_enter_choice",
 ]
 
 #: The canonical page order — the GUI's OWN tuple, consumed rather than copied so
@@ -160,8 +163,30 @@ MODE_CHOICES: tuple[tuple[str, str, str], ...] = (
 )
 
 #: The no-pick default — BY ID, exactly the GUI's rule, so a reorder of the menu
-#: can never change which choice a plain Enter exercises.
+#: can never change which choice a plain Enter exercises. It is what a FRESH flow's
+#: Enter takes; a flow that already holds a mode keeps that one (mode_enter_choice).
 MODE_DEFAULT_CHOICE = "standalone"
+
+
+def mode_enter_choice(cfg) -> str:
+    """What a plain Enter on the mode menu commits: the mode the configuration ALREADY
+    holds — the ``*`` row. The GUI's rule, restated: ``ModePage.initializePage``
+    re-selects ``cfg.mode``'s card "otherwise the constructor's standalone default
+    would silently clobber it on the next validatePage", so Next keeps a loaded
+    configuration's mode.
+
+    Enter used to be :data:`MODE_DEFAULT_CHOICE` whatever the configuration held. That
+    was invisible while nothing could load one (``ImageConfig().mode`` IS the default,
+    so a fresh walk is unchanged), and became a trap the moment REDO could: Enter on
+    welcome, Enter here, and a redone mesh was committed as "standalone" — which drops
+    its worklist and clears its domains and users (commit_mode's standalone clears).
+    The QEMU screen's build-first arm already picks this way (tui/qemu.py).
+
+    ``cfg.mode`` is only ever an image mode; a value that is none of them (a hand-edited
+    record) falls back to the default, as the GUI leaves its default card checked when
+    it finds no card for the mode."""
+    return cfg.mode if cfg.mode in ROLE_CHOICES else MODE_DEFAULT_CHOICE
+
 
 #: The honesty stub for wizard steps not ported to the TUI yet.
 PENDING_NOTE = ("this step is not yet ported to the TUI — configure it in the "
@@ -262,15 +287,22 @@ class ModeScreen:
             out.append(f" {marker}{i:2d}. {label}")
             out.append(f"      {desc}")
         out.append("")
-        out.append(f"(Enter = {_mode_titles()[MODE_DEFAULT_CHOICE]} — the "
-                   "default, by id; * marks the loaded config's mode)")
+        keep = mode_enter_choice(j.cfg)
+        out.append(f"(Enter = {_mode_titles()[keep]} — " + (
+            "the default, by id; * marks the loaded config's mode)"
+            if keep == MODE_DEFAULT_CHOICE else
+            "keeps the loaded config's mode, marked *; a NUMBER picks another)"))
         return out
 
-    def prompt(self, j: "Journey") -> str:  # noqa: ARG002
-        return "mode> "
+    def prompt(self, j: "Journey") -> str:
+        # What Enter takes is said HERE as well as under the cards: the ten cards are
+        # taller than an 80x24 terminal, so the hint line under them (and the * of the
+        # last rows) is below the fold there. The prompt is on screen at every size, on
+        # both faces.
+        return f"mode (Enter={_mode_titles()[mode_enter_choice(j.cfg)]})> "
 
     def feed(self, j: "Journey", line: str) -> None:
-        mid = MODE_DEFAULT_CHOICE if line == "" else _pick_id(MODE_CHOICES, line)
+        mid = mode_enter_choice(j.cfg) if line == "" else _pick_id(MODE_CHOICES, line)
         if mid is None:
             j.status = f"unrecognised choice: {line!r} (a NUMBER picks; q quits)"
             return
@@ -1205,6 +1237,30 @@ class Journey:
 
     def close_overlay(self) -> None:
         self.overlay = None
+
+    def load_session(self, s) -> str:
+        """REDO ("edit as new") — the twin of ``StudioWizard.load_session``: a session
+        record's configuration snapshot back into the journey (base + worklist), landing
+        on the first screen with every step pre-populated (Enter on the mode menu keeps
+        the loaded mode — ``mode_enter_choice``); the eventual save is a NEW
+        configuration. Returns "" once loaded, or why nothing was (a fleet run, a
+        snapshot that no longer loads — ``model.redo_refusal``); a refusal changes
+        nothing. The blanked secrets are said, as the GUI's Redo warns about them."""
+        from . import model
+        why = model.redo_refusal(s)
+        if why:
+            return why
+        wl = WorklistConfig.from_dict(s.config)
+        self.cfg = wl.base
+        self.worklist = wl
+        self.goto(PAGE_ORDER[0])
+        said = [f"loaded the configuration of session {s.id} "
+                f"({s.label or 'no label'}) — Start building walks it: Enter on the "
+                "mode menu keeps its mode (marked *)"]
+        said += [f"! {k.replace('_', '-')} was NOT saved (plaintext secret) — re-enter "
+                 "it before building from this config" for k in s.blanked_secrets]
+        self.status = "\n".join(said)
+        return ""
 
     # ── navigation ──────────────────────────────────────────────────────────────
     def goto(self, slug: str) -> None:
