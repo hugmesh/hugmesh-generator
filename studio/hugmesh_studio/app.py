@@ -245,7 +245,10 @@ def main(argv=None) -> int:
                          "sessions page)")
     ap.add_argument("--login-agent", action="store_true",
                     help="headless: run the passwordless local-login loopback agent "
-                         "(binds 127.0.0.1:27621; serves the role-picker handoff to login-ui)")
+                         "(binds 127.0.0.1:27621; serves the role-picker handoff to login-ui). "
+                         "Refuses to start, exit 3, on a host that cannot check which local "
+                         "user connects (BSD, Solaris; macOS only with "
+                         "HUGMESH_LOCAL_LOGIN_MACOS=refuse)")
     ap.add_argument("--login-manifest",
                     help="path to the local-login roles manifest (default: "
                          "$HUGMESH_LOCAL_LOGIN_MANIFEST or "
@@ -444,6 +447,16 @@ def main(argv=None) -> int:
     from .core.golive_target import add_cli_arguments as _add_golive_target_args
     _add_golive_target_args(ap)
     args = ap.parse_args(argv)
+
+    if args.remember_roles_for_passwordless_login:
+        # Qt-free: a host with no peer-uid check never runs the login agent, so the
+        # roles would be plaintext secrets nothing serves. Same reason as GUI and TUI.
+        from .core.local_login_agent import local_login_unavailable_reason
+        reason = local_login_unavailable_reason()
+        if reason:
+            print(f"--remember-roles-for-passwordless-login ignored: {reason}",
+                  file=sys.stderr)
+            args.remember_roles_for_passwordless_login = False
 
     if args.mesh_token is not None:
         # Qt-free path: mesh_token imports core modules only, never a Qt binding.

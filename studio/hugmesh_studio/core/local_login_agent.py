@@ -28,9 +28,16 @@ SECURITY MODEL  (why a page on the public internet cannot use this agent)
   verify — at the OS/socket layer, which a request cannot forge — that the connecting
   process's peer uid equals the agent's own uid, and drop the connection (before any
   route runs or any secret is touched) otherwise. This is ENFORCED on Linux (see
-  :func:`_peer_uid`); on a platform with no reliable TCP peer-uid (macOS/*BSD/Windows) we
-  FAIL OPEN with a documented one-time startup warning rather than silently pretending to
-  check — the loopback bind + Origin allow-list + preflight header still apply there.
+  :func:`_peer_uid`). What happens on a host with NO peer check for a TCP loopback socket
+  is decided by what the host can check, not by its name (:func:`peer_check_policy`):
+  any non-Windows host without one (FreeBSD, OpenBSD, NetBSD, DragonFly, Solaris,
+  illumos, a Linux without ``/proc/net/tcp``) REFUSES: the agent does not start, and a
+  server built anyway drops every connection, so no handoff is ever served without a
+  peer check. macOS is the one switchable exception: by the operator's decision it keeps
+  FAILING OPEN with a one-time startup warning, and ``HUGMESH_LOCAL_LOGIN_MACOS=refuse``
+  turns it into a refusal. Windows is unchanged (fails open with the startup warning).
+  The Studio's GUI, text UI and command line show the same one-line reason
+  (:data:`NO_PEER_CHECK_REASON`) and grey the local-login control where it refuses.
 * **Exact-match Origin allow-list.** Every request must carry an ``Origin`` that is an
   EXACT (scheme+host+port) member of the allow-list (the brand login-ui origins from the
   manifest, PLUS the localhost dev origins only when dev mode is explicitly opted in —
@@ -387,18 +394,29 @@ def _peer_uid(conn) -> int | None:
     2. ``/proc/net/tcp`` (Linux). The reliable peer-uid for a TCP loopback connection —
        see :func:`_proc_net_peer_uid`.
 
-    On macOS/*BSD (no ``/proc``) and Windows there is no portable reliable equivalent for
-    a TCP socket, so we return ``None`` and the caller documents the reduced guarantee.
+    For an AF_UNIX socket on macOS/FreeBSD/DragonFly, ``LOCAL_PEERCRED`` (what
+    ``getpeereid()`` reads) is used — see :func:`_local_peercred_uid`. On macOS/*BSD
+    (no ``/proc``), Solaris/illumos and Windows there is no portable reliable equivalent
+    for a TCP socket, so we return ``None`` and :func:`peer_check_policy` decides.
     """
     peercred = getattr(socket, "SO_PEERCRED", None)
     if peercred is not None:
         try:
             raw = conn.getsockopt(socket.SOL_SOCKET, peercred, struct.calcsize("3i"))
-            _pid, uid, _gid = struct.unpack("3i", raw)
+            if sys.platform.startswith("openbsd"):
+                uid, _gid, _pid = struct.unpack("3i", raw)   # struct sockpeercred
+            else:
+                _pid, uid, _gid = struct.unpack("3i", raw)   # Linux struct ucred
             if uid >= 0:                         # valid only for an AF_UNIX peer; TCP -> -1
                 return uid
         except (OSError, struct.error):
             pass
+    if getattr(conn, "family", None) == getattr(socket, "AF_UNIX", None):
+        # macOS / FreeBSD / DragonFly: LOCAL_PEERCRED is what getpeereid() reads. It
+        # exists only for AF_UNIX, so it never makes a TCP loopback check "available".
+        uid = _local_peercred_uid(conn)
+        if uid is not None:
+            return uid
     try:
         peer, local = conn.getpeername(), conn.getsockname()
     except OSError:
@@ -406,10 +424,99 @@ def _peer_uid(conn) -> int | None:
     return _proc_net_peer_uid(peer, local)
 
 
+# SOL_LOCAL / LOCAL_PEERCRED from <sys/un.h>: both 0 / 1 on macOS, FreeBSD and
+# DragonFly. Python exposes LOCAL_PEERCRED on some builds only, so fall back to the
+# header value on exactly the platforms that define it.
+_SOL_LOCAL = 0
+_LOCAL_PEERCRED = getattr(socket, "LOCAL_PEERCRED", None) or (
+    1 if sys.platform.startswith(("darwin", "freebsd", "dragonfly")) else None)
+_XUCRED_VERSION = 0
+
+
+def _local_peercred_uid(conn, opt: int | None = None) -> int | None:
+    """The peer uid of an AF_UNIX socket via ``LOCAL_PEERCRED`` (``struct xucred``:
+    ``u_int cr_version; uid_t cr_uid; ...``), or ``None`` where it is unavailable.
+
+    ``opt`` is :data:`_LOCAL_PEERCRED` unless a test passes another."""
+    opt = _LOCAL_PEERCRED if opt is None else opt
+    if opt is None:
+        return None
+    try:
+        raw = conn.getsockopt(_SOL_LOCAL, opt, 256)
+        version, uid = struct.unpack_from("=II", raw)
+    except (OSError, struct.error):
+        return None
+    return uid if version == _XUCRED_VERSION else None
+
+
 # Whether THIS platform can enforce the peer-uid check for our TCP loopback socket.
-# Linux (has os.getuid + /proc/net/tcp) => enforced; else the check fails open with a
-# documented startup warning (see run()).
+# Linux (has os.getuid + /proc/net/tcp) => enforced. Elsewhere peer_check_policy() says
+# what happens: Windows and (by default) macOS fail open with a startup warning, every
+# other host refuses the handoff.
 PEER_UID_ENFORCED = hasattr(os, "getuid") and os.path.exists("/proc/net/tcp")
+
+# ── what a host with no peer check does (capability-based, not name-based) ────
+PEER_ENFORCED = "enforced"      # a real peer-uid check runs on every connection
+PEER_FAIL_OPEN = "fail-open"    # no check; serve anyway, with a startup warning
+PEER_REFUSED = "refused"        # no check; serve NO handoff at all
+
+#: The macOS switch. Unset or "fail-open" keeps the operator's 2026-11-12 decision
+#: (fail open with the warning); any other value, e.g. "refuse", refuses like a BSD.
+#: It is read on macOS only: no value makes another host fail open.
+MACOS_LOCAL_LOGIN_ENV = "HUGMESH_LOCAL_LOGIN_MACOS"
+
+#: Exit code of ``--login-agent`` when it refuses (1 stays "could not bind").
+EXIT_NO_PEER_CHECK = 3
+
+#: The one reason all three channels (GUI, text UI, command line) show.
+NO_PEER_CHECK_REASON = (
+    "Local login is off on this computer: it cannot check which local user is "
+    "connecting to the login agent, so another user here could take the login. "
+    "Sign in with your password.")
+
+#: The macOS warning while it keeps failing open.
+MACOS_FAIL_OPEN_WARNING = (
+    "Local login on macOS cannot check which local user is connecting to the login "
+    "agent; on a shared Mac another user could take the login. Set "
+    f"{MACOS_LOCAL_LOGIN_ENV}=refuse to turn it off.")
+
+
+@dataclass(frozen=True)
+class PeerCheckPolicy:
+    """What this host does about the peer-uid check, and the line to show for it."""
+    mode: str
+    reason: str = ""
+
+    @property
+    def refused(self) -> bool:
+        return self.mode == PEER_REFUSED
+
+
+def peer_check_policy(*, osname: str | None = None, platform: str | None = None,
+                      has_getuid: bool | None = None, proc_net_tcp: bool | None = None,
+                      environ=None) -> PeerCheckPolicy:
+    """Decide from what the host CAN check, so a BSD or Solaris is covered by name-free
+    facts. Every argument defaults to the real host; tests inject another one."""
+    osname = os.name if osname is None else osname
+    platform = sys.platform if platform is None else platform
+    has_getuid = hasattr(os, "getuid") if has_getuid is None else has_getuid
+    proc_net_tcp = os.path.exists("/proc/net/tcp") if proc_net_tcp is None else proc_net_tcp
+    environ = os.environ if environ is None else environ
+    if osname == "nt":
+        return PeerCheckPolicy(PEER_FAIL_OPEN)      # Windows: unchanged, out of scope
+    if has_getuid and proc_net_tcp:
+        return PeerCheckPolicy(PEER_ENFORCED)
+    if platform.startswith("darwin"):
+        switch = (environ.get(MACOS_LOCAL_LOGIN_ENV) or "").strip().lower()
+        if switch in ("", "fail-open"):
+            return PeerCheckPolicy(PEER_FAIL_OPEN, MACOS_FAIL_OPEN_WARNING)
+    return PeerCheckPolicy(PEER_REFUSED, NO_PEER_CHECK_REASON)
+
+
+def local_login_unavailable_reason(**host) -> str:
+    """The reason to grey local login with, or ``""`` where it is offered."""
+    policy = peer_check_policy(**host)
+    return policy.reason if policy.refused else ""
 
 
 # ── HTTP transport ───────────────────────────────────────────────────────────
@@ -532,15 +639,23 @@ class _LoopbackAuthServer(ThreadingHTTPServer):
     does not.
 
     ENFORCED where the OS exposes a reliable peer uid for a TCP loopback socket (Linux —
-    see :func:`_peer_uid`). Where it does not (macOS/*BSD/Windows), we FAIL OPEN with a
-    documented one-time startup warning (see :func:`run`) rather than silently pretending
-    to check; the loopback bind + Origin allow-list + preflight header remain the
-    guarantees there.
+    see :func:`_peer_uid`). Where it does not, :func:`peer_check_policy` decides: a
+    refusing host (any non-Windows host without a check, and macOS when switched)
+    drops EVERY connection here; Windows and macOS by default FAIL OPEN with a one-time
+    startup warning (see :func:`run`), where the loopback bind + Origin allow-list +
+    preflight header remain the guarantees.
     """
+
+    #: set by make_server(); a server nobody configured treats the host as it is.
+    peer_policy: "PeerCheckPolicy | None" = None
 
     def verify_request(self, request, client_address):
         # socketserver calls this after get_request(); a False return shuts the
         # connection down before process_request(), so no handler runs for it.
+        policy = self.peer_policy or peer_check_policy()
+        if policy.refused:
+            _log("dropping loopback connection: this host has no peer-uid check")
+            return False
         try:
             my_uid = os.getuid()
         except AttributeError:
@@ -556,10 +671,13 @@ class _LoopbackAuthServer(ThreadingHTTPServer):
 
 
 def make_server(agent: LocalLoginAgent, host: str = BIND_HOST, port: int = PORT,
-                *, osname: str | None = None) -> ThreadingHTTPServer:
+                *, osname: str | None = None,
+                policy: PeerCheckPolicy | None = None) -> ThreadingHTTPServer:
     """Bind the loopback server. Raises OSError if the bind fails (caller exits).
 
-    ``osname`` is ``os.name`` unless a test passes another."""
+    ``osname`` is ``os.name`` and ``policy`` is :func:`peer_check_policy` for this host
+    unless a test passes others. A refused policy still binds (so the port is held) but
+    drops every connection; :func:`run` does not get that far."""
     if (osname or os.name) == "nt":
         # HTTPServer sets SO_REUSEADDR, which on Windows (unlike Linux) lets a second
         # socket bind a port that is already LISTENING: a second agent then logged
@@ -580,6 +698,7 @@ def make_server(agent: LocalLoginAgent, host: str = BIND_HOST, port: int = PORT,
             raise
     else:
         httpd = _LoopbackAuthServer((host, port), _Handler)
+    httpd.peer_policy = policy or peer_check_policy(osname=osname)
     httpd.agent = agent                                    # type: ignore[attr-defined]
     # Expected Host = the loopback literal + the ACTUAL bound port (0 -> ephemeral in tests).
     httpd.expected_host = f"{host}:{httpd.server_address[1]}"   # type: ignore[attr-defined]
@@ -587,18 +706,24 @@ def make_server(agent: LocalLoginAgent, host: str = BIND_HOST, port: int = PORT,
 
 
 def run(manifest_path: str | None = None, host: str = BIND_HOST, port: int = PORT,
-        *, allow_dev_origins: bool = False) -> int:
+        *, allow_dev_origins: bool = False, policy: PeerCheckPolicy | None = None) -> int:
     """Load the manifest, bind loopback, and serve until interrupted. Returns a process
-    exit code: 0 on clean shutdown, 1 if the bind failed (login-ui then falls back to
-    the password form).
+    exit code: 0 on clean shutdown, 1 if the bind failed, :data:`EXIT_NO_PEER_CHECK` if
+    this host has no peer check and refuses (in both failures login-ui falls back to
+    the password form). ``policy`` is :func:`peer_check_policy` unless a test passes one.
 
     ``allow_dev_origins`` (CLI ``--dev``) additionally trusts the localhost dev origins;
     it is OR-ed with the ``HUGMESH_LOCAL_LOGIN_DEV`` env var and the manifest's
     ``devOrigins`` flag. Leave it off for a shipped production build."""
+    policy = policy or peer_check_policy()
+    if policy.refused:
+        # Before the manifest is read or the port is bound: nothing is served at all.
+        _log(f"not starting: {policy.reason}")
+        return EXIT_NO_PEER_CHECK
     manifest_path = manifest_path or default_manifest_path()
     agent = LocalLoginAgent(manifest_path, allow_dev_origins=allow_dev_origins)
     try:
-        httpd = make_server(agent, host, port)
+        httpd = make_server(agent, host, port, policy=policy)
     except OSError as e:
         _log(f"could not bind {host}:{port}: {e}; login-ui will fall back to the password form")
         return 1
@@ -607,6 +732,8 @@ def run(manifest_path: str | None = None, host: str = BIND_HOST, port: int = POR
         _log("WARNING: OS-level peer-uid authentication is unavailable on this platform; "
              "on a MULTI-USER host another local user could reach this loopback agent. The "
              "loopback bind, Origin allow-list and preflight header still apply.")
+    if policy.reason:
+        _log(f"WARNING: {policy.reason}")
     if agent.dev_origins_enabled:
         _log("localhost dev origins ENABLED (--dev / HUGMESH_LOCAL_LOGIN_DEV / manifest "
              "devOrigins) — do NOT enable this in a shipped production build")

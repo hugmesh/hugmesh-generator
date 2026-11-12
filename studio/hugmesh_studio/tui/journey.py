@@ -352,6 +352,19 @@ class PendingStep:
         j.advance()
 
 
+class KeyZipPendingStep(PendingStep):
+    """The key-zip step is GUI-only, but whether local login is offered on this host is
+    not: show the same one-line reason the GUI and the command line show."""
+
+    def lines(self, j: "Journey") -> list[str]:
+        from ..core import local_login_agent
+        out = super().lines(j)
+        reason = local_login_agent.peer_check_policy().reason
+        if reason:
+            out += ["", reason]
+        return out
+
+
 class IdpScreen:
     """The mesh-node identity-provider step — Casdoor is pickable; the external
     providers need issuer/client-id plumbing the TUI has not ported, so they are
@@ -1169,7 +1182,8 @@ class Journey:
         for slug, title in _SIDE_FLOW_STUB.items():
             self._screens[slug] = PendingSideFlow(slug, title)
         for slug, title in _PENDING_STEPS.items():
-            self._screens.setdefault(slug, PendingStep(slug, title))
+            step = KeyZipPendingStep if slug == "keyzip" else PendingStep
+            self._screens.setdefault(slug, step(slug, title))
         # "sessions" never renders as a journey screen (the face owns the review),
         # but the registry must still cover EVERY canonical slug — parity-pinned.
         self._screens.setdefault("sessions", PendingStep("sessions", "Sessions"))
