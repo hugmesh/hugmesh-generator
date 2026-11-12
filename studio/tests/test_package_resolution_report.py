@@ -130,6 +130,19 @@ def test_catalog_greyed_reasons_cite_only_missing_components(prr, report, catalo
     assert not bad, "\n".join(bad)
 
 
+def test_every_measured_gap_counts_as_missing(prr, report):
+    """Each atom a cell lists as having no visible ebuild, and each masked first wall,
+    is in the arch's missing set the citation check reads."""
+    for arch in report["arches"]:
+        gaps = prr.missing_components(report, arch["catalog_arch"])
+        for rid, cell in report["cells"][arch["id"]].items():
+            for m in cell["missing_atoms"]:
+                assert m["atom"] in gaps, f"{arch['id']}/{rid}: {m['atom']}"
+            fm = cell["first_missing"]
+            if fm and "masked by" in fm["reason"]:
+                assert prr._cp(fm["atom"]) in gaps, f"{arch['id']}/{rid}: {fm['atom']}"
+
+
 def _measured_gap(prr, report, arch):
     gaps = sorted(prr.missing_components(report, arch))
     assert gaps, f"the report marks nothing missing on {arch}"
@@ -200,6 +213,25 @@ def test_citation_parser_reads_versioned_and_prose_atoms(prr, report):
             "sys-cluster/kubelet[foo], and x86-64/arm64 or rv64/lp64d are not atoms")
     assert prr.cited_components(text, cats) == ["sec-policy/selinux-openrc",
                                                 "sys-cluster/kubelet"]
+
+
+def test_each_kind_of_gap_counts_on_its_own(prr):
+    """A top-level atom with no visible ebuild, the wall behind it, and an invisible
+    extra component each mark a component missing, in any variant of the arch."""
+    def rep(cell=None, comp=None):
+        cell = {"first_missing": None, "missing_atoms": [], "residual": None,
+                **(cell or {})}
+        return {"arches": [{"id": "x-v", "catalog_arch": "x"}],
+                "cells": {"x-v": {"r": cell}}, "components": {"x-v": comp or {}}}
+    masked = {"atom": "a-b/wall-1.0", "reason": "a-b/wall-1.0: masked by missing keyword"}
+    assert prr.missing_components(
+        rep({"missing_atoms": [{"atom": "a-b/top", "reason": "x"}]}), "x") == {"a-b/top"}
+    assert prr.missing_components(
+        rep({"residual": {"first_missing": masked}}), "x") == {"a-b/wall"}
+    assert prr.missing_components(
+        rep(comp={"a-b/extra": {"visible": False, "reason": "x"},
+                  "a-b/here": {"visible": True, "reason": ""}}), "x") == {"a-b/extra"}
+    assert prr.missing_components(rep({"first_missing": masked}), "y") == set()
 
 
 def test_a_flag_conflict_is_not_counted_as_a_missing_component(prr):
