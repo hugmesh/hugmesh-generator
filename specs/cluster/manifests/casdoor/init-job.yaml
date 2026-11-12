@@ -737,6 +737,15 @@ data:
             raise CasdoorError(f"organization {ORG} does not exist")
         org["mfaItems"] = MFA_ITEMS
         # WebAuthn relying-party + TOTP issuer scope the platform brand.
+        # 0 = never remember: every sign-in by an enrolled user asks for the second
+        # factor (the MFA form reads "Remember this account for 0 hours").
+        # ⚠ Do not verify this field through get-organization: casdoor 3.80.0's
+        # GetOrganization controller (controllers/organization.go:107-109) answers
+        # 12 whenever the STORED value is 0, so the read-back after this write says
+        # 12 while postgres holds 0 and the login path (controllers/auth.go:456,
+        # :1212) uses 0. get-organizations reports the stored 0. A plain GET-then-
+        # save of the org (the admin UI's Save) persists that 12; the next run of
+        # this Job writes 0 again (MEASURED against a throwaway 3.80.0, 2026-11-10).
         org["mfaRememberInHours"] = 0
         org["websiteUrl"] = org.get("websiteUrl") or "https://hugmesh.net"
         call(f"/api/update-organization?id={org_id}", org, "POST")

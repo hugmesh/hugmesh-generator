@@ -63,6 +63,12 @@ echo "==> Real integration stack (compose.real.yaml)"
 # seed-e2e.sh's EMAIL_DOMAIN_ALLOWLIST), touching only missing/empty keys.
 MASTODON_ENV="${MASTODON_ENV}" bash "${HERE}/gen-mastodon-env.sh"
 
+# The DB passwords (casdoor-db, mastodon-db) and the brokers' SVC_PASSWORD are not
+# spelled in compose.real.yaml (hugmesh-generator#857): it reads ${KEY:?...} from the
+# gitignored tests/stack/.env, which gen-stack-db-env.sh fills (create-if-missing,
+# never rotate; an existing hugmesh-real volume's value is ADOPTED, not replaced).
+STACK_DB_PROJECT=hugmesh-real bash "${HERE}/gen-stack-db-env.sh"
+
 # (The homeserver has no first-run step: tuwunel's whole config is TUWUNEL_*
 # env on the service itself — see compose.real.yaml.)
 

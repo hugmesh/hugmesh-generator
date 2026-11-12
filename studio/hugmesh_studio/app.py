@@ -4,6 +4,8 @@
   python -m hugmesh_studio --tray        # tray only (mesh-node controller)
   python -m hugmesh_studio --stack-tray  # tray only (local dev-stack controller)
   python -m hugmesh_studio --go-live     # superadmin go-live wizard (hugmesh-go-live front-end)
+  python -m hugmesh_studio --go-live --go-live-target LABEL
+      # ...with that emulated device (e.g. rpi5/pki) preselected as the go-live target
   python -m hugmesh_studio --fleet       # fleet build dialog (scripts/build-all-roles.sh front-end)
   python -m hugmesh_studio --login-agent # headless: run the passwordless local-login loopback agent
   python -m hugmesh_studio --scan-hardware [--json]
@@ -35,7 +37,7 @@ import argparse
 import os
 import sys
 
-from .core import crashlog, flatpak_host, no_console
+from .core import crashlog, entry, flatpak_host, no_console
 
 
 def _default_generator_dir() -> str:
@@ -135,7 +137,8 @@ def utf8_stdio(osname: str | None = None, streams=None) -> None:
             pass
 
 
-def print_backend(asked: str, default_backend: str, osname: str | None = None) -> str | None:
+def print_backend(asked: str, default_backend: str, osname: str | None = None,
+                  sysplatform: str | None = None) -> str | None:
     """The backend --print-command/--print-commands print for: None (the host's default)
     unless ``asked`` names one. On a host that cannot build at all the command is still
     printed, deterministically: the native one on Linux, but the DOCKER one on native
@@ -145,21 +148,43 @@ def print_backend(asked: str, default_backend: str, osname: str | None = None) -
     ``osname`` is ``os.name`` unless a test passes another."""
     backend = None if asked == "auto" else asked
     if backend is None and default_backend == "none":
-        native_windows = (os.name if osname is None else osname) == "nt"
-        backend = "docker" if native_windows else "native"
+        # A Mac builds only through Docker too (a native build is a Gentoo chroot).
+        from .core import platform_info
+        backend = "docker" if platform_info.builds_in_docker_vm(osname, sysplatform) \
+            else "native"
     return backend
 
 
-def _native_print_note(backend: str | None, osname: str | None = None) -> None:
-    """An explicit ``--backend native`` on native Windows still prints (it was asked
-    for), but stderr says why that command cannot run here; stdout stays argv only."""
+def _native_print_note(backend: str | None, osname: str | None = None,
+                       sysplatform: str | None = None) -> None:
+    """An explicit ``--backend native`` on native Windows or macOS still prints (it was
+    asked for), but stderr says why that command cannot run here; stdout stays argv
+    only."""
     if backend != "native":
         return
     from .core import platform_info
-    if platform_info.native_windows_blocker("A native build", osname=osname):
+    if platform_info.host_kind(osname, sysplatform) == "windows":
         print("note: a native build runs sudo and bash on a Gentoo host, which the "
               "Windows build of the Studio cannot do. Use --backend docker (Docker "
               "Desktop), or run the Studio inside WSL2.", file=sys.stderr)
+    elif platform_info.host_kind(osname, sysplatform) == "darwin":
+        print("note: " + platform_info.native_build_blocker("A native build", osname,
+                                                            sysplatform),
+              file=sys.stderr)
+
+
+def go_live_target_label(rest: list[str]) -> str:
+    """The device LABEL in ``--go-live --go-live-target …``: the value of a
+    ``--target LABEL`` in it (the CLI's own spelling), else its first word. "" when
+    there is none."""
+    rest = list(rest or [])
+    if "--target" in rest:
+        i = rest.index("--target")
+        return rest[i + 1].strip() if i + 1 < len(rest) else ""
+    for word in rest:
+        if word.startswith("--target="):
+            return word.split("=", 1)[1].strip()
+    return rest[0].strip() if rest and not rest[0].startswith("-") else ""
 
 
 def main(argv=None) -> int:
@@ -176,6 +201,11 @@ def main(argv=None) -> int:
     # make, git, qemu and the generator's scripts live on the HOST, which the sandbox
     # reaches only through flatpak-spawn --host (a no-op outside the Flatpak).
     flatpak_host.install()
+    # And the Mac's: an app opened from Finder gets launchd's PATH (/usr/bin:/bin:...),
+    # which has no Homebrew, no Docker Desktop CLI and no colima, so every probe said
+    # "not installed". Puts them back, GNU tools first (a no-op off macOS). The text UI
+    # and the module command lines make the same call (core/entry.py).
+    entry.bootstrap()
     # Third, before anything prints: a path outside cp1252 must not turn a redirected
     # print into a traceback or a false "bad input" (a no-op off Windows).
     utf8_stdio()
@@ -363,6 +393,8 @@ def main(argv=None) -> int:
     _add_qemu_windows_args(ap)
     # ── Go-live against a target (this host or an emulated device), Qt-free ─────
     # --go-live-target VERB [options]: the rest of the line goes to core/golive_target.py.
+    # After --go-live it is instead the device LABEL the wizard opens on
+    # (``--go-live --go-live-target rpi5/pki``) — see the dispatch below.
     from .core.golive_target import add_cli_arguments as _add_golive_target_args
     _add_golive_target_args(ap)
     args = ap.parse_args(argv)
@@ -383,17 +415,26 @@ def main(argv=None) -> int:
         from .core.org_export import run_cli as _run_org_export
         return _run_org_export(args, args.generator_dir)
 
+    go_live_label = ""
+    if args.go_live_target is not None:
+        if args.go_live:
+            # `--go-live --go-live-target LABEL`: preselect, open the wizard below.
+            go_live_label = go_live_target_label(args.go_live_target)
+            if not go_live_label:
+                print("error: --go-live --go-live-target needs a device LABEL "
+                      "(e.g. rpi5/pki)", file=sys.stderr)
+                return 2
+        else:
+            # Qt-free path: golive_target runs only ssh (never bash, never a Qt
+            # binding), so it works from hugmesh-studio-cli.exe with no display.
+            from .core.golive_target import run_studio_cli as _run_golive_target
+            return _run_golive_target(args.go_live_target, args.generator_dir)
+
     if args.qemu_windows is not None:
         # Qt-free path: runs only qemu-img / qemu-system-x86_64 (and taskkill), never a
         # Qt binding, so it works from hugmesh-studio-cli.exe with no display.
         from .core.qemu_windows import run_studio_cli as _run_qemu_windows
         return _run_qemu_windows(args.qemu_windows, args.generator_dir)
-
-    if args.go_live_target is not None:
-        # Qt-free path: runs only ssh against an emulated device (or the checkout's
-        # driver for this host), never a Qt binding — so the MSI's console twin has it.
-        from .core.golive_target import run_studio_cli as _run_golive_target
-        return _run_golive_target(args.go_live_target, args.generator_dir)
 
     if args.login_agent:
         # Qt-free path: the loopback login agent is stdlib-only and blocks in
@@ -801,7 +842,7 @@ def main(argv=None) -> int:
         nonlocal golive
         from .gui.pages.golive import GoLiveWizard
         if golive is None:
-            golive = GoLiveWizard(args.generator_dir)
+            golive = GoLiveWizard(args.generator_dir, target=go_live_label or None)
         golive.show()
         golive.raise_()
 

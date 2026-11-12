@@ -19,6 +19,12 @@
 # RED. The Studio's output-directory advice (worklist_driver.py), which used to
 # tell a person to run the same `chown -R`, is pinned to the same shape.
 #
+# The second half (2026-11-10) checks that the reown REACHES the host user. It
+# drives the real Makefile's 19 NATIVE build targets with stub builders: the
+# HOST_UID that DOCKER_RUN forwards through the environment must survive, and
+# the reown must run after a failed build too, with make still reporting the
+# failure. Mutations M4-M8 put each old shape back in a copy and go red.
+#
 # No root, no build, no `| grep -q` under pipefail, `grep -a` everywhere.
 set -uo pipefail
 
@@ -169,6 +175,168 @@ run_recipe "${TDIR}/Makefile.m3" stub >/dev/null 2>&1
 n_without_h="$(grep -a -c -v -F -e '-h' "${STUB_STATE}/flags" || true)"
 [ "${n_without_h}" -gt 0 ] && ok "M3 -h dropped: a chown call without -h (leg RED; a real chown would follow the link into the sysroot)" || bad "M3: dropping -h was not caught"
 
+# ══ the reown actually reaches the host user, on every exit path ═════════════
+# The prover's finding (2026-11-10): after a Docker-dispatched `make x86-...`,
+# every artifact, log and work dir was still root:root. Two causes, both in the
+# Makefile, both executed here against the REAL Makefile with stub builders:
+#   (a) `HOST_UID := $(shell id -u)` overrode the HOST_UID that DOCKER_RUN puts
+#       in the container's ENVIRONMENT, so the in-container make chowned to 0:0;
+#   (b) the reown was its own recipe line, so make never reached it after a
+#       FAILED build — and a failed build is exactly when the operator has to
+#       clean up.
+# Every make run below is `make -C <repo> -f <Makefile or a mutated copy>`.
+# Each builder variable (X86, RPI, ALL, ...) is replaced on the make command
+# line by a fake builder that records its argv and exits with FAKE_RC. SUDO is
+# emptied, and `chown` is a stub on PATH that records what it was handed. Nothing
+# is built, nothing needs root, and nothing in the work tree is touched.
+command -v make >/dev/null 2>&1 || { echo "MISSING tool: make"; exit 2; }
+echo "== HOST_UID/HOST_GID: the environment (DOCKER_RUN's -e) and the command line win =="
+print_ids() {   # <Makefile> [env assignments...] -> "uid:gid" as the Makefile resolves them
+    local mk="$1"; shift
+    env -u HOST_UID -u HOST_GID "$@" make -s -C "${REPO}" -f "${mk}" --no-print-directory \
+        --eval 'reown-test-print-ids: ; @echo $(HOST_UID):$(HOST_GID)' reown-test-print-ids NATIVE=1 2>/dev/null
+}
+print_docker_run() {   # <Makefile> [env assignments...] -> the DOCKER_RUN command text
+    local mk="$1"; shift
+    env -u HOST_UID -u HOST_GID "$@" make -s -C "${REPO}" -f "${mk}" --no-print-directory \
+        --eval 'reown-test-print-dr: ; @echo $(DOCKER_RUN)' reown-test-print-dr 2>/dev/null
+}
+ME="$(id -u):$(id -g)"
+got="$(print_ids "${MK}" HOST_UID=4242 HOST_GID=4243)"
+[ "${got}" = "4242:4243" ] && ok "env HOST_UID=4242 HOST_GID=4243 (what DOCKER_RUN gives the container): the Makefile keeps 4242:4243" \
+    || bad "env HOST_UID=4242 HOST_GID=4243: the Makefile resolved '${got}' (the in-container make would chown to that)"
+got="$(print_ids "${MK}")"
+[ "${got}" = "${ME}" ] && ok "HOST_UID/HOST_GID unset: falls back to id -u/-g (${ME})" || bad "HOST_UID unset: resolved '${got}', want ${ME}"
+got="$(print_ids "${MK}" HOST_UID= HOST_GID=)"
+[ "${got}" = "${ME}" ] && ok "HOST_UID/HOST_GID empty in the env: falls back to id -u/-g, never an empty chown owner" || bad "HOST_UID empty: resolved '${got}', want ${ME}"
+got="$(env -u HOST_UID -u HOST_GID HOST_UID=4242 make -s -C "${REPO}" -f "${MK}" --no-print-directory --eval 'reown-test-print-ids: ; @echo $(HOST_UID):$(HOST_GID)' reown-test-print-ids NATIVE=1 HOST_UID=55 HOST_GID=56 2>/dev/null)"
+[ "${got}" = "55:56" ] && ok "command line HOST_UID=55 HOST_GID=56 (build-menu.sh's sudo'd native run) beats the env" || bad "command line: resolved '${got}', want 55:56"
+dr="$(print_docker_run "${MK}")"
+case " ${dr} " in
+    *" -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) "*) ok "DOCKER_RUN forwards the invoking uid/gid: -e HOST_UID=$(id -u) -e HOST_GID=$(id -g)" ;;
+    *) bad "DOCKER_RUN does not forward -e HOST_UID=$(id -u) -e HOST_GID=$(id -g): ${dr}" ;;
+esac
+
+echo "== every NATIVE build recipe reowns on success AND on failure =="
+cat > "${TDIR}/bin/chown" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${STUB_STATE}/chown-calls"
+exit 0
+STUB
+chmod +x "${TDIR}/bin/chown"
+FAKE="${TDIR}/fakebuild"
+cat > "${FAKE}" <<'STUB'
+#!/usr/bin/env bash
+mkdir -p "${FAKE_WD}"
+printf '%s\n' "$*" >> "${STUB_STATE}/builds"
+exit "${FAKE_RC:-0}"
+STUB
+chmod +x "${FAKE}"
+# target -> the builder variable its NATIVE recipe runs. The pattern rules are
+# exercised through one valid stem each (the orangepi ones validate it first).
+TARGETS="build-all:ALL rebuild:ALL rpi:RPI x86:X86 omnibus:X86 x86-standalone:X86 rpi-desktop:RPI x86-pki:X86
+ frite:FRITE_BUILD jetson:JETSON_BUILD jetson-desktop:JETSON_BUILD orangepi5:ORANGEPI5_BUILD orangepi5-backend:ORANGEPI5_BUILD
+ orangepizero2:ORANGEPIZERO2_BUILD orangepizero2w:ORANGEPIZERO2W_BUILD orangepizero3:ORANGEPIZERO3_BUILD
+ orangepi3-lts:ORANGEPI3LTS_BUILD orangepi4-lts:ORANGEPI4LTS_BUILD orangepi4-lts-frontend:ORANGEPI4LTS_BUILD"
+run_native() {   # <Makefile> <target> <builder var> <fake rc> -> make's rc; records in STUB_STATE
+    local mk="$1" t="$2" v="$3" frc="$4"
+    rm -rf "${W}"; mkdir -p "${W}/sessions"
+    rm -f "${STUB_STATE}/chown-calls" "${STUB_STATE}/builds"
+    env -u HOST_UID -u HOST_GID HOST_UID=4242 HOST_GID=4243 FAKE_RC="${frc}" FAKE_WD="${W}" STUB_STATE="${STUB_STATE}" \
+        PATH="${TDIR}/bin:${PATH}" timeout "${WALL}" \
+        make -s -C "${REPO}" -f "${mk}" --no-print-directory "${t}" NATIVE=1 WORK_DIR="${W}" SUDO= "${v}=${FAKE}" >/dev/null 2>&1
+}
+reowned() {   # -> 0 when the stub chown was handed WORK_DIR itself as 4242:4243 with -h
+    [ -s "${STUB_STATE}/chown-calls" ] || return 1
+    awk -v w="${W}" '$1 == "-h" && $2 == "4242:4243" { for (i = 3; i <= NF; i++) if ($i == w) f = 1 } END { exit !f }' "${STUB_STATE}/chown-calls"
+}
+check_targets() {   # <Makefile> -> number of failing legs on stdout; each failing leg in STUB_STATE/legs
+    local mk="$1" tv t v frc rc nfail=0
+    : > "${STUB_STATE}/legs"
+    for tv in ${TARGETS}; do
+        t="${tv%%:*}"; v="${tv#*:}"
+        for frc in 0 9; do
+            run_native "${mk}" "${t}" "${v}" "${frc}"; rc=$?
+            local why=""
+            [ -s "${STUB_STATE}/builds" ] || why="${why} the fake builder never ran;"
+            if [ "${frc}" -eq 0 ]; then [ "${rc}" -eq 0 ] || why="${why} make rc=${rc} on a green build;"
+            else [ "${rc}" -ne 0 ] || why="${why} make rc=0 on a FAILED build (status swallowed);"; fi
+            reowned || why="${why} WORK_DIR not handed to 4242:4243 (chown calls: $({ tr '\n' '|' < "${STUB_STATE}/chown-calls"; } 2>/dev/null));"
+            if [ -n "${why}" ]; then
+                nfail=$((nfail+1))
+                printf 'make %s (builder exit %s):%s\n' "${t}" "${frc}" "${why}" >> "${STUB_STATE}/legs"
+            fi
+        done
+    done
+    echo "${nfail}"
+}
+n_targets="$(echo ${TARGETS} | wc -w)"
+nf="$(check_targets "${MK}")"
+while IFS= read -r leg; do bad "${leg}"; done < "${STUB_STATE}/legs"
+if [ "${nf}" = 0 ]; then
+    ok "${n_targets} build targets x {builder exits 0, builder exits 9}: make's status follows the builder, and WORK_DIR goes to the env's 4242:4243 with chown -h EVERY time"
+else
+    bad "${nf} of $((n_targets*2)) build/exit-status legs did not reown or lost the status (listed above)"
+fi
+# Coverage: every recipe that runs build-then-reown is in TARGETS, and no build
+# recipe still reowns from a SEPARATE line (which make skips after a failure).
+mk_targets="$(awk '/^[A-Za-z0-9%][A-Za-z0-9%_.-]*:/{t=$1; sub(/:.*/,"",t)} /^\t@?\$\(call build-then-reown,/{print t}' "${MK}" | sort -u)"
+missing=""
+for t in ${mk_targets}; do
+    case " $(echo ${TARGETS} | sed -e 's/:[A-Z0-9_]*//g') " in
+        *" ${t} "*) ;;
+        *) pat="${t%\%}"; [ "${pat}" != "${t}" ] && case " $(echo ${TARGETS} | sed -e 's/:[A-Z0-9_]*//g') " in *" ${pat}"*) continue ;; esac; missing="${missing} ${t}" ;;
+    esac
+done
+n_calls_mk="$(grep -a -c -E -e '^	@?\$\(call build-then-reown,' "${MK}" || true)"
+n_sep="$(grep -a -c -E -e '^	@?\$\(chown-artifacts\)[[:space:]]*$' "${MK}" || true)"
+[ -z "${missing}" ] && [ "${n_sep}" -eq 0 ] && [ "${n_calls_mk}" -ge 19 ] \
+    && ok "coverage: all ${n_calls_mk} build-then-reown recipes are exercised above, and no recipe reowns from a separate line" \
+    || bad "coverage: untested build-then-reown targets:${missing:- none}; separate \$(chown-artifacts) lines: ${n_sep}; calls: ${n_calls_mk}"
+
+echo "== mutation battery (reown reach) on COPIES of the Makefile =="
+mutate() {   # <name> <sed program> -> sets m to the mutated copy, or to "" (and FAILs) when sed changed nothing
+    m="${TDIR}/Makefile.$1"
+    sed -e "$2" "${MK}" > "${m}"
+    if cmp -s "${m}" "${MK}"; then bad "$1 did not change the Makefile text"; m=""; fi
+}
+# M4: the old simply-expanded `id -u` assignment -> the env's uid is overridden.
+mutate m4 's|^HOST_UID := $(or $(HOST_UID),$(shell id -u))$|HOST_UID := $(shell id -u)|; s|^HOST_GID := $(or $(HOST_GID),$(shell id -g))$|HOST_GID := $(shell id -g)|'
+if [ -n "${m}" ]; then
+    got="$(print_ids "${m}" HOST_UID=4242 HOST_GID=4243)"
+    nfm="$(check_targets "${m}")"
+    [ "${got}" != "4242:4243" ] && [ "${nfm}" -gt 0 ] && ok "M4 'HOST_UID := \$(shell id -u)' restored: env 4242 resolves to ${got} and ${nfm} reown legs go RED" \
+        || bad "M4: the old assignment was not caught (resolved ${got}, ${nfm} red legs)"
+fi
+# M5: reown back on its own recipe line after the build (the pre-fix shape).
+mutate m5 's|^\(	@\{0,1\}\)$(call build-then-reown,\(.*\))$|\1\2\
+	@$(chown-artifacts)|'
+if [ -n "${m}" ]; then
+    nfm="$(check_targets "${m}")"
+    [ "${nfm}" -eq "${n_targets}" ] && ok "M5 reown split back onto its own line: all ${nfm} FAILED-build legs go RED (the green legs stay green)" \
+        || bad "M5: splitting the reown off was caught on ${nfm} legs, want exactly ${n_targets} (one per target)"
+fi
+# M6: no subshell -> a loop's `|| exit 1` exits the recipe shell before the reown.
+mutate m6 '/^define build-then-reown$/,/^endef$/{s|( $(1) )|$(1)|}'
+if [ -n "${m}" ]; then
+    nfm="$(check_targets "${m}")"
+    [ "${nfm}" -ge 3 ] && ok "M6 subshell dropped: ${nfm} legs RED (the for-loop recipes rpi, x86, x86-standalone exit before the reown)" \
+        || bad "M6: dropping the subshell was caught on only ${nfm} legs"
+fi
+# M7: the build's status is swallowed.
+mutate m7 '/^define build-then-reown$/,/^endef$/{s|exit $$rc|exit 0|}'
+if [ -n "${m}" ]; then
+    nfm="$(check_targets "${m}")"
+    [ "${nfm}" -eq "${n_targets}" ] && ok "M7 'exit 0' after the reown: all ${nfm} FAILED-build legs go RED (a failed build reported green)" \
+        || bad "M7: swallowing the status was caught on ${nfm} legs, want ${n_targets}"
+fi
+# M8: DOCKER_RUN stops forwarding the uid.
+mutate m8 's|^  -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) \\$|  \\|'
+if [ -n "${m}" ]; then
+    dr="$(print_docker_run "${m}")"
+    case " ${dr} " in *" -e HOST_UID="*) bad "M8: removing the -e HOST_UID forward was not caught" ;; *) ok "M8 '-e HOST_UID/GID' dropped from DOCKER_RUN: the forward pin goes RED" ;; esac
+fi
+
 echo "== the Studio's advice has the same shape =="
 if grep -a -F -e "-type d -name sysroot -prune -o -exec chown -h" "${WD}" >/dev/null \
    && ! grep -a -F -e 'f"sudo chown -R {getpass.getuser()} {probe}"' "${WD}" >/dev/null; then
@@ -182,7 +350,7 @@ fi
 # one directory it mounted into a container as /out; no image build system is
 # ever mounted there).
 others="$(grep -a -rn -E -e 'chown -R' --include=Makefile --include='*.sh' --include='*.py' "${REPO}" 2>/dev/null \
-    | grep -a -v -E -e '/(out|\.stack-src|node_modules|\.venv|tests)/' -e '^[^:]*:[0-9]+:[[:space:]]*#' -e 'worklist_driver.py' -e 'install-x86.sh' -e 'provision.sh' -e 'build-msi-wine.sh' || true)"
+    | grep -a -v -E -e '/(out|\.stack-src|node_modules|\.venv|tests)/' -e '^[^:]*:[0-9]+:[[:space:]]*#' -e 'worklist_driver.py' -e 'install-x86.sh' -e 'provision.sh' -e 'build-msi-wine.sh' -e "chown -R'd " || true)"
 [ -z "${others}" ] && ok "no other 'chown -R' over a work directory in Makefile/scripts/Studio (installer, key provisioning, the MSI builder and the qemu harness reown their own trees, not a build system)" \
     || bad "other chown -R sites to review: ${others}"
 

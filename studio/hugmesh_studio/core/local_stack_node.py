@@ -67,6 +67,76 @@ def route_access_password(generator_dir: str) -> str:
         value = value[1:-1]
     return value if _URL_UNRESERVED_RE.match(value) else ""
 
+
+#: tests/stack/gen-stack-db-env.sh owns the local stack's per-role DB passwords and
+#: the brokers' SVC_PASSWORD (hugmesh-generator#857), one key per row of this table,
+#: in the same tests/stack/.env. The compose files read each one as ${KEY:?...}, so
+#: until the resolver has run once a missing key stops EVERY compose command on
+#: them, `ps` and `logs` included. A tree without the table (a checkout older than
+#: #857) spells its passwords inline and has no keys.
+_STACK_DB_TABLE = os.path.join("tests", "stack", "stack-db-passwords.tsv")
+_STACK_DB_GEN = os.path.join("tests", "stack", "gen-stack-db-env.sh")
+#: What a READ-ONLY compose call (ps, logs) passes for a DB key the process env does
+#: not set. `ps`/`logs` interpolate the whole file but never create a container, so
+#: the value goes nowhere; it only gets past `${KEY:?}`. Never passed to a call that
+#: can create one (`up`, the scale, make): those run the resolver instead.
+STACK_DB_READ_PLACEHOLDER = "read-only-placeholder-not-a-password"
+
+
+def stack_db_keys(generator_dir: str) -> list[str]:
+    """The key names in tests/stack/stack-db-passwords.tsv, or [] without the table."""
+    try:
+        with open(os.path.join(generator_dir, _STACK_DB_TABLE), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    keys = []
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key = line.split("\t", 1)[0].strip()
+        if re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            keys.append(key)
+    return keys
+
+
+def _stack_dotenv(generator_dir: str) -> dict[str, str]:
+    """tests/stack/.env as compose's dotenv reads it (last assignment wins, an
+    optional ``export``, one pair of matching quotes) — READ ONLY, {} without it."""
+    try:
+        with open(os.path.join(generator_dir, _STACK_DOTENV), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return {}
+    out: dict[str, str] = {}
+    for line in lines:
+        m = re.match(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$", line)
+        if not m:
+            continue
+        value = m.group(2)
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        out[m.group(1)] = value
+    return out
+
+
+def stack_db_read_env(generator_dir: str, base) -> dict[str, str]:
+    """``base`` plus STACK_DB_READ_PLACEHOLDER for every DB key it does not set to a
+    non-empty value — for READ-ONLY compose calls only (ps, logs).
+
+    Without it the Studio reported a running mesh as stopped (status() is `compose
+    ps -q`, and a `${KEY:?}` error is an empty stdout), showed empty logs, and the
+    Mesh Monitor fell back to `docker ps`, whenever tests/stack/.env did not hold the
+    keys yet: the operator's state the day #857 lands, since only `make stack-*`
+    runs the resolver. The placeholder is set whether or not .env holds the key:
+    the legacy `docker-compose` fallback does not read tests/stack/.env at all, and
+    a read never needs the real value."""
+    env = dict(base)
+    for key in stack_db_keys(generator_dir):
+        if not env.get(key):
+            env[key] = STACK_DB_READ_PLACEHOLDER
+    return env
+
 # Where the OPT-IN hugmesh-tor service copies the minted v3 .onion hostname
 # (PUBLIC — never the key) for the host/GUI to read. Bind-mounted from ./tor-onion
 # in the compose file; written ~30s after `make stack-up TOR=1`.
@@ -727,6 +797,18 @@ class LocalStackNode:
         except (OSError, subprocess.SubprocessError) as e:
             return 1, str(e)
 
+    def _read_probe(self, cmd: list[str], timeout: int = 15) -> tuple[int, str]:
+        """``_probe`` for a READ-ONLY compose call (ps, logs): the same env plus the
+        DB-key placeholders (stack_db_read_env). Never for a verb that creates
+        containers — the Mesh Monitor's scale goes through ``_probe``."""
+        try:
+            r = subprocess.run(cmd, env=stack_db_read_env(
+                                   self.generator_dir, self._build_env(write_overlays=False)),
+                               capture_output=True, text=True, **proc_text.TEXT_IO, timeout=timeout)
+            return r.returncode, (r.stdout or r.stderr).strip()
+        except (OSError, subprocess.SubprocessError) as e:
+            return 1, str(e)
+
     def _docker_ready(self) -> tuple[bool, str]:
         rc, out = self._probe(["docker", "info", "--format", "{{.ServerVersion}}"])
         return (rc == 0 and bool(out)), out
@@ -1178,6 +1260,41 @@ class LocalStackNode:
                            or f"gen-route-access-env.sh exited {r.returncode}")[:600]
         return True, err[:600]
 
+    def ensure_stack_db_env(self, project: str = "", timeout: int = 60
+                            ) -> tuple[bool, str]:
+        """Run tests/stack/gen-stack-db-env.sh so tests/stack/.env holds every
+        local-stack DB password (hugmesh-generator#857) before a compose call that
+        CREATES containers outside make (the Mesh Monitor's `up --scale`). Same
+        contract as ``ensure_route_access_env``: ``(ok, text)``, ``ok`` False is a
+        refusal with the resolver's own reason, ``text`` on success is its stderr
+        (the adoption warnings when it adopted an existing volume's value).
+
+        The compose files read these keys as ${KEY:?}, so without them the scale
+        fails on interpolation. ``(True, "")`` with nothing spawned when every key
+        is already in the file with a connection-string-safe value, and on a
+        checkout older than #857 (no table or no script). ``project`` is the
+        compose project whose volumes and containers adoption probes."""
+        keys = stack_db_keys(self.generator_dir)
+        script = os.path.join(self.generator_dir, _STACK_DB_GEN)
+        if not keys or not os.path.exists(script):
+            return True, ""
+        held = _stack_dotenv(self.generator_dir)
+        if all(_URL_UNRESERVED_RE.match(held.get(k, "")) for k in keys):
+            return True, ""
+        env = self._build_env(write_overlays=False)
+        if project:
+            env["STACK_DB_PROJECT"] = project
+        try:
+            r = subprocess.run(["bash", script], cwd=self.generator_dir, env=env,
+                               capture_output=True, text=True, **proc_text.TEXT_IO, timeout=timeout)
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, f"{type(e).__name__}: {e}"
+        err = (r.stderr or "").strip()
+        if r.returncode != 0:
+            return False, (err or (r.stdout or "").strip()
+                           or f"gen-stack-db-env.sh exited {r.returncode}")[:600]
+        return True, err[:600]
+
     def _make(self, target: str, timeout: int,
               extra_env: dict[str, str] | None = None,
               on_line=None, cancel=None,
@@ -1403,6 +1520,7 @@ class LocalStackNode:
             r = subprocess.run([*base, *self._project_args(), "-f", self.compose_file,
                                 "ps", "-q", "hugmesh-fe-gateway"],
                                cwd=self.generator_dir, capture_output=True,
+                               env=self._read_env(),
                                text=True, **proc_text.TEXT_IO, timeout=30)
             cid = r.stdout.strip().splitlines()[0].strip() if r.stdout.strip() else ""
             if not cid:
@@ -2036,6 +2154,12 @@ class LocalStackNode:
         default, whose argv stays what it was (the file's ``name:`` decides)."""
         return [] if self.project == _COMPOSE_PROJECT else ["-p", self.project]
 
+    def _read_env(self) -> dict[str, str]:
+        """The env status()/logs()/running_env() run `compose ps|logs` with: the
+        inherited one, as before #857, plus the DB-key placeholders
+        (stack_db_read_env) so a tree whose .env lacks the keys still reads."""
+        return stack_db_read_env(self.generator_dir, os.environ)
+
     def status(self) -> StackStatus:
         base = _compose_base()
         if not base or not os.path.exists(self.compose_file):
@@ -2044,7 +2168,7 @@ class LocalStackNode:
             r = subprocess.run([*base, *self._project_args(), "-f", self.compose_file,
                                 "ps", "-q"],
                                cwd=self.generator_dir, capture_output=True, text=True,
-                               **proc_text.TEXT_IO, timeout=30)
+                               env=self._read_env(), **proc_text.TEXT_IO, timeout=30)
             ids = [x for x in r.stdout.splitlines() if x.strip()]
             return StackStatus(running=bool(ids), detail=f"{len(ids)} container(s)")
         except (OSError, subprocess.SubprocessError) as e:
@@ -2058,7 +2182,7 @@ class LocalStackNode:
             r = subprocess.run([*base, *self._project_args(), "-f", self.compose_file,
                                 "logs", "--tail", str(tail)],
                                cwd=self.generator_dir, capture_output=True, text=True,
-                               **proc_text.TEXT_IO, timeout=30)
+                               env=self._read_env(), **proc_text.TEXT_IO, timeout=30)
             return r.stdout
         except (OSError, subprocess.SubprocessError) as e:
             return str(e)

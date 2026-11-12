@@ -246,10 +246,28 @@ class Device:
     display_web_port: int = 0                        # noVNC host port on 127.0.0.1; 0 = none
     display_password_file: str = ""                  # HOST path to the secret, NEVER the value
     display_resize: str = ""                         # "guest" | "scale" — what this image does
+    #: BOOT FROM A SAVE (records written since 2026-11-09): the HOST path of the
+    #: standalone save this device was booted from (run-qemu-docker.sh --boot-save),
+    #: "" for a device booted from its golden image. TOLERANT like the fields above —
+    #: an older record has none and reads as a golden boot, which is what it was.
+    #: The save itself is never written (the run overlay sits over it), so this path
+    #: still holds exactly what was saved, whatever the device has done since.
+    boot_save: str = ""
+    #: The shared-L2 SPEC this device was booted on (``--mesh-net``), "" when it
+    #: had no mesh NIC. Read tolerantly; the entrypoint has written it since #48.
+    mesh_net: str = ""
 
     @property
     def is_running(self) -> bool:
         return self.state not in _DEAD_STATES
+
+    @property
+    def resumed_from_save(self) -> bool:
+        """True when this device booted from a save rather than its golden image —
+        so whatever posture the save carried (a go-live flip, a provisioned cluster)
+        is on the disk again, instead of the golden's first-boot state (the go-live
+        faces read the posture from the device rather than assume either)."""
+        return bool(self.boot_save)
 
 
 def devices_dir(work_dir: str) -> str:
@@ -304,6 +322,8 @@ def _device_from_record(raw: object) -> Device | None:
         display_web_port=display_web_port,
         display_password_file=str(raw.get("display_password_file") or ""),
         display_resize=str(raw.get("display_resize") or ""),
+        boot_save=str(raw.get("boot_save") or ""),
+        mesh_net=str(raw.get("mesh_net") or ""),
     )
 
 
@@ -401,8 +421,12 @@ def terminal_argv(cmd_argv: list[str]) -> list[str] | None:
     shred a staged credentials file and hold the window open for a driver's output,
     whereas this argv IS an interactive session — the window must close when the
     operator types ``exit``, and an extra shell would swallow the pty ssh -t asked
-    for.
+    for. On macOS, Terminal.app (core/macos_host.wrap_in_terminal), not held open.
     """
+    from hugmesh_studio.core import macos_host
+    mac = macos_host.wrap_in_terminal(cmd_argv, hold=False)
+    if mac:
+        return mac
     for binary, exec_args in TERMINALS:
         if shutil.which(binary):
             return [binary, *exec_args, *cmd_argv]
@@ -939,6 +963,41 @@ def _within(path: str, root: str) -> bool:
         return False
 
 
+def save_in_artifacts_refusal(path: str, artifacts_dir: str, work_dir: str = "") -> str:
+    """The ONE "is this save inside the artifacts dir?" rule, or "" when it is not.
+
+    Shared verbatim with run-qemu-docker.sh (``save_in_artifacts_refusal``, used by
+    both ``save_check_target`` and ``boot_save_preflight``), so a save the save path
+    accepts is a save boot-from-save boots, and a refused one is refused by both with
+    the same sentence (:data:`SAVE_IN_ARTIFACTS`).
+
+    Containment alone was the round-1 rule, and it disagreed with itself: the flat
+    layout ``--artifacts <repo>/out`` with the DEFAULT ``--work <repo>/out/qemu-runs``
+    puts every save under the artifacts dir, so the mesh save (which never checked)
+    wrote a set that ``--boot-save`` then refused forever. The carve-out is exactly
+    ``<work>/saves`` when that directory itself sits inside the artifacts dir: the
+    goldens are discovered only at the TOP of the artifacts dir (``*.img``/
+    ``*.img.xz``), never down in a nested work tree, and the work tree already holds
+    multi-GB overlays there. Only ``<work>/saves`` — not all of ``--work`` — so an
+    artifacts dir that lives UNDER ``--work`` (or under its saves dir) stays
+    protected.
+    """
+    if not artifacts_dir or not _within(path, artifacts_dir):
+        return ""
+    saves = saves_dir(work_dir) if work_dir else ""
+    if saves and _within(path, saves) and _within(saves, artifacts_dir):
+        return ""
+    return SAVE_IN_ARTIFACTS.format(
+        path=os.path.realpath(path), arts=os.path.realpath(artifacts_dir),
+        saves=os.path.realpath(saves) if saves else "<work>/saves")
+
+
+#: The refusal sentence, word for word what run-qemu-docker.sh prints for the same
+#: rule (tests/qemu/save_test.sh and test_emulation_boot_from_save.py pin both).
+SAVE_IN_ARTIFACTS = ("{path} is inside the artifacts dir {arts}, where the golden "
+                     "build images live; a save belongs under {saves}")
+
+
 def save_target_refusal(target: str, *, generator_dir: str = "",
                         artifacts_dir: str = "", work_dir: str = "") -> str:
     """Why ``target`` must not be written to, or "" when it is an acceptable save.
@@ -980,9 +1039,9 @@ def save_target_refusal(target: str, *, generator_dir: str = "",
                 "save is the device's whole virtual size, not the data in it")
     if os.path.isdir(target):
         return f"save target {target} is a directory"
-    if artifacts_dir and _within(target, artifacts_dir):
-        return (f"refusing to save into the artifacts directory {artifacts_dir}: it "
-                "holds the golden images every run and every session boots from")
+    in_arts = save_in_artifacts_refusal(target, artifacts_dir, work_dir)
+    if in_arts:
+        return in_arts
     if generator_dir:
         # EVERY sessions tree, not only <generator>/out/sessions: a build pointed at
         # another output folder writes its goldens to <that folder>/sessions, and a

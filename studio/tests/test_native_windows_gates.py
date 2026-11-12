@@ -303,7 +303,8 @@ def test_the_build_page_offers_no_native_backend_on_windows(studio):
     from hugmesh_studio.gui.pages.build import BuildPage
     combo = _page(studio, BuildPage).backend
     items = [combo.itemText(i) for i in range(combo.count())]
-    assert ("native" in items) == (os.name != "nt"), items
+    # Windows and macOS both build only through a Docker VM (test_pages_build_macos.py)
+    assert ("native" in items) == (not platform_info.builds_in_docker_vm()), items
 
 
 def test_go_live_preflight_will_not_lead_to_an_empty_provider_page(qapp, monkeypatch,

@@ -338,7 +338,7 @@ STANDALONE=false        # --standalone : local user, no mesh, LUKS2 FDE on insta
 LOCAL_USER=""           # --local-user NAME : the standalone local login account
 LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
 LOCAL_PASS_FILE=""      # --local-pass-file FILE : the same password read from a file (keeps it off argv)
-LOCAL_ADMIN=false       # --local-admin : the local account may sudo on a KEYS-provisioned image too
+LOCAL_ADMIN=false       # --local-admin : the local login account is an administrator (sudo); without it, it is not, on ANY image
 ENCRYPT_ROOT=false      # --encrypt-root : installer LUKS2-encrypts the target root; auto-on for --standalone
 LUKS_PASS=""            # --luks-pass : OPTIONAL unattended passphrase (lands on the installer ISO — warned)
 
@@ -478,6 +478,9 @@ OPTIONS
     --local-pass PASS    Plaintext; hashed at build (yescrypt, $6$ fallback), never
                           baked raw. Omit it and a random one-time password is
                           minted + printed once at first boot instead.
+    --local-admin         Make the local login account an administrator (sudo).
+                          Without it the account is NOT one on any image, and
+                          root stays locked.
     --encrypt-root        install-orangepi-zero2w.sh LUKS2-encrypts the target
                           root and prompts for a passphrase at install time
                           (ON-DEVICE format — see the header note); auto-on
@@ -1039,7 +1042,25 @@ rebrand_sysroot() {
         # agreement with what the served render produces. Default brand: the whole
         # function early-returns, so this is a byte no-op.
         # Pinned by tests/scripts/test-eso-remoteref-brand.sh.
+        # Filesystem paths on the IMAGE (/etc/hugmesh, /usr/sbin/hugmesh-*,
+        # /var/log/hugmesh-*, ...) are never renamed by a rebrand, so a path
+        # literal must not be either: hidden behind @@SDSYSFSPATH@@ first,
+        # restored last (bootstrap.sh read /etc/<org>/release-state and a cron
+        # ran /usr/sbin/<brand>-node-storage-reconcile, neither of which exists).
         sed -i \
+            -e "s#/etc/hugmesh#/etc/@@SDSYSFSPATH@@#g" \
+            -e "s#/var/lib/hugmesh#/var/lib/@@SDSYSFSPATH@@#g" \
+            -e "s#/var/log/hugmesh#/var/log/@@SDSYSFSPATH@@#g" \
+            -e "s#/var/cache/hugmesh#/var/cache/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/lib/hugmesh#/usr/lib/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/libexec/hugmesh#/usr/libexec/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/sbin/hugmesh#/usr/sbin/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/bin/hugmesh#/usr/bin/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/local/sbin/hugmesh#/usr/local/sbin/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/local/bin/hugmesh#/usr/local/bin/@@SDSYSFSPATH@@#g" \
+            -e "s#/usr/share/hugmesh#/usr/share/@@SDSYSFSPATH@@#g" \
+            -e "s#/run/hugmesh#/run/@@SDSYSFSPATH@@#g" \
+            -e "s#/opt/hugmesh#/opt/@@SDSYSFSPATH@@#g" \
             -e "s|\(~1vault-base, value: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
             -e "s|\(vault-base: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
@@ -1055,6 +1076,7 @@ rebrand_sysroot() {
             -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
             -e "s|@@SDSYSVAULTBASE@@|${_brand}|g" \
+            -e "s#@@SDSYSFSPATH@@#hugmesh#g" \
             "${f}"
     done < <(find "${SYSROOT}/etc/hugmesh" -type f -print0 2>/dev/null)
 }

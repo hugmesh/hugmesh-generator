@@ -10,7 +10,7 @@ work, the greeter says why and the local path is untouched. Nothing hangs.
 
 | path | credential | needs | who |
 |------|------------|-------|-----|
-| **A. local** | the account's password in `/etc/shadow` | nothing | the `--local-pass` user (standalone), KEYS `users.json` users, the keyless first-boot fallback user |
+| **A. local** | the account's password in `/etc/shadow` | nothing | the `--local-pass` user (standalone), KEYS `users.json` users, the keyless first-boot fallback user. The `--local-pass` and fallback users are administrators only with `--local-admin` (`docs/STANDALONE-DESKTOP.md`) |
 | **B. SSO** | approval at the per-domain IdP (`https://id.<domain>`, RFC 8628 device flow) | the IdP reachable (usually over the tailnet) | anyone the IdP knows; the account is created on the device on first sign-in |
 | **B'. SSO offline** | the user's offline password (set during an online SSO sign-in) | nothing, while the bounded cache is valid | SSO-managed accounts only |
 
@@ -58,15 +58,16 @@ lightdm-gtk-greeter speaks plain PAM. The hint line above the password box
   * a user with TOTP enrolled gets the MFA step after the password, and the
     token poll stays `authorization_pending` until the code is entered (the
     org's MFA policy, `reconcile_org_mfa`, is enforced by `/api/login` for every
-    application). After a correct code casdoor 3.80.0 approves the device but
-    leaves its page on the MFA form (no *"Logged in successfully"*); the
-    desktop signs in regardless;
+    application). After a correct code casdoor 3.80.0 approves the device and
+    shows its *"Logged in successfully"* toast, but the page itself stays on
+    the MFA form; the desktop signs in regardless;
   * a browser already signed in to the IdP gets *"Continue with your current
     account to approve this sign-in"* above the form, one tap approves;
   * the **resource-owner password grant stays refused**
     (`grant_type=password` -> `unsupported_grant_type`): the Password sign-in
     *method* is not the password *grant*, which is `grantTypes` alone and
-    omits `password`.
+    omits `password`. That refusal is a property of the token endpoint, not a
+    barrier between a password and a token — see below.
 
   Two consequences to know. Casdoor keys sign-in methods per application, not
   per page, so the PKCE authorize page for `hugmesh-desktop` also gets the
@@ -75,9 +76,15 @@ lightdm-gtk-greeter speaks plain PAM. The hint line above the password box
   the device grant). And leaving Password off was never a server-side barrier:
   casdoor 3.80.0's `/api/login` checks the password method only when the
   request names `signinMethod: "Password"`, so a request that omits it signed
-  in and approved a device code with Password off too. The defences are the
-  ones above: the greeter never sees the password, MFA applies on the IdP page,
-  and the password grant is off.
+  in and approved a device code with Password off too. Nor is the refused
+  password grant: `/api/login` with `type=code` (and PKCE) turns the same user
+  name and password into a `hugmesh-desktop` token on casdoor 3.80.0 whatever
+  `grantTypes` says (measured against both the #958 and the #962 seed;
+  MFA-gated for enrolled users). Anyone who holds a user's IdP password can get a token for
+  this client; no client setting changes that. The real defences are that the
+  **desktop never asks for the IdP password** — the greeter shows a URL and a
+  code, and the password is typed only on the IdP's own page — and that **MFA
+  applies there** for every enrolled user.
   `tests/scripts/test-casdoor-init-honesty.sh` §2c holds every seed to this:
   Device login present, a sign-in method the approval page can render
   (Password), and no `password` grant on the public device client.
@@ -159,7 +166,8 @@ LTS, Orange Pi 5):
   KEYS chain to run the mapper, so baking it would strip `wheel` from KEYS users
   with nothing to replace it. A standalone SSO user gets `wheel` only while the
   IdP says `desktop-admin`. SSO OFF bakes no governance dir either: the image
-  stays ungoverned and `wheel` sudo stays.
+  stays ungoverned and `wheel` sudo stays. The local login account joins `wheel`
+  only when the build passed `--local-admin`.
 
 **Runtime** (root, on the device; contacts nothing):
 

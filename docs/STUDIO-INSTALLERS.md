@@ -1,10 +1,17 @@
 # Studio installers — Windows MSI, Linux Flatpak and Linux tarball
 
-The HugMesh Image Studio runs from a checkout (`studio/hugmesh-studio`, or
-`python -m hugmesh_studio`). That is still the main way to use it. The installers
-exist for people who do not want to set up a Python environment first.
+The usual way to get the HugMesh Image Studio is a package from the
+[Downloads page](https://hugmesh.net/downloads) or the GitHub releases. There are four: a
+Windows MSI, a Flatpak bundle for x86_64 Linux, one for aarch64 Linux, and an x86_64 Linux
+tarball. A checkout is for developers. It is also the way to do what the Flatpak refuses
+(native sudo builds and writing images to devices), and to run the Studio on macOS and BSD,
+which have no package yet. See
+["Developer: run the Studio from a checkout"](#developer-run-the-studio-from-a-checkout).
 
-They package **the same code**. Nothing is added or removed for a packaged build.
+Every package holds **the same application code**. The Flatpaks also carry the
+hugmesh-generator build scripts of their own release. The MSI and the tarball do not include
+them yet. ["What a package gives you"](#what-a-package-gives-you) says what that means on
+first start.
 
 **To release one:** `scripts/release-studio.sh <version>`. That is the whole procedure;
 ["Cutting a release"](#cutting-a-release) below explains what it does and the one
@@ -68,20 +75,35 @@ Artifact attestations need the repository to be **public** on this org's plan. O
 private repository the attest step fails and the workflow creates no release, so the
 first release must be tagged after the repository is public.
 
-## What an installer does and does not give you
+## What a package gives you
 
 The Studio is a **front end over host tooling**. It shells out to `docker`, `make`,
-`bash`, `qemu`, `kubectl`, `lsblk` and `ssh`, and it reads the build scripts and
-cluster specs out of a `hugmesh-generator` checkout. An installer packages the app.
-It cannot package the things the app drives.
+`bash`, `qemu`, `kubectl`, `lsblk` and `ssh`. It runs the build scripts and reads the
+cluster specs of a `hugmesh-generator` tree. A package can carry that tree, but not the
+host tools.
 
-So, after installing:
+| Package | The hugmesh-generator build scripts | On first start |
+|---|---|---|
+| Flatpak, x86_64 and aarch64 (0.4.4-beta.1 and later) | **Included.** The bundle carries the tree of its own release (`share/hugmesh-studio/generator-seed.tar.gz`). | Studio places that copy in `~/.local/share/hugmesh-studio/generator` and uses it. There is nothing to clone. |
+| Windows MSI, Linux tarball | **Not included yet** ([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). | Studio shows *Choose your hugmesh-generator folder*. Clone `hugmesh-generator` (`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and Studio remembers it. |
 
-- **You still need a `hugmesh-generator` checkout.** Start the Studio with
-  `--generator-dir <path>`. Without that flag it uses the current directory. No GUI
-  dialog sets it, and the Start Menu shortcut passes no arguments and starts in the
-  install folder, so the shortcut finds no checkout. Without a checkout there are no
-  build scripts to run and no cluster specs to read.
+How the copy works and what overrides it:
+
+- **Upgrades.** Each Flatpak upgrade refreshes the placed copy to the new release. It
+  keeps your `out/`, `keys-out/` and `tests/stack/.env`.
+- **What takes precedence.** The Studio uses the first of these that is a real checkout:
+  `--generator-dir <path>`, `$HUGMESH_GENERATOR_DIR`, the checkout it is running from,
+  the working directory, a folder you picked in an earlier start, and only then the copy a
+  package carries. So a clone you name or pick still wins over the package's copy.
+- **Checking it.** `flatpak run org.hugmesh.ImageStudio --self-check` says which tree it
+  resolved and whether every script the Studio runs is there.
+- **The release data.** `releases.json` records per file whether that file carries the tree
+  (`"generatorSeed"`). The release job sets it only for a file whose own
+  `--self-check` placed and checked the bundled tree, and the
+  [Downloads page](https://hugmesh.net/downloads) drops its clone step for that file.
+
+After installing any package:
+
 - **Building images still needs Docker** (any OS), or a Gentoo host for a native
   build. The Studio's own preflight says so when a build is dispatched.
 - **Flashing a device and running an emulated mesh** need host access to block
@@ -95,6 +117,13 @@ refuses a machine the app runs on only teaches people to switch checks off.
 
 The MSI installs **per-user**, under `%LOCALAPPDATA%\HugMesh\Image Studio`. It needs
 no administrator rights and shows no UAC prompt.
+
+It does not include the hugmesh-generator build scripts yet
+([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). So on first start the
+Studio shows *Choose your hugmesh-generator folder*. Clone the repository
+(`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and the
+Studio remembers it for later starts. The Start Menu shortcut passes no arguments, so this
+chooser is the way to set the folder there.
 
 It is **not Authenticode-signed** yet; no certificate is configured. SmartScreen will
 warn you the first time you run it. Verify it as in "Verifying a download" above, or at
@@ -115,17 +144,40 @@ Get-FileHash .\hugmesh-studio-0.3.0-beta.1-x64.msi -Algorithm SHA256
 
 ## Linux
 
-The bundle needs the `org.kde.Platform` 6.11 runtime (the app is Qt, and the KDE
-runtime already ships Qt; building against GNOME would mean bundling all of Qt). Since
-this change the bundle also says where that runtime comes from (`flatpak build-bundle
---runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo`): when the installation
-has no remote with that URL, `flatpak install` asks to add it as `flathub`, then fetches
-the runtime before the app. On a machine with **no Flatpak remotes at all**:
+**The Flatpak.** Install the bundle for your machine's architecture, then start it:
 
 ```bash
 flatpak install --user ./hugmesh-studio-<version>-x86_64.flatpak
-flatpak run org.hugmesh.ImageStudio --generator-dir ~/Github/hugmesh-generator
+flatpak run org.hugmesh.ImageStudio
 ```
+
+The Flatpak carries the hugmesh-generator tree of its own release, so there is nothing
+to clone. On first start it places that copy in `~/.local/share/hugmesh-studio/generator`
+and uses it. An upgrade keeps your `out/`, `keys-out/` and `tests/stack/.env` there. A
+clone you name with `--generator-dir`, or picked in an earlier start, still wins. It
+builds with the host's Docker, which it reaches through `flatpak-spawn --host`. Native
+(sudo) builds and writing images to devices need the Studio run from a checkout.
+`flatpak run org.hugmesh.ImageStudio --self-check` says whether all of that works here.
+
+**The tarball** (x86_64 only; needs glibc 2.39 or newer: Ubuntu 24.04, Debian 13,
+Fedora 40 or later) has no install step:
+
+```bash
+tar -xzf hugmesh-studio-<version>-linux-x86_64.tar.gz
+./hugmesh-studio-<version>-linux-x86_64/hugmesh-studio
+```
+
+It does not include the hugmesh-generator build scripts yet
+([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). On first start it asks
+for the folder you cloned `hugmesh-generator` into, and remembers your pick.
+
+The Flatpak bundle needs the `org.kde.Platform` 6.11 runtime. The app is Qt, and the KDE
+runtime already ships Qt; building against GNOME would mean bundling all of Qt. The
+bundle also says where that runtime comes from (`flatpak build-bundle
+--runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo`). When the installation
+has no remote with that URL, `flatpak install` asks to add it as `flathub`, then fetches
+the runtime before the app. So the install above works even on a machine with **no
+Flatpak remotes at all**.
 
 On an ARM64 machine the file is `hugmesh-studio-<version>-aarch64.flatpak` and the
 commands are the same. Each bundle carries its architecture in its name, and `flatpak
@@ -162,14 +214,6 @@ flatpak install --user -y flathub org.kde.Platform//6.8
 flatpak install --user ./hugmesh-studio-0.3.0-beta.1-x86_64.flatpak
 ```
 
-The Flatpak carries the hugmesh-generator tree of its own release: with no
-`--generator-dir` and no clone it places that copy in
-`~/.local/share/hugmesh-studio/generator` on first start (an upgrade keeps your `out/`,
-`keys-out/` and `tests/stack/.env` there) and uses it; a clone you name or pick still
-wins. It builds with the host's Docker, which it reaches through `flatpak-spawn --host`;
-native (sudo) builds and writing images to devices need the Studio run from a checkout.
-`flatpak run org.hugmesh.ImageStudio --self-check` says whether all of that works here.
-
 The manifest requests `--filesystem=host` and `--talk-name=org.freedesktop.Flatpak`.
 Those grants are broad. They let the app use a generator tree under your home and run
 host `docker`/`qemu` through `flatpak-spawn --host`. If you would rather not grant them, run the Studio from a checkout; it
@@ -201,6 +245,27 @@ for provisioning to close, not for this bundle to pretend; the Studio for such a
 is the tarball or a checkout, neither of which touches Flatpak, or a build of the
 bundle whose `--runtime-repo` names the domain registry once that carries the KDE
 runtime.
+
+## Developer: run the Studio from a checkout
+
+A packaged Studio needs none of this. Run it from a checkout when you:
+
+- change the Studio or the build scripts;
+- need a native (sudo) Gentoo build or want to write images to devices, which the
+  Flatpak refuses;
+- are on macOS or BSD, which have no package yet.
+
+```bash
+git clone https://github.com/hugmesh/hugmesh-generator
+cd hugmesh-generator/studio
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+./hugmesh-studio            # Windows: hugmesh-studio.bat
+```
+
+A Studio run from a checkout drives that same checkout, with no flag.
+`python -m hugmesh_studio` from `studio/` does the same thing. On Linux,
+`scripts/studio-launch.sh` is a guided launcher that offers to create the venv for you.
 
 ## Versions
 
@@ -374,3 +439,190 @@ Two scripts repeat the release jobs on a Linux box with no sudo:
 `studio/packaging/build-msi-wine.sh` builds the MSI under Wine, and
 `studio/packaging/build-flatpak-local.sh` builds and smoke-tests the Flatpak. Neither
 publishes anything.
+
+## macOS
+
+The Studio runs on macOS 13 or newer, on Apple silicon (arm64) and Intel (x86_64).
+`studio/packaging/build-macos-app.sh` builds **`HugMesh Image Studio.app`** and packs it
+into `hugmesh-studio-<version>-macos-<arch>.dmg`. It uses the same PyInstaller spec as the
+MSI and the tarball; the spec's darwin-only `BUNDLE` step makes the `.app`.
+
+**Not on a release yet.** The `macos` job of `.github/workflows/studio-tests.yml` builds
+and checks both `.dmg` files on every Studio pull request, on GitHub's `macos-15` (Apple
+silicon) and `macos-15-intel` runners. It keeps them for 7 days as the run artifacts
+`macos-dmg-arm64` and `macos-dmg-x86_64`. Attaching them to a `studio-v*` release is the
+next step. It means a `macos` job in `studio-release.yml` running the same script, plus
+the `.dmg` in the publish job's collect list, `SHA256SUMS`, `releases.json` and the
+signing guard tests. That waits until the publish job's current rework
+(hugmesh-generator#979) has landed. The Downloads page keeps offering macOS "from source"
+until a release carries a `.dmg`.
+
+### First start: Gatekeeper
+
+The app is signed ad hoc, not with a Developer ID, and it is not notarized. So a copy
+downloaded with a browser is refused the first time you open it. On macOS 15 (Sequoia),
+Control-click → Open no longer gets past this:
+
+1. Open the app once and dismiss the warning.
+2. Go to System Settings → Privacy & Security, scroll to Security, click **Open Anyway**
+   next to "HugMesh Image Studio", and confirm with your password.
+
+On macOS 13 and 14, Control-click the app → **Open** → **Open** does the same. To clear
+the download flag from Terminal instead:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/HugMesh Image Studio.app"
+```
+
+The executable inside the bundle is also the command-line tool:
+
+```sh
+"/Applications/HugMesh Image Studio.app/Contents/MacOS/hugmesh-studio" --self-check
+```
+
+### What a Mac needs
+
+- **The GNU tools.** The generator's scripts are written for bash 4+ and GNU sed, find,
+  grep, stat and make. macOS ships bash 3.2 and the BSD tools. Install them with
+  [Homebrew](https://brew.sh):
+
+  ```sh
+  brew install bash coreutils gnu-sed findutils grep make
+  ```
+
+  You do not need to change your shell or PATH. When the Studio starts (the window,
+  the text UI `python -m hugmesh_studio.tui`, or any `python -m hugmesh_studio.core.…`
+  command line), it puts
+  Homebrew's `gnubin` folders and `bin` first in its own PATH. It also adds Docker
+  Desktop's, colima's and OrbStack's CLI folders, so an app opened from Finder finds them
+  (Finder gives an app only `/usr/bin:/bin:/usr/sbin:/sbin`). Without the tools, every
+  verb that runs the generator's scripts refuses with that `brew install` line, and so
+  does `--self-check`.
+- **A Docker runtime** for building images: Docker Desktop for Mac, colima
+  (`brew install colima docker`) or OrbStack. Builds run in that runtime's Linux VM, so
+  size the VM, not the Mac: at least 16 GB of memory and a 200 GB disk. In Docker Desktop
+  that is Settings → Resources. With colima:
+
+  ```sh
+  colima start --vm-type vz --vz-rosetta --cpu 8 --memory 16 --disk 200
+  ```
+
+  On Intel, use `--arch x86_64` instead of `--vz-rosetta`:
+
+  ```sh
+  colima start --vm-type vz --cpu 8 --memory 16 --disk 200 --arch x86_64
+  ```
+
+  On Apple silicon, also turn on
+  Docker Desktop's "Use Rosetta for x86_64/amd64 emulation on Apple Silicon" (colima:
+  `--vz-rosetta`). The builder image is x86_64, so the Studio runs it with
+  `--platform linux/amd64` there.
+
+  A build gets at most the VM's CPUs. Docker refuses to start a container that asks for
+  more CPUs than its VM has ("range of CPUs is from 0.01 to 8.00"), and the Studio's
+  default CPU limit is every core of the Mac but one. So the Studio reads the VM's CPU
+  count when it starts and lowers the limit to it, for a build's `--cpus` and for the
+  local stack's compose limits, and the build preflight says when it did. To build
+  faster, give the VM more CPUs and restart the Studio. To leave more of the VM free,
+  set `HUGMESH_CPUS` (for example `HUGMESH_CPUS=4`) or use the Studio's resource limits.
+  The VM's memory needs no such step: Docker accepts a memory limit above what the VM
+  has.
+- **A case-sensitive folder for the build output.** A build writes a Linux kernel tree
+  and a Gentoo root into its output directory, and APFS ignores case by default. The
+  build preflight checks the folder itself and refuses one that ignores case. The fix
+  takes free space from the Mac's disk, repartitions nothing and needs no sudo (the new
+  volume is writable by you):
+
+  ```sh
+  diskutil apfs addVolume "$(diskutil info -plist / | plutil -extract APFSContainerReference raw -)" 'Case-sensitive APFS' HugMeshBuild
+  ```
+
+  Then use `/Volumes/HugMeshBuild/out` as the output directory. Docker Desktop and
+  OrbStack share `/Volumes` with their VM already. colima shares only your home folder
+  (its FAQ), so add the volume to `mounts:` in `~/.colima/default/colima.yaml` and run
+  `colima restart`.
+
+### What works on a Mac, and how far it is proven
+
+| | Status |
+|---|---|
+| The `.app`: freeze, Info.plist, Mach-O architecture, Qt cocoa plugin, package data, ad-hoc signature, `.dmg` contents | **Proven on real Macs**, arm64 and x86_64, on every Studio pull request |
+| A real window starts on the cocoa plugin and is still running 20 s later | **Proven** (`--gui-smoke`; the screenshot is in the artifact) |
+| Started with Finder's PATH, the app finds Homebrew's GNU tools through its own PATH hook | **Proven** (the frozen app's `--self-check --json`) |
+| A stock Mac (no Homebrew tools) is refused with the `brew install` line | **Proven** |
+| `--self-check` from a checkout parses every generator script with bash 5 | **Proven** |
+| A case-insensitive output folder is refused. The remedy, run as written, adds a case-sensitive volume without sudo, and a folder on it clears the refusal. | **Proven** (the volume is added, checked and deleted on both runners) |
+| A command opened in Terminal.app runs and its `.command` file deletes itself | **Proven** (`open -a Terminal` on the runner) |
+| `sysctl` architecture and Hypervisor.framework probes | **Proven** against both runners' real output |
+| An image **build** through Docker Desktop, colima or OrbStack | **Not proven, and labelled EXPERIMENTAL in the preflight.** GitHub's macOS runners have no nested virtualisation, so no Docker. The output folder is bind-mounted from macOS into the VM, and device nodes and extended attributes over that mount are untested. The follow-up is a Docker named volume as the work directory, with an export step. |
+| Emulated devices (the QEMU lane) | Through the Docker lane only, under full emulation (TCG). The KVM note says so. Driving Homebrew's QEMU with `-accel hvf` natively is a follow-up. |
+| Writing an image to an SD card or USB stick | **Not offered.** The Studio's writer uses Linux block devices. The flash step shows the `diskutil list external physical` / `diskutil unmountDisk` / `dd of=/dev/rdiskN` / `diskutil eject` commands to run by hand. A `diskutil` writer with the same safety checks is a follow-up. |
+
+### Choices, and why
+
+- **Terminal windows** (go-live, cloud deploy, phone wizard, device login, the local AI
+  agent) open Terminal.app, or iTerm2 when it is installed, on a 0700 `.command` file
+  that deletes itself as it starts. Not `osascript … tell application "Terminal"`:
+  scripting Terminal needs an Automation consent per app signature, and an ad-hoc
+  signature changes with every build, so every upgrade would ask again. Terminal.app
+  does not inherit the Studio's environment, so the file exports what the command needs
+  (an allowlist, never a token).
+- **The state folder stays `~/.hugmesh/studio`**, as on Linux, WSL and Windows. It is not
+  `~/Library/Application Support/HugMesh Image Studio`, for two reasons. The single-instance
+  socket in that folder would exceed macOS's 104-byte socket path limit once a user name
+  reaches 17 characters. And the space in "Application Support" would flow into the
+  `docker run -v` arguments and bash scripts the Studio hands paths to.
+- **No Keychain.** Secrets stay in the 0600 files and the in-memory vault every other
+  POSIX platform uses. The Keychain needs a stable signing identity, prompts on each
+  access for an ad-hoc app, and would be a third secrets contract to test.
+
+### Building it locally
+
+```sh
+python3 -m venv .venv-mac
+.venv-mac/bin/pip install --only-binary=:all: -r studio/packaging/macos-build-requirements.txt
+studio/packaging/build-macos-app.sh --python .venv-mac/bin/python      # --gui-smoke opens a window
+```
+
+The script refuses to run anywhere but macOS. `--help` lists its phases and options. It
+runs under macOS's own `/bin/bash` 3.2.
+
+### Signing and notarizing (an operator step; not yet run)
+
+These commands are the standard Developer ID route. **They have not been run against
+this app.** They need an Apple Developer account, a "Developer ID Application"
+certificate in the login keychain, and an app-specific password. `<TEAMID>`, the
+certificate name and the Apple ID are yours.
+
+```sh
+APP="studio/dist/HugMesh Image Studio.app"
+ID="Developer ID Application: <Name> (<TEAMID>)"
+# A PyInstaller app under the hardened runtime usually needs these two entitlements:
+cat > entitlements.plist <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict></plist>
+PLIST
+# 1. sign every library and executable inside, innermost first, then the bundle
+find "$APP/Contents" -type f \( -name '*.dylib' -o -name '*.so' -o -perm -u+x \) -print0 |
+  xargs -0 codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$ID"
+codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$ID" "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP"
+# 2. notarize the app and staple the ticket to it
+xcrun notarytool store-credentials hugmesh-notary --apple-id <apple-id> --team-id <TEAMID>
+ditto -c -k --keepParent "$APP" app.zip
+xcrun notarytool submit app.zip --keychain-profile hugmesh-notary --wait
+xcrun stapler staple "$APP"
+# 3. re-pack the .dmg from the stapled app (build-macos-app.sh's dmg phase), then sign,
+#    notarize and staple the .dmg itself
+codesign --force --timestamp --sign "$ID" hugmesh-studio-<version>-macos-arm64.dmg
+xcrun notarytool submit hugmesh-studio-<version>-macos-arm64.dmg --keychain-profile hugmesh-notary --wait
+xcrun stapler staple hugmesh-studio-<version>-macos-arm64.dmg
+spctl --assess --type open --context context:primary-signature -v hugmesh-studio-<version>-macos-arm64.dmg
+```
+
+When a certificate exists, these steps belong in the release workflow's `macos` jobs,
+gated on a secret the way Authenticode is in the `msi` job.

@@ -261,7 +261,20 @@ pip install -r requirements.txt        # PySide6 (or use an existing PyQt6)
 
 # Windows — the .bat is a guided bootstrapper: just double-click (or run) it
 hugmesh-studio.bat
+
+# macOS (13 or newer), from the root of a checkout: the GNU tools the generator's
+# scripts need, a Docker runtime (Docker Desktop, colima or OrbStack), then as on Linux
+brew install bash coreutils gnu-sed findutils grep make
+cd studio && python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt && ./hugmesh-studio
 ```
+
+On macOS the Studio puts Homebrew's GNU tools, Docker Desktop's and colima's CLI folders
+in front of its own PATH when it starts (a Mac app opened from Finder gets none of them),
+builds only through Docker (no native backend), opens Terminal.app (or iTerm2) for the
+commands that need a terminal, and says what is missing with the one `brew install` line.
+`hugmesh-studio --self-check` reports it. The `.app` and `.dmg`, what is proven on a real
+Mac and what is not yet: [docs/STUDIO-INSTALLERS.md](../docs/STUDIO-INSTALLERS.md#macos).
 
 On Windows, `hugmesh-studio.bat` sets up a bare box from start to finish:
 
@@ -461,8 +474,9 @@ what [docs/LOCAL-AI-ASSISTANT.md](../docs/LOCAL-AI-ASSISTANT.md) tells a person 
   which can be pressed before any copy exists, also has the clone, remote-removal and branch
   lines first. Every line is chained to the one before with `&&`, so a failed clone or a
   missing copy stops the rest instead of running them in whatever folder your shell is in.
-  Native Windows and macOS do not open a window; run the Studio inside WSL2 or
-  follow the doc by hand.
+  Native Windows does not open a window; run the Studio inside WSL2 or follow the doc
+  by hand. macOS opens Terminal.app (iTerm2 when installed) on a self-deleting
+  `.command` file that exports only the allowlisted variables.
 
 Code: `core/local_agent.py` (Qt-free) and `gui/pages/_local_agent_widget.py`; tests:
 `tests/test_local_agent.py`, `tests/test_local_agent_gui.py`.
@@ -794,8 +808,9 @@ Studio inside WSL2, on the Docker backend.
 
 ## Package a Windows .exe
 
-The PyInstaller spec is committed at `packaging/hugmesh-studio.spec`; the MSI, the Flatpak
-and the local build commands are in [docs/STUDIO-INSTALLERS.md](../docs/STUDIO-INSTALLERS.md).
+The PyInstaller spec is committed at `packaging/hugmesh-studio.spec`; the MSI, the Flatpak,
+the macOS `.app`/`.dmg` (`packaging/build-macos-app.sh`) and the local build commands are in
+[docs/STUDIO-INSTALLERS.md](../docs/STUDIO-INSTALLERS.md).
 
 ## Layout
 

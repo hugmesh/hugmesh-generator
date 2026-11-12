@@ -263,12 +263,14 @@ root path.
 
 ## Go live from an emulated mesh
 
-> **Status: partly landed.** The target model, the ssh path and the CLI
-> (`hugmesh_studio.core.golive_target`, group FG1) are in the tree. The GUI and TUI
-> faces (group FG2) and the proof lane (group FG3) are not yet. Until the faces merge,
-> Studio's wizard drives only **This host**, as the
-> [architecture table](#architecture--one-shared-driver-thin-front-ends) says. Read the
-> GUI, TUI and proof-lane parts of this section as the contract those changes are held to.
+> **Status: landed.** The target model, the ssh path and the CLI
+> (`hugmesh_studio.core.golive_target`, group FG1) are in the tree. The GUI and TUI faces
+> (group FG2) are in the tree too: the wizard's Preflight **Target** picker, the TUI's
+> `t`, and the go-live entry on the Mesh emulation page and in `meshemu`. Booting a mesh
+> back from its save (group FG5) is in the tree as a CLI and Makefile lane only
+> ([below](#persistence-the-posture-is-ephemeral)). The harness proof lane (group FG3)
+> is in the tree too, as `tests/qemu/golive-emulated.sh`; [its part](#the-proof-lane-fg3)
+> says what it proves.
 
 A mesh you boot under QEMU from Studio's mesh-emulation page (or `meshemu` in the TUI)
 can be taken live, from the Studio GUI and from the CLI, on Linux (X11 and Wayland), on
@@ -286,7 +288,7 @@ Every go-live verb (`status`, `list`, `plan`, `commit`, `rollback`) runs against
 
 | Target | What it is | When it is offered |
 | --- | --- | --- |
-| **This host** (LOCAL) | The Studio host is itself the node. This is the wizard's behaviour before this section. | `commit` is refused unless `/etc/hugmesh/release-state` exists **and** `command -v hugmesh-firewall-reconcile` finds the reconcile agent. Without them the picker greys the row with: *this host is not a HugMesh node — pick a device*. |
+| **This host** (LOCAL) | The Studio host is itself the node. This is the wizard's behaviour before this section. | Always offered. `commit` is refused unless `/etc/hugmesh/release-state` exists **and** `command -v hugmesh-firewall-reconcile` finds the reconcile agent. Without them the GUI picker still offers the row, because `status` and `plan` preview anywhere; the note under the picker says commit is refused, and why. The Flip step then refuses the commit inline with *this host is not a HugMesh node — pick a device*, and **GO LIVE** stays grey. The TUI's target line says the same, and the CLI's `targets` prints that sentence in the row's status column. |
 | **Emulated** | A running keep-alive device record: `qemu_devices.discover_devices(<work>)` for the docker lane, `qemu_windows.running(<work>)` for WHPX. | One row per running emulated **server** device. The mesh's front-door row is preselected. |
 | **Remote** (later) | Any ssh-reachable node, through the same code. | Not built yet. |
 
@@ -384,14 +386,60 @@ A running device's disk is a per-run qcow2 **overlay** over the golden image, an
 overlay is created on every boot. So the flipped posture **lasts only while the device
 runs**. The Flip page shows an EPHEMERAL banner:
 
-> this posture lasts until the device stops; a restart boots the golden image INTERNAL again — Save the device to keep a copy
+> this posture lives on this run's disk only: the next boot starts again from the golden image (in whatever posture it bakes) or from a Save (in the posture it was saved in) — Save the device to keep it; Status reads the posture from the device itself
 
-**Status** compares the host journal against the running record's `started_at`. When
-they differ it reports *reset by a restart* instead of claiming the device is still
-public.
+**Status never infers the posture.** Every face (CLI `status`, the GUI's Preflight,
+Verify and Flip panes, the TUI's `s`) reads it from the device in one read-only ssh round
+trip, with the same two witnesses the proof lane uses: `hugmesh-go-live status`
+(`effective posture:`) and `nft list table inet hugmesh_release_gate` (loaded with the
+80/443 drop rule = internal, loaded without it = public, absent or unreadable =
+unknown). The reading is `PUBLIC` or `INTERNAL` when both witnesses agree, and `MIXED`
+with both values when they do not: while `hugmesh-firewall-reconcile`'s 60 s cron has
+not yet caught up, or when one witness cannot be read (no table loaded is not a lag, and
+is not called one). When the device cannot be reached (stopped, no ssh, ssh failed) the
+reading is `unknown (device not reachable)` and the reason. It never guesses.
+
+**Every reading is printed with the time it was read**, because a reading is only as
+current as that moment. Each face words the line for how it reads:
+
+| Face | The line | When it is read |
+|---|---|---|
+| CLI `status` | `device posture now (read <UTC time>): …` | As it prints. |
+| GUI Preflight, Verify and Flip panes | `device posture now (read <UTC time>): …` | When the pane is filled, and again on **Refresh status**, **Re-scan devices** and **Recheck posture (driver status)**. The pane is a snapshot between those. |
+| TUI plan screen | `device posture at the last s (read <UTC time>): …` | Only when you press `s`. The screen redraws on every key without asking the device, so it quotes the last `s` and never calls it *now*: if you paste the flip into another terminal, the line still shows the earlier reading, with its time, until you press `s` again. The `s` and `p` output under it is headed the same way: `output of s (read <UTC time>):`, `output of p (run <UTC time>):`. (`l` shows the device's provider list as it was read when the device was picked.) |
+
+When nothing was sent to the device, there is no reading and no time, and the line is
+`device posture: unknown (not read) — <why>` on every face. That is the case for a
+device this host does not use for go-live (a client image; a docker-lane device from
+native Windows), for the TUI before the first `s`, and for **a pick that has gone
+stale**: the device stopped or restarted after you picked it. A stale pick is not asked,
+because an ssh to its old port could reach another device. The TUI also withholds the
+earlier `s` / `l` / `p` output (`output of s (read <UTC time>): not shown — …`), since
+the earlier boot's word is not this device's. Re-scan (GUI: **Re-scan devices**; TUI:
+`t`, then `r`) to bind the pick to the device as it is now; the TUI then drops that
+output for good.
+
+The host journal says *when* this host asked: a journal written during an earlier
+boot (its `started_at` differs from the running record's) reads *during an earlier
+boot*, and says nothing about the posture, because the boot since may have come from
+the golden image or from a save taken while the device was public.
+
+A device booted from a **Save mesh** set also says which save and the posture the save
+was taken in: *booted from a save taken while PUBLIC (mesh-…, saved …)*. Save mesh
+reads each device's posture with the same two witnesses just before it pauses it, and
+records it as `golive_posture` in `mesh-save.json`. A set saved before this was
+recorded says that its posture was not recorded. `mesh-emu-status` prints the same
+origin beside a resumed device: *resumed from save … — a save taken while PUBLIC (…)*.
+
+The save line and the journal's *earlier boot* test are always about the device's
+**current** record, also while the pick is stale: a device picked while it ran from a
+save and since restarted from its golden image prints no save line. A device that is
+not running is not on any boot, so its line reads *last booted from a save taken while
+PUBLIC (…) — it is not running now*.
 
 `commit --persist-public` does not change this. It bakes `release-state=public` into the
-running overlay, which the next boot discards like everything else.
+running overlay, which the next boot discards like everything else (unless the device
+was saved first).
 
 #### What the guest keeps
 
@@ -440,9 +488,12 @@ let a restart discard it, and revoke it at the provider. Treat a save of a devic
 planned `cloudflare-tunnel` or `duckdns` on with a token like a keys stick.
 
 Booting a mesh **from** a save, so that an emulated mesh can stay live across restarts,
-is a later follow-up (group FG5). It boots a new overlay over the saved qcow2 and never
-writes to the save. A mesh booted that way carries the saved token again. It is not
-built yet, so until then the UI must say the posture is ephemeral.
+is group FG5. It is a CLI and Makefile lane only: `make mesh-emu-up FROM_SAVE=mesh-<stamp>`
+([`tests/qemu/README.md`](../tests/qemu/README.md)). It boots a new overlay over the saved
+qcow2 and never writes to the save. A mesh booted that way carries the saved token again.
+Studio has no "Boot from save" button: one waits on an operator decision, because it lets
+an emulated node stay `public` for a long time. Studio's own start buttons boot the golden
+image, so the wizard still says the posture is ephemeral.
 
 ### Per OS
 
@@ -568,9 +619,10 @@ Still **deferred**, by design:
   `commit`). The gate today is preview, then confirm. Automated propagation probes would
   be a new driver subcommand that every front-end then surfaces.
 - **Emulated-mesh follow-ups** (see [Go live from an emulated mesh](#go-live-from-an-emulated-mesh)):
-  booting a mesh from a saved device, so an emulated posture survives a restart; the
-  **remote** target (any ssh-reachable node); and an inbound relay on the Studio host,
-  which waits on an operator decision because it exposes the workstation.
+  a Studio button to boot a mesh from its save (the CLI and Makefile lane exists; the
+  button waits on an operator decision); the **remote** target (any ssh-reachable node);
+  and an inbound relay on the Studio host, which waits on an operator decision because it
+  exposes the workstation.
 - **The other eight builders** (Frite, Jetson, Orange Pi) bake no go-live driver, on
   purpose. They bake neither firewall-reconcile nor release-state, because they are
   clients and appliances, not go-live server nodes.
