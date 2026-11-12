@@ -1,0 +1,150 @@
+{
+  "schema": "mainline-evidence/v1",
+  "_comment": "Per candidate board: the mainline U-Boot defconfig and kernel device tree, looked up at the named release tags by scripts/mainline-evidence.py (run it to re-check; --write to refresh). A board's verdict is 'found' only when both parts are. studio/tests/test_mainline_evidence.py refuses any device-catalog row promoted from unsupported without a 'found' verdict here. Evidence is necessary for promotion, never sufficient.",
+  "trees": {
+    "u-boot": {
+      "url": "https://github.com/u-boot/u-boot",
+      "tag": "v2026.10",
+      "commit": "5508406582f6f7120dce0c4b3059819a41788db2"
+    },
+    "linux": {
+      "url": "https://github.com/torvalds/linux",
+      "tag": "v7.3",
+      "commit": "c03c1a14507dfaf8b856c2608f9ac216021fc222"
+    }
+  },
+  "boards": [
+    {
+      "id": "rock-5b",
+      "label": "Radxa ROCK 5B",
+      "arch": "arm64",
+      "dt": "rockchip/rk3588-rock-5b",
+      "u-boot": {
+        "status": "found",
+        "defconfig": "rock5b-rk3588_defconfig",
+        "path": "configs/rock5b-rk3588_defconfig",
+        "blob": "da5fb3a2c30283a6ffdfb8176e40fc37e3f13db6",
+        "match": "default",
+        "names": "rockchip/rk3588-rock-5b",
+        "dt_source": "dts/upstream/src/arm64/rockchip/rk3588-rock-5b.dts",
+        "also": []
+      },
+      "linux": {
+        "status": "found",
+        "path": "arch/arm64/boot/dts/rockchip/rk3588-rock-5b.dts",
+        "blob": "da13dafcbc823b8b732f6b162ff2e15d9ea0532d",
+        "makefile": "arch/arm64/boot/dts/rockchip/Makefile"
+      },
+      "verdict": "found"
+    },
+    {
+      "id": "nanopc-t6",
+      "label": "FriendlyElec NanoPC-T6",
+      "arch": "arm64",
+      "dt": "rockchip/rk3588-nanopc-t6",
+      "u-boot": {
+        "status": "found",
+        "defconfig": "nanopc-t6-rk3588_defconfig",
+        "path": "configs/nanopc-t6-rk3588_defconfig",
+        "blob": "ba9a5adece7c940899a801d817c91f34ac3fc243",
+        "match": "default",
+        "names": "rockchip/rk3588-nanopc-t6",
+        "dt_source": "dts/upstream/src/arm64/rockchip/rk3588-nanopc-t6.dts",
+        "also": []
+      },
+      "linux": {
+        "status": "found",
+        "path": "arch/arm64/boot/dts/rockchip/rk3588-nanopc-t6.dts",
+        "blob": "40290a81bb9d6c3eaeb2a2bca59bbabee6e383ac",
+        "makefile": "arch/arm64/boot/dts/rockchip/Makefile"
+      },
+      "verdict": "found"
+    },
+    {
+      "id": "opi5-pro",
+      "label": "Orange Pi 5 Pro",
+      "arch": "arm64",
+      "dt": "rockchip/rk3588s-orangepi-5-pro",
+      "u-boot": {
+        "status": "not found",
+        "searched": "all 1534 configs/*_defconfig at v2026.10, for rockchip/rk3588s-orangepi-5-pro (or legacy rk3588s-orangepi-5-pro) as CONFIG_DEFAULT_DEVICE_TREE or in CONFIG_OF_LIST"
+      },
+      "linux": {
+        "status": "found",
+        "path": "arch/arm64/boot/dts/rockchip/rk3588s-orangepi-5-pro.dts",
+        "blob": "c9679bac1db73b23343400e409bb09607a5210a6",
+        "makefile": "arch/arm64/boot/dts/rockchip/Makefile"
+      },
+      "verdict": "not found"
+    },
+    {
+      "id": "opi5-max",
+      "label": "Orange Pi 5 Max",
+      "arch": "arm64",
+      "dt": "rockchip/rk3588-orangepi-5-max",
+      "u-boot": {
+        "status": "found",
+        "defconfig": "orangepi-5-max-rk3588_defconfig",
+        "path": "configs/orangepi-5-max-rk3588_defconfig",
+        "blob": "0861df962cf66151cfc32c65e809cd693616b3e5",
+        "match": "default",
+        "names": "rockchip/rk3588-orangepi-5-max",
+        "dt_source": "dts/upstream/src/arm64/rockchip/rk3588-orangepi-5-max.dts",
+        "also": []
+      },
+      "linux": {
+        "status": "found",
+        "path": "arch/arm64/boot/dts/rockchip/rk3588-orangepi-5-max.dts",
+        "blob": "762f9fd966a42b0817a6a8b685ab744c773b3141",
+        "makefile": "arch/arm64/boot/dts/rockchip/Makefile"
+      },
+      "verdict": "found"
+    },
+    {
+      "id": "visionfive-2",
+      "label": "StarFive VisionFive 2 (v1.3B)",
+      "arch": "riscv64",
+      "dt": "starfive/jh7110-starfive-visionfive-2-v1.3b",
+      "u-boot": {
+        "status": "found",
+        "defconfig": "starfive_visionfive2_defconfig",
+        "path": "configs/starfive_visionfive2_defconfig",
+        "blob": "6fd43544a0c462488e6a91a1949460a0b4500ec3",
+        "match": "default",
+        "names": "starfive/jh7110-starfive-visionfive-2-v1.3b",
+        "dt_source": "dts/upstream/src/riscv/starfive/jh7110-starfive-visionfive-2-v1.3b.dts",
+        "also": []
+      },
+      "linux": {
+        "status": "found",
+        "path": "arch/riscv/boot/dts/starfive/jh7110-starfive-visionfive-2-v1.3b.dts",
+        "blob": "d4ea4a2c0b9bbeefeff8e1d1fe07cb87759604d8",
+        "makefile": "arch/riscv/boot/dts/starfive/Makefile"
+      },
+      "verdict": "found"
+    },
+    {
+      "id": "bpi-f3",
+      "label": "Banana Pi BPI-F3",
+      "arch": "riscv64",
+      "dt": "spacemit/k1-bananapi-f3",
+      "u-boot": {
+        "status": "found",
+        "defconfig": "spacemit_k1_defconfig",
+        "path": "configs/spacemit_k1_defconfig",
+        "blob": "fa352c9a7b326103bf856c53b2fbd877ccbcc535",
+        "match": "of-list",
+        "names": "spacemit/k1-bananapi-f3",
+        "dt_source": "dts/upstream/src/riscv/spacemit/k1-bananapi-f3.dts",
+        "also": []
+      },
+      "linux": {
+        "status": "found",
+        "path": "arch/riscv/boot/dts/spacemit/k1-bananapi-f3.dts",
+        "blob": "58035d886bf678f23725351b5d9636333498a9f2",
+        "makefile": "arch/riscv/boot/dts/spacemit/Makefile"
+      },
+      "verdict": "found"
+    }
+  ]
+}

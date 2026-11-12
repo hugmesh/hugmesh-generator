@@ -102,6 +102,18 @@ selection and leaves emission untouched; the GUI column and the byte-identical
 render from that committed JSON; see the PARITY-TODO in
 [`docs/STUDIO-WIZARD-FLOW.md`](STUDIO-WIZARD-FLOW.md).
 
+**Promoting a board needs mainline evidence.** A catalog row that is not x86-64
+cannot move from unsupported to experimental or supported unless
+`studio/evidence/mainline-evidence.json` gives it a "found" verdict: a mainline U-Boot
+defconfig and a Linux device tree, each found at a named release tag (hugmesh-generator#1057).
+`scripts/mainline-evidence.py` does the lookup. It clones both trees at their tags
+(shallow, blobless), records each part's path and git blob id, or what was searched
+when nothing was found. Run it with no flag to check the committed file against
+upstream (exit 1 on drift), and with `--write` to refresh it. It needs network
+access, so CI does not run it; `studio/tests/test_mainline_evidence.py` checks the
+committed file offline and refuses the promotion. Evidence is necessary for
+promotion, never sufficient: the board still needs a builder that supports it.
+
 Every channel is crossed with the **build ENV** (`test` | `prod`), passed as
 `--env` to the builders and as `ENV=` through make. See the
 [Build ENV section of the README](../README.md#build-env-testprod-baked-at-image-creation).

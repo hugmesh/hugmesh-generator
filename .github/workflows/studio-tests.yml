@@ -78,6 +78,10 @@ on:
       # drift that guard exists to catch.
       - 'docs/STUDIO-INSTALLERS.md'
       - '.github/workflows/studio-release.yml'
+      # hugmesh-generator#1057: studio/tests/test_mainline_evidence.py RUNS this script
+      # against local git repositories, and the evidence file it writes gates catalog
+      # promotions. A change to the lookup lands only here.
+      - 'scripts/mainline-evidence.py'
   # A PUSH to main, for the Studio release machinery only. The release guard tests
   # (test_studio_beta_version.py, test_studio_release_signing.py,
   # test_studio_release_cut.py) parse the release workflows, and on 2026-10-22/23
