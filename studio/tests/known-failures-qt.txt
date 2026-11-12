@@ -1,0 +1,42 @@
+# Qt tests that fail on main under the binding the "Qt suite" job installs (PySide6),
+# for .github/workflows/studio-tests.yml's qt job. Same contract as known-failures.txt
+# beside it: the blocking step does not count these, the report step re-runs every
+# entry on every run and says which now pass, and a line is DELETED the moment its test
+# passes. Measured 2026-11-11 on main aedbb1fd by running every test file in its own
+# interpreter (PySide6 6.12.0 on Python 3.14 locally; the job pins the release's
+# 6.11.2 on 3.12). Every one also passes under PyQt6 there, which is why the PyQt6 runs
+# that found the T1-T5 failures did not show these.
+#
+# A line with "::" is one test: the blocking step deselects it.
+# A bare path is a file whose interpreter dies AFTER its tests ran, so there is no test
+# to deselect: the blocking step still runs the file and still fails on any failed or
+# erroring test, and only the exit status is not counted.
+
+# QObject.receivers(<bound signal>) is PyQt6's spelling; PySide6 takes only a SIGNAL()
+# string and raises TypeError. _mesh_monitor_widget.py catches that and treats the
+# signal as wired (fail-open), so under PySide6, the binding the Studio ships, a mount
+# that connected nothing emits into nothing instead of refusing inline, and the
+# tests that pin the refusal (and the page's wiring, read the same way) fail.
+tests/test_localmesh_monitor.py::test_a_scaling_table_with_nothing_connected_refuses_instead_of_doing_nothing
+tests/test_localmesh_monitor.py::test_the_pages_own_monitor_mounts_the_replicas_column_and_wires_it
+tests/test_mesh_pod_controls_gui.py::test_a_press_emits_domain_and_verb_and_an_unwired_mount_refuses_inline
+tests/test_mesh_pod_controls_gui.py::test_the_page_wires_both_signals
+
+# The test calls QtCore.Qt.mightBeRichText, which PySide6 does not have there
+# (AttributeError); the product code is not involved.
+tests/test_pages_network_sections.py::test_the_services_explainer_is_no_longer_a_wall
+
+# The parent's verdict refuses ANY skip in its child, but Breeze (a KDE plugin the Qt
+# wheels do not carry) is optional by tests/_look.py's rule: the 12 Breeze cases skip,
+# the 12 Fusion ones pass, and the parent fails.
+tests/test_brand_docker_route_look.py::test_the_docker_route_brand_step_is_drawn_whole_in_a_fresh_interpreter
+
+# Every test passes, then the interpreter aborts at exit under PySide6: "QThread:
+# Destroyed while thread '' is still running" (exit 134), or a bus error (exit 135) for
+# test_signin_route_honesty.py. The first two and the last: 3 of 3 runs, 0 of 2 under
+# PyQt6. test_localmesh_domains_steps.py: 1 of 3 (the run on a loaded host), so it is
+# a race, listed so that it cannot turn an unrelated pull request red.
+tests/test_code_folders_gui.py
+tests/test_domains_row_checks_saved_door.py
+tests/test_localmesh_domains_steps.py
+tests/test_signin_route_honesty.py

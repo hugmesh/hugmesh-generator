@@ -281,6 +281,182 @@ jobs:
           print('pyproject OK; version', version)
           "
 
+  qt:
+    # THE GUI HALF. The job above installs no Qt binding, so every test file that
+    # importorskips the Qt shim skips WHOLE there, and GitLab's PySide6 job runs after
+    # the merge. A Qt test could go red on main and stay red: on 2026-11-11 five were
+    # (the look-case census, a frite preflight regex, a mesh-node compose argv without
+    # the limits overlay, the worklist overflowing its viewport after the RAM column was
+    # added, and a file that aborted when run alone). This job installs the binding the
+    # Linux release ships (PySide6, at the version packaging/linux-build-requirements.txt
+    # pins) and runs every test file.
+    #
+    # ONE FILE PER INTERPRETER, because a single-process run with a binding installed
+    # aborts partway through (the --ignore note above), losing every later test without
+    # reporting it. Four shards, because one file at a time is ~25 minutes on one runner.
+    name: Qt suite (shard ${{ matrix.shard }} of 4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install the libraries a Qt wheel loads
+        # The PySide6 wheels carry Qt itself but not the system libraries it dlopens
+        # (EGL/GL, xkbcommon, fontconfig, dbus). DejaVu is the font the geometry tests
+        # are measured in here; the next step fails if Qt still cannot draw.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 fonts-dejavu-core
+
+      - name: Install test dependencies and the release's PySide6
+        run: |
+          pyside=$(sed -n 's/^pyside6==//p' studio/packaging/linux-build-requirements.txt)
+          if [ -z "$pyside" ]; then
+            echo "::error::no pyside6== pin in studio/packaging/linux-build-requirements.txt"
+            exit 1
+          fi
+          python -m pip install --upgrade pip pytest PyYAML jsonschema cryptography \
+            "pyside6==$pyside"
+
+      - name: Prove Qt draws here
+        # A runner where the binding does not import, or imports and cannot build a
+        # window, would make every GUI file SKIP (or ERROR at collection) and this job
+        # would go green having looked at nothing. Build one, draw it, and say what ran.
+        working-directory: studio
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python - <<'EOF'
+          from hugmesh_studio.gui import qt
+          assert qt.BINDING == "PySide6", f"the shim picked {qt.BINDING!r}, not PySide6"
+          from hugmesh_studio.gui.qt import QtCore, QtWidgets
+          app = QtWidgets.QApplication(["qt-probe"])
+          label = QtWidgets.QLabel("qt-probe")
+          label.show()
+          app.processEvents()
+          assert not label.grab().isNull(), "Qt built a window but could not draw it"
+          print(qt.BINDING, QtCore.qVersion(), sorted(QtWidgets.QStyleFactory.keys()),
+                app.font().family(), app.font().pointSizeF())
+          EOF
+
+      - name: Run every test file in its own interpreter
+        working-directory: studio
+        env:
+          QT_QPA_PLATFORM: offscreen
+          # Short on purpose: tmp_path holds AF_UNIX sockets (108-byte path limit), and
+          # a long TMPDIR turns tests/test_instance.py red for a reason that is not a
+          # defect.
+          TMPDIR: /tmp
+          SHARD: ${{ matrix.shard }}
+          SHARDS: 4
+        # tests/known-failures-qt.txt is this job's tests/known-failures.txt, with the
+        # same rule: it grades the change under review, not the backlog, and the
+        # backlog is re-run and reported below on every run. A "::" line is one test,
+        # deselected here. A bare path is a file whose interpreter dies AFTER its tests
+        # (nothing to deselect): it still runs here and still fails on any failed or
+        # erroring test; only its exit status is not counted.
+        #
+        # A file fails when pytest exits non-zero, when it ran nothing (exit 5) without
+        # having skipped or deselected something, and when anything SKIPPED for want of
+        # a Qt binding (the step above proved there is one, so such a skip is a blind
+        # spot, not a pass).
+        run: |
+          declare -A exit_only=()
+          deselect=()
+          while read -r line; do
+            case "$line" in ''|'#'*) continue ;; *::*) deselect+=("$line") ;; *) exit_only["$line"]=1 ;; esac
+          done < tests/known-failures-qt.txt
+
+          mapfile -t files < <(find tests -name 'test_*.py' | LC_ALL=C sort)
+          echo "${#files[@]} test files; this shard runs every ${SHARDS}th from index ${SHARD}"
+          failed=()
+          ran=0
+          for i in "${!files[@]}"; do
+            [ $(( i % SHARDS )) -eq "$SHARD" ] || continue
+            f=${files[$i]}
+            args=()
+            for d in "${deselect[@]}"; do
+              case "$d" in "$f::"*) args+=(--deselect "$d") ;; esac
+            done
+            echo "::group::$f"
+            rc=0
+            python -m pytest -q -rs -p no:cacheprovider "$f" "${args[@]}" > out.txt 2>&1 || rc=$?
+            cat out.txt
+            echo "::endgroup::"
+            ran=$((ran + 1))
+            summary=$(grep -E '[0-9]+ (passed|failed|skipped|deselected|errors?)' out.txt | tail -n 1 || true)
+            if grep -E 'SKIPPED.*Qt binding' out.txt > /dev/null; then
+              failed+=("$f: skipped for want of a Qt binding")
+            elif [ "$rc" -eq 5 ]; then
+              case "$summary" in *skipped*|*deselected*) ;; *) failed+=("$f: ran nothing (exit 5)") ;; esac
+            elif [ "$rc" -ne 0 ]; then
+              case "$summary" in
+                *failed*|*error*) failed+=("$f: exit $rc ($summary)") ;;
+                *passed*)
+                  if [ -n "${exit_only[$f]:-}" ]; then
+                    echo "::warning::$f: its tests passed, then the interpreter exited $rc (listed in tests/known-failures-qt.txt)"
+                  else
+                    failed+=("$f: exit $rc after its tests passed ($summary)")
+                  fi ;;
+                *) failed+=("$f: exit $rc with no summary") ;;
+              esac
+            fi
+          done
+
+          echo "ran $ran files in shard $SHARD"
+          if [ "$ran" -eq 0 ]; then
+            echo "::error::this shard ran no test file"
+            exit 1
+          fi
+          if [ "${#failed[@]}" -gt 0 ]; then
+            printf '::error::%s\n' "${failed[@]}"
+            exit 1
+          fi
+
+      - name: Report the known Qt failures
+        # Non-blocking, once (shard 0): every entry of tests/known-failures-qt.txt is
+        # re-run on its own, and the summary says which still fail and which now pass.
+        if: always() && matrix.shard == 0
+        continue-on-error: true
+        working-directory: studio
+        env:
+          QT_QPA_PLATFORM: offscreen
+          TMPDIR: /tmp
+        run: |
+          {
+            echo "## Known Qt failures (pre-existing on main)"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          n=0
+          while read -r line; do
+            case "$line" in ''|'#'*) continue ;; esac
+            n=$((n + 1))
+            rc=0
+            python -m pytest -q -p no:cacheprovider "$line" > known.txt 2>&1 || rc=$?
+            summary=$(grep -E '[0-9]+ (passed|failed|skipped|errors?)' known.txt | tail -n 1 || true)
+            echo "- \`$line\`: exit $rc, $summary" >> "$GITHUB_STEP_SUMMARY"
+          done < tests/known-failures-qt.txt
+          if [ "$n" -eq 0 ]; then
+            echo 'None: `studio/tests/known-failures-qt.txt` lists nothing. Keep it that way.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo
+              echo 'An entry that exits 0 now passes: delete it from'
+              echo '`studio/tests/known-failures-qt.txt` so it starts gating again.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   windows:
     # The MSI runs the Studio NATIVELY on Windows, and until 2026-10-29 no test had ever
     # run there. The first run of the 0.3.0-beta.1 MSI on Windows 11 found: every run log

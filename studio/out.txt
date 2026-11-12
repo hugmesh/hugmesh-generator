@@ -1,0 +1,4 @@
+
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_mesh_pod_controls_gui.py:21: no Qt binding (PySide6/PyQt6) installed
+1 skipped in 0.17s
