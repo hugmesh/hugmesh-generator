@@ -773,8 +773,9 @@ print(f"\ndecision 60 controls: {ttl_caught} caught / {ttl_survived} survived")
 #       render WITHOUT the pin — measured with kubectl kustomize v5.8.1; an
 #       empty `env: []` is a no-op); if a patch file the kustomization names
 #       is missing; or if the kustomization uses a field this scan cannot see
-#       through (replacements, components, transformers, generators — none is
-#       used today; using one is a decision, made by extending this scan).
+#       through (replacements, components, transformers, generators; the one
+#       extension so far is a `replacements` entry whose every fieldPath writes a
+#       NAMED env entry other than the pin, see NAMED_ENV_FIELDPATH below).
 #   (b) WHEN kustomize OR kubectl IS ON PATH: the directory is rendered and
 #       the rendered Deployment's container env is put through check_ttl_pin
 #       like any other lane; a lane that produces no rendered verdict is a
@@ -795,6 +796,29 @@ OPAQUE_KUSTOMIZE_FIELDS = ("replacements", "components", "transformers", "genera
 # drop or rewrite the pin without naming it.
 ENV_CHAIN = ("spec", "template", "spec", "containers", None, "env")
 SMP_DIRECTIVE = re.compile(r"\$(patch|retainKeys|setElementOrder|deleteFromPrimitiveList)\b")
+
+
+# The ONE `replacements` shape this scan can see through (issue #530, the idp-trust
+# issuer/JWKS blocks): every target fieldPath writes the value of ONE env entry
+# NAMED in the path. kyaml matches `[name=X]` as an unanchored pattern, so a name
+# that is a substring of the pin's key could still reach it; only [A-Z0-9_] names
+# that are not are accepted. An index, a wildcard or any other path stays opaque.
+NAMED_ENV_FIELDPATH = re.compile(
+    r"^spec\.template\.spec\.containers\.\[name=[A-Za-z0-9-]+\]\.env\.\[name=([A-Z0-9_]+)\]\.value$")
+
+
+def named_env_replacement(r):
+    if not isinstance(r, dict) or not r.get("targets"):
+        return False
+    for t in r["targets"]:
+        fps = (t or {}).get("fieldPaths") or []
+        if not fps:
+            return False
+        for fp in fps:
+            m = NAMED_ENV_FIELDPATH.match(str(fp))
+            if not m or m.group(1) in TTL_KEY:
+                return False
+    return True
 
 
 def kustomize_patch_texts(kdir):
@@ -939,7 +963,10 @@ def check_kustomize_patches(label, kdir):
                          f"naming it (env: null and containers: null both render WITHOUT "
                          f"the pin); env is owned by deployment.yaml, edit it there")
     for field in OPAQUE_KUSTOMIZE_FIELDS:
-        if kdoc.get(field):
+        val = kdoc.get(field)
+        if field == "replacements" and val and all(named_env_replacement(r) for r in val):
+            continue
+        if val:
             fails.append(f"[{label}] {kfile} uses `{field}`, which can rewrite the "
                          f"rendered Deployment without naming {TTL_KEY} in any text this "
                          f"scan reads; extend the scan before using it")
@@ -1025,6 +1052,14 @@ def staged_dir(label, mutation):
     shutil.copytree(kdir, dst)
     kpath = os.path.join(dst, "kustomization.yaml")
     kdoc = yaml.safe_load(open(kpath))
+    # The issue #530 idp-trust replacements write NAMED issuer/JWKS env entries, so
+    # kustomize errors once a control nulls `env` or `containers` under them. They
+    # cannot touch the pin (the scan above checks that), so a staged control
+    # renders without them and measures the TTL pin alone.
+    kdoc["replacements"] = [r for r in kdoc.get("replacements") or []
+                            if ((r or {}).get("source") or {}).get("name") != "idp-trust"]
+    if not kdoc["replacements"]:
+        kdoc.pop("replacements")
     kind = mutation["kind"]
     if kind == "strategic":
         with open(os.path.join(dst, "ttl-control-patch.yaml"), "w") as f:
@@ -1192,6 +1227,18 @@ KUSTOMIZE_CONTROLS = [
          {"source": {"kind": "Service", "name": "hugmesh-mod-bff-api", "fieldPath": "metadata.name"},
           "targets": [{"select": {"kind": "Deployment"},
                        "fieldPaths": ["spec.template.spec.containers.0.env.0.value"]}]}]})),
+    ("scan: a NAMED-env replacement that writes the mod-bff pin itself", False,
+     "uses `replacements`",
+     lambda: scan_control(MOD, {"kind": "field", "field": "replacements", "value": [
+         {"source": {"kind": "Service", "name": "hugmesh-mod-bff-api", "fieldPath": "metadata.name"},
+          "targets": [{"select": {"kind": "Deployment"},
+                       "fieldPaths": [f"spec.template.spec.containers.[name=hugmesh-mod-bff-api].env.[name={TTL_KEY}].value"]}]}]})),
+    ("scan: a NAMED-env replacement whose name is a PREFIX of the pin (kyaml matches it)", False,
+     "uses `replacements`",
+     lambda: scan_control(ADMIN, {"kind": "field", "field": "replacements", "value": [
+         {"source": {"kind": "Service", "name": "hugmesh-admin-bff-api", "fieldPath": "metadata.name"},
+          "targets": [{"select": {"kind": "Deployment"},
+                       "fieldPaths": ["spec.template.spec.containers.[name=hugmesh-admin-bff-api].env.[name=APP_BFF_EXCHANGE].value"]}]}]})),
     ("render: the rendered admin-bff Deployment carries 5000 from a strategic-merge patch", True,
      "not \"0\"",
      lambda: render_control(ADMIN, strategic_patch_5000(ADMIN))),
@@ -1222,6 +1269,8 @@ REQUIRED_KUSTOMIZE_CONTROLS = frozenset([
     "scan: a strategic-merge `containers: null` deletes the mod-bff containers list",
     "scan: the admin-bff kustomization names a patch file that does not exist",
     "scan: the mod-bff kustomization uses `replacements` (an opaque field)",
+    "scan: a NAMED-env replacement that writes the mod-bff pin itself",
+    "scan: a NAMED-env replacement whose name is a PREFIX of the pin (kyaml matches it)",
     "render: the rendered admin-bff Deployment carries 5000 from a strategic-merge patch",
     "render: the rendered mod-bff Deployment carries 5000 from an index-only JSON6902 op",
     "render: the rendered mod-bff container lacks the pin after a whole-container replace",

@@ -175,6 +175,7 @@ brand.conf
 scripts/__pycache__/
 scripts/local-ai/__pycache__/
 tests/scripts/__pycache__/
+tests/scripts/lib/__pycache__/
 specs/cluster/manifests/meshbridge/app/__pycache__/
 tests/meshbridge/__pycache__/
 tests/workload-console/__pycache__/

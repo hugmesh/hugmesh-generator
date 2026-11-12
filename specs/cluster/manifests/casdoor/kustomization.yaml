@@ -16,3 +16,32 @@ resources:
 # remote path secret/<brand>/casdoor) — see manifests/external-secrets.
 # The offline/USB path (KEYS/vault/secrets.json) is created by keys-provision.
 # The casdoor Deployment keeps its existing secretKeyRef usage unchanged.
+
+# ── THE ISSUER CASDOOR MINTS (issue #530) ───────────────────────────────────────
+# The other half of manifests/*/kustomization.yaml's idp-trust blocks. The tokens'
+# `iss` is app.conf's `origin`, and every validator (BFFs, gateways, frontend)
+# now reads its issuer from a value in a BAKED Application. rebrand_sysroot()
+# rewrites those values to https://id.<CLUSTER_DOMAIN> on a custom-domain build,
+# so the minter must follow the same value or every token is rejected on `iss`.
+# apps/05-casdoor.yaml sets the annotation below with a one-line op; the
+# replacement writes it into the ONE quoted string of app.conf.template that
+# holds the origin. `delimiter: '"'` + `index: 7` = the 8th '"'-separated part,
+# i.e. the value of `origin = "..."` (the quotes before it: dataSourceName,
+# authState, socks5Proxy). Adding a quote above `origin` in the template shifts
+# that index: tests/scripts/test-eso-remoteref-brand.sh (7) goes red if the
+# default render changes or the origin stops following. On an external-IdP mesh
+# gate_casdoor_apps() removes apps/05, so none of this runs there.
+configMapGenerator:
+  - name: idp-trust
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+        platform.hugmesh.net/idp-issuer: "https://id.hugmesh.net"
+replacements:
+  - source: { version: v1, kind: ConfigMap, name: idp-trust, fieldPath: "metadata.annotations.[platform.hugmesh.net/idp-issuer]" }
+    targets:
+      - select: { version: v1, kind: ConfigMap, name: casdoor-app-conf }
+        fieldPaths:
+          - data.[app.conf.template]
+        options: { delimiter: '"', index: 7 }

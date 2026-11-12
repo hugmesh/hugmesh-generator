@@ -1995,8 +1995,11 @@ if command -v kubectl >/dev/null 2>&1; then
   # (22-render) round 3: a single-line JSON ConfigMap value and a generator literal.
   render_catch "render: single-line JSON helperPod.yaml busybox:latest" '
     lp_helper "  helperPod.yaml: '"'"'{\"apiVersion\":\"v1\",\"kind\":\"Pod\",\"metadata\":{\"name\":\"helper-pod\"},\"spec\":{\"containers\":[{\"name\":\"helper-pod\",\"image\":\"busybox:latest\"}]}}'"'"'"' busybox
+  # edge-ai, not owncast: owncast's kustomization.yaml now has its own
+  # configMapGenerator (the idp-trust carrier, issue #530), and a SECOND
+  # top-level key appended here never reaches the render.
   render_catch "render: configMapGenerator literal busybox:latest" '
-    printf "configMapGenerator:\n  - name: helper\n    literals:\n      - '"'"'helperPod.yaml=%s'"'"'\n" "${GEN_POD}" >> "$T/manifests/owncast/kustomization.yaml"' busybox
+    printf "configMapGenerator:\n  - name: helper\n    literals:\n      - '"'"'helperPod.yaml=%s'"'"'\n" "${GEN_POD}" >> "$T/manifests/edge-ai/kustomization.yaml"' busybox
   render_catch "render: bare busybox in the helper-pod template is not rewritten by images:" "${LP_REWRITE}" busybox
   # (23-render) round 4: the binaryData helper pod is decoded in the render pass too.
   render_catch "render: ConfigMap binaryData helperPod.yaml busybox:latest" 'lp_b64 image' busybox
