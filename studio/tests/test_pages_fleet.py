@@ -357,6 +357,9 @@ def _open_ready_window(wiz, tmp_path, code, lines=("fleet line 1", "fleet line 2
 
     page.driver.run = fake_run
     page.output_dir.setText(str(tmp_path / "out"))
+    # the KEYS folders need the pki node's fixed LAN address (core/pki_lan.py)
+    page.pki_lan_ip.setText("192.168.1.10")
+    page.pki_lan_fixed.setChecked(True)
     return win, page
 
 
@@ -453,7 +456,8 @@ def test_restart_routes_fleet_session_back_into_fleet_window(qapp, wiz, tmp_path
     config reloaded, Review step, prior outcome archived into history on redispatch."""
     wiz.restart()
     cfg = FleetConfig(skip_x86=True, rpi_roles="pki desktop",
-                      output_dir=str(tmp_path / "out"), jobs=5)
+                      output_dir=str(tmp_path / "out"), jobs=5,
+                      pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True)
     s = bs.new_fleet_session(cfg, GENERATOR_DIR)
     bs.start(s)
     bs.update_image(s, 0, status="failed", exit_code=2)
@@ -528,6 +532,8 @@ def held_run(qapp, wiz, tmp_path):
 
         page.driver.run = fake_run
         page.output_dir.setText(str(tmp_path / "out"))
+        page.pki_lan_ip.setText("192.168.1.10")       # core/pki_lan.py: KEYS need it
+        page.pki_lan_fixed.setChecked(True)
         page._goto(fleet_mod.STEP_REVIEW)
         assert page.problems.toPlainText() == "Preflight: OK"
         sid = page.pending_session_id

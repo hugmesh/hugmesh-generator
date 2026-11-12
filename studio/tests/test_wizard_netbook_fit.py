@@ -221,7 +221,9 @@ class _KeysOnlySubprocess:
 def _mesh_worklist(tmp_path):
     base = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
                        brand_title="Acme", org="Acme-Inc", cluster_domain="acme.example",
-                       superdomain="core.acme.internal", output_dir=str(tmp_path / "out"))
+                       superdomain="core.acme.internal", output_dir=str(tmp_path / "out"),
+                       # the pki node's fixed LAN address (core/pki_lan.py) a mesh build refuses without
+                       pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True)
     base.domains = [Domain(name="acme.example", title="Acme")]
     base.users = [User(username="root-admin", domain="core.acme.internal",
                        role="superadmin")]

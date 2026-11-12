@@ -226,6 +226,11 @@ def test_mesh_node_worklist_starts_all_images(monkeypatch, qapp, wiz):
         item.setCheckState(0, Qt.CheckState.Checked if rid in want
                            else Qt.CheckState.Unchecked)
 
+    # the pki node's fixed LAN address, typed on the Network step: a mesh build that
+    # makes KEYS sticks refuses without it (core/pki_lan.py)
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    net.pki_lan_ip.setText("192.168.1.10")
+    net.pki_lan_fixed.setChecked(True)
     build = advance_to(wiz, wizard_mod.BuildPage)   # Next through Worklist→…→Build commits the worklist
     assert build.gen_keys.isChecked()               # node key-zips on by default
     assert build.validatePage()                     # commit worklist / backend / gen-keys

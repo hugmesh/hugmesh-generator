@@ -1505,7 +1505,11 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    # wizard-flow bookkeeping for the build/mesh-start gate — saved with
                    # the config so re-opening one you already configured does not
                    # refuse, and emitted nowhere.
-                   "domain_services_reviewed")
+                   "domain_services_reviewed",
+                   # The pki node's LAN address + the operator's "it is fixed"
+                   # confirmation (core/pki_lan.py): the KEYS channel
+                   # (gen-provision-keys.sh --pki-ip), never a builder argv.
+                   "pki_lan_ip", "pki_lan_ip_fixed")
 
 
 # ── role-class capability layer (Qt-free; BESIDE PLATFORM_FIELD_SUPPORT, NEVER inside
@@ -3649,6 +3653,12 @@ class ImageConfig:
     tailscale: bool | str = ""         # --with-tailscale / --no-tailscale ('' | True/'on' | False/'off')
     sso: bool | str = ""               # --with-sso / --no-sso ('' | True/'on' | False/'off')
     headscale_url: str = ""            # brand mesh control-server URL — NOT a builder flag; env passthrough in build_driver (G2)
+    # The pki node's LAN address (core/pki_lan.py). A worker dials it before go-live,
+    # so a mesh REQUIRES it, with a static IP or a DHCP reservation behind it
+    # (pki_lan_ip_fixed). KEYS channel only: gen-provision-keys.sh --pki-ip stamps it
+    # on every stick — NOT a builder flag, no image byte changes.
+    pki_lan_ip: str = ""
+    pki_lan_ip_fixed: bool = False
     headscale_version: str = ""        # --headscale-version pin (all)
     tailscale_version: str = ""        # --tailscale-version pin (all)
     skip_tailscale: bool = False       # --skip-tailscale: headscale-only posture, distinct from --skip-mesh (all)
@@ -4399,6 +4409,15 @@ class ImageConfig:
         # (core.validate accepts .internal). Feeds the manifest + the KEYS channel.
         if self.superdomain:
             validate_domain_name(self.superdomain)
+        # The pki LAN address reaches a KEYS stick (provision.json) — shape-checked
+        # here so no face can save one gen-provision-keys.sh would refuse. Whether a
+        # mesh HAS one is pki_lan.problem's business (the build/keys gates), not this
+        # structural check: a saved config without it still loads.
+        if self.pki_lan_ip:
+            from . import pki_lan   # local import: config stays lean
+            err = pki_lan.ip_error(self.pki_lan_ip)
+            if err:
+                raise IdentityValidationError(f"{pki_lan.LABEL_IP}: {err}")
         for d in self.domains:
             if getattr(d, "name", ""):
                 validate_domain_name(d.name)

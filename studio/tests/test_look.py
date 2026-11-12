@@ -42,6 +42,12 @@ from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 STUDIO_ROOT = os.path.dirname(HERE)
 
+#: The test files that carry ``test_look_*`` tests. A new look test in another file
+#: must be added here, or it would never run anywhere (test_every_look_test_is_run
+#: below fails when a file carries one that is not listed).
+LOOK_FILES = ("test_anubis_tristate_page.py", "test_localcloud_nodes.py",
+              "test_pages_qemu.py", "test_pages_mesh_emulation.py",
+              "test_look_editor.py", "test_pki_lan_page.py")
 #: LOOK_FILES (tests/_look_files.py) names the test files that carry ``test_look_*``
 #: tests. A new look test in another file must be added there, or it would never run
 #: anywhere: tests/test_qt_suite_guards.py fails when a file carries one that is not

@@ -19,6 +19,11 @@ sys-apps/i2c-tools
 # ── Networking ─────────────────────────────────────────────────────
 net-misc/networkmanager
 net-misc/openssh
+# curl: keys-provision asks the mesh's baked control URL whether it answers as a
+# control server before a worker picks its login server (resolve_control_endpoint
+# in specs/etc/keys-provision/provision.sh). The stage3 seed already carries it;
+# naming it here puts it behind the requested-atom completeness gate.
+net-misc/curl
 net-wireless/wpa_supplicant
 net-firewall/iptables
 net-firewall/nftables

@@ -46,6 +46,7 @@ from ..core.config import (
 )
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
+from ..core import pki_lan, plain_words, platform_info
 from ..core import plain_words, platform_info
 from ..core.desktop_spec import step_applies as desktop_step_applies
 from ..core.validate import validate_domain_name
@@ -1045,6 +1046,13 @@ class BuildScreen:
             out.append("! the GUI build will refuse this configuration: " + refusal)
             out.append("  Walk the ‘Domain services’ step here (it gives every domain "
                        "its own page) before saving.")
+        # The pki LAN address (core/pki_lan.py): the GUI build's keys step refuses a
+        # mesh without it (WorklistDriver.preflight) — say so before the save.
+        pki_refusal = pki_lan.problem(cfg)
+        if pki_refusal:
+            out.append("")
+            out.append("! the GUI build will refuse this configuration: " + pki_refusal)
+            out.append("  Set it on the Network step here (ip ADDR, then fixed on).")
         out.append("")
         out.append("The TUI does not run builds yet — save this configuration "
                    "and build it in the GUI (python -m hugmesh_studio) or "

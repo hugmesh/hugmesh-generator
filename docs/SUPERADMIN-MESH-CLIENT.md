@@ -60,6 +60,11 @@ tailscale up \
 ```
 
 Resolve `<headscale-url>` the way the fleet does. In order of precedence:
+`provision.json .headscale.server_url`, then `provision.json .mesh.endpoint`, then,
+before go-live (the node is not past go-live and the baked URL does not answer as a
+control server), the pki node's fixed LAN address `http://<.mesh.pki_lan_ip>:8080`,
+then the baked brand var `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`), then
+`http://<primary-LAN-IPv4>:8080`. See
 `provision.json .headscale.server_url`, then `provision.json .mesh.endpoint`, then
 the baked brand var `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`), then
 `https://<primary-LAN-IPv4>:8080` (headscale serves TLS there with a certificate from
