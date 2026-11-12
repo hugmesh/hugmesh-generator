@@ -30,18 +30,18 @@ RELEASE_STATE="internal"            # internal (DEFAULT, LAN/tailnet-only) | pub
 # CLI flag.
 #
 # DEFAULT-INCLUSION POLICY:
-#   * DEFAULT-ON  (the built-in default when no selection is given): akkoma, tuwunel
+#   * DEFAULT-ON  (the built-in default when no selection is given): tuwunel
 #     (Matrix), phpbb.
-#   * DEFAULT-OFF (must be specifically added): games, owncast, tube (and any future
-#     user-level service). games is OPT-IN via ENABLE_GAMES / --enable-games or by
+#   * DEFAULT-OFF (must be specifically added): akkoma (image not yet published),
+#     games, owncast, tube (and any future user-level service). games is OPT-IN via ENABLE_GAMES / --enable-games or by
 #     listing 'games'; owncast/tube are GPU-gated x86 services.
 #   * FULL-SET: OPTIONAL_SERVICES="all" (or the --all-services CLI flag) selects
 #     EVERY user-level slug. EXCLUDE_SERVICES still subtracts (see below).
-# Leave commented to keep the DEFAULT set (akkoma tuwunel phpbb). Examples:
-#   OPTIONAL_SERVICES="akkoma tuwunel games"        # add games, drop forum
-#   OPTIONAL_SERVICES="akkoma tuwunel phpbb games"  # default set + games
+# Leave commented to keep the DEFAULT set (tuwunel phpbb). Examples:
+#   OPTIONAL_SERVICES="tuwunel games"               # add games, drop forum
+#   OPTIONAL_SERVICES="tuwunel phpbb games"         # default set + games
 #   OPTIONAL_SERVICES="all"                         # every user-level service
-# OPTIONAL_SERVICES="akkoma tuwunel phpbb games"
+# OPTIONAL_SERVICES="tuwunel phpbb games"
 #
 # EXCLUDE_SERVICES — the SUBTRACTIVE build-time exclusion list. Applied LAST, it
 # force-OFFs any user-level slug no matter how it became selected (default / this

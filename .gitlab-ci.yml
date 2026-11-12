@@ -1958,12 +1958,12 @@ lint:optional-service-slug-closure:
 #
 # ⚠ EXPECTED RED (measured 2026-08-27 against main at db8d7697, and RE-MEASURED the
 # same day when carried onto main at 6ba15d35: the same five, nothing else). FIVE
-# checks, each naming a live defect and each printing its own "GREEN WHEN" line:
-#   A4  build-jetson-stage4.sh bakes ${SYSROOT}/var/lib/hugmesh/cluster and never
-#       resolves gate_optional_services at all (it does not source
-#       scripts/_optional-services-lib.sh). Its own comment admits it. Since
-#       PR #183 the baked tree is what a device APPLIES, so a jetson image deploys
-#       every optional service whatever was selected.
+# checks, each naming a live defect and each printing its own "GREEN WHEN" line;
+# A4 has since gone green (2026-11-12):
+#   A4  GREEN since 2026-11-12. build-jetson-stage4.sh baked
+#       ${SYSROOT}/var/lib/hugmesh/cluster without resolving gate_optional_services,
+#       so a jetson image deployed every optional service whatever was selected.
+#       It now sources scripts/_optional-services-lib.sh and gates after the copy.
 #   B2  the installed-services ConfigMap and the seed OptionalService CRs are
 #       rendered into the baked sysroot and then synced FROM GIT by
 #       apps/16-reserved-prefixes-policy.yaml and apps/13d-optional-services-

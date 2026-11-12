@@ -479,6 +479,27 @@ The rules are tested by `scripts/test-mesh-node-release-channel.sh`, which the v
 job runs before anything else. Run it locally with
 `bash scripts/test-mesh-node-release-channel.sh` (no network, no docker).
 
+### The Akkoma image (hugmesh-akkoma)
+
+`.github/workflows/akkoma-release.yml` publishes `ghcr.io/hugmesh/hugmesh-akkoma`
+(Akkoma built from upstream source, `images/akkoma/README.md`) by exactly the mesh-node
+rules above, with the tag prefix `akkoma-v` and the version in `images/akkoma/VERSION`.
+That is the IMAGE's version; the Akkoma release it builds is `AKKOMA_VERSION` in the
+Dockerfile. Its X.Y must stay on the mesh-node image's line, because hugmesh-generator
+has one `release/X.Y` branch (`tests/scripts/test-akkoma-image-pin.sh` enforces it).
+The workflow boot-tests the image before it pushes, and its signing, attestation and
+tag steps are held equal to `mesh-node-release.yml`'s by the same test.
+
+`scripts/release/repos.tsv` holds one row per repository and `scripts/release.sh`
+refuses a repository listed twice, so this image is not yet part of a whole-org run
+(the generator's row is the mesh-node image). Release it by hand until the table can
+carry a second artifact per repository:
+
+```
+git tag akkoma-v$(cat images/akkoma/VERSION) origin/main   # beta: the commit must be on main
+git push origin akkoma-v$(cat images/akkoma/VERSION)
+```
+
 ## Testing the script
 
 `tests/scripts/test-release-beta.sh` runs it against a recording `gh` stub. It proves:
