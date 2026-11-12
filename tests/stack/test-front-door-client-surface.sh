@@ -271,9 +271,12 @@ check $? "both MEDIA_PROXY_*_ENABLED derive from MEDIA_POISONING_ENABLED (not ha
 
 # The base URLs must be the COMPOSE homeservers. The image defaults are the
 # cluster's akkoma-proxy/tuwunel-proxy, which are NXDOMAIN here — inheriting them
-# turns the 500 into a DNS failure rather than fixing anything.
-grep -q '^MEDIA_PROXY_MASTODON_BASE_URL=.*mastodon-web:3000' <<<"$UB"
-check $? "the mastodon media-proxy base URL is the compose homeserver"
+# turns the 500 into a DNS failure rather than fixing anything. On the Mastodon
+# side that is mastodon-front, the compose homeserver's own front (GUI-35): it is
+# what rewrites the uploaded attachment's https://localhost URLs to the proxied
+# path (tests/stack/test-mastodon-front.sh pins the rest of that wiring).
+grep -q '^MEDIA_PROXY_MASTODON_BASE_URL=.*mastodon-front:8080' <<<"$UB"
+check $? "the mastodon media-proxy base URL is the compose homeserver's front"
 grep -q '^MEDIA_PROXY_MATRIX_BASE_URL=.*tuwunel:8008' <<<"$UB"
 check $? "the matrix media-proxy base URL is the compose homeserver"
 ! grep -E '^MEDIA_PROXY_.*BASE_URL=' <<<"$UB" | grep 'svc.cluster.local' >/dev/null

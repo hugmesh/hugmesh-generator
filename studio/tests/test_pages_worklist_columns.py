@@ -21,7 +21,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 
 from hugmesh_studio.core.platform_info import HostInfo            # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod               # noqa: E402
-from hugmesh_studio.gui.qt import QtCore, QtWidgets               # noqa: E402
+from hugmesh_studio.gui.qt import QtCore, QtGui, QtWidgets        # noqa: E402
 from hugmesh_studio.gui.wizard import medium_size                 # noqa: E402
 from hugmesh_studio.gui.pages.worklist import (                   # noqa: E402
     WorklistPage, _COL_CHECK, _COL_BOARD, _COL_ENC, _COL_FLAVOR, _COL_NOTES,
@@ -138,3 +138,74 @@ def test_every_column_is_reachable_at_the_default_size(page):
     right = hdr.sectionViewportPosition(last) + hdr.sectionSize(last)
     assert right <= tree.viewport().width() + 1, (
         f"columns overflow the viewport: right edge {right} > {tree.viewport().width()}")
+
+
+# ── GUI-29: a jetson row's Encryption cell ──────────────────────────────────────────
+
+
+def _jetson_enc_cells(page):
+    """(entry id, row item, Encryption-cell widget) for every jetson row."""
+    return [(rid, item, page.tree.itemWidget(item, _COL_ENC))
+            for rid, item in page.rows.items() if rid.endswith(".jetson")]
+
+
+def _combo_text_room(combo) -> int:
+    """The width the combo's style gives its current text: the edit field, inside the
+    frame and left of the arrow. Text wider than this is cut where the operator reads it."""
+    opt = QtWidgets.QStyleOptionComboBox()
+    opt.initFrom(combo)
+    opt.editable = combo.isEditable()
+    opt.frame = combo.hasFrame()
+    opt.currentText = combo.currentText()
+    return combo.style().subControlRect(
+        QtWidgets.QStyle.ComplexControl.CC_ComboBox, opt,
+        QtWidgets.QStyle.SubControl.SC_ComboBoxEditField, combo).width()
+
+
+@pytest.mark.parametrize("size", [None, (942, 552)], ids=["default", "942x552"])
+def test_jetson_encryption_cell_fits_and_says_why(page, size):
+    """GUI-29: the jetson Encryption cell read "off — jetson cannot encrypt" in a 90 px
+    column, so the screen showed "off — jetson" and never the part that says why. The
+    cell must show its whole value, and the reason must still be on the cell (its
+    tooltip) and in the row's Notes, whose whole text is that cell's tooltip."""
+    if size is not None:
+        page.wizard().resize(*size)
+        QtWidgets.QApplication.processEvents()
+    cells = _jetson_enc_cells(page)
+    assert cells, "no jetson rows on the worklist: nothing below would be checked"
+    for rid, item, combo in cells:
+        assert combo is not None and not combo.isEnabled(), (
+            f"{rid}: the jetson Encryption cell is a fixed, disabled display")
+        assert page._enc_combos[rid] is None, f"{rid}: jetson must not emit a choice"
+        text = combo.currentText()
+        need = combo.fontMetrics().horizontalAdvance(text)
+        room = _combo_text_room(combo)
+        assert need <= room, (
+            f"{rid}: Encryption cell text {text!r} needs {need}px, the combo shows "
+            f"{room}px of it")
+        assert combo.sizeHint().width() <= combo.width(), (
+            f"{rid}: the Encryption cell wants {combo.sizeHint().width()}px, the column "
+            f"gives it {combo.width()}px")
+        for where, tip in (("combo", combo.toolTip()), ("cell", item.toolTip(_COL_ENC))):
+            assert "jetson cannot encrypt" in tip and "boot+root" in tip, (
+                f"{rid}: the {where} tooltip must carry the reason, got {tip!r}")
+        notes = item.text(_COL_NOTES)
+        assert "no root encryption" in notes and "jetson" in notes, notes
+        assert item.toolTip(_COL_NOTES) == notes, (
+            f"{rid}: the Notes cell elides at the netbook size; its tooltip must be the "
+            "whole text")
+
+
+def test_jetson_encryption_reason_shows_on_hover(page):
+    """A disabled widget still answers a tooltip request: hovering the greyed cell shows
+    the reason (the request is sent the way the platform sends a hover)."""
+    _rid, _item, combo = _jetson_enc_cells(page)[0]
+    QtWidgets.QToolTip.hideText()
+    pos = combo.rect().center()
+    QtWidgets.QApplication.sendEvent(combo, QtGui.QHelpEvent(
+        QtCore.QEvent.Type.ToolTip, pos, combo.mapToGlobal(pos)))
+    QtWidgets.QApplication.processEvents()
+    try:
+        assert "jetson cannot encrypt" in QtWidgets.QToolTip.text()
+    finally:
+        QtWidgets.QToolTip.hideText()

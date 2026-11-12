@@ -289,6 +289,21 @@ inc="$(grep -n '^auth[[:space:]]*include[[:space:]]*system-local-login' "${WORK}
 echo_l="$(grep -n '^auth[[:space:]]*optional[[:space:]]*pam_echo.so file=/run/hugmesh/sso-greeter/hint' "${WORK}/stack" | cut -d: -f1)"
 [ -n "${ex}" ] && [ -n "${inc}" ] && [ -n "${echo_l}" ] && [ "${echo_l}" -lt "${ex}" ] && [ "${ex}" -lt "${inc}" ] \
     && ok "auth order: pam_echo hint, then the SSO exec line, then include system-local-login" || bad "auth order wrong (echo=${echo_l} exec=${ex} include=${inc})"
+# The failure notice's off switch (pam-ok) must come AFTER the include: a wrong
+# password never reaches it (pambase dies at faillock authfail), so the retry shows
+# "Sign-in as X failed"; before the include it would disarm every attempt.
+# tests/desktop-governance/test-sso-greeter.sh executes this through libpam.
+okl="$(grep -n '^auth[[:space:]]*optional[[:space:]]*pam_exec.so quiet /usr/lib/hugmesh/sso-greeter pam-ok$' "${WORK}/stack" | cut -d: -f1)"
+[ -n "${okl}" ] && [ -n "${inc}" ] && [ "${okl}" -gt "${inc}" ] \
+    && ok "auth order: the optional pam-ok line (failure-notice off switch) follows include system-local-login" \
+    || bad "pam-ok line missing or not after the auth include (pam-ok=${okl} include=${inc})"
+# ...and whose notice it is: `pam-hint` rewrites the hint for THIS conversation's
+# user, so it must be the line straight before pam_echo (after it, pam_echo shows
+# the previous user's notice; without it, every user picked next sees it).
+hl="$(grep -n '^auth[[:space:]]*optional[[:space:]]*pam_exec.so quiet /usr/lib/hugmesh/sso-greeter pam-hint$' "${WORK}/stack" | cut -d: -f1)"
+[ -n "${hl}" ] && [ -n "${echo_l}" ] && [ "$((hl + 1))" -eq "${echo_l}" ] \
+    && ok "auth order: the optional pam-hint line comes straight before pam_echo" \
+    || bad "pam-hint line missing or not straight before pam_echo (pam-hint=${hl} echo=${echo_l})"
 grep -q '^auth[[:space:]]*\[success=done default=ignore\][[:space:]]*pam_exec.so' "${WORK}/stack" \
     && ok "exec control is [success=done default=ignore] (SSO success ends auth; anything else is ignored)" || bad "exec control wrong"
 sinc="$(grep -n '^session[[:space:]]*include[[:space:]]*system-local-login' "${WORK}/stack" | cut -d: -f1)"

@@ -56,7 +56,8 @@
 -- line shape is the renderer's ANCHOR — keep it exactly:
 --     UPDATE federation_modules SET enabled = <true|false> WHERE slug = '<module>';
 -- The committed values are the DEFAULT-INCLUSION baseline from
--- optional-services.yaml (akkoma/tuwunel/phpbb default: on; the rest default: off),
+-- optional-services.yaml (tuwunel/phpbb default: on; the rest default: off, akkoma
+-- included since 2026-11-11 because its image is not yet published),
 -- so an unrendered tree still says something true.
 --
 -- Idempotent, and safe on a mesh whose federation-api has not run its changelog
@@ -74,7 +75,7 @@ END
 $gate$;
 
 -- ── akkoma (Mastodon) — catalogue slug: akkoma ───────────────────────────────
-UPDATE federation_modules SET enabled = true WHERE slug = 'mastodon';
+UPDATE federation_modules SET enabled = false WHERE slug = 'mastodon';
 -- ── tuwunel (Matrix) — catalogue slug: tuwunel ───────────────────────────────
 UPDATE federation_modules SET enabled = true WHERE slug = 'matrix';
 -- ── phpBB forum — catalogue slug: phpbb (MODULE slug differs: forum) ─────────
