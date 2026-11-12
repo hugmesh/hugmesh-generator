@@ -65,10 +65,12 @@ hugmesh_pretend_needs() {
         #   emerge: there are no ebuilds built with USE flags to satisfy "...".
         #   !!! One of the following packages is required to complete your request:
         #   - media-video/ffmpeg-8.1.2::gentoo (Change USE: +opus +x264)
-        # The first alternative is portage'"'"'s preferred one (highest version), and its
-        # line becomes ">=CAT/PN-VER opus x264" (what --autounmask-write writes). Only
-        # a hint that is NOTHING BUT a USE change counts: ", this change violates use
-        # flag constraints ..." or "Missing IUSE" stay unnamed, so the result is error.
+        # (_emerge/depgraph.py _show_unsatisfied_dep, printed under NOCOLOR.) The list
+        # holds at most two alternatives: FIRST the change to the dependency itself, then, when
+        # there is one, changing the USE of the PARENT instead. Only the first is taken, and
+        # it becomes ">=CAT/PN-VER opus x264" (what --autounmask-write writes). Only a
+        # hint that is NOTHING BUT a USE change counts: ", this change violates use flag
+        # constraints ..." or "Missing IUSE" stay unnamed, so that result is error.
         /^!!! One of the following packages is required to complete your request/ { oneof = 1; kind = ""; next }
         oneof && /^- / {
             oneof = 0

@@ -93,6 +93,43 @@ def test_a_real_clean_run_parses_clean():
     assert r.excerpt[-1].startswith("Total: 687 packages")
 
 
+def _report_on(fixture: str, rc: int):
+    import subprocess
+    script = (f'. "{GEN}/scripts/_pretend-lib.sh"; '
+              '_hugmesh_pretend_conf_list() { printf "python3_14"; }; '
+              f'hugmesh_pretend_report "{FIX}/{fixture}" {rc}')
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    return p.returncode, dp.parse(p.stdout.splitlines(), p.returncode)
+
+
+def test_the_real_obs_use_wall_is_named_and_its_fix_passes_both_grammars():
+    """needs-real-obs-r1/r2.txt are the REAL resolver output of the 2026-11-11 OBS rounds.
+    Portage listed the keyword change, but printed the ffmpeg USE wall as a
+    "(Change USE: +opus +x264)" hint; read as a need, applied by the same call the
+    Apply button / --apply-portage-fixes make, and accepted by the Studio grammar AND
+    the builder's own dc_check_use_line / dc_check_keyword_line."""
+    import subprocess
+    rc, r1 = _report_on("needs-real-obs-r1.txt", 1)
+    assert (rc, r1.status) == (3, "needs")
+    assert r1.needs == [("accept_keywords", "=media-video/obs-studio-32.2.2 ~amd64"),
+                        ("package.use", ">=media-video/ffmpeg-8.1.2 opus x264")]
+    rc, r2 = _report_on("needs-real-obs-r2.txt", 1)
+    assert (rc, r2.status, r2.needs) == (3, "needs", [("package.use", ">=media-video/ffmpeg-8.1.2 opus x264")])
+    cfg = _laptop()
+    applied = ds.apply_changes(cfg, r1.applicable_needs(), source="autounmask", pretend_run="r1")
+    assert [c.kind for c in applied] == ["accept_keywords", "package.use"]
+    assert ds.grammar_errors(cfg) == []
+    argv = cfg.to_cli_args()
+    assert argv[argv.index("--package-use") + 1] == ">=media-video/ffmpeg-8.1.2 opus x264"
+    assert argv[argv.index("--accept-keywords") + 1] == "=media-video/obs-studio-32.2.2 ~amd64"
+    lib = os.path.join(GEN, "scripts", "_desktop-config-lib.sh")
+    for fn, line in (("dc_check_use_line", ">=media-video/ffmpeg-8.1.2 opus x264"),
+                     ("dc_check_keyword_line", "=media-video/obs-studio-32.2.2 ~amd64")):
+        p = subprocess.run(["bash", "-c", f'. "{lib}"; {fn} "$1" amd64', "_", line],
+                           capture_output=True, text=True)
+        assert p.returncode == 0, (fn, p.stdout, p.stderr)
+
+
 def test_the_builders_own_output_parses(tmp_path):
     """The shell side prints what this side parses: run scripts/_pretend-lib.sh's report on
     the shared fixture and feed its stdout to parse()."""

@@ -211,6 +211,36 @@ out="$(pretend empty.txt 0)"; rc=$?
 out="$(pretend needs-nul.bin 1 2>/dev/null)"; rc=$?
 [ "${rc}" = 3 ] && printf '%s\n' "${out}" | grep -x '==> Pretend needs: package.use >=media-video/ffmpeg-7.1.5 opus x264' >/dev/null \
     && ok "a NUL byte in the log does not blind the parser" || bad "NUL log rc=${rc}"
+# needs-real-obs-r1/r2.txt are the REAL resolver output of the 2026-11-11 OBS rounds
+# (standalone-thin + native media-video/obs-studio). Portage listed the keyword change
+# but put the ffmpeg USE wall in its OTHER form, a "(Change USE: +opus +x264)" hint
+# under "!!! One of the following packages is required"; the parser missed it, round 1
+# applied the keyword only, and round 2 came back "error" with nothing to apply.
+out="$(pretend needs-real-obs-r1.txt 1)"; rc=$?
+[ "${rc}" = 3 ] && ok "real OBS round 1 -> needs" || bad "real OBS round 1 rc=${rc}"
+printf '%s\n' "${out}" | grep -x '==> Pretend needs: accept_keywords =media-video/obs-studio-32.2.2 ~amd64' >/dev/null \
+    && ok "real OBS round 1: the keyword change" || bad "real OBS round 1: no keyword need"
+printf '%s\n' "${out}" | grep -x '==> Pretend needs: package.use >=media-video/ffmpeg-8.1.2 opus x264' >/dev/null \
+    && ok "real OBS round 1: the USE wall from portage's (Change USE: ...) hint" || bad "real OBS round 1: USE hint not read"
+[ "$(printf '%s\n' "${out}" | grep -c '^==> Pretend needs: ')" = 2 ] && ok "real OBS round 1: exactly two needs" \
+    || bad "real OBS round 1 needs: $(printf '%s\n' "${out}" | grep '^==> Pretend needs')"
+out="$(pretend needs-real-obs-r2.txt 1)"; rc=$?
+[ "${rc}" = 3 ] && [ "$(printf '%s\n' "${out}" | grep -c '^==> Pretend needs: ')" = 1 ] \
+    && printf '%s\n' "${out}" | grep -x '==> Pretend needs: package.use >=media-video/ffmpeg-8.1.2 opus x264' >/dev/null \
+    && ok "real OBS round 2 (keyword applied): the USE hint alone is a need, not an error" || bad "real OBS round 2 rc=${rc}: ${out%%=====*}"
+out="$(pretend hint-violates.txt 1)"; rc=$?
+[ "${rc}" = 1 ] && ! printf '%s\n' "${out}" | grep '^==> Pretend needs: ' >/dev/null \
+    && ok "a hint that would violate REQUIRED_USE is not named (error, the operator decides)" || bad "violating hint rc=${rc}"
+out="$(pretend hint-alternatives.txt 1)"; rc=$?
+[ "${rc}" = 3 ] && [ "$(printf '%s\n' "${out}" | grep -c '^==> Pretend needs: ')" = 1 ] \
+    && printf '%s\n' "${out}" | grep -x '==> Pretend needs: package.use >=media-libs/libbar-3.1-r1 gtk -static' >/dev/null \
+    && ok "the hint's FIRST alternative only (the dependency, not the parent), a -flag kept, a dash line outside the block ignored" \
+    || bad "alternatives rc=${rc}: $(printf '%s\n' "${out}" | grep '^==> Pretend needs')"
+# synthetic scoping guard: a "- ... (Change USE: ...)" line that does not DIRECTLY follow
+# the header is not part of portage's list
+out="$(pretend hint-out-of-block.txt 1)"; rc=$?
+[ "${rc}" = 1 ] && ! printf '%s\n' "${out}" | grep '^==> Pretend needs: ' >/dev/null \
+    && ok "a hint line that does not directly follow the header is not named" || bad "out-of-block hint rc=${rc}"
 
 echo "== 7. builder wiring (static)"
 ALL=(build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh)
