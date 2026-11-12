@@ -3869,6 +3869,7 @@ orphan-guards-verify:
         tests/scripts/test-stage4-pack-ownership.sh
         tests/scripts/test-x86-artifact-integrity.sh
         tests/scripts/test-x86-boot-firewall-snort.sh
+        tests/scripts/test-x86-build-sudoers-strip.sh
         tests/scripts/test-x86-live-root-pack.sh
         tests/stack/test-front-door-client-surface.sh
       "
