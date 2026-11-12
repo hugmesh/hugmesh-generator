@@ -195,7 +195,8 @@ PKI_LAN_IP ?=
 #                node-local relay; the keys step stamps the sticks. With MESH_CONTROL_
 #                ONION_MINT=1 the control onion key is minted at KEYS time into
 #                $(WORK_DIR)/mesh-control-onion (pki stick only; its secret key is
-#                removed once every stick is made). Default lan: nothing changes.
+#                removed once the pki stick of the run holds it). Default lan:
+#                nothing changes.
 MESH_CONTROL_TRANSPORT ?=
 MESH_CONTROL_ONION_MINT ?=
 

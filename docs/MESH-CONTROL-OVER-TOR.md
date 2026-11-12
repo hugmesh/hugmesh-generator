@@ -159,7 +159,9 @@ it before you choose a Tor transport.
 **What could narrow it, and why it is not done here:**
 
 - headscale 0.23.0 has no setting that turns off routes such as `/swagger`, `/apple`
-  or `/windows`, and none that verifies relay clients.
+  or `/windows`, and none that verifies relay clients: the pinned binary carries no
+  `verify_clients` key at all, and its only `disable_*` setting is
+  `disable_check_updates`.
 - A path filter would have to terminate TLS on the pki (the relay passes TLS through
   unread) and would still have to pass `/derp` — which is the open relay.
 - **Tor v3 client authorization** would close the onion itself to anyone without a
@@ -299,7 +301,9 @@ What the relay design keeps off the network, and what it does not:
   mitigation: the managed block makes
   tailscaled **need** the relay (`rc_need="hugmesh-mesh-control-relay"`), the relay's
   OpenRC service starts before tailscaled, and `supervise-daemon` respawns it within
-  2 s. A relay that crashes still leaves that window open; it is not boot-tested.
+  2 s. A relay that crashes still leaves that window open. **Not verified on a real
+  OpenRC:** the offline guard checks that the block carries `rc_need`; no node has
+  booted with it.
 - **Not covered — the captive-portal probe:** tailscaled's captive-portal probe (DNS
   and HTTP for `controlplane.tailscale.com` and `login.tailscale.com`) still runs in
   every mode, outside Tor. That needs its own decision (the same open question as
