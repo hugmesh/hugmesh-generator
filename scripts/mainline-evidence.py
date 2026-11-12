@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Look up, per candidate board, the mainline U-Boot defconfig and kernel device tree.
 
-The evidence file is ``studio/hugmesh_studio/core/mainline-evidence.json``. It names two
+The evidence file is ``studio/evidence/mainline-evidence.json``. It names two
 upstream trees at release tags and, per board, the mainline device-tree name to look for
 (``rockchip/rk3588-rock-5b``). This script clones each tree at its tag (shallow, no
 blobs, ``configs/`` only) and records, per board:
@@ -40,8 +40,9 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GENERATOR_DIR = os.path.dirname(HERE)
-DEFAULT_EVIDENCE = os.path.join(
-    GENERATOR_DIR, "studio", "hugmesh_studio", "core", "mainline-evidence.json")
+# Under studio/ so the Studio tests run when it changes; outside the package because
+# the Studio does not read it at run time and must not ship it.
+DEFAULT_EVIDENCE = os.path.join(GENERATOR_DIR, "studio", "evidence", "mainline-evidence.json")
 
 # catalog arch -> the directory name both trees use for it.
 ARCH_DIRS = {"arm64": "arm64", "riscv64": "riscv", "armv7": "arm"}

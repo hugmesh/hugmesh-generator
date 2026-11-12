@@ -1,6 +1,6 @@
 """Mainline evidence for candidate boards, and the promotion guard it feeds.
 
-``hugmesh_studio/core/mainline-evidence.json`` records, per candidate board, the
+``studio/evidence/mainline-evidence.json`` records, per candidate board, the
 mainline U-Boot defconfig and kernel device tree, looked up at named release tags by
 ``scripts/mainline-evidence.py``. This file:
 
@@ -36,7 +36,7 @@ from hugmesh_studio.core import device_catalog as dc
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
-EVIDENCE_PATH = os.path.join(os.path.dirname(dc.CATALOG_PATH), "mainline-evidence.json")
+EVIDENCE_PATH = os.path.join(STUDIO_ROOT, "evidence", "mainline-evidence.json")
 SCRIPT = os.path.join(GENERATOR_DIR, "scripts", "mainline-evidence.py")
 
 FOUND = "found"
