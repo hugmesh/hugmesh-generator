@@ -305,18 +305,16 @@ def test_every_known_qt_entry_names_a_real_test():
             name = node.split("::", 1)[1].split("[", 1)[0]
             assert name in names, f"known list names {node}: no such test in {path}"
             assert node.count("::") == 1, f"{node}: a class-scoped id is not supported"
-    for path in known.exit_abort:
-        assert os.path.isfile(os.path.join(STUDIO_ROOT, path)), \
-            f"known list names {path} (exit-abort), which does not exist"
 
 
 def test_the_known_list_wants_a_reason_and_a_shape():
     empty = rfbf.parse_known("# every entry fixed\n\n")
-    assert empty.nodes == {} and empty.exit_abort == set()
-    k = rfbf.parse_known("# c\n\ntests/a.py::t[x]  # why\ntests/b.py  exit-abort  # why\n")
-    assert k.nodes == {"tests/a.py": ["tests/a.py::t[x]"]} and k.exit_abort == {"tests/b.py"}
+    assert empty.nodes == {}
+    k = rfbf.parse_known("# c\n\ntests/a.py::t[x]  # why\ntests/b.py::u  # why\n")
+    assert k.nodes == {"tests/a.py": ["tests/a.py::t[x]"], "tests/b.py": ["tests/b.py::u"]}
     for bad in ("tests/a.py::t", "tests/a.py::t  #  ", "tests/a.py  # whole file",
-                "tests/a.py  skip  # why", "tests/a.py::t  exit-abort  # why"):
+                "tests/a.py  skip  # why", "tests/a.py::t  extra  # why",
+                "tests/a.py  exit-abort  # why"):
         with pytest.raises(ValueError):
             rfbf.parse_known(bad)
 
@@ -340,23 +338,24 @@ def test_a_known_test_is_left_out_of_its_files_run_and_reported():
     assert why == "pytest exit 1"
 
 
-def test_an_exit_abort_is_tolerated_only_where_listed_and_only_after_a_clean_run():
-    k = rfbf.parse_known("tests/a.py  exit-abort  # QThread at exit\n")
+def test_an_abort_at_exit_after_a_clean_run_is_reported_and_any_other_crash_is_red():
+    """PySide6's qFatal on a QThread still running at teardown, which timing moves from
+    file to file: reported for every file, never listed. Only AFTER a clean summary."""
+    k = rfbf.parse_known("")
     passed_then_abort = "....\n4 passed in 1s\nQThread: Destroyed while thread is still running\n"
-    why, notes = rfbf.judge("tests/a.py", -6, passed_then_abort, None, k, True)
-    assert why == "" and "aborted at exit" in notes[0], (why, notes)
-    why, notes = rfbf.judge("tests/a.py", 134, passed_then_abort, None, k, True)
-    assert why == "" and notes, (why, notes)
-    # the same abort in a file that is not listed is red
-    why, _notes = rfbf.judge("tests/b.py", -6, passed_then_abort, None, k, True)
-    assert "died" in why, why
-    # a failure before the abort is red even in a listed file
+    for rc in (-6, 134):
+        why, notes = rfbf.judge("tests/a.py", rc, passed_then_abort, None, k, True)
+        assert why == "" and "aborted at exit" in notes[0], (rc, why, notes)
+    # a failure before the abort is red
     why, _notes = rfbf.judge("tests/a.py", -6, "1 failed, 3 passed in 1s\n", None, k, True)
     assert "died" in why, why
     # an abort mid-run (no summary) is red
     why, _notes = rfbf.judge("tests/a.py", -6, "..Fatal Python error: Aborted\n", None, k, True)
     assert "died" in why, why
-    # and a listed file that skipped for want of Qt is still blind
+    # a segfault after a summary that ran nothing is red
+    why, _notes = rfbf.judge("tests/a.py", -11, "3 skipped in 1s\n", None, k, True)
+    assert "died" in why, why
+    # and a file that skipped for want of Qt is still blind
     blind = "SKIPPED [1] tests/a.py:3: no Qt binding installed\n1 passed, 1 skipped in 1s\n"
     why, _notes = rfbf.judge("tests/a.py", -6, blind, None, k, True)
     assert "missing Qt binding" in why, why

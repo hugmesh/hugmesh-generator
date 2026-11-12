@@ -9,8 +9,12 @@
 # Separate from known-failures.txt, which feeds the Qt-free `pytest` job (and is empty).
 #
 #   FILE::TEST[id]  # why        one test, left out of the gating run and reported
-#   FILE  exit-abort  # why      the file's tests gate; an abort AT EXIT after they all
-#                                passed is reported, not red (any other crash is red)
+#
+# An abort AT EXIT after a clean run (PySide6's qFatal on a QThread still running at
+# teardown) is not listed here: it moves between files with timing, so the runner reports
+# it for every file (see tests/run_file_by_file.py). Seen so far, on the runner or a
+# loaded developer box: test_code_folders_gui.py, test_domains_row_checks_saved_door.py,
+# test_e2e_lane_doors.py.
 #
 # tests/test_qt_suite_guards.py checks that every FILE and TEST named here exists, and the
 # runner turns a file red when an entry here deselects nothing.
@@ -39,12 +43,8 @@ tests/journey/test_brand_superbrand_image.py::test_a_created_superbrand_reaches_
 tests/journey/test_brand_superbrand_image.py::test_both_faces_write_the_same_command_and_the_same_configuration  # same: two docker commands carry different random --name values
 tests/journey/test_brand_superbrand_image.py::test_the_four_places_that_refuse_a_brand_identity_on_an_unaffiliated_image  # same: docker-host command (see above)
 
+# ── timing: red on 1 of the first 3 runner runs, and on a loaded developer box ───────
+tests/test_local_ai_dock_pull.py::test_an_offer_for_a_named_model_stays_until_that_model_is_in  # the offer row is still shown when wait_for gives up (flaky)
+
 # ── red on main without Qt as well (the go-live lane, #926/#931) ─────────────────────
 tests/test_golive_docs_emulated.py::test_status_callout_says_what_has_landed  # the status callout still says FG3's proof lane has not merged; #926 merged it
-
-# ── PySide6 aborts the interpreter at exit on a QThread still running ────────────────
-# "QThread: Destroyed while thread '' is still running" after every test passed. Timing
-# decides it: test_code_folders_gui.py aborted 3 runs of 3 on a loaded developer box and
-# on 1 of the first 2 runner runs; test_domains_row_checks_saved_door.py aborted on all.
-tests/test_domains_row_checks_saved_door.py  exit-abort  # a worker QThread outlives the tests (PySide6 qFatal at exit)
-tests/test_code_folders_gui.py  exit-abort  # a worker QThread outlives the tests (PySide6 qFatal at exit)

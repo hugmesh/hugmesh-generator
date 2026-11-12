@@ -19,13 +19,19 @@ a Qt job whose GUI tests all skip is green and blind, the very defect it exists 
 this job was added, so the job grades the change under review and not that backlog, and
 says so on every run rather than hiding it:
 
-* ``tests/x.py::test_y[id]  # why`` is deselected from the file's run, so the rest of
-  the file still gates; then it is run on its own and reported (still failing, or
-  passing: delete the line). An entry that deselects nothing is red: pytest silently
-  ignores a ``--deselect`` that matches no test, and a mute that mutes nothing hides rot.
-* ``tests/x.py  exit-abort  # why``: the file's tests gate as usual, but an interpreter
-  that aborts at EXIT after a summary with no failure (PySide6's qFatal on a QThread
-  still running at teardown) is reported, not red. Any other crash of it is red.
+``tests/x.py::test_y[id]  # why``: the test is deselected from the file's run, so the
+rest of the file still gates; then it is run on its own and reported (still failing, or
+passing: delete the line). An entry that deselects nothing is red: pytest silently
+ignores a ``--deselect`` that matches no test, and a mute that mutes nothing hides rot.
+
+ONE CLASS IS REPORTED FOR EVERY FILE, NOT LISTED: an interpreter that aborts at EXIT
+after pytest printed a summary with tests passed and none failed. That is PySide6
+turning a QThread still running at teardown into qFatal, and timing decides which file
+it hits: across the first three runs on the runner it hit test_code_folders_gui.py,
+test_domains_row_checks_saved_door.py and test_e2e_lane_doors.py in different
+combinations, so a per-file list could only flake. Every test in such a file has
+already gated; the abort is printed and put in the job summary on every run. Any other
+crash (mid-run, or after a failure) is red.
 
 Run from studio/ (pytest.ini's rootdir). Exit 0 when every file passed, 1 when any
 did not, 2 when the run could not start (a usage error, a malformed known list or the Qt
@@ -81,12 +87,10 @@ def skipped_for_missing_qt(output: str) -> list[str]:
 
 
 class KnownList:
-    """A parsed ``--known`` file: node ids per file, and the files allowed to abort at
-    exit after their tests passed."""
+    """A parsed ``--known`` file: the known node ids, per file."""
 
-    def __init__(self, nodes=None, exit_abort=None):
+    def __init__(self, nodes=None):
         self.nodes: dict[str, list[str]] = nodes or {}
-        self.exit_abort: set[str] = exit_abort or set()
 
 
 def parse_known(text: str) -> KnownList:
@@ -104,11 +108,8 @@ def parse_known(text: str) -> KnownList:
         if len(words) == 1 and "::" in words[0]:
             path = words[0].split("::", 1)[0]
             known.nodes.setdefault(path, []).append(words[0])
-        elif len(words) == 2 and words[1] == "exit-abort" and "::" not in words[0]:
-            known.exit_abort.add(words[0])
         else:
-            raise ValueError(f"known list line {n}: want 'FILE::TEST  # why' or "
-                             f"'FILE  exit-abort  # why', got {raw!r}")
+            raise ValueError(f"known list line {n}: want 'FILE::TEST  # why', got {raw!r}")
     return known
 
 
@@ -185,9 +186,10 @@ def judge(path: str, returncode, output: str, rerun, known: KnownList,
             return (f"the known list deselects {len(mine)} test(s) here and pytest "
                     f"deselected {got}: an entry names no test"), notes
     why = verdict(returncode, output, require_qt)
-    if why and path in known.exit_abort and aborted_after_passing(returncode, output):
+    if why and aborted_after_passing(returncode, output):
         notes.append(f"aborted at exit (exit {returncode}) after "
-                     f"{_counts(output).get('passed', 0)} passed (exit-abort)")
+                     f"{_counts(output).get('passed', 0)} passed, none failed (reported, "
+                     "not red: see the module docstring)")
         why = verdict(0, output, require_qt)   # still red on a Qt-less skip
     if rerun is not None:
         rc, out, _secs = rerun
