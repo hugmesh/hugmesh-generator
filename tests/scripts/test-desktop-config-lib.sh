@@ -226,7 +226,7 @@ r="${TMP}/fb-alone"; rm -rf "${r}"; make_root "${r}"; mkdir -p "${r}/etc/hugmesh
 printf 'ann true %s\ncarl false %s\n' "${FB_HASH}" "${FB_HASH}" > "${r}/etc/hugmesh/extra-local-users"
 render_extra "${r}"; run_extra "${r}"
 expect "02 alone on an empty sudoers"      "${r}" y wheel
-grep -c '^%wheel ALL=(ALL) ALL' "${r}/etc/sudoers" | grep -qx 1 && ok "02 alone: exactly one %wheel line" || bad "02 alone: %wheel lines: $(cat "${r}/etc/sudoers")"
+[ "$(grep -c '^%wheel ALL=(ALL) ALL' "${r}/etc/sudoers")" = 1 ] && ok "02 alone: exactly one %wheel line" || bad "02 alone: %wheel lines: $(cat "${r}/etc/sudoers")"
 
 echo "== 5. Python targets"
 PS="${TMP}/py"; mkdir -p "${PS}/etc/portage/package.use" "${PS}/usr/lib/python3.13" "${PS}/var/db/pkg/dev-lang/python-3.13.5"
