@@ -107,28 +107,65 @@ def test_check_column_auto_sizes_to_contents(page):
     assert hdr.minimumSectionSize() <= 24
 
 
+def _combos_in(tree, col):
+    """Every setItemWidget() combo in column ``col``, over the whole tree."""
+    found = []
+    it = QtWidgets.QTreeWidgetItemIterator(tree)
+    while it.value():
+        w = tree.itemWidget(it.value(), col)
+        if isinstance(w, QtWidgets.QComboBox):
+            found.append(w)
+        it += 1
+    return found
+
+
 def test_widget_columns_are_not_resize_to_contents(page):
-    """THE TRAP. _COL_BOARD/_COL_FLAVOR/_COL_ENC are filled with setItemWidget() combos,
-    so the ITEM TEXT is empty and sizeHintForColumn() reports 0 for them. Giving these
-    ResizeToContents would collapse them to ~0 and HIDE the combos — trading the reported
-    bug for a worse one. They must keep explicit, non-zero widths."""
-    tree, hdr = page.tree, page.tree.header()
-    for col, name in ((_COL_BOARD, "board"), (_COL_FLAVOR, "flavor"), (_COL_ENC, "enc")):
+    """THE TRAP. _COL_BOARD/_COL_RAM/_COL_FLAVOR/_COL_ENC are filled with setItemWidget()
+    combos. When this page was written, sizeHintForColumn() measured 0 for them and
+    ResizeToContents collapsed the column and HID the combos; on Qt 6.11 it measures the
+    combos' LONGEST item instead and would push the row off-screen. So they keep
+    explicit, non-zero widths — and those widths must hold what each column carries."""
+    from hugmesh_studio.gui.pages.worklist import _COL_RAM
+    hdr = page.tree.header()
+    for col, name in ((_COL_BOARD, "board"), (_COL_RAM, "ram"), (_COL_FLAVOR, "flavor"),
+                      (_COL_ENC, "enc")):
         assert hdr.sectionResizeMode(col) != \
             QtWidgets.QHeaderView.ResizeMode.ResizeToContents, (
             f"{name} column is ResizeToContents, but its cells hold setItemWidget() "
-            f"combos with no item text — it would collapse to ~0 and hide the combos")
+            f"combos: it would collapse (or widen to the combos' longest item)")
         assert hdr.sectionSize(col) >= 60, f"{name} column too narrow for its combo"
-    # the trap is real, not hypothetical: the item text really does measure 0
-    assert tree.sizeHintForColumn(_COL_FLAVOR) == 0
+
+
+def test_combo_columns_hold_their_widest_combo_and_their_header(page):
+    """A combo column narrower than its widest combo cuts that combo's text where the
+    operator reads it ("orange-pi-5-plus", the RAM column's "choose…"), and one narrower
+    than its header cuts the header ("Flavor/Desktop"). Measured with this run's own
+    style and font, so a wider font (DejaVu Sans on a CI runner) is checked too. The
+    Encryption column is not measured here: its jetson cell is GUI-29's (#1011)."""
+    from hugmesh_studio.gui.pages.worklist import _COL_RAM
+    tree, hdr = page.tree, page.tree.header()
+    for col, name in ((_COL_BOARD, "board"), (_COL_RAM, "ram"), (_COL_FLAVOR, "flavor")):
+        combos = _combos_in(tree, col)
+        assert combos, f"no {name} combo on the worklist: nothing would be measured"
+        widest = max(combos, key=lambda c: c.sizeHint().width())
+        assert hdr.sectionSize(col) >= widest.sizeHint().width(), (
+            f"{name} column is {hdr.sectionSize(col)}px; its combo showing "
+            f"{widest.currentText()!r} wants {widest.sizeHint().width()}px")
+        assert hdr.sectionSize(col) >= hdr.sectionSizeHint(col), (
+            f"{name} column is {hdr.sectionSize(col)}px; its header label wants "
+            f"{hdr.sectionSizeHint(col)}px")
 
 
 def test_notes_absorbs_the_slack(page):
     """Notes stretches, replacing the accidental stretchLastSection outcome that handed
-    Notes 452px while Role starved at 100 despite needing 391."""
+    Notes 452px while Role starved at 100 despite needing 391. Sitting AT the 100px a
+    Stretch section stops at means the other columns already overflow the viewport (the
+    RAM column did that, by 42px, and this read exactly 100)."""
     hdr = page.tree.header()
     assert hdr.sectionResizeMode(_COL_NOTES) == QtWidgets.QHeaderView.ResizeMode.Stretch
-    assert hdr.sectionSize(_COL_NOTES) > 100
+    assert hdr.sectionSize(_COL_NOTES) > 100, (
+        f"Notes has {hdr.sectionSize(_COL_NOTES)}px at the default size: the other "
+        "columns ate its room (a new column takes its width from the others)")
 
 
 def test_every_column_is_reachable_at_the_default_size(page):
