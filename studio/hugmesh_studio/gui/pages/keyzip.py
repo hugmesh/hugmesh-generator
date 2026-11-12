@@ -199,10 +199,11 @@ class KeyZipPage(QtWidgets.QWizardPage):
         # nothing serves: grey the box (even when seeded ON) and say why, inline. The
         # same line is what the text UI and the command line show.
         policy = local_login_agent.peer_check_policy()
-        self.local_login_reason = QtWidgets.QLabel(policy.reason)
+        reason = policy.reason if policy.refused else ""
+        self.local_login_reason = QtWidgets.QLabel(reason)
         self.local_login_reason.setWordWrap(True)
-        self.local_login_reason.setVisible(bool(policy.reason))
-        lay.addWidget(self.local_login_reason)
+        lay.addWidget(self.local_login_reason)      # parent it BEFORE showing it
+        self.local_login_reason.setVisible(bool(reason))
         if policy.refused:
             self.remember_roles.setChecked(False)
             self.remember_roles.setEnabled(False)

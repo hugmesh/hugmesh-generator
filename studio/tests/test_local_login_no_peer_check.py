@@ -258,6 +258,60 @@ def test_cli_remember_roles_is_dropped_with_the_reason(refusing_host, monkeypatc
     assert f"--remember-roles-for-passwordless-login ignored: {NO_PEER_CHECK_REASON}" in err
 
 
+def test_cli_remember_roles_flag_is_turned_off(refusing_host, capsys):
+    from hugmesh_studio import app
+    args = types.SimpleNamespace(remember_roles_for_passwordless_login=True)
+    app._drop_remember_roles_without_peer_check(args)
+    assert args.remember_roles_for_passwordless_login is False
+    assert NO_PEER_CHECK_REASON in capsys.readouterr().err
+
+
+@pytest.fixture
+def default_mac(monkeypatch):
+    real = agent_mod.peer_check_policy
+    monkeypatch.setattr(agent_mod, "peer_check_policy", lambda **h: real(
+        **{**dict(platform="darwin", **NO_PROC), **h}))
+
+
+def test_a_default_mac_keeps_local_login_offered_in_all_three_channels(default_mac,
+                                                                      capsys):
+    """Fail-open by decision: nothing is greyed and no reason line is added on a Mac
+    (its warning is the agent's own startup log line)."""
+    from hugmesh_studio import app
+    from hugmesh_studio.tui import journey
+    args = types.SimpleNamespace(remember_roles_for_passwordless_login=True)
+    app._drop_remember_roles_without_peer_check(args)
+    assert args.remember_roles_for_passwordless_login is True
+    assert capsys.readouterr().err == ""
+    j = journey.Journey()
+    assert j.screen_for("keyzip").lines(j) == [journey.PENDING_NOTE]
+    page, _app = _keyzip_page()
+    try:
+        assert page.remember_roles.isEnabled() and page.remember_roles.isChecked()
+        assert page.local_login_reason.text() == ""
+        assert not page.local_login_reason.isVisible()
+    finally:
+        page.close()
+        page.deleteLater()
+
+
+def _keyzip_page():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("hugmesh_studio.gui.qt",
+                        reason="no Qt binding (PySide6/PyQt6) installed")
+    from hugmesh_studio.gui.qt import QtWidgets
+    from hugmesh_studio.gui.pages.keyzip import KeyZipPage
+    qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    # Seeded ON (the flag or the env var).
+    wiz = types.SimpleNamespace(remember_roles_for_passwordless_login=True,
+                                login_manifest_path=None,
+                                cfg=types.SimpleNamespace(mode="mesh"))
+    page = KeyZipPage(wiz)
+    page.show()
+    qapp.processEvents()
+    return page, qapp
+
+
 def test_tui_keyzip_step_shows_the_reason(refusing_host):
     from hugmesh_studio.tui import journey
     j = journey.Journey()
@@ -276,24 +330,15 @@ def test_tui_keyzip_step_is_quiet_where_local_login_is_enforced(monkeypatch):
 
 
 def test_gui_keyzip_page_greys_local_login_with_the_reason(refusing_host):
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    pytest.importorskip("hugmesh_studio.gui.qt",
-                        reason="no Qt binding (PySide6/PyQt6) installed")
-    from hugmesh_studio.gui.qt import QtWidgets
-    from hugmesh_studio.gui.pages.keyzip import KeyZipPage
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    # Seeded ON (the flag or the env var): a refusing host must still not write roles.
-    wiz = types.SimpleNamespace(remember_roles_for_passwordless_login=True,
-                                login_manifest_path=None,
-                                cfg=types.SimpleNamespace(mode="mesh"))
-    page = KeyZipPage(wiz)
+    """Seeded ON, a refusing host must still not write roles: greyed, unchecked, and
+    the reason inline in a label that is in the page (not a stray top-level window)."""
+    page, _app = _keyzip_page()
     try:
-        page.show()
-        app.processEvents()
         assert page.remember_roles.isChecked() is False
         assert page.remember_roles.isEnabled() is False
         assert page.local_login_reason.text() == NO_PEER_CHECK_REASON
         assert page.local_login_reason.isVisible()
+        assert page.local_login_reason.window() is page
         assert page.local_login_reason.geometry().height() > 0
     finally:
         page.close()
