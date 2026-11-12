@@ -13,7 +13,7 @@ import importlib.util
 import os
 import sys
 
-from ..core import build_sessions, crashlog
+from ..core import build_sessions, crashlog, entry
 
 __all__ = ["have_tui", "main"]
 
@@ -61,18 +61,32 @@ def _default_generator_dir() -> str:
     return generator_dir.resolve(os.path.abspath(os.path.join(here, "..", "..", "..")))
 
 
+def _generator_dir(args) -> str:
+    """``--generator-dir``, resolved the first time a flow needs it (kept on args)."""
+    if args.generator_dir is None:
+        args.generator_dir = _default_generator_dir()
+    return args.generator_dir
+
+
 def main(argv=None, *, inp=None, out=None) -> int:
     """``python -m hugmesh_studio.tui`` — see the package docstring for the flows.
 
     ``inp``/``out`` exist for the headless tests: they drive the PLAIN face with
     scripted streams (a non-TTY stream also disables the rich face by itself)."""
     crashlog.install()                     # same first-thing rule as the GUI entry point
+    # And the GUI entry point's PATH rule, before anything here looks a tool up: on a
+    # Mac, Homebrew's GNU tools are not on a shell's PATH, so without this the text UI
+    # refused a Mac that had installed them (a no-op off macOS; core/entry.py).
+    entry.bootstrap()
     ap = argparse.ArgumentParser(
         prog="python -m hugmesh_studio.tui",
         description="HugMesh Image Studio — terminal UI (parity lane). "
                     "Default flow: the guided journey (welcome screen first, "
                     "the GUI wizard's canonical page order).")
-    ap.add_argument("--generator-dir", default=_default_generator_dir(),
+    # default=None, resolved after parsing and only by the flows that use it: the
+    # default can place the bundled generator copy (managed_generator.ensure()), and
+    # --help or --worklist must not (#936 refute, round 2)
+    ap.add_argument("--generator-dir", default=None,
                     help="path to the hugmesh-generator checkout")
     ap.add_argument("--sessions", action="store_true",
                     help="open the sessions review (durable build history) "
@@ -121,9 +135,9 @@ def main(argv=None, *, inp=None, out=None) -> int:
     if args.meshemu:
         from . import plain
         if not plain.print_meshemu(out if out is not None else sys.stdout,
-                                   args.generator_dir, args.meshemu):
+                                   _generator_dir(args), args.meshemu):
             print(f"error: no artifact session named {args.meshemu!r} with "
-                  f"bootable images in any known output folder ({args.generator_dir}/out "
+                  f"bootable images in any known output folder ({_generator_dir(args)}/out "
                   f"or a folder a Studio build wrote sessions into)",
                   file=err)
             return 2
@@ -132,16 +146,16 @@ def main(argv=None, *, inp=None, out=None) -> int:
     if args.sessions:
         if rich:
             from . import urwid_ui
-            return urwid_ui.run_sessions_review(args.generator_dir)
+            return urwid_ui.run_sessions_review(_generator_dir(args))
         from . import plain
-        return plain.run_sessions_review(inp=inp, out=out, generator_dir=args.generator_dir)
+        return plain.run_sessions_review(inp=inp, out=out, generator_dir=_generator_dir(args))
 
     start = "fleet" if args.fleet else ("golive" if args.go_live else None)
     if rich:
         from . import urwid_ui
-        return urwid_ui.run_journey(args.generator_dir, start=start)
+        return urwid_ui.run_journey(_generator_dir(args), start=start)
     from . import plain
-    return plain.run_journey(inp=inp, out=out, generator_dir=args.generator_dir,
+    return plain.run_journey(inp=inp, out=out, generator_dir=_generator_dir(args),
                              start=start)
 
 

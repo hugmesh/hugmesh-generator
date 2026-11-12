@@ -986,6 +986,130 @@ provision_certs() {
 }
 
 # ── Headscale (self-hosted Tailscale control server) ───────────────
+# headscale_policy_unprivileged_ssh_sources <policy.hujson>
+# Prints, one per line, every Tailscale SSH source (an ssh rule's src entry) that is
+# not tag:superadmin. Exit 0 = the policy was read (empty output means every ssh rule
+# names tag:superadmin only); exit 1 = it could not be read, so nothing can be said.
+# WHY: Tailscale SSH (`tailscale up --ssh`, on by default) answers :22 itself, so the
+# device's sshd key checks are not on that path; whoever an ssh rule names as src gets
+# a session as the privileged user. tag:hugmesh and the role tags are self-applied by
+# every node that holds a pre-auth key, and autogroup:member, "*" and the "hugmesh"
+# user are every node too, so any of them as src gives every member a privileged
+# session as soon as anything opens :22 to members (measured on headscale 0.23.0 +
+# tailscale 1.78.1). tag:superadmin is owned by nobody and only
+# hugmesh-headscale-forcetags assigns it, so it is the one source allowed. (An
+# ownerless tag is not enough on its own: tag:mesh_<id> is ownerless too, and the
+# control node forces it on EVERY node.)
+# The policy is read the way headscale reads it: headscale's Go JSON decoder matches
+# member names case-insensitively ("SSH", "Src") and takes repeated members, so jq
+# streams the document and every member whose name folds to "ssh" (top level) or
+# "src" (in a rule) counts, every repeat included. A member name with a non-ASCII
+# character at either level (Go also folds some of those, e.g. U+017F to "s"), an
+# ssh member that is not a list of objects, or a src that is not a list of strings
+# makes the policy unreadable. Same line-comment strip as the owner check below.
+headscale_policy_unprivileged_ssh_sources() {
+    sed -e 's#//.*$##' "$1" 2>/dev/null | jq -ner --stream '
+        [inputs | select(length == 2)] as $leaves
+        | if ($leaves | length) == 0 then error("empty policy") else . end
+        | if any($leaves[]; (.[0] | length) == 0 or (.[0][0] | type) != "string") then error("not an object") else . end
+        | if any($leaves[]; .[0][0] | explode | any(. > 127)) then error("non-ASCII member name") else . end
+        | [$leaves[] | select((.[0][0] | ascii_downcase) == "ssh")] as $ssh
+        | if any($ssh[]; ((.[0] | length) == 1 and .[1] != [] and .[1] != null)
+                         or ((.[0] | length) > 1 and (.[0][1] | type) != "number")
+                         or ((.[0] | length) == 2 and .[1] != {})
+                         or ((.[0] | length) > 2 and (.[0][2] | type) != "string"))
+          then error("ssh is not a list of rules") else . end
+        | if any($ssh[]; (.[0] | length) > 2 and (.[0][2] | explode | any(. > 127))) then error("non-ASCII member name in an ssh rule") else . end
+        | [$ssh[] | select((.[0] | length) > 2 and (.[0][2] | ascii_downcase) == "src")] as $src
+        | if any($src[]; ((.[0] | length) == 3 and .[1] != [] and .[1] != null)
+                         or ((.[0] | length) == 4 and ((.[0][3] | type) != "number" or (.[1] | type) != "string"))
+                         or (.[0] | length) > 4)
+          then error("src is not a list of strings") else . end
+        | [$src[] | select((.[0] | length) == 4) | .[1] | select(. != "tag:superadmin")] | unique[]' 2>/dev/null
+    local rc=$?
+    # jq -e exits 4 when there was no output at all (a clean policy) — that is a read.
+    [ "${rc}" -eq 0 ] || [ "${rc}" -eq 4 ]
+}
+
+# headscale_policy_narrow_ssh_sources <policy.hujson>: rewrite the file in place with
+# every ssh source but tag:superadmin removed, under every spelling headscale reads
+# (see above), and every ssh rule left with no source dropped. Top-level members with
+# a non-ASCII name go too. The result must pass headscale_policy_unprivileged_ssh_sources
+# before it replaces the file (temp file + rename). Comments are lost. Returns 1, file
+# untouched, when the policy cannot be parsed or the result is not clean.
+headscale_policy_narrow_ssh_sources() {
+    local f="$1" tmp="$1.ssh-narrowed.$$" left=""
+    if sed -e 's#//.*$##' "${f}" 2>/dev/null | jq '
+            if type != "object" then error("not an object") else . end
+            | with_entries(select(.key | explode | all(. <= 127)))
+            | with_entries(
+                if (.key | ascii_downcase) == "ssh" then
+                    .value |= (if type == "array" then
+                        [ .[] | select(type == "object")
+                          | with_entries(select(.key | explode | all(. <= 127)))
+                          | with_entries(if (.key | ascii_downcase) == "src" then
+                                .value |= (if type == "array" then map(select(. == "tag:superadmin")) else [] end)
+                              else . end)
+                          | select(any(to_entries[]; (.key | ascii_downcase) == "src" and (.value | length) > 0)) ]
+                      else [] end)
+                else . end)' > "${tmp}" 2>/dev/null \
+       && left="$(headscale_policy_unprivileged_ssh_sources "${tmp}")" && [ -z "${left}" ] \
+       && mv -f "${tmp}" "${f}" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "${tmp}" 2>/dev/null
+    return 1
+}
+
+# headscale_guard_ssh_sources <policy.hujson> <policy.bootstrap.hujson>: the KEYS-stick
+# guard for Tailscale SSH sources. Runs before the security-tag owner check in
+# provision_headscale, on the policy headscale is about to load AND on the bootstrap
+# policy that check falls back on (a stick's *.hujson are copied over /etc/headscale,
+# so the "baked" bootstrap can be the stick's too):
+#   * a bootstrap that names any ssh source but tag:superadmin is narrowed in place,
+#     or set aside (renamed *.refused) when it cannot be, so nothing falls back on it;
+#   * a policy that does is NOT loaded as is: the (now clean) bootstrap is staged in
+#     its place, else the policy itself is narrowed;
+#   * a policy that cannot be read is replaced by a clean bootstrap when there is
+#     one. Otherwise it is left to the owner check below, which handles an unreadable
+#     policy the same way, and this returns 1.
+headscale_guard_ssh_sources() {
+    local policy="$1" boot="$2" found="" readable=1
+    if [ -f "${boot}" ]; then
+        found="$(headscale_policy_unprivileged_ssh_sources "${boot}")" || readable=0
+        if [ "${readable}" = 0 ] || [ -n "${found}" ]; then
+            if [ "${readable}" = 1 ] && headscale_policy_narrow_ssh_sources "${boot}"; then
+                warn "headscale: ${boot} granted Tailscale SSH to non-privileged source(s): $(printf '%s' "${found}" | tr '\n' ' ')— removed them (only tag:superadmin may be an ssh source)"
+            elif mv -f "${boot}" "${boot}.refused" 2>/dev/null; then
+                warn "headscale: ${boot} grants Tailscale SSH to a non-privileged source or cannot be read, and could not be narrowed — set aside as ${boot}.refused"
+            else
+                warn "headscale: ${boot} grants Tailscale SSH to a non-privileged source and could neither be narrowed nor set aside"
+            fi
+        fi
+    fi
+    [ -f "${policy}" ] || return 0
+    found="" readable=1
+    found="$(headscale_policy_unprivileged_ssh_sources "${policy}")" || readable=0
+    [ "${readable}" = 1 ] && [ -z "${found}" ] && return 0
+    if [ "${readable}" = 0 ]; then
+        warn "headscale: ${policy} could not be parsed to check its Tailscale SSH sources — not loading it as is"
+    else
+        warn "headscale: ${policy} grants Tailscale SSH to non-privileged source(s): $(printf '%s' "${found}" | tr '\n' ' ')— every node holding a pre-auth key could open a session as the privileged user; not loading it as is"
+    fi
+    local boot_found=""
+    if [ -f "${boot}" ] && boot_found="$(headscale_policy_unprivileged_ssh_sources "${boot}")" \
+       && [ -z "${boot_found}" ] && cp -f "${boot}" "${policy}"; then
+        warn "headscale: staged the baked BOOTSTRAP policy instead — fix the KEYS headscale/policy.hujson (ssh rules name tag:superadmin only)"
+        return 0
+    fi
+    if [ "${readable}" = 1 ] && headscale_policy_narrow_ssh_sources "${policy}"; then
+        warn "headscale: no clean bootstrap policy — removed the non-privileged ssh source(s) from ${policy} instead"
+        return 0
+    fi
+    warn "headscale: ${policy} — no clean bootstrap policy and its ssh sources could not be narrowed; the owner check decides what is loaded"
+    return 1
+}
+
 # headscale_policy_owned_security_tags <policy.hujson>
 # Prints, one per line, every SECURITY tag (tag:superadmin, tag:mesh_*, tag:dev_*,
 # tag:dom_*) that the policy gives ANY owner. Exit 0 = the policy was read (an empty
@@ -996,13 +1120,30 @@ provision_certs() {
 # themselves (tag:superadmin is the SSH source of the always-on superadmin rule).
 # Security tags take an EMPTY owner list and only hugmesh-headscale-forcetags assigns
 # them. The comment strip is the same line-comment strip the policy tooling uses.
+# The policy is read the way headscale reads it, not the way a plain jq query does.
+# headscale's Go JSON decoder matches a member name to its tagOwners field
+# case-insensitively, and MERGES a repeated tagOwners object into the first one, where
+# jq keeps only the last. Measured on headscale 0.23.0: owners placed under
+# "TagOwners", or in the first of two tagOwners members, granted a self-advertised
+# tag:superadmin while `.tagOwners` read clean. So jq streams the document: every
+# top-level member whose name folds to "tagowners" counts, every repeat counts, and a
+# top-level name with a non-ASCII character (Go also folds some of those, e.g. U+017F
+# to "s") or an empty document makes the policy unreadable.
 headscale_policy_owned_security_tags() {
-    sed -e 's#//.*$##' "$1" 2>/dev/null | jq -er '
-        (.tagOwners // {}) | if type == "object" then . else error("tagOwners is not an object") end
-        | to_entries[]
-        | select(.key | test("^tag:(superadmin$|mesh_|dev_|dom_)"))
-        | select((.value // []) | length > 0)
-        | .key' 2>/dev/null
+    sed -e 's#//.*$##' "$1" 2>/dev/null | jq -ner --stream '
+        [inputs | select(length == 2)] as $leaves
+        | if ($leaves | length) == 0 then error("empty policy") else . end
+        | if any($leaves[]; (.[0] | length) == 0 and (.[1] | type) != "object") then error("not an object") else . end
+        | if any($leaves[]; (.[0] | length) > 0 and (.[0][0] | type) != "string") then error("not an object") else . end
+        | if any($leaves[]; (.[0] | length) > 0 and (.[0][0] | explode | any(. > 127))) then error("non-ASCII member name") else . end
+        | [$leaves[] | select((.[0] | length) > 0 and (.[0][0] | ascii_downcase) == "tagowners")] as $to
+        | if any($to[]; ((.[0] | length) == 1 and .[1] != null and .[1] != {})
+                         or ((.[0] | length) > 1 and (.[0][1] | type) != "string"))
+          then error("tagOwners is not an object") else . end
+        | [$to[] | select((.[0] | length) > 1)
+             | select(.[0][1] | test("^tag:(superadmin$|mesh_|dev_|dom_)"))
+             | select((.[0] | length) > 2 or (.[1] != [] and .[1] != null))
+             | .[0][1]] | unique[]' 2>/dev/null
     local rc=$?
     # jq -e exits 4 when there was no output at all (a clean policy) — that is a read.
     [ "${rc}" -eq 0 ] || [ "${rc}" -eq 4 ]
@@ -1089,7 +1230,7 @@ provision_headscale() {
     # policy.hujson and re-applies it, replacing this bootstrap policy with the
     # generated default-deny per-edge ssh block. A USB-supplied policy.hujson
     # override still wins (operator escape hatch). If neither the bootstrap file
-    # nor a USB/baked policy.hujson exists, fall back to whatever is present.
+    # nor a USB/baked policy.hujson exists, the deny-all policy is staged below.
     if [ ! -f "${BASE}/headscale/policy.hujson" ] && [ -f /etc/headscale/policy.bootstrap.hujson ]; then
         cp -f /etc/headscale/policy.bootstrap.hujson /etc/headscale/policy.hujson \
             && log "headscale: staged Layer-A BOOTSTRAP policy (no any-to-any :22 rule; replaced by first verified Layer-A sync)" \
@@ -1101,12 +1242,23 @@ provision_headscale() {
     if   [ -f "${BASE}/headscale/policy.hujson" ]; then policy_file=/etc/headscale/policy.hujson
     elif [ -f /etc/headscale/policy.hujson ];      then policy_file=/etc/headscale/policy.hujson
     fi
+    # Tailscale SSH may be granted to tag:superadmin only (headscale_guard_ssh_sources).
+    # Checked BEFORE the owner check below, on the policy and on the bootstrap that
+    # check falls back on, so whichever of them ends up loaded names no member source.
+    if [ -n "${policy_file}" ]; then
+        headscale_guard_ssh_sources /etc/headscale/policy.hujson /etc/headscale/policy.bootstrap.hujson || true
+    fi
     # A policy that gives a SECURITY tag an owner lets every pre-auth key holder
     # claim that tag (see headscale_policy_owned_security_tags). A USB override (or a
     # stale baked file) that does so, or that cannot be read to check, is NOT loaded
     # as is: the baked bootstrap policy is staged in its place. Only when there is no
     # clean bootstrap to fall back on is the file itself narrowed (those owners
-    # emptied, comments lost); an unreadable file with no fallback is kept, loudly.
+    # emptied under every spelling headscale reads, comments lost), and the narrowed
+    # file must pass the same check before it replaces the original. Every other
+    # outcome FAILS CLOSED: a policy that could not be narrowed, one that could not be
+    # read, and no policy at all are each replaced by the deny-all policy
+    # (headscale_deny_all_policy), and first-boot health is marked UNPROTECTED.
+    local policy_fail=""
     if [ -n "${policy_file}" ]; then
         local owned_sec="" sec_readable=1
         owned_sec="$(headscale_policy_owned_security_tags "${policy_file}")" || sec_readable=0
@@ -1123,22 +1275,58 @@ provision_headscale() {
                && cp -f /etc/headscale/policy.bootstrap.hujson /etc/headscale/policy.hujson; then
                 warn "headscale: staged the baked BOOTSTRAP policy instead — fix the KEYS headscale/policy.hujson (security tags take an empty owner list)"
             elif [ "${sec_readable}" = 1 ]; then
-                local narrowed="/etc/headscale/policy.hujson.narrowed.$$"
+                local narrowed="/etc/headscale/policy.hujson.narrowed.$$" narrowed_sec=""
                 if sed -e 's#//.*$##' "${policy_file}" | jq '
-                        .tagOwners |= with_entries(
-                            if (.key | test("^tag:(superadmin$|mesh_|dev_|dom_)")) then .value = [] else . end)' \
+                        with_entries(
+                            if (.key | ascii_downcase) == "tagowners" and (.value | type) == "object" then
+                                .value |= with_entries(
+                                    if (.key | test("^tag:(superadmin$|mesh_|dev_|dom_)")) then .value = [] else . end)
+                            else . end)' \
                         > "${narrowed}" 2>/dev/null \
+                   && narrowed_sec="$(headscale_policy_owned_security_tags "${narrowed}")" \
+                   && [ -z "${narrowed_sec}" ] \
                    && mv -f "${narrowed}" /etc/headscale/policy.hujson; then
                     warn "headscale: no clean bootstrap policy — emptied the security-tag owners in ${policy_file} instead"
                 else
                     rm -f "${narrowed}" 2>/dev/null
-                    warn "headscale: could not narrow ${policy_file} — it is loaded UNSAFE (security tags claimable)"
+                    policy_fail="${policy_file} gives an owner to security tag(s) and could not be narrowed, and there is no clean bootstrap policy"
                 fi
             else
-                warn "headscale: no clean bootstrap policy to fall back on — keeping the unreadable ${policy_file}"
+                policy_fail="${policy_file} could not be read to check its security-tag owners, and there is no clean bootstrap policy"
             fi
         fi
+    else
+        policy_fail="no headscale policy: none on the KEYS stick and no baked bootstrap policy"
     fi
+    # POLICY GATE. /etc/headscale/policy.hujson is re-read once more, so headscale starts
+    # only on a file that was just read and found clean. Anything else gets the deny-all
+    # policy; when even that cannot be written, headscale is not started at all (and is
+    # taken out of the runlevel) rather than run on an unchecked file or on none. That
+    # this is the file headscale reads at startup is NOT assumed: the CONFIG GATE right
+    # before the start below refuses any configuration that loads another one.
+    local final_sec=""
+    if [ -z "${policy_fail}" ]; then
+        if [ ! -f /etc/headscale/policy.hujson ]; then
+            policy_fail="/etc/headscale/policy.hujson is missing after staging"
+        elif ! final_sec="$(headscale_policy_owned_security_tags /etc/headscale/policy.hujson)" \
+             || [ -n "${final_sec}" ]; then
+            policy_fail="/etc/headscale/policy.hujson is not clean on the final check"
+        fi
+    fi
+    if [ -n "${policy_fail}" ]; then
+        if headscale_stage_deny_all_policy; then
+            headscale_policy_unprotected "deny-all" "${policy_fail}; the deny-all policy is in force (no node reaches another, no Tailscale SSH, no tag can be self-assigned) until a clean policy is loaded"
+        else
+            rm -f /etc/headscale/policy.hujson 2>/dev/null
+            # Set aside like a CONFIG GATE refusal: a later restart must not start
+            # headscale on whatever the configuration names instead.
+            headscale_refuse_config "${policy_fail}; the deny-all policy could not be written either"
+            return 1
+        fi
+    else
+        rm -f /run/hugmesh/firewall-health/headscale_policy.unprotected 2>/dev/null || true
+    fi
+    policy_file=/etc/headscale/policy.hujson
     # ── Local-first endpoint: rewrite server_url BEFORE starting the server ──
     # The baked config.yaml ships server_url=http://127.0.0.1:8080 (a placeholder
     # that loopback-only peers cannot reach). Resolve the real endpoint
@@ -1170,6 +1358,29 @@ provision_headscale() {
                 warn "headscale MagicDNS base_domain '${dnsdom}' is not a valid hostname ([a-z0-9.-]) — leaving baked default"
             fi
         fi
+    fi
+
+    # CONFIG GATE. Every check above is on /etc/headscale/policy.hujson, but headscale
+    # loads the policy its EFFECTIVE configuration names (policy.mode, policy.path), and
+    # that configuration came from the KEYS stick (headscale/config.yaml, or the
+    # manifest's .headscale.config_file), next to any acl* / *.hujson files the stick
+    # carries. A stick config that names another file, names none (headscale then runs
+    # with no policy at all: allow-all), or selects database mode would put none of the
+    # checks above in force. So headscale starts only when its own reading of its
+    # configuration is policy.mode file with policy.path /etc/headscale/policy.hujson,
+    # the one file the checks above, the deny-all fallback and the Layer-A renderer
+    # (gen-headscale-policy.sh POLICY_OUT) all write. Anything else, including a
+    # configuration that cannot be read, is REFUSED (headscale_refuse_config): headscale
+    # is not started, is taken out of the runlevel, and the configuration is set aside so
+    # that no later restart can start it on that configuration either. The deny-all
+    # policy is no fallback here, because such a configuration does not read the file it
+    # is staged in. This runs after this function's last edit to config.yaml (server_url,
+    # base_domain) and right before the start; publish_cp_dns_record, which edits it
+    # again later, runs the same check before its restart.
+    local cfg_fail=""
+    if ! cfg_fail="$(headscale_config_gate)"; then
+        headscale_refuse_config "${cfg_fail} (the KEYS headscale/config.yaml must keep policy.mode: file and policy.path: /etc/headscale/policy.hujson)"
+        return 1
     fi
 
     # LAN workers dial this node's headscale port before go-live
@@ -1270,7 +1481,11 @@ provision_headscale() {
             fi
         fi
     else
-        warn "No headscale policy.hujson found — tailnet runs allow-all (no tags/route approval)"
+        # The final gate above always leaves a checked policy file; one that is gone
+        # by now was removed underneath this run. Never leave headscale serving without it.
+        headscale_policy_unprotected "not-started" "${policy_file} disappeared after the final check; headscale is stopped"
+        rc-service headscale stop 2>/dev/null || true
+        return 1
     fi
 
     # Defensive backfill: approve the pod + service routes for any fleet node
@@ -1283,6 +1498,187 @@ provision_headscale() {
     # shipped version), and the same function runs on the 60s policy-sync cron,
     # so a node that advertised while headscale was mid-restart converges too.
     approve_mesh_routes_now
+}
+
+# headscale_deny_all_policy: prints the policy provision_headscale stages when it has
+# no policy it can check and trust (a KEYS override it can neither read nor narrow,
+# or no policy at all, with no clean baked bootstrap to use instead). Static text: no
+# value from the KEYS stick or the rejected file ends up in it.
+#   * acls and ssh are empty: no node reaches any other, nobody gets Tailscale SSH.
+#   * No tag has an owner: tag:superadmin is listed with [] and every other tag
+#     (tag:mesh_*, tag:dev_*, tag:dom_*, even tag:hugmesh) is unlisted, so headscale
+#     refuses any tag a node advertises for itself. Forced tags still apply.
+#   * The empty group is there only because headscale 0.23 refuses a policy with no
+#     groups, hosts, acls and ssh entries at all ("empty policy") and does not start.
+# Measured on headscale 0.23.0 + tailscale 1.78.1: headscale starts on it, both nodes'
+# advertised tag:hugmesh and tag:superadmin land in invalid_tags, and every node's
+# packet filter is empty.
+headscale_deny_all_policy() {
+    # Indented on purpose: no line of the text starts with "}", so the usual
+    # awk '/^fn\(\)/,/^}/' extraction of this function still ends at its own brace.
+    cat <<'HUJSON'
+    {
+      // keys-provision FAIL-CLOSED fallback: DENY-ALL. provision_headscale staged this
+      // because it had no policy it could check and trust; the reason is in
+      // /var/log/keys-provision.log. It grants nothing: no ACL, no SSH rule, and no tag
+      // has an owner, so no node can claim a tag for itself. The control node's first
+      // verified Layer-A sync (gen-headscale-policy.sh) replaces it, and so does
+      // re-provisioning with a clean KEYS headscale/policy.hujson.
+      "groups": {
+        "group:keys-provision-deny-all": []
+      },
+      "tagOwners": {
+        "tag:superadmin": []
+      },
+      "acls": [],
+      "ssh": []
+    }
+HUJSON
+}
+
+# headscale_stage_deny_all_policy: write headscale_deny_all_policy over
+# /etc/headscale/policy.hujson (temp file + rename, so a half-written file is never in
+# place) after checking what was written. Returns 1 when it could not be staged; the
+# caller must then not start headscale.
+headscale_stage_deny_all_policy() {
+    local tmp="/etc/headscale/policy.hujson.deny-all.$$" sec=""
+    rm -f "${tmp}" 2>/dev/null
+    if headscale_deny_all_policy > "${tmp}" 2>/dev/null \
+       && sec="$(headscale_policy_owned_security_tags "${tmp}")" && [ -z "${sec}" ] \
+       && mv -f "${tmp}" /etc/headscale/policy.hujson; then
+        return 0
+    fi
+    rm -f "${tmp}" 2>/dev/null
+    return 1
+}
+
+# headscale_policy_unprotected <state> <reason>: say that the headscale policy step
+# failed closed, the way the host firewall reconcilers do (hugmesh-firewall-reconcile):
+# an ERROR line, a daemon.crit syslog line, and the machine-readable first-boot health
+# mark /run/hugmesh/firewall-health/headscale_policy.unprotected, which the QEMU
+# assertions already fail on (tests/qemu/assertions.sh: no *.unprotected mark). <state>
+# is deny-all (headscale runs the deny-all policy) or not-started. /run is tmpfs, so the
+# mark is boot-scoped; keys-provision.log keeps the record. A run that loads a clean
+# policy removes the mark.
+headscale_policy_unprotected() {
+    local mark=/run/hugmesh/firewall-health/headscale_policy.unprotected
+    mkdir -p /run/hugmesh/firewall-health 2>/dev/null || true
+    printf 'policy=/etc/headscale/policy.hujson\nstate=%s\nsince=%s\nreason=%s\n' \
+        "$1" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(printf '%s' "$2" | tr '\n' ' ')" > "${mark}" 2>/dev/null || true
+    log "ERROR: headscale policy step FAILED CLOSED (${1}): ${2} — first-boot health marked UNPROTECTED (${mark})"
+    have logger && logger -p daemon.crit -t keys-provision -- "headscale policy failed closed (${1}): ${2}" 2>/dev/null || true
+}
+
+# headscale_config_gate: exit 0 when headscale's own reading of its configuration is
+# policy.mode file with policy.path /etc/headscale/policy.hujson (the checked file);
+# otherwise prints why and exits 1. See the CONFIG GATE in provision_headscale.
+headscale_config_gate() {
+    local eff=""
+    if ! eff="$(headscale_effective_policy_path)"; then
+        echo "headscale's configuration does not load the checked policy file: ${eff}"
+        return 1
+    fi
+    if [ "${eff}" != /etc/headscale/policy.hujson ]; then
+        echo "headscale's configuration loads its policy from ${eff}, not from the checked /etc/headscale/policy.hujson"
+        return 1
+    fi
+    return 0
+}
+
+# headscale_refuse_config <reason>: headscale is NOT to run (the CONFIG GATE refused its
+# configuration, or the policy step could not even stage the deny-all). It is stopped and
+# taken out of the runlevel, and every file headscale's config search would find in
+# /etc/headscale (config.<ext>, in viper's extension list) is moved aside to
+# <file>.refused. Stopping is not enough on its own: OpenRC's `restart` STARTS a
+# stopped service, and later steps restart headscale (publish_cp_dns_record, the
+# Layer-A policy-sync apply leg every minute, an operator), which would bring it up on
+# the refused configuration. With no configuration headscale cannot start at all.
+# Re-provisioning with a KEYS headscale/config.yaml that keeps policy.mode: file and
+# policy.path: /etc/headscale/policy.hujson installs a configuration again.
+headscale_refuse_config() {
+    local f left=""
+    rc-service headscale stop 2>/dev/null || true
+    rc-update del headscale default 2>/dev/null || true
+    for f in json toml yaml yml properties props prop hcl tfvars dotenv env ini; do
+        f="/etc/headscale/config.${f}"
+        [ -e "${f}" ] || [ -L "${f}" ] || continue
+        mv -f "${f}" "${f}.refused" 2>/dev/null || rm -f "${f}" 2>/dev/null
+        if [ -e "${f}" ] || [ -L "${f}" ]; then left="${left} ${f}"; fi
+    done
+    if [ -n "${left}" ]; then
+        headscale_policy_unprotected "not-started" "$1; headscale is stopped, but its configuration could not be set aside (${left# }), so a later restart could start it on it"
+    else
+        headscale_policy_unprotected "not-started" "$1; headscale is NOT started and its configuration is set aside as /etc/headscale/config.*.refused"
+    fi
+}
+
+# headscale_effective_policy_path: prints the policy FILE headscale will load at its
+# next start, as headscale itself resolves its configuration. Exit 0 = file mode and a
+# plain absolute policy.path (printed). Exit 1 = anything else, with the reason printed
+# instead: database mode, no policy.path (headscale then starts with no policy at all,
+# i.e. allow-all), a relative or odd path, or a configuration headscale cannot read.
+# WHY headscale's own reading and not a read of config.yaml: headscale (viper over
+# yaml.v3) matches keys in any case (Policy:, PATH:), lets a top-level dotted key
+# (policy.path:) win over the nested one, merges <<: anchors, resolves a relative path
+# against the config directory, treats CR, NEL, U+2028 and U+2029 as line breaks, lets a
+# multi-line quoted scalar swallow a later "policy:" block, reads only the first YAML
+# document, and prefers /etc/headscale/config.json or config.toml over config.yaml.
+# Measured on the pinned headscale 0.23.0: each of these made it load a different file
+# from the one a line-by-line read of config.yaml finds. `headscale dumpConfig` (hidden;
+# present in 0.23.0 and 0.26.1) runs the same config search and resolution as
+# `headscale serve` and writes the result, normalised, to /etc/headscale/config.dump.yaml.
+#   * Its exit status says nothing (it prints "Failed to dump config" and exits 0), so
+#     the dump is removed first and must exist, non-empty, afterwards.
+#   * -o json switches off headscale's update check (no network).
+#   * It runs from / with every HEADSCALE_* variable unset, as the openrc service does.
+#     The daemon's own environment is not visible from here; the image's init script
+#     sets no HEADSCALE_* variable and nothing on the KEYS stick can. That is the
+#     boundary of this check.
+#   * The dump repeats the whole configuration (inline secrets too), so it is deleted
+#     again before this returns.
+#   * Its policy block is read strictly: exactly one top-level "policy:", nothing in it
+#     but one mode and one path line; any other shape is refused.
+headscale_effective_policy_path() {
+    local dump=/etc/headscale/config.dump.yaml res="" rc=0
+    rm -f "${dump}" 2>/dev/null
+    if [ -e "${dump}" ] || [ -L "${dump}" ]; then
+        echo "a stale ${dump} could not be removed, so headscale's reading of its configuration cannot be told apart from it"
+        return 1
+    fi
+    (
+        cd / || exit 1
+        for v in $(compgen -A export -X '!HEADSCALE_*'); do unset "${v}"; done
+        umask 077
+        timeout 60 headscale dumpConfig -o json
+    ) >/dev/null 2>&1
+    if [ -L "${dump}" ] || [ ! -f "${dump}" ] || [ ! -s "${dump}" ]; then
+        rm -f "${dump}" 2>/dev/null
+        echo "headscale dumpConfig wrote no configuration dump, so headscale could not read its configuration"
+        return 1
+    fi
+    # (Every line of the awk program keeps its braces balanced and has no double quote
+    # before its last `}`, and the last `}` is followed by a space, not the closing
+    # quote: the shell-group model in
+    # tests/scripts/test-eso-provider-refs.sh reads this file line by line and counts
+    # a `{` / `}` between blanks as grouping. The END rules run in order, and the first
+    # `exit 1` ends the program.)
+    res="$(awk '
+        function clean(s) { gsub(/[^A-Za-z0-9_.\/:@ -]/, "?", s); return substr(s, 1, 120) }
+        /^policy:$/          { blocks++; inb = 1; next }
+        /^[^ ]/              { inb = 0; if (tolower($0) ~ /^[^a-z0-9_ ]?policy/) odd++; next }
+        inb && /^    mode: / { nm++; mode = substr($0, 11); next }
+        inb && /^    path: / { np++; path = substr($0, 11); next }
+        inb                  { odd++ }
+        END { if (blocks != 1 || odd || nm != 1 || np > 1) { print "the dump has no single plain policy block (mode and path only)"; exit 1 } }
+        END { if (mode == "database") { print "policy.mode is database: headscale loads whatever policy its database holds, which keys-provision cannot check before headscale starts"; exit 1 } }
+        END { if (mode != "file") { print "policy.mode is \"" clean(mode) "\", not file"; exit 1 } }
+        END { if (np == 0) { print "it names no policy.path: headscale would start with no policy at all (allow-all)"; exit 1 } }
+        END { if (path !~ /^\/[A-Za-z0-9_.\/-]+$/) { print "policy.path \"" clean(path) "\" is not a plain absolute path"; exit 1 } }
+        END { print path } ' "${dump}" 2>/dev/null)" || rc=1
+    rm -f "${dump}" 2>/dev/null
+    [ -n "${res}" ] || { echo "the configuration dump could not be read"; return 1; }
+    printf '%s\n' "${res}"
+    return "${rc}"
 }
 
 # Run the renderer's mesh-route approval once, now (see provision_headscale).
@@ -1349,6 +1745,16 @@ open(p, "w").write("".join(out))
 PY
     chown headscale:headscale /etc/headscale/config.yaml 2>/dev/null || true
     log "Published MagicDNS CP record ${cpname} -> ${tip}"
+    # This edit comes AFTER provision_headscale's CONFIG GATE, and the restart below
+    # makes headscale read it, so the gate runs again first. The managed-block removal
+    # above deletes everything between its two marker lines: a KEYS config.yaml that put
+    # its policy: block between them passed the first gate and, measured on headscale
+    # 0.23.0, came back from this rewrite with no policy.path (allow-all).
+    local cfg_fail=""
+    if ! cfg_fail="$(headscale_config_gate)"; then
+        headscale_refuse_config "after the CP DNS record was written: ${cfg_fail}"
+        return 0
+    fi
     # headscale 0.23 reads dns.extra_records at startup only (SIGHUP reloads the
     # policy, not the config), so this is a restart, not a reload — and it happens
     # under this node's own tailscaled session. control_client_regain (called by

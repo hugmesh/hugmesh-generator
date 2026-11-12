@@ -403,14 +403,33 @@ echo "7. the live door — TLS, rewrites, and http on the same port"
 
 cat > "${TMP}/upstream.py" <<'PY'
 """A stand-in front door that emits every hostile thing the real one does."""
-import http.server, json, sys
+import http.server, json, sys, time
 
 SEEN_LAST = {}
+#: How long /events holds the stream open between its two frames.
+SSE_HOLD = 8
 
 class H(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):
+        if self.path == "/events":
+            # A live feed, shaped like Mastodon's streaming API: one frame now,
+            # then the stream stays OPEN, then a second frame, then it ends.
+            # The first frame names the mesh host, like a real `update` frame
+            # carrying an account's URLs.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
+            self.end_headers()
+            self.wfile.write(b'event: update\ndata: {"avatar":"https://hugmesh.net/a.png"}\n\n')
+            self.wfile.flush()
+            time.sleep(SSE_HOLD)
+            self.wfile.write(b'event: update\ndata: {"n":2}\n\n')
+            self.wfile.flush()
+            self.close_connection = True
+            return
         if self.path == "/seen":
             b = json.dumps(SEEN_LAST).encode()
             self.send_response(200)
@@ -532,6 +551,59 @@ eq "$(nofollow "https://127.0.0.1:${DOOR_PORT}/bounce" "${CA}")" \
 eq "$(nofollow "http://127.0.0.1:${UP_PORT}/bounce")" \
    "302 https://hugmesh.net/login/" \
    "control: the upstream really does 302 to a host that does not resolve here"
+
+# ── a live event stream must be RELAYED, not read whole ──────────────────────
+# _relay reads a response to the END before it sends the browser one byte. An
+# event stream never ends, so through the door the browser got nothing at all:
+# mastodon-ui's live timeline (GET /bff/user/mastodon/api/v1/streaming/user) sat
+# at "connecting" forever, neither live nor falling back to polling (GUI-35).
+# The stand-in sends frame 1, holds the stream open for SSE_HOLD (8 s), then
+# sends frame 2. Through the door, frame 1 must arrive long before the hold ends.
+sse() {  # $1=url [$2=cafile] -> "ct=<type> first=<s> total=<s> frames=<n> f1=<frame 1 data>"
+    python3 - "$1" "${2:-}" <<'PY'
+import http.client, ssl, sys, time, urllib.parse
+u = urllib.parse.urlsplit(sys.argv[1])
+if u.scheme == "https":
+    c = http.client.HTTPSConnection(u.hostname, u.port, timeout=30,
+                                    context=ssl.create_default_context(cafile=sys.argv[2]))
+else:
+    c = http.client.HTTPConnection(u.hostname, u.port, timeout=30)
+t0 = time.monotonic()
+c.request("GET", u.path, headers={"Accept": "text/event-stream"})
+r = c.getresponse()
+first, frames, f1 = None, [], ""
+while True:
+    line = r.readline()
+    if not line:
+        break
+    line = line.decode().rstrip("\n")
+    if line.startswith("data:"):
+        frames.append(line)
+        if first is None:
+            first, f1 = time.monotonic() - t0, line
+total = time.monotonic() - t0
+print(f"ct={r.getheader('Content-Type')} hsts={r.getheader('Strict-Transport-Security')} "
+      f"first={first if first is None else round(first, 1)} total={round(total, 1)} "
+      f"frames={len(frames)} f1={f1}")
+PY
+}
+sse_door="$(sse "https://127.0.0.1:${DOOR_PORT}/events" "${CA}" 2>&1)"
+sse_direct="$(sse "http://127.0.0.1:${UP_PORT}/events" 2>&1)"
+sse_field() { printf '%s\n' "$1" | tr ' ' '\n' | sed -n "s/^$2=//p"; }
+door_first="$(sse_field "${sse_door}" first)"
+direct_first="$(sse_field "${sse_direct}" first)"
+direct_total="$(sse_field "${sse_direct}" total)"
+python3 -c "import sys; sys.exit(0 if float('${direct_first:-99}') < 3 and float('${direct_total:-0}') >= 7 else 1)" \
+  && _ok "control: the stand-in sends frame 1 at once and then really holds the stream open (${sse_direct%% f1=*})" \
+  || _bad "control: the stand-in did not stream as designed (${sse_direct})"
+python3 -c "import sys; sys.exit(0 if float('${door_first:-99}') < 4 else 1)" \
+  && _ok "THROUGH THE DOOR frame 1 arrives while the stream is still open (first=${door_first}s, hold 8s)" \
+  || _bad "through the door frame 1 waited for the stream to END: first=${door_first:-never}s (${sse_door})"
+has   "${sse_door}" "ct=text/event-stream" "the door keeps Content-Type: text/event-stream"
+has   "${sse_door}" "frames=2" "both frames arrive and the stream ends cleanly (chunked terminator)"
+has   "${sse_door}" "https://127.0.0.1:${DOOR_PORT}/a.png" "a mesh URL inside a frame is rewritten to the loopback door"
+has   "${sse_direct}" "https://hugmesh.net/a.png" "control: the upstream frame really names the mesh host"
+has   "${sse_door}" "hsts=None" "HSTS is dropped on a streamed response too"
 
 # An old http:// bookmark must still land, on the SAME port.
 redir="$(python3 - "http://127.0.0.1:${DOOR_PORT}/login/" <<'PY'

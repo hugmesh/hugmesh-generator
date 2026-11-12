@@ -542,10 +542,17 @@ def start_assistant(generator_dir: str, mode: str, *, environ=None, extra_env=No
 
     On native Windows the script cannot run (it is bash): System mode refuses in words,
     and Docker mode starts the container, waits for it, and says the panel can use it
-    while the queue worker stays off. ``spawn`` replaces ``subprocess.Popen`` (tests).
+    while the queue worker stays off. A Mac without Homebrew's GNU tools gets the same
+    two outcomes in its own words. ``spawn`` replaces ``subprocess.Popen`` (tests).
     """
     from . import local_ai_status as lai
-    windows = bool(lai.windows_refusal(osname))
+    from . import platform_info
+    # "windows" names the gate's history: the script cannot run on THIS host. Which
+    # host decides what the person is told about it (a Mac missing the GNU tools is
+    # not sent to WSL2).
+    refusal = lai.windows_refusal(osname)
+    windows = bool(refusal)
+    on_mac = platform_info.blocker_kind(refusal) == "darwin"
     env = assistant_env(mode, environ)
     env.update(extra_env or {})
     if mode == DOCKER:
@@ -558,6 +565,14 @@ def start_assistant(generator_dir: str, mode: str, *, environ=None, extra_env=No
                 False, f"The Docker Ollama was started but did not answer on "
                        f"{endpoint(DOCKER, env)} within {int(ready_timeout)} seconds "
                        f"(see: docker logs {CONTAINER}).", f"docker logs {CONTAINER}")
+        if windows and on_mac:
+            from .macos_host import BREW_INSTALL
+            return lai.StartResult(
+                True, f"The Studio's own Ollama is answering on {endpoint(DOCKER, env)}, and "
+                      f"the panel asks it directly. The queue worker was not started: it is "
+                      f"the bash script scripts/local-ai.sh, which needs bash 4 and the GNU "
+                      f"tools this Mac does not have yet (`{BREW_INSTALL}`, then restart "
+                      f"the Studio).", "")
         if windows:
             return lai.StartResult(
                 True, f"The Studio's own Ollama is answering on {endpoint(DOCKER, env)}, and "

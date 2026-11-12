@@ -40,6 +40,7 @@ from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from .. import choice_nav
 from ..qt import QtWidgets
 from ._scroll import scrollable
+from ._widgets import page_intro
 from ...core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, UNAFFILIATED_ROLE, enter_mesh_defaults,
 )
@@ -141,17 +142,23 @@ class ModePage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("What do you want to build?")
+        # Two lines at most: the wizard header clips the rest mid-sentence (GUI-14 —
+        # the tour of the side-flows below used to be this subtitle and stopped at
+        # "…test lanes), MESH"). The tour is the body's first line instead.
         self.setSubTitle(
-            "Pick one. Three of these build an image; LOCAL DOCKER MESH runs a mesh on "
-            "this machine right now, MDM PHONE flashes + enrolls a USB Pixel, MDM "
-            "QUEST HEADSET enrolls a Meta Quest 3/3S, CLOUD DEPLOY publishes an "
-            "already-packaged image to a cloud provider, RUN E2E TESTS drives the "
-            "end-to-end suite against a mesh that is already running (and is the "
-            "door to the emulated-device test lanes), MESH EMULATION boots a whole "
-            "built mesh locally, and CREATE NODES FOR LOCAL CLOUD "
-            "turns the local mesh into buildable node images.")
+            "Pick one. Three of these build an image; the others are flows of their "
+            "own, summarised below and on each card.")
         # ten cards are taller than the radios were: scroll, never clip
         lay = scrollable(self)
+        lay.addWidget(page_intro(
+            "Besides the three image builds: LOCAL DOCKER MESH runs a mesh on this "
+            "machine right now, MDM PHONE flashes + enrolls a USB Pixel, MDM QUEST "
+            "HEADSET enrolls a Meta Quest 3/3S, CLOUD DEPLOY publishes an "
+            "already-packaged image to a cloud provider, RUN E2E TESTS drives the "
+            "end-to-end suite against a mesh that is already running (and is the door "
+            "to the emulated-device test lanes), MESH EMULATION boots a whole built "
+            "mesh locally, and CREATE NODES FOR LOCAL CLOUD turns the local mesh into "
+            "buildable node images."))
         self.group = ChoiceCardGroup(self)
         # NINE clearly-distinct choices, in the operator's mesh-building JOURNEY
         # order (issue #50): local mesh -> prod mesh build -> QEMU emulation ->

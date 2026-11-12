@@ -421,8 +421,12 @@ def terminal_argv(cmd_argv: list[str]) -> list[str] | None:
     shred a staged credentials file and hold the window open for a driver's output,
     whereas this argv IS an interactive session — the window must close when the
     operator types ``exit``, and an extra shell would swallow the pty ssh -t asked
-    for.
+    for. On macOS, Terminal.app (core/macos_host.wrap_in_terminal), not held open.
     """
+    from hugmesh_studio.core import macos_host
+    mac = macos_host.wrap_in_terminal(cmd_argv, hold=False)
+    if mac:
+        return mac
     for binary, exec_args in TERMINALS:
         if shutil.which(binary):
             return [binary, *exec_args, *cmd_argv]

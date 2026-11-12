@@ -27,6 +27,7 @@ from hugmesh_studio.gui.qt import QtWidgets                                   # 
 from hugmesh_studio.tui import brand_step             # noqa: E402
 from hugmesh_studio.tui.superbrand_step import (CREATE_LABEL, UNAFFILIATED_REASON,  # noqa: E402
                                                 session_for)
+from test_branding_page_gui import look_pointers_shown                        # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -188,10 +189,71 @@ def test_the_branding_page_hosts_the_drop_down_in_mesh_and_the_look_in_its_secti
     assert not page.superbrand.isHidden()
     assert page.superbrand.picker.item_labels()[0] == CREATE_LABEL
     # one editor, one home: the look is on row 0's Look tab of the Domain services
-    # step (2026-10-21); this page and the design only point there
+    # step (2026-10-21); this page and the design only point there — once (GUI-25):
+    # the open design's "2. Look" line says it, so the page's own line stands down
     assert page.superbrand.look_editor is None
-    assert not page.look_pointer.isHidden() and "Look" in page.look_pointer.text()
+    assert [lb.objectName() for lb in look_pointers_shown(page)] == [
+        "superbrand_look_pointer"]
+    assert page.look_pointer.isHidden() and "Look" in page.look_pointer.text()
     assert not hasattr(page, "login_theme") and not hasattr(page, "login_collapsible")
+
+
+# GUI-25 — red on main: a mesh Branding page printed LOOK_POINTER twice, the open
+# design's "2. Look — …" line and the page's "Web sign-in look — …" line (seen in the
+# mesh-trio-domains-users walk at 942x552). Folding the design away (an existing brand
+# picked) takes its line with it, so "hide the page's line while the step is shown"
+# would trade two for NONE: every state below must say it exactly once.
+def _said_by(page):
+    return [lb.objectName() for lb in look_pointers_shown(page)]
+
+
+def test_a_mesh_branding_page_says_where_the_look_is_chosen_exactly_once(qapp, gen):
+    w = _wiz(gen)
+    page = wizard_mod.BrandingPage(w)
+    page.initializePage()
+    page.show()                       # real visibility too, not only isVisibleTo
+    try:
+        step = page.superbrand
+        # Create (the default): the design is open and its own line says it
+        assert step.session.designing
+        assert _said_by(page) == ["superbrand_look_pointer"]
+        assert step.look_pointer.isVisible() and not page.look_pointer.isVisible()
+        # an existing brand picked: the design folds away, the page's line takes over
+        step.picker.select("profile:example")
+        assert not step.session.designing and step.design.isHidden()
+        assert _said_by(page) == ["branding_look_pointer"]
+        assert page.look_pointer.isVisible() and not step.look_pointer.isVisible()
+        # "Change it" reopens the design: back to the step's line, still once
+        step.picker.change_btn.click()
+        assert step.session.designing
+        assert _said_by(page) == ["superbrand_look_pointer"]
+        # Create picked again from an existing brand: once
+        step.picker.select("profile:example")
+        step.picker.select("create")
+        assert _said_by(page) == ["superbrand_look_pointer"]
+        # a second visit re-decides from the same state, still once
+        page.initializePage()
+        assert _said_by(page) == ["superbrand_look_pointer"]
+        # off a mesh: none
+        w.cfg.mode = "standalone"
+        page.initializePage()
+        assert _said_by(page) == []
+        # and back on a mesh: once again
+        w.cfg.mode = "mesh"
+        page.initializePage()
+        assert len(_said_by(page)) == 1
+    finally:
+        page.close()
+
+
+def test_a_mesh_that_already_has_a_superbrand_says_it_once_on_its_first_visit(qapp, gen):
+    """A configuration carrying its own superbrand opens on that brand with the design
+    folded: the page's line is the one shown (no step line, no blank)."""
+    w = _wiz(gen, _cfg(brand_title="Acme Mesh"))
+    page = wizard_mod.BrandingPage(w)
+    page.initializePage()
+    assert not page.superbrand.session.designing
+    assert _said_by(page) == ["branding_look_pointer"]
 
 
 def test_a_colour_set_in_the_look_editor_survives_the_pages_next(qapp, gen):

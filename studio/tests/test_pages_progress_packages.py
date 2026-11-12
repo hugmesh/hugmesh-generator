@@ -125,7 +125,9 @@ def _run_to_completion(qapp, page, timeout_ms=5000):
 def _mesh_base(tmp_path):
     b = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
                     brand_title="Acme", org="Acme-Inc", cluster_domain="acme.example",
-                    superdomain="core.acme.internal", output_dir=str(tmp_path / "out"))
+                    superdomain="core.acme.internal", output_dir=str(tmp_path / "out"),
+                    # the pki node's fixed LAN address (core/pki_lan.py) a mesh build refuses without
+                    pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True)
     b.domains = [Domain(name="acme.example", title="Acme")]
     b.users = [User(username="root-admin", domain="core.acme.internal", role="superadmin")]
     return b

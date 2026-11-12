@@ -713,7 +713,7 @@ class TerminalSpec:
     """How to open ``argv`` for the operator: Popen(argv, creationflags=…)."""
     argv: list[str]
     creationflags: int = 0
-    how: str = ""                    # "linux" | "wsl-wt" | "wsl-start" | "nt"
+    how: str = ""                    # "linux" | "wsl-wt" | "wsl-start" | "nt" | "darwin"
 
 
 _HOLD = '; rc=$?; echo; read -r -p "press Enter to close..." _; exit "$rc"'
@@ -729,7 +729,8 @@ def terminal_spec(cmd_argv: list[str], *, osname: str | None = None,
                   is_wsl: bool | None = None, wsl_distro: str | None = None,
                   has_interop: bool | None = None,
                   which: Callable[[str], str | None] | None = None,
-                  terminals=None) -> TerminalSpec | None:
+                  terminals=None, sysplatform: str | None = None,
+                  state_dir: str | None = None, isdir=None) -> TerminalSpec | None:
     """Open ``cmd_argv`` (an ``ssh -t …``) in a terminal, or None when none can be
     opened (the caller then shows the exact command to copy).
 
@@ -739,13 +740,22 @@ def terminal_spec(cmd_argv: list[str], *, osname: str | None = None,
       list, held open at the end so the driver's result stays readable;
     * WSL2 without one: Windows Terminal (``cmd.exe /c start "" wt.exe wsl.exe -d
       <distro> -- …``), else a plain console (``cmd.exe /c start "" wsl.exe …``) —
-      only when WSL interop is on."""
+      only when WSL interop is on;
+    * macOS: Terminal.app (or iTerm2 when installed) opening a ``.command`` file that
+      runs the argv and holds the window open (core/macos_host.terminal_argv says why a
+      file and not AppleScript). It is written under ``state_dir`` (the Studio's state
+      dir by default) and deletes itself as it starts."""
     from .cloud_deploy import TERMINALS
     osname = osname or _host_os()
     which = which or shutil.which
     if osname == "nt":
         return TerminalSpec(list(cmd_argv), getattr(subprocess, "CREATE_NEW_CONSOLE", 0x10),
                             "nt")
+    from . import macos_host
+    mac = macos_host.wrap_in_terminal(list(cmd_argv), sysplatform=sysplatform,
+                                      state_dir=state_dir, isdir=isdir or os.path.isdir)
+    if mac:
+        return TerminalSpec(mac, 0, "darwin")
     for binary, exec_args in (terminals if terminals is not None else TERMINALS):
         if which(binary):
             script = shlex.join(cmd_argv) + _HOLD
@@ -1356,4 +1366,6 @@ def run_studio_cli(rest: list[str], generator_dir: str) -> int:
 
 
 if __name__ == "__main__":
+    from .entry import bootstrap as _bootstrap   # the Mac PATH hook: core/entry.py
+    _bootstrap()
     raise SystemExit(main())

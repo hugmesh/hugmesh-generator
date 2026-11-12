@@ -1185,12 +1185,9 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #984 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 244 of 286.
 # PR #1016 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 245 of 287.
 # PR #993 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 246 of 288.
-# PR #1004 round 2, 2026-11-12 (fix/control-endpoint-lan-first-20261111 merged with origin/main dd33be57):
-# main 246 of 288 + this branch's tests/scripts/test-control-endpoint-lan-first.sh = 247 of 289,
-# MEASURED with GUARD_PREMERGE=0 on the merged tree.
-# Re-merged with origin/main a88ef74e (#1022, the baseline is a floor): 247 of 289,
-# MEASURED with GUARD_PREMERGE=0 on the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-247}"
+# Integration batch 2026-11-12: MEASURED with GUARD_PREMERGE=0 on the combined tree: 252 of 294.
+# PR #1004 merged with origin/main 19a2909f (after the integration batch): MEASURED with GUARD_PREMERGE=0 on the merged tree: 253 of 295.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-253}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
