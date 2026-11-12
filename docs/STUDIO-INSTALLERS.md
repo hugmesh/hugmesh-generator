@@ -1,16 +1,18 @@
-# Studio installers — Windows MSI, Linux Flatpak and Linux tarball
+# Studio installers — Windows MSI, Linux Flatpak, Linux tarball and macOS .dmg
 
 The usual way to get the HugMesh Image Studio is a package from the
-[Downloads page](https://hugmesh.net/downloads) or the GitHub releases. There are four: a
-Windows MSI, a Flatpak bundle for x86_64 Linux, one for aarch64 Linux, and an x86_64 Linux
-tarball. A checkout is for developers. It is also the way to do what the Flatpak refuses
-(native sudo builds and writing images to devices), and to run the Studio on macOS and BSD,
-which have no package yet. See
+[Downloads page](https://hugmesh.net/downloads) or the GitHub releases. There are six: a
+Windows MSI, a Flatpak bundle for x86_64 Linux, one for aarch64 Linux, an x86_64 Linux
+tarball, and a macOS disk image each for Apple silicon and Intel Macs
+(`hugmesh-studio-<version>-macos-arm64.dmg` and `hugmesh-studio-<version>-macos-x86_64.dmg`;
+see [macOS](#macos)). A checkout is for developers. It is also the way to do what the
+Flatpak refuses (native sudo builds and writing images to devices), and to run the Studio
+on BSD, which has no package yet. See
 ["Developer: run the Studio from a checkout"](#developer-run-the-studio-from-a-checkout).
 
 Every package holds **the same application code**. The Flatpaks also carry the
-hugmesh-generator build scripts of their own release. The MSI and the tarball do not include
-them yet. ["What a package gives you"](#what-a-package-gives-you) says what that means on
+hugmesh-generator build scripts of their own release. The MSI, the tarball and the `.dmg`
+files do not include them yet. ["What a package gives you"](#what-a-package-gives-you) says what that means on
 first start.
 
 Maintainers cut a release with `scripts/release-studio.sh <version>`; see
@@ -22,9 +24,11 @@ Maintainers cut a release with `scripts/release-studio.sh <version>`; see
 | `hugmesh-studio-<version>-x86_64.flatpak` | x86_64 Linux with Flatpak | flatpak-builder, `org.kde.Platform` 6.11 (the bundle names Flathub as its source) |
 | `hugmesh-studio-<version>-aarch64.flatpak` | aarch64 (ARM64) Linux with Flatpak: Raspberry Pi 4/5 desktops, Apple-silicon VMs, Ampere machines | the same manifest on GitHub's hosted `ubuntu-24.04-arm` runner (job `flatpak-aarch64`) |
 | `hugmesh-studio-<version>-linux-x86_64.tar.gz` | x86_64 Linux, glibc 2.39+ | PyInstaller (same spec as the MSI) |
+| `hugmesh-studio-<version>-macos-arm64.dmg` | macOS 13+ on Apple silicon (signed ad hoc, not notarized; image builds EXPERIMENTAL) | PyInstaller (same spec) → `hdiutil`, by `studio/packaging/build-macos-app.sh` on GitHub's hosted `macos-15` runner (job `macos`) |
+| `hugmesh-studio-<version>-macos-x86_64.dmg` | macOS 13+ on Intel (the same) | the same script on GitHub's hosted `macos-15-intel` runner (job `macos-intel`) |
 
 [`.github/workflows/studio-release.yml`](../.github/workflows/studio-release.yml)
-builds all four **on GitHub-hosted runners only**, signs them there, and attaches
+builds all six **on GitHub-hosted runners only**, signs them there, and attaches
 them to a GitHub Release with `SHA256SUMS`, its cosign signature bundle
 `SHA256SUMS.sigstore.json`, SPDX SBOMs and a `releases.json` that feeds the Downloads
 page on the documentation site. Nothing built on a developer machine is ever published;
@@ -80,7 +84,7 @@ host tools.
 | Package | The hugmesh-generator build scripts | On first start |
 |---|---|---|
 | Flatpak, x86_64 and aarch64 (0.4.4-beta.1 and later) | **Included.** The bundle carries the tree of its own release (`share/hugmesh-studio/generator-seed.tar.gz`). | Studio places that copy in `~/.local/share/hugmesh-studio/generator` and uses it. There is nothing to clone. |
-| Windows MSI, Linux tarball | **Not included yet** ([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). | Studio shows *Choose your hugmesh-generator folder*. Clone `hugmesh-generator` (`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and Studio remembers it. |
+| Windows MSI, Linux tarball, macOS .dmg | **Not included yet** ([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). | Studio shows *Choose your hugmesh-generator folder*. Clone `hugmesh-generator` (`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and Studio remembers it. |
 
 How the copy works and what overrides it:
 
@@ -400,7 +404,8 @@ hugmesh/hugmesh.github.io`; never re-run the release for it (a re-run is a repub
 ### Where the guard lives
 
 Every job runs on a GitHub-hosted runner (`ubuntu-latest`, `ubuntu-24.04`,
-`windows-latest`); no variable can move one onto the self-hosted runner. Only the
+`ubuntu-24.04-arm`, `windows-latest`, `macos-15`, `macos-15-intel`); no variable can move
+one onto the self-hosted runner. Only the
 publish job of `studio-release.yml` can sign (`id-token` and `attestations: write`);
 the cut's `cut` job holds `contents` and `actions: write` and nothing else. The
 tests under `studio/tests/test_studio_beta_version.py`,
@@ -449,15 +454,19 @@ The Studio runs on macOS 13 or newer, on Apple silicon (arm64) and Intel (x86_64
 into `hugmesh-studio-<version>-macos-<arch>.dmg`. It uses the same PyInstaller spec as the
 MSI and the tarball; the spec's darwin-only `BUNDLE` step makes the `.app`.
 
-**Not on a release yet.** The `macos` job of `.github/workflows/studio-tests.yml` builds
-and checks both `.dmg` files on every Studio pull request, on GitHub's `macos-15` (Apple
-silicon) and `macos-15-intel` runners. It keeps them for 7 days as the run artifacts
-`macos-dmg-arm64` and `macos-dmg-x86_64`. Attaching them to a `studio-v*` release is the
-next step. It means a `macos` job in `studio-release.yml` running the same script, plus
-the `.dmg` in the publish job's collect list, `SHA256SUMS`, `releases.json` and the
-signing guard tests. That waits until the publish job's current rework
-(hugmesh-generator#979) has landed. The Downloads page keeps offering macOS "from source"
-until a release carries a `.dmg`.
+**On every release.** The `macos` and `macos-intel` jobs of `.github/workflows/studio-release.yml`
+build `hugmesh-studio-<version>-macos-arm64.dmg` and `hugmesh-studio-<version>-macos-x86_64.dmg`
+on GitHub's `macos-15` (Apple silicon) and `macos-15-intel` runners. They run the same
+script, with the same arguments, as the `macos` job of `.github/workflows/studio-tests.yml`,
+which builds and checks both `.dmg` files on every Studio pull request (kept for 7 days as
+the run artifacts `macos-dmg-arm64` and `macos-dmg-x86_64`). The publish job lists both
+files in `SHA256SUMS` (signed with cosign), attests them like every other file, and lists
+them in `releases.json` as `"platform": "macos"`, `"kind": "dmg"` with an `"arch"` of `arm64`
+or `x86_64`. Verify a `.dmg` as in [Verifying a download](#verifying-a-download); on a Mac,
+`shasum -a 256 <file>` prints the line to compare with `SHA256SUMS`. The app is signed ad
+hoc and not notarized (see the next section), and image builds on a Mac are EXPERIMENTAL:
+no hosted macOS runner has Docker, so no image build on a Mac has been proven yet. The
+release notes say both.
 
 ### First start: Gatekeeper
 
