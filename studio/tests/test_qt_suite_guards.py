@@ -290,12 +290,38 @@ def _qt_job():
     return jobs[0]
 
 
+_BINDING = re.compile(r"\b(?:PySide6|pyside6-essentials|PyQt6)\b", re.I)
+
+
+def _installs_a_binding(line: str, script: str) -> bool:
+    """A ``pip install`` line that names a Qt binding, or installs ``-r FILE`` where the
+    script writes FILE from a line that names one (the job pins the Linux lock's
+    version that way). A binding named only in a message does not count."""
+    if "pip install" not in line:
+        return False
+    if _BINDING.search(line):
+        return True
+    m = re.search(r'-r\s+"?([^"\s]+)"?', line)
+    return bool(m) and any(_BINDING.search(src) and re.search(r">\s*\"?" + re.escape(m.group(1)), src)
+                           for src in script.splitlines())
+
+
+def test_the_install_reader_wants_a_pip_install_of_a_binding():
+    pins = '"$RUNNER_TEMP/qt-pins.txt"'
+    script = (f"grep -E '^(pyside6-essentials|shiboken6)==' lock.txt > {pins}\n"
+              f'echo "::error::the lock no longer pins pyside6-essentials"\n')
+    assert _installs_a_binding(f"python -m pip install -r {pins} pytest", script)
+    assert _installs_a_binding("pip install pytest PySide6==6.11.2", "")
+    assert not _installs_a_binding("python -m pip install pytest PyYAML", script)
+    assert not _installs_a_binding("python -m pip install -r other.txt pytest", script)
+    assert not _installs_a_binding('echo "install PySide6 by hand"', script)
+
+
 def test_the_qt_job_runs_every_file_with_a_binding_and_refuses_a_blind_run():
     job = _qt_job()
     steps = job["steps"]
     runs = "\n".join(s.get("run") or "" for s in steps)
-    assert "pip install" in runs and \
-        re.search(r"\b(?:PySide6|pyside6-essentials|PyQt6)\b", runs), \
+    assert any(_installs_a_binding(ln, runs) for ln in runs.splitlines()), \
         "the Qt job installs no Qt binding: every GUI test would importorskip"
     env = {**(job.get("env") or {})}
     for s in steps:
