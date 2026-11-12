@@ -297,6 +297,25 @@ def test_a_clean_result_offers_nothing(wiz):
     assert page.pretend_status.text().startswith("Clean")
 
 
+def test_an_unchecked_native_pick_is_a_note_until_a_clean_check(wiz):
+    page = _desktop(wiz, mode="standalone", role="chromebook")
+    for r in range(page.apps_table.rowCount()):
+        if page.apps_table.item(r, 0).data(QtCore.Qt.ItemDataRole.UserRole)[0] == "element":
+            combo = page.apps_table.cellWidget(r, 1)
+            combo.setCurrentIndex(combo.findData("native"))
+    page._refresh()
+    assert page.problems.isVisibleTo(page)
+    assert "Note: Not checked against the portage tree yet: net-im/element-desktop-bin" \
+        in page.problems.text()
+    assert page.validatePage(), page.problems.text()        # said, never refused
+    _shot(page.problems, "desktop-unchecked-native-note.png")
+    _shot(wiz, "desktop-unchecked-native-wizard.png")
+    page.show_result(_fixture_result("clean.txt", 0))
+    page._refresh()
+    assert not page.problems.isVisibleTo(page) \
+        or "Not checked against the portage tree" not in page.problems.text()
+
+
 def test_the_pretend_button_waits_its_turn_inline(wiz, monkeypatch):
     page = _desktop(wiz)
     monkeypatch.setattr(dp, "gate", lambda *a, **k: "Another build or emulated device is running")

@@ -117,12 +117,23 @@ The exit status is 0 for clean, 3 for needs and 1 for error. The check fails clo
 `--verbose`) and no named change. Nothing is merged. The run uses its own
 `--build-subdir pretend-<hash>` and removes that tree when it finishes, but only after
 `umount_chroot`, only when nothing is left mounted, and only for a `pretend-*` subdir.
+`--pretend-only` refuses a `--build-subdir` that is not one plain name (a `/` or `..`
+would point that removal outside the work dir).
 
 The Studio always runs it in the builder container, never as a native sudo build, and one
 at a time machine-wide: `desktop_pretend.gate` waits on any running build, QEMU or builder
 container, on free memory below 8 GiB and on free disk below 60 GiB. Each run's log and
 parsed result are kept under `<out>/pretend/<key>/`, and a summary in
-`desktop_spec.last_pretend`.
+`desktop_spec.last_pretend` (with the `config_key` it was run for).
+
+Until a `clean` result exists for exactly the current configuration, every x86 native
+pick (apps and window managers / compositors) is shown as a Note in the GUI and the TUI
+(`desktop_spec.unchecked_native_picks`). It is a warning, never a refusal. Some picks carry only
+`~amd64`: on the 2026-11 tree that was labwc, element-desktop-bin, and Krita / OBS outside
+the Plasma payload (`package.accept_keywords/capable` covers those two there). x86 builds
+with `ACCEPT_KEYWORDS=amd64`, so such a pick stops the build at the payload plan gate's
+keyword wall. Changing the configuration, including adding a keyword line, needs a new
+check.
 
 Honesty: the check resolves the seed, @world and the payload in ONE pass. The real build
 merges @world first and its own fail-fast gate (`hugmesh_payload_plan_gate`) checks the

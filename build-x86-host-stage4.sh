@@ -2145,6 +2145,14 @@ if ${PRETEND_ONLY} && { ${PACKAGES_ONLY} || ${RESUME}; }; then
     err "--pretend-only cannot be combined with --packages-only or --resume (a pretend sysroot is a fresh throwaway)"
     exit 1
 fi
+# --pretend-only removes WORK_DIR/BUILD_SUBDIR (root rm -rf) when it is done, so the
+# subdir must be ONE plain path component: a '/' or '..' (pretend-x/../..) would point
+# that rm outside WORK_DIR. The Studio sends pretend-<sha8>; this is the CLI backstop.
+case "${PRETEND_ONLY}:${BUILD_SUBDIR}" in
+    true:|true:.|true:..|true:*/*|true:*..*)
+        err "--pretend-only: --build-subdir '${BUILD_SUBDIR}' must be one plain directory name (no '/' or '..'): the pretend tree under it is removed afterwards"
+        exit 1 ;;
+esac
 assert_spec_video_cards
 # Thin-desktop stream host (--with-sunshine): CLIENT desktops WITH a tailnet
 # only. Sunshine streams THIS node's desktop session and the fence admits it
@@ -6121,6 +6129,7 @@ PRETEND
     # may be a real build tree: never removed.
     umount_chroot; trap - EXIT
     case "${BUILD_SUBDIR}" in
+        */*|*..*) warn "Pretend: --build-subdir ${BUILD_SUBDIR} is not one plain name; leaving the tree in place" ;;
         pretend-*)
             _pretend_left="$(hmr_stale_mounts "${SYSROOT}")"
             if [ -n "${_pretend_left}" ]; then

@@ -103,7 +103,7 @@ dc_wayland_selected() {
 # apply to every package, which is exactly what this overlay must never do.
 _DC_ATOM_PLAIN='^[a-z0-9][a-z0-9+._-]*/[A-Za-z0-9+_][A-Za-z0-9+_-]*(:[A-Za-z0-9+._-]+(/[A-Za-z0-9+._-]+)?)?$'
 _DC_ATOM_VER='^(>=|<=|=|~|<|>)[a-z0-9][a-z0-9+._-]*/[A-Za-z0-9+_][A-Za-z0-9+_-]*-[0-9][0-9.]*[a-z]?(_(alpha|beta|pre|rc|p)[0-9]*)*(-r[0-9]+)?(:[A-Za-z0-9+._-]+(/[A-Za-z0-9+._-]+)?)?$'
-_DC_USE_FLAG='^-?[a-z0-9][a-z0-9+_@.-]*$'
+_DC_USE_FLAG='^-?[A-Za-z0-9][A-Za-z0-9+_@.-]*$'
 
 dc_valid_atom() {
     [[ "$1" =~ ${_DC_ATOM_PLAIN} ]] || [[ "$1" =~ ${_DC_ATOM_VER} ]]

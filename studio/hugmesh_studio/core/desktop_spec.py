@@ -38,6 +38,7 @@ shows carries :data:`EXTRA_PASS_PLACEHOLDER` instead of a path.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -482,7 +483,7 @@ _ATOM_PLAIN = re.compile(
 _ATOM_VER = re.compile(
     r"^(>=|<=|=|~|<|>)[a-z0-9][a-z0-9+._-]*/[A-Za-z0-9+_][A-Za-z0-9+_-]*-[0-9][0-9.]*[a-z]?"
     r"(_(alpha|beta|pre|rc|p)[0-9]*)*(-r[0-9]+)?(:[A-Za-z0-9+._-]+(/[A-Za-z0-9+._-]+)?)?$")
-_USE_FLAG = re.compile(r"^-?[a-z0-9][a-z0-9+_@.-]*$")
+_USE_FLAG = re.compile(r"^-?[A-Za-z0-9][A-Za-z0-9+_@.-]*$")
 _USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 _FLATPAK_ID = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2,}$")
 _REMOTE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -642,6 +643,13 @@ def problems(cfg, spec: DesktopSpec | None = None, *, passwords: dict | None = N
         block = delivery_block(cfg, a)
         if block:
             err("apps", f"{a.label}: {block}")
+    picks = unchecked_native_picks(cfg, spec) if x86 else []
+    if picks:
+        warn("apps", "Not checked against the portage tree yet: " + ", ".join(picks) + ". "
+             "Some picks carry only the ~amd64 testing keyword (as of the 2026-11 tree: "
+             "labwc, element-desktop-bin, and Krita / OBS outside the Plasma payload), and "
+             "the build then stops at its keyword wall. Run 'Check with emerge --pretend' "
+             "and apply what portage asks, or add 'ATOM ~amd64' accept_keywords lines.")
     for name, url in spec.flatpak_remotes.items():
         if not _REMOTE.fullmatch(name) or not _REMOTE_URL.fullmatch(url):
             err("apps", f"Flatpak remote {name}={url!r}: want a name and an https:// .flatpakrepo URL.")
@@ -715,6 +723,27 @@ def native_atoms(spec: DesktopSpec) -> list[str]:
         if a.delivery == "native" and a.atom and a.atom not in out:
             out.append(a.atom)
     return out
+
+
+def unchecked_native_picks(cfg, spec: DesktopSpec | None = None) -> list[str]:
+    """The packages this step adds natively (apps + window managers / compositors) when no
+    CLEAN emerge --pretend result exists for exactly this configuration, else []. Keyword
+    stability is not recorded anywhere (it drifts); the check is what knows, so a pick
+    stays flagged until the check has passed on this shape (spec.last_pretend["key"] is
+    desktop_pretend.config_key at the time of that result)."""
+    spec = spec if spec is not None else spec_of(cfg)
+    picks = native_atoms(spec) + [SESSIONS[s].atom for s in spec.sessions
+                                  if s in SESSIONS and s not in ALWAYS_ON_SESSIONS]
+    if not picks:
+        return []
+    lp = spec.last_pretend or {}
+    if lp.get("status") == "clean" and lp.get("key"):
+        from . import desktop_pretend          # imports this module: resolve lazily
+        probe = copy.copy(cfg)
+        probe.desktop_spec = spec.to_dict()
+        if lp["key"] == desktop_pretend.config_key(probe):
+            return []
+    return list(dict.fromkeys(picks))
 
 
 def effective_packages_add(cfg) -> str:

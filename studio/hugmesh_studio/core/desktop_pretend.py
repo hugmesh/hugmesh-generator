@@ -346,7 +346,7 @@ def record(cfg, res: PretendResult) -> None:
     """Keep the result's summary on the config (spec.last_pretend), for the assistant,
     the Review page and the session record."""
     spec = ds.spec_of(cfg)
-    spec.last_pretend = res.summary()
+    spec.last_pretend = {**res.summary(), "key": config_key(cfg)}
     ds.store(cfg, spec)
 
 

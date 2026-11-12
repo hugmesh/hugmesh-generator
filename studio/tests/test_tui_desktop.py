@@ -159,3 +159,15 @@ def test_an_arm_board_refuses_a_delivery_that_does_not_exist_there():
     assert [a.flatpak for a in ds.spec_of(j.cfg).apps] == ["org.libreoffice.LibreOffice"]
     text = "\n".join(j.lines())
     assert "thunderbird" in text and "x86_64" in text
+
+
+def test_an_unchecked_native_pick_is_a_note_on_the_screen_and_enter_still_advances():
+    j = _to_desktop()
+    j.cfg.role = "chromebook"
+    j.feed("app element native")
+    text = "\n".join(j.lines())
+    assert "Note: Not checked against the portage tree yet: net-im/element-desktop-bin" in text
+    dp.record(j.cfg, dp.PretendResult(status="clean", rc=0, run_id="t"))
+    assert "Not checked against the portage tree" not in "\n".join(j.lines())
+    j.feed("")
+    assert j.slug == "build"

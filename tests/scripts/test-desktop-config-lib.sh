@@ -77,6 +77,11 @@ refuses "a bad account suffix" "DC_EXTRA_USERS='ann:root'; DC_EXTRA_PASS_FILE=${
 refuses "a Flatpak remote with no URL" 'DC_FLATPAK_APPS="mine:org.example.App"; dc_validate t amd64 true true LXDE all-free bob' "not defined by --flatpak-remotes"
 refuses "an http remote" 'DC_FLATPAK_REMOTES="mine=http://x/y.flatpakrepo"; dc_validate t amd64 true true LXDE all-free bob' "not NAME=https://URL"
 refuses "a wildcard package.use line" 'DC_PACKAGE_USE="*/* -X"; dc_validate t amd64 true true LXDE all-free bob' "not a plain package atom"
+accepts "the X USE flag (PMS allows upper case; portage asks for it by name)" 'DC_PACKAGE_USE="x11-libs/gtk+:3 X -X"; dc_validate t amd64 true true LXDE all-free bob'
+refuses "a category-wildcard package.use line" 'DC_PACKAGE_USE="*/labwc -X"; dc_validate t amd64 true true LXDE all-free bob' "not a plain package atom"
+refuses "a name-wildcard package.use line" 'DC_PACKAGE_USE="gui-wm/* -X"; dc_validate t amd64 true true LXDE all-free bob' "not a plain package atom"
+refuses "a category-wildcard accept_keywords line" 'DC_ACCEPT_KEYWORDS="*/labwc ~amd64"; dc_validate t amd64 true true LXDE all-free bob' "not a plain package atom"
+refuses "a name-wildcard accept_keywords line" 'DC_ACCEPT_KEYWORDS="gui-wm/*"; dc_validate t amd64 true true LXDE all-free bob' "not a plain package atom"
 refuses "a video_cards flag in package.use" 'DC_PACKAGE_USE="media-libs/mesa video_cards_intel"; dc_validate t amd64 true true LXDE all-free bob' "Video section"
 refuses "a python target in package.use" 'DC_PACKAGE_USE="dev-lang/foo python_targets_python3_12"; dc_validate t amd64 true true LXDE all-free bob' "Python section"
 refuses "a USE_EXPAND spelling" 'DC_PACKAGE_USE="media-libs/mesa VIDEO_CARDS: intel"; dc_validate t amd64 true true LXDE all-free bob' "is not a USE flag"
@@ -342,6 +347,20 @@ rmn="$(printf '%s\n' "${pbody}" | grep -n 'rm -rf --one-file-system "${BUILD_ROO
     && ok "pretend removes its throwaway tree only AFTER detaching the chroot mounts" || bad "pretend cleanup order (umount=${um} rm=${rmn})"
 printf '%s\n' "${pbody}" | grep -E '^        pretend-\*\)' >/dev/null && printf '%s\n' "${pbody}" | grep -F 'hmr_stale_mounts "${SYSROOT}"' >/dev/null \
     && ok "pretend removes only a pretend-* tree, and only with nothing left mounted" || bad "pretend cleanup guards missing"
+# The subdir guard, run for real: --pretend-only rm -rf's WORK_DIR/BUILD_SUBDIR afterwards.
+sguard="$(awk '/^case "\$\{PRETEND_ONLY\}:\$\{BUILD_SUBDIR\}" in$/{on=1} on{print} on&&/^esac$/{exit}' "${X86}")"
+if [ -z "${sguard}" ]; then bad "pretend --build-subdir guard not found"; else
+    for sd in 'pretend-x/../..' '../x' 'pretend-a/b' '..' '.' '' 'pretend-..'; do
+        if ( err(){ :; }; PRETEND_ONLY=true; BUILD_SUBDIR="${sd}"; eval "${sguard}"; exit 0 ); then
+            bad "pretend --build-subdir '${sd}' accepted"; else ok "pretend --build-subdir '${sd}' refused"; fi
+    done
+    for sd in 'pretend-1a2b3c4d' 'snap-build-x86'; do
+        ( err(){ :; }; PRETEND_ONLY=true; BUILD_SUBDIR="${sd}"; eval "${sguard}"; exit 0 ) \
+            && ok "pretend --build-subdir '${sd}' accepted" || bad "pretend --build-subdir '${sd}' refused"
+    done
+    ( err(){ :; }; PRETEND_ONLY=false; BUILD_SUBDIR='a/b'; eval "${sguard}"; exit 0 ) \
+        && ok "a real build's --build-subdir is not this guard's business" || bad "guard fires without --pretend-only"
+fi
 grep -F -- '--pretend --verbose' "${REPO}/scripts/_pretend-lib.sh" >/dev/null \
     && ok "pretend asks for --verbose (portage prints Total: only then)" || bad "pretend lib lost --verbose"
 for lib_f in scripts/_desktop-config-lib.sh scripts/_pretend-lib.sh; do

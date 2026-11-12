@@ -70,6 +70,9 @@ def test_the_arm_fixed_cards_are_each_boards_make_conf():
     ("=dev-qt/qtbase-6.9.1-r2:6 icu", True),
     ("x11-libs/libdrm:0 video_cards_radeon", False),
     ("*/* -X", False),
+    ("*/labwc -x", False),
+    ("gui-wm/* -x", False),
+    ("x11-libs/gtk+:3 X -X", True),                   # PMS: upper case is a USE flag
     ("media-video/ffmpeg-7.1.5 opus", False),          # a version needs an operator
     ("dev-lang/python python_targets_python3_12", False),
     ("media-libs/mesa VIDEO_CARDS: intel", False),
@@ -86,6 +89,7 @@ def test_the_use_line_grammar_matches_the_builder(line, ok):
     ("gui-wm/labwc **", False),
     ("gui-wm/labwc ~arm64", False),
     ("gui-wm/* ~amd64", False),
+    ("*/labwc ~amd64", False),
 ])
 def test_the_keyword_line_grammar_matches_the_builder(line, ok):
     assert (ds.check_keyword_line(line, "amd64") == "") is ok
@@ -411,3 +415,51 @@ def test_catalog_blocks_lists_every_delivery_this_image_cannot_take():
     assert set(ds.catalog_blocks(_rpi5(), by_id["blender"])) == {"flatpak"}
     assert ds.catalog_blocks(_rpi5(), by_id["firefox"]) == {}
     assert all(ds.catalog_blocks(_laptop(), a) == {} for a in ds.app_catalog())
+
+
+# ── native picks the resolver has not checked (keyword stability is the check's job) ──
+# Measured 2026-11-12 on the 2026-11-10 tree: gui-wm/labwc, net-im/element-desktop-bin,
+# media-gfx/krita and media-video/obs-studio carry only ~amd64 (krita/obs are covered on
+# the Plasma payload by specs-x86/portage/package.accept_keywords/capable), and an x86
+# image runs ACCEPT_KEYWORDS=amd64, so the build stops at its keyword wall. The Studio
+# does not keep that list (it drifts): every native pick is said until a CLEAN check ran
+# on exactly this configuration.
+
+def _notes(cfg) -> list[str]:
+    return [p.text for p in ds.problems(cfg) if p.level == "warning" and p.section == "apps"]
+
+
+def _record_clean(cfg) -> None:
+    from hugmesh_studio.core import desktop_pretend as dp
+    dp.record(cfg, dp.PretendResult(status="clean", rc=0, run_id="t"))
+
+
+def test_an_unchecked_native_pick_is_said_and_a_clean_check_clears_it():
+    cfg = _with(_laptop(), sessions=["labwc"], video_cards=[],
+                apps=[ds.catalog_app("element", "native")])
+    notes = _notes(cfg)
+    assert len(notes) == 1 and "gui-wm/labwc" in notes[0] and "net-im/element-desktop-bin" in notes[0]
+    assert "emerge --pretend" in notes[0] and "~amd64" in notes[0]
+    assert _errs(cfg) == ""                                  # said, never refused
+    _record_clean(cfg)
+    assert ds.spec_of(cfg).last_pretend["key"]
+    assert _notes(cfg) == []
+    # a change to the shape (a keyword line here) is a different configuration: said again
+    spec = ds.spec_of(cfg)
+    spec.keyword_lines = ["gui-wm/labwc ~amd64"]
+    ds.store(cfg, spec)
+    assert len(_notes(cfg)) == 1
+
+
+def test_a_check_that_needs_changes_does_not_clear_it():
+    from hugmesh_studio.core import desktop_pretend as dp
+    cfg = _with(_laptop(), apps=[ds.catalog_app("krita", "native")])
+    dp.record(cfg, dp.PretendResult(status="needs", rc=3, run_id="t",
+                                    needs=[("accept_keywords", "media-gfx/krita ~amd64")]))
+    assert "media-gfx/krita" in _notes(cfg)[0]
+
+
+def test_flatpak_only_arm_and_bare_images_say_nothing():
+    assert _notes(_with(_laptop(), apps=[ds.catalog_app("element", "flatpak")])) == []
+    assert _notes(_laptop()) == []
+    assert _notes(_rpi5(apps=[ds.catalog_app("element", "native")])) == []   # ~arm64 accepted
