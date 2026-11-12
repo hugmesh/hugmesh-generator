@@ -55,7 +55,7 @@ from ...core.config import (
     PERSON_ROLE_CHOICES, derive_default_user, derive_hostname, image_class,
     person_role_applies,
 )
-from ...core.validate import validate_domain_name
+from ...core.validate import username_problem, validate_domain_name
 from ...core.worklist import derived_hostname, duplicate_hostnames, resolve_hostname
 from ._gating import (
     capability_allows_flow, clear_unsupported, gate_widgets, gate_widgets_role_class,
@@ -351,6 +351,17 @@ class SystemPage(QtWidgets.QWizardPage):
         # module goes stale on that module's next edit.
         self.user_row = _row("Default user", self.user)
         lay.addWidget(self.user_row)
+        # The default account's inline refusal, right under its row — the hostname
+        # refusal's twin (a label, never a modal: validatePage runs headless). Its own
+        # label rather than hostname_error, which sits two rows up under a different
+        # field. Text names the CAPTION ("Default user"), never the config field: the
+        # Review page used to say "invalid local_user", which is the Home step's field.
+        self.user_error = QtWidgets.QLabel("")
+        self.user_error.setObjectName("user_error")
+        self.user_error.setWordWrap(True)
+        self.user_error.setStyleSheet("color: #c62828;")
+        self.user_error.setVisible(False)
+        lay.addWidget(self.user_error)
         # The default-account twin of hostname_note: shown only where the worklist's
         # boards derive DIFFERENT accounts, which is exactly where a single prefilled
         # value would override each ARM builder's own DEFAULT_USER (see _seed_user).
@@ -662,6 +673,7 @@ class SystemPage(QtWidgets.QWizardPage):
         self._seed_hostname(c)
         self._seed_timezone(c)
         self._seed_user(c)
+        self.user_error.setVisible(False)    # a refusal from an earlier visit is stale
         # ask 7: the tier round-trips; an out-of-range value falls back to 'derive'
         self.person_role.setCurrentText(c.person_role if c.person_role in PERSON_ROLE_CHOICES
                                         else "derive")
@@ -713,6 +725,7 @@ class SystemPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         c = self.wiz.cfg
+        prior_user = c.user        # put back if -u is refused below (never written through)
         # hostname: per IMAGE on a mesh worklist (issue #229) — the entries carry it
         # and the base is blanked; the single field only writes the config outside
         # mesh. Refusals are inline (hostname_error), never modal.
@@ -782,4 +795,20 @@ class SystemPage(QtWidgets.QWizardPage):
         if not self._node_creds_apply(c):
             c.user_password = ""
             c.root_password = ""
+        # The allowlist validate_identity applies to -u, applied HERE on the GATED value:
+        # c.user is "" wherever the row is hidden (the duplicate-account clear above), so
+        # a value the operator cannot see is never refused, and a typed one is refused
+        # under the field it was typed into instead of as "Cannot assemble this build:
+        # invalid local_user" at Review. LAST, after every other field is collected:
+        # collect_all() re-runs validatePage and ignores its answer, so an early return
+        # here would silently drop the person role and the credentials from the config.
+        # A refused value is put back rather than left in the config (the hostname
+        # refusal's "never written through" rule), so a Back-and-switch-flow cannot
+        # carry it to Review on a flow that hides this row.
+        problem = username_problem("Default user", c.user) if c.user else ""
+        self.user_error.setText(problem)
+        self.user_error.setVisible(bool(problem))
+        if problem:
+            c.user = prior_user
+            return False
         return True

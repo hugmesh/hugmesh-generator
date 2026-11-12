@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import MISSING
 
-from ..qt import QtWidgets
+from ..qt import QtCore, QtWidgets
 from ._scroll import scrollable
 from ...core import cross_dracut
 from ...core.config import (
@@ -17,6 +17,7 @@ from ...core.config import (
     external_media_applies, home_options_allowed, image_class, local_login_applies,
     standalone_login_problem,
 )
+from ...core.validate import username_problem
 from ...core.worklist import resolve_encrypt_root
 from ._gating import (
     capability_allows_flow,
@@ -905,7 +906,13 @@ class HomePage(QtWidgets.QWizardPage):
         # matters and the one that is gated: it is a SECRET_FIELD that would otherwise
         # ride the shared mesh base onto every node image.
         login_ok = capability_allows_flow(local_login_applies, c, self.wiz)
-        c.local_user = self.local_user.text().strip() or c.local_user
+        # GUI-20: a Local User the allowlist refuses is NOT written (the hostname rule:
+        # never written through) — checked here, before the password refusals below
+        # can return early, and reported LAST, after the whole collect (see the end).
+        typed_user = self.local_user.text().strip() or c.local_user
+        user_problem = username_problem("Local User", typed_user) if login_ok else ""
+        if not user_problem:
+            c.local_user = typed_user
         if login_ok and self.local_pass.text() != self.local_pass_confirm.text():
             self.login_err.setText(
                 "The two passwords do not match. Type the same password in both "
@@ -959,4 +966,24 @@ class HomePage(QtWidgets.QWizardPage):
             for fld in HOME_DESKTOP_FIELDS:
                 f = ImageConfig.__dataclass_fields__[fld]
                 setattr(c, fld, f.default_factory() if f.default is MISSING else f.default)
+        # GUI-20: the allowlist validate_identity applies to --local-user ("always
+        # emitted"), applied on the field it was typed into. Before this, 'Bad User'
+        # passed Next and surfaced at Review as "Cannot assemble this build: invalid
+        # local_user". Only while the login group is ON SCREEN (login_ok): where it is
+        # hidden the operator has no field to fix, so refusing there would be a Next that
+        # cannot be satisfied. Reported LAST, after every field above is collected,
+        # because collect_all() re-runs validatePage and ignores its answer; the value
+        # itself was never written (above), so a Back to Mode and a switch to mesh —
+        # where this group is hidden — cannot carry it, unfixable, to Review. Same label
+        # and scroll as the password refusals: under the group, brought into view.
+        problem = user_problem
+        if problem:
+            self.login_err.setText(problem)
+            self.login_err.setVisible(True)
+            QtCore.QCoreApplication.sendPostedEvents(
+                None, QtCore.QEvent.Type.LayoutRequest)
+            scroll = getattr(self, "_content_scroll", None)
+            if scroll is not None:
+                scroll.ensureWidgetVisible(self.login_err)
+            return False
         return True
