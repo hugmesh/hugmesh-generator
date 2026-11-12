@@ -44,6 +44,8 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LIB="${REPO}/scripts/_selinux-policy-lib.sh"
 X86="${REPO}/build-x86-host-stage4.sh"
+X86KI="${REPO}/scripts/_x86-kernel-install.sh"   # the kernel chroot's compile/install/UKI recipe
+X86KA="${REPO}/scripts/_x86-kernel-asserts.sh"   # the kernel chroot's post-olddefconfig asserts
 INST="${REPO}/specs-x86/installer/install-x86.sh"
 PROV="${REPO}/specs/etc/keys-provision/provision.sh"
 MK="${REPO}/Makefile"
@@ -61,7 +63,7 @@ trap 'rm -rf "${TMP}"' EXIT
 
 # A file with a NUL byte makes grep treat it as binary and a "no match" becomes
 # indistinguishable from a real miss (grep fails OPEN). Refuse such inputs first.
-for f in "${LIB}" "${X86}" "${INST}" "${PROV}" "${MK}" "${GRUBDEF}" "${GRUBD}" "${LRHOOK}"; do
+for f in "${LIB}" "${X86}" "${X86KI}" "${X86KA}" "${INST}" "${PROV}" "${MK}" "${GRUBDEF}" "${GRUBD}" "${LRHOOK}"; do
     [ -f "${f}" ] || continue   # a missing file is reported by its own section
     if [ "$(tr -d '\000' < "${f}" | wc -c)" -ne "$(wc -c < "${f}")" ]; then
         bad "${f#"${REPO}"/} contains a NUL byte — every grep below would fail open on it"
@@ -702,19 +704,23 @@ pv_rel="$(grep -n 'log "Relabelling filesystem' "${PROV}" | head -1 | cut -d: -f
     && ok "I2: provision_selinux maps the root login after the node-policy load and before the relabel (first-boot ARM images)" \
     || bad "I2: provision_selinux root mapping missing or misplaced (load-end=${pv_end:-?} map=${pv_map:-none} relabel=${pv_rel:-?})"
 
-# I3) x86: the dracut UKI loop, EXECUTED. The block lives in an unquoted <<CHROOT
-# heredoc, so expand it host-side exactly as bash would, then run it with a dracut stub.
+# I3) x86: the dracut UKI loop, EXECUTED. The block lives in scripts/_x86-kernel-install.sh
+# (a plain script the kernel chroot runs), fed the builder's UKI_VARIANTS table through
+# HM_UKI_VARIANTS; cut it out and run it with a dracut stub and that table.
 UV_LINE="$(grep -E '^UKI_VARIANTS=\(' "${X86}" | head -1)"
 [ -n "${UV_LINE}" ] && ok "I3: the builder carries one UKI_VARIANTS table" || bad "I3: no UKI_VARIANTS table in the x86 builder"
+grep -vE '^[[:space:]]*#' "${X86}" | grep -A1 -xF 'export HM_UKI_VARIANTS="${UKI_VARIANTS_CHROOT}"' | grep -E '^bash /tmp/hm-x86-kernel-install\.sh ' >/dev/null \
+    && ok "I3: the kernel chroot hands the install script the UKI_VARIANTS table" \
+    || bad "I3: the kernel chroot runs hm-x86-kernel-install.sh without HM_UKI_VARIANTS=\${UKI_VARIANTS_CHROOT}"
+grep -vE '^[[:space:]]*#' "${X86KI}" | grep -F 'UKI_VARIANTS="${HM_UKI_VARIANTS:?' >/dev/null \
+    && ok "I3: the install script has no default variant table (a caller without one fails)" \
+    || bad "I3: _x86-kernel-install.sh does not require HM_UKI_VARIANTS"
 DRB="${TMP}/dracut-uki"; mkdir -p "${DRB}"
-awk '/^if command -v dracut >\/dev\/null && dracut --help .*--uefi.; then$/{f=1} f{print} f&&/^fi$/{exit}' "${X86}" > "${DRB}/block.raw"
+awk '/^if command -v dracut >\/dev\/null && dracut --help .*--uefi.* >\/dev\/null; then$/{f=1} f{print} f&&/^fi$/{exit}' "${X86KI}" > "${DRB}/block.raw"
 if [ ! -s "${DRB}/block.raw" ]; then
-    bad "I3: could not cut the dracut --uefi block out of the x86 builder"
+    bad "I3: could not cut the dracut --uefi block out of scripts/_x86-kernel-install.sh"
 else
-    ( eval "${UV_LINE}"; UKI_VARIANTS_CHROOT="${UKI_VARIANTS[*]}"; UKI_NAME=hugmesh.efi
-      eval "cat <<CHROOT_X
-$(cat "${DRB}/block.raw")
-CHROOT_X" ) > "${DRB}/block.sh"
+    { ( eval "${UV_LINE}"; printf 'UKI_VARIANTS=%q; UKI_NAME=hugmesh.efi\n' "${UKI_VARIANTS[*]}" ); cat "${DRB}/block.raw"; } > "${DRB}/block.sh"
     cat > "${DRB}/run.sh" <<'EOS'
 set -eo pipefail
 dracut() { if [ "$1" = --help ]; then echo "  --uefi  create a UEFI executable"; return 0; fi
@@ -1081,7 +1087,8 @@ for b in "${ALL_BUILDERS[@]}"; do
     [ -n "${frag}" ] && ! grep -qE '^(# CONFIG_SECURITY_SELINUX_DEVELOP is not set|CONFIG_SECURITY_SELINUX_DEVELOP=n|disable CONFIG_SECURITY_SELINUX_DEVELOP)$' "${REPO}/specs-${board}/kernel/"*.config \
         && ok "I10: ${bn}: specs-${board}/kernel/${frag##*/} enables CONFIG_SECURITY_SELINUX_DEVELOP" \
         || bad "I10: ${bn}: no specs-${board}/kernel fragment enables CONFIG_SECURITY_SELINUX_DEVELOP (or one disables it)"
-    grep -vE '^[[:space:]]*#' "${b}" | grep -E '^[[:space:]]*for must in CONFIG_SECURITY_SELINUX ' | grep -w 'CONFIG_SECURITY_SELINUX_DEVELOP' >/dev/null \
+    guard="${b}"; [ "${bn}" = build-x86-host-stage4.sh ] && guard="${X86KA}"   # x86's guard lives in its asserts script
+    grep -vE '^[[:space:]]*#' "${guard}" | grep -E '^[[:space:]]*for must in CONFIG_SECURITY_SELINUX ' | grep -w 'CONFIG_SECURITY_SELINUX_DEVELOP' >/dev/null \
         && ok "I10: ${bn}: the kernel guard refuses a .config without CONFIG_SECURITY_SELINUX_DEVELOP=y" \
         || bad "I10: ${bn}: the kernel guard does not check CONFIG_SECURITY_SELINUX_DEVELOP"
 done
