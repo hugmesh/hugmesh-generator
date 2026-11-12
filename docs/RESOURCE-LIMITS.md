@@ -7,10 +7,10 @@ sits in the system tray of a machine someone is also using for other work.
 Set the caps from the tray: **Resource limits…**. The menu entry shows the current
 setting, so you can read it without opening anything.
 
-## The incident this exists for
+## Why the limits exist
 
-On 2026-07-15 a dockerized fleet build compiled llvm's 32-bit multilib pass at `-j8`
-inside an **unbounded** container. The 31 GiB desktop was also running a browser and
+A dockerized fleet build once compiled llvm's 32-bit multilib pass at `-j8` inside an
+**unbounded** container. The 31 GiB desktop was also running a browser and
 an IDE, and its 4 GiB of swap was already full. The host froze and rebooted.
 
 The first fix capped **memory** on single-image builds. A runaway compile now OOMs the

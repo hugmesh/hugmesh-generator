@@ -2088,6 +2088,21 @@ lint:tls-front:
   script:
     - bash tests/stack/test-tls-front.sh
 
+# Mastodon's compose-lane front (tests/stack/test-mastodon-front.sh, GUI-35): the
+# hsproxy's ONE Mastodon upstream must route /api/v1/streaming to the streaming
+# server and rewrite the https://localhost media URLs to /bff/user/mastodon/....
+# Static wiring + the committed conf run by a REAL nginx in front of stand-ins.
+# The nginx image IS the compose service's image, so the conf is checked by the
+# exact nginx that serves it.
+lint:mastodon-front:
+  stage: lint
+  image: nginx:1.27-alpine
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash python3 py3-yaml
+  script:
+    - bash tests/stack/test-mastodon-front.sh
+
 # Stale-after-logout HEADER POSTURE gate (tests/stack/test-no-store-posture.sh):
 # the wave-5 fix (hugmesh-gateway#11 forces no-store on /bff/** JSON;
 # hugmesh-user-bff-api#8 no-stores the owner-scoped media serves) is
