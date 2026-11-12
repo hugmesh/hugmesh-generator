@@ -281,7 +281,7 @@ endif
 DOCKER_RUN := docker run --rm --privileged \
   -v $(CURDIR):/src -v $(WORK_DIR):/out -w /src \
   -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) \
-  -e STANDALONE_FLAGS \
+  -e STANDALONE_FLAGS -e STANDALONE_THIN_FLAGS -e STANDALONE_THICK_FLAGS \
   -e HUGMESH_SELINUX_MODE -e HUGMESH_SELINUX_MODULES -e HUGMESH_SELINUX_TYPE -e HUGMESH_SELINUX_ENFORCE_GATE \
   $(NVD_DOCKER) $(CA_DOCKER_MOUNTS) $(CA_DOCKER_ENV) $(IMAGE)
 
@@ -987,13 +987,23 @@ prebuild-binaries: ## prebuild a platform's role-union binpkg pool (ARCH=x86|rpi
 # Docker-dispatch hop's OWN additional, buggier re-quoting.
 STANDALONE_FLAGS ?=
 export STANDALONE_FLAGS
+# x86-standalone builds TWO images from one invocation, thin (LXDE) and thick
+# (Plasma). STANDALONE_FLAGS goes to both, so a Desktop-step flag that is right for
+# one only (--default-session LXDE, picom without i3/openbox, --capable) would be
+# refused on the other. These two go to ONE leg each, after STANDALONE_FLAGS:
+#   make x86-standalone STANDALONE_FLAGS='--local-user ann --local-pass-file F' \
+#        STANDALONE_THIN_FLAGS='--default-session LXDE' STANDALONE_THICK_FLAGS='--desktop-sessions i3'
+# (Same quoting rule as STANDALONE_FLAGS; exported and forwarded with -e alike.)
+STANDALONE_THIN_FLAGS ?=
+STANDALONE_THICK_FLAGS ?=
+export STANDALONE_THIN_FLAGS STANDALONE_THICK_FLAGS
 
-x86-standalone: ## build BOTH hardened standalone NVIDIA desktops (thin+thick; LUKS FDE installer + all 4 artifacts; REQUIRES STANDALONE_FLAGS='--local-user NAME --local-pass-file FILE')
+x86-standalone: ## build BOTH hardened standalone NVIDIA desktops (thin+thick; LUKS FDE installer + all 4 artifacts; REQUIRES STANDALONE_FLAGS='--local-user NAME --local-pass-file FILE'; STANDALONE_THIN_FLAGS / STANDALONE_THICK_FLAGS go to one leg each)
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86-standalone NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
-	@$(call build-then-reown,for r in standalone-thin standalone-thick; do echo "==> x86 $$r"; $(X86) --role $$r $(STANDALONE_FLAGS) || exit 1; done)
+	@$(call build-then-reown,echo "==> x86 standalone-thin"; $(X86) --role standalone-thin $(STANDALONE_FLAGS) $(STANDALONE_THIN_FLAGS) || exit 1; echo "==> x86 standalone-thick"; $(X86) --role standalone-thick $(STANDALONE_FLAGS) $(STANDALONE_THICK_FLAGS) || exit 1)
 endif
 
 rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop | rpi-omnibus RAM_GB=16  (same vocabulary as x86 now; add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; RAM_GB=N passes --ram-gb (REQUIRED for omnibus); STANDALONE_FLAGS='--standalone --local-user … --local-pass-file FILE' for rpi-desktop; a standalone desktop refuses to build without a login password)

@@ -59,9 +59,11 @@ export __FN__="${FN}"
 extract_named_fn() { awk -v fn="$1" 'index($0, fn"() {")==1{p=1} p{print} /^\}/{if(p){exit}}' "${SRC}"; }
 USERS_FN="$(extract_named_fn provision_users)"
 GOV_HELPER_FN="$(extract_named_fn desktop_governance_governed)"
+MARK_FN="$(extract_named_fn mark_keys_users)"
 [ -n "${USERS_FN}" ] || { echo "  FAIL could not extract provision_users()"; exit 1; }
 [ -n "${GOV_HELPER_FN}" ] || { echo "  FAIL could not extract desktop_governance_governed()"; exit 1; }
-export __USERS_FN__="${USERS_FN}" __GOV_HELPER_FN__="${GOV_HELPER_FN}"
+[ -n "${MARK_FN}" ] || { echo "  FAIL could not extract mark_keys_users()"; exit 1; }
+export __USERS_FN__="${USERS_FN}" __GOV_HELPER_FN__="${GOV_HELPER_FN}" __MARK_FN__="${MARK_FN}"
 
 # Run provision_users() in the sandbox with all system mutators stubbed. The
 # stubbed `useradd` records the -G group list to ${ETCROOT}/useradd-groups so we
@@ -78,6 +80,7 @@ JSON
         set -uo pipefail
         log(){ :; }; warn(){ :; }; have(){ return 1; }
         MANIFEST="/dev/null"; USERS_MARKER="${ETCROOT}/users.created"
+        KEYS_USERS_MARKER="${ETCROOT}/keys-users.created"
         # System mutators -> harmless stubs.
         groupadd(){ :; }
         getent(){ return 1; }                 # group/passwd lookups: pretend absent
@@ -91,7 +94,7 @@ JSON
             printf "%s\n" "${g}" > "${ETCROOT}/useradd-groups"
             return 0
         }
-        body="$(printf "%s\n%s" "${__GOV_HELPER_FN__}" "${__USERS_FN__}" \
+        body="$(printf "%s\n%s\n%s" "${__GOV_HELPER_FN__}" "${__MARK_FN__}" "${__USERS_FN__}" \
             | sed -e "s#/etc/sudoers#${ETCROOT}/etc/sudoers#g" \
                   -e "s#/etc/hugmesh/desktop-governance#${ETCROOT}/etc/hugmesh/desktop-governance#g")"
         eval "${body}"
@@ -309,6 +312,16 @@ fi
 grep -q 'audio' "${ETCROOT}/useradd-groups" 2>/dev/null \
     && ok "governed: non-sudo groups (audio/video/usb) preserved" \
     || bad "governed: dropped non-sudo supplementary groups too"
+# keys-users.created (read by the Studio's 02-extra-local-users.start after the KEYS media
+# is gone) says "governed", so an extra local administrator gets no standing grant either.
+[ -f "${ETCROOT}/users.created" ] && [ "$(cat "${ETCROOT}/keys-users.created" 2>/dev/null)" = governed ] \
+    && ok "governed: keys-users.created = governed (beside users.created)" \
+    || bad "governed: keys-users.created is '$(cat "${ETCROOT}/keys-users.created" 2>&1)'"
+new_sandbox keys-templates
+run_users false >/dev/null 2>&1
+[ "$(cat "${ETCROOT}/keys-users.created" 2>/dev/null)" = governed ] \
+    && ok "governed from the KEYS stick only: keys-users.created = governed" \
+    || bad "KEYS-stick governance: keys-users.created is '$(cat "${ETCROOT}/keys-users.created" 2>&1)'"
 
 # ── Case 11: GOVERNED image — provision_desktop_governance STRIPS a pre-existing
 # standing /etc/sudoers.d/10-* grant (defense-in-depth, after provision_users).
@@ -337,6 +350,9 @@ run_users false >/dev/null 2>&1
 grep -qw 'wheel' "${ETCROOT}/useradd-groups" 2>/dev/null \
     && ok "non-governed: default wheel group membership preserved" \
     || bad "non-governed: wheel group dropped (broke un-governed behavior)"
+[ "$(cat "${ETCROOT}/keys-users.created" 2>/dev/null)" = ungoverned ] \
+    && ok "non-governed: keys-users.created = ungoverned" \
+    || bad "non-governed: keys-users.created is '$(cat "${ETCROOT}/keys-users.created" 2>&1)'"
 # NOPASSWD variant still honored on a non-governed image.
 new_sandbox no-templates
 mkdir -p "${ETCROOT}/etc/sudoers.d"

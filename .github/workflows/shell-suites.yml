@@ -528,6 +528,7 @@ jobs:
             tests/scripts/test-catalog-discovery-gate.sh
             tests/scripts/test-cloud-package.sh
             tests/scripts/test-container-image-tags.sh
+            tests/scripts/test-desktop-config-lib.sh
             tests/scripts/test-desktop-sso-bake.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh

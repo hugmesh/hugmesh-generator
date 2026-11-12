@@ -1,0 +1,15 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-qt/qtbase:6
+
+  (dev-qt/qtbase-6.9.1:6/6.9.1::gentoo, ebuild scheduled for merge) pulled in by
+    =dev-qt/qtbase-6.9.1* required by (dev-qt/qtsvg-6.9.1:6/6.9.1::gentoo, ebuild scheduled for merge)
+
+  (dev-qt/qtbase-6.10.0:6/6.10.0::gentoo, ebuild scheduled for merge) pulled in by
+    >=dev-qt/qtbase-6.10.0:6= required by (kde-plasma/kwin-6.4.0:6/6.4::gentoo, ebuild scheduled for merge)

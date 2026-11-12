@@ -120,6 +120,10 @@ source "${SCRIPT_DIR}/scripts/_desktop-sso-lib.sh"
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
 source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
+# The Studio Desktop step (default session, extra local accounts, Flatpak apps,
+# Python targets, portage overlay). Every DC_* knob defaults to "emit nothing".
+# shellcheck source=scripts/_desktop-config-lib.sh
+source "${SCRIPT_DIR}/scripts/_desktop-config-lib.sh"
 # shellcheck source=scripts/_portage-config-lib.sh
 source "${SCRIPT_DIR}/scripts/_portage-config-lib.sh"
 # ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
@@ -558,6 +562,16 @@ while [[ $# -gt 0 ]]; do
         # User package deltas (validated + mandatory-floor-checked below); -p stays
         # the frozen legacy extra-packages spelling, --packages-add is the new one.
         --packages-add)       PACKAGES_ADD="$2";          shift 2 ;;
+        # ── Studio Desktop step (scripts/_desktop-config-lib.sh) ──
+        --default-session)       DC_DEFAULT_SESSION="$2"; shift 2 ;;
+        --extra-local-users)     DC_EXTRA_USERS="$2";     shift 2 ;;
+        --extra-local-pass-file) DC_EXTRA_PASS_FILE="$2"; case "$2" in /*) ;; *) DC_EXTRA_PASS_FILE="${PWD}/$2" ;; esac; shift 2 ;;
+        --flatpak-apps)          DC_FLATPAK_APPS="$2";    shift 2 ;;
+        --flatpak-remotes)       DC_FLATPAK_REMOTES="$2"; shift 2 ;;
+        --python-extra-targets)  PT_EXTRA_TARGETS="$2";   shift 2 ;;
+        --python-single-target)  PT_SINGLE_TARGET="$2";   shift 2 ;;
+        --package-use)           DC_PACKAGE_USE="$2";     shift 2 ;;
+        --accept-keywords)       DC_ACCEPT_KEYWORDS="$2"; shift 2 ;;
         --packages-drop)      PACKAGES_DROP="$2";         shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";     shift 2 ;;
         --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
@@ -1091,6 +1105,11 @@ _validate_pkg_atoms() { # LABEL VALUE
         [[ "${_a}" =~ ${_PKG_ATOM_RE} ]] || { err "invalid ${_lbl} atom: '${_a}' — want a category/name atom (e.g. app-editors/vim)"; exit 1; }
     done
 }
+# ── Studio Desktop step: validate every DC_* flag at ARGV time; fold its
+# Flatpak dependency into --packages-add (last-wins: folded ONCE, here).
+dc_validate "build-frite" arm64 "$([ "${DESKTOP}" = "light" ] && echo true || echo false)" false "LXDE" "" "${LOCAL_USER:-${DEFAULT_USER}}" \
+    || { err "Desktop-step flags rejected (see above)"; exit 1; }
+PACKAGES_ADD="$(dc_fold_packages_add "${PACKAGES_ADD}")"
 _validate_pkg_atoms --packages-add  "${PACKAGES_ADD}"
 _validate_pkg_atoms --packages-drop "${PACKAGES_DROP}"
 # Tier-1 mandatory atoms (the payload essentials this appliance builder always
@@ -1166,6 +1185,7 @@ if ${PRINT_PLAN}; then
     _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
     _plan KERNEL             "mainline-arm64 (defconfig=${FRITE_DEFCONFIG} + hardened-desktop.config)"
     _plan FLAGS_EFFECTIVE    "env=${ENV} board=${FRITE_BOARD} flavor=${_EFF_FLAVOR} desktop=${DESKTOP} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_uboot=${SKIP_UBOOT} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT} mesh_forced=${MESH_FORCED:-none} medium_iso=${MEDIUM_ISO}"
+    while read -r _dck _dcv; do _plan "${_dck}" "${_dcv}"; done < <(dc_plan_lines)
     exit 0
 fi
 
@@ -1623,6 +1643,9 @@ render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/ma
 # sysroot, because an emerge run under a wrong pin installs the wrong
 # interpreter and the probe would then read its own effect back in. Fails the
 # build rather than guessing. Analysis: docs/PYTHON-TARGETS-SEED-DRIFT.md.
+# The Studio Desktop step's portage overlay: AFTER the last pcs_sync_dir of
+# package.use / package.accept_keywords (they prune unknown files).
+dc_apply_portage_overlay "${SYSROOT}" "build-frite"
 pt_apply_seed_targets "${SYSROOT}" "build-frite" \
     || { err "could not derive PYTHON_TARGETS from the stage3 seed (see above)"; exit 1; }
 # ── Shared build assets in the rendered make.conf — SB-SHARED-ASSETS-BEGIN ───
@@ -1930,6 +1953,8 @@ greeter-session=lightdm-gtk-greeter
 session-wrapper=/etc/lightdm/Xsession
 user-session=LXDE
 LIGHTDM
+    # Studio Desktop step: default session, extra local accounts, Flatpak apps.
+    dc_bake_desktop "${SYSROOT}" "build-frite" || { err "Desktop-step bake failed (see above)"; exit 1; }
     # Emulated-desktop display (QEMU runner --display spice): the session-side
     # autofit applier (xrandr --auto on a virtio-gpu/qxl preferred-mode change) and
     # the boot-time spice-vdagentd starter (only when the SPICE virtio port exists,

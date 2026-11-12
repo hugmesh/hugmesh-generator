@@ -3108,9 +3108,20 @@ desktop-governance-verify:
     # The bake: builders call desktop_sso_bake/desktop_sso_verify from SKIP_SSO, the
     # lib executed against a fake sysroot, the stack's structure, negative controls.
     - bash tests/scripts/test-desktop-sso-bake.sh
+    # The Studio Desktop step's builder half (scripts/_desktop-config-lib.sh +
+    # scripts/_pretend-lib.sh): flag validation, the overlay/bake against a fake
+    # sysroot, the Python-target union, the pretend parser against a stub emerge, and
+    # the six desktop builders' wiring.
+    - bash tests/scripts/test-desktop-config-lib.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
+        - scripts/_desktop-config-lib.sh
+        - scripts/_pretend-lib.sh
+        - scripts/_python-targets-lib.sh
+        - scripts/desktop-config/**/*
+        - tests/scripts/test-desktop-config-lib.sh
+        - tests/scripts/fixtures/desktop-pretend/**/*
         - specs/etc/keys-provision/provision.sh
         - specs/etc/hugmesh/desktop-governance/**/*
         - specs/etc/pam.d/lightdm

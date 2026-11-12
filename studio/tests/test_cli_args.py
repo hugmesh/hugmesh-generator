@@ -1469,7 +1469,9 @@ def test_g27_node_creds_never_persisted(tmp_path):
 
 
 def test_secret_fields_include_node_creds():
-    assert set(SECRET_FIELDS) == {"local_pass", "luks_pass", "user_password", "root_password"}
+    # extra_local_passes: the Desktop step's extra accounts' first-login passwords
+    assert set(SECRET_FIELDS) == {"local_pass", "luks_pass", "user_password", "root_password",
+                                  "extra_local_passes"}
 
 
 def test_g28_arm_local_user_without_standalone():
@@ -2017,7 +2019,35 @@ def test_field_probe_covers_the_whole_capability_table():
     # `unaffiliated` (needs a standalone baseline) and `superdomain` (mesh-only gate,
     # so the mixed cloud/mesh baselines can't isolate it) are each probed by a dedicated
     # test below instead of the shared before/after differ.
-    assert set(_FIELD_PROBE) | {"unaffiliated", "superdomain"} == set(PLATFORM_FIELD_SUPPORT)
+    # `desktop_spec` (the Desktop step) needs a DESKTOP role on each board — the shared
+    # baselines are node roles on rpi5/jetson — so it has its own test below too.
+    assert set(_FIELD_PROBE) | {"unaffiliated", "superdomain", "desktop_spec"} \
+        == set(PLATFORM_FIELD_SUPPORT)
+
+
+# A desktop-producing role per board (the appliance boards have none: their only role).
+_DESKTOP_BASELINES = {
+    "x86": dict(mode="cloud", role="laptop", platform="x86"),
+    "rpi5": dict(mode="mesh", role="rpi5-desktop", platform="rpi5"),
+    "jetson": dict(mode="mesh", role="jetson-desktop", platform="jetson"),
+    "frite": dict(mode="cloud", role="frite", platform="frite"),
+    "orangepi5": dict(mode="cloud", role="orangepi5", platform="orangepi5"),
+    "orangepi4-lts": dict(mode="cloud", role="orangepi4-lts", platform="orangepi4-lts"),
+}
+
+
+def test_desktop_spec_emits_exactly_on_the_desktop_builders():
+    probe = {"desktop_spec": {"use_lines": ["media-video/ffmpeg opus"]}}
+    derived = set()
+    for plat in _PROBE_PLATFORMS:
+        base = _DESKTOP_BASELINES.get(plat, _BASELINES[plat])
+        if _emits_on(base, probe):
+            derived.add(plat)
+    assert derived == set(PLATFORM_FIELD_SUPPORT["desktop_spec"])
+    # and never on a NODE role of a desktop-capable builder (its builder refuses the flags)
+    for base in (_BASELINES["rpi5"], _BASELINES["jetson"],
+                 dict(mode="mesh", role="backend", platform="x86")):
+        assert not _emits_on(base, probe), base
 
 
 @pytest.mark.parametrize("field", sorted(_FIELD_PROBE))

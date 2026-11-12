@@ -47,6 +47,7 @@ from ..core.config import (
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
 from ..core import plain_words, platform_info
+from ..core.desktop_spec import step_applies as desktop_step_applies
 from ..core.validate import validate_domain_name
 from ..core import roles as role_vocab
 from ..core.worklist import (
@@ -1126,6 +1127,7 @@ class Journey:
         from .meshemu import MeshEmuScreen
         from .network_step import NetworkScreen
         from .domain_ca_keys_step import DomainCAKeysScreen
+        from .desktop_step import DesktopScreen
         from .qemu import QemuScreen
         self.generator_dir = generator_dir
         self.cfg = cfg or ImageConfig()
@@ -1153,7 +1155,8 @@ class Journey:
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),
-            UsersScreen(), SystemScreen(), BrandingScreen(), VaultScreen(), BuildScreen(),
+            UsersScreen(), SystemScreen(), BrandingScreen(), VaultScreen(),
+            DesktopScreen(), BuildScreen(),
         ]
         self._screens = {s.slug: s for s in screens}
         # The two EXPERT entry points (#587, decision 71 = A): the GUI reaches its
@@ -1298,6 +1301,10 @@ class Journey:
                 continue
             if slug == "users" and cfg.mode == "mesh" \
                     and not cfg.configure_users:
+                continue
+            # the Desktop step: walked exactly when the GUI page's applies_to says so
+            # (the SAME core predicate) — a build that makes no desktop skips it
+            if slug == "desktop" and not desktop_step_applies(cfg, self.worklist):
                 continue
             if slug in ("launch", "progress"):
                 continue

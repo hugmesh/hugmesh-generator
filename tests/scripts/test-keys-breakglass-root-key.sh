@@ -32,7 +32,7 @@ STEPS="$(awk '/^    provision_users$/{p=1} /^    provision_dial_user/{exit} p{pr
 [ -n "${STEPS}" ] || { echo "FATAL: could not find main()'s provision_users step in ${PROV}" >&2; exit 2; }
 
 FNS=""
-for fn in desktop_governance_governed provision_users install_root_keys \
+for fn in desktop_governance_governed mark_keys_users provision_users install_root_keys \
           provision_root_breakglass root_keys_ssh_reachability_note \
           sshd_global_value device_registry_owner_type; do
     FNS="${FNS}$(extract_fn "${fn}")
@@ -58,7 +58,7 @@ run_case() {
     fns="${fns//\/etc\/ssh\//${d}/etc/ssh/}"
     fns="${fns//\/etc\/hugmesh\/desktop-governance/${d}/no-such-dir}"
     ( BASE="${d}/keys"; MANIFEST="${d}/keys/provision.json"
-      STATE_DIR="${d}/state"; USERS_MARKER="${d}/state/users.created"
+      STATE_DIR="${d}/state"; USERS_MARKER="${d}/state/users.created"; KEYS_USERS_MARKER="${d}/state/keys-users.created"
       log()  { echo "LOG $*"; }
       warn() { echo "WARNING: $*"; }
       passwd() { echo "STUB passwd $*"; }

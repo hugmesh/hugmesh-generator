@@ -282,6 +282,19 @@ def main(argv=None) -> int:
                     help="headless: print each materialized image's flat ImageConfig JSON "
                          "(one per line, SECRET fields blanked) — the materialization bridge "
                          "the web IMAGE_SPEC_JSON / build-image.sh channel consumes")
+    ap.add_argument("--desktop-options", action="store_true",
+                    help="headless: print the Desktop step's catalog — environments, window "
+                         "managers/compositors, video cards, apps (native/Flatpak), Python "
+                         "targets — and its rules; --json for automation")
+    ap.add_argument("--desktop-pretend", metavar="CONFIG", default=None,
+                    help="headless: run the Desktop step's emerge --pretend check for CONFIG "
+                         "(x86 desktop images; the builder in its container, one at a time "
+                         "machine-wide) and print the result; --image N picks a worklist "
+                         "image, --json for automation, --apply-portage-fixes writes portage's "
+                         "own suggested package.use/accept_keywords lines back into CONFIG")
+    ap.add_argument("--apply-portage-fixes", action="store_true",
+                    help="with --desktop-pretend: record portage's suggested overlay lines "
+                         "in CONFIG (history source 'autounmask'); run it again to re-check")
     ap.add_argument("--image", type=int, default=None,
                     help="with --print-commands/--print-specs: print ONLY the image at this "
                          "0-based materialized index (default: every image)")
@@ -479,6 +492,19 @@ def main(argv=None) -> int:
         # Qt-free path, run by the release workflow inside the built Flatpak.
         from .core import self_check
         return self_check.run_cli(_generator_dir(args), as_json=args.json)
+
+    if args.desktop_options:
+        from .core import desktop_cli
+        return desktop_cli.options(as_json=args.json)
+
+    if args.desktop_pretend:
+        from .core import desktop_cli
+        if not _generator_dir_or_say(_generator_dir(args)):
+            return 2
+        return desktop_cli.pretend(args.desktop_pretend, generator_dir=_generator_dir(args),
+                                   image=args.image, as_json=args.json,
+                                   apply_fixes=args.apply_portage_fixes,
+                                   backend=None if args.backend == "auto" else args.backend)
 
     if args.print_command:
         # Qt-free path: core only — must work with no display and no Qt installed.
