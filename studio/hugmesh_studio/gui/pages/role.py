@@ -276,7 +276,7 @@ class RolePage(QtWidgets.QWizardPage):
         self._device_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
         for fam in self._catalog.families:
             fitem = QtWidgets.QTreeWidgetItem(self.device_tree)
-            fitem.setText(0, f"{fam.label} — {fam.vendor}")
+            fitem.setText(0, device_catalog.family_heading(fam.id))
             fitem.setFlags(Qt.ItemFlag.ItemIsEnabled)   # a header, never selectable
             font = fitem.font(0)
             font.setBold(True)
@@ -594,31 +594,25 @@ class RolePage(QtWidgets.QWizardPage):
         selectable device with zero roles in THIS mode is likewise unselectable here,
         with an inline explanation instead of a dead-end (e.g. rpi3 in standalone,
         the mesh-only Jetson boards in standalone/cloud)."""
+        # The WORDS and the gate come from core.device_catalog.device_row — the same
+        # row the TUI browse and `--list-devices` print, so the three channels cannot
+        # label a device differently. Only the colour is decided here.
         mode = self._mode()
         for did, item in self._device_items.items():
-            dev = self._catalog.device(did)
-            roles = device_catalog.roles_for(did, mode)
-            if dev.status == "unsupported":
-                badge, color = status_badge("unsupported")
-                text = f"{badge} — {dev.reason}"
-                pickable = False
-            elif not roles:
-                others = [m for m in ROLE_CHOICES if device_catalog.roles_for(did, m)]
-                text = (f"no {mode} image — " + (dev.notes or
-                        f"offered on the {'/'.join(others) or 'other'} path"))
+            row = device_catalog.device_row(did, mode)
+            if row.status == "unsupported":
+                color = status_badge("unsupported")[1]
+            elif not row.pickable:
                 color = "#777777"
-                pickable = False
             else:
-                text, color = status_badge(dev.status)
-                pickable = True
-            item.setText(2, text)
+                color = status_badge(row.status)[1]
+            item.setText(2, row.status_text)
             if color:
                 item.setForeground(2, QtGui.QBrush(QtGui.QColor(color)))
-            tip = device_catalog.status_reason(did) or dev.notes
             for col in range(3):
-                item.setToolTip(col, tip)
+                item.setToolTip(col, row.detail)
             item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-                          if pickable else Qt.ItemFlag.NoItemFlags)
+                          if row.pickable else Qt.ItemFlag.NoItemFlags)
 
     def _current_arch(self) -> str | None:
         btn = self.arch_group.checkedButton()

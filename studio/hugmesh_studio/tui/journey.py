@@ -43,7 +43,7 @@ from ..core.config import (
 )
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
-from ..core import plain_words, platform_info
+from ..core import device_catalog, plain_words, platform_info
 from ..core.validate import validate_domain_name
 from ..core import roles as role_vocab
 from ..core.worklist import (
@@ -545,39 +545,227 @@ class VaultScreen:
 
 
 class RoleScreen:
-    """The single-image role picker (standalone/cloud; mesh uses the worklist)."""
+    """The single-image step (standalone/cloud; mesh uses the worklist): the target
+    DEVICE, then the image type it runs — the TUI twin of gui/pages/role.py's
+    arch -> family -> device browser and its derived image-type list.
+
+    The role list is never the whole mode catalog: it is ``device_catalog.roles_for``
+    for the chosen device, exactly what RolePage shows. ``d`` opens the browse —
+    architecture, then family, then device — over EVERY catalog row, the refused ones
+    included: each row is numbered and labelled by ``device_catalog.device_row`` (the
+    words the GUI's Status column and ``--list-devices`` print), and picking a refused
+    row prints its refusal and writes nothing. Enter on the type list keeps the shown
+    device and type and commits both: role, platform and board together, from
+    ``config_axes`` — so a stale role can never pair with another device's builder."""
 
     slug = "role"
-    title = "Image role"
+    title = "Target machine & image type"
+    #: the browse levels, in order; "roles" is the type list the step opens on
+    VIEWS = ("roles", "arch", "family", "device")
+    BROWSE_KEY = "d"
+    BACK_KEY = "b"
 
-    def enter(self, j: "Journey") -> None:  # noqa: ARG002
-        return None
+    def __init__(self):
+        self.view = "roles"
+        self.device: str | None = None
+        self.arch: str | None = None
+        self.family: str | None = None
+        self._committed: str | None = None   # the exact device the last commit chose
 
-    def _choices(self, j: "Journey"):
-        return ROLE_CHOICES[j.cfg.mode]
+    # ── device resolution (RolePage.initializePage, mirrored) ──────────────────────
+    def _resolve_device(self, j: "Journey") -> str:
+        c = j.cfg
+        mode = c.mode if c.mode in ROLE_CHOICES else "standalone"
+        role_plats = next((plats for r, plats, _l in ROLE_CHOICES[mode]
+                           if r == c.role), ())
+        if role_plats:
+            machine = c.platform if c.platform in role_plats else role_plats[0]
+        else:
+            machine = next((p for _r, plats, _l in ROLE_CHOICES[mode] for p in plats),
+                           "x86")
+        try:
+            did = device_catalog.device_for_axes(
+                machine, c.board if c.platform == machine else "")
+        except ValueError:      # a stale/foreign board: the platform's own default
+            did = device_catalog.default_device_for_platform(machine)
+        # an experimental alias this step committed (the Pi 400 shares the Pi 4's
+        # axes) comes back as itself, so its label and caveat survive Back.
+        last = self._committed
+        if last is not None and last != did and device_catalog.selectable(last):
+            cat = device_catalog.load_catalog()
+            ldev, ddev = cat.device(last), cat.device(did)
+            if (ldev.builder_platform == ddev.builder_platform
+                    and ldev.builder_board == ddev.builder_board):
+                did = last
+        return did
+
+    def enter(self, j: "Journey") -> None:
+        self.view = "roles"
+        self.arch = self.family = None
+        self.device = self._resolve_device(j)
+
+    @staticmethod
+    def _mode(j: "Journey") -> str:
+        return j.cfg.mode if j.cfg.mode in ROLE_CHOICES else "standalone"
+
+    def _choices(self, j: "Journey") -> tuple[tuple[str, str], ...]:
+        if self.device is None:
+            return ()
+        return device_catalog.roles_for(self.device, self._mode(j))
+
+    def _shown_role(self, j: "Journey") -> str | None:
+        """The type Enter commits: the config's role when this device offers it, else
+        the device's first (RolePage._populate_roles' preference rule)."""
+        ids = [r for r, _l in self._choices(j)]
+        if not ids:
+            return None
+        return j.cfg.role if j.cfg.role in ids else ids[0]
+
+    # ── rendering ─────────────────────────────────────────────────────────────────
+    @staticmethod
+    def row_lines(row, number: int | None = None, current: bool = False) -> list[str]:
+        """One device row — ``device_catalog.row_text_lines``, the same lines
+        ``--list-devices`` prints for it."""
+        return device_catalog.row_text_lines(row, number, current)
+
+    def _browse(self, j: "Journey"):
+        return device_catalog.browse(self._mode(j))
+
+    def _families(self, j: "Journey"):
+        return next((fams for arch, fams in self._browse(j) if arch.id == self.arch), [])
+
+    def _rows(self, j: "Journey"):
+        return next((rows for fam, rows in self._families(j) if fam.id == self.family),
+                    [])
 
     def lines(self, j: "Journey") -> list[str]:
-        out = ["Pick the image role.", ""]
-        for i, (role, _platforms, label) in enumerate(self._choices(j), 1):
-            marker = "*" if j.cfg.role == role else " "
+        mode = self._mode(j)
+        if self.view == "arch":
+            out = [f"Pick the architecture ({mode} images). "
+                   f"{self.BACK_KEY} = back to the image types.", ""]
+            for i, (arch, fams) in enumerate(self._browse(j), 1):
+                rows = [r for _f, rs in fams for r in rs]
+                ok = sum(1 for r in rows if r.pickable)
+                out.append(f"  {i:2d}. {arch.label} — {_count(len(rows), 'device')}, "
+                           f"{ok} buildable as a {mode} image")
+            return out
+        if self.view == "family":
+            cat = device_catalog.load_catalog()
+            arch = next(a for a in cat.archs if a.id == self.arch)
+            out = [f"{arch.label}: pick the family. {self.BACK_KEY} = back.", ""]
+            for i, (fam, rows) in enumerate(self._families(j), 1):
+                out.append(f"  {i:2d}. {device_catalog.family_heading(fam.id)} "
+                           f"({_count(len(rows), 'device')})")
+            return out
+        if self.view == "device":
+            out = [f"{device_catalog.family_heading(self.family)}: pick the device. "
+                   f"{self.BACK_KEY} = back.",
+                   "Rows marked NOT BUILDABLE, or with no image on this path, are "
+                   "listed with the reason and cannot be picked.", ""]
+            for i, row in enumerate(self._rows(j), 1):
+                out += self.row_lines(row, i, current=(row.id == self.device))
+            return out
+        # the type list
+        out: list[str] = []
+        if self.device is not None:
+            row = device_catalog.device_row(self.device, mode)
+            out.append("Target device:")
+            out += self.row_lines(row)
+            out.append("")
+        out.append(f"({self.BROWSE_KEY} = browse every device: architecture, then "
+                   f"family, then device)")
+        out.append("")
+        choices = self._choices(j)
+        if not choices:
+            out.append("This device has no image on this path — "
+                       f"type {self.BROWSE_KEY} to pick another.")
+            return out
+        out.append("Pick the image type.")
+        shown = self._shown_role(j)
+        for i, (role, label) in enumerate(choices, 1):
+            marker = "*" if role == shown else " "
             out.append(f" {marker}{i:2d}. {label}")
         out.append("")
-        out.append(f"(Enter keeps {j.cfg.role!r})")
+        out.append(f"(Enter keeps {shown!r})")
         return out
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
-        return "role> "
+        return {"roles": "role> ", "arch": "arch> ", "family": "family> ",
+                "device": "device> "}[self.view]
+
+    # ── input ─────────────────────────────────────────────────────────────────────
+    def _back(self) -> None:
+        self.view = {"device": "family", "family": "arch", "arch": "roles"}.get(
+            self.view, "roles")
+
+    def pick_device(self, j: "Journey", device_id: str) -> bool:
+        """Choose ``device_id`` as the target (the browse's final pick). A refused row
+        — UNSUPPORTED, or no image type on this path — prints its refusal and changes
+        nothing. Returns whether the device was taken."""
+        row = device_catalog.device_row(device_id, self._mode(j))
+        if not row.pickable:
+            j.status = f"refused: {row.refusal}"
+            return False
+        self.device = device_id
+        self.view = "roles"
+        j.status = f"device: {row.label} ({row.board_axis})"
+        return True
 
     def feed(self, j: "Journey", line: str) -> None:
-        choices = self._choices(j)
-        if line != "":
-            idx = _index(line, len(choices))
+        if self.view != "roles":
+            if line == "" or line.lower() == self.BACK_KEY:
+                self._back()
+                return
+            if self.view == "arch":
+                browse = self._browse(j)
+                idx = _index(line, len(browse))
+                if idx is None:
+                    j.status = f"unrecognised choice: {line!r} (a NUMBER picks)"
+                    return
+                self.arch = browse[idx][0].id
+                self.view = "family"
+                return
+            if self.view == "family":
+                fams = self._families(j)
+                idx = _index(line, len(fams))
+                if idx is None:
+                    j.status = f"unrecognised choice: {line!r} (a NUMBER picks)"
+                    return
+                self.family = fams[idx][0].id
+                self.view = "device"
+                return
+            rows = self._rows(j)
+            idx = _index(line, len(rows))
             if idx is None:
                 j.status = f"unrecognised choice: {line!r} (a NUMBER picks)"
                 return
-            role, platforms, _label = choices[idx]
-            j.cfg.role = role
-            j.cfg.platform = platforms[0]
+            self.pick_device(j, rows[idx].id)
+            return
+        if line.lower() == self.BROWSE_KEY:
+            self.view = "arch"
+            return
+        choices = self._choices(j)
+        if self.device is None or not choices:
+            row = (device_catalog.device_row(self.device, self._mode(j))
+                   if self.device is not None else None)
+            j.status = ((f"refused: {row.refusal}" if row is not None and row.refusal
+                         else "refused: no device is chosen")
+                        + f" — type {self.BROWSE_KEY} to pick another device")
+            return
+        if line != "":
+            idx = _index(line, len(choices))
+            if idx is None:
+                j.status = (f"unrecognised choice: {line!r} (a NUMBER picks, "
+                            f"{self.BROWSE_KEY} browses devices)")
+                return
+            role = choices[idx][0]
+        else:
+            role = self._shown_role(j)
+        axes = device_catalog.config_axes(self.device)
+        j.cfg.role = role
+        j.cfg.platform = axes["platform"]
+        j.cfg.board = axes["board"]
+        self._committed = self.device
         # the ModePage/RolePage bundle_source rule: standalone bundles the
         # generator source EXCEPT the unaffiliated role (builder hard-conflict).
         if j.cfg.mode == "standalone":
@@ -1056,6 +1244,10 @@ class BuildScreen:
 
 
 # ── the journey itself ──────────────────────────────────────────────────────────────
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" + ("" if n == 1 else "s")
+
+
 def _pick_id(choices, line: str) -> str | None:
     idx = _index(line, len(choices))
     return None if idx is None else choices[idx][0]

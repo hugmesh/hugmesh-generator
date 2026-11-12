@@ -324,7 +324,7 @@ for you. Every other harness must set it itself (`scripts/render-all-images.py` 
 The build-matrix harness (`make matrix-check` at the repo root) drives this headless path.
 It proves the GUI channel agrees with the CLI/make/menu/job channels on every matrix cell.
 
-Three more **Qt-free** headless faces ride the same flag channel (#49: everything the GUI can
+Four more **Qt-free** headless faces ride the same flag channel (#49: everything the GUI can
 do must be a documented command; repo-root `make` fronts: `scan-hardware`,
 `sessions-list/-show/-artifacts/-delete`):
 
@@ -353,6 +353,19 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   Deletion keeps the GUI's three-way guard. No `--yes` is refused (exit 2). An in-progress
   build is never deleted (exit 1). The artifact tree goes only on an explicit
   `--delete-artifacts` (core checks the workdir's shape first).
+
+- **Device catalog** — every device in `core/device-catalog.json`, architecture, then
+  family, then device, with the same words the wizard's device browser and the text UI's
+  browse show: the status (EXPERIMENTAL caveat, or NOT BUILDABLE with its reason), the
+  builder flags the device selects (`--platform`/`--board`), and why a refused row cannot
+  be picked. Rows are labelled for one build path (`--mode`, default `standalone`): a
+  device with no image on that path is listed as refused. It reads the catalog and never
+  edits it:
+
+  ```sh
+  python -m hugmesh_studio --list-devices                     # the tree, as text
+  python -m hugmesh_studio --list-devices --mode cloud --json # stable rows: pickable, refusal, roles
+  ```
 
 - **Local AI** — the local-assistant status of the Studio panel along the bottom of every
   Studio window (see "The Studio panel" below), as text
@@ -674,7 +687,10 @@ mesh's own — 3 Services, 4 Ways to reach it with Tor, VPN and egress); the
 create-nodes-for-local-cloud abbreviated wizard (k8s
 gate, identity import, laptop/node-only worklist); the whole-mesh emulation per-device status
 list (ssh and web access as copy-ready command hints); and the per-domain Sign-in choice on
-the domains step. Steps not ported yet say so and keep the config's defaults. The walk ends
+the domains step; and the single-image step's device browse (`d` on the image-type list:
+architecture, then family, then device, every catalog row listed, refused rows with their
+reason and never selectable, the same words as the GUI and `--list-devices`). Steps not
+ported yet say so and keep the config's defaults. The walk ends
 in a config you can save and build from the GUI, or pass to `--print-commands`.
 
 urwid is deliberately **not** in `requirements.txt`: it must never become a hard studio
