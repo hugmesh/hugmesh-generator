@@ -198,6 +198,19 @@ def go_live_target_label(rest: list[str]) -> str:
     return rest[0].strip() if rest and not rest[0].startswith("-") else ""
 
 
+def _drop_remember_roles_without_peer_check(args) -> None:
+    """Qt-free: a host with no peer-uid check never runs the login agent, so remembered
+    roles would be plaintext secrets nothing serves. Same reason as the GUI and TUI."""
+    if not args.remember_roles_for_passwordless_login:
+        return
+    from .core.local_login_agent import local_login_unavailable_reason
+    reason = local_login_unavailable_reason()
+    if reason:
+        print(f"--remember-roles-for-passwordless-login ignored: {reason}",
+              file=sys.stderr)
+        args.remember_roles_for_passwordless_login = False
+
+
 def main(argv=None) -> int:
     # FIRST thing, before argparse and long before any Qt import: a crash from here
     # on leaves a file behind. Under PyQt6 an unhandled exception in a slot calls
@@ -416,15 +429,7 @@ def main(argv=None) -> int:
     _add_golive_target_args(ap)
     args = ap.parse_args(argv)
 
-    if args.remember_roles_for_passwordless_login:
-        # Qt-free: a host with no peer-uid check never runs the login agent, so the
-        # roles would be plaintext secrets nothing serves. Same reason as GUI and TUI.
-        from .core.local_login_agent import local_login_unavailable_reason
-        reason = local_login_unavailable_reason()
-        if reason:
-            print(f"--remember-roles-for-passwordless-login ignored: {reason}",
-                  file=sys.stderr)
-            args.remember_roles_for_passwordless_login = False
+    _drop_remember_roles_without_peer_check(args)
 
     if args.mesh_token is not None:
         # Qt-free path: mesh_token imports core modules only, never a Qt binding.

@@ -326,7 +326,7 @@ class KeyZipPendingStep(PendingStep):
     def lines(self, j: "Journey") -> list[str]:
         from ..core import local_login_agent
         out = super().lines(j)
-        reason = local_login_agent.peer_check_policy().reason
+        reason = local_login_agent.local_login_unavailable_reason()
         if reason:
             out += ["", reason]
         return out
