@@ -28,6 +28,9 @@
 #      opt-in entries appended (default=0 unchanged); no silent no-xattr tar
 #      fallback on any x86 pack hop or in install-x86.sh; Makefile forwards the
 #      knobs; provision.sh skips the full relabel on an overlay root.
+#   G  specs/usr/libexec/live-overlay-relabel EXECUTED (restorecon stubbed): on an
+#      overlay root it relabels exactly the upper layer (merged spellings) + /dev;
+#      on a disk root it does nothing.
 #
 # Offline, no network. bash + coreutils + findutils + awk (gawk or mawk) + GNU tar
 # (+ setfattr for D, + CAP_SYS_ADMIN for E).
@@ -399,6 +402,41 @@ l_pr="$(grep -n 'restorecon -nv "\${_relabel_probe}"' <<<"${pb}" | head -1 | cut
 [ -n "${l_ov}" ] && [ -n "${l_rc}" ] && [ -n "${l_pr}" ] && [ "${l_ov}" -lt "${l_rc}" ] && [ "${l_rc}" -lt "${l_pr}" ] \
     && ok "provision.sh: an overlay root skips 'restorecon -RF /' (copy-up storm) and still runs the #152 probe postcondition" \
     || bad "provision.sh overlay skip missing or misplaced (overlay=${l_ov:-?} restorecon=${l_rc:-?} probe=${l_pr:-?})"
+
+echo "-- G) live overlay relabel hook, executed --"
+HOOK="${REPO}/specs/usr/libexec/live-overlay-relabel"
+if [ ! -x "${HOOK}" ]; then
+    bad "specs/usr/libexec/live-overlay-relabel is missing or not executable"
+else
+    HK="${TMP}/hook"; mkdir -p "${HK}/bin" "${HK}/upper/etc/selinux" "${HK}/upper/usr/libexec"
+    : > "${HK}/upper/etc/inittab"
+    printf '#!/bin/sh\necho "$*" >> "%s/called"\n' "${HK}" > "${HK}/bin/restorecon"; chmod +x "${HK}/bin/restorecon"
+    run_hook() { # run_hook <mounts file> -> ${HK}/called
+        rm -f "${HK}/called"
+        # the hook's PATH puts /usr/sbin first; a restorecon stub must win, so run a copy with the stub dir prepended
+        sed "s|^PATH=/usr/sbin|PATH=${HK}/bin:/usr/sbin|" "${HOOK}" > "${HK}/hook.sh"
+        PROC_MOUNTS="$1" sh "${HK}/hook.sh" >/dev/null 2>&1
+    }
+    printf 'LiveOS_rootfs / overlay rw,seclabel,relatime,lowerdir=/run/rootfsbase,upperdir=%s/upper,workdir=/run/ovlwork,uuid=on 0 0\n' "${HK}" > "${HK}/m.overlay"
+    printf '/dev/sda2 / ext4 rw,seclabel,relatime 0 0\n' > "${HK}/m.disk"
+    run_hook "${HK}/m.overlay"
+    called="$(tr '\n' ' ' < "${HK}/called" 2>/dev/null)"
+    case " ${called} " in *" -RFx /dev "*) ok "hook: relabels /dev without crossing into its submounts" ;; *) bad "hook: no 'restorecon -RFx /dev' (got: ${called})" ;; esac
+    grep -E -- '^-F ' "${HK}/called" 2>/dev/null > "${HK}/up"
+    for w in / /etc /etc/inittab /etc/selinux /usr /usr/libexec; do
+        grep -- " ${w}\( \|\$\)" "${HK}/up" >/dev/null && ok "hook: relabels upper-layer path ${w} (merged-path spelling)" || bad "hook: did not relabel ${w} (got: $(cat "${HK}/up"))"
+    done
+    grep -- "${HK}/upper" "${HK}/up" >/dev/null && bad "hook: passed an UPPER path to restorecon, not the merged path" || ok "hook: never passes the raw upper path to restorecon"
+    run_hook "${HK}/m.disk"
+    [ ! -e "${HK}/called" ] && ok "hook: a disk root is a no-op" || bad "hook: ran restorecon on a disk root: $(cat "${HK}/called")"
+    grep -vE '^[[:space:]]*#' "${HOOK}" | grep -- '-R[^ ]* /\( \|$\)' >/dev/null && bad "hook: a recursive walk of / (copy-up storm)" || ok "hook: no recursive walk of / (it only touches the upper layer)"
+    grep -i hugmesh "${HOOK}" >/dev/null && bad "hook carries the brand name (it ships on unaffiliated images too)" || ok "hook: brand-neutral"
+fi
+l_lrinst="$(ln_of 'install -D -m 0755 "\$\{SHARED_SPECS\}/usr/libexec/live-overlay-relabel"')"
+l_lrsed="$(ln_of "sed -i 's\\\|\\^si::sysinit:\\\|lr::sysinit:/usr/libexec/live-overlay-relabel")"
+{ [ -n "${l_lrinst}" ] && [ -n "${l_lrsed}" ] && [ "${l_lrinst}" -lt "${l_sto}" ] && [ "${l_lrsed}" -lt "${l_sto}" ]; } \
+    && ok "builder installs the hook and puts it before OpenRC's sysinit line, before the label pass labels both" \
+    || bad "builder wiring for live-overlay-relabel missing (install=${l_lrinst:-?} inittab=${l_lrsed:-?} store=${l_sto:-?})"
 
 echo
 echo "== selinux sysroot labels: ${P} passed, ${F} failed, ${S} skipped (skips are NOT passes) =="

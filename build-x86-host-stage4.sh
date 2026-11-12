@@ -4920,6 +4920,17 @@ if grep -qE '^#\s*s0:12345:respawn:/sbin/agetty -L [0-9]+ ttyS0 ' "${SYSROOT}/et
     sed -i -E 's|^#\s*(s0:12345:respawn:/sbin/agetty -L )[0-9]+( ttyS0 vt100)|\1115200\2|' "${SYSROOT}/etc/inittab"
     info "Activated ttyS0 serial getty (115200) in /etc/inittab for serial-console access"
 fi
+# SELinux on the live overlay: pid 1 has just loaded the policy, and dracut already
+# copied paths up (and made the overlay root) with no policy to honour, so they are
+# tmpfs_t and every confined domain is denied { search } on "/". The first sysinit line
+# relabels exactly the upper layer; a disk root is a no-op. See the script's header.
+install -D -m 0755 "${SHARED_SPECS}/usr/libexec/live-overlay-relabel" "${SYSROOT}/usr/libexec/live-overlay-relabel"
+if ! grep -q '^lr::sysinit:/usr/libexec/live-overlay-relabel$' "${SYSROOT}/etc/inittab"; then
+    sed -i 's|^si::sysinit:|lr::sysinit:/usr/libexec/live-overlay-relabel\nsi::sysinit:|' "${SYSROOT}/etc/inittab"
+fi
+_lr="$(grep -n '^lr::sysinit:' "${SYSROOT}/etc/inittab" | head -1 | cut -d: -f1)"; _si="$(grep -n '^si::sysinit:' "${SYSROOT}/etc/inittab" | head -1 | cut -d: -f1)"
+[ -n "${_lr}" ] && [ -n "${_si}" ] && [ "${_lr}" -lt "${_si}" ] \
+    || { err "/etc/inittab: live-overlay-relabel is not the sysinit line before OpenRC (lr=${_lr:-none} si=${_si:-none})"; exit 1; }
 echo "${TIMEZONE}" > "${SYSROOT}/etc/timezone"
 echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
 # CNI + keys-provision state dirs are platform machinery — none on unaffiliated.
