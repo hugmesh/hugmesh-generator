@@ -295,8 +295,8 @@ def test_every_known_qt_entry_names_a_real_test():
     nothing and still read as a reason; the runner also checks the deselected count."""
     with open(KNOWN, encoding="utf-8") as fh:
         known = rfbf.parse_known(fh.read())
-    assert known.nodes or known.exit_abort, "the known list is empty: delete the file " \
-        "and its --known argument instead"
+    # An all-comment list is valid: it is where this list is meant to end up, and the
+    # job keeps passing --known so the next pre-existing red has a place to be named.
     for path, nodes in known.nodes.items():
         full = os.path.join(STUDIO_ROOT, path)
         assert os.path.isfile(full), f"known list names {path}, which does not exist"
@@ -311,6 +311,8 @@ def test_every_known_qt_entry_names_a_real_test():
 
 
 def test_the_known_list_wants_a_reason_and_a_shape():
+    empty = rfbf.parse_known("# every entry fixed\n\n")
+    assert empty.nodes == {} and empty.exit_abort == set()
     k = rfbf.parse_known("# c\n\ntests/a.py::t[x]  # why\ntests/b.py  exit-abort  # why\n")
     assert k.nodes == {"tests/a.py": ["tests/a.py::t[x]"]} and k.exit_abort == {"tests/b.py"}
     for bad in ("tests/a.py::t", "tests/a.py::t  #  ", "tests/a.py  # whole file",

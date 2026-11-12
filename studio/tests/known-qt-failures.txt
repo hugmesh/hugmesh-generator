@@ -39,12 +39,12 @@ tests/journey/test_brand_superbrand_image.py::test_a_created_superbrand_reaches_
 tests/journey/test_brand_superbrand_image.py::test_both_faces_write_the_same_command_and_the_same_configuration  # same: two docker commands carry different random --name values
 tests/journey/test_brand_superbrand_image.py::test_the_four_places_that_refuse_a_brand_identity_on_an_unaffiliated_image  # same: docker-host command (see above)
 
-# ── red on main without Qt as well (the go-live lane, wf_57dbc243) ───────────────────
+# ── red on main without Qt as well (the go-live lane, #926/#931) ─────────────────────
 tests/test_golive_docs_emulated.py::test_status_callout_says_what_has_landed  # the status callout still says FG3's proof lane has not merged; #926 merged it
 
 # ── PySide6 aborts the interpreter at exit on a QThread still running ────────────────
 # "QThread: Destroyed while thread '' is still running" after every test passed. Timing
 # decides it: test_code_folders_gui.py aborted 3 runs of 3 on a loaded developer box and
-# not on the runner; test_domains_row_checks_saved_door.py aborted on both.
+# on 1 of the first 2 runner runs; test_domains_row_checks_saved_door.py aborted on all.
 tests/test_domains_row_checks_saved_door.py  exit-abort  # a worker QThread outlives the tests (PySide6 qFatal at exit)
 tests/test_code_folders_gui.py  exit-abort  # a worker QThread outlives the tests (PySide6 qFatal at exit)
