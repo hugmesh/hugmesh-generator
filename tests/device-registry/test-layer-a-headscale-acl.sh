@@ -17,9 +17,12 @@
 # HONESTY: this models headscale's policy semantics; it does NOT prove a live
 # control node enforces them. Real :22 default-deny is NEEDS-HEADSCALE (see the PR
 # body matrix); forged-tag REJECTION by the pinned headscale is proven by
-# test-headscale-security-tag-live.sh. The SOURCE side is ADVISORY until
-# OIDC (every edge src is tag:hugmesh); these assertions are the DESTINATION
-# cut + default-deny that ship now.
+# test-headscale-security-tag-live.sh, and so is who actually gets a Tailscale
+# SSH session. The SOURCE side: until per-operator tailnet identities land
+# (FIX-OIDC-USERS) every rule's src is tag:superadmin, never the member tag
+# tag:hugmesh (Tailscale SSH answers :22 itself, so a member src would be a
+# privileged session for every member). So a licensed admin who is only a member
+# gets no Tailscale SSH edge; the per-node edges keep the export-driven shape.
 #
 # ── PART 2 (2026-07-30): THE COMPILE-SIDE RECONCILIATION ──────────────────────
 # Layer-A has TWO would-be writers of one headscale policy: the node-side
@@ -40,6 +43,14 @@
 # silently-skipped assertion is exactly how a live drift sat on a green main
 # before. Point it at a checkout with LAYERA_BFF_ROOT (or LAYERA_SIBLING_ROOT,
 # which holds a <root>/hugmesh-admin-bff-api clone).
+#
+# IN CI THE ABSENT SIBLING IS A FAILURE, NOT INCOMPLETE. Under GITHUB_ACTIONS=true,
+# CI=true or LAYERA_REQUIRE_BFF=1 a missing checkout (or a missing file in it) is a
+# counted FAIL with a ::error:: line and exit 1. Exit 3 stays for a local run, where
+# `make e2e-ungated` reports it in its INCOMPLETE bucket. The cross-repo fixture
+# identity (2b below) also gates every pull request on its own, in
+# test-layer-a-bff-fixture-identity.sh: this suite cannot, because its policy-mode
+# pair in (a) is red against the BFF's `database` declaration until the #634 cut-over.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -124,26 +135,32 @@ echo "-- rendered policy shape --"
 strip "${RENDERED}" | jq -e . >/dev/null 2>&1 && ok "rendered policy is valid JSON" || bad "rendered policy not JSON"
 grep -q '@@' "${RENDERED}" && bad "rendered policy has leftover @@ markers" || ok "no leftover @@ markers"
 
-echo "-- Scenario: licensed admin -> licensed own-domain node:22 (ALLOW) --"
-# node-a carries its server-forced tag:dev_<fpA>; src is the advisory tag:hugmesh.
-if ssh_allowed "tag:hugmesh" "superadmin" "${TAG_A} tag:hugmesh ${MESH_TAG}"; then
-    ok "admin reaches own-domain node-a:22 (edge to ${TAG_A} present)"
-else bad "admin should reach node-a:22"; fi
-if ssh_allowed "tag:hugmesh" "superadmin" "${TAG_B} tag:hugmesh ${MESH_TAG}"; then
-    ok "admin reaches own-domain node-b:22 (DOMAIN-LICENSE edge present)"
-else bad "admin should reach node-b:22"; fi
+echo "-- Scenario: the export still yields one edge per licensed node, sourced from tag:superadmin --"
+# node-a carries its server-forced tag:dev_<fpA>. The edge to it exists, but its src is
+# tag:superadmin: there is no per-operator tailnet identity to name instead.
+for t in "${TAG_A}" "${TAG_B}"; do
+    strip "${RENDERED}" | jq -e --arg d "${t}" '[.ssh[] | select(.dst == [$d])] == [{action:"accept",src:["tag:superadmin"],dst:[$d],users:["superadmin"]}]' >/dev/null 2>&1 \
+        && ok "exactly one edge to ${t}, src tag:superadmin, users [superadmin]" \
+        || bad "the edge to ${t} is missing or not exactly {src:[tag:superadmin], users:[superadmin]}"
+done
 
-echo "-- Scenario: admin -> superadmin/core node:22 (DENY, node absent from export) --"
-# core-1 is NOT in the export, so no tag:dev_<fpCORE> edge exists. It carries only
-# tag:hugmesh + tag:mesh (+ would carry tag:superadmin-reachability via mesh).
-if ssh_allowed "tag:hugmesh" "superadmin" "${TAG_CORE} tag:hugmesh ${MESH_TAG}"; then
-    bad "admin must NOT reach core node:22"
-else ok "admin denied to core node:22 (no export edge -> default-deny)"; fi
-
-echo "-- Scenario: admin -> other-domain node:22 (DENY, no license) --"
-if ssh_allowed "tag:hugmesh" "superadmin" "${TAG_Z} tag:hugmesh ${MESH_TAG}"; then
-    bad "admin must NOT reach other-domain node:22"
-else ok "admin denied to other-domain node-z:22 (no export edge -> default-deny)"; fi
+echo "-- Scenario: a member (tag:hugmesh, every pre-auth key holder) reaches NO node:22 --"
+# A licensed admin who is only a member included: Tailscale SSH answers :22 itself, so a
+# member source would be a privileged session for EVERY member, licensed or not.
+for n in "node-a=${TAG_A}" "node-b=${TAG_B}" "core-1=${TAG_CORE}" "node-z=${TAG_Z}"; do
+    nm="${n%%=*}"; nt="${n#*=}"
+    if ssh_allowed "tag:hugmesh" "superadmin" "${nt} tag:hugmesh ${MESH_TAG}"; then
+        bad "a member (tag:hugmesh) is an ssh source for ${nm}:22 — every member would get a privileged session there"
+    else ok "a member (tag:hugmesh) is denied ${nm}:22"; fi
+done
+for role in tag:pki tag:be tag:fe tag:host; do
+    if ssh_allowed "${role}" "superadmin" "${TAG_A} tag:hugmesh ${MESH_TAG}"; then
+        bad "the self-applied role tag ${role} is an ssh source"
+    else ok "the self-applied role tag ${role} is not an ssh source"; fi
+done
+strip "${RENDERED}" | jq -e '[.ssh[] | .src[]] | length > 0 and all(. == "tag:superadmin")' >/dev/null 2>&1 \
+    && ok "every rendered ssh rule's src is tag:superadmin and nothing else" \
+    || bad "a rendered ssh rule names a source other than tag:superadmin: $(strip "${RENDERED}" | jq -c '[.ssh[] | .src[]] | unique')"
 
 echo "-- Scenario: SUPERADMIN -> ALL mesh nodes:22 (ALLOW via tag:mesh) --"
 # tag:superadmin is force-assigned to the superadmin operator; every node carries
@@ -166,6 +183,10 @@ strip "${RENDERED}" | jq -e '[.acls[] | select(.dst[]? == "10.244.0.0/16:*")] | 
     && ok "CIDR pod/service data-plane rule kept (k8s, not SSH)" || bad "CIDR data-plane rule missing"
 strip "${RENDERED}" | jq -e '[.acls[] | select(.dst[]? == "tag:hugmesh:*")] | length == 0' >/dev/null \
     && ok "NO any-to-any tag:hugmesh -> tag:hugmesh:* rule (the :22 hole is gone)" || bad "any-to-any rule present"
+strip "${RENDERED}" | jq -e '[.acls[] | select(any(.dst[]?; endswith(":22") or endswith(":*")) and .dst != ["10.244.0.0/16:*", "10.96.0.0/12:*"])]
+        == [{action:"accept",src:["tag:superadmin"],dst:["tag:hugmesh:22"]}]' >/dev/null \
+    && ok "the one :22 accept is from tag:superadmin (the superadmin rule is reachable, by nobody else)" \
+    || bad "the :22 accept is missing, or opens :22 to a source other than tag:superadmin"
 
 echo "-- Scenario: tag:hugmesh is no longer an SSH dst --"
 strip "${RENDERED}" | jq -e '[.ssh[] | select(.dst[0]? == "tag:hugmesh")] | length == 0' >/dev/null \
@@ -460,6 +481,22 @@ apply_run apply_policy "${CASE}/new.hujson"
 serves "${CASE}/etc/policy.hujson" tag:mesh_east-01 && serves "${CASE}/etc/policy.hujson" tag:dev_alice && ! serves "${CASE}/etc/policy.hujson" tag:dev_bob \
     && ok "fallback = previous minus revoked edges, superadmin mesh edge retained" || bad "fallback lost the superadmin edge or kept a revoked one"
 
+echo "-- Scenario: per-node edges sourced from tag:superadmin (the rendered shape) are still revocable --"
+# The renderer sources every per-node edge from tag:superadmin, the same src as the
+# break-glass edge. Break-glass is that src AND a tag:mesh_* dst, so a revoked
+# per-node edge must still be dropped by the fallback.
+S_ALICE="$(EDGE tag:dev_alice tag:superadmin)"; S_BOB="$(EDGE tag:dev_bob tag:superadmin)"
+apply_new_case revoke_sup_sourced; : > "${STUB}/reject"
+mkpol OLD "${E_SUP}" "${S_ALICE}" "${S_BOB}" > "${CASE}/etc/policy.hujson"
+mkpol REJECTME "${E_SUP}" "${S_ALICE}" > "${CASE}/new.hujson"
+apply_run apply_policy "${CASE}/new.hujson"
+serves "${CASE}/etc/policy.hujson" tag:dev_bob \
+    && bad "a revoked per-node edge with src tag:superadmin was kept as if it were break-glass" \
+    || ok "a revoked per-node edge with src tag:superadmin is dropped by the fallback"
+serves "${CASE}/etc/policy.hujson" tag:mesh_east-01 && serves "${CASE}/etc/policy.hujson" tag:dev_alice \
+    && ok "the break-glass mesh edge and the still-licensed per-node edge are kept" \
+    || bad "the fallback lost the break-glass edge or a still-licensed per-node edge"
+
 echo "-- Scenario: the previous policy cannot be narrowed -> it is NOT restored (fail closed) --"
 revocation_case unnarrowable REJECTME "${E_SUP}" "${E_ALICE}"; : > "${STUB}/reject"
 printf 'this is not json\n' >> "${CASE}/etc/policy.hujson"     # OLD (sup+alice+bob) plus trailing garbage
@@ -726,7 +763,7 @@ if [ -r "${PARITY_PARAMS}" ] && [ -r "${PARITY_EXPORT}" ] && [ -r "${PARITY_GOLD
     # Because the BFF's HeadscaleAclParityTest holds its compiler to this SAME golden and 2b
     # asserts the two copies are byte-identical, this pins the Java emission too — without a
     # JVM here, and without trusting any grep over Java source.
-    GOLDEN_NODE_DSTS="$(jq -r '[.ssh[] | select(.src[0]=="tag:hugmesh") | .dst[]] | sort | .[]' "${PARITY_GOLDEN}" 2>/dev/null)"
+    GOLDEN_NODE_DSTS="$(jq -r '[.ssh[] | select(.dst[0] | startswith("tag:dev_")) | .dst[]] | sort | .[]' "${PARITY_GOLDEN}" 2>/dev/null)"
     EXPECT_NODE_DSTS="$(jq -r '[.body.operators[]?.machineKeyFp] | unique | .[]' "${PARITY_EXPORT}" 2>/dev/null \
         | while read -r _fp; do [ -n "${_fp}" ] && echo "tag:$(dev_tag_for_fp "${_fp}")"; done | sort)"
     if [ -n "${EXPECT_NODE_DSTS}" ] && [ "${GOLDEN_NODE_DSTS}" = "${EXPECT_NODE_DSTS}" ]; then
@@ -753,7 +790,19 @@ BFF_CONFIG="${BFF_DEV}/HeadscaleAclConfig.java"
 BFF_YML="${BFF_ROOT}/src/main/resources/application.yml"
 BFF_COMPILER_TEST="${BFF_ROOT}/src/test/java/net/hugmesh/adminbff/device/HeadscaleAclCompilerTest.java"
 
+# CI (or LAYERA_REQUIRE_BFF=1): an absent sibling is a counted failure, exit 1.
+layera_bff_required() {
+    [ -n "${LAYERA_REQUIRE_BFF:-}" ] || [ "${GITHUB_ACTIONS:-}" = "true" ] || [ "${CI:-}" = "true" ]
+}
+layera_bff_missing_fail() {
+    bad "$1"
+    echo "::error::test-layer-a-headscale-acl: $1. The compile-side half compared NOTHING, so in CI this is a failure, not INCOMPLETE. Supply the checkout with LAYERA_BFF_ROOT=<checkout> or clone it into ${SIBLING_ROOT}."
+    echo "== RESULT: ${P} passed, ${F} failed, COMPILE SIDE NOT CHECKED =="
+    exit 1
+}
 if [ ! -r "${BFF_COMPILER}" ]; then
+    layera_bff_required \
+        && layera_bff_missing_fail "the hugmesh-admin-bff-api checkout is absent (no ${BFF_COMPILER})"
     echo
     echo "  INCOMPLETE: the hugmesh-admin-bff-api checkout carrying the Layer-A compiler is"
     echo "  absent (looked for ${BFF_COMPILER})."
@@ -767,7 +816,9 @@ if [ ! -r "${BFF_COMPILER}" ]; then
     exit 3
 fi
 for f in "${BFF_PROPS}" "${BFF_CONFIG}" "${BFF_YML}" "${BFF_COMPILER_TEST}"; do
-    [ -r "${f}" ] || { echo "  INCOMPLETE: ${f} missing from the sibling checkout"; exit 3; }
+    [ -r "${f}" ] && continue
+    layera_bff_required && layera_bff_missing_fail "${f} is missing from the sibling checkout"
+    echo "  INCOMPLETE: ${f} missing from the sibling checkout"; exit 3
 done
 ok "sibling hugmesh-admin-bff-api checkout present (${BFF_ROOT})"
 

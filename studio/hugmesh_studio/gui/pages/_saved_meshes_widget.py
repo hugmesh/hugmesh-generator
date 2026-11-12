@@ -49,6 +49,7 @@ import socket
 from dataclasses import dataclass, field
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
+from ...core import platform_info
 from ...core import saved_meshes as sm
 from ...core import vaults
 from ...core.local_mesh_bootstrap import LocalMeshBootstrap
@@ -63,8 +64,16 @@ def native_windows_running_mesh() -> str:
     else). There 'Stop mesh' is greyed with the WSL2 sentence, so "stop it first" would
     send the operator to a button that refuses; and Start/Restore are `make` targets as
     well. The same check as the page's mesh-state label (teardown_refusal)."""
-    if not LocalMeshBootstrap.teardown_refusal():
+    refusal = LocalMeshBootstrap.teardown_refusal()
+    if not refusal:
         return ""
+    if platform_info.blocker_kind(refusal) == "darwin":
+        # A Mac missing Homebrew's GNU tools is refused by the same check; its way
+        # out is one brew line, not WSL2.
+        from ...core.macos_host import BREW_INSTALL
+        return ("A local mesh is running, and this Mac cannot stop it yet (Stop runs "
+                "`make` and bash scripts that need the GNU tools). Start and Restore "
+                f"need them too: run `{BREW_INSTALL}`, then restart the Studio.")
     return ("A local mesh is running, and the Windows build of the Studio cannot stop it "
             "(Stop runs `make` and bash scripts); stop it where it was started, such as "
             "the Studio inside WSL2. Start and Restore run `make` and bash scripts too, "

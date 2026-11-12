@@ -215,7 +215,8 @@ MESH_JOIN_WAIT="${MESH_JOIN_WAIT:-1800}"
 #     is attached instead and the saved key is copied into this run dir, so the
 #     record's ssh_key and a later re-save both work exactly as for a golden run.
 #   * the RECORD notes it ("boot_save"), so a reader can tell a resumed device
-#     from a fresh one (the go-live journal says "resumed from save").
+#     from a fresh one (mesh-emu-status says "resumed from save", and the go-live
+#     faces "booted from a save taken while <posture>").
 # The sibling names are emulation_save.py's KEYS_IMAGE_SUFFIX / LOGIN_KEY_SUFFIX /
 # KEYS_DIR_SUFFIX, spelled from the save's own stem.
 BOOT_SAVE=""
@@ -1409,6 +1410,82 @@ cat > "${KEYS_SRC}/users.json" <<EOF
 }
 EOF
 
+# ── TEST-ONLY sudo for the harness's own logins (governed client desktops) ──
+# The "sudo": true / "sudo_nopasswd": true above is not enough on a client
+# desktop that is desktop-governance-GOVERNED (a cloud/mesh laptop, desktop or
+# chromebook with SSO on). There provision_users() drops `wheel` and suppresses
+# the static /etc/sudoers.d/10-<name> grant, and provision_desktop_governance()
+# comments out `%wheel` and neutralises any standing sudoers.d grant, because on
+# a real device sudo comes ONLY from the IdP's desktop-sudo claim. That is the
+# product working as designed. The harness, though, streams assertions.sh in
+# through `ssh tester@guest 'sudo bash -s'`, so on such a row the guest answered
+# "sudo: a password is required" and the row came back FAIL 0/0 (2026-11-09
+# prover, x86 laptop-user, door2-container.log).
+#
+# The fix rides the KEYS payload's run[] hook, which provision.sh runs in
+# provision_run_hooks() AFTER provision_desktop_governance() (see main() there;
+# verdict_test.sh pins that order), so governance has already finished its
+# sweep when this file lands, and a re-provision re-runs the sweep and then this
+# hook again. The hook writes ONE drop-in, /etc/sudoers.d/zz-hugmesh-test-harness,
+# NOPASSWD for exactly the logins this script created (${GUEST_USERS[@]}: the
+# ssh user plus every validated --extra-user) and nobody else.
+#
+# Scope: this function exists only in this test entrypoint and the hook only on
+# the synthetic stick it builds. No production KEYS writer (scripts/gen-provision-
+# keys.sh, keys-template/, the Studio) emits it, and verdict_test.sh fails if the
+# drop-in's name ever appears in one. It does not weaken what assertions.sh
+# grades either: on a governed image that suite checks tester is NOT in wheel
+# and has no static /etc/sudoers.d/10-tester (the product's own rules), and it
+# never counts this drop-in, which is the harness's and not the image's.
+HARNESS_SUDO_HOOK="hooks/zz-hugmesh-test-harness-sudo.sh"
+# write_harness_sudo_hook KEYS_DIR USER... — write the run[] hook; returns 1 on a bad name.
+write_harness_sudo_hook() {
+    local dir="$1" u names=""
+    shift
+    for u in "$@"; do
+        [[ "${u}" =~ ^[a-z_][a-z0-9_-]*$ ]] || return 1
+        names+="${names:+ }${u}"
+    done
+    [ -n "${names}" ] || return 1
+    mkdir -p "${dir}/hooks"
+    {
+        printf '#!/bin/sh\n'
+        printf '# TEST-ONLY: written by tests/qemu/docker-entrypoint.sh onto a SYNTHETIC KEYS\n'
+        printf '# stick. Never part of a production KEYS payload.\n'
+        printf 'HARNESS_USERS="%s"\n' "${names}"
+        cat <<'HOOK'
+set -eu
+# HUGMESH_TEST_SUDOERS_DIR exists for tests/qemu/verdict_test.sh, which runs this
+# hook through provision.sh's real provision_run_hooks without root.
+d="${HUGMESH_TEST_SUDOERS_DIR:-/etc/sudoers.d}"
+f="${d}/zz-hugmesh-test-harness"
+mkdir -p "${d}"
+# The temp name carries a '.', which sudo's #includedir skips, so a half-written
+# file is never live.
+tmp="${f}.tmp"
+umask 0337
+    {
+        echo "# TEST-ONLY (QEMU harness). Lets the harness's own logins run assertions.sh"
+        echo "# through 'sudo bash -s' on a desktop-governance-governed client image."
+        for u in ${HARNESS_USERS}; do
+            echo "${u} ALL=(ALL) NOPASSWD: ALL"
+        done
+    } > "${tmp}"
+chmod 0440 "${tmp}"
+if command -v visudo >/dev/null 2>&1 && ! visudo -cqf "${tmp}"; then
+    rm -f "${tmp}"
+    echo "zz-hugmesh-test-harness: visudo rejected the drop-in; not installed" >&2
+    exit 1
+fi
+mv -f "${tmp}" "${f}"
+echo "zz-hugmesh-test-harness: NOPASSWD sudo for ${HARNESS_USERS} (test payload only)"
+HOOK
+    } > "${dir}/${HARNESS_SUDO_HOOK}"
+    chmod 0755 "${dir}/${HARNESS_SUDO_HOOK}"
+}
+write_harness_sudo_hook "${KEYS_SRC}" "${GUEST_USERS[@]}" \
+    || die "could not write the harness sudo hook for: ${GUEST_USERS[*]}"
+
 # kubernetes.role, likewise ROLE-ACCURATE rather than a constant (2026-08-26).
 # Every row used to be handed "control-plane", so provision.sh's
 # provision_kubernetes() logged `Kubernetes role: control-plane` on a frontend,
@@ -1536,7 +1613,8 @@ cat > "${KEYS_SRC}/provision.json" <<EOF
                  "up_args": "${TS_UP_ARGS}" },
   "kubernetes": { "role": "${K8S_ROLE}", "bootstrap": false },
   "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.local",
-               "gitops": { "enabled": false } }
+               "gitops": { "enabled": false } },
+  "run": ["${HARNESS_SUDO_HOOK}"]
 }
 EOF
 
@@ -2051,6 +2129,20 @@ emit_assertion_verdict() {
         warn "${LABEL}: DEVICE TEST FAILED — assertion ssh could not hold a connection (rc=255)"
         emit_result FAIL "assertion ssh could not connect${note:- (ssh attempts: ${ASSERT_ATTEMPTS:-1})}" \
             "${PASSED:-0}" "${FAILED:-0}"
+    elif ! grep -q '== RESULT:' "${log}" 2>/dev/null; then
+        # A nonzero exit with NO verdict line: assertions.sh never got to grade
+        # anything, so "N assertions failed" would be a lie and the old spelling
+        # printed "? assertions failed" over a 0/0 row (2026-11-09 prover, x86
+        # laptop-user: the guest's sudo wanted a password, `sudo bash -s` died
+        # before the first line ran). Say the suite could not RUN, and name sudo
+        # when sudo is what refused, because that is a harness/provisioning
+        # problem on the guest, not a finding about the image under test.
+        local why="no RESULT line, rc=${ARC}"
+        if grep -qE '^sudo: (a terminal is required|a password is required|no tty present|.* is not in the sudoers file|.* is not allowed to run sudo)' "${log}" 2>/dev/null; then
+            why="sudo on the guest refused the harness user ${SSH_USER:-tester}, rc=${ARC}"
+        fi
+        warn "${LABEL}: DEVICE TEST FAILED — assertions could not run (${why})"
+        emit_result FAIL "assertions could not run (${why})${note}" "${PASSED:-0}" "${FAILED:-0}"
     else
         warn "${LABEL}: DEVICE TEST FAILED (${FAILED:-?} assertions failed)"
         emit_result FAIL "assertions failed${note}" "${PASSED:-0}" "${FAILED:-0}"

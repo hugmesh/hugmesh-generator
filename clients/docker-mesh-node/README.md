@@ -1,4 +1,4 @@
-# HugMesh Docker mesh-node (FD-09)
+# HugMesh Docker mesh node
 
 Turn **any Linux or Windows machine that already runs Docker** into a background
 HugMesh mesh node. **No OS flash, no reinstall.** This is the *third* onboarding

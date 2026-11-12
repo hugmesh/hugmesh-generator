@@ -337,7 +337,11 @@ class _Section:
             # The whole sentence goes on the actions' tooltips, NOT through a balloon:
             # Windows cuts a tray notification at 255 characters, which dropped the
             # "what to do" half of the WSL2 refusal mid-word.
-            self.status_act.setText(f"{self.label}: needs WSL2 on Windows (hover for why)")
+            # ...and a Mac that is only missing Homebrew's GNU tools is not sent to WSL2.
+            self.status_act.setText(
+                f"{self.label}: needs the GNU tools on this Mac (hover for how)"
+                if platform_info.blocker_kind(blocker) == "darwin" else
+                f"{self.label}: needs WSL2 on Windows (hover for why)")
             for act in (self.status_act, self.start_act, self.stop_act):
                 act.setToolTip(blocker)
             self.start_act.setEnabled(False)

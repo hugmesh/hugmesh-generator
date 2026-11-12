@@ -1041,7 +1041,8 @@ class FleetPage(QtWidgets.QWidget):
             return
         problems = self.driver.preflight(cfg, self._backend())
         # advisories never refuse the run (_start checks preflight() only)
-        notes = "".join(f"\n  note: {n}" for n in self.driver.advisories(cfg))
+        notes = "".join(f"\n  note: {n}"
+                        for n in self.driver.advisories(cfg, self._backend()))
         if problems:
             self.problems.setPlainText(
                 "Preflight:\n" + "\n".join(f"  - {p}" for p in problems) + notes)
