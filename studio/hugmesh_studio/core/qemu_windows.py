@@ -70,14 +70,15 @@ DOCKER_LABEL_MACOS = "Docker container (this Mac's Docker VM)"
 
 
 def backends(osname: str | None = None, sysplatform: str | None = None) -> tuple:
-    """:data:`BACKENDS` as THIS host's chooser shows them: the same ids in the same
-    order, with the Docker backend's label in the Mac's words on a Mac. Everywhere
-    else it is :data:`BACKENDS` itself."""
+    """The backends THIS host's chooser offers. On a Mac that is the Docker backend
+    alone, labelled in the Mac's words: QEMU for Windows can never boot anything
+    there, and offering it (the text UI's switch key landed on it) led only to a
+    refusal that pointed back at Docker. Everywhere else it is :data:`BACKENDS`
+    itself, unchanged."""
     from . import platform_info
     if platform_info.host_kind(osname, sysplatform) != "darwin":
         return BACKENDS
-    return tuple((bid, DOCKER_LABEL_MACOS if bid == BACKEND_DOCKER else label)
-                 for bid, label in BACKENDS)
+    return ((BACKEND_DOCKER, DOCKER_LABEL_MACOS),)
 
 WINGET_ID = "SoftwareFreedomConservancy.QEMU"
 INSTALL_HINT = f"winget install --id {WINGET_ID} -e"

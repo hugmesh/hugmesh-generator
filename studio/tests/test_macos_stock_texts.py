@@ -138,9 +138,9 @@ def test_a_mac_with_the_gnu_tools_is_refused_nothing(brewed_mac, name):
 def test_a_mac_with_the_gnu_tools_gets_the_linux_text(brewed_mac):
     assert vaults._lane_remedy(LINUX_REMEDY) == LINUX_REMEDY
     assert tui_lai._help_lines(False) == list(tui_lai._HELP)
-    lines = meshemu.backend_lines(qemu_windows.BACKEND_DOCKER)
-    assert lines == [f"backend   {qemu_windows.DOCKER_LABEL_MACOS}  "
-                     f"({meshemu.BACKEND_KEY} = switch)"]
+    # one backend on a Mac, so no "(b = switch)" either
+    assert meshemu.backend_lines(qemu_windows.BACKEND_DOCKER) == [
+        f"backend   {qemu_windows.DOCKER_LABEL_MACOS}"]
 
 
 # ── the blocker carries its host ────────────────────────────────────────────────────
@@ -257,16 +257,33 @@ def test_the_mac_text_screen_lines_are_the_sentence_line_by_line(stock_mac):
     assert meshemu.default_backend() == qemu_windows.BACKEND_DOCKER
 
 
-def test_the_docker_backend_label_is_the_macs_on_a_mac(stock_mac):
-    assert dict(qemu_windows.backends())[qemu_windows.BACKEND_DOCKER] == \
-        qemu_windows.DOCKER_LABEL_MACOS
-    assert [bid for bid, _ in qemu_windows.backends()] == \
-        [bid for bid, _ in qemu_windows.BACKENDS]
+def test_a_mac_is_offered_the_docker_backend_alone(stock_mac):
+    """QEMU for Windows cannot boot anything on a Mac. The text UI's switch key used
+    to land on it, where the screen refused and pointed back at Docker, which a stock
+    Mac refuses too: a loop with no way out in it."""
+    assert qemu_windows.backends() == (
+        (qemu_windows.BACKEND_DOCKER, qemu_windows.DOCKER_LABEL_MACOS),)
+    assert meshemu.next_backend(qemu_windows.BACKEND_DOCKER) == qemu_windows.BACKEND_DOCKER
+    assert meshemu.next_backend(qemu_windows.BACKEND_WHPX) == qemu_windows.BACKEND_DOCKER
+    assert meshemu.switch_hint() == ""
+    assert meshemu.default_backend() == qemu_windows.BACKEND_DOCKER
+    _no_words = WINDOWS_WORDS.search("\n".join(
+        meshemu.backend_lines(qemu_windows.BACKEND_DOCKER)))
+    assert not _no_words, _no_words
 
 
-def test_the_backend_labels_are_unchanged_off_a_mac():
+def test_the_backends_and_the_switch_key_are_unchanged_off_a_mac(monkeypatch):
     assert qemu_windows.backends("posix", "linux") is qemu_windows.BACKENDS
     assert qemu_windows.backends("nt", "win32") is qemu_windows.BACKENDS
+    real = platform_info.host_kind
+    monkeypatch.setattr(platform_info, "host_kind",
+                        lambda osname=None, sysplatform=None:
+                        real(osname or "posix", sysplatform or "linux"))
+    assert meshemu.next_backend(qemu_windows.BACKEND_DOCKER) == qemu_windows.BACKEND_WHPX
+    assert meshemu.next_backend(qemu_windows.BACKEND_WHPX) == qemu_windows.BACKEND_DOCKER
+    assert meshemu.switch_hint() == f"{meshemu.BACKEND_KEY} = switch backend · "
+    assert meshemu.backend_label(qemu_windows.BACKEND_DOCKER) == \
+        "Docker container (Linux or WSL2)"
 
 
 # ── the guard: a new consumer cannot add Windows advice without asking the host ─────

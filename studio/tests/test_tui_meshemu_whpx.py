@@ -42,6 +42,12 @@ def _pinned_host(monkeypatch):
     qemu_windows (whose ``os.name`` default would read the real host)."""
     _answer_as(monkeypatch, "posix")
     monkeypatch.setattr(meshemu.MeshEmuScreen, "osname", "posix")
+    # ...and for the backend chooser, which a Mac is offered a shorter one of
+    # (qemu_windows.backends): on a developer's Mac this file still answers as Linux.
+    real_kind = platform_info.host_kind
+    monkeypatch.setattr(platform_info, "host_kind",
+                        lambda osname=None, sysplatform=None:
+                        real_kind(osname, sysplatform or "linux"))
     monkeypatch.setattr(qw, "find_qemu", lambda env=None: None)
 
 
@@ -153,6 +159,33 @@ def test_the_key_cycles_exactly_the_core_backends_with_their_labels(gen):
         assert j.status == f"backend: {meshemu.backend_label(_screen(j)._backend)}"
     assert tuple(seen) == qw.BACKENDS
     assert _screen(j)._backend == qw.BACKEND_DOCKER          # wrapped round
+
+
+def test_on_a_mac_the_key_stays_on_docker_and_nothing_on_the_screen_is_windows(
+        gen, monkeypatch):
+    """A Mac missing Homebrew's GNU tools is refused by the same sentence function as
+    the MSI. The screen said "! not from this Windows Studio:", offered the backend
+    "QEMU for Windows (WHPX)", and the key went there: a second refusal, pointing back
+    at Docker. A Mac has the one backend, and its refusal is the brew line."""
+    from hugmesh_studio.core import macos_host
+    real = platform_info.host_kind
+    monkeypatch.setattr(platform_info, "host_kind",
+                        lambda osname=None, sysplatform=None:
+                        real(osname, sysplatform or "darwin"))
+    monkeypatch.setattr(platform_info, "_GNU_MISSING", ["bash", "gnu-sed", "coreutils"])
+    j = _at_table(gen)
+    assert _screen(j)._backend == qw.BACKEND_DOCKER
+    for _ in range(3):
+        j.feed(meshemu.BACKEND_KEY)
+        assert _screen(j)._backend == qw.BACKEND_DOCKER
+        assert j.status == (f"backend: {qw.DOCKER_LABEL_MACOS} (the only emulation "
+                            "backend on this host)")
+    for text in ("\n".join(j.lines()), _detail(j, "x86/backend")):
+        for word in ("Windows", "WSL", "WHPX", "this PC"):
+            assert word not in text, (word, text)
+        assert f"{meshemu.BACKEND_KEY} = switch" not in text
+        assert "! not on this Mac yet:" in text
+        assert macos_host.BREW_INSTALL in text
 
 
 def test_the_key_is_free_on_this_screen():

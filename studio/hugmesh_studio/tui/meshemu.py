@@ -113,13 +113,25 @@ WHPX_CLI_PREFIXES = (("hugmesh-studio", "--qemu-windows"),
 
 
 def backend_label(backend: str) -> str:
-    return dict(qemu_windows.backends())[backend]
+    """This host's label for ``backend`` (``qemu_windows.backends()``), or its general
+    one where this host does not offer it (QEMU for Windows, named on a Mac)."""
+    return dict(qemu_windows.backends()).get(backend) or dict(qemu_windows.BACKENDS)[backend]
 
 
 def next_backend(backend: str) -> str:
-    """The backend :data:`BACKEND_KEY` switches to: the next of ``BACKENDS``, wrapping."""
-    ids = [bid for bid, _label in qemu_windows.BACKENDS]
+    """The backend :data:`BACKEND_KEY` switches to: the next of the backends this host
+    offers (``qemu_windows.backends()``), wrapping. A Mac offers one, so there the key
+    stays on Docker instead of landing on QEMU for Windows."""
+    ids = [bid for bid, _label in qemu_windows.backends()]
+    if backend not in ids:
+        return ids[0]
     return ids[(ids.index(backend) + 1) % len(ids)]
+
+
+def switch_hint(sep: str = " · ") -> str:
+    """"b = switch backend · " for the key hints, "" where there is nothing to switch
+    to (a Mac's one backend)."""
+    return f"{BACKEND_KEY} = switch backend{sep}" if len(qemu_windows.backends()) > 1 else ""
 
 
 def default_backend(osname: str | None = None) -> str:
@@ -155,7 +167,8 @@ def native_blocker_lines(switch: str) -> list[str]:
 
 def backend_lines(backend: str, osname: str | None = None) -> list[str]:
     """Which backend the hints below are for, and whether it can run here."""
-    out = [f"backend   {backend_label(backend)}  ({BACKEND_KEY} = switch)"]
+    switch = f"  ({BACKEND_KEY} = switch)" if len(qemu_windows.backends()) > 1 else ""
+    out = [f"backend   {backend_label(backend)}{switch}"]
     if backend != qemu_windows.BACKEND_WHPX:
         return out + native_blocker_lines(f"press {BACKEND_KEY} for the backend")
     why = qemu_windows.blocker(osname)
@@ -514,7 +527,7 @@ class MeshEmuScreen:
                   if self._detail.label == self._plan.gateway_label else "")
             return device_detail_lines(self._eplan, self._detail, devices,
                                        self._refusal, self._backend, self.osname) + \
-                ["", f"({BACKEND_KEY} = switch backend · r = refresh{gl} · "
+                ["", f"({switch_hint()}r = refresh{gl} · "
                      "q = back to the device list)"]
         # Under WHPX only the plan line: the front door rides the Docker backend's
         # web tunnel, which this backend does not have.
@@ -535,7 +548,7 @@ class MeshEmuScreen:
             headers, rows = device_table(self._plan, self._devices())
             out += model.format_table(headers, rows)
         out += ["", "(a NUMBER opens a device's detail + access hints · "
-                    f"{BACKEND_KEY} = switch backend · r = refresh · q = back)"]
+                    f"{switch_hint()}r = refresh · q = back)"]
         return out
 
     def prompt(self, j) -> str:  # noqa: ARG002 — screen-protocol signature
@@ -564,6 +577,11 @@ class MeshEmuScreen:
         if low == BACKEND_KEY:
             # Table or detail: the next qemu_windows.BACKENDS id. Switching boots and
             # stops nothing — it changes which backend the hints are for.
+            if len(qemu_windows.backends()) < 2:
+                # a Mac: Docker is the one backend, so say that instead of "switching"
+                j.status = (f"backend: {backend_label(self._backend)} (the only "
+                            "emulation backend on this host)")
+                return
             self._backend = next_backend(self._backend)
             j.status = f"backend: {backend_label(self._backend)}"
             return

@@ -435,7 +435,12 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             "Docker container: the full lanes — every device of the mesh, the QMP "
             "console, saves — through the bash runner (Linux, or the Studio inside "
             "WSL2). QEMU for Windows (WHPX): ONE x86 device at a time — a thin desktop "
-            "or a single node — with no bash, Docker or WSL2.")
+            "or a single node — with no bash, Docker or WSL2."
+            if self.backend_combo.count() > 1 else
+            # a Mac: one backend, so nothing about the Windows one applies
+            "Docker container: the full lanes — every device of the mesh, the QMP "
+            "console, saves — through the bash runner, inside this Mac's Docker VM "
+            "(Docker Desktop, colima or OrbStack).")
         backend_row.addWidget(self.backend_combo)
         # The options for the NEXT QEMU for Windows start; shown only on that backend.
         self.whpx_opts = QtWidgets.QWidget()

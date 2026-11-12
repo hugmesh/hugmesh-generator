@@ -85,7 +85,7 @@ def _fleet_argv(h: HostInfo, tmp_path) -> list[str]:
 
 # ── the argv ────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("mac_cores, vm_cpus, expected", [
-    (12, 8, "8"),      # the refuter's Mac: 11 was refused by an 8-CPU VM
+    (12, 8, "8"),      # a 12-core Mac on the recommended colima VM: 11 was refused
     (10, 8, "8"),      # 9 was refused
     (8, 2, "2"),       # Docker Desktop's small default
     (9, 8, "8"),       # exactly at the VM: cores-1 == NCPU, nothing to lower
@@ -236,7 +236,8 @@ def test_the_preflight_warns_when_the_cap_was_lowered(cores, tmp_path):
     assert "Settings -> Resources" in said and "colima start --cpu" in said
     # advisory only: a lowered cap is not a reason to refuse the build
     drv = BuildDriver(GENERATOR_DIR, mac(8), workdir=str(tmp_path))
-    assert not [p for p in drv.preflight(ImageConfig(), "docker") if "CPU" in p]
+    assert not [p for p in drv.preflight(ImageConfig(), "docker")
+                if "Docker's VM has only" in p]
 
 
 def test_the_warning_names_the_knob_that_asked(cores, tmp_path, monkeypatch):
