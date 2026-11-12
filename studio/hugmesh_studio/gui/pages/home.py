@@ -26,6 +26,7 @@ from ._gating import (
     out_of_scope_note_flow,
     platform_supports,
     scope_allows_flow,
+    unsupported_group_note,
 )
 # Two axis rules this page must ANSWER THE SAME WAY as the pages that own them, rather
 # than re-implement: "is this image unaffiliated" (BrandingPage, which gates the whole
@@ -239,6 +240,16 @@ class HomePage(QtWidgets.QWizardPage):
         # keeps explaining the field.
         self.home_box = QtWidgets.QGroupBox("Home Provisioning")
         hl = QtWidgets.QVBoxLayout(self.home_box)
+        # GUI-24: the PLATFORM gate greys every field in this box on an ARM builder,
+        # and until this note the only explanation was a hover tooltip on each dead
+        # control. Said on the page, first thing in the box. Inside the box on purpose:
+        # on a node flow the role-class gate hides the box, and home_hidden_note (below
+        # it) is the one that speaks, so the two notes can never both show.
+        self.home_platform_note = QtWidgets.QLabel("")
+        self.home_platform_note.setWordWrap(True)
+        self.home_platform_note.setStyleSheet("color: gray;")
+        self.home_platform_note.setVisible(False)
+        hl.addWidget(self.home_platform_note)
         self.mode = QtWidgets.QComboBox()
         self.mode.addItems(["create", "adopt", "archive", "restore"])
         self.mode_row = _row("Home Mode", self.mode)
@@ -269,7 +280,8 @@ class HomePage(QtWidgets.QWizardPage):
             "/home without formatting (--home-device). LABEL=…, UUID=…, or a /dev path.")
         hl.addWidget(self.device_row)
         self.backup = QtWidgets.QLineEdit()
-        bbtn = _file_picker(self, self.backup, "Home Backup", "Backup (*.tar* *.gpg *.enc)")
+        bbtn = self.backup_browse = _file_picker(self, self.backup, "Home Backup",
+                                                 "Backup (*.tar* *.gpg *.enc)")
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.backup, 1); h.addWidget(bbtn)
         self.backup_row = w   # greyed as one unit (line edit + Browse…) per platform
@@ -294,8 +306,9 @@ class HomePage(QtWidgets.QWizardPage):
         # of cloning, and seed the binpkg set from a package list — x86-only, greyed
         # as line-edit+Browse… row units like the backup row above.
         self.include_archive = QtWidgets.QLineEdit()
-        abtn = _file_picker(self, self.include_archive, "Home Archive to Bake In",
-                            "Archive (*.tar* *.tgz *.gpg *.enc)")
+        abtn = self.include_archive_browse = _file_picker(
+            self, self.include_archive, "Home Archive to Bake In",
+            "Archive (*.tar* *.tgz *.gpg *.enc)")
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.include_archive, 1); h.addWidget(abtn)
         self.include_archive_row = w
@@ -303,8 +316,8 @@ class HomePage(QtWidgets.QWizardPage):
         self.include_archive_labeled_row.setToolTip(hints["archive_tip"])
         hl.addWidget(self.include_archive_labeled_row)
         self.seed_code_from = QtWidgets.QLineEdit()
-        sbtn = _file_picker(self, self.seed_code_from, "Seed Home Code From a Local Checkout",
-                            directory=True)
+        sbtn = self.seed_code_from_browse = _file_picker(
+            self, self.seed_code_from, "Seed Home Code From a Local Checkout", directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.seed_code_from, 1); h.addWidget(sbtn)
         self.seed_code_from_row = w
@@ -315,8 +328,9 @@ class HomePage(QtWidgets.QWizardPage):
             "Code is not 'none'.")
         hl.addWidget(self.seed_code_from_labeled_row)
         self.seed_packages = QtWidgets.QLineEdit()
-        pbtn = _file_picker(self, self.seed_packages, "Seed Packages List",
-                            "Package list (*.txt *.list);;All files (*)")
+        pbtn = self.seed_packages_browse = _file_picker(
+            self, self.seed_packages, "Seed Packages List",
+            "Package list (*.txt *.list);;All files (*)")
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.seed_packages, 1); h.addWidget(pbtn)
         self.seed_packages_row = w
@@ -342,6 +356,13 @@ class HomePage(QtWidgets.QWizardPage):
         media = QtWidgets.QGroupBox("External Media-Data Device (Steam Library + gocryptfs Vaults)")
         self.media_box = media          # gate target (ask 3): hidden on node-class flows
         ml = QtWidgets.QVBoxLayout(media)
+        # GUI-24: same as home_platform_note — the media trio is x86-only, so an ARM
+        # desktop sees this box with all three controls greyed.
+        self.media_platform_note = QtWidgets.QLabel("")
+        self.media_platform_note.setWordWrap(True)
+        self.media_platform_note.setStyleSheet("color: gray;")
+        self.media_platform_note.setVisible(False)
+        ml.addWidget(self.media_platform_note)
         # tri-state like the proxy stack: leaving the builder default must round-trip,
         # so a plain checkbox (which collapses to explicit on/off) won't do.
         self.media_data = QtWidgets.QComboBox()
@@ -663,21 +684,45 @@ class HomePage(QtWidgets.QWizardPage):
         # --encrypt-root/--luks-pass and the local-login group, which land on every
         # platform. Greyed per the capability table (G10) instead of silently
         # dropping the values from an ARM build's argv.
-        gate_widgets(c.platform, {
-            "home_mode": self.mode,
+        #
+        # GUI-24: a Browse… row is gated as (container, line edit, button), not the
+        # container alone. Greying the container greys its children, but the reason
+        # tooltip landed only on the container, so the four line edits and four
+        # Browse… buttons were greyed with EMPTY tooltips of their own. The copy-home
+        # preset rides home_mode for the same reason: it greys with the mode combo, so
+        # it carries the mode's reason (the preset text returns in the help tail).
+        home_gate = {
+            "home_mode": (self.mode, self.copy_home_btn),
             "home_device": self.device,
-            "home_backup": self.backup_row,
+            "home_backup": (self.backup_row, self.backup, self.backup_browse),
             "home_encrypted": self.encrypted,
             "home_seed_code": self.seed,
-            "include_home_archive": self.include_archive_row,
-            "home_seed_code_from": self.seed_code_from_row,
-            "seed_packages_from": self.seed_packages_row,
+            "include_home_archive": (self.include_archive_row, self.include_archive,
+                                     self.include_archive_browse),
+            "home_seed_code_from": (self.seed_code_from_row, self.seed_code_from,
+                                    self.seed_code_from_browse),
+            "seed_packages_from": (self.seed_packages_row, self.seed_packages,
+                                   self.seed_packages_browse),
+        }
+        media_gate = {
             "media_data": self.media_data,
             "media_label": self.media_label,
             "no_vaults": self.no_vaults,
+        }
+        gate_widgets(c.platform, {
+            **home_gate,
+            **media_gate,
             "unlock_keyfile": self.unlock_keyfile,
             "unlock_yubikey": self.unlock_yubikey,
         })
+        # ...and the reason ON THE PAGE, once per greyed group (GUI-24), keyed on the
+        # same field lists the gate above just used so the note and the greying cannot
+        # drift. Re-set every visit: going back and switching to x86 clears it.
+        for note, fields in ((self.home_platform_note, home_gate),
+                             (self.media_platform_note, media_gate)):
+            text = unsupported_group_note(c.platform, fields)
+            note.setText(text)
+            note.setVisible(bool(text))
         # role-class gate (spec 7): home provisioning is desktop-only — on a node/mesh
         # image HIDE the whole group (overriding any platform-enable) rather than
         # greying it. THE WHOLE BOX, not its widgets one by one (issue #230): the old
@@ -810,7 +855,10 @@ class HomePage(QtWidgets.QWizardPage):
         # visit ("" while the field is live), which is what used to wipe every
         # explanation off this page (issue #230 — see the constants). A gate's reason
         # always wins; the field's own help returns wherever the gates left "".
-        for w, help_text in ((self.encrypted, _ENCRYPTED_HELP),
+        # The copy-home preset is gated with home_mode above (GUI-24), so while it is
+        # greyed it says why instead of describing a preset that cannot be used.
+        for w, help_text in ((self.copy_home_btn, self._hints["copy_tip"]),
+                             (self.encrypted, _ENCRYPTED_HELP),
                              (self.seed_row, _SEED_HELP),
                              (self.unlock_keyfile, _KEYFILE_HELP),
                              (self.unlock_yubikey, _YUBIKEY_HELP)):
