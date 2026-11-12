@@ -22,7 +22,7 @@ from ..qt import QtCore, QtGui, QtWidgets
 from .. import console
 from ..styles import WARN
 from . import build_window
-from ...core import build_sessions
+from ...core import build_sessions, kernel_reconfig
 from ...core import secret_files
 from ...core import session_locations
 from ...core.domain_services import restart_gate_reason
@@ -338,6 +338,12 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self.open_btn.clicked.connect(self._open_artifacts)
         self.log_btn = QtWidgets.QPushButton("View errors/log")
         self.log_btn.clicked.connect(self._view_log)
+        # "Kernel config…" (core/kernel_reconfig.py): menuconfig a built x86 image, then
+        # rebuild + re-sign + repackage. Enabled only when the selected session HAS a
+        # reconfigurable x86 image; the reason is the tooltip otherwise.
+        self.kernel_btn = QtWidgets.QPushButton("Kernel config…")
+        self.kernel_btn.clicked.connect(self._open_kernel_config)
+        self._kernel_windows: dict = {}
         # destructive actions keep their own row rather than their own side — a session
         # record is a cheap unlink, artifacts a confirmed opt-in; both refuse an
         # in-progress build. Separation of intent survives the reflow.
@@ -347,7 +353,7 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self.delete_all_btn.clicked.connect(self._delete_all)
         for row_i, row_btns in enumerate((
                 (self.open_window_btn, self.restart_btn, self.redo_btn),
-                (self.open_btn, self.log_btn),
+                (self.open_btn, self.log_btn, self.kernel_btn),
                 (self.delete_btn, self.delete_all_btn))):
             for col_i, b in enumerate(row_btns):
                 btns.addWidget(b, row_i, col_i)
@@ -652,6 +658,47 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self.delete_btn.setToolTip(why.get("delete", ""))
         self._show_refusals(why)
         self.delete_all_btn.setEnabled(bool(self._row_data))
+        kwhy = (kernel_reconfig.locate(r.session) if is_session else
+                "Kernel reconfiguration needs a recorded session." if r is not None else "")
+        kok = is_session and not isinstance(kwhy, str)
+        self.kernel_btn.setEnabled(bool(kok))
+        self.kernel_btn.setToolTip("" if kok else (kwhy if isinstance(kwhy, str) else ""))
+
+    def _on_kernel_applied(self, _row=None) -> None:
+        """A rebuild was recorded: re-read the list (new artifacts, the session record).
+        A bound method, not a lambda — Qt drops it with this widget."""
+        try:
+            self.refresh()
+        except Exception:                        # noqa: BLE001 - a slot
+            pass
+
+    def _open_kernel_config(self) -> None:
+        """Open (or raise) the non-modal kernel config window for the selected session."""
+        try:
+            r = self._selected()
+            if r is None or r.kind != "session":
+                return
+            win = self._kernel_windows.get(r.session.id)
+            try:
+                alive = win is not None and win.isWindow()
+            except RuntimeError:                 # its C++ side is gone: open a new one
+                alive = False
+            if not alive:
+                from ._kernel_reconfig_panel import KernelConfigWindow
+                # NO destroyed-signal hook: a closure over this widget that runs while
+                # Qt tears it down raises inside a slot, and PyQt6 then aborts the
+                # Studio (measured: the suite's teardown died exactly that way). A dead
+                # entry is detected above instead.
+                win = KernelConfigWindow(self.wiz.generator_dir, r.session, parent=self.window())
+                win.panel.applied.connect(self._on_kernel_applied)
+                self._kernel_windows[r.session.id] = win
+            else:
+                win.panel.bind(r.session)
+            win.show()
+            win.raise_()
+        except Exception:                        # noqa: BLE001 - a slot: never abort
+            import traceback
+            traceback.print_exc()
 
     # ---- ASK 15: click a build -> its own window -------------------------------------
     def _row_clicked(self, row: int, _col: int) -> None:
@@ -678,7 +725,8 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
     #: its guards (can_restart, the missing-secrets refusal, the fleet routing, the
     #: delete confirmation). One implementation, two faces.
     ROW_ACTIONS = {"resume": "_restart", "artifacts": "_open_artifacts",
-                   "edit": "_redo", "delete": "_delete", "log": "_view_log"}
+                   "edit": "_redo", "delete": "_delete", "log": "_view_log",
+                   "kernel": "_open_kernel_config"}
 
     def row_for_identity(self, ident):
         """The listed row with this :func:`row_identity`, or None when none matches.
@@ -768,6 +816,7 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             on_edit=lambda r: self.act_on_row(r, "edit"),
             on_delete=lambda r: self.act_on_row(r, "delete"),
             on_log=lambda r: self.act_on_row(r, "log"),
+            on_kernel=lambda r: self.act_on_row(r, "kernel"),
             parent=self.window())
         self._build_windows.append(win)
         win.destroyed.connect(

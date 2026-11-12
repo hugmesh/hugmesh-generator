@@ -256,9 +256,17 @@ if [ -n "${X86_BUILDER}" ]; then
   grep -qF 'pu_copied_for_role "$(basename "${puf}")"' "${X86_BUILDER}" \
     && ok "$(basename "${X86_BUILDER}"): the package.use copy loop uses the same role predicate the assert checks" \
     || bad "$(basename "${X86_BUILDER}"): the package.use copy loop no longer uses pu_copied_for_role — the assert can check a different set of files than the build installs"
-  grep -qF 'VIDEO_CARDS="$(gpu_video_cards "${GPU_DRIVER}")"' "${X86_BUILDER}" \
-    && ok "$(basename "${X86_BUILDER}"): make.conf's VIDEO_CARDS comes from the same gpu_video_cards() matrix this test parsed" \
+  # The Studio Desktop step's --video-cards override wraps the matrix: with NO override
+  # dc_effective_video_cards (scripts/_desktop-config-lib.sh) hands the matrix list through
+  # byte-for-byte — proven below by running it — so the matrix this test parsed is still
+  # the one every build without the override renders.
+  grep -qF 'VIDEO_CARDS="$(dc_effective_video_cards "$(gpu_video_cards "${GPU_DRIVER}")")"' "${X86_BUILDER}" \
+    && ok "$(basename "${X86_BUILDER}"): make.conf's VIDEO_CARDS comes from the same gpu_video_cards() matrix this test parsed (via the Desktop step's override wrapper)" \
     || bad "$(basename "${X86_BUILDER}"): make.conf's VIDEO_CARDS is derived somewhere other than gpu_video_cards() — this test is checking a matrix the build does not use"
+  _dc_pass="$(bash -c '. "$1"; dc_effective_video_cards "amdgpu radeonsi radeon intel iris nouveau"' _ "${REPO}/scripts/_desktop-config-lib.sh")"
+  [ "${_dc_pass}" = "amdgpu radeonsi radeon intel iris nouveau" ] \
+    && ok "no --video-cards override: dc_effective_video_cards returns the gpu_video_cards() list unchanged" \
+    || bad "dc_effective_video_cards rewrote the matrix list with no override: '${_dc_pass}'"
   grep -qF 'VIDEO_CARDS="@@VIDEO_CARDS@@"' "${REPO}/specs-x86/portage/make.conf.tmpl" \
     && ok "specs-x86/portage/make.conf.tmpl still renders VIDEO_CARDS from the builder" \
     || bad "specs-x86/portage/make.conf.tmpl no longer carries VIDEO_CARDS=\"@@VIDEO_CARDS@@\" — the inheritance the fixed package.use files rely on is gone"

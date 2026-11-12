@@ -237,7 +237,7 @@ class WorklistDriver:
         """Aggregate preflight problems (empty = OK) — the BLOCKING channel: this is
         what the Review page's problems pane renders and isComplete() keys on, and
         what ProgressPage refuses dispatch over."""
-        problems = self._output_dir_problems()
+        problems = self._output_dir_problems() + self._disk_space_problems()
         # A mesh's KEYS sticks need the pki node's fixed LAN address (core/pki_lan.py):
         # without it every worker dials a public URL that cannot answer before go-live.
         # Blocking here, where the Review page and the dispatch refuse, and only when

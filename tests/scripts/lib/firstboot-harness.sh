@@ -102,14 +102,44 @@ render() {
 
 run_fb() { local r="$1"; shift; ( cd "${r}" && env "$@" PATH="${r}/bin:${PATH}" bash "${r}/self" ) > "${r}/out" 2>&1; }
 
-# keys_provisioned ROOT [USER] — what keys-provision leaves behind: a KEYS user
-# (default alice) in passwd and the users.created marker.
+# keys_provisioned ROOT [USER] [governed|ungoverned] — what keys-provision leaves behind:
+# a KEYS user (default alice) in passwd, the users.created marker, and its own
+# keys-users.created marker (provision.sh mark_keys_users).
 keys_provisioned() {
     local r="$1"
     local u="${2:-alice}"
     mkdir -p "${r}/var/lib/keys-provision"
     echo "${u}:x:1001:1001::/home/${u}:/bin/bash" >> "${r}/etc/passwd"
     : > "${r}/var/lib/keys-provision/users.created"
+    echo "${3:-ungoverned}" > "${r}/var/lib/keys-provision/keys-users.created"
+}
+
+# render_extra ROOT [SCRIPT] — the Studio's extra-accounts first-boot script
+# (scripts/desktop-config/02-extra-local-users.start), absolute paths moved under ROOT,
+# at ROOT/extra. It runs in the SAME boot as 01, right after it (local.d order).
+render_extra() {
+    local r="$1" src="${2:-${EXTRA_SRC}}"
+    sed -e "s|/etc/hugmesh/|${r}/etc/hugmesh/|g" \
+        -e "s|/var/lib/keys-provision|${r}/var/lib/keys-provision|g" \
+        -e "s|/etc/sudoers|${r}/etc/sudoers|g" \
+        -e "s|/dev/console|${r}/console|g" "${src}" > "${r}/extra"
+    chmod +x "${r}/extra"
+}
+
+run_extra() { local r="$1"; ( cd "${r}" && PATH="${r}/bin:${PATH}" sh "${r}/extra" ) > "${r}/extra.out" 2>&1; }
+
+# can_sudo ROOT USER -> y|n: the EFFECTIVE sudo path, not the useradd arguments: an
+# active sudoers.d line for USER, or membership of wheel WITH an active %wheel line.
+can_sudo() {
+    local r="$1" u="$2" f
+    for f in "${r}"/etc/sudoers.d/*; do
+        [ -f "${f}" ] && grep -qE "^${u}[[:space:]]+ALL=\(ALL\) ALL" "${f}" && { echo y; return; }
+    done
+    if grep -qE '(^|[:,])wheel(,|$)' "${r}/groups.${u}" 2>/dev/null \
+       && grep -qE '^%wheel[[:space:]]+ALL=\(ALL\) ALL' "${r}/etc/sudoers" 2>/dev/null; then
+        echo y; return
+    fi
+    echo n
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = probe ]; then

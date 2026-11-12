@@ -45,6 +45,13 @@ STATE_DIR="/var/lib/keys-provision"
 LOG="/var/log/keys-provision.log"
 DONE_MARKER="${STATE_DIR}/done"
 USERS_MARKER="${STATE_DIR}/users.created"
+# keys-users.created: written ONLY here, beside users.created, with "governed" or
+# "ungoverned". users.created is ALSO touched by 01-firstboot for its own local account,
+# so it cannot say "KEYS made the users"; 02-extra-local-users.start (the Studio's extra
+# accounts) runs after the KEYS media is unmounted and reads this one to grant an extra
+# administrator the way 01-firstboot grants --local-admin (sudoers.d on a KEYS image,
+# nothing on a governed one).
+KEYS_USERS_MARKER="${STATE_DIR}/keys-users.created"
 FIND_RETRIES="${KEYS_FIND_RETRIES:-15}"   # USB enumeration can be slow
 
 mkdir -p "${STATE_DIR}"
@@ -62,6 +69,12 @@ have() { command -v "$1" >/dev/null 2>&1; }
 #   2. provision.json .mesh.endpoint
 #   3. the baked brand var HEADSCALE_URL (written to /etc/hugmesh/headscale-url
 #      at build time — env does not survive to first boot)
+#   4. DEFAULT: http://<primary-LAN-IPv4>:8080
+# This is the CONTROL node's own server_url. A WORKER resolves the control node
+# with resolve_control_endpoint below, which puts the pki LAN address AHEAD of
+# the baked HEADSCALE_URL until go-live; the two can therefore differ on a pki
+# baked with a public HEADSCALE_URL (only the DERP host and OIDC callback follow
+# server_url — registration and the netmap do not; docs/SECURITY.md).
 #   4. DEFAULT: https://<primary-LAN-IPv4>:8080
 # HTTPS by default (operator decision 2026-11-10, "Built-in relay on"): headscale's
 # embedded DERP relay rides the server_url listener and tailscale clients only ever
@@ -268,8 +281,14 @@ resolve_endpoint() {
 
 # Is THIS node past go-live? The same predicate hugmesh-go-live and
 # hugmesh-firewall-reconcile use: /etc/hugmesh/release-state reads "public" OR the
-# /etc/hugmesh/go-live marker exists. An absent release-state file is internal
-# (only the x86 and rpi5 builders bake one). The paths are test seams only.
+# /etc/hugmesh/go-live marker exists. An absent release-state file is internal.
+# This is the NODE's own posture, not the mesh's: release-state is baked only into
+# cluster-node images (bake_host_firewall — x86, rpi5 and the Orange Pi node roles;
+# no desktop, appliance or Jetson image has the file) and says "internal" unless
+# that image was built with --release-state public, and the marker reaches a node
+# only once it is on the tailnet. A node this calls "not public" may still be
+# joining a mesh that is live: control_endpoint_mesh_is_live below asks.
+# The paths are test seams only.
 node_is_public() {
     local rs_file="${HUGMESH_RELEASE_STATE_FILE:-/etc/hugmesh/release-state}"
     local marker="${HUGMESH_GO_LIVE_MARKER:-/etc/hugmesh/go-live}"
@@ -304,23 +323,152 @@ resolve_pki_lan_ip() {
     fi
 }
 
+# ── Is the MESH live? Ask the network ──────────────────────────────
+# node_is_public answers for this node from its own image, and a worker cannot
+# learn from its image that the mesh went live after the image was built. So a
+# worker provisioned AFTER go-live looked exactly like one provisioned before it,
+# dialled the pki LAN address, and from outside that LAN never joined. What every
+# image does have is the network: the mesh is live exactly when its baked control
+# URL answers as a control server. The functions below ask that, with curl (in the
+# stage3 every builder starts from, and requested by every platform's packages.list).
+
+# The capability version this node's tailscale client sends with its first request
+# to a control server (GET /key?v=<n>), so the question asked here is the one
+# `tailscale up` will ask. 109 (tailscale 1.78.1) when the client cannot say.
+# headscale answers /key with its Noise key for every v >= 39 (measured: 0.23.0).
+control_probe_capver() {
+    local v=""
+    have tailscale && v="$(tailscale version --json 2>/dev/null | jq -r '.cap // empty' 2>/dev/null)"
+    [[ "${v}" =~ ^[0-9]{1,6}$ ]] || v=109
+    echo "${v}"
+}
+
+# control_server_answers <base-url> <seconds> — does <base-url> answer the way a
+# control server answers a tailscale client's FIRST request? GET <base-url>/key?v=<n>
+# must return a JSON body whose .publicKey is a Noise machine key ("mkey:" + 64 hex).
+# https is verified against this node's trust store (never -k) and no redirect is
+# followed. Everything else is "no": no route, no DNS, no answer in <seconds>, a TLS
+# failure, an HTTP error, a captive portal's or a parked domain's page. The whole
+# request, name lookup included, is bounded twice (curl --max-time, and `timeout`
+# for a resolver that blocks inside libc); at most 64 KiB of answer is read.
+# rc 0 = answers. rc 1 = does not; CONTROL_PROBE_WHY then says why, for the log.
+control_server_answers() {
+    local url="${1%/}" to="$2" body rc
+    CONTROL_PROBE_WHY=""
+    case "${url}" in
+        http://*|https://*) ;;
+        *) CONTROL_PROBE_WHY="it is not an http(s) URL"; return 1 ;;
+    esac
+    local cmd=(curl -sS -f --max-time "${to}" --connect-timeout "${to}" --proto '=http,https'
+               --max-redirs 0 --max-filesize 65536 -H 'Accept: application/json'
+               "${url}/key?v=$(control_probe_capver)")
+    have timeout && cmd=(timeout -k 1 "$((to + 1))" "${cmd[@]}")
+    body="$("${cmd[@]}" 2>/dev/null | head -c 65536; exit "${PIPESTATUS[0]}")"; rc=$?
+    if [ "${rc}" -ne 0 ]; then
+        case "${rc}" in
+            6)          CONTROL_PROBE_WHY="its name does not resolve" ;;
+            7)          CONTROL_PROBE_WHY="nothing accepts the connection" ;;
+            28|124|137) CONTROL_PROBE_WHY="no answer within ${to}s" ;;
+            22)         CONTROL_PROBE_WHY="it answers with an HTTP error" ;;
+            35|51|58|60|77|83|90|91) CONTROL_PROBE_WHY="its TLS certificate does not verify on this node" ;;
+            *)          CONTROL_PROBE_WHY="curl exit ${rc}" ;;
+        esac
+        return 1
+    fi
+    if printf '%s' "${body}" | jq -e '(.publicKey? // "") | type == "string" and test("^mkey:[0-9a-f]{64}$")' >/dev/null 2>&1; then
+        return 0
+    fi
+    CONTROL_PROBE_WHY="it answers, but not as a control server (no Noise key at /key)"
+    return 1
+}
+
+# How long control_endpoint_mesh_is_live keeps asking while NOTHING answers:
+# provision.json .mesh.control_probe_wait, "<n>" or "<n>s", 0-600 seconds; 45 when
+# absent or malformed. 0 = ask one round only.
+control_probe_wait_seconds() {
+    local w; w="$(jqm '.mesh.control_probe_wait // ""')"
+    w="${w%s}"
+    if [[ "${w}" =~ ^[0-9]{1,3}$ ]] && [ "${w}" -le 600 ]; then
+        echo "${w}"
+        return 0
+    fi
+    { [ -z "${w}" ] || [ "${w}" = "null" ]; } \
+        || warn ".mesh.control_probe_wait '${w}' is not 0-600 seconds — using 45" >&2
+    echo 45
+}
+
+# control_endpoint_mesh_is_live <pki-lan-url> — for a node that is NOT past go-live
+# itself and holds a confirmed pki LAN address (resolve_control_endpoint step 3).
+# rc 0: the baked HEADSCALE_URL answers as a control server, so the mesh is live and
+#       the caller dials the baked URL, exactly as a node past go-live does.
+# rc 1: keep the pki LAN address —
+#   * the pki answers on the LAN and the baked URL does not: before go-live;
+#   * neither answered within the wait: before go-live is the default (the public
+#     name does not exist yet and the pki may still be booting — tailscaled keeps
+#     dialling the address it is given);
+#   * nothing is baked, or it IS the LAN URL, or there is no curl: nothing to ask.
+# ORDER. The baked URL is asked first in every round and wins when both answer: it
+# is the name the pki itself advertises, the one that still works when this node
+# leaves the LAN, and — once the mesh is live — the pki LAN address is then never
+# contacted at all (a worker on some other LAN does not offer its pre-auth key to
+# whatever holds that RFC1918 address there).
+# WAITING. keys-provision does its work once and tailscaled keeps the login server
+# it is given, so one question asked before the uplink is up (a Wi-Fi profile this
+# same run just installed, a NIC still waiting for DHCP) would pin the wrong answer
+# for good. Both are therefore asked in rounds until one of them answers, for at
+# most control_probe_wait_seconds. The usual first boot pays one round: a name that
+# does not resolve fails at once, an unanswered one costs 4 s, then the pki answers.
+control_endpoint_mesh_is_live() {
+    local lan="${1%/}" baked="" budget round=0 deadline why_baked="" why_lan=""
+    [ -r /etc/hugmesh/headscale-url ] && baked="$(tr -d '[:space:]' < /etc/hugmesh/headscale-url 2>/dev/null)"
+    baked="${baked%/}"
+    { [ -n "${baked}" ] && [ "${baked}" != "null" ] && [ "${baked}" != "${lan}" ]; } || return 1
+    if ! have curl; then
+        warn "control endpoint: no curl on this image, so the baked HEADSCALE_URL cannot be asked whether the mesh is live — keeping the pki LAN address ${lan} (before go-live)" >&2
+        return 1
+    fi
+    budget="$(control_probe_wait_seconds)"
+    deadline=$((SECONDS + budget))
+    while :; do
+        round=$((round + 1))
+        if control_server_answers "${baked}" 4; then
+            log "control endpoint: correction — the baked HEADSCALE_URL ${baked} answers as the control server, so the mesh is live: dialling it, not the pki LAN address ${lan}" >&2
+            return 0
+        fi
+        why_baked="${CONTROL_PROBE_WHY}"
+        if control_server_answers "${lan}" 3; then
+            log "control endpoint: confirmed — the pki answers on the LAN (${lan}) and the baked HEADSCALE_URL ${baked} does not (${why_baked})" >&2
+            return 1
+        fi
+        why_lan="${CONTROL_PROBE_WHY}"
+        [ "${SECONDS}" -lt "${deadline}" ] || break
+        [ "${round}" -eq 1 ] && log "control endpoint: neither the baked HEADSCALE_URL ${baked} (${why_baked}) nor the pki LAN address ${lan} (${why_lan}) answers yet — asking again for up to ${budget}s (this node's uplink or the pki may still be coming up)" >&2
+        sleep 2
+    done
+    warn "control endpoint: neither the baked HEADSCALE_URL ${baked} (${why_baked}) nor the pki LAN address ${lan} (${why_lan}) answered in ${round} round(s) over ${budget}s — keeping the pki LAN address (before go-live is the default; tailscaled keeps dialling it). If this mesh is ALREADY live and this node is not on the pki's LAN, it will not join until it is provisioned again with its uplink working (.provision-force on the KEYS stick) or the stick names the server (.mesh.endpoint)" >&2
+    return 1
+}
+
 # Control-node (pki) headscale endpoint as seen by a WORKER / additional CP.
 # A non-control node has no local headscale, so its mesh login_server must point
 # at the pki node, not at itself. Precedence (highest first):
 #   1. provision.json .headscale.server_url   (explicit override)
 #   2. provision.json .mesh.endpoint          (explicit override)
 #   3. BEFORE GO-LIVE (node_is_public false): the confirmed pki LAN address,
-#      https://<.mesh.pki_lan_ip>:8080 (the pki's headscale serves TLS itself). A worker's first boot happens before any
+#      http://<.mesh.pki_lan_ip>:8080. A worker's first boot happens before any
 #      public name exists, so the baked public HEADSCALE_URL cannot answer yet; the
 #      pki on the LAN can (the pki admits its headscale port from RFC1918 sources:
 #      hugmesh-coturn-firewall, /etc/hugmesh/headscale-lan-control).
 #   4. the baked brand HEADSCALE_URL (/etc/hugmesh/headscale-url)
-#   5. the pki row of .nodes[] (https://<ip>:8080) — the template example unless
+#   5. the pki row of .nodes[] (http://<ip>:8080) — the template example unless
 #      edited, so it stays BELOW the baked URL, as before.
-# After go-live step 3 is skipped and the baked URL wins again. An off-LAN worker
-# that must join a mesh which is already live, on an image that does not carry the
-# public posture, sets .mesh.endpoint. Empty if none of these are known. Diagnostics
-# go to stderr: stdout is the value.
+# After go-live step 3 is skipped and the baked URL wins again — for a node that is
+# past go-live itself (node_is_public), and for EVERY other node as soon as the
+# baked URL answers as a control server (control_endpoint_mesh_is_live): a worker
+# provisioned after go-live, on any image, on or off the pki's LAN, dials the baked
+# URL as it did before step 3 existed. Step 3 holds only while the baked URL does
+# not answer. Empty if none of these are known. Diagnostics go to stderr: stdout is
+# the value. May wait (control_probe_wait_seconds) while nothing answers at all.
 resolve_control_endpoint() {
     local ep=""
     ep="$(jqm '.headscale.server_url // ""')"
@@ -350,6 +498,20 @@ resolve_control_endpoint() {
         fi
     fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
+        local lan_ip; lan_ip="$(resolve_pki_lan_ip)"
+        if [ -n "${lan_ip}" ]; then
+            if node_is_public; then
+                log "control endpoint: this node is past go-live — the pki LAN address ${lan_ip} yields to the baked HEADSCALE_URL" >&2
+            else
+                ep="http://${lan_ip}:8080"
+                log "control endpoint: before go-live — dialling the pki on the LAN (${ep}), not the baked HEADSCALE_URL" >&2
+                # That was this node's own posture. The MESH may have gone live since
+                # this image was built: when its baked URL answers, that URL (below).
+                if control_endpoint_mesh_is_live "${ep}"; then ep=""; fi
+            fi
+        fi
+    fi
+    if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
         [ -r /etc/hugmesh/headscale-url ] && ep="$(tr -d '[:space:]' < /etc/hugmesh/headscale-url 2>/dev/null)"
     fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
@@ -360,13 +522,11 @@ resolve_control_endpoint() {
                 pki_ip="$(jqm ".nodes[$i].ip")"; break
             fi
         done
-        # https: the pki node's headscale serves TLS on its own listener by default
-        # (resolve_endpoint above); control_url_tls_migrate checks the answer.
         if [ -n "${pki_ip}" ] && [ "${pki_ip}" != "null" ]; then
             if ipv4_literal "${pki_ip}"; then
-                ep="https://${pki_ip}:8080"
+                ep="http://${pki_ip}:8080"
             elif [[ "${pki_ip}" =~ ^[0-9A-Fa-f:]+$ && "${pki_ip}" == *:* ]]; then
-                ep="https://[${pki_ip}]:8080"
+                ep="http://[${pki_ip}]:8080"
             else
                 warn "the pki row of .nodes[] has ip '${pki_ip}', not an IP address — not used as the control endpoint" >&2
             fi
@@ -523,6 +683,16 @@ desktop_governance_governed() {
     return 1
 }
 
+# mark_keys_users — record that KEYS provisioning created accounts (see KEYS_USERS_MARKER).
+mark_keys_users() {
+    touch "${USERS_MARKER}"
+    if desktop_governance_governed; then
+        echo governed > "${KEYS_USERS_MARKER}"
+    else
+        echo ungoverned > "${KEYS_USERS_MARKER}"
+    fi
+}
+
 provision_users() {
     local f="${BASE}/users.json"
     [ -f "${f}" ] || f="${MANIFEST}"          # users may live in provision.json
@@ -613,7 +783,7 @@ provision_users() {
                 log "Granted sudo to ${name} (nopasswd=${nopw})"
             fi
         fi
-        touch "${USERS_MARKER}"
+        mark_keys_users
     done
 
     # root account
@@ -632,7 +802,7 @@ provision_users() {
             printf 'root:%s\n' "${rhash}" | chpasswd -e && log "Set root password hash"
         fi
         install_root_keys "${f}"
-        touch "${USERS_MARKER}"
+        mark_keys_users
     fi
 }
 
@@ -1192,6 +1362,35 @@ headscale_policy_owned_security_tags() {
     [ "${rc}" -eq 0 ] || [ "${rc}" -eq 4 ]
 }
 
+# ── LAN control port: the pki's headscale, reachable from the LAN ─────────
+# Before go-live a worker dials http://<pki LAN address>:8080 (resolve_control_
+# endpoint). On an ENV=prod x86/rpi5 image firewalld's default zone is `drop` and
+# only tailscale0/lo are trusted, so that dial died at the pki's firewall: the
+# worker cannot be on the tailnet before it has joined it. This writes the port
+# headscale listens on (listen_addr in its config, default 8080) to ONE marker;
+# hugmesh-coturn-firewall (boot + 60s cron, the node's firewalld reconciler) then
+# admits <port>/tcp from the RFC1918 ranges only — never from anywhere else. A
+# listen_addr bound to loopback writes no marker (nothing to admit).
+HEADSCALE_LAN_CONTROL_MARKER="${HEADSCALE_LAN_CONTROL_MARKER:-/etc/hugmesh/headscale-lan-control}"
+headscale_lan_control_marker() {
+    local cfg="$1" la port host
+    la="$(sed -n 's/^listen_addr:[[:space:]]*//p' "${cfg}" 2>/dev/null | head -1 | tr -d "\"' ")"
+    [ -n "${la}" ] || la="0.0.0.0:8080"
+    port="${la##*:}"; host="${la%:*}"
+    if ! [[ "${port}" =~ ^[0-9]{1,5}$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; then
+        warn "headscale listen_addr '${la}' has no usable port — no LAN control port admitted"
+        rm -f "${HEADSCALE_LAN_CONTROL_MARKER}" 2>/dev/null || true
+        return 0
+    fi
+    case "${host}" in
+        127.*|localhost|"[::1]"|::1)
+            log "headscale listens on loopback only (${la}) — no LAN control port admitted"
+            rm -f "${HEADSCALE_LAN_CONTROL_MARKER}" 2>/dev/null || true
+            return 0 ;;
+    esac
+    mkdir -p "$(dirname "${HEADSCALE_LAN_CONTROL_MARKER}")"
+    printf '%s\n' "${port}" > "${HEADSCALE_LAN_CONTROL_MARKER}"
+    log "headscale LAN control port ${port}/tcp -> ${HEADSCALE_LAN_CONTROL_MARKER} (admitted from RFC1918 sources by hugmesh-coturn-firewall)"
 # ── headscale DERP relay: offline-first, public map opt-in ─────────────────────
 # Operator decision 2026-11-10 ("Built-in relay on"): the shipped configs turn
 # headscale's EMBEDDED DERP server on and ship NO public DERP map (urls: []), so the
@@ -2145,6 +2344,10 @@ provision_headscale() {
         headscale_refuse_config "${cfg_fail} (the KEYS headscale/config.yaml must keep policy.mode: file and policy.path: /etc/headscale/policy.hujson)"
         return 1
     fi
+
+    # LAN workers dial this node's headscale port before go-live
+    # (resolve_control_endpoint). Hand that port to the node firewall.
+    headscale_lan_control_marker /etc/headscale/config.yaml
 
     chown -R headscale:headscale /etc/headscale /var/lib/headscale /run/headscale
     chmod 0600 /var/lib/headscale/*.key 2>/dev/null || true

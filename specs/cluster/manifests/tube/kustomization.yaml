@@ -15,3 +15,33 @@ images:
   - { name: nginx, newName: nginx, newTag: "1.27-alpine", digest: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 }
   - { name: hugmesh/tube-bff-api, newName: registry.hugmesh.net/hugmesh/hugmesh-tube-bff-api, newTag: main }
   - { name: hugmesh/tube-ui, newName: registry.hugmesh.net/hugmesh/hugmesh-tube-ui, newTag: main }
+
+# ── THE IDENTITY PROVIDER THIS SERVICE TRUSTS (issue #530) ──────────────────────
+# ArgoCD serves this directory from GIT, never from the device's baked tree, so
+# rewrite_idp_sysroot()'s sed over the baked manifests/ copy cannot reach it. The
+# issuer/JWKS move HERE, at render time, the way the Vault base does (#285). The
+# idp-trust ConfigMap is local-config: kustomize never emits it, it is only the
+# value surface. Its platform.hugmesh.net/idp-* annotations are set by a one-line
+# JSON-6902 op in apps/53-tube.yaml, which IS baked, so
+# rewrite_idp_sysroot() re-points that op at the external IdP for --idp != casdoor,
+# and `replacements` copies it onto the env below. At the casdoor defaults this
+# block is a byte no-op. Pinned by tests/scripts/test-eso-remoteref-brand.sh (7).
+configMapGenerator:
+  - name: idp-trust
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+        platform.hugmesh.net/idp-issuer: "https://id.hugmesh.net"
+        platform.hugmesh.net/idp-jwks: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks"
+replacements:
+  - source: { version: v1, kind: ConfigMap, name: idp-trust, fieldPath: "metadata.annotations.[platform.hugmesh.net/idp-issuer]" }
+    targets:
+      - select: { group: apps, kind: Deployment, name: hugmesh-tube }
+        fieldPaths:
+          - spec.template.spec.containers.[name=tube-bff-api].env.[name=CASDOOR_ISSUER_URI].value
+  - source: { version: v1, kind: ConfigMap, name: idp-trust, fieldPath: "metadata.annotations.[platform.hugmesh.net/idp-jwks]" }
+    targets:
+      - select: { group: apps, kind: Deployment, name: hugmesh-tube }
+        fieldPaths:
+          - spec.template.spec.containers.[name=tube-bff-api].env.[name=CASDOOR_JWKS_URI].value

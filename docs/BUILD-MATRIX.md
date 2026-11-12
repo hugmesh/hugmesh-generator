@@ -90,7 +90,7 @@ new builders" below.
 **Arch-first device taxonomy** ✅ (Studio) / 🔭 (menu, CLI guided help): the
 Studio's machine tier now offers an architecture selector over a family-grouped
 **device catalog** (`studio/hugmesh_studio/core/device_catalog.py` +
-`core/device-catalog.json`). The catalog carries the #351 honesty statuses:
+`core/device-catalog.json`). The catalog carries three honesty statuses:
 supported; experimental (labelled); unsupported (visible but not selectable, with
 the reason shown). A device is exactly a `(platform, board)` pair, and its roles
 are **derived** from `ROLE_CHOICES` + `rpi_boards_for_role()`. This regroups
@@ -101,6 +101,18 @@ selection and leaves emission untouched; the GUI column and the byte-identical
 (6 assertions) pins its honesty. The ncurses menu and CLI guided help should
 render from that committed JSON; see the PARITY-TODO in
 [`docs/STUDIO-WIZARD-FLOW.md`](STUDIO-WIZARD-FLOW.md).
+
+**Promoting a board needs mainline evidence.** A catalog row that is not x86-64
+cannot move from unsupported to experimental or supported unless
+`studio/evidence/mainline-evidence.json` gives it a "found" verdict: a mainline U-Boot
+defconfig and a Linux device tree, each found at a named release tag (hugmesh-generator#1057).
+`scripts/mainline-evidence.py` does the lookup. It clones both trees at their tags
+(shallow, blobless), records each part's path and git blob id, or what was searched
+when nothing was found. Run it with no flag to check the committed file against
+upstream (exit 1 on drift), and with `--write` to refresh it. It needs network
+access, so CI does not run it; `studio/tests/test_mainline_evidence.py` checks the
+committed file offline and refuses the promotion. Evidence is necessary for
+promotion, never sufficient: the board still needs a builder that supports it.
 
 Every channel is crossed with the **build ENV** (`test` | `prod`), passed as
 `--env` to the builders and as `ENV=` through make. See the
@@ -149,7 +161,7 @@ sources that file, and `studio/hugmesh_studio/core/roles.py` reads it:
 | `backend` | backend k8s worker | x86, rpi5, orangepi5 |
 | `frontend` | frontend k8s worker | x86, rpi5, orangepi5, orangepi4-lts |
 | `backend-gpu` | backend worker + GPU, no inference service | x86, jetson |
-| `omnibus` | every cluster role on one node | x86, jetson, rpi5 (Pi 4 / Pi 5), orangepi5 |
+| `omnibus` | every cluster role on one node | x86, jetson, rpi5 (Pi 5 only: omnibus needs 16 GB), orangepi5 |
 | `edge-ai` | GPU inference node (OpenAI-compatible model API) | x86, jetson |
 | `generic` | plain unbranded arm64 server | rpi5 |
 | `laptop` `chromebook` `desktop` | person-device desktops | x86 (+ `desktop` on rpi5/jetson) |

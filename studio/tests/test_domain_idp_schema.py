@@ -184,7 +184,8 @@ def test_overlay_renders_a_casdoor_per_own_domain_behind_the_profile():
               "casdoor-team-acme-example:", "postgres:16-alpine",
               "casbin/casdoor:latest",
               'origin: "http://casdoor-acme-example.localtest.me:8001"',
-              '- "8001:8000"', '- "8002:8000"',
+              '- "${STACK_BIND_ADDR:-127.0.0.1}:8001:8000"',
+              '- "${STACK_BIND_ADDR:-127.0.0.1}:8002:8000"',
               "aliases: [casdoor-acme-example.localtest.me]",
               "casdoor-acme-example-pg:", "casdoor-team-acme-example-pg:",
               "name: hugmesh-local"):

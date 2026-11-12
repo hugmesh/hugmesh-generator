@@ -349,3 +349,21 @@ def test_look_the_pki_lan_row_is_drawn_whole(qapp, style, pt):
             w.close()
             w.deleteLater()
             settle(qapp)
+
+
+def test_a_malformed_address_refuses_without_dropping_the_rest_of_the_collect(wiz):
+    # GUI-20 (_refuse_malformed): a refusal on Next never returns early, so every field
+    # below the pki row is still collected (collect_all() ignores the answer), and a
+    # malformed superdomain refused in the same Next is put back, not written through.
+    page = net_page(wiz)
+    wiz.cfg.superdomain = "good.internal"
+    page.superdomain.setText("bad..domain")
+    page.pki_lan_ip.setText("pki.local")
+    page.root_login.setCurrentIndex(page.root_login.count() - 1)
+    want_root_login = page.root_login.currentText()
+    assert page.validatePage() is False
+    assert wiz.cfg.pki_lan_ip == ""
+    assert page.pki_lan_note.isVisible() and "mDNS" in page.pki_lan_note.text()
+    assert wiz.cfg.superdomain == "good.internal"
+    assert page.superdomain_error.isVisible()
+    assert wiz.cfg.root_login == want_root_login

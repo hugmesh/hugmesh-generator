@@ -56,7 +56,11 @@
 #      stable X.Y.Z are flagged, an unreadable listing fails closed, the plain "every artifact
 #      is DONE" is never printed over them, and --apply stops in verify;
 #   M  the guards are mutation-tested: each is broken in a copy of the script, the check
-#      that covers it must go red, and the copy must really differ from the original.
+#      that covers it must go red, and the copy must really differ from the original;
+#   R  artifact rows (<repository>@<artifact>, a repository's SECOND artifact): classified
+#      on their own version file/prefix/workflow, every gh call goes to the repository and
+#      none names the row ID, the stable channel skips them and refuses one under --only,
+#      and a beta --apply tags the repository and starts the artifact's own workflow.
 #
 # Two independent proofs that a dry run writes nothing: the stub REFUSES every write call
 # (exit 97) whenever the script runs without --apply, and the call log is checked for writes.
@@ -236,7 +240,8 @@ if pos and pos[0] == "api":
         ref = fields["ref"]; sha = fields["sha"]; t = ref[len("refs/tags/"):]
         if t in r.get("tags", {}): sys.stderr.write("gh: Reference already exists (HTTP 422)\n"); sys.exit(1)
         r.setdefault("tags", {})[t] = sha
-        wf = r.get("tag_workflow", "release.yml")
+        # a repository with artifact rows starts the workflow its tag PREFIX names
+        wf = next((w for pfx, w in r.get("tag_workflows", {}).items() if t.startswith(pfx)), r.get("tag_workflow", "release.yml"))
         r.setdefault("runs", []).append({"databaseId": next_id(), "workflow": wf, "headBranch": t, "headSha": sha,
                                         "event": "push", "status": "completed", "conclusion": r.get("tag_result", "success"), "createdAt": now()})
         for pkg in r.get("publishes", []):
@@ -384,6 +389,15 @@ def add(stage, name, kind, vfile, prefix, wfname, pkgs, mirrors=None, **r):
     rows.append("|".join([str(stage), name, kind, vfile, prefix, wfname, pkgs] + ([mirrors] if mirrors else [])))
     r.setdefault("main", ["m-" + name]); r.setdefault("secrets", []); r.setdefault("tag_workflow", wfname)
     repos[name] = r
+def add_artifact(stage, rowid, vfile, prefix, wfname, pkgs, **r):
+    # a SECOND artifact of an existing repository (<repository>@<artifact>): its own
+    # row in the table, its files/tags/runs merged into that repository's state
+    rows.append("|".join([str(stage), rowid, "img", vfile, prefix, wfname, pkgs]))
+    g = repos[rowid.split("@")[0]]
+    for k in ("files", "tags", "compare", "path_commits"):
+        g.setdefault(k, {}).update(r.get(k, {}))
+    g.setdefault("runs", []).extend(r.get("runs", []))
+    g.setdefault("tag_workflows", {})[prefix] = wfname
 gen_files = {"studio/hugmesh_studio/__init__.py": '__version__ = "0.9.0-beta.1"\n'}
 if scen == "mixed":
     add(1, "fx-lib-a", "mvn", "pom.xml", "v", "release.yml", "net.fx.lib-a",
@@ -427,6 +441,10 @@ if scen == "mixed":
         compare={"mesh-node-v0.1.0-beta.1": {"ahead_by": 5, "commits": ["g1", "g2", "g3", "g4", "g5"]}},
         path_commits={"clients/docker-mesh-node": ["older1"], ".github/workflows/mesh-node-release.yml": ["older2"]},
         releases=["studio-v0.9.0-beta.1"])
+    add_artifact(9, "hugmesh-generator@akkoma", "images/akkoma/VERSION", "akkoma-v", "akkoma-release.yml", "hugmesh-akkoma",
+        files={"images/akkoma/VERSION": "0.4.0-beta.1\n",
+               ".github/workflows/akkoma-release.yml": wf(paths=["images/akkoma/**"])},
+        runs=[run(931, wf_="akkoma-release.yml", sha="m-hugmesh-generator")])
     add(9, "fx-node2", "img", "clients/docker-mesh-node/VERSION", "mesh-node-v", "mesh-node-release.yml", "fx-node2",
         files={"clients/docker-mesh-node/VERSION": "0.4.0-beta.2\n",
                ".github/workflows/mesh-node-release.yml": wf(paths=["clients/docker-mesh-node/**"])},
@@ -671,12 +689,13 @@ fx-ui-badver REFUSE
 fx-ui-running RUNNING
 fx-php DONE
 hugmesh-generator DONE
+hugmesh-generator@akkoma READY
 fx-node2 NEEDS-BUMP
 EOF
   cp "$d/out" "$TMP/last-classification.out"; cp "$d/calls" "$TMP/last-classification.calls"
   return "$rc"
 }
-if check_classification "$SCRIPT"; then ok "DONE/READY/REFUSE/NEEDS-BUMP/RUNNING for 13 fixture rows"; else bad "classification"; fi
+if check_classification "$SCRIPT"; then ok "DONE/READY/REFUSE/NEEDS-BUMP/RUNNING for 14 fixture rows (one an artifact row)"; else bad "classification"; fi
 O="$TMP/last-classification.out"
 grep -a 'fx-ui-bump' "$O" | grep -a '3 commit(s) since it' >/dev/null && grep -a 'fx-ui-bump' "$O" | grep -a 'bumps package.json to 0.2.0-beta.2' >/dev/null \
   && ok "NEEDS-BUMP names the commit count and the next version" || bad "NEEDS-BUMP message: $(grep -a fx-ui-bump "$O" | head -1)"
@@ -685,6 +704,20 @@ grep -a 'fx-node2' "$O" | grep -a '1 commit(s) since it under clients/docker-mes
 grep -a 'hugmesh-generator' "$O" | grep -a 'no commit since it that mesh-node-release.yml builds' >/dev/null \
   && ok "mesh-node stays DONE while main moves elsewhere (5 commits, none in its paths)" || bad "mesh-node DONE note"
 grep -a 'fx-ui-nosign' "$O" | grep -a 'signing absent' >/dev/null && ok "REFUSE reason: signing absent" || bad "nosign reason"
+# Artifact rows (<repository>@<artifact>): a second artifact of hugmesh-generator, its own
+# version file, tag prefix and workflow, classified on its own; every GitHub call goes to the
+# REPOSITORY, never to a path that names the row ID.
+grep -a 'hugmesh-generator@akkoma' "$O" | grep -a 'akkoma-v0.4.0-beta.1' >/dev/null \
+  && ok "artifact row: READY names its own tag (akkoma-v0.4.0-beta.1), not the mesh-node prefix" \
+  || bad "artifact row plan line: $(grep -a 'hugmesh-generator@akkoma' "$O" | head -1)"
+if grep -a '@akkoma' "$TMP/last-classification.calls" >/dev/null; then
+  bad "artifact row: a gh call names the row ID instead of the repository: $(grep -a '@akkoma' "$TMP/last-classification.calls" | head -1)"
+else
+  ok "artifact row: no gh call carries the row ID (every call goes to hugmesh-generator)"
+fi
+grep -a '"repos/hugmesh/hugmesh-generator/contents/images/akkoma/VERSION' "$TMP/last-classification.calls" >/dev/null \
+  && ok "artifact row: its version file is read from the hugmesh-generator repository" \
+  || bad "artifact row: images/akkoma/VERSION was never read from hugmesh-generator"
 grep -a 'fx-ui-badver' "$O" | grep -a "not MAJOR.MINOR.PATCH-beta.N" >/dev/null && ok "REFUSE reason: version not -beta.N" || bad "badver reason"
 grep -a 'hugmesh-gateway' "$O" | grep -a 'gh run rerun 501 --failed' >/dev/null && ok "REFUSE reason: red main push run, with the rerun command" || bad "red-run reason"
 grep -a 'fx-api-old' "$O" | grep -a 'cannot re-run it' >/dev/null && ok "G: a 40-day-old red run is reported as not re-runnable" || bad "old-run reason"
@@ -696,6 +729,40 @@ if [ -z "$w" ] && [ "$n" -gt 50 ]; then ok "A: dry run made $n gh calls and ZERO
 writes_probe=$(printf '%s\n' '["gh","api","-X","POST","repos/o/r/git/refs"]' '["gh","api","repos/o/r/git/refs","-f","ref=x"]' '["gh","run","rerun","5"]' '["gh","pr","merge","1"]' '["gh","workflow","run","w"]' '["gh","release","create","t"]' '["docker","push","x"]' '["gh","pr","create","--draft"]' '["gh","api","-X","PATCH","repos/o/r/git/refs/heads/b","-f","sha=1"]' '["gh","api","repos/o/r/git/trees","--input","f"]' '["gh","api","repos/o/r"]' > "$TMP/probe.calls"; writes "$TMP/probe.calls" | grep -c .)
 [ "$writes_probe" = 10 ] && ok "the write detector itself flags 10 of 10 planted writes and passes a read" || bad "write detector caught $writes_probe of 10"
 grep -a 'fx-api-old' "$O" | grep -a 'would: gh run rerun 701' >/dev/null && bad "G: dry run plans to re-run a 40-day-old run" || ok "G: no re-run planned for the old run"
+
+# Artifact rows are beta-only: the stable channel skips them (one release/X.Y and one bump PR
+# per repository) and refuses one named with --only; a beta --apply tags it in the repository
+# and the run that tag starts is the artifact's own workflow.
+echo "== artifact rows: stable skips, --only refuses, beta --apply tags in the repository"
+D="$TMP/art-stable"; fixture mixed "$D"; run_script "$SCRIPT" "$D" --channel stable --no-studio
+grep -a 'skipping artifact row(s) hugmesh-generator@akkoma' "$D/out" >/dev/null && [ -z "$(state_of "$D/out" hugmesh-generator@akkoma)" ] \
+  && ok "stable channel: the artifact row is skipped with a note and never classified" \
+  || bad "stable channel artifact row: rc=$(cat "$D/rc") $(grep -a 'akkoma' "$D/out" | head -2 | tr '\n' ';')"
+D="$TMP/art-only"; fixture mixed "$D"; run_script "$SCRIPT" "$D" --channel stable --only hugmesh-generator@akkoma --no-studio
+[ "$(cat "$D/rc")" = 2 ] && grep -a 'beta channel only' "$D/out" >/dev/null \
+  && ok "stable channel: --only <artifact row> is refused (rc 2) with the reason" \
+  || bad "stable --only artifact row: rc=$(cat "$D/rc") $(head -2 "$D/out" | tr '\n' ';')"
+D="$TMP/art-apply"; fixture mixed "$D"; run_script "$SCRIPT" "$D" --apply --yes --only hugmesh-generator@akkoma --from apps --no-studio
+if python3 -I - "$D/state.json" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1]))
+g = st["repos"]["hugmesh-generator"]
+runs = [r for r in g.get("runs", []) if r["headBranch"] == "akkoma-v0.4.0-beta.1"]
+ok = g.get("tags", {}).get("akkoma-v0.4.0-beta.1") == "m-hugmesh-generator" and runs and all(r["workflow"] == "akkoma-release.yml" for r in runs)
+ok = ok and "hugmesh-generator@akkoma" not in st["repos"]
+sys.exit(0 if ok else 1)
+PY
+then ok "beta --apply: akkoma-v0.4.0-beta.1 is tagged in hugmesh-generator at main and starts akkoma-release.yml"
+else bad "beta --apply artifact row: rc=$(cat "$D/rc"); $(grep -a 'akkoma' "$D/out" | tail -3 | tr '\n' ';')"
+fi
+# the WRITE path too: no call of the --apply run (tag POST, run watch, package reads) names the row ID
+if grep -a '@akkoma' "$D/calls" >/dev/null; then
+  bad "beta --apply: a gh call names the row ID instead of the repository: $(grep -a '@akkoma' "$D/calls" | head -1)"
+elif grep -a '"POST"' "$D/calls" | grep -a 'repos/hugmesh/hugmesh-generator/git/refs' >/dev/null; then
+  ok "beta --apply: every call of the run goes to the repository (the tag POST included), none names the row ID"
+else
+  bad "beta --apply: no tag POST to repos/hugmesh/hugmesh-generator/git/refs was recorded"
+fi
 
 # Studio through the REAL scripts/release-studio.sh --dry-run, still zero writes
 echo "== A studio dry run"

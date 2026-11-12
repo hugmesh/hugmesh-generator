@@ -47,6 +47,8 @@ from ..core.config import (
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
 from ..core import pki_lan, plain_words, platform_info
+from ..core import plain_words, platform_info
+from ..core.desktop_spec import step_applies as desktop_step_applies
 from ..core.validate import validate_domain_name
 from ..core import roles as role_vocab
 from ..core.worklist import (
@@ -349,6 +351,19 @@ class PendingStep:
 
     def feed(self, j: "Journey", line: str) -> None:  # noqa: ARG002
         j.advance()
+
+
+class KeyZipPendingStep(PendingStep):
+    """The key-zip step is GUI-only, but whether local login is offered on this host is
+    not: show the same one-line reason the GUI and the command line show."""
+
+    def lines(self, j: "Journey") -> list[str]:
+        from ..core import local_login_agent
+        out = super().lines(j)
+        reason = local_login_agent.peer_check_policy().reason
+        if reason:
+            out += ["", reason]
+        return out
 
 
 class IdpScreen:
@@ -1133,6 +1148,7 @@ class Journey:
         from .meshemu import MeshEmuScreen
         from .network_step import NetworkScreen
         from .domain_ca_keys_step import DomainCAKeysScreen
+        from .desktop_step import DesktopScreen
         from .qemu import QemuScreen
         self.generator_dir = generator_dir
         self.cfg = cfg or ImageConfig()
@@ -1160,7 +1176,8 @@ class Journey:
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),
-            UsersScreen(), SystemScreen(), BrandingScreen(), VaultScreen(), BuildScreen(),
+            UsersScreen(), SystemScreen(), BrandingScreen(), VaultScreen(),
+            DesktopScreen(), BuildScreen(),
         ]
         self._screens = {s.slug: s for s in screens}
         # The two EXPERT entry points (#587, decision 71 = A): the GUI reaches its
@@ -1173,7 +1190,8 @@ class Journey:
         for slug, title in _SIDE_FLOW_STUB.items():
             self._screens[slug] = PendingSideFlow(slug, title)
         for slug, title in _PENDING_STEPS.items():
-            self._screens.setdefault(slug, PendingStep(slug, title))
+            step = KeyZipPendingStep if slug == "keyzip" else PendingStep
+            self._screens.setdefault(slug, step(slug, title))
         # "sessions" never renders as a journey screen (the face owns the review),
         # but the registry must still cover EVERY canonical slug — parity-pinned.
         self._screens.setdefault("sessions", PendingStep("sessions", "Sessions"))
@@ -1305,6 +1323,10 @@ class Journey:
                 continue
             if slug == "users" and cfg.mode == "mesh" \
                     and not cfg.configure_users:
+                continue
+            # the Desktop step: walked exactly when the GUI page's applies_to says so
+            # (the SAME core predicate) — a build that makes no desktop skips it
+            if slug == "desktop" and not desktop_step_applies(cfg, self.worklist):
                 continue
             if slug in ("launch", "progress"):
                 continue

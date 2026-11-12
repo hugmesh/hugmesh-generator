@@ -840,6 +840,29 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.superdomain.textChanged.connect(self._mesh_control_changed)
         self.superdomain_error = _refusal_label("superdomain_error")
         cp.addWidget(self.superdomain_error)
+        # The pki node's LAN address (core/pki_lan.py) — MESH ONLY. Every other node
+        # dials it before go-live, so a mesh build refuses without it (the Review page /
+        # WorklistDriver.preflight); this row says why, takes the address, and asks
+        # for the "it is fixed" confirmation. A malformed address is refused right here,
+        # inline (no dialog — a modal in page logic hangs the headless tests).
+        self.pki_lan_box = QtWidgets.QWidget()
+        pl = QtWidgets.QVBoxLayout(self.pki_lan_box)
+        pl.setContentsMargins(0, 0, 0, 0)
+        self.pki_lan_why = _hint(pki_lan.WHY)
+        pl.addWidget(self.pki_lan_why)
+        self.pki_lan_ip = QtWidgets.QLineEdit()
+        self.pki_lan_ip.setPlaceholderText("e.g. 192.168.1.10  (the PKI node's fixed LAN IPv4)")
+        self.pki_lan_ip_row = _row(pki_lan.LABEL_IP, self.pki_lan_ip)
+        pl.addWidget(self.pki_lan_ip_row)
+        self.pki_lan_fixed = QtWidgets.QCheckBox(pki_lan.LABEL_FIXED)
+        pl.addWidget(self.pki_lan_fixed)
+        self.pki_lan_note = QtWidgets.QLabel()
+        self.pki_lan_note.setWordWrap(True)
+        self.pki_lan_note.setStyleSheet("color: #b00020;")
+        pl.addWidget(self.pki_lan_note)
+        cp.addWidget(self.pki_lan_box)
+        self.pki_lan_ip.textChanged.connect(self._pki_lan_changed)
+        self.pki_lan_fixed.toggled.connect(self._pki_lan_changed)
         # ASK 8's "this mesh also hosts other domains" CHECKBOX used to sit here, under
         # the superdomain row. ASK 19 promoted that decision to its own choice-card
         # screen (gui/pages/domains_choice.py) in the ModePage idiom — "proceed with the
@@ -2146,6 +2169,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.headscale_public_derp = self.headscale_public_derp.isChecked()
         # superdomain is user-set ONLY in mesh (editable); in cloud the field shows the
         # DERIVED value read-only — never write it back (would pin the derived string).
+        pki_refused = False
         if c.mode == "mesh":
             c.superdomain = self.superdomain.text().strip()
             # The pki LAN address: a malformed one stops the page here, inline. An
@@ -2407,7 +2431,18 @@ class NetworkPage(QtWidgets.QWizardPage):
             "optional_services", "exclude_services", "enable_games", "anubis",
             "managed_services",
         ))
-        return self._refuse_malformed(c, prior)
+        refused_ok = self._refuse_malformed(c, prior)
+        if pki_refused:
+            # the pki row sits in the mesh section: open it, and scroll to the refusal
+            # when _refuse_malformed scrolled to nothing (same layout-pass ordering)
+            self.mesh_section.set_expanded(True)
+            if refused_ok:
+                QtCore.QCoreApplication.sendPostedEvents(
+                    None, QtCore.QEvent.Type.LayoutRequest)
+                scroll = getattr(self, "_content_scroll", None)
+                if scroll is not None:
+                    scroll.ensureWidgetVisible(self.pki_lan_note)
+        return refused_ok and not pki_refused
 
     def _refuse_malformed(self, c, prior: dict) -> bool:
         """Refuse Next, inline, on a value this page just collected that the build would

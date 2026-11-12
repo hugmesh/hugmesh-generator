@@ -11,6 +11,18 @@ spec:
     repoURL: https://github.com/hugmesh/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/casdoor
+    kustomize:
+      # THE ISSUER CASDOOR MINTS (issue #530): app.conf's `origin`, which every
+      # validator's issuer must equal. The validators read theirs from the same
+      # kind of one-line op in their own baked Applications, and rebrand_sysroot()
+      # rewrites all of them alike, so minter and validators stay in agreement on
+      # a custom-domain build. The git-served kustomization.yaml writes this value
+      # into app.conf.template. At this default the render is unchanged. Pinned by
+      # tests/scripts/test-eso-remoteref-brand.sh section (7).
+      patches:
+        - target: { version: v1, kind: ConfigMap, name: idp-trust }
+          patch: |-
+            - { op: replace, path: /metadata/annotations/platform.hugmesh.net~1idp-issuer, value: "https://id.hugmesh.net" }
   destination:
     server: https://kubernetes.default.svc
     namespace: hugmesh-pki

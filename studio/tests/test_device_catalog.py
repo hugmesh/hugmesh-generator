@@ -295,7 +295,7 @@ def test_catalog_covers_the_named_families_and_verdicts():
     (real-cases check — the badge machinery discriminates)."""
     by_status = {s: [d.id for d in CAT.devices if d.status == s] for s in dc.STATUSES}
     assert by_status["experimental"] and by_status["unsupported"]
-    expect_unsupported = {"rpi2", "rpi6", "opi2", "opi3", "opi4", "opi6",
+    expect_unsupported = {"rpi2", "opi2", "opi3", "opi4", "opi6",
                           "bpi-m5", "bpi-f3", "rock-5b", "nanopc-t6",
                           "rk3588-generic", "lc-renegade"}
     assert expect_unsupported <= set(by_status["unsupported"])

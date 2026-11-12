@@ -100,20 +100,28 @@ def pairs(args):
 
 # ---- RolePage: composable --capable / --unaffiliated (G21/G22) -----------------
 
+# --capable (the KDE Plasma payload) is the Desktop step's "KDE Plasma" environment
+# since 2026-11-11 (gui/pages/desktop.py is its one writer).
+
+def _pick_plasma_on_the_desktop_step(wiz):
+    page = advance_to(wiz, wizard_mod.DesktopPage)
+    page.env.setCurrentIndex(page.env.findData("plasma"))
+    assert page.env.isEnabled() and page.validatePage(), page.problems.text()
+    return page
+
+
 def test_role_capable_composes_on_standalone_thin(wiz):
     page = pick_role(wiz, "standalone-thin")
-    assert page.client_box.isVisible() and page.capable.isEnabled()
-    page.capable.setChecked(True)
-    advance_to(wiz, wizard_mod.HardwarePage)
+    assert page.client_box.isVisible()
+    _pick_plasma_on_the_desktop_step(wiz)
     assert wiz.cfg.capable is True
     assert "--capable" in wiz.cfg.to_cli_args()
 
 
 def test_role_capable_composes_on_cloud_laptop(wiz):
     pick_mode(wiz, "cloud")
-    page = pick_role(wiz, "laptop")
-    page.capable.setChecked(True)
-    advance_to(wiz, wizard_mod.HardwarePage)
+    pick_role(wiz, "laptop")
+    _pick_plasma_on_the_desktop_step(wiz)
     assert "--capable" in wiz.cfg.to_cli_args()
 
 
@@ -178,7 +186,8 @@ def test_role_unaffiliated_checkbox_disabled_in_cloud(wiz):
     page = pick_role(wiz, "laptop")
     assert not page.unaffiliated.isEnabled()
     assert not page.unaffiliated.isChecked()
-    assert page.capable.isEnabled()
+    from hugmesh_studio.core import desktop_spec as ds     # Plasma stays on offer
+    assert "plasma" in ds.environment_choices(wiz.cfg)
     assert "unaffiliated" in page.unaffiliated.toolTip()
 
 
@@ -195,9 +204,8 @@ def test_role_unaffiliated_checkbox_disabled_on_dedicated_role(wiz):
 
 def test_role_capable_clears_when_client_box_hides(wiz):
     """A capable pick on x86 can't linger into an ARM build (no --capable there)."""
-    page = pick_role(wiz, "standalone-thin")
-    page.capable.setChecked(True)
-    advance_to(wiz, wizard_mod.HardwarePage)
+    pick_role(wiz, "standalone-thin")
+    _pick_plasma_on_the_desktop_step(wiz)
     assert wiz.cfg.capable is True
     page = back_to(wiz, wizard_mod.RolePage)
     pick_role(wiz, "generic")            # standalone rpi5 — client box hides
@@ -315,10 +323,13 @@ def test_role_kernel_flavor_cannot_linger_off_jetson(wiz, mode, role, platform):
     enforces it: ModePage clears no such field, and to_cli_args() can only hide a stale
     value (--kernel-flavor lives in _jetson_args), never remove it from the config that
     gets saved, re-emitted and round-tripped."""
-    wiz.cfg.kernel_flavor = "l4t"          # e.g. loaded from a saved jetson config
+    # mainline, not l4t: l4t is no longer an offered flavour (KERNEL_FLAVOR_REFUSED), so
+    # a restore never puts it on the combo (test_kernel_flavor_offer.py); mainline is
+    # the value that can still be restored and so can still linger.
+    wiz.cfg.kernel_flavor = "mainline"     # e.g. loaded from a saved jetson config
     pick_mode(wiz, mode)
     page = pick_role(wiz, role)
-    assert page.kernel_flavor.currentData() == "l4t"   # restored onto the combo...
+    assert page.kernel_flavor.currentData() == "mainline"   # restored onto the combo...
     assert not page.jetson_box.isVisible()             # ...which is never shown here
     advance_to(wiz, wizard_mod.HardwarePage)
     assert wiz.cfg.platform == platform

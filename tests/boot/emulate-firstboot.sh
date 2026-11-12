@@ -93,6 +93,7 @@ EOF
       [ -s /home/opsadmin/.ssh/authorized_keys ] && ok "SSH authorized_keys installed" || bad "authorized_keys"
       [ -f /etc/sudoers.d/10-opsadmin ] && ok "sudoers entry written" || bad "sudoers"
       [ -f /var/lib/keys-provision/users.created ] && ok "users.created marker" || bad "users.created marker"
+      [ "$(cat /var/lib/keys-provision/keys-users.created 2>/dev/null)" = ungoverned ] && ok "keys-users.created = ungoverned (02-extra-local-users reads it)" || bad "keys-users.created marker"
       [ -f /var/lib/keys-provision/done ] && ok "done marker" || bad "done marker"
       [ "$(cat /etc/hostname)" = "hugmesh-'"${role}"'" ] && ok "hostname applied" || bad "hostname ($(cat /etc/hostname))"
       ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1 && ok "SSH host keys generated" || bad "host keys"

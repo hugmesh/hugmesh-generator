@@ -1447,6 +1447,53 @@ def test_issuing_a_token_offers_the_same_roles_shell_rule_and_lifetime_on_every_
         dlg.deleteLater()
 
 
+# ── Kernel config… (core/kernel_reconfig.py): one action, one sentence, every face ──
+def test_kernel_config_is_offered_by_every_face():
+    """The Build page button, the Previous builds list, the per-build window, both TUI
+    faces and the CLI all offer the same action under the same name."""
+    import argparse
+    import re
+    from hugmesh_studio.gui.pages import build_window as gui_bw
+    from hugmesh_studio.gui.pages import progress as gui_progress
+    from hugmesh_studio.gui.pages import sessions_widget as gui_sw
+    from hugmesh_studio.tui import plain as tui_plain
+    assert gui_progress._KERNEL_BTN_TEXT == gui_bw._LABELS["kernel"] == "Kernel config…"
+    assert gui_sw.PreviousBuildsWidget.ROW_ACTIONS["kernel"] == "_open_kernel_config"
+    assert "k NUMBER=kernel config" in tui_plain._HELP
+    try:
+        from hugmesh_studio.tui import urwid_ui
+    except ImportError:            # urwid is optional; the plain face is the floor
+        urwid_ui = None
+    if urwid_ui is not None:
+        assert "k=kernel config" in urwid_ui._LIST_HELP
+    src = open(os.path.join(STUDIO_ROOT, "hugmesh_studio", "app.py"), encoding="utf-8").read()
+    for flag in ("--kernel-config", "--kernel-config-set", "--kernel-config-diff",
+                 "--kernel-config-apply", "--kernel-config-discard"):
+        assert re.search(r'add_argument\("%s"' % re.escape(flag), src), flag
+    del argparse
+
+
+def test_kernel_config_refusal_reads_the_same_on_every_face(tmp_path, capsys):
+    """An ARM-only session: the per-build window's reason, the TUI detail line, the TUI
+    ``k`` flow and the CLI all carry the SAME core sentence, word for word."""
+    from hugmesh_studio.core import kernel_reconfig as kr
+    from hugmesh_studio.gui.pages import build_window as gui_bw
+    from hugmesh_studio.tui import model as tui_model
+    from _kernel_reconfig_fixture import make_session
+    s = make_session(str(tmp_path), platform="rpi5")
+    sentence = kr.NOT_X86.format(board="rpi5")
+
+    class Row:
+        kind, status, label, when, session, location = "session", "complete", "x", "", s, s.workdir
+    assert gui_bw.actions_for(Row())["kernel"].reason == sentence
+    assert f"kernel    {sentence}" in tui_model.session_detail_lines(tui_model.SessionRow(s, "complete"))
+    said = []
+    assert tui_model.kernel_config_flow(s, GENERATOR_DIR, ask=lambda q: True, say=said.append) == 3
+    assert said == [f"kernel config: {sentence}"]
+    assert kr.cli("diff", s.id, GENERATOR_DIR) == 3
+    assert capsys.readouterr().err.strip() == f"refused: {sentence}"
+
+
 def test_go_live_names_targets_and_their_limits_identically_on_both_faces(
         qapp, tmp_path, monkeypatch):
     """The emulated-target words are spelled ONCE: the picker rows (GUI Preflight) and
@@ -1485,6 +1532,38 @@ def test_go_live_names_targets_and_their_limits_identically_on_both_faces(
     assert golive_target.EPHEMERAL_NOTE in gui_golive.ephemeral_text(w.target)
     assert gui_meshemu.GO_LIVE_ACTION == tui_meshemu.GO_LIVE_ACTION
     w.deleteLater()
+# ── the Desktop step (2026-11-11): one catalog, three faces ─────────────────────────
+def test_desktop_step_catalogs_match_on_gui_tui_and_cli(wiz, capsys):
+    """The GUI page's session checkboxes, video-card checkboxes and app rows, the TUI
+    screen's listing and the CLI's --desktop-options all come from core/desktop_spec.py;
+    a face that grew its own list would go red here."""
+    from hugmesh_studio.core import desktop_cli
+    from hugmesh_studio.core import desktop_spec as ds
+    from hugmesh_studio.gui.qt import QtCore
+    from hugmesh_studio.tui.desktop_step import DesktopScreen
+    import json as _json
+    page = wiz.page(wiz._page_ids["desktop"])
+    wiz.cfg = ImageConfig(mode="cloud", role="laptop", platform="x86")
+    page.initializePage()
+    gui_apps = [page.apps_table.item(r, 0).data(QtCore.Qt.ItemDataRole.UserRole)[0]
+                for r in range(page.apps_table.rowCount())]
+    assert list(page.session_checks) == [s.name for s in ds.SESSION_CATALOG]
+    assert tuple(page.card_checks) == ds.VIDEO_CARD_TOKENS
+    assert gui_apps == [a["id"] for a in ds.app_catalog()]
+    assert list(page.py_checks) == list(ds.PYTHON_TARGET_CHOICES)
+    j = journey.Journey(".", ImageConfig(mode="cloud", role="laptop", platform="x86"))
+    tui = "\n".join(DesktopScreen().lines(j))
+    for name in page.session_checks:
+        assert name in tui
+    for app_id in gui_apps:
+        assert app_id in tui
+    assert desktop_cli.options(as_json=True) == 0
+    cli = _json.loads(capsys.readouterr().out)
+    assert [s["name"] for s in cli["sessions"]] == list(page.session_checks)
+    assert list(cli["video_cards"]) == list(page.card_checks)
+    assert [a["id"] for a in cli["apps"]] == gui_apps
+    # the same environment choices on both faces (the Role step no longer offers them)
+    assert [page.env.itemData(i) for i in range(page.env.count())] == ds.environment_choices(wiz.cfg)
 
 
 # ── GUI-28 (B-10): the previous-builds RESTART gate is one answer on both faces ──────

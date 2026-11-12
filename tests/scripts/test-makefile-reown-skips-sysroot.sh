@@ -349,10 +349,82 @@ fi
 # MSI builder's throwaway table-dump directory (build-msi-wine.sh hands back the
 # one directory it mounted into a container as /out; no image build system is
 # ever mounted there).
-others="$(grep -a -rn -E -e 'chown -R' --include=Makefile --include='*.sh' --include='*.py' "${REPO}" 2>/dev/null \
-    | grep -a -v -E -e '/(out|\.stack-src|node_modules|\.venv|tests)/' -e '^[^:]*:[0-9]+:[[:space:]]*#' -e 'worklist_driver.py' -e 'install-x86.sh' -e 'provision.sh' -e 'build-msi-wine.sh' -e "chown -R'd " || true)"
-[ -z "${others}" ] && ok "no other 'chown -R' over a work directory in Makefile/scripts/Studio (installer, key provisioning, the MSI builder and the qemu harness reown their own trees, not a build system)" \
-    || bad "other chown -R sites to review: ${others}"
+#
+# chown_r_sites <root>: every `chown -R` in a Makefile, *.sh or *.py under <root>,
+# as root-relative path:line:text, minus comment lines and those reviewed sites.
+#
+# IT FAILS CLOSED. This scan used to end `2>/dev/null || true`, and busybox grep
+# (the alpine CI job's grep until 2026-11-11) has no --include: it printed
+# "unrecognized option", exited 2, the stderr went to /dev/null, and an empty
+# result read as "no other sites", so the check PASSED having read nothing.
+# MEASURED in alpine:3: a `chown -R "$WORK_DIR"` planted in scripts/ passed. An
+# erroring grep prints exactly what a clean tree prints, so a grep status above 1
+# returns 2 here and the caller goes red, and stderr is left alone so the reason
+# shows in the log. The positive control below runs this same function over a
+# tree with planted sites, so a grep that cannot do the scan is red there too.
+#
+# Pruned with --exclude-dir, never by matching the printed path: the old filter
+# matched '/(out|...|tests)/' anywhere in an ABSOLUTE path, so a checkout that
+# itself lived under a directory called out/ or tests/ would have dropped every
+# hit. Pruning also means grep never walks out/, which a native build leaves
+# root-owned and partly unreadable: walked, it would make grep exit 2 on a
+# developer's box. The exemptions are anchored to their paths, so a new file
+# whose name merely CONTAINS "provision.sh" is not exempt.
+chown_r_sites() {
+    local raw ps
+    raw="$(cd "$1" || exit 2
+           grep -a -rn -E -e 'chown -R' --include=Makefile --include='*.sh' --include='*.py' \
+                --exclude-dir=out --exclude-dir=.stack-src --exclude-dir=node_modules \
+                --exclude-dir=.venv --exclude-dir=tests .)"
+    ps=$?
+    [ "${ps}" -le 1 ] || { echo "  chown_r_sites: grep over $1 exited ${ps}" >&2; return 2; }
+    printf '%s\n' "${raw}" | sed -e 's|^\./||' \
+        | grep -a -v -E -e '^$' -e '^[^:]*:[0-9]+:[[:space:]]*#' \
+              -e '^studio/hugmesh_studio/core/worklist_driver\.py:' \
+              -e '^specs-x86/installer/install-x86\.sh:' \
+              -e '^specs/etc/keys-provision/provision\.sh:' \
+              -e '^studio/packaging/build-msi-wine\.sh:' \
+              -e "^scripts/_builder-resume-lib\.sh:[0-9]+:.*chown -R'd "
+    ps="${PIPESTATUS[1]}:${PIPESTATUS[2]}"
+    case "${ps}" in 0:0|0:1) return 0 ;; esac
+    echo "  chown_r_sites: filtering the hits failed (sed:grep status ${ps})" >&2
+    return 2
+}
+others="$(chown_r_sites "${REPO}")"; rc=$?
+if [ "${rc}" -ne 0 ]; then
+    bad "the 'chown -R' scan itself FAILED (status ${rc}, reason above): it read nothing, which is not the same as finding nothing"
+elif [ -z "${others}" ]; then
+    ok "no other 'chown -R' over a work directory in Makefile/scripts/Studio (installer, key provisioning, the MSI builder and the qemu harness reown their own trees, not a build system)"
+else
+    bad "other chown -R sites to review: ${others}"
+fi
+
+# POSITIVE CONTROL, through the same function: one planted site per --include type
+# (Makefile, *.sh, *.py), plus one in a file whose name only CONTAINS an exempt
+# name, must come back as exactly those four. The decoys must not: a comment line,
+# a *.txt, a site under each pruned directory, and the exempt provision.sh path.
+# Under a grep that cannot run the scan (busybox, no --include) the real tree and
+# this one both come back empty; this is the half that turns that red.
+C="${TDIR}/ctl"
+mkdir -p "${C}/scripts" "${C}/studio" "${C}/out/x" "${C}/tests/y" "${C}/node_modules/z" "${C}/.stack-src/s" "${C}/specs/etc/keys-provision"
+printf 'chown-artifacts:\n\tchown -R $(HOST_UID):$(HOST_GID) "$(WORK_DIR)"\n' > "${C}/Makefile"
+printf '#!/bin/sh\nchown -R "$u" "$WORK_DIR"\n' > "${C}/scripts/reown.sh"
+printf 'import os\nos.system("chown -R %%s %%s" %% (u, out))\n' > "${C}/studio/reown.py"
+printf '#!/bin/sh\nchown -R "$u" "$WORK_DIR"\n' > "${C}/scripts/gen-provision.sh"
+printf '#!/bin/sh\n# chown -R "$u" "$WORK_DIR" -- prose, not a call\n' > "${C}/scripts/comment.sh"
+printf 'chown -R u /w\n' > "${C}/scripts/notes.txt"
+for d in out/x tests/y node_modules/z .stack-src/s; do printf 'chown -R u /w\n' > "${C}/${d}/reown.sh"; done
+printf 'chown -R u /w\n' > "${C}/specs/etc/keys-provision/provision.sh"
+want="$(printf '%s\n' 'Makefile:2' 'scripts/gen-provision.sh:2' 'scripts/reown.sh:2' 'studio/reown.py:2' | LC_ALL=C sort)"
+got="$(chown_r_sites "${C}")"; rc=$?
+got_ids="$(printf '%s\n' "${got}" | cut -d: -f1,2 | LC_ALL=C sort)"
+if [ "${rc}" -ne 0 ]; then
+    bad "positive control: the scan FAILED on a planted tree (status ${rc}) -- this grep cannot run it, so the real-tree result above means nothing"
+elif [ "${got_ids}" = "${want}" ]; then
+    ok "positive control: the 4 planted sites (Makefile, .sh, .py, a non-exempt *provision.sh) are found; the comment, the .txt, the 4 pruned directories and the exempt path are not"
+else
+    bad "positive control: planted sites came back as [$(echo ${got_ids})], want [$(echo ${want})] -- the scan cannot be trusted"
+fi
 
 echo
 echo "== ${P} passed, ${F} failed =="

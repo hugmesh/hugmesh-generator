@@ -52,7 +52,8 @@
 #   JETSON_ROLES="edge-ai desktop" JETSON=1 ./scripts/build-all-roles.sh   # role subset
 #   JETSON_ONLY=1 ./scripts/build-all-roles.sh  # ONLY the Jetson (skip Pi + x86 + Frite)
 #   JETSON_BOARD=orin-nx-16gb JETSON=1 ./scripts/build-all-roles.sh        # other module
-#   JETSON_KERNEL_FLAVOR=l4t JETSON=1 ./scripts/build-all-roles.sh  # (stubbed) L4T/CUDA path
+#   (JETSON_KERNEL_FLAVOR=l4t is NOT a build route: the builder exits 1 on it by design —
+#    NVIDIA's L4T/CUDA stack is an EULA-gated, out-of-band flash, see specs-jetson/README.md.)
 # (build-jetson-stage4.sh — roles: edge-ai (default) | backend-gpu | omnibus | desktop.)
 #
 # The Orange Pi 5 / Orange Pi 5 Plus (Rockchip RK3588/RK3588S) light-desktop

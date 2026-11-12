@@ -35,6 +35,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 
 from _look import (LOOK_CASES, LOOK_CHILD_ENV, REQUIRE_STYLES_ENV,  # noqa: E402
                    looking, missing_style_action, required_styles)
+from _look_files import LOOK_FILES  # noqa: E402
 
 from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 
@@ -188,19 +189,3 @@ def test_the_looked_at_pages_are_drawn_whole_in_a_fresh_interpreter(fname):
     if skipped:
         warnings.warn(f"{fname}: no look case ran under {skipped} (not installed here; "
                       f"optional unless {REQUIRE_STYLES_ENV} names it)", stacklevel=1)
-
-
-def test_every_look_test_is_run():
-    """A ``test_look_*`` test in a file this wrapper does not start would skip for ever
-    in an ordinary run — a look test nobody runs. Names are read from the source, so no
-    Qt is needed."""
-    carriers = []
-    for name in sorted(os.listdir(HERE)):
-        if not (name.startswith("test_") and name.endswith(".py")) or name == "test_look.py":
-            continue
-        with open(os.path.join(HERE, name), encoding="utf-8") as fh:
-            if re.search(r"^def test_look_", fh.read(), re.M):
-                carriers.append(name)
-    assert sorted(carriers) == sorted(LOOK_FILES), \
-        f"files with test_look_* tests: {carriers}; started by test_look.py: " \
-        f"{list(LOOK_FILES)}"

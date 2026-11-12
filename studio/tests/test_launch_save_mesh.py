@@ -421,14 +421,20 @@ def test_progress_dispatch_survives_a_panel_that_raises(monkeypatch, qapp, wiz,
     assert page.driver.results[0].status == "ok"
 
 
-def test_the_progress_page_draws_the_panel_whole(monkeypatch, qapp, wiz, tmp_path):
-    """The whole progress page of a mesh build whose local copy was refused: the panel
-    sits between the overall bar and the image rows, and its status is fully drawn.
+# ---- #647 / #656 rule: the panel is LOOKED AT, under two styles and at 8 pt ---------
+# A ``test_look_*`` case: it skips in an ordinary run and tests/test_look.py runs it in a
+# fresh interpreter (tests/_look.py says why), which is also why it builds its own wizard
+# INSIDE ``looking`` instead of taking the ``wiz`` fixture (a fixture's wizard is built
+# under the old style and font before the case applies its own).
+from _look import (LOOK_CASES, LOOK_IDS, DEFAULT_WINDOW, assert_whole,  # noqa: E402
+                   child_only, looking, settle, snap)
 
-    Not a ``test_look_*`` test: it measures one style at the default font and runs in
-    the ordinary run, so tests/test_look.py (which starts ``test_look_*`` tests in a
-    fresh interpreter under every LOOK_CASES style) must not count it as one of its own
-    — under that name it failed test_look::test_every_look_test_is_run since #937."""
+
+@pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
+def test_look_at_the_progress_page_with_the_panel(monkeypatch, qapp, tmp_path, style, pt):
+    """The whole progress page of a mesh build whose local copy was refused: the panel
+    sits between the overall bar and the image rows, and its status is fully drawn."""
+    child_only()
     from hugmesh_studio.core import worklist_driver as wd
 
     class FakeBuildDriver:
@@ -456,26 +462,40 @@ def test_the_progress_page_draws_the_panel_whole(monkeypatch, qapp, wiz, tmp_pat
         on_line("  - host port 8000 is already in use by hugmesh-local-casdoor-1")
         return False, []
     monkeypatch.setattr(images_mesh.AlongsideMesh, "start", refused)
-    cfg = _mesh_cfg(tmp_path)
-    wiz.cfg = cfg
-    wiz.worklist = WorklistConfig(base=cfg, entries=[WorklistEntry(role="pki",
-                                                                   platform="x86")])
-    wiz.build_backend = None
-    wiz.generate_node_keys = False
-    wiz.images_mesh_start_local = True
-    wiz.setStartId(wiz._page_ids["progress"])
-    wiz.restart()
-    page = wiz.currentPage()
-    assert page is wiz.page(wiz._page_ids["progress"])
-    page.worker.wait(5000)
-    assert _pump(qapp, lambda: page.isComplete()
-                 and "did NOT start" in page.local_mesh.run_status.text())
-    _settle(qapp)
-    panel = page.local_mesh
-    assert panel.isVisible() and _fully_drawn(panel.status) and \
-        _fully_drawn(panel.run_status)
-    assert _top_in(page, page.total_bar) < _top_in(page, panel) < _top_in(page, page.tree)
-    assert page.driver.results[0].status == "ok"
-    rec = saved_meshes.scan()[0][0]
-    assert rec.build["session_id"] == page._session.id
-    _shot(wiz, "progress-page-local-mesh.png")
+    with looking(qapp, style, pt):
+        wiz = wizard_mod.StudioWizard(GENERATOR_DIR)
+        wiz.resize(*DEFAULT_WINDOW)
+        wiz.show()
+        try:
+            cfg = _mesh_cfg(tmp_path)
+            wiz.cfg = cfg
+            wiz.worklist = WorklistConfig(base=cfg, entries=[
+                WorklistEntry(role="pki", platform="x86")])
+            wiz.build_backend = None
+            wiz.generate_node_keys = False
+            wiz.images_mesh_start_local = True
+            wiz.setStartId(wiz._page_ids["progress"])
+            wiz.restart()
+            page = wiz.currentPage()
+            assert page is wiz.page(wiz._page_ids["progress"])
+            page.worker.wait(5000)
+            assert _pump(qapp, lambda: page.isComplete()
+                         and "did NOT start" in page.local_mesh.run_status.text())
+            settle(qapp)
+            assert (wiz.width(), wiz.height()) == DEFAULT_WINDOW
+            panel = page.local_mesh
+            assert panel.isVisible()
+            assert _fully_drawn(panel.status) and _fully_drawn(panel.run_status)
+            assert_whole(panel.status, "the local-mesh panel's status")
+            assert_whole(panel.run_status, "the local-mesh panel's run status")
+            assert _top_in(page, page.total_bar) < _top_in(page, panel) \
+                < _top_in(page, page.tree)
+            assert page.driver.results[0].status == "ok"
+            rec = saved_meshes.scan()[0][0]
+            assert rec.build["session_id"] == page._session.id
+            snap(wiz, "progress-page-local-mesh", style, pt)
+            _shot(wiz, "progress-page-local-mesh.png")
+        finally:
+            wiz.close()
+            wiz.deleteLater()
+            settle(qapp)

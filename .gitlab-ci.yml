@@ -1547,10 +1547,18 @@ lint:casdoor-domains-appset:
 # — the client just could not open the store containing it. With the gate on
 # (forum-bff-api) it is worse: KeyStore.load(new char[0]) throws and the client
 # never constructs. This gate ran RED on the commit before the fix.
+#
+# GNU grep (2026-11-11). bash:5 is Alpine with busybox grep, which has no --include.
+# Rule 4 (no http:// URL to a TLS-serving peer) scans with `grep -r --include=*.yaml`,
+# and while that scan ended `2>/dev/null || true` busybox's exit 2 read as "no
+# matches": the rule passed here having read nothing. The scan now fails closed, so
+# without this package the job goes RED instead of quietly blind.
 lint:outbound-mtls-client:
   stage: lint
   image: bash:5
   tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache grep
   script:
     - bash tests/scripts/test-outbound-mtls-client.sh
 
@@ -3108,9 +3116,20 @@ desktop-governance-verify:
     # The bake: builders call desktop_sso_bake/desktop_sso_verify from SKIP_SSO, the
     # lib executed against a fake sysroot, the stack's structure, negative controls.
     - bash tests/scripts/test-desktop-sso-bake.sh
+    # The Studio Desktop step's builder half (scripts/_desktop-config-lib.sh +
+    # scripts/_pretend-lib.sh): flag validation, the overlay/bake against a fake
+    # sysroot, the Python-target union, the pretend parser against a stub emerge, and
+    # the six desktop builders' wiring.
+    - bash tests/scripts/test-desktop-config-lib.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
+        - scripts/_desktop-config-lib.sh
+        - scripts/_pretend-lib.sh
+        - scripts/_python-targets-lib.sh
+        - scripts/desktop-config/**/*
+        - tests/scripts/test-desktop-config-lib.sh
+        - tests/scripts/fixtures/desktop-pretend/**/*
         - specs/etc/keys-provision/provision.sh
         - specs/etc/hugmesh/desktop-governance/**/*
         - specs/etc/pam.d/lightdm
@@ -3703,6 +3722,10 @@ lint:seed-password-reconcile:
     - bash tests/scripts/test-seed-password-reconcile.sh
     - bash tests/scripts/seed_password_reconcile_mutations.sh
     - bash tests/stack/test-seed-e2e-lockout.sh
+    # NEW-15: the identity provider is published on loopback only and the seed moves
+    # Casdoor's admin off the factory default (stub Casdoor; no docker, no egress).
+    - bash tests/scripts/test-stack-idp-exposure.sh
+    - bash tests/scripts/stack_idp_exposure_mutations.sh
 
 # The e2e password ROTATES per run (2026-10-15): the contract said "random per
 # run", but nothing ever started a new value — the operator's credentials file

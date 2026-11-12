@@ -226,6 +226,11 @@ def test_mesh_node_worklist_starts_all_images(monkeypatch, qapp, wiz):
         item.setCheckState(0, Qt.CheckState.Checked if rid in want
                            else Qt.CheckState.Unchecked)
 
+    # the pki node's fixed LAN address, typed on the Network step: a mesh build that
+    # makes KEYS sticks refuses without it (core/pki_lan.py)
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    net.pki_lan_ip.setText("192.168.1.10")
+    net.pki_lan_fixed.setChecked(True)
     build = advance_to(wiz, wizard_mod.BuildPage)   # Next through Worklist→…→Build commits the worklist
     assert build.gen_keys.isChecked()               # node key-zips on by default
     assert build.validatePage()                     # commit worklist / backend / gen-keys
@@ -364,6 +369,16 @@ def test_localmesh_launch_dispatches_compose_up(qapp, tmp_path, monkeypatch):
     subprocess env."""
     monkeypatch.delenv("TS_AUTHKEY", raising=False)   # prove start() no longer needs it in env
     monkeypatch.setenv("HOME", str(tmp_path))         # isolate the default ~/.hugmesh workdir
+    # Resource limits OFF, both knobs: start() writes docker-compose.limits.yml beside
+    # the project and adds `-f` for it whenever the effective limits cap anything, and
+    # the auto formula always does — so the argv below would depend on this host. CPU
+    # and memory resolve independently, and the overlay is skipped only when BOTH are
+    # off. The overlay's own argv is test_limits_reach_lanes.py's subject, not this one.
+    # (XDG_CONFIG_HOME too: the env knobs win, but a saved tray setting must not be read
+    # from the real home either way.)
+    monkeypatch.setenv("HUGMESH_CPUS", "off")
+    monkeypatch.setenv("HUGMESH_BUILD_MEMORY", "off")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.setattr(mesh_node_mod, "_compose_base", lambda: ["docker", "compose"])
 
     calls = []
@@ -402,6 +417,7 @@ def test_localmesh_launch_dispatches_compose_up(qapp, tmp_path, monkeypatch):
     expected = ["docker", "compose", "--profile", "mesh", "-p", dlg.node.project, "-f",
                 os.path.join(dlg.node.workdir, "docker-compose.mesh.yml"), "up", "-d"]
     assert up_cmd == expected
+    assert not os.path.exists(os.path.join(dlg.node.workdir, mesh_node_mod.LIMITS_OVERLAY))
     # the effective auth key (from the dialog field, NOT the environment) reached the
     # subprocess env — the second half of the fix (inherited _env used to inject only a
     # teardown placeholder, shadowing the staged real key).

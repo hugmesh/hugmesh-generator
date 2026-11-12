@@ -67,7 +67,7 @@ def prompt_yes_no(inp: IO[str], out: IO[str], question: str) -> bool:
 
 # ── sessions review ────────────────────────────────────────────────────────────────
 _HELP = ("commands: NUMBER=inspect · d NUMBER=delete · w NUMBER=worklist table · "
-         "r=refresh · local-ai=the Local AI screen · q=quit")
+         "k NUMBER=kernel config · r=refresh · local-ai=the Local AI screen · q=quit")
 
 #: The GUI's other Previous-builds buttons (B-10), on a line of their own ABOVE the
 #: commands line, which keeps the Local AI status line directly under that one.
@@ -319,6 +319,16 @@ def run_sessions_review(inp: IO[str] | None = None, out: IO[str] | None = None, 
                 _delete_flow(inp, out, row)
             rows, unreadable = model.session_rows()
             _print_list(out, rows, unreadable)
+            continue
+        if verb.lower() in ("k", "kernel"):
+            row = _pick(rows, arg.strip())
+            if row is None:
+                _say(out, f"no such session number: {arg.strip() or '(missing)'}")
+                continue
+            model.kernel_config_flow(
+                row.session, generator_dir,
+                ask=lambda q: prompt_yes_no(inp, out, q), say=lambda s: _say(out, s),
+                out=out, err=out)
             continue
         if verb.lower() in ("w", "worklist"):
             row = _pick(entries, arg.strip())

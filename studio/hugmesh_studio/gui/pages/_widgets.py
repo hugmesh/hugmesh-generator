@@ -213,6 +213,35 @@ _STATUS_BADGES = {
 }
 
 
+def add_refused_items(combo, refused) -> None:
+    """Append each REFUSED choice to ``combo`` greyed out, with its reason.
+
+    ``refused`` maps a value to the reason it is not offered. The item is listed so
+    the reader learns the option exists and why it is unavailable, but it cannot be
+    picked, because picking it would only buy a build that exits non-zero."""
+    for value, reason in refused.items():
+        combo.addItem(f"{value} (not offered)", value)
+        idx = combo.count() - 1
+        item = combo.model().item(idx)
+        item.setEnabled(False)
+        item.setToolTip(reason)
+
+
+def offered_index(combo, value) -> int:
+    """The index of ``value`` in ``combo`` when it is an ENABLED item, else 0.
+
+    A saved config may name a choice that is no longer offered (one shown greyed by
+    add_refused_items). Restoring it would select the greyed row and emit it, so it
+    falls back to the first entry, the builder default, instead."""
+    i = combo.findData(value)
+    if i < 0:
+        return 0
+    item = combo.model().item(i)
+    if item is not None and not item.isEnabled():
+        return 0
+    return i
+
+
 def status_badge(status):
     """(badge text, css color) for a device-catalog status."""
     return _STATUS_BADGES[status]

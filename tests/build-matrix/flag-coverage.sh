@@ -47,6 +47,7 @@ all --print-plan — harness-only dry-run flag (this suite's own probe channel)
 all --help — usage text, not an image option
 all --no-grow — pure alias of '--grow none' (the fielded spelling)
 x86 --nvidia — pure alias of '--gpu-driver nvidia' (the fielded matrix spelling)
+x86 --pretend-only — the Desktop step's emerge --pretend check, not an image option: core/desktop_pretend.py appends it to its own throwaway run (own --build-subdir), never to a build
 x86 --nvidia-driver — back-compat open|proprietary alias of --gpu-driver
 x86 --skip-mesh — alias posture; the Studio emits the explicit --no-tailscale pair
 x86 --skip-sso — alias posture; the Studio emits the explicit --no-sso pair
@@ -195,6 +196,16 @@ BASELINES = {
     "orangepizero3": dict(mode="cloud", role="orangepizero3", platform="orangepizero3"),
     "orangepi3-lts": dict(mode="cloud", role="orangepi3-lts", platform="orangepi3-lts"),
     "orangepi4-lts": dict(mode="cloud", role="orangepi4-lts", platform="orangepi4-lts"),
+}
+
+DESKTOP_SAMPLE = {
+    "sessions": ["i3", "sway"], "default_session": "openbox", "video_cards": ["intel"],
+    "extra_users": [{"name": "ann", "admin": True}],
+    "apps": [{"id": "firefox", "label": "Firefox", "delivery": "flatpak",
+              "flatpak": "org.mozilla.firefox", "remote": "flathub"}],
+    "flatpak_remotes": {"mine": "https://example.org/mine.flatpakrepo"},
+    "python_extra_targets": ["python3_13"], "python_single_target": "python3_13",
+    "use_lines": ["media-libs/mesa vulkan"], "keyword_lines": ["gui-wm/labwc"],
 }
 
 # field -> LIST of override dicts (tri-states get an on AND an off variant so
@@ -349,6 +360,11 @@ SAMPLES = {
     "extra_packages": [{"extra_packages": "app-editors/vim"}],
     "packages_add": [{"packages_add": "app-editors/vim"}],
     "packages_drop": [{"packages_drop": "app-editors/vim"}],
+    # the Desktop step: every flag it can emit, on a DESKTOP role of each board (the
+    # shared rpi5/jetson baselines are node roles, where it emits nothing by design)
+    "desktop_spec": [{"desktop_spec": DESKTOP_SAMPLE},
+                     {"role": "rpi5-desktop", "desktop_spec": DESKTOP_SAMPLE},
+                     {"role": "jetson-desktop", "desktop_spec": DESKTOP_SAMPLE}],
 }
 
 # structural axes (role/env/board/flavor/desktop) are deliberately absent from

@@ -21,7 +21,7 @@ from ..core.platform_info import detect
 from ..core import platform_info
 from ..core import worklist as worklist_mod
 from .pages import (
-    BrandingPage, BuildPage, DeployPage, DomainCAKeysPage, DomainServicesPage,
+    BrandingPage, BuildPage, DeployPage, DesktopPage, DomainCAKeysPage, DomainServicesPage,
     DomainsChoicePage,
     DomainsPage, E2EPage,
     HardwarePage,
@@ -265,7 +265,7 @@ class StudioWizard(QtWidgets.QWizard):
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
             DomainsChoicePage, DomainsPage, DomainServicesPage, DomainCAKeysPage,
             UsersChoicePage, UsersPage,
-            SystemPage, VaultPage, HomePage, BuildPage, LaunchPage, ProgressPage,
+            SystemPage, VaultPage, HomePage, DesktopPage, BuildPage, LaunchPage, ProgressPage,
         ]
         assert len(page_ctors) == len(WIZARD_PAGE_SLUGS), (
             f"page constructors ({len(page_ctors)}) drifted from "
