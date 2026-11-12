@@ -700,6 +700,7 @@ jobs:
               tests/scripts/test-standalone-login-firstboot.sh
               tests/scripts/test-subject-revocation-ttl.sh
               tests/scripts/test-pki-role-san-coverage.sh
+              tests/scripts/test-prod-gate-env-apps.sh
               tests/scripts/test-provision-keys-escrow-guard.sh
               tests/scripts/test-python-targets-seed.sh
               tests/scripts/test-run-ungated-lane.sh

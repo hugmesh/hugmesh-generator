@@ -68,7 +68,7 @@ from ...core.build_driver import BuildDriver
 from ...core.config import (COMPRESS_LEVEL_CHOICES, COMPRESS_LEVEL_DEFAULT,
                             ENV_CHOICES, FLAVOR_MEDIA_PLATFORMS, ImageConfig,
                             UNAFFILIATED_ROLE, clamp_compress_level,
-                            effective_installer_ui, field_default,
+                            effective_installer_ui, field_default, field_in_scope,
                             image_class, resolve_installer_ui_default,
                             resolve_platform_defaults)
 from ...core.worklist_driver import WorklistDriver
@@ -669,13 +669,17 @@ class BuildPage(QtWidgets.QWizardPage):
         self.grow.addItems(["", "fill", "none"])
         self.grow.lineEdit().setPlaceholderText("fill | none | <size e.g. 16G, 50%>  (empty = builder default)")
         im.addWidget(_row("First-boot root growth (--grow)", self.grow))
-        # image stamps (G30): -v/--version is all-platform, --release-tag x86-only
+        # image stamps (G30): -v/--version is all-platform; --release-tag is the tag an
+        # ENV=prod build pins first-party :dev images to (x86, rpi5, Orange Pi node roles)
         self.version = QtWidgets.QLineEdit()
         self.version.setPlaceholderText("-v/--version image stamp (empty = builder default)")
         self.release_tag = QtWidgets.QLineEdit()
-        self.release_tag.setPlaceholderText("--release-tag image stamp (empty = deterministic build stamp)")
+        self.release_tag.setPlaceholderText("--release-tag: ENV=prod image pin, e.g. 2026.07-rc1 (empty = the UTC build date)")
         im.addWidget(_row("Version stamp", self.version))
-        im.addWidget(_row("Release tag", self.release_tag))
+        # the ROW is what gets gated (label + field as one unit): hiding only the line
+        # edit left a bare "Release tag" label on every builder that takes no tag.
+        self.release_tag_row = _row("Release tag", self.release_tag)
+        im.addWidget(self.release_tag_row)
         # issue #232 "explain defaults": what each field does when left alone, in one
         # visible place — values read from the builders (INSTALLER_UI resolution
         # build-x86-host-stage4.sh:1903; GROW_POLICY="fill" x86:296 / rpi5:213;
@@ -687,7 +691,7 @@ class BuildPage(QtWidgets.QWizardPage):
             "measured role payload; an empty growth policy is the builder's "
             "\"fill\" (the root grows to fill the disk on first boot); an empty "
             "Version stamp uses the builder's pinned release version; an empty "
-            "Release tag becomes a deterministic build stamp.")
+            "Release tag pins an ENV=prod build's images to the UTC build date.")
         im.addWidget(self.image_defaults_hint)
         # Expanded and never auto-folded: it carries the per-mode musts (the Packages…
         # entry point, the installer-UI honesty combo) and the unaffiliated bundle note.
@@ -1330,7 +1334,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # exactly the orphan-caption bug the NetworkPage egress section already paid for.
         _A = self.artifact_labels
         gate_widgets(c.platform, {
-            "release_tag": self.release_tag,
+            "release_tag": self.release_tag_row,
             "build_img": (self.build_img, _A["build_img"]),
             "live_iso": (self.live_iso, _A["live_iso"]),
             "cached": (self.cached, _A["cached"]),
@@ -1359,6 +1363,20 @@ class BuildPage(QtWidgets.QWizardPage):
             "secure_boot": self.sb_section,
             "distdir": self.distdir_row,
         }, hide=True)
+        # --release-tag is also CLASS-scoped on the Orange Pi (FIELD_SCOPE, via
+        # _OPI_NODE_CLASS_FIELDS): a node role parses it, but the Orange Pi desktop's
+        # builder refuses every cluster choice and its argv never carries the flag. The
+        # platform gate above cannot say that, so ask the composed scope (the NetworkPage
+        # idiom for the other Orange Pi node-class fields) and hide the row; the collect
+        # path below resets the value to match. Platform-supported only: a builder with
+        # no flag at all (frite, jetson, ...) keeps the platform note gate_widgets set.
+        if platform_supports("release_tag", c.platform) and not field_in_scope("release_tag", c):
+            # (not out_of_scope_note: its class text describes a DESKTOP-only rule,
+            # and this one is the inverse — node-only)
+            gate_widgets_role_class(
+                self.release_tag_row, False,
+                "Only a cluster node role bakes a cluster tree to pin; the Orange Pi "
+                "desktop has none, and its builder refuses --release-tag.", hide=True)
         # gate_widgets blanks the tooltip on every SUPPORTED widget it gates — restore
         # the flag-pair explanation on the live boxes (an unsupported one keeps the
         # platform note the gate set), the NetworkPage restore idiom. secure_boot's gate
@@ -1581,6 +1599,10 @@ class BuildPage(QtWidgets.QWizardPage):
             "sd_only", "build_tar", "skip_iso", "image_only", "secure_boot",
             "keys_usb", "secureboot_key", "secureboot_cert", "distdir",
         ))
+        # ...and release_tag's CLASS half (the row is hidden on the Orange Pi desktop):
+        # reset it there too, so a tag typed for a node row cannot linger into save().
+        if not field_in_scope("release_tag", c):
+            c.release_tag = field_default("release_tag")
         try:
             # DISPLAY the same command the real build will run: the actual build path
             # (WorklistDriver over synthesize->materialize) applies resolve_platform_defaults,

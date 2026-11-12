@@ -154,6 +154,10 @@ source "${SCRIPT_DIR}/scripts/_node-storage-bake-lib.sh"
 # EXCLUDE_SERVICES). See the lib header for the observed symptoms.
 # shellcheck source=scripts/_optional-services-lib.sh
 source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
+# The ENV=prod clean-up of the baked cluster tree (test-harness prune, :dev pin,
+# static prod-hygiene self-check), shared with build-x86-host-stage4.sh.
+# shellcheck source=scripts/_prod-gate-lib.sh
+source "${SCRIPT_DIR}/scripts/_prod-gate-lib.sh"
 # Cluster NODE plumbing shared with the Orange Pi node builders: here only the
 # headscale-host rule (pki/omnibus/generic) and the k8s topology word, so the two
 # builders cannot disagree about which roles run the mesh control server.
@@ -328,6 +332,10 @@ ENV="test"
 #   outside the tailnet unless /etc/hugmesh/go-live exists.
 # public: the above restrictions are lifted (rebuild-time go-live).
 RELEASE_STATE="internal"
+# Pinned first-party release tag for ENV=prod: gate_env_apps replaces every
+# floating `:dev` first-party image tag in the baked tree with it, so the static
+# prod-hygiene gate finds none. Same default and flag as build-x86-host-stage4.sh.
+RELEASE_TAG="${RELEASE_TAG:-$(date -u +%Y%m%d)}"
 CONFIG_FILE=""                      # optional drop-in brand profile (sourced)
 DEFAULT_USER="pi"
 # NO baked default password. Real creds come from the KEYS USB ($6$ hashes in
@@ -1004,6 +1012,14 @@ OPTIONS
                go-live app is kept (creds from the keys USB) and the LAN wildcard
                DNS app is pruned. ACME is ADDITIVE to the internal cluster CA.
                Prints a LOUD announced banner before building.
+               Also prunes the ENV=test e2e harness (apps/99-test-runner.yaml,
+               manifests/test-runner), pins first-party :dev image tags to
+               --release-tag, and fails the build if the static prod-hygiene
+               check (scripts/validate-prod-hygiene.sh) finds anything left.
+    --release-tag TAG
+        The tag ENV=prod pins first-party :dev image tags to. Letters, digits,
+        . _ - only, and not dev/main/latest; with --env prod a bad tag is
+        refused before the build starts. Default: the UTC build date (YYYYMMDD).
 
   Per-domain identity provider (issue #47)
     --domain-idp DOMAIN=own|superdomain
@@ -1174,6 +1190,7 @@ while [[ $# -gt 0 ]]; do
         -r|--role)            ROLE="$2";               shift 2 ;;
         -C|--config)          CONFIG_FILE="$2";        shift 2 ;;  # sourced above
         --env)                ENV="$2";                shift 2 ;;
+        --release-tag)        RELEASE_TAG="$2";        shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
         --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
@@ -1772,6 +1789,11 @@ case "${ENV}" in
     test|prod) ;;
     *) err "--env must be one of: test | prod  (got '${ENV}')"; exit 1 ;;
 esac
+# ENV=prod pins first-party :dev image tags to RELEASE_TAG at bake time; refuse a
+# floating or malformed tag NOW, not after the emerge phase (scripts/_prod-gate-lib.sh).
+if [ "${ENV}" = "prod" ]; then
+    prod_gate_validate_release_tag "${RELEASE_TAG}" || exit 1
+fi
 
 # ── Validate the release-state posture (baked into the image) ─────────────
 case "${RELEASE_STATE}" in
@@ -2310,6 +2332,15 @@ gate_env_apps() {
     if [ "${ENV}" = "prod" ]; then
         rm -f "${apps}/09-lan-dns.yaml" && \
             info "ENV=prod: pruned LAN wildcard-DNS app 09-lan-dns.yaml from the baked tree"
+        # Prune the ENV=test e2e harness, pin :dev tags and run the static
+        # prod-hygiene self-check (scripts/_prod-gate-lib.sh). This used to exist
+        # on x86 only, so ENV=prod Pi and Orange Pi node images shipped the
+        # tier:test test-runner Application. RELEASE_TAG has a default here
+        # because the Orange Pi node builders load this function without it.
+        prod_gate_cluster_tree "${SYSROOT}/var/lib/hugmesh/cluster" \
+            "${RELEASE_TAG:-$(date -u +%Y%m%d)}" \
+            "${SCRIPT_DIR}/scripts/validate-prod-hygiene.sh" \
+            || { err "ENV=prod: the baked cluster tree is not clean for prod (see above); refusing to build a prod image"; exit 1; }
     else
         # ENV=test
         rm -f "${apps}/12-cloudflared.yaml" && \
