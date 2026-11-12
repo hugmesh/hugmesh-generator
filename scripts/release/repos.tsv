@@ -26,7 +26,12 @@
 #          <hugmesh-*.version> properties move without being listed here.
 #
 # Not here: the Studio (scripts/release-studio.sh, its own tag prefix studio-v), the
-# Pages site hugmesh.github.io, and .github / .github-private (no package).
+# Pages site hugmesh.github.io, .github / .github-private (no package), and the Akkoma
+# image hugmesh-akkoma (.github/workflows/akkoma-release.yml, tag prefix akkoma-v,
+# version images/akkoma/VERSION). It is a SECOND artifact of hugmesh-generator, and
+# scripts/release.sh keys every row by repository (a second hugmesh-generator row stops
+# it: "'hugmesh-generator' is listed twice"), so it is released by hand until rows can
+# name an artifact: docs/RELEASING.md, "The Akkoma image".
 1|hugmesh-build-config|mvn|pom.xml|v|release.yml|net.hugmesh.hugmesh-build-config
 2|hugmesh-parent|mvn|pom.xml|v|release.yml|net.hugmesh.hugmesh-parent
 3|hugmesh-commons|mvn|pom.xml|v|release.yml|net.hugmesh.hugmesh-commons
