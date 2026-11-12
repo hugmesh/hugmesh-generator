@@ -473,6 +473,7 @@ jobs:
           tests/test_macos_stock_texts.py
           tests/test_macos_stock_texts_gui.py
           tests/test_pages_build_macos.py
+          tests/test_local_login_no_peer_check.py
 
       - name: A stock Mac - the self-check names the missing GNU tools and exits 1
         # Before Homebrew's GNU tools are installed: macOS's own bash 3.2 and BSD sed,
