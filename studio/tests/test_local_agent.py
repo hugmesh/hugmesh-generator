@@ -1061,12 +1061,43 @@ def test_wsl2_with_a_desktop_uses_the_linux_terminals(plan):
     assert res.opened and res.terminal == "xterm"
 
 
-def test_windows_and_macos_say_plainly_that_the_window_is_not_offered(plan):
-    for kind, word in (("windows", "Windows"), ("darwin", "macOS")):
-        fake = FakeHost(kind=kind, have=["xterm"])
-        res = la.launch(plan, make_host(fake))
-        assert not res.opened and word in res.reason and fake.runs == []
-        assert res.command == plan.after_copy_text
+def test_windows_says_plainly_that_the_window_is_not_offered(plan):
+    fake = FakeHost(kind="windows", have=["xterm"])
+    res = la.launch(plan, make_host(fake))
+    assert not res.opened and "Windows" in res.reason and fake.runs == []
+    assert res.command == plan.after_copy_text
+
+
+def test_macos_opens_terminal_on_a_command_file_that_carries_only_the_allowlist(plan):
+    """macOS used to refuse ("The Studio does not open a window on macOS"). It now opens
+    Terminal.app on a self-deleting .command file (core/macos_host.terminal_argv).
+    Terminal.app does not inherit the Popen environment, so what the window gets is
+    what the FILE exports: the allowlist, never a token; the agent's own env -i follows."""
+    fake = FakeHost(kind="darwin", have=["open"],
+                    environ={"GH_TOKEN": SECRET, "HOME": "/h", "LANG": "en_US.UTF-8",
+                             "PATH": "/opt/homebrew/bin:/usr/bin"})
+    res = la.launch(plan, make_host(fake))
+    assert res.opened and res.verified and res.terminal in ("Terminal", "iTerm")
+    assert res.command == plan.after_copy_text
+    [(argv, cwd, env)] = fake.runs
+    assert argv[:3] == ["/usr/bin/open", "-a", res.terminal] and argv[3].endswith(".command")
+    assert cwd == plan.cwd and SECRET not in repr(env)
+    text = open(argv[3], encoding="utf-8").read()
+    assert SECRET not in text and "GH_TOKEN" not in text
+    assert "export PATH=/opt/homebrew/bin:/usr/bin" in text
+    assert "bash --noprofile --norc -c" in text and "env -i" in text
+    assert f"cd {plan.cwd}" in text or f"cd '{plan.cwd}'" in text
+    assert oct(os.stat(argv[3]).st_mode & 0o777) == "0o700"
+
+
+def test_macos_without_open_or_with_a_failing_open_hands_back_the_command(plan):
+    fake = FakeHost(kind="darwin", have=[], environ={"HOME": "/h"})
+    res = la.launch(plan, make_host(fake))
+    assert not res.opened and "`open`" in res.reason and fake.runs == []
+    fake = FakeHost(kind="darwin", have=["open"], exits={"open": 1}, environ={"HOME": "/h"})
+    res = la.launch(plan, make_host(fake))
+    assert not res.opened and "exited 1" in res.reason
+    assert res.command == plan.after_copy_text
 
 
 def test_the_default_spawner_reports_a_real_exit_and_a_real_still_running(tmp_path, monkeypatch):

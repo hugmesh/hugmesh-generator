@@ -515,9 +515,9 @@ def start_device_argv(plan_or_record, label: str = "", *, generator_dir: str = "
         env = envelope or RunEnvelope(jobs=1)
         # A device that was RESUMED from a save restarts from that same save. Round 1
         # dropped the record's boot_save here, so Start on a stopped resumed device
-        # booted its golden — a silent first boot, INTERNAL again, with every bit of
-        # state the save carried (a go-live flip included) gone. The save was never
-        # written, so the path still holds exactly what was saved.
+        # booted its golden — a silent first boot in the golden's baked posture, with
+        # every bit of state the save carried (a go-live flip included) gone. The save
+        # was never written, so the path still holds exactly what was saved.
         rec_save = str(getattr(rec, "boot_save", "") or "")
         if rec_save and str(getattr(rec, "mesh_net", "") or ""):
             # Same refusal as plan_from_save: this argv boots no mesh NIC, and the
@@ -741,12 +741,14 @@ def plan_mesh_save(plan: EmulationPlan, *, session: str = "", stamp: str = "",
 
 def save_mesh(plan: EmulationPlan, *, session: str = "", stamp: str = "",
               overwrite: bool = False, budget_bytes: int = 0, run=None,
-              disk_usage=None) -> emulation_save.MeshSaveReport:
-    """Save THIS plan's devices — one save-set, emulation_save's orchestration."""
+              disk_usage=None, read_posture=None) -> emulation_save.MeshSaveReport:
+    """Save THIS plan's devices — one save-set, emulation_save's orchestration (each
+    device's go-live posture is read from it before its pause and recorded)."""
     return emulation_save.save_mesh(
         plan.generator_dir, list(plan.rows), work_dir=plan.work_dir,
         session=session, stamp=stamp, overwrite=overwrite,
-        budget_bytes=budget_bytes, run=run, disk_usage=disk_usage)
+        budget_bytes=budget_bytes, run=run, disk_usage=disk_usage,
+        read_posture=read_posture)
 
 
 # ── status: THE reconciled truth ─────────────────────────────────────────────────────
@@ -1111,7 +1113,9 @@ def _print_status(st: MeshStatus) -> None:
         if r.device is not None and r.device.ssh_host_port:
             extra = f"  ssh 127.0.0.1:{r.device.ssh_host_port}"
         if r.device is not None and r.device.resumed_from_save:
-            extra += f"  resumed from save {r.device.boot_save}"
+            from .golive_target import save_origin
+            extra += (f"  resumed from save {r.device.boot_save} — "
+                      f"{save_origin(r.device.boot_save)}")
         print(f"  {r.label:<24} [{r.state:<10}] {verdict:<10} {r.detail}{extra}")
     for dev in st.unplanned:
         print(f"  {dev.label:<24} (not in this plan; state {dev.state or 'unknown'})")
@@ -1119,9 +1123,11 @@ def _print_status(st: MeshStatus) -> None:
 
 
 def _print_save_report(report: emulation_save.MeshSaveReport) -> int:
+    from .golive_target import posture_phrase
     for res in report.results:
         if res.ok:
-            print(f"  saved {res.label} -> {res.target}")
+            print(f"  saved {res.label} -> {res.target} (go-live posture when saved: "
+                  f"{posture_phrase(res.golive_posture)})")
             if res.keys_error:
                 print(f"    keys warning: {res.keys_error}")
             for piece in res.keys_copied:
@@ -1356,4 +1362,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from .entry import bootstrap as _bootstrap   # the Mac PATH hook: core/entry.py
+    _bootstrap()
     sys.exit(main())

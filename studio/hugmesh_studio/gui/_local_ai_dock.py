@@ -704,14 +704,10 @@ class LocalAIDock(QtWidgets.QFrame):
                                         "Start the local Ollama and the queue worker "
                                         "(runs scripts/local-ai.sh start; in Docker mode it "
                                         "starts the Studio's Ollama container first)")
-        if lai.windows_worker_note():
+        if lai.start_tooltip():
             # that tooltip names the bash script, which this build cannot run: say what
-            # the button does here, where it is pressed
-            self.start_btn.setToolTip(
-                "In Docker mode: start the Studio's Ollama container and wait until it "
-                "answers. With the system Ollama there is nothing to start from here: "
-                "Ollama for Windows runs in the background once installed.\n\n"
-                + lai.windows_worker_note())
+            # the button does here, where it is pressed (in this host's own words)
+            self.start_btn.setToolTip(lai.start_tooltip())
         self.start_btn.clicked.connect(self.start_assistant)
         self.work_btn = _styled_button("Current work",
                                        "Open a window with the queue, the drafts and the running builds")
@@ -1577,13 +1573,10 @@ class LocalAIDock(QtWidgets.QFrame):
         self.docker_stop_btn.setVisible(docker)
         st, gpu = self.docker_state, self.gpu
         if not docker:
-            if lai.windows_worker_note():
+            if lai.system_ollama_note():
                 # the .sh line below cannot run here; Ollama for Windows is a native app
-                self.docker_label.setText(
-                    "The Studio does not start or stop the system Ollama from here: "
-                    "Ollama for Windows runs in the background once installed (start it "
-                    f"from the Start menu when it is not answering; get it from "
-                    f"{lai.OLLAMA_DOWNLOAD}).")
+                # (and on a Mac without the GNU tools the Ollama app is)
+                self.docker_label.setText(lai.system_ollama_note())
                 return
             self.docker_label.setText(
                 "The Studio does not start or stop the system Ollama from here: Start "
