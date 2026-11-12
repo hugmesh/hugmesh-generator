@@ -1841,15 +1841,19 @@ class GoLiveWizard(QtWidgets.QWizard):
         now (both witnesses; "unknown (device not reachable)" when it cannot be asked),
         the save it booted from and the posture that save was taken in, and the journal.
         A picked binding that went stale is NOT asked — an ssh to its old port could
-        reach another device and show that one's posture as this one's. "" for this
-        host."""
+        reach another device and show that one's posture as this one's — and its save
+        and journal lines are the device's CURRENT record's (self.fresh), not the
+        picked one's: that boot_save and started_at belong to a boot that is over. ""
+        for this host."""
         t = self.target
         if t.is_local:
             return ""
-        stale = self.stale_binding()
-        posture = (golive_target.Posture(asked=False, error="re-scan the devices first")
-                   if stale else golive_target.read_posture(t))
-        return golive_target.device_report(self.work_dir, t, posture)
+        if self.stale_binding():
+            return golive_target.device_report(
+                self.work_dir, self.fresh(t),
+                golive_target.Posture(asked=False, error="re-scan the devices first"))
+        return golive_target.device_report(self.work_dir, t,
+                                           golive_target.read_posture(t))
 
     def nextId(self):
         """The default order, except that the export step is SKIPPED when no domain

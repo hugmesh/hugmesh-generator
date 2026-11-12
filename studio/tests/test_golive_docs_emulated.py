@@ -189,6 +189,33 @@ def test_ephemeral_banner_and_status_reads_the_device(section: str):
     assert "`hugmesh-go-live status`" in flat
     assert "`nft list table inet hugmesh_release_gate`" in flat
     assert "`unknown (device not reachable)`" in flat
+    # ...and each face's line, with its read time, as that face prints it (#1007 r2)
+    from hugmesh_studio.core import golive_target as gt
+    from hugmesh_studio.tui import golive as tui
+    read = gt.Posture(status="public", nft="public", reachable=True, at="<UTC time>")
+    now_line = gt.posture_line(read)
+    assert now_line.startswith("device posture now (read <UTC time>): PUBLIC")
+    assert flat.count("`device posture now (read <UTC time>): …`") == 2     # CLI, GUI
+    tui_line = gt.posture_line(read, when=tui.LAST_S)
+    assert tui_line.startswith("device posture at the last s (read <UTC time>): PUBLIC")
+    assert "`device posture at the last s (read <UTC time>): …`" in flat
+    assert "never calls it *now*" in flat
+    assert gt.posture_line(gt.Posture(asked=False, error="<why>")) == (
+        "device posture: unknown (not read) — <why>")
+    assert "`device posture: unknown (not read) — <why>` on every face" in flat
+    page = _read("studio", "hugmesh_studio", "gui", "pages", "golive.py")
+    for button in ("Refresh status", "Re-scan devices", "Recheck posture (driver status)"):
+        assert f"**{button}**" in flat and f'QPushButton("{button}")' in page, button
+    tui_src = _read("studio", "hugmesh_studio", "tui", "golive.py")
+    assert "`output of s (read <UTC time>):`" in flat
+    assert "`output of p (run <UTC time>):`" in flat
+    assert "`output of s (read <UTC time>): not shown — …`" in flat
+    assert 'f"output of {self.run_log_of}: not shown — ' in tui_src
+    assert 'of = f"s (read {self.posture.at})"' in tui_src
+    assert 'of = f"p (run {golive_target.utc_now()})"' in tui_src
+    assert ("*last booted from a save taken while PUBLIC (…) — it is not running "
+            "now*") in flat
+    assert "*resumed from save … — a save taken while PUBLIC (…)*" in flat
     assert "*during an earlier boot*" in flat
     assert "*booted from a save taken while PUBLIC (mesh-…, saved …)*" in flat
     assert "`golive_posture` in `mesh-save.json`" in flat
@@ -403,7 +430,7 @@ def test_flow_quotes_the_core_wording(section: str):
     assert REACH_LINE in flat
 
 
-# ── the section against what has landed (FG1 #927, FG2, FG5 #932; FG3 still open) ──
+# ── the section against what has landed (FG1 #927, FG2, FG5 #932, FG3 #926) ────────
 def test_status_callout_says_what_has_landed(section: str):
     flat = _flat(section)
     assert "**Status: specification." not in flat, "FG1 is in the tree; the callout is stale"
@@ -429,15 +456,16 @@ def test_status_callout_says_what_has_landed(section: str):
     assert "(group FG5) is in the tree as a CLI and Makefile lane only" in flat
     assert "`make mesh-emu-up FROM_SAVE=mesh-<stamp>`" in flat
     assert "is a later follow-up (group FG5)" not in flat
-    # FG3 (the harness proof lane) has not merged: the callout still says so. When it
-    # lands, this goes red on purpose, and the callout must be updated with it.
+    # FG3 (the harness proof lane) is in the tree (#926), and the callout says so and
+    # names the file. (This went red on purpose when the lane landed with the callout
+    # still saying "has not merged".)
     lane = [f for f in os.listdir(os.path.join(REPO, "tests", "qemu"))
             if "golive" in f or "go-live" in f]
-    if not lane:
-        assert "The harness proof lane (group FG3) has not merged" in flat
-    else:
-        assert "The harness proof lane (group FG3) has not merged" not in flat, (
-            f"FG3's proof lane is in the tree ({lane}): update the status callout")
+    assert "golive-emulated.sh" in lane, lane
+    assert "has not merged" not in flat and "except the proof lane" not in flat
+    assert "**Status: landed.**" in flat
+    assert ("The harness proof lane (group FG3) is in the tree too, as "
+            "`tests/qemu/golive-emulated.sh`") in flat
 
 
 def _fake_target(gt, tmp_path):

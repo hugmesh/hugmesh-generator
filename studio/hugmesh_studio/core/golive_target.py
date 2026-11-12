@@ -93,7 +93,8 @@ __all__ = [
     "write_journal", "read_journal", "earlier_boot", "journal_status",
     "POSTURE_PUBLIC", "POSTURE_INTERNAL", "POSTURE_MIXED", "POSTURE_UNKNOWN",
     "RELEASE_GATE_TABLE", "Posture", "posture_argv", "parse_posture", "read_posture",
-    "posture_phrase", "save_origin", "boot_origin", "device_report",
+    "posture_phrase", "posture_line", "READ_NOW", "utc_now", "save_origin", "boot_origin",
+    "device_report",
     "mechanism_reachability", "refuse_private_ingress", "EPHEMERAL_NOTE",
     "HEADSCALE_REFUSED_PROVIDERS", "HEADSCALE_REFUSED_MECHANISMS", "headscale_refusal",
     "add_cli_arguments", "run_studio_cli", "main",
@@ -1024,7 +1025,8 @@ def parse_posture(text: str) -> tuple[str, str, bool]:
     return status, nft, complete
 
 
-def _utc_now() -> str:
+def utc_now() -> str:
+    """Now, as every read time and journal entry here is written (UTC, to the second)."""
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
@@ -1037,7 +1039,7 @@ def read_posture(target: GoLiveTarget, run=None, timeout: float = 45,
     each with the refusal as the reason. An ssh that failed (exit 255, a timeout) is
     not reachable either. Never raises."""
     run = run or subprocess.run
-    at = now or _utc_now()
+    at = now or utc_now()
     why = refusal(target)
     if why:
         channel = target.running and target.ssh_port > 0 and bool(target.ssh_base_argv)
@@ -1086,22 +1088,50 @@ def save_origin(boot_save: str) -> str:
 def boot_origin(target: GoLiveTarget) -> str:
     """"" for this host or a boot from the golden image; for a boot from a save, which
     save and the posture it was taken in (:func:`save_origin`). That is the posture
-    the disk came up with — what the device says NOW is :func:`read_posture`'s."""
+    the disk came up with — what the device says NOW is :func:`read_posture`'s. A
+    record that is not running (stopped, or gone) has no boot to speak of: its line
+    says *last* booted, and that it is not running."""
     if target.is_local or not target.boot_save:
         return ""
-    return f"booted from {save_origin(target.boot_save)}"
+    origin = save_origin(target.boot_save)
+    if not target.running:
+        return f"last booted from {origin} — it is not running now"
+    return f"booted from {origin}"
 
 
-def device_report(work_dir: str, target: GoLiveTarget, posture: Posture) -> str:
+#: ``when`` for a reading printed as it is taken (CLI ``status``, a GUI pane's refresh).
+READ_NOW = "now"
+
+
+def posture_line(posture: Posture, when: str = READ_NOW) -> str:
+    """The one posture line every face prints. A reading that was taken carries WHEN
+    it was read: ``device posture now (read <UTC>): …`` where the face reads as it
+    prints, ``device posture <when> (read <UTC>): …`` where it quotes an earlier
+    reading (the TUI's plan screen: ``at the last s``). A reading with no time on it
+    is never called ``now``. Nothing sent at all is ``device posture: unknown (not
+    read) — why``: no ``now``, and no time, because there was no read."""
+    if not posture.asked:
+        return f"device posture: {posture.sentence()}"
+    if not posture.at:
+        return f"device posture (read time not recorded): {posture.sentence()}"
+    return f"device posture {when} (read {posture.at}): {posture.sentence()}"
+
+
+def device_report(work_dir: str, target: GoLiveTarget, posture: Posture, *,
+                  when: str = READ_NOW) -> str:
     """What every face shows under an emulated device's status, one fact per line: the
-    posture the device reports NOW (``posture`` — :func:`read_posture`, or an unasked
-    Posture when the face must not ssh), the save it booted from, and the journal of
-    what this host asked of it. "" for this host."""
+    posture the device reported (``posture`` — :func:`read_posture`, or an unasked
+    Posture when the face must not ssh) with its read time (:func:`posture_line`), the
+    save it booted from, and the journal of what this host asked of it. "" for this
+    host.
+
+    ``target`` must be the device's CURRENT record: the save line and the journal's
+    "earlier boot" test are both made against it. A face whose pick went stale passes
+    the fresh record (:func:`rebind`), never the one it picked — that one's save and
+    started_at belong to a boot that is over."""
     if target.is_local:
         return ""
-    head = ("device posture now" + (f" (read {posture.at})" if posture.at else "")
-            if posture.asked else "device posture")
-    lines = [f"{head}: {posture.sentence()}"]
+    lines = [posture_line(posture, when)]
     origin = boot_origin(target)
     if origin:
         lines.append(origin)
@@ -1222,11 +1252,16 @@ def run_cli(args, *, out=None, call=None, isatty=None) -> int:
         say(f"!! {blocker}")
         if args.verb == "status" and t.is_remote:
             # No guess: a device that could not be reached reads "unknown", with the
-            # save it booted from and the journal still said. A guest that answered
-            # the probe but bakes no driver is still asked (nft can say what it is).
-            reached = not (refusal(t) or drv.probe().error)
-            say(device_report(work, t, read_posture(t) if reached
-                              else Posture(error=blocker, at=_utc_now())))
+            # save it booted from and the journal still said. Which "unknown" is
+            # read_posture's to say for a record this host refuses (it sends nothing:
+            # a client image is "not read", a stopped device "not reachable") and
+            # for a guest that answered the probe but bakes no driver (it IS asked:
+            # nft can say what it is). Only a probe that got no answer is said here.
+            if refusal(t) or not drv.probe().error:
+                posture = read_posture(t)
+            else:
+                posture = Posture(error=blocker, at=utc_now())
+            say(device_report(work, t, posture))
         return 2
     if args.verb == "status":
         say(drv.status_text())

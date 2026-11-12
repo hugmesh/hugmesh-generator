@@ -11,9 +11,11 @@ Every ssh argv is pinned. The laws these tests hold:
   * the WSL and native-Windows terminal shapes.
 Nothing here starts ssh: subprocess.run / Popen are fakes that record argv and stdin.
 """
+import dataclasses
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -1116,6 +1118,114 @@ def test_cli_status_of_an_unreachable_device_is_unknown(tmp_path, monkeypatch):
                     "--generator-dir", str(tmp_path)])
     assert rc == 2 and calls == []
     assert "unknown (device not reachable) — rpi5/pki is not running" in out
+
+
+def test_cli_status_of_a_client_image_says_not_read(tmp_path, monkeypatch):
+    """Round 2 of #1007 (R7): `status` on a running CLIENT image printed 'device
+    posture now (read T): unknown (device not reachable)'. It is reachable, it was not
+    asked and nothing was read: 'unknown (not read)', no 'now', no read time."""
+    work = _work(tmp_path, _record(label="x86/laptop", platform="x86", role="laptop"))
+    calls = []
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run",
+                        lambda argv, **kw: calls.append(argv))
+    rc, out = _cli(["status", "--target", "x86/laptop", "--work", work,
+                    "--generator-dir", str(tmp_path)])
+    assert rc == 2 and calls == [], "a refused client was sent something"
+    lines = out.splitlines()
+    assert lines[0].startswith("!! x86/laptop is a laptop client")
+    assert lines[1].startswith("device posture: unknown (not read) — x86/laptop is a "
+                               "laptop client — client images bake no go-live driver")
+    assert "posture now" not in out and "(read " not in out
+    assert "not reachable" not in out
+
+
+def test_cli_status_of_a_guest_with_no_driver_still_asks_its_firewall(tmp_path,
+                                                                      monkeypatch):
+    """The other half of the blocker path (R7): a SERVER guest that answers the probe
+    but bakes no driver is blocked, yet it IS asked — its nft table can still say what
+    it enforces. Only a probe that got no answer is 'not reachable' unasked."""
+    work = _work(tmp_path, _record())
+    run = FakeRun(probe_text="::driver\n::cluster-domain\nexample.org\n::domains\n\n"
+                             "::release-state\ninternal\n::end\n",
+                  posture_text="sh: hugmesh-go-live: not found\n@@nft@@\n" + NFT_INTERNAL
+                               + "@@nftrc=0@@\n@@end@@\n")
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run", run)
+    rc, out = _cli(["status", "--target", "rpi5/pki", "--work", work,
+                    "--generator-dir", str(tmp_path)])
+    assert rc == 2
+    assert "no go-live driver" in out.splitlines()[0]
+    assert len([argv for argv, _in in run.calls if "@@nftrc" in argv[-1]]) == 1
+    assert re.search(r"^device posture now \(read \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\): "
+                     r"MIXED — hugmesh-go-live status says unknown, the nft release "
+                     r"gate says internal$", out, re.M), out
+    assert "converges them" not in out               # an absent driver is not a lag
+
+
+# ── the one posture line every face prints (round 2 of #1007) ───────────────────────
+def test_posture_line_always_carries_the_read_time(tmp_path):
+    read = gt.Posture(status="internal", nft="internal", reachable=True,
+                      at="2026-11-11T15:31:14Z")
+    assert gt.posture_line(read) == (
+        "device posture now (read 2026-11-11T15:31:14Z): INTERNAL — both witnesses say "
+        "internal (hugmesh-go-live status; nft table inet hugmesh_release_gate)")
+    # a face that QUOTES an earlier reading says so instead of "now" — with the time
+    quoted = gt.posture_line(read, when="at the last s")
+    assert quoted.startswith("device posture at the last s (read 2026-11-11T15:31:14Z): "
+                             "INTERNAL — ")
+    assert "now" not in quoted
+    # a reading with no time on it is never called "now"
+    untimed = gt.posture_line(dataclasses.replace(read, at=""))
+    assert untimed.startswith("device posture (read time not recorded): INTERNAL — ")
+    assert "now" not in untimed
+    # nothing sent: no "now" and no time, whatever the caller passes
+    for when in (gt.READ_NOW, "at the last s"):
+        unasked = gt.posture_line(gt.Posture(asked=False, error="re-scan first",
+                                             at="2026-11-11T15:31:14Z"), when=when)
+        assert unasked == "device posture: unknown (not read) — re-scan first"
+    # an ssh that failed WAS a read attempt, at a time
+    down = gt.posture_line(gt.Posture(error="ssh failed", at="2026-11-11T15:31:14Z"))
+    assert down == ("device posture now (read 2026-11-11T15:31:14Z): unknown (device "
+                    "not reachable) — ssh failed")
+    # device_report's first line is that line, for either wording
+    t = _target(tmp_path)
+    assert gt.device_report(str(tmp_path), t, read).splitlines()[0] == gt.posture_line(read)
+    assert gt.device_report(str(tmp_path), t, read, when="at the last s") == quoted
+    assert _STAMP.fullmatch(gt.utc_now())
+    assert _STAMP.fullmatch(gt.read_posture(
+        t, run=FakeRun(posture_text=POSTURE_PUBLIC_OUT)).at)
+
+
+_STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
+
+
+def test_the_save_line_is_about_a_boot_that_is_running(tmp_path):
+    """A record that is not running (stopped, or gone since it was picked) keeps the
+    save its next Start resumes from. That is not the boot of a running device: the
+    line says LAST booted, and that it is not running."""
+    saved = gt.Posture(status="public", nft="public", reachable=True).as_record()
+    t = _target(tmp_path, label="x86/pki", platform="x86",
+                boot_save=_save_set(tmp_path, saved))
+    origin = ("a save taken while PUBLIC (mesh-20261111T152704Z, saved "
+              "2026-11-11T15:30:29Z)")
+    assert gt.boot_origin(t) == f"booted from {origin}"
+    stopped = dataclasses.replace(t, running=False)
+    assert gt.boot_origin(stopped) == f"last booted from {origin} — it is not running now"
+    report = gt.device_report(str(tmp_path), stopped, gt.read_posture(stopped))
+    assert report.splitlines()[1] == gt.boot_origin(stopped)
+    # a pick gone stale is reported against the record as it is NOW (rebind), so a
+    # restart from the golden image prints no save line at all
+    golden = _record(label="x86/pki", platform="x86", started_at="2026-11-11T16:00:00Z")
+    from hugmesh_studio.core.qemu_devices import device_from_record
+    rows = [gt.target_from_device(device_from_record(golden))]
+    fresh = gt.rebind(t, rows)
+    assert gt.binding_change(t, rows) and not fresh.boot_save
+    unasked = gt.Posture(asked=False, error="re-scan the devices first")
+    assert gt.device_report(str(tmp_path), fresh, unasked) == (
+        "device posture: unknown (not read) — re-scan the devices first")
+    # ...and a record that is gone is the picked one, NOT running
+    gone = gt.rebind(t, [])
+    assert gt.device_report(str(tmp_path), gone, unasked).splitlines()[1] == (
+        f"last booted from {origin} — it is not running now")
 
 
 def test_journal_refused_after_a_gui_launch_keeps_the_launch_wording(tmp_path):

@@ -750,6 +750,57 @@ def test_every_pane_after_a_boot_from_a_save_taken_while_public_says_public(
         w.deleteLater()
 
 
+def test_a_stale_pick_reports_the_current_boot_not_the_one_it_picked(
+        qapp, guest, tmp_path, monkeypatch):
+    """Round 2 of #1007 (the refuter's P7, on this face): picked while booted from a
+    save taken while PUBLIC, then restarted from the golden image. The pane went on
+    printing 'booted from a save taken while PUBLIC' — a line about a boot that was
+    over — and tested the journal against that boot's started_at."""
+    monkeypatch.setattr(golive_mod.GoLiveDriver, "status_text", _REAL_STATUS_TEXT)
+    _boot_from_a_save_taken_while_public(guest, tmp_path)
+    w = golive_mod.GoLiveWizard(GENERATOR_DIR, target="rpi5/pki")
+    w.show()
+    try:
+        flip = _at_flip(w)
+        save = w.target.boot_save
+        assert save and "booted from a save taken while PUBLIC" in flip.status.toPlainText()
+        fake.set_public(guest, False)
+        fake.register(guest, label="rpi5/pki", started_at="2026-11-11T16:00:00Z")  # golden
+        asked = len([c for c in guest.calls() if "@@nftrc" in c[-1]])
+        flip._refresh()
+        shown = flip.status.toPlainText()
+        assert len([c for c in guest.calls() if "@@nftrc" in c[-1]]) == asked
+        assert w.target.boot_save == save            # the pick itself is still the old one
+        assert shown.splitlines()[0] == ("device posture: unknown (not read) — re-scan "
+                                         "the devices first")
+        assert "booted from" not in shown and "PUBLIC" not in shown
+        assert "during an earlier boot (the device booted again at " \
+            "2026-11-11T16:00:00Z)" in shown
+        assert "booted again at 2026-11-11T15:31:13Z)" not in shown.split("\n\n")[0]
+        # what a person sees: the unread posture leads the pane, whole, inside it
+        _shoot(w, "golive-flip-stale-pick-current-boot", tmp_path)
+        st = flip.status
+        assert st.isVisible() and w.rect().contains(_rect_in(st, w))
+        block = st.firstVisibleBlock()
+        assert block.text().startswith("device posture: unknown (not read)")
+        geo = st.blockBoundingGeometry(block).translated(st.contentOffset())
+        assert geo.top() >= 0 and geo.bottom() <= st.viewport().height(), \
+            (geo, st.viewport().height())
+        assert st.fontMetrics().horizontalAdvance(block.text()) <= st.viewport().width()
+        # stopped (its record still names the save a Start resumes from): the LAST
+        # boot, said as that
+        fake.register(guest, label="rpi5/pki", started_at="2026-11-11T16:00:00Z",
+                      state="stopped", boot_save=save)
+        flip._refresh()
+        shown = flip.status.toPlainText()
+        assert ("last booted from a save taken while PUBLIC (mesh-20261111T152704Z, "
+                "saved 2026-11-11T15:30:29Z) — it is not running now") in shown
+        assert "\nbooted from" not in shown
+    finally:
+        w.close()
+        w.deleteLater()
+
+
 def test_this_host_off_node_cannot_flip_whatever_is_typed(wiz, baked_domain, monkeypatch,
                                                           launched):
     monkeypatch.setattr(golive_target, "local_node_refusal",

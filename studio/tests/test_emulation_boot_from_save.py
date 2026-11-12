@@ -1,8 +1,8 @@
 """Boot from a save (FG5) — the facade/manifest half, hermetically.
 
 A go-live flipped inside an emulated mesh lasts only while its devices run: a
-restart boots the golden image INTERNAL again. Saving the mesh and booting it back
-from the saves is how the posture survives. The shell half (launchers, runner,
+restart boots the golden image again, in whatever posture that image bakes. Saving
+the mesh and booting it back from the saves is how the posture survives. The shell half (launchers, runner,
 entrypoint) is pinned by tests/qemu/save_test.sh; this file pins what the Studio
 authors and reads:
 
@@ -296,6 +296,52 @@ def test_status_json_carries_the_save_a_device_resumed_from(gen_session, tmp_pat
     assert rows["x86/backend"]["started_at"] == "2026-11-09T00:00:00Z"
 
 
+def test_cli_status_says_the_posture_each_resumed_devices_save_was_taken_in(
+        gen_session, tmp_path, monkeypatch, capsys):
+    """`mesh-emu-status` (the text form): a device resumed from a save says which
+    save and the posture that save was TAKEN in (golive_target.save_origin) — the
+    posture its disk came up with. A golden boot says nothing of the kind, and a set
+    saved before the posture was recorded says exactly that, never a guess."""
+    from hugmesh_studio.core import golive_target as gt
+    gen, sess = gen_session
+    work = str(tmp_path / "work")
+    disks = {}
+    for name, label, posture in (
+            ("mesh-20261111T152704Z", "x86/backend",
+             gt.Posture(status="public", nft="public", reachable=True).as_record()),
+            ("mesh-20261101T000000Z", "x86/frontend", None)):
+        sdir = os.path.join(work, "saves", name)
+        os.makedirs(sdir)
+        disks[label] = os.path.join(sdir, qd.save_basename(label))
+        with open(disks[label], "w", encoding="utf-8") as fh:
+            fh.write("qcow2")
+        dev = {"label": label, "target": disks[label], "ok": True}
+        if posture is not None:
+            dev["golive_posture"] = posture
+        with open(os.path.join(sdir, es.MANIFEST_NAME), "w", encoding="utf-8") as fh:
+            json.dump({"session": name, "created_at": "2026-11-11T15:30:29Z",
+                       "devices": [dev]}, fh)
+    _registry(work, sess, **{lb: {"boot_save": disk} for lb, disk in disks.items()})
+    monkeypatch.setattr(em, "_runner_devices", lambda g, w: None)
+    monkeypatch.setattr(em, "_docker_running_names",
+                        lambda: {"hugmesh-qemu-dev-" + qd.safe_label(lb)
+                                 for lb in LABELS})
+    assert em.main(["status", "--generator-dir", gen, "--work", work]) == 0
+    rows = {ln.split()[0]: ln for ln in capsys.readouterr().out.splitlines()
+            if ln.startswith("  ") and "/" in ln.split()[0]}
+    assert set(rows) == set(LABELS)
+    assert rows["x86/backend"].endswith(
+        f"resumed from save {disks['x86/backend']} — a save taken while PUBLIC "
+        "(mesh-20261111T152704Z, saved 2026-11-11T15:30:29Z)")
+    assert rows["x86/frontend"].endswith(
+        f"resumed from save {disks['x86/frontend']} — a save (mesh-20261101T000000Z, "
+        "saved 2026-11-11T15:30:29Z) whose go-live posture was not recorded when it "
+        "was saved")
+    golden = [lb for lb in LABELS if lb not in disks]
+    assert golden and all("save" not in rows[lb] for lb in golden)
+    assert all("INTERNAL" not in ln for ln in rows.values())
+
+
 def test_cli_plan_from_save_previews_and_boots_nothing(gen_session, tmp_path,
                                                        monkeypatch, capsys):
     gen, sess = gen_session
@@ -526,7 +572,8 @@ def test_the_mesh_save_checks_against_the_records_artifacts_dir(tmp_path):
 
 def test_a_stopped_resumed_device_restarts_from_its_save(gen_session, tmp_path):
     """Round 1 dropped the record's boot_save: Start on a stopped RESUMED device
-    booted its golden — INTERNAL again, the save's go-live posture gone."""
+    booted its golden image — the save's go-live posture gone, whatever the golden
+    bakes in its place."""
     gen, sess = gen_session
     work = str(tmp_path / "work")
     save = os.path.join(work, "saves", f"mesh-{STAMP}", "x86_backend.qcow2")

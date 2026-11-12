@@ -60,6 +60,12 @@ THIS_HOST = "This host"
 #: how many lines of a plan run the plan stage keeps on screen
 PLAN_TAIL = 40
 
+#: The plan screen redraws on every key and never sshes to draw, so the posture it
+#: shows is the reading the last ``s`` took, however long ago that was (the operator
+#: may have pasted the flip into another terminal since). It is labelled as that, with
+#: its read time — never ``now`` (golive_target.posture_line).
+LAST_S = "at the last s"
+
 #: The plan stage's input commands — the GUI Inputs step's fields, one command each:
 #: (command, GoLiveOptions attribute, the provider input that offers it (GoLiveProvider
 #: .offers), the driver flag, what it takes). Offered only for a provider that takes it.
@@ -111,6 +117,9 @@ class GoLiveScreen:
         self.work_dir = ""                     # "" = qemu_devices.default_work_dir
         self._rows: list = []
         self.run_log: list[str] = []           # the last s / l / p output
+        #: which verb wrote run_log, and when (UTC): the ``output`` heading says both,
+        #: because what a device said is only as current as the moment it said it
+        self.run_log_of = ""
         #: the picked device's posture as it said it at the last ``s`` (read over ssh,
         #: both witnesses); None until then. The plan screen redraws on every key, so
         #: it shows this reading with its time instead of sshing per redraw.
@@ -188,9 +197,16 @@ class GoLiveScreen:
             return why
         if (old[0].kind, old[0].label) != (target.kind, target.label):
             self.opts.provider = ""
-        self.run_log = []
-        self.posture = None                     # read from ANOTHER binding
+        self._forget_what_was_read()            # it was read from ANOTHER binding
         return ""
+
+    def _forget_what_was_read(self) -> None:
+        """Drop everything quoted from a device: the last s / l / p output and the
+        posture reading. Called whenever the target becomes another binding (a pick,
+        a re-bind), so nothing an earlier boot or another device said stays on
+        screen as this one's."""
+        self.run_log, self.run_log_of = [], ""
+        self.posture = None
 
     def fresh(self, j, target):
         """``target``'s device as the work dir says it is NOW (golive_target.rebind):
@@ -207,8 +223,7 @@ class GoLiveScreen:
         fresh = self.fresh(j, t)
         if not golive_target.same_binding(fresh, t):
             self.target, self.driver = fresh, None
-            self.run_log = []
-            self.posture = None                 # it was the earlier boot's
+            self._forget_what_was_read()        # it was the earlier boot's
         return golive_target.refusal(self.target) or (
             self._driver(j).blocker() if self.target.running else "")
 
@@ -461,7 +476,7 @@ class GoLiveScreen:
                 j.status = why
                 return
         setattr(self.opts, attr, value)
-        self.run_log = []
+        self.run_log, self.run_log_of = [], ""
         j.status = f"{flag} {value}" if value else f"{flag} cleared"
 
     def _lines_plan(self, j) -> list[str]:
@@ -524,21 +539,35 @@ class GoLiveScreen:
         if reach:
             out.append(f"from {t.label}: {reach}")
         out.append(f"EPHEMERAL on {t.label}: {golive_target.EPHEMERAL_NOTE}.")
-        # the last reading (s), never a guess; a stale pick is not quoted at all
-        if self.stale_binding(j):
+        # The last reading (s) with its read time, never a guess. A stale pick is
+        # not quoted at all — neither its posture nor (below) anything it printed —
+        # and the save and journal lines are the CURRENT record's: the picked one's
+        # boot_save and started_at belong to a boot that is over.
+        stale = bool(self.stale_binding(j))
+        if stale:
             posture = golive_target.Posture(asked=False, error="t, then r: re-scan")
+            now = self.fresh(j, t)
         else:
             posture = self.posture or golive_target.Posture(
                 asked=False, error="s reads it from the device")
-        out += golive_target.device_report(self._work(j), t, posture).splitlines()
+            now = t
+        out += golive_target.device_report(self._work(j), now, posture,
+                                           when=LAST_S).splitlines()
         tok = (f"token file (sent over ssh stdin, never argv): {self.opts.token_file}"
                if self.opts.token_file else
                "token: none (tf PATH names a HOST file whose content is sent over ssh "
                "stdin into a root-only file on the device, deleted after the run)")
         if p is not None and p.offers("token"):
             out.append(tok)
-        if self.run_log:
-            out += ["", "output:"] + ["  " + ln for ln in self.run_log[-PLAN_TAIL:]]
+        if self.run_log and stale:
+            # what the earlier boot (or whatever held that port) said is not this
+            # device's word: withheld until the pick is re-bound, which drops it
+            out += ["", f"output of {self.run_log_of}: not shown — it was read before "
+                    f"{t.label} changed, so it is not this device's word any more "
+                    "(t, then r: re-scan)."]
+        elif self.run_log:
+            out += ["", f"output of {self.run_log_of}:"] + [
+                "  " + ln for ln in self.run_log[-PLAN_TAIL:]]
         out += ["",
                 f"The flip runs on {t.label}'s own TTY — paste into a terminal (it asks "
                 "you to confirm; there is no way around that):",
@@ -558,16 +587,24 @@ class GoLiveScreen:
         lines: list[str] = []
         if verb == "status":
             lines = d.status_text().splitlines()
-            # both witnesses, read from the device now (the plan screen quotes it)
+            # both witnesses, read from the device (the plan screen quotes it). The
+            # line stays on screen until the next s / l / p, so it carries its read
+            # time and is never called "now".
             self.posture = golive_target.read_posture(self.target)
-            lines.append(f"device posture now: {self.posture.sentence()}")
+            lines.append(golive_target.posture_line(self.posture, when=LAST_S))
+            of = f"s (read {self.posture.at})"
         elif verb == "list":
+            # no time: the driver reads the device's registry ONCE per binding (when
+            # it is picked or re-bound), so `l` shows that list, not a fresh read
+            of = "l"
             for pr in d.providers():
                 reach = golive_target.mechanism_reachability(pr.mechanism, self.target,
                                                              pr.id)
                 lines.append(f"{pr.id} {pr.mechanism} {pr.status} {pr.title}"
                              + (f"  [{reach}]" if reach else ""))
         else:
+            # a plan is RUN on the device (it writes there), from this moment
+            of = f"p (run {golive_target.utc_now()})"
             rc = d.run("plan", self.opts, on_line=lines.append)
             lines.append(f"=== plan exited {rc} ===")
             out = golive_target.artifacts_dir(self._work(j), self.target.label)
@@ -575,7 +612,7 @@ class GoLiveScreen:
                 lines.append(f"artifacts copied back to {out}:")
                 lines += [f"  {n}" for n in sorted(os.listdir(out))]
             j.status = f"plan on {self.target.label} exited {rc}"
-        self.run_log = lines
+        self.run_log, self.run_log_of = lines, of
 
     def _feed_plan(self, j, line: str) -> None:
         if line.lower() == "b":
