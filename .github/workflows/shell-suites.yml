@@ -213,7 +213,14 @@
 #       a container runtime INSIDE the job container (it starts casdoor itself);
 #       alpine:3 has neither docker nor podman and no daemon socket is mounted
 #   * tests/device-registry/test-layer-a-headscale-acl.sh
-#       the hugmesh-admin-bff-api sibling checkout, for the BFF-side Layer-A compiler
+#       NOT for want of the hugmesh-admin-bff-api sibling checkout: that repository
+#       is public now, and the layer-a job below checks it out at a pinned commit.
+#       It stays out because two of its checks (policy mode, `file` vs the BFF's
+#       `database`) are red against the BFF by design until the hugmesh-generator#634
+#       cut-over flips them (#634 item 4). Its cross-repo fixture identity leg DOES
+#       gate every pull request, as tests/device-registry/test-layer-a-bff-fixture-identity.sh
+#       in the layer-a job. Under CI it no longer exits 3 for a missing sibling: it
+#       fails with exit 1.
 #   * tests/stack/test-gateway-auth-flag-parity.sh
 #       the hugmesh-gateway sibling checkout. It compares the EFFECTIVE auth-carrier
 #       flags on the two lanes, and "effective" means resolving each key through the
@@ -398,6 +405,31 @@ jobs:
           # 2026-11-04, in alpine:3 with this job's apk set (checkout copied in;
           # busybox grep/sed/diff/cmp): 134 passed / 0 failed. Mutation-tested
           # on a Gentoo host: 23 planted defects, 23 caught.
+          # tests/qemu/boot_stall_test.sh and tests/scripts/test-udev-coldplug-guard.sh
+          # (2026-11-10): the lost-udev-coldplug fix. The first drives the REAL
+          # ssh-wait loop of docker-entrypoint.sh (fake ssh, fake clock) over the
+          # captured consoles of a stalled and a healthy x86 display-door boot; the
+          # second runs specs/usr/libexec/udev-coldplug-guard under busybox sh against
+          # a fake root (sysfs + udevd's rules dirs) + udevadm and executes the x86
+          # build's sysinit wiring against a scratch sysroot. MEASURED, 2026-11-11, in
+          # alpine:3 + bash coreutils (busybox sh): 33 passed / 0 failed and 107 passed
+          # / 0 failed, 40 of 40 runs green with 8 suites in parallel plus CPU load (the
+          # ping-poll checks read the clock). Mutation-tested on a Gentoo host: 36
+          # planted defects, 36 caught.
+          # tests/qemu/golive_emulated_test.sh (2026-11-09): the go-live-on-an-
+          # emulated-device proof lane (tests/qemu/golive-emulated.sh). Hermetic:
+          # `ssh` is a PATH shim that records argv and runs the remote command
+          # against a throwaway guest root with the REAL hugmesh-go-live driver;
+          # it pins loopback-only destinations, plan/commit/rollback argv, commit
+          # and rollback on `ssh -tt` with 'y' typed on a pty, and NO -y /
+          # GL_ASSUME_YES / token on any argv; a rollback that never converges, an
+          # absent/truncated/empty nft table or a read cut off before its rc marker
+          # (unknown, never public) and a status/nft disagreement all fail. Needs
+          # python3 (pty) only. MEASURED, 2026-11-11, in alpine:3 (bash python3
+          # coreutils util-linux; busybox grep/sed): 121 passed / 0 failed.
+          # Mutation-tested on a Gentoo host: 18 planted defects in the lane in
+          # round 2, 17 caught; round 3's two missing-rc-marker mutants, both caught
+          # (they survived the round-2 suite). The survivor is named in the PR.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
@@ -458,6 +490,8 @@ jobs:
             tests/qemu/qemu-e2e-lane_test.sh
             tests/qemu/display_door_test.sh
             tests/qemu/display_argv_test.sh
+            tests/qemu/boot_stall_test.sh
+            tests/qemu/golive_emulated_test.sh
             tests/qemu/no_egress_argv_test.sh
             tests/requested-atoms-resolvable.sh
             tests/scripts/test-admin-bff-mesh-token-secret-refs.sh
@@ -499,6 +533,7 @@ jobs:
             tests/scripts/test-installer-ui-node-default.sh
             tests/scripts/test-intltool-preseed.sh
             tests/scripts/test-kernel-artifact-cache.sh
+            tests/scripts/test-keys-breakglass-root-key.sh
             tests/scripts/test-kind-addon-channel.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
             tests/scripts/test-kind-doctor.sh
@@ -538,6 +573,7 @@ jobs:
             tests/scripts/test-tools-path-lib.sh
             tests/scripts/test-tor-export-sync.sh
             tests/scripts/test-tor-node-contract.sh
+            tests/scripts/test-udev-coldplug-guard.sh
             tests/scripts/test-verify-artifact-neutrality-frite.sh
             tests/scripts/test-vm-display-guest.sh
             tests/scripts/test-virtual-display-kernel.sh
@@ -650,6 +686,7 @@ jobs:
               tests/scripts/test-mfa-required-rules.sh
               tests/scripts/test-passhash-lib.sh
               tests/scripts/test-standalone-login-firstboot.sh
+              tests/scripts/test-subject-revocation-ttl.sh
               tests/scripts/test-pki-role-san-coverage.sh
               tests/scripts/test-provision-keys-escrow-guard.sh
               tests/scripts/test-python-targets-seed.sh
@@ -657,6 +694,7 @@ jobs:
               tests/scripts/test-url-embedded-credentials.sh
               tests/scripts/test-docs-command-coverage.sh
               tests/scripts/test-x86-artifact-integrity.sh
+              tests/scripts/test-x86-build-sudoers-strip.sh
               tests/scripts/test-x86-live-root-pack.sh
               tests/stack/test-anubis-flip-wiring.sh
               tests/stack/test-gen-route-access-env.sh
@@ -1066,6 +1104,85 @@ jobs:
               s=$?; echo "FAIL($s) $t"
               case "$s" in
                 2) echo "::error::$t exited 2 — it could not run at all (docker or the kindest/node image); that is a job failure, not a skip" ;;
+                141) echo "::warning::$t exited 141 (SIGPIPE) — a pipeline stage was killed mid-write; this is NOT an assertion failure" ;;
+                137) echo "::warning::$t exited 137 (SIGKILL) — almost always the OOM killer on the runner" ;;
+                124) echo "::warning::$t exited 124 — it hit the timeout" ;;
+              esac
+              rc=1; failed="$failed $t($s)"
+            fi
+            echo "::endgroup::"
+            ran=$((ran+1))
+          done
+          echo "── ran $ran suite(s) ──"
+          [ -z "$failed" ] || { echo "::error::failed:$failed"; }
+          exit $rc
+
+  layer-a:
+    name: shell suites (layer-a cross-repo)
+    runs-on: ubuntu-latest
+    # The cross-repo leg of the Layer-A parity contract. The node-side renderer
+    # (specs/usr/sbin/gen-headscale-policy.sh) and hugmesh-admin-bff-api's dark
+    # HeadscaleAclCompiler (the ONLY policy writer after the #634 cut-over, decision
+    # 101 = B) are held to one shared golden; this job checks the BFF's copy is the
+    # same bytes as ours, that the renderer still emits it, and that neither copy
+    # gives a security tag an owner. No job ran that comparison before, and the BFF's
+    # copy kept the pre-#896 owners on tag:superadmin and tag:dev_* unseen.
+    #
+    # THE SIBLING IS PINNED, not main: a change on the BFF's main cannot turn this
+    # repo's pull requests red, and a pin bump is a reviewed edit here. Bump
+    # LAYERA_BFF_PIN (a full 40-hex commit of hugmesh/hugmesh-admin-bff-api) whenever
+    # the BFF side of the contract changes; the run-suites step asserts the checkout
+    # is that commit. The suite exits 1 (never 0, never 3) when the checkout is absent.
+    # MEASURED 2026-11-11 in alpine:3 with this job's apk set and CI=true, against the
+    # BFF fix commit pinned below: 24 passed / 0 failed in ~11 s (its negative controls
+    # include three runs of test-layer-a-headscale-acl.sh on an absent or partial
+    # sibling). Against hugmesh-admin-bff-api main de019243 (the pre-fix golden): 2
+    # failed (the golden DIFFERS; owners on tag:superadmin and tag:dev_*).
+    timeout-minutes: 10
+    container:
+      image: alpine:3
+    env:
+      LAYERA_BFF_PIN: 1fb23d8f2602b867c98297b8506a5f3e5b3a8916
+    steps:
+      - run: apk add --no-cache bash coreutils diffutils gawk git grep jq openssl sed
+      - uses: actions/checkout@v4
+      - name: check out hugmesh-admin-bff-api at the pin
+        uses: actions/checkout@v4
+        with:
+          repository: hugmesh/hugmesh-admin-bff-api
+          ref: ${{ env.LAYERA_BFF_PIN }}
+          path: .layera-siblings/hugmesh-admin-bff-api
+          persist-credentials: false
+      - name: trust both checkouts
+        # Container jobs run as root against checkouts git considers foreign; without
+        # this, `git rev-parse HEAD` in the sibling fails and the pin check below
+        # cannot see which commit it got.
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/.layera-siblings/hugmesh-admin-bff-api"
+      - name: preflight
+        run: |
+          missing=""
+          for b in bash jq openssl gawk cmp diff git; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          [ -z "$missing" ] || { echo "::error::preflight: missing$missing"; exit 1; }
+          head="$(git -C .layera-siblings/hugmesh-admin-bff-api rev-parse HEAD)"
+          [ "$head" = "$LAYERA_BFF_PIN" ] || { echo "::error::preflight: sibling HEAD $head is not LAYERA_BFF_PIN $LAYERA_BFF_PIN"; exit 1; }
+          echo "preflight ok: hugmesh-admin-bff-api at $head"
+      - name: run suites
+        shell: bash
+        run: |
+          export LAYERA_BFF_ROOT="$GITHUB_WORKSPACE/.layera-siblings/hugmesh-admin-bff-api"
+          export LAYERA_BFF_EXPECT_REF="$LAYERA_BFF_PIN"
+          SUITES="
+            tests/device-registry/test-layer-a-bff-fixture-identity.sh
+          "
+          rc=0; failed=""; ran=0
+          for t in $SUITES; do
+            [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
+            echo "::group::$t"
+            if bash "$t" </dev/null; then echo "PASS $t"; else
+              s=$?; echo "FAIL($s) $t"
+              case "$s" in
                 141) echo "::warning::$t exited 141 (SIGPIPE) — a pipeline stage was killed mid-write; this is NOT an assertion failure" ;;
                 137) echo "::warning::$t exited 137 (SIGKILL) — almost always the OOM killer on the runner" ;;
                 124) echo "::warning::$t exited 124 — it hit the timeout" ;;
