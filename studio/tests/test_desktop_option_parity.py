@@ -159,18 +159,27 @@ MENU_HARNESS = textwrap.dedent(r'''
     export SNAP_MENU_STATE="$1" NO_TUI=1; Q="$2"; LOG="$3"; TARGET="$4"; TAG="$5"
     source scripts/build-menu.sh
     _next() { local a; a="$(head -n 1 "${Q}")"; sed -i 1d "${Q}"; printf '%s' "${a}"; }
-    ui_menu() { _next; }
+    ui_menu() {
+        local t="$1" tags=""; shift 2
+        while [ "$#" -ge 2 ]; do tags+=" $1"; shift 2; done
+        printf 'MENU %s ::%s\n' "${t}" "${tags}" >> "${LOG}"
+        _next
+    }
     ui_checklist() { _next; }
     ui_input() { _next; }
     ui_password() { _next; }
     ui_password_confirmed() { _next; }
     ui_yesno() { local a; a="$(_next)"; [ "${a}" = yes ]; }
     ui_msg() { printf 'MSG %s: %s\n' "$1" "$2" >> "${LOG}"; }
+    # never start a build from a test, whatever a mutated screen does
+    launch_build() { echo "LAUNCH ${RUN_MAKE[*]}" >> "${LOG}"; return 0; }
+    monitor_build() { :; }
     eval "$(declare -f _desk | sed '1s/^_desk /_desk_real /')"
     _desk() { if [ "$2" = pretend ]; then echo "PRETEND $*" >> "${LOG}"; else _desk_real "$@"; fi; }
     OPT_SA_GPU=all-free OPT_SA_STEAM=native OPT_SA_USER=snap SA_LOCAL_PASS=login-pw OPT_EXTRA_FLAGS=""
     case "${TAG}" in
         ROWS) _desk "${TARGET}" rows; exit 0 ;;
+        SCREEN) "${TARGET}"; exit 0 ;;
     esac
     _desk_edit "${TARGET}" "${TAG}" "the option"
     echo "SAID=${DESK_SAID}" >> "${LOG}"
@@ -487,3 +496,31 @@ def test_the_menu_carries_the_options_on_every_desktop_target(target, tmp_path):
     assert "--python-extra-targets python3_13" in flags[0]
     assert "--package-use media-gfx/gimp lua" in flags[0]
     assert flags[0].count("--package-use") == 1
+
+
+#: (screen function, canned answers up to the stop before building) per desktop target
+SCREENS = {
+    "x86-standalone-thin": ("single_role_screen", ["x86", "standalone-thin", "back"]),
+    "x86-laptop": ("single_role_screen", ["x86", "laptop", "back"]),
+    "x86-chromebook": ("single_role_screen", ["x86", "chromebook", "back"]),
+    "x86-desktop": ("single_role_screen", ["x86", "desktop", "back"]),
+    "rpi-desktop": ("single_role_screen", ["rpi", "desktop", "rpi5", "pass", "pw", "done", "back"]),
+    "jetson-desktop": ("single_role_screen", ["jetson", "desktop", "orin-nano", "mainline",
+                                              "pass", "pw", "done", "back"]),
+    "orangepi5": ("single_role_screen", ["orangepi5", "desktop", "orange-pi-5-plus", "both",
+                                         "pass", "pw", "done", "back"]),
+    "orangepi4-lts": ("single_role_screen", ["orangepi4-lts", "desktop", "both", "pass", "pw",
+                                             "done", "back"]),
+    "frite": ("frite_screen", ["la-frite", "both", "light", "pass", "pw", "done", "back"]),
+}
+
+
+@pytest.mark.parametrize("target", sorted(SCREENS))
+def test_every_menu_path_to_a_desktop_reaches_the_desktop_options(target, tmp_path):
+    """Walk the real menu screens (canned answers) to the point before the build: the
+    Desktop options item must be on offer there."""
+    fn, answers = SCREENS[target]
+    _out, log = run_menu(tmp_path, fn, "SCREEN", answers)
+    menus = [ln.split("::", 1)[1].split() for ln in log.splitlines() if ln.startswith("MENU ")]
+    assert "LAUNCH" not in log, log
+    assert menus and {"desktop", "build"} <= set(menus[-1]), menus
