@@ -305,7 +305,11 @@ class BrandingPage(QtWidgets.QWizardPage):
         # section). The mesh's web sign-in look is chosen on the Look tab of the mesh's
         # own domain (row 0) on the Domain services step, over the same model this page
         # used to host (``brand_look.CfgLook``: the config's login_* fields, so a saved
-        # configuration loads exactly as before). On a mesh this page says where.
+        # configuration loads exactly as before). On a mesh this page says where — ONCE:
+        # while the superbrand design is open its own "2. Look" line already says it
+        # (same place, same LOOK_POINTER), so this line stands in only when that one is
+        # not on screen (an existing brand is picked and the design is folded away).
+        # _sync_look_pointer is the one place that decides.
         self.look_pointer = QtWidgets.QLabel(
             "<b>Web sign-in look</b> — " + html.escape(LOOK_POINTER) + ".")
         self.look_pointer.setObjectName("branding_look_pointer")
@@ -323,7 +327,36 @@ class BrandingPage(QtWidgets.QWizardPage):
             self.superbrand.setAccessibleName(plain_words.term("superbrand").capitalize())
             # right under the unaffiliated note: the top of the page
             self._page_layout.insertWidget(1, self.superbrand)
+            # a pick or "Change it" opens/folds the design, and with it the step's own
+            # "2. Look" line: the page's line follows (connected once — this method
+            # makes the step once, initializePage runs on every visit)
+            self.superbrand.changed.connect(self._sync_look_pointer)
         return self.superbrand
+
+    def _sync_look_pointer(self, *_args) -> None:
+        """Say where the web sign-in look is chosen exactly ONCE on a mesh, never off
+        one. The superbrand design's "2. Look" line and this page's "Web sign-in look"
+        line carry the same LOOK_POINTER; the page's line is shown only while the
+        step's is not (no step, or its design folded away because an existing brand is
+        picked). Read from the step's ACTUAL label, not from "the step is shown": the
+        step stays shown while its design is folded, and keying on that would trade two
+        pointers for none.
+
+        Guarded: a Qt slot (the step's ``changed``); under PyQt6 an exception escaping
+        one calls qFatal and kills the Studio."""
+        try:
+            # spelled through ``c`` like the rest of this page: the assistant's page map
+            # (core/assistant_catalogue_pages.py) greps ``cfg.<field>`` to say where a
+            # setting is EDITED, and the mode is not edited on this page
+            c = self.wiz.cfg
+            mesh = c.mode == "mesh"
+            step_says_it = (self.superbrand is not None
+                            and self.superbrand.look_pointer.isVisibleTo(self))
+            self.look_pointer.setVisible(mesh and not step_says_it)
+        except Exception:       # pragma: no cover - defensive, PyQt6 qFatal guard
+            import sys, traceback
+            print("branding: swallowed exception in _sync_look_pointer", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
     def _show_superbrand(self, c, mesh: bool) -> None:
         """The superbrand step on a mesh: the drop-down at the top. Its look is not
@@ -504,7 +537,7 @@ class BrandingPage(QtWidgets.QWizardPage):
         self.desktop_hdr.setText(_DESKTOP_HDR_MESH if mesh else _DESKTOP_HDR)
         self.setSubTitle(_SUBTITLE_MESH if mesh else _SUBTITLE_IMAGE)
         self._show_superbrand(c, mesh)
-        self.look_pointer.setVisible(mesh)
+        self._sync_look_pointer()
 
     def _gate_identity(self, unaffiliated: bool) -> None:
         """Hide/show the two IDENTITY widgets — the brand logo picker and the branding

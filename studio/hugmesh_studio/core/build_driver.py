@@ -15,17 +15,21 @@ blocks a build and never silently throttles jobs or the cap.
 """
 from __future__ import annotations
 
+import math
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
+from typing import NamedTuple
 
-from . import askpass, host_resources, platform_info, proc_text, resource_limits
-from . import secret_files, state_paths
+from . import askpass, emulation_save, host_resources, platform_info, proc_text
+from . import resource_limits, secret_files, state_paths
 from .config import (PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations,
                      standalone_login_problem, unaffiliated_image)
 from .platform_info import HostInfo, detect
@@ -444,6 +448,343 @@ def shared_assets_root(out_dir: str) -> str:
     return os.path.join(base, "shared")
 
 
+# ---- free-space preflight ------------------------------------------------------------
+# Defect L4, session 20261110-220215-cde67f: a 23-image mesh ran for 1.5 h into a full
+# disk. ENOSPC stopped its FIRST image at the .img step ("sfdisk: cannot open ...img",
+# with a 22.7 GiB payload, 12 GiB of the .img and a 1.3 GiB stage4 written) and the four
+# after it ("cannot open pool lockfile ... No space left on device", "tar: ... Cannot
+# open: No space left on device"). How much was free when it started is not recorded.
+# Nothing compared free space with what an image needs, before the session or between
+# images, so the record held mid-build crashes where a refusal belonged. WorklistDriver
+# checks these numbers before the session (blocking for the first image, advisory for the
+# whole list) and again before each queued image. FleetDriver (build-all-roles.sh) does
+# not use them.
+GIB = 1024 ** 3
+#: The most one x86 image holds under its work dir at once, taken from that session's pki
+#: node: its build system (the sysroot, a 22.7 GiB payload), the stage4 (1.3 GiB), the raw
+#: .img (27.5 GiB: the payload plus 15 %, and a filesystem that does not keep it sparse
+#: stores all of it), the filesystem tarball and the compressed image (about 3 GiB). The
+#: ISOs come after the raw .img has been replaced by its .xz and peak lower.
+X86_IMAGE_SPACE_GIB = 55
+#: The part of that which is the build system. A build that finds an earlier run's build
+#: system in its work dir does not need this part again (see :func:`image_space`); the
+#: other 32 GiB it writes every time.
+X86_TREE_SPACE_GIB = 23
+#: One ARM image (rpi5, jetson, frite, Orange Pi): a smaller payload and its .img.
+ARM_IMAGE_SPACE_GIB = 20
+#: Its build system's part. No more than 7, because every build writes the rest again:
+#: for an rpi5 node the 9.5 GiB raw .img (a 9216 MiB root that the payload must fit), the
+#: stage4, the filesystem tarball and the compressed image, about 12.5 GiB together.
+ARM_TREE_SPACE_GIB = 7
+#: Kept free on top of an image's estimate. The output dir usually shares a filesystem
+#: with docker volumes and the rest of the host, and a disk filled to the last byte takes
+#: those down with the build (it killed a live 56-container mesh on 2026-08-14).
+SPACE_MARGIN_GIB = 10
+#: Operator override for the per-image estimate: unset or "" = the table above;
+#: 0/off/none = no free-space check; a positive number = that many GiB per image (the
+#: margin still applies). Anything else is ignored, so a typo never turns the check off.
+SPACE_ENV = "HUGMESH_BUILD_IMAGE_SPACE"
+_SPACE_OFF = ("0", "off", "none")
+#: The longest :func:`measure_tree` reads one build system before it settles for what it
+#: has counted. Reading a real 24 GiB x86 tree took 43 s, and a 15 GiB rpi5 one 115 s, on
+#: the incident host (an encrypted home under a running build).
+TREE_MEASURE_SECONDS = 300
+_TREE_CHECK_EVERY = 256        # entries read between two looks at the clock and at Stop
+
+
+def image_space_estimate_bytes(cfg, env=None) -> int:
+    """Bytes one image is expected to leave under its work dir; 0 = check switched off.
+
+    Builds in one session accumulate (each entry keeps its own ``wl-<id>`` tree beside
+    its products), so this is what the image ADDS, and the next image must fit into
+    what is left after it."""
+    env = os.environ if env is None else env
+    raw = (env.get(SPACE_ENV) or "").strip().lower()
+    if raw in _SPACE_OFF:
+        return 0
+    try:
+        gib = float(raw) if raw else 0.0
+    except ValueError:
+        gib = 0.0
+    if gib > 0 and math.isfinite(gib * GIB):
+        return int(gib * GIB)
+    platform = getattr(cfg, "platform", "") or "x86"
+    return (X86_IMAGE_SPACE_GIB if platform == "x86" else ARM_IMAGE_SPACE_GIB) * GIB
+
+
+class ImageSpace(NamedTuple):
+    """What one image needs from the disk under its work dir."""
+    estimate: int       #: bytes it holds there at once, built from nothing; 0 = check off
+    share: int          #: of those, the bytes ``sysroot`` may already hold (0 without one)
+    sysroot: str        #: the build system an earlier run left for it, "" when none
+
+    def need(self, credit: int = 0) -> int:
+        """Free bytes the image needs when ``credit`` bytes of it are already in
+        ``sysroot``. No more than ``share`` is ever counted: the rest of the estimate
+        is written by every build."""
+        return self.estimate - max(0, min(credit, self.share)) + SPACE_MARGIN_GIB * GIB
+
+    def credit_wanted(self, free: int) -> int:
+        """Bytes ``sysroot`` must already hold for the image to fit into ``free``; 0
+        when no measurement could change the answer (the check is off, free space is
+        unknowable, the image fits with nothing counted, or it would not fit even
+        over a finished tree)."""
+        if not self.estimate or free < 0:
+            return 0
+        wanted = self.need() - free
+        return wanted if 0 < wanted <= self.share else 0
+
+
+def image_space(cfg, build_tree: str = "", env=None) -> ImageSpace:
+    """The space ``cfg``'s image needs, given ``build_tree``, its ``wl-<id>`` dir.
+
+    A build into a work dir an earlier run used (a RESTART into the same session)
+    finds that run's build system at ``<build_tree>/sysroot``, and does not need the
+    space it holds a second time, whichever way the build goes. With ``--resume`` every
+    builder skips the stage3 extraction and continues from it. Without, x86, rpi5,
+    orangepi5 and orangepi4-lts remove it and extract again, and the other six extract
+    over it; both put the new build system where the old one was.
+
+    Only a POPULATED build system counts, by the test all ten builders make before they
+    reuse one: ``sysroot/etc/gentoo-release`` exists. A run that died before or during
+    the extraction leaves none (four of the incident session's six trees), and then
+    nothing is counted."""
+    estimate = image_space_estimate_bytes(cfg, env)
+    sysroot = os.path.join(build_tree, "sysroot") if build_tree else ""
+    if not estimate or not os.path.isfile(os.path.join(sysroot, "etc", "gentoo-release")):
+        return ImageSpace(estimate, 0, "")
+    x86 = (getattr(cfg, "platform", "") or "x86") == "x86"
+    tree, image = ((X86_TREE_SPACE_GIB, X86_IMAGE_SPACE_GIB) if x86
+                   else (ARM_TREE_SPACE_GIB, ARM_IMAGE_SPACE_GIB))
+    # The override replaces the estimate, and the build system keeps its proportion of it.
+    return ImageSpace(estimate, estimate * tree // image, sysroot)
+
+
+class TreeMeasure(NamedTuple):
+    """What :func:`measure_tree` found. ``bytes`` is a LOWER bound whenever the walk did
+    not read everything, which the other three fields say."""
+    bytes: int                  #: allocated bytes it counted
+    cut_short: bool = False     #: the time limit ended the walk
+    unreadable: int = 0         #: directories and files it could not read (not counted)
+    stopped: bool = False       #: ``should_stop()`` ended the walk
+
+
+def _allocated_bytes(st) -> int:
+    """What one directory entry takes on disk: its blocks (512 bytes each, whatever the
+    filesystem's own block size), so a sparse file counts for what it really holds.
+    Where a stat carries no block count (Windows) its length is the best there is."""
+    blocks = getattr(st, "st_blocks", None)
+    return st.st_size if blocks is None else blocks * 512
+
+
+def measure_tree(path: str, *, enough: int = 0, seconds: float = TREE_MEASURE_SECONDS,
+                 should_stop: Callable[[], bool] | None = None) -> TreeMeasure:
+    """Count the bytes allocated under ``path``, a build system an earlier run left.
+
+    Never on the GUI thread: this reads every directory, and a real tree takes from
+    seconds to minutes. It returns as soon as ``enough`` bytes are counted (the caller
+    needs no more than that to decide), at the ``seconds`` limit, or when
+    ``should_stop()`` says the operator stopped the image.
+
+    It never counts more than is there. Symlinks are not followed. Anything on another
+    filesystem is skipped (a crashed build leaves /proc, /sys and /dev bound under its
+    sysroot). A file with several names is counted once. What cannot be read (the
+    tree is root's, and a few of its directories are root-only) is left out and
+    reported in ``unreadable``. Blocks are counted, not lengths, so a sparse file
+    counts for what it really holds; without block counts (Windows) lengths are used."""
+    try:
+        device = os.stat(path).st_dev
+    except OSError:
+        return TreeMeasure(0, unreadable=1)
+    deadline = time.monotonic() + seconds
+    total = unreadable = seen = 0
+    linked: set[tuple[int, int]] = set()
+    pending = [path]
+    while pending:
+        try:
+            entries = os.scandir(pending.pop())
+        except OSError:
+            unreadable += 1
+            continue
+        with entries:
+            for entry in entries:
+                seen += 1
+                if seen % _TREE_CHECK_EVERY == 0:
+                    if should_stop is not None and should_stop():
+                        return TreeMeasure(total, unreadable=unreadable, stopped=True)
+                    if time.monotonic() > deadline:
+                        return TreeMeasure(total, cut_short=True, unreadable=unreadable)
+                try:
+                    st = entry.stat(follow_symlinks=False)
+                except OSError:
+                    unreadable += 1
+                    continue
+                # st_dev is 0 from a Windows directory listing: nothing to compare.
+                if st.st_dev and st.st_dev != device:
+                    continue
+                if stat.S_ISDIR(st.st_mode):
+                    pending.append(entry.path)
+                elif st.st_nlink > 1:
+                    if (st.st_dev, st.st_ino) in linked:
+                        continue
+                    linked.add((st.st_dev, st.st_ino))
+                total += _allocated_bytes(st)
+                if enough and total >= enough:
+                    return TreeMeasure(total, unreadable=unreadable)
+    return TreeMeasure(total, unreadable=unreadable)
+
+
+#: The seam :func:`dispatch_space_refusal` measures through, so a test can answer for a
+#: tree it does not have (as ``emulation_save._disk_usage`` is for free space).
+_measure_tree = measure_tree
+
+
+def _passes_resume(cfg) -> bool:
+    """Is ``--resume`` in the argv the Studio dispatches for ``cfg``? Read from the argv,
+    so it is what the builder gets, including a ``--resume`` typed into the extra flags."""
+    try:
+        return "--resume" in cfg.to_cli_args()
+    except (AttributeError, ValueError):       # not a config, or one that cannot be built
+        return bool(getattr(cfg, "resume", False))
+
+
+def _space_refusal(space: ImageSpace, cfg, out_dir: str, free: int,
+                   reused: TreeMeasure | None) -> str:
+    """The one place a need is compared with ``free`` and a refusal is worded.
+
+    ``reused`` is what a measurement of ``space.sysroot`` found, or None when it was not
+    measured. Unmeasured, an earlier build system is taken as finished: only an image
+    that would not fit even then is refused."""
+    if not space.estimate or free < 0 or free >= space.need():
+        return ""
+    wanted = space.credit_wanted(free)
+    if wanted and (reused is None or reused.bytes >= wanted):
+        return ""
+    what = (f"{getattr(cfg, 'role', '') or 'this image'} "
+            f"({getattr(cfg, 'platform', '') or 'x86'})")
+    override = f"set {SPACE_ENV} to the GiB one image needs (0 turns this check off)."
+    if not space.sysroot:
+        need = space.need()
+        return (f"not enough free disk space under {out_dir} for {what}: it needs about "
+                f"{need / GIB:.0f} GiB ({space.estimate / GIB:.0f} GiB for its build tree "
+                f"and images, plus a {SPACE_MARGIN_GIB} GiB margin), but only "
+                f"{free / GIB:.1f} GiB is free, {(need - free) / GIB:.1f} GiB short. Free "
+                f"space on that disk (earlier build sessions under the output folder's "
+                f"sessions/ are the usual bulk), choose an output folder on a bigger "
+                f"disk, or {override}")
+    how = ("continues from it (the builder is passed --resume)" if _passes_resume(cfg)
+           else "rebuilds it in place (the builder is not passed --resume)")
+    if wanted:
+        # Measured, and not enough of the tree is there.
+        need = space.need(reused.bytes)
+        notes = []
+        if reused.cut_short:
+            notes.append(f"measuring it stopped at the {TREE_MEASURE_SECONDS}-second limit")
+        if reused.unreadable:
+            notes.append(f"{reused.unreadable} of its directories or files could not be "
+                         f"read and are not counted")
+        counted = (f"It holds {'at least ' if reused.cut_short else ''}"
+                   f"{reused.bytes / GIB:.1f} GiB{' (' + '; '.join(notes) + ')' if notes else ''}"
+                   f", so the image still")
+        rest = "the rest of its build tree and its images"
+    else:
+        need = space.need(space.share)
+        counted = f"Even with all {space.share / GIB:.0f} GiB counted, the image still"
+        rest = "the images and archives every build writes again"
+    return (f"not enough free disk space under {out_dir} for {what}: an earlier run left "
+            f"this image's build tree at {space.sysroot}, and this run {how}, so what "
+            f"that tree already holds is not needed again and is counted, up to the "
+            f"{space.share / GIB:.0f} GiB a finished one takes. {counted} needs about "
+            f"{need / GIB:.0f} GiB ({(need - SPACE_MARGIN_GIB * GIB) / GIB:.0f} GiB for "
+            f"{rest}, plus a {SPACE_MARGIN_GIB} GiB margin), but only {free / GIB:.1f} GiB "
+            f"is free, {(need - free) / GIB:.1f} GiB short. Free space elsewhere on that "
+            f"disk (other build sessions under the output folder's sessions/ are the "
+            f"usual bulk), or {override}")
+
+
+def disk_space_refusal(cfg, out_dir: str, *, build_tree: str = "",
+                       reused: TreeMeasure | None = None, free: int | None = None,
+                       disk_usage=None, env=None) -> str:
+    """Why the filesystem under ``out_dir`` cannot take this image now, or "" when it can.
+
+    Free space comes from :func:`emulation_save.free_bytes_for`, which walks up to the
+    nearest existing ancestor (a session dir does not exist before dispatch) and whose
+    probe is the injectable ``emulation_save._disk_usage``. Its -1 (unknowable) never
+    refuses, the same rule :func:`emulation_save.preflight_refusal` follows.
+
+    ``build_tree`` is this image's ``wl-<id>`` dir; what an earlier run's build system
+    under it already holds is not needed again (:func:`image_space`). This function
+    never measures it, so it is safe on the GUI thread: without ``reused`` it takes a
+    populated build system as finished, and refuses only an image that would not fit
+    even then. :func:`dispatch_space_refusal` is the check that measures."""
+    if free is None:
+        free = emulation_save.free_bytes_for(out_dir, disk_usage)
+    return _space_refusal(image_space(cfg, build_tree, env), cfg, out_dir, free, reused)
+
+
+def dispatch_space_refusal(cfg, out_dir: str, *, build_tree: str = "",
+                           should_stop: Callable[[], bool] | None = None,
+                           on_measure: Callable[[str], None] | None = None,
+                           disk_usage=None, env=None) -> str | None:
+    """:func:`disk_space_refusal` for the moment right before an image is dispatched,
+    on the build thread: here an earlier run's build system is MEASURED when the answer
+    depends on how much of it is there, and only what was found is counted. A run that
+    died early leaves a populated build system of a few GiB; taking that one as
+    finished would start a build 20 GiB short.
+
+    The walk is asked for no more than the bytes that make the image fit, and is
+    skipped when no result could change the answer. ``on_measure(sysroot)`` is called
+    before it starts. Returns None when ``should_stop()`` ended it: the operator
+    stopped the image, and there is no verdict to give."""
+    space = image_space(cfg, build_tree, env)
+    free = emulation_save.free_bytes_for(out_dir, disk_usage)
+    wanted = space.credit_wanted(free)
+    reused = None
+    if wanted:
+        if on_measure is not None:
+            on_measure(space.sysroot)
+        reused = _measure_tree(space.sysroot, enough=wanted, should_stop=should_stop)
+        if reused.stopped:
+            return None
+    return _space_refusal(space, cfg, out_dir, free, reused)
+
+
+def disk_space_warning(cfgs, out_dir: str, *, build_trees=(), disk_usage=None,
+                       env=None) -> str:
+    """ADVISORY: the first image passes but the whole sequence does not fit; "" otherwise.
+
+    Also "" when the first image is refused (:func:`disk_space_refusal` blocks that
+    case, and this asks it, so the two cannot disagree), when the check is off, and when
+    free space is unknowable. ``build_trees`` are the images' ``wl-<id>`` dirs, in
+    order; a populated build system under one is counted as finished, as the refusal
+    does, and never measured."""
+    cfgs = list(cfgs)
+    trees = [*build_trees, *[""] * len(cfgs)][:len(cfgs)]
+    spaces = [image_space(c, t, env) for c, t in zip(cfgs, trees)]
+    if not spaces or not spaces[0].estimate:
+        return ""
+    free = emulation_save.free_bytes_for(out_dir, disk_usage)
+    if free < 0 or _space_refusal(spaces[0], cfgs[0], out_dir, free, None):
+        return ""
+    margin = SPACE_MARGIN_GIB * GIB
+    total = sum(s.need(s.share) - margin for s in spaces) + margin
+    if free >= total:
+        return ""
+    reusing = sum(1 for s in spaces if s.sysroot)
+    counted = (f", and counting the build trees {reusing} of them already have from an "
+               f"earlier run as finished" if reusing else "")
+    # A run over earlier build trees is pinned to the folder they are in.
+    remedy = ("Free space elsewhere on that disk" if reusing
+              else "Free space or choose an output folder on a bigger disk")
+    return (f"not enough free disk space under {out_dir} for the whole worklist: its "
+            f"{len(spaces)} images need about {total / GIB:.0f} GiB together "
+            f"(including a {SPACE_MARGIN_GIB} GiB margin{counted}), but only "
+            f"{free / GIB:.1f} GiB is free. The first image passes this check, so the "
+            f"session can start. Every image is re-checked before it starts and refused "
+            f"(marked failed, with the reason) if it does not fit by then. {remedy} to "
+            f"build them all.")
+
+
 class BuildDriver:
     def __init__(self, generator_dir: str, host: HostInfo | None = None, *,
                  graphical: bool = False, workdir: str | None = None,
@@ -671,6 +1012,15 @@ class BuildDriver:
         ``-w /src``) — never the Studio process's own cwd, which under a desktop launcher
         is usually $HOME. Typed ``brands/example.conf`` is the case this exists for."""
         return os.path.normpath(p if os.path.isabs(p) else os.path.join(self.generator_dir, p))
+
+    def missing_host_path(self, p: str) -> str:
+        """'' when ``p`` passes the existence test :meth:`preflight` applies to a path
+        field's value; otherwise the host path it was looked for at. For a wizard page
+        that refuses a missing file on the field it was typed into instead of at Review:
+        same resolution (:meth:`_host_path` — relative means relative to the generator
+        checkout, never the Studio's cwd), same ``os.path.exists``."""
+        host = self._host_path(p)
+        return "" if os.path.exists(host) else host
 
     def _docker_path(self, value: str, index: int) -> tuple[list[str], str | None]:
         """One host path value -> (extra docker args, its in-container value), or

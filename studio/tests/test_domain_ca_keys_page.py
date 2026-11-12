@@ -339,6 +339,44 @@ def test_a_malformed_certificate_is_an_inline_refusal_and_clears_the_passphrase(
         assert dca.store().entries() == ()
 
 
+# ── an unopenable file is an inline refusal, not the crash dialog (build audit L7) ─
+def test_a_key_path_that_does_not_open_is_an_inline_refusal(
+        wiz, monkeypatch, tmp_path):
+    page = _to_page(wiz)
+    chain = tca.Chain(tmp_path)
+    d = str(tmp_path / "a-directory")
+    os.mkdir(d)
+    page.table.selectRow(0)
+    page.passphrase.setText("typed-passphrase")
+    _picks(monkeypatch, chain.signing_path, d)
+    page._import_files()              # called directly: a raise reaches the test
+    assert page.note.text().startswith("Not imported: cannot read"), page.note.text()
+    assert page.passphrase.text() == ""
+    assert dca.store().entries() == ()
+
+
+@pytest.mark.parametrize("exc, needle", [
+    (PermissionError(13, "Permission denied", "/keys/ca.key"),
+     "cannot read /keys/ca.key: Permission denied"),
+    (ValueError("error parsing asn1 value: ParseError { kind: ShortData }"),
+     "does not parse"),
+])
+def test_a_read_or_parse_error_past_the_core_is_still_an_inline_refusal(
+        wiz, exc, needle):
+    # the backstop in _run: whatever the core lets through of these two kinds is a
+    # sentence on the page (and never cryptography's raw asn1 text)
+    page = _to_page(wiz)
+    page.passphrase.setText("typed-passphrase")
+
+    def fail():
+        raise exc
+    page._run(fail)
+    assert page.note.text().startswith("Not imported:"), page.note.text()
+    assert needle in page.note.text(), page.note.text()
+    assert "asn1" not in page.note.text()
+    assert page.passphrase.text() == ""
+
+
 def test_an_unexpected_error_still_clears_the_passphrase(wiz):
     page = _to_page(wiz)
     page.passphrase.setText("typed-passphrase")
@@ -348,3 +386,170 @@ def test_an_unexpected_error_still_clears_the_passphrase(wiz):
     with pytest.raises(RuntimeError):
         page._run(boom)
     assert page.passphrase.text() == ""
+
+
+# ── a refused rename, on both faces (#974 round 3 self-refute) ───────────────────
+def _x_files(tmp_path):
+    """x.example's root and an intermediate it issued (with its own key)."""
+    rx_key, ik = tca.key(), tca.key()
+    rx = tca.cert(rx_key, "x Root CA")
+    xi = tca.cert(ik, "x Signing CA", issuer_key=rx_key, issuer_cert=rx, path_length=0)
+    return (tca.write(tmp_path, "rx.crt", tca.pem(rx)),
+            tca.write(tmp_path, "xi.crt", tca.pem(xi)),
+            tca.write(tmp_path, "xi.key", tca.key_pem(ik)))
+
+
+def _held_now():
+    return sorted((e.domain, e.own, e.root_pem, e.signing_pem, e.key_pem)
+                  for e in dca.store().entries())
+
+
+def test_an_own_row_import_during_a_refused_rename_is_an_inline_refusal(
+        wiz, qapp, monkeypatch, tmp_path):
+    """The mesh's CA (a signing CA, no root) on m.example, x.example's root on its
+    row, then the mesh renamed to x.example: the move is refused, and the own row
+    (now x.example) must not take a second own CA, which the next refresh would
+    have moved over x.example's root. Its Remove is the remedy the checklist names.
+    HUGMESH_LOOK_SHOTS=DIR saves the screenshot a reviewer looks at."""
+    from hugmesh_studio.core.config import Domain
+    page = _to_page(wiz)
+    wiz.cfg.cluster_domain = "m.example"
+    wiz.cfg.domains = [Domain(name="x.example")]
+    page.refresh()
+    m = tca.Chain(tmp_path, tag="m")
+    rx_path, xi_path, xk_path = _x_files(tmp_path)
+    page.table.selectRow(0)
+    _picks(monkeypatch, m.signing_path, m.key_path)
+    page.import_files.click()
+    assert "Imported for m.example" in page.note.text(), page.note.text()
+    page.table.selectRow(1)
+    _picks(monkeypatch, rx_path)
+    page.import_root.click()
+    assert "Imported for x.example" in page.note.text(), page.note.text()
+    wiz.cfg.cluster_domain = "x.example"                 # the rename
+    page.refresh()
+    assert page.table.rowCount() == 1
+    assert any("renamed to x.example" in ln
+               for ln in page.checklist.text().splitlines())
+    held = _held_now()
+    page.table.selectRow(0)
+    _picks(monkeypatch, xi_path, xk_path)
+    page.import_files.click()
+    note = page.note.text()
+    assert note.startswith("Not imported: the mesh's own CA is held for m.example"), note
+    assert "ONE own CA" in note
+    page.refresh()                                       # the move it used to make
+    assert _held_now() == held
+    assert dca.store().get("x.example").root_pem and not dca.store().get("x.example").own
+    settle(qapp, 5)
+    shots = os.environ.get("HUGMESH_LOOK_SHOTS", "")
+    if shots:
+        os.makedirs(shots, exist_ok=True)
+        page.note.setText(note)
+        settle(qapp, 3)
+        wiz.grab().save(os.path.join(shots, "domain-ca-keys-refusal-second-own.png"))
+    page.note.setText(note)
+    assert_page_fits_its_window(page)
+    assert_whole(page.note, "the refusal under the buttons")
+    # the remedy, as the checklist words it: Remove on that row, and the mesh's CA
+    # moves to x.example by itself
+    assert page.remove_btn.isEnabled()
+    page.remove_btn.click()
+    own = dca.store().own()
+    assert own is not None and own.domain == "x.example" and own.key_pem
+    assert not any("renamed to" in ln for ln in page.checklist.text().splitlines())
+
+
+def test_tui_an_own_row_import_during_a_refused_rename_is_refused(tmp_path):
+    from hugmesh_studio.core.config import Domain
+    m = tca.Chain(tmp_path, tag="m")
+    rx_path, xi_path, xk_path = _x_files(tmp_path)
+    j = journey.Journey(GENERATOR_DIR)
+    j.cfg.mode = "mesh"
+    j.cfg.cluster_domain = "m.example"
+    j.cfg.domains = [Domain(name="x.example")]
+    j.goto(dca.STEP_SLUG)
+    j.feed(f"k 1 {m.signing_path} {m.key_path}")
+    assert j.status.startswith("imported"), j.status
+    j.feed(f"r 2 {rx_path}")
+    assert j.status.startswith("imported"), j.status
+    j.cfg.cluster_domain = "x.example"                   # the rename
+    assert "renamed to x.example" in "\n".join(j.lines())
+    held = _held_now()
+    j.feed(f"k 1 {xi_path} {xk_path}")
+    assert j.status.startswith("refused: the mesh's own CA is held for m.example"), \
+        j.status
+    j.lines()                                            # the move it used to make
+    assert _held_now() == held
+    j.feed("x 1")                                        # the remedy
+    assert j.status.startswith("removed"), j.status
+    j.lines()
+    own = dca.store().own()
+    assert own is not None and own.domain == "x.example" and own.key_pem
+
+
+# ── the old name added back during a refused rename (#974 refute, round 1b) ──────
+def _old_name_back(cfg):
+    """After the refused rename to x.example, the operator adds m.example back as
+    another domain: its row is where the mesh's own CA (and key) is still held."""
+    from hugmesh_studio.core.config import Domain
+    cfg.cluster_domain = "x.example"
+    cfg.domains = [Domain(name="x.example"), Domain(name="m.example")]
+
+
+def test_the_old_name_row_says_it_holds_the_meshs_ca_and_key(wiz, qapp, monkeypatch,
+                                                             tmp_path):
+    """That row read 'm-signing.crt + m-signing.key | not taken (certificates only)
+    | ready' and its Remove removed the mesh's CA and key. It now names whose CA
+    and key it shows, is not ready, and the checklist says what Remove does there.
+    HUGMESH_LOOK_SHOTS=DIR saves the screenshot a reviewer looks at."""
+    from hugmesh_studio.core.config import Domain
+    page = _to_page(wiz)
+    wiz.cfg.cluster_domain = "m.example"
+    wiz.cfg.domains = [Domain(name="x.example")]
+    page.refresh()
+    m = tca.Chain(tmp_path, tag="m")
+    rx_path, _xi, _xk = _x_files(tmp_path)
+    page.table.selectRow(0)
+    _picks(monkeypatch, m.signing_path, m.key_path)
+    page.import_files.click()
+    page.table.selectRow(1)
+    _picks(monkeypatch, rx_path)
+    page.import_root.click()
+    _old_name_back(wiz.cfg)
+    page.refresh()
+    held = _held_now()
+    rows = {r[0]: r for r in _cells(page)}
+    assert rows["m.example"][3] == dca.OLD_NAME_KEY_CELL, rows["m.example"]
+    assert rows["m.example"][4] == "not ready", rows["m.example"]
+    text = page.checklist.text()
+    assert "holds the mesh's OWN CA and its signing key" in text, text
+    assert "Removing this row's CA removes the mesh's CA" in text, text
+    assert "not taken (certificates only)" not in rows["m.example"]
+    assert _held_now() == held                       # showing it moves nothing
+    settle(qapp, 5)
+    shots = os.environ.get("HUGMESH_LOOK_SHOTS", "")
+    if shots:
+        os.makedirs(shots, exist_ok=True)
+        wiz.grab().save(os.path.join(shots, "domain-ca-keys-old-name-row.png"))
+    assert_page_fits_its_window(page)
+    assert_whole(page.checklist, "the go-live checklist")
+
+
+def test_tui_the_old_name_row_says_it_holds_the_meshs_ca_and_key(tmp_path):
+    from hugmesh_studio.core.config import Domain
+    m = tca.Chain(tmp_path, tag="m")
+    rx_path, _xi, _xk = _x_files(tmp_path)
+    j = journey.Journey(GENERATOR_DIR)
+    j.cfg.mode = "mesh"
+    j.cfg.cluster_domain = "m.example"
+    j.cfg.domains = [Domain(name="x.example")]
+    j.goto(dca.STEP_SLUG)
+    j.feed(f"k 1 {m.signing_path} {m.key_path}")
+    j.feed(f"r 2 {rx_path}")
+    _old_name_back(j.cfg)
+    out = "\n".join(j.lines())
+    row = next(ln for ln in out.splitlines() if ln.strip().startswith("2. m.example"))
+    assert dca.OLD_NAME_KEY_CELL in row and row.rstrip().endswith("not ready"), row
+    assert "certificates only" not in row, row
+    assert "holds the mesh's OWN CA and its signing key" in out, out
