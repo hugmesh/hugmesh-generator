@@ -270,6 +270,26 @@ def test_a_needs_result_offers_portages_own_fix_and_applies_it_on_a_click(wiz):
     assert [h["op"] for h in ds.spec_of(wiz.cfg).history] == ["add", "add", "undo", "undo"]
 
 
+def test_the_real_obs_round_offers_both_changes_and_opens_the_log_at_portages_walls(wiz, qapp):
+    """needs-real-obs-r1.txt is the REAL resolver output of the 2026-11-11 OBS round 1, run
+    through the builder's own report: the USE wall came as a "(Change USE: ...)" hint and
+    must be offered with the keyword change; the verbatim box opens at its END, where
+    portage states the walls (its top is the "Performing Global Updates" noise)."""
+    import subprocess
+    script = (f'. "{os.path.join(GENERATOR_DIR, "scripts", "_pretend-lib.sh")}"; '
+              '_hugmesh_pretend_conf_list() { printf python3_14; }; '
+              f'hugmesh_pretend_report "{os.path.join(FIXTURES, "needs-real-obs-r1.txt")}" 1')
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    res = dp.parse(p.stdout.splitlines(), p.returncode)
+    page = _desktop(wiz)
+    page.show_result(res)
+    qapp.processEvents()
+    assert "+>=media-video/ffmpeg-8.1.2 opus x264" in page.offer_text.text()
+    assert "+=media-video/obs-studio-32.2.2 ~amd64" in page.offer_text.text()
+    bar = page.pretend_log.verticalScrollBar()
+    assert bar.maximum() > 0 and bar.value() == bar.maximum()
+
+
 def test_a_clean_result_offers_nothing(wiz):
     page = _desktop(wiz)
     page.show_result(_fixture_result("clean.txt", 0))

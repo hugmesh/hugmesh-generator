@@ -855,6 +855,10 @@ class DesktopPage(QtWidgets.QWizardPage):
         self.pretend_needs.setText("\n".join(need_lines))
         if res.excerpt and not self.pretend_log.toPlainText():
             self.pretend_log.setPlainText("\n".join(res.excerpt))
+            # portage states its walls LAST (after "Performing Global Updates" and the
+            # plan): open the box at its end, not at the update-pass noise on top
+            bar = self.pretend_log.verticalScrollBar()
+            bar.setValue(bar.maximum())
         offer = [ch for ch in res.applicable_needs()
                  if not ds.check_change(ch, self.view())]
         self._pending_offer = offer
