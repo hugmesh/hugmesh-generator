@@ -225,7 +225,22 @@ def restart_refusal(s: build_sessions.BuildSession) -> str | None:
 def restart_handover_lines(s: build_sessions.BuildSession) -> list[str]:
     """What a restart of ``s`` would do, and where it runs. The TUI runs no builds (its
     Build screen says so too), so after the gate passes this is the honest end of the
-    verb: the GUI's own confirmation text, then the route to the GUI button."""
+    verb: what the GUI's Restart does with THIS record — its own confirmation text for
+    a wizard build, the fleet window for a fleet run — then the route to the button."""
+    if s.kind == "fleet":
+        # The GUI asks no "Rebuild into …?" question about a fleet run and warns about
+        # no secrets (a fleet configuration holds none): its Restart returns into the
+        # fleet window before either (PreviousBuildsWidget._restart), and that window's
+        # Review step is the confirmation. Saying the wizard's sentence here described
+        # a dialog the GUI never shows for this record.
+        return [f"Restart session {s.id} is a fleet run: the GUI reopens its fleet "
+                "window on the Review step with this run's configuration, pinned to "
+                f"this record and its build directory {s.workdir}",
+                "  nothing is rebuilt before that step: ‘Build fleet now’ there is the "
+                "confirmation, and the prior outcome is kept in the record's history.",
+                "The TUI does not run builds. Restart it from the GUI: python -m "
+                "hugmesh_studio → Review prior sessions → select this build → Restart "
+                "(its fleet window opens on the Review step, pinned to this record)."]
     from ..core import secret_files
     out = [f"Restart session {s.id} rebuilds into {s.workdir}",
            "  existing artifacts will be reused/overwritten."]
@@ -240,11 +255,9 @@ def restart_handover_lines(s: build_sessions.BuildSession) -> list[str]:
                        f"{r.get('name', '?')} "
                        f"({labels.get(r.get('field', ''), r.get('field', ''))})"
                        for r in need))
-    where = ("its fleet window opens on the Review step, pinned to this record"
-             if s.kind == "fleet" else "the build starts on the Build progress page")
     out += ["The TUI does not run builds. Restart it from the GUI: python -m "
             "hugmesh_studio → Review prior sessions → select this build → Restart "
-            f"({where})."]
+            "(the build starts on the Build progress page)."]
     return out
 
 

@@ -31,6 +31,15 @@ def _text_lines(lines: list[str]) -> urwid.ListBox:
     return urwid.ListBox(urwid.SimpleListWalker([urwid.Text(ln) for ln in lines]))
 
 
+def _end_in_view(box: urwid.ListBox) -> None:
+    """Open ``box`` scrolled to its LAST line instead of its first. A page that fits
+    the terminal renders exactly as before; a taller one shows its end, and its top is
+    a Page Up away. Focusing the last line is all it takes: a ListBox leaves no row
+    empty under its last widget while there are lines above to fill it with."""
+    if len(box.body):
+        box.set_focus(len(box.body) - 1)
+
+
 class SessionsReview:
     """SESSIONS REVIEW: list → detail / worklist / delete-with-confirm.
 
@@ -116,23 +125,32 @@ class SessionsReview:
     def _on_row(self, _button: urwid.Button, row: model.SessionRow) -> None:
         self.show_detail(row)
 
+    def _open(self, mode: str, body: urwid.Widget, help_text: str) -> None:
+        """Show another screen of the review (detail, worklist, hand-over, a question).
+        The status line answered something on the screen being left — a refusal about
+        ONE build, the result of a delete — so it does not follow the person onto the
+        next one. (It used to stay until something overwrote it: "not restarted: …
+        running in another Studio process" sat under the hand-over, the worklist and
+        the delete questions of every other build, and under the list again after
+        them.) A result is still shown where it happened: ``refresh`` itself never
+        clears the line, because every action sets its answer and then refreshes."""
+        self.status.set_text("")
+        self.mode = mode
+        self.frame.body = body
+        self._set_help(help_text)
+
     def _on_unreadable(self, _button: urwid.Button, row: model.UnreadableRow) -> None:
-        self.mode = "detail"
-        self.frame.body = _text_lines(model.unreadable_detail_lines(row))
-        self._set_help("d=delete this record file  q/esc=back")
+        self._open("detail", _text_lines(model.unreadable_detail_lines(row)),
+                   "d=delete this record file  q/esc=back")
         self._viewing = row
 
     def show_detail(self, row: model.SessionRow) -> None:
-        self.mode = "detail"
         self._viewing = None
-        self.frame.body = _text_lines(model.session_detail_lines(row))
-        self._set_help(_SUB_HELP)
+        self._open("detail", _text_lines(model.session_detail_lines(row)), _SUB_HELP)
 
     def show_worklist(self, row: model.SessionRow) -> None:
-        self.mode = "worklist"
         headers, rows = model.worklist_table(row.session)
-        self.frame.body = _text_lines(model.format_table(headers, rows))
-        self._set_help(_SUB_HELP)
+        self._open("worklist", _text_lines(model.format_table(headers, rows)), _SUB_HELP)
 
     # ── delete-with-confirm ──────────────────────────────────────────────────
     def start_delete(self, row: model.SessionRow) -> None:
@@ -176,9 +194,8 @@ class SessionsReview:
         if why is not None:
             self.status.set_text(f"not restarted: {why}")
             return
-        self.mode = "restart"
-        self.frame.body = _text_lines(model.restart_handover_lines(row.session))
-        self._set_help(_SUB_HELP)
+        self._open("restart", _text_lines(model.restart_handover_lines(row.session)),
+                   _SUB_HELP)
 
     def redo(self, row: model.SessionRow) -> None:
         """REDO: the recorded configuration into the journey (``on_redo``)."""
@@ -194,15 +211,13 @@ class SessionsReview:
             self.refresh()
 
     def _show_confirm(self, question: str) -> None:
-        self.mode = "confirm"
         yes = urwid.Button("Yes", on_press=self._confirm_yes)
         no = urwid.Button("No", on_press=self._confirm_no)
-        self.frame.body = urwid.ListBox(urwid.SimpleFocusListWalker([
+        self._open("confirm", urwid.ListBox(urwid.SimpleFocusListWalker([
             urwid.Text(question), urwid.Divider(),
             urwid.AttrMap(no, None, focus_map="reversed"),      # No is the default focus
             urwid.AttrMap(yes, None, focus_map="reversed"),
-        ]))
-        self._set_help("enter=choose  q/esc=cancel")
+        ])), "enter=choose  q/esc=cancel")
 
     def _confirm_yes(self, _button=None) -> None:
         stage, row = self._confirm_stage, self._confirm_row
@@ -300,6 +315,7 @@ class SessionsReview:
             self.start_delete_unreadable(entry)
             return
         if key in ("r", "R"):
+            self.status.set_text("")       # a fresh read: the last answer was about the old one
             self.refresh()
         elif key in ("d", "D"):
             row = self._focused_row()
@@ -477,6 +493,11 @@ class JourneyApp:
             return why
         self.sessions_only = False          # the journey owns the terminal now
         self._close_sessions()
+        # The Redo's message ends with what was NOT loaded — a secret the record never
+        # held — which the GUI raises as a dialog. Here it is the last lines of a
+        # welcome screen taller than an 80x24 terminal, where it sat below the fold:
+        # this one screen opens at its end, so the message is read without scrolling.
+        _end_in_view(self.frame.body)
         return ""
 
     def _close_sessions(self) -> None:

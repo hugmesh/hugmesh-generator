@@ -108,3 +108,47 @@ def test_the_plain_face_route_end_to_end():
     assert "pick a provider: type its NUMBER" in text
     assert "where t NAME types one" in text
     assert "Inputs step" not in text
+
+
+# ── the same usage line when the screen was opened OVER another one ────────────────
+@pytest.mark.parametrize("back_to", ["Brand settings", "Mesh emulation"])
+def test_an_empty_enter_on_a_go_live_opened_over_a_screen_offers_b_not_q(back_to):
+    # q quits the whole journey from here, so the usage line must not offer it as the
+    # way out: b goes back to the screen underneath, and the line names that screen
+    j = journey.Journey(GENERATOR_DIR)
+    gl = GoLiveScreen()
+    gl.back_to = back_to
+    j.open_overlay(gl)                 # as Brand settings' `go-live` and Mesh emulation do
+    count = len(gl._driver(j).providers())
+    assert count > 1
+    j.feed("")
+    assert j.overlay is gl and gl.stage == "provider"
+    assert j.status == (f"pick a provider: type its NUMBER (1-{count}) and Enter · "
+                        f"t=pick the target · b=back to {back_to}")
+    j.feed("b")                                    # and b does what the line says
+    assert j.overlay is None
+
+
+def test_the_brand_settings_door_gets_the_b_back_usage_line():
+    # the real door: a mesh walk to Domain services, its Ways section, `go-live`
+    j = journey.Journey(GENERATOR_DIR)
+    j.feed("")                                     # welcome
+    j.feed("3")                                    # Mesh node
+    j.feed("")                                     # identity provider
+    j.feed("1")                                    # one worklist row
+    for _ in journey.PAGE_ORDER:
+        if j.slug == "domain_services":
+            break
+        j.feed("")
+    assert j.slug == "domain_services"
+    j.feed("open 4")                               # Brand settings: Ways to reach it
+    j.feed("go-live")
+    gl = j.overlay
+    assert isinstance(gl, GoLiveScreen)
+    j.feed("")
+    count = len(gl._driver(j).providers())
+    assert j.status == (f"pick a provider: type its NUMBER (1-{count}) and Enter · "
+                        "t=pick the target · b=back to Brand settings")
+    assert "q=quit" not in j.status
+    j.feed("b")
+    assert j.overlay is None and j.slug == "domain_services"

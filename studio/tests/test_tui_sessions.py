@@ -389,3 +389,166 @@ def test_plain_restart_refuses_a_config_that_gained_an_unconfigured_domain(tmp_p
     text = _run_plain("s 1\nn\nq\n")
     assert "not restarted: " in text and "late.example" in text
     assert "The TUI does not run builds" not in text   # refused: no hand-over
+
+
+# ── GUI-28 round 2: a REDO survives the default key path (Enter, Enter) ─────────────
+def _mesh_with_a_late_domain(tmp_path):
+    """A mesh of two images whose configuration gained a domain after its services were
+    recorded — the record the restart gate refuses with "Use Redo instead"."""
+    from hugmesh_studio.core import domain_services as ds
+    from hugmesh_studio.core.config import Domain
+    base = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
+                       output_dir=str(tmp_path / "out"), additional_domains=True,
+                       domains=[Domain(name="a.example")])
+    ds.record_reviewed(base, ["a.example"])
+    base.domains.append(Domain(name="late.example"))
+    return WorklistConfig(base=base, entries=[
+        WorklistEntry(role="pki", platform="x86"),
+        WorklistEntry(role="backend", platform="rpi5")])
+
+
+def _redone(tmp_path, wl, session_id):
+    """A journey with ``wl``'s session REDONE into it — on welcome, as the verb leaves it."""
+    from hugmesh_studio.tui import journey as journey_mod
+    s = _finished(tmp_path, session_id=session_id, wl=wl)
+    j = journey_mod.Journey(str(tmp_path))
+    assert j.load_session(s) == ""
+    assert j.slug == "welcome"
+    return j
+
+
+def test_redo_then_enter_on_the_mode_menu_keeps_the_mesh_and_its_worklist(tmp_path):
+    # Enter on the mode menu was hard-wired to "standalone", whatever was loaded: the
+    # default key path of the Redo verb (Enter on welcome, Enter on the menu) switched a
+    # mesh to standalone, which drops its worklist and clears its domains. The GUI's
+    # mode page re-selects the loaded configuration's card instead
+    j = _redone(tmp_path, _mesh_with_a_late_domain(tmp_path), "20260128-000001-aaaaaa")
+    j.feed("")                                         # welcome: Start building
+    assert j.slug == "mode"
+    j.feed("")                                         # the mode menu: Enter
+    assert j.cfg.mode == "mesh"
+    assert [e.id for e in j.worklist.entries] == ["pki.x86", "backend.rpi5"]
+    assert [d.name for d in j.cfg.domains] == ["a.example", "late.example"]
+    assert j.cfg.additional_domains is True
+    assert j.slug == "idp"                             # the mesh chain, not Image role
+
+
+def test_redo_then_enter_on_the_mode_menu_keeps_a_desktop_client_too(tmp_path):
+    from hugmesh_studio.core.config import Domain, User
+    cfg = ImageConfig(mode="cloud", role="laptop", platform="x86", brand="acme",
+                      output_dir=str(tmp_path / "out"), keyzip="/keys/admin-keys.zip",
+                      domains=[Domain(name="a.example")],
+                      users=[User(username="alice", domain="a.example")])
+    j = _redone(tmp_path, synthesize(cfg), "20260128-000002-aaaaaa")
+    j.feed("")
+    j.feed("")
+    assert (j.cfg.mode, j.cfg.role) == ("cloud", "laptop")
+    assert [d.name for d in j.cfg.domains] == ["a.example"]
+    assert [u.username for u in j.cfg.users] == ["alice"]
+    assert j.cfg.keyzip == "/keys/admin-keys.zip"
+    assert j.slug == "role"
+
+
+def test_a_config_holding_no_image_mode_falls_back_to_the_default_choice(tmp_path):
+    # the GUI leaves its default card checked when it finds no card for cfg.mode; a
+    # hand-edited mode must not reach commit_mode, which indexes the role table by it
+    from types import SimpleNamespace
+
+    from hugmesh_studio.tui import journey as journey_mod
+    assert journey_mod.mode_enter_choice(SimpleNamespace(mode="banana")) == "standalone"
+    assert journey_mod.mode_enter_choice(SimpleNamespace(mode="e2e")) == "standalone"
+    for mode in ("mesh", "cloud", "standalone"):
+        assert journey_mod.mode_enter_choice(SimpleNamespace(mode=mode)) == mode
+    j = journey_mod.Journey(str(tmp_path))
+    j.cfg.mode = "banana"
+    j.feed("")
+    j.feed("")                                         # Enter on the menu: no KeyError
+    assert (j.cfg.mode, j.slug) == ("standalone", "role")
+
+
+def test_redo_of_a_standalone_build_still_enters_the_standalone_chain(tmp_path):
+    j = _redone(tmp_path, _standalone_wl(tmp_path), "20260128-000003-aaaaaa")
+    j.feed("")
+    j.feed("")
+    assert (j.cfg.mode, j.cfg.role) == ("standalone", "standalone-thick")
+    assert j.slug == "role"
+
+
+def test_the_mode_menu_says_what_enter_takes_and_typing_a_number_still_switches(
+        tmp_path):
+    from hugmesh_studio.tui import journey as journey_mod
+    fresh = journey_mod.Journey(str(tmp_path))
+    fresh.feed("")
+    assert fresh.prompt() == "mode (Enter=Standalone Gentoo desktop)> "
+    assert [ln for ln in fresh.lines() if ln.startswith("(Enter = ")] == [
+        "(Enter = Standalone Gentoo desktop — the default, by id; * marks the loaded "
+        "config's mode)"]
+    j = _redone(tmp_path, _mesh_with_a_late_domain(tmp_path), "20260128-000004-aaaaaa")
+    # the Redo's own message says it, before the menu is even open
+    assert "Enter on the mode menu keeps its mode (marked *)" in j.status
+    j.feed("")
+    # the prompt is on screen at every terminal size; the hint line under the ten cards
+    # is not (it is below the fold at 80x24)
+    assert j.prompt() == "mode (Enter=Mesh node)> "
+    assert [ln for ln in j.lines() if ln.startswith("(Enter = ")] == [
+        "(Enter = Mesh node — keeps the loaded config's mode, marked *; a NUMBER picks "
+        "another)"]
+    assert " * 3. Mesh node" in j.lines()
+    j.feed("10")                                       # a typed number is a real switch
+    assert j.cfg.mode == "standalone"
+    assert j.cfg.domains == []                         # ...with the standalone clears
+
+
+def test_plain_restart_refused_then_redo_then_enter_walks_the_loaded_mesh(tmp_path):
+    # the route, key for key: `s 1` is refused and names Redo and the Domain services
+    # step, y takes the Redo, then Enter on every screen. The walk has to reach that
+    # step for the domain the refusal named, and end on a Build screen for the mesh
+    s = _finished(tmp_path, session_id="20260128-000005-aaaaaa",
+                  wl=_mesh_with_a_late_domain(tmp_path))
+    os.makedirs(s.workdir)                 # the workdir is there: the services arm refuses
+    out = io.StringIO()
+    assert plain.run_sessions_review(inp=io.StringIO("s 1\ny\n" + "\n" * 30), out=out,
+                                     generator_dir=str(tmp_path)) == 0
+    text = out.getvalue()
+    assert "not restarted: " in text and "Use Redo instead" in text
+    assert "Load its config into the journey now (Redo)? [y/N]" in text
+    assert f"loaded the configuration of session {s.id}" in text
+    assert "mode (Enter=Mesh node)> " in text
+    assert "Identity provider (mesh nodes)" in text    # Enter on the menu kept the mesh
+    assert "Image role" not in text                    # ...and never the standalone chain
+    assert "Still to go: late.example" in text         # the step the refusal promised
+    assert "  mode      mesh" in text                  # the Build screen's summary
+    assert "  worklist  2 image(s): pki.x86, backend.rpi5" in text
+    assert "  domains   2" in text
+
+
+# ── GUI-28 round 2: a fleet run's restart is the fleet window's, not the wizard's ───
+def test_plain_restart_of_a_fleet_run_hands_over_to_the_fleet_window(tmp_path):
+    # the GUI never asks "Rebuild into …? Existing artifacts will be reused/overwritten"
+    # for a fleet run: it reopens the fleet window on its Review step, pinned to the
+    # record, and "Build fleet now" there is the confirmation
+    s = _finished(tmp_path, session_id="20260129-000001-aaaaaa", status="failed")
+    s.kind = "fleet"
+    bs.save(s)
+    _with_artifacts(s)
+    before = bs.load(s.path()).to_dict()
+    text = _run_plain("s 1\nq\n")
+    assert f"Restart session {s.id} is a fleet run" in text
+    assert "‘Build fleet now’ there is the confirmation" in text
+    assert s.workdir in text
+    assert "rebuilds into" not in text
+    assert "existing artifacts will be reused/overwritten" not in text
+    assert ("The TUI does not run builds. Restart it from the GUI: python -m "
+            "hugmesh_studio → Review prior sessions → select this build → Restart "
+            "(its fleet window opens on the Review step, pinned to this record).") in text
+    assert bs.load(s.path()).to_dict() == before       # a hand-over: nothing written
+
+
+def test_a_wizard_restart_keeps_the_gui_confirmation_wording(tmp_path):
+    # the non-fleet hand-over is unchanged by the fleet wording above
+    s = _finished(tmp_path, session_id="20260129-000002-aaaaaa", status="failed")
+    _with_artifacts(s)
+    lines = model.restart_handover_lines(s)
+    assert lines[0] == f"Restart session {s.id} rebuilds into {s.workdir}"
+    assert lines[1] == "  existing artifacts will be reused/overwritten."
+    assert "(the build starts on the Build progress page)." in lines[-1]

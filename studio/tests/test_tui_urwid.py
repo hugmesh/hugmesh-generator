@@ -142,7 +142,9 @@ def test_journey_enter_feeds_the_edit_line_into_the_state_machine(tmp_path):
 def test_journey_mode_cards_are_reachable_by_paging_at_80x24(tmp_path):
     app = urwid_ui.JourneyApp(str(tmp_path))
     _typed(app, "")                                    # -> mode menu
-    last = journey.MODE_CHOICES[-1][1]
+    # the last CARD's own row ("10. Standalone Gentoo desktop"): its bare title is also
+    # in the prompt, which names what Enter takes and is on screen at every size
+    last = f"{len(journey.MODE_CHOICES)}. {journey.MODE_CHOICES[-1][1]}"
     size = (80, 24)
     first = "\n".join(ln.decode("utf-8", "replace")
                       for ln in app.root.render(size).text)
@@ -352,3 +354,186 @@ def test_sessions_only_quits_on_q_but_a_redo_hands_over_to_the_journey(tmp_path)
     app.unhandled("e")
     assert app.sessions is None and not app.sessions_only
     assert "Start building" in _screen_text(app.root)
+
+
+# ── GUI-28 round 2: REDO on the default key path, keys sent the way MainLoop sends them ─
+def _press(app, size, *keys):
+    """Send keys as urwid's MainLoop does: the top widget first, and whatever it does
+    not take goes to the app's ``unhandled_input``."""
+    for key in keys:
+        left = app.root.keypress(size, key)
+        if left:
+            app.unhandled(left)
+
+
+def _text_at(app, size) -> str:
+    return "\n".join(ln.decode("utf-8", "replace") for ln in app.root.render(size).text)
+
+
+def _flat(text: str) -> str:
+    """One line, single spaces: a sentence reads the same however the terminal wrapped it."""
+    return " ".join(text.split())
+
+
+def _mesh_with_a_late_domain(tmp_path, session_id):
+    """A mesh of two images whose configuration gained a domain after its services were
+    recorded, with its workdir present — the restart gate refuses it and names Redo."""
+    from hugmesh_studio.core import domain_services as ds
+    from hugmesh_studio.core.config import Domain
+    base = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
+                       output_dir=str(tmp_path / "out"), additional_domains=True,
+                       domains=[Domain(name="a.example")])
+    ds.record_reviewed(base, ["a.example"])
+    base.domains.append(Domain(name="late.example"))
+    s = bs.new_session(WorklistConfig(base=base, entries=[
+        WorklistEntry(role="pki", platform="x86"),
+        WorklistEntry(role="backend", platform="rpi5")]), str(tmp_path),
+        session_id=session_id)
+    bs.start(s)
+    bs.finish(s, "complete")
+    os.makedirs(s.workdir)
+    return s
+
+
+@pytest.mark.parametrize("size", [(80, 24), (132, 43)])
+def test_restart_refused_then_redo_then_enter_keeps_the_mesh(tmp_path, size):
+    # `tui --sessions`: s on the mesh is refused and names Redo; Yes takes it; then
+    # Enter on welcome and Enter on the mode menu. That second Enter was hard-wired to
+    # "standalone" and threw the loaded worklist and domains away
+    _mesh_with_a_late_domain(tmp_path, "20260115-000001-aaaaaa")
+    app = urwid_ui.JourneyApp(str(tmp_path), sessions_only=True)
+    _press(app, size, "s")
+    assert "Use Redo instead" in _flat(_text_at(app, size))
+    _press(app, size, "down", "enter")                 # Yes (No has the focus)
+    assert app.sessions is None                        # the journey owns the screen
+    _press(app, size, "enter")                         # welcome: Start building
+    assert app.journey.slug == "mode"
+    menu = _text_at(app, size)
+    assert " * 3. Mesh node" in menu
+    assert "mode (Enter=Mesh node)>" in menu           # said without scrolling, any size
+    _press(app, size, "enter")                         # the mode menu: Enter
+    assert app.journey.cfg.mode == "mesh"
+    assert [e.id for e in app.journey.worklist.entries] == ["pki.x86", "backend.rpi5"]
+    assert [d.name for d in app.journey.cfg.domains] == ["a.example", "late.example"]
+    assert "Identity provider (mesh nodes)" in _text_at(app, size)
+    # ...and Enter on every step reaches the one the refusal named, for that domain
+    for _ in journey.PAGE_ORDER:
+        if app.journey.slug == "domain_services":
+            break
+        _press(app, size, "enter")
+    assert app.journey.slug == "domain_services"
+    assert any("Still to go: late.example" in ln for ln in app.journey.lines())
+
+
+def test_typing_another_number_on_the_mode_menu_is_still_a_switch(tmp_path):
+    _mesh_with_a_late_domain(tmp_path, "20260115-000002-aaaaaa")
+    app = urwid_ui.JourneyApp(str(tmp_path), sessions_only=True)
+    _press(app, _SIZE, "e", "enter", "1", "0", "enter")    # Redo, welcome, then "10"
+    assert app.journey.cfg.mode == "standalone"
+    assert app.journey.cfg.domains == []
+
+
+def test_redo_shows_the_unsaved_secret_warning_without_scrolling_at_80x24(tmp_path):
+    # the GUI raises this warning as a dialog. Here it is the last line of the welcome
+    # screen, which is taller than an 80x24 terminal: it was two rows below the fold
+    s = bs.new_session(synthesize(ImageConfig(
+        mode="standalone", role="standalone-thick", platform="x86", brand="acme",
+        output_dir=str(tmp_path / "out"), local_pass="hunter2")), str(tmp_path),
+        session_id="20260115-000003-aaaaaa")
+    bs.start(s)
+    bs.finish(s, "complete")
+    assert s.blanked_secrets == ["local_pass"]
+    size = (80, 24)
+    app = urwid_ui.JourneyApp(str(tmp_path), sessions_only=True)
+    _press(app, size, "e")
+    shown = _flat(_text_at(app, size))
+    assert f"loaded the configuration of session {s.id}" in shown
+    assert ("! local-pass was NOT saved (plaintext secret) — re-enter it before "
+            "building from this config") in shown
+    assert "hunter2" not in shown
+    assert "welcome>" in shown                         # the prompt is still under it
+    for _ in range(3):                                 # and the top is a Page Up away
+        _press(app, size, "page up")
+    assert "HugMesh is a self-hosted mesh" in _text_at(app, size)
+
+
+def test_a_screen_without_a_message_still_opens_at_its_top_at_80x24(tmp_path):
+    app = urwid_ui.JourneyApp(str(tmp_path))
+    size = (80, 24)
+    assert "HugMesh is a self-hosted mesh" in _text_at(app, size)
+    _press(app, size, "enter")                         # the mode menu: ten cards
+    first = _text_at(app, size)
+    assert "Pick one." in first and "1. Local Docker mesh" in first
+
+
+# ── GUI-28 round 2: the review's status line answers ONE screen ─────────────────────
+def _a_refusal_on_the_list(tmp_path):
+    """A review whose status line holds a refusal about its FIRST row (a running build);
+    row 1 is a finished build with its workdir, row 2 an unreadable record."""
+    done = _finished(tmp_path, session_id="20260116-000001-aaaaaa")
+    os.makedirs(done.workdir)
+    live = bs.new_session(synthesize(ImageConfig(
+        mode="standalone", role="standalone-thick", platform="x86", brand="acme",
+        output_dir=str(tmp_path / "out"))), str(tmp_path),
+        session_id="20260116-000002-bbbbbb")
+    bs.start(live)                                     # running: our own live pid
+    _corrupt()
+    app = urwid_ui.SessionsReview()
+    assert [r.session.id for r in app.rows] == [live.id, done.id]
+    app.unhandled("s")                                 # the running build: refused
+    assert "not restarted: This session appears to be running" in _flat(
+        _screen_text(app.frame))
+    return app
+
+
+@pytest.mark.parametrize("key, row, mode", [
+    ("s", 1, "restart"), ("w", 1, "worklist"), ("d", 1, "confirm"), ("a", 1, "confirm"),
+    ("enter", 1, "detail"), ("enter", 2, "detail"), ("d", 2, "confirm")])
+def test_a_refusal_never_follows_the_person_onto_another_screen(tmp_path, key, row, mode):
+    # "not restarted: … running in another Studio process" was said about ONE build and
+    # then stayed under the hand-over, the worklist, the questions and the detail of
+    # every other row, and under the list again after them
+    app = _a_refusal_on_the_list(tmp_path)
+    _focus(app, row)                                   # another row: a build, or the
+    if key == "enter":                                 # unreadable record under it
+        app.frame.keypress(_SIZE, "enter")
+    else:
+        app.unhandled(key)
+    assert app.mode == mode
+    assert "not restarted" not in _screen_text(app.frame)
+    app.unhandled("q")                                 # back: the list is clean too
+    assert app.mode == "list"
+    assert "not restarted" not in _screen_text(app.frame)
+
+
+def test_r_re_reads_the_list_and_drops_the_last_answer(tmp_path):
+    app = _a_refusal_on_the_list(tmp_path)
+    app.unhandled("r")
+    assert app.mode == "list"
+    assert "not restarted" not in _screen_text(app.frame)
+
+
+def test_an_answer_stays_on_the_screen_it_was_said_on(tmp_path):
+    # the other half of the rule: a result is still shown where it happened
+    done = _finished(tmp_path, session_id="20260117-000001-aaaaaa")
+    app = urwid_ui.SessionsReview()
+    app.unhandled("d")
+    app._confirm_yes()
+    assert not os.path.exists(done.path())
+    assert f"deleted session {done.id} (record only)." in _screen_text(app.frame)
+    app.unhandled("a")                                 # nothing left: said on the list
+    assert "nothing to delete" in _screen_text(app.frame)
+
+
+def test_s_on_a_fleet_run_hands_over_to_the_fleet_window(tmp_path):
+    s = _finished(tmp_path, session_id="20260118-000001-aaaaaa", status="failed")
+    s.kind = "fleet"
+    bs.save(s)
+    os.makedirs(s.workdir)
+    app = urwid_ui.SessionsReview()
+    app.unhandled("s")
+    assert app.mode == "restart"
+    shown = _flat(_screen_text(app.frame))
+    assert f"Restart session {s.id} is a fleet run" in shown
+    assert "‘Build fleet now’ there is the confirmation" in shown
+    assert "reused/overwritten" not in shown
