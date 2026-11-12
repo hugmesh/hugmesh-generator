@@ -485,13 +485,16 @@ d=""; while [ \$# -gt 0 ]; do [ "\$1" = --HiddenServiceDir ] && d="\$2"; shift; 
 [ -n "\${d}" ] || exit 1
 head -c 96 /dev/urandom > "\${d}/hs_ed25519_secret_key"; head -c 64 /dev/urandom > "\${d}/hs_ed25519_public_key"
 printf '%s\n' "${ONION2}" > "\${d}/hostname"
-exec -a "hugmesh-stub-tor-${WORK##*/}" sleep 60
+echo \$\$ > "${WORK}/stub-tor.pid"     # exec keeps the PID
+exec sleep 60
 EOF
 chmod +x "${TB}/tor"
 if PATH="${TB}:${PATH}" gk "${WORK}/k-mint" --role host --mesh-control-transport onion --mesh-control-onion-dir "${WORK}/mint" --mesh-control-onion-mint; then
     expect "the mint survives tor's exit 143 and stamps the minted onion" "${ONION2}" "$(jq -r .mesh.control_onion "${WORK}/k-mint/provision.json")"
 else bad "the mint aborted on tor's exit status (rc $?): $(tail -2 "${WORK}/k-mint.log" | tr '\n' ' ')"; fi
-pgrep -f "hugmesh-stub-tor-${WORK##*/}" >/dev/null 2>&1 && bad "the stub tor was left running" || ok "the minting tor is stopped and reaped"
+if [ ! -s "${WORK}/stub-tor.pid" ]; then bad "the stub tor never ran (no pid file)"
+elif kill -0 "$(cat "${WORK}/stub-tor.pid")" 2>/dev/null; then bad "the stub tor was left running"; kill "$(cat "${WORK}/stub-tor.pid")" 2>/dev/null
+else ok "the minting tor is stopped and reaped"; fi
 # build-all-roles: the secret leaves this computer only on positive evidence
 awk '/^mesh_control_forget_secret\(\) \{/{f=1} f; f&&/^}/{exit}' "${BAR}" > "${WORK}/forget.sh"
 if grep -a -q '^mesh_control_forget_secret() {' "${WORK}/forget.sh"; then
