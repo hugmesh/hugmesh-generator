@@ -171,6 +171,38 @@ orangepi5	omnibus	test	orange-pi-5-plus	installer	-
 orangepi5	omnibus	test	orange-pi-5	installer	-
 orangepi5	omnibus	prod	orange-pi-5-plus	installer	-
 orangepi5	omnibus	prod	orange-pi-5	installer	-
+# Radxa ROCK 5B and FriendlyElec NanoPC-T6 on the SAME builder (--board rock-5b /
+# nanopc-t6, hugmesh-generator#1061) — EXPERIMENTAL, no board of either kind has
+# booted. The Orange Pi 5 cells exactly: three desktop flavors and the four node
+# roles (installer), both envs; no standalone probe row, like orange-pi-5.
+orangepi5	desktop	test	rock-5b	live	-
+orangepi5	desktop	test	rock-5b	installer	-
+orangepi5	desktop	test	rock-5b	both	-
+orangepi5	desktop	prod	rock-5b	live	-
+orangepi5	desktop	prod	rock-5b	installer	-
+orangepi5	desktop	prod	rock-5b	both	-
+orangepi5	pki	test	rock-5b	installer	-
+orangepi5	pki	prod	rock-5b	installer	-
+orangepi5	backend	test	rock-5b	installer	-
+orangepi5	backend	prod	rock-5b	installer	-
+orangepi5	frontend	test	rock-5b	installer	-
+orangepi5	frontend	prod	rock-5b	installer	-
+orangepi5	omnibus	test	rock-5b	installer	-
+orangepi5	omnibus	prod	rock-5b	installer	-
+orangepi5	desktop	test	nanopc-t6	live	-
+orangepi5	desktop	test	nanopc-t6	installer	-
+orangepi5	desktop	test	nanopc-t6	both	-
+orangepi5	desktop	prod	nanopc-t6	live	-
+orangepi5	desktop	prod	nanopc-t6	installer	-
+orangepi5	desktop	prod	nanopc-t6	both	-
+orangepi5	pki	test	nanopc-t6	installer	-
+orangepi5	pki	prod	nanopc-t6	installer	-
+orangepi5	backend	test	nanopc-t6	installer	-
+orangepi5	backend	prod	nanopc-t6	installer	-
+orangepi5	frontend	test	nanopc-t6	installer	-
+orangepi5	frontend	prod	nanopc-t6	installer	-
+orangepi5	omnibus	test	nanopc-t6	installer	-
+orangepi5	omnibus	prod	nanopc-t6	installer	-
 orangepizero2	appliance	test	-	live	-
 orangepizero2	appliance	test	-	installer	-
 orangepizero2	appliance	test	-	both	-

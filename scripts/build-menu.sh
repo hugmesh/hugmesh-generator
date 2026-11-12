@@ -164,7 +164,7 @@ OPT_JETSON_BOARD="orin-nano"  # orin-nano | orin-nano-4gb | orin-nx-8gb | orin-n
 OPT_JETSON_KFLAVOR="mainline" # mainline (buildable; NO CUDA) | l4t (documented stub)
 # ── Orange Pi 5 (arm64 Rockchip RK3588/RK3588S; EXPERIMENTAL — hardware
 # validation pending) ────────────────────────────────────────────────────────
-OPT_ORANGEPI5_BOARD="orange-pi-5-plus"   # orange-pi-5-plus (DEFAULT) | orange-pi-5
+OPT_ORANGEPI5_BOARD="orange-pi-5-plus"   # orange-pi-5-plus (DEFAULT) | orange-pi-5 | rock-5b | nanopc-t6
 OPT_ORANGEPI5_FLAVOR="both"              # both (DEFAULT) | live | installer
 # ── Orange Pi Zero 2 (arm64 Allwinner H616 HEADLESS APPLIANCE; EXPERIMENTAL —
 # hardware validation pending). No board axis (one board) and no --desktop
@@ -1813,6 +1813,8 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
             board="$(ui_menu "Orange Pi 5 board" "Board variant (--board; current: ${OPT_ORANGEPI5_BOARD}). EXPERIMENTAL — hardware validation pending, see specs-orangepi5/README.md:" \
                 orange-pi-5-plus "orange-pi-5-plus — RK3588: dual 2.5GbE, PCIe3.0x4 NVMe, dual HDMI+HDMI-in (DEFAULT)" \
                 orange-pi-5 "orange-pi-5      — RK3588S: fewer PCIe lanes, single NIC, single HDMI" \
+                rock-5b "rock-5b          — Radxa ROCK 5B, RK3588 (EXPERIMENTAL, never booted)" \
+                nanopc-t6 "nanopc-t6        — FriendlyElec NanoPC-T6, RK3588 (EXPERIMENTAL, never booted)" \
                 back "‹ back")" || return 0
             [ "${board}" = back ] && return 0
             OPT_ORANGEPI5_BOARD="${board}"

@@ -29,7 +29,11 @@
 # Board VARIANTS (--board): orange-pi-5-plus (RK3588, DEFAULT — dual 2.5GbE,
 # PCIe3.0x4 M.2 NVMe, dual HDMI 2.1 + HDMI input; strictly the fuller-I/O chip),
 # orange-pi-5 (RK3588S — same CPU/GPU/NPU core, fewer PCIe lanes, single NIC,
-# single HDMI, no HDMI input). See the BOARD TABLE below + specs-orangepi5/README.md.
+# single HDMI, no HDMI input). Two more RK3588 boards ride the same chain
+# (hugmesh-generator#1061): rock-5b (Radxa ROCK 5B) and nanopc-t6 (FriendlyElec
+# NanoPC-T6), each with a mainline U-Boot defconfig + kernel DTB pair recorded as
+# found in studio/evidence/mainline-evidence.json. EXPERIMENTAL like the rest: no
+# board has booted. See the BOARD TABLE below + specs-orangepi5/README.md.
 #
 # The default role is a client desktop, like Frite; --role pki | backend |
 # frontend | omnibus builds a cluster NODE instead (EXPERIMENTAL, installer only;
@@ -236,18 +240,20 @@ REL_VERSION="2026.0"
 # only (see specs-orangepi5/README.md's board table). orange-pi-5-plus (the
 # fuller RK3588 chip: dual 2.5GbE, PCIe3.0x4 NVMe, dual HDMI + HDMI input) is
 # the DEFAULT: it is strictly a superset of orange-pi-5's (RK3588S) I/O.
-OPI5_BOARD="orange-pi-5-plus"                   # orange-pi-5 | orange-pi-5-plus
+# rock-5b and nanopc-t6 are full RK3588 boards on the same rkbin DDR-init + TF-A
+# BL31 chain; only their mainline U-Boot defconfig and DTB differ.
+OPI5_BOARD="orange-pi-5-plus"                   # orange-pi-5 | orange-pi-5-plus | rock-5b | nanopc-t6
 OPI5_DEFCONFIG="defconfig"                      # generic arm64 mainline kernel defconfig (KERNEL, not U-Boot)
 OPI5_KERNEL_IMG="Image"
 # Board-derived values. Left EMPTY here; select_board() fills any the operator
 # did NOT override on the CLI. An explicit --cpu/--dtb/--uboot-defconfig sets
 # these non-empty BEFORE select_board runs, and select_board only fills
 # empties — so an explicit flag always wins regardless of flag order vs --board.
-OPI5_CPU=""                                      # both boards: cortex-a76.cortex-a55 (big.LITTLE)
+OPI5_CPU=""                                      # every board: cortex-a76.cortex-a55 (big.LITTLE)
 OPI5_DTB=""
 OPI5_UBOOT_DEFCONFIG=""
 OPI5_BOARD_DESC=""
-OPI5_HAS_SD=true                                 # both boards have a microSD slot
+OPI5_HAS_SD=true                                 # every board has a microSD slot
 
 JOBS="$(nproc)"
 SKIP_KERNEL=false
@@ -400,7 +406,11 @@ OPTIONS
     --board NAME        orange-pi-5-plus (DEFAULT, RK3588 — dual 2.5GbE,
                         PCIe3.0x4 M.2 NVMe, dual HDMI 2.1 + HDMI input),
                         orange-pi-5 (RK3588S — same CPU/GPU/NPU core, fewer
-                        PCIe lanes, single NIC, single HDMI, no HDMI input).
+                        PCIe lanes, single NIC, single HDMI, no HDMI input),
+                        rock-5b (Radxa ROCK 5B, RK3588) or nanopc-t6
+                        (FriendlyElec NanoPC-T6, RK3588): same boot chain,
+                        mainline U-Boot + DTB pair; EXPERIMENTAL, no board
+                        of either kind has booted an image from this repo.
     -c, --cpu CPU       GCC -mcpu/-mtune (default cortex-a76.cortex-a55 — the
                         RK3588/RK3588S big.LITTLE core mix, both boards).
     -d, --defconfig N   Kernel base defconfig (default: defconfig, mainline arm64).
@@ -519,6 +529,9 @@ EXAMPLES
 
     # Orange Pi 5 (the smaller-I/O RK3588S sibling), live image only
     ./build-orangepi5-stage4.sh --board orange-pi-5 --flavor live
+
+    # Radxa ROCK 5B on the same chain (EXPERIMENTAL), dry-run plan
+    ./build-orangepi5-stage4.sh --board rock-5b --print-plan
 
     # Standalone hardened desktop: local user, LUKS2 FDE on install
     ./build-orangepi5-stage4.sh --standalone --local-user alice
@@ -675,7 +688,20 @@ select_board() {
             uboot="orangepi-5-plus-rk3588_defconfig"; has_sd=true
             desc="Orange Pi 5 Plus (RK3588: dual 2.5GbE, PCIe3.0x4 M.2 NVMe, dual HDMI 2.1 + HDMI input)"
             ;;
-        *) err "--board must be one of: orange-pi-5 | orange-pi-5-plus (got '${OPI5_BOARD}')"; exit 1 ;;
+        # The two rows below are EXPERIMENTAL (hugmesh-generator#1061): the pair is
+        # what mainline U-Boot and Linux name for the board (the evidence table,
+        # studio/evidence/mainline-evidence.json), not a pair anyone has booted.
+        rock-5b)
+            cpu="cortex-a76.cortex-a55"; dtb="rockchip/rk3588-rock-5b.dtb"
+            uboot="rock5b-rk3588_defconfig"; has_sd=true
+            desc="Radxa ROCK 5B (RK3588: 2.5GbE, PCIe3.0x4 M.2 NVMe, dual HDMI 2.1 + HDMI input; EXPERIMENTAL, never booted from this repo)"
+            ;;
+        nanopc-t6)
+            cpu="cortex-a76.cortex-a55"; dtb="rockchip/rk3588-nanopc-t6.dtb"
+            uboot="nanopc-t6-rk3588_defconfig"; has_sd=true
+            desc="FriendlyElec NanoPC-T6 (RK3588: dual 2.5GbE, PCIe3.0x4 M.2 NVMe, onboard eMMC, dual HDMI 2.1 + HDMI input; EXPERIMENTAL, never booted from this repo)"
+            ;;
+        *) err "--board must be one of: orange-pi-5 | orange-pi-5-plus | rock-5b | nanopc-t6 (got '${OPI5_BOARD}')"; exit 1 ;;
     esac
     [ -z "${OPI5_CPU}" ]              && OPI5_CPU="${cpu}"
     [ -z "${OPI5_DTB}" ]             && OPI5_DTB="${dtb}"
@@ -1264,7 +1290,7 @@ if ${PRINT_PLAN}; then
         _plan RAM_FLOOR_GB       "$(hugmesh_role_min_ram_gb "${ROLE}")"
         _plan NODE_PACKAGES      "specs-rpi5/portage/packages-k8s.list + ${NODE_ROLE_HOST_PACKAGES_LIST} (the Raspberry Pi node set)"
         _plan NODE_USE           "${NODE_ROLE_MAKE_CONF_USE} + package.use ${NODE_ROLE_PI_PACKAGE_USE} (from specs-rpi5)"
-        _plan EXPERIMENTAL       "yes (no Orange Pi has booted an image from this repo; hardware validation pending)"
+        _plan EXPERIMENTAL       "yes (no board on this builder has booted an image from this repo; hardware validation pending)"
     else
     _plan OPTIONAL_SERVICES  "none"   # lean desktop client: no baked cluster tree
     fi

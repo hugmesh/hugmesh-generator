@@ -296,12 +296,13 @@ def test_catalog_covers_the_named_families_and_verdicts():
     by_status = {s: [d.id for d in CAT.devices if d.status == s] for s in dc.STATUSES}
     assert by_status["experimental"] and by_status["unsupported"]
     expect_unsupported = {"rpi2", "rpi6", "opi2", "opi3", "opi4", "opi6",
-                          "bpi-m5", "bpi-f3", "rock-5b", "nanopc-t6",
+                          "bpi-m5", "bpi-f3",
                           "rk3588-generic", "lc-renegade"}
     assert expect_unsupported <= set(by_status["unsupported"])
     expect_supported = {"x86-pc", "x86-laptop", "chromebook", "rpi5", "rpi4", "rpi3",
                         "la-frite", "le-potato", "sweet-potato"}
     assert expect_supported <= set(by_status["supported"])
     expect_experimental = {"orin-nano", "orin-nano-4gb", "orin-nx-8gb", "orin-nx-16gb",
-                           "orange-pi-5", "orange-pi-5-plus", "orange-pi-zero2"}
+                           "orange-pi-5", "orange-pi-5-plus", "orange-pi-zero2",
+                           "rock-5b", "nanopc-t6"}
     assert expect_experimental <= set(by_status["experimental"])

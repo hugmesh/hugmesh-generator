@@ -375,7 +375,15 @@ fi
 # make or the menu — the same honest gap (C) above already records for cloud mode).
 # Written down rather than papered over: a wrong baseline reads as reviewed and stops
 # anyone looking, which is exactly how the 62 survived.
-BASELINE_GAPS=68
+#
+# GAPS re-baselined 68 -> 76 (hugmesh-generator#1061): two new --board values on the
+# Orange Pi 5 builder (rock-5b, nanopc-t6). Each one carries EXACTLY the four gaps
+# the orange-pi-5 board already has, and no other: cloud/.../<board>/both (job
+# refuses "both", the single-imageRef rule) and standalone/.../<board>/{both,
+# installer,live} (make/menu reach standalone only through the escape hatch; job
+# refuses "both" and drops the posture on "live"). 2 boards x 4 = 8. Measured by
+# diffing the gap ID sets: every new ID is an orange-pi-5 ID with the board renamed.
+BASELINE_GAPS=76
 BASELINE_PHANTOMS=0
 GOT_GAPS="$("${PYTHON}" -c "import json,sys;print(len(json.load(open(sys.argv[1]))['channel_gaps']))" "${INVENTORY}")"
 GOT_PHANTOMS="$("${PYTHON}" -c "import json,sys;print(len(json.load(open(sys.argv[1]))['phantoms']))" "${INVENTORY}")"

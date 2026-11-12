@@ -1184,27 +1184,95 @@
     },
     {
       "arch": "arm64",
-      "config_axes": null,
+      "config_axes": {
+        "board": "rock-5b",
+        "platform": "orangepi5"
+      },
       "family": "radxa",
       "id": "rock-5b",
       "label": "Radxa ROCK 5B",
-      "notes": "",
-      "reason": "promotion path exists \u2014 mainline u-boot rock5b-rk3588_defconfig + mainline DTB rk3588-rock-5b.dtb, same rkbin DDR-init + TF-A BL31 chain as the Orange Pi 5 \u2014 but the additive board row + fail-loud preflight have NOT shipped in build-orangepi5-stage4.sh, so it is not selectable (the drift guard pins catalog boards to the builder's accepted set)",
-      "roles": {},
+      "notes": "the 'orangepi5' builder with --board rock-5b: light desktop (board + flavor axes) + cluster node pki/backend/frontend/omnibus (installer; RAM 4/8/16/32 GB; omnibus 16 GB+, backend 8 GB+)",
+      "reason": "hardware validation pending \u2014 no ROCK 5B has booted an image from this repo; fail-loud preflight. A board row on the Orange Pi 5 builder (--board rock-5b): mainline u-boot rock5b-rk3588_defconfig + mainline DTB rockchip/rk3588-rock-5b.dtb (found upstream, studio/evidence/mainline-evidence.json), same rkbin DDR-init + TF-A BL31 chain as the Orange Pi 5. The light desktop plus the pki/backend/frontend/omnibus cluster node roles (EXPERIMENTAL; nodes are installer-only; omnibus needs 16 GB+ RAM, backend 8 GB+)",
+      "roles": {
+        "cloud": [
+          {
+            "label": "Orange Pi 5 / 5 Plus arm64 client \u2014 EXPERIMENTAL (board + live/installer flavor)",
+            "role": "orangepi5"
+          }
+        ],
+        "mesh": [
+          {
+            "label": "PKI node \u2014 cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+            "role": "pki"
+          },
+          {
+            "label": "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+            "role": "backend"
+          },
+          {
+            "label": "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS \u2014 EXPERIMENTAL)",
+            "role": "frontend"
+          },
+          {
+            "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+            "role": "omnibus"
+          }
+        ],
+        "standalone": [
+          {
+            "label": "Orange Pi 5 / 5 Plus arm64 standalone \u2014 EXPERIMENTAL (FDE local desktop; board + flavor)",
+            "role": "orangepi5"
+          }
+        ]
+      },
       "soc": "Rockchip RK3588",
-      "status": "unsupported"
+      "status": "experimental"
     },
     {
       "arch": "arm64",
-      "config_axes": null,
+      "config_axes": {
+        "board": "nanopc-t6",
+        "platform": "orangepi5"
+      },
       "family": "friendlyelec",
       "id": "nanopc-t6",
       "label": "FriendlyElec NanoPC-T6",
-      "notes": "",
-      "reason": "promotion path exists \u2014 mainline nanopc-t6-rk3588_defconfig + rk3588-nanopc-t6.dtb, same boot chain as the Orange Pi 5 \u2014 but the additive board row + fail-loud preflight have NOT shipped in build-orangepi5-stage4.sh, so it is not selectable",
-      "roles": {},
+      "notes": "the 'orangepi5' builder with --board nanopc-t6: light desktop (board + flavor axes) + cluster node pki/backend/frontend/omnibus (installer; RAM 4/8/16/32 GB; omnibus 16 GB+, backend 8 GB+)",
+      "reason": "hardware validation pending \u2014 no NanoPC-T6 has booted an image from this repo; fail-loud preflight. A board row on the Orange Pi 5 builder (--board nanopc-t6): mainline u-boot nanopc-t6-rk3588_defconfig + mainline DTB rockchip/rk3588-nanopc-t6.dtb (found upstream, studio/evidence/mainline-evidence.json), same rkbin DDR-init + TF-A BL31 chain as the Orange Pi 5. The light desktop plus the pki/backend/frontend/omnibus cluster node roles (EXPERIMENTAL; nodes are installer-only; omnibus needs 16 GB+ RAM, backend 8 GB+)",
+      "roles": {
+        "cloud": [
+          {
+            "label": "Orange Pi 5 / 5 Plus arm64 client \u2014 EXPERIMENTAL (board + live/installer flavor)",
+            "role": "orangepi5"
+          }
+        ],
+        "mesh": [
+          {
+            "label": "PKI node \u2014 cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+            "role": "pki"
+          },
+          {
+            "label": "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+            "role": "backend"
+          },
+          {
+            "label": "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS \u2014 EXPERIMENTAL)",
+            "role": "frontend"
+          },
+          {
+            "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+            "role": "omnibus"
+          }
+        ],
+        "standalone": [
+          {
+            "label": "Orange Pi 5 / 5 Plus arm64 standalone \u2014 EXPERIMENTAL (FDE local desktop; board + flavor)",
+            "role": "orangepi5"
+          }
+        ]
+      },
       "soc": "Rockchip RK3588",
-      "status": "unsupported"
+      "status": "experimental"
     },
     {
       "arch": "arm64",
@@ -1548,7 +1616,9 @@
             "axes": {
               "board": [
                 "orange-pi-5-plus",
-                "orange-pi-5"
+                "orange-pi-5",
+                "rock-5b",
+                "nanopc-t6"
               ],
               "flavor": [
                 "live",
@@ -1669,7 +1739,9 @@
             "axes": {
               "board": [
                 "orange-pi-5-plus",
-                "orange-pi-5"
+                "orange-pi-5",
+                "rock-5b",
+                "nanopc-t6"
               ],
               "flavor": [
                 "installer"
@@ -1701,7 +1773,9 @@
             "axes": {
               "board": [
                 "orange-pi-5-plus",
-                "orange-pi-5"
+                "orange-pi-5",
+                "rock-5b",
+                "nanopc-t6"
               ],
               "flavor": [
                 "installer"
@@ -1733,7 +1807,9 @@
             "axes": {
               "board": [
                 "orange-pi-5-plus",
-                "orange-pi-5"
+                "orange-pi-5",
+                "rock-5b",
+                "nanopc-t6"
               ],
               "flavor": [
                 "installer"
@@ -1805,7 +1881,9 @@
             "axes": {
               "board": [
                 "orange-pi-5-plus",
-                "orange-pi-5"
+                "orange-pi-5",
+                "rock-5b",
+                "nanopc-t6"
               ],
               "flavor": [
                 "installer"
@@ -2018,7 +2096,9 @@
             "axes": {
               "board": [
                 "orange-pi-5-plus",
-                "orange-pi-5"
+                "orange-pi-5",
+                "rock-5b",
+                "nanopc-t6"
               ],
               "flavor": [
                 "live",

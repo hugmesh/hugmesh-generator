@@ -388,7 +388,7 @@ Skipped in mesh. Mesh picks role and platform on the worklist screen instead.
 
 You pick three things, top to bottom. First the **architecture** (x86-64, ARM64, ARMv7, RISC-V 64). Then a **device** from a searchable tree grouped by vendor family: 51 devices across 11 families today, with a Status column. Then the **image type**, a list of only the roles that device supports in the mode you are in.
 
-The catalogue is honest rather than tidy. Unsupported devices are listed with the reason they cannot be built, and you cannot select them. 27 of the 51 are in that state, including everything under ARMv7 and RISC-V. A device that is buildable but has no image type in *this* mode is also unselectable, with an inline note saying which path does offer it. Search matches the device name, its SoC, and its family or vendor.
+The catalogue is honest rather than tidy. Unsupported devices are listed with the reason they cannot be built, and you cannot select them. 25 of the 51 are in that state, including everything under ARMv7 and RISC-V. A device that is buildable but has no image type in *this* mode is also unselectable, with an inline note saying which path does offer it. Search matches the device name, its SoC, and its family or vendor.
 
 Underneath, only the knobs the chosen platform has appear:
 
@@ -428,7 +428,7 @@ A fresh mesh flow arrives with one row already checked: the mode default, `omnib
 
 Checking a desktop-class row asks who uses it. The dialog opens when you tick the row with the mouse. A programmatic check, such as a loaded worklist re-seeding the tree, never opens it. The named people appear in a **Desktop users** table below the tree, and double-clicking a row there edits one. Cancelling the dialog unchecks the row. Next stays disabled until every checked desktop has a named user, and the placeholder row shows in red until it does. That account is created on the internal Tailscale root domain, and the person's role rides the image. The dialog asks for the person's tier (`user`, `mod`, `admin`, `superadmin`) and any grants (`games`, `games-services`). The tier is what `--person-role` bakes into the image. The grants ride only the manifest account, which holds the tier plus every ticked grant, and the **Desktop users** table lists the full set.
 
-Two things a survey of this page usually misses. First, a checkbox reads "Also list the 37 devices that cannot be mesh nodes". It is off by default, and it brings back read-only rows that explain why each device has nothing to build here. Second, the combos in this tree ignore the scroll wheel on purpose. A plain combo would change a board or an encryption setting under the cursor while you scrolled the table, which is how one node once shipped with the wrong board.
+Two things a survey of this page usually misses. First, a checkbox reads "Also list the 32 devices that cannot be mesh nodes". It is off by default, and it brings back read-only rows that explain why each device has nothing to build here. Second, the combos in this tree ignore the scroll wheel on purpose. A plain combo would change a board or an encryption setting under the cursor while you scrolled the table, which is how one node once shipped with the wrong board.
 
 Downstream, the worklist stamps the base config's role from the first checked row and pins its platform to x86 as the option superset, so later screens show the widest field set. Unchecking a row also removes its id from every domain's "Applies to" list.
 

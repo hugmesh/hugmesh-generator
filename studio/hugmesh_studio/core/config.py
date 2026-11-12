@@ -391,7 +391,10 @@ RPI_NODE_BOARDS = ("rpi5", "rpi4")
 # build-orangepi5-stage4.sh --board (Rockchip RK3588/RK3588S) / --flavor.
 # EXPERIMENTAL — hardware validation pending; see specs-orangepi5/README.md.
 # ONE role (a client desktop, no --role axis), like Frite — just board + flavor.
-ORANGEPI5_BOARDS = ("orange-pi-5-plus", "orange-pi-5")
+# rock-5b (Radxa ROCK 5B) and nanopc-t6 (FriendlyElec NanoPC-T6) ride the same
+# RK3588 boot chain with their own mainline U-Boot defconfig + DTB
+# (hugmesh-generator#1061); the default stays first.
+ORANGEPI5_BOARDS = ("orange-pi-5-plus", "orange-pi-5", "rock-5b", "nanopc-t6")
 ORANGEPI5_FLAVORS = ("live", "installer", "both")
 
 # build-orangepi-zero2-stage4.sh --flavor (Allwinner H616). EXPERIMENTAL —

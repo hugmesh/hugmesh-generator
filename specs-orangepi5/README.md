@@ -26,6 +26,7 @@ password) and `--encrypt-root` (LUKS2 full-disk encryption) from the start.
 ```sh
 ./build-orangepi5-stage4.sh                                   # Orange Pi 5 Plus (default), both live+installer
 ./build-orangepi5-stage4.sh --board orange-pi-5                # the smaller-I/O sibling (RK3588S)
+./build-orangepi5-stage4.sh --board rock-5b --print-plan       # Radxa ROCK 5B on the same chain (dry run)
 ./build-orangepi5-stage4.sh --standalone --local-user alice     # local-only desktop, LUKS2 FDE on install
 ./build-orangepi5-stage4.sh --encrypt-root --print-plan         # dry-run plan (no root)
 ```
@@ -36,6 +37,19 @@ password) and `--encrypt-root` (LUKS2 full-disk encryption) from the start.
 |---|---|---|---|
 | `orange-pi-5-plus` (**DEFAULT**) | RK3588 (full) | dual 2.5GbE (RTL8125, PCIe), PCIe3.0x4 M.2 NVMe, M.2 E-key WiFi slot, dual HDMI 2.1 + HDMI input, eMMC/microSD | EXPERIMENTAL |
 | `orange-pi-5` | RK3588S | single lower-speed NIC (SKU-dependent), no PCIe3.0x4 (fewer PCIe lanes overall), single HDMI 2.1 output, no HDMI input, eMMC/microSD | EXPERIMENTAL |
+| `rock-5b` (Radxa ROCK 5B) | RK3588 (full) | 2.5GbE (RTL8125, PCIe), PCIe3.0x4 M.2 M-key NVMe, dual HDMI 2.1 + HDMI input, eMMC module socket/microSD. Mainline U-Boot `rock5b-rk3588_defconfig`, DTB `rockchip/rk3588-rock-5b.dtb` | EXPERIMENTAL, never booted |
+| `nanopc-t6` (FriendlyElec NanoPC-T6) | RK3588 (full) | dual 2.5GbE (RTL8125, PCIe), PCIe3.0x4 M.2 M-key NVMe, onboard eMMC/microSD, dual HDMI 2.1 + HDMI input. Mainline U-Boot `nanopc-t6-rk3588_defconfig`, DTB `rockchip/rk3588-nanopc-t6.dtb` | EXPERIMENTAL, never booted |
+
+**ROCK 5B and NanoPC-T6 (hugmesh-generator#1061).** Both are full RK3588 boards on
+the Orange Pi 5's boot chain (rkbin DDR-init + TF-A BL31, then U-Boot and
+extlinux), so they are two more `--board` values here, not a new builder. The
+U-Boot defconfig and kernel DTB for each were looked up in mainline at named
+release tags and recorded as found in `studio/evidence/mainline-evidence.json`
+(`scripts/mainline-evidence.py` re-checks them). That is necessary, not
+sufficient: no board of either kind has booted an image from this repo. What is
+proven without the board is that the rootfs and kernel boot under QEMU `-M virt`
+(`tests/qemu/launch-arm.sh --platform orangepi5 --board rock-5b`, or
+`--board nanopc-t6`); a silicon boot needs a person with the board.
 
 **Chip confirmation (HIGH confidence):** RK3588 and RK3588S share an *identical*
 CPU/GPU/NPU core (4x Cortex-A76 @ up to 2.4GHz + 4x Cortex-A55 @ up to 1.8GHz,

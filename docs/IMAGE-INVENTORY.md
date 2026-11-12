@@ -4,11 +4,11 @@
      Regenerate: python3 scripts/emit-image-inventory.py
      CI gate:    bash tests/build-matrix/inventory-check.sh (`make inventory-check`) -->
 
-`docs/catalog/image-catalog.json` is the image GRAMMAR and `tests/build-matrix/matrix.tsv` is a curated 170-cell SAMPLE of it. This table is the third thing neither of them is: the FULL cross-product of that grammar — every image the platform advertises — with, per image, which of the six build channels can actually express it.
+`docs/catalog/image-catalog.json` is the image GRAMMAR and `tests/build-matrix/matrix.tsv` is a curated 198-cell SAMPLE of it. This table is the third thing neither of them is: the FULL cross-product of that grammar — every image the platform advertises — with, per image, which of the six build channels can actually express it.
 
-- **141 distinct images** (x 2 hardening envs = 282 builds)
-- **170 matrix.tsv cells** (77 distinct, env-collapsed) — the sampled subset `tests/build-matrix/check.sh` proves across five channels
-- **68 images with a channel gap**, 0 phantom, 0 undocumented
+- **161 distinct images** (x 2 hardening envs = 322 builds)
+- **198 matrix.tsv cells** (91 distinct, env-collapsed) — the sampled subset `tests/build-matrix/check.sh` proves across five channels
+- **76 images with a channel gap**, 0 phantom, 0 undocumented
 
 Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder flags) &nbsp; ❌ not expressible
 
@@ -16,12 +16,12 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 
 | channel | source of truth | ✅ | ⚠️ | ❌ |
 | --- | --- | ---: | ---: | ---: |
-| `cli` | build-*-stage4.sh --print-plan | 141 | 0 | 0 |
-| `make` | Makefile targets (make -n) | 92 | 49 | 0 |
-| `menu` | scripts/build-menu.sh ui_menu pickers | 92 | 40 | 9 |
-| `gui` | studio/hugmesh_studio --print-command | 141 | 0 | 0 |
-| `job` | docker/build-image.sh resolve_build_target() | 91 | 9 | 41 |
-| `worklist` | hugmesh-worklist/v1 envelope -> materialize() | 141 | 0 | 0 |
+| `cli` | build-*-stage4.sh --print-plan | 161 | 0 | 0 |
+| `make` | Makefile targets (make -n) | 106 | 55 | 0 |
+| `menu` | scripts/build-menu.sh ui_menu pickers | 106 | 46 | 9 |
+| `gui` | studio/hugmesh_studio --print-command | 161 | 0 | 0 |
+| `job` | docker/build-image.sh resolve_build_target() | 105 | 9 | 47 |
+| `worklist` | hugmesh-worklist/v1 envelope -> materialize() | 161 | 0 | 0 |
 
 ## The inventory
 
@@ -51,12 +51,18 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 | `cloud/orangepi4-lts/orangepi4-lts/both` | cloud | orangepi4-lts | `orangepi4-lts` | `—` | — | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | `cloud/orangepi4-lts/orangepi4-lts/installer` | cloud | orangepi4-lts | `orangepi4-lts` | `—` | — | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `cloud/orangepi4-lts/orangepi4-lts/live` | cloud | orangepi4-lts | `orangepi4-lts` | `—` | — | live | — | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/orangepi5/orangepi5/nanopc-t6/both` | cloud | orangepi5 | `orangepi5` | `—` | nanopc-t6 | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| `cloud/orangepi5/orangepi5/nanopc-t6/installer` | cloud | orangepi5 | `orangepi5` | `—` | nanopc-t6 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/orangepi5/orangepi5/nanopc-t6/live` | cloud | orangepi5 | `orangepi5` | `—` | nanopc-t6 | live | — | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `cloud/orangepi5/orangepi5/orange-pi-5-plus/both` | cloud | orangepi5 | `orangepi5` | `—` | orange-pi-5-plus | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | `cloud/orangepi5/orangepi5/orange-pi-5-plus/installer` | cloud | orangepi5 | `orangepi5` | `—` | orange-pi-5-plus | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `cloud/orangepi5/orangepi5/orange-pi-5-plus/live` | cloud | orangepi5 | `orangepi5` | `—` | orange-pi-5-plus | live | — | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `cloud/orangepi5/orangepi5/orange-pi-5/both` | cloud | orangepi5 | `orangepi5` | `—` | orange-pi-5 | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | `cloud/orangepi5/orangepi5/orange-pi-5/installer` | cloud | orangepi5 | `orangepi5` | `—` | orange-pi-5 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `cloud/orangepi5/orangepi5/orange-pi-5/live` | cloud | orangepi5 | `orangepi5` | `—` | orange-pi-5 | live | — | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/orangepi5/orangepi5/rock-5b/both` | cloud | orangepi5 | `orangepi5` | `—` | rock-5b | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| `cloud/orangepi5/orangepi5/rock-5b/installer` | cloud | orangepi5 | `orangepi5` | `—` | rock-5b | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cloud/orangepi5/orangepi5/rock-5b/live` | cloud | orangepi5 | `orangepi5` | `—` | rock-5b | live | — | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `cloud/orangepizero2/orangepizero2/both` | cloud | orangepizero2 | `orangepizero2` | `—` | — | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | `cloud/orangepizero2/orangepizero2/installer` | cloud | orangepizero2 | `orangepizero2` | `—` | — | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `cloud/orangepizero2/orangepizero2/live` | cloud | orangepizero2 | `orangepizero2` | `—` | — | live | — | live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -92,14 +98,22 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 | `mesh/jetson/omnibus/orin-nx-16gb` | mesh | jetson | `omnibus` | `omnibus` | orin-nx-16gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/jetson/omnibus/orin-nx-8gb` | mesh | jetson | `omnibus` | `omnibus` | orin-nx-8gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/orangepi4-lts/frontend/installer` | mesh | orangepi4-lts | `frontend` | `frontend` | — | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/backend/nanopc-t6/installer` | mesh | orangepi5 | `backend` | `backend` | nanopc-t6 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/orangepi5/backend/orange-pi-5-plus/installer` | mesh | orangepi5 | `backend` | `backend` | orange-pi-5-plus | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/orangepi5/backend/orange-pi-5/installer` | mesh | orangepi5 | `backend` | `backend` | orange-pi-5 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/backend/rock-5b/installer` | mesh | orangepi5 | `backend` | `backend` | rock-5b | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/frontend/nanopc-t6/installer` | mesh | orangepi5 | `frontend` | `frontend` | nanopc-t6 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/orangepi5/frontend/orange-pi-5-plus/installer` | mesh | orangepi5 | `frontend` | `frontend` | orange-pi-5-plus | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/orangepi5/frontend/orange-pi-5/installer` | mesh | orangepi5 | `frontend` | `frontend` | orange-pi-5 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/frontend/rock-5b/installer` | mesh | orangepi5 | `frontend` | `frontend` | rock-5b | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/omnibus/nanopc-t6/installer` | mesh | orangepi5 | `omnibus` | `omnibus` | nanopc-t6 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/orangepi5/omnibus/orange-pi-5-plus/installer` | mesh | orangepi5 | `omnibus` | `omnibus` | orange-pi-5-plus | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/orangepi5/omnibus/orange-pi-5/installer` | mesh | orangepi5 | `omnibus` | `omnibus` | orange-pi-5 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/omnibus/rock-5b/installer` | mesh | orangepi5 | `omnibus` | `omnibus` | rock-5b | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/pki/nanopc-t6/installer` | mesh | orangepi5 | `pki` | `pki` | nanopc-t6 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/orangepi5/pki/orange-pi-5-plus/installer` | mesh | orangepi5 | `pki` | `pki` | orange-pi-5-plus | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/orangepi5/pki/orange-pi-5/installer` | mesh | orangepi5 | `pki` | `pki` | orange-pi-5 | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/orangepi5/pki/rock-5b/installer` | mesh | orangepi5 | `pki` | `pki` | rock-5b | installer | — | installer.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/backend/rpi4` | mesh | rpi5 | `backend` | `backend` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/backend/rpi5` | mesh | rpi5 | `backend` | `backend` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/frontend/rpi4` | mesh | rpi5 | `frontend` | `frontend` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -146,12 +160,18 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 | `standalone/orangepi4-lts/orangepi4-lts/both` | standalone | orangepi4-lts | `orangepi4-lts` | `—` | — | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
 | `standalone/orangepi4-lts/orangepi4-lts/installer` | standalone | orangepi4-lts | `orangepi4-lts` | `—` | — | installer | — | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
 | `standalone/orangepi4-lts/orangepi4-lts/live` | standalone | orangepi4-lts | `orangepi4-lts` | `—` | — | live | — | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/orangepi5/orangepi5/nanopc-t6/both` | standalone | orangepi5 | `orangepi5` | `—` | nanopc-t6 | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/orangepi5/orangepi5/nanopc-t6/installer` | standalone | orangepi5 | `orangepi5` | `—` | nanopc-t6 | installer | — | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
+| `standalone/orangepi5/orangepi5/nanopc-t6/live` | standalone | orangepi5 | `orangepi5` | `—` | nanopc-t6 | live | — | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
 | `standalone/orangepi5/orangepi5/orange-pi-5-plus/both` | standalone | orangepi5 | `orangepi5` | `—` | orange-pi-5-plus | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
 | `standalone/orangepi5/orangepi5/orange-pi-5-plus/installer` | standalone | orangepi5 | `orangepi5` | `—` | orange-pi-5-plus | installer | — | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
 | `standalone/orangepi5/orangepi5/orange-pi-5-plus/live` | standalone | orangepi5 | `orangepi5` | `—` | orange-pi-5-plus | live | — | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
 | `standalone/orangepi5/orangepi5/orange-pi-5/both` | standalone | orangepi5 | `orangepi5` | `—` | orange-pi-5 | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
 | `standalone/orangepi5/orangepi5/orange-pi-5/installer` | standalone | orangepi5 | `orangepi5` | `—` | orange-pi-5 | installer | — | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
 | `standalone/orangepi5/orangepi5/orange-pi-5/live` | standalone | orangepi5 | `orangepi5` | `—` | orange-pi-5 | live | — | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/orangepi5/orangepi5/rock-5b/both` | standalone | orangepi5 | `orangepi5` | `—` | rock-5b | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
+| `standalone/orangepi5/orangepi5/rock-5b/installer` | standalone | orangepi5 | `orangepi5` | `—` | rock-5b | installer | — | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
+| `standalone/orangepi5/orangepi5/rock-5b/live` | standalone | orangepi5 | `orangepi5` | `—` | rock-5b | live | — | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
 | `standalone/orangepizero2/orangepizero2/both` | standalone | orangepizero2 | `orangepizero2` | `—` | — | both | — | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
 | `standalone/orangepizero2/orangepizero2/installer` | standalone | orangepizero2 | `orangepizero2` | `—` | — | installer | — | installer.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
 | `standalone/orangepizero2/orangepizero2/live` | standalone | orangepizero2 | `orangepizero2` | `—` | — | live | — | live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
@@ -183,8 +203,10 @@ An image one channel can express and another cannot. This is the defect class th
 | `cloud/frite/frite/sweet-potato/both/none` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.sweet-potato.both |
 | `cloud/orangepi3-lts/orangepi3-lts/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi3-lts.both |
 | `cloud/orangepi4-lts/orangepi4-lts/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi4-lts.both |
+| `cloud/orangepi5/orangepi5/nanopc-t6/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.nanopc-t6.both |
 | `cloud/orangepi5/orangepi5/orange-pi-5-plus/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.orange-pi-5-plus.both |
 | `cloud/orangepi5/orangepi5/orange-pi-5/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.orange-pi-5.both |
+| `cloud/orangepi5/orangepi5/rock-5b/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.rock-5b.both |
 | `cloud/orangepizero2/orangepizero2/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepizero2.both |
 | `cloud/orangepizero2w/orangepizero2w/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepizero2w.both |
 | `cloud/orangepizero3/orangepizero3/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepizero3.both |
@@ -273,6 +295,14 @@ An image one channel can express and another cannot. This is the defect class th
 | `standalone/orangepi4-lts/orangepi4-lts/live` | `job` | ❌ | resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image) |
 | `standalone/orangepi4-lts/orangepi4-lts/live` | `make` | ⚠️ | `make orangepi4-lts` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
 | `standalone/orangepi4-lts/orangepi4-lts/live` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |
+| `standalone/orangepi5/orangepi5/nanopc-t6/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.nanopc-t6.both |
+| `standalone/orangepi5/orangepi5/nanopc-t6/both` | `make` | ⚠️ | `make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
+| `standalone/orangepi5/orangepi5/nanopc-t6/both` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |
+| `standalone/orangepi5/orangepi5/nanopc-t6/installer` | `make` | ⚠️ | `make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
+| `standalone/orangepi5/orangepi5/nanopc-t6/installer` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |
+| `standalone/orangepi5/orangepi5/nanopc-t6/live` | `job` | ❌ | resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image) |
+| `standalone/orangepi5/orangepi5/nanopc-t6/live` | `make` | ⚠️ | `make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
+| `standalone/orangepi5/orangepi5/nanopc-t6/live` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |
 | `standalone/orangepi5/orangepi5/orange-pi-5-plus/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.orange-pi-5-plus.both |
 | `standalone/orangepi5/orangepi5/orange-pi-5-plus/both` | `make` | ⚠️ | `make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
 | `standalone/orangepi5/orangepi5/orange-pi-5-plus/both` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |
@@ -289,6 +319,14 @@ An image one channel can express and another cannot. This is the defect class th
 | `standalone/orangepi5/orangepi5/orange-pi-5/live` | `job` | ❌ | resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image) |
 | `standalone/orangepi5/orangepi5/orange-pi-5/live` | `make` | ⚠️ | `make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
 | `standalone/orangepi5/orangepi5/orange-pi-5/live` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |
+| `standalone/orangepi5/orangepi5/rock-5b/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.rock-5b.both |
+| `standalone/orangepi5/orangepi5/rock-5b/both` | `make` | ⚠️ | `make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
+| `standalone/orangepi5/orangepi5/rock-5b/both` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |
+| `standalone/orangepi5/orangepi5/rock-5b/installer` | `make` | ⚠️ | `make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
+| `standalone/orangepi5/orangepi5/rock-5b/installer` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |
+| `standalone/orangepi5/orangepi5/rock-5b/live` | `job` | ❌ | resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image) |
+| `standalone/orangepi5/orangepi5/rock-5b/live` | `make` | ⚠️ | `make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
+| `standalone/orangepi5/orangepi5/rock-5b/live` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |
 | `standalone/orangepizero2/orangepizero2/both` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepizero2.both |
 | `standalone/orangepizero2/orangepizero2/both` | `make` | ⚠️ | `make orangepizero2` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
 | `standalone/orangepizero2/orangepizero2/both` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |

@@ -60,7 +60,8 @@ Usage: $0 [--encrypt|--no-encrypt] [--luks-pass PASS] [--write-uboot-spi] <targe
   <target-block-device>   the ONBOARD storage to install to, e.g.:
                             /dev/mmcblk0   (eMMC module / microSD)
                             /dev/mmcblk1   (microSD, if eMMC is mmcblk0)
-                            /dev/nvme0n1   (M.2 NVMe — Orange Pi 5 PLUS ONLY;
+                            /dev/nvme0n1   (M.2 NVMe — Orange Pi 5 Plus, ROCK 5B
+                                           or NanoPC-T6;
                                            see specs-orangepi5/README.md for the
                                            current confidence level on NVMe as
                                            an install target)

@@ -1,5 +1,5 @@
 {
-  "build_count": 282,
+  "build_count": 322,
   "channel_gaps": [
     {
       "channels": {
@@ -77,6 +77,15 @@
       "channels": {
         "job": "no"
       },
+      "id": "cloud/orangepi5/orangepi5/nanopc-t6/both",
+      "notes": {
+        "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.nanopc-t6.both"
+      }
+    },
+    {
+      "channels": {
+        "job": "no"
+      },
       "id": "cloud/orangepi5/orangepi5/orange-pi-5-plus/both",
       "notes": {
         "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.orange-pi-5-plus.both"
@@ -89,6 +98,15 @@
       "id": "cloud/orangepi5/orangepi5/orange-pi-5/both",
       "notes": {
         "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.orange-pi-5.both"
+      }
+    },
+    {
+      "channels": {
+        "job": "no"
+      },
+      "id": "cloud/orangepi5/orangepi5/rock-5b/both",
+      "notes": {
+        "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.rock-5b.both"
       }
     },
     {
@@ -546,6 +564,43 @@
         "make": "escape-hatch",
         "menu": "escape-hatch"
       },
+      "id": "standalone/orangepi5/orangepi5/nanopc-t6/both",
+      "notes": {
+        "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.nanopc-t6.both",
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      }
+    },
+    {
+      "channels": {
+        "make": "escape-hatch",
+        "menu": "escape-hatch"
+      },
+      "id": "standalone/orangepi5/orangepi5/nanopc-t6/installer",
+      "notes": {
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      }
+    },
+    {
+      "channels": {
+        "job": "no",
+        "make": "escape-hatch",
+        "menu": "escape-hatch"
+      },
+      "id": "standalone/orangepi5/orangepi5/nanopc-t6/live",
+      "notes": {
+        "job": "resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      }
+    },
+    {
+      "channels": {
+        "job": "no",
+        "make": "escape-hatch",
+        "menu": "escape-hatch"
+      },
       "id": "standalone/orangepi5/orangepi5/orange-pi-5-plus/both",
       "notes": {
         "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.orange-pi-5-plus.both",
@@ -608,6 +663,43 @@
         "menu": "escape-hatch"
       },
       "id": "standalone/orangepi5/orangepi5/orange-pi-5/live",
+      "notes": {
+        "job": "resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      }
+    },
+    {
+      "channels": {
+        "job": "no",
+        "make": "escape-hatch",
+        "menu": "escape-hatch"
+      },
+      "id": "standalone/orangepi5/orangepi5/rock-5b/both",
+      "notes": {
+        "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.rock-5b.both",
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      }
+    },
+    {
+      "channels": {
+        "make": "escape-hatch",
+        "menu": "escape-hatch"
+      },
+      "id": "standalone/orangepi5/orangepi5/rock-5b/installer",
+      "notes": {
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      }
+    },
+    {
+      "channels": {
+        "job": "no",
+        "make": "escape-hatch",
+        "menu": "escape-hatch"
+      },
+      "id": "standalone/orangepi5/orangepi5/rock-5b/live",
       "notes": {
         "job": "resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
         "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
@@ -779,7 +871,7 @@
     "prod"
   ],
   "generated_by": "scripts/emit-image-inventory.py",
-  "image_count": 141,
+  "image_count": 161,
   "images": [
     {
       "artifacts": [
@@ -2143,6 +2235,174 @@
         "live.iso",
         "stage4.tar.xz"
       ],
+      "board": "nanopc-t6",
+      "builder_role": "",
+      "channel_notes": {
+        "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.nanopc-t6.both"
+      },
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "no",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "both",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board nanopc-t6 --flavor both --env test --compress --resume",
+      "id": "cloud/orangepi5/orangepi5/nanopc-t6/both",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.nanopc-t6.both",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": []
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 client \u2014 EXPERIMENTAL (board + live/installer flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "nanopc-t6",
+        "ORANGEPI5_FLAVOR": "both"
+      },
+      "mode": "cloud",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "nanopc-t6",
+      "builder_role": "",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board nanopc-t6 --flavor installer --env test --compress --resume",
+      "id": "cloud/orangepi5/orangepi5/nanopc-t6/installer",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.nanopc-t6.installer",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": [
+          "client"
+        ]
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 client \u2014 EXPERIMENTAL (board + live/installer flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "nanopc-t6",
+        "ORANGEPI5_FLAVOR": "installer"
+      },
+      "mode": "cloud",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "live.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "nanopc-t6",
+      "builder_role": "",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "live",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board nanopc-t6 --flavor live --env test --compress --resume",
+      "id": "cloud/orangepi5/orangepi5/nanopc-t6/live",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.nanopc-t6.live",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": [
+          "client"
+        ]
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 client \u2014 EXPERIMENTAL (board + live/installer flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "nanopc-t6",
+        "ORANGEPI5_FLAVOR": "live"
+      },
+      "mode": "cloud",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "live.iso",
+        "stage4.tar.xz"
+      ],
       "board": "orange-pi-5-plus",
       "builder_role": "",
       "channel_notes": {
@@ -2454,6 +2714,174 @@
       "make_target": "orangepi5",
       "make_vars": {
         "ORANGEPI5_BOARD": "orange-pi-5",
+        "ORANGEPI5_FLAVOR": "live"
+      },
+      "mode": "cloud",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "live.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "rock-5b",
+      "builder_role": "",
+      "channel_notes": {
+        "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.rock-5b.both"
+      },
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "no",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "both",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board rock-5b --flavor both --env test --compress --resume",
+      "id": "cloud/orangepi5/orangepi5/rock-5b/both",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.rock-5b.both",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": []
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 client \u2014 EXPERIMENTAL (board + live/installer flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "rock-5b",
+        "ORANGEPI5_FLAVOR": "both"
+      },
+      "mode": "cloud",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "rock-5b",
+      "builder_role": "",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board rock-5b --flavor installer --env test --compress --resume",
+      "id": "cloud/orangepi5/orangepi5/rock-5b/installer",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.rock-5b.installer",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": [
+          "client"
+        ]
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 client \u2014 EXPERIMENTAL (board + live/installer flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "rock-5b",
+        "ORANGEPI5_FLAVOR": "installer"
+      },
+      "mode": "cloud",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "live.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "rock-5b",
+      "builder_role": "",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "live",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board rock-5b --flavor live --env test --compress --resume",
+      "id": "cloud/orangepi5/orangepi5/rock-5b/live",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.rock-5b.live",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": [
+          "client"
+        ]
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 client \u2014 EXPERIMENTAL (board + live/installer flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "rock-5b",
         "ORANGEPI5_FLAVOR": "live"
       },
       "mode": "cloud",
@@ -4430,6 +4858,62 @@
         "installer.iso",
         "stage4.tar.xz"
       ],
+      "board": "nanopc-t6",
+      "builder_role": "backend",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board nanopc-t6 --flavor installer --role backend --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/backend/nanopc-t6/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.backend.nanopc-t6",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-backend",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "nanopc-t6"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "backend",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "backend"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
       "board": "orange-pi-5-plus",
       "builder_role": "backend",
       "channel_notes": {},
@@ -4542,6 +5026,118 @@
         "installer.iso",
         "stage4.tar.xz"
       ],
+      "board": "rock-5b",
+      "builder_role": "backend",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board rock-5b --flavor installer --role backend --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/backend/rock-5b/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.backend.rock-5b",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Backend node (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-backend",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "rock-5b"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "backend",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "backend"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "nanopc-t6",
+      "builder_role": "frontend",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board nanopc-t6 --flavor installer --role frontend --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/frontend/nanopc-t6/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.frontend.nanopc-t6",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-frontend",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "nanopc-t6"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "frontend",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "frontend"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
       "board": "orange-pi-5-plus",
       "builder_role": "frontend",
       "channel_notes": {},
@@ -4648,6 +5244,119 @@
         "worklist"
       ],
       "role": "frontend"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "rock-5b",
+      "builder_role": "frontend",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board rock-5b --flavor installer --role frontend --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/frontend/rock-5b/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.frontend.rock-5b",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Frontend node (x86, Raspberry Pi 4/5, or Orange Pi 5 / 4 LTS \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-frontend",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "rock-5b"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "frontend",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "frontend"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "nanopc-t6",
+      "builder_role": "omnibus",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board nanopc-t6 --flavor installer --role omnibus --ram-gb 16 --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/omnibus/nanopc-t6/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.omnibus.nanopc-t6.16gb",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-omnibus",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "nanopc-t6",
+        "RAM_GB": "16"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "omnibus",
+      "platform": "orangepi5",
+      "ram_gb": "16",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "omnibus"
     },
     {
       "artifacts": [
@@ -4768,6 +5477,119 @@
         "installer.iso",
         "stage4.tar.xz"
       ],
+      "board": "rock-5b",
+      "builder_role": "omnibus",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board rock-5b --flavor installer --role omnibus --ram-gb 16 --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/omnibus/rock-5b/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.omnibus.rock-5b.16gb",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "Omnibus \u2014 every cluster role on one node (x86; Raspberry Pi 5 or Orange Pi 5 with 16 GB+ RAM; Jetson Orin / Orange Pi \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-omnibus",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "rock-5b",
+        "RAM_GB": "16"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "omnibus",
+      "platform": "orangepi5",
+      "ram_gb": "16",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "omnibus"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "nanopc-t6",
+      "builder_role": "pki",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board nanopc-t6 --flavor installer --role pki --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/pki/nanopc-t6/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.pki.nanopc-t6",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "PKI node \u2014 cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-pki",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "nanopc-t6"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "pki",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "pki"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
       "board": "orange-pi-5-plus",
       "builder_role": "pki",
       "channel_notes": {},
@@ -4857,6 +5679,62 @@
       "make_target": "orangepi5-pki",
       "make_vars": {
         "ORANGEPI5_BOARD": "orange-pi-5"
+      },
+      "mode": "mesh",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "pki",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "make",
+        "menu",
+        "worklist"
+      ],
+      "role": "pki"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "rock-5b",
+      "builder_role": "pki",
+      "channel_notes": {},
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "yes",
+        "menu": "yes",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board rock-5b --flavor installer --role pki --env test --superdomain hugmesh.internal --compress --resume",
+      "id": "mesh/orangepi5/pki/rock-5b/installer",
+      "image_class": "node",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.pki.rock-5b",
+        "IMAGE_TYPE": "primary",
+        "accepted_image_types": [
+          "primary",
+          "mesh-extension"
+        ]
+      },
+      "label": "PKI node \u2014 cluster certificate authority (x86, Raspberry Pi 4/5, or Orange Pi 5 \u2014 EXPERIMENTAL)",
+      "make_target": "orangepi5-pki",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "rock-5b"
       },
       "mode": "mesh",
       "phantom": false,
@@ -7480,6 +8358,174 @@
         "live.iso",
         "stage4.tar.xz"
       ],
+      "board": "nanopc-t6",
+      "builder_role": "",
+      "channel_notes": {
+        "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.nanopc-t6.both",
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      },
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "no",
+        "make": "escape-hatch",
+        "menu": "escape-hatch",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "both",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board nanopc-t6 --flavor both --env test --skip-mesh --compress --resume",
+      "id": "standalone/orangepi5/orangepi5/nanopc-t6/both",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.nanopc-t6.both",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": []
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 standalone \u2014 EXPERIMENTAL (FDE local desktop; board + flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "nanopc-t6",
+        "ORANGEPI5_FLAVOR": "both"
+      },
+      "mode": "standalone",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "nanopc-t6",
+      "builder_role": "",
+      "channel_notes": {
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      },
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "escape-hatch",
+        "menu": "escape-hatch",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board nanopc-t6 --flavor installer --env test --skip-mesh --compress --resume",
+      "id": "standalone/orangepi5/orangepi5/nanopc-t6/installer",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.nanopc-t6.standalone",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": [
+          "client"
+        ]
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 standalone \u2014 EXPERIMENTAL (FDE local desktop; board + flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "nanopc-t6",
+        "ORANGEPI5_FLAVOR": "installer"
+      },
+      "mode": "standalone",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "live.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "nanopc-t6",
+      "builder_role": "",
+      "channel_notes": {
+        "job": "resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      },
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "no",
+        "make": "escape-hatch",
+        "menu": "escape-hatch",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "live",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board nanopc-t6 --flavor live --env test --skip-mesh --compress --resume",
+      "id": "standalone/orangepi5/orangepi5/nanopc-t6/live",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.nanopc-t6.live",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": []
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 standalone \u2014 EXPERIMENTAL (FDE local desktop; board + flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "nanopc-t6",
+        "ORANGEPI5_FLAVOR": "live"
+      },
+      "mode": "standalone",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "live.iso",
+        "stage4.tar.xz"
+      ],
       "board": "orange-pi-5-plus",
       "builder_role": "",
       "channel_notes": {
@@ -7794,6 +8840,174 @@
       "make_target": "orangepi5",
       "make_vars": {
         "ORANGEPI5_BOARD": "orange-pi-5",
+        "ORANGEPI5_FLAVOR": "live"
+      },
+      "mode": "standalone",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "live.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "rock-5b",
+      "builder_role": "",
+      "channel_notes": {
+        "job": "resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.rock-5b.both",
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      },
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "no",
+        "make": "escape-hatch",
+        "menu": "escape-hatch",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "both",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board rock-5b --flavor both --env test --skip-mesh --compress --resume",
+      "id": "standalone/orangepi5/orangepi5/rock-5b/both",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.rock-5b.both",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": []
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 standalone \u2014 EXPERIMENTAL (FDE local desktop; board + flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "rock-5b",
+        "ORANGEPI5_FLAVOR": "both"
+      },
+      "mode": "standalone",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "installer.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "rock-5b",
+      "builder_role": "",
+      "channel_notes": {
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      },
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "yes",
+        "make": "escape-hatch",
+        "menu": "escape-hatch",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "installer",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board rock-5b --flavor installer --env test --skip-mesh --compress --resume",
+      "id": "standalone/orangepi5/orangepi5/rock-5b/installer",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.rock-5b.standalone",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": [
+          "client"
+        ]
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 standalone \u2014 EXPERIMENTAL (FDE local desktop; board + flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "rock-5b",
+        "ORANGEPI5_FLAVOR": "installer"
+      },
+      "mode": "standalone",
+      "phantom": false,
+      "phantom_reason": "",
+      "plan_platform": "orangepi5",
+      "plan_role": "desktop",
+      "platform": "orangepi5",
+      "ram_gb": "",
+      "reachable": [
+        "cli",
+        "gui",
+        "job",
+        "worklist"
+      ],
+      "role": "orangepi5"
+    },
+    {
+      "artifacts": [
+        "live.iso",
+        "stage4.tar.xz"
+      ],
+      "board": "rock-5b",
+      "builder_role": "",
+      "channel_notes": {
+        "job": "resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "make": "`make orangepi5` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS)",
+        "menu": "no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags'"
+      },
+      "channels": {
+        "cli": "yes",
+        "gui": "yes",
+        "job": "no",
+        "make": "escape-hatch",
+        "menu": "escape-hatch",
+        "worklist": "yes"
+      },
+      "desktop": "",
+      "desktop_implied": false,
+      "envs": [
+        "test",
+        "prod"
+      ],
+      "flavor": "live",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board rock-5b --flavor live --env test --skip-mesh --compress --resume",
+      "id": "standalone/orangepi5/orangepi5/rock-5b/live",
+      "image_class": "desktop",
+      "job_token": {
+        "HARDWARE_CLASS": "orangepi5.rock-5b.live",
+        "IMAGE_TYPE": "client",
+        "accepted_image_types": []
+      },
+      "label": "Orange Pi 5 / 5 Plus arm64 standalone \u2014 EXPERIMENTAL (FDE local desktop; board + flavor)",
+      "make_target": "orangepi5",
+      "make_vars": {
+        "ORANGEPI5_BOARD": "rock-5b",
         "ORANGEPI5_FLAVOR": "live"
       },
       "mode": "standalone",
@@ -8696,43 +9910,43 @@
       "role": "standalone-unaffiliated"
     }
   ],
-  "matrix_cells": 170,
-  "matrix_distinct_cells": 77,
+  "matrix_cells": 198,
+  "matrix_distinct_cells": 91,
   "mode_counts": {
-    "cloud": 48,
-    "mesh": 47,
-    "standalone": 46
+    "cloud": 54,
+    "mesh": 55,
+    "standalone": 52
   },
   "per_channel_counts": {
     "cli": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 141
+      "yes": 161
     },
     "gui": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 141
+      "yes": 161
     },
     "job": {
       "escape-hatch": 9,
-      "no": 41,
-      "yes": 91
+      "no": 47,
+      "yes": 105
     },
     "make": {
-      "escape-hatch": 49,
+      "escape-hatch": 55,
       "no": 0,
-      "yes": 92
+      "yes": 106
     },
     "menu": {
-      "escape-hatch": 40,
+      "escape-hatch": 46,
       "no": 9,
-      "yes": 92
+      "yes": 106
     },
     "worklist": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 141
+      "yes": 161
     }
   },
   "phantom_count": 0,
@@ -8742,7 +9956,7 @@
     "jetson": 16,
     "orangepi3-lts": 6,
     "orangepi4-lts": 7,
-    "orangepi5": 20,
+    "orangepi5": 40,
     "orangepizero2": 6,
     "orangepizero2w": 6,
     "orangepizero3": 6,

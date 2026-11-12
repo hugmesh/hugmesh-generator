@@ -160,7 +160,8 @@ Usage: $0 --platform PLAT [--board BOARD] [OPTIONS]
 Platform / board:
   -p, --platform PLAT  frite | jetson | orangepi5 | orangepizero2 | orangepizero2w | orangepizero3 | orangepi3-lts | orangepi4-lts. Default: ${PLATFORM}
   -b, --board BOARD    Board id (la-frite|le-potato|sweet-potato | orin-nano[-4gb]|
-                       orin-nx-8gb|orin-nx-16gb | orange-pi-5[-plus]). Empty on zero2/zero2w/zero3.
+                       orin-nx-8gb|orin-nx-16gb | orange-pi-5[-plus]|rock-5b|
+                       nanopc-t6). Empty on zero2/zero2w/zero3.
 
 Artifact selection (shared with launch-pi.sh / flash-disk.sh):
   -w, --work-dir DIR   Dir to autodetect the .img/kernel/DTB from. Default: ${WORK_DIR}
@@ -329,6 +330,10 @@ board_defaults() {
         jetson:orin-nx-16gb) DEF_DTB="nvidia/tegra234-p3768-0000+p3767-0000.dtb"; DEF_CPU="cortex-a76"; DEF_SUBDIR="snap-build-jetson" ;;
         orangepi5:orange-pi-5)      DEF_DTB="rockchip/rk3588s-orangepi-5.dtb";      DEF_CPU="cortex-a76"; DEF_SUBDIR="snap-build-orangepi5" ;;
         orangepi5:orange-pi-5-plus) DEF_DTB="rockchip/rk3588-orangepi-5-plus.dtb"; DEF_CPU="cortex-a76"; DEF_SUBDIR="snap-build-orangepi5" ;;
+        # Same builder (--board rock-5b / nanopc-t6, hugmesh-generator#1061); the
+        # rootfs and kernel boot under -M virt exactly like the Orange Pi 5 rows.
+        orangepi5:rock-5b)          DEF_DTB="rockchip/rk3588-rock-5b.dtb";          DEF_CPU="cortex-a76"; DEF_SUBDIR="snap-build-orangepi5" ;;
+        orangepi5:nanopc-t6)        DEF_DTB="rockchip/rk3588-nanopc-t6.dtb";        DEF_CPU="cortex-a76"; DEF_SUBDIR="snap-build-orangepi5" ;;
         orangepizero2:*)    DEF_DTB="allwinner/sun50i-h616-orangepi-zero2.dtb";   DEF_CPU="cortex-a53"; DEF_SUBDIR="snap-build-orangepizero2" ;;
         orangepizero2w:*)   DEF_DTB="allwinner/sun50i-h618-orangepi-zero2w.dtb"; DEF_CPU="cortex-a53"; DEF_SUBDIR="snap-build-orangepizero2w" ;;
         orangepizero3:*)   DEF_DTB="allwinner/sun50i-h618-orangepi-zero3.dtb"; DEF_CPU="cortex-a53"; DEF_SUBDIR="snap-build-orangepizero3" ;;

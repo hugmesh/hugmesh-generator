@@ -381,7 +381,7 @@ JETSON_PASS := JETSON_ROLE='$(JETSON_ROLE)' JETSON_BOARD='$(JETSON_BOARD)' \
 # (hardware validation pending; see specs-orangepi5/README.md). FRITE-style
 # vars: a single dedicated platform, ONE role (a client desktop — no cluster-
 # node concept), so just --board and --flavor, no --role/--desktop knob.
-#   ORANGEPI5_BOARD  = orange-pi-5-plus (DEFAULT) | orange-pi-5
+#   ORANGEPI5_BOARD  = orange-pi-5-plus (DEFAULT) | orange-pi-5 | rock-5b | nanopc-t6
 #   ORANGEPI5_FLAVOR = both (DEFAULT) | live | installer
 ORANGEPI5_BOARD  ?= orange-pi-5-plus
 ORANGEPI5_FLAVOR ?= both
@@ -485,7 +485,7 @@ help: ## list targets
 	@echo "              frite (arm64 light desktop) | jetson (arm64 Tegra edge-AI — EXPERIMENTAL,"
 	@echo "              JETSON_ROLE=edge-ai|backend-gpu|omnibus|desktop, hardware validation pending) |"
 	@echo "              orangepi5 (arm64 Rockchip RK3588/RK3588S light desktop — EXPERIMENTAL,"
-	@echo "              ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5, hardware validation pending;"
+	@echo "              ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5|rock-5b|nanopc-t6, hardware validation pending;"
 	@echo "              cluster nodes: orangepi5-pki|-backend|-frontend|-omnibus RAM_GB=4|8|16|32,"
 	@echo "              installer only — EXPERIMENTAL) |"
 	@echo "              orangepizero2 (arm64 Allwinner H616 HEADLESS APPLIANCE — EXPERIMENTAL,"
@@ -1033,7 +1033,7 @@ else
 	@$(call build-then-reown,$(JETSON_BUILD) --role $* --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS))
 endif
 
-orangepi5: ## build the Orange Pi 5 light desktop (EXPERIMENTAL; ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5, ORANGEPI5_FLAVOR=both|live|installer; STANDALONE_FLAGS='--standalone …' appended verbatim)
+orangepi5: ## build the Orange Pi 5 light desktop (EXPERIMENTAL; ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5|rock-5b|nanopc-t6, ORANGEPI5_FLAVOR=both|live|installer; STANDALONE_FLAGS='--standalone …' appended verbatim)
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make orangepi5 NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPI5_PASS)
@@ -1047,7 +1047,7 @@ orangepi5-live: ## build the Orange Pi 5 light desktop LIVE image only (boots ep
 orangepi5-installer: ## build the Orange Pi 5 light desktop INSTALLER image only (writes to eMMC/microSD/NVMe)
 	$(MAKE) orangepi5 ORANGEPI5_FLAVOR=installer
 
-orangepi5-%: ## build an Orange Pi 5 / 5 Plus CLUSTER NODE: make orangepi5-pki | -backend | -frontend | -omnibus RAM_GB=16 (EXPERIMENTAL, hardware validation pending; installer flavor only; ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5)
+orangepi5-%: ## build an Orange Pi 5 / 5 Plus CLUSTER NODE: make orangepi5-pki | -backend | -frontend | -omnibus RAM_GB=16 (EXPERIMENTAL, hardware validation pending; installer flavor only; ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5|rock-5b|nanopc-t6)
 ifndef NATIVE
 	@. scripts/_roles-lib.sh; hugmesh_role_board_node_role orangepi5 '$*' >/dev/null || { [ $$? -eq 2 ] && echo "ERROR: make orangepi5-$* is not a target: the Orange Pi 5 / 5 Plus node targets are orangepi5-pki | -backend | -frontend | -omnibus (the desktop is make orangepi5)." >&2; exit 1; }
 	$(MAKE) ensure-image

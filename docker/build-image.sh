@@ -181,7 +181,8 @@
 #                        — see the JETSON STANDALONE EXCEPTION note below.
 #   orangepi5 (EXPERIMENTAL; client only, no --role axis — a light-desktop
 #                        client device like frite): "<board>.<flavor>"; board =
-#                        orange-pi-5-plus (default) | orange-pi-5; flavor =
+#                        orange-pi-5-plus (default) | orange-pi-5 | rock-5b |
+#                        nanopc-t6 (the last two EXPERIMENTAL, #1061); flavor =
 #                        live | installer (default) | standalone. Bare
 #                        "orangepi5" = orange-pi-5-plus.installer. "both" is
 #                        rejected for the same single-imageRef reason as frite
@@ -893,7 +894,7 @@ resolve_build_target() {
         if [ "$IMAGE_TYPE" != "client" ]; then
           # CLUSTER NODE (EXPERIMENTAL): "<role>.<board>[.<N>gb]" — role = pki |
           # backend | frontend | omnibus (omnibus needs the RAM field, 16 GB+);
-          # board = orange-pi-5-plus (default) | orange-pi-5. Installer flavor only.
+          # board = orange-pi-5-plus (default) | orange-pi-5 | rock-5b | nanopc-t6. Installer flavor only.
           BUILD_ROLE="$(hugmesh_role_board_node_role orangepi5 "$p2" 2>/dev/null)" || return 1
           ORANGEPI5_BOARD_OUT="${p3%%.*}"
           ORANGEPI5_BOARD_OUT="${ORANGEPI5_BOARD_OUT:-orange-pi-5-plus}"
@@ -903,14 +904,14 @@ resolve_build_target() {
             *gb) RAM_GB_OUT="${RAM_GB_OUT%gb}" ;;
             *) return 1 ;;
           esac
-          case "$ORANGEPI5_BOARD_OUT" in orange-pi-5-plus|orange-pi-5) ;; *) return 1 ;; esac
+          case "$ORANGEPI5_BOARD_OUT" in orange-pi-5-plus|orange-pi-5|rock-5b|nanopc-t6) ;; *) return 1 ;; esac
           hugmesh_role_ram_check "$BUILD_ROLE" "$RAM_GB_OUT" "$ORANGEPI5_BOARD_OUT" 2>/dev/null || return 1
           ORANGEPI5_FLAVOR_OUT="installer"
           PLATFORM="orangepi5"
         else
         ORANGEPI5_BOARD_OUT="${p2:-orange-pi-5-plus}"
         ORANGEPI5_FLAVOR_OUT="${p3:-installer}"
-        case "$ORANGEPI5_BOARD_OUT" in orange-pi-5-plus|orange-pi-5) ;; *) return 1 ;; esac
+        case "$ORANGEPI5_BOARD_OUT" in orange-pi-5-plus|orange-pi-5|rock-5b|nanopc-t6) ;; *) return 1 ;; esac
         # "both" rejected for the same single-imageRef reason as frite above.
         case "$ORANGEPI5_FLAVOR_OUT" in
           standalone)

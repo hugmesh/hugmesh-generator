@@ -115,7 +115,7 @@ A pool is the `pkgdir` under a build's per-board `BUILD_SUBDIR`:
 > always wins.
 
 Non-Pi ARM board tables (frite `la-frite`/`le-potato`/`sweet-potato`; orangepi5
-`orange-pi-5`/`orange-pi-5-plus`) select a defconfig/DTB but **not** a different
+`orange-pi-5`/`orange-pi-5-plus`/`rock-5b`/`nanopc-t6`) select a defconfig/DTB but **not** a different
 `-mcpu`, so those boards safely share one pool per builder.
 
 ---

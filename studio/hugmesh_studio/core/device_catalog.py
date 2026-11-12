@@ -199,7 +199,7 @@ def mesh_capable(device_id: str) -> bool:
         Orange Pi boards. They are supported and buildable, just never as a cluster node:
         ROLE_CHOICES["mesh"] names no role on their builder platform, because their
         builders bake no cluster GitOps tree at all;
-      * the 27 UNSUPPORTED devices (rpi2, opi6, bpi-f3, rock-5b, the legacy Jetsons, …),
+      * the 25 UNSUPPORTED devices (rpi2, opi6, bpi-f3, bpi-m7, the legacy Jetsons, …),
         which derive no roles in ANY mode (``builder_platform is None``).
 
     Deliberately derived, never a hand-kept list: the authority stays ROLE_CHOICES +

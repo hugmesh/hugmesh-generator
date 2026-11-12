@@ -652,15 +652,18 @@ frontend=4
 
 # RAM SKUs each board is SOLD with, in GB (comma separated). Used only for a
 # WARNING when --ram-gb names a size that is not in the list — never to refuse, so
-# a missing SKU here cannot block a real board. The Raspberry Pi and Orange Pi 5
-# lists are vendor recollection, NOT read from this repo: confirm against the
-# vendors' pages. orangepi4-lts/rpi3 come from their specs-*/README.md.
+# a missing SKU here cannot block a real board. The Raspberry Pi, Orange Pi 5,
+# ROCK 5B and NanoPC-T6 lists are vendor recollection, NOT read from this repo:
+# confirm against the vendors' pages. orangepi4-lts/rpi3 come from their
+# specs-*/README.md.
 HUGMESH_BOARD_RAM_GB="
 rpi5=1,2,4,8,16
 rpi4=1,2,4,8
 rpi3=1
 orange-pi-5=4,8,16,32
 orange-pi-5-plus=4,8,16,32
+rock-5b=4,8,16,32
+nanopc-t6=4,8,16,32
 orange-pi-4-lts=4
 "
 
