@@ -405,4 +405,6 @@ def _main(argv) -> int:
 
 
 if __name__ == "__main__":                        # pragma: no cover — exercised by draft.sh
+    from .entry import bootstrap as _bootstrap   # the Mac PATH hook: core/entry.py
+    _bootstrap()
     raise SystemExit(_main(sys.argv[1:]))

@@ -424,23 +424,22 @@ def copyable(argv: list[str]) -> str:
     return shlex.join(argv)
 
 
-def _host_platform() -> str:
-    """``sys.platform`` — a seam, so the darwin branch is tested on every OS."""
-    return sys.platform
-
-
 def open_editor(t: KernelTarget, ctx: RunContext, *,
                 spawner: Callable[..., object] | None = None,
                 which: Callable[[str], str | None] | None = None,
-                osname: str | None = None, platform: str | None = None,
-                is_wsl: bool | None = None, terminals=None) -> tuple[bool, str]:
+                osname: str | None = None, sysplatform: str | None = None,
+                is_wsl: bool | None = None, terminals=None,
+                state_dir: str | None = None) -> tuple[bool, str]:
     """Open menuconfig in its own terminal window. ``(True, how)`` once spawned,
     ``(False, sentence)`` with the copyable command when no window can be opened.
-    Every seam is injectable: tests never open a window on the operator's desktop."""
+    The window comes from golive_target.terminal_spec, the Studio's one "open a
+    terminal" route (on a Mac: core/macos_host's self-deleting ``.command`` file under
+    ``state_dir``). Every seam is injectable: tests never open a window on the
+    operator's desktop."""
     from .golive_target import terminal_spec
     argv = edit_argv(t, ctx)
-    spec = terminal_spec(argv, osname=osname, platform=platform, is_wsl=is_wsl,
-                         which=which, terminals=terminals)
+    spec = terminal_spec(argv, osname=osname, sysplatform=sysplatform, is_wsl=is_wsl,
+                         which=which, terminals=terminals, state_dir=state_dir)
     if spec is None:
         return False, NO_TERMINAL.format(cmd=copyable(argv))
     spawn = spawner or subprocess.Popen

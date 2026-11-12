@@ -614,8 +614,10 @@ pausing anything**. One device failing (the runner quarantines its partial as
 ### Booting the mesh back from a save (`make mesh-emu-up FROM_SAVE=…`)
 
 What a device does inside an emulated mesh lasts only while it runs. A go-live flip is
-one example. A restart boots the golden image again, INTERNAL. To keep that state, save
-the mesh (above) and boot the set back:
+one example. A restart boots the golden image again, in whatever posture that image
+bakes. To keep that state, save the mesh (above) and boot the set back. The save
+records each device's go-live posture (read from it just before the pause), and the
+go-live faces quote it: "booted from a save taken while PUBLIC".
 
 ```bash
 make mesh-emu-up FROM_SAVE=mesh-<stamp>        # boot every saved row from its save
@@ -638,9 +640,9 @@ PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation plan --from-save mesh
   never runs beside a fresh worker. A set with a failed device is refused, and so is a
   mesh NIC MAC that differs from the one the saved disk was bound to.
 - The device record names its source (`"boot_save"`), and `mesh-emu-status` shows
-  "resumed from save". Starting a stopped resumed device again from its record boots
-  the same save, never its golden. A resumed device from a shared-L2 fleet is refused
-  there too, as below.
+  "resumed from save" with the posture the save was taken in. Starting a stopped resumed
+  device again from its record boots the same save, never its golden. A resumed device
+  from a shared-L2 fleet is refused there too, as below.
 - `--boot-save` is a `--keep-alive` lane only; the runner refuses it on the test lane,
   which grades a FIRST boot and then powers the guest off. `assertions.sh` still runs on
   a resumed keep-alive guest, and because its checks are written for a first boot, a

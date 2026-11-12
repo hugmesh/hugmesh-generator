@@ -213,7 +213,14 @@
 #       a container runtime INSIDE the job container (it starts casdoor itself);
 #       alpine:3 has neither docker nor podman and no daemon socket is mounted
 #   * tests/device-registry/test-layer-a-headscale-acl.sh
-#       the hugmesh-admin-bff-api sibling checkout, for the BFF-side Layer-A compiler
+#       NOT for want of the hugmesh-admin-bff-api sibling checkout: that repository
+#       is public now, and the layer-a job below checks it out at a pinned commit.
+#       It stays out because two of its checks (policy mode, `file` vs the BFF's
+#       `database`) are red against the BFF by design until the hugmesh-generator#634
+#       cut-over flips them (#634 item 4). Its cross-repo fixture identity leg DOES
+#       gate every pull request, as tests/device-registry/test-layer-a-bff-fixture-identity.sh
+#       in the layer-a job. Under CI it no longer exits 3 for a missing sibling: it
+#       fails with exit 1.
 #   * tests/stack/test-gateway-auth-flag-parity.sh
 #       the hugmesh-gateway sibling checkout. It compares the EFFECTIVE auth-carrier
 #       flags on the two lanes, and "effective" means resolving each key through the
@@ -680,6 +687,7 @@ jobs:
               tests/scripts/test-mfa-required-rules.sh
               tests/scripts/test-passhash-lib.sh
               tests/scripts/test-standalone-login-firstboot.sh
+              tests/scripts/test-subject-revocation-ttl.sh
               tests/scripts/test-pki-role-san-coverage.sh
               tests/scripts/test-provision-keys-escrow-guard.sh
               tests/scripts/test-python-targets-seed.sh
@@ -1072,6 +1080,13 @@ jobs:
     # tag:superadmin; it exits 2 (a failure here) when docker or an image is
     # unavailable. MEASURED 2026-11-04 on a Linux host with docker: 13 passed /
     # 0 failed in ~8 s, and 6 failed against the unfixed policy.
+    # tests/device-registry/test-headscale-tag-minters-live.sh runs the same pinned
+    # headscale and tailscale with keys minted by the REAL minters: the whole
+    # keys-provision engine (inside the kindest/node image the gpu-labels suite
+    # above already pulls) from a keys-template-shaped stick, and the Studio's
+    # mint_preauth_key; then the real Layer-A apply path of gen-headscale-policy.sh
+    # and the real hugmesh-headscale-forcetags. Exit 2 (a failure here) when docker
+    # or an image is unavailable.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -1088,6 +1103,7 @@ jobs:
             tests/boot/test-gpu-worker-node-labels.sh
             tests/device-registry/test-headscale-tag-ownership.sh
             tests/device-registry/test-headscale-security-tag-live.sh
+            tests/device-registry/test-headscale-tag-minters-live.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do
@@ -1097,6 +1113,85 @@ jobs:
               s=$?; echo "FAIL($s) $t"
               case "$s" in
                 2) echo "::error::$t exited 2 — it could not run at all (docker or the kindest/node image); that is a job failure, not a skip" ;;
+                141) echo "::warning::$t exited 141 (SIGPIPE) — a pipeline stage was killed mid-write; this is NOT an assertion failure" ;;
+                137) echo "::warning::$t exited 137 (SIGKILL) — almost always the OOM killer on the runner" ;;
+                124) echo "::warning::$t exited 124 — it hit the timeout" ;;
+              esac
+              rc=1; failed="$failed $t($s)"
+            fi
+            echo "::endgroup::"
+            ran=$((ran+1))
+          done
+          echo "── ran $ran suite(s) ──"
+          [ -z "$failed" ] || { echo "::error::failed:$failed"; }
+          exit $rc
+
+  layer-a:
+    name: shell suites (layer-a cross-repo)
+    runs-on: ubuntu-latest
+    # The cross-repo leg of the Layer-A parity contract. The node-side renderer
+    # (specs/usr/sbin/gen-headscale-policy.sh) and hugmesh-admin-bff-api's dark
+    # HeadscaleAclCompiler (the ONLY policy writer after the #634 cut-over, decision
+    # 101 = B) are held to one shared golden; this job checks the BFF's copy is the
+    # same bytes as ours, that the renderer still emits it, and that neither copy
+    # gives a security tag an owner. No job ran that comparison before, and the BFF's
+    # copy kept the pre-#896 owners on tag:superadmin and tag:dev_* unseen.
+    #
+    # THE SIBLING IS PINNED, not main: a change on the BFF's main cannot turn this
+    # repo's pull requests red, and a pin bump is a reviewed edit here. Bump
+    # LAYERA_BFF_PIN (a full 40-hex commit of hugmesh/hugmesh-admin-bff-api) whenever
+    # the BFF side of the contract changes; the run-suites step asserts the checkout
+    # is that commit. The suite exits 1 (never 0, never 3) when the checkout is absent.
+    # MEASURED 2026-11-11 in alpine:3 with this job's apk set and CI=true, against the
+    # BFF fix commit pinned below: 24 passed / 0 failed in ~11 s (its negative controls
+    # include three runs of test-layer-a-headscale-acl.sh on an absent or partial
+    # sibling). Against hugmesh-admin-bff-api main de019243 (the pre-fix golden): 2
+    # failed (the golden DIFFERS; owners on tag:superadmin and tag:dev_*).
+    timeout-minutes: 10
+    container:
+      image: alpine:3
+    env:
+      LAYERA_BFF_PIN: 1fb23d8f2602b867c98297b8506a5f3e5b3a8916
+    steps:
+      - run: apk add --no-cache bash coreutils diffutils gawk git grep jq openssl sed
+      - uses: actions/checkout@v4
+      - name: check out hugmesh-admin-bff-api at the pin
+        uses: actions/checkout@v4
+        with:
+          repository: hugmesh/hugmesh-admin-bff-api
+          ref: ${{ env.LAYERA_BFF_PIN }}
+          path: .layera-siblings/hugmesh-admin-bff-api
+          persist-credentials: false
+      - name: trust both checkouts
+        # Container jobs run as root against checkouts git considers foreign; without
+        # this, `git rev-parse HEAD` in the sibling fails and the pin check below
+        # cannot see which commit it got.
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/.layera-siblings/hugmesh-admin-bff-api"
+      - name: preflight
+        run: |
+          missing=""
+          for b in bash jq openssl gawk cmp diff git; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          [ -z "$missing" ] || { echo "::error::preflight: missing$missing"; exit 1; }
+          head="$(git -C .layera-siblings/hugmesh-admin-bff-api rev-parse HEAD)"
+          [ "$head" = "$LAYERA_BFF_PIN" ] || { echo "::error::preflight: sibling HEAD $head is not LAYERA_BFF_PIN $LAYERA_BFF_PIN"; exit 1; }
+          echo "preflight ok: hugmesh-admin-bff-api at $head"
+      - name: run suites
+        shell: bash
+        run: |
+          export LAYERA_BFF_ROOT="$GITHUB_WORKSPACE/.layera-siblings/hugmesh-admin-bff-api"
+          export LAYERA_BFF_EXPECT_REF="$LAYERA_BFF_PIN"
+          SUITES="
+            tests/device-registry/test-layer-a-bff-fixture-identity.sh
+          "
+          rc=0; failed=""; ran=0
+          for t in $SUITES; do
+            [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
+            echo "::group::$t"
+            if bash "$t" </dev/null; then echo "PASS $t"; else
+              s=$?; echo "FAIL($s) $t"
+              case "$s" in
                 141) echo "::warning::$t exited 141 (SIGPIPE) — a pipeline stage was killed mid-write; this is NOT an assertion failure" ;;
                 137) echo "::warning::$t exited 137 (SIGKILL) — almost always the OOM killer on the runner" ;;
                 124) echo "::warning::$t exited 124 — it hit the timeout" ;;

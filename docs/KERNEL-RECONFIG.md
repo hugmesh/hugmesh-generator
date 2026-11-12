@@ -109,7 +109,7 @@ image was OOM-killed on a busy 31 GiB host.
 | Linux | the first terminal found from the Studio's terminal list (konsole, gnome-terminal, ptyxis, kgx, xterm, …) |
 | WSL2 | Windows Terminal (`wt.exe`), or a plain console |
 | Windows | a new console |
-| macOS | Terminal.app, through `osascript` |
+| macOS | Terminal.app (iTerm2 when installed) on a self-deleting `.command` file, the Studio's shared macOS route (`core/macos_host`) |
 
 With the docker backend, the window runs `docker run -it … hugmesh-builder` after the
 build. While the build container is still running, it runs `docker exec -it` into that

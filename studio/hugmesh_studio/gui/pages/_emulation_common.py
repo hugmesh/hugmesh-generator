@@ -602,6 +602,25 @@ class _LateAnswer(QtCore.QObject):
     landed = Signal(bool, str)
 
 
+def blocker_html(blocker: str) -> str:
+    """A host-script blocker (``qemu_tests.native_blocker()`` and its kin) as RichText.
+
+    Escaped, with one ``<br>`` per line, and a line the plain text INDENTS (the Mac
+    sentence's ``brew install ...``) kept on a line of its own in ``<tt>``. RichText
+    drops a bare newline, so a plain ``html.escape`` ran the command into the prose:
+    "brew install bash coreutils gnu-sed findutils grep make then restart the Studio."
+    read as one command to copy. The Windows sentence is one line with nothing to
+    escape, so for it this is ``html.escape`` exactly."""
+    out = []
+    for line in str(blocker).splitlines():
+        if not line.strip():
+            continue
+        text = html.escape(line.strip())
+        out.append(f"&nbsp;&nbsp;&nbsp;&nbsp;<tt>{text}</tt>"
+                   if line[:1].isspace() else text)
+    return "<br>".join(out)
+
+
 def docker_note_html(answer: tuple[bool, str] | None) -> str:
     """The availability note both pages show, in all three states.
 

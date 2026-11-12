@@ -8,9 +8,11 @@ Pinned here, without Qt, root, docker or a terminal window (every seam injected)
 * the argv for each backend: docker run (after the build), docker exec into the LIVE
   build container (mid-build), native ``sudo`` for the interactive edit and the build
   driver's own elevation prefix for the streamed apply;
-* the terminal hand-off on Linux, WSL, native Windows and macOS (Terminal.app through
-  osascript, the AppleScript string escaped), and the copyable command when no window
-  can be opened — the spawner is a fake, nothing is ever opened on a real desktop;
+* the terminal hand-off on Linux, WSL, native Windows and macOS (Terminal.app on the
+  Studio's shared self-deleting ``.command`` file, core/macos_host — the exact edit
+  argv inside the file, never re-quoted through AppleScript), and the copyable command
+  when no window can be opened — the spawner is a fake, nothing is ever opened on a
+  real desktop;
 * the one-build-at-a-time gate matches programs, not shells that mention them;
 * apply's result is read from the path the CONTAINER printed, recorded append-only on
   the session, shown by --show-session, and omitted from records that have none;
@@ -210,14 +212,15 @@ class _Spawn:
     ("posix", "linux", {"konsole"}, False, "linux", "konsole"),
     ("posix", "linux", {"cmd.exe", "wt.exe"}, True, "wsl-wt", "cmd.exe"),
     ("nt", "win32", set(), False, "nt", "docker"),
-    ("posix", "darwin", {"osascript"}, False, "darwin", "osascript"),
+    ("posix", "darwin", set(), False, "darwin", "open"),
 ])
 def test_open_editor_per_os(tmp_path, monkeypatch, osname, platform, which, is_wsl, how, head):
     monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
     t = kr.locate(make_session(str(tmp_path)))
     sp = _Spawn()
     ok, said = kr.open_editor(t, _ctx(), spawner=sp, which=lambda b: b if b in which else None,
-                              osname=osname, platform=platform, is_wsl=is_wsl)
+                              osname=osname, sysplatform=platform, is_wsl=is_wsl,
+                              state_dir=str(tmp_path / "state"))
     assert ok and said == how
     assert sp.calls and sp.calls[0][0][0] == head
     assert sp.calls[0][1]["stdin"] == subprocess.DEVNULL
@@ -227,33 +230,40 @@ def test_open_editor_without_any_terminal_gives_the_command_to_copy(tmp_path):
     t = kr.locate(make_session(str(tmp_path)))
     sp = _Spawn()
     ok, said = kr.open_editor(t, _ctx(), spawner=sp, which=lambda b: None, osname="posix",
-                              platform="linux", is_wsl=False)
+                              sysplatform="linux", is_wsl=False)
     assert not ok and not sp.calls
     assert said == kr.NO_TERMINAL.format(cmd=shlex.join(kr.edit_argv(t, _ctx())))
 
 
-def test_darwin_terminal_escapes_the_applescript_string():
-    argv = ["sudo", "bash", "/x/k.sh", "edit", "--build-root", '/o/a "b" \\c']
-    spec = golive_target.terminal_spec(argv, osname="posix", platform="darwin",
-                                       which=lambda b: "/usr/bin/" + b)
-    assert spec.how == "darwin" and spec.argv[0] == "osascript"
-    script = spec.argv[2]
-    assert script.startswith('tell application "Terminal" to do script "') and script.endswith('"')
-    body = script[len('tell application "Terminal" to do script "'):-1]
-    import re
-    # inside the AppleScript literal no double quote may stand unescaped (it would end
-    # the string early and run the rest as AppleScript)
-    assert re.search(r'(?<!\\)"', body) is None, body
-    unescaped = body.replace('\\"', '"').replace("\\\\", "\\")
-    # what Terminal runs is exactly bash -c '<the command>; hold'
-    words = shlex.split(unescaped)
-    assert words[:2] == ["bash", "-c"] and words[2].startswith(shlex.join(argv))
+def test_darwin_menuconfig_runs_the_exact_edit_argv_from_a_command_file(tmp_path):
+    # A Mac has no Linux emulator: menuconfig opens through the Studio's ONE macOS route
+    # (core/macos_host), a self-deleting .command file Terminal.app runs. The edit argv
+    # must reach it shell-quoted exactly once, whatever the build root's path holds.
+    t = kr.locate(make_session(str(tmp_path)))
+    sp = _Spawn()
+    state = tmp_path / "state"
+    ok, said = kr.open_editor(t, _ctx(), spawner=sp, which=lambda b: None, osname="posix",
+                              sysplatform="darwin", is_wsl=False, state_dir=str(state),
+                              terminals=(("xterm", ("-e",)),))
+    assert ok and said == "darwin"
+    argv = sp.calls[0][0]
+    assert argv[:2] == ["open", "-a"] and argv[2] in ("Terminal", "iTerm")
+    path = argv[3]
+    assert path.endswith(".command") and os.path.dirname(path) == str(state / "term")
+    text = open(path, encoding="utf-8").read()
+    assert shlex.join(kr.edit_argv(t, _ctx())) in text
 
 
-def test_darwin_without_osascript_falls_back_to_the_terminal_list():
-    spec = golive_target.terminal_spec(["x"], osname="posix", platform="darwin",
-                                       which=lambda b: b if b == "xterm" else None)
-    assert spec.how == "linux" and spec.argv[0] == "xterm"
+def test_darwin_terminal_quotes_a_hostile_build_root_once(tmp_path):
+    argv = ["sudo", "bash", "/x/k.sh", "edit", "--build-root", '/o/a "b" \\c $(id) ;x']
+    spec = golive_target.terminal_spec(argv, osname="posix", sysplatform="darwin",
+                                       state_dir=str(tmp_path), isdir=lambda d: False,
+                                       which=lambda b: None)
+    assert spec.how == "darwin" and spec.argv[0] == "open"
+    text = open(spec.argv[3], encoding="utf-8").read()
+    # the command line inside the file is the argv shell-quoted once: no word of it
+    # (the $(id), the ;x) can run as its own command
+    assert shlex.join(argv) in text
 
 
 # ── the one-build-at-a-time gate ───────────────────────────────────────────────────
