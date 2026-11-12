@@ -1045,6 +1045,33 @@ class LaunchResult:
     tried: "tuple[str, ...]" = ()
 
 
+def _launch_darwin(plan: Plan, host: Host, paste: str) -> LaunchResult:
+    """macOS: Terminal.app (iTerm2 when installed) runs a self-deleting ``.command``
+    file (core/macos_host.terminal_argv). Terminal.app does NOT inherit the Popen
+    environment, so the allowlist (``build_env``) is written into the file, and the
+    agent's own ``env -i`` rebuilds it again inside the window, as on Linux."""
+    from . import macos_host, state_paths
+    inner = ["bash", "--noprofile", "--norc", "-c", plan.shell_command]
+    term_env = build_env(host.environ, terminal=True)
+    try:
+        argv = macos_host.terminal_argv(inner, state_dir=state_paths.state_dir(),
+                                        cwd=plan.cwd, title=plan.title, environ=term_env,
+                                        hold=False)
+    except OSError as exc:
+        return LaunchResult(False, False, "", f"could not write the terminal script: {exc}",
+                            paste)
+    app = argv[2]
+    exe = host.which(argv[0])
+    if not exe:
+        return LaunchResult(False, False, "", "macOS's `open` command was not found.", paste)
+    argv[0] = exe
+    code = host.run(argv, plan.cwd, term_env)
+    if code is None or code == 0:
+        return LaunchResult(True, True, app, f"{app} took the request (open -a {app})", paste)
+    return LaunchResult(False, False, "", f"open -a {app} exited {code}", paste,
+                        (f"{app} exited {code}",))
+
+
 def launch(plan: Plan, host: Optional[Host] = None) -> LaunchResult:
     """Open a terminal window running the plan. The scratch clone must exist already
     (``create_scratch``). Never raises; on any failure the result carries the command
@@ -1057,10 +1084,9 @@ def launch(plan: Plan, host: Optional[Host] = None) -> LaunchResult:
         return LaunchResult(False, False, "", "The Studio does not open a window on "
                             "Windows: the launch line needs a POSIX shell. Run the Studio "
                             "inside WSL2, or follow docs section 6 by hand.", paste)
-    if host.kind == "darwin":
-        return LaunchResult(False, False, "", "The Studio does not open a window on "
-                            "macOS. Run the lines below in a Terminal window.", paste)
     env = host.environ
+    if host.kind == "darwin":
+        return _launch_darwin(plan, host, paste)
     if not (env.get("DISPLAY") or env.get("WAYLAND_DISPLAY")):
         where = ("WSL2 without a Linux desktop (WSLg)" if host.kind == "wsl"
                  else "no desktop session (DISPLAY and WAYLAND_DISPLAY are both unset)")

@@ -2753,6 +2753,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from .entry import bootstrap as _bootstrap   # the Mac PATH hook: core/entry.py
+    _bootstrap()
     # UTF-8 stdout/stderr on native Windows, as app.main() does: a redirected cp1252
     # stream raised UnicodeEncodeError on a checkout path such as C:\Users\Łukasz.
     from ..app import utf8_stdio

@@ -37,7 +37,7 @@ import argparse
 import os
 import sys
 
-from .core import crashlog, flatpak_host, no_console
+from .core import crashlog, entry, flatpak_host, no_console
 
 
 def _default_generator_dir() -> str:
@@ -137,7 +137,8 @@ def utf8_stdio(osname: str | None = None, streams=None) -> None:
             pass
 
 
-def print_backend(asked: str, default_backend: str, osname: str | None = None) -> str | None:
+def print_backend(asked: str, default_backend: str, osname: str | None = None,
+                  sysplatform: str | None = None) -> str | None:
     """The backend --print-command/--print-commands print for: None (the host's default)
     unless ``asked`` names one. On a host that cannot build at all the command is still
     printed, deterministically: the native one on Linux, but the DOCKER one on native
@@ -147,21 +148,29 @@ def print_backend(asked: str, default_backend: str, osname: str | None = None) -
     ``osname`` is ``os.name`` unless a test passes another."""
     backend = None if asked == "auto" else asked
     if backend is None and default_backend == "none":
-        native_windows = (os.name if osname is None else osname) == "nt"
-        backend = "docker" if native_windows else "native"
+        # A Mac builds only through Docker too (a native build is a Gentoo chroot).
+        from .core import platform_info
+        backend = "docker" if platform_info.builds_in_docker_vm(osname, sysplatform) \
+            else "native"
     return backend
 
 
-def _native_print_note(backend: str | None, osname: str | None = None) -> None:
-    """An explicit ``--backend native`` on native Windows still prints (it was asked
-    for), but stderr says why that command cannot run here; stdout stays argv only."""
+def _native_print_note(backend: str | None, osname: str | None = None,
+                       sysplatform: str | None = None) -> None:
+    """An explicit ``--backend native`` on native Windows or macOS still prints (it was
+    asked for), but stderr says why that command cannot run here; stdout stays argv
+    only."""
     if backend != "native":
         return
     from .core import platform_info
-    if platform_info.native_windows_blocker("A native build", osname=osname):
+    if platform_info.host_kind(osname, sysplatform) == "windows":
         print("note: a native build runs sudo and bash on a Gentoo host, which the "
               "Windows build of the Studio cannot do. Use --backend docker (Docker "
               "Desktop), or run the Studio inside WSL2.", file=sys.stderr)
+    elif platform_info.host_kind(osname, sysplatform) == "darwin":
+        print("note: " + platform_info.native_build_blocker("A native build", osname,
+                                                            sysplatform),
+              file=sys.stderr)
 
 
 def go_live_target_label(rest: list[str]) -> str:
@@ -192,6 +201,11 @@ def main(argv=None) -> int:
     # make, git, qemu and the generator's scripts live on the HOST, which the sandbox
     # reaches only through flatpak-spawn --host (a no-op outside the Flatpak).
     flatpak_host.install()
+    # And the Mac's: an app opened from Finder gets launchd's PATH (/usr/bin:/bin:...),
+    # which has no Homebrew, no Docker Desktop CLI and no colima, so every probe said
+    # "not installed". Puts them back, GNU tools first (a no-op off macOS). The text UI
+    # and the module command lines make the same call (core/entry.py).
+    entry.bootstrap()
     # Third, before anything prints: a path outside cp1252 must not turn a redirected
     # print into a traceback or a false "bad input" (a no-op off Windows).
     utf8_stdio()

@@ -56,8 +56,14 @@ def _host_independent_build_defaults(monkeypatch):
     dispatch-time read (_meminfo_fresh: low-memory warnings) — to a canonical
     healthy 32 GiB reading (cap auto-derives, warnings stay quiet). Tests that
     exercise the formulas pass explicit env/meminfo (which win) or re-monkeypatch
-    the relevant override point themselves."""
-    from hugmesh_studio.core import host_resources
+    the relevant override point themselves.
+
+    And the Docker ENGINE's CPU count (core/resource_limits: a Mac's Docker VM, which
+    caps a build's --cpus) is pinned to 0, "no ceiling": on a developer's Mac the first
+    resource_limits.effective() would otherwise ask the real ``docker info`` and clamp
+    every expected ``--cpus`` to whatever that VM has. Tests of the clamp set it."""
+    from hugmesh_studio.core import host_resources, resource_limits
+    monkeypatch.setattr(resource_limits, "_ENGINE_CPUS", 0)
     monkeypatch.setenv(host_resources.JOBS_ENV, "8")
     monkeypatch.delenv(host_resources.MEMORY_ENV, raising=False)
     healthy = {"MemTotal": 32 * host_resources.GIB,

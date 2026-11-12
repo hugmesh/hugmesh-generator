@@ -696,4 +696,6 @@ def main(argv=None, *, stdin=None, prompt=getpass.getpass, opener=None, runner=N
 
 
 if __name__ == "__main__":
+    from .entry import bootstrap as _bootstrap   # the Mac PATH hook: core/entry.py
+    _bootstrap()
     raise SystemExit(main())
