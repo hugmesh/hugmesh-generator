@@ -260,6 +260,28 @@ def test_no_space_warning_when_the_whole_list_fits(monkeypatch, tmp_path):
     assert not [w for w in drv.preflight_warnings() if "disk space" in w]
 
 
+@pytest.mark.parametrize("free_gib, warned", [(119, True), (120, False)])
+def test_the_whole_list_warning_counts_every_image(monkeypatch, tmp_path, free_gib, warned):
+    """Two x86 images need 55 + 55 + a 10 GiB margin = 120 GiB together. The first one
+    fits in either case, so the session is not blocked; the warning must price BOTH
+    images, the first included, or it stays quiet on a disk that cannot finish."""
+    _pin_disk(monkeypatch, free_gib * GIB)
+    drv = wd.WorklistDriver(str(tmp_path), _mesh(tmp_path, [("pki", "x86"), ("backend", "x86")]),
+                            host=host())
+    assert not [p for p in drv.preflight() if "disk space" in p]
+    assert bool([w for w in drv.preflight_warnings() if "disk space" in w]) is warned
+
+
+def test_a_disk_with_nothing_free_refuses(monkeypatch, tmp_path):
+    """0 bytes free is a real answer, and the state the incident left its disk in. Only
+    free_bytes_for's -1 (unknowable) skips the check; a full disk must still refuse."""
+    _pin_disk(monkeypatch, 0)
+    cfg = ImageConfig(mode="mesh", role="backend", platform="rpi5")
+    assert "not enough free disk space" in bd.disk_space_refusal(cfg, str(tmp_path))
+    drv = wd.WorklistDriver(str(tmp_path), _mesh(tmp_path, [("backend", "rpi5")]), host=host())
+    assert [p for p in drv.preflight() if "disk space" in p]
+
+
 def test_unknowable_free_space_never_refuses(monkeypatch, tmp_path):
     """-1 from free_bytes_for (an unreadable filesystem) must not block a build that
     may well fit. Same rule as emulation_save.preflight_refusal."""
@@ -286,6 +308,24 @@ def test_an_arm_image_needs_less_than_an_x86_one(monkeypatch, tmp_path, free_gib
     _pin_disk(monkeypatch, free_gib * GIB)
     cfg = ImageConfig(mode="mesh", role="backend", platform="rpi5")
     assert bool(bd.disk_space_refusal(cfg, str(tmp_path))) is refused
+
+
+# Every board the Studio offers other than x86, read from its own role table so a new
+# board is covered the day it is added.
+_ARM_PLATFORMS = sorted({p for rows in ROLE_CHOICES.values() for _role, plats, _label in rows
+                         for p in plats} - {"x86"})
+
+
+@pytest.mark.parametrize("platform", _ARM_PLATFORMS)
+def test_every_arm_board_is_priced_as_arm(monkeypatch, tmp_path, platform):
+    """rpi5 is not the only ARM board. A Jetson or Orange Pi image priced as x86 would be
+    refused on a disk that holds it (30 GiB free is enough for 20 + 10)."""
+    assert "rpi5" in _ARM_PLATFORMS and len(_ARM_PLATFORMS) > 1
+    cfg = ImageConfig(mode="mesh", role="backend", platform=platform)
+    _pin_disk(monkeypatch, 30 * GIB)
+    assert bd.disk_space_refusal(cfg, str(tmp_path)) == ""
+    _pin_disk(monkeypatch, 29 * GIB)
+    assert "not enough free disk space" in bd.disk_space_refusal(cfg, str(tmp_path))
 
 
 # ── the operator's override ───────────────────────────────────────────────────────────
