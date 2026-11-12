@@ -561,7 +561,7 @@ ALLOW_MISSING_PACKAGES=false
 # --allow-missing-packages class (never a Studio field); the emission itself is
 # failure-tolerant either way (WARN + no plan, never an aborted build).
 EMERGE_PLAN_ENABLED=true
-# --bundle-source : ship the generator source in the image (BUNDLE_SOURCE_DIR) + a
+# --bundle-source : ship the generator's TRACKED source in the image (BUNDLE_SOURCE_DIR) + a
 # regenerate helper, so you can build a fresh customized ISO from the running desktop.
 # Default ON for standalone (self-hosting appliance).
 BUNDLE_SOURCE=""
@@ -572,6 +572,94 @@ BUNDLE_SOURCE=""
 # look bundled. specs/usr/sbin/hugmesh-regenerate reads this same path (pinned by
 # tests/scripts/test-x86-live-root-pack.sh).
 BUNDLE_SOURCE_DIR=/usr/share/hugmesh/generator-src
+# ── Bundle-source helpers (tests/scripts/test-x86-live-root-pack.sh executes this block) ──
+# --bundle-source ships the generator's TRACKED source, never "whatever sits in the
+# checkout". A checkout in use holds gitignored secrets: keys-out/ (cluster CA key,
+# vault token + secrets.json, keystore passwords.json, headscale OIDC secret),
+# tests/stack/.tls-front/ca.key, .e2e-credentials, tests/stack/.mastodon.env,
+# .stack-src/, local tool state, and a -w inside the checkout puts secureboot/sb.key there.
+# The old `tar -C SCRIPT_DIR --exclude=./.git --exclude=./out .` copied all of them
+# into every artifact built with the bundle (the Studio always asks for it).
+#
+# The file list is `git ls-files` (safe.directory pinned on the command line: the
+# builder runs as root over a checkout another uid owns, and the docker backend mounts
+# it at /src), or — in a tree that was itself bundled, where hugmesh-regenerate runs the
+# builder and there is no .git — the manifest the previous bundle wrote. With neither,
+# nothing is bundled (the preflight warns and drops it): no fallback ever tars the tree. Tracked files shaped like a key
+# or credential (BUNDLE_DENY_RE, or a PEM private-key header under any name) are left
+# out, and bundle_source_gate re-checks the STAGED tree, failing the build on a hit.
+BUNDLE_MANIFEST=.hugmesh-bundle-files
+BUNDLE_DENY_RE='(^|/)(\.git|keys-out|keys-(pki|backend|frontend|host)|vault-seed|\.stack-src|\.claude|\.tls-front|\.mesh-token|\.seed-e2e|tor-onion|secureboot)(/|$)|^out(/|$)|(^|/)\.e2e-credentials[^/]*$|(^|/)\.[^/]*env$|\.(key|pem|p12|pfx|jks|keystore|srl|csr)$|(^|/)signing_key[^/]*$|(^|/)(secrets|passwords|credentials)\.json$|(^|/)(keystore\.properties|dial_private_key|unseal-key|encryption-key|tunnel-token|cifs\.cred)$|(^|/)(ddns|vault)/token$|_(ed25519|rsa)$|(^|/)ssh_host_[^/]*_key(\.pub)?$'
+BUNDLE_PEM_RE='^-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----'
+
+# bundle_source_list <generator-dir> <out-file> — write the files to bundle (paths
+# relative to the generator dir, NUL-separated) to <out-file>. Returns 1, saying why,
+# when there is no trustworthy list or it does not carry the builder.
+bundle_source_list() {
+    local src="$1" out="$2" raw top f from n_drop=0
+    local -a files=() keep=() pem=()
+    local -A is_pem=()
+    raw="$(mktemp)" || return 1
+    top="$(git -c safe.directory="${src}" -C "${src}" rev-parse --show-toplevel 2>/dev/null)" || top=""
+    if [ -n "${top}" ] && [ "$(cd "${top}" && pwd -P)" = "$(cd "${src}" && pwd -P)" ] \
+        && git -c safe.directory="${src}" -C "${src}" ls-files -z > "${raw}" 2>/dev/null && [ -s "${raw}" ]; then
+        from="git ls-files"
+    elif [ -s "${src}/${BUNDLE_MANIFEST}" ] && [ ! -L "${src}/${BUNDLE_MANIFEST}" ]; then
+        cp "${src}/${BUNDLE_MANIFEST}" "${raw}" || { rm -f "${raw}"; return 1; }
+        from="${BUNDLE_MANIFEST}"
+    else
+        rm -f "${raw}"
+        err "bundle-source: ${src} is neither a git checkout git can read (as $(id -un 2>/dev/null || id -u)) nor a bundled tree (${BUNDLE_MANIFEST}) — cannot tell its source from local secrets"
+        return 1
+    fi
+    mapfile -d '' files < "${raw}"; rm -f "${raw}"
+    for f in "${files[@]}"; do
+        case "${f}" in ''|/*|..|../*|*/..|*/../*) continue ;; esac
+        [ -L "${src}/${f}" ] || [ -f "${src}/${f}" ] || continue     # deleted in the tree, or a gitlink dir
+        if [[ "${f}" =~ ${BUNDLE_DENY_RE} ]]; then n_drop=$((n_drop + 1)); continue; fi
+        keep+=("${f}")
+    done
+    # A PEM private key under any name. Regular files only (-L skipped: a link's
+    # target is not what ships); grep -a so a NUL byte cannot make grep skip a file.
+    if [ "${#keep[@]}" -gt 0 ]; then
+        raw="$(mktemp)" || return 1
+        (cd "${src}" && for f in "${keep[@]}"; do [ -L "${f}" ] || printf '%s\0' "${f}"; done \
+            | xargs -0 -r grep -a -l -Z -E -e "${BUNDLE_PEM_RE}" -- > "${raw}" 2>/dev/null) || true   # 123 = no file matched
+        mapfile -d '' pem < "${raw}"; rm -f "${raw}"
+        for f in "${pem[@]}"; do is_pem["${f}"]=1; done
+    fi
+    : > "${out}" || return 1
+    for f in "${keep[@]}"; do
+        [ -n "${is_pem[${f}]:-}" ] && { n_drop=$((n_drop + 1)); continue; }
+        printf '%s\0' "${f}" >> "${out}"
+    done
+    grep -a -qzx 'build-x86-host-stage4.sh' "${out}" >/dev/null \
+        || { err "bundle-source: the file list from ${from} does not carry build-x86-host-stage4.sh"; return 1; }
+    info "bundle-source: $(tr -cd '\0' < "${out}" | wc -c) files from ${from}; ${n_drop} key/credential-shaped file(s) left out"
+}
+
+# bundle_source_gate <staged-dir> — fail-closed check of what ACTUALLY ships: no path
+# matching BUNDLE_DENY_RE and no PEM private key under any name.
+bundle_source_gate() {
+    local dir="$1" lst rc=0 hits="" pemhits="" f
+    [ -d "${dir}" ] || { err "bundle-source gate: ${dir} is missing"; return 1; }
+    lst="$(cd "${dir}" && find . -mindepth 1 \( -type f -o -type l \) -print)" \
+        || { err "bundle-source gate: cannot list ${dir}"; return 1; }
+    while IFS= read -r f; do
+        f="${f#./}"; [ -n "${f}" ] || continue
+        [[ "${f}" =~ ${BUNDLE_DENY_RE} ]] && hits+="${f}"$'\n'
+    done <<<"${lst}"
+    pemhits="$(cd "${dir}" && grep -r -a -l -E -e "${BUNDLE_PEM_RE}" . 2>&1)" || rc=$?
+    [ "${rc}" -le 1 ] || { err "bundle-source gate: could not read ${dir}: ${pemhits}"; return 1; }
+    [ "${rc}" -eq 0 ] && hits+="${pemhits}"$'\n'
+    hits="$(sed '/^$/d' <<<"${hits}")"
+    if [ -n "${hits}" ]; then
+        err "bundle-source gate: ${dir} carries key/credential files — refusing to ship them:"
+        err "  ${hits//$'\n'/$'\n'  }"
+        return 1
+    fi
+}
+# ── end bundle-source helpers ──
 # ── Desktop branding (boot screen / login / wallpaper / colours) ─────────────
 # Composable across ALL desktop generations (standalone or tailnet client; cli,
 # ncurses or graphical install). A --theme NAME pulls a bundled preset from
@@ -2647,6 +2735,23 @@ if ${PRINT_PLAN}; then
     exit 0
 fi
 
+# ── --bundle-source preflight (real builds only) ──────────────────────────────
+# Resolve the bundle's file list now (seconds), not hours in at the bundle step. With
+# no trustworthy list (bundle_source_list: not a git checkout git can read, not a
+# bundled tree) the build goes on WITHOUT the bundle and says so, whether the bundle
+# was asked for or defaulted: the Studio passes --bundle-source on every build, and a
+# worktree mounted alone at /src (its gitdir outside the mount), a tarball copy or
+# the image-gen worker's baked tree (no .git) must still build. After --print-plan,
+# so the plan channel never reads the checkout.
+if ${BUNDLE_SOURCE}; then
+    _bundle_list="$(mktemp)"
+    if ! bundle_source_list "${SCRIPT_DIR}" "${_bundle_list}"; then
+        warn "--bundle-source: NOT bundling the generator source (see the error above) — the image ships without it and without hugmesh-regenerate. Build from a git checkout to bundle it."
+        BUNDLE_SOURCE=false
+    fi
+    rm -f "${_bundle_list}"
+fi
+
 # ── A standalone DESKTOP needs its login password (real builds only) ──────────
 # Root is locked and there is no KEYS stick or SSO, so the --local-pass account is
 # the only way in, and its first-boot random one-time password goes to a console
@@ -4512,13 +4617,27 @@ fi
 # desktop can build a fresh, customized ISO (hugmesh-regenerate …).
 if ${BUNDLE_SOURCE:-false}; then
     info "Bundling generator source -> ${BUNDLE_SOURCE_DIR} (regenerate from the desktop)"
-    mkdir -p "${SYSROOT}${BUNDLE_SOURCE_DIR}"
-    tar -C "${SCRIPT_DIR}" --exclude=./.git --exclude=./out --exclude='./snap-*' --exclude='./*.bundle' \
-        -cf - . 2>/dev/null | tar -C "${SYSROOT}${BUNDLE_SOURCE_DIR}" -xf - 2>/dev/null || true
+    # Tracked files only (bundle_source_list), root-owned, then the gate over what
+    # was staged. Every failure is fatal: a silent `|| true` here once meant an empty
+    # or partial bundle nobody noticed.
+    _bundle_list="$(mktemp)"
+    bundle_source_list "${SCRIPT_DIR}" "${_bundle_list}" || { rm -f "${_bundle_list}"; err "--bundle-source: no trustworthy file list (pass --no-bundle-source)"; exit 1; }
+    rm -rf "${SYSROOT}${BUNDLE_SOURCE_DIR}"; mkdir -p "${SYSROOT}${BUNDLE_SOURCE_DIR}"
+    # --no-same-owner: the builder runs as root, so the tree is root's, not the uid that
+    # owns the checkout (root runs it via hugmesh-regenerate).
+    tar -C "${SCRIPT_DIR}" --no-recursion --null --verbatim-files-from \
+        -T "${_bundle_list}" -cf - | tar -C "${SYSROOT}${BUNDLE_SOURCE_DIR}" --no-same-owner -xf - \
+        || { rm -f "${_bundle_list}"; err "--bundle-source: staging the generator tree failed"; exit 1; }
+    install -m 0644 "${_bundle_list}" "${SYSROOT}${BUNDLE_SOURCE_DIR}/${BUNDLE_MANIFEST}"; rm -f "${_bundle_list}"
+    bundle_source_gate "${SYSROOT}${BUNDLE_SOURCE_DIR}" || { err "--bundle-source: refusing to build an image that carries the files above"; exit 1; }
     if [ -f "${SHARED_SPECS}/usr/sbin/hugmesh-regenerate" ]; then
         cp "${SHARED_SPECS}/usr/sbin/hugmesh-regenerate" "${SYSROOT}/usr/sbin/hugmesh-regenerate"
         chmod +x "${SYSROOT}/usr/sbin/hugmesh-regenerate"
     fi
+else
+    # A reused sysroot (--resume, a warm build root) may hold an earlier run's bundle,
+    # possibly from before tracked-only staging: never let it ride along ungated.
+    rm -rf "${SYSROOT:?}${BUNDLE_SOURCE_DIR}" "${SYSROOT:?}/usr/sbin/hugmesh-regenerate"
 fi
 # Graphical Calamares installer config + the bridge to install-x86.sh.
 # UNAFFILIATED: neutral names (gentoo-calamares-install / gentoo-installer-autostart,
@@ -5701,8 +5820,8 @@ live_root_gate() {
         fstab="$(rdsquashfs -c /etc/fstab "${sq}" 2>/dev/null)" \
             || { err "live-root gate: ${sq} has no /etc/fstab"; return 1; }
     else
-        warn "live-root gate: neither unsquashfs nor rdsquashfs on this host — cannot verify that ${sq} carries /proc /sys /dev /run and a live /etc/fstab"
-        return 0
+        err "live-root gate: neither unsquashfs nor rdsquashfs on this host — cannot verify that ${sq} carries /proc /sys /dev /run, a live /etc/fstab and no module-signing key; refusing to ship it unchecked"
+        return 1
     fi
     for m in ${LIVE_ROOT_MOUNTPOINTS}; do
         grep -qx "/${m}" <<<"${top}" || {
@@ -5723,7 +5842,17 @@ live_root_gate() {
     [ -n "${_all}" ] || { err "live-root gate: cannot list ${sq} — refusing to ship a live root nobody checked for the module-signing key"; return 1; }
     # unsquashfs prints "/usr/src/...", rdsquashfs "file usr/src/..." (no leading slash):
     # the certs/ alternative accepts either, or a renamed key would pass the rdsquashfs arm.
-    _leak="$(grep -E 'signing_key\.pem([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/' <<<"${_all}" | head -3)" || true
+    # The name alternative takes any signing_key*.pem* (a signing_key.pem.bak copy is the
+    # same key), and the basename of a non-default CONFIG_MODULE_SIG_KEY (file paths
+    # only; a pkcs11: URI names no file) read from the sysroot's kernel config.
+    local _re='(^|[[:space:]/])signing_key[^/[:space:]]*\.pem[^/[:space:]]*([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/'
+    local _sk=""
+    _sk="$(sed -nE 's/^CONFIG_MODULE_SIG_KEY="([^"]*)"$/\1/p' "${SYSROOT:-/nonexistent}/usr/src/linux/.config" 2>/dev/null)" || _sk=""
+    case "${_sk}" in ''|*:*) ;; *)
+        _sk="${_sk##*/}"
+        _re+="|(^|[[:space:]/])$(sed 's/[][\.*^$+?(){}|/]/\\&/g' <<<"${_sk}")([[:space:]]|$)" ;;
+    esac
+    _leak="$(grep -E -e "${_re}" <<<"${_all}" | head -3)" || true
     if [ -n "${_leak}" ]; then
         err "live-root gate: ${sq} carries the kernel module-signing PRIVATE key:"
         err "  ${_leak//$'\n'/$'\n'  }"
