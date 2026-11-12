@@ -459,8 +459,12 @@ the front-ends: graphical **Calamares** (Qt; Ubuntu-style), **text/ncurses**
 (`install-x86.sh --interactive`) and **unattended CLI**
 (`install-x86.sh --unattended`, reads the baked manifest). `--cached` embeds the
 binpkg cache for **offline rebuild and fast reinstall**; `--uncached` (default) is
-lean. `--bundle-source` (standalone default) ships the generator source and
-`hugmesh-regenerate`, so the desktop can **build a fresh customized ISO**.
+lean. `--bundle-source` (standalone default) ships the generator source at
+`/usr/share/hugmesh/generator-src` and `hugmesh-regenerate`, so the desktop can
+**build a fresh customized ISO**. The bundle rides in every x86 artifact (live ISO,
+stage4, `.img`, fs tarball, installer). It used to sit under `/usr/src`, which every
+artifact drops whole because it holds the kernel's module-signing key, so no
+installed system had it.
 
 ## Verifying images under emulation
 

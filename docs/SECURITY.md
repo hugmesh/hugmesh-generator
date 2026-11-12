@@ -34,7 +34,11 @@ build system keeps its kernel tree in `/usr/src` (the stage4 tar has always excl
 it), and the live ISO used to squash the whole build system, key included. Anyone with
 that ISO could sign a module that every kernel of the same build accepts under
 `lockdown=integrity`. The live pack now excludes `usr/src` (`live_squash_excludes`, both
-arms), and `live_root_gate` refuses a squashfs that still lists the key. Live ISOs built
+arms), and `live_root_gate` refuses a squashfs whose listing still names
+`signing_key.pem` or a `usr/src/linux*/certs/` dir, in both its listing arms
+(`unsquashfs`, and `rdsquashfs`, whose paths have no leading slash). The `--bundle-source`
+generator tree moved out of `/usr/src` to `/usr/share/hugmesh/generator-src` so the
+whole-directory exclude does not take it along. Live ISOs built
 before the fix, and images whose kernel came from the same cache entry, share a key that
 has to be treated as public. Rotating it means invalidating the x86 kernel cache and
 rebuilding.

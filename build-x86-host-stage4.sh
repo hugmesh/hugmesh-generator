@@ -561,10 +561,17 @@ ALLOW_MISSING_PACKAGES=false
 # --allow-missing-packages class (never a Studio field); the emission itself is
 # failure-tolerant either way (WARN + no plan, never an aborted build).
 EMERGE_PLAN_ENABLED=true
-# --bundle-source : ship the generator source in the image (/usr/src/hugmesh-
-# generator) + a regenerate helper, so you can build a fresh customized ISO from the
-# running desktop. Default ON for standalone (self-hosting appliance).
+# --bundle-source : ship the generator source in the image (BUNDLE_SOURCE_DIR) + a
+# regenerate helper, so you can build a fresh customized ISO from the running desktop.
+# Default ON for standalone (self-hosting appliance).
 BUNDLE_SOURCE=""
+# NOT under /usr/src: every artifact drops usr/src whole (it holds the built kernel tree
+# and its module-signing PRIVATE key, see live_squash_excludes), so a bundle there
+# reached no artifact at all. Not /usr/share/hugmesh/generator either: every host image
+# already stages domain-reconcile's scripts there, which would make an unbundled image
+# look bundled. specs/usr/sbin/hugmesh-regenerate reads this same path (pinned by
+# tests/scripts/test-x86-live-root-pack.sh).
+BUNDLE_SOURCE_DIR=/usr/share/hugmesh/generator-src
 # ── Desktop branding (boot screen / login / wallpaper / colours) ─────────────
 # Composable across ALL desktop generations (standalone or tailnet client; cli,
 # ncurses or graphical install). A --theme NAME pulls a bundled preset from
@@ -4504,10 +4511,10 @@ fi
 # Self-hosting: bundle the generator source + a regenerate helper so the running
 # desktop can build a fresh, customized ISO (hugmesh-regenerate …).
 if ${BUNDLE_SOURCE:-false}; then
-    info "Bundling generator source -> /usr/src/hugmesh-generator (regenerate from the desktop)"
-    mkdir -p "${SYSROOT}/usr/src/hugmesh-generator"
+    info "Bundling generator source -> ${BUNDLE_SOURCE_DIR} (regenerate from the desktop)"
+    mkdir -p "${SYSROOT}${BUNDLE_SOURCE_DIR}"
     tar -C "${SCRIPT_DIR}" --exclude=./.git --exclude=./out --exclude='./snap-*' --exclude='./*.bundle' \
-        -cf - . 2>/dev/null | tar -C "${SYSROOT}/usr/src/hugmesh-generator" -xf - 2>/dev/null || true
+        -cf - . 2>/dev/null | tar -C "${SYSROOT}${BUNDLE_SOURCE_DIR}" -xf - 2>/dev/null || true
     if [ -f "${SHARED_SPECS}/usr/sbin/hugmesh-regenerate" ]; then
         cp "${SHARED_SPECS}/usr/sbin/hugmesh-regenerate" "${SYSROOT}/usr/sbin/hugmesh-regenerate"
         chmod +x "${SYSROOT}/usr/sbin/hugmesh-regenerate"
@@ -5711,10 +5718,12 @@ live_root_gate() {
     if command -v unsquashfs >/dev/null; then
         _all="$(unsquashfs -ls -d '' "${sq}" 2>/dev/null)" || _all=""
     else
-        _all="$(rdsquashfs -d "${sq}" 2>/dev/null)" || _all=""     # gensquashfs-style: "file /path ..."
+        _all="$(rdsquashfs -d "${sq}" 2>/dev/null)" || _all=""     # gensquashfs-style: "file usr/src/... 0644 0 0"
     fi
     [ -n "${_all}" ] || { err "live-root gate: cannot list ${sq} — refusing to ship a live root nobody checked for the module-signing key"; return 1; }
-    _leak="$(grep -E 'signing_key\.pem([[:space:]]|$)|/usr/src/linux[^/[:space:]]*/certs/' <<<"${_all}" | head -3)" || true
+    # unsquashfs prints "/usr/src/...", rdsquashfs "file usr/src/..." (no leading slash):
+    # the certs/ alternative accepts either, or a renamed key would pass the rdsquashfs arm.
+    _leak="$(grep -E 'signing_key\.pem([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/' <<<"${_all}" | head -3)" || true
     if [ -n "${_leak}" ]; then
         err "live-root gate: ${sq} carries the kernel module-signing PRIVATE key:"
         err "  ${_leak//$'\n'/$'\n'  }"
