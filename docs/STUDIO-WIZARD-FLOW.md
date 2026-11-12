@@ -393,7 +393,7 @@ the marked bullet below). Per-subsection status is inline below:
   (x86-64 / ARM64 — extensible enum) over a **family-grouped, searchable device
   browser** sourced from
   [`core/device_catalog.py`](../studio/hugmesh_studio/core/device_catalog.py) +
-  `core/device-catalog.json`, with the #351 honesty statuses on every row
+  `core/device-catalog.json`, with an honesty status on every row
   (SUPPORTED / EXPERIMENTAL labelled + fail-loud / UNSUPPORTED visible-but-unselectable
   with the reason shown). A device IS a `(platform, board)` pair and its roles are
   **derived** from `ROLE_CHOICES` + `rpi_boards_for_role()` — never stored, never

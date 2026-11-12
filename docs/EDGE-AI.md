@@ -52,7 +52,8 @@ All three front-ends expose the same knobs (**all-menus parity**):
   / edge_ai_model_default` → `to_cli_args()`.
 
 The `edge-ai` role defaults `--gpu-driver nvidia` and turns CUDA on; pass an explicit
-`--gpu-driver` to override (an AMD/Intel ROCm edge node is a future path).
+`--gpu-driver` to override. GPU inference is CUDA only: with any other `--gpu-driver`
+the builder does not turn CUDA on and bakes no GPU inference stack.
 
 **CUDA host compiler = clang, on purpose.** `dev-util/nvidia-cuda-toolkit` caps its host
 compiler below the toolchain the amd64 hardened stage3 seed ships (12.9.2 caps at gcc 14;
