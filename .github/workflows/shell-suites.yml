@@ -26,6 +26,13 @@
 # requirements file and no other leg does. Without them it exits 2 rather than
 # skipping, which was measured in a bare python:3.12-slim.
 #
+# MEASURED, 2026-11-11: tests/scripts/test-akkoma-image-pin.sh was executed in
+# python:3.12-slim with the checkout mounted READ-ONLY and --network=none before
+# being added to the debian job's first leg: 40 passed / 0 failed, rc=0, including
+# its 37-mutation battery (37 caught / 0 survived, each mutation verified to change
+# its file) and one positive control. In an image without python3 it prints FATAL
+# and exits 2 rather than passing. It is a NEGATIVE guard, hence debian.
+#
 # MEASURED, 2026-11-09: tests/scripts/test-compose-no-literal-passwords.sh and
 # tests/stack/test-gen-stack-db-env.sh (hugmesh-generator#857) were executed in
 # python:3.12-slim with this job's apt packages, the checkout mounted READ-ONLY,
@@ -317,15 +324,28 @@ jobs:
       # binutils (strings), file, xorriso: tests/scripts/test-verify-artifact-neutrality-frite.sh
       # runs scripts/verify-artifact-neutrality.sh, whose host preflight FAILs closed
       # without all three; the suite builds its frite FAT media with mtools (already here).
+      # grep (GNU), on all three lines, since 2026-11-11. Before that this job ran on
+      # busybox grep, which has no --include. Two guards here,
+      # tests/scripts/test-makefile-reown-skips-sysroot.sh (the "no other chown -R" scan)
+      # and tests/scripts/test-outbound-mtls-client.sh (rule 4, http:// to a TLS-serving
+      # peer), ran `grep -r --include=...` with `2>/dev/null || true`. Busybox printed
+      # "unrecognized option", exited 2, and both read that as "no matches" and PASSED.
+      # MEASURED in alpine:3 with this job's old apk set: a planted `chown -R "$WORK_DIR"`
+      # and a planted http:// URL to admin-bff both passed, and rule 4 reported
+      # "0 known-broken" against its five real exempt hits. Both guards now fail closed
+      # (a grep status above 1 is a FAIL) and carry a positive control. The preflight
+      # asserts --include WORKS, not merely that a grep exists, so losing this package
+      # turns the job red at the door. Measurements below that name "busybox grep"
+      # predate this change.
       # nginx: tests/stack/test-mastodon-front.sh runs the committed
       # mastodon-front/default.conf through a real nginx (alpine's is built with
       # http_sub_module); without it that suite exits 2 "SKIPPED-LOUDLY".
-      - run: apk add --no-cache attr bash binutils coreutils curl e2fsprogs-extra file flock gawk git git-daemon helm jq make mtools nginx nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
+      - run: apk add --no-cache attr bash binutils coreutils curl e2fsprogs-extra file flock gawk git git-daemon grep helm jq make mtools nginx nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
       # xorriso: tests/qemu/launch_arm_medium_test.sh builds a real ISO9660 Frite
       # medium fixture with it (the launcher reads such media with xorriso or
       # bsdtar); without it that suite exits 2 "SKIPPING LOUDLY", a red job.
-      - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
-      - run: apk add --no-cache attr bash coreutils curl dosfstools e2fsprogs e2fsprogs-extra flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl parted py3-yaml python3 tar util-linux xz
+      - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git git-daemon grep helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
+      - run: apk add --no-cache attr bash coreutils curl dosfstools e2fsprogs e2fsprogs-extra flock gawk git git-daemon grep helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl parted py3-yaml python3 tar util-linux xz
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -356,8 +376,14 @@ jobs:
           # it at exactly this path and exits 2 (a failure here) when it is absent; its
           # package is git-daemon, which the install step names.
           [ -x "$(git --exec-path)/git-http-backend" ] || missing="$missing git-http-backend(apk:git-daemon)"
+          # GNU grep, asserted by BEHAVIOUR: `command -v grep` passes on busybox too. The
+          # reown and outbound-mTLS suites scan with `grep -r --include=...`, which busybox
+          # rejects with exit 2. Both now fail closed on that, but name it here first.
+          g="$(mktemp -d)"; printf 'x\n' > "$g/a.yaml"; printf 'x\n' > "$g/b.txt"
+          [ "$(grep -rl --include='*.yaml' x "$g")" = "$g/a.yaml" ] || missing="$missing grep-with-working---include(apk:grep)"
+          rm -rf "$g"
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp strings file xorriso git-http-backend"
+          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp strings file xorriso git-http-backend grep--include"
       - name: run suites
         shell: bash
         run: |
@@ -521,6 +547,7 @@ jobs:
             tests/scripts/test-catalog-discovery-gate.sh
             tests/scripts/test-cloud-package.sh
             tests/scripts/test-container-image-tags.sh
+            tests/scripts/test-desktop-config-lib.sh
             tests/scripts/test-desktop-sso-bake.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh
@@ -534,6 +561,7 @@ jobs:
             tests/scripts/test-github-auth-lib.sh
             tests/scripts/test-frite-kernel-emulation-symbols.sh
             tests/scripts/test-guard-integrity.sh
+            tests/scripts/test-guest-host-facts.sh
             tests/scripts/test-harbor-robots-ownership.sh
             tests/scripts/test-host-accept-keywords.sh
             tests/scripts/test-host-bdep-pool.sh
@@ -545,6 +573,7 @@ jobs:
             tests/scripts/test-installer-ui-node-default.sh
             tests/scripts/test-intltool-preseed.sh
             tests/scripts/test-kernel-artifact-cache.sh
+            tests/scripts/test-kernel-reconfig-x86.sh
             tests/scripts/test-keys-breakglass-root-key.sh
             tests/scripts/test-kind-addon-channel.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
@@ -580,6 +609,7 @@ jobs:
             tests/scripts/test-stack-clone-credential.sh
             tests/scripts/test-stack-e2e-argv.sh
             tests/scripts/test-stack-fetch-repos.sh
+            tests/scripts/test-stack-idp-exposure.sh
             tests/scripts/test-stage4-pack-ownership.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
@@ -678,6 +708,7 @@ jobs:
               tests/platform-capability-rbac/test-argocd-route-honesty.sh
               tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
               tests/phone/test-phone-wizard.sh
+              tests/scripts/test-akkoma-image-pin.sh
               tests/scripts/test-appstore-effector-flags.sh
               tests/scripts/test-argocd-serverside-diff.sh
               tests/scripts/test-backing-service-endpoints-closure.sh
@@ -697,6 +728,7 @@ jobs:
               tests/scripts/test-fragment-route-target.sh
               tests/scripts/test-games-screens-wiring.sh
               tests/scripts/test-gitlab-ci-wellformed.sh
+              tests/scripts/test-headscale-embedded-derp.sh
               tests/scripts/test-headscale-oidc-secret-staging.sh
               tests/scripts/test-mfa-raw-jwt-posture.sh
               tests/scripts/test-mfa-required-rules.sh
@@ -746,7 +778,7 @@ jobs:
     steps:
       - run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless squashfs-tools
+          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless squashfs-tools squashfs-tools-ng
           pip install --quiet pyyaml
       - uses: actions/checkout@v4
       - name: trust the workspace
@@ -1115,6 +1147,16 @@ jobs:
     # tag:superadmin; it exits 2 (a failure here) when docker or an image is
     # unavailable. MEASURED 2026-11-04 on a Linux host with docker: 13 passed /
     # 0 failed in ~8 s, and 6 failed against the unfixed policy.
+    # tests/stack/test-stack-idp-exposure-live.sh (NEW-15) renders the real
+    # compose.local.yaml, starts casbin/casdoor:3.80.0 + postgres:16-alpine from that
+    # render under a throwaway project on a free port, and proves Casdoor refuses
+    # connections on the docker bridge gateway (the LAN view) and that the real
+    # seed-e2e.sh moves the built-in admin off the factory default. Exits 2 (a
+    # failure here) without docker. MEASURED 2026-11-11 on a Linux host with docker:
+    # 30 passed / 0 failed in 25 s (images cached) to ~3 min; against origin/main
+    # 39b953ad, 22 failed (incl. an admin session from the factory default via a
+    # non-loopback address).
+    timeout-minutes: 15
     # tests/device-registry/test-headscale-tag-minters-live.sh runs the same pinned
     # headscale and tailscale with keys minted by the REAL minters: the whole
     # keys-provision engine (inside the kindest/node image the gpu-labels suite
@@ -1122,7 +1164,24 @@ jobs:
     # mint_preauth_key; then the real Layer-A apply path of gen-headscale-policy.sh
     # and the real hugmesh-headscale-forcetags. Exit 2 (a failure here) when docker
     # or an image is unavailable.
-    timeout-minutes: 15
+    # tests/scripts/test-headscale-embedded-derp-live.sh runs the PINNED headscale on
+    # a private --internal network with the configs this repo ships (rendered by
+    # keys-provision's real provision_headscale_derp) and proves the mesh starts and
+    # relays with no internet: a negative control shows the old public-map-only
+    # config dies there with "initial DERPMap is empty", a stock client receives a
+    # map holding only the embedded region and a STUN answer, the public-map opt-in
+    # still starts offline, and two clients relay "via DERP" through the local
+    # stack's real tests/stack/tls-front/default.conf. Its section D drives the
+    # SHIPPED node path with nothing edited by hand: KEYS sticks from
+    # scripts/gen-provision-keys.sh (keytool + ssh-keygen + openssl, checked in the
+    # preflight below), keys-provision's own functions in a nicolaka/netshoot
+    # container sharing the node's network namespace, headscale serving HTTPS from
+    # the stick's mesh CA, and two clients on split --internal networks that relay
+    # "via DERP(hugmesh)" to an IP-literal node, plus a packet capture (zero lookups
+    # of a Tailscale name, with a positive control) and a worker without the CA that
+    # must not join. Exits 2 without docker or an image. MEASURED 2026-11-11 on a
+    # Linux host with docker, images cached: 43 passed / 0 failed in about 5 min.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: preflight
@@ -1131,6 +1190,10 @@ jobs:
           # sign that the runner image stopped shipping docker.
           docker info >/dev/null 2>&1 || { echo "::error::preflight: no usable docker daemon — the suite would exit 2"; exit 1; }
           command -v jq >/dev/null 2>&1 || { echo "::error::preflight: jq missing"; exit 1; }
+          # test-headscale-embedded-derp-live.sh section D runs scripts/gen-provision-keys.sh.
+          for t in keytool ssh-keygen openssl python3; do
+            command -v "$t" >/dev/null 2>&1 || { echo "::error::preflight: $t missing (gen-provision-keys.sh needs it)"; exit 1; }
+          done
       - name: run suites
         shell: bash
         run: |
@@ -1139,7 +1202,9 @@ jobs:
             tests/device-registry/test-headscale-policy-fallback-live.sh
             tests/device-registry/test-headscale-tag-ownership.sh
             tests/device-registry/test-headscale-security-tag-live.sh
+            tests/stack/test-stack-idp-exposure-live.sh
             tests/device-registry/test-headscale-tag-minters-live.sh
+            tests/scripts/test-headscale-embedded-derp-live.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

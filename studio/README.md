@@ -344,6 +344,9 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   python -m hugmesh_studio --list-sessions [--json]        # one line per session:
                                                            # id, date, roles, status, artifact count
   python -m hugmesh_studio --show-session ID [--json]      # full record + per-image outcomes
+  python -m hugmesh_studio --kernel-config SESSION[:IMAGE]  # x86: menuconfig the built kernel here,
+  python -m hugmesh_studio --kernel-config-apply SESSION[:IMAGE]  # then rebuild + re-sign + repackage
+                                                          # (also -set/-diff/-discard; docs/KERNEL-RECONFIG.md)
   python -m hugmesh_studio --session-artifacts ID [--json] # files under <out>/sessions/<ID>/
   python -m hugmesh_studio --delete-session ID --yes       # record only; REFUSES without --yes
   python -m hugmesh_studio --delete-session ID --yes --delete-artifacts
@@ -718,6 +721,9 @@ python -m hugmesh_studio.tui                       # the guided journey (welcome
 python -m hugmesh_studio.tui --sessions            # sessions review (build history):
                                                    #   status · why an image was not started
                                                    #   · artifacts · delete-with-confirm
+                                                   #   (an unreadable record too) · restart
+                                                   #   (the GUI's gate, then where to run it)
+                                                   #   · redo into the journey · delete all
 python -m hugmesh_studio.tui --worklist SESSION_ID # read-only worklist table for one session
 python -m hugmesh_studio.tui --meshemu SESSION     # whole-mesh emulation status list
 python -m hugmesh_studio.tui --fleet               # fleet build (scripts/build-all-roles.sh)

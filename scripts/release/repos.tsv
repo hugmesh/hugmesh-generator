@@ -3,6 +3,13 @@
 #
 #   stage|repo|kind|version file|tag prefix|workflow|packages[|mirrors]
 #
+# repo     the repository, which is also the row's ID. A repository that publishes a
+#          SECOND artifact (its own version file, tag prefix and workflow) gets one more
+#          row whose ID is <repository>@<artifact>: GitHub calls go to <repository>, and
+#          --only / --expect / the plan name the ID. Artifact rows are img rows and
+#          BETA-ONLY (the stable channel cuts one release/X.Y and opens one bump PR per
+#          repository, so it skips them and refuses one named with --only).
+#
 # stage    dependency order. 1-4 the Maven chain (build-config -> parent -> commons ->
 #          auth-core), 5 the gateway base image, 6 its be/fe/pki overlays (FROM the
 #          gateway image), 7 the Java BFF/API images, 8 the Angular UIs, 9 games,
@@ -65,3 +72,4 @@
 9|hugmesh-games|img|VERSION|v|release.yml|hugmesh-games/backend hugmesh-games/frontend hugmesh-games/rpg-builder hugmesh-games/vn-builder hugmesh-games/wasm-fragment
 9|hugmesh-forum-api|img|composer.json|v|release.yml|hugmesh-forum-api
 9|hugmesh-generator|img|clients/docker-mesh-node/VERSION|mesh-node-v|mesh-node-release.yml|hugmesh-mesh-node
+9|hugmesh-generator@akkoma|img|images/akkoma/VERSION|akkoma-v|akkoma-release.yml|hugmesh-akkoma

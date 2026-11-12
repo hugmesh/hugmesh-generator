@@ -1,0 +1,50 @@
+# Studio tests that were ALREADY red with a Qt binding when the `qt` job of
+# .github/workflows/studio-tests.yml was added (2026-11-11, PySide6 6.11.2, offscreen,
+# the ubuntu-latest runner), so that job grades the change under review and not this
+# backlog. NOT hidden: tests/run_file_by_file.py leaves each test below out of its
+# file's run (the rest of the file still gates), runs it on its own and REPORTS it on
+# every run, in the log and in the job summary's "Known before this job" section; a test
+# here that passes is reported as such. Delete its line then.
+#
+# Separate from known-failures.txt, which feeds the Qt-free `pytest` job (and is empty).
+#
+#   FILE::TEST[id]  # why        one test, left out of the gating run and reported
+#
+# An abort AT EXIT after a clean run (PySide6's qFatal on a QThread still running at
+# teardown) is not listed here: it moves between files with timing, so the runner reports
+# it for every file (see tests/run_file_by_file.py). Seen so far, on the runner or a
+# loaded developer box: test_code_folders_gui.py, test_domains_row_checks_saved_door.py,
+# test_e2e_lane_doors.py.
+#
+# tests/test_qt_suite_guards.py checks that every FILE and TEST named here exists, and the
+# runner turns a file red when an entry here deselects nothing.
+
+# ── PRODUCT DEFECT: the Mesh Monitor's "not wired" refusal is dead under PySide6 ──────
+# hugmesh_studio/gui/pages/_mesh_monitor_widget.py:769 and :865 call
+# QObject.receivers(<signal>), which PySide6 (the binding every Studio package ships)
+# refuses for a SignalInstance: TypeError, so the refusal line is never shown and the
+# press does nothing. PyQt6 accepts it, which is why the developer venv never saw it.
+tests/test_localmesh_monitor.py::test_a_scaling_table_with_nothing_connected_refuses_instead_of_doing_nothing  # PySide6: receivers(SignalInstance) TypeError, _mesh_monitor_widget.py:769
+tests/test_localmesh_monitor.py::test_the_pages_own_monitor_mounts_the_replicas_column_and_wires_it  # PySide6: receivers(SignalInstance) TypeError, _mesh_monitor_widget.py:769
+tests/test_mesh_pod_controls_gui.py::test_a_press_emits_domain_and_verb_and_an_unwired_mount_refuses_inline  # PySide6: receivers(SignalInstance) TypeError, _mesh_monitor_widget.py:865
+tests/test_mesh_pod_controls_gui.py::test_the_page_wires_both_signals  # PySide6: receivers(SignalInstance) TypeError, _mesh_monitor_widget.py:865
+
+# ── the runner's font (DejaVu Sans) is wider than the one these were measured in ─────
+tests/test_domain_services_selection_column.py::test_a_style_with_a_bigger_checkbox_widens_the_column[fleet-Fusion-13pt]  # DejaVu Sans: the check column stays 99px at 13.5 pt
+tests/test_domain_services_selection_column.py::test_a_style_with_a_bigger_checkbox_widens_the_column[image-flow-Fusion-13pt]  # DejaVu Sans: the check column stays 99px at 13.5 pt
+tests/test_domain_services_selection_column.py::test_a_style_with_a_bigger_checkbox_widens_the_column[local-docker-mesh-Fusion-13pt]  # DejaVu Sans: the check column stays 99px at 13.5 pt
+tests/test_fleet_window_layout.py::test_every_placeholder_is_whole_in_its_field[Fusion-defaultpt]  # DejaVu Sans: the HEADSCALE_URL placeholder needs 543px, its field has 514px
+
+# ── test-side binding or host assumptions ────────────────────────────────────────────
+tests/test_pages_network_sections.py::test_the_services_explainer_is_no_longer_a_wall  # PySide6 has mightBeRichText on QtGui.Qt, not QtCore.Qt (AttributeError)
+tests/test_brand_docker_route_look.py::test_the_docker_route_brand_step_is_drawn_whole_in_a_fresh_interpreter  # its wrapper fails the child on the OPTIONAL Breeze skips (the Qt wheels carry no Breeze); test_look.py allows them
+tests/journey/test_brand_superbrand_image.py::test_a_created_superbrand_reaches_the_build_command_and_the_builders_plan[window]  # assumes a native build host: on a docker host the printed command is `docker run ...` and _plan() runs `bash docker` ("docker: Is a directory")
+tests/journey/test_brand_superbrand_image.py::test_a_created_superbrand_reaches_the_build_command_and_the_builders_plan[text]  # same: docker-host command (see above)
+tests/journey/test_brand_superbrand_image.py::test_both_faces_write_the_same_command_and_the_same_configuration  # same: two docker commands carry different random --name values
+tests/journey/test_brand_superbrand_image.py::test_the_four_places_that_refuse_a_brand_identity_on_an_unaffiliated_image  # same: docker-host command (see above)
+
+# ── timing: red on 1 of the first 3 runner runs, and on a loaded developer box ───────
+tests/test_local_ai_dock_pull.py::test_an_offer_for_a_named_model_stays_until_that_model_is_in  # the offer row is still shown when wait_for gives up (flaky)
+
+# ── red on main without Qt as well (the go-live lane, #926/#931) ─────────────────────
+tests/test_golive_docs_emulated.py::test_status_callout_says_what_has_landed  # the status callout still says FG3's proof lane has not merged; #926 merged it

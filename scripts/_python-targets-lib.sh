@@ -150,8 +150,28 @@ pt_apply_seed_targets() {
         printf '[%s]        conflict. See docs/PYTHON-TARGETS-SEED-DRIFT.md.\n' "${tag}" >&2
         return 1
     fi
-    # shellcheck disable=SC2086
-    single="$(pt_seed_single_target ${targets})" || return 1
+    # The Studio Desktop step's Python section (--python-extra-targets /
+    # --python-single-target, scripts/_desktop-config-lib.sh) can only WIDEN the
+    # set: the result is the UNION seed + extras, never fewer than the seed carries
+    # (a make.conf assignment REPLACES the profile value, so a narrower set would
+    # orphan the seed's own installed modules — docs/PYTHON-TARGETS-SEED-DRIFT.md).
+    if [ -n "${PT_EXTRA_TARGETS:-}" ]; then
+        # shellcheck disable=SC2086
+        targets="$(printf '%s\n' ${targets} ${PT_EXTRA_TARGETS} | sort -u -V | tr '\n' ' ')"
+        targets="${targets% }"
+    fi
+    if [ -n "${PT_SINGLE_TARGET:-}" ]; then
+        case " ${targets} " in
+            *" ${PT_SINGLE_TARGET} "*) single="${PT_SINGLE_TARGET}" ;;
+            *)
+                printf '[%s] ERROR: --python-single-target %s is not in PYTHON_TARGETS (%s);\n' "${tag}" "${PT_SINGLE_TARGET}" "${targets}" >&2
+                printf '[%s]        add it to --python-extra-targets too.\n' "${tag}" >&2
+                return 1 ;;
+        esac
+    else
+        # shellcheck disable=SC2086
+        single="$(pt_seed_single_target ${targets})" || return 1
+    fi
 
     if [ ! -f "${mc}" ]; then
         printf '[%s] ERROR: %s does not exist — render make.conf before applying seed targets\n' "${tag}" "${mc}" >&2
@@ -182,7 +202,8 @@ pt_apply_seed_targets() {
         printf '*/* PYTHON_TARGETS: %s\n' "${targets}"
     } > "${pu}"
 
-    printf '[%s] PYTHON_TARGETS="%s" PYTHON_SINGLE_TARGET="%s" (derived from the stage3 seed)\n' \
-        "${tag}" "${targets}" "${single}"
+    printf '[%s] PYTHON_TARGETS="%s" PYTHON_SINGLE_TARGET="%s" (derived from the stage3 seed%s)\n' \
+        "${tag}" "${targets}" "${single}" \
+        "$( [ -n "${PT_EXTRA_TARGETS:-}${PT_SINGLE_TARGET:-}" ] && echo ' + the Desktop step' )"
     return 0
 }

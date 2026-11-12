@@ -6,6 +6,7 @@ no Qt required.
 """
 import getpass
 import json
+import os
 import re
 
 import pytest
@@ -1468,7 +1469,9 @@ def test_g27_node_creds_never_persisted(tmp_path):
 
 
 def test_secret_fields_include_node_creds():
-    assert set(SECRET_FIELDS) == {"local_pass", "luks_pass", "user_password", "root_password"}
+    # extra_local_passes: the Desktop step's extra accounts' first-login passwords
+    assert set(SECRET_FIELDS) == {"local_pass", "luks_pass", "user_password", "root_password",
+                                  "extra_local_passes"}
 
 
 def test_g28_arm_local_user_without_standalone():
@@ -1496,6 +1499,23 @@ def test_g29_version_pins_and_skip_tailscale(platform, role, mode):
     assert ("--headscale-version", "0.23.0") in p
     assert ("--tailscale-version", "1.62.0") in p
     assert "--skip-tailscale" in args
+
+
+@pytest.mark.parametrize("platform", sorted(BUILDER_SCRIPTS))
+def test_headscale_public_derp_opt_in_every_builder(platform):
+    """The public Tailscale DERP map is an OPT-IN (docs/HEADSCALE-DERP.md): off by
+    default on every platform, emitted as --headscale-public-derp when set, and the
+    builder that receives it really parses that exact flag."""
+    off = ImageConfig(mode="mesh", role="omnibus", platform=platform).to_cli_args()
+    on = ImageConfig(mode="mesh", role="omnibus", platform=platform,
+                     headscale_public_derp=True).to_cli_args()
+    assert "--headscale-public-derp" not in off
+    assert on.count("--headscale-public-derp") == 1
+    builder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                           BUILDER_SCRIPTS[platform])
+    with open(builder, encoding="utf-8") as fh:
+        src = fh.read()
+    assert "--headscale-public-derp) HEADSCALE_PUBLIC_DERP=true" in src, builder
 
 
 def test_g30_version_all_release_tag_on_the_cluster_tree_builders():
@@ -1868,6 +1888,7 @@ _FIELD_PROBE = {
     "headscale_version": {"headscale_version": "0.23"},
     "tailscale_version": {"tailscale_version": "1.60"},
     "skip_tailscale": {"skip_tailscale": True},
+    "headscale_public_derp": {"headscale_public_derp": True},
     "gpu_driver": {"gpu_driver": "nvidia"}, "nvidia_cuda": {"nvidia_cuda": True},
     "kernel_builtin": {"kernel_builtin": True},
     "enable_wifi": {"enable_wifi": True}, "enable_bluetooth": {"enable_bluetooth": True},
@@ -1998,7 +2019,35 @@ def test_field_probe_covers_the_whole_capability_table():
     # `unaffiliated` (needs a standalone baseline) and `superdomain` (mesh-only gate,
     # so the mixed cloud/mesh baselines can't isolate it) are each probed by a dedicated
     # test below instead of the shared before/after differ.
-    assert set(_FIELD_PROBE) | {"unaffiliated", "superdomain"} == set(PLATFORM_FIELD_SUPPORT)
+    # `desktop_spec` (the Desktop step) needs a DESKTOP role on each board — the shared
+    # baselines are node roles on rpi5/jetson — so it has its own test below too.
+    assert set(_FIELD_PROBE) | {"unaffiliated", "superdomain", "desktop_spec"} \
+        == set(PLATFORM_FIELD_SUPPORT)
+
+
+# A desktop-producing role per board (the appliance boards have none: their only role).
+_DESKTOP_BASELINES = {
+    "x86": dict(mode="cloud", role="laptop", platform="x86"),
+    "rpi5": dict(mode="mesh", role="rpi5-desktop", platform="rpi5"),
+    "jetson": dict(mode="mesh", role="jetson-desktop", platform="jetson"),
+    "frite": dict(mode="cloud", role="frite", platform="frite"),
+    "orangepi5": dict(mode="cloud", role="orangepi5", platform="orangepi5"),
+    "orangepi4-lts": dict(mode="cloud", role="orangepi4-lts", platform="orangepi4-lts"),
+}
+
+
+def test_desktop_spec_emits_exactly_on_the_desktop_builders():
+    probe = {"desktop_spec": {"use_lines": ["media-video/ffmpeg opus"]}}
+    derived = set()
+    for plat in _PROBE_PLATFORMS:
+        base = _DESKTOP_BASELINES.get(plat, _BASELINES[plat])
+        if _emits_on(base, probe):
+            derived.add(plat)
+    assert derived == set(PLATFORM_FIELD_SUPPORT["desktop_spec"])
+    # and never on a NODE role of a desktop-capable builder (its builder refuses the flags)
+    for base in (_BASELINES["rpi5"], _BASELINES["jetson"],
+                 dict(mode="mesh", role="backend", platform="x86")):
+        assert not _emits_on(base, probe), base
 
 
 @pytest.mark.parametrize("field", sorted(_FIELD_PROBE))

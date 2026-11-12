@@ -266,7 +266,10 @@ hb = hsb[0] if hsb else ""
 (ok if re.search(r"resolver\s+127\.0\.0\.11\b", hb) and re.search(r"set\s+\$headscale\s+hugmesh-headscale\s*;", hb) else bad)(
     "re-resolves hugmesh-headscale per request (resolver 127.0.0.11 + variable)")
 pp = re.findall(r"proxy_pass\s+([^;]+);", hb)
-(ok if pp == ["http://$headscale:8080$request_uri"] else bad)("the hs. block proxies only to $headscale:8080 (got %r)" % pp)
+# `location /` and the private-source-only `location ^~ /derp` (docs/HEADSCALE-DERP.md,
+# "Who can use the relay") both proxy, and only ever to headscale.
+(ok if pp and set(pp) == {"http://$headscale:8080$request_uri"} and len(pp) <= 2 else bad)(
+    "the hs. block proxies only to $headscale:8080 (got %r)" % pp)
 (ok if re.search(r"proxy_set_header\s+Upgrade\s+\$http_upgrade\s*;", hb) and re.search(r"proxy_set_header\s+Connection\s+\$connection_upgrade\s*;", hb) else bad)(
     "passes Upgrade/Connection (ts2021 + DERP are HTTP/1.1 upgrades)")
 (ok if re.search(r"proxy_http_version\s+1\.1\s*;", hb) and re.search(r"proxy_buffering\s+off\s*;", hb) else bad)(

@@ -171,6 +171,14 @@ MODE_DEFAULT_ROLE = {
 # (the KEYS sticks are a mesh's): standalone and cloud skip it statically. Its material
 # lives in memory (core/domain_ca_keys.py), never in the config, so an untouched step
 # changes no argv, no saved config and no session record.
+# "desktop" (operator ask 2026-11-11: "a step to configure each desktop, login, window
+# managers on board, compositers, per build being made, users, roles, installed apps and
+# if they're native or flatpak, video drivers ... It can also configure python") sits
+# after "home" (the primary login account) and before the review. It is in NO mode's
+# static skip set: a standalone desktop, a cloud client and a mesh's desktop rows all get
+# it, and it skips ITSELF (applies_to) on a build that produces no desktop. Its data is
+# ImageConfig.desktop_spec (core/desktop_spec.py), omitted from the saved JSON while
+# empty, so an untouched step changes no argv and no saved config.
 WIZARD_PAGE_SLUGS = ("welcome", "sessions",
                      "mode", "localmesh", "phone", "quest", "deploy",
                      "e2e", "qemu", "meshemu", "localcloud",
@@ -178,7 +186,7 @@ WIZARD_PAGE_SLUGS = ("welcome", "sessions",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains_choice", "domains", "domain_services", "domain_ca_keys",
                      "users_choice", "users",
-                     "system", "vault", "home", "build", "launch", "progress")
+                     "system", "vault", "home", "desktop", "build", "launch", "progress")
 MODE_SKIPPED_PAGES = {
     # standalone/cloud build ONE image the old way (role/hardware/branding per image);
     # the mesh worklist is skipped there. mesh builds N images from a role x platform
@@ -558,7 +566,7 @@ OPTIONAL_SERVICES_BY_PLATFORM = {
 }
 
 # --optional-services sentinels (mirror build-menu.sh's OPT_SERVICES + the builders):
-#   optional_services == []            -> emit nothing (builder default akkoma tuwunel phpbb)
+#   optional_services == []            -> emit nothing (builder default tuwunel phpbb)
 #   optional_services == [SERVICES_NONE] -> emit --optional-services "" (EXPLICIT none, G13)
 #   optional_services == [SERVICES_ALL]  -> emit --all-services (full user-level set, G14)
 #   optional_services == [slug, ...]     -> emit --optional-services "slug ..." (allow-list)
@@ -566,8 +574,12 @@ SERVICES_NONE = "none"
 SERVICES_ALL = "all"
 
 # The builders' OWN built-in default selection when no --optional-services is given:
-#   build-x86-host-stage4.sh:196   OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
-#   build-rpi5-stage4.sh:254       (identical line)
+#   build-x86-host-stage4.sh       OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
+#   build-rpi5-stage4.sh           (identical line)
+# akkoma left the default on 2026-11-11: its image (hugmesh-akkoma) is not yet published,
+# so a default build would deploy a pod that cannot pull. tests/scripts/
+# test-akkoma-image-pin.sh refuses akkoma back in this tuple while its digest is the
+# placeholder.
 # The services table PRE-TICKS exactly these rows on arrival, because they are what an
 # untouched build genuinely ships — eight unticked boxes over a mesh that runs three of
 # them anyway is the same lie as a part-checked square (ask 23: "anything off by default
@@ -575,7 +587,7 @@ SERVICES_ALL = "all"
 # unticking `phpbb` a no-op, since --optional-services REPLACES rather than subtracts.
 # tests/test_services_section.py parses both builder scripts and asserts set-equality with
 # this tuple, so it cannot go stale into a comment.
-BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
+BUILTIN_DEFAULT_SERVICES = ("tuwunel", "phpbb")
 
 # What the `all` sentinel / --all-services ACTUALLY expands to, mirrored from the single
 # line both node builders declare it on:
@@ -722,7 +734,7 @@ def with_service_slug(services, slug: str) -> list[str]:
 # stops a new slug landing as a bare identifier again.
 SERVICE_DESCRIPTIONS: dict[str, str] = {
     "akkoma": "Fediverse social server — ActivityPub timelines, follows and DMs "
-              "at social.<domain>.",
+              "at social.<domain>. Off by default: image not yet published.",
     "tuwunel": "Matrix homeserver — end-to-end-encrypted chat rooms and DMs for "
                "everyone on the mesh.",
     "phpbb": "Web forum — threaded boards at forum.<domain>, SSO-linked to mesh "
@@ -954,7 +966,11 @@ SECURE_BOOT_CHOICES = ("", "on", "off")
 # for the live command line (the builder hashes them at build time). user_password /
 # root_password are the x86 node FALLBACK credentials (G27); local_pass / luks_pass the
 # standalone/FDE ones.
-SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
+SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password",
+                 # the Desktop step's extra local accounts' first-login passwords
+                 # (NAME:PASSWORD lines; core/desktop_spec.py) — staged to a 0600 file
+                 # at dispatch (--extra-local-pass-file), never argv, never saved.
+                 "extra_local_passes")
 
 
 # Mesh secrets store (issue #224): the HashiCorp Vault a cluster NODE seeds its
@@ -1361,6 +1377,9 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "tailscale": _ALL_PLATFORMS, "sso": _X86,
     "headscale_version": _ALL_PLATFORMS, "tailscale_version": _ALL_PLATFORMS,
     "skip_tailscale": _ALL_PLATFORMS,
+    # headscale DERP: the public Tailscale map is an OPT-IN next to the embedded relay
+    # (every builder parses --headscale-public-derp; docs/HEADSCALE-DERP.md).
+    "headscale_public_derp": _ALL_PLATFORMS,
     # hardware.
     "gpu_driver": _X86, "nvidia_cuda": _X86, "kernel_builtin": _X86,
     "enable_wifi": _ALL_PLATFORMS, "enable_bluetooth": _ALL_PLATFORMS,
@@ -1427,6 +1446,11 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "distdir": _X86, "extra_packages": _ARM_PLATFORMS,
     # user package deltas — parsed identically by all six builders (WS-BUILDER flip).
     "packages_add": _ALL_PLATFORMS, "packages_drop": _ALL_PLATFORMS,
+    # the Desktop step (core/desktop_spec.py -> scripts/_desktop-config-lib.sh): parsed by
+    # the six DESKTOP-producing builders; desktop class only (FIELD_SCOPE below).
+    # extra_local_passes is ABSENT on purpose (like domain_ca): it is a secret that only
+    # ever reaches a builder as a 0600 FILE staged at dispatch, never as a field's flag.
+    "desktop_spec": ("x86", "rpi5", "jetson", "frite", "orangepi5", "orangepi4-lts"),
 }
 
 # Fields delivered OUT-OF-BAND — never a builder CLI flag on any platform, so absent
@@ -1756,6 +1780,12 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
        for f in THEME_FIELDS},
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
        for f in HOME_DESKTOP_FIELDS},
+    # the Desktop step: a node role builds no desktop, and its builder refuses the flags
+    # (frite has no role class: its builder decides by --desktop light|none, which
+    # core/desktop_spec.applies() mirrors, so the class rule stays off that builder)
+    "desktop_spec": FieldScope(platforms=_FIELD_PLATFORMS["desktop_spec"], classes=("desktop",),
+                               class_platforms=("x86", "rpi5", "jetson", "orangepi5",
+                                                "orangepi4-lts")),
     # --standalone means "no mesh/SSO, local user logs in with a build-time password". It is
     # a DESKTOP posture: a NODE has no local desktop session to log into. The x86 builder
     # still PARSES it on a node role, which is
@@ -3622,6 +3652,7 @@ class ImageConfig:
     headscale_version: str = ""        # --headscale-version pin (all)
     tailscale_version: str = ""        # --tailscale-version pin (all)
     skip_tailscale: bool = False       # --skip-tailscale: headscale-only posture, distinct from --skip-mesh (all)
+    headscale_public_derp: bool = False  # --headscale-public-derp: ALSO list Tailscale's public DERP map (default: embedded relay only, offline-first) (all)
     # ── mesh-node identity provider (I6; x86 + rpi5 node builders) ──
     # "casdoor" (the NATIVE DEFAULT) emits NOTHING — argv/sysroot byte-identity is
     # the hard invariant. External providers emit --idp/--idp-issuer/--idp-client-id
@@ -3910,6 +3941,13 @@ class ImageConfig:
     # extra_packages (no merging).
     packages_add: str = ""             # atoms to add on top of the default set
     packages_drop: str = ""            # default-set atoms to remove (honoring the mandatory floor)
+    # The Desktop step (core/desktop_spec.py DesktopSpec.to_dict): extra sessions, default
+    # session, VIDEO_CARDS override, extra accounts, apps (native/flatpak), Python targets,
+    # the portage overlay + its history. OMITTED from the saved JSON while empty.
+    desktop_spec: dict = field(default_factory=dict)
+    # SECRET (SECRET_FIELDS): the extra accounts' first-login passwords, NAME:PASSWORD
+    # lines, typed at build time and never saved; staged to a 0600 file at dispatch.
+    extra_local_passes: str = ""
     # PENTEST=1 OWASP pen-test toggle — NOT a per-builder flag; a FLEET/env knob the
     # build_driver/fleet channel forwards (build-all-roles.sh / Makefile), never argv (G40).
     pentest: bool = False
@@ -3948,9 +3986,16 @@ class ImageConfig:
         # a config that never met the field keeps its bytes
         if not (d.get("cluster_domain_github_org") or "").strip():
             d.pop("cluster_domain_github_org", None)
+        # the Desktop step's spec is OMIT-WHEN-EMPTY too (core/desktop_spec.py), and its
+        # secret twin never appears unless a caller asked for secrets AND one was typed
+        if not d.get("desktop_spec"):
+            d.pop("desktop_spec", None)
+        if not include_secrets or not d.get("extra_local_passes"):
+            d.pop("extra_local_passes", None)
         if not include_secrets:
             for k in SECRET_FIELDS:
-                d[k] = ""
+                if k in d:
+                    d[k] = ""
         return d
 
     @staticmethod
@@ -4095,6 +4140,12 @@ class ImageConfig:
                 d.pop(_k)
         if "domain_ca" in d and not isinstance(d["domain_ca"], dict):
             d.pop("domain_ca")
+        # the Desktop step's spec: a hand-edited non-object is treated as ABSENT, and an
+        # object is normalised through the model (unknown keys dropped)
+        if "desktop_spec" in d:
+            from .desktop_spec import DesktopSpec
+            d["desktop_spec"] = (DesktopSpec.from_dict(d["desktop_spec"]).to_dict()
+                                 if isinstance(d["desktop_spec"], dict) else {})
         # #495: tolerate `null` / a hand-edited scalar exactly as "domains": null is
         # tolerated — treat it as ABSENT (the native empty list), which is the
         # fail-CLOSED reading: every domain then counts as unconfigured and the gate
@@ -4453,6 +4504,12 @@ class ImageConfig:
         # --packages-drop later). Fail closed on any shell/sed-meaningful character.
         validate_package_atoms(self.packages_add)
         validate_package_atoms(self.packages_drop)
+        # The Desktop step's spec rides argv as single words the builders `read -ra` /
+        # split on ';' — refuse any value outside its grammar here, the same boundary.
+        from .desktop_spec import grammar_errors
+        bad = grammar_errors(self)
+        if bad:
+            raise ValueError(f"desktop step: {bad[0]}")
 
     # ---- the canonical flag translation ------------------------------------
     @property
@@ -4586,8 +4643,8 @@ class ImageConfig:
 
     def _mesh_version_args(self) -> list[str]:
         """--headscale-version / --tailscale-version pins + --skip-tailscale (a
-        headscale-only posture, distinct from --skip-mesh) — every builder parses all
-        three."""
+        headscale-only posture, distinct from --skip-mesh) + --headscale-public-derp
+        (the public Tailscale DERP map opt-in) — every builder parses all four."""
         a: list[str] = []
         if self.headscale_version:
             a += ["--headscale-version", self.headscale_version]
@@ -4595,6 +4652,8 @@ class ImageConfig:
             a += ["--tailscale-version", self.tailscale_version]
         if self.skip_tailscale:
             a += ["--skip-tailscale"]
+        if self.headscale_public_derp:
+            a += ["--headscale-public-derp"]
         return a
 
     def _plumbing_args(self) -> list[str]:
@@ -4808,11 +4867,16 @@ class ImageConfig:
         every legacy flat config stays byte-identical (invariant I1). Atom-charset
         validation lives in validate_identity (validate_package_atoms), not here —
         emission stays a faithful field->argv translation."""
+        from . import desktop_spec as _ds
         a: list[str] = []
-        if self.packages_add:
-            a += ["--packages-add", self.packages_add]
+        # the Desktop step's NATIVE apps ride the same flag, folded in ONCE (last-wins)
+        add = _ds.effective_packages_add(self)
+        if add:
+            a += ["--packages-add", add]
         if self.packages_drop:
             a += ["--packages-drop", self.packages_drop]
+        # the Desktop step's own flags (empty unless this image produces a desktop)
+        a += _ds.cli_args(self)
         return a
 
     def _superdomain_args(self) -> list[str]:

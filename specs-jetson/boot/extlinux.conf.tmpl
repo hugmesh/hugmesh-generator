@@ -31,3 +31,30 @@ LABEL jetson
     FDT /boot/dtb/@@JETSON_DTB@@
 @@JETSON_INITRD_LINE@@
     APPEND @@JETSON_APPEND@@
+
+# ── SELinux entries (#863 refute, blockers 3 and 4) ─────────────────────────────
+# DEFAULT above is unchanged; these two are picked from the boot menu on the serial
+# console (U-Boot shows it because of the MENU TITLE line; the Jetson's L4TLauncher
+# lists every LABEL). Same kernel, FDT, initrd and cmdline as the default, plus ONE
+# token: the kernel takes the LAST enforcing=, and libselinux lets it override
+# /etc/selinux/config.
+#   jetson-selinux-rescue          enforcing=0  boot a node whose enforcing policy
+#                                   breaks its boot (permissive, for this boot only)
+#   jetson-selinux-enforcing-test  enforcing=1  try enforcing for ONE boot without
+#                                   touching /etc/selinux/config
+# The installers rewrite root= with a per-line sed, so these APPEND lines get the
+# installed root= exactly like the default's.
+
+LABEL jetson-selinux-rescue
+    MENU LABEL @@BRAND_TITLE@@ edge-AI node (SELinux permissive rescue)
+    LINUX /boot/@@JETSON_KERNEL_IMG@@
+    FDT /boot/dtb/@@JETSON_DTB@@
+@@JETSON_INITRD_LINE@@
+    APPEND @@JETSON_APPEND@@ enforcing=0
+
+LABEL jetson-selinux-enforcing-test
+    MENU LABEL @@BRAND_TITLE@@ edge-AI node (SELinux enforcing (test))
+    LINUX /boot/@@JETSON_KERNEL_IMG@@
+    FDT /boot/dtb/@@JETSON_DTB@@
+@@JETSON_INITRD_LINE@@
+    APPEND @@JETSON_APPEND@@ enforcing=1

@@ -270,6 +270,10 @@ class WorklistEntry:
     # entry on rpi5/orangepi5 (16 GB+). Serialized OMIT-WHEN-EMPTY, so every entry
     # saved before the field existed keeps its bytes.
     ram_gb: str = ""
+    # The Desktop step's spec for THIS row (core/desktop_spec.py; "per build being made",
+    # operator ask 2026-11-11): materialize() stamps it onto the row's image when set,
+    # else the row inherits the base's. Serialized OMIT-WHEN-EMPTY (pre-field bytes kept).
+    desktop_spec: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -311,6 +315,7 @@ class WorklistEntry:
                if self.desktop_user_roles != [self.desktop_user_role] else {}),
             "hostname": self.hostname,
             **({"ram_gb": str(self.ram_gb)} if self.ram_gb else {}),
+            **({"desktop_spec": copy.deepcopy(self.desktop_spec)} if self.desktop_spec else {}),
         }
 
     @classmethod
@@ -336,6 +341,10 @@ class WorklistEntry:
             vals.pop("desktop_user_roles")
         if not isinstance(vals.get("desktop_user_role", ""), str):
             vals.pop("desktop_user_role")
+        if "desktop_spec" in vals:
+            from .desktop_spec import DesktopSpec
+            raw = vals["desktop_spec"]
+            vals["desktop_spec"] = DesktopSpec.from_dict(raw).to_dict() if isinstance(raw, dict) else {}
         return cls(**vals)
 
 
@@ -521,6 +530,12 @@ class WorklistConfig:
         #    no merging) + the encrypt_root resolution + the collision-guard subdir.
         cfg.packages_add = entry.packages_add
         cfg.packages_drop = entry.packages_drop
+        # 4'. The Desktop step's per-row spec (core/desktop_spec.py): the row's own wins,
+        #     else the base's is inherited (the single-image shape synthesize() wraps).
+        #     Emission is gated on the image producing a desktop, so a node row never
+        #     carries it to a builder.
+        if entry.desktop_spec:
+            cfg.desktop_spec = copy.deepcopy(entry.desktop_spec)
         cfg.encrypt_root = self._resolve_encrypt_root(entry)
         cfg.build_subdir = entry.build_subdir
 

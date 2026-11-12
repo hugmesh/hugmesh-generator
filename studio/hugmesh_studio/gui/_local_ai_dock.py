@@ -1905,8 +1905,11 @@ class LocalAIDock(QtWidgets.QFrame):
                 # a small model will happily put after rm -rf (PR #832, round 6)
                 files_block = (f"[code folder {ws.name}; the person named no "
                                "file — ask which file to change]")
+        pretend_block = ""
+        if where.slug == "desktop":
+            pretend_block = self._desktop_pretend_block()
         prompt = aprompt.build(text, where, history, env=env, generator_dir=self.generator_dir,
-                               files_block=files_block)
+                               files_block=files_block, pretend_block=pretend_block)
         self._last_prompt[born] = prompt
         return lai.send_prompt(text, env=env, history=prompt.history, system=prompt.system,
                                on_chunk=on_chunk, should_stop=should_stop)
@@ -2266,9 +2269,51 @@ class LocalAIDock(QtWidgets.QFrame):
         card._fit()
         self.layout_changed.emit()
 
-    def _offer_card(self, answer: str, question: str, prompt) -> None:
-        """A ```change block becomes a proposal card; a ```diff block a diff card."""
+    def _desktop_page(self):
+        """The Desktop step's page when it is on screen, else None."""
+        if self._page_slug != "desktop":
+            return None
+        wiz = self._wizard_ref() if self._wizard_ref is not None else None
+        if wiz is None or self._page_id is None:
+            return None
+        page = wiz.page(self._page_id)
+        return page if page is not None and hasattr(page, "apply_portage_changes") else None
+
+    def _desktop_pretend_block(self) -> str:
+        """The pretend facts for the prompt (core/assistant_portage.pretend_block)."""
         try:
+            page = self._desktop_page()
+            if page is None:
+                return ""
+            from ..core import assistant_portage as aport
+            return aport.pretend_block(page.wiz.cfg, page.last_result)
+        except Exception:                       # noqa: BLE001 — facts are best-effort
+            _log_swallowed("LocalAIDock._desktop_pretend_block")
+            return ""
+
+    def _offer_portage(self, answer: str) -> bool:
+        """A ```portage block on the Desktop step becomes a portage card (True)."""
+        from ..core import assistant_portage as aport
+        if not aport.has_block(answer):
+            return False
+        page = self._desktop_page()
+        if page is None:
+            self._append("Portage changes are proposed on the Desktop step only.\n\n")
+            return True
+        last = page.last_result
+        proposal = aport.parse(answer, page.wiz.cfg, list(last.needs) if last else [])
+        if proposal is None or not proposal.lines:
+            self._append("That portage block held no change.\n\n")
+            return True
+        self._show_card(_PortageCard(self, page, proposal))
+        return True
+
+    def _offer_card(self, answer: str, question: str, prompt) -> None:
+        """A ```change block becomes a proposal card; a ```diff block a diff card; a
+        ```portage block (Desktop step) a portage card."""
+        try:
+            if self._offer_portage(answer):
+                return
             where = prompt.where if prompt is not None else self._page_where(question)
             proposal = aact.parse_proposal(answer, question)
             if proposal is not None:
@@ -2760,6 +2805,74 @@ class _DiffCard(_Card):
         except Exception as exc:                # noqa: BLE001
             self.say(f"Not reverted: {exc.__class__.__name__}: {exc}", warn=True)
             _log_swallowed("_DiffCard._revert")
+
+
+class _PortageCard(_Card):
+    """``Proposed portage changes``: the overlay diff, Apply / Cancel / Undo, Re-check.
+
+    The Desktop step's tool (core/assistant_portage.py). Apply writes ONLY the lines
+    that pass the builder's own grammar into the image's overlay and records each in
+    the spec history (source "assistant"); a line portage did not name is labelled; a
+    refused line is listed with its reason and never applied. Nothing changes without
+    the click, and Re-check runs the same emerge --pretend again."""
+
+    def __init__(self, dock: "LocalAIDock", page, proposal):
+        from ..core import assistant_portage as aport
+        self.dock, self.page, self.proposal = dock, page, proposal
+        self.applied: list = []
+        super().__init__("Proposed portage changes", dock)
+        rows = []
+        diff = aport.diff_text(page.wiz.cfg, proposal)
+        if diff:
+            rows.append(diff)
+        for ln in proposal.lines:
+            if ln.note:
+                rows.append(f"{ln.kind} {ln.line}  ({ln.note})")
+        for ln in proposal.refused():
+            rows.append(f"NOT applied: {ln.kind} {ln.line} \u2014 {ln.problem}")
+        self.rows.setText("\n".join(rows) or "Nothing new: the overlay already has these lines.")
+        self.recheck_btn = _styled_button("Re-check", "Run emerge --pretend again with the overlay")
+        self.recheck_btn.setVisible(False)
+        self.recheck_btn.clicked.connect(self._recheck)
+        self.buttons.insertWidget(3, self.recheck_btn)
+        self.apply_btn.setEnabled(bool(proposal.applicable()) and bool(diff))
+        self.cancel_btn.clicked.connect(lambda: dock._drop_card())
+        self.apply_btn.clicked.connect(self._apply)
+        self.undo_btn.clicked.connect(self._undo)
+        self.say("Nothing changes until you press Apply; Re-check decides whether it worked.")
+
+    def _apply(self) -> None:
+        try:
+            self.applied = self.page.apply_portage_changes(self.proposal.applicable(),
+                                                           source="assistant")
+            if not self.applied:
+                self.say("Nothing applied: the overlay already holds these lines.", warn=True)
+                return
+            self.say(f"Applied {len(self.applied)} line(s) to this image's portage overlay. "
+                     "Re-check runs emerge --pretend again.")
+            self.apply_btn.setVisible(False)
+            self.undo_btn.setVisible(True)
+            self.recheck_btn.setVisible(True)
+            self.cancel_btn.setText("Close")
+        except Exception as exc:                # noqa: BLE001
+            self.say(f"Not applied: {exc.__class__.__name__}: {exc}", warn=True)
+            _log_swallowed("_PortageCard._apply")
+
+    def _undo(self) -> None:
+        try:
+            self.page.undo_portage_changes(self.applied, source="assistant")
+            self.applied = []
+            self.say("Undone: the overlay is as it was.")
+            self.undo_btn.setVisible(False)
+            self.recheck_btn.setVisible(False)
+        except Exception as exc:                # noqa: BLE001
+            self.say(f"Not undone: {exc.__class__.__name__}: {exc}", warn=True)
+            _log_swallowed("_PortageCard._undo")
+
+    def _recheck(self) -> None:
+        why = self.page.start_pretend()
+        self.say(why or "Re-checking with emerge --pretend (the Desktop step shows the result).",
+                 warn=bool(why))
 
 
 class _SessionRef:

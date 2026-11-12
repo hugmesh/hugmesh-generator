@@ -375,8 +375,12 @@ run_seed_e2e_fresh() { # <fd-expected-password> [fail-user] — out -> ${WORK}/s
     # SKIP_OVERRIDE (optional, callers set it as a prefix assignment) feeds
     # SEED_REGISTRATION_SKIP; empty falls through to the seed's own default
     # (its `:-` expansion treats empty as unset), so only 5d ever changes it.
+    # CASDOOR_ADMIN_ENV_FILE: the seed mints its Casdoor admin password into a
+    # SCRATCH file (never the checkout's tests/stack/.env) and moves the stub's
+    # factory-default admin onto it, exactly as on a fresh compose volume (NEW-15).
     PATH="${WORK}/bin:${PATH}" \
     E2E_PASSWORD="${NEW_PW}" E2E_CREDENTIALS_FILE="${NO_CREDS}" \
+    CASDOOR_ADMIN_ENV_FILE="${WORK}/casdoor-admin.env" \
     CASDOOR_URL="${CASDOOR}" FRONT_DOOR="${FRONT}" \
     SEED_CASDOOR_ONLY=1 SEED_COMPLETE_REGISTRATION=1 SEED_WAIT_S=10 \
     SEED_REGISTRATION_SKIP="${SKIP_OVERRIDE:-}" \
