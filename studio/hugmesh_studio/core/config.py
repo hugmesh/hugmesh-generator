@@ -1377,6 +1377,9 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "tailscale": _ALL_PLATFORMS, "sso": _X86,
     "headscale_version": _ALL_PLATFORMS, "tailscale_version": _ALL_PLATFORMS,
     "skip_tailscale": _ALL_PLATFORMS,
+    # headscale DERP: the public Tailscale map is an OPT-IN next to the embedded relay
+    # (every builder parses --headscale-public-derp; docs/HEADSCALE-DERP.md).
+    "headscale_public_derp": _ALL_PLATFORMS,
     # hardware.
     "gpu_driver": _X86, "nvidia_cuda": _X86, "kernel_builtin": _X86,
     "enable_wifi": _ALL_PLATFORMS, "enable_bluetooth": _ALL_PLATFORMS,
@@ -3649,6 +3652,7 @@ class ImageConfig:
     headscale_version: str = ""        # --headscale-version pin (all)
     tailscale_version: str = ""        # --tailscale-version pin (all)
     skip_tailscale: bool = False       # --skip-tailscale: headscale-only posture, distinct from --skip-mesh (all)
+    headscale_public_derp: bool = False  # --headscale-public-derp: ALSO list Tailscale's public DERP map (default: embedded relay only, offline-first) (all)
     # ── mesh-node identity provider (I6; x86 + rpi5 node builders) ──
     # "casdoor" (the NATIVE DEFAULT) emits NOTHING — argv/sysroot byte-identity is
     # the hard invariant. External providers emit --idp/--idp-issuer/--idp-client-id
@@ -4639,8 +4643,8 @@ class ImageConfig:
 
     def _mesh_version_args(self) -> list[str]:
         """--headscale-version / --tailscale-version pins + --skip-tailscale (a
-        headscale-only posture, distinct from --skip-mesh) — every builder parses all
-        three."""
+        headscale-only posture, distinct from --skip-mesh) + --headscale-public-derp
+        (the public Tailscale DERP map opt-in) — every builder parses all four."""
         a: list[str] = []
         if self.headscale_version:
             a += ["--headscale-version", self.headscale_version]
@@ -4648,6 +4652,8 @@ class ImageConfig:
             a += ["--tailscale-version", self.tailscale_version]
         if self.skip_tailscale:
             a += ["--skip-tailscale"]
+        if self.headscale_public_derp:
+            a += ["--headscale-public-derp"]
         return a
 
     def _plumbing_args(self) -> list[str]:

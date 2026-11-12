@@ -3865,6 +3865,7 @@ orphan-guards-verify:
         tests/scripts/test-edge-ai-ollama-pin.sh
         tests/scripts/test-eso-remoteref-brand.sh
         tests/scripts/test-first-run-lib.sh
+        tests/scripts/test-headscale-embedded-derp.sh
         tests/scripts/test-headscale-oidc-secret-staging.sh
         tests/scripts/test-host-accept-keywords.sh
         tests/scripts/test-host-bdep-pool.sh

@@ -1344,6 +1344,31 @@ class BuildDriver:
         guard_elevation(cmd)          # the kill elevates through the same prefix
         subprocess.run(cmd, capture_output=True, check=False, env=self._elevation_env())
 
+    # ---- kernel reconfiguration (core/kernel_reconfig.py) -------------------
+    @property
+    def container_name(self) -> str:
+        """The ``--name`` this driver stamps on its docker runs (cancel's handle)."""
+        return self._container_name
+
+    def reconfig_context(self, backend: str | None = None, *, live_container: str = ""):
+        """How "Kernel config…" reaches root from THIS driver: the same backend, builder
+        image and generator mount as the build, the same elevation prefix (``sudo -A`` +
+        askpass for a GUI driver), and this driver's container name so :meth:`cancel`
+        stops a running rebuild. ``live_container`` is a build container still running
+        (menuconfig mid-build goes in with ``docker exec``). No behaviour change for builds."""
+        from .kernel_reconfig import RunContext
+        b = backend or self.host.default_backend
+        return RunContext(backend=b, generator_dir=self.generator_dir,
+                          builder_image=self.host.builder_image, container=live_container,
+                          run_container_name=self._container_name,
+                          elevation=self._elevation_prefix() if b == "native" else [])
+
+    def stream_command(self, cmd: list[str], on_line: Callable[[str], None] | None,
+                       backend: str) -> int:
+        """Stream an arbitrary command through the build's own spawn: guard_elevation,
+        the askpass env, the process group / container name cancel() reaches."""
+        return self._stream(cmd, on_line, backend)
+
     def cancel(self) -> None:
         """Stop the in-flight build honestly, per backend (design 2.5). Idempotent and
         safe to call after the build has already finished (the kill just no-ops)."""

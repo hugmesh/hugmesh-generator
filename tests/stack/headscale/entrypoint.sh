@@ -58,6 +58,9 @@ PORT="${PUBLIC_HTTPS_PORT:-8488}"
 MESH_ID="${HEADSCALE_MESH_ID:-hugmesh-local}"
 SSH_USER="${HEADSCALE_SSH_USER:-admin}"
 RENEW_DAYS="${HEADSCALE_APIKEY_RENEW_DAYS:-30}"
+# Opt-in: ALSO list Tailscale's public DERP map (default: the embedded relay only —
+# the same knob as the node builders' --headscale-public-derp, docs/HEADSCALE-DERP.md).
+PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 
 [[ "${DOMAIN}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
     || die "HUGMESH_DOMAIN '${DOMAIN}' is not a lower-case DNS name with at least two labels"
@@ -70,6 +73,12 @@ RENEW_DAYS="${HEADSCALE_APIKEY_RENEW_DAYS:-30}"
 # 90 (the key's whole lifetime) means "replace the key at every start".
 [[ "${RENEW_DAYS}" =~ ^[0-9]{1,2}$ ]] && [ "${RENEW_DAYS}" -le 90 ] \
     || die "HEADSCALE_APIKEY_RENEW_DAYS '${RENEW_DAYS}' must be 0..90 (the key lives 90 days)"
+
+case "${PUBLIC_DERP}" in
+    true|1|yes|on)     PUBLIC_DERP=true ;;
+    false|0|no|off|"") PUBLIC_DERP=false ;;
+    *) die "HEADSCALE_PUBLIC_DERP '${PUBLIC_DERP}' must be true or false" ;;
+esac
 
 SERVER_URL="https://hs.${DOMAIN}:${PORT}"
 MESH_TAG="tag:mesh_${MESH_ID}"
@@ -85,6 +94,13 @@ render_config() {
     ' "${CONFIG_TMPL}" > "${out_tmp}"
     if grep -n '@@' "${out_tmp}" >/dev/null; then
         rm -f "${out_tmp}"; die "rendered config still holds an @@ marker"
+    fi
+    if [ "${PUBLIC_DERP}" = true ]; then
+        sed -i -e 's|^  urls: \[\][[:space:]]*$|  urls: ["https://controlplane.tailscale.com/derpmap/default"]|' \
+               -e 's|^  auto_update_enabled:.*|  auto_update_enabled: true|' "${out_tmp}"
+        grep -F 'controlplane.tailscale.com/derpmap/default' "${out_tmp}" >/dev/null \
+            || { rm -f "${out_tmp}"; die "HEADSCALE_PUBLIC_DERP=true but the template has no 'urls: []' line to swap"; }
+        log "DERP: public Tailscale DERP map opted in next to the embedded region"
     fi
     chmod 0644 "${out_tmp}"
     mv -f "${out_tmp}" "${CONFIG_OUT}"

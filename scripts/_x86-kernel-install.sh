@@ -3,6 +3,8 @@
 # the x86 kernel from an ALREADY-ASSERTED .config: bzImage + modules, modules_install,
 # make install (the unversioned /boot/vmlinuz), the disk initramfs and the UNSIGNED UKI
 # (/boot/<uki-name minus .efi>-unsigned.efi). Signing is NOT here: it happens on the host,
+# make install (the unversioned /boot/vmlinuz), the disk initramfs and the UNSIGNED UKIs
+# (/boot/<uki-name minus .efi><suffix>-unsigned.efi, one per HM_UKI_VARIANTS entry). Signing is NOT here: it happens on the host,
 # outside the sysroot, so the key never enters the image (build-x86-host-stage4.sh's
 # "Secure Boot" block, scripts/kernel-reconfig-x86.sh's strict signer).
 #
@@ -19,6 +21,11 @@ set -eo pipefail
 JOBS="${1:?usage: _x86-kernel-install.sh <jobs> <root-label> <uki-name> [kernel-tree]}"
 ROOT_LABEL="${2:?usage: _x86-kernel-install.sh <jobs> <root-label> <uki-name> [kernel-tree]}"
 UKI_NAME="${3:?usage: _x86-kernel-install.sh <jobs> <root-label> <uki-name> [kernel-tree]}"
+# HM_UKI_VARIANTS (environment, REQUIRED): the builder's UKI_VARIANTS table, space-separated
+# '<suffix>:<cmdline extra|none>' entries, e.g. ':none -selinux-rescue:enforcing=0
+# -selinux-enforcing-test:enforcing=1'. One UKI per entry. No default here: a caller that
+# built only the default UKI would ship a signed chain with no permissive rescue (#944).
+UKI_VARIANTS="${HM_UKI_VARIANTS:?_x86-kernel-install.sh: HM_UKI_VARIANTS (the UKI variant table) is required}"
 cd "${4:-/usr/src/linux}"
 make -j${JOBS} bzImage modules
 make modules_install
@@ -84,15 +91,29 @@ CMDLINE="root=LABEL=${ROOT_LABEL} ro $(. /etc/default/grub 2>/dev/null; printf '
 # Drained, never `grep -q`: this is bash -o pipefail, and grep -q exiting on the first
 # match SIGPIPEs dracut --help, which turns a FOUND --uefi into a failed pipeline and
 # skips the UKI without a word (the same coin flip every other guard here was fixed for).
+#
+# THREE UKIs, one per SELinux boot mode. A signed UKI's cmdline is FIXED: systemd-stub
+# ignores the load options GRUB would pass under Secure Boot, so the only way to boot the
+# signed chain permissive (a node whose enforcing policy breaks its boot) or as an
+# enforcing trial is a UKI that carries that cmdline itself, signed like the default
+# (#863 refute, blockers 3 and 4). The kernel takes the LAST enforcing= on the cmdline,
+# and libselinux lets it override /etc/selinux/config. The variant suffixes are the
+# builder's UKI_VARIANTS table (HM_UKI_VARIANTS; the sign step and build_img read the
+# same table). A variant that fails is a WARN here like the default; the builder's sign
+# step refuses to seal a default UKI without its rescue twin.
 if command -v dracut >/dev/null && dracut --help 2>/dev/null | grep -- '--uefi' >/dev/null; then
-    dracut --force --no-hostonly --uefi \
-        --add crypt \
-        --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net dm_crypt" \
-        --kernel-cmdline "${CMDLINE}" \
-        --kernel-image /boot/vmlinuz \
-        --kver "${KVER}" "/boot/${UKI_NAME%.efi}-unsigned.efi" \
-        && echo "[build-x86] UKI built: /boot/${UKI_NAME%.efi}-unsigned.efi" \
-        || echo "[build-x86] WARN: dracut --uefi failed; UKI not built (secure boot chain needs manual rebuild)"
+    for _uv in ${UKI_VARIANTS}; do
+        _suffix="${_uv%%:*}"; _extra="${_uv#*:}"; [ "${_extra}" = none ] && _extra=""
+        _out="/boot/${UKI_NAME%.efi}${_suffix}-unsigned.efi"
+        dracut --force --no-hostonly --uefi \
+            --add crypt \
+            --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net dm_crypt" \
+            --kernel-cmdline "${CMDLINE}${_extra:+ ${_extra}}" \
+            --kernel-image /boot/vmlinuz \
+            --kver "${KVER}" "${_out}" \
+            && echo "[build-x86] UKI built: ${_out} (cmdline extra: ${_extra:-none})" \
+            || echo "[build-x86] WARN: dracut --uefi failed for ${_out}; UKI not built (secure boot chain needs manual rebuild)"
+    done
 else
     echo "[build-x86] INFO: dracut --uefi not available; UKI skipped (add 'uefi' USE to sys-kernel/dracut)"
 fi

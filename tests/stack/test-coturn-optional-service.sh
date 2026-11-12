@@ -396,7 +396,7 @@ EOF
 chmod +x "${FWT}/nft" "${FWT}/firewall-cmd"
 : > "${FWT}/fw.log"
 NFT_CAPTURE="${FWT}/closed.nft" FWCMD_LOG="${FWT}/fw.log" PATH="${FWT}:${PATH}" \
-  HUGMESH_COTURN_PUBLIC_MARKER="${FWT}/marker" bash "${FW}" >/dev/null 2>&1
+  HUGMESH_COTURN_PUBLIC_MARKER="${FWT}/marker" HUGMESH_HEADSCALE_STUN_MARKER="${FWT}/no-headscale-stun" bash "${FW}" >/dev/null 2>&1
 grep -qE 'udp dport \{ 3478, 5349 \} drop' "${FWT}/closed.nft" && grep -qE 'udp dport 49152-49200 drop' "${FWT}/closed.nft" \
   && ok "firewall(run): marker ABSENT renders the closed backstop (TURN ports dropped)" || bad "firewall(run): closed posture missing its drops"
 grep -q '^ADD ' "${FWT}/fw.log" \
@@ -404,7 +404,7 @@ grep -q '^ADD ' "${FWT}/fw.log" \
   || ok "firewall(run): marker ABSENT admits nothing through firewalld"
 touch "${FWT}/marker"
 NFT_CAPTURE="${FWT}/open.nft" FWCMD_LOG="${FWT}/fw.log" PATH="${FWT}:${PATH}" \
-  HUGMESH_COTURN_PUBLIC_MARKER="${FWT}/marker" bash "${FW}" >/dev/null 2>&1
+  HUGMESH_COTURN_PUBLIC_MARKER="${FWT}/marker" HUGMESH_HEADSCALE_STUN_MARKER="${FWT}/no-headscale-stun" bash "${FW}" >/dev/null 2>&1
 grep -qE 'dport.*drop' "${FWT}/open.nft" \
   && bad "firewall(run): marker PRESENT still renders drops (public mode dead)" \
   || ok "firewall(run): marker PRESENT lifts the backstop drops"
