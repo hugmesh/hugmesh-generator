@@ -458,6 +458,7 @@ jobs:
           tests/test_ollama_docker.py
           tests/test_local_ai_dock.py
           tests/test_local_ai_dock_pull.py
+          tests/test_self_check_windows.py
 
   macos:
     # The macOS app: "HugMesh Image Studio.app" in a .dmg, for Apple silicon and Intel.
