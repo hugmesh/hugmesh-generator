@@ -62,6 +62,39 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # GUARD_ALLOW does for the allowlist: this number describes THE REAL REPO, and a
 # synthesised one-suite tree cannot be measured against it.
 #
+# IT IS A FLOOR, NOT AN EQUALITY PIN (2026-11-11, GEN-3). Check 7 FAILS when fewer
+# suites gate a pull request than this number says, because a drop is the event
+# that lets a bad merge through. When MORE suites gate a PR, it PASSES and prints
+# how far above the floor the tree is. Raising the number is still welcome. It
+# re-arms the floor against an outright deletion, but nothing goes red when nobody
+# raises it.
+#
+# Why the equality pin had to go: every PR that gated a new suite had to bump this
+# one line. Two such PRs were each green alone. Git merges their two identical
+# edits of the line with no conflict, so whichever landed second left main one
+# suite above the recorded number ("coverage rose to N, baseline still says N-1"),
+# and every open PR's merge result went red with it until someone bumped the line
+# again. Reproduced on 2026-11-11 by landing two one-suite branches on origin/main
+# aedbb1fd: each printed "240 of 282" and passed alone, both merged cleanly, and
+# the result printed "rose to 241, baseline still says 240" with rc 1.
+# MEASURED over the Actions API on 2026-11-11: the 100 failed shell-suites runs
+# created 2026-10-29..2026-11-10 hold 137 failed jobs (latest attempt of each run).
+# 56 of them, on 44 branches, carry that FAIL line, all in the alpine job, which is
+# 56 of its 96 failures. Re-run attempts are not counted, so 56 is a lower bound.
+# shell-suites runs only on pull_request, so main itself was recorded red by it
+# ("232 of 274 against the recorded 216", below) and nothing on main said so. The
+# history below is that hand-bump treadmill. Its doctrine, "measure, never
+# compute", still holds for anyone who raises the number.
+#
+# Per-suite protection never depended on the equality. Check 7b pins the
+# COMPLEMENT (PREMERGE_UNGATED below), so any gated suite that stops being gated is
+# NAMED whatever the count does. What 7b cannot see is a gated suite DELETED
+# outright, file and wiring both. That is what this floor still catches, once the
+# count falls below it. THE RESIDUAL: the headroom check 7 prints ("N above its
+# floor") is how many such deletions can pass unseen, and raising this number to
+# the measured count closes it again. Controls (i) and (i2) in the
+# negative-control battery pin both directions.
+#
 # 117 -> 125 on 2026-08-26, and the DENOMINATOR moved 126 -> 134 in the same
 # commit. Both moved for one reason: the census above matched `test-*.sh` only, so
 # the eight `*_test.sh` suites in tests/qemu/ and tests/menu/ were neither counted
@@ -1145,14 +1178,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #926 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 240 of 282.
 # PR #972 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 242 of 284.
 # PR #966 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 243 of 285.
-# MERGED (origin/main aedbb1fd into akkoma-own-image-v3.20.1): main 239 of 281 (#983) + this
-# branch's ONE gated suite, tests/scripts/test-akkoma-image-pin.sh (shell-suites.yml
-# debian leg 1) = 240 of 282, MEASURED by running this file with GUARD_PREMERGE=0 on the
-# merged tree. PREMERGE_UNGATED is untouched.
-# MERGED (origin/main 96e0f6df into akkoma-own-image-v3.20.1): main 243 of 285 (#966) + this
-# branch's ONE gated suite = 244 of 286, MEASURED by running this file with GUARD_PREMERGE=0
-# on the merged tree. PREMERGE_UNGATED is untouched.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-244}"
+# PR #984 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 244 of 286.
+# PR #1016 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 245 of 287.
+# PR #993 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 246 of 288.
+# Integration batch 2026-11-12: MEASURED with GUARD_PREMERGE=0 on the combined tree: 252 of 294.
+# Integration batch2-20261112: MEASURED with GUARD_PREMERGE=0 on the combined tree: 253 of 295.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-253}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
@@ -1364,6 +1395,12 @@ PREMERGE_UNGATED=(
   # pwsh; Pester 5.6.1 must be installed), DELETE this entry and raise PREMERGE_BASELINE
   # by one to the number this file then prints.
   tests/docker-mesh-node/test-launcher-parity.sh
+  # NOT for want of the hugmesh-admin-bff-api sibling (public now; shell-suites.yml's
+  # layer-a job checks it out at a pin): its two policy-mode checks are red against the
+  # BFF's `database` declaration by design until the #634 cut-over (#634 item 4). Its
+  # cross-repo fixture identity leg IS gated, as test-layer-a-bff-fixture-identity.sh.
+  # TO CLOSE THIS: after #634, add it to the layer-a job, DELETE this entry, raise
+  # PREMERGE_BASELINE by one.
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
   # Offline, bash + python3 only, 48 passed / 0 failed on 2026-10-14 (#654 D12:
@@ -2062,11 +2099,13 @@ if any(re.search(r"\bguard_require_(tools|capability)\b",
 # This check does NOT demand the 123 be wired: which of them can even run in a
 # hosted runner (docker, qemu, kind, node) is a real design question, not
 # something a static analyser should force. What it refuses to allow is the
-# number being INVISIBLE. It prints the ratio on every run and pins it, so the
-# gap is a stated fact rather than an inference nobody draws, and so neither
-# direction of drift is silent: unwiring a gated suite fails, and gating a new
-# one fails until the baseline is raised to match (the same honesty rule check 4
-# already applies to ALLOW_UNWIRED).
+# number being INVISIBLE. It prints the ratio on every run and holds it to a
+# FLOOR, so the gap is a stated fact rather than an inference nobody draws.
+# Neither direction of drift is silent: falling below the floor FAILS, and rising
+# above it PASSES with a line that says by how much. Rising used to fail too,
+# until the baseline was raised to match. That made every pair of PRs that each
+# gated a suite red on whichever landed second (GEN-3, see the PREMERGE_BASELINE
+# header). Unwiring any one gated suite is named by 7b below, whatever the count.
 print()
 print("-- 7) how many suites actually gate a pull request --")
 PREMERGE_BASELINE = int(os.environ.get("PREMERGE_BASELINE", "0"))
@@ -2118,9 +2157,12 @@ elif n < PREMERGE_BASELINE:
     bad("pre-merge suite coverage DROPPED to %d, baseline is %d — a suite that used "
         "to block a bad merge no longer does" % (n, PREMERGE_BASELINE))
 else:
-    bad("pre-merge suite coverage rose to %d, baseline still says %d — raise "
-        "PREMERGE_BASELINE to %d so the recorded number stays true"
-        % (n, PREMERGE_BASELINE, n))
+    # A FLOOR, not an equality pin (GEN-3): more gated suites is never a defect.
+    # Two PRs that each gate a suite must both stay green in either landing order.
+    ok("pre-merge suite coverage %d/%d is %d above its floor of %d — nothing "
+       "dropped out of the gate (raising PREMERGE_BASELINE to %d is optional; "
+       "it re-arms the floor against an outright deletion)"
+       % (n, total, n - PREMERGE_BASELINE, PREMERGE_BASELINE, n))
 
 # ── 7b) WHICH suites are ungated, not merely how many ────────────────────────
 # The count above cannot see a ONE-FOR-ONE SWAP: delist a gated suite and gate a
@@ -2160,7 +2202,7 @@ else:
             print("         %s" % s)
     if delisted or regated:
         print("         the pin must be REPLACED with the measured list below "
-              "(and PREMERGE_BASELINE set to %d):" % n)
+              "(and PREMERGE_BASELINE, a floor, must not exceed %d):" % n)
         for s in actual_ungated:
             print("           %s" % s)
     else:
@@ -2376,22 +2418,66 @@ echo "== ${P} passed, ${F} failed =="
   neg_case "guard_require_* called without sourcing the helper" \
            "without sourcing tests/lib/guard-preflight.sh"
 
-  # (i) check 7's own red: a suite that IS pull_request-gated while the recorded
-  #     PREMERGE_BASELINE still says none is. The tree is otherwise CLEAN, so this
-  #     case can only be biting on check 7. Without it the baseline could be pinned
-  #     at a number nothing ever compares against — a check that only ever agrees
-  #     with itself is the exact shape this file exists to catch.
-  build_tree 'P=0; F=0
+  # (i) and (i2): check 7 is a FLOOR (GEN-3), and these two pin both directions of it.
+  #     ONE miniature tree serves both. It has three suites, all named in .gitlab-ci.yml
+  #     so checks 1/2/3 are clean. pr.yml gates the ones it is told to, and
+  #     GUARD_PREMERGE_UNGATED is handed the EXACT complement, so 7b is clean too. Only
+  #     check 7's own comparison can decide the verdict.
+  #     (i)  THE DROP. One suite is gated, the floor says 2, and the ungated set AGREES
+  #          with the tree. That is the shape of a gated suite DELETED outright (file
+  #          and wiring), the one case 7b cannot name. The count must fall below the
+  #          floor and go RED. Without this control the floor could be compared against
+  #          nothing at all, a check that only ever agrees with itself. total is 3 here,
+  #          ABOVE the floor, so a comparison against the wrong number is caught as well.
+  #     (i2) THE RISE, the GEN-3 regression itself. Two suites are gated and the floor
+  #          says 1: one PR raised the line, a second PR gated a suite on top without
+  #          raising it, and git merged both cleanly. That must be GREEN (rc 0), and the
+  #          line must say how far above the floor it is, so a rise is never silent.
+  #          Before GEN-3 this exact tree printed "coverage rose to 2, baseline still
+  #          says 1" and exited 1.
+  #     Clean bodies go through build_tree, and the extra suites are counter-free, for
+  #     the self-flagging reason control (j) records below.
+  floor_tree() { # floor_tree "SUITE..." -> pr.yml gates exactly those suites
+    build_tree 'P=0; F=0
 ok(){ echo "  PASS $*"; P=$((P+1)); }
 bad(){ echo "  FAIL $*"; F=$((F+1)); }
 ok "nothing wrong"
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]'
-  mkdir -p "${NEG}/tree/.github/workflows"
-  printf 'name: pr\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash tests/probe/test-probe.sh\n' \
-    > "${NEG}/tree/.github/workflows/pr.yml"
-  neg_case "a pre-merge-gated suite the baseline does not record" \
-           "raise PREMERGE_BASELINE"
+    mkdir -p "${NEG}/tree/.github/workflows"
+    printf 'echo second\nexit 0\n' > "${NEG}/tree/tests/probe/test-second.sh"
+    printf 'echo third\nexit 0\n'  > "${NEG}/tree/tests/probe/test-third.sh"
+    printf 'probe-job:\n  script:\n    - bash tests/probe/test-probe.sh\n    - bash tests/probe/test-second.sh\n    - bash tests/probe/test-third.sh\n' \
+      > "${NEG}/tree/.gitlab-ci.yml"
+    printf 'name: pr\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n' \
+      > "${NEG}/tree/.github/workflows/pr.yml"
+    local s
+    for s in $1; do printf '      - run: bash %s\n' "${s}" >> "${NEG}/tree/.github/workflows/pr.yml"; done
+  }
+  floor_tree "tests/probe/test-probe.sh"
+  drop_out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_PREMERGE=2 \
+              GUARD_PREMERGE_UNGATED="$(printf '%s\n' tests/probe/test-second.sh tests/probe/test-third.sh)" \
+              bash "${SELF}" 2>&1)"; drop_rc=$?
+  if [ "${drop_rc}" -ne 0 ] \
+     && printf '%s' "${drop_out}" | grep -F "pre-merge suite coverage DROPPED to 1, baseline is 2" >/dev/null \
+     && printf '%s' "${drop_out}" | grep -F "the ungated SET matches its pin exactly" >/dev/null; then
+    ok "negative control bites: gated suites falling BELOW the floor, with the ungated set agreeing (an outright deletion)"
+  else
+    bad "negative control did NOT bite (rc=${drop_rc}): gated suites falling BELOW the floor, with the ungated set agreeing (an outright deletion)"
+    printf '%s\n' "${drop_out}" | sed 's/^/           /'
+  fi
+  floor_tree "tests/probe/test-probe.sh tests/probe/test-second.sh"
+  rise_out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_PREMERGE=1 \
+              GUARD_PREMERGE_UNGATED="tests/probe/test-third.sh" \
+              bash "${SELF}" 2>&1)"; rise_rc=$?
+  if [ "${rise_rc}" -eq 0 ] \
+     && printf '%s' "${rise_out}" | grep -F "pre-merge suite coverage 2/3 is 1 above its floor of 1" >/dev/null \
+     && ! printf '%s' "${rise_out}" | grep -F "  FAIL " >/dev/null; then
+    ok "positive control: gated suites RISING above the floor pass and say by how much (GEN-3: two PRs that each gate a suite, either landing order)"
+  else
+    bad "positive control FAILED (rc=${rise_rc}): gated suites rising above the floor must pass with a notice (GEN-3)"
+    printf '%s\n' "${rise_out}" | sed 's/^/           /'
+  fi
 
   # (j) THE BLIND SPOT ITSELF: an orphaned suite named in the OTHER convention.
   #     Until 2026-08-26 the census walked for `test-*.sh` only, so a file called

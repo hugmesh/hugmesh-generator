@@ -2,7 +2,7 @@
 #
 # This is the akkoma-side reconcile that realizes ROLE_MASTODON_DOMAINLOCKED
 # ("Mastodon local-only") into the live set the ForceLocalForUsers MRF reads at
-# delivery time (manifests/akkoma/mrf/force_local_for_users_policy.ex —
+# delivery time (images/akkoma/mrf/force_local_for_users_policy.ex —
 # `force_local?/1` reads Pleroma config key {:mrf_force_local, :forced_actors}).
 # It mirrors admin-sync-job.yaml exactly (the ROLE_MOD/ROLE_ADMIN -> --moderator/
 # --admin reconcile): runAsNonRoot, drop ALL caps, readOnlyRootFilesystem,
@@ -15,7 +15,7 @@
 # future posts federate again; past local-only posts correctly stay local.
 #
 # GATED / DARK: gated by homeserver.domainlock.enabled — wired into the akkoma
-# kustomization ONLY when enabled (so a plain akkoma:stable deploy without the MRF
+# kustomization ONLY when enabled (so a deploy that has not turned the MRF on
 # never runs this). With the gate off (default) the force-local set is never
 # materialized and the MRF (if even present) is a no-op for every actor.
 #

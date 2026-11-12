@@ -45,7 +45,9 @@
 #      checked main SHA, and refuses while any selected main is NEEDS-BUMP or main moved;
 #      the bump opens ONE draft PR per repo into release/X.Y with the mechanical rewrite
 #      (pom project/parent/net.hugmesh pins and properties, package.json + lock, VERSION,
-#      the overlays' FROM pin), idempotently, and refuses a bump that is not mechanical;
+#      the overlays' FROM pin, a README's "currently `X`" and "target/<artifact>-X.jar" in
+#      the same commit), idempotently, and refuses a bump that is not mechanical (a doc
+#      mirror with nothing to move included); an unknown mirror kind stops at the table;
 #      the tag goes on the release branch's re-read SHA; patches must be the next patch on
 #      an existing release branch; the next-beta PR goes to main; Studio stable is refused;
 #      every stable dry run makes zero writes;
@@ -1318,6 +1320,82 @@ check_stable_overlay_bump() { # script -> 0 when the overlay's bump moves VERSIO
 if check_stable_overlay_bump "$SCRIPT"; then ok "S: an overlay's bump moves VERSION and PINNED_GATEWAY_IMAGE to the gateway's stable"
 else bad "S: overlay bump"; fi
 
+# BA-1 (2026-11-11): federation-api's README names its version as "currently `X`" and as
+# "target/federation-X.jar", its ReadmeFactsGuardTest pins both to the pom, and the 0.4.0-beta.2
+# bump moved only pom.xml. The README.md:currently and README.md:jar mirrors move them in the
+# same commit. The README here carries federation-api's own two lines, verbatim but for the
+# version, plus versions that are NOT the project's and must not move.
+doc_mirror_fixture() { # dir [README body]: the stable fixture, fx-lib-b mirroring README.md:currently,README.md:jar
+  local d=$1 body=${2:-}
+  fixture stable "$d"
+  sed -i 's/^\(2|fx-lib-b|.*\)$/\1|README.md:currently,README.md:jar/' "$d/repos.tsv"
+  grep -a '^2|fx-lib-b|.*|README.md:currently,README.md:jar$' "$d/repos.tsv" >/dev/null || return 1
+  [ -n "$body" ] || body='# x
+
+```bash
+./mvnw package       # builds target/federation-2.0.0-beta.1.jar
+```
+
+## Releases
+
+The version is the project `<version>` in `pom.xml`, currently `2.0.0-beta.1`.
+An older paragraph also said currently `1.9.0-beta.4`.
+It needs lib/ext-3.0.0-beta.1.jar and the parent `2.0.0-beta.1`, which stay as they are.
+'
+  README_BODY=$body pyset "$d/state.json" 'import os; R["fx-lib-b"]["files_at"]["rb-fx-lib-b"]["README.md"] = os.environ["README_BODY"]'
+}
+
+check_stable_doc_mirrors() { # script -> 0 when both README spellings move in fx-lib-b's ONE bump commit, and nothing else in it does
+  local s=$1 d="$TMP/sdm.$RANDOM"
+  doc_mirror_fixture "$d" || return 1
+  run_script "$s" "$d" --channel stable --apply --yes --only fx-lib-b --from bump --no-studio
+  writes "$d/calls" | grep -a 'pr create -R hugmesh/fx-lib-b --draft --base release/2.0 --head bump/stable-2.0.0' >/dev/null || return 1
+  python3 - "$d/state.json" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1])); r = st["repos"]["fx-lib-b"]
+c = st["commits"][r["branches"]["bump/stable-2.0.0"]]
+assert c["parents"] == ["rb-fx-lib-b"], c
+files = {e["path"]: e["content"] for e in st["trees"][c["tree"]]["tree"]}
+assert sorted(files) == ["README.md", "pom.xml"], sorted(files)
+md = files["README.md"]
+for w in ["./mvnw package       # builds target/federation-2.0.0.jar\n",                       # :jar
+          "The version is the project `<version>` in `pom.xml`, currently `2.0.0`.\n",         # :currently
+          "An older paragraph also said currently `2.0.0`.\n",                                  # every occurrence
+          "It needs lib/ext-3.0.0-beta.1.jar and the parent `2.0.0-beta.1`, which stay"]:        # not ours: untouched
+    assert w in md, (w, md)
+assert "<version>2.0.0</version>" in files["pom.xml"], files["pom.xml"]
+PY
+}
+if check_stable_doc_mirrors "$SCRIPT"; then ok "S: README.md:currently + README.md:jar move every 'currently \`X\`' and 'target/<artifact>-X.jar' in the same bump commit as pom.xml; a lib/ jar and a bare version are left alone"
+else bad "S: README doc mirrors"; fi
+
+check_stable_doc_mirror_missing() { # script -> 0 when a mirrored README with no jar spelling refuses the bump: no PR, rc 1
+  local s=$1 d="$TMP/sdx.$RANDOM"
+  doc_mirror_fixture "$d" 'The version is the project `<version>` in `pom.xml`, currently `2.0.0-beta.1`.
+' || return 1
+  run_script "$s" "$d" --channel stable --apply --yes --only fx-lib-b --from bump --no-studio
+  grep -a 'REFUSE fx-lib-b: its bump to 2.0.0 is not mechanical' "$d/out" >/dev/null || return 1
+  grep -a "README.md: no 'target/<artifact>-X.jar' spelling to move" "$d/out" >/dev/null || return 1
+  [ -z "$(writes "$d/calls")" ] && [ "$(cat "$d/rc")" = 1 ]
+}
+if check_stable_doc_mirror_missing "$SCRIPT"; then ok "S: a README.md:jar mirror whose README names no target/<artifact>-X.jar refuses the bump (no PR, rc 1) instead of moving nothing"
+else bad "S: a doc mirror with nothing to move was opened anyway"; fi
+
+check_table_mirror_kinds() { # script -> 0 when an unknown :kind stops at the table, before any gh call, and the real table loads
+  local s=$1 d="$TMP/tmk.$RANDOM" v
+  fixture stable "$d"
+  sed -i 's/^\(2|fx-lib-b|.*\)$/\1|README.md:Currently/' "$d/repos.tsv"
+  run_script "$s" "$d" --channel stable --no-studio
+  [ "$(cat "$d/rc")" = 2 ] || return 1
+  grep -a "unknown mirror kind 'Currently' in 'README.md:Currently' for 'fx-lib-b'" "$d/out" >/dev/null || return 1
+  [ ! -s "$d/calls" ] || return 1
+  # the shipped table loads, and federation-api mirrors both spellings its ReadmeFactsGuardTest pins
+  v=$(RELEASE_BETA_TABLE="$REPO/scripts/release/repos.tsv" RELEASE_BETA_SOURCE_ONLY=1 bash -c 's=$1; shift; source "$s" && printf "%s\n" "${T_MIRRORS[hugmesh-federation-api]}"' _ "$s" 2>&1)
+  [ "$v" = "README.md:currently,README.md:jar" ] || { echo "      real table: federation-api mirrors '$v'"; return 1; }
+}
+if check_table_mirror_kinds "$SCRIPT"; then ok "S: an unknown mirror kind (README.md:Currently) stops the script at the table with no gh call (rc 2); the shipped table loads and mirrors federation-api's README.md:currently,README.md:jar"
+else bad "S: mirror kinds in the table"; fi
+
 check_stable_tag() { # script -> 0 when the tag goes on release/0.3's re-read SHA, and a moved release branch is never tagged
   local s=$1 d="$TMP/st.$RANDOM"
   libs_done() { # stages 1-2 published at their stables, so the gateway's stage is not blocked
@@ -1461,6 +1539,20 @@ mutate stable-studio '/REFUSE --studio \$v on the stable channel/,/return 1/s/re
 mutate stable-version-only 's/^  \[ \${#ONLY\[@\]} -gt 0 \] || die "--version/  true || die "--version/' check_stable_patch
 # S-M11 the bump rewrites only the project version (no org pins)
 mutate stable-bump-pins 's/^        if art in pins:$/        if False:/' check_stable_bump_rules
+# S-M12 (BA-1) the :jar mirror falls through to a plain path that never exists: the jar line stays
+mutate doc-jar-dispatch 's/^    elif tok.endswith(":jar"):$/    elif False:/' check_stable_doc_mirrors
+# S-M13 (BA-1) the README of a :currently/:jar mirror is never fetched
+mutate doc-fetch 's/^      \*:Version|\*:heading|\*:currently|\*:jar) fetch+=/      *:Version|*:heading) fetch+=/' check_stable_doc_mirrors
+# S-M14 (BA-1) each mirror re-reads the file: the second rewrite of README.md drops the first
+mutate doc-chain 's/^    text = res\["changed"\]\.get(path)$/    text = None/' check_stable_doc_mirrors
+# S-M15 (BA-1) a doc mirror with no spelling to move passes silently
+mutate doc-missing 's/^    if not found:$/    if False:/' check_stable_doc_mirror_missing
+# S-M16 (BA-1) an unknown mirror kind is read as a path again
+mutate doc-kind 's/^      \*:\*) die "\$TABLE: unknown mirror kind/      *:*) : "$TABLE: unknown mirror kind/' check_table_mirror_kinds
+# S-M17 (BA-1) the :currently mirror falls through to a plain path: the "currently" line stays
+mutate doc-currently-dispatch 's/^    elif tok.endswith(":currently"):$/    elif False:/' check_stable_doc_mirrors
+# S-M18 (BA-1) the table check refuses the new kinds it is meant to accept
+mutate doc-kind-valid 's/^      gateway-pin|\*:Version|\*:heading|\*:currently|\*:jar) ;;$/      gateway-pin|*:Version|*:heading) ;;/' check_stable_doc_mirrors
 # T-M1 the beta channel ignores stable tags again (#855): a shipped line is tagged as a pre-release
 mutate beta-stable-guard 's/^  if \[ -n "\$stable" \] \&\& \[ "\$(vercmp "\$ver" "\$stable")" != gt \]; then$/  if false; then/' check_stable_tags
 # T-M2 next_beta advises X.Y.Z-beta.(N+1) below the newest stable again

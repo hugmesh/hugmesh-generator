@@ -34,19 +34,33 @@ data:
       name: "HugMesh",
       email: "admin@hugmesh.net",
       registrations_open: false
+    # Uploads base_url. REQUIRED: without it `pleroma start` raises "No base_url
+    # set for uploads" (Pleroma.Config.DeprecationWarnings.check_uploader_base_url_set)
+    # and exits, so the pod crash-loops. images/akkoma/smoke-test.sh boots THIS
+    # ConfigMap, extracted from this file, against Postgres to keep it that way.
+    # SAME host as the endpoint, on purpose for now: the be-gateway's mastodon-web
+    # route already sends every path on this host (so /media/**) to Akkoma, and
+    # cloudflared, DNS and the cert already cover it; rebrand_sysroot rewrites this
+    # literal with the rest of the domain. Upstream advises a SEPARATE media host
+    # (user uploads on the instance's origin are an XSS risk) and logs an
+    # error-level "Your Akkoma Host and your Upload base_url's host are the same!"
+    # at boot, but it only logs: it does not refuse to start. A media.<domain> host
+    # needs its own DNS name, certificate, cloudflared rule and gateway route; that
+    # is a follow-up (images/akkoma/README.md, "Pinning").
+    config :pleroma, Pleroma.Upload, base_url: "https://mastodon.hugmesh.net/media/"
     # --- DOMAIN-LOCK MRF (homeserver.domainlock.enabled) — GATED / SHIPS DARK ---
-    # The custom ForceLocalForUsers MRF (manifests/akkoma/mrf/, compiled into the
-    # custom image built from manifests/akkoma/Dockerfile) is the AUTHORITATIVE
-    # Mastodon leg of domain-lock: for any actor in the force-local set it filters
-    # outbound delivery to LOCAL inboxes only (ALL visibilities + boosts/replies/
+    # The custom ForceLocalForUsers MRF (images/akkoma/mrf/, compiled into
+    # hugmesh-akkoma by images/akkoma/Dockerfile) is the AUTHORITATIVE Mastodon leg
+    # of domain-lock: for any actor in the force-local set it filters outbound
+    # delivery to LOCAL inboxes only (ALL visibilities + boosts/replies/
     # profile-Update/Follow), not just rewriting as:Public.
     #
-    # SHIPS DARK: the MRF is NOT enabled below by default. A plain akkoma:stable
-    # (the image pinned in this file until the custom image is built + pinned) does
-    # NOT carry the module, so enabling it on the stock image would crash-loop —
-    # hence it is commented out. To turn domain-lock ON (homeserver.domainlock.enabled):
-    #   1. build + pin the custom image (manifests/akkoma/Dockerfile) in this file
-    #      and in domainlock-sync-job.yaml,
+    # SHIPS DARK: the MRF is NOT enabled below by default. The module is compiled
+    # into the image but does nothing until it is listed under :mrf policies, and
+    # it is still a skeleton (see its header). To turn domain-lock ON
+    # (homeserver.domainlock.enabled):
+    #   1. pin a PUBLISHED hugmesh-akkoma digest in this file and in
+    #      domainlock-sync-job.yaml (images/akkoma/README.md, "Pinning"),
     #   2. add the policy to the :mrf policies list and the empty default set below,
     #   3. wire domainlock-sync-job.yaml into the akkoma kustomization so the
     #      force-local set is materialized from ROLE_MASTODON_DOMAINLOCKED.

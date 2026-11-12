@@ -22,26 +22,35 @@ mesh deploys a pod that cannot pull. These checks hold that line:
   [lockstep]   every ref carries the same digest.
   [placeholder] a repeated-character digest is the placeholder. It must be marked on
                its line ("PLACEHOLDER digest"), and while it is in place Akkoma must be
-               OFF in every default source: the shared builder lib, both builders'
-               OPTIONAL_SERVICES default, Studio's BUILTIN_DEFAULT_SERVICES, the
-               registry's `default:`, the installed-services ConfigMap baseline, the
-               seed OptionalService CR, the federation gate.sql baseline, and the
-               test-runner kustomization (git-synced on every ENV=test mesh, so a
-               wired akkoma-peer.yaml is "on" there whatever the selection). A real
-               digest must not carry the marker.
+               OFF in every default source: the shared builder lib, the three cluster
+               builders' OPTIONAL_SERVICES default (x86, rpi5, jetson), build-menu.sh's
+               OPT_SERVICES default and its pre-ticked checklist, Studio's
+               BUILTIN_DEFAULT_SERVICES, the registry's `default:`, the
+               installed-services ConfigMap baseline, the seed OptionalService CR, the
+               federation gate.sql baseline, and the test-runner kustomization
+               (git-synced on every ENV=test mesh, so a wired akkoma-peer.yaml is "on"
+               there whatever the selection). A real digest must not carry the marker.
+  [config]     both of the cluster's Akkoma configs (akkoma-config in akkoma.yaml,
+               akkoma-peer-config in test-runner/akkoma-peer.yaml) set the
+               Pleroma.Upload base_url `pleroma start` refuses to run without, and
+               images/akkoma/smoke-test.sh boots both of them as shipped.
   [dockerfile] images/akkoma/Dockerfile pins both base images by digest, builds one
-               40-hex upstream commit in every stage, ships no Erlang cookie and runs
-               as a non-root user.
+               40-hex upstream commit in every stage, installs dependencies with
+               --check-locked and rebar3 by version and SHA-512, ships no Erlang
+               cookie and runs as a non-root user.
   [version]    images/akkoma/VERSION is MAJOR.MINOR.PATCH[-beta.N] and shares X.Y with
                clients/docker-mesh-node/VERSION (one release/X.Y per repository).
   [release-wf] akkoma-release.yml has no pull_request trigger, publishes only
                akkoma-v* tags with TAG_PREFIX=akkoma-v, builds and pushes
-               linux/amd64 + linux/arm64, boot-tests before it decides the tags,
+               linux/amd64 + linux/arm64 on GitHub-hosted runners only, boot-tests
+               before it decides the tags (a step that runs whenever the push runs),
                decides them in the step right before the push, and every
                security-relevant step body equals mesh-node-release.yml's after the
                artifact's names are swapped in.
   [pr-wf]      akkoma-image-ci.yml runs on pull_request only, with a read-only token,
-               no registry login and no push, and boot-tests a native arm64 build.
+               no registry login and no push, boot-tests a native arm64 build with a
+               step nothing can switch off, and runs when either Akkoma manifest
+               changes (step 8 of the smoke test boots their ConfigMaps).
 """
 import os
 import re
@@ -152,8 +161,14 @@ def default_sources():
 
     literal("scripts/_optional-services-lib.sh", r'^_OPT_BUILTIN_DEFAULT_SERVICES="([^"]*)"',
             "builder lib _OPT_BUILTIN_DEFAULT_SERVICES")
-    for b in ("build-x86-host-stage4.sh", "build-rpi5-stage4.sh"):
+    for b in ("build-x86-host-stage4.sh", "build-rpi5-stage4.sh", "build-jetson-stage4.sh"):
         literal(b, r'^OPTIONAL_SERVICES="\$\{OPTIONAL_SERVICES:-([^}"]*)\}"', "%s default" % b)
+    # build-menu.sh: OPT_SERVICES is passed to every builder, and an empty value
+    # pre-ticks the services checklist from the literal below.
+    literal("scripts/build-menu.sh", r'^OPT_SERVICES="([^"]*)"', "build-menu.sh OPT_SERVICES default")
+    literal("scripts/build-menu.sh",
+            r'if \[ -z "\$\{OPT_SERVICES\}" \]; then\s*\n\s*cur="([^"]*)"',
+            "build-menu.sh pre-ticked services")
     literal("studio/hugmesh_studio/core/config.py", r"^BUILTIN_DEFAULT_SERVICES\s*=\s*\(([^)]*)\)",
             "Studio BUILTIN_DEFAULT_SERVICES")
 
@@ -274,6 +289,63 @@ def check_refs_and_defaults():
             ok("defaults", "the digest is real, so Akkoma may be default-on (%d of %d sources say on)" % (len(on), len(sources)))
 
 
+# ── [config] ─────────────────────────────────────────────────────────────────
+CONFIGS = [
+    ("specs/cluster/manifests/akkoma/akkoma.yaml", "akkoma-config"),
+    ("specs/cluster/manifests/test-runner/akkoma-peer.yaml", "akkoma-peer-config"),
+]
+BASE_URL = re.compile(r'^\s*config\s+:pleroma,\s*Pleroma\.Upload,(?:.*\n)*?.*\bbase_url:\s*"https?://[^"\s]+"', re.M)
+
+
+def configmap_exs(text, name):
+    """config.exs of ConfigMap NAME, dedented, or None."""
+    for doc in re.split(r"(?m)^---[ \t]*$", text):
+        if not re.search(r"(?m)^kind:\s*ConfigMap\s*$", doc):
+            continue
+        if not re.search(r"(?m)^\s+name:\s*%s\s*$" % re.escape(name), doc):
+            continue
+        lines = doc.split("\n")
+        for i, l in enumerate(lines):
+            m = re.match(r"^(\s+)config\.exs:\s*\|[-+]?\s*$", l)
+            if not m:
+                continue
+            body = []
+            for b in lines[i + 1:]:
+                if b.strip() and len(b) - len(b.lstrip()) <= len(m.group(1)):
+                    break
+                body.append(b)
+            code = [b.strip() for b in body if b.strip() and not b.strip().startswith("#")]
+            return "\n".join(code)
+    return None
+
+
+def check_configs():
+    problems = []
+    for rel, name in CONFIGS:
+        if not exists(rel):
+            problems.append("%s is missing" % rel)
+            continue
+        exs = configmap_exs(read(rel), name)
+        if exs is None:
+            problems.append("no config.exs in ConfigMap %s (%s)" % (name, rel))
+        elif not BASE_URL.search(exs):
+            problems.append("ConfigMap %s (%s) sets no `config :pleroma, Pleroma.Upload, base_url:` "
+                            "(outside comments): `pleroma start` raises 'No base_url set for uploads' "
+                            "and the pod crash-loops" % (name, rel))
+    rel = "images/akkoma/smoke-test.sh"
+    if not exists(rel):
+        problems.append("%s is missing" % rel)
+    else:
+        code = "\n".join(l for l in read(rel).split("\n") if not l.lstrip().startswith("#"))
+        for path, name in CONFIGS:
+            if path not in code or name not in code:
+                problems.append("smoke-test.sh no longer boots ConfigMap %s from %s as shipped" % (name, path))
+    if problems:
+        fail("config", "; ".join(problems))
+    else:
+        ok("config", "both Akkoma ConfigMaps set an upload base_url, and smoke-test.sh boots both as shipped")
+
+
 # ── [dockerfile] ─────────────────────────────────────────────────────────────
 def check_dockerfile():
     rel = "images/akkoma/Dockerfile"
@@ -285,7 +357,7 @@ def check_dockerfile():
     problems = []
     args = {}
     for l in lines:
-        m = re.match(r"^ARG\s+([A-Z_]+)=(.*)$", l.strip())
+        m = re.match(r"^ARG\s+([A-Z0-9_]+)=(.*)$", l.strip())
         if m:
             args.setdefault(m.group(1), set()).add(m.group(2).strip())
     for base in ("ELIXIR_IMAGE", "RUNTIME_IMAGE"):
@@ -309,6 +381,16 @@ def check_dockerfile():
         problems.append("AKKOMA_VERSION differs between stages: %s" % sorted(args.get("AKKOMA_VERSION", set())))
     if 'test "$(git rev-parse HEAD)" = "$AKKOMA_COMMIT"' not in text:
         problems.append("the fetched upstream commit is not checked against AKKOMA_COMMIT")
+    code = "\n".join(l for l in lines if not l.lstrip().startswith("#"))
+    if not re.search(r"mix deps\.get\b[^;\n]*--check-locked", code):
+        problems.append("`mix deps.get` runs without --check-locked (dependencies may drift from upstream's mix.lock)")
+    sha = args.get("REBAR3_SHA512", set())
+    if len(sha) != 1 or not re.fullmatch(r"[0-9a-f]{128}", next(iter(sha), "")):
+        problems.append("REBAR3_SHA512 is not one 128-hex SHA-512")
+    if not re.search(r'mix local\.rebar rebar3 "\$REBAR3_URL" --sha512 "\$REBAR3_SHA512"', code) \
+            or re.search(r"mix local\.rebar(?! rebar3 )", code):
+        problems.append("rebar3 is not installed only as `mix local.rebar rebar3 \"$REBAR3_URL\" --sha512 "
+                        "\"$REBAR3_SHA512\"` (a bare `mix local.rebar` takes whatever hex lists newest)")
     if "rm -f /opt/akkoma/releases/COOKIE" not in text:
         problems.append("the build no longer deletes the baked Erlang cookie (releases/COOKIE)")
     users = [l.split(None, 1)[1].strip() for l in lines if re.match(r"^USER\s", l)]
@@ -317,7 +399,8 @@ def check_dockerfile():
     if problems:
         fail("dockerfile", "; ".join(problems))
     else:
-        ok("dockerfile", "bases pinned by digest, one upstream commit checked after fetch, no baked cookie, non-root USER %s" % users[-1])
+        ok("dockerfile", "bases pinned by digest, one upstream commit checked after fetch, --check-locked, "
+           "rebar3 pinned by SHA-512, no baked cookie, non-root USER %s" % users[-1])
 
 
 # ── [version] ────────────────────────────────────────────────────────────────
@@ -388,6 +471,66 @@ PARITY_STEPS = [
 ]
 
 
+def jobs(text):
+    """{job id: block text} for every job under the top-level `jobs:` key."""
+    lines = text.split("\n")
+    start = next((i for i, l in enumerate(lines) if re.match(r"^jobs:\s*$", l)), None)
+    if start is None:
+        return {}
+    out, cur, buf = {}, None, []
+    for l in lines[start + 1:]:
+        if l and not l[0].isspace() and not l.startswith("#"):
+            break
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", l)
+        if m:
+            if cur:
+                out[cur] = "\n".join(buf)
+            cur, buf = m.group(1), []
+        elif cur:
+            buf.append(l)
+    if cur:
+        out[cur] = "\n".join(buf)
+    return out
+
+
+HOSTED = re.compile(r"^ubuntu-(latest|\d{2}\.\d{2}(-arm)?)$")
+
+
+def runner_problems(text, wf):
+    """Every job must run on a GitHub-hosted runner: a self-hosted runner holding
+    this repository's id-token and packages: write would be a signing key on a box
+    nobody here controls."""
+    out = []
+    js = jobs(text)
+    if not js:
+        return ["%s: no jobs found" % wf]
+    for jid, body in js.items():
+        m = re.search(r"^    runs-on:\s*(.+?)\s*$", body, re.M)
+        if not m:
+            out.append("%s job %s has no runs-on" % (wf, jid))
+            continue
+        val = m.group(1).strip("'\"")
+        if val.startswith("${{"):
+            # matrix: every value the matrix gives `runner` must be hosted
+            vals = re.findall(r"^\s+runner:\s*(\S+)\s*$", body, re.M)
+            if not vals or any(not HOSTED.match(v.strip("'\"")) for v in vals):
+                out.append("%s job %s runs on %s, which is not only GitHub-hosted ubuntu runners (%s)"
+                           % (wf, jid, val, ", ".join(vals) or "no matrix values"))
+        elif not HOSTED.match(val):
+            out.append("%s job %s runs on %r, not a GitHub-hosted ubuntu runner" % (wf, jid, val))
+    return out
+
+
+def step_switched_off(block, allowed_if=None):
+    """Why a step might not run (or not fail the job), or None."""
+    m = re.search(r"^\s+if:\s*(.+?)\s*$", block, re.M)
+    if m and m.group(1) != allowed_if:
+        return "it carries `if: %s`" % m.group(1)
+    if re.search(r"^\s+continue-on-error:", block, re.M):
+        return "it carries continue-on-error"
+    return None
+
+
 def on_block(text):
     lines = text.split("\n")
     start = next((i for i, l in enumerate(lines) if re.match(r"^['\"]?on['\"]?\s*:", l)), None)
@@ -434,12 +577,19 @@ def check_release_workflow():
             problems.append("the first build is not push: false")
         if "smoke-test.sh" not in s["Boot-test the image before pushing it"]:
             problems.append("the boot test does not run images/akkoma/smoke-test.sh")
+        # The boot test must run whenever the push does: the same condition, and
+        # nothing that lets a failure through.
+        m = re.search(r"^\s+if:\s*(.+?)\s*$", s["Build and push image"], re.M)
+        why = step_switched_off(s["Boot-test the image before pushing it"], m.group(1) if m else None)
+        if why:
+            problems.append("the boot test can be skipped or ignored while the push runs: %s" % why)
         for n in ("Build the image (no push)", "Build and push image"):
             if "platforms: linux/amd64,linux/arm64" not in s[n]:
                 problems.append("step %r does not build linux/amd64,linux/arm64 (akkoma is "
                                 "selectable on rpi5 and x86 meshes)" % n)
     if "Check the upstream tag still names the pinned commit" not in s:
         problems.append("the version job does not check the upstream tag against the pinned commit")
+    problems += runner_problems(text, "akkoma-release.yml")
     for name in PARITY_STEPS:
         if name not in ts:
             problems.append("template step %r vanished from mesh-node-release.yml" % name)
@@ -452,7 +602,8 @@ def check_release_workflow():
     if problems:
         fail("release-wf", "; ".join(problems))
     else:
-        ok("release-wf", "no PR trigger, akkoma-v* only, boot-test before tags, tags right before push, "
+        ok("release-wf", "no PR trigger, akkoma-v* only, GitHub-hosted runners, boot-test before tags "
+           "and under the push's own condition, tags right before push, "
            "%d security steps equal to mesh-node-release.yml's" % len(PARITY_STEPS))
 
 
@@ -475,15 +626,26 @@ def check_pr_workflow():
     for bad in ("packages: write", "id-token: write", "docker/login-action", "push: true", "cosign"):
         if bad in code:
             problems.append("it contains %r" % bad)
-    if "smoke-test.sh" not in code:
-        problems.append("it does not boot-test the image")
+    s = steps(text)
+    boot = s.get("Boot-test the image")
+    if boot is None or "smoke-test.sh" not in boot:
+        problems.append("it has no 'Boot-test the image' step running smoke-test.sh")
+    else:
+        why = step_switched_off(boot)
+        if why:
+            problems.append("its boot test can be skipped or ignored: %s" % why)
+    for path, _name in CONFIGS:
+        if not re.search(r"^\s+- '%s'\s*$" % re.escape(path), on, re.M):
+            problems.append("it does not run when %s changes (the smoke test boots its ConfigMap)" % path)
+    problems += runner_problems(text, "akkoma-image-ci.yml")
     if "runner: ubuntu-24.04-arm" not in code or "platform: linux/arm64" not in code:
         problems.append("it has no native linux/arm64 leg (the release builds arm64 under QEMU; "
                         "this is where arm64 is proven)")
     if problems:
         fail("pr-wf", "; ".join(problems))
     else:
-        ok("pr-wf", "pull_request only, contents: read, no login, no push, boot-tested")
+        ok("pr-wf", "pull_request only, contents: read, no login, no push, GitHub-hosted runners, "
+           "boot-tested by a step nothing switches off, triggered by both Akkoma manifests")
 
 
 def main():
@@ -492,6 +654,7 @@ def main():
         return 2
     check_dead_host()
     check_refs_and_defaults()
+    check_configs()
     check_dockerfile()
     check_version()
     check_release_workflow()

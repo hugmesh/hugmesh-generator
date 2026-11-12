@@ -39,6 +39,8 @@ noise:
 # runs --accept-routes, so pods/ClusterIPs become reachable cross-node "as one
 # LAN". keys-provision also runs `headscale policy set -f` on this file so the
 # DB/file stay in sync. No internet-wide grant; fleet-scoped by design.
+# keys-provision starts headscale only when headscale's own reading of its config
+# is exactly this mode and path (the file it checks); anything else is refused.
 policy:
   mode: file
   path: /etc/headscale/policy.hujson

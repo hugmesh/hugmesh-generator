@@ -18,8 +18,21 @@
 #      works (the per-container cookie is shared), and the same task in a SEPARATE
 #      container with PLEROMA_CTL_RPC_DISABLED=true works (the admin-sync Job shape);
 #   6. Erlang distribution and epmd listen on loopback only;
-#   7. python3 can import what the sync Jobs' scripts import.
-# Needs docker and network access for postgres:16-alpine. Exit 0 only if all pass.
+#   7. python3 can import what the sync Jobs' scripts import;
+#   8. the cluster's OWN configs boot: config.exs is extracted verbatim from the
+#      akkoma-config ConfigMap in specs/cluster/manifests/akkoma/akkoma.yaml and
+#      from akkoma-peer-config in specs/cluster/manifests/test-runner/akkoma-peer.yaml
+#      (nothing in it is edited: Postgres answers to the host names those configs
+#      name), then migrate + start must serve /api/v1/instance for the host the
+#      config declares, each on a fresh database. Steps 2-7 use a minimal config of
+#      their own; this step is what catches a manifest the image cannot boot (it
+#      did: neither ConfigMap set the Pleroma.Upload base_url `pleroma start`
+#      requires, and steps 2-7 passed).
+# Needs docker, python3 (stdlib, to read the manifests) and network access for
+# postgres:16-alpine. Exit 0 only if all pass.
+#
+# SMOKE_AKKOMA_MANIFEST / SMOKE_PEER_MANIFEST override the two manifest paths (to
+# boot another revision's ConfigMap, e.g. one written by `git show`).
 set -euo pipefail
 
 image="${1:?usage: smoke-test.sh <image> [expected-akkoma-version]}"
@@ -28,6 +41,10 @@ pg_image="${SMOKE_PG_IMAGE:-postgres:16-alpine}"
 p="hm-akkoma-smoke-$$"
 net="$p-net"; db="$p-db"; app="$p-app"; cfg="$p-cfg"; pgdata="$p-pgdata"
 pass=0; fail=0
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "$here/../.." && pwd)"
+akkoma_manifest="${SMOKE_AKKOMA_MANIFEST:-$repo/specs/cluster/manifests/akkoma/akkoma.yaml}"
+peer_manifest="${SMOKE_PEER_MANIFEST:-$repo/specs/cluster/manifests/test-runner/akkoma-peer.yaml}"
 ok()  { echo "  PASS $*"; pass=$((pass + 1)); }
 bad() { echo "  FAIL $*"; fail=$((fail + 1)); }
 
@@ -47,8 +64,8 @@ docker network create --internal "$net" >/dev/null
 docker volume create "$cfg" >/dev/null
 docker volume create "$pgdata" >/dev/null
 
-# A minimal instance config: the cluster's own (specs/cluster/manifests/akkoma) is
-# not reused, so this test proves the IMAGE and does not drift with that file.
+# A minimal instance config for steps 2-7, which prove the IMAGE. Step 8 boots the
+# cluster's own ConfigMaps, which prove the MANIFESTS.
 config="$(cat <<'EOF'
 import Config
 config :pleroma, Pleroma.Web.Endpoint,
@@ -101,7 +118,9 @@ else
   bad "python3 cannot import json/os/base64/subprocess/urllib.request: the sync Jobs would die"
 fi
 
+# The aliases are the Repo host names the cluster's ConfigMaps name (step 8).
 docker run -d --name "$db" --network "$net" \
+  --network-alias akkoma-db --network-alias akkoma-peer-db \
   -e POSTGRES_USER=akkoma -e POSTGRES_DB=akkoma -e POSTGRES_PASSWORD="$db_password" \
   -v "$pgdata:/var/lib/postgresql/data" "$pg_image" >/dev/null
 for _ in $(seq 1 60); do
@@ -184,6 +203,80 @@ if [ -z "$offloop" ] && [ -n "$listen" ]; then
 else
   bad "listeners off loopback besides :4000:${offloop:- (none read at all)}"
 fi
+
+# 8. the cluster's own ConfigMaps, extracted verbatim, boot on a fresh database
+# extract_config MANIFEST CONFIGMAP: print data["config.exs"] of that ConfigMap.
+# A block-scalar reader, stdlib only (no PyYAML on every runner); it fails closed:
+# no such ConfigMap, no config.exs key or an empty body is exit 1.
+extract_config() {
+  python3 -I - "$1" "$2" <<'PY'
+import re, sys
+path, want = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+for doc in re.split(r"(?m)^---[ \t]*$", text):
+    if not re.search(r"(?m)^kind:\s*ConfigMap\s*$", doc):
+        continue
+    if not re.search(r"(?m)^\s+name:\s*%s\s*$" % re.escape(want), doc):
+        continue
+    lines = doc.split("\n")
+    for i, l in enumerate(lines):
+        m = re.match(r"^(\s+)config\.exs:\s*\|[-+]?\s*$", l)
+        if not m:
+            continue
+        key = len(m.group(1))
+        body = []
+        for b in lines[i + 1:]:
+            if b.strip() and len(b) - len(b.lstrip()) <= key:
+                break
+            body.append(b)
+        while body and not body[-1].strip():
+            body.pop()
+        ind = min(len(b) - len(b.lstrip()) for b in body if b.strip()) if body else 0
+        out = "\n".join(b[ind:] for b in body).strip("\n")
+        if out:
+            print(out)
+            sys.exit(0)
+sys.exit("no non-empty config.exs in ConfigMap %s of %s" % (want, path))
+PY
+}
+
+docker rm -f "$app" >/dev/null 2>&1 || true
+for spec in "akkoma-config|$akkoma_manifest" "akkoma-peer-config|$peer_manifest"; do
+  cm="${spec%%|*}"; manifest="${spec#*|}"
+  if ! command -v python3 >/dev/null 2>&1; then
+    bad "$cm: python3 is not installed, so the as-shipped config cannot be read (not skipped)"
+    continue
+  fi
+  if [ ! -f "$manifest" ] || ! shipped="$(extract_config "$manifest" "$cm" 2>&1)"; then
+    bad "$cm: cannot read config.exs from $manifest: ${shipped:-missing file}"
+    continue
+  fi
+  host="$(printf '%s\n' "$shipped" | sed -n 's/.*url: \[host: "\([^"]*\)".*/\1/p' | head -n 1)"
+  # a fresh database, as a new cluster's PVC is
+  docker exec "$db" psql -q -U akkoma -d postgres -c 'DROP DATABASE IF EXISTS akkoma WITH (FORCE)' >/dev/null
+  docker exec "$db" psql -q -U akkoma -d postgres -c 'CREATE DATABASE akkoma OWNER akkoma' >/dev/null
+  config="$shipped"
+  write_config 0440
+  if ! out="$(docker run --rm "${app_flags[@]}" "$image" /opt/akkoma/bin/pleroma_ctl migrate 2>&1)"; then
+    bad "$cm (as shipped): pleroma_ctl migrate failed: $(printf '%s' "$out" | tail -n 5)"
+    continue
+  fi
+  docker run -d --name "$app" "${app_flags[@]}" "$image" >/dev/null
+  body=""
+  for _ in $(seq 1 90); do
+    if body="$(docker exec "$app" curl -fsS http://127.0.0.1:4000/api/v1/instance 2>/dev/null)"; then break; fi
+    body=""
+    [ "$(docker inspect -f '{{.State.Running}}' "$app" 2>/dev/null)" = true ] || break
+    sleep 2
+  done
+  uri="$(printf '%s' "$body" | sed -n 's/.*"uri":"\([^"]*\)".*/\1/p')"
+  if [ -n "$body" ] && [ -n "$host" ] && [ "$uri" = "$host" ]; then
+    ok "$cm (as shipped in $(basename "$manifest")): migrate + start serve /api/v1/instance as $uri"
+  else
+    bad "$cm (as shipped in $(basename "$manifest")): did not serve /api/v1/instance as '${host:-<no host in config>}' (got '${uri}'); last log lines: $(docker logs --tail 12 "$app" 2>&1 | grep -v '^\s*$' | tail -n 12)"
+  fi
+  docker rm -f "$app" >/dev/null 2>&1 || true
+done
 
 echo "== smoke-test: $pass passed, $fail failed"
 [ "$fail" = 0 ]

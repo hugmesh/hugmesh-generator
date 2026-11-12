@@ -174,12 +174,26 @@ echo "     features need: ${need[*]}"
 # The x86 ALL-ROLES host-firewall guard: the `for must in CONFIG_NF_TABLES ...`
 # loop that sits OUTSIDE the ROLE_K8S if-block (the k8s guard is skipped for
 # ROLE_K8S=none, yet a client desktop with --with-sunshine loads a 'table inet').
-hfw_guard="$(awk '/^# HOST-FIREWALL kernel guard/{g=1} g{print} g&&/^done$/{exit}' "${X86_BUILD}")"
+# The x86 post-olddefconfig guards live in scripts/_x86-kernel-asserts.sh (moved out of
+# the builder's chroot heredoc so the kernel-reconfiguration path asserts the SAME list).
+# It is the builder's guard only while the builder stages it and runs it AFTER
+# `make olddefconfig`; otherwise the builder itself is read (and these checks fail).
+X86_ASSERTS="${REPO}/scripts/_x86-kernel-asserts.sh"
+_od=$(grep -n '^make olddefconfig$' "${X86_BUILD}" | head -1 | cut -d: -f1)
+_ca=$(grep -n '^bash /tmp/hm-x86-kernel-asserts\.sh "\${ROLE_K8S}"$' "${X86_BUILD}" | head -1 | cut -d: -f1)
+if [ -f "${X86_ASSERTS}" ] && [ -n "${_od}" ] && [ -n "${_ca}" ] && [ "${_ca}" -gt "${_od}" ]; then
+    X86_GUARD="${X86_ASSERTS}"
+    ok "the x86 builder runs scripts/_x86-kernel-asserts.sh after olddefconfig (the guards below live there)"
+else
+    X86_GUARD="${X86_BUILD}"
+    bad "the x86 builder does not run scripts/_x86-kernel-asserts.sh after olddefconfig"
+fi
+hfw_guard="$(awk '/^# HOST-FIREWALL kernel guard/{g=1} g{print} g&&/^done$/{exit}' "${X86_GUARD}")"
 [ -n "${hfw_guard}" ] && ok "x86 builder carries the all-roles HOST-FIREWALL kernel guard block" \
     || bad "x86 builder has no '# HOST-FIREWALL kernel guard' block"
 # It must not be nested in the k8s guard's `if [ "${ROLE_K8S}" != none ]`: the line
 # after the k8s branch's closing `fi` must lead into it.
-python3 - "${X86_BUILD}" <<'PY' && ok "the x86 HOST-FIREWALL guard runs for EVERY role (after the ROLE_K8S if/else/fi, not inside it)" || bad "the x86 HOST-FIREWALL guard is nested inside the ROLE_K8S branch (standalone/sunshine desktops would skip it)"
+python3 - "${X86_GUARD}" <<'PY' && ok "the x86 HOST-FIREWALL guard runs for EVERY role (after the ROLE_K8S if/else/fi, not inside it)" || bad "the x86 HOST-FIREWALL guard is nested inside the ROLE_K8S branch (standalone/sunshine desktops would skip it)"
 import sys
 L = open(sys.argv[1]).read().split("\n")
 i = next(n for n, l in enumerate(L) if l.startswith("# HOST-FIREWALL kernel guard"))

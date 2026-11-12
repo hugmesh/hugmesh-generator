@@ -582,6 +582,81 @@ def test_the_cli_refuses_a_malformed_certificate_with_exit_2(tmp_path, capsys):
     assert "Traceback" not in out.out + out.err
 
 
+def test_ca_cert_problems_names_a_malformed_certificate_instead_of_raising(tmp_path):
+    # the extension parse is lazy: the check itself must not raise (build audit L8)
+    cp, kp, _k, c = _malformed(tmp_path)
+    probs = dca.ca_cert_problems(c, "root CA certificate")
+    assert probs and "root CA certificate has an extension that does not parse" \
+        in probs[0], probs
+    # and the import's refusal names WHICH certificate, not "a certificate in this file"
+    _refused(lambda: dca.import_root(_st(), OWN, True, cp),
+             "the root CA certificate has an extension that does not parse")
+    _refused(lambda: dca.import_signing(_st(), OWN, True, cert_path=cp, key_path=kp),
+             "the signing CA certificate has an extension that does not parse")
+    # a sound basicConstraints next to a malformed keyUsage: same refusal (the whole
+    # extension list is parsed on first touch)
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.x509.oid import ExtensionOID
+    k = tca.key()
+    name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "bad keyUsage")])
+    ku_bad = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+              .public_key(k.public_key()).serial_number(x509.random_serial_number())
+              .not_valid_before(dt.datetime(2020, 1, 1))
+              .not_valid_after(dt.datetime(2099, 1, 1))
+              .add_extension(x509.BasicConstraints(ca=True, path_length=None),
+                             critical=True)
+              .add_extension(x509.UnrecognizedExtension(ExtensionOID.KEY_USAGE,
+                                                        b"\x00junk"), critical=True)
+              .sign(k, hashes.SHA256()))
+    assert "has an extension that does not parse" in \
+        dca.ca_cert_problems(ku_bad, "root CA certificate")[0]
+
+
+# ── a file the Studio cannot read is a refusal, never a crash (build audit L7) ───
+# os.path.getsize only stats: a directory (or a key this user may not read) passes
+# it and fails at open(), which escaped as a bare OSError into the crash dialog.
+def test_a_path_that_stats_but_does_not_open_is_refused_on_every_import_path(
+        chain, tmp_path):
+    d = str(tmp_path / "a-directory")
+    os.mkdir(d)
+    st = _st()
+    _refused(lambda: dca.import_root(st, OWN, True, d), "cannot read", d)
+    _refused(lambda: dca.import_signing(st, OWN, True, cert_path=d,
+                                        key_path=chain.key_path), "cannot read", d)
+    _refused(lambda: dca.import_signing(st, OWN, True, cert_path=chain.signing_path,
+                                        key_path=d), "cannot read", d)
+    _refused(lambda: dca.import_signing(st, OWN, True, p12_path=d), "cannot read", d)
+    assert st.entries() == ()
+
+
+def test_an_unreadable_key_file_is_refused_not_raised(chain):
+    os.chmod(chain.key_path, 0)
+    try:
+        if os.access(chain.key_path, os.R_OK):      # root, or a filesystem that
+            pytest.skip("this user can read a mode-000 file")   # ignores the mode
+        st = _st()
+        dca.import_root(st, OWN, True, chain.root_path)
+        _refused(lambda: dca.import_signing(st, OWN, True,
+                                            cert_path=chain.signing_path,
+                                            key_path=chain.key_path),
+                 "cannot read", chain.key_path)
+        assert not st.own().key_pem
+    finally:
+        os.chmod(chain.key_path, 0o600)
+
+
+def test_the_cli_refuses_an_unopenable_file_with_exit_2(chain, tmp_path, capsys):
+    d = str(tmp_path / "a-directory")
+    os.mkdir(d)
+    assert dca.cli_main(["check", "--domain", OWN, "--cert", chain.signing_path,
+                         "--key", d]) == 2
+    assert dca.cli_main(["check", "--domain", OWN, "--root", d]) == 2
+    out = capsys.readouterr()
+    assert out.out.count("refused: cannot read") == 2, out.out
+    assert "Traceback" not in out.out + out.err
+
+
 # ── the extra-domain root slot (now the only place a self-signed CA goes) ───────
 def test_an_extra_domain_with_only_a_root_says_what_it_adds(chain):
     st = _st()

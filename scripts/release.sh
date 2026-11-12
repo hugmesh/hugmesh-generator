@@ -164,6 +164,14 @@ while IFS='|' read -r st repo kind vfile prefix wf pkgs mirrors; do
   [ -z "${T_STAGE[$repo]:-}" ] || die "$TABLE: '$repo' is listed twice"
   ROWS+=("$repo")
   T_STAGE[$repo]=$st; T_KIND[$repo]=$kind; T_VFILE[$repo]=$vfile; T_PREFIX[$repo]=$prefix; T_WF[$repo]=$wf; T_PKGS[$repo]=$pkgs; T_MIRRORS[$repo]=${mirrors:-}
+  # A mirror is gateway-pin, a plain path, or <file>:<kind>. An unknown :kind would be read as
+  # a file name that never exists, and a missing mirror file moves nothing without a word.
+  for tok in ${T_MIRRORS[$repo]//,/ }; do
+    case "$tok" in
+      gateway-pin|*:Version|*:heading|*:currently|*:jar) ;;
+      *:*) die "$TABLE: unknown mirror kind '${tok##*:}' in '$tok' for '$repo' (kinds: Version, heading, currently, jar)" ;;
+    esac
+  done
 done < "$TABLE"
 [ ${#ROWS[@]} -gt 0 ] || die "$TABLE has no rows"
 for o in "${ONLY[@]}"; do
@@ -943,6 +951,22 @@ def readme_version(path, text):
     res["summary"].append("%s:%d **Version %s** -> %s" % (path, line_of(text, m.start()), m.group(1), own))
     return text[:m.start(1)] + own + text[m.end(1):]
 
+SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?"
+
+def spelled(path, text, pattern, what):
+    # every occurrence of one version spelling in a doc; the version is group "v"
+    found = list(re.finditer(pattern, text))
+    if not found:
+        res["left"].append("%s: no %s spelling to move; set it by hand or drop the mirror" % (path, what))
+        return None
+    if mode == "check":
+        return text
+    for m in reversed(found):
+        if m.group("v") != own:
+            res["summary"].append("%s:%d %s %s -> %s" % (path, line_of(text, m.start()), what, m.group("v"), own))
+            text = text[:m.start("v")] + own + text[m.end("v"):]
+    return text
+
 def changelog(path, text):
     if mode != "stable":
         return text
@@ -957,10 +981,14 @@ def changelog(path, text):
     return text[:at] + stub + text[at:]
 
 def handle(path, how):
-    text = rd(path)
+    # a file named by several mirrors (README.md:currently,README.md:jar) is rewritten in turn,
+    # each from the previous rewrite: re-reading it would drop the earlier one
+    text = res["changed"].get(path)
+    if text is None:
+        text = rd(path)
     if text is None:
         res["missing"].append(path)
-        if how in ("vfile", "readme", "changelog", "gwpin"):
+        if how in ("vfile", "readme", "changelog", "gwpin", "currently", "jar"):
             res["left"].append("%s is missing" % path)
         return
     base = os.path.basename(path)
@@ -968,6 +996,10 @@ def handle(path, how):
         new = gatewaypin(path, text)
     elif how == "readme":
         new = readme_version(path, text)
+    elif how == "currently":
+        new = spelled(path, text, r"currently `(?P<v>%s)`" % SEMVER, "'currently `X`'")
+    elif how == "jar":
+        new = spelled(path, text, r"target/[A-Za-z0-9_.-]+?-(?P<v>%s)\.jar\b" % SEMVER, "'target/<artifact>-X.jar'")
     elif how == "changelog":
         new = changelog(path, text)
     elif base == "pom.xml":
@@ -989,6 +1021,10 @@ for tok in spec.get("mirrors", []):
         todo.append((tok[: -len(":Version")], "readme"))
     elif tok.endswith(":heading"):
         todo.append((tok[: -len(":heading")], "changelog"))
+    elif tok.endswith(":currently"):
+        todo.append((tok[: -len(":currently")], "currently"))
+    elif tok.endswith(":jar"):
+        todo.append((tok[: -len(":jar")], "jar"))
     else:
         todo.append((tok, "mirror"))
 for p, how in list(todo):
@@ -1013,7 +1049,7 @@ bump_compute() {
   for tok in ${T_MIRRORS[$repo]//,/ }; do
     case "$tok" in
       gateway-pin) fetch+=(".github/workflows/${T_WF[$repo]}") ;;
-      *:Version|*:heading) fetch+=("${tok%:*}") ;;
+      *:Version|*:heading|*:currently|*:jar) fetch+=("${tok%:*}") ;;
       *) fetch+=("$tok") ;;
     esac
   done

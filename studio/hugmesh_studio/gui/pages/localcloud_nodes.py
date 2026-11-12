@@ -243,9 +243,9 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self._k8s_up: bool | None = None
         self.setTitle("Create nodes for local cloud")
         self.setSubTitle(
-            "Turn the local Docker mesh into real device images. The abbreviated "
-            "wizard ahead reuses the domain and accounts already provisioned here "
-            "and offers only the laptop and cluster-node image types.")
+            "Turn the local Docker mesh into real device images. The short wizard "
+            "ahead reuses its domain and accounts and offers only the laptop and "
+            "cluster-node image types.")
         lay = scrollable(self)
 
         intro = QtWidgets.QLabel(
@@ -405,6 +405,12 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             return "Checking whether the local Kubernetes (DevOps) lane is running…"
         if self._k8s_up:
             blocker = self._teardown_blocker()
+            if platform_info.blocker_kind(blocker) == "darwin":
+                # A Mac missing Homebrew's GNU tools: the sentence is the whole way
+                # past the gate (install them, restart, and the button works).
+                return (f"The local Kubernetes (DevOps) lane is RUNNING. {blocker} "
+                        "After that this page can delete the cluster itself; Next "
+                        "stays disabled until the cluster is gone.")
             if blocker:
                 # The button cannot run here, so the way past the gate is to delete
                 # the cluster where `make` runs and re-enter (initializePage re-probes).

@@ -1427,7 +1427,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "uboot_url": _UBOOT_PLATFORMS, "uboot_defconfig": _UBOOT_PLATFORMS, "skip_uboot": _UBOOT_PLATFORMS,
     # build plumbing.
     "skip_kernel": _ALL_PLATFORMS, "skip_clean": _ALL_PLATFORMS, "build_subdir": _ALL_PLATFORMS,
-    "seed_url": _ALL_PLATFORMS, "version": _ALL_PLATFORMS, "release_tag": _X86,
+    "seed_url": _ALL_PLATFORMS, "version": _ALL_PLATFORMS, "release_tag": _X86_RPI5_OPI,
     "distdir": _X86, "extra_packages": _ARM_PLATFORMS,
     # user package deltas — parsed identically by all six builders (WS-BUILDER flip).
     "packages_add": _ALL_PLATFORMS, "packages_drop": _ALL_PLATFORMS,
@@ -1516,7 +1516,8 @@ _ORANGEPI_NODE_ROLE_IDS = ("pki", "backend", "frontend", "omnibus")
 # and its DESKTOP does not: node-class only on _OPI_NODE_PLATFORMS (FIELD_SCOPE).
 _OPI_NODE_CLASS_FIELDS = ("games_domain", "release_state", "idp", "idp_issuer",
                           "idp_client_id", "idp_jwks", "vault_addr", "vault_external_addr",
-                          "optional_services", "exclude_services", "enable_games", "anubis")
+                          "optional_services", "exclude_services", "enable_games", "anubis",
+                          "release_tag")
 DESKTOP_ROLES = X86_CLIENT_ROLES + _STANDALONE_DESKTOP_ROLES + _ARM_DESKTOP_ROLES
 # Cluster-node / headless-appliance family (root-encrypted infra). X86_NODE_ROLES already
 # covers pki/backend/frontend/backend-gpu/omnibus/edge-ai (x86 AND rpi5 share
@@ -3595,7 +3596,7 @@ class ImageConfig:
     superdomain: str = ""            # Tailscale root domain all mesh nodes join; "" = derived <brand>.internal. Emitted as --superdomain for MESH builds (WS-SUPER-B: baked to <etc>/superdomain + headscale MagicDNS); permanently internal, never go-live-flipped (I7)
     games_domain: str = ""             # --games-domain (games.<domain> host + OIDC issuer; x86+rpi5)
     release_state: str = ""            # --release-state internal|public (x86+rpi5; "" = builder default)
-    release_tag: str = ""              # --release-tag image stamp (x86)
+    release_tag: str = ""              # --release-tag: the tag ENV=prod pins first-party :dev images to (x86 + rpi5 + Orange Pi node roles; "" = builder default, the UTC build date)
     version: str = ""                  # -v/--version image stamp (all)
     person_role: str = ""              # --person-role user|mod|admin|superadmin (x86 CLIENT roles; "" = derive)
     hostname: str = ""                 # -H/--hostname baked host identity (all)
@@ -4439,7 +4440,7 @@ class ImageConfig:
         if self.hostname:
             validate_domain_name(self.hostname)   # a hostname is a DNS label/name
         if self.user:
-            validate_username(self.user)
+            validate_username(self.user, "user")   # not "local_user": a different field
         if self.timezone and not _TIMEZONE_RE.fullmatch(self.timezone):
             raise IdentityValidationError(
                 f"invalid timezone: {self.timezone!r} — rejected by the identity allowlist")
@@ -4946,6 +4947,10 @@ class ImageConfig:
         # the optional-services checklist) — the other ARM builders bake no cluster tree.
         if self.release_state:
             a += ["--release-state", self.release_state]
+        # --release-tag: the tag the builder's ENV=prod gate pins first-party :dev
+        # images to (scripts/_prod-gate-lib.sh), the same flag x86 takes.
+        if self.release_tag:
+            a += ["--release-tag", self.release_tag]
         if self.games_domain:
             a += ["--games-domain", self.games_domain]
         a += self._services_args()
@@ -5103,6 +5108,9 @@ class ImageConfig:
         a: list[str] = []
         if self.release_state:
             a += ["--release-state", self.release_state]
+        # the ENV=prod image-pin tag (scripts/_prod-gate-lib.sh), as _rpi5_args emits it
+        if self.release_tag:
+            a += ["--release-tag", self.release_tag]
         if self.games_domain:
             a += ["--games-domain", self.games_domain]
         a += self._services_args()

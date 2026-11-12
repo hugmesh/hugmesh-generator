@@ -1060,3 +1060,75 @@ def test_a_settings_error_inside_plan_is_said_inline_never_raised_out_of_the_slo
     page.plan_btn.click()                         # must return
     assert not page.status.isHidden() and "could not be read" in page.status.text()
     assert page.plan is None and not page.apply_btn.isEnabled()
+
+
+# ── a failed Plan / Apply speaks the sentence, not the Python class (GUI-27 / B-09) ──
+_CLASS_NAME = r"\b[A-Z][A-Za-z]*(Error|Exception)\b"
+
+
+def test_a_failed_plan_says_the_engines_sentence_not_the_python_class(
+        golive, world, qapp, tmp_path, monkeypatch, capfd):
+    """The walk read "Plan failed: RuntimeError: git archive … failed in …": the
+    class name is noise to an operator. The page says the engine's own sentence;
+    the class and the traceback go to stderr (the Studio log), not away."""
+    import re
+    saved_mesh_naming_the_org(world)
+    runner = world["runner"]
+    real_run = runner.run
+    why = "fatal: not a valid object name"
+
+    def archive_fails(argv, **kw):
+        if "archive" in argv:
+            runner.calls.append(list(argv))
+            return oe.RunResult(128, b"", (why + "\n").encode())
+        return real_run(argv, **kw)
+    monkeypatch.setattr(runner, "run", archive_fails)
+    golive.export_runner = runner
+    golive.export_remote_base = f"file://{world['gh_root']}/"
+    _at_generate(golive)
+    golive.next()
+    page = golive.currentPage()
+    assert isinstance(page, golive_mod.GoLiveOrgExportPage)
+    page.out_dir.setText(str(tmp_path / "out"))
+    capfd.readouterr()                                   # only what the Plan writes
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    golive.resize(820, 640)
+    _settle(qapp, 10)
+    _shot(golive, "golive-org-export-plan-failed.png", tmp_path)
+    status = page.status.text()
+    assert page.plan is None and not page.apply_btn.isEnabled()
+    m = re.fullmatch(r"Plan failed: git archive (\S+) failed in (\S+): (.*)", status)
+    assert m, status
+    assert m.group(3) == why and os.path.isdir(m.group(2)), status
+    assert not re.search(_CLASS_NAME, status), status
+    assert page.status.isVisible()
+    # the line is on screen whole: inside the viewport's width, never cut short
+    viewport = page._content_scroll.viewport()
+    right = page.status.mapTo(viewport, page.status.rect().bottomRight())
+    assert right.x() <= viewport.width(), (right, viewport.width())
+    assert page.status.height() >= page.status.heightForWidth(page.status.width()) - 2
+    # ...and the class is still recorded for whoever debugs it
+    err = capfd.readouterr().err
+    assert "golive: org export failed: RuntimeError: git archive" in err, err
+    assert "Traceback (most recent call last)" in err, err
+
+
+@pytest.mark.parametrize("exc, said", [
+    (RuntimeError("gh repo create exampleorg/x failed: HTTP 403"),
+     "gh repo create exampleorg/x failed: HTTP 403"),
+    (OSError(2, "No such file or directory"), "[Errno 2] No such file or directory"),
+    (RuntimeError(), "RuntimeError"),                    # no message: never a bare "failed: "
+    (ValueError("   "), "ValueError"),
+])
+def test_the_export_worker_reports_the_message_and_logs_the_class(qapp, capfd, exc, said):
+    """Plan AND Apply share this worker, so "Apply failed: …" gets the same rule."""
+    def boom(_progress):
+        raise exc
+    got = []
+    w = golive_mod._ExportWorker(boom)
+    w.done.connect(got.append)
+    w.run()                                              # synchronously, on this thread
+    assert got == [("error", said)]
+    err = capfd.readouterr().err
+    assert f"golive: org export failed: {type(exc).__name__}" in err, err
