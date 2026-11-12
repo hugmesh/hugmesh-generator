@@ -1279,6 +1279,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# tailscaled version floor (scripts/_download-lib.sh): the shared init script passes
+# --no-logs-no-support, which tailscaled only accepts from 1.32.0 on. Refuse an older
+# --tailscale-version here, before any download, instead of shipping a mesh client
+# that exits on an unknown flag.
+${SKIP_MESH} || ${SKIP_TAILSCALE} || dlv_tailscale_version_ok "${TAILSCALE_VERSION}" || exit 1
+
 # Comma tolerance: accept "akkoma,tuwunel" (the CSV spelling GUIs/configs tend to
 # emit) as well as the native space-separated list — normalized HERE, right after
 # arg parse, so every downstream word-split (`for s in ${OPTIONAL_SERVICES}`,
