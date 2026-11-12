@@ -76,7 +76,7 @@ from ...core import build_sessions
 from ...core import roles as role_vocab
 from ...core.config import (
     ENV_CHOICES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS,
-    KERNEL_FLAVOR_CHOICES, KERNEL_FLAVOR_REFUSED, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
+    KERNEL_FLAVOR_CHOICES, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
     ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS, ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS,
     ORANGEPI4LTS_FLAVORS,
     RPI_BOARDS,
@@ -90,7 +90,7 @@ from ...core import pki_lan
 from ...core import plain_words
 from ...tui.superbrand_step import session_for
 from ._nvd_key_widget import NvdKeyWidget
-from ._widgets import _file_picker, _row, add_refused_items, offered_index
+from ._widgets import _file_picker, _row
 from .brand_picker import BrandPicker
 from .domain_services import DomainServicesWidget
 from .domains import _COL_IDP, DomainsTableWidget
@@ -378,9 +378,7 @@ class FleetPage(QtWidgets.QWidget):
         self.jetson_roles.setPlaceholderText("JETSON_ROLES subset (default: edge_ai)")
         self.jetson_board = _default_combo(JETSON_BOARDS)
         self.jetson_kernel_flavor = _default_combo(
-            KERNEL_FLAVOR_CHOICES,
-            "JETSON_KERNEL_FLAVOR. l4t is shown greyed: " + KERNEL_FLAVOR_REFUSED["l4t"])
-        add_refused_items(self.jetson_kernel_flavor, KERNEL_FLAVOR_REFUSED)
+            KERNEL_FLAVOR_CHOICES, "JETSON_KERNEL_FLAVOR — the l4t BUILD is a stub that hard-errors today")
         jl.addWidget(_row("Jetson roles", self.jetson_roles))
         jl.addWidget(_row("Jetson board", self.jetson_board))
         jl.addWidget(_row("Jetson kernel", self.jetson_kernel_flavor))
@@ -748,8 +746,7 @@ class FleetPage(QtWidgets.QWidget):
         self.jetson_only.setChecked(cfg.jetson_only)
         self.jetson_roles.setText(cfg.jetson_roles)
         combo(self.jetson_board, cfg.jetson_board)
-        self.jetson_kernel_flavor.setCurrentIndex(
-            offered_index(self.jetson_kernel_flavor, cfg.jetson_kernel_flavor))
+        combo(self.jetson_kernel_flavor, cfg.jetson_kernel_flavor)
         self.orangepi5.setChecked(cfg.orangepi5)
         self.orangepi5_only.setChecked(cfg.orangepi5_only)
         combo(self.orangepi5_board, cfg.orangepi5_board)

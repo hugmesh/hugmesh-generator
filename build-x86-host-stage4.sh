@@ -2132,7 +2132,7 @@ if ${NVIDIA_CUDA}; then
     fi
 fi
 # edge-ai inference node: default CUDA on when on the proprietary NVIDIA driver (the
-# inference runtime needs it). GPU inference is CUDA only: any other driver leaves it off.
+# inference runtime needs it). Skipped for an AMD/Intel edge node (future ROCm path).
 if ${EDGE_AI} && [ "${GPU_DRIVER}" = "nvidia" ]; then NVIDIA_CUDA=true; fi
 case "${STEAM_DELIVERY}" in flatpak|native|none) ;; *) err "--steam must be: flatpak | native | none (got '${STEAM_DELIVERY}')"; exit 1 ;; esac
 # NATIVE Steam (games-util/steam-launcher from the steam-overlay) is heavy: it

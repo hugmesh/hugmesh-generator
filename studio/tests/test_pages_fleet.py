@@ -122,11 +122,6 @@ def _sessions_page(wiz):
 # generator_dir=/gen and the pinned HOST above. Byte-identical argv is the fleet's
 # emission contract — do NOT regenerate these to make a refactor pass.
 #
-# One deliberate edit since: "everything" chose jetson_kernel_flavor="l4t", which the
-# fleet page no longer offers (the builder exits 1 on it by design; hugmesh-generator
-# #1060). It now chooses "mainline", the one offered non-default value, and the env
-# golden says JETSON_KERNEL_FLAVOR=mainline. The translation itself is unchanged.
-#
 # BuildDriver.__init__ resolves generator_dir with os.path.abspath, so the /src bind
 # mount carries the resolved form: exactly "/gen" on Linux (the captured golden), and
 # "<drive of the cwd>:\gen" on Windows, which Docker Desktop mounts the same way.
@@ -140,7 +135,7 @@ GOLDEN_CHOICES = {
         frite=True, frite_only=True, frite_board="le-potato", frite_flavor="live",
         frite_desktop="none",
         jetson=True, jetson_only=True, jetson_roles="edge_ai desktop",
-        jetson_board="orin-nx-16gb", jetson_kernel_flavor="mainline",
+        jetson_board="orin-nx-16gb", jetson_kernel_flavor="l4t",
         orangepi5=True, orangepi5_only=True, orangepi5_board="orange-pi-5",
         orangepi5_flavor="installer",
         orangepizero2=True, orangepizero2_only=True, orangepizero2_flavor="live",
@@ -176,7 +171,7 @@ _EVERYTHING_ENV = [
     "RPI_ROLES=pki backend frontend desktop", "RPI_BOARD=rpi4",
     "FRITE_BOARD=le-potato", "FRITE_FLAVOR=live", "FRITE_DESKTOP=none",
     "JETSON_ROLES=edge_ai desktop", "JETSON_BOARD=orin-nx-16gb",
-    "JETSON_KERNEL_FLAVOR=mainline", "ORANGEPI5_BOARD=orange-pi-5",
+    "JETSON_KERNEL_FLAVOR=l4t", "ORANGEPI5_BOARD=orange-pi-5",
     "ORANGEPI5_FLAVOR=installer", "ORANGEPIZERO2_FLAVOR=live",
     "ORANGEPIZERO2W_FLAVOR=installer",
     "ORANGEPIZERO3_FLAVOR=installer",
@@ -236,8 +231,6 @@ def _drive(page, choices):
         elif isinstance(w, QtWidgets.QComboBox):
             i = w.findData(val)
             assert i >= 0, f"{name}: {val!r} not in the combo"
-            # an operator cannot pick a greyed (not offered) item, so neither can this
-            assert w.model().item(i).isEnabled(), f"{name}: {val!r} is not offered"
             w.setCurrentIndex(i)
         elif isinstance(w, QtWidgets.QSpinBox):
             w.setValue(val)

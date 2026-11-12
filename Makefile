@@ -388,8 +388,7 @@ FRITE_PASS    := FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' FRI
 # validation pending; see specs-jetson/README.md). FRITE-style vars:
 #   JETSON_ROLE          = edge-ai (DEFAULT, headline) | backend-gpu | omnibus | desktop
 #   JETSON_BOARD         = orin-nano (DEFAULT) | orin-nano-4gb | orin-nx-8gb | orin-nx-16gb
-#   JETSON_KERNEL_FLAVOR = mainline (DEFAULT, the only one that builds — NO CUDA);
-#                          l4t is parsed but the builder exits 1 on it by design
+#   JETSON_KERNEL_FLAVOR = mainline (DEFAULT, buildable — NO CUDA) | l4t (stub)
 JETSON_ROLE          ?= edge-ai
 JETSON_BOARD         ?= orin-nano
 JETSON_KERNEL_FLAVOR ?= mainline

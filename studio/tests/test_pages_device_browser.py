@@ -117,7 +117,7 @@ def test_unsupported_device_visible_unselectable_with_reason(wiz):
     reason, and can never be selected for a build."""
     page = advance_to(wiz, wizard_mod.RolePage)
     page._arch_buttons["arm64"].setChecked(True)
-    for did in ("bpi-m5", "rpi2", "opi4", "rk3588-generic"):
+    for did in ("bpi-m5", "rpi6", "opi4", "rk3588-generic"):
         item = page._device_items[did]
         assert not item.isHidden() or CAT.device(did).arch != "arm64"
         assert not _pickable(page, did), did

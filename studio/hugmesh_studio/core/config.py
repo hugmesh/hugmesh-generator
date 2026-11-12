@@ -463,20 +463,19 @@ ORANGEPI4LTS_FLAVORS = ("live", "installer", "both")
 # specs-*/ work; would need the jetson/opi5 EXPERIMENTAL-label + fail-loud-preflight
 # convention; the orchestrator deliberately did NOT author new builders it cannot
 # validate on silicon, per the honesty rule):
-#   OPi 4 (RK3399)        — the 4 LTS revision has its own platform since (orangepi4-lts,
-#                           build-orangepi4-lts-stage4.sh), booting this board's own
-#                           mainline rk3399-orangepi DTB + orangepi-rk3399_defconfig;
-#                           promoting the plain OPi 4 is a validation task, not a builder.
-#                           Other RK3399 boards (Rock Pi 4, NanoPi M4) each need their own
-#                           defconfig + DTB pair: that builder accepts one board only.
-#   OPi 3 (Allwinner H6)  — the 3 LTS revision has its own platform (orangepi3-lts);
-#                           the plain OPi 3 is likewise a validation task.
+#   OPi 4 (RK3399)        — mature mainline u-boot/kernel/DTB/TF-A/panfrost, but the
+#                           only Rockchip recipe here (RK3588) is NOT directly reusable
+#                           (different rkbin DDR blob, TF-A platform, Mali). Would be a
+#                           new platform `orangepi4` + build-orangepi4-stage4.sh.
+#   OPi 3 (Allwinner H6)  — mainline u-boot/kernel/DTB incl. display; closest sibling
+#                           is the H616 zero2 flow but needs new specs-orangepi3/.
 #   OPi 4 Pro             — UNCONFIRMED SKU; folds into OPi 4 only IF proven RK3399.
 #
 # NOT ADDED — INFEASIBLE (no internally-consistent, --print-plan-clean recipe to even
 # gate; fails at recipe-authoring, so a preflight-gated EXPERIMENTAL would be dishonest):
 #   RPi 2 (BCM2836)          — 32-bit ARMv7; the whole rpi5 toolchain is aarch64-only.
 #   OPi 2 (Allwinner H3)     — 32-bit ARMv7; same aarch64-only blocker.
+#   RPi 6                    — does not exist (latest shipping Pi is the Pi 5, Jan-2026).
 #   OPi 6 / 6 Plus (CIX Sky1)— 2025 SoC, vendor-BSP/out-of-tree; no trustworthy mainline
 #                              u-boot/kernel/DTB to build a recipe against.
 
@@ -955,20 +954,9 @@ MANAGED_SERVICE_TIER3_BLOCKER = {
                  "re-architecture keeping <app>-mtls names; USB CA-custody has no managed analog",
 }
 
-# --kernel-flavor (jetson only). OFFERED: mainline (the builder default). REFUSED: l4t.
-# build-jetson-stage4.sh exits 1 on --kernel-flavor l4t by design: NVIDIA's L4T/BSP
-# kernel and CUDA userspace are EULA-gated downloads the builder does not fetch, and
-# their flash is an out-of-band tegraflash. An option that always exits non-zero is
-# not an option, so no channel offers it: the GUI shows it greyed with this reason and
-# the text menu lists it with the same reason but never selects it. The builder and
-# --print-plan still parse the axis (G36), so a plan-only check keeps working.
-KERNEL_FLAVOR_CHOICES = ("mainline",)
-KERNEL_FLAVOR_REFUSED = {
-    "l4t": ("not offered: the builder exits non-zero on it by design. NVIDIA's L4T "
-            "kernel and CUDA userspace are EULA-gated downloads it does not fetch; flash "
-            "them out of band (specs-jetson/installer/TEGRAFLASH.md). mainline builds, "
-            "without CUDA."),
-}
+# --kernel-flavor (jetson only): mainline (default) | l4t. The l4t BUILD is a stub that
+# hard-errors today, but the plan/matrix/--print-plan accept the axis (G36).
+KERNEL_FLAVOR_CHOICES = ("mainline", "l4t")
 
 # --secure-boot tri-state (x86 only; builder default is ON with a throwaway org key):
 #   "" -> leave the builder default   "on" -> --secure-boot   "off" -> --no-secure-boot (G5)
@@ -4990,12 +4978,9 @@ class ImageConfig:
         return a
 
     def _encrypt_root_args(self) -> list[str]:
-        """--encrypt-root / --luks-pass — every builder EXCEPT Jetson takes them. The
-        Jetson builder refuses --encrypt-root (its single boot+root partition is read
-        by the Orin firmware before Linux runs, so a LUKS2 root cannot boot), and
-        _check_jetson_conflicts raises before this emits it. Kept as its own opt-in
-        helper (called from each builder method) rather than folded into
-        _arm_common_args()."""
+        """--encrypt-root / --luks-pass — landed on x86/Frite/RPi5/Jetson (all
+        four platforms as of Phase 2c); kept as its own opt-in helper (called
+        from each builder method) rather than folded into _arm_common_args()."""
         a: list[str] = []
         if self.encrypt_root:
             a += ["--encrypt-root"]
