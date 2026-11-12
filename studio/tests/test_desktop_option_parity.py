@@ -439,6 +439,10 @@ def test_a_greyed_option_says_the_same_reason_on_every_face(target, role, platfo
             j.feed("gpu nvidia")
             assert j.status == reasons["gpu_driver"]
             assert j.cfg.gpu_driver in ("", "auto")
+            j.feed("s +i3")
+            assert j.status == reasons["i3"] and not ds.spec_of(j.cfg).sessions
+            j.feed("cards intel")
+            assert j.status == reasons["video_cards"] and not ds.spec_of(j.cfg).video_cards
     elif face == "cli":
         table = {o["id"]: o for o in json.loads(_cli_options_json())["options"]}
         for o, why in reasons.items():

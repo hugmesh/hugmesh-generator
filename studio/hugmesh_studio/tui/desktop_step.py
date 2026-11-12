@@ -194,6 +194,9 @@ class DesktopScreen:
                 name = t.lstrip("+-")
                 if name not in ds.SESSIONS:
                     return f"unknown session {name!r}"
+                st, why = ds.option_state(c, name, "tui") if name in ds.OPTION_LABELS else ("live", "")
+                if st != "live" and not t.startswith("-"):
+                    return why
                 if t.startswith("-"):
                     spec.sessions = [x for x in spec.sessions if x != name]
                 elif name not in spec.sessions and name not in ds.ALWAYS_ON_SESSIONS:
@@ -201,6 +204,9 @@ class DesktopScreen:
         elif cmd == "default":
             spec.default_session = "" if args[0] == "-" else args[0]
         elif cmd == "cards":
+            st, why = ds.option_state(c, "video_cards", "tui")
+            if st != "live" and args != ["-"]:
+                return why
             spec.video_cards = [] if args == ["-"] else list(args)
         elif cmd == "user":
             sub = args[0]
