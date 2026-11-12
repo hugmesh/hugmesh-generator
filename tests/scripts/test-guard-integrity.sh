@@ -1188,6 +1188,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #1004 round 2, 2026-11-12 (fix/control-endpoint-lan-first-20261111 merged with origin/main dd33be57):
 # main 246 of 288 + this branch's tests/scripts/test-control-endpoint-lan-first.sh = 247 of 289,
 # MEASURED with GUARD_PREMERGE=0 on the merged tree.
+# Re-merged with origin/main a88ef74e (#1022, the baseline is a floor): 247 of 289,
+# MEASURED with GUARD_PREMERGE=0 on the merged tree.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-247}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a

@@ -351,7 +351,7 @@ for a in "$@"; do case "$a" in
   --list-rich-rules) cat "${FW_RULES}" 2>/dev/null; exit 0 ;;
   --query-rich-rule=*) grep -qxF -- "${a#--query-rich-rule=}" "${FW_RULES}" 2>/dev/null; exit $? ;;
   --add-rich-rule=*) printf '%s\n' "${a#--add-rich-rule=}" >> "${FW_RULES}"; echo "ADDRICH ${a#--add-rich-rule=}" >> "${FW_LOG}"; exit 0 ;;
-  --remove-rich-rule=*) grep -vxF -- "${a#--remove-rich-rule=}" "${FW_RULES}" > "${FW_RULES}.n"; mv "${FW_RULES}.n" "${FW_RULES}"; echo "RMRICH ${a#--remove-rich-rule=}" >> "${FW_LOG}"; exit 0 ;;
+  --remove-rich-rule=*) [ -z "${FW_RM_FAIL:-}" ] || exit 1; grep -vxF -- "${a#--remove-rich-rule=}" "${FW_RULES}" > "${FW_RULES}.n"; mv "${FW_RULES}.n" "${FW_RULES}"; echo "RMRICH ${a#--remove-rich-rule=}" >> "${FW_LOG}"; exit 0 ;;
   --query-port=*) exit 1 ;;
   --add-port=*) echo "ADDPORT ${a#--add-port=}" >> "${FW_LOG}"; exit 0 ;;
 esac; done
@@ -367,6 +367,7 @@ fwrun() {  # fwrun <marker content|-> <tag>
     PATH="${FWT}:${PATH}" FW_RULES="${FWT}/rules" FW_LOG="${FWT}/log" NFT_CAPTURE="${FWT}/$2.nft" \
         HUGMESH_COTURN_PUBLIC_MARKER="${FWT}/no-coturn" HUGMESH_HEADSCALE_LAN_MARKER="${FWT}/marker" \
         HUGMESH_HEADSCALE_STUN_MARKER="${FWT}/no-stun" HUGMESH_HEADSCALE_STUN_FW_STATE="${FWT}/stun-state" \
+        HUGMESH_HEADSCALE_LAN_FW_STATE="${FWT}/run/headscale-lan-control.fw" \
         HUGMESH_FIREWALL_HEALTH_DIR="${FWT}/health" bash "${FW}" > "${FWT}/$2.out" 2>&1
 }
 want_set() {  # want_set <port>: the exact expected rule set (+ the foreign rule)
@@ -396,6 +397,37 @@ fwrun 9443 m9443b; fwrun - gone
     && ok "no marker: ours removed, the foreign rule untouched" || bad "marker removal left: $(tr '\n' '|' < "${FWT}/rules")"
 fwrun 70000 bad2
 [ "$(sort "${FWT}/rules")" = "${FOREIGN}" ] && ok "an out-of-range port admits nothing" || bad "port 70000 admitted something"
+# Only what this script wrote is ever taken back. An operator's rich rule of the
+# carve-out's exact shape on another port (the reviewer's repro: 22/tcp from
+# 192.168/16), and one on the SAME port written before this script admitted anything,
+# both survive every run, marker or not.
+OP22="$(rule 192.168.0.0/16 22)"; OP8080="$(rule 10.0.0.0/8 8080)"
+rm -f "${FWT}/run/headscale-lan-control.fw"
+printf '%s\n' "${FOREIGN}" "${OP22}" "${OP8080}" > "${FWT}/rules"
+fwrun - op-nomarker
+[ "$(sort "${FWT}/rules")" = "$(printf '%s\n' "${FOREIGN}" "${OP22}" "${OP8080}" | sort)" ] && ! grep -a -F 'RMRICH' "${FWT}/log" >/dev/null \
+    && ok "no marker, nothing recorded: an operator's same-shape rules (22/tcp, and 8080/tcp from 10/8) are not touched" \
+    || bad "an operator's same-shape rule was removed with no marker: $(tr '\n' '|' < "${FWT}/log")"
+fwrun 9443 op-9443
+[ "$(sort "${FWT}/rules")" = "$( { want_set 9443; printf '%s\n' "${OP22}" "${OP8080}"; } | sort)" ] \
+    && ok "marker 9443: ours admitted, the operator's 22 and 8080 rules kept" || bad "marker 9443 with operator rules: $(tr '\n' '|' < "${FWT}/rules")"
+[ "$(cat "${FWT}/run/headscale-lan-control.fw" 2>/dev/null)" = "9443" ] && ok "the admitted port is recorded (9443)" \
+    || bad "the admitted port is not recorded: '$(cat "${FWT}/run/headscale-lan-control.fw" 2>/dev/null)'"
+fwrun - op-gone
+[ "$(sort "${FWT}/rules")" = "$(printf '%s\n' "${FOREIGN}" "${OP22}" "${OP8080}" | sort)" ] \
+    && ok "marker gone: ours (9443) taken back, the operator's rules still there" || bad "marker gone with operator rules: $(tr '\n' '|' < "${FWT}/rules")"
+[ ! -e "${FWT}/run/headscale-lan-control.fw" ] && ok "nothing admitted: the record is gone" || bad "the record outlived the rules"
+# A removal that fails keeps its port recorded, so a later run still takes it back.
+printf '%s\n' "${FOREIGN}" > "${FWT}/rules"; rm -f "${FWT}/run/headscale-lan-control.fw"
+fwrun 8080 rf-1
+FW_RM_FAIL=1 fwrun 9443 rf-2
+[ "$(tr ' ' '\n' < "${FWT}/run/headscale-lan-control.fw" | sort | tr '\n' ' ')" = "8080 9443 " ] \
+    && ok "a failed removal keeps the old port (8080) recorded next to the new one (9443)" \
+    || bad "a failed removal lost the old port: '$(cat "${FWT}/run/headscale-lan-control.fw" 2>/dev/null)'"
+fwrun 9443 rf-3
+[ "$(sort "${FWT}/rules")" = "$(want_set 9443)" ] && [ "$(cat "${FWT}/run/headscale-lan-control.fw")" = "9443" ] \
+    && ok "…and the next run takes 8080 back" || bad "after a failed removal: $(tr '\n' '|' < "${FWT}/rules")"
+printf '%s\n' "${FOREIGN}" > "${FWT}/rules"; rm -f "${FWT}/run/headscale-lan-control.fw"
 
 # ── D. gen-provision-keys.sh --pki-ip ────────────────────────────────────────
 echo "-- D. gen-provision-keys.sh --pki-ip (run for real) --"
@@ -613,9 +645,14 @@ PY
     control "the firewall admits from every source" specs/usr/sbin/hugmesh-coturn-firewall \
         'HS_LAN_SOURCES="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"' 'HS_LAN_SOURCES="0.0.0.0/0"'
     control "the firewall never removes a stale rule" specs/usr/sbin/hugmesh-coturn-firewall \
-        '            firewall-cmd --zone="${ZONE}" --remove-rich-rule="${r}" >/dev/null 2>&1 \' '            true \'
+        '                    firewall-cmd --zone="${ZONE}" --remove-rich-rule="${r}" >/dev/null 2>&1 && continue' '                    continue'
     control "the firewall accepts a malformed marker" specs/usr/sbin/hugmesh-coturn-firewall \
         'if [[ "${_hs_lan}" =~ ^[0-9]{1,5}$ ]] && [ "${_hs_lan}" -ge 1 ] && [ "${_hs_lan}" -le 65535 ]; then' 'if [ -n "${_hs_lan}" ]; then'
+    control "the firewall takes back rules of its shape on ANY port (an operator's 22/tcp)" specs/usr/sbin/hugmesh-coturn-firewall \
+        '[ "${r}" = "$(hs_lan_rule "${src}" "${p}")" ] || continue' \
+        '[[ "${r}" == *"${src}"* ]] || continue'
+    control "the firewall forgets a port whose removal failed" specs/usr/sbin/hugmesh-coturn-firewall \
+        '*) HS_LAN_RECORD="${HS_LAN_RECORD} ${p}" ;; esac' '*) : ;; esac'
     control "gen-provision-keys lets the tailnet range through" scripts/gen-provision-keys.sh \
         'if [ "${_o1}" -eq 10 ] ||' 'if [ "${_o1}" -eq 100 ] || [ "${_o1}" -eq 10 ] ||'
     control "gen-provision-keys forgets the .mesh key" scripts/gen-provision-keys.sh \

@@ -460,10 +460,19 @@ IP. Precedence, highest first:
 1. `provision.json .headscale.server_url`;
 2. `.mesh.endpoint`;
 3. **before go-live only**: the pki node's confirmed LAN address,
-   `http://<.mesh.pki_lan_ip>:8080`. "Before go-live" is the predicate
-   `hugmesh-go-live` uses: `/etc/hugmesh/release-state` is not `public` and the
-   `/etc/hugmesh/go-live` marker is absent (an absent release-state file is
-   internal);
+   `http://<.mesh.pki_lan_ip>:8080`. "Before go-live" means both of these hold:
+   - this node is not past go-live itself, by the predicate `hugmesh-go-live`
+     uses: `/etc/hugmesh/release-state` is not `public` and the
+     `/etc/hugmesh/go-live` marker is absent (an absent release-state file is
+     internal);
+   - the baked `HEADSCALE_URL` does **not** answer as a control server. The
+     node's image cannot know that the mesh went live after the image was built,
+     so keys-provision asks: `GET <baked URL>/key?v=<the client's capability
+     version>`, the first request `tailscale up` makes, must return a Noise
+     machine key (`mkey:` + 64 hex). curl verifies https against the node's trust
+     store, follows no redirect and is bounded (4 s; the LAN address 3 s). A
+     captive portal, a parked name, an HTTP error or a certificate that does not
+     verify is "does not answer";
 4. the baked brand `HEADSCALE_URL`;
 5. the pki row of `.nodes[]` (`http://<ip>:8080`).
 
@@ -476,11 +485,30 @@ row of `.nodes[]` is the template's example address (`10.0.0.10`) unless someone
 edited it, so it stays below the baked URL. A malformed value in either is dropped,
 never interpolated.
 
-After go-live, step 3 is skipped and the baked URL wins again. A worker that must
-join a mesh that is already live, from outside its LAN, on an image without the
-public posture, sets `.mesh.endpoint`. A worker that joined over the LAN keeps that
-login server; changing it later needs `tailscale up --login-server=<new>
---force-reauth`.
+After go-live, step 3 is skipped and the baked URL wins again: on a node past
+go-live itself without asking anything, and on **every** other node as soon as the
+baked URL answers, whatever its image and whether or not it is on the pki's LAN.
+The baked URL is asked first in every round and wins when both answer, so a worker
+of a live mesh never contacts the pki LAN address at all (a worker on some other
+LAN does not offer its pre-auth key to whatever holds that RFC1918 address there).
+Before go-live it does: a worker on the pki's LAN offers its pre-auth key to
+`http://<pki_lan_ip>:8080` over plain HTTP, as a mesh with no baked URL always has
+(headscale's Noise channel protects the exchange, but anything that holds that
+address on that LAN receives the key). The static IP or DHCP reservation the Studio
+requires is what keeps that address the pki's.
+
+keys-provision runs once and tailscaled keeps the login server it is given, so the
+two are asked in rounds (2 s apart) until one answers, for at most
+`.mesh.control_probe_wait` seconds (0-600, default 45): a Wi-Fi profile the same run
+installed, or a NIC still waiting for DHCP, does not pin the wrong answer. The usual
+first boot pays one round. When neither answers within the wait the LAN address is
+kept (before go-live is the default), with a WARNING saying that a node of a live
+mesh off the pki's LAN will not join until it is provisioned again with a working
+uplink (`.provision-force`) or its stick names `.mesh.endpoint`. Every platform's
+base `packages.list` requests `net-misc/curl` (it is also in every stage3 seed), so
+the question can be asked on every image; an image with no curl keeps the LAN
+address and says so. A worker that joined over the LAN keeps that login server;
+changing it later needs `tailscale up --login-server=<new> --force-reauth`.
 
 **The pki side.** The pki node's own `server_url` still follows `resolve_endpoint`
 above, so a pki baked with a public `HEADSCALE_URL` advertises that URL while its
@@ -488,14 +516,19 @@ workers dial its LAN address. Registration and the netmap do not depend on it; t
 embedded DERP region's host and the OIDC callback do. Before go-live the LAN peers
 connect directly, so relay through that host is what is lost.
 
-**The firewall.** On an `ENV=prod` x86 image, firewalld's default zone is `drop`
-and only `tailscale0`/`lo` are trusted. A worker that has not yet joined cannot use
-the tailnet, so `provision_headscale` writes headscale's listen port to
-`/etc/hugmesh/headscale-lan-control`. `hugmesh-coturn-firewall` (boot and a 60 s
-cron) then admits that port over TCP **from the RFC1918 ranges only** (one runtime
-rich rule each for `10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16`) and removes
-them when the marker goes. ARM images run no firewalld, and their nftables tables
-do not drop that port.
+**The firewall.** As built, nothing blocks the LAN dial: no shipped image enables
+firewalld (x86 ships it but does not enable it; ARM leaves it out), and the nftables
+tables (`hugmesh-firewall-reconcile`, `hugmesh-coturn-firewall`) do not drop
+headscale's port. An operator who enables firewalld on an `ENV=prod` x86 image gets
+its baked `DefaultZone=drop` with only `tailscale0`/`lo` trusted, which would drop
+a worker that has not joined yet. For that case `provision_headscale` writes
+headscale's listen port to `/etc/hugmesh/headscale-lan-control`, and
+`hugmesh-coturn-firewall` (boot and a 60 s cron) admits that port over TCP **from
+the RFC1918 ranges only** (one runtime rich rule each for `10.0.0.0/8`,
+`172.16.0.0/12` and `192.168.0.0/16`). It records the port it admitted in
+`/run/hugmesh/headscale-lan-control.fw` and, when the marker goes or the port
+changes, removes only rules of that exact shape for a recorded port: an operator's
+rich rule for any other port is never touched.
 
 A public facade (`scale.<domain>`) can be published later without re-imaging. The
 MagicDNS control-plane name stays stable across the IP→domain transition, so clients
