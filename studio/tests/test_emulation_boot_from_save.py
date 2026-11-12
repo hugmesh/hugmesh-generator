@@ -2,9 +2,9 @@
 
 A go-live flipped inside an emulated mesh lasts only while its devices run: a
 restart boots the golden image again, in whatever posture that image bakes. Saving
-the mesh and booting it back from the saves is how the posture survives. The shell half (launchers, runner,
-entrypoint) is pinned by tests/qemu/save_test.sh; this file pins what the Studio
-authors and reads:
+the mesh and booting it back from the saves is how the posture survives. The shell
+half (launchers, runner, entrypoint) is pinned by tests/qemu/save_test.sh; this file
+pins what the Studio authors and reads:
 
 * the mesh save manifest records which build each saved device ran from, so a
   resume never guesses the newest session;

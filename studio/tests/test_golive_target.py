@@ -1098,7 +1098,10 @@ def test_cli_status_of_an_unreachable_device_is_unknown(tmp_path, monkeypatch):
                                             started_at="2026-11-09T09:00:00Z"),
                      "commit", "byo-domain", "example.invalid", rc=0)
 
+    sent = []
+
     def down(argv, **kw):
+        sent.append(argv[-1])
         return subprocess.CompletedProcess(argv, 255, "", "ssh: connect to host "
                                            "127.0.0.1 port 2201: Connection refused\n")
     monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run", down)
@@ -1106,7 +1109,11 @@ def test_cli_status_of_an_unreachable_device_is_unknown(tmp_path, monkeypatch):
                     "--generator-dir", str(tmp_path)])
     assert rc == 2
     assert out.startswith("!! rpi5/pki: cannot read the device")
-    assert "device posture now" in out and ": unknown (device not reachable) — " in out
+    assert re.search(r"^device posture now \(read [0-9TZ:-]+\): unknown \(device not "
+                     r"reachable\) — rpi5/pki: cannot read the device", out, re.M), out
+    # the probe got no answer: that IS the read attempt — the dead port is not asked
+    # a second time for a posture
+    assert len(sent) == 1 and "::driver" in sent[0] and "@@nftrc" not in sent[0], sent
     assert "last commit from this host: byo-domain" in out and "earlier boot" in out
     assert "INTERNAL" not in out
     # a stopped device: refused, nothing sent, still unknown — and still no guess
