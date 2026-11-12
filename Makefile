@@ -448,6 +448,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         quest-plan quest-detect quest-mdm-enroll quest-enroll quest-ingest quest-status quest-wizard \
         deploy-plan deploy-apply deploy-status deploy-destroy \
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate qemu-mesh qemu-mesh-enumerate \
+        qemu-mirror qemu-mirror-list qemu-mirror-down \
         playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-route-access-reconcile stack-e2e stack-e2e-list \
@@ -1249,6 +1250,20 @@ qemu-mesh: ## boot a 3-node emulated k8s cluster (opt-in; HUGMESH_QEMU_MESH=1; C
 qemu-mesh-enumerate: ## plan the 3-node emulated cluster (L2 spec, MACs/IPs, ports, launcher argv; nothing boots)
 	tests/qemu/mesh-cluster.sh --dry-run \
 	  $(if $(CP_ROLE),--cp-role $(CP_ROLE),) $(if $(WORKER_ROLE),--worker-role $(WORKER_ROLE),)
+
+# Host-side registry mirror for the emulated cluster's CNI (issue #516): Calico
+# (pinned by specs/cluster/apps/01-calico.yaml) + the Tigera operator chart +
+# ArgoCD's images, served on 127.0.0.1:$(MIRROR_PORT) = 10.0.2.2 to the guests'
+# user-mode NIC. Fill it before `MESH_CLUSTER_GATE_READY=1 make qemu-mesh`.
+MIRROR_PORT ?= 5000
+qemu-mirror: ## start + fill the host registry mirror for emulated-cluster CNI images (docker, helm)
+	tests/qemu/registry-mirror.sh up --port $(MIRROR_PORT)
+
+qemu-mirror-list: ## list the image set the host registry mirror serves (pulls nothing)
+	tests/qemu/registry-mirror.sh --dry-run --port $(MIRROR_PORT)
+
+qemu-mirror-down: ## remove the host registry mirror container (only if it is the mirror's own)
+	tests/qemu/registry-mirror.sh down
 
 # SELinux AVC workout (issue #45): boot ONE image, drive the workloads
 # specs/selinux/*.te confine, harvest AVCs, and emit the narrowing report
