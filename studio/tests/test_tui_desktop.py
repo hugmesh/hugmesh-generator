@@ -145,3 +145,17 @@ def test_the_screen_lists_the_shared_catalogs():
         assert a["id"] in text
     assert ds.LOGIN_MANAGER_NOTE in text
     assert os.path.basename(__file__)
+
+
+def test_an_arm_board_refuses_a_delivery_that_does_not_exist_there():
+    j = _to_desktop()
+    j.cfg.mode, j.cfg.role, j.cfg.platform = "cloud", "rpi5-desktop", "rpi5"
+    before = dict(j.cfg.desktop_spec)
+    j.feed("app thunderbird native")
+    assert "amd64" in j.status and j.cfg.desktop_spec == before
+    j.feed("app blender flatpak")
+    assert "x86_64" in j.status and j.cfg.desktop_spec == before
+    j.feed("app libreoffice flatpak")
+    assert [a.flatpak for a in ds.spec_of(j.cfg).apps] == ["org.libreoffice.LibreOffice"]
+    text = "\n".join(j.lines())
+    assert "thunderbird" in text and "x86_64" in text

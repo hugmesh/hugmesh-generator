@@ -252,6 +252,46 @@ def catalog_app(app_id: str, delivery: str = "native") -> DesktopApp | None:
     return None
 
 
+def image_arch(cfg) -> str:
+    """The Gentoo arch this image is built for (amd64 / arm64)."""
+    return PLATFORM_ARCH.get(getattr(cfg, "platform", "") or "x86", "amd64")
+
+
+_DELIVERY_KEY = {"native": "atom", "flatpak": "flatpak"}
+
+
+def catalog_blocks(cfg, entry: dict) -> dict[str, str]:
+    """{delivery: why} for each delivery of catalog ``entry`` that does not EXIST for this
+    image's arch (the catalog's ``*_arches`` / ``*_why``: a binary package with no build for
+    the arch, a Flathub app built for x86_64 only). Empty when every offered delivery can
+    reach the image. Every face greys these and problems() refuses them."""
+    arch = image_arch(cfg)
+    out: dict[str, str] = {}
+    for how, key in _DELIVERY_KEY.items():
+        lim = entry.get(f"{how}_arches")
+        if entry.get(key) and lim and arch not in lim:
+            out[how] = entry.get(f"{how}_why") or f"built for {', '.join(lim)} only"
+    return out
+
+
+def delivery_block(cfg, app: DesktopApp) -> str:
+    """Why ``app`` cannot reach this image ("" when it can). The catalog row is found by
+    the PACKAGE (atom / Flatpak app id) as well as the id, so a free entry naming the
+    same package is refused the same way."""
+    key = _DELIVERY_KEY.get(app.delivery)
+    if key is None:
+        return ""
+    pkg = app.atom if app.delivery == "native" else app.flatpak
+    for entry in app_catalog():
+        if entry["id"] == app.id or (pkg and entry.get(key) == pkg):
+            why = catalog_blocks(cfg, entry).get(app.delivery)
+            if why:
+                how = "Native" if app.delivery == "native" else "Flatpak"
+                return (f"{how} is not available on {getattr(cfg, 'platform', '') or 'x86'} "
+                        f"({image_arch(cfg)}): {why}.")
+    return ""
+
+
 # ── which images get the step ─────────────────────────────────────────────────
 
 
@@ -599,6 +639,9 @@ def problems(cfg, spec: DesktopSpec | None = None, *, passwords: dict | None = N
                     "Deliver it natively, or from hugmesh-discover.")
         else:
             err("apps", f"{a.label}: delivery must be native or flatpak.")
+        block = delivery_block(cfg, a)
+        if block:
+            err("apps", f"{a.label}: {block}")
     for name, url in spec.flatpak_remotes.items():
         if not _REMOTE.fullmatch(name) or not _REMOTE_URL.fullmatch(url):
             err("apps", f"Flatpak remote {name}={url!r}: want a name and an https:// .flatpakrepo URL.")

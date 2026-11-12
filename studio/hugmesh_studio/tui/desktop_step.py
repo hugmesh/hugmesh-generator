@@ -105,8 +105,12 @@ class DesktopScreen:
                 f"{s.name}{' (on)' if s.name in spec.sessions or s.name in ds.ALWAYS_ON_SESSIONS else ''}"
                 for s in ds.SESSION_CATALOG))
         out.append("  Apps: " + ", ".join(
-            f"{a['id']}({'/'.join(x for x, k in (('native', 'atom'), ('flatpak', 'flatpak')) if a.get(k))})"
+            f"{a['id']}({'/'.join(x for x, k in (('native', 'atom'), ('flatpak', 'flatpak')) if a.get(k) and x not in ds.catalog_blocks(c, a)) or 'none here'})"
             for a in ds.app_catalog()))
+        blocked = [f"{a['id']} {how}: {why}" for a in ds.app_catalog()
+                   for how, why in ds.catalog_blocks(c, a).items()]
+        if blocked:
+            out.append(f"  Not on {ds.image_arch(c)}: " + "; ".join(blocked))
         if spec.use_lines or spec.keyword_lines:
             out.append("  package.use: " + ("; ".join(spec.use_lines) or "-"))
             out.append("  accept_keywords: " + ("; ".join(spec.keyword_lines) or "-"))
@@ -224,6 +228,9 @@ class DesktopScreen:
                     app = ds.catalog_app(app_id, how)
                     if app is None:
                         return f"{app_id} is not offered as {how}"
+                    why = ds.delivery_block(c, app)
+                    if why:
+                        return f"{app_id}: {why}"
                     spec.apps.append(app)
         elif cmd == "remote":
             if args[0] == "rm":

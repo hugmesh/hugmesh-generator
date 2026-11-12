@@ -343,3 +343,62 @@ def test_a_governed_desktop_refuses_an_extra_local_administrator():
     script = open(os.path.join(GEN, "scripts", "desktop-config", "02-extra-local-users.start"),
                   encoding="utf-8").read()
     assert "[ -d /etc/hugmesh/desktop-governance ] || [ -f /var/lib/keys-provision/users.created ]" in script
+
+
+# ── catalog deliveries that do not exist for the image's arch ──────────────────────────
+# Structural facts, measured 2026-11-12 (gentoo tree 2026-11-10, flathub.org/api/v2/summary):
+# thunderbird-bin and libreoffice-bin carry no arm64 keyword at all (a binary Mozilla /
+# TDF ship for amd64 only, so no accept_keywords line can reach them), and Flathub builds
+# Thunderbird, Blender and OBS Studio for x86_64 only. Keyword STABILITY is not encoded
+# (it drifts; the ARM boards accept ~arm64 and x86 has the emerge --pretend check).
+
+def _rpi5(**spec) -> ImageConfig:
+    return _with(ImageConfig(mode="cloud", role="rpi5-desktop", platform="rpi5"), **spec)
+
+
+def test_an_arch_limit_names_a_real_arch_and_says_why():
+    arches = set(ds.PLATFORM_ARCH.values())
+    for a in ds.app_catalog():
+        for how, key in (("native", "atom"), ("flatpak", "flatpak")):
+            lim = a.get(f"{how}_arches")
+            if lim is None:
+                continue
+            assert a.get(key), f"{a['id']}: an arch limit on a delivery it does not offer"
+            assert lim and set(lim) <= arches, (a["id"], how, lim)
+            assert a.get(f"{how}_why"), f"{a['id']}: {how}_arches without its reason"
+
+
+def test_a_delivery_that_does_not_exist_on_arm_is_refused_with_its_reason():
+    tb_native = ds.catalog_app("thunderbird", "native")
+    tb_flat = ds.catalog_app("thunderbird", "flatpak")
+    lo_native = ds.catalog_app("libreoffice", "native")
+    lo_flat = ds.catalog_app("libreoffice", "flatpak")
+    blender_flat = ds.catalog_app("blender", "flatpak")
+    obs_flat = ds.catalog_app("obs-studio", "flatpak")
+    obs_native = ds.catalog_app("obs-studio", "native")
+    for app in (tb_native, tb_flat, lo_native, blender_flat, obs_flat):
+        why = ds.delivery_block(_rpi5(), app)
+        assert why, app
+        assert why in _errs(_rpi5(apps=[app]))
+        assert ds.delivery_block(_laptop(), app) == ""
+        assert _errs(_with(_laptop(), apps=[app])) == ""
+    for app in (lo_flat, obs_native, ds.catalog_app("firefox", "native")):
+        # (a cloud rpi5 desktop is governed: its flathub refusal is a different rule)
+        assert ds.delivery_block(_rpi5(), app) == ""
+        assert "is not available on" not in _errs(_rpi5(apps=[app]))
+    # the same package typed as a free entry is refused the same way
+    free = ds.DesktopApp("mail-client/thunderbird-bin", "mail-client/thunderbird-bin",
+                         "native", atom="mail-client/thunderbird-bin")
+    assert "amd64" in _errs(_rpi5(apps=[free]))
+    free_flat = ds.DesktopApp("org.blender.Blender", "org.blender.Blender", "flatpak",
+                              flatpak="org.blender.Blender")
+    assert "x86_64" in _errs(_rpi5(apps=[free_flat]))
+
+
+def test_catalog_blocks_lists_every_delivery_this_image_cannot_take():
+    by_id = {a["id"]: a for a in ds.app_catalog()}
+    assert set(ds.catalog_blocks(_rpi5(), by_id["thunderbird"])) == {"native", "flatpak"}
+    assert set(ds.catalog_blocks(_rpi5(), by_id["libreoffice"])) == {"native"}
+    assert set(ds.catalog_blocks(_rpi5(), by_id["blender"])) == {"flatpak"}
+    assert ds.catalog_blocks(_rpi5(), by_id["firefox"]) == {}
+    assert all(ds.catalog_blocks(_laptop(), a) == {} for a in ds.app_catalog())

@@ -400,3 +400,36 @@ def test_look_at_the_desktop_step(wiz, qapp, size):
         qapp.processEvents()
         _shot(wiz, f"desktop-step-{tag}-{w}x{h}.png")
     scroll.verticalScrollBar().setValue(0)
+
+
+def test_an_arm_board_greys_the_deliveries_that_do_not_exist_there_and_says_why(wiz):
+    """thunderbird-bin / libreoffice-bin have no arm64 build and Flathub ships Thunderbird,
+    Blender and OBS for x86_64 only: on an ARM board those choices are greyed in the row's
+    combo, and the row SAYS why in its visible text (not only a tooltip)."""
+    page = wiz.page(wiz._page_ids["desktop"])
+    wiz.cfg = ImageConfig(mode="cloud", role="rpi5-desktop", platform="rpi5")
+    page.initializePage()
+    rows = {page.apps_table.item(r, 0).data(QtCore.Qt.ItemDataRole.UserRole)[0]: r
+            for r in range(page.apps_table.rowCount())}
+
+    def offered(app_id):
+        combo = page.apps_table.cellWidget(rows[app_id], 1)
+        m = combo.model()
+        return {combo.itemData(i): m.item(i).isEnabled() for i in range(combo.count())}, combo
+
+    tb, tb_combo = offered("thunderbird")
+    assert tb == {"": True, "native": False, "flatpak": False}
+    assert not tb_combo.isEnabled()
+    tb_text = page.apps_table.item(rows["thunderbird"], 2).text()
+    assert "amd64" in tb_text and "x86_64" in tb_text
+    lo, lo_combo = offered("libreoffice")
+    assert lo == {"": True, "native": False, "flatpak": True} and lo_combo.isEnabled()
+    assert "amd64" in page.apps_table.item(rows["libreoffice"], 2).text()
+    assert offered("blender")[0]["flatpak"] is False
+    assert offered("firefox")[0] == {"": True, "native": True, "flatpak": True}
+    assert page.apps_table.item(rows["firefox"], 2).text() == ""
+    _shot(page.apps_table, "desktop-step-rpi5-apps.png")
+    # x86 offers every delivery
+    wiz.cfg = ImageConfig(mode="cloud", role="laptop", platform="x86")
+    page.initializePage()
+    assert all(offered(i)[0].values() and all(offered(i)[0].values()) for i in rows)

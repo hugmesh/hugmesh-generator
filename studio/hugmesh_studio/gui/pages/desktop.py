@@ -36,6 +36,8 @@ from ._widgets import _row
 
 _ERR = "color: #b00020;"
 _WARN = "color: #8a6d00;"
+#: the apps table: {delivery: why} for the deliveries this image's arch cannot take
+_BLOCKS_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
 
 
 class _PretendWorker(QtCore.QThread):
@@ -462,16 +464,20 @@ class DesktopPage(QtWidgets.QWizardPage):
 
     def _fill_apps(self, spec: ds.DesktopSpec) -> None:
         chosen = {a.id: a for a in spec.apps}
-        rows = [(a["id"], a["label"], a.get("atom", ""), a.get("flatpak", "")) for a in ds.app_catalog()]
+        view = self.view()
+        rows = [(a["id"], a["label"], a.get("atom", ""), a.get("flatpak", ""),
+                 ds.catalog_blocks(view, a)) for a in ds.app_catalog()]
         for a in spec.apps:
             if a.id not in {r[0] for r in rows}:
-                rows.append((a.id, a.label, a.atom, a.flatpak))
+                why = ds.delivery_block(view, a)
+                rows.append((a.id, a.label, a.atom, a.flatpak, {a.delivery: why} if why else {}))
         self.apps_table.setRowCount(0)
-        for app_id, label, atom, flat in rows:
+        for app_id, label, atom, flat, blocks in rows:
             r = self.apps_table.rowCount()
             self.apps_table.insertRow(r)
             item = QtWidgets.QTableWidgetItem(label)
             item.setData(QtCore.Qt.ItemDataRole.UserRole, (app_id, atom, flat))
+            item.setData(_BLOCKS_ROLE, blocks)
             item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
             self.apps_table.setItem(r, 0, item)
             combo = QtWidgets.QComboBox()
@@ -480,8 +486,18 @@ class DesktopPage(QtWidgets.QWizardPage):
                 combo.addItem("Native (emerge)", "native")
             if flat:
                 combo.addItem("Flatpak", "flatpak")
+            # a delivery that does not exist for this image's arch: greyed, with its reason
+            # (the row's text says it too; problems() refuses it if a loaded config has it)
+            for how, why in blocks.items():
+                idx = combo.findData(how)
+                if idx >= 0:
+                    combo.model().item(idx).setEnabled(False)
+                    combo.setItemData(idx, why, QtCore.Qt.ItemDataRole.ToolTipRole)
             cur = chosen.get(app_id)
             combo.setCurrentIndex(max(0, combo.findData(cur.delivery if cur else "")))
+            # nothing left to pick (and nothing picked): the whole control is greyed
+            combo.setEnabled(combo.currentIndex() > 0 or any(
+                combo.model().item(i).isEnabled() for i in range(1, combo.count())))
             combo.currentIndexChanged.connect(self._changed)
             self.apps_table.setCellWidget(r, 1, combo)
             src = QtWidgets.QTableWidgetItem("")
@@ -499,8 +515,14 @@ class DesktopPage(QtWidgets.QWizardPage):
             app_id, atom, flat = self.apps_table.item(r, 0).data(QtCore.Qt.ItemDataRole.UserRole)
             delivery = self.apps_table.cellWidget(r, 1).currentData()
             remote = self.apps_table.item(r, 2).data(QtCore.Qt.ItemDataRole.UserRole) or "flathub"
-            self.apps_table.item(r, 2).setText(
-                atom if delivery == "native" else f"{remote}:{flat}" if delivery == "flatpak" else "")
+            blocks = self.apps_table.item(r, 0).data(_BLOCKS_ROLE) or {}
+            text = atom if delivery == "native" else f"{remote}:{flat}" if delivery == "flatpak" else ""
+            if not text and blocks:
+                text = f"Not on {ds.image_arch(self.view())}: " + " ".join(
+                    f"{label}: {blocks[how]}." for how, label in (("native", "Native"), ("flatpak", "Flatpak"))
+                    if how in blocks)
+            self.apps_table.item(r, 2).setText(text)
+            self.apps_table.item(r, 2).setToolTip(text if blocks else "")
 
     def _add_free_app(self) -> None:
         text = self.free_app.text().strip()

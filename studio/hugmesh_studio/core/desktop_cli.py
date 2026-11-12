@@ -43,6 +43,8 @@ def options(*, as_json: bool = False, out=None) -> int:
             "extra local accounts are not administrators unless marked :admin; each must "
             "change its password at first login",
             "a governed (SSO + KEYS) mesh desktop keeps only the hugmesh-discover Flatpak remote",
+            "an app delivery with *_arches is refused on an image of another arch (it does "
+            "not exist there: a binary package, or a Flathub app built for x86_64 only)",
             "Python extra targets only widen the stage3 seed's set",
             "overlay lines: no wildcards, no video_cards_*/python_* flags, only the image's "
             "testing keyword, never a mask or licence change",
@@ -59,6 +61,11 @@ def options(*, as_json: bool = False, out=None) -> int:
     print("  apps: " + ", ".join(
         f"{a['id']} ({'/'.join(x for x, k in (('native', 'atom'), ('flatpak', 'flatpak')) if a.get(k))})"
         for a in data["apps"]), file=out)
+    for a in data["apps"]:
+        for how, key in (("native", "atom"), ("flatpak", "flatpak")):
+            if a.get(key) and a.get(f"{how}_arches"):
+                print(f"    {a['id']} {how}: {'/'.join(a[f'{how}_arches'])} only "
+                      f"({a.get(f'{how}_why', '')})", file=out)
     print("  python targets: " + " ".join(ds.PYTHON_TARGET_CHOICES), file=out)
     print("  rules:", file=out)
     for r in data["rules"]:

@@ -57,6 +57,28 @@ On the overlay it refuses wildcards, `video_cards_*` and Python flags, version a
 without an operator, and any keyword but the image's own `~arch`. With no flag given,
 nothing here writes a file.
 
+### App deliveries that do not exist on an arch
+
+The app catalog (`studio/hugmesh_studio/core/desktop_apps.json`) records, per delivery, only
+the STRUCTURAL limit: `native_arches` / `flatpak_arches` plus `*_why`. The delivery does not
+exist for any other arch, so no keyword or USE line can fix it. Measured 2026-11-12 against
+the Gentoo tree and Flathub's summary API:
+
+| App | Native | Flatpak |
+|---|---|---|
+| Thunderbird | amd64 only (`thunderbird-bin` has no arm64 build) | x86_64 only on Flathub |
+| LibreOffice | amd64 only (`libreoffice-bin`) | every arch |
+| Blender | every arch | x86_64 only on Flathub |
+| OBS Studio | every arch | x86_64 only on Flathub |
+
+On an ARM board the GUI greys that choice in the row's combo and says why in the row. The
+TUI refuses `app ID HOW` with the reason and lists it under "Not on arm64". `--desktop-options`
+prints it. `desktop_spec.problems()` refuses it in a loaded config or a free entry that names
+the same package. Keyword stability is not recorded, because it drifts. The ARM boards accept
+`~arm64`, and x86 has the emerge --pretend check. A free-entry Flatpak id is not checked
+against Flathub's arches. That needs the network, so a free entry that Flathub does not build
+for the board fails at first boot, in the `hugmesh-flatpak-apps` service log.
+
 ## emerge --pretend
 
 `build-x86-host-stage4.sh --pretend-only` runs everything a real build runs up to the
