@@ -108,6 +108,16 @@ _RAM_PROMPT = "choose…"
 # "default" inherits the worklist-wide Home-step encrypt_root; on/off force it.
 _ENC_CHOICES = ("default", "on", "off")
 
+# A jetson row's Encryption cell: a fixed, disabled "off". The cell used to hold the whole
+# sentence "off — jetson cannot encrypt", which the 90 px column cut to "off — jetson", so
+# the part that says WHY was the part that was never on screen (GUI-29). The cell now
+# shows only the value, which fits; the reason is its tooltip, and the row's Notes cell
+# says it in words ("no root encryption — jetson builder limitation").
+_JETSON_ENC_TEXT = "off"
+_JETSON_ENC_REASON = (
+    "off — jetson cannot encrypt: the Orin's single boot+root partition has no separate "
+    "LUKS path, so its builder refuses --encrypt-root (docs/STANDALONE-DESKTOP.md).")
+
 
 def _row_notes(role: str, platform: str) -> str:
     """The auto, read-only Notes cell (design 3.4): encryption reality + GPU + the
@@ -453,7 +463,11 @@ class WorklistPage(QtWidgets.QWizardPage):
         item.setCheckState(_COL_CHECK, Qt.CheckState.Unchecked)
         item.setText(_COL_ROLE, role)
         item.setText(_COL_PLATFORM, PLATFORM_LABELS.get(platform, platform))
-        item.setText(_COL_NOTES, _row_notes(role, platform))
+        notes = _row_notes(role, platform)
+        item.setText(_COL_NOTES, notes)
+        # Notes stretches into what is left, which is 100 px at the netbook size: the
+        # whole text is the cell's tooltip, as on the read-only device rows below.
+        item.setToolTip(_COL_NOTES, notes)
         item.setData(_COL_CHECK, Qt.ItemDataRole.UserRole, rid)
         self._item_arch[id(item)] = self._catalog.device(
             device_catalog.default_device_for_platform(platform)).arch
@@ -510,8 +524,10 @@ class WorklistPage(QtWidgets.QWizardPage):
         enc_combo = None
         if platform == "jetson":
             disp = NoWheelComboBox()
-            disp.addItem("off — jetson cannot encrypt")
+            disp.addItem(_JETSON_ENC_TEXT)
+            disp.setToolTip(_JETSON_ENC_REASON)
             disp.setEnabled(False)
+            item.setToolTip(_COL_ENC, _JETSON_ENC_REASON)
             self.tree.setItemWidget(item, _COL_ENC, disp)
         else:
             enc_combo = NoWheelComboBox()
