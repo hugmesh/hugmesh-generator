@@ -82,7 +82,7 @@ Seven actions:
 - **Delete** — removes the record. Deleting the artifacts on disk is a separate checkbox, **off** by default. Greyed for a session running elsewhere, with the reason under the buttons. (An unmanaged tree or an unreadable record file is deleted outright, on a plain confirm.)
 - **Delete all finished…** — prunes finished records only; running sessions stay. Same artifacts-are-opt-in checkbox.
 
-Restart and Redo are disabled for anything that is not a session record. Discovered `wl-*` directories and unreadable record files have no config snapshot to replay. A line under the buttons says why each greyed button is greyed.
+Restart and Redo are disabled for anything that is not a session record. Discovered `wl-*` directories and unreadable record files have no config snapshot to replay. A line under the buttons says why each greyed button is greyed. The line and the buttons always describe the highlighted row, also after an action taken from another build's own window. A row greyed because another Studio process is running it is asked again every two seconds while it stays highlighted, so the grey lifts by itself once that process exits. The page scrolls in a short window rather than squeezing that line.
 
 A **Fleet build…** button appears here only when `HUGMESH_STUDIO_ADVANCED` is set truthy (`1`/`true`/`yes`/`on`). It builds every role for a whole release, not the single image this wizard configures. `hugmesh_studio --fleet` reaches it without the flag.
 

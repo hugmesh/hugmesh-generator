@@ -53,6 +53,9 @@ UNMANAGED_RESTART_REASON = ("No config snapshot exists for a pre-session build â
                             "Restart/Redo need one.")
 MISSING_DIR_REASON = "The artifact directory no longer exists."
 
+#: How often a row greyed as running elsewhere is asked again (``_liveness``).
+LIVENESS_RECHECK_MS = 2000
+
 
 def redo_secrets_note(session) -> str:
     """What the page REDO lands on says about the secrets the record did not keep, or
@@ -360,6 +363,15 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self.gate_note.setWordWrap(True)
         self.gate_note.setVisible(False)
         lay.addWidget(self.gate_note)
+        # A greyed button cannot be clicked to find out whether its reason still
+        # holds. While the highlighted row is refused as running elsewhere, the gate
+        # is asked again on this timer, so the grey lifts by itself once that Studio
+        # process is gone. _update_buttons starts and stops it, and it stops itself
+        # out of view (_recheck_liveness). (Before the buttons were greyed, the click
+        # itself asked.)
+        self._liveness = QtCore.QTimer(self)
+        self._liveness.setInterval(LIVENESS_RECHECK_MS)
+        self._liveness.timeout.connect(self._recheck_liveness)
         self._update_buttons()
 
     # ---- data --------------------------------------------------------------------
@@ -499,6 +511,11 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         # pins for the duration of one action and restores afterwards.
         if self._pinned_row is not None:
             return self._pinned_row
+        return self._table_row()
+
+    def _table_row(self) -> _RowData | None:
+        """The row the TABLE has highlighted, whatever is pinned. The button row under
+        the table describes this row and no other (``_update_buttons``)."""
         rows = {ix.row() for ix in self.table.selectedIndexes()}
         if len(rows) != 1:
             return None
@@ -558,8 +575,53 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self.gate_note.setText(text)
         self.gate_note.setVisible(bool(text))
 
+    def _recheck_liveness(self) -> None:
+        """Ask again what the highlighted row refuses: on every ``_liveness`` tick, and
+        whenever this widget comes back into view (``showEvent``). When the answer
+        changed, every open per-build window re-derives its own buttons, so the
+        windows and the list agree. Out of view nothing is asked: nobody can see the
+        buttons, and coming back into view asks at once.
+
+        It reads the record already in memory, as the click-time guards do. The list
+        itself is reloaded from disk on the next visit to the page.
+
+        A timer slot and an event handler: under PyQt6 an escaping exception aborts
+        the Studio. A check that fails says so once and stops asking, rather than
+        every two seconds; the buttons then stay as they are until the row is selected
+        again."""
+        try:
+            if not self.isVisible():
+                self._liveness.stop()
+                return
+            said = self.gate_note.text()
+            self._update_buttons()
+            if self.gate_note.text() != said:
+                self._rebind_build_windows()
+        except Exception:                      # noqa: BLE001 - a slot: never abort
+            import sys
+            import traceback
+            print("sessions_widget: swallowed exception in _recheck_liveness",
+                  file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            self._liveness.stop()
+
+    def showEvent(self, ev):  # noqa: N802 (Qt override)
+        """Back in view: the page was returned to, or the window was reopened from the
+        tray with this page still on it (no ``initializePage``, so no reload)."""
+        try:
+            super().showEvent(ev)
+        finally:
+            self._recheck_liveness()
+
     def _update_buttons(self) -> None:
-        r = self._selected()
+        # The TABLE's row, never the pin (_selected): these buttons sit under the table
+        # and describe its highlighted row. A per-build window's action pins ITS row,
+        # and this gate runs while that pin is held: the window's Delete reloads the
+        # list, and a fleet run's session_changed or the _liveness tick can arrive
+        # while its confirm is open. A gate that read the pin left the highlighted
+        # row's Restart and Delete enabled with no reason, to refuse through a modal
+        # after the click.
+        r = self._table_row()
         # "Open build window" mirrors row activation EXACTLY: open_build_window()
         # accepts every row kind (an unreadable record's window still offers Delete,
         # honestly gated inside by build_window.actions_for), so the only guard â€”
@@ -570,6 +632,10 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         # names the reason, as the tooltip and in gate_note. The handlers still re-run
         # their guards at click time against a race.
         why = self._refusals(r)
+        if IN_USE_REASON not in why.values():
+            self._liveness.stop()
+        elif not self._liveness.isActive():
+            self._liveness.start()
         self.restart_btn.setEnabled(is_session and "restart" not in why)
         self.restart_btn.setToolTip(why.get("restart", ""))
         self.redo_btn.setEnabled(is_session and "redo" not in why)

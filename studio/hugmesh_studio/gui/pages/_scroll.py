@@ -25,9 +25,29 @@ the content is taller than the viewport.
 from ..qt import Qt, QtWidgets
 
 
-def scrollable(page: QtWidgets.QWidget) -> QtWidgets.QVBoxLayout:
-    """Wrap ``page`` in a vertical scroll area; return the inner content layout."""
-    content = QtWidgets.QWidget()
+class _SqueezeFirst(QtWidgets.QWidget):
+    """Scrolled content that is squeezed to its MINIMUM height before it scrolls.
+
+    A resizable QScrollArea gives content whose layout is height-for-width (any
+    word-wrapped label makes it one) its PREFERRED height. A page with a table then
+    scrolls as soon as the table cannot have its full height, although the table could
+    simply have shrunk. Answering with the layout's minimum keeps the page laid out
+    exactly as it is without a scroll area for as long as it fits, and scrolls only
+    when even the minimum does not fit.
+    """
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 (Qt override)
+        lay = self.layout()
+        return lay.minimumHeightForWidth(width) if lay is not None else -1
+
+
+def scrollable(page: QtWidgets.QWidget, *,
+               squeeze_first: bool = False) -> QtWidgets.QVBoxLayout:
+    """Wrap ``page`` in a vertical scroll area; return the inner content layout.
+
+    ``squeeze_first`` is for a page whose rows can shrink (a table): see
+    :class:`_SqueezeFirst`."""
+    content = _SqueezeFirst() if squeeze_first else QtWidgets.QWidget()
     content_layout = QtWidgets.QVBoxLayout(content)
 
     scroll = QtWidgets.QScrollArea(page)

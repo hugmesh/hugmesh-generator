@@ -220,9 +220,16 @@ class WelcomePage(QtWidgets.QWizardPage):
         self.show_landing_note("")
 
     def show_landing_note(self, text: str) -> None:
-        """Show ``text`` at the top of this page, or hide the note for ""."""
+        """Show ``text`` at the top of this page, or hide the note for "".
+
+        A note is shown from the top of the page: Redo has just sent the operator
+        here, and in a short window this page still holds the scroll offset it was
+        left at (the Review card sits below the fold there), which cut the note's
+        first line off."""
         self.landing_note.setText(text)
         self.landing_note.setVisible(bool(text))
+        if text:
+            self._content_scroll.verticalScrollBar().setValue(0)
 
     # ── selection / flow ─────────────────────────────────────────────────────────
     def _selected_choice(self):
