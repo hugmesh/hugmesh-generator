@@ -565,10 +565,105 @@ ALLOW_MISSING_PACKAGES=false
 # --allow-missing-packages class (never a Studio field); the emission itself is
 # failure-tolerant either way (WARN + no plan, never an aborted build).
 EMERGE_PLAN_ENABLED=true
-# --bundle-source : ship the generator source in the image (/usr/src/hugmesh-
-# generator) + a regenerate helper, so you can build a fresh customized ISO from the
-# running desktop. Default ON for standalone (self-hosting appliance).
+# --bundle-source : ship the generator's TRACKED source in the image (BUNDLE_SOURCE_DIR) + a
+# regenerate helper, so you can build a fresh customized ISO from the running desktop.
+# Default ON for standalone (self-hosting appliance).
 BUNDLE_SOURCE=""
+# NOT under /usr/src: every artifact drops usr/src whole (it holds the built kernel tree
+# and its module-signing PRIVATE key, see live_squash_excludes), so a bundle there
+# reached no artifact at all. Not /usr/share/hugmesh/generator either: every host image
+# already stages domain-reconcile's scripts there, which would make an unbundled image
+# look bundled. specs/usr/sbin/hugmesh-regenerate reads this same path (pinned by
+# tests/scripts/test-x86-live-root-pack.sh).
+BUNDLE_SOURCE_DIR=/usr/share/hugmesh/generator-src
+# ── Bundle-source helpers (tests/scripts/test-x86-live-root-pack.sh executes this block) ──
+# --bundle-source ships the generator's TRACKED source, never "whatever sits in the
+# checkout". A checkout in use holds gitignored secrets: keys-out/ (cluster CA key,
+# vault token + secrets.json, keystore passwords.json, headscale OIDC secret),
+# tests/stack/.tls-front/ca.key, .e2e-credentials, tests/stack/.mastodon.env,
+# .stack-src/, local tool state, and a -w inside the checkout puts secureboot/sb.key there.
+# The old `tar -C SCRIPT_DIR --exclude=./.git --exclude=./out .` copied all of them
+# into every artifact built with the bundle (the Studio always asks for it).
+#
+# The file list is `git ls-files` (safe.directory pinned on the command line: the
+# builder runs as root over a checkout another uid owns, and the docker backend mounts
+# it at /src), or — in a tree that was itself bundled, where hugmesh-regenerate runs the
+# builder and there is no .git — the manifest the previous bundle wrote. With neither,
+# nothing is bundled (the preflight warns and drops it): no fallback ever tars the tree. Tracked files shaped like a key
+# or credential (BUNDLE_DENY_RE, or a PEM private-key header under any name) are left
+# out, and bundle_source_gate re-checks the STAGED tree, failing the build on a hit.
+BUNDLE_MANIFEST=.hugmesh-bundle-files
+BUNDLE_DENY_RE='(^|/)(\.git|keys-out|keys-(pki|backend|frontend|host)|vault-seed|\.stack-src|\.claude|\.tls-front|\.mesh-token|\.seed-e2e|tor-onion|secureboot)(/|$)|^out(/|$)|(^|/)\.e2e-credentials[^/]*$|(^|/)\.[^/]*env$|\.(key|pem|p12|pfx|jks|keystore|srl|csr)$|(^|/)signing_key[^/]*$|(^|/)(secrets|passwords|credentials)\.json$|(^|/)(keystore\.properties|dial_private_key|unseal-key|encryption-key|tunnel-token|cifs\.cred)$|(^|/)(ddns|vault)/token$|_(ed25519|rsa)$|(^|/)ssh_host_[^/]*_key(\.pub)?$'
+BUNDLE_PEM_RE='^-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----'
+
+# bundle_source_list <generator-dir> <out-file> — write the files to bundle (paths
+# relative to the generator dir, NUL-separated) to <out-file>. Returns 1, saying why,
+# when there is no trustworthy list or it does not carry the builder.
+bundle_source_list() {
+    local src="$1" out="$2" raw top f from n_drop=0
+    local -a files=() keep=() pem=()
+    local -A is_pem=()
+    raw="$(mktemp)" || return 1
+    top="$(git -c safe.directory="${src}" -C "${src}" rev-parse --show-toplevel 2>/dev/null)" || top=""
+    if [ -n "${top}" ] && [ "$(cd "${top}" && pwd -P)" = "$(cd "${src}" && pwd -P)" ] \
+        && git -c safe.directory="${src}" -C "${src}" ls-files -z > "${raw}" 2>/dev/null && [ -s "${raw}" ]; then
+        from="git ls-files"
+    elif [ -s "${src}/${BUNDLE_MANIFEST}" ] && [ ! -L "${src}/${BUNDLE_MANIFEST}" ]; then
+        cp "${src}/${BUNDLE_MANIFEST}" "${raw}" || { rm -f "${raw}"; return 1; }
+        from="${BUNDLE_MANIFEST}"
+    else
+        rm -f "${raw}"
+        err "bundle-source: ${src} is neither a git checkout git can read (as $(id -un 2>/dev/null || id -u)) nor a bundled tree (${BUNDLE_MANIFEST}) — cannot tell its source from local secrets"
+        return 1
+    fi
+    mapfile -d '' files < "${raw}"; rm -f "${raw}"
+    for f in "${files[@]}"; do
+        case "${f}" in ''|/*|..|../*|*/..|*/../*) continue ;; esac
+        [ -L "${src}/${f}" ] || [ -f "${src}/${f}" ] || continue     # deleted in the tree, or a gitlink dir
+        if [[ "${f}" =~ ${BUNDLE_DENY_RE} ]]; then n_drop=$((n_drop + 1)); continue; fi
+        keep+=("${f}")
+    done
+    # A PEM private key under any name. Regular files only (-L skipped: a link's
+    # target is not what ships); grep -a so a NUL byte cannot make grep skip a file.
+    if [ "${#keep[@]}" -gt 0 ]; then
+        raw="$(mktemp)" || return 1
+        (cd "${src}" && for f in "${keep[@]}"; do [ -L "${f}" ] || printf '%s\0' "${f}"; done \
+            | xargs -0 -r grep -a -l -Z -E -e "${BUNDLE_PEM_RE}" -- > "${raw}" 2>/dev/null) || true   # 123 = no file matched
+        mapfile -d '' pem < "${raw}"; rm -f "${raw}"
+        for f in "${pem[@]}"; do is_pem["${f}"]=1; done
+    fi
+    : > "${out}" || return 1
+    for f in "${keep[@]}"; do
+        [ -n "${is_pem[${f}]:-}" ] && { n_drop=$((n_drop + 1)); continue; }
+        printf '%s\0' "${f}" >> "${out}"
+    done
+    grep -a -qzx 'build-x86-host-stage4.sh' "${out}" >/dev/null \
+        || { err "bundle-source: the file list from ${from} does not carry build-x86-host-stage4.sh"; return 1; }
+    info "bundle-source: $(tr -cd '\0' < "${out}" | wc -c) files from ${from}; ${n_drop} key/credential-shaped file(s) left out"
+}
+
+# bundle_source_gate <staged-dir> — fail-closed check of what ACTUALLY ships: no path
+# matching BUNDLE_DENY_RE and no PEM private key under any name.
+bundle_source_gate() {
+    local dir="$1" lst rc=0 hits="" pemhits="" f
+    [ -d "${dir}" ] || { err "bundle-source gate: ${dir} is missing"; return 1; }
+    lst="$(cd "${dir}" && find . -mindepth 1 \( -type f -o -type l \) -print)" \
+        || { err "bundle-source gate: cannot list ${dir}"; return 1; }
+    while IFS= read -r f; do
+        f="${f#./}"; [ -n "${f}" ] || continue
+        [[ "${f}" =~ ${BUNDLE_DENY_RE} ]] && hits+="${f}"$'\n'
+    done <<<"${lst}"
+    pemhits="$(cd "${dir}" && grep -r -a -l -E -e "${BUNDLE_PEM_RE}" . 2>&1)" || rc=$?
+    [ "${rc}" -le 1 ] || { err "bundle-source gate: could not read ${dir}: ${pemhits}"; return 1; }
+    [ "${rc}" -eq 0 ] && hits+="${pemhits}"$'\n'
+    hits="$(sed '/^$/d' <<<"${hits}")"
+    if [ -n "${hits}" ]; then
+        err "bundle-source gate: ${dir} carries key/credential files — refusing to ship them:"
+        err "  ${hits//$'\n'/$'\n'  }"
+        return 1
+    fi
+}
+# ── end bundle-source helpers ──
 # ── Desktop branding (boot screen / login / wallpaper / colours) ─────────────
 # Composable across ALL desktop generations (standalone or tailnet client; cli,
 # ncurses or graphical install). A --theme NAME pulls a bundled preset from
@@ -2663,6 +2758,23 @@ if ${PRINT_PLAN}; then
     exit 0
 fi
 
+# ── --bundle-source preflight (real builds only) ──────────────────────────────
+# Resolve the bundle's file list now (seconds), not hours in at the bundle step. With
+# no trustworthy list (bundle_source_list: not a git checkout git can read, not a
+# bundled tree) the build goes on WITHOUT the bundle and says so, whether the bundle
+# was asked for or defaulted: the Studio passes --bundle-source on every build, and a
+# worktree mounted alone at /src (its gitdir outside the mount), a tarball copy or
+# the image-gen worker's baked tree (no .git) must still build. After --print-plan,
+# so the plan channel never reads the checkout.
+if ${BUNDLE_SOURCE}; then
+    _bundle_list="$(mktemp)"
+    if ! bundle_source_list "${SCRIPT_DIR}" "${_bundle_list}"; then
+        warn "--bundle-source: NOT bundling the generator source (see the error above) — the image ships without it and without hugmesh-regenerate. Build from a git checkout to bundle it."
+        BUNDLE_SOURCE=false
+    fi
+    rm -f "${_bundle_list}"
+fi
+
 # ── A standalone DESKTOP needs its login password (real builds only) ──────────
 # Root is locked and there is no KEYS stick or SSO, so the --local-pass account is
 # the only way in, and its first-boot random one-time password goes to a console
@@ -4497,14 +4609,28 @@ fi
 # Self-hosting: bundle the generator source + a regenerate helper so the running
 # desktop can build a fresh, customized ISO (hugmesh-regenerate …).
 if ${BUNDLE_SOURCE:-false}; then
-    info "Bundling generator source -> /usr/src/hugmesh-generator (regenerate from the desktop)"
-    mkdir -p "${SYSROOT}/usr/src/hugmesh-generator"
-    tar -C "${SCRIPT_DIR}" --exclude=./.git --exclude=./out --exclude='./snap-*' --exclude='./*.bundle' \
-        -cf - . 2>/dev/null | tar -C "${SYSROOT}/usr/src/hugmesh-generator" -xf - 2>/dev/null || true
+    info "Bundling generator source -> ${BUNDLE_SOURCE_DIR} (regenerate from the desktop)"
+    # Tracked files only (bundle_source_list), root-owned, then the gate over what
+    # was staged. Every failure is fatal: a silent `|| true` here once meant an empty
+    # or partial bundle nobody noticed.
+    _bundle_list="$(mktemp)"
+    bundle_source_list "${SCRIPT_DIR}" "${_bundle_list}" || { rm -f "${_bundle_list}"; err "--bundle-source: no trustworthy file list (pass --no-bundle-source)"; exit 1; }
+    rm -rf "${SYSROOT}${BUNDLE_SOURCE_DIR}"; mkdir -p "${SYSROOT}${BUNDLE_SOURCE_DIR}"
+    # --no-same-owner: the builder runs as root, so the tree is root's, not the uid that
+    # owns the checkout (root runs it via hugmesh-regenerate).
+    tar -C "${SCRIPT_DIR}" --no-recursion --null --verbatim-files-from \
+        -T "${_bundle_list}" -cf - | tar -C "${SYSROOT}${BUNDLE_SOURCE_DIR}" --no-same-owner -xf - \
+        || { rm -f "${_bundle_list}"; err "--bundle-source: staging the generator tree failed"; exit 1; }
+    install -m 0644 "${_bundle_list}" "${SYSROOT}${BUNDLE_SOURCE_DIR}/${BUNDLE_MANIFEST}"; rm -f "${_bundle_list}"
+    bundle_source_gate "${SYSROOT}${BUNDLE_SOURCE_DIR}" || { err "--bundle-source: refusing to build an image that carries the files above"; exit 1; }
     if [ -f "${SHARED_SPECS}/usr/sbin/hugmesh-regenerate" ]; then
         cp "${SHARED_SPECS}/usr/sbin/hugmesh-regenerate" "${SYSROOT}/usr/sbin/hugmesh-regenerate"
         chmod +x "${SYSROOT}/usr/sbin/hugmesh-regenerate"
     fi
+else
+    # A reused sysroot (--resume, a warm build root) may hold an earlier run's bundle,
+    # possibly from before tracked-only staging: never let it ride along ungated.
+    rm -rf "${SYSROOT:?}${BUNDLE_SOURCE_DIR}" "${SYSROOT:?}/usr/sbin/hugmesh-regenerate"
 fi
 # Graphical Calamares installer config + the bridge to install-x86.sh.
 # UNAFFILIATED: neutral names (gentoo-calamares-install / gentoo-installer-autostart,
@@ -5621,16 +5747,23 @@ LIVE_SQUASH_EXCL=()
 # match a leading dot (the sysroot's /dev carries static nodes, /run may carry
 # dotfiles). An array, not a word-split string: `proc/*` must reach mksquashfs
 # unexpanded whatever the cwd holds.
+#
+# usr/src is dropped WHOLE, as the stage4 tar has always done (--exclude=./usr/src): the
+# sysroot keeps the BUILT kernel tree for kernel reconfiguration, and that tree holds
+# certs/signing_key.pem — the module-signing PRIVATE key. Until 2026-11-11 every live ISO
+# shipped it (proven on a real pki live.iso), so anyone holding the ISO could sign a
+# module the .img/stage4/installed kernels of that build accept under lockdown=integrity.
+# live_root_gate refuses a squashfs that still carries one.
 live_squash_excludes() {
     local mode="$1" m
     LIVE_SQUASH_EXCL=()
     case "${mode}" in
         mksquashfs)
             for m in ${LIVE_ROOT_MOUNTPOINTS}; do LIVE_SQUASH_EXCL+=("${m}/*" "${m}/.*"); done
-            LIVE_SQUASH_EXCL+=(var/cache/distfiles "home/${DEFAULT_USER}") ;;
+            LIVE_SQUASH_EXCL+=(var/cache/distfiles "home/${DEFAULT_USER}" usr/src) ;;
         tar)
             for m in ${LIVE_ROOT_MOUNTPOINTS}; do LIVE_SQUASH_EXCL+=("--exclude=./${m}/*"); done
-            LIVE_SQUASH_EXCL+=(--exclude=./var/cache/distfiles "--exclude=./home/${DEFAULT_USER}") ;;
+            LIVE_SQUASH_EXCL+=(--exclude=./var/cache/distfiles "--exclude=./home/${DEFAULT_USER}" --exclude=./usr/src) ;;
         *) err "live_squash_excludes: unknown mode '${mode}' (mksquashfs|tar)"; return 1 ;;
     esac
 }
@@ -5680,8 +5813,8 @@ live_root_gate() {
         fstab="$(rdsquashfs -c /etc/fstab "${sq}" 2>/dev/null)" \
             || { err "live-root gate: ${sq} has no /etc/fstab"; return 1; }
     else
-        warn "live-root gate: neither unsquashfs nor rdsquashfs on this host — cannot verify that ${sq} carries /proc /sys /dev /run and a live /etc/fstab"
-        return 0
+        err "live-root gate: neither unsquashfs nor rdsquashfs on this host — cannot verify that ${sq} carries /proc /sys /dev /run, a live /etc/fstab and no module-signing key; refusing to ship it unchecked"
+        return 1
     fi
     for m in ${LIVE_ROOT_MOUNTPOINTS}; do
         grep -qx "/${m}" <<<"${top}" || {
@@ -5689,6 +5822,38 @@ live_root_gate() {
             return 1
         }
     done
+    # KEY-LEAK GATE: the module-signing PRIVATE key must never ride into a live root
+    # (see live_squash_excludes). Reads the packed image's full listing, captured first
+    # and then searched — never `listing | grep -q` under pipefail, where grep's early
+    # exit SIGPIPEs the lister and a FOUND key would read as a clean pass.
+    local _all="" _leak=""
+    if command -v unsquashfs >/dev/null; then
+        _all="$(unsquashfs -ls -d '' "${sq}" 2>/dev/null)" || _all=""
+    else
+        _all="$(rdsquashfs -d "${sq}" 2>/dev/null)" || _all=""     # gensquashfs-style: "file usr/src/... 0644 0 0"
+    fi
+    [ -n "${_all}" ] || { err "live-root gate: cannot list ${sq} — refusing to ship a live root nobody checked for the module-signing key"; return 1; }
+    # unsquashfs prints "/usr/src/...", rdsquashfs "file usr/src/..." (no leading slash):
+    # the certs/ alternative accepts either, or a renamed key would pass the rdsquashfs arm.
+    # The name alternative takes any signing_key*.pem* (a signing_key.pem.bak copy is the
+    # same key), and the basename of a non-default CONFIG_MODULE_SIG_KEY (file paths
+    # only; a pkcs11: URI names no file) read from the sysroot's kernel config.
+    local _re='(^|[[:space:]/])signing_key[^/[:space:]]*\.pem[^/[:space:]]*([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/'
+    local _sk="" _ske=""
+    # (tr strips the value's quotes: \042 is '"', spelled so the line holds no bare one)
+    _sk="$(sed -n 's/^CONFIG_MODULE_SIG_KEY=//p' "${SYSROOT:-/nonexistent}/usr/src/linux/.config" 2>/dev/null | tr -d '\042')" || _sk=""
+    if [ -n "${_sk}" ] && [ "${_sk#*:}" = "${_sk}" ]; then
+        _ske="$(sed 's/[][\.*^$+?(){}|/]/\\&/g' <<<"${_sk##*/}")"
+        _re+="|(^|[[:space:]/])${_ske}([[:space:]]|$)"
+    fi
+    _leak="$(grep -E -e "${_re}" <<<"${_all}" | head -3)" || true
+    if [ -n "${_leak}" ]; then
+        err "live-root gate: ${sq} carries the kernel module-signing PRIVATE key:"
+        err "  ${_leak//$'\n'/$'\n'  }"
+        err "anyone holding this ISO could sign a module every kernel of this build accepts —"
+        err "usr/src must be excluded from the live pack (live_squash_excludes)."
+        return 1
+    fi
     if printf '%s\n' "${fstab}" | awk '$1 ~ /^(PARTUUID|UUID|LABEL|PARTLABEL)=|^\/dev\// {found=1} END {exit !found}'; then
         err "live-root gate: ${sq}'s /etc/fstab still addresses a disk (PARTUUID/UUID/LABEL//dev line) — OpenRC fsck/localmount would abort the live boot runlevel; the pack must run between live_fstab_swap_in and live_fstab_restore"
         return 1
@@ -6784,6 +6949,15 @@ kernel_cache_derive() {
 kernel_cache_try_restore() {
     KCACHE_HIT=false
     [ -n "${KCACHE_KEY}" ] || return 1
+    # A sysroot whose kernel an operator rebuilt by hand (kernel-reconfig-x86.sh apply)
+    # is never "restored" from a cache entry built from the fragments: that would lay a
+    # second kernel beside the edited one. kernel_reconfig_reset already removed the
+    # edited kernel's files; recompile from the fragments (the key stays derived, so a
+    # fresh fragment kernel is still cached afterwards).
+    if ${KRC_FORCE_MISS:-false}; then
+        kc_info "this build tree's kernel was reconfigured by hand — cache lookup skipped, recompiling from the fragments"
+        return 1
+    fi
     local entry
     entry="$(kc_lookup "${KERNEL_CACHE_ROOT}" "x86" "${KCACHE_KEY}" \
                 "${KCACHE_KVER}" "${KCACHE_CFG}" "${KCACHE_FP}" || true)"
@@ -6796,6 +6970,15 @@ kernel_cache_try_restore() {
        || ! kc_unpack "${KCACHE_TMP}/modules.tar" "${SYSROOT}/lib/modules"; then
         kc_prune "${entry}" "payload failed to unpack into the sysroot"
         rm -rf "${KCACHE_TMP}"; return 1
+    fi
+    # The final .config rides along since kernel reconfiguration (optional payload: an
+    # entry stored before it simply has none, and kernel_config_preserve says so). It
+    # lands OUTSIDE the sysroot — a hit leaves no .config anywhere in the image.
+    KCACHE_RESTORED_CONFIG=""
+    if grep -q '^file config ' "${entry}/manifest" 2>/dev/null \
+       && kc_restore "${entry}" "config=${KCACHE_TMP}/config" 2>/dev/null; then
+        mkdir -p "${KRC_DIR}" && cp -f "${KCACHE_TMP}/config" "${KRC_DIR}/config.from-cache" \
+            && KCACHE_RESTORED_CONFIG="${KRC_DIR}/config.from-cache"
     fi
     rm -rf "${KCACHE_TMP}"
     KCACHE_HIT=true
@@ -6817,9 +7000,11 @@ kernel_cache_store() {
     rm -rf "${KCACHE_TMP}"; mkdir -p "${KCACHE_TMP}" || return 0
     if kc_pack "${KCACHE_TMP}/boot.tar" "${SYSROOT}/boot" "${names[@]}" \
        && kc_pack "${KCACHE_TMP}/modules.tar" "${SYSROOT}/lib/modules" "${kver}"; then
+        local -a _kc_cfg=()
+        [ -s "${SYSROOT}/usr/src/linux/.config" ] && _kc_cfg=("config=${SYSROOT}/usr/src/linux/.config")
         kc_store "${KERNEL_CACHE_ROOT}" "x86" "${KCACHE_KEY}" "${KCACHE_KVER}" \
             "${KCACHE_CFG}" "${KCACHE_FP}" "build-x86-host-stage4.sh" \
-            "boot.tar=${KCACHE_TMP}/boot.tar" "modules.tar=${KCACHE_TMP}/modules.tar" \
+            "boot.tar=${KCACHE_TMP}/boot.tar" "modules.tar=${KCACHE_TMP}/modules.tar" "${_kc_cfg[@]}" \
             && kc_info "cached this kernel for reuse (board=x86 key=${KCACHE_KEY})" \
             || kc_warn "could not publish the kernel cache entry (build unaffected)"
     else
@@ -6828,10 +7013,69 @@ kernel_cache_store() {
     rm -rf "${KCACHE_TMP}"
 }
 
+# ── KERNEL RECONFIGURATION CONTRACT (scripts/kernel-reconfig-x86.sh) ───────────
+# The Studio's "Kernel config…" button reopens THIS image's kernel in menuconfig after the
+# build, rebuilds only the kernel + modules, re-signs the UKI and repackages the artifacts.
+# It needs three things the build used to throw away or never wrote down:
+#   <BUILD_ROOT>/kernel/config-<kver>   the FINAL .config (post-olddefconfig) — on a cache
+#                                       hit nothing in the sysroot holds it (IKCONFIG is
+#                                       off, /boot has no config-*), so it is kept here;
+#   <BUILD_ROOT>/kernel-reconfig.env    the no-secret facts the repackager must reuse
+#                                       (written at the very end, kernel_reconfig_env);
+#   <BUILD_ROOT>/kernel/reconfigured    written BY the reconfig apply: the sysroot now
+#                                       carries a hand-edited kernel (kernel_reconfig_reset).
+KRC_DIR="${BUILD_ROOT}/kernel"
+KRC_FORCE_MISS=false
+KCACHE_RESTORED_CONFIG=""
+
+# kernel_reconfig_reset — at the start of the kernel phase. A previous run's config copy
+# is stale the moment this phase starts. A `reconfigured` marker means a --resume run is
+# about to rebuild over a hand-edited kernel: remove that kernel's module tree and
+# initramfs (sort -V would otherwise keep picking it — "6.x-gentoo-hmtest" sorts after
+# "6.x-gentoo") and force the cache lookup to MISS so the fragments recompile it.
+kernel_reconfig_reset() {
+    local rk
+    if [ -f "${KRC_DIR}/reconfigured" ]; then
+        rk="$(sed -n 's/^kver=//p' "${KRC_DIR}/reconfigured" | head -1)"
+        warn "This build tree's kernel was reconfigured by hand (menuconfig${rk:+, ${rk}}); this run"
+        warn "rebuilds it from the kernel fragments — the menuconfig edit is DISCARDED."
+        case "${rk}" in
+            ""|*/*|.|..) : ;;
+            *) rm -rf "${SYSROOT}/lib/modules/${rk}" "${SYSROOT}/boot/initramfs-${rk}.img" ;;
+        esac
+        KRC_FORCE_MISS=true
+    fi
+    rm -f "${KRC_DIR}"/config-* "${KRC_DIR}/config.from-cache" "${KRC_DIR}/reconfigured" 2>/dev/null || true
+}
+
+# kernel_config_preserve — after the kernel phase (hit or miss): keep the final .config
+# as <BUILD_ROOT>/kernel/config-<kver>, outside the sysroot (never in an artifact).
+kernel_config_preserve() {
+    local kver src=""
+    kver="$(ls -1 "${SYSROOT}/lib/modules" 2>/dev/null | sort -V | tail -1 || true)"
+    [ -n "${kver}" ] || { warn "kernel reconfiguration: no /lib/modules tree — no kernel config kept"; return 0; }
+    if ${KCACHE_HIT}; then
+        src="${KCACHE_RESTORED_CONFIG}"
+    elif [ -s "${SYSROOT}/usr/src/linux/.config" ]; then
+        src="${SYSROOT}/usr/src/linux/.config"
+    fi
+    mkdir -p "${KRC_DIR}"
+    if [ -n "${src}" ] && [ -s "${src}" ]; then
+        cp -f "${src}" "${KRC_DIR}/config-${kver}"
+        info "Kernel config kept for reconfiguration: ${KRC_DIR}/config-${kver}"
+    else
+        warn "kernel reconfiguration: this kernel came from a cache entry stored before the"
+        warn "config was cached — the Studio's \"Kernel config…\" will refuse this image until it"
+        warn "is rebuilt with --no-kernel-cache once."
+    fi
+    rm -f "${KRC_DIR}/config.from-cache"
+}
+
 if ${SKIP_KERNEL}; then
     banner "SKIPPED kernel (--skip-kernel)"
 else
     banner "Building hardened kernel (native: gentoo-sources + KSPP/SELinux + k8s fragment)"
+    kernel_reconfig_reset
     # Base (role-independent) hardening+k8s fragment; append the DRM driver block
     # ONLY for GPU roles. Headless roles keep just the virtio-gpu console FB.
     cp "${SPECS_DIR}/kernel/hardened-k8s.config" "${SYSROOT}/tmp/k.config"
@@ -6902,6 +7146,10 @@ else
         info "Kernel: cache key ${KCACHE_KEY} (board=x86 ${KCACHE_KVER}); every"
         info "artifact-integrity gate below still runs against the restored sysroot."
     else
+    # The assert list and the compile/install recipe are files, not heredoc text, so
+    # scripts/kernel-reconfig-x86.sh runs the identical ones (see the call below).
+    install -m 0755 "${SCRIPT_DIR}/scripts/_x86-kernel-asserts.sh" "${SYSROOT}/tmp/hm-x86-kernel-asserts.sh"
+    install -m 0755 "${SCRIPT_DIR}/scripts/_x86-kernel-install.sh" "${SYSROOT}/tmp/hm-x86-kernel-install.sh"
     # (heredoc body must stay at column 0, so the miss branch is not re-indented)
     chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 KBUILTIN=${KERNEL_BUILTIN}
@@ -6964,208 +7212,23 @@ if [ "\${KBUILTIN}" = true ]; then
     echo "[build-x86] --kernel-builtin: promoted \${nmod} modules to built-in (kept denylist + CONFIG_MODULES)"
 fi
 make olddefconfig
-# Refuse to ship a kernel that silently lost its hardening (e.g. a symbol that
-# olddefconfig pruned for an unmet dep). Stable, long-standing KSPP/LSM symbols.
-for must in CONFIG_SECURITY_SELINUX CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_SOURCE CONFIG_HARDENED_USERCOPY; do
-    grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: hardened kernel option \${must} not enabled after olddefconfig"; exit 1; }
-done
-# BOOT-CRITICAL (live ISO + SELinux enforcing): SQUASHFS_XATTR must survive olddefconfig.
-# The live squashfs pack PRESERVES security.selinux xattrs (mksquashfs by default, the
-# tar2sqfs fallback via tar --xattrs), and since #503 the sysroot is LABELLED at build
-# time: slx_label_tree (scripts/_selinux-policy-lib.sh) runs setfiles into it before
-# the stage4 tar and again before the squash, and live_label_gate reads the packed
-# image back. Nothing relies on a first-boot relabel any more (that one needs KEYS).
-# SQUASHFS_XATTR is therefore load-bearing: without it the kernel drops the labels ("squashfs: Xattrs in
-# filesystem, these will be ignored") — and on a labeled squashfs that unlabels the
-# live root and the enforcing boot DEADLOCKS at OpenRC init-early (proven via QEMU:
-# enforcing hangs, enforcing=0 reaches agetty). SQUASHFS_XATTR depends on SQUASHFS,
-# so a pruned dep would silently re-strip the labels — fail closed here.
-grep -q "^CONFIG_SQUASHFS_XATTR=y" .config || { echo "[build-x86] ERROR: CONFIG_SQUASHFS_XATTR not enabled after olddefconfig — live SELinux-enforcing boot would hang (unlabeled squashfs root)"; exit 1; }
-# BOOT-CRITICAL: refuse to ship a kernel whose k8s Service-networking surface
-# silently lost a netfilter/NAT/eBPF symbol. The x86 fragment used to be a
-# TRUNCATED copy of the Pi one (no xtables match/target layer, no nft NAT/MASQ,
-# no NF_NAT_MASQUERADE, no IPv6 nf tables, no IP_NF_MANGLE) which left ClusterIP/
-# kube-proxy/MASQUERADE/dual-stack/NetworkPolicy DEAD. Even with the fragment
-# fixed, \`make olddefconfig\` (above) will SILENTLY DROP any symbol whose parent
-# dep is unmet on the x86_64 defconfig base — no error, no diff. This loop is the
-# only thing that turns that silent prune into a BUILD FAILURE naming the symbol.
-# This list is the FULL load-bearing set the fragment adds — NOT a representative
-# subset. olddefconfig prunes per-LEAF: a parent (e.g. NETFILTER_XTABLES) can
-# survive while a leaf (e.g. NETFILTER_XT_TARGET_REDIRECT, IP6_NF_FILTER,
-# NETFILTER_XT_MATCH_MARK/MULTIPORT/STATISTIC, NETFILTER_XT_TARGET_MARK) gets
-# silently dropped — shipping a dead path. Asserting only a subset would let such
-# a leaf prune through, which is exactly the class of bug this guard exists to
-# stop. Keep this list IDENTICAL (modulo shell-var escaping) to the
-# build-rpi5-stage4.sh mirror and in sync with
-# tests/scripts/test-x86-kernel-net-symbols.sh (which asserts guard==fragment).
-# This guard asserts the FULL k8s Service-networking surface (kube-proxy xtables /
-# nft NAT / IPVS / CNI overlay / cgroup). It is REQUIRED for a cluster node, but a
-# standalone DESKTOP (ROLE_K8S=none) is not a k8s node — it doesn't run kube-proxy
-# and legitimately has no k8s fragment, so olddefconfig prunes the legacy xtables
-# leaves (e.g. IP_NF_MANGLE, whose legacy parent isn't enabled on the desktop). Skip
-# the k8s assertion for non-k8s roles; firewalld (nftables) + docker get the symbols
-# they need from hardened-k8s.config regardless, and the hardening/LSM guards below
-# still run for every role.
-if [ "${ROLE_K8S}" != none ]; then
-for must in CONFIG_NETFILTER_XTABLES \
-            CONFIG_NETFILTER_XT_MATCH_ADDRTYPE CONFIG_NETFILTER_XT_MATCH_COMMENT \
-            CONFIG_NETFILTER_XT_MATCH_CONNTRACK CONFIG_NETFILTER_XT_MATCH_MARK \
-            CONFIG_NETFILTER_XT_MATCH_MULTIPORT CONFIG_NETFILTER_XT_MATCH_STATISTIC \
-            CONFIG_NETFILTER_XT_TARGET_MARK CONFIG_NETFILTER_XT_TARGET_MASQUERADE \
-            CONFIG_NETFILTER_XT_TARGET_REDIRECT \
-            CONFIG_NETFILTER_XTABLES_LEGACY CONFIG_IP_NF_IPTABLES_LEGACY \
-            CONFIG_IP6_NF_IPTABLES_LEGACY \
-            CONFIG_IP_NF_MANGLE CONFIG_NF_NAT CONFIG_NF_NAT_MASQUERADE \
-            CONFIG_NF_TABLES CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6 \
-            CONFIG_NF_TABLES_INET \
-            CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT \
-            CONFIG_IP6_NF_IPTABLES CONFIG_IP6_NF_FILTER CONFIG_IP6_NF_NAT \
-            CONFIG_IP6_NF_MANGLE \
-            CONFIG_VLAN_8021Q CONFIG_NET_L3_MASTER_DEV CONFIG_NET_SCH_HTB \
-            CONFIG_NET_CLS_CGROUP \
-            CONFIG_IP_VS CONFIG_VXLAN CONFIG_VETH CONFIG_BRIDGE \
-            CONFIG_OVERLAY_FS CONFIG_OVERLAY_FS_REDIRECT_DIR CONFIG_OVERLAY_FS_INDEX \
-            CONFIG_CGROUP_NET_CLASSID CONFIG_CGROUP_NET_PRIO CONFIG_CGROUP_HUGETLB \
-            CONFIG_CGROUP_PERF CONFIG_CGROUP_WRITEBACK \
-            CONFIG_FAIR_GROUP_SCHED \
-            CONFIG_BPF_SYSCALL CONFIG_BPF_EVENTS \
-            CONFIG_POSIX_MQUEUE; do
-    grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: k8s node kernel option \${must} not enabled after olddefconfig (Service/kube-proxy/CNI/container-runtime would be impaired)"; exit 1; }
-done
-else
-    echo "[build-x86] Standalone/non-k8s role (ROLE_K8S=none): skipping the k8s Service-networking kernel guard"
-fi
-# HOST-FIREWALL kernel guard — EVERY role, k8s or not. The k8s guard above is
-# skipped for ROLE_K8S=none, but the host rulesets are not k8s-only: a node runs
-# hugmesh-firewall-reconcile + hugmesh-coturn-firewall, and a client desktop built
-# with --with-sunshine runs hugmesh-sunshine-firewall. All of them load a
-# 'table inet ...', and nf_tables_newtable() refuses a family the kernel was not
-# built with (EOPNOTSUPP) — so a kernel without NF_TABLES_INET boots with NO host
-# backstop at all. That shipped: the 2026-10-30 backend/frontend/backend-gpu ISOs
-# logged "Could not process rule: Operation not supported" for both tables on
-# every boot, and the x86_64 defconfig base carries no nf_tables of its own, so
-# the fragment is the only source. NFT_CT backs the coturn backstop's
-# 'ct state established,related accept' (without it that table is refused too).
-for must in CONFIG_NF_TABLES CONFIG_NF_TABLES_INET CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6 CONFIG_NFT_CT; do
-    grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: host-firewall kernel option \${must} not enabled after olddefconfig — every 'table inet' host ruleset (release gate, coturn backstop, sunshine fence) would be refused with EOPNOTSUPP and the node would boot with NO host firewall"; exit 1; }
-done
-# SELinux only activates if CONFIG_LSM is a clean, well-formed string. lockdown is
-# listed FIRST so it engages before any other LSM; a stray quote or wrong order here
-# would silently ship SELinux or lockdown DISABLED. Assert the exact intended value.
-grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"\$' .config || { echo "[build-x86] ERROR: CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); lockdown/SELinux would not activate"; exit 1; }
-# ...and every NAME in that string must have its module COMPILED IN. Asserting the
-# string alone is structurally blind to the failure that actually shipped: the
-# kernel does not diagnose an LSM name it cannot resolve, it initializes a SHORTER
-# stack and boots on. The 2026-08-14 pki image asked for
-#   lsm=lockdown,yama,selinux,bpf
-# and dmesg answered
-#   LSM: initializing lsm=lockdown,capability,selinux
-# because CONFIG_SECURITY_YAMA and CONFIG_BPF_LSM were never set — two LSMs that
-# were pure decoration in the config, the cmdline, the grub.cfg and the signed UKI.
-# So derive the required symbols FROM the string: adding a name to CONFIG_LSM
-# without its enabling symbol now fails the build instead of shipping a lie.
-for _l in \$(sed -n 's/^CONFIG_LSM="\(.*\)"\$/\1/p' .config | tr ',' ' '); do
-    case "\${_l}" in
-        capability) continue ;;                      # always built in with CONFIG_SECURITY
-        lockdown)   _sym=CONFIG_SECURITY_LOCKDOWN_LSM ;;
-        yama)       _sym=CONFIG_SECURITY_YAMA ;;
-        selinux)    _sym=CONFIG_SECURITY_SELINUX ;;
-        bpf)        _sym=CONFIG_BPF_LSM ;;
-        apparmor)   _sym=CONFIG_SECURITY_APPARMOR ;;
-        loadpin)    _sym=CONFIG_SECURITY_LOADPIN ;;
-        safesetid)  _sym=CONFIG_SECURITY_SAFESETID ;;
-        landlock)   _sym=CONFIG_SECURITY_LANDLOCK ;;
-        integrity)  _sym=CONFIG_INTEGRITY ;;
-        *) echo "[build-x86] ERROR: CONFIG_LSM names '\${_l}', which this guard cannot verify — add its enabling CONFIG_* symbol to the case above"; exit 1 ;;
-    esac
-    grep -q "^\${_sym}=y\$" .config || { echo "[build-x86] ERROR: CONFIG_LSM names '\${_l}' but \${_sym} is not =y after olddefconfig — the kernel would SILENTLY DROP it from the LSM stack"; exit 1; }
-done
-# BTF is what lets a BPF_PROG_TYPE_LSM program attach to the bpf LSM that CONFIG_LSM
-# names. olddefconfig drops CONFIG_DEBUG_INFO_BTF silently when dev-util/pahole is
-# missing at configure time or when a struct-randomisation choice is on, so assert it
-# survived rather than ship a kernel whose bpf LSM registers but cannot enforce.
-for must in CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES; do
-    grep -q "^\${must}=y\$" .config || { echo "[build-x86] ERROR: \${must} not enabled after olddefconfig — dev-util/pahole missing at configure time, or struct layout randomisation is on (BTF depends on it being off); a BPF_PROG_TYPE_LSM program could not attach"; exit 1; }
-done
-make -j${JOBS} bzImage modules
-make modules_install
-# 'make install' copies bzImage/System.map/config to /boot FIRST, then falls
-# through arch/x86/boot/install.sh's bootloader probe (no installkernel(8) in
-# the image, no lilo) and prints a harmless "Cannot find LILO." as its last
-# gasp. Filter that one cosmetic line: the shell is bash -eo pipefail, so a
-# REAL make-install failure still aborts via the pipeline status; the '|| true'
-# only absorbs grep's status-1 when every line was filtered.
-make install 2>&1 | { grep -vF 'Cannot find LILO.' || true; }
-# Disk-boot initramfs (NOT the live dmsquash-live one): a normal, generic
-# (--no-hostonly) dracut image so the persistent ext4 GPT root mounts on real
-# hardware AND in VMs. Named initramfs-<kver>.img to match the grub.cfg the .img
-# builder writes. The live ISO builds its own initramfs-live.img separately.
-KVER="\$(make -s kernelrelease 2>/dev/null || ls /lib/modules | sort -V | tail -1)"
-if command -v dracut >/dev/null; then
-    # --add crypt: the LUKS2 root the installer can lay down is unlocked
-    # from /etc/crypttab + the rd.luks cmdline in this initramfs. Harmless on a
-    # plaintext-root image (no crypttab → no unlock attempted). See dracut.conf.d.
-    dracut --force --no-hostonly \
-        --add crypt \
-        --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net dm_crypt" \
-        --kver "\${KVER}" "/boot/initramfs-\${KVER}.img" \
-        || echo "[build-x86] WARN: dracut (disk initramfs) failed; the .img may not boot"
-else
-    echo "[build-x86] WARN: dracut not installed; no disk initramfs (sys-kernel/dracut should be in packages.list)"
-fi
-# Unified Kernel Image (UKI) for Secure Boot: bundles kernel+initramfs+cmdline
-# as a single signed PE/EFI binary. Requires dracut[uefi] + systemd-utils[boot]
-# (owns the sd-stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub) + CONFIG_EFI_STUB.
-# The host-side signing step below signs it with the org key; build_img() installs
-# it to the ESP. NOTE: the output path expands HOST-side (unquoted heredoc) from
-# UKI_NAME so it matches the sign step's UKI_UNSIGNED for BOTH the branded
-# (hugmesh-unsigned.efi) and UNAFFILIATED (gentoo-unsigned.efi) names.
-# --kernel-image /boot/vmlinuz is REQUIRED: 'make install' above ran with no
-# installkernel(8) (see the LILO note), so arch/x86/boot/install.sh wrote an
-# UNVERSIONED /boot/vmlinuz — dracut's determine_kernel_image() probes only
-# versioned paths (/lib/modules/<kver>/vmlinuz, /boot/vmlinuz-<kver>, ...) and
-# dies "Can't find a kernel image" without the flag; the WARN below would then
-# swallow that and the SB chain would silently degrade to GRUB+vmlinuz
-# (live-proven on the real desktop sysroot: exact invocation failed without
-# the flag, produced a valid PE32+ UKI with it).
-# NB: this whole block lives inside an UNQUOTED <<CHROOT heredoc, so backticks are
-# COMMAND SUBSTITUTION even in a comment — the heredoc is expanded before any of it is
-# parsed as shell. Quoting a command name in backticks here runs it at build time and
-# splices its stdout into the script (a bare 'parted' printed "Using /dev/sda", which
-# then executed as a command and failed the build). Use 'single quotes' in comments.
-#
-# root= MUST be baked in here. GRUB's 'chainloader' hands a UKI NO external cmdline,
-# so unlike the GRUB 'linux' menuentry — which appends root=PARTUUID=... at build_img
-# time — the UKI is only bootable if it carries root= itself. GRUB_CMDLINE_LINUX is the
-# APPEND half by design and never contains one, so the UKI shipped without it: the
-# kernel started and dracut then died "FATAL: No or empty root= argument" and dropped to
-# a debug shell. That is every x86 image of the 2026-08-07 session (matrix triage
-# 2026-08-13); it was masked until now by a separate GRUB defect that stopped the UKI
-# entry from ever being reached.
-#
-# LABEL=, not PARTUUID=: the partition UUIDs are minted by 'parted' inside build_img()
-# and only read back afterwards (see mkpart/_fld root_uuid), which happens long AFTER
-# this UKI is built AND signed — so a PARTUUID is simply not knowable here, and
-# rewriting .cmdline post-signing would invalidate the signature. ${ROOT_LABEL} is a
-# build-time constant that build_img passes to 'mkfs.ext4 -L', so it is stable and
-# known now. dracut already carries the ext4 driver (--add-drivers below) to mount it.
-CMDLINE="root=LABEL=${ROOT_LABEL} ro \$(. /etc/default/grub 2>/dev/null; printf '%s' "\${GRUB_CMDLINE_LINUX:-lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1}")"
-if command -v dracut >/dev/null && dracut --help 2>/dev/null | grep -q -- '--uefi'; then
-    dracut --force --no-hostonly --uefi \
-        --add crypt \
-        --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net dm_crypt" \
-        --kernel-cmdline "\${CMDLINE}" \
-        --kernel-image /boot/vmlinuz \
-        --kver "\${KVER}" "/boot/${UKI_NAME%.efi}-unsigned.efi" \
-        && echo "[build-x86] UKI built: /boot/${UKI_NAME%.efi}-unsigned.efi" \
-        || echo "[build-x86] WARN: dracut --uefi failed; UKI not built (secure boot chain needs manual rebuild)"
-else
-    echo "[build-x86] INFO: dracut --uefi not available; UKI skipped (add 'uefi' USE to sys-kernel/dracut)"
-fi
+# The post-olddefconfig hardening asserts (KSPP, SELinux, SQUASHFS_XATTR, the k8s
+# Service-networking + host-firewall netfilter sets, the CONFIG_LSM string and every
+# name in it, BTF) and the compile/install/UKI recipe live in two plain scripts the
+# host staged into /tmp just before this chroot: scripts/_x86-kernel-asserts.sh and
+# scripts/_x86-kernel-install.sh. ONE list, two callers — this build, and
+# scripts/kernel-reconfig-x86.sh, which rebuilds an operator's menuconfig edit
+# through the SAME asserts and the SAME recipe. Both exit non-zero (naming the
+# symbol / the failing step), which aborts this bash -e heredoc exactly as the
+# inline copy did.
+bash /tmp/hm-x86-kernel-asserts.sh "${ROLE_K8S}"
+bash /tmp/hm-x86-kernel-install.sh "${JOBS}" "${ROOT_LABEL}" "${UKI_NAME}"
 CHROOT
     kernel_cache_store
     fi
-    rm -f "${SYSROOT}/tmp/k.config" "${SYSROOT}/tmp/k.cache-inputs"
+    kernel_config_preserve
+    rm -f "${SYSROOT}/tmp/k.config" "${SYSROOT}/tmp/k.cache-inputs" \
+          "${SYSROOT}/tmp/hm-x86-kernel-asserts.sh" "${SYSROOT}/tmp/hm-x86-kernel-install.sh"
     info "Gentoo hardened kernel + disk-boot initramfs installed to ${SYSROOT}/boot"
 fi
 
@@ -8396,6 +8459,56 @@ CHROOT
         fi
     fi
 fi
+
+# ── 11b. Kernel reconfiguration contract ───────────────────────────
+# <BUILD_ROOT>/kernel-reconfig.env: what scripts/kernel-reconfig-x86.sh needs to rebuild
+# THIS image's kernel after an operator's menuconfig edit and repackage the artifacts
+# exactly as this run named, labelled and signed them. NO SECRET may ever appear here —
+# no password, no LUKS material, no key (only the key's DIRECTORY name, which is the
+# fixed <work-dir>/secureboot). Strict KEY=VALUE, one per line, never sourced: the
+# reader (the reconfig script and core/kernel_reconfig.py) takes everything after the
+# first '=' and accepts only the keys it knows. A session built before this block
+# existed has no such file, and the Studio refuses it in one sentence.
+_krc_base() { case "$1" in "("*|"") printf '' ;; *) basename -- "${1%% *}" ;; esac; }
+kernel_reconfig_env() {
+    local f="${BUILD_ROOT}/kernel-reconfig.env" kver signed=no live="" cfg=""
+    kver="$(ls -1 "${SYSROOT}/lib/modules" 2>/dev/null | sort -V | tail -1 || true)"
+    if [ -f "${SYSROOT}/boot/${UKI_NAME}" ] && [ -f "${SBCRT:-}" ] && command -v sbverify >/dev/null \
+       && sbverify --cert "${SBCRT}" "${SYSROOT}/boot/${UKI_NAME}" >/dev/null 2>&1; then
+        signed=yes
+    fi
+    case "${ISO_PATH}" in *.live.iso) live="$(_krc_base "${ISO_PATH}")" ;; esac
+    [ -n "${kver}" ] && [ -s "${KRC_DIR}/config-${kver}" ] && cfg="kernel/config-${kver}"
+    # One `_krc_kv KEY VALUE` per line (a value never carries a newline). Written as a
+    # call, not as KEY=VALUE text, so no line here reads as a shell assignment — the
+    # role-tag guard (test-role-key-spelling.sh A4d) scans this file for those.
+    _krc_kv() { local v="${2-}"; printf '%s=%s\n' "$1" "${v//$'\n'/ }"; }
+    {
+        _krc_kv KR_FORMAT 1
+        _krc_kv BUILD_TS "${BUILD_TS}";           _krc_kv BRAND "${BRAND}"
+        _krc_kv BRAND_TITLE "${BRAND_TITLE}";     _krc_kv ROLE "${ROLE}"
+        _krc_kv ROLE_TAG "${ROLE_TAG}";           _krc_kv ROLE_K8S "${ROLE_K8S}"
+        _krc_kv ENV "${ENV}";                     _krc_kv UNAFFILIATED "${UNAFFILIATED}"
+        _krc_kv UKI_NAME "${UKI_NAME}";           _krc_kv ROOT_LABEL "${ROOT_LABEL}"
+        _krc_kv ESP_LABEL "${ESP_LABEL}";         _krc_kv SB_ETC_DIR "${SB_ETC_DIR}"
+        _krc_kv SB_EFI_VENDOR "${SB_EFI_VENDOR}"; _krc_kv SECURE_BOOT "${SECURE_BOOT}"
+        _krc_kv UKI_SIGNED "${signed}";           _krc_kv DEFAULT_USER "${DEFAULT_USER}"
+        _krc_kv LIVE_ROOT_MOUNTPOINTS "${LIVE_ROOT_MOUNTPOINTS}"
+        _krc_kv LIVE_VOLID "${LIVE_VOLID}";       _krc_kv INSTALL_VOLID "${INSTALL_VOLID}"
+        _krc_kv SLX_TYPE "${SLX_TYPE:-}";         _krc_kv JOBS "${JOBS}"
+        _krc_kv KVER "${kver}";                   _krc_kv KERNEL_FROM_CACHE "${KCACHE_HIT}"
+        _krc_kv KERNEL_CONFIG "${cfg}"
+        _krc_kv COMPRESS_IMG "${COMPRESS_IMG}";   _krc_kv COMPRESS_LEVEL "${COMPRESS_LEVEL}"
+        _krc_kv STAGE4 "$(_krc_base "${STAGE4:-}")"
+        _krc_kv IMG "$(_krc_base "${IMG_PATH}")"
+        _krc_kv FS_TAR "$(_krc_base "${FS_TAR_PATH}")"
+        _krc_kv LIVE_ISO "${live}"
+        _krc_kv INSTALLER_ISO "$(_krc_base "${INSTALLER_ISO_PATH}")"
+    } > "${f}.tmp" && mv -f "${f}.tmp" "${f}" \
+        && info "Kernel reconfiguration contract: ${f}" \
+        || warn "could not write ${f} — the Studio's \"Kernel config…\" will refuse this image"
+}
+${SKIP_KERNEL} || kernel_reconfig_env
 
 # ── 12. Summary ────────────────────────────────────────────────────
 # UNAFFILIATED prints a neutral summary: no k8s/cluster-domain/KEYS-stick lines
