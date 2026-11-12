@@ -18,6 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
+from hugmesh_studio.core import crashlog                # noqa: E402
 from hugmesh_studio.core import keyzip as core_keyzip   # noqa: E402
 from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     BUILTIN_DEFAULT_SERVICES, ImageConfig, MODE_SKIPPED_PAGES,
@@ -724,6 +725,140 @@ def test_buildpage_iso_knobs_grey_out_off_x86(wiz):
     for flag in ("--cached", "--uncached", "--live-toram", "--no-live-toram",
                  "--bundle-source", "--no-bundle-source"):
         assert flag not in args
+
+
+# ---- collect_all(): one pass per Continue / Refresh preview ----------------------
+# collect_all() re-runs the validatePage of every VISITED page, and the Review page is
+# visited while it is on screen. So BuildPage.validatePage -> _preview -> collect_all()
+# -> BuildPage.validatePage -> _preview -> ... recursed until Python's limit: a couple of
+# hundred nested passes per click, every visited page re-committed at each level, the
+# deepest one cut off part-way through a page, and the RecursionError swallowed by
+# collect_all's own handler. A call made while a pass is running now returns at once.
+
+class _Abort(BaseException):
+    """Escapes collect_all()'s `except Exception`, as an interrupt would."""
+
+
+@pytest.fixture
+def counted_wiz(qapp, monkeypatch):
+    """A wizard whose BuildPage._preview and NetworkPage.validatePage count their calls.
+
+    Patched on the CLASSES, and BEFORE the wizard is built: the "Refresh preview" button
+    is connected to the bound _preview when the page is constructed, so a patch applied
+    to an existing wizard would never see the click's own call."""
+    counts = {"preview": 0, "network": 0}
+    real_preview = wizard_mod.BuildPage._preview
+    real_network = wizard_mod.NetworkPage.validatePage
+
+    # No *args: clicked(bool) hands its `checked` to any slot that accepts one, and
+    # _preview takes none.
+    def preview(self):
+        counts["preview"] += 1
+        return real_preview(self)
+
+    def network(self):
+        counts["network"] += 1
+        return real_network(self)
+
+    monkeypatch.setattr(wizard_mod.BuildPage, "_preview", preview)
+    monkeypatch.setattr(wizard_mod.NetworkPage, "validatePage", network)
+    w = wizard_mod.StudioWizard(GENERATOR_DIR)
+    w.show()
+    yield w, counts
+    w.close()
+    w.deleteLater()
+
+
+def _crash_logs():
+    d = crashlog.crashes_dir()
+    return sorted(os.listdir(d)) if os.path.isdir(d) else []
+
+
+@pytest.mark.parametrize("mode", ["standalone", "cloud", "mesh"])
+def test_review_page_commits_each_page_once_per_refresh_and_continue(
+        counted_wiz, mode, capsys):
+    """Exact counts, per click. _preview runs twice — the click's own call, and the one
+    collect_all reaches through the (visited) Review page's validatePage, whose own
+    collect_all then returns at once — and every other visited page commits ONCE."""
+    wiz, counts = counted_wiz
+    pick_mode(wiz, mode)
+    if mode == "mesh":
+        enable_additional_domains(wiz)      # puts DomainsPage on the collect path too
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.preview_btn.isEnabled()
+
+    counts.update(preview=0, network=0)
+    build.preview_btn.click()
+    assert counts == {"preview": 2, "network": 1}, "Refresh preview"
+
+    counts.update(preview=0, network=0)
+    wiz.next()
+    assert isinstance(wiz.currentPage(), wizard_mod.LaunchPage)
+    assert counts == {"preview": 2, "network": 1}, "Continue"
+
+    # Nothing was swallowed on the way: the recursion ended in a RecursionError that
+    # collect_all hid, and on the mesh walk it surfaced only as DomainsPage's bare
+    # "swallowed exception in _refresh_summary_cells" line, with no traceback after it.
+    assert _crash_logs() == []
+    assert "swallowed exception" not in capsys.readouterr().err
+
+
+def test_collect_all_from_a_later_page_is_one_pass(counted_wiz):
+    """Save config's path: collect_all() called while the Review page is visited but not
+    on screen. It reaches _preview through BuildPage.validatePage, and that _preview's
+    own collect_all must not start a second pass."""
+    wiz, counts = counted_wiz
+    advance_to(wiz, wizard_mod.LaunchPage)
+    counts.update(preview=0, network=0)
+    wiz.collect_all()
+    assert counts == {"preview": 1, "network": 1}
+
+
+def test_collect_all_reports_a_failing_page_once_and_still_harvests_the_rest(
+        wiz, monkeypatch, capsys):
+    """A page that raises no longer vanishes: its traceback reaches the crash log (once
+    per page class and exception type — collect_all runs on every Review-page edit and
+    the crash dir keeps only its newest files) and one stderr line names it. The pages
+    after it are still collected."""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+
+    def broken(self):
+        raise ValueError("network page bug")
+
+    monkeypatch.setattr(wizard_mod.NetworkPage, "validatePage", broken)
+    capsys.readouterr()
+    for size in (4096, 8192):
+        build.img_size.setValue(size)
+        wiz.collect_all()
+        assert wiz.cfg.img_size == size     # BuildPage comes after NetworkPage
+    logs = _crash_logs()
+    assert len(logs) == 1, logs
+    with open(os.path.join(crashlog.crashes_dir(), logs[0]), encoding="utf-8") as fh:
+        text = fh.read()
+    assert "StudioWizard.collect_all (NetworkPage.validatePage)" in text
+    assert "ValueError: network page bug" in text
+    err = capsys.readouterr().err
+    assert err.count("collect_all: NetworkPage.validatePage raised ValueError") == 1
+
+
+def test_collect_all_guard_is_released_when_a_pass_is_interrupted(wiz, monkeypatch):
+    """The re-entrancy flag is cleared in `finally`. Left set, every later collect_all
+    would return at once and silently stop harvesting every page."""
+    advance_to(wiz, wizard_mod.BuildPage)
+    real = wizard_mod.NetworkPage.validatePage
+    calls = []
+
+    def interrupted_once(self):
+        calls.append(1)
+        if len(calls) == 1:
+            raise _Abort
+        return real(self)
+
+    monkeypatch.setattr(wizard_mod.NetworkPage, "validatePage", interrupted_once)
+    with pytest.raises(_Abort):
+        wiz.collect_all()
+    wiz.collect_all()
+    assert len(calls) == 2, "collect_all stayed switched off after an interrupted pass"
 
 
 # ---- per-platform capability gating (G10/G11/G12/G16) --------------------------
