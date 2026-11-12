@@ -699,6 +699,13 @@ if ${STANDALONE}; then
     BUILD_INSTALLER=true        # guarantee the installer artifact (the FDE path)
     info "STANDALONE appliance: no mesh; local user '${LOCAL_USER}' over SSH; LUKS2 FDE on install"
 fi
+
+# tailscaled version floor (scripts/_download-lib.sh): the shared init script passes
+# --no-logs-no-support, which tailscaled only accepts from 1.32.0 on. Refuse an older
+# --tailscale-version HERE, after the --standalone posture above has settled whether
+# tailscale ships at all and before any download, instead of shipping a mesh client
+# that exits on an unknown flag.
+${SKIP_MESH} || ${SKIP_TAILSCALE} || dlv_tailscale_version_ok "${TAILSCALE_VERSION}" || exit 1
 # --encrypt-root composed onto a plain (non-standalone) build also needs the
 # installer flavor — LUKS is laid down by install-orangepi-zero2.sh, not the
 # live medium.
@@ -2557,6 +2564,21 @@ if ${ENCRYPT_ROOT} && ${BUILD_INSTALLER} && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY};
         exit 1
     fi
 fi
+
+# ── NetworkManager: no connectivity probe (headless appliance) ──
+# The networkmanager package ships /usr/lib/NetworkManager/conf.d/20-connectivity.conf,
+# which polls a fixed public URL (nmcheck.gnome.org) every few minutes, forever: an
+# unsolicited phone-home from a self-hosted mesh, and DNS noise on an offline or
+# egress-filtered LAN. This board is always a headless appliance (no desktop, ever), so there is
+# no captive portal to show anyone: always off. 90- so it sorts after the package's
+# own conf.d files. Pinned by tests/scripts/test-node-telemetry-off.sh.
+mkdir -p "${SYSROOT}/etc/NetworkManager/conf.d"
+printf '%s\n' \
+    '# Written by the HugMesh builder (headless appliance): no connectivity probe' \
+    '# to a public URL. Delete this file to restore the package default.' \
+    '[connectivity]' \
+    'enabled=false' > "${SYSROOT}/etc/NetworkManager/conf.d/90-hugmesh-no-connectivity-check.conf"
+info "NetworkManager: connectivity check OFF (headless appliance — no public probe URL)"
 
 # ── BEGIN shared block: SELinux node-policy modules ───────────────────────────
 # Compile specs/selinux/*.te into .pp ON THE X86 BUILD HOST and install them into

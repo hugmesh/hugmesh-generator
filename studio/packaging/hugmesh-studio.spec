@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for the Windows build of HugMesh Image Studio, and for the Linux
-tarball built from the same spec.
+tarball and the macOS app built from the same spec.
 
     cd studio
     HUGMESH_STUDIO_ICON=<path to a .ico> pyinstaller --noconfirm packaging/hugmesh-studio.spec
@@ -12,7 +12,10 @@ into %TEMP% on every start). It is a WINDOWED executable (no console window); be
 command-line flags (see the comment above COLLECT). On Linux
 the same command (without HUGMESH_STUDIO_ICON) writes ``dist/hugmesh-studio/hugmesh-studio``,
 which the release workflow's ``linux`` job packs into
-``hugmesh-studio-<version>-linux-x86_64.tar.gz``.
+``hugmesh-studio-<version>-linux-x86_64.tar.gz``. On macOS (``packaging/build-macos-app.sh``,
+with HUGMESH_STUDIO_ICON pointing at an .icns) the same tree is also wrapped into
+``dist/HugMesh Image Studio.app`` by the BUNDLE step at the end of this file; that .app
+is what the .dmg carries.
 
 THIS FILE IS COMMITTED ON PURPOSE. It used to be missing: ``studio/.gitignore`` carried
 a blanket ``*.spec`` (the pattern PyInstaller's own ``.gitignore`` template uses for
@@ -37,6 +40,7 @@ checkout (build-*.sh, scripts/, specs/, tests/), and none of those are bundled. 
 """
 import glob
 import os
+import re
 import sys
 
 from PyInstaller.utils.hooks import collect_all
@@ -50,6 +54,11 @@ PACKAGE_DIR = os.path.join(STUDIO_DIR, "hugmesh_studio")
 ENTRY = os.path.join(PACKAGING_DIR, "run_studio.py")
 
 NAME = "hugmesh-studio"
+# macOS only: the bundle's name in Finder and its identifier. The identifier is the
+# Flatpak's app id, so one name means the Studio on every platform.
+APP_NAME = "HugMesh Image Studio"
+BUNDLE_ID = "org.hugmesh.ImageStudio"
+MACOS_MINIMUM = "13.0"
 
 # Never freeze a second Qt binding. pyproject.toml makes PySide6 (LGPL) the dependency
 # and says "the PyInstaller spec excludes PyQt6" because PyQt6 is GPL: a bundle that
@@ -192,3 +201,43 @@ coll = COLLECT(  # noqa: F821
     upx=False,
     name=NAME,
 )
+
+# MACOS ONLY: wrap the onedir tree in an application bundle. Contents/MacOS/hugmesh-studio
+# is the same executable as on Linux, so it is also the command-line tool (macOS has no
+# subsystem split, unlike Windows, and the app needs no console twin):
+#     "/Applications/HugMesh Image Studio.app/Contents/MacOS/hugmesh-studio" --self-check
+# Not signed with an identity (codesign_identity stays unset), so PyInstaller signs it
+# ad hoc, which Apple silicon requires for any executable to run at all. A Developer ID
+# signature and notarization are an operator step: docs/STUDIO-INSTALLERS.md, "macOS".
+if sys.platform == "darwin":
+    sys.path.insert(0, os.path.join(PACKAGING_DIR, "wix"))
+    from msi_version import msi_version  # noqa: E402  (the one SemVer -> numeric mapping)
+
+    with open(os.path.join(PACKAGE_DIR, "__init__.py"), encoding="utf-8") as fh:
+        version = re.search(r'__version__ = "([^"]+)"', fh.read()).group(1)
+    if icon is not None and not icon.endswith(".icns"):
+        raise SystemExit(
+            "HUGMESH_STUDIO_ICON=%s is not an .icns file; a macOS bundle needs one "
+            "(packaging/build-macos-app.sh renders it with iconutil)" % icon_setting)
+    BUNDLE(  # noqa: F821
+        coll,
+        name=APP_NAME + ".app",
+        icon=icon,
+        bundle_identifier=BUNDLE_ID,
+        # CFBundleShortVersionString is what Finder shows and must be numbers only;
+        # CFBundleVersion is the build number Launch Services compares, so it takes the
+        # MSI's monotonic mapping (0.4.4-beta.1 -> 0.4.401, the final 0.4.4 -> 0.4.499).
+        version=version.split("-", 1)[0],
+        info_plist={
+            "CFBundleName": APP_NAME,
+            "CFBundleDisplayName": APP_NAME,
+            "CFBundleVersion": msi_version(version),
+            "HugMeshStudioVersion": version,
+            # PySide6 6.11's macOS wheels are tagged macosx_13_0: Qt will not start on
+            # anything older, so neither may the app.
+            "LSMinimumSystemVersion": MACOS_MINIMUM,
+            "NSHighResolutionCapable": True,
+            "NSRequiresAquaSystemAppearance": False,
+            "LSApplicationCategoryType": "public.app-category.developer-tools",
+        },
+    )

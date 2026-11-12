@@ -60,6 +60,9 @@ class DomainCAKeysScreen:
                                    node_key_profiles(getattr(j, "worklist", None)))
 
     def lines(self, j) -> list[str]:
+        # the GUI page's refresh() twin: the store follows a rename (or says, in the
+        # checklist, why it cannot) on every render, not only on entering the step
+        dca.rekey_own(j.cfg)
         headers, rows = self.table(j)
         out = [dca.STEP_SUBTITLE, ""]
         out.append("  #  " + " | ".join(headers))

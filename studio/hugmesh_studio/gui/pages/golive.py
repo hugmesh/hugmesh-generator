@@ -33,14 +33,18 @@ this mesh…" opens the wizard on its front door (``target=``). Against a device
 host runs nothing but ssh: status/list come from the device's own baked driver, the
 Inputs step autofills from its probe, Generate streams the plan run INSIDE it and
 lists the artefacts copied back, Exposure/Provider say what each mechanism can really
-do from an emulated node, Verify/Flip carry the EPHEMERAL banner (a restart boots the
-golden image INTERNAL again), and the flip opens ``ssh -t … commit`` in a terminal —
-the device's own TTY confirm, never -y. This host's commit is refused off-node (B1).
+do from an emulated node, Verify/Flip carry the EPHEMERAL banner (the next boot starts
+from the golden image or a save, never from this run's disk), every status pane leads
+with the posture READ from the device (both witnesses — never inferred from a
+restart), and the flip opens ``ssh -t … commit`` in a terminal — the device's own TTY
+confirm, never -y. This host's commit is refused off-node (B1).
 """
 from __future__ import annotations
 
 import os
 import re
+import sys
+import traceback
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
 from .. import console
@@ -273,8 +277,9 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
 
     def _refresh(self):
         text = self.wiz.status_text()
-        js = self.wiz.journal_line()
-        self.status.setPlainText(text + (f"\n\n{js}" if js else ""))
+        rep = self.wiz.device_report()
+        # the device's own posture FIRST: the pane is short, and that is its answer
+        self.status.setPlainText((f"{rep}\n\n" if rep else "") + text)
 
     def revisit(self) -> None:
         """Back to this step from a later one. QWizard's Back never calls
@@ -870,7 +875,13 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
 class _ExportWorker(QtCore.QThread):
     """Runs org_export.plan / apply off the GUI thread (git archive of thirty
     repositories and pushes take minutes). ``done`` carries ("ok", value) or
-    ("error", message); ``progress`` one line per repository as apply finishes it."""
+    ("error", message); ``progress`` one line per repository as apply finishes it.
+
+    The error message is the exception's own sentence, never "RuntimeError: …": the
+    operator reads "Plan failed: <message>" on the page, and a Python class name in
+    it says nothing they can act on. The class and the traceback go to stderr (the
+    Studio log) for whoever debugs it. An exception with no message falls back to
+    its class name, so the line never reads a bare "Plan failed: "."""
     progress = Signal(object)
     done = Signal(object)
 
@@ -882,7 +893,10 @@ class _ExportWorker(QtCore.QThread):
         try:
             self.done.emit(("ok", self._fn(lambda r: self.progress.emit(r))))
         except Exception as exc:                 # noqa: BLE001 — reported inline
-            self.done.emit(("error", f"{type(exc).__name__}: {exc}"))
+            print(f"golive: org export failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            self.done.emit(("error", str(exc).strip() or type(exc).__name__))
 
 
 # the plan table's columns (tests pin the header words)
@@ -1437,8 +1451,8 @@ class GoLiveVerifyPage(QtWidgets.QWizardPage):
         return p.mechanism if p else ""
 
     def _recheck(self):
-        js = self.wiz.journal_line()
-        self.status.setPlainText(self.wiz.status_text() + (f"\n{js}" if js else ""))
+        rep = self.wiz.device_report()
+        self.status.setPlainText((f"{rep}\n\n" if rep else "") + self.wiz.status_text())
         self.wiz.verify_ok = True   # advisory only; the flip arms on the typed domain
 
 
@@ -1568,8 +1582,8 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         self._refresh()
 
     def _refresh(self):
-        js = self.wiz.journal_line()
-        self.status.setPlainText(self.wiz.status_text() + (f"\n{js}" if js else ""))
+        rep = self.wiz.device_report()
+        self.status.setPlainText((f"{rep}\n\n" if rep else "") + self.wiz.status_text())
 
     def _armed(self, text):
         d = self.wiz.opts.domain
@@ -1833,12 +1847,24 @@ class GoLiveWizard(QtWidgets.QWizard):
                      "deleted after the run")
         return line
 
-    def journal_line(self) -> str:
-        """The journal compared with the device's boot: says 'reset by a restart' when
-        the device booted again since. "" for this host / no journal."""
-        if self.target.is_local:
+    def device_report(self) -> str:
+        """golive_target.device_report for the picked device: the posture READ from it
+        now (both witnesses; "unknown (device not reachable)" when it cannot be asked),
+        the save it booted from and the posture that save was taken in, and the journal.
+        A picked binding that went stale is NOT asked — an ssh to its old port could
+        reach another device and show that one's posture as this one's — and its save
+        and journal lines are the device's CURRENT record's (self.fresh), not the
+        picked one's: that boot_save and started_at belong to a boot that is over. ""
+        for this host."""
+        t = self.target
+        if t.is_local:
             return ""
-        return golive_target.journal_status(self.work_dir, self.target)
+        if self.stale_binding():
+            return golive_target.device_report(
+                self.work_dir, self.fresh(t),
+                golive_target.Posture(asked=False, error="re-scan the devices first"))
+        return golive_target.device_report(self.work_dir, t,
+                                           golive_target.read_posture(t))
 
     def nextId(self):
         """The default order, except that the export step is SKIPPED when no domain

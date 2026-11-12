@@ -77,6 +77,8 @@ source "${SCRIPT_DIR}/scripts/_kernel-cache-lib.sh"
 # the lib header for the observed symptoms of all three.
 # shellcheck source=scripts/_optional-services-lib.sh
 source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
+# shellcheck source=scripts/_prod-gate-lib.sh
+source "${SCRIPT_DIR}/scripts/_prod-gate-lib.sh"
 # Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
@@ -694,6 +696,12 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             pruned; OAuth/SMTP optional). prod = real public domain
                             (Cloudflare/ACME allowed; creds from keys USB) — prints
                             a LOUD announced banner before building.
+      --release-tag TAG     The tag --env prod pins first-party :dev image tags to.
+                            Letters, digits, . _ - only, and not dev/main/latest
+                            (since #964 '+', '/' and other characters are refused;
+                            none is valid in an image tag). With --env prod a bad
+                            tag is refused before the build starts. Default: the
+                            UTC build date (YYYYMMDD).
       --cluster-domain D    Default: ${CLUSTER_DOMAIN}
       --superdomain D       Orchestration superdomain (mesh MagicDNS suffix) baked to
                             /etc/<brand>/superdomain + headscale base_domain. Mesh only;
@@ -839,7 +847,11 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --skip-mesh           Don't install headscale/tailscale.
       --skip-tailscale      headscale only.
       --skip-kernel         Don't build the kernel.
-      --skip-clean          Keep docs/headers/symbols.
+      --skip-clean          Skip the sysroot size clean: keep docs/man/info,
+                            locales, static libraries, .pyc, debug symbols,
+                            all firmware and (uncached) the binpkg/distfiles
+                            cache. The build-only sudoers grant is removed
+                            and verified on every build regardless.
   Artifacts (.img + live ISO are the DEFAULT; installer ISO is opt-in):
       --no-img              Don't build the raw .img.
       --img-size MiB        ext4 root size in the .img (built COMPACT, not
@@ -1828,6 +1840,13 @@ if ${STANDALONE}; then
     info "STANDALONE desktop: no mesh / no SSO / no k8s; local user '${LOCAL_USER}'; LUKS FDE on install; media-data auto-detect=${MEDIA_DATA}"
 fi
 
+# tailscaled version floor (scripts/_download-lib.sh): the shared init script passes
+# --no-logs-no-support, which tailscaled only accepts from 1.32.0 on. Refuse an older
+# --tailscale-version HERE, after the --standalone posture above has settled whether
+# tailscale ships at all and before any download, instead of shipping a mesh client
+# that exits on an unknown flag.
+${SKIP_MESH} || ${SKIP_TAILSCALE} || dlv_tailscale_version_ok "${TAILSCALE_VERSION}" || exit 1
+
 # ── Tor NODE service: CLIENT roles never carry it (hugmesh-generator#583) ─────────
 # ROLE_CLIENT is FINAL only from here: the role case block sets it for the desktop
 # roles, and the UNAFFILIATED -> STANDALONE folds above set it for everything else
@@ -2445,6 +2464,11 @@ case "${ENV}" in
     test|prod) ;;
     *) err "--env must be one of: test | prod  (got '${ENV}')"; exit 1 ;;
 esac
+# ENV=prod pins first-party :dev image tags to RELEASE_TAG at bake time; refuse a
+# floating or malformed tag NOW, not after the emerge phase (scripts/_prod-gate-lib.sh).
+if [ "${ENV}" = "prod" ]; then
+    prod_gate_validate_release_tag "${RELEASE_TAG}" || exit 1
+fi
 
 # ── Validate the release-state posture (baked into the image) ─────────────
 case "${RELEASE_STATE}" in
@@ -2907,44 +2931,14 @@ GROWFS_EOF
 # only first-party image lines (image: ...hugmesh-.../...-{api,ui,bff,web,gateway}:dev
 # + the akkoma/tuwunel pins) are rewritten; third-party `:dev`-less images untouched.
 rewrite_prod_image_tags() {
-    local tree="${SYSROOT}/var/lib/hugmesh/cluster"
-    [ -d "${tree}" ] || return 0
-    local n=0 f
-    while IFS= read -r -d '' f; do
-        # Any first-party image (its repo path contains 'hugmesh') tagged :dev
-        # -> :RELEASE_TAG. Matches `image: <registry>/hugmesh.../<name>:dev`.
-        # The repo-path char class EXCLUDES ':' so the greedy match stops before
-        # the ':dev' tag (image repo paths carry no ':' except a registry port,
-        # which our first-party images do not use).
-        if grep -qE 'image:[[:space:]]*[^[:space:]:]*hugmesh[^[:space:]:]*:dev([[:space:]]|$)' "${f}" 2>/dev/null; then
-            sed -i -E "s|(image:[[:space:]]*[^[:space:]:]*hugmesh[^[:space:]:]*):dev|\\1:${RELEASE_TAG}|g" "${f}"
-            n=$((n+1))
-        fi
-    done < <(find "${tree}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 2>/dev/null)
-    info "ENV=prod: pinned first-party :dev image tags -> :${RELEASE_TAG} in ${n} file(s)"
-    # Prune the ENV=test e2e harness (forbidden in prod by the hygiene gate's
-    # tier:test rule). NOTE: the pen-test is now DEV/CI-pipeline-only (a per-repo
-    # ArgoCD CI stage + a build option), NOT a deployed cluster wave — there is no
-    # pentest-runner app/manifest to prune anymore.
-    rm -f "${SYSROOT}/var/lib/hugmesh/cluster/apps/99-test-runner.yaml" \
-          "${SYSROOT}/var/lib/hugmesh/cluster/apps/00-app-of-apps-waved.yaml" 2>/dev/null || true
-    rm -rf "${SYSROOT}/var/lib/hugmesh/cluster/manifests/test-runner" 2>/dev/null || true
-    info "ENV=prod: pruned the test-runner wave (apps/99-test-runner.yaml + manifests/test-runner) from the baked tree"
-    # STATIC prod-hygiene self-check over the BAKED tree — hard-fail the build if
-    # any dev-only server / tier:test resource / floating :dev tag survived the
-    # prune + rewrite above. (The RUNTIME leg — the seam/seal/live-pod probe — is
-    # the ArgoCD PreSync hook Job apps/00-prod-hygiene.yaml runs in-cluster.)
-    local hygiene="${SCRIPT_DIR}/scripts/validate-prod-hygiene.sh"
-    if [ -x "${hygiene}" ] || [ -f "${hygiene}" ]; then
-        if bash "${hygiene}" "${tree}"; then
-            info "ENV=prod: prod-hygiene static gate PASSED on the baked tree"
-        else
-            err "ENV=prod: prod-hygiene static gate FAILED on the baked tree (a dev-only server / test harness / floating :dev tag survived) — refusing to build a prod image"
-            exit 1
-        fi
-    else
-        warn "prod-hygiene gate script not found at ${hygiene}; skipping the static self-check"
-    fi
+    # The implementation is shared with the Pi builder's gate_env_apps (and through
+    # it the Orange Pi node builders): scripts/_prod-gate-lib.sh. It pins the :dev
+    # tags, prunes the test-runner wave and runs the static prod-hygiene self-check,
+    # failing closed. (The RUNTIME leg is the ArgoCD PreSync hook Job
+    # apps/00-prod-hygiene.yaml runs in-cluster.)
+    prod_gate_cluster_tree "${SYSROOT}/var/lib/hugmesh/cluster" "${RELEASE_TAG}" \
+        "${SCRIPT_DIR}/scripts/validate-prod-hygiene.sh" \
+        || { err "ENV=prod: the baked cluster tree is not clean for prod (see above); refusing to build a prod image"; exit 1; }
 }
 
 # ── OPTIONAL-SERVICE gate ───────────────────────────────────────────────────
@@ -3925,11 +3919,68 @@ else
     hmr_seed_marker_write "${BUILD_ROOT}" "${STAGE3_LOCAL}" || true
 fi
 
+# ── Build-only sudoers grant: removed on EVERY path, verified before packing ──
+# The block below gives the portage build user `NOPASSWD: ALL` inside the sysroot so
+# pkg_postinst can sudo without a tty. In an image that grant makes anything running
+# as portage (an on-device emerge, an ebuild phase on a CACHED image) root. Until
+# 2026-11-11 its removal sat inside `if ! ${SKIP_CLEAN}`, so every image built with
+# --skip-clean shipped it, and a build that failed left it in the sysroot.
+#   build_sudoers_strip  removes it: from the EXIT trap armed just before the write
+#                        (and from the chroot phase's trap, which replaces that one),
+#                        and inline at the top of the Clean phase, OUTSIDE the
+#                        --skip-clean block. Idempotent; a no-op without a sysroot.
+#   build_sudoers_gate   fails closed when the sysroot still carries it (the drop-in,
+#                        any portage NOPASSWD line, the build-added includedir).
+#                        Called before the stage4 tar and before the live-ISO
+#                        squash; the .img, fs.tar and installer ISO are built from
+#                        the stage4.
+# tests/scripts/test-x86-build-sudoers-strip.sh executes all of it.
+build_sudoers_strip() {
+    [ -n "${SYSROOT:-}" ] && [ -d "${SYSROOT}/etc" ] || return 0
+    [ "$(cd "${SYSROOT}" && pwd -P)" != / ] || return 0
+    rm -f "${SYSROOT}/etc/sudoers.d/build-notty"
+    # Revert main sudoers: restore requiretty and remove the includedir line we added
+    if [[ -f "${SYSROOT}/etc/sudoers" ]]; then
+        sed -i 's/^Defaults !requiretty/Defaults requiretty/' "${SYSROOT}/etc/sudoers"
+        sed -i '/^#includedir \/etc\/sudoers.d # build-added$/d' "${SYSROOT}/etc/sudoers"
+    fi
+}
+build_sudoers_gate() {
+    local f rc=0
+    [ -n "${SYSROOT:-}" ] && [ -d "${SYSROOT}/etc" ] \
+        || { err "build-only sudoers gate: no sysroot at '${SYSROOT:-}' to check"; return 1; }
+    if [ -e "${SYSROOT}/etc/sudoers.d/build-notty" ] || [ -L "${SYSROOT}/etc/sudoers.d/build-notty" ]; then
+        err "build-only sudoers gate: /etc/sudoers.d/build-notty is still in the sysroot"
+        rc=1
+    fi
+    # Any non-comment line naming portage (user or %group, alone or in a list) that
+    # carries NOPASSWD, in the main file or any drop-in, whatever the drop-in is called.
+    for f in "${SYSROOT}/etc/sudoers" "${SYSROOT}"/etc/sudoers.d/*; do
+        [ -f "${f}" ] || continue
+        if awk '/^[[:space:]]*#/ {next}
+                /NOPASSWD/ && /(^|[^[:alnum:]_.-])portage([^[:alnum:]_.-]|$)/ {hit=1}
+                END {exit !hit}' "${f}"; then
+            err "build-only sudoers gate: ${f#"${SYSROOT}"} grants the portage user NOPASSWD sudo"
+            rc=1
+        fi
+    done
+    if [ -f "${SYSROOT}/etc/sudoers" ] \
+       && grep -a -x -F '#includedir /etc/sudoers.d # build-added' "${SYSROOT}/etc/sudoers" >/dev/null 2>&1; then
+        err "build-only sudoers gate: /etc/sudoers still carries the build-added includedir line"
+        rc=1
+    fi
+    return "${rc}"
+}
+
 # Portage pkg_postinst calls sudo internally (as the portage build user); stage3
 # sudoers has requiretty which breaks non-interactive builds. Patch the main
 # sudoers file directly (sudoers.d may not be included by the stage3 default)
 # and grant the portage user NOPASSWD. These patches are inside the build sysroot
-# only and are never shipped — the cleanup section removes them before imaging.
+# only and are never shipped: build_sudoers_strip (above) removes them on every
+# path, --skip-clean included, and build_sudoers_gate refuses to pack them.
+# The trap goes up BEFORE the write, so a build that dies anywhere from here to the
+# chroot phase (whose own trap also strips) leaves no grant behind.
+trap 'build_sudoers_strip || true' EXIT
 if [[ -f "${SYSROOT}/etc/sudoers" ]]; then
     sed -i 's/^Defaults\s\+requiretty/Defaults !requiretty/' "${SYSROOT}/etc/sudoers"
     # Ensure sudoers.d drop-ins are loaded (stage3 may omit this)
@@ -5312,6 +5363,23 @@ if _tor_node_selected; then
     fi
 fi
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
+
+# udev coldplug guard (SYSINIT, every role). udev-trigger can fire its coldplug
+# before systemd-udevd has bound its uevent socket, and those uevents are lost:
+# no seat tags (seat0 without devices, no X), no NIC initialisation (no
+# NetworkManager, no ssh). Seen on 1 of 2 display-door boots of the x86 laptop
+# image on 2026-11-10. The guard pings udevd, checks the PCI + NIC + DRM canaries
+# (a card's seat tag only where 71-seat.rules is installed: node roles have no
+# elogind, so a GPU node's card is never tagged) and re-runs the coldplug once
+# only when they are missing; see the helper for the mechanism. Neutral names (no brand), so --unaffiliated images carry it as is.
+# Sysinit, not default: it has to finish before elogind, NetworkManager and the
+# display manager start, and the SVCS loop above only writes runlevels/default.
+install -D -m 0755 "${SHARED_SPECS}/usr/libexec/udev-coldplug-guard" "${SYSROOT}/usr/libexec/udev-coldplug-guard"
+install -D -m 0755 "${SHARED_SPECS}/etc/init.d/udev-coldplug-guard" "${SYSROOT}/etc/init.d/udev-coldplug-guard"
+mkdir -p "${SYSROOT}/etc/runlevels/sysinit"
+ln -sf /etc/init.d/udev-coldplug-guard "${SYSROOT}/etc/runlevels/sysinit/udev-coldplug-guard"
+[ -L "${SYSROOT}/etc/runlevels/sysinit/udev-trigger" ] \
+    || warn "runlevels/sysinit has no udev-trigger link: udev-coldplug-guard orders itself after a service this image does not run"
 # Belt-and-suspenders for shared / --resume sysroots: `ln -sf` only ADDS, so a prior
 # role's run can leave a headscale runlevel symlink behind that a worker/client image
 # would background-start. Remove it unless THIS role runs the control server. (Same
@@ -5696,7 +5764,9 @@ umount_chroot() {
     fi
     for m in run dev sys proc; do umount -lR "${SYSROOT}/$m" 2>/dev/null || true; done
 }
-trap umount_chroot EXIT
+# Replaces the build-only sudoers trap armed at the grant (bash has one EXIT slot),
+# so it strips that grant too: a build that fails in the chroot phase leaves none.
+trap 'build_sudoers_strip || true; umount_chroot' EXIT
 mount_chroot
 # A resumed build system must be able to LINK before anything is emerged: the
 # static restore above (4b) is the fix, this is the proof, in seconds instead
@@ -7225,6 +7295,11 @@ fi
 
 # ── 8. Clean ───────────────────────────────────────────────────────
 umount_chroot; trap - EXIT
+# The build-only sudoers grant goes HERE, on every path and before anything below can
+# exit: --skip-clean keeps docs, locales, static libraries and symbols, never a root
+# grant for the portage user. build_sudoers_gate checks the result before each pack.
+build_sudoers_strip
+info "Removed the build-only sudoers grant (portage NOPASSWD drop-in, requiretty and includedir patches)"
 # Guard (shared-binpkg): the shared-pool bind must be DETACHED before ANYTHING
 # below touches var/cache/binpkgs — the uncached clean's rm -rf through a live
 # bind would empty the FLEET's pool, and the --cached embed below would copy the
@@ -7258,14 +7333,8 @@ if ${ISO_CACHED:-false} && [ -n "${X86_POOL_DIR}" ]; then
 fi
 if ! ${SKIP_CLEAN}; then
     banner "Cleaning sysroot"
-    # Remove build-only sudoers patches (added to allow portage pkg_postinst to run
-    # sudo without a tty; not needed or wanted in the deployed image).
-    rm -f "${SYSROOT}/etc/sudoers.d/build-notty"
-    # Revert main sudoers: restore requiretty and remove the includedir line we added
-    if [[ -f "${SYSROOT}/etc/sudoers" ]]; then
-        sed -i 's/^Defaults !requiretty/Defaults requiretty/' "${SYSROOT}/etc/sudoers"
-        sed -i '/^#includedir \/etc\/sudoers.d # build-added$/d' "${SYSROOT}/etc/sudoers"
-    fi
+    # (The build-only sudoers grant is NOT removed here: it went at the top of this
+    # phase, unconditionally — see build_sudoers_strip.)
     # Build-artifact bloat: binpkgs (~2.4 GiB), distfiles, docs, tmp.
     # CACHED ISO (--cached) KEEPS the binpkg cache (+ distfiles) so the installed
     # system can rebuild/extend packages OFFLINE and reinstall fast; UNCACHED prunes
@@ -7405,6 +7474,27 @@ pcs_unquiet_sendfile_noise "${SYSROOT}"
 # left in ${SYSROOT}/tmp rides into the ISO's rootfs.
 rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
 
+# ── NetworkManager: no connectivity probe (cluster-node roles) ──
+# The networkmanager package ships /usr/lib/NetworkManager/conf.d/20-connectivity.conf,
+# which polls a fixed public URL (nmcheck.gnome.org) every few minutes, forever: an
+# unsolicited phone-home from a self-hosted mesh, and DNS noise on an offline or
+# egress-filtered LAN. A server has no captive portal to detect; a client desktop keeps
+# the package default. HERE, before the build-time label pass below: this is a NEW
+# file, so unlike the package-owned conf.d/NetworkManager (rewritten in place after the
+# pass, keeping its label) it has no label until setfiles runs, and the stage4 tar is
+# packed from the sysroot with no further pass. ROLE_CLIENT is final long before here
+# and the file is not package-owned, so no later emerge can replace it. 90- so it sorts
+# after the package's own conf.d files. Pinned by tests/scripts/test-node-telemetry-off.sh.
+if ! ${ROLE_CLIENT}; then
+    mkdir -p "${SYSROOT}/etc/NetworkManager/conf.d"
+    printf '%s\n' \
+        '# Written by the HugMesh builder (cluster-node roles): no connectivity probe' \
+        '# to a public URL. Delete this file to restore the package default.' \
+        '[connectivity]' \
+        'enabled=false' > "${SYSROOT}/etc/NetworkManager/conf.d/90-hugmesh-no-connectivity-check.conf"
+    info "NetworkManager: connectivity check OFF (cluster node — no public probe URL)"
+fi
+
 # ── BUILD-TIME SELINUX LABELS (#503) ─────────────────────────────────────────
 # Labels and the hugmesh modules are BUILD ARTIFACTS: every carrier below (stage4,
 # .img, fs.tar, live squashfs) inherits them, and each hop has its own fail-closed
@@ -7470,6 +7560,9 @@ if ! ${ROLE_CLIENT}; then
     info "NetworkManager: INACTIVE_TIMEOUT=60 (cluster node — need-net services wait for the link)"
 fi
 
+# Last look before the first pack (the stage4 is also what the .img, fs.tar and
+# installer ISO are built from): no build-only sudoers grant may ride into it.
+build_sudoers_gate || { err "the sysroot carries a build-only sudoers grant — refusing to pack it"; exit 1; }
 banner "Packaging stage4 tarball"
 # The role tag IS the role. It only ever translated because `be+gpu` carried a `+`
 # that is illegal in a filename-ish token; `backend-gpu` is filename-safe, so the
@@ -7935,6 +8028,8 @@ CHROOT
         # PLACE (same inode, label kept); live_label_gate probes it on the packed image.
         slx_label_tree "${SYSROOT}" "${SLX_TYPE}" \
             || { err "live pack: SELinux label pass failed — not squashing an unlabelled root"; exit 1; }
+        # The live root is squashed from the sysroot itself, after a second chroot.
+        build_sudoers_gate || { err "live pack: the sysroot carries a build-only sudoers grant — not squashing it"; exit 1; }
         rm -f "${ISO_DIR}/LiveOS/squashfs.img"
         # The live root must NOT carry the installed image's fstab (see the live-ISO
         # root pack helpers next to umount_chroot): swap it for the live one for the

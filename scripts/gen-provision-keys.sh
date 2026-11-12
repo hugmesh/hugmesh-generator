@@ -1111,6 +1111,9 @@ else
     echo; echo "Done (worker '${ROLE}' — keys only, no users.json). Generated:"
     echo "  ${OUT_DIR}/provision.json        (join/mesh/CA keys only — fill in the join token + CA hash)"
     echo "  ${OUT_DIR}/ssh/root.authorized_keys   (break-glass SSH; ${ADMIN}_ed25519 is the private key)"
+    echo "    NOTE: root SSH needs an image built with a root-login setting of prohibit-password;"
+    echo "          with the default (no) the key is installed but sshd refuses root, and"
+    echo "          keys-provision logs a WARNING saying so."
     echo "  Add: kubernetes/pki/ca.crt, kubernetes join token, tailscale/authkey, certs/cluster-ca.crt"
 fi
 

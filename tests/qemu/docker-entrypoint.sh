@@ -79,6 +79,11 @@ TIMEOUT="2400"
 # Wall clock for the POST-boot phase. ${TIMEOUT} only covers the ssh-wait loop;
 # see the timeout(1) wrapper on the assertion ssh below for why this exists.
 ASSERT_TIMEOUT="900"
+# How long the ssh wait keeps going once the guest console shows a login prompt.
+# Init has finished by then, and sshd starts before getty, so a guest that has a
+# login prompt and still no ssh after this long is not slow, it is stalled (see
+# boot_stall_check). 0 = off: wait the full --timeout, as before.
+BOOT_STALL_GRACE="300"
 SSH_PORT="2222"
 UI_PORT="8443"
 SSH_USER="tester"
@@ -210,7 +215,8 @@ MESH_JOIN_WAIT="${MESH_JOIN_WAIT:-1800}"
 #     is attached instead and the saved key is copied into this run dir, so the
 #     record's ssh_key and a later re-save both work exactly as for a golden run.
 #   * the RECORD notes it ("boot_save"), so a reader can tell a resumed device
-#     from a fresh one (the go-live journal says "resumed from save").
+#     from a fresh one (mesh-emu-status says "resumed from save", and the go-live
+#     faces "booted from a save taken while <posture>").
 # The sibling names are emulation_save.py's KEYS_IMAGE_SUFFIX / LOGIN_KEY_SUFFIX /
 # KEYS_DIR_SUFFIX, spelled from the save's own stem.
 BOOT_SAVE=""
@@ -241,6 +247,10 @@ Usage: docker run --rm --privileged --device /dev/kvm \\
                    wall clock for the in-guest assertion ssh (SIGTERM, then
                    SIGKILL 30s later). Used verbatim — never clamped.
                    Default: ${ASSERT_TIMEOUT}
+  --boot-stall-grace SEC
+                   stop waiting for ssh this many seconds after the guest
+                   console shows a login prompt, and FAIL the row as a stalled
+                   boot. 0 = wait the full --timeout. Default: ${BOOT_STALL_GRACE}
   --label NAME     result label (default: <platform>/<role>)
   --keep           keep the scratch run dir
   -h, --help
@@ -317,6 +327,7 @@ while [[ $# -gt 0 ]]; do
         --smp)      SMP="$2"; shift 2 ;;
         --timeout)  TIMEOUT="$2"; shift 2 ;;
         --assert-timeout) ASSERT_TIMEOUT="$2"; shift 2 ;;
+        --boot-stall-grace) BOOT_STALL_GRACE="$2"; shift 2 ;;
         --label)    LABEL="$2"; shift 2 ;;
         --keep)     KEEP=true; shift ;;
         --keep-alive)    KEEP_ALIVE=true; shift ;;
@@ -453,6 +464,61 @@ json_str() {
         s="${s//"${c}"/${u}}"
     done
     printf '"%s"' "${s}"
+}
+
+# boot_stall_check CONSOLE NOW — called once per ssh-wait iteration. Returns 0 and
+# sets BOOT_STALL_REASON when the guest console already proves the ssh wait is
+# hopeless; returns 1 (keep waiting) otherwise. Two signals, both read from the
+# console FILE (grep's file argument, never a pipe: these logs are far past the
+# size at which `| grep -q` under pipefail turns a match into a failure):
+#   1. The guest's own verdict. /usr/libexec/udev-coldplug-guard prints
+#      "udev-coldplug-guard: FAIL" when udev's coldplug never reached udevd and
+#      the one in-guest re-trigger did not recover it. udev's rules never ran
+#      for those devices, so the image is not running as built and the row
+#      fails the moment that line appears. The verdict QUOTES the guest's line
+#      rather than describing the cost itself: only the guest knows which
+#      devices were lost (a lost NIC means no ssh, a lost card on a desktop
+#      means no seat0; a stuck card or PCI device alone need not stop ssh) and
+#      whether it has a seat rule (71-seat.rules, elogind) at all.
+#   2. A login prompt with no ssh behind it. getty is spawned after the default
+#      runlevel and sshd starts inside it, so once "<host> login:" is on the
+#      console init is over. If ssh still has not answered BOOT_STALL_GRACE
+#      seconds later the row fails, naming what the console shows. This one
+#      covers images built before the guard existed: on 2026-11-10 an x86
+#      display-door boot lost its coldplug, printed its login prompt at 12:20,
+#      and the runner waited out the full 2400s for an ssh that could not come.
+# "NetworkManager has started, but is inactive" is reported but is NOT a signal
+# on its own: OpenRC prints it whenever NM is merely slow to connect, and NM
+# promotes itself to started once a connection lands.
+# State (first time a login prompt was seen) lives in BOOT_STALL_LOGIN_AT, so call
+# this directly, never in $( ): a subshell would forget it every iteration.
+BOOT_STALL_REASON=""
+BOOT_STALL_LOGIN_AT=""
+boot_stall_check() {
+    local console="$1" now="$2"
+    local nm=no lost=no waited=0 guard_line=""
+    BOOT_STALL_REASON=""
+    [ -f "${console}" ] || return 1
+    if grep -aq 'udev-coldplug-guard: FAIL' "${console}"; then
+        # From the marker on (a serial console can glue a previous partial line
+        # and colour codes in front of it), CR dropped, bounded.
+        guard_line="$(grep -a -m1 'udev-coldplug-guard: FAIL' "${console}")"
+        guard_line="udev-coldplug-guard: FAIL${guard_line#*udev-coldplug-guard: FAIL}"
+        guard_line="${guard_line//$'\r'/}"
+        BOOT_STALL_REASON="udev coldplug never reached udevd and the in-guest re-trigger did not recover it, so udev never set up the devices the guest's line names (console: '${guard_line:0:400}')"
+        return 0
+    fi
+    [ "${BOOT_STALL_GRACE:-0}" -gt 0 ] || return 1
+    if [ -z "${BOOT_STALL_LOGIN_AT}" ]; then
+        grep -aqE '^[A-Za-z0-9._-]+ login:[[:space:]]*$' "${console}" || return 1
+        BOOT_STALL_LOGIN_AT="${now}"
+    fi
+    waited=$((now - BOOT_STALL_LOGIN_AT))
+    [ "${waited}" -ge "${BOOT_STALL_GRACE}" ] || return 1
+    grep -aq 'NetworkManager has started, but is inactive' "${console}" && nm=yes
+    grep -aq 'udev-coldplug-guard: LOST' "${console}" && lost=yes
+    BOOT_STALL_REASON="boot stalled: the guest console has shown a login prompt for ${waited}s (grace ${BOOT_STALL_GRACE}s) and ssh never answered (NetworkManager inactive: ${nm}; udev coldplug lost: ${lost}). On a desktop row this is the lost-coldplug signature: seat0 without devices, no X, no network"
+    return 0
 }
 
 # emit_result STATUS DETAIL [PASS] [FAIL] — one machine-readable row per run, so
@@ -644,6 +710,8 @@ EOF
     || die "--timeout must be a whole number of seconds, got '${TIMEOUT}'"
 [[ "${ASSERT_TIMEOUT}" =~ ^[0-9]+$ ]] \
     || die "--assert-timeout must be a whole number of seconds, got '${ASSERT_TIMEOUT}'"
+[[ "${BOOT_STALL_GRACE}" =~ ^[0-9]+$ ]] \
+    || die "--boot-stall-grace must be a whole number of seconds, got '${BOOT_STALL_GRACE}'"
 
 # ssh_host_port is emitted as a BARE JSON number. Anything non-numeric makes the
 # whole record unparseable, and the Studio skips records it cannot parse — so a
@@ -1342,6 +1410,82 @@ cat > "${KEYS_SRC}/users.json" <<EOF
 }
 EOF
 
+# ── TEST-ONLY sudo for the harness's own logins (governed client desktops) ──
+# The "sudo": true / "sudo_nopasswd": true above is not enough on a client
+# desktop that is desktop-governance-GOVERNED (a cloud/mesh laptop, desktop or
+# chromebook with SSO on). There provision_users() drops `wheel` and suppresses
+# the static /etc/sudoers.d/10-<name> grant, and provision_desktop_governance()
+# comments out `%wheel` and neutralises any standing sudoers.d grant, because on
+# a real device sudo comes ONLY from the IdP's desktop-sudo claim. That is the
+# product working as designed. The harness, though, streams assertions.sh in
+# through `ssh tester@guest 'sudo bash -s'`, so on such a row the guest answered
+# "sudo: a password is required" and the row came back FAIL 0/0 (2026-11-09
+# prover, x86 laptop-user, door2-container.log).
+#
+# The fix rides the KEYS payload's run[] hook, which provision.sh runs in
+# provision_run_hooks() AFTER provision_desktop_governance() (see main() there;
+# verdict_test.sh pins that order), so governance has already finished its
+# sweep when this file lands, and a re-provision re-runs the sweep and then this
+# hook again. The hook writes ONE drop-in, /etc/sudoers.d/zz-hugmesh-test-harness,
+# NOPASSWD for exactly the logins this script created (${GUEST_USERS[@]}: the
+# ssh user plus every validated --extra-user) and nobody else.
+#
+# Scope: this function exists only in this test entrypoint and the hook only on
+# the synthetic stick it builds. No production KEYS writer (scripts/gen-provision-
+# keys.sh, keys-template/, the Studio) emits it, and verdict_test.sh fails if the
+# drop-in's name ever appears in one. It does not weaken what assertions.sh
+# grades either: on a governed image that suite checks tester is NOT in wheel
+# and has no static /etc/sudoers.d/10-tester (the product's own rules), and it
+# never counts this drop-in, which is the harness's and not the image's.
+HARNESS_SUDO_HOOK="hooks/zz-hugmesh-test-harness-sudo.sh"
+# write_harness_sudo_hook KEYS_DIR USER... — write the run[] hook; returns 1 on a bad name.
+write_harness_sudo_hook() {
+    local dir="$1" u names=""
+    shift
+    for u in "$@"; do
+        [[ "${u}" =~ ^[a-z_][a-z0-9_-]*$ ]] || return 1
+        names+="${names:+ }${u}"
+    done
+    [ -n "${names}" ] || return 1
+    mkdir -p "${dir}/hooks"
+    {
+        printf '#!/bin/sh\n'
+        printf '# TEST-ONLY: written by tests/qemu/docker-entrypoint.sh onto a SYNTHETIC KEYS\n'
+        printf '# stick. Never part of a production KEYS payload.\n'
+        printf 'HARNESS_USERS="%s"\n' "${names}"
+        cat <<'HOOK'
+set -eu
+# HUGMESH_TEST_SUDOERS_DIR exists for tests/qemu/verdict_test.sh, which runs this
+# hook through provision.sh's real provision_run_hooks without root.
+d="${HUGMESH_TEST_SUDOERS_DIR:-/etc/sudoers.d}"
+f="${d}/zz-hugmesh-test-harness"
+mkdir -p "${d}"
+# The temp name carries a '.', which sudo's #includedir skips, so a half-written
+# file is never live.
+tmp="${f}.tmp"
+umask 0337
+    {
+        echo "# TEST-ONLY (QEMU harness). Lets the harness's own logins run assertions.sh"
+        echo "# through 'sudo bash -s' on a desktop-governance-governed client image."
+        for u in ${HARNESS_USERS}; do
+            echo "${u} ALL=(ALL) NOPASSWD: ALL"
+        done
+    } > "${tmp}"
+chmod 0440 "${tmp}"
+if command -v visudo >/dev/null 2>&1 && ! visudo -cqf "${tmp}"; then
+    rm -f "${tmp}"
+    echo "zz-hugmesh-test-harness: visudo rejected the drop-in; not installed" >&2
+    exit 1
+fi
+mv -f "${tmp}" "${f}"
+echo "zz-hugmesh-test-harness: NOPASSWD sudo for ${HARNESS_USERS} (test payload only)"
+HOOK
+    } > "${dir}/${HARNESS_SUDO_HOOK}"
+    chmod 0755 "${dir}/${HARNESS_SUDO_HOOK}"
+}
+write_harness_sudo_hook "${KEYS_SRC}" "${GUEST_USERS[@]}" \
+    || die "could not write the harness sudo hook for: ${GUEST_USERS[*]}"
+
 # kubernetes.role, likewise ROLE-ACCURATE rather than a constant (2026-08-26).
 # Every row used to be handed "control-plane", so provision.sh's
 # provision_kubernetes() logged `Kubernetes role: control-plane` on a frontend,
@@ -1469,7 +1613,8 @@ cat > "${KEYS_SRC}/provision.json" <<EOF
                  "up_args": "${TS_UP_ARGS}" },
   "kubernetes": { "role": "${K8S_ROLE}", "bootstrap": false },
   "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.local",
-               "gitops": { "enabled": false } }
+               "gitops": { "enabled": false } },
+  "run": ["${HARNESS_SUDO_HOOK}"]
 }
 EOF
 
@@ -1714,6 +1859,15 @@ while [ "${SECONDS}" -lt "${deadline}" ]; do
         warn "QEMU exited early"; break
     fi
     if ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" true 2>/dev/null; then up=true; break; fi
+    # Fail fast when the console already proves ssh cannot come (boot_stall_check):
+    # a lost udev coldplug used to cost the full ${TIMEOUT}s here.
+    if boot_stall_check "${CONSOLE}" "${SECONDS}"; then
+        warn "${BOOT_STALL_REASON}"
+        echo "----- last 80 lines of console -----"
+        tail -n 80 "${CONSOLE}" 2>/dev/null || true
+        emit_result FAIL "${BOOT_STALL_REASON}"
+        exit 1
+    fi
     # Background + wait, not a plain sleep: bash defers a trap until the
     # current FOREGROUND child returns, and 5s of deferral is half of docker
     # stop's grace window (see keepalive_wait below for the same pattern).
@@ -1975,6 +2129,20 @@ emit_assertion_verdict() {
         warn "${LABEL}: DEVICE TEST FAILED — assertion ssh could not hold a connection (rc=255)"
         emit_result FAIL "assertion ssh could not connect${note:- (ssh attempts: ${ASSERT_ATTEMPTS:-1})}" \
             "${PASSED:-0}" "${FAILED:-0}"
+    elif ! grep -q '== RESULT:' "${log}" 2>/dev/null; then
+        # A nonzero exit with NO verdict line: assertions.sh never got to grade
+        # anything, so "N assertions failed" would be a lie and the old spelling
+        # printed "? assertions failed" over a 0/0 row (2026-11-09 prover, x86
+        # laptop-user: the guest's sudo wanted a password, `sudo bash -s` died
+        # before the first line ran). Say the suite could not RUN, and name sudo
+        # when sudo is what refused, because that is a harness/provisioning
+        # problem on the guest, not a finding about the image under test.
+        local why="no RESULT line, rc=${ARC}"
+        if grep -qE '^sudo: (a terminal is required|a password is required|no tty present|.* is not in the sudoers file|.* is not allowed to run sudo)' "${log}" 2>/dev/null; then
+            why="sudo on the guest refused the harness user ${SSH_USER:-tester}, rc=${ARC}"
+        fi
+        warn "${LABEL}: DEVICE TEST FAILED — assertions could not run (${why})"
+        emit_result FAIL "assertions could not run (${why})${note}" "${PASSED:-0}" "${FAILED:-0}"
     else
         warn "${LABEL}: DEVICE TEST FAILED (${FAILED:-?} assertions failed)"
         emit_result FAIL "assertions failed${note}" "${PASSED:-0}" "${FAILED:-0}"

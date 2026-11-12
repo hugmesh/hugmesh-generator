@@ -62,6 +62,7 @@ __all__ = [
     "ResourceLimits", "auto_limits", "from_env", "load", "save",
     "docker_run_args", "compose_resource_block", "qemu_smp",
     "gpu_runtime_available", "gpu_warnings",
+    "set_engine_cpus", "engine_cpus", "clamp_cpus", "engine_cpu_warnings",
 ]
 
 #: Same shape as host_resources.MEMORY_ENV. Value is a docker ``--cpus`` string:
@@ -193,6 +194,90 @@ def _parse_cpus(raw: str) -> float | None:
     except ValueError:
         return None
     return value if value > 0 else None
+
+
+# ── The Docker ENGINE's own CPU count ────────────────────────────────────────────
+#
+# On Linux the engine is the host: ``docker info`` NCPU equals ``os.cpu_count()`` and
+# the auto formula (every core but one) can never ask for more than the engine has.
+# On a Mac the engine is a Linux VM (Docker Desktop, colima, OrbStack) with its OWN
+# CPU count, set in that runtime's settings and usually smaller than the Mac's: the
+# colima line the Studio itself recommends is ``--cpu 8``. dockerd refuses to create a
+# container whose ``--cpus`` (or compose ``deploy.resources.limits.cpus``) is above its
+# NCPU:
+#
+#     range of CPUs is from 0.01 to 8.00, as there are only 8 CPUs available
+#
+# so a 12-core Mac (auto cap 11) on that VM failed every build, after dispatch, with
+# no warning before it. platform_info.detect() records the VM's count here on a Mac
+# (the window and the text UI both detect before they build anything); a process that
+# never detected (a module command line bringing the local stack up) asks Docker once
+# itself. Off macOS nothing is ever asked and the answer is 0 ("the engine is the
+# host"), and 0 clamps nothing, which is what keeps every Linux and Windows argv
+# byte-identical.
+#
+# Memory needs no twin: dockerd accepts a ``--memory`` above its MemTotal (measured:
+# ``docker create --memory 9999g`` on a 31 GiB engine succeeds).
+_ENGINE_CPUS: int | None = None      # None = nobody has asked or recorded yet
+
+
+def set_engine_cpus(count: int | None) -> None:
+    """Record the Docker engine's CPU count (a Mac's Docker VM). 0 = known to be
+    unknown (Docker did not answer): nothing is clamped and nothing is probed again.
+    None forgets it, so the next :func:`engine_cpus` asks again (tests)."""
+    global _ENGINE_CPUS
+    if count is None:
+        _ENGINE_CPUS = None
+        return
+    try:
+        _ENGINE_CPUS = max(0, int(count))
+    except (TypeError, ValueError):
+        _ENGINE_CPUS = 0
+
+
+def engine_cpus() -> int:
+    """The Docker engine's CPU count where it is not the host's: what
+    :func:`set_engine_cpus` recorded, else (on macOS only, once per process) what
+    ``docker info`` says. 0 when unknown and on every other host."""
+    global _ENGINE_CPUS
+    if _ENGINE_CPUS is None:
+        from . import macos_host
+        _ENGINE_CPUS = macos_host.docker_vm().cpus if macos_host.is_macos() else 0
+    return _ENGINE_CPUS
+
+
+def clamp_cpus(limits: ResourceLimits, engine: int | None = None) -> ResourceLimits:
+    """``limits`` with its CPU cap lowered to the engine's CPU count when it is above
+    it; unchanged when it is not, when there is no cap, or when the count is unknown
+    (0). ``engine`` is :func:`engine_cpus` unless given."""
+    engine = engine_cpus() if engine is None else int(engine or 0)
+    if engine > 0 and limits.cpus is not None and limits.cpus > engine:
+        return dataclasses.replace(limits, cpus=float(engine))
+    return limits
+
+
+def engine_cpu_warnings(engine: int | None = None,
+                        env: os._Environ | dict | None = None,
+                        path: str | None = None,
+                        nproc: int | None = None) -> list[str]:
+    """Say so when :func:`clamp_cpus` lowered the CPU cap, naming both numbers and
+    where each can be changed. [] when nothing was lowered."""
+    engine = engine_cpus() if engine is None else int(engine or 0)
+    if engine <= 0:
+        return []
+    env = os.environ if env is None else env
+    asked = effective(env=env, path=path, nproc=nproc, engine=0).cpus
+    if asked is None or asked <= engine:
+        return []
+    raw = (env.get(CPUS_ENV) or "").strip()
+    who = (f"{CPUS_ENV}={raw} asks for {_trim(asked)} CPUs" if raw else
+           f"This run's CPU limit is {_trim(asked)} CPUs")
+    return [f"{who}, and Docker's VM has only {engine}. Docker refuses to start a "
+            f"container that asks for more CPUs than its VM has, so this run is capped "
+            f"at {engine} (--cpus {engine}). For a faster build give the VM more CPUs "
+            f"(Docker Desktop: Settings -> Resources; colima: `colima start --cpu "
+            f"<count>`), then restart the Studio. To choose a lower cap set {CPUS_ENV} "
+            f"(for example {CPUS_ENV}={max(1, engine // 2)})."]
 
 
 def limit_warnings(env: os._Environ | dict | None = None) -> list[str]:
@@ -358,7 +443,8 @@ def save(limits: ResourceLimits, path: str | None = None) -> str:
 def effective(env: os._Environ | dict | None = None,
               path: str | None = None,
               nproc: int | None = None,
-              meminfo: dict[str, int] | None = None) -> ResourceLimits:
+              meminfo: dict[str, int] | None = None,
+              engine: int | None = None) -> ResourceLimits:
     """The limits every lane should actually use, resolved in precedence order:
 
       1. an environment knob (a one-off override for a single run)
@@ -368,11 +454,16 @@ def effective(env: os._Environ | dict | None = None,
     Environment beats the saved setting so a scripted run can bound itself without
     mutating the operator's preferences, which is the same precedence the memory knob
     already had.
+
+    Whichever of the three answered, its CPU cap is then held to the Docker engine's
+    own CPU count where that is known and smaller (:func:`clamp_cpus`: a Mac's Docker
+    VM), because the engine refuses a larger one outright. ``engine`` is
+    :func:`engine_cpus` unless given; 0 clamps nothing.
     """
     env = os.environ if env is None else env
     if any((env.get(k) or "").strip() for k in (CPUS_ENV, MEMORY_ENV, GPUS_ENV)):
-        return from_env(env=env, nproc=nproc, meminfo=meminfo)
+        return clamp_cpus(from_env(env=env, nproc=nproc, meminfo=meminfo), engine)
     saved = load(path)
     if saved is not None:
-        return saved
-    return auto_limits(nproc=nproc, meminfo=meminfo)
+        return clamp_cpus(saved, engine)
+    return clamp_cpus(auto_limits(nproc=nproc, meminfo=meminfo), engine)

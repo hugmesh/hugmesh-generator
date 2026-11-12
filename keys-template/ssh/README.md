@@ -12,8 +12,11 @@ SSH-over-Tailscale keypair:
 
 SSH reachability is **tailnet-only**. `tailscale up --ssh` exposes Tailscale SSH on
 the tailnet, not on the public interface. The headscale SSH ACL
-(`headscale/policy.hujson`) admits **only the privileged user**. Root and every
-other account are denied an SSH session.
+(`headscale/policy.hujson`) admits **only the privileged user**, and only from a
+machine the control node has force-tagged `tag:superadmin` (see
+`docs/SUPERADMIN-MESH-CLIENT.md`). Root and
+every other account are denied an SSH session. Tailscale SSH answers port 22 on the
+tailnet itself, so on that path the key above is not what admits you: the tag is.
 
 ## Per-user authorized_keys
 
