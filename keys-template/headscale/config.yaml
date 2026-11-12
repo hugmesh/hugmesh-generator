@@ -82,11 +82,8 @@ dns:
 # are reachable cross-node "as one LAN". This replaces the old allow-all
 # behaviour; combined with the OIDC join below it gives two membership layers
 # (IdP gates enrolment, tagOwners gates which tags a node may claim).
-# keys-provision starts headscale ONLY with exactly this mode and path (it asks
-# headscale for its effective config first): it checks /etc/headscale/policy.hujson
-# and nothing else, so another path, no path (allow-all) or `mode: database` is
-# refused and headscale is not started. Database mode waits on
-# hugmesh-generator#634.
+# Switch to `mode: database` only if you intend to manage policy purely via the
+# API/CLI instead of this file.
 # Ref: https://tailscale.com/kb/1018/acls/  https://headscale.net/stable/ref/acls/
 policy:
   mode: file

@@ -4,8 +4,8 @@ Attach **extra storage** to a specific mesh node and let services use that space
 that node. Storage is **node-pinned**: a service placed on a pool runs on the node the
 disk is attached to, and its volume binds there.
 
-Node storage is optional: you add it by command, and until you do it does nothing. With
-no pool registered anywhere, the platform behaves as before: the local-path provisioner
+The feature is **OPTIONAL, opt-in and add-by-command**. It ships **INERT**. With no
+pool registered anywhere, the platform behaves as before: the local-path provisioner
 keeps its `DEFAULT_PATH` on the x86 host, the placement ApplicationSet has zero
 elements, and the control-plane tables are empty. The node agent is **baked into every
 device image and enabled on every mesh node** (see *Bake & enable* below). It is inert

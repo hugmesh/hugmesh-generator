@@ -34,7 +34,6 @@ TWO RULES INHERITED FROM EARLIER BUGS IN THIS TREE, both relied on:
 from __future__ import annotations
 
 from .qt import QtCore, QtWidgets, Signal
-from . import styles
 from ..core import vaults
 from .pages._widgets import own_probe, probe_running
 
@@ -89,9 +88,6 @@ class VaultsDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self._project = project
         self._volumes: list[vaults.ManagedVolume] = []
-        # why the volume list could not be read ("" = it was): the status line's reason,
-        # which the disabled Delete repeats rather than guessing at a cause of its own
-        self._volumes_blocked = ""
         self.vault_entries: list[vaults.VaultEntry] = []
         self.setWindowTitle("Vaults & managed volumes")
         self.resize(820, 520)
@@ -104,9 +100,7 @@ class VaultsDialog(QtWidgets.QDialog):
         vol_page = QtWidgets.QWidget()
         vl = QtWidgets.QVBoxLayout(vol_page)
         self.status = QtWidgets.QLabel("Loading…")
-        self.status.setObjectName("volumesStatus")
-        self.status.setWordWrap(True)
-        self.status.setStyleSheet(styles.muted())
+        self.status.setStyleSheet("color: gray;")
         vl.addWidget(self.status)
         self.table = QtWidgets.QTableWidget(0, len(_COLS))
         self.table.setHorizontalHeaderLabels(list(_COLS))
@@ -128,7 +122,6 @@ class VaultsDialog(QtWidgets.QDialog):
         self.confirm.textChanged.connect(self._sync_delete)
         self.delete_btn = QtWidgets.QPushButton("Delete volume")
         self.delete_btn.setEnabled(False)
-        self.delete_btn.setToolTip("Select one volume in the table first.")
         self.delete_btn.clicked.connect(self._delete_selected)
         confirm_row.addWidget(self.confirm, 1)
         confirm_row.addWidget(self.delete_btn)
@@ -163,7 +156,7 @@ class VaultsDialog(QtWidgets.QDialog):
         rather than stacking threads."""
         if probe_running(self, "_probe"):
             return
-        self._say("Loading…")
+        self.status.setText("Loading…")
         self.refresh_btn.setEnabled(False)
         probe = own_probe(self, "_probe", _VaultsProbe(self._project, parent=self))
         probe.result.connect(self._on_probe)
@@ -173,28 +166,16 @@ class VaultsDialog(QtWidgets.QDialog):
         volumes, (vault_entries, vault_cap), docker_cap = payload
         self.refresh_btn.setEnabled(True)
         self._volumes = list(volumes)
-        self._volumes_blocked = ("" if docker_cap.available
-                                 else docker_cap.detail or "the volume list could not be read")
-        if self._volumes_blocked:
-            # WARNING style, not the muted grey of a summary line: this is the reason
-            # the table is empty and the remedy for it, and in grey it read as a note
-            self._say(" — ".join(t for t in (docker_cap.detail, docker_cap.remedy) if t),
-                      warn=True)
+        if not docker_cap.available:
+            self.status.setText(f"{docker_cap.detail} — {docker_cap.remedy}")
         else:
             total = sum(v.size_bytes or 0 for v in self._volumes)
             held = sum(1 for v in self._volumes if v.in_use)
-            self._say(
+            self.status.setText(
                 f"{len(self._volumes)} volume(s) in project '{self._project}' · "
                 f"{held} in use · {vaults.ManagedVolume('', '', '', size_bytes=total).human_size()} total")
         self._repopulate()
         self._render_vault(vault_entries, vault_cap)
-
-    def _say(self, text: str, *, warn: bool = False) -> None:
-        """The volumes tab's status line: muted for a summary or "Loading…", the
-        warning colour for a reason the tab cannot do its job. Every caller goes
-        through here so a Refresh that succeeds never keeps a stale warning colour."""
-        self.status.setText(text)
-        self.status.setStyleSheet(f"color: {styles.WARN};" if warn else styles.muted())
 
     # ---- volumes ------------------------------------------------------------------
     def _repopulate(self) -> None:
@@ -225,28 +206,17 @@ class VaultsDialog(QtWidgets.QDialog):
         if vol is None:
             self.danger.setText("")
             self.delete_btn.setEnabled(False)
-            self.delete_btn.setToolTip(
-                f"No volume can be listed or deleted: {self._volumes_blocked}."
-                if self._volumes_blocked and not self._volumes
-                else "Select one volume in the table first.")
             return
         if vol.in_use:
             self.danger.setText(
                 f"'{vol.short}' is in use by {', '.join(vol.in_use_by)} — stop the mesh "
                 f"before deleting it.")
             self.delete_btn.setEnabled(False)
-            self.delete_btn.setToolTip(f"'{vol.short}' is in use — stop the mesh first.")
             return
         self.danger.setText(
             f"Deleting '{vol.short}' destroys its data permanently. No rebuild restores "
             f"it. Type the volume name below to confirm.")
-        armed = self.confirm.text().strip() == vol.short
-        self.delete_btn.setEnabled(armed)
-        # the reason while disabled; once armed, what the click does (never a stale
-        # reason on a live destructive button)
-        self.delete_btn.setToolTip(
-            f"Permanently delete '{vol.short}'." if armed
-            else f"Type '{vol.short}' in the box to the left to enable Delete.")
+        self.delete_btn.setEnabled(self.confirm.text().strip() == vol.short)
 
     def _delete_selected(self) -> None:
         vol = self.selected_volume()

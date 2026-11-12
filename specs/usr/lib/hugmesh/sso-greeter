@@ -129,7 +129,6 @@ POLL_SCALE = float(seam("HSG_POLL_SCALE", "1"))
 LOGIN_DEFS = seam("HSG_LOGIN_DEFS", "/etc/login.defs")
 UID_MIN_OVERRIDE = seam("HSG_UID_MIN", "")
 HINT_FILE = os.path.join(RUN_DIR, "hint")
-FAILED_FILE = os.path.join(RUN_DIR, "failed")   # whose refused attempt the notice is for
 HANDOFF_DIR = os.path.join(RUN_DIR, "handoff")
 USERS_DIR = os.path.join(STATE_DIR, "users")
 MANAGED_DIR = os.path.join(STATE_DIR, "managed")
@@ -669,20 +668,9 @@ def off_reason(conf):
     return "SSO sign-in is not enabled on this device (an administrator can turn it on: sso-greeter configure --enable --issuer https://...)."
 
 
-def failed_line(conf, failed):
-    """The line the NEXT attempt shows if this one is refused (see cmd_pam_auth)."""
-    who = (" as '%s'" % failed) if valid_username(failed) else ""
-    if enabled(conf) and issuer_ok(conf):
-        return "Sign-in%s failed: the password was not accepted, or SSO did not finish. Try again." % who
-    return "Sign-in%s failed: the password was not accepted. Try again." % who
-
-
-def compose_hint(conf, user=None, failed=None):
+def compose_hint(conf, user=None):
     lines = []
     brand = conf.get("BRAND_TITLE") or "HugMesh"
-    if failed is not None:
-        # FIRST, so it is what the eye lands on in the greeter's message area.
-        lines.append(failed_line(conf, failed))
     if enabled(conf) and issuer_ok(conf):
         lines.append("Leave the password empty to sign in with %s SSO (%s); or type your local password." % (brand, issuer_host(conf)))
     else:
@@ -714,15 +702,13 @@ def pending_users():
     return out
 
 
-def write_hint(conf, user=None, failed=None):
-    # 0600: its one reader is pam_echo inside lightdm's root session child, and
-    # while a failure notice is armed it names the user whose sign-in was refused.
+def write_hint(conf, user=None):
     try:
         os.makedirs(RUN_DIR, mode=0o755, exist_ok=True)
         tmp = HINT_FILE + ".%d.tmp" % os.getpid()
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         with os.fdopen(fd, "w") as f:
-            f.write(compose_hint(conf, user, failed))
+            f.write(compose_hint(conf, user))
         os.replace(tmp, HINT_FILE)
     except OSError as e:
         log("hint not written: %s" % e)
@@ -838,102 +824,7 @@ def finish_online(user, conf, token, claims, offline_password):
 
 
 # ── pam-auth ─────────────────────────────────────────────────────────────────
-# THE FAILURE NOTICE. lightdm-gtk-greeter (2.0.9, authentication_complete_cb)
-# prints its own "Your password is incorrect" ONLY when the message area is empty
-# or already an error. Our hint is a PAM_TEXT_INFO line (pam_echo), so the area is
-# never empty, the greeter took the hint for a PAM module's own explanation, and a
-# wrong password just cleared the box with nothing said (2026-11-09 prover, four
-# frames 0.7 s apart). The greeter then restarts the conversation for the same
-# user, and the first thing that conversation shows is pam_echo's hint, which
-# would replace any message anyway. So the one place a failure notice survives is
-# the hint the NEXT conversation reads, and PAM gives a module no way to run only
-# when the rest of the stack failed (`include` lines are inlined, and a `substack`
-# is followed on success and failure alike).
-#
-# Hence: every attempt ARMS the notice before the local path runs (this
-# conversation's hint was already shown, so only a retry can read it), and every
-# success DISARMS it: an SSO sign-in here before returning 0, a local one through
-# `sso-greeter pam-ok` on the auth line after the include, which pambase reaches
-# only on success (a wrong password ends the stack at `[default=die]
-# pam_faillock.so authfail`). The greeter-setup-script `probe` writes a clean hint
-# for every new greeter. If some other system-auth ever let a failure reach
-# pam-ok, the notice would just be cleared again: today's silence, never a false
-# success, and never a different PAM verdict (pam-ok is `optional`).
-#
-# WHOSE notice. Arming records the attempt's user in FAILED_FILE (0600), and
-# `sso-greeter pam-hint`, the auth line BEFORE pam_echo, recomposes the hint for
-# the conversation that is starting: the notice only if the refused attempt was
-# this same user's. So after alice is refused, picking bob shows bob the plain
-# hint (never "Sign-in as 'alice' failed"), and alice's own retry still leads
-# with it. An attempt that had no valid user name arms an unnamed notice, which
-# names nobody and is shown to whoever comes next, as before.
 def cmd_pam_auth():
-    rc = pam_auth_attempt()
-    if rc == 0:
-        disarm_failure_notice()
-    return rc
-
-
-def arm_failure_notice(name):
-    """Record whose attempt is in flight ('' = no valid user name)."""
-    try:
-        os.makedirs(RUN_DIR, mode=0o755, exist_ok=True)
-        tmp = FAILED_FILE + ".%d.tmp" % os.getpid()
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(name + "\n")
-        os.replace(tmp, FAILED_FILE)
-    except OSError as e:
-        log("failure notice not armed: %s" % e)
-
-
-def clear_failure_notice():
-    try:
-        os.unlink(FAILED_FILE)
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        log("failure notice not cleared: %s" % e)
-
-
-def failure_notice_for(user):
-    """The `failed=` a conversation for `user` shows: None (no notice), '' or a name."""
-    try:
-        with open(FAILED_FILE) as f:
-            armed = f.read(256).strip()
-    except OSError:
-        return None
-    if armed == "":
-        return ""
-    if valid_username(armed) and armed == user:
-        return armed
-    return None
-
-
-def disarm_failure_notice():
-    clear_failure_notice()
-    user = os.environ.get("PAM_USER", "")
-    write_hint(load_conf(), user if valid_username(user) else None)
-
-
-def cmd_pam_hint():
-    """Before pam_echo: the hint for THIS conversation's user (see WHOSE notice)."""
-    if os.environ.get("PAM_TYPE", "auth") != "auth":
-        return 0
-    user = os.environ.get("PAM_USER", "")
-    user = user if valid_username(user) else ""
-    write_hint(load_conf(), user or None, failed=failure_notice_for(user))
-    return 0
-
-
-def cmd_pam_ok():
-    """The local path authenticated: take the armed failure notice back down."""
-    if os.environ.get("PAM_TYPE", "auth") == "auth":
-        disarm_failure_notice()
-    return 0
-
-
-def pam_auth_attempt():
     if os.environ.get("PAM_TYPE", "auth") != "auth":
         return 1
     user = os.environ.get("PAM_USER", "")
@@ -944,10 +835,7 @@ def pam_auth_attempt():
     if typed.endswith("\n"):
         typed = typed[:-1]
     conf = load_conf()
-    # Armed: what a RETRY shows if this attempt is refused (see above).
-    name = user if valid_username(user) else ""
-    arm_failure_notice(name)
-    write_hint(conf, name or None, failed=name)
+    write_hint(conf, user if valid_username(user) else None)
     if not enabled(conf) or not issuer_ok(conf):
         if typed == "":
             say(off_reason(conf) + " " + FALLBACK_LINE)
@@ -1050,7 +938,6 @@ def cmd_pam_session():
 # ── operator commands ────────────────────────────────────────────────────────
 def cmd_probe():
     conf = load_conf()
-    clear_failure_notice()          # a new greeter starts clean
     write_hint(conf)
     return 0
 
@@ -1224,7 +1111,7 @@ def main(argv):
     # subprocess would otherwise fall back to /bin:/usr/bin.
     os.environ.setdefault("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: sso-greeter pam-auth | pam-hint | pam-ok | pam-session | probe | status [USER] | list | revoke USER|--all | configure ...", file=sys.stderr)
+        print("usage: sso-greeter pam-auth | pam-session | probe | status [USER] | list | revoke USER|--all | configure ...", file=sys.stderr)
         return 2
     cmd, rest = argv[0], argv[1:]
     try:
@@ -1232,10 +1119,6 @@ def main(argv):
             return cmd_pam_auth()
         if cmd == "pam-session":
             return cmd_pam_session()
-        if cmd == "pam-ok":
-            return cmd_pam_ok()
-        if cmd == "pam-hint":
-            return cmd_pam_hint()
         if cmd == "probe":
             return cmd_probe()
         if cmd == "status":

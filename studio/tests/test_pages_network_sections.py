@@ -274,13 +274,7 @@ def test_section_titles_are_not_eaten_as_mnemonics(wiz):
     "and", which would leave this guard passing while proving nothing. It asserts on
     the ONE section title that deliberately keeps an ampersand, and this second
     assertion is what says so — if the last '&' ever leaves the page's section titles,
-    this fails rather than going quietly hollow.
-
-    TREE-WIDE (GUI-23): this pins two widgets on one page, so it could not see the key-zip
-    step's "Import & apply" button rendering as "Import _apply".
-    test_gui_button_mnemonics.py scans every QPushButton / QCheckBox / QGroupBox /
-    QRadioButton literal under gui/ for a bare '&'. It needs no Qt binding, so it also
-    runs in the Qt-free job, where this module is skipped."""
+    this fails rather than going quietly hollow."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
     assert page.identity_section.title() == "Identity & Domain"
     # the displayed text must carry the escaped form, or Qt swallows the ampersand

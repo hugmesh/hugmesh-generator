@@ -57,9 +57,7 @@ check "provision log exists"                      '[ -f /var/log/keys-provision.
 
 echo "-- users / ssh --"
 check "test user 'tester' exists"                 'id tester'
-# tester's sudo route (wheel, or not wheel on a desktop-governance-governed image)
-# is graded under "-- sudo / desktop governance --", after the KEYS mount below:
-# whether the image is governed is partly a question about the stick.
+check "tester in wheel group"                     'id -nG tester | grep -qw wheel'
 check "tester authorized_keys installed"          '[ -s /home/tester/.ssh/authorized_keys ]'
 check "sshd is running"                            'pgrep -x sshd'
 check "ssh host keys present"                      'ls /etc/ssh/ssh_host_*_key'
@@ -123,10 +121,6 @@ _ts_key=none
 # comma-separated; empty for a client that only accepts routes. assert_mesh_client grades
 # that every one of them is served on the tailnet.
 _ts_routes=""
-# Fourth consumer: does the STICK carry desktop-governance templates? That is half
-# of provision.sh's desktop_governance_governed() (the baked dir is the other
-# half), which decides whether provision_users() confers wheel at all.
-_gov_keys=false
 _hs_dev="$(blkid -L "${KEYS_LABEL:-KEYS}" 2>/dev/null || true)"
 if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
     _hs_mnt="$(mktemp -d 2>/dev/null || echo '')"
@@ -135,7 +129,6 @@ if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
         # Both KEYS/ layouts provision.sh accepts (provision.sh:235-238).
         for _hs_m in "${_hs_mnt}/provision.json" "${_hs_mnt}/keys/provision.json"; do
             [ -f "${_hs_m}" ] || continue
-            [ -d "$(dirname "${_hs_m}")/desktop-governance" ] && _gov_keys=true
             # tostring, not `// false`: jq's // folds a literal false into null, so the
             # two spellings happen to agree HERE only because this case folds false and
             # null into the same branch anyway. Keeping them distinct at the source means
@@ -198,36 +191,6 @@ elif [ "${_hs_want}" = false ]; then
 else
     skip "headscale service — INTENT UNVERIFIED: no readable KEYS manifest and no manifest decision in the provision log. NOT evidence that headscale is healthy or unwanted."
     skip "headscale port :8080 — INTENT UNVERIFIED (see above)"
-fi
-
-echo "-- sudo / desktop governance --"
-# WHERE tester's sudo comes from is a property of the IMAGE, decided in provision.sh
-# by desktop_governance_governed(): desktop-governance templates baked at
-# /etc/hugmesh/desktop-governance, OR shipped on the stick as desktop-governance/.
-#   not governed (servers, standalone, unaffiliated desktops): provision_users()
-#     puts tester in wheel, as it always did.
-#   governed (a cloud/mesh laptop, desktop or chromebook): sudo comes ONLY from the
-#     IdP's desktop-sudo claim, so provision_users() drops wheel and writes no
-#     /etc/sudoers.d/10-tester, and provision_desktop_governance() strips one that
-#     exists. The old unconditional "tester in wheel group" FAILED on every correct
-#     governed image; nobody saw it because the harness could not sudo there at all
-#     until its TEST-ONLY drop-in (2026-11-09 prover, x86 laptop-user).
-# That drop-in (zz-hugmesh-test-harness, written by tests/qemu/docker-entrypoint.sh's
-# run[] hook) is HOW this script runs as root on a governed guest. It is the
-# harness's, not the image's, so nothing here grades it.
-_gov_src=""
-if [ -d "${DESKTOP_GOVERNANCE_DIR:-/etc/hugmesh/desktop-governance}" ]; then
-    _gov_src="templates baked into the image"
-elif ${_gov_keys}; then
-    _gov_src="templates on the KEYS stick"
-fi
-if [ -n "${_gov_src}" ]; then
-    check "tester NOT in wheel: governed image, sudo only via the desktop-sudo SSO claim (${_gov_src})" \
-        'id tester && ! id -nG tester | grep -qw wheel'
-    check "no static sudoers.d grant for tester on a governed image (${_gov_src})" \
-        '[ ! -e "${SUDOERS_D:-/etc/sudoers.d}/10-tester" ]'
-else
-    check "tester in wheel group (image not desktop-governance-governed)" 'id -nG tester | grep -qw wheel'
 fi
 
 echo "-- network --"

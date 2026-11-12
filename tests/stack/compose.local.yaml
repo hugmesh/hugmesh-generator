@@ -1214,10 +1214,7 @@ services:
       # akkoma-proxy/tuwunel-proxy defaults, which are NXDOMAIN here — the same
       # substitution APP_HS_TOKEN_*_URL below already makes for the hsproxy.
       MEDIA_PROXY_MASTODON_ENABLED: ${MEDIA_PROXY_MASTODON_ENABLED:-${MEDIA_POISONING_ENABLED:-false}}
-      # mastodon-front, not mastodon-web: the upload answers with a MediaAttachment
-      # whose url/preview_url the compose box shows, and only the front rewrites
-      # those to /bff/user/mastodon/... (see APP_HS_TOKEN_MASTODON_URL below).
-      MEDIA_PROXY_MASTODON_BASE_URL: ${MEDIA_PROXY_MASTODON_BASE_URL:-http://mastodon-front:8080}
+      MEDIA_PROXY_MASTODON_BASE_URL: ${MEDIA_PROXY_MASTODON_BASE_URL:-http://mastodon-web:3000}
       MEDIA_PROXY_MATRIX_ENABLED: ${MEDIA_PROXY_MATRIX_ENABLED:-${MEDIA_POISONING_ENABLED:-false}}
       MEDIA_PROXY_MATRIX_BASE_URL: ${MEDIA_PROXY_MATRIX_BASE_URL:-http://tuwunel:8008}
       ADMIN_BFF_INTERNAL_BASE_URL: ${ADMIN_BFF_INTERNAL_BASE_URL:-http://hugmesh-admin-bff-api:8080}
@@ -1231,14 +1228,7 @@ services:
       # the mTLS tuwunel-proxy:4443).
       APP_HS_TOKEN_KEY: ${APP_HS_TOKEN_KEY:-dev-hs-token-key-do-not-use-in-prod}
       APP_HS_TOKEN_MATRIX_URL: ${APP_HS_TOKEN_MATRIX_URL:-http://tuwunel:8008}
-      # mastodon-front (compose.real.yaml), NOT mastodon-web. The hsproxy has ONE
-      # upstream for every /bff/user/mastodon/** path, and Rails does not serve
-      # /api/v1/streaming/** (it 301s to https://localhost/..., so mastodon-ui
-      # fell back to 30 s polling). The front sends streaming to
-      # mastodon-streaming and everything else to Rails, and rewrites the
-      # https://localhost media URLs Mastodon mints to /bff/user/mastodon/...,
-      # which load on every door (GUI-35; tests/stack/mastodon-front/default.conf).
-      APP_HS_TOKEN_MASTODON_URL: ${APP_HS_TOKEN_MASTODON_URL:-http://mastodon-front:8080}
+      APP_HS_TOKEN_MASTODON_URL: ${APP_HS_TOKEN_MASTODON_URL:-http://mastodon-web:3000}
       # plain-HTTP local stack: the bff_ session cookie must not be Secure-only or the browser drops it
       APP_SESSION_COOKIE_SECURE: "false"
       # Homeserver service-account password the hsproxy broker mints with. The property is

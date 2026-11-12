@@ -516,9 +516,7 @@ cluster._
   still runs `mode: file` with the node renderer writing, tracked in
   hugmesh-generator#634 (switch the mode, seed the stored policy so the tailnet does
   not fall to allow-all, retire the node-side writer; needs a live control node to
-  confirm). Until then **nobody may flip `enabled`**. keys-provision now refuses to
-  start headscale unless headscale's own reading of its config is `policy.mode: file`
-  with `/etc/headscale/policy.hujson`, so #634 has to change that check as well. The BFF now refuses to wire the
+  confirm). Until then **nobody may flip `enabled`**. The BFF now refuses to wire the
   push client unless it declares `policy-mode: database`
   (`HeadscaleAclConfig.requireDbPolicyMode`, hugmesh-admin-bff-api), but headscale's
   API does not report its mode, so the guard can only check the declaration.

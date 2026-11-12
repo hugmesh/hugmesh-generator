@@ -243,9 +243,9 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self._k8s_up: bool | None = None
         self.setTitle("Create nodes for local cloud")
         self.setSubTitle(
-            "Turn the local Docker mesh into real device images. The short wizard "
-            "ahead reuses its domain and accounts and offers only the laptop and "
-            "cluster-node image types.")
+            "Turn the local Docker mesh into real device images. The abbreviated "
+            "wizard ahead reuses the domain and accounts already provisioned here "
+            "and offers only the laptop and cluster-node image types.")
         lay = scrollable(self)
 
         intro = QtWidgets.QLabel(

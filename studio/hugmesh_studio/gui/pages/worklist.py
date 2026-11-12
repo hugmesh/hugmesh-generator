@@ -64,7 +64,7 @@ def _infra_service_options(platform: str) -> list[tuple[str, tuple[str, ...]]]:
     if len(expr) > 1:                                   # a "both" option (rpi5)
         opts.append((" + ".join(labels[s] for s in expr), tuple(expr)))
     return opts
-from ._widgets import NoWheelComboBox, page_intro, status_badge
+from ._widgets import NoWheelComboBox, status_badge
 
 # The GPU-bearing mesh roles (Notes-column callout); mirrors the builder's GPU roles.
 _GPU_ROLES = ("backend-gpu", "edge-ai", "be+gpu", "edge_ai", "gpu-host")
@@ -108,16 +108,6 @@ _RAM_PROMPT = "choose…"
 # "default" inherits the worklist-wide Home-step encrypt_root; on/off force it.
 _ENC_CHOICES = ("default", "on", "off")
 
-# A jetson row's Encryption cell: a fixed, disabled "off". The cell used to hold the whole
-# sentence "off — jetson cannot encrypt", which the 90 px column cut to "off — jetson", so
-# the part that says WHY was the part that was never on screen (GUI-29). The cell now
-# shows only the value, which fits; the reason is its tooltip, and the row's Notes cell
-# says it in words ("no root encryption — jetson builder limitation").
-_JETSON_ENC_TEXT = "off"
-_JETSON_ENC_REASON = (
-    "off — jetson cannot encrypt: the Orin's single boot+root partition has no separate "
-    "LUKS path, so its builder refuses --encrypt-root (docs/STANDALONE-DESKTOP.md).")
-
 
 def _row_notes(role: str, platform: str) -> str:
     """The auto, read-only Notes cell (design 3.4): encryption reality + GPU + the
@@ -158,21 +148,17 @@ class WorklistPage(QtWidgets.QWizardPage):
         # row is one server node image, that pki+be+fe are required together, and that
         # GPU / Edge-AI nodes can wait — the core "make each step clear" ask.
         self.setTitle("Choose the images to build")
-        # Two lines at most: the wizard header clips the rest mid-sentence (GUI-14). The
-        # desktop-people sentence is the body's, under the root-domain header it is about.
         self.setSubTitle(
             "Select every server node this mesh needs — PKI + Backend + Frontend are "
             "required together; GPU / Edge-AI nodes can be built later from a provided "
-            "config.")
+            "config. Desktop devices can be added for the mesh's people: checking one "
+            "asks who uses it (the account is created on the internal domain).")
         lay = QtWidgets.QVBoxLayout(self)
 
         self.header = QtWidgets.QLabel("")
         self.header.setWordWrap(True)
         self.header.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(self.header)
-        lay.addWidget(page_intro(
-            "Desktop devices can be added for the mesh's people: checking one asks who "
-            "uses it (the account is created on the internal domain)."))
 
         # spec 2c convenience: one click checks the pki+be+fe trio (the minimum
         # buildable-together set) on whichever architectures the arch filter admits,
@@ -463,11 +449,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         item.setCheckState(_COL_CHECK, Qt.CheckState.Unchecked)
         item.setText(_COL_ROLE, role)
         item.setText(_COL_PLATFORM, PLATFORM_LABELS.get(platform, platform))
-        notes = _row_notes(role, platform)
-        item.setText(_COL_NOTES, notes)
-        # Notes stretches into what is left, which is 100 px at the netbook size: the
-        # whole text is the cell's tooltip, as on the read-only device rows below.
-        item.setToolTip(_COL_NOTES, notes)
+        item.setText(_COL_NOTES, _row_notes(role, platform))
         item.setData(_COL_CHECK, Qt.ItemDataRole.UserRole, rid)
         self._item_arch[id(item)] = self._catalog.device(
             device_catalog.default_device_for_platform(platform)).arch
@@ -524,10 +506,8 @@ class WorklistPage(QtWidgets.QWizardPage):
         enc_combo = None
         if platform == "jetson":
             disp = NoWheelComboBox()
-            disp.addItem(_JETSON_ENC_TEXT)
-            disp.setToolTip(_JETSON_ENC_REASON)
+            disp.addItem("off — jetson cannot encrypt")
             disp.setEnabled(False)
-            item.setToolTip(_COL_ENC, _JETSON_ENC_REASON)
             self.tree.setItemWidget(item, _COL_ENC, disp)
         else:
             enc_combo = NoWheelComboBox()

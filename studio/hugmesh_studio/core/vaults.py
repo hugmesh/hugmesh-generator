@@ -135,7 +135,7 @@ def docker_available() -> Capability:
         False,
         detail="the docker daemon is not reachable",
         remedy="Start Docker (or, under WSL, enable Docker Desktop's WSL integration "
-               "for this distro), then press Refresh.")
+               "for this distro) and reopen this dialog.")
 
 
 class DockerDidNotAnswer(RuntimeError):

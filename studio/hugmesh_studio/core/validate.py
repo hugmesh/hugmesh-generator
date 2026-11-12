@@ -99,44 +99,9 @@ def validate_domain_name(value: str) -> str:
     return value
 
 
-def validate_username(value: str, field: str = "local_user") -> str:
-    # ``field`` names the config field in the error. The default keeps every existing
-    # message byte-identical; the SECOND account field (``user``, -u/--user) passes its
-    # own name, so a refusal of "Default user" no longer reads "invalid local_user".
-    _require(bool(_USERNAME.fullmatch(value)), field, value)
+def validate_username(value: str) -> str:
+    _require(bool(_USERNAME.fullmatch(value)), "local_user", value)
     return value
-
-
-# ── the same two allowlists, in plain words, for the wizard pages ──────────────────
-# IdentityValidationError names the INTERNAL field ("local_user", "domain"): right for
-# the CLI and the Review page's assembly error, wrong beside a field whose caption is
-# "Local User" or "Public Apex Domain". These sentences name the caption the operator
-# typed into and say what the allowlist accepts, so the page can refuse Next inline.
-USERNAME_RULE = ("an account name starts with a lower-case letter or '_', then up to 31 "
-                 "lower-case letters, digits, '_' or '-' (no spaces, no capitals)")
-DOMAIN_NAME_RULE = ("a domain name is lower-case letters, digits, hyphens and dots, each "
-                    "dot-separated part starting and ending with a letter or digit "
-                    "(no spaces, no capitals)")
-
-
-def username_problem(label: str, value: str) -> str:
-    """'' when ``value`` passes :func:`validate_username`; otherwise one sentence that
-    names the visible field ``label`` and the rule."""
-    try:
-        validate_username(value)
-    except IdentityValidationError:
-        return f"{label}: {value!r} is not a valid account name — {USERNAME_RULE}."
-    return ""
-
-
-def domain_name_problem(label: str, value: str) -> str:
-    """'' when ``value`` passes :func:`validate_domain_name`; otherwise one sentence
-    that names the visible field ``label`` and the rule."""
-    try:
-        validate_domain_name(value)
-    except IdentityValidationError:
-        return f"{label}: {value!r} is not a valid domain name — {DOMAIN_NAME_RULE}."
-    return ""
 
 
 def validate_home_device(value: str) -> str:

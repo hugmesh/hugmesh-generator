@@ -25,5 +25,3 @@ services:
     profiles: ["social"]
   mastodon-streaming:
     profiles: ["social"]
-  mastodon-front:
-    profiles: ["social"]

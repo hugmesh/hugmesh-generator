@@ -3,10 +3,10 @@
   //
   // If present, provisioning copies this to /etc/headscale/policy.hujson and
   // (when headscale config has `policy.mode: file`) loads it with
-  // `headscale policy set -f /etc/headscale/policy.hujson`. Members of
-  // tag:hugmesh reach the cluster pod/service CIDRs on all ports, tag:superadmin
-  // reaches :22 for Tailscale SSH, and nothing else is open (default-deny; no
-  // node-to-node rule, no internet-wide grant).
+  // `headscale policy set -f /etc/headscale/policy.hujson`. This is the fleet
+  // full-mesh policy: every member of tag:hugmesh reaches every other member
+  // on all ports, plus the cluster pod/service CIDRs, and nothing else
+  // (default-deny; no internet-wide grant).
   //
   // Membership: nodes self-apply tag:hugmesh at join
   // (--advertise-tags=tag:hugmesh,tag:<role>). With OIDC join (Casdoor
@@ -32,11 +32,7 @@
     "tag:pki": ["hugmesh"],
     "tag:be": ["hugmesh"],
     "tag:fe": ["hugmesh"],
-    "tag:host": ["hugmesh"],
-    // The only SSH source (see the ssh block), owned by nobody: the control node
-    // force-assigns it (hugmesh-headscale-forcetags). headscale 0.23 builds no
-    // node's map while a rule names a tag that is neither listed here nor forced.
-    "tag:superadmin": []
+    "tag:host": ["hugmesh"]
   },
 
   // Auto-approve exactly the cluster pod + service CIDRs advertised by fleet
@@ -62,14 +58,6 @@
       "action": "accept",
       "src": ["tag:hugmesh"],
       "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
-    },
-    // The ONLY way to :22, and only from tag:superadmin: a Tailscale SSH session
-    // is a TCP connection to :22, so without this the ssh rule below can never be
-    // used. Never widen its src: see the ssh block.
-    {
-      "action": "accept",
-      "src": ["tag:superadmin"],
-      "dst": ["tag:hugmesh:22"]
     }
   ],
 
@@ -78,17 +66,10 @@
   // .tailscale.ssh_user) may open a Tailscale-SSH session; root + other accounts
   // are denied. Pair with `tailscale up --ssh` (provision.json tailscale.up_args
   // / the keys-provision default). SSH is tailnet-only.
-  //
-  // WHO may open that session: tag:superadmin, nothing else. Tailscale SSH
-  // answers :22 itself, so the device's sshd key checks are not on this path;
-  // whoever src names gets a session as the privileged user. Do NOT put
-  // tag:hugmesh, a role tag, autogroup:member, "*" or a user/group here: every
-  // node holding a pre-auth key has those. keys-provision refuses to load a
-  // policy whose ssh rules name any source but tag:superadmin.
   "ssh": [
     {
       "action": "accept",
-      "src": ["tag:superadmin"],
+      "src": ["tag:hugmesh"],
       "dst": ["tag:hugmesh"],
       "users": ["@@TS_SSH_USER@@"]
     }

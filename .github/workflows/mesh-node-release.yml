@@ -457,15 +457,6 @@ jobs:
   # GitHub itself. Needs the SITE_DISPATCH_TOKEN secret (a token allowed to
   # write contents on hugmesh/hugmesh.github.io); without it this job prints a
   # notice and succeeds. Never runs on a push to main.
-  #
-  # NEVER FATAL (2026-11-11). This job runs after the image and the GitHub Release
-  # are published, so its answer cannot change what was released. It used
-  # `curl -fsS`, which turns a refused token into exit 22 and a red release run
-  # (Studio's studio-v0.4.4-beta.1 run 42882326209 went red exactly that way on a
-  # 403). Only a 204 counts as sent; any other answer, or no connection, is a
-  # ::warning:: carrying GitHub's own message and the job stays green. Tested by
-  # scripts/test-mesh-node-release-channel.sh, which runs this step with real curl
-  # against a loopback stand-in for api.github.com.
   notify-site:
     needs: [github-release]
     if: startsWith(github.ref, 'refs/tags/mesh-node-v')
@@ -482,29 +473,10 @@ jobs:
             exit 0
           fi
           payload=$(python3 -c 'import json, os; print(json.dumps({"event_type": "releases-updated", "client_payload": {"source": os.environ["GITHUB_REPOSITORY"], "kind": "image", "image": "ghcr.io/hugmesh/hugmesh-mesh-node", "version": os.environ["GITHUB_REF_NAME"].removeprefix("mesh-node-v"), "ref": os.environ["GITHUB_REF"], "sha": os.environ["GITHUB_SHA"]}}))')
-          resp=$(mktemp)
-          rc=0
-          http_code=$(curl -sS -o "$resp" -w '%{http_code}' --max-time 30 -X POST \
+          curl -fsS -X POST \
             -H "Authorization: Bearer $SITE_DISPATCH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             https://api.github.com/repos/hugmesh/hugmesh.github.io/dispatches \
-            -d "$payload") || rc=$?
-          if [ "$rc" = 0 ] && [ "$http_code" = 204 ]; then
-            echo "sent releases-updated for $GITHUB_REPOSITORY $GITHUB_REF_NAME"
-            exit 0
-          fi
-          why=$(python3 - "$resp" <<'PY'
-          import json, sys
-          raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
-          try:
-              msg = json.loads(raw).get("message") or raw
-          except Exception:
-              msg = raw
-          # One line, escaped for a workflow command: this text lands inside ::warning::.
-          print(" ".join(str(msg).split())[:300].replace("%", "%25"))
-          PY
-          ) || why=""
-          [ "$rc" = 0 ] || why="curl exit $rc${why:+; $why}"
-          echo "::warning::releases-updated dispatch to hugmesh/hugmesh.github.io was not accepted (HTTP ${http_code:-000}): ${why:-no response body}. $GITHUB_REF_NAME is published and unaffected. The site rebuilds its downloads data from GitHub within the hour (pages.yml cron), or now via: gh workflow run pages.yml --repo hugmesh/hugmesh.github.io. Do not re-run the release for it. A 401, 403 or 404 means SITE_DISPATCH_TOKEN cannot write to hugmesh/hugmesh.github.io: re-issue it as a fine-grained token with resource owner hugmesh, only hugmesh/hugmesh.github.io, Contents read and write (approved, if the org requires approval)."
-          exit 0
+            -d "$payload"
+          echo "sent releases-updated for $GITHUB_REPOSITORY $GITHUB_REF_NAME"

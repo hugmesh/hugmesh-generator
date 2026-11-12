@@ -651,13 +651,6 @@ if ${STANDALONE}; then
     info "STANDALONE desktop: $([ "${MESH_FORCED}" = on ] && echo 'tailnet client kept (--with-tailscale), no mesh association' || echo 'no mesh'); local user '${LOCAL_USER}'; LUKS2-encrypted root"
 fi
 
-# tailscaled version floor (scripts/_download-lib.sh): the shared init script passes
-# --no-logs-no-support, which tailscaled only accepts from 1.32.0 on. Refuse an older
-# --tailscale-version HERE, after the --standalone posture above has settled whether
-# tailscale ships at all and before any download, instead of shipping a mesh client
-# that exits on an unknown flag.
-${SKIP_MESH} || ${SKIP_TAILSCALE} || dlv_tailscale_version_ok "${TAILSCALE_VERSION}" || exit 1
-
 # ── --encrypt-root on a headless k8s role: this platform's disk-boot
 # initramfs only supports an interactive passphrase prompt (no keyfile/
 # Clevis/TPM factor yet — see the crypttab comment in Phase 4), so an
@@ -2505,23 +2498,6 @@ if [ ! -f "${SYSROOT}/boot/${JETSON_KERNEL_IMG}" ]; then
         err "artifact cannot boot. Review Phase 3 above."
         exit 1
     fi
-fi
-
-# ── NetworkManager: no connectivity probe (non-desktop roles) ──
-# The networkmanager package ships /usr/lib/NetworkManager/conf.d/20-connectivity.conf,
-# which polls a fixed public URL (nmcheck.gnome.org) every few minutes, forever: an
-# unsolicited phone-home from a self-hosted mesh, and DNS noise on an offline or
-# egress-filtered LAN. A node or edge-AI box has no captive portal to detect; --role desktop keeps
-# the package default, because captive-portal detection is useful on a person's desktop. 90- so it sorts after the package's
-# own conf.d files. Pinned by tests/scripts/test-node-telemetry-off.sh.
-if ! ${ROLE_CLIENT}; then
-    mkdir -p "${SYSROOT}/etc/NetworkManager/conf.d"
-    printf '%s\n' \
-        '# Written by the HugMesh builder (non-desktop role): no connectivity probe' \
-        '# to a public URL. Delete this file to restore the package default.' \
-        '[connectivity]' \
-        'enabled=false' > "${SYSROOT}/etc/NetworkManager/conf.d/90-hugmesh-no-connectivity-check.conf"
-    info "NetworkManager: connectivity check OFF (non-desktop role — no public probe URL)"
 fi
 
 # ── BEGIN shared block: SELinux node-policy modules ───────────────────────────

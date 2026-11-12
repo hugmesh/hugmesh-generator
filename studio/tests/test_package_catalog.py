@@ -13,10 +13,6 @@ from hugmesh_studio.core.config import ImageConfig, ROLE_CHOICES, image_class
 _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # raw (non-deduped) per-platform atom totals — pinned to the tree (design 2.8 counts).
-# jetson 67 / frite 56 / orangepi5 74 since www-client/netsurf left the jetson, frite,
-# orangepi5 and orangepi4-lts desktop lists (-1 each): every one of those boards also
-# lists it in profile/package.provided, so it was never merged and the requested-atom
-# completeness gate failed every desktop build of them on it.
 # x86 153 / rpi5 77 / jetson 68 / frite 57 / orangepi5 75 since e425be8d (#865, ARM
 # desktop-governance runtime) added sys-auth/polkit and dev-lang/python to the rpi5,
 # jetson, orangepi5 and orangepi4-lts desktop lists (+2 each) and sys-fs/mtd-utils
@@ -35,11 +31,11 @@ _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # glib[introspection] chain does not cross-compile (the real build died in glib's
 # in-source gobject-introspection bootstrap), so the atom was removed behind a
 # paper-trail comment and tests/requested-atoms-resolvable.sh pins the exclusion.
-# orangepi5 = 56 (packages 33 + desktop 22 + live 1) + 8 + 10: its cluster NODE roles
+# orangepi5 = 57 (packages 33 + desktop 23 + live 1) + 8 + 10: its cluster NODE roles
 # (EXPERIMENTAL) read the Raspberry Pi k8s node set (specs-rpi5/portage/packages-k8s.list, 8 atoms) and the node host list
 # (specs-rpi5/portage/packages-node-host.list, 10 atoms) rather than a copy.
-_RAW_TOTALS = {"x86": 153, "rpi5": 77, "jetson": 67, "frite": 56,
-               "orangepi5": 74, "orangepizero2": 32, "orangepizero2w": 32}
+_RAW_TOTALS = {"x86": 153, "rpi5": 77, "jetson": 68, "frite": 57,
+               "orangepi5": 75, "orangepizero2": 32, "orangepizero2w": 32}
 
 _CONFIGS = [
     ("x86 omnibus node", ImageConfig(mode="mesh", role="omnibus", platform="x86")),

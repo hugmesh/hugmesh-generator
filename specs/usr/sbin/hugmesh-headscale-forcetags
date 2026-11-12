@@ -15,8 +15,8 @@
 # is unlisted), so an advertised one lands in invalid_tags, while the tags forced
 # here bypass tagOwners and apply. That makes the SSH dst and the superadmin src
 # NON-FORGEABLE. tag:hugmesh stays self-applied and owned by "hugmesh"
-# (data-plane membership — CIDR rule + route auto-approval; NEVER an ssh or :22
-# source). `headscale nodes tag -t` REPLACES the node's forced-tag list, so the
+# (data-plane membership only — CIDR rule + route auto-approval, NOT a :22
+# src/dst). `headscale nodes tag -t` REPLACES the node's forced-tag list, so the
 # key's forced tag:hugmesh is dropped here; nodes keep tag:hugmesh through their
 # own --advertise-tags.
 # WHY (FIX-SERVERTAG): tags are SELF-APPLIED at join (--advertise-tags=...).
@@ -33,8 +33,7 @@
 # invalid. This script is then the ONLY way a node gets one: `headscale nodes
 # tag` does not consult tagOwners. Never give a security tag an owner to "help"
 # this script — it does not need one. tag:hugmesh stays self-applied (data-plane
-# membership — CIDR rule + route auto-approval; NEVER an ssh or :22 source, and as
-# a :22 destination it admits tag:superadmin only).
+# membership only — CIDR rule + route auto-approval, NOT a :22 src/dst).
 #
 # WHAT IT FORCES, per node:
 #   * tag:mesh_<MESH_ID>  on EVERY approved node in this mesh — including

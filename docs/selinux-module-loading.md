@@ -73,23 +73,6 @@ dependency is absent is skipped, with the Gentoo package that would fix it
 manifest. Merge the package into an image and the module builds, installs and is
 required automatically.
 
-A module whose `.fc` labels an entrypoint (a `/usr/bin` or `/usr/sbin` path typed
-`hugmesh_*_exec_t`) is also skipped when the image ships none of its entrypoints.
-A domain that nothing can enter confines nothing. The manifest records it as
-`# skipped: <module> (no entrypoint shipped in this image)`. Two cases hit this
-today:
-
-- `standalone-unaffiliated` ships no hugmesh entrypoint, so its manifest holds only
-  `hugmesh_bootpath`.
-- No x86 role ships `hugmesh-vpn-runner` or `hugmesh-vpn-reconcile`, so `hugmesh_vpn`
-  is skipped on x86.
-
-The skip has two exceptions:
-
-- `hugmesh_bootpath` declares no entrypoint, so it installs on every role.
-- A skipped module stays installed when a kept module requires one of its types.
-  For example, `hugmesh_domain_reconcile` requires `hugmesh_authkeys_cache_t`.
-
 (The header comment of `_selinux-policy-lib.sh` and `README.md` still say "seven
 mandatory, two conditional". The lib's own map and the gate's `MANDATORY` array
 say six and three.)

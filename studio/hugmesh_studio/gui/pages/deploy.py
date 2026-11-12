@@ -64,11 +64,11 @@ class DeployPage(QtWidgets.QWizardPage):
         self.worker: _MeshWorker | None = None
         self._running = False
         self.setTitle("Cloud deploy")
-        # Two lines at most: the wizard header clips the rest mid-sentence (GUI-14). The
-        # offline-plan sentence is the intro's, below.
         self.setSubTitle("Publish an already-built, cloud-packaged x86 image to a "
-                         "cloud provider — no image build. This is the end of this "
-                         "path: Exit closes the Studio.")
+                         "cloud provider — no image build. Plan renders readable "
+                         "artifacts OFFLINE; only the emitted apply.sh/destroy.sh "
+                         "ever touch a cloud, and the driver confirms each. This is "
+                         "the end of this path: Exit closes the Studio.")
         self.setFinalPage(True)
         # Pressing the final button here does nothing but close the Studio — no
         # build, no apply, no write, no state commit — so it says so (_widgets:
@@ -83,9 +83,7 @@ class DeployPage(QtWidgets.QWizardPage):
             "every gate (provider registry, input validation, creds-present check, "
             "apply/destroy confirmation). PLAN and STATUS run here; APPLY streams "
             "here after you acknowledge the plan; DESTROY opens a terminal so the "
-            "driver's own confirmation runs there. Plan renders readable artifacts "
-            "OFFLINE; only the emitted apply.sh/destroy.sh ever touch a cloud, and the "
-            "driver confirms each.")
+            "driver's own confirmation runs there.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
 

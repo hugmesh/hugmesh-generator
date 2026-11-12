@@ -11,7 +11,8 @@ failure looks like.
 
 ## 1. Why the key is needed
 
-Dependency-Check downloads the NVD CVE feed, which holds about 420,000 records. Without a key, NVD allows a client **5 requests per 30 seconds**. With a key
+Dependency-Check downloads the NVD CVE feed, which holds about 420,000 records (421,929 on
+2026-11-10). Without a key, NVD allows a client **5 requests per 30 seconds**. With a key
 the limit is 50. Dependency-Check 13's own defaults are
 `nvd.api.requestsperthirtysecondswithoutapikey=5` and `...withapikey=50`.
 
@@ -143,8 +144,8 @@ fleet lane reads `PENTEST=1`. That page says so and points at the Fleet window.
 
 `gh secret set NVD_API_KEY --org <org> --visibility all` reads the value from **stdin**
 when stdin is not a terminal. An **empty** stdin stores an **empty** secret, and gh reports
-no error. That happens when the command runs from a non-interactive shell, and the CI job
-then runs keyless and fails with exit 13.
+no error. On 2026-11-10 this happened twice when the command was run from a non-interactive
+shell. The CI job then ran keyless and failed with exit 13.
 
 To set it safely, use one of these:
 

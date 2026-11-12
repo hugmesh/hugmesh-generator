@@ -28,8 +28,7 @@ PAGES = {
   "domain_services",
   "fleet",
   "localcloud_nodes",
-  "localmesh",
-  "users"
+  "localmesh"
  ],
  "cluster_domain_github_org": [
   "domains"

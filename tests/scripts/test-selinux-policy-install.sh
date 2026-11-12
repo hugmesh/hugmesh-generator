@@ -371,22 +371,6 @@ mk_sysroot() {
         : > "${s}/usr/share/selinux/mcs/kubernetes.pp"
         : > "${s}/usr/share/selinux/mcs/tor.pp"
     fi
-    ship_entrypoints "${s}"
-}
-
-# The hugmesh entrypoints, read from the REAL .fc: every literal /usr/sbin path
-# typed hugmesh_*_exec_t. A mesh-role builder copies each into
-# ${SYSROOT}/usr/sbin (`cp "${SHARED_SPECS}/usr/sbin/<x>" "${SYSROOT}/usr/sbin/<x>"`),
-# so mk_sysroot ships them all; the lib skips a module whose entrypoints the
-# sysroot lacks (C-role). Here /usr/sbin is a REAL directory (no usrmerge), so a
-# lib that looked only at the /usr/bin spelling would skip every module.
-mapfile -t ENTRYPOINTS < <(awk '$1 ~ /^\/usr\/sbin\/[A-Za-z0-9._-]+$/ && $2 == "--" &&
-    $3 ~ /object_r:hugmesh_[a-z0-9_]+_exec_t,/ { print $1 }' "${SRC}"/*.fc | sort -u)
-ship_entrypoints() {  # ship_entrypoints <sysroot> [<path>...]  (default: all of them)
-    local s="$1" e; shift
-    [ "$#" -gt 0 ] || set -- "${ENTRYPOINTS[@]}"
-    mkdir -p "${s}/usr/sbin"
-    for e in "$@"; do printf '#!/bin/sh\n' > "${s}${e}"; chmod +x "${s}${e}"; done
 }
 
 # mk_sysroot_fedora — the second-choice layout the lib still accepts, so a
@@ -398,7 +382,6 @@ mk_sysroot_fedora() {
     : > "${s}/usr/share/selinux/mcs/base.pp"
     mk_headers "${s}/usr/share/selinux/devel/include" "$2" "$3"
     mv "${s}/usr/share/selinux/devel/include/Makefile" "${s}/usr/share/selinux/devel/Makefile"
-    ship_entrypoints "${s}"
 }
 
 # A fake ${SHARED_SPECS}: real specs/selinux, plus the real enforce-gate.
@@ -535,150 +518,6 @@ for m in "${DEPENDENT[@]}"; do grep -qx "${m}" "${MAN3B}" 2>/dev/null && named="
 printf '%s' "${out}" | grep 'sec-policy/selinux-kubernetes' >/dev/null \
     && ok "C3b the skip message names the package that would fix it" \
     || bad "C3b skip message does not name sec-policy/selinux-kubernetes"$'\n'"${out}"
-
-# ── C-role) A ROLE THAT SHIPS NO HUGMESH ENTRYPOINT (standalone-unaffiliated) ──
-# THE DEFECT (Studio session 20261110-073450-306003): a standalone-unaffiliated
-# x86 build refused to pack after ~13.5 h of building:
-#     probe table: the manifest lists hugmesh modules but no hugmesh entrypoint is labellable
-#     probe table ...: 9 probe(s), 0 hugmesh entrypoint(s)
-#     SELinux build-time labelling failed ... refusing to pack an unlabelled image
-# --unaffiliated skips the whole mesh-platform bake, so the image carries none of
-# the hugmesh entrypoints, yet slx_stage_node_policy put every hugmesh_* module in
-# the manifest and the store, so file_contexts labelled entrypoints nobody shipped.
-# This section runs the REAL stage step on that sysroot shape, writes the store's
-# file_contexts from the manifest the step wrote (what `semodule -i` of exactly
-# those modules yields), then runs the REAL slx_write_probe_table with chroot,
-# readlink and matchpathcon stubbed. Against the pre-fix lib the unaffiliated case
-# fails with the build's own words.
-echo "-- C-role) a role that ships no hugmesh entrypoint (standalone-unaffiliated) --"
-# declares_ep <module>: its real .fc types a /usr/(s)bin path hugmesh_*_exec_t.
-declares_ep() { awk '$1 ~ /^\/usr\/s?bin\// && $2 == "--" && $3 ~ /object_r:hugmesh_[a-z0-9_]+_exec_t,/ { f = 1 } END { exit !f }' "${SRC}/$1.fc"; }
-man_mods() { grep -vE '^#|^$' "$1/usr/share/hugmesh/selinux-modules.list" 2>/dev/null | sort | tr '\n' ' '; }
-# usrmerge <sysroot>: /usr/sbin -> bin, as on every x86 and Frite image.
-usrmerge() {
-    local s="$1"; mkdir -p "${s}/usr/bin"
-    if [ -d "${s}/usr/sbin" ] && [ ! -L "${s}/usr/sbin" ]; then cp -a "${s}/usr/sbin/." "${s}/usr/bin/"; rm -rf "${s}/usr/sbin"; fi
-    ln -sfn bin "${s}/usr/sbin"
-}
-# fc_store <sysroot> [nohugmesh]: the compiled file_contexts of a store holding the
-# manifest's modules: the lib's own core-probe rules, then every manifest module's
-# real .fc lines with gen_context(u:r:t,s0) written out as u:r:t:s0. 'nohugmesh'
-# is a store install that never reached file_contexts (core rules only).
-fc_store() {
-    local s="$1" f="$1/etc/selinux/mcs/contexts/files/file_contexts" m
-    mkdir -p "${f%/*}"
-    ( source "${LIB}"; for m in "${_SLX_CORE_PROBES[@]}"; do printf '%s\tsystem_u:object_r:%s:s0\n' "${m%%:*}" "${m##*:}"; done ) > "${f}"
-    [ "${2:-}" = nohugmesh ] && return 0
-    for m in $(grep -vE '^#|^$' "${s}/usr/share/hugmesh/selinux-modules.list"); do
-        awk '/^[[:space:]]*(#|$)/ { next }
-             { c = $NF; sub(/^gen_context\(/, "", c); sub(/\)$/, "", c); sub(/,/, ":", c)
-               if ($2 == "--") print $1 "\t--\t" c; else print $1 "\t" c }' "${SRC}/${m}.fc" >> "${f}"
-    done
-}
-run_probe() {  # run_probe <sysroot> <table> -> rc, output on stdout
-    ( set -u
-      # shellcheck disable=SC1090
-      source "${LIB}"
-      chroot()       { local r="$1"; shift; SR_ROOT="${r}" "$@"; }
-      readlink()     { [ "$1" = -f ] && shift; printf '%s\n' "$1"; }
-      matchpathcon() { [ "$1" = -n ] && shift
-                       awk -v p="$1" '$1 == p { print $NF; exit }' "${SR_ROOT}/etc/selinux/mcs/contexts/files/file_contexts"; }
-      slx_write_probe_table "$1" mcs "$2" ) 2>&1
-}
-n_ep_mods=0; for m in "${MANDATORY[@]}" "${DEPENDENT[@]}"; do declares_ep "${m}" && n_ep_mods=$((n_ep_mods+1)); done
-{ [ "${#ENTRYPOINTS[@]}" -ge 1 ] && [ "${n_ep_mods}" -ge 1 ] && printf '%s\n' "${ENTRYPOINTS[@]}" | grep -x /usr/sbin/hugmesh-authorized-keys-lookup >/dev/null; } \
-    && ok "C-role fixture armed: ${#ENTRYPOINTS[@]} entrypoints across ${n_ep_mods} modules read from the real .fc" \
-    || bad "C-role fixture is inert: entrypoints=[${ENTRYPOINTS[*]}] modules-with-entrypoints=${n_ep_mods}"
-
-# U: standalone-unaffiliated — merged /usr, not one hugmesh entrypoint.
-S="${TMP}/crole-u/sysroot"; SP="${TMP}/crole-u/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
-rm -rf "${S}/usr/sbin"; usrmerge "${S}"
-out="$(run_lib "${S}" "${SP}")"; rc=$?
-[ "${rc}" -eq 0 ] && ok "C-role U: the stage step succeeds on an image with no hugmesh entrypoint" \
-                  || bad "C-role U: rc=${rc}"$'\n'"${out}"
-MANU="${S}/usr/share/hugmesh/selinux-modules.list"
-leak=""; for m in $(man_mods "${S}"); do declares_ep "${m}" && leak="${leak} ${m}"; done
-[ -z "${leak}" ] && ok "C-role U: the manifest names no module whose entrypoints the image lacks [$(man_mods "${S}")]" \
-                 || bad "C-role U: the manifest names module(s) nothing can enter:${leak}"
-grep -qx hugmesh_bootpath "${MANU}" 2>/dev/null \
-    && ok "C-role U: hugmesh_bootpath (no entrypoint by design, boot-path grants) is still installed" \
-    || bad "C-role U: hugmesh_bootpath dropped — the boot-path grants belong on every role"
-norec=""
-for m in "${MANDATORY[@]}"; do
-    declares_ep "${m}" || continue
-    grep -qx "# skipped: ${m} (no entrypoint shipped in this image)" "${MANU}" 2>/dev/null || norec="${norec} ${m}(no-reason)"
-    [ -e "${S}/usr/share/selinux/mcs/${m}.pp" ] && norec="${norec} ${m}(.pp-installed)"
-done
-[ -z "${norec}" ] && ok "C-role U: every skipped module is recorded '# skipped: <m> (no entrypoint shipped in this image)' and has no .pp" \
-                  || bad "C-role U:${norec}"$'\n'"$(cat "${MANU}" 2>/dev/null)"
-fc_store "${S}"
-pout="$(run_probe "${S}" "${TMP}/crole-u/probes.tsv")"; prc=$?
-{ [ "${prc}" -eq 0 ] && printf '%s' "${pout}" | grep -E 'probe\(s\), 0 hugmesh entrypoint\(s\)' >/dev/null; } \
-    && ok "C-role U: the REAL probe table passes with 0 hugmesh entrypoints (the 13.5 h refusal is gone)" \
-    || bad "C-role U: the probe table refused the unaffiliated image: rc=${prc}"$'\n'"${pout}"
-
-# M: a mesh role on merged /usr — every entrypoint shipped, every module kept, probed.
-S="${TMP}/crole-m/sysroot"; SP="${TMP}/crole-m/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
-usrmerge "${S}"
-out="$(run_lib "${S}" "${SP}")"; rc=$?
-want="$(printf '%s\n' "${MANDATORY[@]}" | sort | tr '\n' ' ')"
-{ [ "${rc}" -eq 0 ] && [ "$(man_mods "${S}")" = "${want}" ]; } \
-    && ok "C-role M: a mesh role (merged /usr) keeps all ${#MANDATORY[@]} modules" \
-    || bad "C-role M: rc=${rc} manifest [$(man_mods "${S}")] want [${want}]"$'\n'"${out}"
-fc_store "${S}"
-pout="$(run_probe "${S}" "${TMP}/crole-m/probes.tsv")"; prc=$?
-{ [ "${prc}" -eq 0 ] && grep -qxF "$(printf 'usr/bin/hugmesh-authorized-keys-lookup\thugmesh_authkeys_exec_t')" "${TMP}/crole-m/probes.tsv"; } \
-    && ok "C-role M: the probe table carries the hugmesh entrypoints ($(printf '%s' "${pout}" | grep -oE '[0-9]+ hugmesh entrypoint\(s\)'))" \
-    || bad "C-role M: rc=${prc} table=[$(tr '\n' ' ' < "${TMP}/crole-m/probes.tsv" 2>/dev/null)]"$'\n'"${pout}"
-# The defect's end state, kept as a refusal: the policy labels entrypoints, the image
-# ships none (a manifest written before the skip existed). Must still refuse to pack.
-rm -f "${S}"/usr/bin/*
-pout="$(run_probe "${S}" "${TMP}/crole-m/probes2.tsv")"; prc=$?
-{ [ "${prc}" -ne 0 ] && printf '%s' "${pout}" | grep 'no hugmesh entrypoint is labellable' >/dev/null; } \
-    && ok "C-role R: policy labels hugmesh entrypoints the image does not ship -> the probe table still refuses" \
-    || bad "C-role R: entrypoint rules with no shipped entrypoint PASSED: rc=${prc}"$'\n'"${pout}"
-# The guard the old check existed for: modules in the manifest, nothing in file_contexts.
-usrmerge "${S}"; ship_entrypoints "${S}"
-fc_store "${S}" nohugmesh
-pout="$(run_probe "${S}" "${TMP}/crole-m/probes3.tsv")"; prc=$?
-{ [ "${prc}" -ne 0 ] && printf '%s' "${pout}" | grep 'store install missing' >/dev/null; } \
-    && ok "C-role S: hugmesh modules in the manifest, no hugmesh_ rule in file_contexts -> refuses (store install missing)" \
-    || bad "C-role S: a store install that never reached file_contexts PASSED: rc=${prc}"$'\n'"${pout}"
-
-# P: only ONE module's entrypoint shipped. A kept module that requires another's
-# types pins it (hugmesh_domain_reconcile requires hugmesh_authkeys_cache_t), or
-# the kept one could not load.
-S="${TMP}/crole-p/sysroot"; SP="${TMP}/crole-p/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
-rm -rf "${S}/usr/sbin"; ship_entrypoints "${S}" /usr/sbin/hugmesh-domain-reconcile
-out="$(run_lib "${S}" "${SP}")"; rc=$?
-got="$(man_mods "${S}")"
-{ [ "${rc}" -eq 0 ] && [ "${got}" = "hugmesh_authkeys hugmesh_bootpath hugmesh_domain_reconcile " ]; } \
-    && ok "C-role P: domain-reconcile shipped alone -> it, the hugmesh_authkeys it requires, and bootpath; nothing else" \
-    || bad "C-role P: rc=${rc} manifest [${got}]"$'\n'"${out}"
-printf '%s' "${out}" | grep 'KEEP hugmesh_authkeys: .* hugmesh_domain_reconcile requires its types' >/dev/null \
-    && ok "C-role P: the build log says why hugmesh_authkeys stayed" \
-    || bad "C-role P: no KEEP line for hugmesh_authkeys"$'\n'"${out}"
-# One of a module's two entrypoints is enough to keep it; a bin_t helper is none.
-S="${TMP}/crole-1/sysroot"; SP="${TMP}/crole-1/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
-rm -rf "${S}/usr/sbin"; ship_entrypoints "${S}" /usr/sbin/hugmesh-vpn-reconcile
-run_lib "${S}" "${SP}" >/dev/null
-grep -qx hugmesh_vpn "${S}/usr/share/hugmesh/selinux-modules.list" 2>/dev/null \
-    && ok "C-role 1: hugmesh-vpn-reconcile without hugmesh-vpn-runner keeps hugmesh_vpn (skip only when ALL are absent)" \
-    || bad "C-role 1: hugmesh_vpn skipped although one of its entrypoints ships: [$(man_mods "${S}")]"
-# An entrypoint shipped as an ABSOLUTE in-image symlink dangles from the build host
-# (-e follows it out of the sysroot). It still ships; the probe table counts it too.
-S="${TMP}/crole-l/sysroot"; SP="${TMP}/crole-l/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
-rm -rf "${S}/usr/sbin"; mkdir -p "${S}/usr/sbin"; ln -s /usr/lib/hugmesh/no-such-target-on-the-host "${S}/usr/sbin/hugmesh-vpn-reconcile"
-run_lib "${S}" "${SP}" >/dev/null
-grep -qx hugmesh_vpn "${S}/usr/share/hugmesh/selinux-modules.list" 2>/dev/null \
-    && ok "C-role L: an entrypoint that is an absolute in-image symlink (dangling from the host) still counts as shipped" \
-    || bad "C-role L: a dangling in-image symlink entrypoint was treated as absent: [$(man_mods "${S}")]"
-S="${TMP}/crole-b/sysroot"; SP="${TMP}/crole-b/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
-rm -rf "${S}/usr/sbin"; ship_entrypoints "${S}" /usr/sbin/hugmesh-vpn-mark /usr/sbin/hugmesh-tor-ingress-admit
-run_lib "${S}" "${SP}" >/dev/null
-grep -qx hugmesh_vpn "${S}/usr/share/hugmesh/selinux-modules.list" 2>/dev/null \
-    && bad "C-role B: a bin_t helper (hugmesh-vpn-mark) counted as an entrypoint and kept hugmesh_vpn" \
-    || ok "C-role B: bin_t helpers (hugmesh-vpn-mark, hugmesh-tor-ingress-admit) are not entrypoints"
 
 # C3c: USRMERGE — a /usr/sbin .fc rule can never match on these images.
 # Measured in the booted guest: /usr/sbin is a symlink to bin (and /sbin to

@@ -1,10 +1,17 @@
 # Superadmin go-live wizard
 
-The go-live wizard has one shared driver and a registry of six providers:
-bring-your-own-domain, cloudflare-tunnel, DuckDNS/Cloudflare-DDNS, tailscale-funnel,
-router-portforward and tor-onion. You can run it from the command line, the console
-menu or the Studio. The two server builders bake it into the image. What is not done yet
-is listed under [Deferred](#deferred).
+> **Status: v1 consolidated.** One architecture: a shared driver, a provider registry,
+> **three front-ends** (CLI, ncurses console menu, Studio GUI wizard) and **all six
+> providers implemented end to end**: bring-your-own-domain, cloudflare-tunnel,
+> DuckDNS/Cloudflare-DDNS, tailscale-funnel, router-portforward and tor-onion. The two
+> server builders **bake** the mechanism on-image, and a **console** menu and a
+> **Studio** menu entry surface it. What is still deferred is listed in
+> [Deferred](#deferred).
+>
+> *(This page is the single canonical go-live reference. It absorbed the former
+> `docs/GO-LIVE.md`. The superseded #286 engine (`scripts/go-live.sh`,
+> `scripts/golive-providers.conf`, `scripts/go-live-menu.sh`) and its doc were removed
+> once their wins were ported onto this driver.)*
 
 The go-live wizard is the **human-facing effector of the existing `RELEASE_STATE`
 mechanism**. It does *not* reimplement the internal-vs-public posture switch. It
@@ -600,7 +607,7 @@ These are **done** and no longer deferred:
 - ✅ **Console and Studio menu entries** — a "Go Live…" tray action in Studio and the
   on-device `hugmesh-go-live-menu` console face.
 - ✅ **The web front-end, done differently from the other three.** admin-bff's web
-  console cannot call the driver directly, because it
+  console (merged, admin-bff-api PR #200) cannot call the driver directly, because it
   runs in a pod and not on the host. It records a signed intent.
   `hugmesh-go-live-reconcile` (see [Web-UI effector](#web-ui-effector-item-6-4-interface-parity)
   below) is the thin host-side piece that turns that intent into the same driver

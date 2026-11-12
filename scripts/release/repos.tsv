@@ -17,9 +17,7 @@
 # mirrors  optional, comma-separated: what a STABLE version bump moves besides the version
 #          file (the bump PR into release/X.Y, and main's next-beta PR). A path names
 #          another version file (a package.json also moves its package-lock.json);
-#          <file>:Version is a "**Version X.Y.Z**" line; <file>:currently is every
-#          "currently `X.Y.Z`" and <file>:jar every "target/<artifact>-X.Y.Z.jar" in it
-#          (each refuses the bump when the file has none); <file>:heading is a new
+#          <file>:Version is a "**Version X.Y.Z**" line; <file>:heading is a new
 #          "## X.Y.Z" changelog heading (stable only, prose left to a human);
 #          gateway-pin is the PINNED_GATEWAY_IMAGE / GATEWAY_IMAGE_PIN in the workflow.
 #          Every pom's own version, <parent>, net.hugmesh dependencies and
@@ -37,7 +35,7 @@
 6|hugmesh-pki-gateway|img|VERSION|v|release.yml|hugmesh-pki-gateway|gateway-pin
 7|hugmesh-admin-bff-api|img|pom.xml|v|release.yml|hugmesh-admin-bff-api
 7|hugmesh-user-bff-api|img|pom.xml|v|release.yml|hugmesh-user-bff-api
-7|hugmesh-federation-api|img|pom.xml|v|release.yml|hugmesh-federation-api|README.md:currently,README.md:jar
+7|hugmesh-federation-api|img|pom.xml|v|release.yml|hugmesh-federation-api
 7|hugmesh-mod-bff-api|img|pom.xml|v|release.yml|hugmesh-mod-bff-api
 7|hugmesh-forum-bff-api|img|pom.xml|v|release.yml|hugmesh-forum-bff-api
 7|hugmesh-wiki-bff-api|img|pom.xml|v|release.yml|hugmesh-wiki-bff-api

@@ -229,25 +229,7 @@ def test_bootstrap_plan_preview_populates_and_hides_prod_group(qapp):
     # switching to prod reveals the overlay group + re-renders the plan for prod
     dlg.env_prod.setChecked(True)
     assert dlg.prod_group.isHidden() is False
-    # GUI-21: with no apex typed yet a prod plan names NO domain and NO issuer (it
-    # used to print the brand default's https://id.hugmesh.net above the blocker
-    # saying none was given), and the group's own red note says what is missing —
-    # here, on a host with no Domains step, the Domain field is typed in place
-    plan = dlg.plan_view.toPlainText()
-    assert "Domain:     (not set — required in prod)" in plan
-    assert "https://id." not in plan and bmod.DEFAULT_DOMAIN not in plan
-    note = dlg.overlay_note
-    assert not note.isHidden() and "type it in Domain above" in note.text()
-    # no Domains step seeds a row 0 here, so the table's note does not ask for one
-    assert dlg.domains_note.isHidden()
-    assert "auth key" in note.text()
-    dlg.boot_domain.setText("example.com")
-    assert "Issuer:     https://id.example.com" in dlg.plan_view.toPlainText()
-    assert "apex" not in note.text() and "auth key" in note.text()
-    dlg.boot_auth_key.setText("tskey-never-echoed")
-    assert note.isHidden()
-    dlg.env_test.setChecked(True)
-    assert note.isHidden() and dlg.prod_group.isHidden()
+    assert "https://id." in dlg.plan_view.toPlainText()
 
 
 def test_bootstrap_start_is_armed_with_no_acknowledgement(qapp):

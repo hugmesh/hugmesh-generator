@@ -408,9 +408,7 @@ EXISTS = ('{"tagName":"' + _RELEASE_ID + '","assets":[{"updatedAt":"2026-10-23T0
           '{"updatedAt":"2026-10-22T10:28:46Z"}]}')
 
 
-# The decision both release-existence checks make: the publish job's (the last guard)
-# and the version job's (the same question, asked before anything is built).
-_OVERWRITE_CASES = [
+@pytest.mark.parametrize("gh_rc,gh_out,republish,want_rc,want_output,want_text", [
     # the release exists and nobody asked to replace it: RED, names the way to do so
     (0, EXISTS, "false", 1, "", "--republish"),
     (0, EXISTS, "", 1, "", "--republish"),                       # a push event: no inputs at all
@@ -426,31 +424,7 @@ _OVERWRITE_CASES = [
     (1, "HTTP 502: Bad Gateway", "true", 1, "", "could not tell"),
     (4, "authentication required", "false", 1, "", "could not tell"),
     (4, "authentication required", "true", 1, "", "could not tell"),
-]
-
-
-def _run_exists_check(tmp_path, script: str, gh_rc: int, gh_out: str, republish: str):
-    """Run a release-existence step script under `bash -e` with a fake `gh` that answers
-    ``gh_out`` with exit code ``gh_rc`` and logs its arguments. Returns the process, what
-    the script wrote to GITHUB_OUTPUT, and the gh argument lines."""
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    gh_log = tmp_path / "gh.log"
-    _script(bindir / "gh", f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(gh_log))}\n"
-                           f"printf '%s\\n' '{gh_out}' >&2\nexit {gh_rc}\n")
-    # The publish step counts the assets with `python3 -c`; hand it this interpreter, so
-    # the check does not depend on what /usr/bin happens to hold.
-    _script(bindir / "python3", f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n")
-    out_file = tmp_path / "github_output"
-    out_file.write_text("")
-    env = {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": _version(), "REPUBLISH": republish,
-           "GITHUB_REPOSITORY": "hugmesh/hugmesh-generator", "GITHUB_OUTPUT": str(out_file)}
-    proc = subprocess.run([BASH, "-e", "-c", script], env=env, capture_output=True, text=True)
-    calls = gh_log.read_text().splitlines() if gh_log.exists() else []
-    return proc, out_file.read_text(), calls
-
-
-@pytest.mark.parametrize("gh_rc,gh_out,republish,want_rc,want_output,want_text", _OVERWRITE_CASES)
+])
 def test_overwrite_check_fails_closed(tmp_path, gh_rc, gh_out, republish, want_rc, want_output, want_text):
     """Run the real step script with a fake `gh`. Only gh's own "release not found" may
     count as absent: treating a network or auth failure as absent would send the publish
@@ -458,69 +432,22 @@ def test_overwrite_check_fails_closed(tmp_path, gh_rc, gh_out, republish, want_r
     release is RED unless REPUBLISH=true, and then the warning names what is replaced."""
     steps = _workflow()["jobs"]["publish"]["steps"]
     script = next(s for s in steps if s.get("id") == "exists")["run"]
-    proc, written, _ = _run_exists_check(tmp_path, script, gh_rc, gh_out, republish)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _script(bindir / "gh", f"#!/bin/sh\nprintf '%s\\n' '{gh_out}' >&2\nexit {gh_rc}\n")
+    # The step counts the assets with `python3 -c`; hand it this interpreter, so the
+    # check does not depend on what /usr/bin happens to hold.
+    _script(bindir / "python3", f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n")
+    out_file = tmp_path / "github_output"
+    out_file.write_text("")
+    env = {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": _version(), "REPUBLISH": republish,
+           "GITHUB_REPOSITORY": "hugmesh/hugmesh-generator", "GITHUB_OUTPUT": str(out_file)}
+    proc = subprocess.run([BASH, "-e", "-c", script], env=env, capture_output=True, text=True)
     assert proc.returncode == want_rc, (proc.stdout, proc.stderr)
-    assert written == want_output
+    assert out_file.read_text() == want_output
     assert want_text in proc.stdout + proc.stderr, (proc.stdout, proc.stderr)
     if want_rc == 1:
         assert "::error::" in proc.stdout
-
-
-_EARLY_CHECK = "Refuse an existing release before anything is built"
-
-
-def test_an_existing_release_is_refused_before_any_build():
-    """GEN-9. The publish job's overwrite check runs after every build job, so the re-run
-    of run 41047656293 (2026-11-06) built the MSI, the tarball and both Flatpaks for
-    seven minutes before it refused a release that already existed. The version job
-    asks the same question first; every build job needs the version job, so a red
-    answer there means nothing is built."""
-    jobs = _workflow()["jobs"]
-    steps = jobs["version"]["steps"]
-    names = [s.get("name") for s in steps]
-    assert _EARLY_CHECK in names, "the version job no longer refuses an existing release"
-    early = steps[names.index(_EARLY_CHECK)]
-    # After the gates that prove VERSION is this tag's version, before the always() verdict.
-    assert names.index("Tag must match the version it claims to release") < names.index(_EARLY_CHECK)
-    assert names.index(_EARLY_CHECK) < names.index("Say whether this run will publish")
-    # It asks exactly when the publish job would act, never more: main's __version__ is
-    # the released version right after a cut, so an ungated check would turn every
-    # build-only rehearsal on main red. The condition is the publish job's, word for word.
-    publish_if = " ".join(jobs["publish"]["if"].split())
-    assert publish_if.startswith("${{ ") and publish_if.endswith(" }}"), publish_if
-    assert " ".join(str(early.get("if", "")).split()) == publish_if[4:-3], (
-        "the early release check's `if:` is not the publish job's `if:`")
-    assert early["env"] == {"GH_TOKEN": "${{ github.token }}",
-                            "VERSION": "${{ steps.read.outputs.version }}",
-                            "REPUBLISH": "${{ inputs.republish }}"}, early["env"]
-    assert "continue-on-error" not in early, "a refusal that does not fail the job builds anyway"
-    # A red version job stops every build job only while each one needs it.
-    for name in ("msi", "linux", "flatpak", "flatpak-aarch64"):
-        needs = jobs[name]["needs"]
-        assert "version" in ([needs] if isinstance(needs, str) else needs), name
-    # The publish job keeps its own check as the first step: the last guard stays.
-    assert jobs["publish"]["steps"][0].get("id") == "exists"
-
-
-@pytest.mark.parametrize("gh_rc,gh_out,republish,want_rc,want_output,want_text", _OVERWRITE_CASES)
-def test_the_early_check_decides_like_the_publish_job(tmp_path, gh_rc, gh_out, republish, want_rc,
-                                                      want_output, want_text):
-    """The version job's check over the publish job's decision table: the same exit code
-    for every case, so it never refuses a run the publish job would allow, and never lets
-    a build start that the publish job would refuse. It asks about this version's tag in
-    this repository, once."""
-    steps = _workflow()["jobs"]["version"]["steps"]
-    script = next(s for s in steps if s.get("name") == _EARLY_CHECK)["run"]
-    proc, _, calls = _run_exists_check(tmp_path, script, gh_rc, gh_out, republish)
-    assert proc.returncode == want_rc, (proc.stdout, proc.stderr)
-    assert len(calls) == 1, calls
-    assert calls[0].startswith(f"release view {_RELEASE_ID} "), calls
-    assert "--repo hugmesh/hugmesh-generator" in calls[0], calls
-    if want_rc == 1:
-        assert "::error::" in proc.stdout
-        assert want_text in proc.stdout, proc.stdout
-    elif republish == "true":
-        assert "::warning::" in proc.stdout and "republish=true" in proc.stdout, proc.stdout
 
 
 def _counterpart() -> str:

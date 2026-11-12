@@ -28,7 +28,7 @@ from ..styles import muted
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from . import idp_provider
 from ._scroll import scrollable
-from ._widgets import _row, page_intro
+from ._widgets import _row
 
 # idp id -> choice_icons registry name (presentation only; ids stay IDP_CHOICES)
 _IDP_ICONS = {
@@ -76,17 +76,13 @@ class IdpPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Identity provider")
-        # Two lines at most: the wizard header clips the rest mid-sentence (GUI-14). The
-        # per-domain override is the body's first line.
         self.setSubTitle(
-            "Which identity provider will this mesh's services trust? Casdoor "
-            "(built-in) needs nothing from you — read the limits note below before "
-            "choosing another.")
+            "Which identity provider will this mesh's services trust? This is the "
+            "DEFAULT every domain inherits; a domain can choose its own on its "
+            "Identity tab (Domain services step). Casdoor (built-in) needs nothing "
+            "from you — read the limits note below before choosing another.")
         # four cards + the endpoints box + the limits note: scroll, never clip
         lay = scrollable(self)
-        lay.addWidget(page_intro(
-            "This is the DEFAULT every domain inherits; a domain can choose its own on "
-            "its Identity tab (Domain services step)."))
 
         self.group = ChoiceCardGroup(self)
         self._buttons: dict[str, ChoiceCard] = {}

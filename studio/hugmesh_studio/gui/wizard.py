@@ -9,12 +9,10 @@ nextId() flow, and collect_all().
 from __future__ import annotations
 
 import os
-import sys
 
 from .qt import BINDING, QtCore, QtGui, QtWidgets
 from .branding_icon import brand_icon
 from .. import __version__
-from ..core import crashlog
 from ..core.build_driver import BuildDriver
 from ..core.config import ImageConfig, MODE_SKIPPED_PAGES, WIZARD_PAGE_SLUGS
 from ..core.platform_info import detect
@@ -117,16 +115,9 @@ def medium_size(avail) -> "QtCore.QSize":
 
     Pure function of the rect (no display needed) so the clamp is directly testable
     against screens the test host does not have. Measured: 1080p/1440p -> 1040x780,
-    768p laptop -> 1040x706, 1024x600 netbook -> 942x552, 800x800 -> 736x736.
-
-    What a PAGE gets is smaller than the window. The header, the button row and the
-    folded Studio panel come off it, so at 942x552 the page area is 916x405, and at
-    736x736 it is 710x589. Every page's minimumSizeHint must fit 916x405 or Qt lays the
-    page out below its minimum. A tall page scrolls (pages/_scroll.scrollable) instead of
-    asking for more. Measured 2026-11-11: the widest and tallest minimum is WorklistPage
-    at 518x221. SystemPage and ProgressPage used to break this at 410 and 462-671 px
-    (GUI-13). tests/test_wizard_netbook_fit.py measures every registered page against
-    the live window, so read the numbers there, not here."""
+    768p laptop -> 1040x706, 1024x600 netbook -> 942x552, 800x800 -> 736x736 — all
+    of which clear every page's minimumSizeHint (widest: WorklistPage at 518, tallest:
+    ProgressPage at 401)."""
     w, h = _PREFERRED
     return QtCore.QSize(min(w, int(avail.width() * _MARGIN)),
                         min(h, int(avail.height() * _MARGIN)))
@@ -230,10 +221,6 @@ class StudioWizard(QtWidgets.QWizard):
         # by BuildPage's preview (so preview == dispatch), pinned by a RESTART (same
         # record + workdir reused), cleared by ProgressPage at finish.
         self.pending_session_id = None
-        # collect_all()'s re-entrancy guard, and the (page class, exception type) pairs
-        # it has already written to the crash log — both explained in collect_all().
-        self._collecting = False
-        self._collect_failures_reported: set[tuple[str, str]] = set()
         # graphical=True: a build reached from the GUI must elevate through a password
         # DIALOG (sudo -A askpass / pkexec), never a sudo prompt on an invisible terminal.
         self.driver = BuildDriver(self.generator_dir, self.host, graphical=True)
@@ -380,61 +367,16 @@ class StudioWizard(QtWidgets.QWizard):
         """Pull values out of every VISITED page into self.cfg. Only visited pages are
         collected — an unvisited page's widgets hold construction defaults, so collecting
         them would wipe loaded/earlier values (this also lets Domains/Users be collected,
-        which the old blanket exclusion silently dropped on save + the mesh build path).
-
-        ONE PASS, NEVER NESTED. A validatePage this calls can call collect_all() again:
-        BuildPage.validatePage -> BuildPage._preview -> collect_all(), and the Review page
-        is a VISITED page while it is on screen. Unguarded, that recursed until Python's
-        limit: hundreds of nested passes per Continue or "Refresh preview", every
-        visited page re-committed at each level, and the deepest level dying part-way
-        through a page (its fields half written) with a RecursionError the handler below
-        then swallowed. A call made while a pass is running now returns at once: the
-        running pass is already harvesting every visited page, in order. The flag is
-        cleared in ``finally`` so an interrupted pass cannot leave every later collect
-        switched off.
-
-        A page whose validatePage raises still does not stop the others (an exception
-        that escapes a Qt slot aborts the process under PyQt6), but it is no longer
-        silent: _report_collect_failure records it through the crash log."""
-        if self._collecting:
-            return
-        self._collecting = True
-        try:
-            for pid in self.pageIds():
-                if not self.hasVisitedPage(pid):
-                    continue
-                p = self.page(pid)
-                if hasattr(p, "validatePage"):
-                    try:
-                        p.validatePage()
-                    except Exception as exc:        # noqa: BLE001 — reported, see above
-                        self._report_collect_failure(p, exc)
-        finally:
-            self._collecting = False
-
-    def _report_collect_failure(self, page, exc) -> None:
-        """Make a validatePage failure that collect_all() swallowed visible: its full
-        traceback goes through ``core.crashlog`` (the crash dir under the Studio state
-        dir) and one line naming the page, the exception type and that file goes to
-        stderr.
-
-        Once per (page class, exception type) per wizard: collect_all() runs on every
-        Review-page option edit, and the crash dir keeps only its newest files, so a page
-        that raised on each edit would otherwise evict the real crash logs beside it.
-        Never raises — it runs inside the handler that keeps the pass going."""
-        try:
-            key = (type(page).__name__, type(exc).__name__)
-            if key in self._collect_failures_reported:
-                return
-            self._collect_failures_reported.add(key)
-            path = crashlog.write(
-                type(exc), exc, exc.__traceback__,
-                context=f"swallowed by StudioWizard.collect_all ({key[0]}.validatePage)")
-            sys.stderr.write(
-                f"[hugmesh-studio] collect_all: {key[0]}.validatePage raised {key[1]}"
-                + (f"; traceback in {path}" if path else "") + "\n")
-        except Exception:                           # noqa: BLE001 — see docstring
-            pass
+        which the old blanket exclusion silently dropped on save + the mesh build path)."""
+        for pid in self.pageIds():
+            if not self.hasVisitedPage(pid):
+                continue
+            p = self.page(pid)
+            if hasattr(p, "validatePage"):
+                try:
+                    p.validatePage()
+                except Exception:
+                    pass
 
     def load_config(self, path):
         """Load EITHER a flat single-image config OR a worklist envelope through the one

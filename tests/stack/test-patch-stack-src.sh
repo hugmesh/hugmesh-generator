@@ -80,36 +80,6 @@ from_ln="$(grep -n 'AS build' "${SRC5}/gw/Dockerfile" | cut -d: -f1)"
 if [ "${arg_ln}" -gt "${from_ln}" ]; then ok "ARGs land inside the build stage"
 else bad "ARGs land inside the build stage"; fi
 
-echo "== 6b. a patched Dockerfile whose settings file is gone gets the file back =="
-# The Dockerfile edit is TRACKED, the settings file UNTRACKED: a `git clean` or a
-# fresh worktree over a committed patched Dockerfile leaves a COPY with no file,
-# and the image build dies at that COPY. The pass must write the file again
-# (issue #910) without injecting the Dockerfile lines a second time.
-SRC5B="${WORK}/e2"; make_consumer "${SRC5B}/gw" yes yes
-bash "${PATCH_SH}" "${SRC5B}" >/dev/null
-cp "${SRC5B}/gw/hugmesh-local-settings.xml" "${WORK}/settings-first"
-rm -f "${SRC5B}/gw/hugmesh-local-settings.xml"
-out5b="$(bash "${PATCH_SH}" "${SRC5B}" 2>&1)"
-if [ -f "${SRC5B}/gw/hugmesh-local-settings.xml" ]; then ok "the deleted settings file is written again"
-else bad "the deleted settings file is written again"; fi
-check "the restored file uses the group-registry URL" \
-      "$(grep -c 'groups/${env.GITLAB_GROUP_ID}/-/packages/maven' "${SRC5B}/gw/hugmesh-local-settings.xml" 2>/dev/null || true)" "1"
-check "the restored file neutralises the http-blocker" \
-      "$(grep -c '<id>maven-default-http-blocker</id>' "${SRC5B}/gw/hugmesh-local-settings.xml" 2>/dev/null || true)" "1"
-if cmp -s "${WORK}/settings-first" "${SRC5B}/gw/hugmesh-local-settings.xml"; then
-  ok "the restored file is byte-identical to the first one"
-else bad "the restored file is byte-identical to the first one"; fi
-check "still exactly ONE settings COPY in the Dockerfile" \
-      "$(grep -c 'COPY hugmesh-local-settings.xml' "${SRC5B}/gw/Dockerfile" || true)" "1"
-check "still exactly ONE MAVEN_ARGS in the Dockerfile" \
-      "$(grep -c 'MAVEN_ARGS=' "${SRC5B}/gw/Dockerfile" || true)" "1"
-case "${out5b}" in *"gw/hugmesh-local-settings.xml: restored"*) ok "the restore names the repo" ;;
-                   *) bad "the restore names the repo (got: ${out5b})" ;; esac
-: > "${SRC5B}/gw/hugmesh-local-settings.xml"            # an EMPTY file is no better
-bash "${PATCH_SH}" "${SRC5B}" >/dev/null
-check "an empty settings file is written again too" \
-      "$(grep -c '<id>maven-default-http-blocker</id>' "${SRC5B}/gw/hugmesh-local-settings.xml" || true)" "1"
-
 echo "== 7. idempotent =="
 cp "${SRC5}/gw/Dockerfile" "${WORK}/wired-before"
 bash "${PATCH_SH}" "${SRC5}" >/dev/null

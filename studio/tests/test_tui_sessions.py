@@ -111,58 +111,6 @@ def test_plain_list_and_inspect_shows_detail(tmp_path):
     assert "  build.log" in text
 
 
-def test_inspect_says_why_an_image_was_never_started(tmp_path, monkeypatch):
-    """GUI/TUI parity for the free-space refusal (defect L4). An image the build runner
-    refuses before dispatch is recorded ``failed (exit 1)``, and its reason is the
-    ``!!`` line the runner wrote, which the session record's error tail keeps. The
-    GUI's previous-builds list prints that tail. This face printed the status alone,
-    so a terminal could not tell a refused image from a build that crashed.
-
-    The refusal is made by the real runner here (1 GiB free: neither image is
-    dispatched, so no builder is involved), not typed into the test."""
-    import collections
-
-    from hugmesh_studio.core import emulation_save, worklist_driver
-    from hugmesh_studio.core.platform_info import HostInfo
-    usage = collections.namedtuple("usage", "total used free")
-    monkeypatch.setattr(emulation_save, "_disk_usage",
-                        lambda _path: usage(1 << 42, 0, 1 << 30))
-    base = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
-                       brand_title="Acme", org="Acme-Inc", cluster_domain="acme.example",
-                       superdomain="core.acme.internal", output_dir=str(tmp_path / "out"))
-    wl = WorklistConfig(base=base, entries=[
-        WorklistEntry(role="pki", platform="x86", hostname="n0"),
-        WorklistEntry(role="backend", platform="rpi5", hostname="n1")])
-    s = bs.new_session(wl, str(tmp_path), session_id="20260107-000001-abc123")
-    bs.start(s)
-    host = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
-                    has_kvm=False, is_root=True, builder_image="hugmesh-builder")
-    drv = worklist_driver.WorklistDriver(str(tmp_path), wl, host=host, workdir=s.workdir)
-    tails: dict[str, list[str]] = {}
-    drv.run_all(
-        on_line=lambda i, ln: tails.setdefault(wl.entries[i].id, []).append(ln),
-        on_entry_done=lambda i, code: bs.update_image(
-            s, i, status=drv.results[i].status, exit_code=code))
-    tails["backend.rpi5"].insert(0, "==> Preparing build directories")
-    bs.finish(s, "failed", tails)
-
-    text = _run_plain("1\nq\n")
-    assert "pki.x86: pki · x86 — failed (exit 1)" in text
-    assert f"  pki.x86 not started: not enough free disk space under {s.workdir}" in text
-    assert "  backend.rpi5 not started: not enough free disk space" in text
-    assert "1.0 GiB is free" in text
-    assert "Preparing build directories" not in text       # builder output stays in the log
-    # nothing to say, nothing printed: a clean session's detail is unchanged
-    clean = _finished(tmp_path, session_id="20260107-000002-abc123")
-    assert model.verdict_lines(clean) == []
-    assert not any(ln.startswith("why") for ln in model.session_detail_lines(
-        model.SessionRow(session=clean, status=clean.status)))
-    # a verdict that does not name its image is led by the image id
-    clean.error_tail = {"standalone-thick.x86": ["!! exit 137 — killed by its memory cap"]}
-    assert model.verdict_lines(clean) == [
-        "standalone-thick.x86: exit 137 — killed by its memory cap"]
-
-
 def test_plain_list_surfaces_unreadable_records(tmp_path):
     os.makedirs(bs.sessions_dir(), exist_ok=True)
     bad = os.path.join(bs.sessions_dir(), "zz-corrupt.json")

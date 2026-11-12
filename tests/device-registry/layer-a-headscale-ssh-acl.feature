@@ -6,15 +6,15 @@
 # template + a synthetic signed-export body using the REAL renderer functions
 # (sourced from specs/usr/sbin/gen-headscale-policy.sh), then evaluates each
 # scenario against headscale's documented SSH semantics: SSH is DEFAULT-DENY and
-# ONLY the listed `ssh[]` accepts apply. Every rule's src is tag:superadmin until
-# per-operator identities land (see the Background note).
+# ONLY the listed `ssh[]` accepts apply. The src side is ADVISORY until OIDC users
+# land (see the Background note) — these scenarios assert the DESTINATION cut +
+# the default-deny that ship NOW, which is the real Layer-A hardening.
 #
 # NOT covered here (needs a LIVE headscale + a running admin-bff /export — see the
 # NEEDS-HEADSCALE matrix in the PR body): that :22 is genuinely unreachable on a
 # booted node for a denied edge. That a real headscale REJECTS a self-advertised
 # security tag (because it has no owner — a forced tag does NOT override a
-# different advertised one), and that only the force-tagged superadmin gets a
-# Tailscale SSH session, are proven against the pinned headscale by
+# different advertised one) is proven against the pinned headscale by
 # test-headscale-security-tag-live.sh.
 
 Feature: Layer-A headscale SSH ACL is generated from the signed device-license export
@@ -24,24 +24,16 @@ Feature: Layer-A headscale SSH ACL is generated from the signed device-license e
     And the export contains ONLY explicit ADMIN licenses (superadmin/core nodes are absent by design)
     And the headscale policy is rendered from policy.hujson.tmpl by gen-headscale-policy.sh
     And headscale SSH is default-deny — only the rendered ssh[] accepts apply
-    # SOURCE SIDE (FIX-OIDC-USERS deferred): there is no per-operator tailnet
-    # identity until per-tenant Casdoor->headscale OIDC users land, so every
-    # generated rule's src is tag:superadmin. It is NEVER tag:hugmesh: Tailscale SSH
-    # answers :22 itself (the device's sshd key checks are not on that path), and
-    # every node holding a pre-auth key self-applies tag:hugmesh.
+    # SOURCE-SIDE CAVEAT (FIX-OIDC-USERS deferred): every generated edge uses the
+    # advisory src tag:hugmesh until per-tenant Casdoor->headscale OIDC users
+    # land; the load-bearing per-operator SOURCE authenticity + per-key %f pinning
+    # stay in Layer-B. These scenarios assert the DESTINATION cut + default-deny.
 
-  Scenario: A licensed node still gets its export edge, sourced from tag:superadmin
+  Scenario: A licensed admin operator reaches a licensed own-domain node on :22 (ALLOW)
     Given node "node-a" (machine_key_fp "fpA") appears in the export with a DEVICE-LICENSE for operator "alice"
     When the policy is rendered
     Then there is exactly one ssh accept whose dst is the server-forced tag:dev_<hash(fpA)>
-    And its src is tag:superadmin and its users list is the node-local privileged ssh account (not the operator name)
-
-  Scenario: A member (tag:hugmesh, a role tag) reaches no node on :22, licensed or not (DENY)
-    When the policy is rendered
-    Then no ssh rule names tag:hugmesh, a role tag, autogroup:member or "*" as its src
-    And a licensed admin who is only a member gets no Tailscale SSH session until operator identities land
-    # proven live (a member with a member-to-member :22 accept is REFUSED, the
-    # force-tagged superadmin gets a session) by test-headscale-security-tag-live.sh
+    And its users list is the node-local privileged ssh account (not the operator name)
 
   Scenario: The same admin cannot reach a superadmin/core node on :22 (DENY)
     Given node "core-1" is SUPERADMIN-owned and therefore ABSENT from the export
@@ -69,16 +61,14 @@ Feature: Layer-A headscale SSH ACL is generated from the signed device-license e
 
   Scenario: Non-:22 fleet traffic still rides the CIDR data-plane only (k8s, not SSH)
     When the policy is rendered
-    Then the acls[] keeps the {src:[tag:hugmesh], dst:[10.244.0.0/16:*,10.96.0.0/12:*]} rule
+    Then the acls[] keeps exactly the {src:[tag:hugmesh], dst:[10.244.0.0/16:*,10.96.0.0/12:*]} rule
     And the acls[] contains NO any-to-any tag:hugmesh -> tag:hugmesh:* rule
-    And the only other acl is {src:[tag:superadmin], dst:[tag:hugmesh:22]}, the one way to :22
 
   Scenario: The bootstrap policy already drops the any-to-any :22 hole (pre-export)
     Given the baked policy.bootstrap.hujson applied during provisioning
     Then it has NO any-to-any tag:hugmesh -> tag:hugmesh:* rule
     And it keeps the 10.244/10.96 data-plane rule
-    And it has a single conservative @@TS_SSH_USER@@ ssh accept for the bootstrap window, from tag:superadmin only
-    And its only :22 accept is from tag:superadmin
+    And it has a single conservative @@TS_SSH_USER@@ ssh accept for the bootstrap window
 
   Scenario: Server-forced destination tags are not self-applyable (FIX-SERVERTAG)
     Then tag:superadmin, tag:mesh_<id> and every tag:dev_* are listed in tagOwners with the EMPTY owner list []

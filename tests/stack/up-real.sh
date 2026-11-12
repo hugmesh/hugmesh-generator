@@ -106,8 +106,8 @@ done
 echo "==> Preparing Mastodon database (rails db:prepare)"
 ${COMPOSE} run --rm mastodon-web bundle exec rails db:prepare
 
-echo "==> Starting Mastodon web + sidekiq + streaming + front"
-${COMPOSE} up -d mastodon-web mastodon-sidekiq mastodon-streaming mastodon-front
+echo "==> Starting Mastodon web + sidekiq + streaming"
+${COMPOSE} up -d mastodon-web mastodon-sidekiq mastodon-streaming
 
 # ── 4. Readiness summary ──
 echo "==> Waiting on HTTP endpoints"

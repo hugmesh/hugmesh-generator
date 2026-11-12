@@ -18,8 +18,7 @@
 # run of pages.yml). Nobody writes that file by hand. The publish job below still
 # attaches a `releases.json` to the release (the same shape, plus the signature
 # material) and sends the dispatch when SITE_DISPATCH_TOKEN exists; without the
-# secret, or when GitHub refuses the dispatch (a ::warning::, never a red run), the
-# site catches up within the hour.
+# secret the site catches up within the hour.
 #
 # TRIGGER: workflow_dispatch, plus a `studio-v*` tag. A run on a tag ref is the
 # publish decision; a dispatch on main is a build-only rehearsal.
@@ -38,13 +37,9 @@
 # ticked and the version typed into confirm). A republish replaces every file of the
 # release with new bytes, so every checksum, signature and attestation changes and
 # anyone who downloaded earlier can no longer verify what they have; the release
-# notes and the run summary then say so. The version job asks the same question
-# first ("Refuse an existing release before anything is built"), so a re-run or a
-# dispatch of a version that is already out fails in seconds instead of after seven
-# minutes of builds; the publish job's check stays the last guard. The old green-skip
-# gates (eleven `if:` lines that let a run publish nothing and still pass) are gone:
-# they were deleted by hand on main on 2026-10-22, and a green skip is exactly what
-# nobody notices.
+# notes and the run summary then say so. The old green-skip gates (eleven `if:` lines
+# that let a run publish nothing and still pass) are gone: they were deleted by hand on
+# main on 2026-10-22, and a green skip is exactly what nobody notices.
 #
 # RUNNERS: GITHUB-HOSTED ONLY (operator rule, 2026-10-21). Every download that is
 # published must be built and signed on GitHub's own runners. So every job here names
@@ -172,47 +167,6 @@ jobs:
         run: |
           echo "::error::publish was ticked on $REF, which never publishes. To release: scripts/release-studio.sh <version>, or Actions > Cut a Studio release"
           exit 1
-
-      - name: Refuse an existing release before anything is built
-        # The publish job's "Never overwrite a published release" step is the guard that
-        # counts, but it runs only after the msi, linux and both flatpak jobs. The re-run
-        # of run 41047656293 on 2026-11-06 built for seven minutes and then got
-        # "studio-v0.3.0-beta.3 already exists; nothing was changed". This step asks the
-        # same question before any build starts, and decides the same way: an existing
-        # release is RED unless republish=true, republish=true with no release is RED,
-        # and anything other than gh's own "release not found" is RED, never a guess.
-        #
-        # It runs only when the publish job would run: this `if:` is the publish job's
-        # `if:` word for word. A build-only dispatch, on main or on a tag without
-        # "publish" ticked, never asks. The publish job still asks again at the end,
-        # because a release can appear while the builds run.
-        #
-        # contents: read (the workflow default) is enough to read a release, so this job
-        # stays without a permissions block like every job except publish.
-        if: startsWith(github.ref, 'refs/tags/studio-v') && (github.event_name == 'push' || inputs.publish)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.read.outputs.version }}
-          REPUBLISH: ${{ inputs.republish }}
-        run: |
-          if out=$(gh release view "studio-v$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1); then
-            if [ "$REPUBLISH" = "true" ]; then
-              echo "::warning::release studio-v$VERSION exists and republish=true: the publish job will replace its files, and every checksum, signature and attestation changes"
-            else
-              echo "::error::release studio-v$VERSION already exists; refused before any build ran, nothing was changed. To replace its files on purpose (every checksum changes): scripts/release-studio.sh $VERSION --republish"
-              exit 1
-            fi
-          else
-            case "$out" in
-              *"release not found"*)
-                if [ "$REPUBLISH" = "true" ]; then
-                  echo "::error::republish was requested but release studio-v$VERSION does not exist; run a normal release"
-                  exit 1
-                fi
-                echo "release studio-v$VERSION does not exist yet; this run may publish it" ;;
-              *) echo "::error::could not tell whether release studio-v$VERSION exists: $out"; exit 1 ;;
-            esac
-          fi
 
       - name: Say whether this run will publish
         if: always()
@@ -1332,14 +1286,6 @@ jobs:
         # rebuilds the site's data from the Releases API. GITHUB_TOKEN cannot reach
         # another repository; SITE_DISPATCH_TOKEN is a fine-grained token (or GitHub App
         # token) with Contents: read and write on hugmesh/hugmesh.github.io only.
-        #
-        # NEVER FATAL (2026-11-11). This step runs after the release is published, so its
-        # answer cannot change what was released. It used `curl -fsS`, which turned
-        # GitHub's 403 for SITE_DISPATCH_TOKEN into exit 22: the published
-        # studio-v0.4.4-beta.1 run went red (run 42882326209) and GitHub's reason was
-        # thrown away. Only a 204 counts as sent. Any other answer (a refused or
-        # unapproved token, a GitHub error, no connection) is a ::warning:: that carries
-        # GitHub's own message, and the step stays green.
         env:
           SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
           SITE_REPO: hugmesh/hugmesh.github.io
@@ -1349,29 +1295,10 @@ jobs:
             exit 0
           fi
           payload=$(python3 -c 'import json,os; v=os.environ["VERSION"]; r=os.environ["GITHUB_REPOSITORY"]; t="studio-v"+v; print(json.dumps({"event_type":"releases-updated","client_payload":{"source":r,"kind":"studio","version":v,"tag":t,"releases_json":"https://github.com/%s/releases/download/%s/releases.json"%(r,t)}}))')
-          resp=$(mktemp)
-          rc=0
-          http_code=$(curl -sS -o "$resp" -w '%{http_code}' --max-time 30 -X POST \
+          curl -fsS -X POST \
             -H "Authorization: Bearer $SITE_DISPATCH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/$SITE_REPO/dispatches" \
-            -d "$payload") || rc=$?
-          if [ "$rc" = 0 ] && [ "$http_code" = 204 ]; then
-            echo "sent releases-updated to $SITE_REPO: $payload"
-            exit 0
-          fi
-          why=$(python3 - "$resp" <<'PY'
-          import json, sys
-          raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
-          try:
-              msg = json.loads(raw).get("message") or raw
-          except Exception:
-              msg = raw
-          # One line, escaped for a workflow command: this text lands inside ::warning::.
-          print(" ".join(str(msg).split())[:300].replace("%", "%25"))
-          PY
-          ) || why=""
-          [ "$rc" = 0 ] || why="curl exit $rc${why:+; $why}"
-          echo "::warning::releases-updated dispatch to $SITE_REPO was not accepted (HTTP ${http_code:-000}): ${why:-no response body}. The release is published and unaffected. The site rebuilds releases.json from the Releases API within the hour (pages.yml cron), or now via: gh workflow run pages.yml --repo $SITE_REPO. Do not re-run this workflow for it (a re-run is a republish). A 401, 403 or 404 means SITE_DISPATCH_TOKEN cannot write to $SITE_REPO: re-issue it as a fine-grained token with resource owner hugmesh, only $SITE_REPO, Contents read and write (approved, if the org requires approval)."
-          exit 0
+            -d "$payload"
+          echo "sent releases-updated to $SITE_REPO: $payload"

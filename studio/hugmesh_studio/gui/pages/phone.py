@@ -69,8 +69,9 @@ class PhonePage(QtWidgets.QWizardPage):
         self._running = False
         self.setTitle("MDM phone")
         self.setSubTitle("Flash a USB Pixel with VERIFIED GrapheneOS and enroll it in "
-                         "the mesh — no image build. Dry-run by default; the driver "
-                         "gates every destructive step. Exit closes the Studio.")
+                         "the mesh — no image build. Dry-run by default; every "
+                         "destructive step is gated by the driver itself. This is the "
+                         "end of this path: Exit closes the Studio.")
         self.setFinalPage(True)
         # Pressing the final button here does nothing but close the Studio — no
         # build, no apply, no write, no state commit — so it says so (_widgets:

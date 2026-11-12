@@ -1,12 +1,11 @@
 # test-runner — the ENV=test e2e harness (orchestrator + lean/heavy Job templates +
 # the non-federation akkoma-peer + RBAC + the test-reports PVC).
 #
-# ⚠ ENV=test ONLY. Every builder that bakes the cluster tree PRUNES this app +
-# manifests/test-runner from the baked prod tree (scripts/_prod-gate-lib.sh, called
-# from gate_env_apps), the prod-hygiene Kyverno ClusterPolicy + the runtime PreSync
-# hook REJECT every tier:test resource, and the static prod-hygiene gate FAILS a
-# prod bake that still carries it. So this can never run in prod even if the file
-# survived.
+# ⚠ ENV=test ONLY. The build (build-x86-host-stage4.sh rewrite_prod_image_tags)
+# PRUNES this app + manifests/test-runner from the baked prod tree, the prod-hygiene
+# Kyverno ClusterPolicy + the runtime PreSync hook REJECT every tier:test resource,
+# and the static prod-hygiene gate FAILS a prod bake that still carries it. So this
+# can never run in prod even if the file survived.
 #
 # Wave 99 (LAST) so the harness deploys after every app it tests. The orchestrator
 # then watches readiness and spawns the lean Job (x86 absent) / heavy Job (x86

@@ -79,7 +79,6 @@ from ...core.stage_tracker import StageTracker
 from ...core.worklist_driver import WorklistDriver
 from ._images_mesh import LocalMeshPanel
 from ._widgets import hold_thread, label_finish_as_exit
-from ._scroll import scrollable
 
 # Residual control bytes AFTER strip_ansi() — a bare ESC that formed no complete
 # SGR/CSI sequence, plus BEL/BS/CR/VT/FF (the x86 emerge stream carries CR from its
@@ -420,53 +419,6 @@ class _DetachedLogWindow(QtWidgets.QWidget):
         ev.accept()
 
 
-class _FloorSplitter(QtWidgets.QSplitter):
-    """The tree/log splitter. Its preferred height is its MINIMUM.
-
-    The page lives in a scroll area (pages/_scroll.scrollable). When a word-wrapped
-    label is shown on the page, the content layout has height-for-width. This happens
-    with the saved-mesh banner, the flash progress label or the "flashing cannot work
-    here" note. QScrollArea then sizes the content to the layout's heightForWidth(),
-    and QBoxLayout adds up PREFERRED heights for that. The tree and the log each prefer
-    about 200 px, so the splitter asked for 649 px against a 299 px minimum.
-
-    Measured: after an all-ok mesh run with the banner shown, the content was 941 px
-    tall at EVERY window size. There was a page scrollbar even at 1920x1040, and the log
-    and the Flash group were below the fold. With the splitter preferring its minimum,
-    the content is its real minimum when the window is small and the viewport when it
-    is not. The splitter is the one stretch item, so it still takes all the spare
-    height, as before."""
-
-    def sizeHint(self):
-        return self.minimumSizeHint()
-
-
-class _WrapLabel(QtWidgets.QLabel):
-    """A word-wrapped label whose MINIMUM height is what its text needs at its width.
-
-    Used for the two wrapped labels inside the splitter's panes: the footer under the
-    tree and the watch-it-in-a-terminal help under the log. QSplitter does no
-    height-for-width. It never gives a pane less than the pane's minimumSizeHint, but a
-    wrapped QLabel's minimumSizeHint is computed at a width Qt picks, not the label's
-    real width. So the tree pane's minimum did not include the footer's real lines. With
-    the pane at its minimum, the three-line footer ("mesh manifest written: ...", one
-    key-zip per node) was drawn over the job rows (GUI-13).
-
-    Here the minimum follows heightForWidth(width()). A width change re-asks the layout,
-    so the floor stays right when the window is resized."""
-
-    def minimumSizeHint(self):
-        hint = super().minimumSizeHint()
-        if self.text() and self.width() > 0:
-            hint.setHeight(max(hint.height(), self.heightForWidth(self.width())))
-        return hint
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if event.oldSize().width() != event.size().width():
-            self.updateGeometry()
-
-
 class _Row:
     """The per-image UI + parse state (one worklist entry)."""
 
@@ -558,16 +510,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         # button starts nothing and writes nothing, it only closes the Studio, so it
         # says Exit (_widgets.label_finish_as_exit).
         label_finish_as_exit(self)
-        # The page scrolls (pages/_scroll.py); the tree and the log inside it still
-        # scroll themselves. Its minimum is the total-bar block, the tree's minimum, the
-        # log header and, after a run, the saved-mesh banner, the footer lines and the
-        # Flash group. Before an outer scroll area that came to 462-671 px, in the 405 px
-        # page of the 942x552 netbook window. Qt grew the window past a 600 px screen,
-        # or laid the page out below its minimum and drew the footer over the job rows
-        # (GUI-13). With the scroll area the content keeps its minimum and the page
-        # scrolls. Where the page has room, the content fills the viewport and the
-        # splitter below still takes all the spare height.
-        lay = scrollable(self)
+        lay = QtWidgets.QVBoxLayout(self)
 
         # ── view controls: a single "Configure view" entry point above everything
         # else, so the operator can add/remove columns without hunting for a header
@@ -682,13 +625,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         # per-badge child widgets — a real build has 300+ packages) and keeps every column
         # hidden until a row gives it content.
         self.flag_columns = flag_badges.FlagColumns(self.tree, _FLAG_COLS)
-        # 100, down from 180: the header and about three job rows. The splitter gives
-        # the tree two shares of any spare height, so this is a FLOOR and not its size.
-        # Every pixel of it is page minimum, though. Measured on a finished mesh run (the
-        # Flash group shown, no saved-mesh banner) in the 1040x780 window of a 1080p
-        # screen: 648 px of content at 180, in a 592 px viewport, so the page scrolled.
-        # At 100 the content is 498 px and fits (GUI-13; tests/test_wizard_netbook_fit.py).
-        self.tree.setMinimumHeight(100)
+        self.tree.setMinimumHeight(180)
         # NO setMaximumHeight: the tree is the PRIMARY surface and must grow with the
         # window. It used to be capped at 340px, which (once the stretch below was fixed)
         # left a growing band of dead grey space under it inside its own splitter pane at
@@ -697,7 +634,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_tree_menu)
 
-        self.footer = _WrapLabel("")
+        self.footer = QtWidgets.QLabel("")
         self.footer.setWordWrap(True)
         self.footer.setStyleSheet("color: gray;")
 
@@ -712,7 +649,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         # A QSplitter fixes the proportions AND hands the operator the drag handle: the
         # tree pane gets stretch 2, the log pane stretch 1 (~2:1, log <= 1/3), and only the
         # LOG pane is collapsible — the tree can never be dragged shut.
-        self.splitter = _FloorSplitter(Qt.Orientation.Vertical)
+        self.splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
 
         tree_pane = QtWidgets.QWidget()
         tree_lay = QtWidgets.QVBoxLayout(tree_pane)
@@ -770,7 +707,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.log_help_row = QtWidgets.QWidget()
         help_lay = QtWidgets.QHBoxLayout(self.log_help_row)
         help_lay.setContentsMargins(0, 0, 0, 0)
-        self.log_help = _WrapLabel("")
+        self.log_help = QtWidgets.QLabel("")
         self.log_help.setWordWrap(True)
         self.log_help.setStyleSheet("color: gray;")      # greyed, like self.footer
         # greyed help the operator cannot copy is useless — make it a real selection.
@@ -922,13 +859,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.next_fail_btn.clicked.connect(self._next_failure)
         btns.addWidget(self.next_fail_btn)
         btns.addStretch(1)
-        # UNDER the scroll area, not in it. In the 942x552 netbook window a running
-        # build's content is taller than the page (413 px in a 364 px viewport), so it
-        # scrolls. Stop all must not be what scrolls off. Here the row is on screen at
-        # any window size, like the wizard's own buttons, and lines up with the content.
-        m = lay.contentsMargins()
-        btns.setContentsMargins(m.left(), 0, m.right(), m.bottom())
-        self.layout().addLayout(btns)
+        lay.addLayout(btns)
 
         self.driver: WorklistDriver | None = None
         self.worker: _WorklistWorker | None = None

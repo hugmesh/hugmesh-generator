@@ -21,17 +21,7 @@ lightdm-gtk-greeter speaks plain PAM. The hint line above the password box
 (`id.<domain>`); or type your local password."*
 
 * **Local**: pick the user, type the password. Exactly as before; the SSO
-  helper steps aside without a network call. A wrong password brings the
-  password box back with *"Sign-in as '<user>' failed: the password was not
-  accepted ..."* as the first line of the hint. lightdm-gtk-greeter 2.0.9 prints
-  no "incorrect password" message of its own while an info message (the hint)
-  is on screen, so the helper arms that line on every attempt and the
-  `sso-greeter pam-ok` line after the local include takes it down on success.
-  Only that user's own retry shows it: the `sso-greeter pam-hint` line before
-  `pam_echo` rewrites the hint for whoever the greeter is signing in, so picking
-  another user after a refused attempt shows the plain hint. An attempt with no
-  valid user name arms an unnamed *"Sign-in failed: ..."* instead, which names
-  nobody.
+  helper steps aside without a network call.
 * **SSO**: pick or type the user name (`greeter-show-manual-login=true`, so a
   user the device has never seen can type theirs), leave the password
   **empty**, press Enter. The greeter shows *"open `<url>` on your phone or any
@@ -132,11 +122,10 @@ then exit 1 so the local path still runs:
 
 | piece | path | role |
 |-------|------|------|
-| PAM stack | `specs/etc/pam.d/lightdm` → `/etc/pam.d/lightdm` | an `optional` `pam-hint` line that writes the hint for this conversation's user; `pam_echo` hint; `pam_exec quiet stdout expose_authtok` running the helper under `[success=done default=ignore]`; then the stock `system-local-login`; then an `optional` `pam-ok` line that clears the failure notice after a local success; a `session` line hands the token to the session |
-| helper | `specs/usr/lib/hugmesh/sso-greeter` → `/usr/lib/hugmesh/sso-greeter` | `pam-auth`, `pam-hint`, `pam-ok`, `pam-session`, `probe`, `status`, `list`, `revoke`, `configure` |
+| PAM stack | `specs/etc/pam.d/lightdm` → `/etc/pam.d/lightdm` | `pam_echo` hint; `pam_exec quiet stdout expose_authtok` running the helper under `[success=done default=ignore]`; then the stock `system-local-login`; a `session` line hands the token to the session |
+| helper | `specs/usr/lib/hugmesh/sso-greeter` → `/usr/lib/hugmesh/sso-greeter` | `pam-auth`, `pam-session`, `probe`, `status`, `list`, `revoke`, `configure` |
 | conf | `/etc/hugmesh/sso-greeter.conf` (written by the builder) | `SSO_ENABLED`, `ISSUER`, `CLIENT_ID`, `BRAND_TITLE`, `OFFLINE_MAX_AGE_DAYS`, `ADMIN_ROLE`, `LOGIN_TIMEOUT`, `CONNECT_TIMEOUT`, `POSTURE` |
-| hint | `/run/hugmesh/sso-greeter/hint` (0600; `pam_echo` reads it as root) | written by `probe` (lightdm `greeter-setup-script`, local facts only), by `pam-hint` for each conversation's user, and by every attempt |
-| failure notice | `/run/hugmesh/sso-greeter/failed` (0600) | the user name of the attempt in flight (empty: no valid name). `pam-hint` shows the notice only to that user; `pam-ok`, an SSO success and `probe` remove it |
+| hint | `/run/hugmesh/sso-greeter/hint` | written by `probe` (lightdm `greeter-setup-script`, local facts only) and refreshed by every attempt |
 | cache | `/var/lib/hugmesh/sso-greeter/users/<name>.json` (0600, dir 0700) | `iss`, `sub`, `name`, `roles`, `last_online`, `offline_until`, optional scrypt hash of the offline password; never a token |
 | registry | `/var/lib/hugmesh/sso-greeter/managed/<name>` (0600) | the uid of each account the helper CREATED; SSO signs in to these only. `revoke` keeps it (revoke ends offline sign-in, not the account) |
 | hand-off | `/run/hugmesh/sso-greeter/handoff/<uid>` (0600 root, tmpfs) → `/run/user/<uid>/hugmesh/oidc-token.src` | the verified access token reaches the existing desktop-governance chain (`hugmesh-sso-token login --if-needed` honours it; the desktop-sudo mapper re-verifies it) with no second device prompt |

@@ -1544,12 +1544,6 @@ for b in build-rpi5-stage4.sh build-x86-host-stage4.sh; do
   cp -r "${REPO}/specs/cluster" "${s}/var/lib/hugmesh/cluster"
   ( info(){ :; }; warn(){ :; }
     SYSROOT="${s}"; ENV=prod; RELEASE_STATE=internal; CLUSTER_DOMAIN=hugmesh.net
-    SCRIPT_DIR="${REPO}"; RELEASE_TAG=19700101
-    # ENV=prod runs the shared prod gate (scripts/_prod-gate-lib.sh) first; the Pi
-    # builder exits on its failure, so it must be loaded for this leg to run at all.
-    # shellcheck source=scripts/_prod-gate-lib.sh
-    source "${REPO}/scripts/_prod-gate-lib.sh"
-    eval "$(extract_fn "${REPO}/${b}" rewrite_prod_image_tags)"
     eval "$(extract_fn "${REPO}/${b}" gate_env_apps)"
     gate_env_apps ) >/dev/null 2>&1
   t="${s}/var/lib/hugmesh/cluster/manifests"

@@ -13,8 +13,13 @@ hugmesh-generator build scripts of their own release. The MSI and the tarball do
 them yet. ["What a package gives you"](#what-a-package-gives-you) says what that means on
 first start.
 
-Maintainers cut a release with `scripts/release-studio.sh <version>`; see
-["Cutting a release"](#cutting-a-release).
+**To release one:** `scripts/release-studio.sh <version>`. That is the whole procedure;
+["Cutting a release"](#cutting-a-release) below explains what it does and the one
+other way (a button in Actions). The first beta, `0.3.0-beta.1`, shipped on
+2026-10-22.
+A whole-org beta release (every library and image, then the Studio, then the site) calls
+this same script from `scripts/release-beta.sh --studio <version>`; see
+[`RELEASING.md`](RELEASING.md).
 
 | Artifact | Platform | Built by |
 |---|---|---|
@@ -386,16 +391,9 @@ run). **Nobody copies `releases.json` by hand.** After a release the Downloads p
 refreshes within the hour; `scripts/release-studio.sh ... --site` runs
 `gh workflow run pages.yml --repo hugmesh/hugmesh.github.io` with your own token to
 ask for it now. The publish job also sends the `releases-updated` dispatch itself
-when the secret `SITE_DISPATCH_TOKEN` exists (a fine-grained token with resource owner
-`hugmesh`, only `hugmesh/hugmesh.github.io`, Contents: read and write; approved, if the
-organization requires approval for fine-grained tokens). It is an organization secret
-since 2026-11-10. Without it the step prints a notice. **The step is never fatal**: it
-runs after the release is published, so any answer but `204` (a refused or unapproved
-token, a GitHub error, no connection) is a `::warning::` that quotes GitHub's message,
-and the run stays green. The first Studio release with the secret set
-(`studio-v0.4.4-beta.1`, run 42882326209) went red on a 403 from `curl -fsS` before this
-was changed. To re-send the notice, run `gh workflow run pages.yml --repo
-hugmesh/hugmesh.github.io`; never re-run the release for it (a re-run is a republish).
+when the repository secret `SITE_DISPATCH_TOKEN` exists (a fine-grained token with
+Contents: read and write on `hugmesh/hugmesh.github.io` only); **it does not exist
+today**, and the job prints a notice and goes on.
 
 ### Where the guard lives
 

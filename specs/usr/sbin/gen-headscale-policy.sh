@@ -73,18 +73,14 @@
 #                     10.244/10.96 CIDR data-plane rule (k8s, not SSH).
 #   [FIX-DENY22]      headscale ssh is default-deny; the generated ssh[] block
 #                     emits EXACTLY the predicate-permitted edges, so :22 is
-#                     default-deny. The template's one :22 accept lets only
-#                     tag:superadmin through the packet filter.
-#   [FIX-OIDC-USERS]  DEFERRED. There is no per-operator tailnet identity until
-#                     per-tenant Casdoor->headscale OIDC users land, so no ssh
-#                     rule can name an operator. Every ssh rule's SOURCE is
-#                     tag:superadmin (SSH_SRC below), never tag:hugmesh: Tailscale
-#                     SSH answers :22 itself, so the device's sshd key checks
-#                     (Layer-B) are NOT on that path, and tag:hugmesh is a tag
-#                     every pre-auth key holder self-applies. A member source
-#                     would hand every member a privileged session the moment
-#                     anything opened :22 to members (measured on headscale
-#                     0.23.0 + tailscale 1.78.1).
+#                     default-deny.
+#   [FIX-OIDC-USERS]  DEFERRED. Until per-tenant Casdoor->headscale OIDC users
+#                     land, the SSH SOURCE side is the advisory tag:hugmesh
+#                     (the reusable preauth key still gates JOIN). The
+#                     load-bearing per-operator SOURCE authenticity + per-key %f
+#                     pinning stay in Layer-B. Layer-A is ADVISORY on the source
+#                     side, REAL on the destination side (server-forced dst tags
+#                     + dropped any-to-any rule). See the PR body.
 #
 # VALIDATION STATUS: every shell path here is `bash -n`-clean and the render is
 # smoke-tested off-node against a synthetic export (the PR body carries the
@@ -134,13 +130,6 @@ ALARM_MARK="${CACHE_DIR}/apply-failed"
 # The rendered policy headscale refused to load, and how many retry ticks it has had.
 PENDING_POLICY="${CACHE_DIR}/pending-policy.hujson"
 PENDING_TRIES="${CACHE_DIR}/pending-tries"
-
-# The ONLY source any generated ssh rule names. tag:superadmin is owned by nobody
-# (tagOwners []), so a node cannot claim it by advertising it; only
-# hugmesh-headscale-forcetags assigns it, from superadmin-machines.txt. NEVER
-# tag:hugmesh, a role tag, autogroup:member or "*": every node holding a pre-auth
-# key has (or can self-apply) those, and Tailscale SSH has no other gate.
-SSH_SRC="tag:superadmin"
 
 # Baked per-node privileged SSH local account (the Tailscale-SSH `users` value —
 # the LOCAL unix account a session opens AS, NOT the Casdoor operator). Source of
@@ -284,13 +273,10 @@ render_policy() {
         esac
     done <<< "${fps}"
 
-    # ssh edges: one accept per node (uniq by machineKeyFp). src is SSH_SRC
-    # (tag:superadmin): there is no per-operator tailnet identity until OIDC users
-    # land, and the only other candidate, tag:hugmesh, is every member (see
-    # SSH_SRC). So until then a per-node edge opens nothing the SUPERADMIN mesh
-    # rule does not; it keeps the export-driven per-node shape an operator
-    # source will slot into. dst is the SERVER-FORCED tag:dev_<short>. users is
-    # the node-local privileged ssh account.
+    # ssh edges: one accept per node (uniq by machineKeyFp). src is the ADVISORY
+    # tag:hugmesh (OPERATOR-IDENTITY open issue: no per-operator tailnet
+    # identity until OIDC users land). dst is the SERVER-FORCED tag:dev_<short>.
+    # users is the node-local privileged ssh account.
     #
     # The ALWAYS-emitted SUPERADMIN mesh rule is FIRST (independent of the export
     # body) so superadmin reach to core nodes the export omits is preserved even
@@ -299,8 +285,8 @@ render_policy() {
     # (one element per line, indented to slot under the template's ssh[ marker).
     local ssh_splice=""
     local sup_edge
-    sup_edge="$(jq -cn --arg sshuser "${TS_SSH_USER}" --arg meshtag "${MESH_TAG}" --arg src "${SSH_SRC}" \
-        '{action:"accept",src:[$src],dst:[$meshtag],users:[$sshuser]}' 2>/dev/null)"
+    sup_edge="$(jq -cn --arg sshuser "${TS_SSH_USER}" --arg meshtag "${MESH_TAG}" \
+        '{action:"accept",src:["tag:superadmin"],dst:[$meshtag],users:[$sshuser]}' 2>/dev/null)"
     [ -n "${sup_edge}" ] || { warn "failed to render SUPERADMIN edge — keeping current policy"; return 1; }
     ssh_splice="$(printf '\n    %s' "${sup_edge}")"
 
@@ -309,8 +295,8 @@ render_policy() {
         short="$(dev_tag_for_fp "${fp}")"
         [ -n "${short}" ] || { warn "could not derive dev tag for an fp — skipping that edge (fail-closed: node unreachable, not over-broad)"; continue; }
         local edge
-        edge="$(jq -cn --arg sshuser "${TS_SSH_USER}" --arg devtag "tag:${short}" --arg src "${SSH_SRC}" \
-            '{action:"accept",src:[$src],dst:[$devtag],users:[$sshuser]}' 2>/dev/null)"
+        edge="$(jq -cn --arg sshuser "${TS_SSH_USER}" --arg devtag "tag:${short}" \
+            '{action:"accept",src:["tag:hugmesh"],dst:[$devtag],users:[$sshuser]}' 2>/dev/null)"
         [ -n "${edge}" ] || continue
         ssh_splice="${ssh_splice},$(printf '\n    %s' "${edge}")"
     done <<< "${fps}"
@@ -437,9 +423,7 @@ save_pending() {
 # rejected one cannot be loaded. It is <prev> with every ssh edge the rejected policy
 # no longer carries REMOVED, so a revocation survives a failed apply (the old rollback
 # restored <prev> verbatim and with it every revoked edge). Edges that are in both are
-# kept, and so is the always-on break-glass edge: src tag:superadmin AND every dst a
-# tag:mesh_* (per-node edges share that src, so the src alone would also keep a
-# revoked per-node edge). When nothing was
+# kept, and so is the always-on tag:superadmin break-glass edge. When nothing was
 # revoked <prev> is copied byte for byte. A rejected policy that does not parse keeps
 # NO edge but break-glass. Uses no temp file (jq reads both policies through pipes),
 # so a full or missing TMPDIR cannot turn the narrowing off. Returns 1, writing
@@ -458,10 +442,7 @@ revocation_safe_fallback() {
                 | jq -c '(.ssh // []) | if type == "array" then . else [] end' 2>/dev/null) '
             ($k[0] // []) as $keep
             | if has("ssh") then
-                .ssh |= map(. as $e | select(
-                    ($e.src == ["tag:superadmin"] and (($e.dst // []) | length) > 0
-                        and all(($e.dst // [])[]; type == "string" and startswith("tag:mesh_")))
-                    or any($keep[]; . == $e)))
+                .ssh |= map(. as $e | select($e.src == ["tag:superadmin"] or any($keep[]; . == $e)))
               else . end' > "${out}" 2>/dev/null; then
         rm -f "${out}" 2>/dev/null; return 1
     fi

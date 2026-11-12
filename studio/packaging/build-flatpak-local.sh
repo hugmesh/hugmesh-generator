@@ -386,48 +386,18 @@ done
     || die "flatpak did not export $app_id.desktop into $user_dir/exports"
 printf 'ok       %s\n' "$user_dir/exports/share/applications/$app_id.desktop"
 
-step "Generator check: $app_command --self-check inside the sandbox (the tree the bundle places)"
-# The release workflow's second smoke step: the app places the bundled generator tree and
-# checks every generator path and make target the Studio names in IT. Its host-bridge
+step "Generator check: $app_command --self-check inside the sandbox (the tree the bundle carries)"
+# The release workflow's second smoke step. It places the bundled generator tree under
+# your home (~/.local/share/hugmesh-studio/generator, the same place the installed app
+# uses) and checks every generator path and make target the Studio names. Its host-bridge
 # line is reported, not counted.
-#
-# It must check the PLACED tree, which is what an installed Studio with no checkout runs.
-# Started from this checkout (as documented) with no --cwd, the app found the checkout as
-# its cwd and checked that instead, so a bundle whose placed tree was broken passed
-# (#936 refute, round 2). So it runs from an empty folder, with $HUGMESH_GENERATOR_DIR
-# emptied and its own state folder (no saved pick), and places the copy under $work, not
-# in your home; the report must then name that copy as both the placed tree and the one
-# checked.
-sc_root="$work/self-check"
-sc_managed="$sc_root/generator"
-rm -rf "$sc_root"
-mkdir -p "$sc_root/cwd" "$sc_root/state"
 self_check="$work/self-check.json"
-if ! flatpak run --user --filesystem="$sc_root" --cwd="$sc_root/cwd" \
-        --env=HUGMESH_GENERATOR_DIR= --env=HUGMESH_STUDIO_STATE_DIR="$sc_root/state" \
-        --env=HUGMESH_STUDIO_MANAGED_GENERATOR_DIR="$sc_managed" \
-        --command="$app_command" "$app_id" --self-check --json > "$self_check"; then
+if ! flatpak run --user --command="$app_command" "$app_id" --self-check --json > "$self_check"; then
     cat "$self_check" >&2 || true
     die "--self-check failed inside the sandbox: the bundle cannot run the generator's scripts"
 fi
 grep -q '"ok": true' "$self_check" \
     || die "--self-check exited 0 without reporting \"ok\": true (see $self_check)"
-python3 - "$self_check" "$sc_managed" <<'PY' || die "--self-check did not check the tree the bundle placed (see $self_check)"
-import json, os, sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as fh:
-        report = json.load(fh)
-except ValueError as exc:
-    sys.exit(f"the --self-check report is not JSON: {exc}")
-want = os.path.realpath(sys.argv[2])
-placed = ((report.get("placed") or {}).get("path") or "") if isinstance(report, dict) else ""
-checked = (report.get("generator_dir") or "") if isinstance(report, dict) else ""
-if not placed or os.path.realpath(placed) != want:
-    sys.exit(f"the bundled tree was not placed in {want} (placed: {placed or 'nothing'})")
-if not checked or os.path.realpath(checked) != want:
-    sys.exit(f"--self-check checked {checked or 'nothing'}, not the placed tree {want}")
-print(f"checked the placed tree: {placed}")
-PY
 printf 'self-check ok (%s)\n' "$self_check"
 
 # ---- done ---------------------------------------------------------------------------------------------

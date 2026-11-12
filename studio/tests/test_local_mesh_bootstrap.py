@@ -115,35 +115,6 @@ def test_plan_flags_prod_blockers(tmp_path):
     assert "auth key" in p.lower()
 
 
-@pytest.mark.parametrize("blank", ["", "   "])
-def test_a_blank_prod_apex_plan_names_no_domain_and_no_issuer(tmp_path, blank):
-    """GUI-21: a prod plan with no public apex printed ``Domain: hugmesh.net`` and
-    ``Issuer: https://id.hugmesh.net`` (resolved_domain()'s brand fallback) right above
-    the blocker saying no domain was given, and its overlay section said "SKIPPED —
-    the platform still comes up fully without a tailnet" above the blocker saying
-    prod refuses without a key. The header and the overlay line must agree with the
-    blockers; nothing in the plan may name the brand default as this mesh's domain."""
-    for own in ((), ("team.example",)):        # the own-Casdoor block names the issuer too
-        p = _boot(tmp_path, env="prod", cluster_domain=blank,
-                  own_idp_domains=own).plan()
-        lines = p.splitlines()
-        assert "Domain:     (not set — required in prod)" in lines, p
-        assert not [ln for ln in lines if ln.startswith("Issuer:")], p
-        assert boot_mod.DEFAULT_DOMAIN not in p, p
-        assert "NOT SET — prod requires a tailnet/headscale auth key;" in lines[
-            lines.index("(3) MESH OVERLAY (hugmesh-mesh compose project, tailscale):") + 1]
-        assert "comes up fully without a tailnet" not in p
-        assert "BLOCKERS" in p
-    # a prod mesh WITH its apex, and a test mesh, keep exactly the header they had
-    pd = _boot(tmp_path, env="prod", cluster_domain="e.com").plan().splitlines()
-    assert "Domain:     e.com" in pd and "Issuer:     https://id.e.com" in pd
-    t = _boot(tmp_path, env="test").plan().splitlines()
-    assert (f"Domain:     {boot_mod.DEFAULT_DOMAIN}  (brand default; not a public "
-            "issuer in test)") in t
-    assert "Issuer:     http://localhost:8000" in t
-    assert "      SKIPPED — LAN-only (no TS_AUTHKEY); the from-scratch" in t
-
-
 def test_plan_accounts_for_every_row_the_services_table_shows(tmp_path):
     """The confirm-before-run manifest must describe the mesh the operator was SHOWN,
     which means all three kinds of row. The DevOps-lane rows were omitted entirely

@@ -139,30 +139,6 @@ def unsupported_note(platform: str) -> str:
             "build. Cleared when you leave the page.")
 
 
-def unsupported_group_note(platform: str, fields) -> str:
-    """The VISIBLE twin of ``unsupported_note`` for a whole group of gated fields.
-
-    ``gate_widgets`` explains a greyed widget only in its hover tooltip. That is enough
-    for one stray row, but when the platform gate greys an entire group (HomePage's
-    Home Provisioning and External Media-Data boxes on every ARM builder) the page
-    showed a block of dead controls and said nothing about why unless you hovered
-    each one. A page that greys a section has to say so on the page.
-
-    ``fields`` is the SAME field list the caller hands ``gate_widgets`` for that group,
-    so the note and the greying cannot disagree. Returns "" when the builder takes every
-    field (show nothing); otherwise the reason, worded for all of the group or for the
-    greyed part of it."""
-    fields = tuple(fields)
-    dropped = [f for f in fields if not platform_supports(f, platform)]
-    if not dropped:
-        return ""
-    which = ("any option in this section" if len(dropped) == len(fields)
-             else "the greyed options in this section")
-    return (f"Not available for the {platform or 'x86'} builder — it has no flag for "
-            f"{which}, so values set here would be silently dropped from the build. "
-            "Cleared when you leave the page.")
-
-
 def gate_widgets(platform: str, field_widgets: dict, *, hide: bool = False) -> None:
     """initializePage() half: gate widgets per the capability table.
 

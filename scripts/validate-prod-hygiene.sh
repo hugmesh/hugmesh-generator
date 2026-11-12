@@ -30,10 +30,8 @@
 #
 # Exit 0 = clean for prod; non-zero = a dev-only server or un-flipped stub is
 # present (prints exactly which). Wired:
-#   * every builder that bakes the cluster tree (x86 host, Raspberry Pi 5, and the
-#     Orange Pi node builders through the Pi's gate_env_apps) runs `--static` over
-#     the BAKED tree for ENV=prod via scripts/_prod-gate-lib.sh (belt to the
-#     gate_env_apps prune + image-tag rewrite), and fails the build on a finding.
+#   * build-x86-host-stage4.sh runs `--static` over the BAKED tree for ENV=prod
+#     (belt to the gate_env_apps prune + image-tag rewrite).
 #   * apps/00-prod-hygiene.yaml deploys the Kyverno ClusterPolicy + the PreSync
 #     hook Job (manifests/prod-hygiene/) that runs `--runtime` and BLOCKS the
 #     dependent app wave on a violation. See docs/TEST-ARCHITECTURE.md.

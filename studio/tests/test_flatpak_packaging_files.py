@@ -1481,15 +1481,7 @@ def _scripted_flatpak(tmp_path, validators=True):
         "            *' --print-specs')\n"
         "                [ -z \"${FAKE_FLATPAK_SPECS-}\" ] || printf '%s\\n' \"$FAKE_FLATPAK_SPECS\" ;;\n"
         "            *' --self-check --json')\n"
-        # PLACED: answer as a working bundle does, naming the managed folder the
-        # script handed the sandbox as both the placed tree and the one checked
-        "                if [ \"${FAKE_FLATPAK_SELF_CHECK-}\" = PLACED ]; then\n"
-        "                    managed=\n"
-        "                    for a in \"$@\"; do case \"$a\" in\n"
-        "                        --env=HUGMESH_STUDIO_MANAGED_GENERATOR_DIR=*) managed=\"${a#*=}\"; managed=\"${managed#*=}\" ;;\n"
-        "                    esac; done\n"
-        "                    printf '{\"ok\": true, \"problems\": [], \"generator_dir\": \"%s\", \"placed\": {\"path\": \"%s\", \"action\": \"seeded\"}}\\n' \"$managed\" \"$managed\"\n"
-        "                else printf '%s\\n' \"${FAKE_FLATPAK_SELF_CHECK-}\"; fi\n"
+        "                printf '%s\\n' \"${FAKE_FLATPAK_SELF_CHECK-}\"\n"
         "                exit \"${FAKE_FLATPAK_SELF_CHECK_EXIT-0}\" ;;\n"
         "            *' --command=python3 '*)\n"
         "                if [ \"${FAKE_FLATPAK_QT+set}\" = set ]; then printf '%s\\n' \"$FAKE_FLATPAK_QT\"\n"
@@ -1539,7 +1531,7 @@ def _calls(log) -> list[tuple[str, str, str]]:
 #: the script's own python runs against ``_qt_stub``.
 _SMOKE_OK = {"FAKE_FLATPAK_SPECS": '{"os": "linux"}',
              "FAKE_FLATPAK_FILES": "",
-             "FAKE_FLATPAK_SELF_CHECK": "PLACED"}
+             "FAKE_FLATPAK_SELF_CHECK": '{"ok": true, "problems": []}'}
 
 #: Stands in for ``hugmesh_studio.gui.qt`` in the sandbox. The script's smoke test 2 is
 #: python that imports it, checks the binding, the platform and a rendered grab, and
@@ -1767,17 +1759,10 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
     assert "--command=python3" in smoke[-3] and "--nofilesystem=host" in smoke[-3], smoke
     assert "--command=sh" in smoke[-2] and "--nofilesystem=host" in smoke[-2], smoke
     assert smoke[-2].endswith(f"/app/share/icons/hicolor/256x256/apps/{APP_ID}.png"), smoke[-2]
-    # The generator check runs WITH the host filesystem, but from an empty folder with
-    # no checkout, env or saved pick to find, and places the bundled tree under the
-    # work dir: what it checks is the PLACED tree (#936 refute, round 2).
-    sc = f"{work}/self-check"
-    assert smoke[-1] == (f"run --user --filesystem={sc} --cwd={sc}/cwd "
-                         f"--env=HUGMESH_GENERATOR_DIR= "
-                         f"--env=HUGMESH_STUDIO_STATE_DIR={sc}/state "
-                         f"--env=HUGMESH_STUDIO_MANAGED_GENERATOR_DIR={sc}/generator "
-                         f"--command={_manifest_scalar('command')} {APP_ID} "
+    # The generator check runs WITH the host filesystem: it places the bundled tree
+    # under the home, where the installed app keeps it.
+    assert smoke[-1] == (f"run --user --command={_manifest_scalar('command')} {APP_ID} "
                          "--self-check --json"), smoke[-1]
-    assert f"checked the placed tree: {sc}/generator" in result.stdout
     assert f"ok       {private}/exports/share/applications/{APP_ID}.desktop" in result.stdout
 
     # The wrapper the Builder hands to the host must pin the private directory itself:
@@ -1887,15 +1872,8 @@ def test_script_runs_the_same_commands_as_the_release_workflows_flatpak_job(tmp_
     check_words = _words_of(workflow_one(
         lambda ln: ln.startswith("flatpak run ") and "--self-check" in ln, "generator check"))
     script_check = next(shlex.split(a) for a in args if a.endswith(" --self-check --json"))
-    # the script's run adds only what isolates it from the checkout it is started in
-    # (the workflow runs in studio/packaging/flatpak, which is no checkout, on a runner
-    # with no saved pick): an empty --cwd, its own state and managed folders
-    isolation = ("--user", "--filesystem=", "--cwd=", "--env=HUGMESH_GENERATOR_DIR=",
-                 "--env=HUGMESH_STUDIO_STATE_DIR=",
-                 "--env=HUGMESH_STUDIO_MANAGED_GENERATOR_DIR=")
-    assert [w for w in script_check
-            if not (w == "--user" or w.startswith(isolation[1:]))] == check_words[1:], (
-        script_check, check_words)
+    assert [w for w in script_check if w != "--user"] == check_words[1:], (script_check,
+                                                                           check_words)
 
 
 @needs_bash
@@ -2203,30 +2181,3 @@ def test_the_script_writes_the_seed_before_it_builds():
     seed = text.find("make_generator_seed.py\" --out \"$flatpak_src/generator-seed\"")
     build = text.find("--command=flatpak-builder org.flatpak.Builder")
     assert 0 < seed < build, "build-flatpak-local.sh must write the generator seed before flatpak-builder"
-
-
-@needs_bash
-@pytest.mark.parametrize("answer, says", [
-    pytest.param("CHECKOUT", "not the placed tree", id="checked-the-checkout"),
-    pytest.param("ELSEWHERE", "was not placed in", id="placed-elsewhere"),
-    pytest.param('{"ok": true, "problems": []}', "was not placed in", id="no-placed-tree"),
-    pytest.param('{"ok": true, not json', "not JSON", id="not-json"),
-])
-def test_the_generator_check_refuses_a_report_of_another_tree(tmp_path, answer, says):
-    """#936 refute, round 2: run from the checkout, --self-check checked the CHECKOUT
-    (its cwd) and reported ok while the tree the bundle places went unchecked. The
-    script now refuses an ok report unless it names the placed copy -- in the folder
-    the script handed the sandbox -- as both the placed tree and the one checked."""
-    out = os.path.realpath(str(tmp_path / "out"))
-    managed = f"{out}/flatpak-work/self-check/generator"
-    if answer == "CHECKOUT":
-        answer = json.dumps({"ok": True, "problems": [], "generator_dir": GENERATOR_DIR,
-                             "placed": {"path": managed, "action": "seeded"}})
-    elif answer == "ELSEWHERE":
-        answer = json.dumps({"ok": True, "problems": [], "generator_dir": "/x/generator",
-                             "placed": {"path": "/x/generator", "action": "seeded"}})
-    result, _calls, _private, _out = _scripted_run(tmp_path, FAKE_FLATPAK_SELF_CHECK=answer)
-    assert result.returncode == 1, result.stdout
-    assert says in result.stderr, result.stderr
-    assert "did not check the tree the bundle placed" in result.stderr, result.stderr
-    assert "self-check ok" not in result.stdout

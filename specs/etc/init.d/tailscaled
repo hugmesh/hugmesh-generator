@@ -3,15 +3,6 @@
 description="Tailscale node agent (tailscaled)"
 command="/usr/sbin/tailscaled"
 command_args="--state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=${PORT:-41641}"
-# No log upload to the vendor's log service. tailscaled otherwise streams its logs
-# to log.tailscale.io from every node: a phone-home from a self-hosted mesh (the
-# control server is our own headscale), and on an offline LAN it retries through
-# hard-coded public bootstrap-DNS addresses. Opt back in with
-# TAILSCALED_UPLOAD_LOGS=yes in /etc/conf.d/tailscaled.
-case "${TAILSCALED_UPLOAD_LOGS:-no}" in
-    [Yy][Ee][Ss]|1|true) ;;
-    *) command_args="${command_args} --no-logs-no-support" ;;
-esac
 command_background=true
 pidfile="/run/${RC_SVCNAME}.pid"
 output_log="/var/log/tailscaled.log"

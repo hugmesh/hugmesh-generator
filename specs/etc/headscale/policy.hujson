@@ -1,12 +1,12 @@
 {
   // HugMesh fleet mesh ACL policy (headscale 0.23.x, file mode).
   //
-  // GOAL: pods/ClusterIP services on one node are reachable from any node as
-  // though on one LAN, and the superadmin can open a Tailscale SSH session on any
-  // node. Nothing else: this is a default-deny policy that ONLY opens the
-  // cluster's pod/service CIDRs to members and :22 to tag:superadmin. Nodes do
-  // not reach each other directly. There is NO internet-wide ("*") grant and NO
-  // autogroup exit-node access.
+  // GOAL: a flat L3 mesh — every fleet node reaches every other fleet node on
+  // every port, AND pods/ClusterIP services on one node are reachable from any
+  // node as though on one LAN. Fleet-scoped and least-surprising: this is a
+  // default-deny policy that ONLY opens fleet-internal traffic + the cluster's
+  // pod/service CIDRs. There is NO internet-wide ("*") grant and NO autogroup
+  // exit-node access.
   //
   // hujson = JSON with comments + trailing commas; headscale parses it natively.
   // This particular file is also strict JSON (no trailing commas) so it lints
@@ -31,11 +31,7 @@
     "tag:pki": ["hugmesh"],
     "tag:be": ["hugmesh"],
     "tag:fe": ["hugmesh"],
-    "tag:host": ["hugmesh"],
-    // The only SSH source (see the ssh block). Owned by nobody: a node gets it
-    // only from hugmesh-headscale-forcetags. headscale 0.23 builds no node's map
-    // while a rule names a tag that is neither listed here nor forced on a node.
-    "tag:superadmin": []
+    "tag:host": ["hugmesh"]
   },
 
   // ── Subnet-route auto-approval ────────────────────────────────────────────
@@ -71,14 +67,6 @@
       "action": "accept",
       "src": ["tag:hugmesh"],
       "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
-    },
-    // The ONLY way to :22, and only from tag:superadmin: a Tailscale SSH session
-    // is a TCP connection to :22, so without this the ssh rule below can never be
-    // used. Never widen its src: see the ssh block.
-    {
-      "action": "accept",
-      "src": ["tag:superadmin"],
-      "dst": ["tag:hugmesh:22"]
     }
   ],
 
@@ -95,17 +83,10 @@
   // account in users.json) before `headscale policy set`. SSH is reachable on
   // the tailnet only (tailscaled binds the tailnet; the public iface is not
   // exposed by Tailscale SSH).
-  //
-  // WHO: src is tag:superadmin and nothing else. Tailscale SSH answers :22
-  // itself, so the device's sshd key checks are not on this path; whoever src
-  // names gets a session as the privileged user. tag:hugmesh (which every node
-  // with a pre-auth key self-applies) used to be the src here, so one
-  // member-to-member :22 accept would have given every member that session.
-  // keys-provision refuses a policy whose ssh rules name any other source.
   "ssh": [
     {
       "action": "accept",
-      "src": ["tag:superadmin"],
+      "src": ["tag:hugmesh"],
       "dst": ["tag:hugmesh"],
       "users": ["@@TS_SSH_USER@@"]
     }

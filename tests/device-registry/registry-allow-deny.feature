@@ -115,13 +115,10 @@ Feature: The device-license registry compiles to a default-deny ALLOW+DENY SSH b
 
   # ── LAYER A: headscale SSH ACL rendered from the same signed export ──
 
-  Scenario: A licensed admin's node gets its edge, but not from a member source [REAL-LAYER-A]
+  Scenario: A licensed admin reaches their own licensed node on :22 (ALLOW) [REAL-LAYER-A]
     Given node-a (fpA) appears in the export with a DEVICE-LICENSE for "alice"
     When the policy is rendered
-    Then there is an ssh accept whose dst is the server-forced tag:dev_<hash(fpA)> and whose src is tag:superadmin
-    And no member source (tag:hugmesh) reaches node-a:22 over Tailscale SSH
-    # Tailscale SSH answers :22 itself, so Layer B's sshd is not on that path; until
-    # per-operator identities land, an admin's licensed SSH is Layer B's (sshd)
+    Then there is an ssh accept whose dst is the server-forced tag:dev_<hash(fpA)>
 
   Scenario: The same admin cannot reach a superadmin/core node on :22 (DENY) [REAL-LAYER-A]
     Given core-1 is SUPERADMIN-owned and ABSENT from the export

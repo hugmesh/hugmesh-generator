@@ -75,25 +75,6 @@ def _host_independent_build_defaults(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _roomy_build_disk(monkeypatch):
-    """Answer "4 TiB free" from the free-space probe on ANY test host, and clear any
-    ambient per-image override. WorklistDriver.preflight() BLOCKS when the output
-    filesystem cannot hold the first image (55 GiB + margin for x86), so without this
-    every test that expects a clean x86 preflight would pass or fail by the host's real
-    free space: a CI runner has far less than that, and so did this workstation's /home
-    the day the check landed. The probe is ``emulation_save._disk_usage``, the seam
-    ``emulation_save.free_bytes_for`` reads. Tests of the check
-    (test_build_disk_space_guard.py) and of mesh saves re-pin it in their own body or
-    pass ``disk_usage=`` explicitly, and theirs wins."""
-    import collections
-    from hugmesh_studio.core import build_driver, emulation_save
-    usage = collections.namedtuple("usage", "total used free")
-    roomy = usage(total=8 << 40, used=4 << 40, free=4 << 40)
-    monkeypatch.delenv(build_driver.SPACE_ENV, raising=False)
-    monkeypatch.setattr(emulation_save, "_disk_usage", lambda _path: roomy)
-
-
-@pytest.fixture(autouse=True)
 def _no_node_image_meshes_up(monkeypatch):
     """Answer "no hugmesh-img-* mesh is up" for the checkout's own `stack-clean` on
     ANY test host (PR #937 round 4). LocalStackNode.clean of hugmesh-local asks

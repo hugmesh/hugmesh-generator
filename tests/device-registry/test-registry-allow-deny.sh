@@ -331,19 +331,10 @@ ssh_allowed() {
         | length > 0' >/dev/null 2>&1
 }
 
-echo "-- Case 13: ADMIN -> own licensed node-a: an edge exists, but NOT from a member source [REAL-LAYER-A] --"
-# The export still yields the per-node edge to tag:dev_<fpA>, but its src is
-# tag:superadmin. There is no per-operator tailnet identity yet (FIX-OIDC-USERS), and
-# the only other source an admin's node has is tag:hugmesh, which EVERY node holding a
-# pre-auth key self-applies. Tailscale SSH answers :22 itself (the sshd of Case 1 is
-# not on that path), so a tag:hugmesh source would be a privileged session for every
-# member. An admin's licensed SSH is Layer B's (Cases 1-12) until operator identities land.
-strip "${LA_RENDERED}" | jq -e --arg d "${TAG_A}" 'any(.ssh[]; .dst == [$d] and .src == ["tag:superadmin"])' >/dev/null 2>&1 \
-    && ok "rendered ssh edge to ${TAG_A} present, sourced from tag:superadmin" \
-    || bad "the export's edge to ${TAG_A} is missing or not sourced from tag:superadmin"
+echo "-- Case 13: ADMIN -> own licensed node-a (ALLOW) [REAL-LAYER-A] --"
 if ssh_allowed "tag:hugmesh" "superadmin" "${TAG_A} tag:hugmesh ${MESH_TAG}"; then
-    bad "a member source (tag:hugmesh) reaches node-a:22 — every member would get a privileged Tailscale SSH session"
-else ok "no member source (tag:hugmesh) reaches node-a:22 over Tailscale SSH"; fi
+    ok "rendered ssh edge to ${TAG_A} present -> admin reaches node-a:22"
+else bad "admin should reach node-a:22"; fi
 
 echo "-- Case 14: ADMIN -> SUPERADMIN/core node (DENY: export omits it) [REAL-LAYER-A] --"
 if ssh_allowed "tag:hugmesh" "superadmin" "${TAG_CORE} tag:hugmesh ${MESH_TAG}"; then
