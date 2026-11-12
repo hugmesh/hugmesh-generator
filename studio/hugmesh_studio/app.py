@@ -4,6 +4,8 @@
   python -m hugmesh_studio --tray        # tray only (mesh-node controller)
   python -m hugmesh_studio --stack-tray  # tray only (local dev-stack controller)
   python -m hugmesh_studio --go-live     # superadmin go-live wizard (hugmesh-go-live front-end)
+  python -m hugmesh_studio --go-live --go-live-target LABEL
+      # ...with that emulated device (e.g. rpi5/pki) preselected as the go-live target
   python -m hugmesh_studio --fleet       # fleet build dialog (scripts/build-all-roles.sh front-end)
   python -m hugmesh_studio --login-agent # headless: run the passwordless local-login loopback agent
   python -m hugmesh_studio --scan-hardware [--json]
@@ -169,6 +171,20 @@ def _native_print_note(backend: str | None, osname: str | None = None,
         print("note: " + platform_info.native_build_blocker("A native build", osname,
                                                             sysplatform),
               file=sys.stderr)
+
+
+def go_live_target_label(rest: list[str]) -> str:
+    """The device LABEL in ``--go-live --go-live-target …``: the value of a
+    ``--target LABEL`` in it (the CLI's own spelling), else its first word. "" when
+    there is none."""
+    rest = list(rest or [])
+    if "--target" in rest:
+        i = rest.index("--target")
+        return rest[i + 1].strip() if i + 1 < len(rest) else ""
+    for word in rest:
+        if word.startswith("--target="):
+            return word.split("=", 1)[1].strip()
+    return rest[0].strip() if rest and not rest[0].startswith("-") else ""
 
 
 def main(argv=None) -> int:
@@ -376,6 +392,8 @@ def main(argv=None) -> int:
     _add_qemu_windows_args(ap)
     # ── Go-live against a target (this host or an emulated device), Qt-free ─────
     # --go-live-target VERB [options]: the rest of the line goes to core/golive_target.py.
+    # After --go-live it is instead the device LABEL the wizard opens on
+    # (``--go-live --go-live-target rpi5/pki``) — see the dispatch below.
     from .core.golive_target import add_cli_arguments as _add_golive_target_args
     _add_golive_target_args(ap)
     args = ap.parse_args(argv)
@@ -396,17 +414,26 @@ def main(argv=None) -> int:
         from .core.org_export import run_cli as _run_org_export
         return _run_org_export(args, args.generator_dir)
 
+    go_live_label = ""
+    if args.go_live_target is not None:
+        if args.go_live:
+            # `--go-live --go-live-target LABEL`: preselect, open the wizard below.
+            go_live_label = go_live_target_label(args.go_live_target)
+            if not go_live_label:
+                print("error: --go-live --go-live-target needs a device LABEL "
+                      "(e.g. rpi5/pki)", file=sys.stderr)
+                return 2
+        else:
+            # Qt-free path: golive_target runs only ssh (never bash, never a Qt
+            # binding), so it works from hugmesh-studio-cli.exe with no display.
+            from .core.golive_target import run_studio_cli as _run_golive_target
+            return _run_golive_target(args.go_live_target, args.generator_dir)
+
     if args.qemu_windows is not None:
         # Qt-free path: runs only qemu-img / qemu-system-x86_64 (and taskkill), never a
         # Qt binding, so it works from hugmesh-studio-cli.exe with no display.
         from .core.qemu_windows import run_studio_cli as _run_qemu_windows
         return _run_qemu_windows(args.qemu_windows, args.generator_dir)
-
-    if args.go_live_target is not None:
-        # Qt-free path: runs only ssh against an emulated device (or the checkout's
-        # driver for this host), never a Qt binding — so the MSI's console twin has it.
-        from .core.golive_target import run_studio_cli as _run_golive_target
-        return _run_golive_target(args.go_live_target, args.generator_dir)
 
     if args.login_agent:
         # Qt-free path: the loopback login agent is stdlib-only and blocks in
@@ -814,7 +841,7 @@ def main(argv=None) -> int:
         nonlocal golive
         from .gui.pages.golive import GoLiveWizard
         if golive is None:
-            golive = GoLiveWizard(args.generator_dir)
+            golive = GoLiveWizard(args.generator_dir, target=go_live_label or None)
         golive.show()
         golive.raise_()
 
