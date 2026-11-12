@@ -13,7 +13,7 @@ import importlib.util
 import os
 import sys
 
-from ..core import build_sessions, crashlog
+from ..core import build_sessions, crashlog, entry
 
 __all__ = ["have_tui", "main"]
 
@@ -67,6 +67,10 @@ def main(argv=None, *, inp=None, out=None) -> int:
     ``inp``/``out`` exist for the headless tests: they drive the PLAIN face with
     scripted streams (a non-TTY stream also disables the rich face by itself)."""
     crashlog.install()                     # same first-thing rule as the GUI entry point
+    # And the GUI entry point's PATH rule, before anything here looks a tool up: on a
+    # Mac, Homebrew's GNU tools are not on a shell's PATH, so without this the text UI
+    # refused a Mac that had installed them (a no-op off macOS; core/entry.py).
+    entry.bootstrap()
     ap = argparse.ArgumentParser(
         prog="python -m hugmesh_studio.tui",
         description="HugMesh Image Studio — terminal UI (parity lane). "

@@ -435,6 +435,10 @@ class CloudDeploy:
                      f"2>/dev/null || rm -f {q}")
         script = (shlex.join(inner) + "; rc=$?" + shred
                   + '; echo; read -r -p "press Enter to close..." _; exit "$rc"')
+        from . import macos_host
+        mac = macos_host.wrap_in_terminal(["bash", "-c", script], hold=False)
+        if mac:
+            return mac
         for binary, exec_args in _TERMINALS:
             if shutil.which(binary):
                 return [binary, *exec_args, "bash", "-c", script]
@@ -545,4 +549,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":                     # pragma: no cover — argparse shim
+    from .entry import bootstrap as _bootstrap   # the Mac PATH hook: core/entry.py
+    _bootstrap()
     raise SystemExit(main())

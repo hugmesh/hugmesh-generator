@@ -40,6 +40,14 @@
 # silently-skipped assertion is exactly how a live drift sat on a green main
 # before. Point it at a checkout with LAYERA_BFF_ROOT (or LAYERA_SIBLING_ROOT,
 # which holds a <root>/hugmesh-admin-bff-api clone).
+#
+# IN CI THE ABSENT SIBLING IS A FAILURE, NOT INCOMPLETE. Under GITHUB_ACTIONS=true,
+# CI=true or LAYERA_REQUIRE_BFF=1 a missing checkout (or a missing file in it) is a
+# counted FAIL with a ::error:: line and exit 1. Exit 3 stays for a local run, where
+# `make e2e-ungated` reports it in its INCOMPLETE bucket. The cross-repo fixture
+# identity (2b below) also gates every pull request on its own, in
+# test-layer-a-bff-fixture-identity.sh: this suite cannot, because its policy-mode
+# pair in (a) is red against the BFF's `database` declaration until the #634 cut-over.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -753,7 +761,19 @@ BFF_CONFIG="${BFF_DEV}/HeadscaleAclConfig.java"
 BFF_YML="${BFF_ROOT}/src/main/resources/application.yml"
 BFF_COMPILER_TEST="${BFF_ROOT}/src/test/java/net/hugmesh/adminbff/device/HeadscaleAclCompilerTest.java"
 
+# CI (or LAYERA_REQUIRE_BFF=1): an absent sibling is a counted failure, exit 1.
+layera_bff_required() {
+    [ -n "${LAYERA_REQUIRE_BFF:-}" ] || [ "${GITHUB_ACTIONS:-}" = "true" ] || [ "${CI:-}" = "true" ]
+}
+layera_bff_missing_fail() {
+    bad "$1"
+    echo "::error::test-layer-a-headscale-acl: $1. The compile-side half compared NOTHING, so in CI this is a failure, not INCOMPLETE. Supply the checkout with LAYERA_BFF_ROOT=<checkout> or clone it into ${SIBLING_ROOT}."
+    echo "== RESULT: ${P} passed, ${F} failed, COMPILE SIDE NOT CHECKED =="
+    exit 1
+}
 if [ ! -r "${BFF_COMPILER}" ]; then
+    layera_bff_required \
+        && layera_bff_missing_fail "the hugmesh-admin-bff-api checkout is absent (no ${BFF_COMPILER})"
     echo
     echo "  INCOMPLETE: the hugmesh-admin-bff-api checkout carrying the Layer-A compiler is"
     echo "  absent (looked for ${BFF_COMPILER})."
@@ -767,7 +787,9 @@ if [ ! -r "${BFF_COMPILER}" ]; then
     exit 3
 fi
 for f in "${BFF_PROPS}" "${BFF_CONFIG}" "${BFF_YML}" "${BFF_COMPILER_TEST}"; do
-    [ -r "${f}" ] || { echo "  INCOMPLETE: ${f} missing from the sibling checkout"; exit 3; }
+    [ -r "${f}" ] && continue
+    layera_bff_required && layera_bff_missing_fail "${f} is missing from the sibling checkout"
+    echo "  INCOMPLETE: ${f} missing from the sibling checkout"; exit 3
 done
 ok "sibling hugmesh-admin-bff-api checkout present (${BFF_ROOT})"
 
