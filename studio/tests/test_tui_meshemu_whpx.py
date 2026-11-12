@@ -169,9 +169,11 @@ def test_on_a_mac_the_key_stays_on_docker_and_nothing_on_the_screen_is_windows(
     at Docker. A Mac has the one backend, and its refusal is the brew line."""
     from hugmesh_studio.core import macos_host
     real = platform_info.host_kind
+    # a Mac is posix AND darwin: on a Windows runner os.name is "nt", which host_kind
+    # answers before it looks at sys.platform, so both are given
     monkeypatch.setattr(platform_info, "host_kind",
                         lambda osname=None, sysplatform=None:
-                        real(osname, sysplatform or "darwin"))
+                        real(osname or "posix", sysplatform or "darwin"))
     monkeypatch.setattr(platform_info, "_GNU_MISSING", ["bash", "gnu-sed", "coreutils"])
     j = _at_table(gen)
     assert _screen(j)._backend == qw.BACKEND_DOCKER

@@ -54,10 +54,13 @@ LINUX_REMEDY = "Press 'Resume DevOps lane' on the local-mesh page."
 
 
 def _as_a_mac(monkeypatch, missing):
+    """A Mac is posix AND darwin. Both are given, so the answer is a Mac's on any test
+    host: on Windows os.name is "nt", which host_kind answers before sys.platform. A
+    caller that passes osname="nt" still gets Windows."""
     real = platform_info.host_kind
     monkeypatch.setattr(platform_info, "host_kind",
                         lambda osname=None, sysplatform=None:
-                        real(osname, sysplatform or "darwin"))
+                        real(osname or "posix", sysplatform or "darwin"))
     monkeypatch.setattr(platform_info, "_GNU_MISSING", list(missing))
 
 

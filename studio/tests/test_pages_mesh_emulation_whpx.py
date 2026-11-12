@@ -156,9 +156,11 @@ def stock_mac(monkeypatch):
     """This process is a Mac without Homebrew's GNU tools (set up BEFORE the wizard
     builds its pages: name it ahead of ``wiz``)."""
     real = platform_info.host_kind
+    # a Mac is posix AND darwin: on a Windows runner os.name is "nt", which host_kind
+    # answers before it looks at sys.platform, so both are given
     monkeypatch.setattr(platform_info, "host_kind",
                         lambda osname=None, sysplatform=None:
-                        real(osname, sysplatform or "darwin"))
+                        real(osname or "posix", sysplatform or "darwin"))
     monkeypatch.setattr(platform_info, "_GNU_MISSING", ["bash", "gnu-sed", "coreutils"])
 
 
