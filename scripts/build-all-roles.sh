@@ -740,6 +740,36 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
             KEYS_FAILED+=(orangepizero3)
         fi
     fi
+    # ── The mesh CA on every other stick ──────────────────────────────────────
+    # The pki node's headscale serves HTTPS with a certificate from the mesh CA the
+    # pki stick carries (docs/HEADSCALE-DERP.md), and a node trusts it only once
+    # keys-provision installs its own stick's certs/*.crt. Every keys folder above was
+    # generated on its own, so the other sticks have no certs/cluster-ca.crt: hand them
+    # the pki stick's (the CERTIFICATE only, re-encoded by openssl x509; the key never
+    # leaves the pki folder). A folder that already carries one is left alone.
+    _mesh_ca=""
+    for _kd in "${WORK_DIR}"/keys-*/; do
+        if [ -f "${_kd}certs/cluster-ca.key" ] && [ -f "${_kd}certs/cluster-ca.crt" ]; then
+            if [ -z "${_mesh_ca}" ]; then
+                _mesh_ca="${_kd}certs/cluster-ca.crt"
+            elif ! cmp -s "${_mesh_ca}" "${_kd}certs/cluster-ca.crt"; then
+                echo "!! ${_kd%/} is another pki stick with its OWN mesh CA; the other sticks get ${_mesh_ca}'s." >&2
+                echo "!! Nodes provisioned from ${_kd%/} and from the other sticks do not trust each other's headscale." >&2
+            fi
+        fi
+    done
+    if [ -n "${_mesh_ca}" ]; then
+        for _kd in "${WORK_DIR}"/keys-*/; do
+            [ -f "${_kd}certs/cluster-ca.key" ] && continue
+            [ -f "${_kd}certs/cluster-ca.crt" ] && continue
+            mkdir -p "${_kd}certs"
+            if openssl x509 -in "${_mesh_ca}" -out "${_kd}certs/cluster-ca.crt" 2>/dev/null; then
+                echo "==> ${_kd%/}: certs/cluster-ca.crt from ${_mesh_ca%/certs/cluster-ca.crt} (trusts the mesh's headscale)"
+            else
+                echo "!! could not copy the mesh CA into ${_kd%/}/certs — that node cannot verify the control server" >&2
+            fi
+        done
+    fi
 fi
 
 echo

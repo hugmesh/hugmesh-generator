@@ -706,6 +706,7 @@ jobs:
               tests/scripts/test-fragment-route-target.sh
               tests/scripts/test-games-screens-wiring.sh
               tests/scripts/test-gitlab-ci-wellformed.sh
+              tests/scripts/test-headscale-embedded-derp.sh
               tests/scripts/test-headscale-oidc-secret-staging.sh
               tests/scripts/test-mfa-raw-jwt-posture.sh
               tests/scripts/test-mfa-required-rules.sh
@@ -1131,7 +1132,24 @@ jobs:
     # mint_preauth_key; then the real Layer-A apply path of gen-headscale-policy.sh
     # and the real hugmesh-headscale-forcetags. Exit 2 (a failure here) when docker
     # or an image is unavailable.
-    timeout-minutes: 15
+    # tests/scripts/test-headscale-embedded-derp-live.sh runs the PINNED headscale on
+    # a private --internal network with the configs this repo ships (rendered by
+    # keys-provision's real provision_headscale_derp) and proves the mesh starts and
+    # relays with no internet: a negative control shows the old public-map-only
+    # config dies there with "initial DERPMap is empty", a stock client receives a
+    # map holding only the embedded region and a STUN answer, the public-map opt-in
+    # still starts offline, and two clients relay "via DERP" through the local
+    # stack's real tests/stack/tls-front/default.conf. Its section D drives the
+    # SHIPPED node path with nothing edited by hand: KEYS sticks from
+    # scripts/gen-provision-keys.sh (keytool + ssh-keygen + openssl, checked in the
+    # preflight below), keys-provision's own functions in a nicolaka/netshoot
+    # container sharing the node's network namespace, headscale serving HTTPS from
+    # the stick's mesh CA, and two clients on split --internal networks that relay
+    # "via DERP(hugmesh)" to an IP-literal node, plus a packet capture (zero lookups
+    # of a Tailscale name, with a positive control) and a worker without the CA that
+    # must not join. Exits 2 without docker or an image. MEASURED 2026-11-11 on a
+    # Linux host with docker, images cached: 43 passed / 0 failed in about 5 min.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: preflight
@@ -1140,6 +1158,10 @@ jobs:
           # sign that the runner image stopped shipping docker.
           docker info >/dev/null 2>&1 || { echo "::error::preflight: no usable docker daemon — the suite would exit 2"; exit 1; }
           command -v jq >/dev/null 2>&1 || { echo "::error::preflight: jq missing"; exit 1; }
+          # test-headscale-embedded-derp-live.sh section D runs scripts/gen-provision-keys.sh.
+          for t in keytool ssh-keygen openssl python3; do
+            command -v "$t" >/dev/null 2>&1 || { echo "::error::preflight: $t missing (gen-provision-keys.sh needs it)"; exit 1; }
+          done
       - name: run suites
         shell: bash
         run: |
@@ -1149,6 +1171,7 @@ jobs:
             tests/device-registry/test-headscale-tag-ownership.sh
             tests/device-registry/test-headscale-security-tag-live.sh
             tests/device-registry/test-headscale-tag-minters-live.sh
+            tests/scripts/test-headscale-embedded-derp-live.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

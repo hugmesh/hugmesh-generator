@@ -175,10 +175,15 @@ ENV      ?= test
 #                an explicit flag overrides the profile).
 # HEADSCALE_URL= override the brand's own headscale control server (its own mesh).
 #                Passed through as an env var the brand/mesh setup honors.
+# HEADSCALE_PUBLIC_DERP=true  ALSO list Tailscale's public DERP map in the pki node's
+#                headscale. Default OFF: headscale's embedded relay only, so the mesh
+#                starts and relays offline (docs/HEADSCALE-DERP.md). Same knob as the
+#                builders' --headscale-public-derp and gen-provision-keys.sh's.
 # Usage:  make build-all BRAND=acme DOMAIN=acme.example
 BRAND     ?=
 DOMAIN    ?=
 HEADSCALE_URL ?=
+HEADSCALE_PUBLIC_DERP ?=
 
 # ── External CA (optional) ─────────────────────────────────────────────────────
 # Point the cert generators at an EXISTING CA (cert + key) to use it as the
@@ -215,6 +220,9 @@ BRAND_ENV :=
 ifneq ($(strip $(HEADSCALE_URL)),)
 BRAND_ENV += HEADSCALE_URL=$(HEADSCALE_URL)
 endif
+ifneq ($(strip $(HEADSCALE_PUBLIC_DERP)),)
+BRAND_ENV += HEADSCALE_PUBLIC_DERP=$(HEADSCALE_PUBLIC_DERP)
+endif
 # Root SSH login toggle (empty => builder default 'no' = DISABLED). Only threaded when
 # explicitly set, so every image stays hardened-by-default unless opted in.
 ifneq ($(strip $(PERMIT_ROOT_LOGIN)),)
@@ -224,7 +232,7 @@ endif
 # BRAND_PASS — brand make-vars forwarded into the in-container `make` re-invoke
 # (the Docker dispatch path) so BRAND_FLAGS/BRAND_ENV are rebuilt identically
 # inside the builder image. brands/ is mounted at /src/brands via -v $(CURDIR):/src.
-BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
+BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
 
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).
@@ -2070,7 +2078,7 @@ STACK_MESH_TOKEN_DIR := tests/stack/.mesh-token
 STACK_HEADSCALE_COMPOSE := tests/stack/compose.headscale.yaml
 STACK_HEADSCALE_PROFILE := $(if $(strip $(HEADSCALE)), --profile headscale,)
 STACK_HEADSCALE_FLAGS := $(if $(strip $(HEADSCALE)), -f $(STACK_HEADSCALE_COMPOSE),)
-STACK_HEADSCALE_ENV := $(if $(strip $(HEADSCALE)), HUGMESH_DOMAIN='$(STACK_HUGMESH_DOMAIN)' HEADSCALE_MESH_ID='$(HEADSCALE_MESH_ID)',)
+STACK_HEADSCALE_ENV := $(if $(strip $(HEADSCALE)), HUGMESH_DOMAIN='$(STACK_HUGMESH_DOMAIN)' HEADSCALE_MESH_ID='$(HEADSCALE_MESH_ID)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)',)
 STACK_HEADSCALE_DEP := $(if $(strip $(HEADSCALE)),stack-mesh-token-key,)
 STACK_ROUTE_ACCESS_ENV := ROUTE_ACCESS_DB_PASSWORD="$$(bash tests/stack/gen-route-access-env.sh --read)" 
 # The local stack's per-role passwords (hugmesh-generator#857): every Postgres role

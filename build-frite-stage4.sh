@@ -280,6 +280,11 @@ DLV_OFFLINE_KEYRING="${DLV_OFFLINE_KEYRING:-${SCRIPT_DIR}/scripts/gentoo-release
 # Mesh VPN (installed as upstream static arm64 binaries, not emerged) — IDENTICAL
 # to the Pi5 client image so the Frite joins the same headscale/tailscale mesh.
 HEADSCALE_VERSION="0.23.0"
+# Opt-in: ALSO list Tailscale's public DERP map in headscale. Default OFF: the pki
+# node's headscale runs its embedded relay only, so the mesh starts and relays
+# offline (docs/HEADSCALE-DERP.md). --headscale-public-derp or env/brand.conf
+# HEADSCALE_PUBLIC_DERP=true bakes /etc/hugmesh/headscale-public-derp.
+HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
@@ -389,6 +394,8 @@ OPTIONS
 
   Mesh / radios  (same as the Pi5 builder)
     --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
+    --headscale-public-derp  Also list Tailscale's public DERP map (default: the
+                            embedded relay only — offline-first, docs/HEADSCALE-DERP.md).
     --with-tailscale | --no-tailscale   Force the tailnet agent ON/OFF. Outranks
                         the --standalone default (mesh OFF): --standalone
                         --with-tailscale = a local-login desktop that keeps the
@@ -553,6 +560,7 @@ while [[ $# -gt 0 ]]; do
         --packages-add)       PACKAGES_ADD="$2";          shift 2 ;;
         --packages-drop)      PACKAGES_DROP="$2";         shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";     shift 2 ;;
+        --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";     shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;      shift   ;;
@@ -584,6 +592,12 @@ while [[ $# -gt 0 ]]; do
         *)  err "Unexpected argument: $1"; echo "    Run with --help for usage." >&2; exit 1 ;;
     esac
 done
+# --headscale-public-derp / HEADSCALE_PUBLIC_DERP: one spelling, checked before any work.
+case "${HEADSCALE_PUBLIC_DERP}" in
+    true|1|yes|on)   HEADSCALE_PUBLIC_DERP=true ;;
+    false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
+    *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
+esac
 
 # Default work directory: ./out under CWD (local + gitignored)
 [ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/out"
@@ -1812,6 +1826,16 @@ echo "frite:${FRITE_BOARD}" > "${SYSROOT}/etc/hugmesh/board"
 if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/hugmesh/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/hugmesh/headscale-url"
+fi
+# Public Tailscale DERP map opt-in (default OFF: headscale's embedded relay only).
+# keys-provision reads the marker at first boot; provision.json .headscale.public_derp
+# outranks it either way.
+if [ "${HEADSCALE_PUBLIC_DERP}" = true ]; then
+    mkdir -p "${SYSROOT}/etc/hugmesh"
+    echo true > "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+    info "Baked HEADSCALE_PUBLIC_DERP=true -> /etc/hugmesh/headscale-public-derp (public Tailscale DERP map opted in)"
+else
+    rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
 fi
 if ${STANDALONE}; then
     # STANDALONE desktop: bake the marker so keys-provision skips all
