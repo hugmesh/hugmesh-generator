@@ -214,6 +214,19 @@ expect "KEYS (ungoverned) + --local-pass" "$(boot_shape keys-pass false "${FB_HA
 expect "KEYS (ungoverned), no local pass" "$(boot_shape keys-nopass false "" ungoverned no)" y sudoers.d
 expect "governed from the KEYS stick"     "$(boot_shape gov-keys false "${FB_HASH}" governed no)" n -
 expect "governed, templates baked"        "$(boot_shape gov-baked false "" ungoverned yes)" n -
+expect "governed, baked, booted keyless"   "$(boot_shape gov-nokeys false "${FB_HASH}" no yes)" n -
+# A keys-users.created that says neither governed nor ungoverned grants nothing.
+r="$(boot_shape odd-mark false "${FB_HASH}" no no)"
+rm -rf "${r}"; make_root "${r}"; keys_provisioned "${r}" alice "garbage"
+mkdir -p "${r}/etc/hugmesh"; printf 'ann true %s\ncarl false %s\n' "${FB_HASH}" "${FB_HASH}" > "${r}/etc/hugmesh/extra-local-users"
+render "${r}" "${FB_HASH}" false false; run_fb "${r}"; render_extra "${r}"; run_extra "${r}"
+expect "an unreadable KEYS marker"         "${r}" n -
+# 02 alone, nothing from 01 (empty /etc/sudoers): its own %wheel line is what makes wheel sudo.
+r="${TMP}/fb-alone"; rm -rf "${r}"; make_root "${r}"; mkdir -p "${r}/etc/hugmesh"
+printf 'ann true %s\ncarl false %s\n' "${FB_HASH}" "${FB_HASH}" > "${r}/etc/hugmesh/extra-local-users"
+render_extra "${r}"; run_extra "${r}"
+expect "02 alone on an empty sudoers"      "${r}" y wheel
+grep -c '^%wheel ALL=(ALL) ALL' "${r}/etc/sudoers" | grep -qx 1 && ok "02 alone: exactly one %wheel line" || bad "02 alone: %wheel lines: $(cat "${r}/etc/sudoers")"
 
 echo "== 5. Python targets"
 PS="${TMP}/py"; mkdir -p "${PS}/etc/portage/package.use" "${PS}/usr/lib/python3.13" "${PS}/var/db/pkg/dev-lang/python-3.13.5"
