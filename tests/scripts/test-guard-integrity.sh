@@ -1191,6 +1191,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # MERGED (origin/main a88ef74e into akkoma-own-image-v3.20.1): main 246 of 288 (#993; #1022 made
 # this number a floor and gated nothing) + this branch's ONE gated suite = 247 of 289, MEASURED
 # by running this file with GUARD_PREMERGE=0 on the merged tree. PREMERGE_UNGATED is untouched.
+# MERGED (origin/main 16f20c3c, #1007, which gates no suite): RE-MEASURED with
+# GUARD_PREMERGE=0 on the merged tree, still 247 of 289.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-247}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
