@@ -66,10 +66,10 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 GEN_ROOT = os.path.dirname(_HERE)
 GENERATOR = "scripts/package-resolution-report.py"
-REPORT_JSON = os.path.join("docs", "catalog", "package-resolution-report.json")
-REPORT_MD = os.path.join("docs", "PACKAGE-RESOLUTION-RISCV-MIPS.md")
-DEVICE_CATALOG = os.path.join("studio", "hugmesh_studio", "core", "device-catalog.json")
-PACKAGES_CATALOG = os.path.join("docs", "catalog", "packages-catalog.json")
+REPORT_JSON = "docs/catalog/package-resolution-report.json"
+REPORT_MD = "docs/PACKAGE-RESOLUTION-RISCV-MIPS.md"
+DEVICE_CATALOG = "studio/hugmesh_studio/core/device-catalog.json"
+PACKAGES_CATALOG = "docs/catalog/packages-catalog.json"
 SCHEMA = "package-resolution-report/v1"
 DEFAULT_IMAGE = "hugmesh-builder:latest"
 

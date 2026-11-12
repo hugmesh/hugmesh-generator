@@ -128,6 +128,11 @@ def test_markdown_is_the_rendering_of_the_json(prr, report):
 def test_catalog_greyed_reasons_cite_only_missing_components(prr, report, catalog):
     bad = prr.catalog_citation_violations(catalog, report)
     assert not bad, "\n".join(bad)
+    # not blind: the check reads at least one greyed row the report's arch ids name
+    measured = {a["catalog_arch"] for a in report["arches"]}
+    assert any(d.get("arch") in measured and d.get("status") != "supported"
+               for d in catalog["devices"]), \
+        "no greyed catalog row on a measured arch: an arch id was renamed?"
 
 
 def test_every_measured_gap_counts_as_missing(prr, report):
