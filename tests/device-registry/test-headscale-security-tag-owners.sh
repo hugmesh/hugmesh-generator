@@ -32,9 +32,21 @@
 #      and provision_headscale actually calls it;
 #   4. NEGATIVE CONTROLS: a renderer template with tag:superadmin given back to
 #      "hugmesh", and a renderer that gives tag:dev_* an owner, are both caught by the
-#      same check — so a green run is not a vacuous one.
+#      same check — so a green run is not a vacuous one;
+#   5. Tailscale SSH SOURCES. Tailscale SSH answers :22 itself, so whoever an ssh rule
+#      names as src gets a session as the privileged user; tag:hugmesh (and the role
+#      tags, autogroup:member, "*", the "hugmesh" user) is every node holding a
+#      pre-auth key. So: every ssh src in every shipped/rendered/golden policy is
+#      tag:superadmin, the one :22 accept in acls is from tag:superadmin only, and
+#      keys-provision's stick guard (headscale_policy_unprivileged_ssh_sources /
+#      headscale_guard_ssh_sources) flags and narrows every other source under every
+#      spelling headscale reads, on the policy AND on the bootstrap it falls back on.
+#      Negative controls put tag:hugmesh back as a source and require a failure.
+#      Because per-node edges now share the superadmin source, the Layer-A fallback
+#      (revocation_safe_fallback) is checked to still drop a revoked per-node edge.
 # The live proof that headscale really refuses a self-advertised tag:superadmin under
-# this policy is test-headscale-security-tag-live.sh (needs docker).
+# this policy, and that only the force-tagged superadmin gets a Tailscale SSH session,
+# is test-headscale-security-tag-live.sh (needs docker).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -232,6 +244,185 @@ else
        && ! { o="$(owners_of_security_tags "${WORK}/mut2.hujson")" && [ -z "$o" ]; }; then
         ok "a renderer that gives tag:dev_* an owner is caught"
     else bad "a renderer that gives tag:dev_* an owner was NOT caught"; fi
+fi
+
+# ── 5. Tailscale SSH sources ─────────────────────────────────────────────────
+echo "== Tailscale SSH sources =="
+# ssh_contract <label> <file>: every ssh src is tag:superadmin, there is at least one
+# ssh rule (or this check is vacuous), tag:superadmin is declared ownerless (headscale
+# 0.23 builds no map while a rule names an undeclared, unforced tag), and every acls
+# entry but the CIDR data-plane rule is a :22-only accept from tag:superadmin, of
+# which there is exactly one (without it the ssh rules are unreachable: measured).
+ssh_contract() {
+    local label="$1" f="$2" bad_src n22
+    if ! strip "$f" | jq -e '(.ssh | type) == "array" and (.ssh | length) > 0' >/dev/null 2>&1; then
+        bad "${label}: no ssh rule to check (the source check would be vacuous)"; return
+    fi
+    bad_src="$(strip "$f" | jq -r '[.ssh[] | (.src // [])[] | select(. != "tag:superadmin")] | unique[]' 2>/dev/null)"
+    [ -z "${bad_src}" ] && ok "${label}: every ssh rule's src is tag:superadmin only" \
+        || bad "${label}: ssh rule(s) grant a session to a non-privileged source: $(printf '%s' "${bad_src}" | tr '\n' ' ')"
+    strip "$f" | jq -e '.tagOwners["tag:superadmin"] == []' >/dev/null 2>&1 \
+        && ok "${label}: tag:superadmin (the ssh source) is declared with an EMPTY owner list" \
+        || bad "${label}: tag:superadmin is not declared ownerless — either claimable or, undeclared, every node's map fails"
+    n22="$(strip "$f" | jq '[.acls[] | select(.dst != ["10.244.0.0/16:*", "10.96.0.0/12:*"])] as $o
+        | if all($o[]; .action == "accept" and .src == ["tag:superadmin"] and (.dst | length) > 0
+                        and all(.dst[]; endswith(":22"))) then ($o | length) else -1 end' 2>/dev/null)"
+    case "${n22}" in
+        1)  ok "${label}: the only acl beside the CIDR rule is a :22 accept from tag:superadmin (the session can be reached, by nobody else)" ;;
+        0)  bad "${label}: no :22 accept for tag:superadmin — every Tailscale SSH session times out at the packet filter" ;;
+        -1) bad "${label}: an acl beside the CIDR rule is not a :22-only accept from tag:superadmin" ;;
+        *)  bad "${label}: expected exactly one superadmin :22 accept, found '${n22}'" ;;
+    esac
+}
+for rel in "${POLICIES[@]}"; do
+    [ -f "${REPO}/${rel}" ] && ssh_contract "${rel}" "${REPO}/${rel}"
+done
+[ -f "${RENDERED}" ] && ssh_contract "rendered" "${RENDERED}" || bad "no rendered policy to check"
+[ -f "${GOLDEN}" ] && ssh_contract "parity golden" "${GOLDEN}"
+
+echo "== keys-provision ssh-source guard =="
+SSH_GUARD_SRC="$(for fn in headscale_policy_unprivileged_ssh_sources headscale_policy_narrow_ssh_sources headscale_guard_ssh_sources; do
+    awk -v f="${fn}()" 'index($0, f) == 1 {p=1} p {print} p && /^}/ {exit}' "${PROVISION}"; done)"
+if grep -q '^headscale_guard_ssh_sources()' <<< "${SSH_GUARD_SRC}" \
+   && grep -q '^headscale_policy_narrow_ssh_sources()' <<< "${SSH_GUARD_SRC}" \
+   && grep -q '^headscale_policy_unprivileged_ssh_sources()' <<< "${SSH_GUARD_SRC}"; then
+    log()  { :; }; warn() { :; }
+    eval "${SSH_GUARD_SRC}"
+    G="${WORK}/sshguard"; mkdir -p "${G}"
+    # srcs_of <json-text>: what the guard reports, space-joined; "UNREADABLE" when it says rc 1.
+    srcs_of() {
+        printf '%s' "$1" > "${G}/p.json"
+        local o; o="$(headscale_policy_unprivileged_ssh_sources "${G}/p.json")" || { echo UNREADABLE; return; }
+        printf '%s' "${o}" | tr '\n' ' ' | sed 's/ $//'
+    }
+    expect() { # <label> <expected> <json>
+        local got; got="$(srcs_of "$3")"
+        [ "${got}" = "$2" ] && ok "guard: $1 -> '${2:-clean}'" || bad "guard: $1 -> expected '${2:-clean}', got '${got}'"
+    }
+    expect "only tag:superadmin"                 ""                 '{"ssh":[{"action":"accept","src":["tag:superadmin"],"dst":["tag:hugmesh"],"users":["a"]}]}'
+    expect "tag:hugmesh (main's shape)"          "tag:hugmesh"      '{"ssh":[{"action":"accept","src":["tag:hugmesh"],"dst":["tag:hugmesh"],"users":["a"]}]}'
+    expect "autogroup:member beside superadmin"  "autogroup:member" '{"ssh":[{"src":["autogroup:member","tag:superadmin"]}]}'
+    expect "a self-applied role tag"             "tag:pki"          '{"ssh":[{"action":"check","src":["tag:pki"]}]}'
+    expect "the wildcard"                        "*"                '{"ssh":[{"src":["*"]}]}'
+    expect "the membership user and a group"     "group:ops hugmesh" '{"ssh":[{"src":["hugmesh"]},{"src":["group:ops"]}]}'
+    expect "ownerless but forced on every node"  "tag:mesh_east-01" '{"ssh":[{"src":["tag:mesh_east-01"]}]}'
+    expect "an \"SSH\" member headscale also reads" "tag:pki"       '{"ssh":[{"src":["tag:superadmin"]}],"SSH":[{"Src":["tag:pki"]}]}'
+    expect "the first of two ssh members"        "*"                '{"ssh":[{"src":["*"]}],"ssh":[{"src":["tag:superadmin"]}]}'
+    expect "the first of two src members"        "hugmesh"          '{"ssh":[{"src":["hugmesh"],"src":["tag:superadmin"]}]}'
+    expect "no ssh member at all"                ""                 '{"acls":[]}'
+    expect "a non-ASCII top-level name"          UNREADABLE         "$(printf '{"\xc5\xbfsh":[{"src":["tag:hugmesh"]}]}')"
+    expect "a non-ASCII rule member name"        UNREADABLE         "$(printf '{"ssh":[{"\xc5\xbfrc":["tag:hugmesh"]}]}')"
+    expect "src as a bare string"                UNREADABLE         '{"ssh":[{"src":"tag:hugmesh"}]}'
+    expect "ssh as an object"                    UNREADABLE         '{"ssh":{"x":{"src":["tag:hugmesh"]}}}'
+    expect "a // inside a string"                UNREADABLE         '{"ssh":[{"src":["tag:superadmin"],"x":"//","SRC":["tag:hugmesh"]}]}'
+    expect "unparseable text"                    UNREADABLE         '{bad'
+    expect "an empty file"                       UNREADABLE         ''
+    for rel in "${POLICIES[@]}"; do
+        o="$(headscale_policy_unprivileged_ssh_sources "${REPO}/${rel}")" && [ -z "${o}" ] \
+            && ok "guard passes the shipped ${rel}" || bad "guard rejects the shipped ${rel} ('${o}')"
+    done
+    # narrowing keeps everything but the bad sources
+    printf '%s' '{"acls":[{"action":"accept","src":["tag:hugmesh"],"dst":["10.244.0.0/16:*"]}],"SSH":[{"Src":["tag:pki","tag:superadmin"],"dst":["tag:hugmesh"],"users":["a"]},{"src":["*"]}],"ssh":[{"src":["tag:hugmesh"],"users":["a"]}]}' > "${G}/n.json"
+    if headscale_policy_narrow_ssh_sources "${G}/n.json" \
+       && jq -e '.SSH == [{"Src":["tag:superadmin"],"dst":["tag:hugmesh"],"users":["a"]}] and .ssh == []
+                 and .acls == [{"action":"accept","src":["tag:hugmesh"],"dst":["10.244.0.0/16:*"]}]' "${G}/n.json" >/dev/null; then
+        ok "narrowing keeps only tag:superadmin sources, drops rules left with none, leaves acls alone"
+    else bad "narrowing produced $(jq -c . "${G}/n.json" 2>/dev/null)"; fi
+    printf '%s' '{bad' > "${G}/n2.json"
+    if headscale_policy_narrow_ssh_sources "${G}/n2.json"; then bad "narrowing 'succeeded' on unparseable text"
+    elif [ "$(cat "${G}/n2.json")" = '{bad' ] && [ -z "$(find "${G}" -name 'n2.json.ssh-narrowed.*')" ]; then
+        ok "narrowing an unparseable policy fails, leaves the file untouched and no temp file"
+    else bad "a failed narrowing changed the file or left a temp file"; fi
+
+    # headscale_guard_ssh_sources end to end, against throwaway policy/bootstrap files.
+    MAIN_SHAPE='{"tagOwners":{"tag:hugmesh":["hugmesh"],"tag:superadmin":[]},"acls":[],"ssh":[{"action":"accept","src":["tag:hugmesh"],"dst":["tag:hugmesh"],"users":["admin"]}]}'
+    # Each case gets its own directory (${C}); nothing is reused or removed.
+    n_case=0
+    case_dir() { n_case=$((n_case + 1)); C="${G}/case${n_case}"; mkdir -p "${C}"; }
+    clean_now() { o="$(headscale_policy_unprivileged_ssh_sources "$1")" && [ -z "${o}" ]; }
+    case_dir; printf '%s' "${MAIN_SHAPE}" > "${C}/policy.hujson"; cp "${REPO}/specs/etc/headscale/policy.bootstrap.hujson" "${C}/boot.hujson"
+    headscale_guard_ssh_sources "${C}/policy.hujson" "${C}/boot.hujson"
+    cmp -s "${C}/policy.hujson" "${REPO}/specs/etc/headscale/policy.bootstrap.hujson" \
+        && ok "stick policy granting SSH to tag:hugmesh -> the clean bootstrap is staged instead" \
+        || bad "stick policy granting SSH to tag:hugmesh was not replaced by the bootstrap"
+    case_dir; printf '%s' "${MAIN_SHAPE}" > "${C}/policy.hujson"; printf '%s' "${MAIN_SHAPE}" > "${C}/boot.hujson"
+    headscale_guard_ssh_sources "${C}/policy.hujson" "${C}/boot.hujson"
+    clean_now "${C}/policy.hujson" && clean_now "${C}/boot.hujson" \
+        && ok "a stick that also ships its own member-SSH bootstrap: both end up naming tag:superadmin only" \
+        || bad "a stick-supplied member-SSH bootstrap survived the guard (the owner check falls back on it)"
+    case_dir; printf '%s' '{bad' > "${C}/policy.hujson"; cp "${REPO}/specs/etc/headscale/policy.bootstrap.hujson" "${C}/boot.hujson"
+    headscale_guard_ssh_sources "${C}/policy.hujson" "${C}/boot.hujson"
+    cmp -s "${C}/policy.hujson" "${REPO}/specs/etc/headscale/policy.bootstrap.hujson" \
+        && ok "an unreadable stick policy -> the clean bootstrap is staged" || bad "an unreadable stick policy was kept although a clean bootstrap exists"
+    case_dir; cp "${REPO}/keys-template/headscale/policy.hujson" "${C}/policy.hujson"; cp "${REPO}/specs/etc/headscale/policy.bootstrap.hujson" "${C}/boot.hujson"
+    headscale_guard_ssh_sources "${C}/policy.hujson" "${C}/boot.hujson"
+    cmp -s "${C}/policy.hujson" "${REPO}/keys-template/headscale/policy.hujson" \
+        && ok "the shipped keys-template policy is loaded as is (byte for byte)" || bad "the guard rewrote a clean keys-template policy"
+    case_dir; printf '%s' "${MAIN_SHAPE}" > "${C}/policy.hujson"
+    headscale_guard_ssh_sources "${C}/policy.hujson" "${C}/boot.hujson"
+    clean_now "${C}/policy.hujson" && jq -e '.ssh == [] and .tagOwners["tag:superadmin"] == []' "${C}/policy.hujson" >/dev/null 2>&1 \
+        && ok "no bootstrap at all -> the stick policy itself is narrowed" || bad "with no bootstrap the member-SSH policy was left as is"
+    case_dir; printf '%s' "${MAIN_SHAPE}" > "${C}/policy.hujson"; printf '%s' '{bad' > "${C}/boot.hujson"
+    headscale_guard_ssh_sources "${C}/policy.hujson" "${C}/boot.hujson"
+    [ ! -e "${C}/boot.hujson" ] && [ -e "${C}/boot.hujson.refused" ] && clean_now "${C}/policy.hujson" \
+        && ok "an unreadable bootstrap is set aside (nothing falls back on it) and the policy is narrowed" \
+        || bad "an unreadable bootstrap stayed in place, or the policy was not narrowed"
+else
+    bad "the ssh-source guard functions are not all in ${PROVISION}"
+fi
+# The call: provision_headscale runs the guard on the policy it loads and on the
+# bootstrap, BEFORE the owner check (whose bootstrap fallback must already be clean).
+call_ln="$(grep -n 'headscale_guard_ssh_sources /etc/headscale/policy.hujson /etc/headscale/policy.bootstrap.hujson' <<< "${PH_BODY}" | head -1 | cut -d: -f1)"
+owner_ln="$(grep -n 'headscale_policy_owned_security_tags "\${policy_file}"' <<< "${PH_BODY}" | head -1 | cut -d: -f1)"
+if [ -n "${call_ln}" ] && [ -n "${owner_ln}" ] && [ "${call_ln}" -lt "${owner_ln}" ]; then
+    ok "provision_headscale runs the ssh-source guard on policy.hujson + the bootstrap, before the owner check"
+else bad "provision_headscale does not run headscale_guard_ssh_sources before the owner check (guard line '${call_ln}', owner line '${owner_ln}')"; fi
+
+echo "== Layer-A fallback: a revoked superadmin-sourced per-node edge stays revoked =="
+# The renderer sources every per-node edge from tag:superadmin, the same src as the
+# break-glass mesh edge. revocation_safe_fallback (what runs while headscale refuses a
+# new policy) must still drop the per-node edge the refused policy revoked: break-glass
+# is that src AND a tag:mesh_* dst. Uses the REAL rendered shape from 2b.
+if [ -f "${RENDERED}" ] && declare -F revocation_safe_fallback >/dev/null; then
+    FB="${WORK}/fallback"; mkdir -p "${FB}"
+    strip "${RENDERED}" > "${FB}/prev.json"
+    TAG_B_FB="tag:$(dev_tag_for_fp fpB)"
+    strip "${RENDERED}" | jq --arg b "${TAG_B_FB}" '.ssh |= map(select(.dst != [$b]))' > "${FB}/rejected.json"
+    serves_fb() { jq -e --arg d "$2" 'any(.ssh[]?; .dst == [$d])' "$1" >/dev/null 2>&1; }
+    if revocation_safe_fallback "${FB}/prev.json" "${FB}/rejected.json" "${FB}/out.json"; then
+        ! serves_fb "${FB}/out.json" "${TAG_B_FB}" \
+            && ok "fallback drops the revoked per-node edge to ${TAG_B_FB} although its src is tag:superadmin" \
+            || bad "fallback kept the revoked per-node edge to ${TAG_B_FB} (src tag:superadmin taken for break-glass)"
+        serves_fb "${FB}/out.json" "${MESH_TAG}" && serves_fb "${FB}/out.json" "tag:$(dev_tag_for_fp fpA)" \
+            && ok "fallback keeps the break-glass mesh edge and the still-licensed per-node edge" \
+            || bad "fallback lost the break-glass mesh edge or the still-licensed per-node edge"
+    else bad "revocation_safe_fallback could not narrow the rendered policy"; fi
+    printf '%s' '{bad' > "${FB}/rejected-bad.json"
+    if revocation_safe_fallback "${FB}/prev.json" "${FB}/rejected-bad.json" "${FB}/out2.json"; then
+        [ "$(jq -c '[.ssh[].dst[]]' "${FB}/out2.json")" = "[\"${MESH_TAG}\"]" ] \
+            && ok "an unparseable refused policy leaves only the break-glass mesh edge" \
+            || bad "an unparseable refused policy left $(jq -c '[.ssh[].dst[]]' "${FB}/out2.json") (want only ${MESH_TAG})"
+    else bad "revocation_safe_fallback failed on an unparseable refused policy"; fi
+else
+    bad "no rendered policy or no revocation_safe_fallback to check"
+fi
+
+echo "== negative controls (ssh sources) =="
+MUT_R="${WORK}/mut-ssh-renderer.sh"
+sed 's/^SSH_SRC="tag:superadmin"$/SSH_SRC="tag:hugmesh"/' "${RENDERER}" > "${MUT_R}"
+if cmp -s "${RENDERER}" "${MUT_R}"; then
+    bad "negative control could not plant tag:hugmesh as the renderer's ssh source (shape changed?) — the check is unproven"
+elif ( . "${MUT_R}"; POLICY_TMPL="${TMPL}"; render_policy "${EXPORT}" "${WORK}/mut3.hujson" ) \
+     && [ -n "$(strip "${WORK}/mut3.hujson" | jq -r '[.ssh[] | .src[] | select(. != "tag:superadmin")] | .[]')" ]; then
+    ok "a renderer whose ssh source is tag:hugmesh is caught"
+else bad "a renderer whose ssh source is tag:hugmesh was NOT caught"; fi
+sed 's/"src": \["tag:superadmin"\],/"src": ["tag:hugmesh"],/' "${REPO}/keys-template/headscale/policy.hujson" > "${WORK}/mut-stick.hujson"
+if cmp -s "${REPO}/keys-template/headscale/policy.hujson" "${WORK}/mut-stick.hujson"; then
+    bad "negative control could not plant tag:hugmesh as the stick policy's ssh source — the check is unproven"
+else
+    o="$(headscale_policy_unprivileged_ssh_sources "${WORK}/mut-stick.hujson")" && [ "${o}" = "tag:hugmesh" ] \
+        && ok "a stick policy with tag:hugmesh as its ssh source is flagged by the guard" \
+        || bad "a stick policy with tag:hugmesh as its ssh source was NOT flagged (got '${o}')"
 fi
 
 echo
