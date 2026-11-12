@@ -77,6 +77,8 @@ source "${SCRIPT_DIR}/scripts/_kernel-cache-lib.sh"
 # the lib header for the observed symptoms of all three.
 # shellcheck source=scripts/_optional-services-lib.sh
 source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
+# shellcheck source=scripts/_prod-gate-lib.sh
+source "${SCRIPT_DIR}/scripts/_prod-gate-lib.sh"
 # Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
@@ -699,6 +701,12 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             pruned; OAuth/SMTP optional). prod = real public domain
                             (Cloudflare/ACME allowed; creds from keys USB) — prints
                             a LOUD announced banner before building.
+      --release-tag TAG     The tag --env prod pins first-party :dev image tags to.
+                            Letters, digits, . _ - only, and not dev/main/latest
+                            (since #964 '+', '/' and other characters are refused;
+                            none is valid in an image tag). With --env prod a bad
+                            tag is refused before the build starts. Default: the
+                            UTC build date (YYYYMMDD).
       --cluster-domain D    Default: ${CLUSTER_DOMAIN}
       --superdomain D       Orchestration superdomain (mesh MagicDNS suffix) baked to
                             /etc/<brand>/superdomain + headscale base_domain. Mesh only;
@@ -1867,6 +1875,13 @@ if ${STANDALONE}; then
     info "STANDALONE desktop: no mesh / no SSO / no k8s; local user '${LOCAL_USER}'; LUKS FDE on install; media-data auto-detect=${MEDIA_DATA}"
 fi
 
+# tailscaled version floor (scripts/_download-lib.sh): the shared init script passes
+# --no-logs-no-support, which tailscaled only accepts from 1.32.0 on. Refuse an older
+# --tailscale-version HERE, after the --standalone posture above has settled whether
+# tailscale ships at all and before any download, instead of shipping a mesh client
+# that exits on an unknown flag.
+${SKIP_MESH} || ${SKIP_TAILSCALE} || dlv_tailscale_version_ok "${TAILSCALE_VERSION}" || exit 1
+
 # ── Tor NODE service: CLIENT roles never carry it (hugmesh-generator#583) ─────────
 # ROLE_CLIENT is FINAL only from here: the role case block sets it for the desktop
 # roles, and the UNAFFILIATED -> STANDALONE folds above set it for everything else
@@ -2495,6 +2510,11 @@ case "${ENV}" in
     test|prod) ;;
     *) err "--env must be one of: test | prod  (got '${ENV}')"; exit 1 ;;
 esac
+# ENV=prod pins first-party :dev image tags to RELEASE_TAG at bake time; refuse a
+# floating or malformed tag NOW, not after the emerge phase (scripts/_prod-gate-lib.sh).
+if [ "${ENV}" = "prod" ]; then
+    prod_gate_validate_release_tag "${RELEASE_TAG}" || exit 1
+fi
 
 # ── Validate the release-state posture (baked into the image) ─────────────
 case "${RELEASE_STATE}" in
@@ -2966,44 +2986,14 @@ GROWFS_EOF
 # only first-party image lines (image: ...hugmesh-.../...-{api,ui,bff,web,gateway}:dev
 # + the akkoma/tuwunel pins) are rewritten; third-party `:dev`-less images untouched.
 rewrite_prod_image_tags() {
-    local tree="${SYSROOT}/var/lib/hugmesh/cluster"
-    [ -d "${tree}" ] || return 0
-    local n=0 f
-    while IFS= read -r -d '' f; do
-        # Any first-party image (its repo path contains 'hugmesh') tagged :dev
-        # -> :RELEASE_TAG. Matches `image: <registry>/hugmesh.../<name>:dev`.
-        # The repo-path char class EXCLUDES ':' so the greedy match stops before
-        # the ':dev' tag (image repo paths carry no ':' except a registry port,
-        # which our first-party images do not use).
-        if grep -qE 'image:[[:space:]]*[^[:space:]:]*hugmesh[^[:space:]:]*:dev([[:space:]]|$)' "${f}" 2>/dev/null; then
-            sed -i -E "s|(image:[[:space:]]*[^[:space:]:]*hugmesh[^[:space:]:]*):dev|\\1:${RELEASE_TAG}|g" "${f}"
-            n=$((n+1))
-        fi
-    done < <(find "${tree}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 2>/dev/null)
-    info "ENV=prod: pinned first-party :dev image tags -> :${RELEASE_TAG} in ${n} file(s)"
-    # Prune the ENV=test e2e harness (forbidden in prod by the hygiene gate's
-    # tier:test rule). NOTE: the pen-test is now DEV/CI-pipeline-only (a per-repo
-    # ArgoCD CI stage + a build option), NOT a deployed cluster wave — there is no
-    # pentest-runner app/manifest to prune anymore.
-    rm -f "${SYSROOT}/var/lib/hugmesh/cluster/apps/99-test-runner.yaml" \
-          "${SYSROOT}/var/lib/hugmesh/cluster/apps/00-app-of-apps-waved.yaml" 2>/dev/null || true
-    rm -rf "${SYSROOT}/var/lib/hugmesh/cluster/manifests/test-runner" 2>/dev/null || true
-    info "ENV=prod: pruned the test-runner wave (apps/99-test-runner.yaml + manifests/test-runner) from the baked tree"
-    # STATIC prod-hygiene self-check over the BAKED tree — hard-fail the build if
-    # any dev-only server / tier:test resource / floating :dev tag survived the
-    # prune + rewrite above. (The RUNTIME leg — the seam/seal/live-pod probe — is
-    # the ArgoCD PreSync hook Job apps/00-prod-hygiene.yaml runs in-cluster.)
-    local hygiene="${SCRIPT_DIR}/scripts/validate-prod-hygiene.sh"
-    if [ -x "${hygiene}" ] || [ -f "${hygiene}" ]; then
-        if bash "${hygiene}" "${tree}"; then
-            info "ENV=prod: prod-hygiene static gate PASSED on the baked tree"
-        else
-            err "ENV=prod: prod-hygiene static gate FAILED on the baked tree (a dev-only server / test harness / floating :dev tag survived) — refusing to build a prod image"
-            exit 1
-        fi
-    else
-        warn "prod-hygiene gate script not found at ${hygiene}; skipping the static self-check"
-    fi
+    # The implementation is shared with the Pi builder's gate_env_apps (and through
+    # it the Orange Pi node builders): scripts/_prod-gate-lib.sh. It pins the :dev
+    # tags, prunes the test-runner wave and runs the static prod-hygiene self-check,
+    # failing closed. (The RUNTIME leg is the ArgoCD PreSync hook Job
+    # apps/00-prod-hygiene.yaml runs in-cluster.)
+    prod_gate_cluster_tree "${SYSROOT}/var/lib/hugmesh/cluster" "${RELEASE_TAG}" \
+        "${SCRIPT_DIR}/scripts/validate-prod-hygiene.sh" \
+        || { err "ENV=prod: the baked cluster tree is not clean for prod (see above); refusing to build a prod image"; exit 1; }
 }
 
 # ── OPTIONAL-SERVICE gate ───────────────────────────────────────────────────
@@ -7597,6 +7587,27 @@ pcs_unquiet_sendfile_noise "${SYSROOT}"
 # dev, run, plus var/cache/distfiles and the local user's home — no tmp), so a file
 # left in ${SYSROOT}/tmp rides into the ISO's rootfs.
 rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
+
+# ── NetworkManager: no connectivity probe (cluster-node roles) ──
+# The networkmanager package ships /usr/lib/NetworkManager/conf.d/20-connectivity.conf,
+# which polls a fixed public URL (nmcheck.gnome.org) every few minutes, forever: an
+# unsolicited phone-home from a self-hosted mesh, and DNS noise on an offline or
+# egress-filtered LAN. A server has no captive portal to detect; a client desktop keeps
+# the package default. HERE, before the build-time label pass below: this is a NEW
+# file, so unlike the package-owned conf.d/NetworkManager (rewritten in place after the
+# pass, keeping its label) it has no label until setfiles runs, and the stage4 tar is
+# packed from the sysroot with no further pass. ROLE_CLIENT is final long before here
+# and the file is not package-owned, so no later emerge can replace it. 90- so it sorts
+# after the package's own conf.d files. Pinned by tests/scripts/test-node-telemetry-off.sh.
+if ! ${ROLE_CLIENT}; then
+    mkdir -p "${SYSROOT}/etc/NetworkManager/conf.d"
+    printf '%s\n' \
+        '# Written by the HugMesh builder (cluster-node roles): no connectivity probe' \
+        '# to a public URL. Delete this file to restore the package default.' \
+        '[connectivity]' \
+        'enabled=false' > "${SYSROOT}/etc/NetworkManager/conf.d/90-hugmesh-no-connectivity-check.conf"
+    info "NetworkManager: connectivity check OFF (cluster node — no public probe URL)"
+fi
 
 # ── BUILD-TIME SELINUX LABELS (#503) ─────────────────────────────────────────
 # Labels and the hugmesh modules are BUILD ARTIFACTS: every carrier below (stage4,

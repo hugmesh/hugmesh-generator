@@ -342,6 +342,13 @@ def _migrated_services(cfg: LocalMeshBootstrapConfig) -> LocalMeshBootstrapConfi
 #: was retired (2026-10-21): what is left on it is the mesh's own infrastructure.
 MESH_INFRA_TITLE = "The mesh's own infrastructure (chosen once for the whole mesh)"
 
+#: The Domains step's prod line while row 0 (the public apex) is blank. Shown on ENTRY
+#: and kept live as row 0 is typed (GUI-21): it used to be written only by the step's
+#: own Next, which then moved on, so nobody saw it until the plan's BLOCKERS.
+PROD_APEX_NOTE = ("A prod mesh needs its public apex domain in row 0 — the minted "
+                  "issuer and superadmin align with it. The mesh cannot start "
+                  "without it.")
+
 
 _IDP_JWKS_HINTS = {
     "entra": "empty = <issuer>/discovery/v2.0/keys",
@@ -732,12 +739,11 @@ class _LocalMeshWrites(MeshWrites):
 
 class LocalMeshPage(QtWidgets.QWizardPage):
     #: The subtitle once the bottom panel holds the actions, the stages and the table.
+    #: Two lines at most — the wizard header clips the rest mid-sentence (GUI-14).
     DOCKED_SUBTITLE = (
-        "Everything is chosen. Press 'Generate & start' on the panel's Local mesh tab "
-        "(at the bottom of this window) to mint the credentials and bring the mesh up "
-        "on THIS machine; the panel's Mesh run and Running mesh tabs report what "
-        "happens. This is the end of this path: Exit closes the Studio; the mesh keeps "
-        "running in Docker.")
+        "Press 'Generate & start' on the panel's Local mesh tab (at the bottom) to bring "
+        "the mesh up; its Mesh run tab reports progress. Exit closes the Studio; the mesh "
+        "keeps running.")
 
     def __init__(self, wiz):
         super().__init__()
@@ -801,11 +807,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "the running stack has not been checked yet — the readiness probe has "
             "not reported."]
         self.setTitle("Bring-up and monitor")
-        self.setSubTitle("Everything is chosen. Press 'Generate && start' to mint the "
-                         "credentials and bring the mesh up on THIS machine; the "
-                         "stages and the running-mesh table below report what happens. "
-                         "This is the end of this path: Exit closes the Studio; the "
-                         "mesh keeps running in Docker.")
+        # Two lines at most — the wizard header clips the rest mid-sentence (GUI-14).
+        self.setSubTitle("Press 'Generate && start' to bring the mesh up on THIS "
+                         "machine; the stages and table below report what happens. "
+                         "Exit closes the Studio; the mesh keeps running in Docker.")
         self.setFinalPage(True)
         # Pressing the final button here does nothing but close the Studio — no
         # build, no apply, no write, no state commit — so it says so (_widgets:
@@ -1397,6 +1402,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.domains_note.setStyleSheet("color: #c62828;")
         self.domains_note.setVisible(False)
         lay.addWidget(self.domains_note)
+        #: the refusals the step's last Next found (``_commit_domains``); the prod
+        #: apex line is NOT stored — ``_render_domains_note`` reads it live
+        self._domains_problems: list[str] = []
         return w
 
     def _build_domain_services_section(self) -> QtWidgets.QWidget:
@@ -1451,7 +1459,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # a renamed own domain is a domain nobody has reviewed under that name
             record_reviewed(md, md.domain_services_reviewed)
         self.domains_table.fill(md.domains, md.own_name)
-        self.domains_note.setVisible(False)
+        # a fresh entry drops the last Next's refusals, but a blank prod apex is said
+        # NOW, not after a Next that moves on past it (GUI-21)
+        self._domains_problems = []
+        self._render_domains_note()
         # Once the Domains step owns the own domain, the overlay's field is a mirror.
         self.boot_domain.setReadOnly(True)
         self.boot_domain_note.setVisible(True)
@@ -1518,23 +1529,33 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         md.domains = [own_row] + added
         md.own_name = own
         record_reviewed(md, md.domain_services_reviewed)
-        blank = prod and not own
         # a GitHub org that is not a slug is refused here, inline, with the sentence
         # the image flow's DomainsPage.validatePage uses — it used to be accepted on
         # this route and reach the saved record
         problems = table.org_problems() + self._domain_row_problems()
+        self._domains_problems = list(problems)
+        self._render_domains_note()
+        self._refresh_plan()
+        return not problems
+
+    def _render_domains_note(self) -> None:
+        """The Domains step's inline note: the last Next's refusals, plus — on a prod
+        mesh whose row 0 is still blank — PROD_APEX_NOTE, read from the table as it is
+        NOW. READ-ONLY by design: it is the slot for every row-0 edit (itemChanged),
+        so it writes nothing to ``mesh_domains`` or ``boot_domain`` (only
+        ``_commit_domains`` does) and never opens a modal. Every caller fills the
+        table first, and ``fill`` always lays down a row 0, so "" here means a blank
+        apex, never a missing row. A note, not a refusal: Next stays enabled (the
+        bring-up's validate() is what refuses a blank apex, and the review step's
+        saved meshes stay reachable)."""
+        problems = list(self._domains_problems)
         lines = list(problems)
-        if blank:
-            lines.append(
-                "A prod mesh needs its public apex domain in row 0 — the minted "
-                "issuer and superadmin align with it. The mesh cannot start without "
-                "it.")
+        if self.env_prod.isChecked() and not self.domains_table.own_row_name():
+            lines.append(PROD_APEX_NOTE)
         if problems:
             lines.append("Fix or remove these rows to continue.")
         self.domains_note.setText("\n".join(lines))
         self.domains_note.setVisible(bool(lines))
-        self._refresh_plan()
-        return not problems
 
     def _build_source_section(self) -> QtWidgets.QWidget:
         w = QtWidgets.QWidget()
@@ -1849,6 +1870,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_login_server = QtWidgets.QLineEdit()
         self.boot_login_server.setPlaceholderText("optional self-hosted headscale URL")
         pg.addWidget(_row("Login server", self.boot_login_server))
+        # Inline (never a modal), INSIDE the prod group so it hides with it: which of
+        # the two prod requirements is still empty (GUI-21 — Next used to walk past
+        # both with nothing said until the plan's BLOCKERS). Never echoes the key.
+        self.overlay_note = QtWidgets.QLabel("")
+        self.overlay_note.setWordWrap(True)
+        self.overlay_note.setStyleSheet("color: #c62828;")
+        self.overlay_note.setVisible(False)
+        pg.addWidget(self.overlay_note)
         lay.addWidget(self.prod_group)
         lay.addStretch(1)
         return w
@@ -2308,6 +2337,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_domain.textChanged.connect(self._refresh_plan)
         self.boot_auth_key.textChanged.connect(self._refresh_plan)
         self.boot_login_server.textChanged.connect(self._refresh_plan)
+        # the Domains step's prod-apex line follows row 0 as it is typed (GUI-21); the
+        # slot is read-only (_render_domains_note). The env is switched on the step
+        # BEFORE, and entering this one re-seeds row 0 and re-renders the note.
+        self.domains_table.table.itemChanged.connect(
+            lambda _item: self._render_domains_note())
 
     @staticmethod
     def _wrap(inner_layout) -> QtWidgets.QWidget:
@@ -2948,7 +2982,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # the old walk's ticks over the loaded ones and rebuilds the reviewed markers
         # from the old walk, un-reviewing every loaded row.
         self.domain_services.reload(md)
-        self.domains_note.setVisible(False)
+        self._domains_problems = []
+        self._render_domains_note()
         self.boot_domain.setReadOnly(True)
         self.boot_domain_note.setVisible(True)
 
@@ -3479,11 +3514,37 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                                   own_name=self._own_domain_name(),
                                   record_id=getattr(self, "_loaded_record_id", "") or "")
 
+    def _render_overlay_note(self) -> None:
+        """The Mesh overlay step's inline note: which of the two prod requirements
+        (the public apex, the auth key) is still empty, and where it is set. Hidden
+        on a test mesh and once both are given. A note, not a refusal — the same
+        rule as the Domains step's (``_render_domains_note``). It reads only whether
+        the key is EMPTY; the key itself is never put in the text."""
+        if not self.env_prod.isChecked():
+            self.overlay_note.setVisible(False)
+            return
+        missing = []
+        if not self.boot_domain.text().strip():
+            missing.append(
+                "its public apex domain — "
+                + ("set it in row 0 on the ‘Domains’ step (Back)"
+                   if self.boot_domain.isReadOnly() else "type it in Domain above"))
+        if not self.boot_auth_key.text().strip():
+            missing.append("a tailnet/headscale auth key in Auth key above — it "
+                           "attaches the mesh overlay")
+        if missing:
+            self.overlay_note.setText(
+                "A prod mesh needs " + "; and ".join(missing) + ". The mesh cannot "
+                "start without " + ("it" if len(missing) == 1 else "them")
+                + " (the plan on the next step lists the same blockers).")
+        self.overlay_note.setVisible(bool(missing))
+
     def _refresh_plan(self):
         if getattr(self, "_applying_bootstrap", False):
             return                      # apply_bootstrap refreshes once at its end
         prod = self.env_prod.isChecked()
         self.prod_group.setVisible(prod)
+        self._render_overlay_note()
         self.src_dir.setEnabled(self.src_existing.isChecked())
         self.src_browse.setEnabled(self.src_existing.isChecked())
         # IdP endpoint fields enabled IFF an external provider is picked (casdoor
@@ -5358,15 +5419,14 @@ class LocalMeshJoinPage(_LocalMeshStep):
 
     SECTION = "join"
     TITLE = "Join an existing mesh with a key"
+    # Two lines at most, both of them — the wizard header clips the rest (GUI-14).
     SUBTITLE = ("Run a HugMesh mesh node on THIS machine in Docker with a "
                 "tailnet/headscale auth key — no server hardware, no image build. "
-                "This is the end of this path: Exit closes the Studio; the node keeps "
-                "running in Docker.")
+                "Exit closes the Studio; the node keeps running.")
     DOCKED_SUBTITLE = (
-        "Run a HugMesh mesh node on THIS machine in Docker with a tailnet/headscale auth "
-        "key — no server hardware, no image build. Its status line and output are in "
-        "the panel at the bottom of this window (Mesh run tab). Exit closes the Studio; "
-        "the node keeps running in Docker.")
+        "Run a mesh node on THIS machine in Docker with a tailnet auth key; its output "
+        "is on the panel's Mesh run tab, at the bottom. Exit closes the Studio; the node "
+        "keeps running.")
 
     def __init__(self, wiz):
         super().__init__(wiz)
@@ -5402,8 +5462,7 @@ class LocalMeshEnvPage(_LocalMeshStep):
     TITLE = "Environment and brand"
     SUBTITLE = ("Where this mesh lives and whose name it carries: a LAN-only test "
                 f"mesh or a public prod one, the {plain_words.term('superbrand')} that "
-                "governs it (create one, or pick an existing profile), and the "
-                "superadmin account the bring-up mints.")
+                "governs it, and the superadmin the bring-up mints.")
 
     def initializePage(self):
         super().initializePage()
@@ -5434,10 +5493,11 @@ class LocalMeshDomainsPage(_LocalMeshStep):
 
     SECTION = "domains"
     TITLE = "Domains"
-    SUBTITLE = ("Every domain this mesh serves, its own domain first. Each one gets "
-                "its own service page on the next step, and the mesh will not start "
-                "while any domain here has never been through it. A row whose sign-in "
-                "is ‘Own’ gets its own (its Identity tab, next step, says which).")
+    # Two lines at most — the wizard header clips the rest mid-sentence (GUI-14). What
+    # ‘Own’ sign-in means is the help above the table.
+    SUBTITLE = ("Every domain this mesh serves, its own domain first. Each gets its own "
+                "service page on the next step, and the mesh will not start until every "
+                "domain has been through it.")
 
     def initializePage(self):
         super().initializePage()
@@ -5527,7 +5587,7 @@ class LocalMeshIdpPage(_LocalMeshStep):
     TITLE = "Identity provider"
     SUBTITLE = ("Who signs users in: the default every domain inherits (a domain can "
                 "choose its own on its Identity tab). Casdoor is built in and needs "
-                "nothing; the note says how far another provider goes locally.")
+                "nothing.")
 
 
 class LocalMeshOverlayPage(_LocalMeshStep):
@@ -5559,14 +5619,14 @@ class LocalMeshReviewPage(_LocalMeshStep):
 
     SECTION = "review"
     TITLE = "Saved meshes and the plan"
-    SUBTITLE = ("What a bring-up will generate and start, and the meshes already "
-                "saved on this machine. The plan itself is read-only; a saved row's "
-                "Start or Restore does run docker, and its output appears below.")
+    # Two lines at most, both of them — the wizard header clips the rest (GUI-14).
+    SUBTITLE = ("What a bring-up will generate and start, and the meshes saved on this "
+                "machine. The plan is read-only; a saved row's Start or Restore runs "
+                "docker, with its output below.")
     DOCKED_SUBTITLE = (
-        "What a bring-up will generate and start, and the meshes already saved on this "
-        "machine. The plan itself is read-only; a saved row's Start or Restore does run "
-        "docker, and its output appears in the panel at the bottom of this window (Mesh "
-        "run tab).")
+        "What a bring-up will generate and start, and the meshes saved on this machine. "
+        "The plan is read-only; a saved row's Start or Restore runs docker (output: the "
+        "panel's Mesh run tab).")
 
     def _claim(self) -> None:
         # THE RUN SURFACE COMES WITH THE TABLE. The saved-mesh rows are not a preview:

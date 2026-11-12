@@ -22,8 +22,8 @@ from ..core import build_sessions
 
 __all__ = [
     "SessionRow", "display_status", "session_rows", "artifact_entries",
-    "image_lines", "session_detail_lines", "delete_refusal", "worklist_table",
-    "format_table", "session_line",
+    "image_lines", "verdict_lines", "session_detail_lines", "delete_refusal",
+    "worklist_table", "format_table", "session_line",
 ]
 
 #: Render string for a running record whose recorded pid is gone on this host —
@@ -86,6 +86,27 @@ def image_lines(s: build_sessions.BuildSession) -> list[str]:
     return lines
 
 
+def verdict_lines(s: build_sessions.BuildSession) -> list[str]:
+    """Why an image ended as it did, in the Studio's own words: every ``!! `` line in
+    the record's error tails. That prefix is how the build runner marks its OWN
+    verdicts (an image it refused to start for lack of disk space, a cancelled
+    password prompt, a memory-cap kill, a builder that could not be spawned), as
+    opposed to builder output. One line each, led by the image id.
+
+    The GUI's previous-builds list prints the whole tail. A terminal detail screen
+    cannot afford forty builder lines per image, but without these a refused image
+    reads ``failed (exit 1)`` here and nothing says it was never started."""
+    out: list[str] = []
+    tails = s.error_tail if isinstance(s.error_tail, dict) else {}
+    for image_id, tail in tails.items():
+        for line in tail if isinstance(tail, list) else []:
+            if not isinstance(line, str) or not line.startswith("!! "):
+                continue
+            text = line[3:].strip()
+            out.append(text if text.startswith(f"{image_id} ") else f"{image_id}: {text}")
+    return out
+
+
 def session_detail_lines(row: SessionRow) -> list[str]:
     """The detail screen, as plain lines both faces render verbatim."""
     s = row.session
@@ -106,6 +127,11 @@ def session_detail_lines(row: SessionRow) -> list[str]:
     lines.append("images:")
     imgs = image_lines(s)
     lines += [f"  {ln}" for ln in imgs] or ["  (none recorded)"]
+    why = verdict_lines(s)
+    if why:
+        lines.append("")
+        lines.append("why (the Studio's own verdicts; the log has the builder's output):")
+        lines += [f"  {ln}" for ln in why]
     lines.append("")
     lines.append("artifacts:")
     arts = artifact_entries(s)

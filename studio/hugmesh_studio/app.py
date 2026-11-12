@@ -48,6 +48,17 @@ def _default_generator_dir() -> str:
     return generator_dir.resolve(os.path.abspath(os.path.join(here, "..", "..")))
 
 
+def _generator_dir(args) -> str:
+    """``--generator-dir``, resolved the FIRST time a path needs it (and kept on
+    ``args``). Never at parser construction: :func:`_default_generator_dir` can end in
+    ``managed_generator.ensure()``, which places the bundled 133 MB copy in an
+    installed Flatpak, and ``--help``, ``--print-specs`` or ``--mesh-token`` must not
+    write anything (#936 refute, round 2: both placed 3263 files)."""
+    if args.generator_dir is None:
+        args.generator_dir = _default_generator_dir()
+    return args.generator_dir
+
+
 def _asks_for_the_checkout(tray_only: bool, tray_available: bool) -> bool:
     """Whether this launch shows the checkout chooser. A tray-only launch may be
     unattended (an autostart entry) and a modal before its icon exists would block it,
@@ -215,8 +226,11 @@ def main(argv=None) -> int:
     from .core import ollama_docker
     ollama_docker.host_env_defaults(os.environ)
     ap = argparse.ArgumentParser(description="HugMesh Image Studio")
-    ap.add_argument("--generator-dir", default=_default_generator_dir(),
-                    help="path to the hugmesh-generator checkout")
+    # default=None, resolved lazily by _generator_dir(args) on the paths that use it
+    ap.add_argument("--generator-dir", default=None,
+                    help="path to the hugmesh-generator checkout (default: this "
+                         "source tree, $HUGMESH_GENERATOR_DIR, the current folder, the "
+                         "folder chosen last time, or the copy this install carries)")
     ap.add_argument("--tray", action="store_true", help="run only the mesh-node tray controller")
     ap.add_argument("--stack-tray", action="store_true",
                     help="run only the local dev-stack (make stack-up) tray controller")
@@ -426,7 +440,7 @@ def main(argv=None) -> int:
         # printed as the same text. Runs only git and gh (through the engine's one
         # runner), never a Qt binding.
         from .core.org_export import run_cli as _run_org_export
-        return _run_org_export(args, args.generator_dir)
+        return _run_org_export(args, _generator_dir(args))
 
     go_live_label = ""
     if args.go_live_target is not None:
@@ -441,13 +455,13 @@ def main(argv=None) -> int:
             # Qt-free path: golive_target runs only ssh (never bash, never a Qt
             # binding), so it works from hugmesh-studio-cli.exe with no display.
             from .core.golive_target import run_studio_cli as _run_golive_target
-            return _run_golive_target(args.go_live_target, args.generator_dir)
+            return _run_golive_target(args.go_live_target, _generator_dir(args))
 
     if args.qemu_windows is not None:
         # Qt-free path: runs only qemu-img / qemu-system-x86_64 (and taskkill), never a
         # Qt binding, so it works from hugmesh-studio-cli.exe with no display.
         from .core.qemu_windows import run_studio_cli as _run_qemu_windows
-        return _run_qemu_windows(args.qemu_windows, args.generator_dir)
+        return _run_qemu_windows(args.qemu_windows, _generator_dir(args))
 
     if args.login_agent:
         # Qt-free path: the loopback login agent is stdlib-only and blocks in
@@ -458,7 +472,7 @@ def main(argv=None) -> int:
     if args.self_check:
         # Qt-free path, run by the release workflow inside the built Flatpak.
         from .core import self_check
-        return self_check.run_cli(args.generator_dir, as_json=args.json)
+        return self_check.run_cli(_generator_dir(args), as_json=args.json)
 
     if args.desktop_options:
         from .core import desktop_cli
@@ -485,9 +499,9 @@ def main(argv=None) -> int:
         # graphical stays False (default): this is the headless single-build command
         # channel — its sudo prefix is a literal `sudo ` the callers strip (test_headless
         # removeprefix, build-matrix check.sh ${cmdline#sudo }), never `sudo -A`/pkexec.
-        if not _generator_dir_or_say(args.generator_dir):
+        if not _generator_dir_or_say(_generator_dir(args)):
             return 2
-        driver = BuildDriver(args.generator_dir)
+        driver = BuildDriver(_generator_dir(args))
         # still print a deterministic command on a host that can't build
         backend = print_backend(args.backend, driver.host.default_backend)
         _native_print_note(backend)
@@ -526,9 +540,9 @@ def main(argv=None) -> int:
         from .core.build_driver import BuildDriver
         from .core.config import ImageConfig
         from .core.worklist import load_any, synthesize
-        if not _generator_dir_or_say(args.generator_dir):
+        if not _generator_dir_or_say(_generator_dir(args)):
             return 2
-        driver = BuildDriver(args.generator_dir)
+        driver = BuildDriver(_generator_dir(args))
         backend = print_backend(args.backend, driver.host.default_backend)
         _native_print_note(backend)
         try:
@@ -851,9 +865,9 @@ def main(argv=None) -> int:
     # operator is right there. See _asks_for_the_checkout for the tray-only case.
     if _asks_for_the_checkout(tray_only,
                               QtWidgets.QSystemTrayIcon.isSystemTrayAvailable()):
-        args.generator_dir = _choose_generator_dir(args.generator_dir, QtWidgets)
+        args.generator_dir = _choose_generator_dir(_generator_dir(args), QtWidgets)
     shell = shell_mod.StudioShell(
-        args.generator_dir,
+        _generator_dir(args),
         remember_roles_for_passwordless_login=args.remember_roles_for_passwordless_login,
         login_manifest_path=args.login_manifest,
         server=server)
@@ -868,7 +882,7 @@ def main(argv=None) -> int:
         nonlocal golive
         from .gui.pages.golive import GoLiveWizard
         if golive is None:
-            golive = GoLiveWizard(args.generator_dir, target=go_live_label or None)
+            golive = GoLiveWizard(_generator_dir(args), target=go_live_label or None)
         golive.show()
         golive.raise_()
 
@@ -876,7 +890,7 @@ def main(argv=None) -> int:
         nonlocal fleet
         from .gui.pages.fleet import FleetDialog
         if fleet is None:
-            fleet = FleetDialog(args.generator_dir)
+            fleet = FleetDialog(_generator_dir(args))
         fleet.show()
         fleet.raise_()
 

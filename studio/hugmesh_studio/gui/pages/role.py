@@ -25,6 +25,7 @@ import sys
 import traceback
 
 from .. import choice_icons
+from ..flow_layout import flow_box
 from ..qt import Qt, QtCore, QtGui, QtWidgets
 from ._scroll import scrollable
 from ...core import device_catalog, profiles
@@ -58,6 +59,15 @@ _STANDALONE_TIP = (
     "The x86 standalone-* roles set this themselves inside the builder; tick it to "
     "compose the same posture onto another client role (the documented rpi5-desktop + "
     "--standalone FDE desktop, for example).")
+
+# Where the --standalone posture composes, shown as a muted note under the checkbox
+# (GUI-03: it used to be part of the checkbox's own one-line text). orangepi4-lts was
+# missing from the first spelling although the gate offers the box there
+# (core.config._ENC_PLATFORMS).
+_POSTURE_NOTE = (
+    "Client roles only — laptop, chromebook, desktop, rpi5-desktop, frite, orangepi5, "
+    "orangepizero2[w], orangepizero3, orangepi3-lts, orangepi4-lts. NOT jetson — "
+    "--encrypt-root is hard-blocked on that platform, see docs/STANDALONE-DESKTOP.md.")
 
 # The Sunshine tooltip, hoisted out of __init__ for the SAME reason _STANDALONE_TIP is
 # (gate_widgets_role_class writes `"" if allowed else reason` on every pass, so a tooltip
@@ -242,9 +252,14 @@ class RolePage(QtWidgets.QWizardPage):
         self.machine_box = QtWidgets.QGroupBox("Target machine")
         mbl = QtWidgets.QVBoxLayout(self.machine_box)
 
-        arch_row = QtWidgets.QWidget()
-        arch_lay = QtWidgets.QHBoxLayout(arch_row)
-        arch_lay.setContentsMargins(0, 0, 0, 0)
+        # A WRAPPING row, not a QHBoxLayout. The arch enum is extensible and its labels
+        # carry their honesty caveats ("ARMv7 (32-bit — no aarch64 toolchain fit)"), so
+        # the four radios already sum to ~933px: a QHBoxLayout reports that SUM as its
+        # minimum, the scroll content inherits it, and _scroll.scrollable() keeps the
+        # horizontal scrollbar off — so at the 942x552 netbook default (902px viewport)
+        # the RISC-V radio was cut off with no way to reach it. flow_box reports a
+        # one-item minimum and wraps the radios onto a second line instead.
+        self.arch_row, arch_lay = flow_box()
         arch_lay.addWidget(QtWidgets.QLabel("Architecture:"))
         self.arch_group = QtWidgets.QButtonGroup(self)
         self._arch_buttons: dict[str, QtWidgets.QRadioButton] = {}
@@ -257,8 +272,8 @@ class RolePage(QtWidgets.QWizardPage):
             self.arch_group.addButton(rb, i)
             self._arch_buttons[arch.id] = rb
             arch_lay.addWidget(rb)
-        arch_lay.addStretch(1)
-        mbl.addWidget(arch_row)
+        # (no trailing addStretch: a FlowLayout has no stretch concept — see flow_layout)
+        mbl.addWidget(self.arch_row)
 
         self.device_search = QtWidgets.QLineEdit()
         self.device_search.setPlaceholderText(
@@ -538,18 +553,33 @@ class RolePage(QtWidgets.QWizardPage):
         # out-of-scope, exactly as the Home step used to do it.
         self.posture_box = QtWidgets.QGroupBox("Image posture")
         pl = QtWidgets.QVBoxLayout(self.posture_box)
+        # A QCheckBox cannot word-wrap: its text is one line, and that line's width IS its
+        # minimumSizeHint. The first spelling packed the role list and the jetson caveat
+        # into the box itself — ~330 characters, a 1708px minimum — which forced the
+        # whole scroll content to 1750px; with the horizontal scrollbar off
+        # (_scroll.scrollable) everything right of the viewport (device Status column,
+        # search field, Image type list, machine profile, desktop/Steam combos, board
+        # options) was cut on every route that shows this box, at every window size.
+        # So the box carries only the short label, and the detail rides in a
+        # word-wrapped note under it — the same muted-caption idiom as profile_note.
         self.standalone = QtWidgets.QCheckBox(
-            "Standalone: no mesh/SSO, the local user logs in with a build-time password "
-            "(--standalone; client roles only — laptop/chromebook/desktop, rpi5-desktop/"
-            "frite/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts. NOT jetson — "
-            "--encrypt-root is hard-blocked on that platform, see "
-            "docs/STANDALONE-DESKTOP.md)")
+            "Standalone (--standalone): no mesh/SSO, local user with a build-time password")
         # Set through _sync_standalone_gate, NOT here: gate_widgets_role_class blanks a
         # widget's tooltip whenever the surface is allowed ("" if allowed else reason),
         # so a tooltip written in __init__ is wiped by the first gate pass and never
         # seen. The gate restores this one instead — the in-scope tooltip is the "why
         # would I tick this" text, the out-of-scope one is the refusal reason.
         pl.addWidget(self.standalone)
+        # Each hyphenated token is held whole by a WORD JOINER (U+2060, zero-width)
+        # after every hyphen: the line breaker splits after a hyphen, which rendered
+        # "--" at one line end and "encrypt-root" at the next. (<nobr> did not help —
+        # measured: Qt still broke after the hyphen inside it.) Hidden with the section
+        # (the gate setVisible()s posture_box), never on its own.
+        self.posture_note = QtWidgets.QLabel(_POSTURE_NOTE.replace("-", "-\u2060"))
+        self.posture_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.posture_note.setWordWrap(True)
+        self.posture_note.setStyleSheet("color: gray;")
+        pl.addWidget(self.posture_note)
         lay.addWidget(self.posture_box)
 
         self.note = QtWidgets.QLabel("")

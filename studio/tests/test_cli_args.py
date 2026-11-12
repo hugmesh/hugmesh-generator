@@ -1500,7 +1500,10 @@ def test_g29_version_pins_and_skip_tailscale(platform, role, mode):
     assert "--skip-tailscale" in args
 
 
-def test_g30_version_all_release_tag_x86_only():
+def test_g30_version_all_release_tag_on_the_cluster_tree_builders():
+    # --release-tag is the tag an ENV=prod build pins first-party :dev images to
+    # (scripts/_prod-gate-lib.sh). x86, rpi5 and the Orange Pi NODE roles bake a
+    # cluster tree and parse it; the builders with no cluster tree do not.
     x = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
                     version="2026.07", release_tag="rc1").to_cli_args()
     assert ("--version", "2026.07") in pairs(x)
@@ -1508,7 +1511,23 @@ def test_g30_version_all_release_tag_x86_only():
     r = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                     version="2026.07", release_tag="rc1").to_cli_args()
     assert ("--version", "2026.07") in pairs(r)
-    assert "--release-tag" not in r
+    assert ("--release-tag", "rc1") in pairs(r)
+    assert r.count("--release-tag") == 1
+    for plat, role, ram in (("orangepi5", "pki", "8"), ("orangepi4-lts", "frontend", "4")):
+        o = ImageConfig(mode="mesh", role=role, platform=plat, ram_gb=ram,
+                        version="2026.07", release_tag="rc1").to_cli_args()
+        assert ("--release-tag", "rc1") in pairs(o), plat
+        assert o.count("--release-tag") == 1, plat
+    # the Orange Pi DESKTOP builder refuses every cluster choice: never emitted there
+    for plat in ("orangepi5", "orangepi4-lts"):
+        d = ImageConfig(mode="cloud", role=plat, platform=plat,
+                        version="2026.07", release_tag="rc1").to_cli_args()
+        assert "--release-tag" not in d, plat
+    for plat, role in (("frite", "frite"), ("jetson", "edge-ai")):
+        n = ImageConfig(mode="mesh", role=role, platform=plat,
+                        version="2026.07", release_tag="rc1").to_cli_args()
+        assert ("--version", "2026.07") in pairs(n), plat
+        assert "--release-tag" not in n, plat
 
 
 # ---- G31/G32/G33: home extras / media / cuda+grub-theme (x86) --------------------

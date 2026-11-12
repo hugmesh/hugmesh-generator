@@ -1181,11 +1181,11 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #984 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 244 of 286.
 # PR #1016 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 245 of 287.
 # PR #993 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 246 of 288.
+# Integration batch 2026-11-12: MEASURED with GUARD_PREMERGE=0 on the combined tree: 252 of 294.
 # +1 gated, +1 total on feat/desktop-config-20261111: tests/scripts/test-desktop-config-lib.sh,
 # named by shell-suites.yml (alpine) and the .gitlab-ci.yml desktop job. PREMERGE_UNGATED
-# untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main dd33be57: 247 of 289;
-# re-measured 2026-11-12 on the tree merged with origin/main cbfd5ee4: 247 of 289.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-247}"
+# untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main 19a2909f: 253 of 295.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-253}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
