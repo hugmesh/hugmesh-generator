@@ -1,0 +1,346 @@
+   OpenRC 0.63.3 is starting up Gentoo Linux (x86_64)
+ * /proc is already mounted
+ * /run/openrc: creating directory
+ * /run/lock: correcting mode
+ * /run/lock: correcting owner
+ * Caching service dependencies ...
+[    1.533270] audit: type=1400 audit(1794315019.017:5): avc:  denied  { write } for  pid=631 comm="ip" path="/dev/null" dev="devtmpfs" ino=5 scontext=system_u:system_r:ifconfig_t:s0 tcontext=system_u:object_r:device_t:s0 tclass=chr_file permissive=1
+[    1.536036] audit: type=1300 audit(1794315019.017:5): arch=c000003e syscall=59 success=yes exit=0 a0=556dfa5fb670 a1=556dfa5fcf10 a2=556dfa601950 a3=20 items=0 ppid=630 pid=631 auid=4294967295 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=ttyS0 ses=4294967295 comm="ip" exe="/usr/bin/ip" subj=system_u:system_r:ifconfig_t:s0 key=(null)
+[    1.540111] audit: type=1309 audit(1794315019.017:5): argc=5 a0="ip" a1="-4" a2="route" a3="show" a4="default"
+[    1.541357] audit: type=1327 audit(1794315019.017:5): proctitle=6970002D3400726F7574650073686F770064656661756C74
+ [ ok ]
+ * Mounting debug filesystem ...
+ [ ok ]
+ * Mounting trace filesystem ...
+ [ ok ]
+ * Mounting fuse control filesystem ...
+ [ ok ]
+ * Mounting efivarfs filesystem ...
+[    1.601950] Lockdown: modprobe: unsigned module loading is restricted; see man kernel_lockdown.7
+ [ ok ]
+ * Mounting bpf filesystem ...
+ [ ok ]
+ * Restoring SELinux contexts in /sys ...
+ [ ok ]
+ * Restoring SELinux contexts in /sys/fs/cgroup ...
+ [ ok ]
+ * Remounting devtmpfs on /dev ...
+ [ ok ]
+ * Mounting /dev/mqueue ...
+ [ ok ]
+ * Restoring SELinux contexts in /dev ...
+ [ ok ]
+ * Creating list of required static device nodes for the current kernel ...
+ [ ok ]
+ * Create Static Devices Nodes in /dev ...
+ [ ok ]
+ * Starting udev ...
+ [ ok ]
+ * Generating a rule to create a /dev/root symlink ...
+ [ ok ]
+ * Populating /dev with existing devices through uevents ...
+ [ ok ]
+ * Loading module overlay ...
+modprobe: ERROR: could not insert 'overlay': Module already in kernel
+ [ ok ]
+ * Loading module br_netfilter ...
+modprobe: ERROR: could not insert 'br_netfilter': Module already in kernel
+ [ ok ]
+ * Loading module ip_vs ...
+modprobe: ERROR: could not insert 'ip_vs': Module already in kernel
+ [ ok ]
+ * Loading module ip_vs_rr ...
+modprobe: ERROR: could not insert 'ip_vs_rr': Module already in kernel
+ [ ok ]
+ * Loading module ip_vs_wrr ...
+modprobe: ERROR: could not insert 'ip_vs_wrr': Module already in kernel
+ [ ok ]
+ * Loading module ip_vs_sh ...
+modprobe: ERROR: could not insert 'ip_vs_sh': Module already in kernel
+ [ ok ]
+ * Loading module nf_conntrack ...
+modprobe: ERROR: could not insert 'nf_conntrack': Module already in kernel
+ [ ok ]
+ * Loading module vxlan ...
+modprobe: ERROR: could not insert 'vxlan': Module already in kernel
+ [ ok ]
+ * Setting system clock using the hardware clock [UTC] ...
+hwclock: select() to /dev/rtc to wait for clock tick timed out
+ * Failed to set the system clock
+ [ !! ]
+ * Mounting misc binary format filesystem ...
+ [ ok ]
+ * Loading custom binary format handlers ...
+ [ ok ]
+ * Checking local filesystems  ...
+SNAP_ROOT: clean, 184237/1441792 files, 1734409/5767168 blocks
+fsck.fat 4.2 (2021-01-31)
+/dev/vda1: 13 files, 23643/130811 clusters
+ [ ok ]
+ * Remounting root filesystem read/write ...
+ [ ok ]
+ * Remounting filesystems ...
+ [ ok ]
+ * Updating /etc/mtab ...
+ * Creating mtab symbolic link
+ [ ok ]
+ * Activating swap devices ...
+ [ ok ]
+ * Mounting local filesystems ...
+ [ ok ]
+ * Configuring kernel parameters ...
+sysctl: setting key "net.core.default_qdisc", ignoring: No such file or directory
+ [ ok ]
+ * Creating user login records ...
+ [ ok ]
+ * Setting hostname to hugmesh-laptop from /etc/hostname ...
+ [ ok ]
+ * Setting terminal encoding [UTF-8] ...
+ * checkpath: /var/cache/rc: could not open cache: No such file or directory
+ [ ok ]
+ * Setting keyboard mode [UTF-8] ...
+ [ ok ]
+ * Loading key mappings [us] ...
+ [ ok ]
+ * Bringing up network interface lo ...
+ [ ok ]
+ * Saving key mapping ...
+ [ ok ]
+ * Saving terminal encoding ...
+ [ ok ]
+ * Seeding random number generator ...
+ * Saving 256 bits of creditable seed for next boot
+ [ ok ]
+ * Create Volatile Files and Directories ...
+ [ ok ]
+INIT: Entering runlevel: 3
+ * Starting dbus ...
+ [ ok ]
+ * Starting elogind ...
+ [ ok ]
+ * Starting NetworkManager ...
+ [ ok ]
+Connecting.                  1sModemManager[1772]: <msg> ModemManager (version 1.24.2) starting in system bus...
+Connecting..                 1sConnecting...                1sConnecting...............    1s [online]
+ * Starting auditd ...
+ [ ok ]
+ * Loading audit rules from /etc/audit/audit.rules
+ * Starting cronie ...
+ [ ok ]
+ * Expanding the root filesystem (GROW=fill) ...
+ * growroot: root filesystem now fills the disk
+ [ ok ]
+ * Provisioning from KEYS partition ...
+[keys-provision 2026-11-10T12:50:30Z] === keys-provision starting ===
+[keys-provision 2026-11-10T12:50:30Z] Generating Ed25519-only SSH host key
+Generating public/private ed25519 key pair.
+Your identification has been saved in /etc/ssh/ssh_host_ed25519_key
+Your public key has been saved in /etc/ssh/ssh_host_ed25519_key.pub
+The key fingerprint is:
+[keys-provision 2026-11-10T12:50:30Z] Found KEYS media: /dev/vdb
+[keys-provision 2026-11-10T12:50:30Z] Provisioning data root: /run/keys
+[keys-provision 2026-11-10T12:50:30Z] Hostname set to hugmesh-laptop-user-qemu
+[keys-provision 2026-11-10T12:50:30Z] Timezone set to UTC
+[keys-provision 2026-11-10T12:50:30Z] Creating 1 user(s) from /run/keys/users.json
+[keys-provision 2026-11-10T12:50:30Z] desktop-governance: governed image  dropping sudo-conferring 'wheel' from tester's groups (sudo via desktop-sudo SSO claim only)
+[keys-provision 2026-11-10T12:50:30Z] Created user tester
+[keys-provision 2026-11-10T12:50:30Z] Installed 1 authorized key(s) for tester
+[keys-provision 2026-11-10T12:50:30Z] desktop-governance: governed image  SUPPRESSING static /etc/sudoers.d grant for tester (sudo via desktop-sudo SSO claim only)
+[keys-provision 2026-11-10T12:50:30Z] root login LOCKED (passwd -l root  no root password)
+[keys-provision 2026-11-10T12:50:30Z] Installed root authorized key(s)
+[keys-provision 2026-11-10T12:50:30Z] NetworkManager reloaded its connection profiles
+[keys-provision 2026-11-10T12:50:30Z] No KEYS certs  skipping truststore
+[keys-provision 2026-11-10T12:50:30Z] egress-vpn: no KEYS/vpn/hugmesh.local/ on the key-USB  skipping (service stays off; public egress falls back to the Squid proxy / direct)
+[keys-provision 2026-11-10T12:50:30Z] desktop-governance: provisioning for domain hugmesh.local
+[keys-provision 2026-11-10T12:50:30Z] desktop-governance: rendered /etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo (mode 0644)
+[keys-provision 2026-11-10T12:50:31Z] desktop-governance: flatpak remote 'hugmesh-discover' added (system)
+[keys-provision 2026-11-10T12:50:31Z] desktop-governance: rendered /etc/polkit-1/rules.d/49-hugmesh-desktop-sudo.rules (mode 0644)
+[keys-provision 2026-11-10T12:50:31Z] desktop-governance: rendered /etc/hugmesh/desktop-governance/desktop-sudo-mapper (mode 0700)
+[keys-provision 2026-11-10T12:50:31Z] desktop-governance: rendered /etc/cron.d/hugmesh-desktop-sudo-mapper (mode 0644)
+[keys-provision 2026-11-10T12:50:31Z] desktop-governance: rendered /etc/hugmesh/desktop-governance/bearer-forward.sh (mode 0755)
+session-install: installing GEN-SSO session-start for domain hugmesh.local (src /etc/hugmesh/desktop-governance)
+session-install: rendered /etc/hugmesh/desktop-governance/oidc-token-deposit.sh (mode 0755)
+session-install: rendered /etc/hugmesh/desktop-governance/hugmesh-desktop-sso-start.sh (mode 0755)
+session-install: rendered /etc/hugmesh/desktop-governance/hugmesh-sso-token (mode 0755)
+session-install: rendered /etc/xdg/autostart/hugmesh-desktop-sso.desktop (mode 0644)
+session-install: done  autostart published; bearer-forward now has a token depositor + a session-start invoker
+[keys-provision 2026-11-10T12:50:31Z] desktop-governance: GEN-SSO session-start installed from the baked templates
+[keys-provision 2026-11-10T12:50:31Z] desktop-governance: done (domain hugmesh.local; store empty until admin curates; sudo only for the verified desktop-sudo SSO claim)
+[keys-provision 2026-11-10T12:50:31Z] headscale disabled in manifest  removing from runlevel
+ * rc-update: tailscaled already installed in runlevel `default'; skipping
+ModemManager[1772]: <msg> [base-manager] couldn't check support for device '/sys/devices/pci0000:00/0000:00:02.0': not supported by any plugin
+ * Starting tailscaled ... [ ok ]
+ * Caching service dependencies ... [ ok ]
+[keys-provision 2026-11-10T12:51:33Z] device-registry: owner_type=SUPERADMIN (image_type=primary)  KEEPING #66 owner-key sshd; NOT installing registry enforcement (correct for core/client nodes)
+[keys-provision 2026-11-10T12:51:33Z] domain-registry: .domain_registry.enabled != true  NOT enabling the bridge (baked agent stays inert; default-off optional service)
+ * service hugmesh-node-storage-reconcile added to runlevel default
+[keys-provision 2026-11-10T12:51:33Z] node-storage: enabled hugmesh-node-storage-reconcile (boot reconcile)
+[keys-provision 2026-11-10T12:51:33Z] node-storage: installed 60s reconcile cron (convergence floor)
+[keys-provision 2026-11-10T12:51:33Z] Kubernetes role: worker (bootstrap=false)
+[keys-provision 2026-11-10T12:51:33Z] K8s config staged; skipping live bootstrap (set kubernetes.bootstrap=true to run kubeadm)
+[keys-provision 2026-11-10T12:51:33Z] auto-update plumbing baked: cadence='0 4 * * *' window='any' reboot=if-needed; poller is DEFAULT-OFF (opt in via enabled:true). provisioned enabled=false
+[keys-provision 2026-11-10T12:51:33Z] HugMesh GitOps disabled
+[keys-provision 2026-11-10T12:51:33Z] Calico config disabled
+[keys-provision 2026-11-10T12:51:33Z] No .vault block and no image-baked /etc/hugmesh/vault.conf  skipping Vault/ESO seeding
+[keys-provision 2026-11-10T12:51:33Z] secureboot: mokutil not installed  skipping cert enrollment
+[keys-provision 2026-11-10T12:51:33Z] SELinux: type=mcs mode=permissive
+[keys-provision 2026-11-10T12:51:33Z] Loading hugmesh SELinux node-policy modules: /usr/share/selinux/mcs/hugmesh_authkeys.pp /usr/share/selinux/mcs/hugmesh_bootpath.pp /usr/share/selinux/mcs/hugmesh_device_registry_sync.pp /usr/share/selinux/mcs/hugmesh_domain_reconcile.pp /usr/share/selinux/mcs/hugmesh_node_storage.pp /usr/share/selinux/mcs/hugmesh_policy_sync.pp /usr/share/selinux/mcs/hugmesh_vpn.pp /usr/share/selinux/mcs/localpath_provisioner.pp /usr/share/selinux/mcs/otel_collector.pp
+[keys-provision 2026-11-10T12:51:34Z] Relabelling filesystem (this can take a while)
+[keys-provision 2026-11-10T12:51:36Z] SELinux configured (permissive). Switch to enforcing after verifying: setenforce 1 + SELINUX=enforcing
+[keys-provision 2026-11-10T12:51:36Z] === keys-provision complete ===
+ [ ok ]
+ * Caching service dependencies ...
+ [ ok ]
+ * Mounting network filesystems ...
+ [ ok ]
+ * Starting hugmesh-media-detect ...
+[media-detect] no attached data device with markers (Steam Vaults) found  continuing
+ [ ok ]
+ * Starting display-manager ...
+ [ ok ]
+ * Starting haveged ...
+haveged: command socket is listening at fd 3
+haveged: haveged starting up
+ [ ok ]
+ * Polling the binhost for changed binpkgs (fail-safe; keeps last-good on error) ...
+[hugmesh-update 2026-11-10T12:51:37Z] auto-update not enabled (opt-in: set enabled:true in devops/hugmesh-update-policy)  skipping
+ [ ok ]
+ * Starting privoxy ...
+haveged: haveged: ver: 1.9.21; arch: x86; vend: GenuineIntel; build: (gcc 16.2.1 ITV); collect: 128K
+haveged: haveged: cpu: (L4 VC); data: 32K (L2 L4 V); inst: 32K (L2 L4 V); idx: 28/40; sz: 32291/45634
+haveged: haveged: tot tests(BA8): A:1/1 B:1/1 continuous tests(B):  last entropy estimate 7.99933
+haveged: haveged: fills: 0, generated: 0 
+ [ ok ]
+ * Starting snort ...
+snort[3384]: Found pid path directive (/var/run/snort)
+snort[3384]: Running in IDS mode
+snort[3384]: 
+snort[3384]:         --== Initializing Snort ==--
+snort[3384]: Initializing Output Plugins!
+snort[3384]: Initializing Preprocessors!
+snort[3384]: Initializing Plug-ins!
+snort[3384]: Parsing Rules file "/etc/snort/snort.conf"
+snort[3384]: Found pid path directive (/var/run/snort)
+snort[3384]: Tagged Packet Limit: 256
+snort[3384]: Log directory = /var/log/snort
+snort[3384]: Frag3 global config:
+snort[3384]:     Max frags: 65536
+snort[3384]:     Fragment memory cap: 4194304 bytes
+snort[3384]: Frag3 engine config:
+snort[3384]:     Bound Address: default
+snort[3384]:     Target-based policy: LINUX
+snort[3384]:     Fragment timeout: 60 seconds
+snort[3384]:     Fragment min_ttl:   1
+snort[3384]:     Fragment Anomalies: No Alert
+snort[3384]:     Overlap Limit:     0
+snort[3384]:     Min fragment Length:     0
+snort[3384]:       Max Expected Streams: 768
+snort[3384]: Stream global config:
+snort[3384]:     Track TCP sessions: ACTIVE
+snort[3384]:     Max TCP sessions: 262144
+snort[3384]:     TCP cache pruning timeout: 30 seconds
+snort[3384]:     TCP cache nominal timeout: 3600 seconds
+snort[3384]:     Memcap (for reassembly packet storage): 8388608
+snort[3384]:     Track UDP sessions: ACTIVE
+snort[3384]:     Max UDP sessions: 131072
+snort[3384]:     UDP cache pruning timeout: 30 seconds
+snort[3384]:     UDP cache nominal timeout: 180 seconds
+snort[3384]:     Track ICMP sessions: INACTIVE
+snort[3384]:     Track IP sessions: INACTIVE
+snort[3384]:     Log info if session memory consumption exceeds 1048576
+snort[3384]:     Send up to 0 active responses
+snort[3384]:     Protocol Aware Flushing: ACTIVE
+snort[3384]:         Maximum Flush Point: 16384
+snort[3384]: Stream TCP Policy config:
+snort[3384]:     Bound Address: default
+snort[3384]:     Reassembly Policy: LINUX
+snort[3384]:     Timeout: 30 seconds
+snort[3384]:     Maximum number of bytes to queue per session: 1048576
+snort[3384]:     Maximum number of segs to queue per session: 2621
+snort[3384]:     Reassembly Ports:
+snort[3384]: Stream UDP Policy config:
+snort[3384]:     Timeout: 30 seconds
+snort[3384]: 
+snort[3384]: +++++++++++++++++++++++++++++++++++++++++++++++++++
+snort[3384]: Initializing rule chains...
+snort[3384]: 1 Snort rules read
+snort[3384]:     1 detection rules
+snort[3384]:     0 decoder rules
+snort[3384]:     0 preprocessor rules
+snort[3384]: 1 Option Chains linked into 1 Chain Headers
+snort[3384]: +++++++++++++++++++++++++++++++++++++++++++++++++++
+snort[3384]: 
+snort[3384]: +-------------------[Rule Port Counts]---------------------------------------
+snort[3384]: |             tcp     udp    icmp      ip
+snort[3384]: |     src       0       0       0       0
+snort[3384]: |     dst       0       0       0       0
+snort[3384]: |     any       0       0       1       0
+snort[3384]: |      nc       0       0       1       0
+snort[3384]: |     s+d       0       0       0       0
+snort[3384]: +----------------------------------------------------------------------------
+snort[3384]: 
+snort[3384]: +-----------------------[detection-filter-config]------------------------------
+snort[3384]: | memory-cap : 1048576 bytes
+snort[3384]: +-----------------------[detection-filter-rules]-------------------------------
+snort[3384]: | none
+snort[3384]: -------------------------------------------------------------------------------
+snort[3384]: 
+snort[3384]: +-----------------------[rate-filter-config]-----------------------------------
+snort[3384]: | memory-cap : 1048576 bytes
+snort[3384]: +-----------------------[rate-filter-rules]------------------------------------
+snort[3384]: | none
+snort[3384]: -------------------------------------------------------------------------------
+snort[3384]: 
+snort[3384]: +-----------------------[event-filter-config]----------------------------------
+snort[3384]: | memory-cap : 1048576 bytes
+snort[3384]: +-----------------------[event-filter-global]----------------------------------
+snort[3384]: +-----------------------[event-filter-local]-----------------------------------
+snort[3384]: | none
+snort[3384]: +-----------------------[suppression]------------------------------------------
+snort[3384]: | none
+snort[3384]: -------------------------------------------------------------------------------
+snort[3384]: Rule application order: pass->drop->sdrop->reject->alert->log
+snort[3384]: Verifying Preprocessor Configurations!
+snort[3384]: 
+snort[3384]: [ Port Based Pattern Matching Memory ]
+snort[3384]: pcap DAQ configured to passive.
+snort[3384]: Acquiring network traffic from "enp0s2".
+snort[3384]: Initializing daemon mode
+snort[3393]: Daemon initialized, signaled parent pid: 3384
+snort[3393]: Reload thread starting...
+snort[3393]: Reload thread started, thread 0x7fc3398496c0 (3394)
+snort[3393]: Decoding Ethernet
+snort[3393]: Checking PID path...
+snort[3393]: PID path stat checked out ok, PID path set to /var/run/snort
+snort[3393]: Writing PID "3393" to file "/var/run/snort/snort_enp0s2.pid"
+snort[3393]: 
+snort[3393]:         --== Initialization Complete ==--
+snort[3393]: 
+snort[3393]:    ,,_     -*> Snort! <*-
+snort[3393]:   o"  )~   Version 2.9.20 GRE (Build 82) 
+snort[3393]:    ''''    By Martin Roesch & The Snort Team: http://www.snort.org/contact#team
+snort[3393]:            Copyright (C) 2014-2022 Cisco and/or its affiliates. All rights reserved.
+snort[3393]:            Copyright (C) 1998-2013 Sourcefire, Inc., et al.
+snort[3393]:            Using libpcap version 1.10.7 (64-bit time_t, with TPACKET_V3)
+snort[3393]:            Using PCRE version: 8.45 2021-06-15
+snort[3393]:            Using ZLIB version: 1.3.2
+snort[3393]: 
+snort[3393]: Commencing packet processing (pid=3393)
+ [ ok ]
+ * Initializing cache directory /var/cache/squid ...
+ [ ok ]
+ * Starting squid (service name squid) with KRB5_KTNAME="" /usr/sbin/squid -YC -f /etc/squid/squid.conf -n squid ...
+ [ ok ]
+ssh-keygen: generating new host keys: RSA ECDSA MLDSA44-ED25519 
+ * Starting sshd ...
+ [ ok ]
+ * Starting local ...
+Local login: user proofuser ready (password set at build time).
+  [home-setup] home provisioning complete
+ [ ok ]
+This is hugmesh-laptop-user-qemu (Linux x86_64 6.18.52-gentoo) 12:51:45
+hugmesh-laptop-user-qemu login: 
+This is hugmesh-laptop-user-qemu (Linux x86_64 6.18.52-gentoo) 12:54:36
+hugmesh-laptop-user-qemu login: 
+This is hugmesh-laptop-user-qemu (Linux x86_64 6.18.52-gentoo) 12:59:54
+hugmesh-laptop-user-qemu login: 
