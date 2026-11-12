@@ -435,10 +435,13 @@ class WorklistDriver:
 
         if self.generate_keys and self._is_mesh():
             self._hand_mesh_ca_on(on_line)
-        # The control onion's secret key leaves this computer on the pki stick only:
-        # once every stick of the run is made, it is removed here (the address stays).
+        # The control onion's secret key leaves this computer on the pki stick only: it
+        # is removed here once a stick this run made holds an identical copy (a failed or
+        # stopped pki keys step keeps it, for the re-run). The address stays.
         if self.generate_keys and self._is_mesh():
-            mesh_control.forget_secret(self.worklist.base, self._output_dir())
+            mesh_control.forget_secret(
+                self.worklist.base, self._output_dir(),
+                [r.keys_path for r in self.results if r.keys_ok and r.keys_path])
         return self.summary_exit_code()
 
     def _hand_mesh_ca_on(self, on_line: Callable[[int, str], None] | None) -> None:

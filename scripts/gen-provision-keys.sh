@@ -143,14 +143,19 @@ PKI_LAN_IP="${PKI_LAN_IP:-}"
 
 # ── Mesh control over Tor (OPT-IN, default lan; docs/MESH-CONTROL-OVER-TOR.md) ───
 # lan (default) writes nothing new. lan+onion | onion stamp provision.json .mesh
-# control_transport / control_name (default hs.<superdomain>) / control_onion on every
-# stick, and put the pki's dedicated CONTROL onion key on the PKI STICK ONLY
+# control_transport / control_name / control_onion on every stick, and put the pki's
+# dedicated CONTROL onion key on the PKI STICK ONLY
 # (headscale/control-onion/, 0600). Operator decision 2026-11-11: the key is minted
 # HERE, at KEYS time, on the build host — workers can only know the onion before their
 # first boot that way. Every role's run takes the SAME --mesh-control-onion-dir: the
 # first run mints into it (only with the explicit --mesh-control-onion-mint consent),
 # every later run reuses it, a run never mints over an existing address. Delete the
 # secret key from that directory once every stick is made (this script says so).
+# The control name defaults to hs.<first superdomain label>-control.<rest>
+# (hugmesh.internal -> hs.hugmesh-control.internal) and must lie OUTSIDE the superdomain:
+# headscale 0.23.0 refuses to START when its server_url contains dns.base_domain (the
+# superdomain) as a substring — measured on the pinned image, e.g. hs.hugmesh.internal
+# under hugmesh.internal, and even hs.hugmesh.internal under mesh.internal.
 MESH_CONTROL_TRANSPORT="${MESH_CONTROL_TRANSPORT:-lan}"
 MESH_CONTROL_NAME="${MESH_CONTROL_NAME:-}"
 MESH_CONTROL_ONION_DIR="${MESH_CONTROL_ONION_DIR:-}"
@@ -303,7 +308,10 @@ Options:
                       prefers the pki on the LAN (lan+onion; needs --pki-ip) and falls
                       back to the pki's control onion. Needs --mesh-control-onion-dir.
                       (env: MESH_CONTROL_TRANSPORT)
-      --mesh-control-name NAME   The stable control name. Default hs.<superdomain>.
+      --mesh-control-name NAME   The stable control name. Default
+                      hs.<first superdomain label>-control.<rest>, e.g.
+                      hs.hugmesh-control.internal. It must NOT contain the superdomain
+                      (headscale refuses to start with such a server_url).
       --mesh-control-onion-dir DIR   The control onion key directory, the SAME for
                       every role's run; its key goes onto the pki stick only.
       --mesh-control-onion-mint  Consent to create the control onion key on THIS
@@ -347,7 +355,7 @@ while [[ $# -gt 0 ]]; do
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;          # mesh MagicDNS base_domain (permanently internal); default <BRAND>.internal
         --pki-ip)      PKI_LAN_IP="$2"; shift 2 ;;           # the pki node's static/reserved LAN IPv4 (LAN-first control plane)
         --mesh-control-transport) MESH_CONTROL_TRANSPORT="$2"; shift 2 ;;   # lan (default) | lan+onion | onion
-        --mesh-control-name) MESH_CONTROL_NAME="$2"; shift 2 ;;             # stable control name (default hs.<superdomain>)
+        --mesh-control-name) MESH_CONTROL_NAME="$2"; shift 2 ;;             # stable control name (default hs.<first superdomain label>-control.<rest>)
         --mesh-control-onion-dir) MESH_CONTROL_ONION_DIR="$2"; shift 2 ;;   # shared control-onion key dir (one per mesh)
         --mesh-control-onion-mint) MESH_CONTROL_ONION_MINT=true; shift ;;   # consent: mint the control onion key here
         --device-id)   DEVICE_ID="$2"; shift 2 ;;            # in-UI SSH terminal: per-device Vault-seed path segment
@@ -396,14 +404,32 @@ case "${MESH_CONTROL_ONION_MINT}" in
     *) MESH_CONTROL_ONION_MINT=false ;;
 esac
 MESH_CONTROL_ONION=""
+# The control port every node dials (provision.sh MESH_CONTROL_PORT_DEFAULT): it is in
+# the server_url headscale checks against the superdomain.
+MESH_CONTROL_PORT=7443
 if [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
-    if [ -n "${MESH_CONTROL_NAME}" ]; then
-        MESH_CONTROL_NAME="${MESH_CONTROL_NAME,,}"
-        if ! [[ "${MESH_CONTROL_NAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
-           || [[ "${MESH_CONTROL_NAME}" == *.onion ]]; then
-            echo "ERROR: --mesh-control-name '${MESH_CONTROL_NAME}' is not a dotted DNS name (and never an .onion)" >&2; exit 1
-        fi
+    _mc_sd="${SUPERDOMAIN:-${BRAND:-hugmesh}.internal}"; _mc_sd="${_mc_sd,,}"
+    if [ -z "${MESH_CONTROL_NAME}" ]; then
+        if [[ "${_mc_sd}" == *.* ]]; then MESH_CONTROL_NAME="hs.${_mc_sd%%.*}-control.${_mc_sd#*.}"
+        else MESH_CONTROL_NAME="hs.${_mc_sd}-control"; fi
+        _mc_named=derived
+    else
+        _mc_named=given
     fi
+    MESH_CONTROL_NAME="${MESH_CONTROL_NAME,,}"
+    if ! [[ "${MESH_CONTROL_NAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
+       || [[ "${MESH_CONTROL_NAME}" == *.onion ]]; then
+        echo "ERROR: --mesh-control-name '${MESH_CONTROL_NAME}' is not a dotted DNS name (and never an .onion)" >&2; exit 1
+    fi
+    if [[ "https://${MESH_CONTROL_NAME}:${MESH_CONTROL_PORT}" == *"${_mc_sd}"* ]]; then
+        if [ "${_mc_named}" = derived ]; then
+            echo "ERROR: the default control name '${MESH_CONTROL_NAME}' still contains the superdomain '${_mc_sd}', and headscale refuses to start when its server_url contains the MagicDNS domain — pass --mesh-control-name with a name outside ${_mc_sd} (for example hs.mesh-control.internal)" >&2
+        else
+            echo "ERROR: --mesh-control-name '${MESH_CONTROL_NAME}' contains the superdomain '${_mc_sd}', and headscale refuses to start when its server_url contains the MagicDNS domain — choose a control name outside ${_mc_sd} (the default is hs.<first label>-control.<rest>)" >&2
+        fi
+        exit 1
+    fi
+    unset _mc_sd _mc_named
     if [ "${MESH_CONTROL_TRANSPORT}" = "lan+onion" ] && [ -z "${PKI_LAN_IP}" ]; then
         echo "ERROR: --mesh-control-transport lan+onion needs --pki-ip (the LAN path the relay prefers)" >&2; exit 1
     fi
@@ -419,23 +445,38 @@ if [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
         mkdir -p "${MESH_CONTROL_ONION_DIR}" && chmod 0700 "${MESH_CONTROL_ONION_DIR}" || exit 1
         echo "==> Minting the control onion key in ${MESH_CONTROL_ONION_DIR} (tor, DisableNetwork — nothing leaves this computer)"
         _mc_tmp="$(mktemp -d)"; : > "${_mc_tmp}/torrc"   # tor refuses /dev/null as a torrc
+        _mc_ctr=""
         if command -v tor >/dev/null 2>&1; then
             tor --defaults-torrc "${_mc_tmp}/torrc" -f "${_mc_tmp}/torrc" --DisableNetwork 1 --SocksPort 0 \
                 --DataDirectory "${_mc_tmp}/data" --HiddenServiceDir "${MESH_CONTROL_ONION_DIR}" \
-                --HiddenServicePort "8080 127.0.0.1:8080" --Log "notice file ${_mc_tmp}/tor.log" >/dev/null 2>&1 &
+                --HiddenServicePort "${MESH_CONTROL_PORT} 127.0.0.1:8080" --Log "notice file ${_mc_tmp}/tor.log" >/dev/null 2>&1 &
         elif [ -n "${MESH_CONTROL_TOR_IMAGE}" ] && command -v docker >/dev/null 2>&1; then
-            docker run --rm --network none --user "$(id -u):$(id -g)" -v "$(cd "${MESH_CONTROL_ONION_DIR}" && pwd):/hs" \
-                "${MESH_CONTROL_TOR_IMAGE}" sh -c ': > /tmp/torrc; exec tor --defaults-torrc /tmp/torrc -f /tmp/torrc --DisableNetwork 1 --SocksPort 0 --DataDirectory /tmp/data --HiddenServiceDir /hs --HiddenServicePort "8080 127.0.0.1:8080"' >/dev/null 2>&1 &
+            _mc_ctr="hugmesh-mint-$$-${RANDOM}"
+            docker run --rm --name "${_mc_ctr}" --network none --user "$(id -u):$(id -g)" -v "$(cd "${MESH_CONTROL_ONION_DIR}" && pwd):/hs" \
+                "${MESH_CONTROL_TOR_IMAGE}" sh -c ': > /tmp/torrc; exec tor --defaults-torrc /tmp/torrc -f /tmp/torrc --DisableNetwork 1 --SocksPort 0 --DataDirectory /tmp/data --HiddenServiceDir /hs --HiddenServicePort "7443 127.0.0.1:8080"' >/dev/null 2>&1 &
         else
             rm -rf "${_mc_tmp}"
             echo "ERROR: minting the control onion needs tor on this computer (or MESH_CONTROL_TOR_IMAGE=<an image with tor> and docker)" >&2; exit 1
         fi
         _mc_pid=$!
-        for _i in $(seq 1 60); do [ -s "${MESH_CONTROL_ONION_DIR}/hostname" ] && break; sleep 0.5; done
-        sleep 0.5; kill "${_mc_pid}" 2>/dev/null; wait "${_mc_pid}" 2>/dev/null
-        rm -rf "${_mc_tmp}"; unset _mc_tmp _mc_pid _i
-        [ -s "${MESH_CONTROL_ONION_DIR}/hostname" ] && [ -s "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" ] \
-            || { echo "ERROR: tor did not mint a control onion key in ${MESH_CONTROL_ONION_DIR}" >&2; exit 1; }
+        # Wait for ALL the files tor writes (hostname last is not guaranteed), then stop it
+        # and reap it WITHOUT letting its exit status end this script: a SIGTERM that lands
+        # before tor installs its signal handlers exits 143, which `wait` returned and
+        # `set -e` turned into a silent abort (measured 15 of 15 when killed the instant
+        # the hostname appeared). Success is judged by the files, never by tor's status.
+        for _i in $(seq 1 120); do
+            [ -s "${MESH_CONTROL_ONION_DIR}/hostname" ] && [ -s "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" ] \
+                && [ -s "${MESH_CONTROL_ONION_DIR}/hs_ed25519_public_key" ] && break
+            kill -0 "${_mc_pid}" 2>/dev/null || break
+            sleep 0.5
+        done
+        if [ -n "${_mc_ctr}" ]; then docker rm -f "${_mc_ctr}" >/dev/null 2>&1 || true; fi
+        kill "${_mc_pid}" 2>/dev/null || true
+        wait "${_mc_pid}" 2>/dev/null || true
+        rm -rf "${_mc_tmp}"; unset _mc_tmp _mc_pid _mc_ctr _i
+        if ! { [ -s "${MESH_CONTROL_ONION_DIR}/hostname" ] && [ -s "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" ]; }; then
+            echo "ERROR: tor did not mint a control onion key in ${MESH_CONTROL_ONION_DIR}" >&2; exit 1
+        fi
     fi
     MESH_CONTROL_ONION="$(tr -d '[:space:]' < "${MESH_CONTROL_ONION_DIR}/hostname")"
     [[ "${MESH_CONTROL_ONION}" =~ ^[a-z2-7]{56}\.onion$ ]] \
@@ -664,7 +705,7 @@ fi
 # ── Mesh control over Tor -> provision.json (+ the pki stick's onion key) ───────
 # lan writes nothing (byte-identical to before the option existed).
 if [ "${MESH_CONTROL_TRANSPORT}" != lan ] && [ -f "${PROV}" ]; then
-    MC_T="${MESH_CONTROL_TRANSPORT}" MC_N="${MESH_CONTROL_NAME:-hs.${EFFECTIVE_SUPERDOMAIN}}" MC_O="${MESH_CONTROL_ONION}" \
+    MC_T="${MESH_CONTROL_TRANSPORT}" MC_N="${MESH_CONTROL_NAME}" MC_O="${MESH_CONTROL_ONION}" \
         python3 - "${PROV}" <<'PY'
 import json, os, sys
 p = sys.argv[1]
@@ -676,7 +717,7 @@ m["control_onion"] = os.environ["MC_O"]
 json.dump(d, open(p, "w"), indent=2)
 open(p, "a").write("\n")
 PY
-    echo "==> mesh control over Tor: ${MESH_CONTROL_TRANSPORT}, name ${MESH_CONTROL_NAME:-hs.${EFFECTIVE_SUPERDOMAIN}}, onion ${MESH_CONTROL_ONION%%.*}… -> ${PROV}"
+    echo "==> mesh control over Tor: ${MESH_CONTROL_TRANSPORT}, name ${MESH_CONTROL_NAME} (port ${MESH_CONTROL_PORT}), onion ${MESH_CONTROL_ONION:0:8}… -> ${PROV}"
     if [ "${ROLE}" = pki ]; then
         mkdir -p "${OUT_DIR}/headscale/control-onion" && chmod 0700 "${OUT_DIR}/headscale/control-onion"
         for _f in hs_ed25519_secret_key hs_ed25519_public_key hostname; do

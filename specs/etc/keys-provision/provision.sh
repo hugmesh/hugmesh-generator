@@ -96,16 +96,41 @@ resolve_lan_ip() {
 # gen-provision-keys.sh --mesh-control-transport; else the builder-baked
 # /etc/hugmesh/mesh-control-transport; else lan):
 #   lan        today's behaviour (the precedence above), nothing below runs;
-#   lan+onion  every node dials https://<control_name>:<port>, /etc/hosts points that
-#              name at 127.77.0.1, and on a worker hugmesh-mesh-control-relay passes
-#              the connection to the pki on the LAN while it answers, else to the
-#              pki's dedicated control onion through the local Tor client;
-#   onion      the same, always through the onion.
+#   lan+onion  every node dials https://<control_name>:<control port> (7443), and
+#              /etc/hosts points that name at 127.77.0.1, where
+#              hugmesh-mesh-control-relay listens. On a worker it passes each
+#              connection to the pki's headscale on the LAN (<pki LAN address>:8080)
+#              while that answers, else to the pki's dedicated control onion through
+#              the local Tor client; on the pki it passes it to headscale itself
+#              (127.0.0.1:8080). If this node cannot do that (no tor, no socat, no
+#              valid name or onion) it falls back to lan, loudly;
+#   onion      the same, always through the onion — and FAIL CLOSED: a node that
+#              cannot run the Tor path dials nothing else (resolve_control_endpoint
+#              returns no endpoint and provision_tailscale does not run `tailscale up`;
+#              explicit .headscale.server_url / .mesh.endpoint / .tailscale.login_server
+#              overrides are the operator's and still win).
 # A PERMANENT fallback, not a handover: the name never changes, so no client ever
 # needs `tailscale up --login-server --force-reauth`, and the DERP host (which follows
-# server_url) is the same name on every node. Before go-live the onion needs the
-# internet (Tor never shortcuts over the LAN); an offline LAN still needs the LAN path.
+# server_url, host AND port) is the same name on every node. Before go-live the onion
+# needs the internet (Tor never shortcuts over the LAN); an offline LAN still needs
+# the LAN path.
+#
+# Why port 7443 and not headscale's own 8080: the relay must listen on the URL's port
+# at 127.77.0.1, and a listener on one address cannot coexist with a WILDCARD listener
+# on the same port. Workers carry wildcard :8080 listeners (lan-dns's CoreDNS health on
+# ENV=test backend nodes), so the dial port is a dedicated one, and headscale keeps
+# 8080 for the LAN, the firewall carve-out and `lan` (byte-identical).
+#
+# Why the default name is hs.<first label>-control.<rest>, NOT hs.<superdomain>:
+# headscale 0.23.0 refuses to START when its server_url CONTAINS dns.base_domain (the
+# MagicDNS domain, i.e. the superdomain) as a plain SUBSTRING — measured on the pinned
+# image: base hugmesh.internal with https://hs.hugmesh.internal:8080 -> FTL "server_url
+# cannot contain the base_domain"; base mesh.internal with the same URL -> FTL too
+# (substring, not a label suffix); hs.hugmesh-control.internal -> serving. A name that
+# overlaps is refused here and by gen-provision-keys.sh and the Studio.
 MESH_CONTROL_LOOPBACK="127.77.0.1"
+MESH_CONTROL_PORT_DEFAULT=7443
+MESH_CONTROL_SERVICE_PORT=8080   # headscale's own TLS listener on the pki (the KEYS listen_addr)
 MESH_CONTROL_TRANSPORT_BAKED="${MESH_CONTROL_TRANSPORT_BAKED:-/etc/hugmesh/mesh-control-transport}"
 
 # lan | lan+onion | onion — malformed values fall back to lan, loudly (stderr).
@@ -121,17 +146,53 @@ resolve_mesh_control_transport() {
     esac
 }
 
-# The stable control name (default hs.<MagicDNS base domain>, i.e. hs.<superdomain>):
-# a dotted DNS name, never an .onion. Empty when malformed.
-resolve_mesh_control_name() {
-    local n; n="$(jqm '.mesh.control_name // ""')"
-    { [ -z "${n}" ] || [ "${n}" = "null" ]; } && n="hs.$(resolve_magic_dns_domain)"
-    n="${n,,}"
-    if [[ "${n}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] && [[ "${n}" != *.onion ]]; then
-        echo "${n}"
+# mesh_control_default_name <MagicDNS base domain> — hs.<first label>-control.<rest>
+# (hugmesh.internal -> hs.hugmesh-control.internal): OUTSIDE the base domain. The same
+# derivation as gen-provision-keys.sh and studio core/mesh_control.py (parity-tested).
+mesh_control_default_name() {
+    local sd="${1,,}"
+    if [[ "${sd}" == *.* ]]; then echo "hs.${sd%%.*}-control.${sd#*.}"; else echo "hs.${sd}-control"; fi
+}
+
+# mesh_control_name_clash <name> <port> <base domain> — true when headscale 0.23.0
+# would refuse to start with server_url https://<name>:<port> and that base_domain:
+# it refuses when the URL CONTAINS the base domain as a substring (measured; see above).
+mesh_control_name_clash() {
+    [ -n "$3" ] && [[ "https://$1:$2" == *"$3"* ]]
+}
+
+# The control port (the URL's, the relay's and the onion's virtual port):
+# .mesh.control_port, default 7443. Never headscale's own 8080 (the pki's forward
+# 127.77.0.1:<port> -> 127.0.0.1:8080 would collide with headscale's wildcard bind).
+resolve_mesh_control_port() {
+    local p; p="$(jqm '.mesh.control_port // ""')"
+    { [ -z "${p}" ] || [ "${p}" = "null" ]; } && p="${MESH_CONTROL_PORT_DEFAULT}"
+    if [[ "${p}" =~ ^[0-9]{1,5}$ ]] && [ "$((10#${p}))" -ge 1 ] && [ "$((10#${p}))" -le 65535 ] \
+       && [ "$((10#${p}))" -ne "${MESH_CONTROL_SERVICE_PORT}" ]; then
+        echo "$((10#${p}))"
     else
-        warn "mesh control name '${n}' is not a dotted DNS name — mesh control over Tor stays off" >&2
+        warn ".mesh.control_port '${p}' is not a port other than headscale's own ${MESH_CONTROL_SERVICE_PORT} — using ${MESH_CONTROL_PORT_DEFAULT}" >&2
+        echo "${MESH_CONTROL_PORT_DEFAULT}"
     fi
+}
+
+# The stable control name (default: mesh_control_default_name of the MagicDNS base
+# domain): a dotted DNS name, never an .onion, and never one headscale would refuse
+# next to the MagicDNS base domain. Empty (with the reason on stderr) otherwise.
+resolve_mesh_control_name() {
+    local n dom; n="$(jqm '.mesh.control_name // ""')"
+    dom="$(resolve_magic_dns_domain)"
+    { [ -z "${n}" ] || [ "${n}" = "null" ]; } && n="$(mesh_control_default_name "${dom}")"
+    n="${n,,}"
+    if ! [[ "${n}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || [[ "${n}" == *.onion ]]; then
+        warn "mesh control name '${n}' is not a dotted DNS name — mesh control over Tor cannot run on this node" >&2
+        return 0
+    fi
+    if mesh_control_name_clash "${n}" "$(resolve_mesh_control_port 2>/dev/null)" "${dom}"; then
+        warn "mesh control name '${n}' contains the MagicDNS domain '${dom}', and headscale refuses to start with such a server_url — mesh control over Tor cannot run on this node (re-make the sticks with a control name outside ${dom})" >&2
+        return 0
+    fi
+    echo "${n}"
 }
 
 # The pki's control onion (56 base32 chars + .onion). Empty when absent or malformed.
@@ -139,35 +200,46 @@ resolve_mesh_control_onion() {
     local o; o="$(jqm '.mesh.control_onion // ""')"
     { [ -z "${o}" ] || [ "${o}" = "null" ]; } && return 0
     if [[ "${o}" =~ ^[a-z2-7]{56}\.onion$ ]]; then echo "${o}"
-    else warn ".mesh.control_onion '${o}' is not a v3 onion hostname — ignored" >&2; fi
+    else warn ".mesh.control_onion is not a v3 onion hostname — ignored" >&2; fi
 }
 
-# The control port: headscale's own TLS listener, .mesh.control_port, default 8080.
-resolve_mesh_control_port() {
-    local p; p="$(jqm '.mesh.control_port // ""')"
-    { [ -z "${p}" ] || [ "${p}" = "null" ]; } && p=8080
-    if [[ "${p}" =~ ^[0-9]{1,5}$ ]] && [ "${p}" -ge 1 ] && [ "${p}" -le 65535 ]; then echo "${p}"; else echo 8080; fi
-}
+# A short, loggable form of an onion address: the first 8 characters only. The
+# address is not a secret, but every copy widens who can reach the control onion
+# (docs/MESH-CONTROL-OVER-TOR.md "Who can reach the control onion").
+mesh_control_onion_short() { printf '%s…' "${1:0:8}"; }
 
 # True when this node runs the control plane over the stable name: a Tor transport,
-# a valid name and onion, and the tools that carry it (tor everywhere; socat for the
-# relay on a node without headscale). Anything missing keeps the node on lan, loudly.
+# a valid name and onion, and the tools that carry it (tor, and socat for the
+# node-local relay — on the pki too, where it forwards the control port to
+# headscale). Anything missing: lan+onion falls back to lan, loudly; onion fails
+# CLOSED (mesh_control_blocked).
 mesh_control_active() {
     local t; t="$(resolve_mesh_control_transport)"
     [ "${t}" = lan ] && return 1
     [ -n "$(resolve_mesh_control_name)" ] || return 1
+    local fallback="staying on lan"
+    [ "${t}" = onion ] && fallback="Tor only: this node dials NO other control path"
     if [ -z "$(resolve_mesh_control_onion)" ]; then
-        warn "mesh control transport ${t} but no .mesh.control_onion on this stick — staying on lan" >&2
+        warn "mesh control transport ${t} but no .mesh.control_onion on this stick — ${fallback}" >&2
         return 1
     fi
     if ! have tor; then
-        warn "mesh control transport ${t} but tor is not installed (build with --mesh-control-transport ${t}) — staying on lan" >&2
+        warn "mesh control transport ${t} but tor is not installed (build with --mesh-control-transport ${t}) — ${fallback}" >&2
         return 1
     fi
-    if [ "$(jqm '.headscale.enabled // false')" != "true" ] && ! have socat; then
-        warn "mesh control transport ${t} but socat is not installed (the node-local relay needs it) — staying on lan" >&2
+    if ! have socat; then
+        warn "mesh control transport ${t} but socat is not installed (the node-local relay needs it) — ${fallback}" >&2
         return 1
     fi
+    return 0
+}
+
+# True when the transport is `onion` (Tor only) but this node cannot run the Tor path:
+# the node must then dial NOTHING (fail closed), never the LAN, the baked URL or the
+# template's .nodes[] row.
+mesh_control_blocked() {
+    [ "$(resolve_mesh_control_transport 2>/dev/null)" = onion ] || return 1
+    mesh_control_active 2>/dev/null && return 1
     return 0
 }
 
@@ -180,6 +252,9 @@ resolve_endpoint() {
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then ep="$(jqm '.mesh.endpoint // ""')"; fi
     # Mesh control over Tor (OPT-IN): the stable control name, ahead of the baked URL.
     if { [ -z "${ep}" ] || [ "${ep}" = "null" ]; } && mesh_control_active; then ep="$(mesh_control_url)"; fi
+    if { [ -z "${ep}" ] || [ "${ep}" = "null" ]; } && mesh_control_blocked; then
+        warn "mesh control transport onion (Tor only) but this control node cannot publish the control onion (see above) — Tor-only workers cannot reach it; headscale's server_url falls back to the node's own address" >&2
+    fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
         [ -r /etc/hugmesh/headscale-url ] && ep="$(tr -d '[:space:]' < /etc/hugmesh/headscale-url 2>/dev/null)"
     fi
@@ -255,6 +330,13 @@ resolve_control_endpoint() {
     if { [ -z "${ep}" ] || [ "${ep}" = "null" ]; } && mesh_control_active; then
         ep="$(mesh_control_url)"
         log "control endpoint: mesh control over Tor — dialling the stable name ${ep} (node-local relay)" >&2
+    fi
+    # Tor only, and the Tor path cannot run here: FAIL CLOSED — no LAN address, no
+    # baked URL, no .nodes[] row. provision_tailscale then does not run `tailscale up`.
+    if { [ -z "${ep}" ] || [ "${ep}" = "null" ]; } && mesh_control_blocked; then
+        warn "control endpoint: mesh control transport onion (Tor only), but the Tor path cannot run on this node (see above) — NO control endpoint: this node dials nothing until the image carries tor + socat and the stick a valid control name and onion" >&2
+        echo ""
+        return 0
     fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
         local lan_ip; lan_ip="$(resolve_pki_lan_ip)"
@@ -1401,6 +1483,14 @@ headscale_tls_material() {
     return 1
 }
 
+# mesh_control_tls_passthrough <host> <port> — true when <host>:<port> is this node's
+# mesh control name and port with mesh control over Tor active: the relay in front of
+# headscale is a TCP passthrough (socat), not a TLS terminator.
+mesh_control_tls_passthrough() {
+    mesh_control_active 2>/dev/null || return 1
+    [ "$1" = "$(resolve_mesh_control_name 2>/dev/null)" ] && [ "$2" = "$(resolve_mesh_control_port 2>/dev/null)" ]
+}
+
 # provision_headscale_tls <config> <server_url> — decide who serves TLS for
 # <server_url> (see the header), make it so in <config>, and set HEADSCALE_SERVED_URL
 # to the URL headscale will actually answer at (https -> http only when no
@@ -1429,7 +1519,10 @@ provision_headscale_tls() {
         warn "headscale TLS: server_url ${url} is plain http (an explicit override) — nodes join, but the embedded DERP relay is NOT usable over it (clients speak TLS to DERP), so peers with no direct path get no relay. Drop the override (the default is https://<LAN IP>:${lport}) or front headscale with TLS (docs/HEADSCALE-DERP.md)"
         return 0
     fi
-    if [ "${port:-443}" != "${lport}" ]; then
+    # Mesh control over Tor: the URL's port (7443) is the node-local relay's, which
+    # passes TLS through UNREAD to headscale's own listener — so headscale serves the
+    # TLS itself, exactly as when the ports match. Any other mismatch is a TLS front.
+    if [ "${port:-443}" != "${lport}" ] && ! mesh_control_tls_passthrough "${host}" "${port}"; then
         headscale_tls_config_set "${cfg}" off
         log "headscale TLS: server_url ${url} names a TLS front (port ${port:-443}; headscale listens on ${lport}) — headscale stays plain HTTP behind it, and that front must pass /derp with its Upgrade header for the relay to work (docs/HEADSCALE-DERP.md)"
         return 0
@@ -1532,18 +1625,27 @@ headscale_lan_control_marker() {
 # Runs before provision_headscale/provision_tailscale (main). Nothing at all happens
 # on lan except removing what an earlier run of this step left behind. Otherwise:
 #   * /etc/hosts: <control_name> -> 127.77.0.1 (one managed line);
-#   * tailscaled: TS_FORCE_NOISE_443=true in /etc/conf.d/tailscaled and NO proxy
-#     variable (measured: no bootstrap DNS, no onion name leaked to the resolver);
-#   * Tor: /etc/hugmesh/tor/mesh-control for hugmesh-tor-reconcile ("control <port>"
-#     on the pki, "client" on a worker); where the tor optional service was not
-#     selected at build time, mesh-control-only too, so this node publishes no onion
-#     of its own; the reconcile + tor are linked and the reconcile run now;
+#   * tailscaled: a managed block in /etc/conf.d/tailscaled exporting
+#     TS_FORCE_NOISE_443=true and TS_NO_LOGS_NO_SUPPORT=true, and NO proxy variable.
+#     Measured on the pinned 1.78.1 (no network, 30 s): without the knob tailscaled made
+#     25 log.tailscale.io attempts and 24 bootstrap-DNS dials to Tailscale's public DERP
+#     IPs; with TS_NO_LOGS_NO_SUPPORT=true, 0 and 0 — the same as --no-logs-no-support
+#     (the flag only sets this knob). On a node with a default route those would leave
+#     outside Tor. PR #965 turns log upload off for every node in the init script; this
+#     block is the Tor-mode guarantee that does not wait for it;
+#   * Tor: /etc/hugmesh/tor/mesh-control for hugmesh-tor-reconcile ("control <port>
+#     <headscale port>" on the pki, "client" on a worker); where the tor optional
+#     service was not selected at build time, mesh-control-only too, so this node
+#     publishes no onion of its own; the reconcile + tor are linked and the reconcile
+#     run now;
+#   * the relay (hugmesh-mesh-control-relay) on EVERY node, listening on
+#     127.77.0.1:<control port>: on a worker it goes to the pki on the LAN or the control
+#     onion (+ the keeper); on the pki it forwards to headscale's own TLS listener
+#     (TRANSPORT=local, no keeper) — the URL's port is not headscale's (see above);
 #   * the pki: the control onion key from the pki stick (headscale/control-onion/)
 #     into /var/lib/tor/hugmesh-control, 0700/0600 tor:tor, refused when its hostname
-#     is not the .mesh.control_onion every worker stick carries; OIDC deferred until
-#     the issuer answers (hugmesh-headscale-oidc-defer; first sign-in = pre-auth keys);
-#   * a worker: /etc/hugmesh/mesh-control/relay.conf, and the relay + keeper linked
-#     and started.
+#     is not the .mesh.control_onion every worker stick carries. headscale runs WITHOUT
+#     OIDC in a Tor mode (mesh_control_oidc_off): first sign-in is the pre-auth keys.
 MESH_CONTROL_HOSTS_TAG="# hugmesh-mesh-control"
 MESH_CONTROL_DIR="${MESH_CONTROL_DIR:-/etc/hugmesh/mesh-control}"
 MESH_CONTROL_TOR_MARKER="${MESH_CONTROL_TOR_MARKER:-/etc/hugmesh/tor/mesh-control}"
@@ -1551,7 +1653,6 @@ MESH_CONTROL_TOR_ONLY="${MESH_CONTROL_TOR_ONLY:-/etc/hugmesh/tor/mesh-control-on
 MESH_CONTROL_HS_DIR="${MESH_CONTROL_HS_DIR:-/var/lib/tor/hugmesh-control}"
 MESH_CONTROL_TS_CONF="${MESH_CONTROL_TS_CONF:-/etc/conf.d/tailscaled}"
 MESH_CONTROL_HOSTS="${MESH_CONTROL_HOSTS:-/etc/hosts}"
-HEADSCALE_OIDC_DEFER_MARKER="${HEADSCALE_OIDC_DEFER_MARKER:-/var/lib/hugmesh/headscale-oidc-deferred}"
 
 mesh_control_hosts_line() {  # <name|""> — (re)write the one managed /etc/hosts line
     local tmp
@@ -1561,19 +1662,31 @@ mesh_control_hosts_line() {  # <name|""> — (re)write the one managed /etc/host
     cat "${tmp}" > "${MESH_CONTROL_HOSTS}"; rm -f "${tmp}"
 }
 
-mesh_control_tailscaled_env() {  # on|off — the managed block in /etc/conf.d/tailscaled
+mesh_control_tailscaled_env() {  # on|closed|off — the managed block in /etc/conf.d/tailscaled
+    # on: the Tor path runs here. closed: Tor only cannot run here (fail closed) — the
+    # same no-upload variables, but no rc_need on a relay that is not configured, so an
+    # operator's explicit login server can still start tailscaled.
     local tmp
     mkdir -p "$(dirname "${MESH_CONTROL_TS_CONF}")"
     tmp="$(mktemp)" || return 1
     sed '/^# >>> hugmesh-mesh-control/,/^# <<< hugmesh-mesh-control/d' "${MESH_CONTROL_TS_CONF}" > "${tmp}" 2>/dev/null || true
-    if [ "$1" = on ]; then
+    if [ "$1" = on ] || [ "$1" = closed ]; then
         cat >> "${tmp}" <<'EOT'
 # >>> hugmesh-mesh-control (keys-provision; docs/MESH-CONTROL-OVER-TOR.md)
 # Noise over the TLS port only: the control URL's port is the node-local relay. No
 # proxy variable here, ever (an HTTPS_PROXY leaks the onion name to DNS).
 export TS_FORCE_NOISE_443=true
-# <<< hugmesh-mesh-control
+# No log upload to log.tailscale.io and no bootstrap-DNS dials to Tailscale's public
+# DERP addresses (the --no-logs-no-support knob): neither would go through Tor.
+export TS_NO_LOGS_NO_SUPPORT=true
 EOT
+        [ "$1" = on ] && cat >> "${tmp}" <<'EOT'
+# tailscaled only with the relay listening: when nothing answers on the control port,
+# tailscaled 1.78.1 falls back to bootstrap DNS for the control NAME over the clearnet,
+# whatever the knob above says (measured; docs/MESH-CONTROL-OVER-TOR.md "Privacy").
+rc_need="hugmesh-mesh-control-relay"
+EOT
+        echo "# <<< hugmesh-mesh-control" >> "${tmp}"
     fi
     if [ -s "${tmp}" ]; then cat "${tmp}" > "${MESH_CONTROL_TS_CONF}"; else rm -f "${MESH_CONTROL_TS_CONF}"; fi
     rm -f "${tmp}"
@@ -1586,40 +1699,39 @@ mesh_control_off() {
     return 0
 }
 
-# mesh_control_oidc_defer <live headscale config> — on the pki in a Tor mode, with an
-# OIDC issuer configured: first sign-in uses the sticks' pre-auth keys, and OIDC is
-# switched on once the issuer answers (hugmesh-headscale-oidc-defer, cron; headscale
-# 0.23 never retries a failed discovery itself). Called by provision_headscale AFTER the
-# KEYS config was installed — the baked config carries no oidc block.
-MESH_CONTROL_OIDC_CRON_SRC="${MESH_CONTROL_OIDC_CRON_SRC:-/etc/hugmesh/registry/cron-headscale-oidc-defer}"
-MESH_CONTROL_OIDC_CRON_DST="${MESH_CONTROL_OIDC_CRON_DST:-/etc/cron.d/hugmesh-headscale-oidc-defer}"
-mesh_control_oidc_defer() {
-    local cfg="$1"
-    if ! mesh_control_active 2>/dev/null; then
-        rm -f "${HEADSCALE_OIDC_DEFER_MARKER}" "${MESH_CONTROL_OIDC_CRON_DST}" 2>/dev/null || true
-        return 0
-    fi
-    if sed -n '/^oidc:/,/^[^ #]/p' "${cfg}" 2>/dev/null | grep -E '^[[:space:]]+issuer:[[:space:]]*["'"'"']?https?://' >/dev/null; then
-        mkdir -p "$(dirname "${HEADSCALE_OIDC_DEFER_MARKER}")"
-        : > "${HEADSCALE_OIDC_DEFER_MARKER}"
-        if [ -f "${MESH_CONTROL_OIDC_CRON_SRC}" ]; then
-            mkdir -p "$(dirname "${MESH_CONTROL_OIDC_CRON_DST}")"
-            cp -f "${MESH_CONTROL_OIDC_CRON_SRC}" "${MESH_CONTROL_OIDC_CRON_DST}" \
-                || warn "mesh control: could not install the OIDC-defer cron (${MESH_CONTROL_OIDC_CRON_DST})"
-        else
-            warn "mesh control: ${MESH_CONTROL_OIDC_CRON_SRC} is missing (image built without --mesh-control-transport?) — OIDC stays off until headscale restarts"
-        fi
-        log "mesh control: OIDC deferred until the issuer answers (hugmesh-headscale-oidc-defer); first sign-in uses the pre-auth keys"
-    fi
+# mesh_control_oidc_off <live headscale config> — on the pki in a Tor mode, remove the
+# top-level oidc: block, so headscale runs with pre-auth-key (and CLI) registration
+# only. Operator decision 2026-11-11: first sign-in via the sticks' pre-auth keys, no
+# OIDC over the onion. It could not work through the control name anyway: headscale
+# builds its redirect URI from server_url (https://<control name>:<port>/oidc/callback),
+# which Casdoor's init job does not register and which only provisioned nodes resolve.
+# Called by provision_headscale AFTER the KEYS config was installed (the baked config
+# carries no oidc block). lan: nothing changes.
+mesh_control_oidc_off() {
+    local cfg="$1" tmp
+    mesh_control_active 2>/dev/null || return 0
+    [ "$(jqm '.headscale.enabled // false')" = "true" ] || return 0
+    grep -q '^oidc:' "${cfg}" 2>/dev/null || return 0
+    tmp="$(mktemp)" || return 0
+    awk 'skip && /^[^[:space:]#]/ {skip=0} /^oidc:/ {skip=1; next} !skip' "${cfg}" > "${tmp}" \
+        && cat "${tmp}" > "${cfg}"
+    rm -f "${tmp}"
+    log "mesh control: headscale runs WITHOUT OIDC in a Tor mode (oidc: removed from ${cfg}); nodes join with the KEYS sticks' pre-auth keys"
     return 0
 }
 
 provision_mesh_control() {
     if ! mesh_control_active; then
         mesh_control_off
+        if mesh_control_blocked; then
+            # Fail closed: keep tailscaled's no-log-upload block (nothing may leave
+            # outside Tor), configure nothing else; provision_tailscale dials nothing.
+            mesh_control_tailscaled_env closed
+            warn "mesh control: Tor only, and the Tor path cannot run on this node — nothing is configured, and this node will not dial any other control path"
+        fi
         return 0
     fi
-    local t name onion port is_pki=false
+    local t name onion port is_pki=false svc_port="${MESH_CONTROL_SERVICE_PORT}"
     t="$(resolve_mesh_control_transport)"; name="$(resolve_mesh_control_name)"
     onion="$(resolve_mesh_control_onion)"; port="$(resolve_mesh_control_port)"
     [ "$(jqm '.headscale.enabled // false')" = "true" ] && is_pki=true
@@ -1629,17 +1741,19 @@ provision_mesh_control() {
     mesh_control_tailscaled_env on
 
     # Tor: a client everywhere, the control onion on the pki.
-    mkdir -p "$(dirname "${MESH_CONTROL_TOR_MARKER}")"
+    mkdir -p "$(dirname "${MESH_CONTROL_TOR_MARKER}")" "${MESH_CONTROL_DIR}"
     if [ ! -e /etc/runlevels/default/hugmesh-tor-reconcile ]; then
         : > "${MESH_CONTROL_TOR_ONLY}"
         log "mesh control: the tor optional service is not selected here — Tor runs for the control plane only (no onion of this node's own)"
     fi
     if ${is_pki}; then
         local src="${BASE}/headscale/control-onion" f got
+        # headscale's own listener, as the KEYS config names it (default 8080).
+        [ -f "${BASE}/headscale/config.yaml" ] && svc_port="$(headscale_listen_port "${BASE}/headscale/config.yaml")"
         if [ -s "${src}/hs_ed25519_secret_key" ] && [ -s "${src}/hostname" ]; then
             got="$(tr -d '[:space:]' < "${src}/hostname")"
             if [ "${got}" != "${onion}" ]; then
-                warn "mesh control: the pki stick's control onion key is for ${got}, but the sticks say ${onion} — NOT installed (workers would dial an onion nobody publishes); re-make the sticks from one --mesh-control-onion-dir"
+                warn "mesh control: the pki stick's control onion key is for $(mesh_control_onion_short "${got}"), but the sticks say $(mesh_control_onion_short "${onion}") — NOT installed (workers would dial an onion nobody publishes); re-make the sticks from one --mesh-control-onion-dir"
             else
                 mkdir -p "${MESH_CONTROL_HS_DIR}"
                 for f in hs_ed25519_secret_key hs_ed25519_public_key hostname; do
@@ -1647,22 +1761,27 @@ provision_mesh_control() {
                 done
                 chown -R tor:tor "${MESH_CONTROL_HS_DIR}" 2>/dev/null || true
                 chmod 0700 "${MESH_CONTROL_HS_DIR}"
-                log "mesh control: control onion ${onion%%.*}… installed (key from the pki stick, 0600 tor:tor)"
+                log "mesh control: control onion $(mesh_control_onion_short "${onion}") installed (key from the pki stick, 0600 tor:tor)"
             fi
         else
             warn "mesh control: no headscale/control-onion/ on the pki stick — the control onion is NOT published; workers reach this node over the LAN only"
         fi
-        printf 'control %s\n' "${port}" > "${MESH_CONTROL_TOR_MARKER}"
-        # OIDC deferral is armed by provision_headscale (mesh_control_oidc_defer), once the
-        # KEYS headscale config is the live one.
+        printf 'control %s %s\n' "${port}" "${svc_port}" > "${MESH_CONTROL_TOR_MARKER}"
+        # The URL's port -> headscale's own TLS listener (TLS passes through untouched).
+        {
+            echo "# Written by keys-provision (provision_mesh_control). hugmesh-mesh-control-relay"
+            echo "# parses it; every value is shape-checked there."
+            echo "TRANSPORT=local"
+            echo "LISTEN=${MESH_CONTROL_LOOPBACK}:${port}"
+            echo "LAN=127.0.0.1:${svc_port}"
+        } > "${MESH_CONTROL_DIR}/relay.conf"
     else
         local lan_ip="" lan=""
         if [ "${t}" = "lan+onion" ]; then
             lan_ip="$(resolve_pki_lan_ip)"
-            [ -n "${lan_ip}" ] && lan="${lan_ip}:${port}"
+            [ -n "${lan_ip}" ] && lan="${lan_ip}:${svc_port}"
             [ -n "${lan}" ] || warn "mesh control: lan+onion but no .mesh.pki_lan_ip on this stick — the relay uses the onion only"
         fi
-        mkdir -p "${MESH_CONTROL_DIR}"
         {
             echo "# Written by keys-provision (provision_mesh_control). hugmesh-mesh-control-relay"
             echo "# parses it; every value is shape-checked there."
@@ -1671,9 +1790,11 @@ provision_mesh_control() {
             echo "LAN=${lan}"
             echo "ONION=${onion}:${port}"
         } > "${MESH_CONTROL_DIR}/relay.conf"
-        chmod 0644 "${MESH_CONTROL_DIR}/relay.conf"
         printf 'client\n' > "${MESH_CONTROL_TOR_MARKER}"
     fi
+    # Root-only: the onion address is not a secret, but every readable copy widens who
+    # can reach the control onion (docs/MESH-CONTROL-OVER-TOR.md).
+    chmod 0600 "${MESH_CONTROL_DIR}/relay.conf"
 
     # Tor itself: the reconcile renders the torrc from the markers and starts tor.
     if [ ! -e /etc/runlevels/default/hugmesh-tor-reconcile ]; then
@@ -1686,16 +1807,15 @@ provision_mesh_control() {
         || warn "mesh control: hugmesh-tor-reconcile failed (see /var/log/hugmesh-tor-reconcile.log)"
     if ${is_pki} && [ -s "${MESH_CONTROL_HS_DIR}/hostname" ] \
        && [ "$(tr -d '[:space:]' < "${MESH_CONTROL_HS_DIR}/hostname")" != "${onion}" ]; then
-        warn "mesh control: tor publishes $(tr -d '[:space:]' < "${MESH_CONTROL_HS_DIR}/hostname") but the sticks say ${onion}"
+        warn "mesh control: tor publishes $(mesh_control_onion_short "$(tr -d '[:space:]' < "${MESH_CONTROL_HS_DIR}/hostname")") but the sticks say $(mesh_control_onion_short "${onion}")"
     fi
 
-    if ! ${is_pki}; then
-        local svc
-        for svc in hugmesh-mesh-control-relay hugmesh-mesh-control-keeper; do
-            rc-update add "${svc}" default 2>/dev/null || true
-            rc-service "${svc}" start 2>/dev/null || warn "mesh control: ${svc} did not start"
-        done
-    fi
+    local svc svcs=(hugmesh-mesh-control-relay)
+    ${is_pki} || svcs+=(hugmesh-mesh-control-keeper)
+    for svc in "${svcs[@]}"; do
+        rc-update add "${svc}" default 2>/dev/null || true
+        rc-service "${svc}" start 2>/dev/null || warn "mesh control: ${svc} did not start"
+    done
     return 0
 }
 
@@ -1812,8 +1932,9 @@ provision_headscale() {
     # LAN workers dial this node's headscale port before go-live
     # (resolve_control_endpoint). Hand that port to the node firewall.
     headscale_lan_control_marker /etc/headscale/config.yaml
-    # Mesh control over Tor (OPT-IN): OIDC waits for its issuer (no-op on lan).
-    mesh_control_oidc_defer /etc/headscale/config.yaml
+    # Mesh control over Tor (OPT-IN): headscale runs without OIDC; first sign-in is the
+    # pre-auth keys (no-op on lan).
+    mesh_control_oidc_off /etc/headscale/config.yaml
 
     chown -R headscale:headscale /etc/headscale /var/lib/headscale /run/headscale
     chmod 0600 /var/lib/headscale/*.key 2>/dev/null || true
@@ -2146,6 +2267,23 @@ provision_tailscale() {
         rc-update del tailscaled default 2>/dev/null || true
         rc-service tailscaled stop 2>/dev/null || true
         return 0
+    fi
+
+    # Mesh control over Tor, Tor only, and the Tor path cannot run here: FAIL CLOSED,
+    # before tailscaled even starts. With no login server `tailscale up` would dial
+    # Tailscale's own control plane over the clearnet (and hand it the pre-auth key);
+    # with the LAN / baked / .nodes[] one it would leave Tor. An explicit
+    # .tailscale.login_server, .headscale.server_url or .mesh.endpoint is the
+    # operator's and still wins (resolve_control_endpoint returns those first).
+    if [ "$(jqm '.headscale.enabled // false')" != "true" ] && mesh_control_blocked; then
+        local explicit_login; explicit_login="$(jqm '.tailscale.login_server // ""')"
+        if { [ -z "${explicit_login}" ] || [ "${explicit_login}" = "null" ]; } \
+           && [ -z "$(resolve_control_endpoint 2>/dev/null)" ]; then
+            warn "tailscale: mesh control transport onion (Tor only), but the Tor path cannot run on this node — tailscaled is STOPPED and taken out of the runlevel; no other control path is dialled. Build the image with --mesh-control-transport onion (tor + socat) and make the sticks with a valid control name and onion, then re-run keys-provision."
+            rc-service tailscaled stop 2>/dev/null || true
+            rc-update del tailscaled default 2>/dev/null || true
+            return 0
+        fi
     fi
 
     mkdir -p /var/lib/tailscale /run/tailscale

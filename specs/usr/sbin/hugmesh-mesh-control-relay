@@ -4,13 +4,16 @@
 #
 # WHY. A worker's first boot happens before go-live: no public DNS, IP or
 # port-forward. With .mesh.control_transport lan+onion|onion every node dials ONE
-# stable name, https://<control_name>:<port> (default hs.<superdomain>:8080), which
-# /etc/hosts points at 127.77.0.1. On a worker this relay listens there and passes
-# each TCP connection, unread (TLS stays end to end with the pki's headscale), to:
-#   lan+onion: the pki on the LAN (<pki LAN address>:<port>) while the keeper says it
-#              answers, else the pki's dedicated control onion through the local Tor
-#              SOCKS port;
-#   onion:     the control onion, always.
+# stable name, https://<control_name>:<port> (default hs.<first superdomain
+# label>-control.<rest>:7443), which /etc/hosts points at 127.77.0.1. This relay
+# listens there and passes each TCP connection, unread (TLS stays end to end with the
+# pki's headscale), to:
+#   lan+onion: the pki on the LAN (<pki LAN address>:8080, headscale's own listener)
+#              while the keeper says it answers, else the pki's dedicated control onion
+#              through the local Tor SOCKS port;
+#   onion:     the control onion, always;
+#   local:     (the pki itself) headscale's own listener, 127.0.0.1:8080 — the URL's
+#              port is not headscale's, so the pki needs this forward too. No keeper.
 # tailscaled itself carries NO proxy variable (measured: HTTPS_PROXY leaks the onion
 # name to the LAN resolver and Tailscale's bootstrap DNS); only TS_FORCE_NOISE_443.
 # The DERP host is the same name, so relayed traffic takes the same path.
@@ -34,8 +37,8 @@
 #
 # CONFIG (written by keys-provision provision_mesh_control; KEY=VALUE, parsed, never
 # sourced, every value shape-checked — a bad line disables the relay, loudly):
-#   TRANSPORT=lan+onion|onion   LISTEN=127.77.0.1:<port>   LAN=<ipv4>:<port>|""
-#   ONION=<56 base32>.onion:<port>   SOCKS=127.0.0.1:<port>   ISOLATION=<word>
+#   TRANSPORT=lan+onion|onion|local   LISTEN=127.77.0.1:<port>   LAN=<ipv4>:<port>|""
+#   ONION=<56 base32>.onion:<port> (not with local)   SOCKS=127.0.0.1:<port>   ISOLATION=<word>
 #   TOR_CONTROL=<unix socket path>   TOR_COOKIE=<cookie file path>
 set -uo pipefail
 
@@ -68,10 +71,10 @@ load_conf() {
         [[ "${line}" =~ ^([A-Z_]+)=(.*)$ ]] || die "malformed line in ${CONF}: ${line}"
         k="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
         case "${k}" in
-            TRANSPORT) [[ "${v}" =~ ^(lan\+onion|onion)$ ]] || die "TRANSPORT '${v}'"; TRANSPORT="${v}" ;;
+            TRANSPORT) [[ "${v}" =~ ^(lan\+onion|onion|local)$ ]] || die "TRANSPORT '${v}'"; TRANSPORT="${v}" ;;
             LISTEN)    _hostport_ok "${v}" "${_IPV4}" || die "LISTEN '${v}'"; LISTEN="${v}" ;;
             LAN)       [ -z "${v}" ] || _hostport_ok "${v}" "${_IPV4}" || die "LAN '${v}'"; LAN="${v}" ;;
-            ONION)     _hostport_ok "${v}" "${_ONION}" || die "ONION '${v}'"; ONION="${v}" ;;
+            ONION)     _hostport_ok "${v}" "${_ONION}" || die "ONION (not a v3 onion:port)"; ONION="${v}" ;;
             SOCKS)     _hostport_ok "${v}" "${_IPV4}" || die "SOCKS '${v}'"; SOCKS="${v}" ;;
             ISOLATION) [[ "${v}" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "ISOLATION '${v}'"; ISOLATION="${v}" ;;
             TOR_CONTROL) [[ "${v}" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "TOR_CONTROL '${v}'"; TOR_CONTROL="${v}" ;;
@@ -79,10 +82,20 @@ load_conf() {
             *) die "unknown key ${k} in ${CONF}" ;;
         esac
     done < "${CONF}"
-    [ -n "${TRANSPORT}" ] && [ -n "${LISTEN}" ] && [ -n "${ONION}" ] || die "${CONF} lacks TRANSPORT, LISTEN or ONION"
+    [ -n "${TRANSPORT}" ] && [ -n "${LISTEN}" ] || die "${CONF} lacks TRANSPORT or LISTEN"
+    if [ "${TRANSPORT}" = local ]; then
+        [ -n "${LAN}" ] || die "${CONF}: TRANSPORT=local needs LAN (headscale's own listener)"
+        ONION=""
+    else
+        [ -n "${ONION}" ] || die "${CONF} lacks ONION"
+    fi
     [ "${TRANSPORT}" = onion ] && LAN=""
     return 0
 }
+
+# A loggable form of the onion: its first 8 characters. The address is not a secret,
+# but every copy widens who can reach the control onion.
+onion_short() { [ -n "${ONION}" ] && printf '%s…' "${ONION:0:8}" || printf 'none'; }
 
 # The socat address of the onion through Tor, on the relay's isolation user.
 onion_addr() { echo "SOCKS4A:${SOCKS%:*}:${ONION%:*}:${ONION##*:},socksport=${SOCKS##*:},socksuser=${ISOLATION}"; }
@@ -98,12 +111,15 @@ lan_ok() {
 cmd_listen() {
     load_conf
     mkdir -p "${STATE}"
-    log "listening on ${LISTEN} (transport ${TRANSPORT}; LAN ${LAN:-none}; onion ${ONION%%.*}…)"
+    log "listening on ${LISTEN} (transport ${TRANSPORT}; LAN ${LAN:-none}; onion $(onion_short))"
     exec socat "TCP-LISTEN:${LISTEN##*:},bind=${LISTEN%:*},fork,reuseaddr" "EXEC:${SELF} upstream"
 }
 
 cmd_upstream() {
     load_conf
+    if [ "${TRANSPORT}" = local ]; then
+        exec socat STDIO "TCP:${LAN},connect-timeout=3"
+    fi
     if lan_ok; then
         exec socat STDIO "TCP:${LAN},connect-timeout=3"
     fi
@@ -124,6 +140,7 @@ newnym() {
 
 cmd_keeper() {
     load_conf
+    [ "${TRANSPORT}" = local ] && { log "keeper: TRANSPORT=local (the control node's own forward) has nothing to keep"; return 0; }
     mkdir -p "${STATE}"
     local fails=0 t0 lan_res onion_res
     log "keeper: every ${KEEPER_INTERVAL}s (LAN probe ${LAN:-off}; onion keep-warm; NEWNYM after ${NEWNYM_AFTER} failures)"
@@ -153,7 +170,8 @@ cmd_keeper() {
 cmd_status() {
     load_conf
     echo "transport: ${TRANSPORT}"; echo "listen:    ${LISTEN}"; echo "lan:       ${LAN:-none}"
-    echo "onion:     ${ONION}"; echo "socks:     ${SOCKS} (isolation ${ISOLATION})"
+    echo "onion:     $(onion_short)"; echo "socks:     ${SOCKS} (isolation ${ISOLATION})"
+    if [ "${TRANSPORT}" = local ]; then echo "path now:  local (headscale on this node)"; return 0; fi
     if lan_ok; then echo "path now:  LAN"; else echo "path now:  onion"; fi
     cat "${STATE}/status" 2>/dev/null || echo "keeper:    no result yet"
 }
