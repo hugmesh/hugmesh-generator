@@ -38,8 +38,9 @@ services:
       #   in-network JWKS = http://casdoor-brandb:8000/.well-known/jwks
       # (brand A: issuer localhost:8000 vs jwks casdoor:8000 — same shape).
     ports:
-      # host 8001 -> container 8000 (brand A owns host 8000).
-      - "8001:8000"
+      # host 8001 -> container 8000 (brand A owns host 8000). Loopback by default
+      # (NEW-15, see compose.real.yaml casdoor): STACK_BIND_ADDR opts into LAN.
+      - "${STACK_BIND_ADDR:-127.0.0.1}:8001:8000"
     networks:
       default:
         aliases: [casdoor-brandb.localtest.me]

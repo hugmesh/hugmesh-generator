@@ -3714,6 +3714,10 @@ lint:seed-password-reconcile:
     - bash tests/scripts/test-seed-password-reconcile.sh
     - bash tests/scripts/seed_password_reconcile_mutations.sh
     - bash tests/stack/test-seed-e2e-lockout.sh
+    # NEW-15: the identity provider is published on loopback only and the seed moves
+    # Casdoor's admin off the factory default (stub Casdoor; no docker, no egress).
+    - bash tests/scripts/test-stack-idp-exposure.sh
+    - bash tests/scripts/stack_idp_exposure_mutations.sh
 
 # The e2e password ROTATES per run (2026-10-15): the contract said "random per
 # run", but nothing ever started a new value — the operator's credentials file
