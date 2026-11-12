@@ -369,9 +369,12 @@ unchanged.
   `casbin/casdoor:3.80.0`; its init Job seeds the OAuth2 apps and the Google provider
   from the `casdoor-google` Secret.
 - Cassandra references an upstream chart; Akkoma + tuwunel are raw manifests
-  (no official charts). tuwunel is pinned (`v1.7.0`); Akkoma still uses
-  `git.akkoma.dev/akkomagang/akkoma:stable`, marked "pin a real tag" in
-  `manifests/akkoma/akkoma.yaml`.
+  (no official charts). tuwunel is pinned (`v1.7.0`). Akkoma runs
+  `ghcr.io/hugmesh/hugmesh-akkoma`, which HugMesh builds from upstream source
+  (`images/akkoma/`, released by `.github/workflows/akkoma-release.yml`): upstream
+  publishes no container image. Until its first release every Akkoma ref carries a
+  marked placeholder digest and `akkoma` is DEFAULT-OFF;
+  `tests/scripts/test-akkoma-image-pin.sh` holds both.
 - `hugmesh-federation-api` (the module-federation registry / manifest + bundles API
   upstream of `admin-bff` and the `remote-fragment` sync fleet) stores fragment
   bundle bytes on a **filesystem RWO PVC** (`federation-bundles`, 5Gi), so it runs

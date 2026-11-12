@@ -476,7 +476,7 @@ This screen is never skipped; only its contents are mode-gated. In standalone it
 
 Traps here are worth reading twice:
 
-- **Ticking replaces, it does not add.** `--optional-services` overrides the built-in set outright. The builders' own defaults (akkoma, tuwunel, phpbb) therefore arrive ticked, and unticking one removes it.
+- **Ticking replaces, it does not add.** `--optional-services` overrides the built-in set outright. The builders' own defaults (tuwunel, phpbb; akkoma is off until its image is published) therefore arrive ticked, and unticking one removes it.
 - So unticking every offered row is a real answer, and it commits an explicit "none", not silence.
 - The Selection dropdown above the table holds two whole-set shortcuts beside the default "pick individually". "Every user-level service" is not the same as ticking every row. It expands a fixed set that excludes the infra services. Every row it decides is set to the state it produces and then locked (user-level rows ticked, an infra slug row unticked), so you can see what it builds.
 - **Services are mesh-wide.** They are baked into the cluster GitOps tree every node shares. The only per-node service choice is the Services column on the worklist screen.

@@ -159,6 +159,14 @@ source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 # destination or a dead branch all leave untouched.
 # shellcheck source=scripts/_node-storage-bake-lib.sh
 source "${SCRIPT_DIR}/scripts/_node-storage-bake-lib.sh"
+# OPTIONAL-SERVICE gate: gate_optional_services() + every _opt_* helper/renderer,
+# the ONE definition build-rpi5-stage4.sh and build-x86-host-stage4.sh source too.
+# Until 2026-11-12 this builder baked the WHOLE specs/cluster tree ungated, so a
+# Jetson cluster image applied every optional service's Application whatever was
+# selected (tests/scripts/test-selected-services-only.sh A4), including akkoma,
+# whose image is not yet published.
+# shellcheck source=scripts/_optional-services-lib.sh
+source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
 
 WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-jetson}"  # per-arch isolation (never shares the Pi/Frite/x86 sysroot)
@@ -235,6 +243,16 @@ ORG="hugmesh"
 # ENV (test|prod) selector — same semantics as the cluster builders: it shapes
 # branding/creds and gates the baked cluster tree's env apps posture.
 ENV="test"
+# OPTIONAL services baked into a cluster role's GitOps tree. The same selection
+# model and built-in default as build-rpi5-stage4.sh: the user-level set, the
+# DEFAULT-ON pair (tuwunel phpbb; akkoma is DEFAULT-OFF until its image is
+# published, images/akkoma/README.md), `all` for the whole user-level set, and
+# EXCLUDE_SERVICES subtracting last. The edge-ai and omnibus roles fold `edge-ai`
+# in (the role's own service). brand.conf narrows; --optional-services overrides
+# both. Every unselected slug is pruned from the baked tree by gate_optional_services.
+USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
+EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"
 CONFIG_FILE=""
 DEFAULT_USER="jetson"
 # NO baked default password (fleet OWASP posture): real creds come from the KEYS
@@ -355,6 +373,21 @@ OPTIONS
         a lowercase DNS name and not --cluster-domain. See docs/DOMAIN-IDP.md.
     -H hostname / -T timezone / -u user
     -C, --config FILE   drop-in brand.conf profile (sourced; CLI overrides it).
+
+  Optional cluster services  (cluster roles; specs/cluster/optional-services.yaml)
+    --optional-services "<slugs>"
+                        Space- or comma-separated slugs to bake: akkoma tuwunel
+                        phpbb games owncast tube character-studio character-forge
+                        (plus edge-ai, tor, ... as on the other builders), or
+                        "all". Unlisted slugs are pruned from the baked GitOps tree
+                        by gate_optional_services. Built-in DEFAULT is "tuwunel
+                        phpbb"; --role edge-ai and --role omnibus add edge-ai.
+                        akkoma is DEFAULT-OFF (image not yet published).
+                        (env/brand.conf: OPTIONAL_SERVICES)
+    --all-services      The whole user-level set (= --optional-services all).
+    --exclude-services "<slugs>"
+                        Remove these slugs last, however they were selected.
+                        (env/brand.conf: EXCLUDE_SERVICES)
 
   Image
     --img / --no-img    build / skip the flashable raw .img (default: build).
@@ -499,6 +532,9 @@ while [[ $# -gt 0 ]]; do
         -H|--hostname)        HOSTNAME="$2";              shift 2 ;;
         -C|--config)          CONFIG_FILE="$2";           shift 2 ;;  # sourced above
         --env)                ENV="$2";                   shift 2 ;;
+        --optional-services)  OPTIONAL_SERVICES="$2";     shift 2 ;;
+        --all-services)       OPTIONAL_SERVICES="all";    shift   ;;
+        --exclude-services)   EXCLUDE_SERVICES="$2";      shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2";   shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
         --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
@@ -633,6 +669,45 @@ case "${ROLE}" in
         err "internal: role '${ROLE}' passed validation but has no arm here — the case block has drifted from HUGMESH_ROLES_JETSON"
         exit 1 ;;
 esac
+
+# ── OPTIONAL-SERVICE selection: resolve it here, after the role (edge-ai folds
+# in) and before --print-plan, so the plan states what the gate will keep. The
+# same order as build-rpi5-stage4.sh: commas -> negative-only veto -> `all` ->
+# role fold -> EXCLUDE_SERVICES last. The rules shared with the other builders
+# (_opt_negative_only_keeps_defaults, _opt_negative_tokens) come from
+# scripts/_optional-services-lib.sh.
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
+_opt_negative_only_keeps_defaults
+case " ${OPTIONAL_SERVICES} " in
+    *" all "*)
+        _opt_neg="$(_opt_negative_tokens)"
+        OPTIONAL_SERVICES="${USER_LEVEL_SERVICES}${_opt_neg}"
+        unset _opt_neg
+        info "OPTIONAL_SERVICES: 'all' sentinel expanded to every user-level slug: ${OPTIONAL_SERVICES}"
+        ;;
+esac
+# The edge-ai and omnibus roles exist to run the edge-ai service, so the role
+# selects it. An operator who does not want it builds --role backend-gpu, or
+# lists it in EXCLUDE_SERVICES.
+if ${EDGE_AI}; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" edge-ai "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES:+${OPTIONAL_SERVICES} }edge-ai" ;;
+    esac
+fi
+if [ -n "${EXCLUDE_SERVICES//[[:space:],]/}" ]; then
+    _excl_x=""
+    for _x in ${EXCLUDE_SERVICES//,/ }; do
+        _kept=""
+        for _s in ${OPTIONAL_SERVICES}; do
+            [ "${_s}" = "${_x}" ] || _kept="${_kept} ${_s}"
+        done
+        OPTIONAL_SERVICES="${_kept# }"
+        _excl_x="${_excl_x} ${_x}"
+    done
+    info "OPTIONAL_SERVICES: EXCLUDE_SERVICES removed:${_excl_x} (final selection: ${OPTIONAL_SERVICES:-none})"
+    unset _excl_x _x _s _kept
+fi
 
 # ── STANDALONE posture (composable onto --role desktop only — a k8s cluster
 # role can't be a standalone appliance) ─────────────────────────────────────
@@ -915,7 +990,7 @@ if ${PRINT_PLAN}; then
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME}"
-    _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || { ${EDGE_AI} && echo edge-ai || echo none; })"
+    _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo "n/a (role=desktop; no cluster GitOps tree baked)" || echo "${OPTIONAL_SERVICES:-none}")"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan STANDALONE         "${STANDALONE}"
     _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
@@ -1868,16 +1943,18 @@ chmod +x "${SYSROOT}/usr/share/hugmesh/generator/scripts/gen-keystores.sh" "${SY
 # ── Cluster GitOps tree (k8s roles only) — the SAME shared specs/cluster tree
 # the rpi5/x86 node builders bake; the edge-ai manifests are arch-portable
 # (Ollama ships arm64 + Jetson images; nvidia-device-plugin/RuntimeClass apply
-# on arm64 GPU nodes). EXPERIMENTAL note: this bakes the WHOLE tree — the
-# per-slug optional-services pruning gate (gate_optional_services) is NOT
-# replicated here yet; ArgoCD's installed-services ConfigMap still gates
-# activation at runtime. Revisit with hardware validation. ──────────
+# on arm64 GPU nodes). gate_optional_services then prunes every optional
+# service not in OPTIONAL_SERVICES and renders the install-state artefacts
+# (installed-services ConfigMap, 13a ApplicationSet flags, seed OptionalService
+# CRs, federation gate.sql) from the same selection, exactly as on rpi5/x86.
+# bootstrap.sh applies the baked apps/ tree, so this prune IS the deployed set. ──
 if [ "${ROLE_K8S}" != "none" ]; then
     if [ -d "${SHARED_SPECS}/cluster" ]; then
         mkdir -p "${SYSROOT}/var/lib/hugmesh"
         rm -rf "${SYSROOT}/var/lib/hugmesh/cluster"
         cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/hugmesh/cluster"
         info "Baked shared cluster GitOps tree -> /var/lib/hugmesh/cluster (role=${ROLE})"
+        gate_optional_services     # prune OPTIONAL services not in OPTIONAL_SERVICES
     else
         warn "shared specs/cluster tree not found — k8s role '${ROLE}' will have no baked GitOps tree"
     fi
