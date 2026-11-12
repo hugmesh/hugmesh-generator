@@ -13,6 +13,10 @@ on:
       - 'images/akkoma/**'
       - '.github/workflows/akkoma-image-ci.yml'
       - '.github/workflows/akkoma-release.yml'
+      # smoke-test.sh step 8 boots these two ConfigMaps as shipped, so a change
+      # to either must rebuild and boot-test here.
+      - 'specs/cluster/manifests/akkoma/akkoma.yaml'
+      - 'specs/cluster/manifests/test-runner/akkoma-peer.yaml'
 
 permissions:
   contents: read

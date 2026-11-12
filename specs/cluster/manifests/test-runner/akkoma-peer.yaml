@@ -48,6 +48,12 @@ data:
       email: "peer@peer.test",
       # OPEN registration so the e2e can make a follower account here via the API.
       registrations_open: true
+    # Uploads base_url: without one `pleroma start` exits ("No base_url set for
+    # uploads"). Same host as the endpoint, like the system under test's
+    # akkoma-config: the peer is a test observer with no media host of its own,
+    # and same-host only logs a warning. images/akkoma/smoke-test.sh boots this
+    # ConfigMap too.
+    config :pleroma, Pleroma.Upload, base_url: "https://peer.test/media/"
     # NO MRF, NO domain-lock, NO egress restriction: this is the OBSERVER, not the
     # system under test. It accepts and stores whatever federates to its inbox.
     config :pleroma, Pleroma.Repo,
