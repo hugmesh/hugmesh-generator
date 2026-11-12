@@ -85,6 +85,10 @@ source "${SCRIPT_DIR}/scripts/_prod-gate-lib.sh"
 source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
 # shellcheck source=scripts/_portage-config-lib.sh
 source "${SCRIPT_DIR}/scripts/_portage-config-lib.sh"
+# The Studio Desktop step (sessions, default session, VIDEO_CARDS override, extra
+# local accounts, Flatpak apps, Python targets, portage overlay). Every DC_* knob
+# defaults to "emit nothing". shellcheck source=scripts/_desktop-config-lib.sh
+source "${SCRIPT_DIR}/scripts/_desktop-config-lib.sh"
 # ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
 # shellcheck source=scripts/_selinux-policy-lib.sh
 source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
@@ -276,6 +280,11 @@ DEFAULT_USER_PASS="hugmesh"
 ROOT_PASS="hugmesh"
 SEED_STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64-hardened-openrc.txt"
 HEADSCALE_VERSION="0.23.0"
+# Opt-in: ALSO list Tailscale's public DERP map in headscale. Default OFF: the pki
+# node's headscale runs its embedded relay only, so the mesh starts and relays
+# offline (docs/HEADSCALE-DERP.md). --headscale-public-derp or env/brand.conf
+# HEADSCALE_PUBLIC_DERP=true bakes /etc/hugmesh/headscale-public-derp.
+HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
@@ -424,6 +433,12 @@ MEDIA_DATA_FORCED=""    # ''|on|off — tracks an explicit --media-data/--no-med
 # may never be dropped (Decision #5).
 PACKAGES_ADD=""
 PACKAGES_DROP=""
+# --pretend-only : the Studio Desktop step's "Check with emerge --pretend". Runs
+# everything up to the payload emerge (seed, specs, overlay, make.conf, Python
+# targets), asks the resolver once (scripts/_pretend-lib.sh) and exits 0 clean /
+# 3 needs changes / 1 error. Merges, writes and packages NOTHING. Use its own
+# --build-subdir: the sysroot is a throwaway and is never an image.
+PRETEND_ONLY=false
 # ── GPU driver matrix (--gpu-driver) — all common cards, FREE drivers default ──
 # FREE drivers (open, no EULA, hardened) are the default. Only NVIDIA has a
 # proprietary DISPLAY driver; AMD/Intel "pro" = the open display driver + the
@@ -568,6 +583,7 @@ ALLOW_MISSING_PACKAGES=false
 # --allow-missing-packages class (never a Studio field); the emission itself is
 # failure-tolerant either way (WARN + no plan, never an aborted build).
 EMERGE_PLAN_ENABLED=true
+# --bundle-source : ship the generator source in the image (BUNDLE_SOURCE_DIR) + a
 # --bundle-source : ship the generator's TRACKED source in the image (BUNDLE_SOURCE_DIR) + a
 # regenerate helper, so you can build a fresh customized ISO from the running desktop.
 # Default ON for standalone (self-hosting appliance).
@@ -805,6 +821,9 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --user-password PASS  Default: ${DEFAULT_USER_PASS}
       --root-password PASS  Default: ${ROOT_PASS}
       --headscale-version V Default: ${HEADSCALE_VERSION}
+      --headscale-public-derp  Also list Tailscale's public DERP map in headscale.
+                            Default OFF: the embedded relay only, offline-first
+                            (docs/HEADSCALE-DERP.md). (env/brand.conf: HEADSCALE_PUBLIC_DERP=true)
       --tailscale-version V Default: ${TAILSCALE_VERSION}
       --seed-url URL        amd64 stage3 index URL.
       --enable-wifi         Re-enable WiFi (DISABLED by default: rfkill block +
@@ -975,6 +994,33 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             (PLAN_KEY=VALUE lines) and exit 0 — no root, no
                             writes, no network. Secrets print as REDACTED.
                             Invalid role/flag combinations exit non-zero.
+  DESKTOP STEP (Studio; client/standalone desktops only; scripts/_desktop-config-lib.sh):
+      --desktop-sessions "i3 picom sway"   Extra window managers / compositors
+                            (openbox i3 picom sway wayfire labwc). A Wayland one
+                            adds USE=wayland; picom needs an X11 WM without a
+                            compositor of its own.
+      --default-session NAME  The greeter's default session (must be installed:
+                            LXDE|xfce|plasmax11|openbox|i3|sway|wayfire|labwc).
+      --video-cards "LIST"  Override the --gpu-driver VIDEO_CARDS list (intel i915
+                            amdgpu radeonsi radeon nouveau nvidia virgl vmware
+                            lavapipe zink); radeonsi adds radeon+amdgpu.
+      --extra-local-users "ann bob:admin"  Extra local accounts, created at first
+                            boot; administrator ONLY with ':admin'. Each must
+                            change its password at first login.
+      --extra-local-pass-file FILE  NAME:PASSWORD lines for those accounts
+                            (hashed at build time; never on argv).
+      --flatpak-apps "flathub:org.mozilla.firefox ..."  Flatpak apps installed
+                            system-wide once the machine is online.
+      --flatpak-remotes "name=https://.../x.flatpakrepo ..."  Extra remotes.
+      --python-extra-targets "python3_13"  Widen PYTHON_TARGETS beyond the seed's
+                            (never narrows it).
+      --python-single-target python3_13  PYTHON_SINGLE_TARGET (must be in the set).
+      --package-use "ATOM FLAG...;..."     package.use lines (zz-hugmesh-studio).
+      --accept-keywords "ATOM [~amd64];..." package.accept_keywords lines.
+      --pretend-only        Resolve @world + the payload with emerge --pretend
+                            --autounmask=y, print "==> Pretend result/needs" lines
+                            and exit 0 clean / 3 needs changes / 1 error. Nothing
+                            is merged or packaged; use a throwaway --build-subdir.
   STANDALONE hardened desktop (self-contained; no mesh / no SSO / local login):
       --standalone          Self-contained desktop: NO headscale/tailscale, NO
                             Casdoor/OIDC SSO, NO k8s/cluster tree. Boots to a
@@ -1231,6 +1277,7 @@ while [[ $# -gt 0 ]]; do
         --user-password) DEFAULT_USER_PASS="$2"; shift 2 ;;
         --root-password) ROOT_PASS="$2"; shift 2 ;;
         --headscale-version) HEADSCALE_VERSION="$2"; shift 2 ;;
+        --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
         --tailscale-version) TAILSCALE_VERSION="$2"; shift 2 ;;
         --seed-url) SEED_STAGE3_URL="$2"; shift 2 ;;
         --enable-wifi) ENABLE_WIFI=true; shift ;;
@@ -1306,6 +1353,19 @@ while [[ $# -gt 0 ]]; do
         --packages-add) PACKAGES_ADD="$2"; shift 2 ;;
         --packages-drop) PACKAGES_DROP="$2"; shift 2 ;;
         --print-plan) PRINT_PLAN=true; shift ;;
+        # ── Studio Desktop step (scripts/_desktop-config-lib.sh) ──
+        --desktop-sessions)      DC_SESSIONS="$2";        shift 2 ;;
+        --default-session)       DC_DEFAULT_SESSION="$2"; shift 2 ;;
+        --video-cards)           DC_VIDEO_CARDS="$2";     shift 2 ;;
+        --extra-local-users)     DC_EXTRA_USERS="$2";     shift 2 ;;
+        --extra-local-pass-file) DC_EXTRA_PASS_FILE="$2"; case "$2" in /*) ;; *) DC_EXTRA_PASS_FILE="${PWD}/$2" ;; esac; shift 2 ;;
+        --flatpak-apps)          DC_FLATPAK_APPS="$2";    shift 2 ;;
+        --flatpak-remotes)       DC_FLATPAK_REMOTES="$2"; shift 2 ;;
+        --python-extra-targets)  PT_EXTRA_TARGETS="$2";   shift 2 ;;
+        --python-single-target)  PT_SINGLE_TARGET="$2";   shift 2 ;;
+        --package-use)           DC_PACKAGE_USE="$2";     shift 2 ;;
+        --accept-keywords)       DC_ACCEPT_KEYWORDS="$2"; shift 2 ;;
+        --pretend-only)          PRETEND_ONLY=true;       shift ;;
         # ── STANDALONE hardened desktop (no mesh / no SSO / local login) ──
         --standalone) STANDALONE=true; shift ;;
         # ── UNAFFILIATED plain desktop (standalone + zero HugMesh affiliation) ──
@@ -1407,6 +1467,12 @@ while [[ $# -gt 0 ]]; do
         *) err "Unknown option: $1"; usage 1 ;;
     esac
 done
+# --headscale-public-derp / HEADSCALE_PUBLIC_DERP: one spelling, checked before any work.
+case "${HEADSCALE_PUBLIC_DERP}" in
+    true|1|yes|on)   HEADSCALE_PUBLIC_DERP=true ;;
+    false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
+    *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
+esac
 
 # Comma tolerance: accept "akkoma,tuwunel" (the CSV spelling GUIs/configs tend to
 # emit) as well as the native space-separated list — normalized HERE, right after
@@ -1994,6 +2060,14 @@ else
     SB_CERT_O="HugMesh Systems"; SB_CERT_CN="HugMesh Secure Boot"
     SB_ETC_DIR="/etc/hugmesh/secureboot"; SB_EFI_VENDOR="hugmesh"
 fi
+# The UKIs built per kernel, "<name suffix>:<cmdline extra>" ("none" = no extra). The
+# first is the default (Secure Boot) UKI, ${UKI_NAME}; the other two are its SELinux
+# twins, ${UKI_NAME%.efi}<suffix>.efi, signed the same way and chainloaded by their
+# own .img menu entries (rescue: enforcing=0; trial: enforcing=1). One table, read by
+# the dracut loop in the kernel chroot, the sign step, the kernel-cache key and
+# build_img, so a variant cannot exist in one place and be missing in another.
+UKI_VARIANTS=(":none" "-selinux-rescue:enforcing=0" "-selinux-enforcing-test:enforcing=1")
+UKI_VARIANTS_CHROOT="${UKI_VARIANTS[*]}"
 
 # ── modprobe.d drop-in NAMES (the last two hugmesh-* files an unaffiliated image
 # could still acquire). --unaffiliated's usage text promises "no hugmesh-* tools or
@@ -2149,7 +2223,7 @@ pu_copied_for_role() { # <basename> -> 0 iff this role/driver gets the file
 assert_spec_video_cards() {
     local pud="${SPECS_DIR}/portage/package.use"
     [ -d "${pud}" ] || return 0
-    local cards; cards="$(${GPU} && gpu_video_cards "${GPU_DRIVER}" || echo "")"
+    local cards; cards="$(${GPU} && dc_effective_video_cards "$(gpu_video_cards "${GPU_DRIVER}")" || echo "")"
     local puf base offenders="" scanned=0
     for puf in "${pud}/"*; do
         [ -f "${puf}" ] || continue
@@ -2185,6 +2259,25 @@ assert_spec_video_cards() {
     fi
     [ "${scanned}" -gt 0 ] || { err "internal: no package.use files scanned for role '${ROLE}' — the VIDEO_CARDS agreement check would pass vacuously"; exit 1; }
 }
+# ── Studio Desktop step: validate every DC_* flag at ARGV time ────────────────
+# Before the VIDEO_CARDS assert below (which reads the EFFECTIVE card list, i.e.
+# a --video-cards override when one is given) and before any download.
+_dc_de_session="LXDE"; [ "${DESKTOP}" = "full" ] && _dc_de_session="xfce"
+${CAPABLE} && _dc_de_session="plasmax11"
+dc_validate "build-x86" amd64 "${ROLE_CLIENT}" true "${_dc_de_session}" "${GPU_DRIVER}" \
+    "${LOCAL_USER:-${DEFAULT_USER}}" || { err "Desktop-step flags rejected (see above)"; exit 1; }
+if ${PRETEND_ONLY} && { ${PACKAGES_ONLY} || ${RESUME}; }; then
+    err "--pretend-only cannot be combined with --packages-only or --resume (a pretend sysroot is a fresh throwaway)"
+    exit 1
+fi
+# --pretend-only removes WORK_DIR/BUILD_SUBDIR (root rm -rf) when it is done, so the
+# subdir must be ONE plain path component: a '/' or '..' (pretend-x/../..) would point
+# that rm outside WORK_DIR. The Studio sends pretend-<sha8>; this is the CLI backstop.
+case "${PRETEND_ONLY}:${BUILD_SUBDIR}" in
+    true:|true:.|true:..|true:*/*|true:*..*)
+        err "--pretend-only: --build-subdir '${BUILD_SUBDIR}' must be one plain directory name (no '/' or '..'): the pretend tree under it is removed afterwards"
+        exit 1 ;;
+esac
 assert_spec_video_cards
 # Thin-desktop stream host (--with-sunshine): CLIENT desktops WITH a tailnet
 # only. Sunshine streams THIS node's desktop session and the fence admits it
@@ -2601,6 +2694,9 @@ _validate_pkg_atoms() { # LABEL VALUE
             err "invalid ${_lbl} atom: '${_a}' — want a category/name atom (e.g. app-editors/vim)"; exit 1; }
     done
 }
+# The Desktop step's session atoms (and sys-apps/flatpak for Flatpak apps) ride
+# the same channel as --packages-add, folded in ONCE here (the flag is last-wins).
+PACKAGES_ADD="$(dc_fold_packages_add "${PACKAGES_ADD}")"
 _validate_pkg_atoms --packages-add  "${PACKAGES_ADD}"
 _validate_pkg_atoms --packages-drop "${PACKAGES_DROP}"
 # Tier-1 mandatory atoms: the payload whose binaries the post-emerge assert
@@ -2758,6 +2854,8 @@ if ${PRINT_PLAN}; then
     _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} live_iso=${LIVE_ISO} installer_iso=${INSTALLER_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} skip_sso=${SKIP_SSO} standalone=${STANDALONE} desktop=${DESKTOP} capable=${CAPABLE} gpu_driver=${GPU_DRIVER} cuda=${NVIDIA_CUDA} encrypt_root=${ENCRYPT_ROOT} secure_boot=${SECURE_BOOT} media_data=${MEDIA_DATA} installer_ui=${INSTALLER_UI} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} unaffiliated=${UNAFFILIATED}"
     _plan PACKAGES_ADD       "${PACKAGES_ADD}"
     _plan PACKAGES_DROP      "${PACKAGES_DROP}"
+    while read -r _dck _dcv; do _plan "${_dck}" "${_dcv}"; done < <(dc_plan_lines)
+    _plan PRETEND_ONLY       "${PRETEND_ONLY}"
     exit 0
 fi
 
@@ -2784,7 +2882,7 @@ fi
 # that sits behind the graphical greeter. The Studio and the TUI refuse this
 # before dispatch; this is the same refusal for the CLI/Makefile path. After
 # --print-plan, so the plan channel (and matrix.tsv) still describe the config.
-if ${STANDALONE} && ${ROLE_CLIENT} && [ -z "${LOCAL_PASSHASH}" ]; then
+if ${STANDALONE} && ${ROLE_CLIENT} && [ -z "${LOCAL_PASSHASH}" ] && ! ${PRETEND_ONLY}; then
     err "--standalone desktop build with no --local-pass/--local-pass-file: the image would boot to a greeter nobody can log in to (root is locked; no KEYS stick, no SSO). Pass --local-pass-file FILE (preferred: keeps the password off the process list) or --local-pass PASS."
     exit 1
 fi
@@ -2842,7 +2940,8 @@ info "Build stamp: ${BUILD_TS} (UTC; brand=${BRAND}, env=${ENV})"
 # NVIDIA_PROPRIETARY/AMD_PRO/INTEL_PRO were derived there too.
 if ${GPU}; then
     GPU_USE="vulkan vaapi vdpau gbm egl gles2"
-    VIDEO_CARDS="$(gpu_video_cards "${GPU_DRIVER}")"
+    VIDEO_CARDS="$(dc_effective_video_cards "$(gpu_video_cards "${GPU_DRIVER}")")"
+    [ -n "${DC_VIDEO_CARDS}" ] && info "VIDEO_CARDS override (--video-cards): ${VIDEO_CARDS}"
     info "GPU driver: ${GPU_DRIVER} (VIDEO_CARDS='${VIDEO_CARDS}')$(${NVIDIA_PROPRIETARY} && echo ' — NVIDIA proprietary, nouveau blacklisted'; ${AMD_PRO} && echo ' — + AMDGPU-PRO Vulkan/OpenCL'; ${INTEL_PRO} && echo ' — + Intel compute/media stack')${NVIDIA_CUDA:+ + CUDA toolkit}"
 else
     GPU_USE=""
@@ -2853,6 +2952,9 @@ fi
 if ${ROLE_CLIENT}; then
     CLIENT_USE="X gtk dbus elogind udev"
     [ "${DESKTOP}" = "full" ] && CLIENT_USE="${CLIENT_USE} pulseaudio pipewire"
+    # A Wayland compositor from the Desktop step (--desktop-sessions) needs wayland.
+    _dc_use="$(dc_client_use_extra)"
+    [ -n "${_dc_use}" ] && CLIENT_USE="${CLIENT_USE} ${_dc_use}"
     INPUT_DEVICES="libinput"   # Xorg keyboard/mouse/touchpad (via x11-base/xorg-drivers)
     # Client roles keep man pages; doc/info still skipped (not needed at runtime).
     # The .mo pattern masks ONLY the empty-basename catalogs from the gettext-0.23.2
@@ -4219,6 +4321,10 @@ rm -rf "${PCS_STAGE_PU}"
 # sysroot, because an emerge run under a wrong pin installs the wrong
 # interpreter and the probe would then read its own effect back in. Fails the
 # build rather than guessing. Analysis: docs/PYTHON-TARGETS-SEED-DRIFT.md.
+# The Studio Desktop step's portage overlay (--package-use / --accept-keywords):
+# AFTER the last pcs_sync_dir of package.use and package.accept_keywords, which
+# prune any file the specs lack (dc_apply_portage_overlay explains the order).
+dc_apply_portage_overlay "${SYSROOT}" "build-x86"
 pt_apply_seed_targets "${SYSROOT}" "build-x86" \
     || { err "could not derive PYTHON_TARGETS from the stage3 seed (see above)"; exit 1; }
 # package.mask: role-independent version quarantines (e.g. the gettext-0.23.x
@@ -4341,6 +4447,10 @@ grep -q '^GRUB_DISABLE_OS_PROBER=' "${SYSROOT}/etc/default/grub" || \
 # exactly the kernels the normal entries boot and always sorts after them.
 install -D -m 0755 "${SPECS_DIR}/etc/grub.d/11_selinux_permissive_rescue" \
     "${SYSROOT}/etc/grub.d/11_selinux_permissive_rescue"
+# Its sibling: one SELinux enforcing (test) entry per kernel (enforcing=1, this boot
+# only), so an INSTALLED node can try enforcing without editing /etc/selinux/config.
+install -D -m 0755 "${SPECS_DIR}/etc/grub.d/12_selinux_enforcing_test" \
+    "${SYSROOT}/etc/grub.d/12_selinux_enforcing_test"
 
 # PARTUUID-token fstab (mounts / + /boot/efi by PARTUUID, plus hardening tmpfs).
 # The .img builder and install-x86.sh substitute __ROOT_PARTUUID__/__ESP_PARTUUID__.
@@ -5131,6 +5241,16 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/hugmesh/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/hugmesh/headscale-url"
 fi
+# Public Tailscale DERP map opt-in (default OFF: headscale's embedded relay only).
+# keys-provision reads the marker at first boot; provision.json .headscale.public_derp
+# outranks it either way.
+if [ "${HEADSCALE_PUBLIC_DERP}" = true ]; then
+    mkdir -p "${SYSROOT}/etc/hugmesh"
+    echo true > "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+    info "Baked HEADSCALE_PUBLIC_DERP=true -> /etc/hugmesh/headscale-public-derp (public Tailscale DERP map opted in)"
+else
+    rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+fi
 # Mesh secrets store (#224): the Vault connection facts keys-provision seeds ESO
 # from when the KEYS manifest has no .vault block. "" = byte no-op; client = warn.
 bake_vault_conf
@@ -5275,6 +5395,9 @@ greeter-session=lightdm-gtk-greeter
 session-wrapper=/etc/lightdm/Xsession
 user-session=${_user_session}
 LIGHTDM
+    # Studio Desktop step: default session, extra local accounts, Flatpak apps.
+    dc_bake_desktop "${SYSROOT}" "build-x86" "$(${UNAFFILIATED} && echo gentoo || echo hugmesh)" \
+        || { err "Desktop-step bake failed (see above)"; exit 1; }
     # Emulated-desktop display (QEMU runner --display spice): the session-side
     # autofit applier (xrandr --auto on a virtio-gpu/qxl preferred-mode change; the
     # LXDE session has no output daemon, so without it a viewer resize is a scaled
@@ -5838,6 +5961,7 @@ live_root_gate() {
     [ -n "${_all}" ] || { err "live-root gate: cannot list ${sq} — refusing to ship a live root nobody checked for the module-signing key"; return 1; }
     # unsquashfs prints "/usr/src/...", rdsquashfs "file usr/src/..." (no leading slash):
     # the certs/ alternative accepts either, or a renamed key would pass the rdsquashfs arm.
+    _leak="$(grep -E 'signing_key\.pem([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/' <<<"${_all}" | head -3)" || true
     # The name alternative takes any signing_key*.pem* (a signing_key.pem.bak copy is the
     # same key), and the basename of a non-default CONFIG_MODULE_SIG_KEY (file paths
     # only; a pkcs11: URI names no file) read from the sysroot's kernel config.
@@ -6170,6 +6294,69 @@ cp "${SCRIPT_DIR}/scripts/_emerge-prefetch-lib.sh" "${SYSROOT}/tmp/hugmesh-emerg
 cp "${SCRIPT_DIR}/scripts/patch-portage-file-copy.py" "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py" \
     || info "WARN: sendfile-noise patcher staging failed — per-file sendfile tracebacks will spam the payload emerge log"
 # ── END sendfile-noise re-patch (lib staging) ────────────────────────────────
+# ── --pretend-only: ask the resolver once, then stop (Studio Desktop step) ─────
+# Everything above ran exactly as for a real build (seed, specs, the Desktop
+# step's overlay, make.conf, the seed's Python targets, PKGS). Here the resolver
+# is asked ONE question with --autounmask=y, so it NAMES the USE / keyword
+# changes it needs; scripts/_pretend-lib.sh prints the wire contract the Studio
+# parses and the exit status says clean (0) / needs changes (3) / error (1).
+# Nothing is merged: no portage self-update, no steam-overlay sync (native Steam
+# needs that overlay, which only a real build enables — its atoms are left out
+# of this resolution and the result says so), no kernel, no image.
+# HEREDOC SAFETY: <<PRETEND is unquoted on purpose (PKGS/EMERGE_EXCLUDE expand
+# on the host); every chroot-side expansion is backslash-escaped; no backticks
+# and no dollar-parens anywhere in it, comments included.
+if ${PRETEND_ONLY}; then
+    # info, not banner(): a progress PHASE banner here would be a 30th call site the
+    # Studio's progress table (core/progress-tables.json) does not know, and a pretend
+    # run is not a build phase — its output is read by core/desktop_pretend.py instead.
+    info "Pretend only: resolving @world + the role payload (nothing is merged)"
+    cp "${SCRIPT_DIR}/scripts/_pretend-lib.sh" "${SYSROOT}/tmp/hugmesh-pretend-lib.sh" \
+        || { err "pretend lib staging failed (scripts/_pretend-lib.sh -> ${SYSROOT}/tmp)"; exit 1; }
+    _pretend_pkgs="${PKGS}"
+    if ${STEAM_NATIVE}; then
+        _pretend_pkgs="$(printf '%s\n' ${PKGS} | grep -av -E '^(games-util/steam|games-util/steam-launcher|games-util/steam-meta)$' | tr '\n' ' ')"
+        info "Pretend: native Steam's atoms are left out (the steam-overlay is only enabled by a real build)"
+    fi
+    _pretend_rc=0
+    chroot "${SYSROOT}" /bin/bash -o pipefail <<PRETEND || _pretend_rc=$?
+export EMERGE_DEFAULT_OPTS="--usepkg=y --binpkg-respect-use=y"
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+export DONT_MOUNT_BOOT=1
+if [ ! -d /var/db/repos/gentoo/metadata ] && ! mountpoint -q /var/db/repos/gentoo; then
+    emerge-webrsync
+fi
+HUGMESH_PRETEND_TIMEOUT=${HUGMESH_PRETEND_TIMEOUT:-2400}
+. /tmp/hugmesh-pretend-lib.sh
+_rc=0
+hugmesh_pretend_run /tmp/hugmesh-pretend.log --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world ${_pretend_pkgs} || _rc=\$?
+hugmesh_pretend_report /tmp/hugmesh-pretend.log "\${_rc}"
+PRETEND
+    # The pretend sysroot is a throwaway: detach what mount_chroot attached (the
+    # shared binpkg pool is bind-mounted READ-WRITE in there), prove nothing is left
+    # mounted, then remove the whole pretend-* build tree so a Re-check starts fresh
+    # and the root-owned tree never piles up. A --build-subdir that is NOT pretend-*
+    # may be a real build tree: never removed.
+    umount_chroot; trap - EXIT
+    case "${BUILD_SUBDIR}" in
+        */*|*..*) warn "Pretend: --build-subdir ${BUILD_SUBDIR} is not one plain name; leaving the tree in place" ;;
+        pretend-*)
+            _pretend_left="$(hmr_stale_mounts "${SYSROOT}")"
+            if [ -n "${_pretend_left}" ]; then
+                warn "Pretend: still mounted under ${SYSROOT}; leaving the tree in place: ${_pretend_left}"
+            else
+                rm -rf --one-file-system "${BUILD_ROOT}" && rm -f "${BUILD_ROOT}.lock" \
+                    && info "Pretend: removed the throwaway build tree ${BUILD_ROOT}"
+            fi ;;
+        *) info "Pretend: --build-subdir ${BUILD_SUBDIR} is not a pretend-* tree, so it is left in place" ;;
+    esac
+    case "${_pretend_rc}" in
+        0) info "Pretend: clean — the resolver sees no USE/keyword wall from the seed (the real build re-checks after @world)" ;;
+        3) warn "Pretend: the resolver needs the changes listed above (==> Pretend needs: ...)" ;;
+        *) err "Pretend: the resolution failed without naming a change (see the resolver output above)"; _pretend_rc=1 ;;
+    esac
+    exit "${_pretend_rc}"
+fi
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 # NOTE: MAKEOPTS is NOT exported here on purpose. It comes from the chroot's
 # make.conf (rendered "-j${JOBS} -l${JOBS}"). An exported MAKEOPTS env var takes
@@ -6898,6 +7085,9 @@ kernel_cache_inputs() {
         # ships the PREVIOUS UKI — which is exactly how a missing root= could survive a
         # rebuild that was performed to add it (2026-08-13).
         printf 'uki-cmdline-prefix=%s\n' "root=LABEL=${ROOT_LABEL} ro"
+        # The SELinux UKI twins (#863 refute): a cache entry from before them holds only
+        # the default UKI, so a hit would hand the sign step nothing to sign as rescue.
+        printf 'uki-variants=%s\n' "${UKI_VARIANTS_CHROOT}"
         for d in "${SYSROOT}"/var/db/pkg/sys-kernel/dracut-* \
                  "${SYSROOT}"/var/db/pkg/sys-apps/systemd-utils-*; do
             [ -d "${d}" ] && printf 'pkg=%s\n' "$(basename -- "${d}")"
@@ -7225,6 +7415,10 @@ make olddefconfig
 # symbol / the failing step), which aborts this bash -e heredoc exactly as the
 # inline copy did.
 bash /tmp/hm-x86-kernel-asserts.sh "${ROLE_K8S}"
+# HM_UKI_VARIANTS: the UKI_VARIANTS table (default + the SELinux -selinux-rescue and
+# -selinux-enforcing-test twins); the install script builds one UKI per entry and has
+# no default of its own, so a caller that forgets it fails instead of shipping no rescue.
+export HM_UKI_VARIANTS="${UKI_VARIANTS_CHROOT}"
 bash /tmp/hm-x86-kernel-install.sh "${JOBS}" "${ROOT_LABEL}" "${UKI_NAME}"
 CHROOT
     kernel_cache_store
@@ -7296,9 +7490,29 @@ if [ -n "${SECUREBOOT_KEY}" ] && [ -f "${SECUREBOOT_KEY}" ]; then
     [ -f "${SBCRT}" ] && openssl x509 -inform PEM -outform DER -in "${SBCRT}" -out "${SBCER}" 2>/dev/null || true
     info "Secure Boot: signing UKI with the provided KEYS key (${SECUREBOOT_KEY})"
 fi
+# uki_variant_paths <variant> — set _uv_u/_uv_s (unsigned/signed path) for one
+# UKI_VARIANTS entry.
+uki_variant_paths() {
+    local suffix="${1%%:*}"
+    _uv_u="${SYSROOT}/boot/${UKI_NAME%.efi}${suffix}-unsigned.efi"
+    _uv_s="${SYSROOT}/boot/${UKI_NAME%.efi}${suffix}.efi"
+}
+# The SELinux twins must exist whenever the default does. Without the rescue UKI the
+# signed chain has NO permissive entry, and the default UKI is .img entry 0 (#863
+# refute, blocker 3). A missing twin used to be impossible to notice; now it stops
+# the build before anything is signed or sealed.
+if [ -f "${UKI_UNSIGNED}" ]; then
+    for _uv in "${UKI_VARIANTS[@]}"; do
+        uki_variant_paths "${_uv}"
+        [ -s "${_uv_u}" ] || { err "UKI twin missing: ${_uv_u} (the default UKI was built; its SELinux variant '${_uv}' was not — see the dracut WARN above)"; exit 1; }
+    done
+fi
 if ! ${SECURE_BOOT}; then
-    warn "Secure Boot DISABLED (--no-secure-boot): UKI left unsigned (chain won't verify)."
-    [ -f "${UKI_UNSIGNED}" ] && { cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; rm -f "${UKI_UNSIGNED}"; }
+    warn "Secure Boot DISABLED (--no-secure-boot): UKIs left unsigned (chain won't verify)."
+    for _uv in "${UKI_VARIANTS[@]}"; do
+        uki_variant_paths "${_uv}"
+        [ -f "${_uv_u}" ] && { cp "${_uv_u}" "${_uv_s}"; rm -f "${_uv_u}"; }
+    done
 elif command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
     mkdir -p "${SBDIR}"
     if [ ! -f "${SBKEY}" ]; then
@@ -7316,12 +7530,15 @@ elif command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
                 && info "EFI db.auth enrollment payload generated at ${SBDIR}/db.auth"
         fi
     fi
-    info "Signing UKI with org Secure Boot key"
-    sbsign --key "${SBKEY}" --cert "${SBCRT}" \
-        --output "${UKI_SIGNED}" "${UKI_UNSIGNED}" \
-        && info "Signed UKI: ${UKI_SIGNED}" \
-        || { warn "sbsign failed; copying unsigned UKI (not verifiable under Secure Boot)"; cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; }
-    rm -f "${UKI_UNSIGNED}"
+    info "Signing UKIs with org Secure Boot key (default + SELinux rescue + enforcing trial)"
+    for _uv in "${UKI_VARIANTS[@]}"; do
+        uki_variant_paths "${_uv}"
+        sbsign --key "${SBKEY}" --cert "${SBCRT}" \
+            --output "${_uv_s}" "${_uv_u}" \
+            && info "Signed UKI: ${_uv_s}" \
+            || { warn "sbsign failed; copying unsigned UKI ${_uv_u##*/} (not verifiable under Secure Boot)"; cp "${_uv_u}" "${_uv_s}"; }
+        rm -f "${_uv_u}"
+    done
     # Install org cert into the rootfs for keys-provision mokutil enrollment.
     # SB_ETC_DIR comes from the boot-chain identity fold (UNAFFILIATED keeps the
     # functional enrollment certs under the neutral /etc/gentoo dir); the ESP and
@@ -7333,8 +7550,11 @@ elif command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
     [ -f "${SBDIR}/db.auth" ] && cp "${SBDIR}/db.auth" "${SYSROOT}${SB_ETC_DIR}/db.auth"
     info "Org Secure Boot cert installed to sysroot ${SB_ETC_DIR}/"
 elif [ -f "${UKI_UNSIGNED}" ]; then
-    warn "sbsign not found on build host (install app-crypt/sbsigntools); UKI unsigned — Secure Boot chain won't verify"
-    cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; rm -f "${UKI_UNSIGNED}"
+    warn "sbsign not found on build host (install app-crypt/sbsigntools); UKIs unsigned — Secure Boot chain won't verify"
+    for _uv in "${UKI_VARIANTS[@]}"; do
+        uki_variant_paths "${_uv}"
+        cp "${_uv_u}" "${_uv_s}"; rm -f "${_uv_u}"
+    done
 fi
 
 # ── 8. Clean ───────────────────────────────────────────────────────
@@ -7564,15 +7784,11 @@ done
 chmod 0664 "${SYSROOT}/var/log/wtmp"; chmod 0644 "${SYSROOT}/var/log/lastlog"
 chroot "${SYSROOT}" chgrp utmp /var/log/wtmp 2>/dev/null \
     || warn "/var/log/wtmp: no 'utmp' group in the sysroot — left root:root (mkutmp would have set utmp)"
-# What systemd-tmpfiles-setup would otherwise create in "/" at every boot, measured
-# under enforcing (2026-11-04): `q /srv` (systemd home.conf) mkdir'd /srv in root_t
-# and portage-tmpdir.conf created /var/tmp/portage as portage_tmp_t — both denied to
-# systemd_tmpfiles_t, and the denials made the service exit non-zero. Ship /srv so
-# the entry is a no-op, and mask portage's entry: a node never runs portage from a
-# tmpfiles-made directory. Both before the label pass so the shipped paths are
-# labelled (/srv is a core probe: var_t at every pack hop).
-install -d -m 0755 "${SYSROOT}/srv"
-install -D -m 0644 "${SHARED_SPECS}/etc/tmpfiles.d/portage-tmpdir.conf" "${SYSROOT}/etc/tmpfiles.d/portage-tmpdir.conf"
+# /srv + the portage-tmpdir.conf mask (what systemd-tmpfiles-setup would otherwise
+# create in "/" at every boot; see the lib). Before the label pass so the shipped
+# paths are labelled (/srv is a core probe: var_t at every pack hop).
+slx_ship_bootpath_files "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "could not ship the SELinux boot-path files (/srv, portage-tmpdir.conf mask)"; exit 1; }
 SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
 SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
 info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> root login mapping -> config -> setfiles -> gate)"
@@ -7857,6 +8073,18 @@ build_img() {
         mkdir -p "${root_mnt}/boot/efi/EFI/Linux"
         cp "${uki_src}" "${root_mnt}/boot/efi/EFI/Linux/${UKI_NAME}"
         info "UKI installed to ESP: EFI/Linux/${UKI_NAME}"
+        # Its SELinux twins (rescue enforcing=0, trial enforcing=1), signed in the same
+        # step. Entry 0 of this .img is the default UKI; without the rescue twin on the
+        # ESP the signed chain has no permissive way back (#863 refute, blocker 3).
+        local _uv _uv_name
+        for _uv in "${UKI_VARIANTS[@]}"; do
+            _uv_name="${UKI_NAME%.efi}${_uv%%:*}.efi"
+            [ "${_uv_name}" = "${UKI_NAME}" ] && continue
+            [ -s "${SYSROOT}/boot/${_uv_name}" ] \
+                || { err "UKI twin ${SYSROOT}/boot/${_uv_name} missing next to ${UKI_NAME} — refusing to seal an .img whose Secure Boot chain has no SELinux ${_uv#*:} entry"; exit 1; }
+            cp "${SYSROOT}/boot/${_uv_name}" "${root_mnt}/boot/efi/EFI/Linux/${_uv_name}"
+            info "UKI installed to ESP: EFI/Linux/${_uv_name} (SELinux ${_uv#*:})"
+        done
         # Org cert and db.auth: keys-provision enrolls via mokutil on first boot.
         # SB_ETC_DIR/SB_EFI_VENDOR come from the boot-chain identity fold — the
         # same fold the stager used — so UNAFFILIATED certs (staged under the
@@ -7936,6 +8164,8 @@ build_img() {
             echo "    chainloader /EFI/Linux/${UKI_NAME}"
             echo "}"
         fi
+        # The default entries above stay entries 0 (UKI) and 1 (GRUB+vmlinuz); every
+        # SELinux entry is APPENDED below them, so default=0 never lands on one.
         echo "menuentry \"${BRAND_TITLE} (${ROLE})\" {"
         echo "    search --no-floppy --fs-uuid --set=root ${root_fsuuid}"
         if [ -n "${vmlinuz}" ]; then
@@ -7952,6 +8182,36 @@ build_img() {
             echo "menuentry \"${BRAND_TITLE} (${ROLE}) — SELinux permissive rescue\" {"
             echo "    search --no-floppy --fs-uuid --set=root ${root_fsuuid}"
             echo "    linux /boot/${vmlinuz} root=PARTUUID=${root_uuid} ro ${cmdline} enforcing=0"
+            [ -n "${initrd}" ] && echo "    initrd /boot/${initrd}"
+            echo "}"
+        fi
+        # The signed chain's own SELinux entries (#863 refute, blockers 3 and 4): a UKI's
+        # cmdline is fixed, so each mode is its own signed UKI, chainloaded like entry 0.
+        # These work with Secure Boot ON; the GRUB+vmlinuz entries need it off.
+        if [ -f "${root_mnt}/boot/efi/EFI/Linux/${UKI_NAME}" ]; then
+            local _uv _uv_name _uv_title
+            for _uv in "${UKI_VARIANTS[@]}"; do
+                _uv_name="${UKI_NAME%.efi}${_uv%%:*}.efi"
+                [ "${_uv_name}" = "${UKI_NAME}" ] && continue
+                case "${_uv#*:}" in
+                    enforcing=0) _uv_title="Secure Boot UKI, SELinux permissive rescue" ;;
+                    enforcing=1) _uv_title="Secure Boot UKI, SELinux enforcing (test)" ;;
+                    *) err "UKI_VARIANTS entry '${_uv}' has no .img menu title"; exit 1 ;;
+                esac
+                echo "menuentry \"${BRAND_TITLE} (${ROLE}) — ${_uv_title}\" {"
+                echo "    search --no-floppy --fs-uuid --set=root ${esp_fsuuid}"
+                echo "    chainloader /EFI/Linux/${_uv_name}"
+                echo "}"
+            done
+        fi
+        # The installed .img's enforcing trial on the GRUB+vmlinuz path: boots enforcing
+        # ONCE, without touching /etc/selinux/config (the next plain boot is permissive
+        # again). The live ISO has had this entry since #846; the .img had none, so the
+        # installed path was never booted enforcing (#863 refute, blocker 4).
+        if [ -n "${vmlinuz}" ]; then
+            echo "menuentry \"${BRAND_TITLE} (${ROLE}) — SELinux enforcing (test)\" {"
+            echo "    search --no-floppy --fs-uuid --set=root ${root_fsuuid}"
+            echo "    linux /boot/${vmlinuz} root=PARTUUID=${root_uuid} ro ${cmdline} enforcing=1"
             [ -n "${initrd}" ] && echo "    initrd /boot/${initrd}"
             echo "}"
         fi

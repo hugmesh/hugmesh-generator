@@ -60,6 +60,10 @@ on:
       # reads the same file. A drift there lands ONLY in the Makefile, so without
       # this path the gate would not run on the change it exists to catch.
       - 'Makefile'
+      # studio/tests/test_desktop_option_parity.py drives the make menu's Desktop
+      # options (it sources this script and runs its real handler) and reads the
+      # flags the desktop builders parse. A menu change lands only here.
+      - 'scripts/build-menu.sh'
       # hugmesh-generator#591: the named-file pin suite below, and the scripts its
       # fleet pins run (test_fleet_tor.py executes the REAL build-all-roles.sh
       # against stub builders and reads the rpi5 builder's default service line).
@@ -74,6 +78,10 @@ on:
       # drift that guard exists to catch.
       - 'docs/STUDIO-INSTALLERS.md'
       - '.github/workflows/studio-release.yml'
+      # hugmesh-generator#1057: studio/tests/test_mainline_evidence.py RUNS this script
+      # against local git repositories, and the evidence file it writes gates catalog
+      # promotions. A change to the lookup lands only here.
+      - 'scripts/mainline-evidence.py'
   # A PUSH to main, for the Studio release machinery only. The release guard tests
   # (test_studio_beta_version.py, test_studio_release_signing.py,
   # test_studio_release_cut.py) parse the release workflows, and on 2026-10-22/23
@@ -108,6 +116,8 @@ on:
       - 'studio/packaging/build-msi-wine.sh'
       - 'studio/packaging/wix/windows-build-requirements.txt'
       - 'studio/packaging/linux-build-requirements.txt'
+      # test_studio_release_signing.py sources it for dmg_name, the .dmg's file name.
+      - 'studio/packaging/build-macos-app.sh'
       # The cut's guard step runs under pytest.ini's options, so an edit to it can
       # change what the guards do; test_studio_beta_version.py's bump simulation reads it.
       - 'studio/pytest.ini'
@@ -159,9 +169,9 @@ jobs:
         # --ignore: six GUI test files. With a Qt binding installed a full
         #   single-process run ABORTS partway through (SIGABRT/SIGSEGV inside Qt's
         #   event-loop teardown) on every Python/binding combination tried, and
-        #   neither pytest-xdist nor pytest-forked rescues it. GitLab runs the fuller
-        #   `test:studio-suite` job against PySide6 with QT_QPA_PLATFORM=offscreen;
-        #   this job is the fast pre-merge subset and says so rather than pretending
+        #   neither pytest-xdist nor pytest-forked rescues it. The `qt` job below
+        #   runs every file (these six included) with PySide6, one file per process;
+        #   this job is the fast Qt-free subset and says so rather than pretending
         #   to be complete.
         #
         # --deselect: whatever tests/known-failures.txt lists — tests that already
@@ -281,6 +291,77 @@ jobs:
           print('pyproject OK; version', version)
           "
 
+  qt:
+    # THE GUI TESTS, WITH A QT BINDING. The pytest job above installs none, ignores six
+    # GUI files and lets every other GUI test importorskip, so a GUI test is green there
+    # whatever it does — and GitLab's test:studio-suite (the "fuller" run it points at)
+    # has no runner on GitHub's side. On 2026-11-11 five Qt test files were red on main
+    # and nothing showed it (a look census, a builder-preflight reader, a compose argv, a
+    # dropped QApplication that aborted its file, and four worklist column checks).
+    #
+    # ONE FILE PER PROCESS (studio/tests/run_file_by_file.py): with a binding, one
+    # process over the whole suite aborts in Qt's teardown, which is why the job above
+    # never installed one. Every tests/**/test_*.py is found by the runner itself, so a
+    # new test file cannot be left off a list. --require-qt refuses to start unless an
+    # offscreen QApplication shows a widget, and fails any file that still skipped for
+    # want of a binding: a Qt job whose GUI tests all skip would be green and blind.
+    #
+    # WHAT WAS ALREADY RED when this job was added is in studio/tests/known-qt-failures.txt,
+    # with the cause on each line: four tests behind a PRODUCT defect (the Mesh Monitor
+    # calls QObject.receivers() the way only PyQt6 accepts), and the rest test-side
+    # (fonts, binding, host assumptions, one timing-flaky wait). The runner leaves each
+    # out of its file's run, runs it on its own and reports it on every run, in the log
+    # and in the job summary; it is not hidden, and the rest of each file still gates.
+    # An interpreter that aborts AT EXIT after a clean run (PySide6's qFatal on a QThread
+    # still running at teardown; timing moves it between files) is reported, not red.
+    #
+    # Four shards, two files at a time each, fail-fast off so one red shard does not
+    # cancel the others' verdicts. studio/tests/test_qt_suite_guards.py (Qt-free, so the
+    # job above runs it) pins this job's shape and checks the known list names real tests.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/4', '2/4', '3/4', '4/4']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install the Qt runtime libraries
+        # What PySide6's QtGui/QtWidgets load even offscreen; the same list GitLab's
+        # test:studio-suite installs into python:3-slim.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y libgl1 libegl1 libxkbcommon0 libdbus-1-3 \
+            libfontconfig1 libglib2.0-0
+
+      - name: Install PySide6 (the binding the Studio ships) and the test dependencies
+        # The binding at the version the Linux release locks (PySide6 is the shim's first
+        # choice and the one every package carries), essentials only: the Studio imports
+        # QtCore, QtGui and QtWidgets and nothing else. The other packages are the job
+        # above's, for the same reasons.
+        run: |
+          grep -E '^(pyside6-essentials|shiboken6)==' studio/packaging/linux-build-requirements.txt > "$RUNNER_TEMP/qt-pins.txt"
+          cat "$RUNNER_TEMP/qt-pins.txt"
+          test "$(wc -l < "$RUNNER_TEMP/qt-pins.txt")" -eq 2 || { echo "::error::the Linux lock no longer pins pyside6-essentials and shiboken6"; exit 1; }
+          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: -r "$RUNNER_TEMP/qt-pins.txt" pytest PyYAML jsonschema cryptography
+
+      - name: Run every test file in its own interpreter
+        working-directory: studio
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          python tests/run_file_by_file.py --require-qt
+          --known tests/known-qt-failures.txt
+          --shard ${{ matrix.shard }} -j 2
+
   windows:
     # The MSI runs the Studio NATIVELY on Windows, and until 2026-10-29 no test had ever
     # run there. The first run of the 0.3.0-beta.1 MSI on Windows 11 found: every run log
@@ -377,6 +458,7 @@ jobs:
           tests/test_ollama_docker.py
           tests/test_local_ai_dock.py
           tests/test_local_ai_dock_pull.py
+          tests/test_self_check_windows.py
 
   macos:
     # The macOS app: "HugMesh Image Studio.app" in a .dmg, for Apple silicon and Intel.
@@ -388,9 +470,10 @@ jobs:
     #
     # NAMED FILES, as in the windows job: these are the macOS contract, and a new macOS
     # fix adds its test here. Then packaging/build-macos-app.sh freezes, checks,
-    # smoke-tests and packs the app. studio-release.yml has no macOS job yet (the .dmg
-    # is not on a release); when it gets one it must run this SAME script, so that what
-    # a pull request proves is what the release ships.
+    # smoke-tests and packs the app. The `macos` and `macos-intel` jobs of
+    # studio-release.yml run this SAME script with the same arguments on the same two
+    # images (test_studio_release_signing.py holds them to this matrix), so that what a
+    # pull request proves is what the release ships.
     #
     # macos-15 is Apple silicon (arm64) and macos-15-intel is x86_64; both are GitHub's
     # standard hosted images, pinned by version rather than macos-latest so the
@@ -473,6 +556,7 @@ jobs:
           tests/test_macos_stock_texts.py
           tests/test_macos_stock_texts_gui.py
           tests/test_pages_build_macos.py
+          tests/test_local_login_no_peer_check.py
 
       - name: A stock Mac - the self-check names the missing GNU tools and exits 1
         # Before Homebrew's GNU tools are installed: macOS's own bash 3.2 and BSD sed,

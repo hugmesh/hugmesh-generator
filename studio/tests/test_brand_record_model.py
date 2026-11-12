@@ -526,7 +526,7 @@ def test_brand_b_owns_8001_so_studio_brands_start_at_8002():
     assert own_casdoor.ports_for(["a", "b"], {"a": 8005, "b": 8005}) == {"a": 8005, "b": 8001}
     env = own_casdoor.tenancy_env(["a.example"], "http://localhost:8000", {"a.example": 8007})
     assert "casdoor-a-example.localtest.me:8007=a-example" in env["APP_TENANCY_ISSUERS"]
-    assert '"8007:8000"' in own_casdoor.compose_overlay(["a.example"], {"a.example": 8007})
+    assert '"${STACK_BIND_ADDR:-127.0.0.1}:8007:8000"' in own_casdoor.compose_overlay(["a.example"], {"a.example": 8007})
     # without a mapping the table-position rule is byte-identical to before
     assert own_casdoor.compose_overlay(["a.example"]) == own_casdoor.compose_overlay(
         ["a.example"], {})

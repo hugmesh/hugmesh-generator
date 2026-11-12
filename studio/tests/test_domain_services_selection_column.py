@@ -248,6 +248,9 @@ _HOSTS = {"image-flow": _image_flow, "local-docker-mesh": _local_mesh, "fleet": 
 _KDE_STYLES = ("Breeze", "Oxygen")
 
 
+_COLLECTION_QAPP = []
+
+
 def _installed_looks():
     """``[(style name, point size or None for the default), ...]`` — computed at
     collection so each look is its own test id. Without a Qt binding the GUI tests
@@ -256,8 +259,11 @@ def _installed_looks():
         from hugmesh_studio.gui import qt as qt_mod
     except Exception:                          # noqa: BLE001 — no binding: see _qt()
         return [("Fusion", None)]
-    qt_mod.QtWidgets.QApplication.instance() \
-        or qt_mod.QtWidgets.QApplication(["hugmesh-studio-selection-column"])
+    # HELD, not built and dropped (tests/test_qt_suite_guards.py): a dropped one is freed
+    # at once, and the next widget built in this process aborts it. _qt() reuses it.
+    _COLLECTION_QAPP.append(qt_mod.QtWidgets.QApplication.instance()
+                            or qt_mod.QtWidgets.QApplication(
+                                ["hugmesh-studio-selection-column"]))
     keys = set(qt_mod.QtWidgets.QStyleFactory.keys())
     return ([("Fusion", None), ("Fusion", 8.0)]
             + [(s, 8.0) for s in _KDE_STYLES if s in keys]

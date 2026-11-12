@@ -153,6 +153,11 @@ mainline before the overlay.
      is a deliberate exclusion (it does not cross-compile; see
      `specs-rpi5/portage/packages.list`).
 
+   The same script also admits headscale's embedded-DERP STUN port (3478/udp only)
+   on the pki node, from `/etc/hugmesh/headscale-derp-stun`. On an omnibus node that
+   is also a coturn-public relay, the two contend for 3478/udp; see
+   [`HEADSCALE-DERP.md`](HEADSCALE-DERP.md#firewall).
+
    Delete the marker to close again (within 60s). To widen the relay window, edit
    `min-port`/`max-port`, the NetworkPolicy range **and**
    `HUGMESH_COTURN_RELAY_MIN/MAX` together. The test pins all three equal, because

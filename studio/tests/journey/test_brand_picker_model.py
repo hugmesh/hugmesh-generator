@@ -192,7 +192,9 @@ def test_keeping_a_design_puts_it_in_the_drop_down_next_time(gen):
 
 
 # ── what the record cannot hold yet ──────────────────────────────────────────────────
-def test_look_choices_the_record_cannot_hold_are_named_not_dropped(gen, tmp_path):
+# Named for the brand's LOOK (its design choices), and NOT ``test_look_*``: that prefix
+# is tests/test_look.py's fresh-interpreter look cases, and this is a model test.
+def test_design_choices_the_record_cannot_hold_are_named_not_dropped(gen, tmp_path):
     from test_look_model import png_bytes
     s = _session(gen)
     logo = tmp_path / "logo.png"

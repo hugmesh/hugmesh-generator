@@ -59,17 +59,24 @@
 #   FRONT_DOOR            default http://localhost:8088   (fe-gateway)
 #   CASDOOR_URL           default http://localhost:8000
 #   CASDOOR_ADMIN_USER    default admin
-#   CASDOOR_ADMIN_PASS    default 123      (the casbin/casdoor FRESH-BOOT dev
-#                                           default — override for anything else)
-#                         DELIBERATE DIVERGENCE FROM THE CLUSTER: this stack keeps
-#                         casdoor's default because it is a throwaway local
-#                         Casdoor bound to localhost with a throwaway volume. The
-#                         cluster must NOT: manifests/casdoor/init-job.yaml applies
-#                         the Vault/ESO password via /api/set-password and then
-#                         proves "123" no longer logs in. So this leg is one the
-#                         compose stack will never exercise — see
-#                         tests/scripts/test-casdoor-init-honesty.sh, which runs
-#                         the real cluster script offline instead.
+#   CASDOOR_ADMIN_PASS    NO DEFAULT VALUE (NEW-15). Unset, it is this checkout's
+#                         generated CASDOOR_ADMIN_PASSWORD in tests/stack/.env,
+#                         minted there on the first seed by
+#                         tests/stack/gen-casdoor-admin-env.sh
+#                         (CASDOOR_ADMIN_ENV_FILE overrides the file). Exported, it
+#                         wins. Casdoor's factory default is refused as a value.
+#                         casdoor_admin_session() below signs in with it, and a
+#                         Casdoor still on the upstream factory default (a fresh
+#                         volume, or a stack created before this change) is MOVED
+#                         onto it with /api/set-password, after which the default
+#                         is proven to be refused: the compose twin of
+#                         manifests/casdoor/init-job.yaml's
+#                         reconcile_admin_password(). Until 2026-11-11 this
+#                         stack kept the factory default while publishing Casdoor
+#                         on every host interface, so any machine on the LAN could
+#                         sign in as the identity provider's admin.
+#   CASDOOR_ADMIN_ENV_FILE  default tests/stack/.env (where the generated admin
+#                         password lives; tests point it at a scratch file)
 #   CASDOOR_ORG           default hugmesh
 #   CASDOOR_BRAND_B_URL   unset            (second-tenant Casdoor; enables leg 1b)
 #   SYNAPSE_URL           default http://localhost:8008   (tuwunel; the env NAME
@@ -112,7 +119,9 @@ SEED_ACCOUNTS="${GEN_DIR}/tests/qemu/seed-accounts.sh"
 FRONT_DOOR="${FRONT_DOOR:-http://localhost:8088}"
 CASDOOR_URL="${CASDOOR_URL:-http://localhost:8000}"
 CASDOOR_ADMIN_USER="${CASDOOR_ADMIN_USER:-admin}"
-CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS:-123}"
+# No literal default (NEW-15): resolved below, once die() exists, from the exported
+# value or this checkout's generated one (tests/stack/gen-casdoor-admin-env.sh).
+CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS:-}"
 CASDOOR_ORG="${CASDOOR_ORG:-hugmesh}"
 # The confidential OAuth app user-bff drives NATIVE login through: user-bff POSTs the
 # username/password to the INTERNAL Casdoor /api/login with this app's OIDC/PKCE params,
@@ -154,6 +163,23 @@ SEED_COMPLETE_REGISTRATION="${SEED_COMPLETE_REGISTRATION:-0}"
 log()  { echo "[seed-e2e] $*"; }
 warn() { echo "[seed-e2e] WARN: $*" >&2; }
 die()  { echo "${PROG}: UNMET DEPENDENCY: $*" >&2; exit 2; }
+
+# The password casbin/casdoor gives the built-in admin when it bootstraps an EMPTY
+# database. Public knowledge (upstream docs; manifests/casdoor/init-job.yaml names it
+# CASDOOR_BOOTSTRAP_PASSWORD too), so a bootstrap value and not a secret: it is NEVER
+# the admin password this seed leaves behind, only the credential
+# casdoor_admin_session() uses to take a factory-fresh admin over, exactly once.
+CASDOOR_BOOTSTRAP_PASSWORD="123"
+# The Casdoor admin password this run converges on (NEW-15): exported, or this
+# checkout's generated value (minted on first use; never printed).
+if [ -z "${CASDOOR_ADMIN_PASS}" ]; then
+  CASDOOR_ADMIN_PASS="$(bash "${HERE}/gen-casdoor-admin-env.sh" --print)" \
+    || die "could not resolve this checkout's Casdoor admin password (tests/stack/gen-casdoor-admin-env.sh; its message is above)"
+  [ -n "${CASDOOR_ADMIN_PASS}" ] \
+    || die "tests/stack/gen-casdoor-admin-env.sh printed no Casdoor admin password"
+fi
+[ "${CASDOOR_ADMIN_PASS}" != "${CASDOOR_BOOTSTRAP_PASSWORD}" ] \
+  || die "CASDOOR_ADMIN_PASS is Casdoor's public factory-default password. Refusing to leave the identity provider's admin on it: unset CASDOOR_ADMIN_PASS (this checkout's generated value is used) or export a value of your own."
 
 # THIS IS WHERE A COMPOSE RUN STARTS (see e2e-password.sh, "WHERE A RUN
 # STARTS"): every `make stack-seed` mints a NEW password, persists it and
@@ -223,13 +249,99 @@ fi
 mkdir -p "${SEED_WORKDIR}"
 
 # ── Casdoor helpers (same admin-session transport as apply-systems-roles.sh) ──
-CJ="$(mktemp)"; trap 'rm -f "${CJ}"' EXIT
+CJ="$(mktemp)"; trap 'rm -f "${CJ}" "${CJ}.probe"' EXIT
 
-casdoor_login() { # <base-url>
-  curl -sf -c "${CJ}" "$1/api/login" -H 'content-type: application/json' \
-    -d "{\"application\":\"app-built-in\",\"organization\":\"built-in\",\"username\":\"${CASDOOR_ADMIN_USER}\",\"password\":\"${CASDOOR_ADMIN_PASS}\",\"type\":\"login\",\"autoSignin\":true}" \
-    | jq -e '.status == "ok"' >/dev/null \
-    || die "Casdoor admin login failed at $1 (CASDOOR_ADMIN_USER/CASDOOR_ADMIN_PASS — the compose default is admin/123 on a FRESH casdoor volume)"
+# Casdoor's sign-in throttle: after a handful of wrong passwords it refuses EVERY
+# login, the correct one included, with HTTP 200 + {"status":"error"} and this text
+# (i18n key check."You have entered the wrong password or code too many times...").
+# Same fragment as manifests/casdoor/init-job.yaml's LOCKOUT_MARKER and leg 1c's
+# CASDOOR_LOCKOUT_MARKER below (that one classifies the PERSONAS' front-door
+# logins and is defined where leg 1c needs it; this one, the ADMIN's, is needed
+# before leg 1 starts).
+CASDOOR_ADMIN_LOCKOUT_MARKER="too many times"
+CASDOOR_LOGIN_MSG=""
+
+# casdoor_try_login <base-url> <password> <cookie-jar> — one admin login.
+#   rc 0  an admin session is in the jar, PROVEN by /api/get-account (an "ok" from
+#         /api/login alone is not one: casdoor-init once reconciled anonymously)
+#   rc 1  refused; casdoor's own message is in CASDOOR_LOGIN_MSG
+# The password reaches jq through its environment and curl on stdin, never argv
+# (argv is world-readable in /proc), and is never printed.
+casdoor_try_login() {
+  local base="$1"
+  local pw="$2"
+  local jar="$3"
+  local body
+  local name
+  CASDOOR_LOGIN_MSG=""
+  : > "${jar}"
+  body="$(SEED_CD_USER="${CASDOOR_ADMIN_USER}" SEED_CD_PW="${pw}" jq -nc \
+            '{application:"app-built-in",organization:"built-in",username:env.SEED_CD_USER,password:env.SEED_CD_PW,type:"login",autoSignin:true}' \
+          | curl -s --max-time 15 -c "${jar}" -b "${jar}" "${base}/api/login" \
+              -H 'content-type: application/json' --data-binary @- 2>/dev/null)" \
+    || die "Casdoor at ${base} did not answer POST /api/login"
+  CASDOOR_LOGIN_MSG="$(printf '%s' "${body}" | jq -r '.msg // ""' 2>/dev/null || true)"
+  printf '%s' "${body}" | jq -e '.status == "ok"' >/dev/null 2>&1 || return 1
+  name="$(curl -s --max-time 15 -b "${jar}" -c "${jar}" "${base}/api/get-account" 2>/dev/null \
+            | jq -r '.data.name // .name // empty' 2>/dev/null || true)"
+  [ "${name}" = "${CASDOOR_ADMIN_USER}" ] \
+    || die "Casdoor at ${base} accepted the admin login, but the session resolves to '${name:-nobody}', not ${CASDOOR_ADMIN_USER}"
+  return 0
+}
+
+casdoor_locked_out() { [[ "${CASDOOR_LOGIN_MSG}" == *"${CASDOOR_ADMIN_LOCKOUT_MARKER}"* ]]; }
+
+die_casdoor_lockout() { # <base-url> <what was already done>
+  die "Casdoor at $1 is refusing EVERY admin login: its sign-in throttle has banned ${CASDOOR_ADMIN_USER} ('${CASDOOR_LOGIN_MSG}'). That is NOT evidence of a wrong password (the right one is refused too while the ban holds), so do NOT change CASDOOR_ADMIN_PASS or tests/stack/.env on the strength of it. $2Wait for the ban to expire (casdoor names the minutes) and re-run make stack-seed."
+}
+
+# casdoor_admin_session <base-url> — leave an admin session for CASDOOR_ADMIN_PASS in
+# ${CJ}, first moving an admin still on Casdoor's factory default onto it (NEW-15).
+# The compose twin of manifests/casdoor/init-job.yaml reconcile_admin_password():
+#   1. CASDOOR_ADMIN_PASS signs in      -> done (a seeded stack: one login, no write)
+#   2. else the factory default does    -> POST /api/set-password (the ONLY endpoint
+#      that changes a password; form-encoded, on stdin), then PROVE it: the factory
+#      default is refused (a scratch jar) and CASDOOR_ADMIN_PASS signs in (${CJ})
+#   3. else                              -> die, naming the two ways out; no retry
+# The throttle is classified at every step and stops the run as a lockout, never as
+# a wrong password. At most two wrong-password attempts per call, and a run makes
+# this call once per Casdoor before any other admin login (the child scripts below
+# inherit the password it converged on).
+casdoor_admin_session() { # <base-url>
+  local base="$1"
+  local resp
+  local probe
+  if casdoor_try_login "${base}" "${CASDOOR_ADMIN_PASS}" "${CJ}"; then
+    return 0
+  fi
+  casdoor_locked_out && die_casdoor_lockout "${base}" ""
+  if ! casdoor_try_login "${base}" "${CASDOOR_BOOTSTRAP_PASSWORD}" "${CJ}"; then
+    casdoor_locked_out && die_casdoor_lockout "${base}" ""
+    die "Casdoor admin login failed at ${base} with BOTH this checkout's admin password and Casdoor's factory default, so this Casdoor's admin was moved onto a value this checkout does not hold (its tests/stack/.env lost CASDOOR_ADMIN_PASSWORD, or another checkout seeded it). Put that value back in tests/stack/.env (or export CASDOOR_ADMIN_PASS), or run make stack-down (DROPS the stack's data) for a fresh Casdoor. Nothing was changed."
+  fi
+  log "Casdoor admin at ${base} still has the upstream factory-default password; moving it onto this checkout's generated value"
+  resp="$(SEED_CD_USER="${CASDOOR_ADMIN_USER}" SEED_CD_OLD="${CASDOOR_BOOTSTRAP_PASSWORD}" SEED_CD_NEW="${CASDOOR_ADMIN_PASS}" \
+          jq -jn '"userOwner=built-in&userName=\(env.SEED_CD_USER|@uri)&oldPassword=\(env.SEED_CD_OLD|@uri)&newPassword=\(env.SEED_CD_NEW|@uri)"' \
+          | curl -s --max-time 15 -b "${CJ}" -c "${CJ}" -X POST "${base}/api/set-password" \
+              -H 'content-type: application/x-www-form-urlencoded' --data-binary @- 2>/dev/null)" \
+    || die "Casdoor at ${base} did not answer POST /api/set-password"
+  printf '%s' "${resp}" | jq -e '.status == "ok"' >/dev/null 2>&1 \
+    || die "Casdoor at ${base} refused to change its admin password ($(printf '%s' "${resp}" | jq -r '.msg // "no message"' 2>/dev/null || echo 'unparseable response')). The admin is STILL on the factory default."
+  # PROOF 1: the factory default no longer signs in. A scratch jar, so the refusal
+  # cannot clobber the session below; an "ok" here means the write did not persist.
+  probe="${CJ}.probe"   # removed by the EXIT trap too, should a check below die
+  if casdoor_try_login "${base}" "${CASDOOR_BOOTSTRAP_PASSWORD}" "${probe}"; then
+    rm -f "${probe}"
+    die "Casdoor at ${base} answered ok to set-password, but its factory-default admin password STILL signs in. The admin is exposed; nothing below runs."
+  fi
+  rm -f "${probe}"
+  casdoor_locked_out && die_casdoor_lockout "${base}" "The new admin password WAS applied, but the throttle tripped before the factory default could be proven refused. "
+  # PROOF 2: the new value signs in; this is the session the seed continues with.
+  if ! casdoor_try_login "${base}" "${CASDOOR_ADMIN_PASS}" "${CJ}"; then
+    casdoor_locked_out && die_casdoor_lockout "${base}" "The new admin password WAS applied and the factory default is refused. "
+    die "Casdoor at ${base} answered ok to set-password, but this checkout's admin password does not sign in afterwards. The admin credential is NOT what tests/stack/.env holds."
+  fi
+  log "Casdoor admin at ${base}: moved off the factory default (factory default refused, this checkout's value signs in)"
 }
 
 # A fresh compose Casdoor has NO hugmesh org and NO ROLE_* objects (the
@@ -364,7 +476,7 @@ ensure_fragment_sync_client() { # <base-url> <org>
 
 # ══ LEG 1: Casdoor personas (reuses seed-accounts.sh --roles + its apply hook) ══
 log "leg 1: Casdoor personas at ${CASDOOR_URL} (org ${CASDOOR_ORG})"
-casdoor_login "${CASDOOR_URL}"
+casdoor_admin_session "${CASDOOR_URL}"
 ensure_org    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 ensure_roles  "${CASDOOR_URL}" "${CASDOOR_ORG}"
 ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
@@ -836,7 +948,7 @@ if [ -n "${CASDOOR_BRAND_B_URL}" ]; then
   log "leg 1b: second-tenant persona at ${CASDOOR_BRAND_B_URL}"
   curl -sf -o /dev/null --max-time 5 "${CASDOOR_BRAND_B_URL}/" \
     || die "CASDOOR_BRAND_B_URL=${CASDOOR_BRAND_B_URL} set but not answering"
-  casdoor_login "${CASDOOR_BRAND_B_URL}"
+  casdoor_admin_session "${CASDOOR_BRAND_B_URL}"
   ensure_org    "${CASDOOR_BRAND_B_URL}" "${CASDOOR_ORG}"
   ensure_roles  "${CASDOOR_BRAND_B_URL}" "${CASDOOR_ORG}"
   ensure_app    "${CASDOOR_BRAND_B_URL}" "${CASDOOR_ORG}"
@@ -855,7 +967,7 @@ if [ -n "${CASDOOR_BRAND_B_URL}" ]; then
     | jq -e '.data.name // empty | length > 0' >/dev/null \
     || die "e2e-tenant2-user did not land in brand-B Casdoor"
   log "leg 1b OK: e2e-tenant2-user verified in brand-B Casdoor"
-  casdoor_login "${CASDOOR_URL}"   # restore the brand-A admin session
+  casdoor_admin_session "${CASDOOR_URL}"   # restore the brand-A admin session
 else
   MSG="second-tenant persona NOT seeded — the standard compose stack runs a SINGLE Casdoor, so cross-tenant (brand-wall) scenarios are unverifiable here. Set CASDOOR_BRAND_B_URL (e.g. the tests/pentest two-brand profile) to seed e2e-tenant2-user."
   if [ "${SEED_STRICT}" = "1" ]; then die "${MSG}"; else warn "${MSG}"; fi

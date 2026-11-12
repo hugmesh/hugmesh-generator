@@ -199,7 +199,9 @@ _SERVICE_TMPL = """\
     ports:
       # host {port} -> container 8000 (the central Casdoor owns host 8000;
       # own-idp domains take 8001+ in Domains-table order — the brand-b scheme).
-      - "{port}:8000"
+      # Loopback by default, like the central Casdoor (compose.real.yaml):
+      # STACK_BIND_ADDR is the explicit opt-in for LAN exposure.
+      - "${{STACK_BIND_ADDR:-127.0.0.1}}:{port}:8000"
     networks:
       default:
         aliases: [casdoor-{slug}.localtest.me]

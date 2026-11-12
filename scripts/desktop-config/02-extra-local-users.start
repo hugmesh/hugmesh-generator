@@ -1,0 +1,96 @@
+#!/bin/sh
+# 02-extra-local-users.start — create the extra local login accounts the Studio's
+# Desktop step asked for (scripts/_desktop-config-lib.sh dc_bake_desktop).
+#
+# /etc/hugmesh/extra-local-users (0600, root) holds one "NAME ADMIN HASH" line per
+# account; the HASH was made at build time with the same KDF as --local-pass, so
+# no plaintext password is on the image. Each account:
+#   * joins audio video usb plugdev games (created when missing);
+#   * is an administrator ONLY when ADMIN is "true" (operator rule: a local account is
+#     not an administrator unless the build asked for it), granted the way
+#     01-firstboot.start grants --local-admin on the same image:
+#       - keyless / standalone image: `wheel`, plus the `%wheel ALL=(ALL) ALL` line
+#         (01 writes it too; it is ensured here so the grant never depends on order);
+#       - KEYS stick created accounts, image NOT governed: /etc/sudoers.d/90-local-NAME,
+#         never the shared %wheel line (01's rule: re-adding it would hand standing
+#         root to every KEYS wheel member);
+#       - governed (desktop-governance baked, or on the KEYS stick): no grant at all;
+#         sudo flows only through the revocable SSO desktop-sudo claim. The Studio
+#         refuses ':admin' for such an image; this is the device-side backstop.
+#     "KEYS created accounts" is keys-provision's OWN marker, keys-users.created
+#     (governed|ungoverned), never users.created: 01-firstboot touches users.created
+#     for its local account just before this runs, which used to withhold wheel from
+#     every standalone and --local-pass image;
+#   * gets its build-time password, then `chage -d 0`, so the first login must
+#     choose a new one.
+# An account that already exists is left alone (its password is never reset).
+# The list is deleted once every account is in; on any failure it stays and the
+# next boot retries — the same contract as 01-firstboot.start.
+LIST=/etc/hugmesh/extra-local-users
+[ -f "${LIST}" ] || exit 0
+KP_MARK=/var/lib/keys-provision/keys-users.created
+GRANT=wheel
+if [ -d /etc/hugmesh/desktop-governance ]; then
+    GRANT=none
+elif [ -f "${KP_MARK}" ]; then
+    if [ "$(cat "${KP_MARK}" 2>/dev/null)" = ungoverned ]; then GRANT=sudoers; else GRANT=none; fi
+fi
+ok=true
+while read -r name admin hash; do
+    [ -n "${name}" ] || continue
+    case "${name}" in \#*) continue ;; esac
+    if id "${name}" >/dev/null 2>&1; then
+        continue
+    fi
+    want="audio video usb plugdev games"
+    admin_how=""
+    if [ "${admin}" = "true" ]; then
+        case "${GRANT}" in
+            wheel)   want="wheel ${want}" ;;
+            none)    echo "Extra local account ${name}: NOT made an administrator — on this governed image sudo comes only from the SSO desktop-sudo claim." \
+                         | tee /dev/console 2>/dev/null || true ;;
+        esac
+    fi
+    groups=""
+    for g in ${want}; do
+        getent group "${g}" >/dev/null 2>&1 || groupadd -r "${g}" >/dev/null 2>&1 || true
+        getent group "${g}" >/dev/null 2>&1 && groups="${groups:+${groups},}${g}"
+    done
+    if [ -n "${groups}" ]; then
+        useradd -m -G "${groups}" -s /bin/bash "${name}" || { ok=false; continue; }
+    else
+        useradd -m -s /bin/bash "${name}" || { ok=false; continue; }
+    fi
+    if [ "${admin}" = "true" ]; then
+        case "${GRANT}" in
+            wheel)
+                # Only when useradd really put the account in wheel (the group exists).
+                if case ",${groups}," in *,wheel,*) true ;; *) false ;; esac; then
+                    grep -q '^%wheel ALL=(ALL) ALL' /etc/sudoers || echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+                    grep -q '^%wheel ALL=(ALL) ALL' /etc/sudoers && admin_how="wheel"
+                fi ;;
+            sudoers)
+                mkdir -p /etc/sudoers.d
+                echo "${name} ALL=(ALL) ALL" > "/etc/sudoers.d/90-local-${name}" \
+                    && chmod 0440 "/etc/sudoers.d/90-local-${name}" && admin_how="sudoers.d"
+                ;;
+        esac
+        if [ "${GRANT}" != none ] && [ -z "${admin_how}" ]; then
+            echo "Extra local account ${name}: the administrator grant (${GRANT}) did NOT land." \
+                | tee /dev/console 2>/dev/null || true
+        fi
+    fi
+    if printf '%s:%s\n' "${name}" "${hash}" | chpasswd -e; then
+        chage -d 0 "${name}" 2>/dev/null || true
+        echo "Extra local account ${name} created$( [ -n "${admin_how}" ] && echo " (administrator, via ${admin_how})"); it must choose a new password at first login." \
+            | tee /dev/console 2>/dev/null || true
+    else
+        ok=false
+    fi
+done < "${LIST}"
+if ${ok}; then
+    rm -f "${LIST}" "$0"
+else
+    echo "Extra local accounts: at least one could not be created; retrying next boot." | tee /dev/console 2>/dev/null || true
+fi
+exit 0

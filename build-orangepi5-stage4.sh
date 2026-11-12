@@ -150,6 +150,10 @@ source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
 source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
+# The Studio Desktop step (default session, extra local accounts, Flatpak apps,
+# Python targets, portage overlay). Every DC_* knob defaults to "emit nothing".
+# shellcheck source=scripts/_desktop-config-lib.sh
+source "${SCRIPT_DIR}/scripts/_desktop-config-lib.sh"
 # shellcheck source=scripts/_portage-config-lib.sh
 source "${SCRIPT_DIR}/scripts/_portage-config-lib.sh"
 # ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
@@ -341,6 +345,11 @@ DLV_OFFLINE_KEYRING="${DLV_OFFLINE_KEYRING:-${SCRIPT_DIR}/scripts/gentoo-release
 # Mesh VPN (installed as upstream static arm64 binaries, not emerged) — IDENTICAL
 # to the Frite/Pi5 client images so this board joins the same headscale/tailscale mesh.
 HEADSCALE_VERSION="0.23.0"
+# Opt-in: ALSO list Tailscale's public DERP map in headscale. Default OFF: the pki
+# node's headscale runs its embedded relay only, so the mesh starts and relays
+# offline (docs/HEADSCALE-DERP.md). --headscale-public-derp or env/brand.conf
+# HEADSCALE_PUBLIC_DERP=true bakes /etc/hugmesh/headscale-public-derp.
+HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
@@ -451,6 +460,8 @@ OPTIONS
 
   Mesh / radios  (same as the Frite/Pi5 builders)
     --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
+    --headscale-public-derp  Also list Tailscale's public DERP map (default: the
+                            embedded relay only — offline-first, docs/HEADSCALE-DERP.md).
     --with-tailscale      Keep the tailnet client on a --standalone desktop (dropped
                           by default) so the greeter SSO can reach an IdP over a
                           tailnet; the image stays standalone (ungoverned).
@@ -611,8 +622,19 @@ while [[ $# -gt 0 ]]; do
         # User package deltas (validated + mandatory-floor-checked below); -p stays
         # the frozen legacy extra-packages spelling, --packages-add is the new one.
         --packages-add)       PACKAGES_ADD="$2";          shift 2 ;;
+        # ── Studio Desktop step (scripts/_desktop-config-lib.sh) ──
+        --default-session)       DC_DEFAULT_SESSION="$2"; shift 2 ;;
+        --extra-local-users)     DC_EXTRA_USERS="$2";     shift 2 ;;
+        --extra-local-pass-file) DC_EXTRA_PASS_FILE="$2"; case "$2" in /*) ;; *) DC_EXTRA_PASS_FILE="${PWD}/$2" ;; esac; shift 2 ;;
+        --flatpak-apps)          DC_FLATPAK_APPS="$2";    shift 2 ;;
+        --flatpak-remotes)       DC_FLATPAK_REMOTES="$2"; shift 2 ;;
+        --python-extra-targets)  PT_EXTRA_TARGETS="$2";   shift 2 ;;
+        --python-single-target)  PT_SINGLE_TARGET="$2";   shift 2 ;;
+        --package-use)           DC_PACKAGE_USE="$2";     shift 2 ;;
+        --accept-keywords)       DC_ACCEPT_KEYWORDS="$2"; shift 2 ;;
         --packages-drop)      PACKAGES_DROP="$2";         shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";     shift 2 ;;
+        --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";     shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;      shift   ;;
@@ -658,6 +680,12 @@ while [[ $# -gt 0 ]]; do
         *)  err "Unexpected argument: $1"; echo "    Run with --help for usage." >&2; exit 1 ;;
     esac
 done
+# --headscale-public-derp / HEADSCALE_PUBLIC_DERP: one spelling, checked before any work.
+case "${HEADSCALE_PUBLIC_DERP}" in
+    true|1|yes|on)   HEADSCALE_PUBLIC_DERP=true ;;
+    false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
+    *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
+esac
 
 # Default work directory: ./out under CWD (local + gitignored)
 [ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/out"
@@ -1190,6 +1218,11 @@ _validate_pkg_atoms() { # LABEL VALUE
         [[ "${_a}" =~ ${_PKG_ATOM_RE} ]] || { err "invalid ${_lbl} atom: '${_a}' — want a category/name atom (e.g. app-editors/vim)"; exit 1; }
     done
 }
+# ── Studio Desktop step: validate every DC_* flag at ARGV time; fold its
+# Flatpak dependency into --packages-add (last-wins: folded ONCE, here).
+dc_validate "build-orangepi5" arm64 "${ROLE_CLIENT}" false "LXDE" "" "${LOCAL_USER:-${DEFAULT_USER}}" \
+    || { err "Desktop-step flags rejected (see above)"; exit 1; }
+PACKAGES_ADD="$(dc_fold_packages_add "${PACKAGES_ADD}")"
 _validate_pkg_atoms --packages-add  "${PACKAGES_ADD}"
 _validate_pkg_atoms --packages-drop "${PACKAGES_DROP}"
 # Tier-1 mandatory atoms (the payload essentials this appliance builder always
@@ -1281,6 +1314,7 @@ if ${PRINT_PLAN}; then
     _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
     _plan KERNEL             "mainline-arm64 (defconfig=${OPI5_DEFCONFIG} + hardened-desktop.config$(${NODE_ROLE} && echo " + specs/kernel/k8s-node.config"))"
     _plan FLAGS_EFFECTIVE    "env=${ENV} board=${OPI5_BOARD} flavor=${_EFF_FLAVOR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_uboot=${SKIP_UBOOT} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
+    while read -r _dck _dcv; do _plan "${_dck}" "${_dcv}"; done < <(dc_plan_lines)
     exit 0
 fi
 
@@ -1800,6 +1834,9 @@ fi
 # sysroot, because an emerge run under a wrong pin installs the wrong
 # interpreter and the probe would then read its own effect back in. Fails the
 # build rather than guessing. Analysis: docs/PYTHON-TARGETS-SEED-DRIFT.md.
+# The Studio Desktop step's portage overlay: AFTER the last pcs_sync_dir of
+# package.use / package.accept_keywords (they prune unknown files).
+dc_apply_portage_overlay "${SYSROOT}" "build-orangepi5"
 pt_apply_seed_targets "${SYSROOT}" "build-orangepi5" \
     || { err "could not derive PYTHON_TARGETS from the stage3 seed (see above)"; exit 1; }
 # ── Shared build assets in the rendered make.conf — SB-SHARED-ASSETS-BEGIN ───
@@ -2006,6 +2043,16 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/hugmesh/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/hugmesh/headscale-url"
 fi
+# Public Tailscale DERP map opt-in (default OFF: headscale's embedded relay only).
+# keys-provision reads the marker at first boot; provision.json .headscale.public_derp
+# outranks it either way.
+if [ "${HEADSCALE_PUBLIC_DERP}" = true ]; then
+    mkdir -p "${SYSROOT}/etc/hugmesh"
+    echo true > "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+    info "Baked HEADSCALE_PUBLIC_DERP=true -> /etc/hugmesh/headscale-public-derp (public Tailscale DERP map opted in)"
+else
+    rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+fi
 if ${STANDALONE}; then
     # STANDALONE desktop: bake the marker so keys-provision skips all
     # mesh-seeking no-ops and a normal LOCAL USER logs in with the build-set
@@ -2128,6 +2175,8 @@ greeter-session=lightdm-gtk-greeter
 session-wrapper=/etc/lightdm/Xsession
 user-session=LXDE
 LIGHTDM
+# Studio Desktop step: default session, extra local accounts, Flatpak apps.
+dc_bake_desktop "${SYSROOT}" "build-orangepi5" || { err "Desktop-step bake failed (see above)"; exit 1; }
 # Emulated-desktop display (QEMU runner --display spice): the session-side
 # autofit applier (xrandr --auto on a virtio-gpu/qxl preferred-mode change) and
 # the boot-time spice-vdagentd starter (only when the SPICE virtio port exists,
@@ -2474,7 +2523,7 @@ else
         fi
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
         # Refuse to ship a kernel that silently lost SELinux (fleet posture guard).
-        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
+        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM CONFIG_SECURITY_SELINUX_DEVELOP; do
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
         if ${NODE_ROLE}; then
@@ -2853,6 +2902,16 @@ fi
 # The image still boots PERMISSIVE: the enforce-gate service ships INERT (not in
 # any runlevel, /etc/conf.d/selinux-enforce-gate SELINUX_ENFORCE_GATE=no) unless
 # HUGMESH_SELINUX_ENFORCE_GATE=1 is set at build time. See the lib header for why.
+# /srv + the portage-tmpdir.conf mask: systemd-tmpfiles-setup otherwise creates both
+# in "/" at every boot and is denied under enforcing (see the lib; #863 refute,
+# blocker 3: this used to ship on x86 only).
+slx_ship_bootpath_files "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "could not ship the SELinux boot-path files (/srv, portage-tmpdir.conf mask)"; exit 1; }
+# Cross-built python extensions can carry the build host's x86_64 suffix, and the
+# target python then cannot import them: semanage died with "No module named
+# '_semanage'" on the #944 rpi5 image, so the root login mapping failed (see the lib).
+slx_fix_cross_python_ext "${SYSROOT}" aarch64 \
+    || { err "could not give the cross-built python extensions the target's suffix (semanage would not import on the node)"; exit 1; }
 slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
     || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
 # ── END shared block: SELinux node-policy modules ─────────────────────────────

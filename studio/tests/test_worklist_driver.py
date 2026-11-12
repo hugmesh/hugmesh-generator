@@ -328,6 +328,44 @@ def test_generate_keys_opt_out(monkeypatch, tmp_path):
     assert all(r.keys_ok is None for r in drv.results)
 
 
+def test_mesh_ca_handed_to_every_other_stick(monkeypatch, tmp_path):
+    """Without the Domain CA keys step the pki stick makes its own mesh CA and the
+    other sticks get none — but the pki node's headscale serves HTTPS with a
+    certificate from that CA (docs/HEADSCALE-DERP.md). After the run every other keys
+    folder carries the CA CERTIFICATE (never a key), wherever the pki entry sits."""
+    _install_fake_builddriver(monkeypatch)
+    cert = b"-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
+
+    class Proc:
+        stdout = iter(["generating keys"])
+
+        def wait(self):
+            return 0
+
+    def fake_popen(cmd, **kwargs):
+        out = cmd[cmd.index("--out") + 1]
+        os.makedirs(out, exist_ok=True)
+        if cmd[cmd.index("--role") + 1] == "pki":
+            os.makedirs(os.path.join(out, "certs"))
+            with open(os.path.join(out, "certs", "cluster-ca.crt"), "wb") as f:
+                f.write(cert)
+            with open(os.path.join(out, "certs", "cluster-ca.key"), "wb") as f:
+                f.write(b"-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n")
+        return Proc()
+
+    monkeypatch.setattr(wd.subprocess, "Popen", fake_popen)
+    wl = _worklist(tmp_path, roles=(("backend", "rpi5"), ("pki", "x86"), ("frontend", "x86")))
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    lines = []
+    assert drv.run_all(on_line=lambda i, ln: lines.append((i, ln))) == 0
+    for r in drv.results:
+        with open(os.path.join(r.keys_path, "certs", "cluster-ca.crt"), "rb") as f:
+            assert f.read() == cert
+    for i in (0, 2):
+        assert sorted(os.listdir(os.path.join(drv.results[i].keys_path, "certs"))) == ["cluster-ca.crt"]
+        assert any(j == i and ln.startswith("mesh CA: certs/cluster-ca.crt") for j, ln in lines)
+
+
 # ── cancel ───────────────────────────────────────────────────────────────────────────
 def test_cancel_entry_before_start_skips_it(monkeypatch, tmp_path):
     built = _install_fake_builddriver(monkeypatch)

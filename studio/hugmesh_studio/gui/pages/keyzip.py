@@ -194,6 +194,18 @@ class KeyZipPage(QtWidgets.QWizardPage):
         remember_help.setWordWrap(True)
         remember_help.setStyleSheet("color: gray;")
         lay.addWidget(remember_help)
+        # A host with no peer-uid check (BSD, Solaris, a Mac switched to refuse) never
+        # runs the login agent, so remembering roles would only write plaintext secrets
+        # nothing serves: grey the box (even when seeded ON) and say why, inline. The
+        # same line is what the text UI and the command line show.
+        policy = local_login_agent.peer_check_policy()
+        self.local_login_reason = QtWidgets.QLabel(policy.reason)
+        self.local_login_reason.setWordWrap(True)
+        self.local_login_reason.setVisible(bool(policy.reason))
+        lay.addWidget(self.local_login_reason)
+        if policy.refused:
+            self.remember_roles.setChecked(False)
+            self.remember_roles.setEnabled(False)
 
         self.out = QtWidgets.QLabel("")
         self.out.setWordWrap(True)

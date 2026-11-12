@@ -459,7 +459,9 @@ echo "== G. provision_headscale end to end: stick configs against the pinned bin
 E2E_SRC="${WORK}/provision-extract.sh"; : > "${E2E_SRC}"
 for fn in headscale_policy_owned_security_tags headscale_deny_all_policy headscale_stage_deny_all_policy \
           headscale_policy_unprotected headscale_effective_policy_path headscale_config_gate \
-          headscale_refuse_config provision_headscale publish_cp_dns_record; do
+          headscale_refuse_config provision_headscale publish_cp_dns_record \
+          provision_headscale_config provision_headscale_tls headscale_url_parts \
+          headscale_listen_port headscale_tls_cert_path headscale_tls_config_set; do
     body="$(extract "${fn}")"; [ -n "${body}" ] || cannot "${fn}() not found in ${PROVISION}"
     printf '%s\n\n' "${body}" >> "${E2E_SRC}"
 done
@@ -497,7 +499,7 @@ e2e_run() { # <name> <stick config.yaml> [extra shell] -> SB
         getent() { return 0; }; groupadd() { :; }; useradd() { :; }; chown() { :; }; sleep() { :; }
         logger() { echo "$*" >> "${HSB}/syslog"; }
         resolve_endpoint() { :; }; resolve_magic_dns_domain() { :; }; resolve_ssh_user() { echo superadmin; }
-        approve_mesh_routes_now() { :; }; provision_headscale_derp() { :; }
+        approve_mesh_routes_now() { :; }; provision_headscale_derp() { :; }; headscale_tls_cover_address() { :; }
         rc-service() { echo "rc-service $*" >> "${HSB}/rc"; }
         rc-update() { echo "rc-update $*" >> "${HSB}/rc"; }
         timeout() { shift; "$@"; }

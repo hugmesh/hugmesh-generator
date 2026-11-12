@@ -33,6 +33,13 @@ spec:
 
           patch: |-
             - { op: replace, path: /metadata/annotations/platform.hugmesh.net~1vault-base, value: "hugmesh" }
+        # THE IDENTITY PROVIDER Harbor's OIDC login is pointed at (issue #530):
+        # rewrite_idp_sysroot() rewrites this value to the external issuer when
+        # --idp is not casdoor; manifests/harbor/kustomization.yaml copies it onto
+        # CASDOOR_OIDC_ENDPOINT. Byte no-op at the casdoor default.
+        - target: { version: v1, kind: ConfigMap, name: idp-trust }
+          patch: |-
+            - { op: replace, path: /metadata/annotations/platform.hugmesh.net~1idp-issuer, value: "https://id.hugmesh.net" }
   destination:
     server: https://kubernetes.default.svc
     namespace: hugmesh-pki

@@ -127,6 +127,10 @@ TIPS: dict = {
         "The Secrets store page may stay empty: an internal store under hugmesh/ is used unless you name one.",
     ),
     "home": ("Home folder, encryption and login choices for a desktop image; encryption needs a passphrase.",),
+    "desktop": (
+        "Pick the environment, extra window managers, video cards, apps (native or Flatpak) and Python here.",
+        "Check with emerge --pretend asks Gentoo whether it builds; ask me to read the result and propose the fixes.",
+    ),
     "build": (
         "Review shows every choice; Continue commits nothing and the Build page starts the build.",
     ),

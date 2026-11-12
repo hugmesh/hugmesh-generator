@@ -1,0 +1,8 @@
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+emerge: there are no ebuilds built with USE flags to satisfy "media-libs/libbar[-static,gtk]".
+!!! One of the following packages is required to complete your request:
+- media-libs/libbar-3.1-r1::gentoo (Change USE: +gtk -static)
+- app-misc/qux-1.0::gentoo (Change USE: -gtk)
+(dependency required by "app-misc/qux-1.0::gentoo" [ebuild])
+- not/a-hint-1.0::gentoo (Change USE: +nope)

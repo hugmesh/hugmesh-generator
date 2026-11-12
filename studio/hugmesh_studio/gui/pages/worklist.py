@@ -238,31 +238,54 @@ class WorklistPage(QtWidgets.QWizardPage):
         # Role/Platform are NOT ResizeToContents on purpose: their longest cells want
         # 391px/627px, which would push the rest of the row off-screen. Explicit widths
         # that fit the medium window instead.
-        # 210px fits the family-group labels that head each block ("x86 PCs — x86-64
-        # (Intel/AMD)") and every buildable role id. The longest cells are ~467px (the
-        # grey unbuildable device rows' prose names) — no width fits those without eating
-        # the row, so they truncate and keep their tooltip; that text is informational,
-        # while the check/board/flavor controls are what the operator has to act on.
-        self.tree.setColumnWidth(_COL_ROLE, 210)
-        self.tree.setColumnWidth(_COL_PLATFORM, 110)
-        # TRAP: _COL_BOARD/_COL_FLAVOR/_COL_ENC hold setItemWidget() combos, so the
-        # ITEM TEXT is empty and sizeHintForColumn() reports 0 for them. Giving these
-        # ResizeToContents collapses them to ~0 and HIDES the combos — trading this
-        # report for a worse one. They must stay Interactive with explicit widths.
-        # Sized to the COMBO each column carries. Budget: check + these + the Notes
-        # stretch floor (100 = defaultSectionSize; Stretch will not go below it) fit
-        # inside the medium window's ~980px viewport with ~330px left for Notes. On a
-        # much narrower window the row does scroll horizontally — that is deliberate:
-        # squeezing 3 combo columns + Role/Platform under ~576px would starve them into
-        # uselessness, and a scrollbar is the honest answer. The CHECK column is
-        # unaffected either way: it is section 0 at viewport x=0, so it stays visible
-        # without dragging at any width, which is what the report was about.
-        # 128 fits "orange-pi-5-plus", the longest board token (the Orange Pi 5 node rows).
-        self.tree.setColumnWidth(_COL_BOARD, 128)
-        self.tree.setColumnWidth(_COL_RAM, 84)
-        self.tree.setColumnWidth(_COL_FLAVOR, 120)
+        # 170px holds every buildable role id (the longest, "jetson-desktop", is ~80px)
+        # with room. The family-group labels that head each block are wider than any
+        # width this row can spare (bold: 196px for x86 and 300px or more for the ARM
+        # families in Liberation Sans, 230px and up in DejaVu Sans), so they truncate, as
+        # every one but x86 already did at the old 210px. So do the grey unbuildable
+        # device rows' prose names (~467px), which keep their tooltip; that text is
+        # informational, while the check/board/flavor controls are what the operator has
+        # to act on. Platform's buildable-row label is a sentence that truncates at any
+        # width that fits; 90px keeps "x86_64 host" whole and the start of the rest.
+        self.tree.setColumnWidth(_COL_ROLE, 170)
+        self.tree.setColumnWidth(_COL_PLATFORM, 90)
+        # The combo columns are Interactive with explicit widths, never ResizeToContents.
+        # When this page was written sizeHintForColumn() measured 0 for a column of
+        # setItemWidget() combos (their item text is empty), so ResizeToContents
+        # collapsed the column and HID the combos. On Qt 6.11 (PyQt6 and PySide6) it
+        # measures each combo's sizeHint instead, which is its LONGEST item ("Tor onion
+        # + Egress VPN"), so ResizeToContents would push the row off-screen. Either way,
+        # no.
+        # Board, RAM and Flavor/Desktop are then MEASURED, once the rows exist
+        # (_fit_combo_columns, below the row loop): each as wide as the widest combo it
+        # carries and as its header label, in the style and font this page is built with.
+        # A pixel width fits only the font it was measured in: "orange-pi-5-plus" wants
+        # 118px in Liberation Sans under Fusion and 137px in DejaVu Sans under Breeze, so
+        # the 128px Board had cut it there, and the RAM column's 84px cut "choose…" under
+        # Breeze. The widths set here are floors.
+        #   Encryption 90 (fixed): "default" fits, and the header wants 67-85px. Its
+        #     jetson cell shows only "off" and keeps the reason in its tooltip (GUI-29).
+        #   Services 100 (fixed): "Egress VPN" and "Tor onion" show whole (75px of text
+        #     room); "Tor onion + Egress VPN", its longest item, did not at 120 either.
+        # BUDGET at the default 1040x780 window (a ~975-980px viewport), measured
+        # 2026-11-11 offscreen at 9 pt: the check column (60px Fusion, 72px Breeze) + Role
+        # + Platform + the three measured columns + these two leave Notes 181px (Fusion,
+        # Liberation Sans), 150px (Fusion, DejaVu Sans), 140px (Breeze, Liberation) and
+        # 109px (Breeze, DejaVu): over the 100px a Stretch section stops at, so nothing
+        # scrolls sideways on arrival. The RAM column was added without re-budgeting:
+        # the row overflowed by 42px, Notes sat at that floor and a horizontal scrollbar
+        # showed (tests/test_pages_worklist_columns.py). A new column takes its width
+        # FROM these, or that happens again. On a much narrower window, or a much bigger
+        # font, the row does scroll horizontally — that is deliberate: squeezing the
+        # combo columns would starve them into uselessness, and a scrollbar is the honest
+        # answer. The CHECK column is unaffected either way: it is section 0 at viewport
+        # x=0, so it stays visible without dragging at any width, which is what the
+        # original report was about.
+        self.tree.setColumnWidth(_COL_BOARD, 60)
+        self.tree.setColumnWidth(_COL_RAM, 60)
+        self.tree.setColumnWidth(_COL_FLAVOR, 60)
         self.tree.setColumnWidth(_COL_ENC, 90)
-        self.tree.setColumnWidth(_COL_SERVICES, 120)
+        self.tree.setColumnWidth(_COL_SERVICES, 100)
         # Notes absorbs the slack, replacing the accidental stretchLastSection outcome
         # that handed Notes 452px while Role starved at 100.
         hdr_view.setSectionResizeMode(_COL_NOTES, QtWidgets.QHeaderView.ResizeMode.Stretch)
@@ -372,6 +395,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         for role, platforms, _label in ROLE_CHOICES["mesh"]:
             for platform in platforms:
                 self._build_row(role, platform)
+        self._fit_combo_columns()
 
         # ASK 18, verbatim: "image/roles that cant be a mesh should be excluded from mesh
         # generation options."
@@ -766,6 +790,36 @@ class WorklistPage(QtWidgets.QWizardPage):
             return False
         return all(user for user, _roles in self._desktop_people.values())
 
+    @staticmethod
+    def _contents_width(combo) -> int:
+        """The width ``combo`` asks for to show its longest item. Not its plain
+        sizeHint(): these combos adjust to their contents on FIRST SHOW, and until then
+        the hint is a placeholder (measured: 72px for every RAM combo, whose "choose…"
+        wants 80 once shown). Asking under AdjustToContents computes it now."""
+        policy = combo.sizeAdjustPolicy()
+        combo.ensurePolished()
+        combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
+        try:
+            return combo.sizeHint().width()
+        finally:
+            combo.setSizeAdjustPolicy(policy)
+
+    def _fit_combo_columns(self) -> None:
+        """Board, RAM and Flavor/Desktop: as wide as the widest combo each column carries
+        and as its header label, measured in the style and font the page is built with
+        (the sizing block in __init__ says why not ResizeToContents, and why not a fixed
+        pixel width). Never narrower than the floor __init__ set."""
+        hdr = self.tree.header()
+        for col in (_COL_BOARD, _COL_RAM, _COL_FLAVOR):
+            need = max(hdr.sectionSize(col), hdr.sectionSizeHint(col))
+            it = QtWidgets.QTreeWidgetItemIterator(self.tree)
+            while it.value():
+                combo = self.tree.itemWidget(it.value(), col)
+                if combo is not None:
+                    need = max(need, self._contents_width(combo))
+                it += 1
+            self.tree.setColumnWidth(col, need)
+
     # ---- (de)serialize the check/axes state against the worklist -----------------
     def initializePage(self) -> None:
         cfg = self.wiz.cfg
@@ -989,5 +1043,14 @@ class WorklistPage(QtWidgets.QWizardPage):
         # a stale base field a no-op). role is the first checked row's (primary).
         cfg.role = entries[0].role
         cfg.platform = "x86"
+        # The Desktop step's per-row spec lives on the entry and is not a column here:
+        # carry it across this rebuild by row id, so Back to the worklist and Next again
+        # never loses what was chosen on the Desktop step.
+        prev = getattr(self.wiz, "worklist", None)
+        if prev is not None:
+            kept = {e.id: e.desktop_spec for e in prev.entries if getattr(e, "desktop_spec", None)}
+            for e in entries:
+                if e.id in kept and not e.desktop_spec:
+                    e.desktop_spec = kept[e.id]
         self.wiz.worklist = WorklistConfig(base=cfg, entries=entries)
         return True

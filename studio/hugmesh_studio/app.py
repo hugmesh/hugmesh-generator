@@ -245,7 +245,10 @@ def main(argv=None) -> int:
                          "sessions page)")
     ap.add_argument("--login-agent", action="store_true",
                     help="headless: run the passwordless local-login loopback agent "
-                         "(binds 127.0.0.1:27621; serves the role-picker handoff to login-ui)")
+                         "(binds 127.0.0.1:27621; serves the role-picker handoff to login-ui). "
+                         "Refuses to start, exit 3, on a host that cannot check which local "
+                         "user connects (BSD, Solaris; macOS only with "
+                         "HUGMESH_LOCAL_LOGIN_MACOS=refuse)")
     ap.add_argument("--login-manifest",
                     help="path to the local-login roles manifest (default: "
                          "$HUGMESH_LOCAL_LOGIN_MANIFEST or "
@@ -282,6 +285,19 @@ def main(argv=None) -> int:
                     help="headless: print each materialized image's flat ImageConfig JSON "
                          "(one per line, SECRET fields blanked) — the materialization bridge "
                          "the web IMAGE_SPEC_JSON / build-image.sh channel consumes")
+    ap.add_argument("--desktop-options", action="store_true",
+                    help="headless: print the Desktop step's catalog — environments, window "
+                         "managers/compositors, video cards, apps (native/Flatpak), Python "
+                         "targets — and its rules; --json for automation")
+    ap.add_argument("--desktop-pretend", metavar="CONFIG", default=None,
+                    help="headless: run the Desktop step's emerge --pretend check for CONFIG "
+                         "(x86 desktop images; the builder in its container, one at a time "
+                         "machine-wide) and print the result; --image N picks a worklist "
+                         "image, --json for automation, --apply-portage-fixes writes portage's "
+                         "own suggested package.use/accept_keywords lines back into CONFIG")
+    ap.add_argument("--apply-portage-fixes", action="store_true",
+                    help="with --desktop-pretend: record portage's suggested overlay lines "
+                         "in CONFIG (history source 'autounmask'); run it again to re-check")
     ap.add_argument("--image", type=int, default=None,
                     help="with --print-commands/--print-specs: print ONLY the image at this "
                          "0-based materialized index (default: every image)")
@@ -335,6 +351,25 @@ def main(argv=None) -> int:
                          "three-way guard as the GUI's delete affordance.")
     ap.add_argument("--yes", action="store_true",
                     help="with --delete-session: the required explicit confirmation.")
+    # ── kernel reconfiguration (core/kernel_reconfig.py; x86 images) ────────
+    ap.add_argument("--kernel-config", metavar="SESSION[:IMAGE]",
+                    help="open menuconfig for a built x86 image's kernel IN THIS TERMINAL "
+                         "(on a copy of the build's own .config), then print the change. "
+                         "IMAGE defaults to the session's first x86 image.")
+    ap.add_argument("--kernel-config-set", metavar="SESSION[:IMAGE]",
+                    help="a scripted kernel config edit: scripts/config with "
+                         "--kernel-config-args (e.g. \"--set-str LOCALVERSION -hmtest\")")
+    ap.add_argument("--kernel-config-args", metavar="ARGS", default="",
+                    help="with --kernel-config-set: the scripts/config arguments as ONE string, given with = "
+                         "(--kernel-config-args=\"--set-str LOCALVERSION -hmtest\")")
+    ap.add_argument("--kernel-config-diff", metavar="SESSION[:IMAGE]",
+                    help="print the pending kernel config change, symbol by symbol")
+    ap.add_argument("--kernel-config-apply", metavar="SESSION[:IMAGE]",
+                    help="rebuild the kernel + modules from the pending edit, re-sign the "
+                         "UKI with the key the build used and repackage the stage4, .img, "
+                         "fs.tar and ISOs (streams; refuses in one sentence when it cannot)")
+    ap.add_argument("--kernel-config-discard", metavar="SESSION[:IMAGE]",
+                    help="drop the pending kernel config edit")
     ap.add_argument("--delete-artifacts", action="store_true",
                     help="with --delete-session: ALSO remove the session's "
                          "<out>/sessions/<id>/ artifact tree (guarded by the same "
@@ -413,6 +448,16 @@ def main(argv=None) -> int:
     _add_golive_target_args(ap)
     args = ap.parse_args(argv)
 
+    if args.remember_roles_for_passwordless_login:
+        # Qt-free: a host with no peer-uid check never runs the login agent, so the
+        # roles would be plaintext secrets nothing serves. Same reason as GUI and TUI.
+        from .core.local_login_agent import local_login_unavailable_reason
+        reason = local_login_unavailable_reason()
+        if reason:
+            print(f"--remember-roles-for-passwordless-login ignored: {reason}",
+                  file=sys.stderr)
+            args.remember_roles_for_passwordless_login = False
+
     if args.mesh_token is not None:
         # Qt-free path: mesh_token imports core modules only, never a Qt binding.
         from .core.mesh_token import main as _mesh_token_main
@@ -460,6 +505,19 @@ def main(argv=None) -> int:
         # Qt-free path, run by the release workflow inside the built Flatpak.
         from .core import self_check
         return self_check.run_cli(_generator_dir(args), as_json=args.json)
+
+    if args.desktop_options:
+        from .core import desktop_cli
+        return desktop_cli.options(as_json=args.json)
+
+    if args.desktop_pretend:
+        from .core import desktop_cli
+        if not _generator_dir_or_say(_generator_dir(args)):
+            return 2
+        return desktop_cli.pretend(args.desktop_pretend, generator_dir=_generator_dir(args),
+                                   image=args.image, as_json=args.json,
+                                   apply_fixes=args.apply_portage_fixes,
+                                   backend=None if args.backend == "auto" else args.backend)
 
     if args.print_command:
         # Qt-free path: core only — must work with no display and no Qt installed.
@@ -712,6 +770,22 @@ def main(argv=None) -> int:
             return 1
         print()
         return 0
+
+    kc = [(v, getattr(args, f"kernel_config_{v}" if v != "edit" else "kernel_config"))
+          for v in ("edit", "set", "diff", "apply", "discard")]
+    kc = [(v, a) for v, a in kc if a]
+    if kc:
+        # Qt-free: every decision lives in core/kernel_reconfig.py, shared with the GUI
+        # panel and the TUI.
+        from .core import kernel_reconfig
+        if len(kc) > 1:
+            print("error: give one --kernel-config* action at a time", file=sys.stderr)
+            return 2
+        if not _generator_dir_or_say(args.generator_dir):
+            return 2
+        verb, target = kc[0]
+        return kernel_reconfig.cli(verb, target, args.generator_dir,
+                                   config_args=args.kernel_config_args)
 
     if args.list_sessions or args.show_session or args.session_artifacts \
             or args.delete_session:

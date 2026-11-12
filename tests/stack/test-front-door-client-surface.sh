@@ -396,6 +396,86 @@ if cluster_egress "$NEG" derived >/dev/null 2>&1; then neg=0; else neg=1; fi
 [ "$neg" -eq 1 ]; check $? "negative control: cluster flags hardcoded -> the derivation check goes red"
 rm -f "$NEG"
 
+# ── (D) tuwunel adds no suffix to a new account's displayname ───────────────
+echo "== (D) tuwunel's new-account displayname carries no suffix =="
+
+# tuwunel appends new_user_displayname_suffix (default "💕") to the displayname it
+# creates at registration, so every BFF-minted account read "<localpart> 💕" in
+# every Matrix client. Both lanes must set it to the EMPTY STRING, exactly: a
+# missing key, a null compose value (compose passes it through from the host) or
+# a key that sits under [global.well_known] all leave the default in force.
+# Parsed, not grepped, so a key in the wrong table cannot satisfy it.
+suffix_compose() {  # $1=compose file -> exit 0 iff tuwunel env sets the suffix to ""
+  python3 - "$1" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+env = (d.get('services') or {}).get('tuwunel', {}).get('environment') or {}
+if isinstance(env, list):
+    env = dict(e.split('=', 1) if '=' in e else (e, None) for e in env)
+k = 'TUWUNEL_NEW_USER_DISPLAYNAME_SUFFIX'
+if k not in env:
+    sys.exit("%s is not set on the compose tuwunel service" % k)
+if env[k] != "":
+    sys.exit("%s is %r, not the empty string" % (k, env[k]))
+PY
+}
+suffix_cluster() {  # $1=cluster tuwunel manifest -> exit 0 iff [global] sets the suffix to ""
+  python3 - "$1" <<'PY'
+import sys, yaml
+try:
+    import tomllib
+except ModuleNotFoundError:
+    sys.exit("tomllib unavailable (python < 3.11): cannot check the cluster toml")
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = [d for d in docs if d.get('kind') == 'ConfigMap' and d['metadata']['name'] == 'tuwunel-config'][0]
+g = tomllib.loads(cm['data']['tuwunel.toml'])['global']
+k = 'new_user_displayname_suffix'
+if k in (g.get('well_known') or {}):
+    sys.exit("%s was swallowed by [global.well_known]" % k)
+if k not in g:
+    sys.exit("%s is not set in [global]" % k)
+if g[k] != "":
+    sys.exit("%s is %r, not the empty string" % (k, g[k]))
+PY
+}
+
+suffix_compose "$COMPOSE_REAL"
+check $? "compose tuwunel sets TUWUNEL_NEW_USER_DISPLAYNAME_SUFFIX to the empty string"
+suffix_cluster "$CLUSTER_TUWUNEL"
+check $? "cluster tuwunel.toml sets new_user_displayname_suffix = \"\" in [global]"
+
+# NEGATIVE CONTROLS: each re-introduces one way the default suffix comes back.
+NEG="$(mktemp)"
+grep -v 'TUWUNEL_NEW_USER_DISPLAYNAME_SUFFIX:' "$COMPOSE_REAL" > "$NEG"
+if suffix_compose "$NEG" >/dev/null 2>&1; then r=1; else r=0; fi
+check $r "negative control: compose key deleted -> the compose check goes red"
+sed 's/TUWUNEL_NEW_USER_DISPLAYNAME_SUFFIX: ""/TUWUNEL_NEW_USER_DISPLAYNAME_SUFFIX:/' "$COMPOSE_REAL" > "$NEG"
+if suffix_compose "$NEG" >/dev/null 2>&1; then r=1; else r=0; fi
+check $r "negative control: compose value nulled (bare KEY:) -> the compose check goes red"
+grep -v '^ *new_user_displayname_suffix = ' "$CLUSTER_TUWUNEL" > "$NEG"
+if suffix_cluster "$NEG" >/dev/null 2>&1; then r=1; else r=0; fi
+check $r "negative control: cluster key deleted -> the cluster check goes red"
+sed 's/^\( *\)new_user_displayname_suffix = ""/\1new_user_displayname_suffix = "💕"/' "$CLUSTER_TUWUNEL" > "$NEG"
+if suffix_cluster "$NEG" >/dev/null 2>&1; then r=1; else r=0; fi
+check $r "negative control: cluster suffix set to the default -> the cluster check goes red"
+python3 - "$CLUSTER_TUWUNEL" "$NEG" <<'PY'
+import sys
+lines = open(sys.argv[1]).read().split('\n')
+key = [i for i, l in enumerate(lines) if l.strip() == 'new_user_displayname_suffix = ""']
+hdr = [i for i, l in enumerate(lines) if l.strip() == '[global.well_known]']
+assert len(key) == 1 and len(hdr) == 1, (key, hdr)
+line = lines.pop(key[0])
+hdr = [i for i, l in enumerate(lines) if l.strip() == '[global.well_known]'][0]
+lines.insert(hdr + 1, line)
+open(sys.argv[2], 'w').write('\n'.join(lines))
+PY
+mv_rc=$?
+# A failed rewrite leaves the previous control's file behind; that must not count.
+if [ "$mv_rc" -ne 0 ]; then r=1
+elif suffix_cluster "$NEG" >/dev/null 2>&1; then r=1; else r=0; fi
+check $r "negative control: cluster key moved under [global.well_known] -> the cluster check goes red"
+rm -f "$NEG"
+
 echo
 echo "== front-door client surface: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

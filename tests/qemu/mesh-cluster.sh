@@ -23,8 +23,12 @@
 #   4. boots node2+node3 the same way and waits for "Joined cluster (" on each
 #      (fail marker: "kubeadm join failed against");
 #   5. asserts REGISTRATION over SSH on the CP: `kubectl get nodes` must list
-#      3 nodes (Ready needs a CNI — that is the post-build campaign's phase, so
-#      the Ready count is reported, not gated);
+#      3 nodes. Ready needs a CNI, so by DEFAULT the Ready count is reported,
+#      not gated; MESH_CLUSTER_GATE_READY=1 (issue #516) gates it — the run then
+#      keeps polling up to --ready-timeout and FAILS ('ready-count:N/3') when
+#      fewer than 3 nodes are Ready. The guests get their CNI images from the
+#      host-side mirror (tests/qemu/registry-mirror.sh). The gate stays opt-in
+#      until one live emulated run has proved that mirror end to end;
 #   6. powers everything down. Overlays are throwaway BY DESIGN and are NEVER
 #      committed back: `qemu-img commit` against a live device silently rewrites
 #      the GOLDEN artifact (learned the hard way — see qemu-device-save). This
@@ -60,6 +64,10 @@
 #                    stdin passed through)
 #   MESH_KEYS_CMD    replaces make-test-keys.sh
 #
+# Opt-in gates:
+#   MESH_CLUSTER_GATE_READY=1  fail the run when fewer than 3 nodes are Ready
+#                    (default: report the Ready count only — see step 5 above)
+#
 #   tests/qemu/mesh-cluster.sh --dry-run                      # plan only
 #   HUGMESH_QEMU_MESH=1 tests/qemu/mesh-cluster.sh -w out     # real 3-node boot
 #   make qemu-mesh WORK_DIR=out/sessions/<id>/artifacts
@@ -94,6 +102,7 @@ SUBNET_PREFIX_SET=false
 SSH_USER="tester"
 TIMEOUT="2700"                 # per-node boot -> console-marker budget (TCG is slow)
 JOIN_TIMEOUT="900"             # kubectl node-registration budget after all joins
+READY_TIMEOUT="1800"           # Ready budget after registration (only with the Ready gate)
 KEEP=false
 DRY_RUN=false
 
@@ -128,6 +137,12 @@ Usage: $0 [OPTIONS]
       --ssh-user U   login the KEYS payloads create. Default: ${SSH_USER}
   -t, --timeout SEC  per-node boot->marker budget. Default: ${TIMEOUT}
       --join-timeout SEC  kubectl registration budget. Default: ${JOIN_TIMEOUT}
+      --ready-timeout SEC Ready budget after registration, used only when
+                       MESH_CLUSTER_GATE_READY=1. Default: ${READY_TIMEOUT}
+
+  MESH_CLUSTER_GATE_READY=1  gate on 3 Ready nodes (default: Ready is reported,
+                       not gated). Ready needs the CNI images the host-side
+                       mirror serves: tests/qemu/registry-mirror.sh up
       --dry-run      print the 3-node plan; boot NOTHING (no root, no keys)
       --keep         keep overlays + scratch files in the run dir
   -h, --help         this help
@@ -152,12 +167,18 @@ while [[ $# -gt 0 ]]; do
         --ssh-user)       SSH_USER="$2"; shift 2 ;;
         -t|--timeout)     TIMEOUT="$2"; shift 2 ;;
         --join-timeout)   JOIN_TIMEOUT="$2"; shift 2 ;;
+        --ready-timeout)  READY_TIMEOUT="$2"; shift 2 ;;
         --dry-run)        DRY_RUN=true; shift ;;
         --keep)           KEEP=true; shift ;;
         -h|--help)        usage 0 ;;
         *) echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
 done
+
+# The Ready gate is opt-in and spelled exactly "1": anything else (unset, 0,
+# "true") leaves today's report-only behaviour untouched.
+GATE_READY=false
+[ "${MESH_CLUSTER_GATE_READY:-0}" = "1" ] && GATE_READY=true
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; YEL=$'\033[0;33m'; RST=$'\033[0m'
 info() { echo "${GREEN}[mesh-cluster]${RST} $*"; }
@@ -290,6 +311,11 @@ if ${DRY_RUN}; then
     echo "markers: cp='Running kubeadm init' -> 'First control plane initialised' -> '=== keys-provision complete ==='"
     echo "         workers='Joined cluster (' (fail: 'kubeadm join failed against')"
     echo "gate   : kubectl get nodes lists 3 registered nodes (Ready needs a CNI — reported, not gated)"
+    if ${GATE_READY}; then
+        echo "ready  : GATED (MESH_CLUSTER_GATE_READY=1) — fewer than 3 Ready nodes within ${READY_TIMEOUT}s fails the run"
+    else
+        echo "ready  : reported only (MESH_CLUSTER_GATE_READY=1 gates it; CNI images: tests/qemu/registry-mirror.sh)"
+    fi
     echo "RESULT:  DRY-RUN planned 3 nodes (nothing booted)"
     exit 0
 fi
@@ -629,13 +655,20 @@ fi
 
 # ── 5. Registration gate: kubectl get nodes on the CP must list 3 nodes ──────
 NODES_SEEN=0
+READY_SEEN=0
+get_nodes() {
+    gssh 1 60 'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get nodes --no-headers 2>/dev/null' \
+        </dev/null 2>/dev/null || true
+}
+# Ready = the STATUS column (field 2) is exactly Ready, optionally followed by
+# ",SchedulingDisabled". NotReady / Unknown never count.
+count_ready() { printf '%s\n' "$1" | awk '$2 ~ /^Ready(,|$)/ {n++} END {print n+0}'; }
 if [ -z "${FAILED}" ]; then
     step "Asserting registration: kubectl get nodes on the CP (budget ${JOIN_TIMEOUT}s)"
     deadline=$((SECONDS + JOIN_TIMEOUT))
     out=""
     while [ "${SECONDS}" -lt "${deadline}" ]; do
-        out="$(gssh 1 60 'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get nodes --no-headers 2>/dev/null' \
-                </dev/null 2>/dev/null || true)"
+        out="$(get_nodes)"
         NODES_SEEN="$(printf '%s\n' "${out}" | grep -cE '^[[:alnum:]]' || true)"
         [ "${NODES_SEEN}" -ge 3 ] && break
         sleep "${MESH_VERIFY_INTERVAL:-10}"
@@ -644,8 +677,28 @@ if [ -z "${FAILED}" ]; then
     if [ "${NODES_SEEN}" -ge 3 ]; then
         info "kubectl sees ${NODES_SEEN} registered nodes:"
         printf '%s\n' "${out}" | sed 's/^/    | /'
-        ready="$(printf '%s\n' "${out}" | grep -cw 'Ready' || true)"
-        info "Ready: ${ready}/3 (Ready needs a CNI — the post-build campaign's phase, reported not gated)"
+        READY_SEEN="$(count_ready "${out}")"
+        if ${GATE_READY}; then
+            # Registration lands before the CNI converges, so the gate polls for
+            # Ready on its own budget instead of judging the first snapshot.
+            step "Ready gate (MESH_CLUSTER_GATE_READY=1): waiting for 3 Ready nodes (budget ${READY_TIMEOUT}s)"
+            deadline=$((SECONDS + READY_TIMEOUT))
+            while [ "${READY_SEEN}" -lt 3 ] && [ "${SECONDS}" -lt "${deadline}" ]; do
+                sleep "${MESH_VERIFY_INTERVAL:-10}"
+                out="$(get_nodes)"
+                READY_SEEN="$(count_ready "${out}")"
+            done
+            printf '%s\n' "${out}" > "${RUN_DIR}/kubectl-get-nodes.txt"
+            if [ "${READY_SEEN}" -ge 3 ]; then
+                info "Ready: ${READY_SEEN}/3 (GATED by MESH_CLUSTER_GATE_READY=1)"
+            else
+                warn "Ready: only ${READY_SEEN}/3 nodes Ready within ${READY_TIMEOUT}s (GATED by MESH_CLUSTER_GATE_READY=1)"
+                printf '%s\n' "${out}" | sed 's/^/    | /'
+                FAILED="${FAILED} ready-count:${READY_SEEN}/3"
+            fi
+        else
+            info "Ready: ${READY_SEEN}/3 (Ready needs a CNI — reported, not gated; MESH_CLUSTER_GATE_READY=1 gates it)"
+        fi
     else
         warn "kubectl sees only ${NODES_SEEN}/3 registered nodes"
         FAILED="${FAILED} node-count:${NODES_SEEN}"
@@ -661,7 +714,11 @@ sleep 3
 
 echo
 if [ -z "${FAILED}" ]; then
-    info "${GREEN}MESH-CLUSTER RESULT: PASS${RST} (3 nodes registered over the shared L2) — artifacts: ${RUN_DIR}"
+    if ${GATE_READY}; then
+        info "${GREEN}MESH-CLUSTER RESULT: PASS${RST} (3 nodes registered AND Ready over the shared L2) — artifacts: ${RUN_DIR}"
+    else
+        info "${GREEN}MESH-CLUSTER RESULT: PASS${RST} (3 nodes registered over the shared L2; Ready ${READY_SEEN}/3 reported, not gated) — artifacts: ${RUN_DIR}"
+    fi
     exit 0
 else
     warn "MESH-CLUSTER RESULT: FAIL —${FAILED}"
