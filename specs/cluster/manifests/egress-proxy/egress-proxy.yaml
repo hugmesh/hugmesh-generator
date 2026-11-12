@@ -24,7 +24,7 @@
 #     all to the standard federation ports). Federation works UNCHANGED — this is
 #     a transparent forward hop. The homeserver-egress NetworkPolicy still forces
 #     traffic through here (structural backstop) but NO actor is blocked yet. A
-#     plain akkoma:stable + tuwunel keep federating normally.
+#     akkoma (hugmesh-akkoma, MRF dark) + tuwunel keep federating normally.
 #   - ON: squid loads the allowlist ACL from the domainlock-allowlist ConfigMap
 #     (the materialized force-local destination set the reconcile loop writes) and
 #     DENIES anything outside it. Flipping this on is what makes the per-destination

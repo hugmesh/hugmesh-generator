@@ -303,11 +303,12 @@ _SERVICES_NODE_SCOPE_CAVEAT = (
 # The builders resolve this precedence themselves — build-x86-host-stage4.sh:193-196 and
 # build-rpi5-stage4.sh:252-254, both verbatim "built-in < brand.conf < flag":
 #
-#     OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+#     OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
 #
+# (akkoma left that default on 2026-11-11: its image is not yet published.)
 # i.e. --optional-services does not ADD to the built-in default, it REPLACES it. So an
 # explicit tick-list is already a complete subtraction: to build "forum-less" you tick
-# akkoma and tuwunel and leave phpbb alone. That is what --exclude-services was for from
+# tuwunel and leave phpbb alone. That is what --exclude-services was for from
 # this screen, and it is why a free-text slug field sitting next to a checklist that
 # already expresses the same thing "makes no sense". The flag itself is untouched and
 # still reachable from a brand profile (-C) or extra flags — it is the only knob that can
@@ -1474,10 +1475,11 @@ class NetworkPage(QtWidgets.QWizardPage):
         picked = [s for s in c.optional_services if s not in (SERVICES_NONE, SERVICES_ALL)]
         # ── the builders' OWN default set arrives TICKED ──────────────────────────────
         # Ask 23's rule, verbatim: "anything off by default is UNCHECKED; only pre-check
-        # what is genuinely on by default" — and akkoma / tuwunel / phpbb are genuinely on
-        # by default. `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"`
-        # (build-x86-host-stage4.sh:196, build-rpi5-stage4.sh:254) means an untouched mesh
-        # ships all three, so three unticked boxes over three running services is the same
+        # what is genuinely on by default" — and BUILTIN_DEFAULT_SERVICES (tuwunel / phpbb
+        # since 2026-11-11, when akkoma left it: image not yet published) are genuinely on
+        # by default. `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"` (both
+        # builders) means an untouched mesh ships them, so unticked boxes over running
+        # services is the same
         # lie as a part-checked square, merely spelled differently — and it made unticking
         # `phpbb` a no-op, because --optional-services REPLACES rather than subtracts, so
         # "nothing ticked" emitted nothing and left the forum up.

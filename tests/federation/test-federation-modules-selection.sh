@@ -114,8 +114,9 @@ echo "== federation_modules build-time selection test =="
 
 # The eight slugs that own a federation module (every user-level optional slug).
 GATED_SLUGS="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
-# specs/cluster/optional-services.yaml's DEFAULT-INCLUSION POLICY (user 2026-06-17).
-DEFAULT_ON="akkoma tuwunel phpbb"
+# specs/cluster/optional-services.yaml's DEFAULT-INCLUSION POLICY (user 2026-06-17;
+# akkoma left it on 2026-11-11 because its image is not yet published).
+DEFAULT_ON="tuwunel phpbb"
 
 # ── load the REAL renderer AS THE BUILDER RESOLVES IT ───────────────────────────
 # NOT `awk` over the builder file. This suite was written while the gate still had
