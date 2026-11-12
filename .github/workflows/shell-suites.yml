@@ -755,7 +755,7 @@ jobs:
     steps:
       - run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless squashfs-tools
+          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless squashfs-tools squashfs-tools-ng
           pip install --quiet pyyaml
       - uses: actions/checkout@v4
       - name: trust the workspace
