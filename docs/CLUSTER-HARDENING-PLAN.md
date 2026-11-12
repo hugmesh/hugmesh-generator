@@ -365,25 +365,17 @@ against the running image** (`kubectl exec -- id`) before you apply.
 
 ## G. akkoma image digest pin (could not pin in the safe PR)
 
-> **Superseded 2026-11-11.** The premise below was wrong: upstream publishes no
-> container image at all, and `git.akkoma.dev` does not resolve. HugMesh now builds
-> its own, `ghcr.io/hugmesh/hugmesh-akkoma`, from upstream source
-> (`images/akkoma/`, `.github/workflows/akkoma-release.yml`). Every ref listed
-> below now names that image at one digest, a marked placeholder until the first
-> release, with `akkoma` DEFAULT-OFF meanwhile; `tests/scripts/test-akkoma-image-pin.sh`
-> enforces both. The pin step is `images/akkoma/README.md`, "Pinning". The original
-> entry is kept for the record.
-
 - **Files:** `specs/cluster/manifests/akkoma/akkoma.yaml` (×2),
   `akkoma/admin-sync-job.yaml`, `test-runner/akkoma-peer.yaml` (×2), all
-  then the upstream `:stable` tag. The old skeleton `akkoma/Dockerfile` carried a
-  base-digest placeholder and a git-tag placeholder.
+  `git.akkoma.dev/akkomagang/akkoma:stable`. The custom build `akkoma/Dockerfile`
+  carries `AKKOMA_BASE=...@sha256:REPLACE_WITH_PINNED_AKKOMA_DIGEST` and
+  `AKKOMA_SOURCE_REF=REPLACE_WITH_AKKOMA_GIT_TAG`.
 - **Control:** 800-190 §4.3 (image provenance); CIS Docker 4.x
 - **Why deferred:** upstream publishes only the **moving** `stable`/`develop` tags,
   and there is **no** per-release version tag to pin to. The correct pin is a
   `@sha256` digest. It must be **resolved from the live registry**
-  (`crane digest` or `docker buildx imagetools inspect` on the upstream
-  `:stable` tag) for the chosen release. It cannot be fabricated
+  (`crane digest git.akkoma.dev/akkomagang/akkoma:stable` or
+  `docker buildx imagetools inspect`) for the chosen release. It cannot be fabricated
   in a manifest. Fill `REPLACE_WITH_PINNED_AKKOMA_DIGEST` in the Dockerfile and
   replace every `:stable` ref with the SAME digest in one change.
 - **Validation:** the akkoma app, migrate Job, admin-sync and test peer all pull the

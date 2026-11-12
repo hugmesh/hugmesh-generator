@@ -188,8 +188,7 @@ _As of 2026-08-05, except the kind SSO e2e bullets, re-measured 2026-10-14. Stat
   **metrics-server** / **keda** / **kyverno** / **observability** /
   **service-catalog-builder** / **optional-services-operator**. The UI
   greys out when a service is absent, games defaults to `games.<domain>`. A build
-  with no selection bakes `tuwunel phpbb`; the other user-level slugs are opt-in
-  (`akkoma` until its own-built image is published: `images/akkoma/README.md`).
+  with no selection bakes `akkoma tuwunel phpbb`; the other user-level slugs are opt-in.
   Build-time prune ships; the **🚧 live ApplicationSet cut-over is pending**.
 - **✅ A/V relay via coturn (TURN/STUN) — ships dark** — the `coturn` slug is a
   DEFAULT-OFF optional service running RFC-5766 REST long-term-credential mode

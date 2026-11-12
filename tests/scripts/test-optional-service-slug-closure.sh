@@ -349,7 +349,7 @@ expect 1 'java-registry.*missing.*coturn' \
 # ── 10. ConfigMap: a boolean with no 13a element and no recorded reason ────────
 stage
 mutate "${D}" specs/cluster/manifests/policy/installed-services-configmap.yaml \
-  's = s.replace("  tuwunel: \"true\"\n", "  tuwunel: \"true\"\n  newthing: \"false\"\n", 1)' &&
+  's = s.replace("  akkoma: \"true\"\n", "  akkoma: \"true\"\n  newthing: \"false\"\n", 1)' &&
 expect 1 'configmap->13a.*newthing' \
   "a sixth cardinality: a new ConfigMap boolean with no element and no reason" -- "${D}"
 
@@ -503,7 +503,7 @@ expect 1 "node-scope. catalogue scope:node slug.s. \\['tor'\\] appear in Java EN
 # ── 28. the DELIBERATE EXCLUSION, leaked: egress-vpn as a ConfigMap boolean ───
 stage
 mutate "${D}" specs/cluster/manifests/policy/installed-services-configmap.yaml \
-  's = s.replace("  tuwunel: \"true\"\n", "  tuwunel: \"true\"\n  egress-vpn: \"false\"\n", 1)' &&
+  's = s.replace("  akkoma: \"true\"\n", "  akkoma: \"true\"\n  egress-vpn: \"false\"\n", 1)' &&
 expect 1 "node-scope. catalogue scope:node slug.s. \\['egress-vpn'\\] appear in configmap booleans" \
   "egress-vpn (scope: node) as a greying boolean is a node-scope violation" -- "${D}"
 

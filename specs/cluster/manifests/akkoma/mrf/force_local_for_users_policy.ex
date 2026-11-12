@@ -2,7 +2,7 @@
 # HugMesh Systems — custom Akkoma MRF (Message Rewrite Facility) policy.
 #
 # AGPL NOTICE: Akkoma is AGPL-3.0. This module is COMPILED INTO a derived Akkoma
-# image (images/akkoma/Dockerfile) and therefore the whole image is a
+# image (see manifests/akkoma/Dockerfile) and therefore the whole image is a
 # derivative work whose complete corresponding source MUST be published (the AGPL
 # §13 network-use clause: anyone interacting with the running server over a network
 # is an AGPL recipient). This file IS that source contribution; the build also
@@ -34,18 +34,17 @@
 #
 # ─────────────────────────── HOW THE SET IS READ ──────────────────────────────
 # The force-local set is materialized LIVE by the akkoma-domainlock-sync Job
-# (specs/cluster/manifests/akkoma/domainlock-sync-job.yaml) from Casdoor ROLE_MASTODON_DOMAINLOCKED
+# (manifests/akkoma/domainlock-sync-job.yaml) from Casdoor ROLE_MASTODON_DOMAINLOCKED
 # membership into a small DB-backed allowlist the module reads at delivery time (no
 # per-change recompile / no app restart). The lookup seam is `force_local?/1`.
 #
 # ──────────────────────────────── GATED / DARK ────────────────────────────────
 # This policy only takes effect when it is listed in `:mrf, policies` in the Akkoma
 # config AND the force-local set is non-empty. The deploy gates that on
-# homeserver.domainlock.enabled (specs/cluster/manifests/akkoma/akkoma.yaml only
-# adds it to the :mrf policies list when enabled). With the gate off the module is
-# compiled into hugmesh-akkoma but never called, and federation is unchanged. Even
-# when enabled, an EMPTY force-local set is a no-op for every actor, so the module
-# is safe by default.
+# homeserver.domainlock.enabled (manifests/akkoma/akkoma.yaml only adds it to the
+# :mrf policies list when enabled). With the gate off, a plain akkoma:stable runs
+# and federation is unchanged. Even compiled-in, an EMPTY force-local set is a
+# no-op for every actor — so the module is safe-by-default.
 #
 # !!! SKELETON: the Pleroma/Akkoma MRF behaviour callbacks + the exact addressing
 # !!! field names are version-sensitive. This is a working scaffold modelled on the
@@ -56,6 +55,8 @@
 defmodule Pleroma.Web.ActivityPub.MRF.ForceLocalForUsersPolicy do
   @moduledoc "Force a configured set of LOCAL actors to deliver to LOCAL inboxes only (domain-lock / no-federation)."
   @behaviour Pleroma.Web.ActivityPub.MRF.Policy
+
+  alias Pleroma.Web.ActivityPub.MRF
 
   # Local instance host — recipients on this host (or the local shared inbox /
   # #Public) are kept; everything else is stripped for a force-local actor.

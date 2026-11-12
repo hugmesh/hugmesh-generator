@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # _optional-services-lib.sh — the ONE implementation of the OPTIONAL-SERVICE
 # selection gate + its renderers, sourced by EVERY stage4 builder that bakes the
-# cluster GitOps tree (build-rpi5-stage4.sh, build-x86-host-stage4.sh and, since
-# 2026-11-12, build-jetson-stage4.sh, which used to bake the tree ungated).
+# cluster GitOps tree (build-rpi5-stage4.sh, build-x86-host-stage4.sh).
 #
 # WHY THIS FILE EXISTS (2026-08-26). Until this commit each builder carried its
 # OWN copy of gate_optional_services() and the ~13 _opt_* helpers. They were
@@ -928,8 +927,7 @@ _opt_negative_tokens() {
 # `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-...}"` line (tests/stack/
 # test-optional-services-exclude.sh asserts that), because the function below
 # restores it.
-# akkoma left this list on 2026-11-11: its image (hugmesh-akkoma) is not yet published.
-_OPT_BUILTIN_DEFAULT_SERVICES="tuwunel phpbb"
+_OPT_BUILTIN_DEFAULT_SERVICES="akkoma tuwunel phpbb"
 
 # _opt_negative_only_keeps_defaults — a list made ONLY of explicit-deselect tokens
 # ("-anubis", "no-anubis") keeps the built-in default selection.

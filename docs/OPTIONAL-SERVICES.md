@@ -96,7 +96,7 @@ registry is that missing list). Each service entry carries:
 | `deliveryManifestPath` / `deliveryApp` | (node slugs) a SECOND, dark manifest tree + its MANUAL-sync Application that delivers runtime bytes to the node — `egress-vpn` uses it for the secret-projector (`manifests/egress-vpn` + `apps/13e-egress-vpn.yaml`); pruned with the slug like `manifestPath` |
 | `secretContract` | (node slugs) the file that OWNS the cross-lane delivery contract. When present, the three fields below are **copies** of it and lose every argument to it |
 | `secretNamespace` / `secretLabel` / `secretKey` / `nodeDeliveryLabel` | (node slugs) the cross-lane delivery contract the control-plane/ESO half must satisfy, and the node label that arms the projector — see `docs/EGRESS-VPN.md`. For `egress-vpn` these are COPIES of `specs/cluster/egress-vpn-secret-contract.env` (the contract spans two repos that never build together) and are asserted against it by `tests/egress-vpn/test-secret-contract.sh`; that gate's copy census also fails on any NEW carrier of those values that nothing asserts. `secretKey` shipped as `config` here — unread, unasserted, and wrong — until that census existed. Note the value must stay quoted: `@` cannot start a plain YAML scalar |
-| `default` | `tuwunel`/`phpbb` → `on`; `akkoma` → `off` until its image (`ghcr.io/hugmesh/hugmesh-akkoma`) is published (`images/akkoma/README.md`, "Pinning"); **`games`/`owncast`/`tube`/`character-studio`/`character-forge` → `off` (opt-in; owncast/tube are GPU-gated x86; character-studio is an admin-gated frontend remote; character-forge is an admin-gated multi-app slug — BFF db + BFF api + UI remote)** |
+| `default` | `akkoma`/`tuwunel`/`phpbb` → `on`; **`games`/`owncast`/`tube`/`character-studio`/`character-forge` → `off` (opt-in; owncast/tube are GPU-gated x86; character-studio is an admin-gated frontend remote; character-forge is an admin-gated multi-app slug — BFF db + BFF api + UI remote)** |
 
 There is also a `gamesDomain` block (the `GAMES_DOMAIN` knob + the
 parameterized files) — see §5.
@@ -176,18 +176,10 @@ federation-db/capabilities endpoint skip **loudly** when no stack is up).
 
 | Tier | Slugs | When baked |
 |---|---|---|
-| **DEFAULT-ON** (the built-in default when no selection is given) | `tuwunel` (Matrix), `phpbb` | always, unless `EXCLUDE_SERVICES` removes them |
-| **DEFAULT-OFF** (must be specifically added) | `akkoma`, `games`, `owncast`, `tube`, `character-studio`, `character-forge` — and any future user-level service | only when explicitly selected |
+| **DEFAULT-ON** (the built-in default when no selection is given) | `akkoma`, `tuwunel` (Matrix), `phpbb` | always, unless `EXCLUDE_SERVICES` removes them |
+| **DEFAULT-OFF** (must be specifically added) | `games`, `owncast`, `tube`, `character-studio`, `character-forge` — and any future user-level service | only when explicitly selected |
 | **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug — rpi5 **and** x86 builders |
 
-> ⚠ **`akkoma` is DEFAULT-OFF since 2026-11-11: its image is not yet published.** Upstream
-> publishes no container image, so HugMesh builds its own (`ghcr.io/hugmesh/hugmesh-akkoma`,
-> `images/akkoma/README.md`); until the first release run
-> publishes it, every Akkoma ref in `specs/cluster` carries a placeholder digest and a pod
-> would sit in ImagePullBackOff. Selecting `akkoma` explicitly still bakes it.
-> `tests/scripts/test-akkoma-image-pin.sh` refuses `akkoma` back in any default while the
-> digest is the placeholder.
->
 > ⚠ **`games` is DEFAULT-OFF** (it was default-on before). Add it with `--enable-games` /
 > `ENABLE_GAMES=true`, by naming `games` in `OPTIONAL_SERVICES`, or through the full set.
 > `owncast` and `tube` are GPU-gated x86 services, also off by default.
@@ -198,8 +190,8 @@ federation-db/capabilities endpoint skip **loudly** when no stack is up).
 > with `--with-character-forge`, by naming it in `OPTIONAL_SERVICES`, or through the full
 > set. See [XR-CHAT.md](XR-CHAT.md).
 
-Two inputs, in precedence order **built-in default (`tuwunel phpbb`;
-akkoma/games/owncast/tube OFF) < `brand.conf` < `--optional-services` CLI flag**:
+Two inputs, in precedence order **built-in default (`akkoma tuwunel phpbb`;
+games/owncast/tube OFF) < `brand.conf` < `--optional-services` CLI flag**:
 
 - **`brand.conf`** knob (sourced by both builders):
   ```sh

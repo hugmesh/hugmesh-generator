@@ -263,16 +263,10 @@ class DeviceTable(QtWidgets.QGroupBox):
                     combo.setItemData(combo.count() - 1,
                                       "domains: " + ", ".join(domains),
                                       QtCore.Qt.ItemDataRole.ToolTipRole)
-            prev_id = a.get("entry_id", "")
-            i = combo.findData(prev_id)
+            i = combo.findData(a.get("entry_id", ""))
             if i >= 0:
                 combo.setCurrentIndex(i)
             a["entry_id"] = combo.currentData() or ""
-            if a["entry_id"] != prev_id:
-                # the assigned image left the worklist and the row now points at
-                # another one: a flavour picked for the old image must not carry
-                # over to it (#478)
-                a.pop("flavor", None)
             combo.currentIndexChanged.connect(lambda _=0, r=row: self._image_changed(r))
             self.table.setCellWidget(row, _COL_EXTRA, combo)
         elif role == ROLE_KEYS:
@@ -301,16 +295,11 @@ class DeviceTable(QtWidgets.QGroupBox):
             out.append((entry_id, role, platform, domains))
         return out
 
-    def _entry_platform(self, entry_id: str) -> str | None:
-        """The platform of worklist entry ``entry_id``, or None when the images
-        provider no longer lists it (removed or renamed after this row was assigned).
-        A listed entry with no platform is x86, the WorklistEntry default. None is
-        kept apart from every platform name so the caller can say the image is gone
-        instead of offering a menu for a platform it does not know (#478)."""
+    def _entry_platform(self, entry_id: str) -> str:
         for eid, _role, platform, _domains in self._image_choices():
             if eid == entry_id:
-                return platform or "x86"
-        return None
+                return platform
+        return ""
 
     def _set_flavor_cell(self, row: int, t) -> None:
         """The Artifact column: a flavour combo for a flash row with an assigned
@@ -323,9 +312,6 @@ class DeviceTable(QtWidgets.QGroupBox):
                 a.pop("flavor", None)   # no image, no flavour — nothing may linger
             return
         platform = self._entry_platform(a["entry_id"])
-        if platform is None:
-            self._set_stale_flavor_cell(row, a)
-            return
         combo = QtWidgets.QComboBox()
         combo.setToolTip(
             "WHICH built artifact is written: the OS .img, the live USB "
@@ -344,21 +330,6 @@ class DeviceTable(QtWidgets.QGroupBox):
         combo.setCurrentIndex(i if i >= 0 else 0)
         a["flavor"] = combo.currentData() or flash_targets.FLAVOR_AUTO
         combo.currentIndexChanged.connect(lambda _=0, r=row: self._flavor_changed(r))
-        self.table.setCellWidget(row, _COL_FLAVOR, combo)
-
-    def _set_stale_flavor_cell(self, row: int, a: dict) -> None:
-        """The Artifact cell of a flash row whose image left the worklist: 'auto'
-        only, disabled, with the reason. Any flavour picked earlier is dropped, so it
-        cannot come back if the row is pointed at another image (#478)."""
-        combo = QtWidgets.QComboBox()
-        combo.addItem(flash_targets.FLAVOR_LABELS[flash_targets.FLAVOR_AUTO],
-                      flash_targets.FLAVOR_AUTO)
-        combo.setEnabled(False)
-        combo.setToolTip(
-            f"The image assigned to this device ({a['entry_id']}) is no longer in "
-            "the worklist, so there is nothing to choose an artifact from. Pick an "
-            "image for this device again in the Image / Dir column.")
-        a["flavor"] = flash_targets.FLAVOR_AUTO
         self.table.setCellWidget(row, _COL_FLAVOR, combo)
 
     def _flavor_changed(self, row: int) -> None:

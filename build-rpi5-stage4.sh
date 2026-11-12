@@ -279,10 +279,9 @@ GAMES_DOMAIN="games.hugmesh.net"
 # OPTIONAL_SERVICES=all / --all-services expands to.
 USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
 # OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
-#   DEFAULT-ON  (the built-in default when NO selection is given): tuwunel phpbb.
-#   DEFAULT-OFF (must be specifically added): akkoma games owncast tube (and any
-#               future user-level service) — pruned unless explicitly selected.
-#               akkoma: image not yet published (images/akkoma/README.md).
+#   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
+#   DEFAULT-OFF (must be specifically added): games owncast tube (and any future
+#               user-level service) — pruned unless explicitly selected.
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services) expands to EVERY
 # user-level slug (USER_LEVEL_SERVICES) just before EXCLUDE_SERVICES subtracts, so
 # `all` + EXCLUDE_SERVICES="games" still drops games. GAMES IS OPT-IN / OFF BY
@@ -291,7 +290,7 @@ USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio ch
 # ENABLE_GAMES=true, by listing 'games' in --optional-services, or via 'all').
 # brand.conf narrows; --optional-services overrides both (built-in < brand.conf <
 # flag). Unselected slugs are pruned by gate_optional_services.
-OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
 # EXCLUDE_SERVICES — the SUBTRACTIVE build-time exclusion knob (brand.conf /
 # --exclude-services). Any user-level slug listed here is REMOVED from the final
 # selection AFTER all positive sources (built-in default, brand.conf
@@ -883,8 +882,8 @@ OPTIONS
         akkoma tuwunel phpbb games owncast tube character-studio character-forge, or
         the literal "all" (every user-level slug). Unlisted slugs are pruned from the
         baked GitOps tree by gate_optional_services. Built-in DEFAULT (no selection
-        given) is "tuwunel phpbb"; akkoma/games/owncast/tube/character-studio/
-        character-forge are DEFAULT-OFF (opt-in; akkoma: image not yet published).
+        given) is "akkoma tuwunel phpbb"; games/owncast/tube/character-studio/
+        character-forge are DEFAULT-OFF (opt-in).
         (env/brand.conf: OPTIONAL_SERVICES; OPTIONAL_SERVICES=all = the full set)
 
     --all-services

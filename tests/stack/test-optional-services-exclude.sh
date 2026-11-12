@@ -603,10 +603,9 @@ echo "-- DEFAULT-INCLUSION POLICY: default set / 'all' sentinel / opt-in / defau
 
 # resolve_selection must agree with the REAL builder's resolution (built-in default
 # < all-sentinel < EXCLUDE last). Spot-check the builder actually wires each leg.
-# akkoma left the default on 2026-11-11 (its image is not yet published; images/akkoma/).
-grep -q 'OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"' "${BUILDER}" \
-  && ok "builder built-in default is 'tuwunel phpbb' (akkoma/games/owncast/tube OFF)" \
-  || bad "builder built-in default is not 'tuwunel phpbb'"
+grep -q 'OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"' "${BUILDER}" \
+  && ok "builder built-in default is 'akkoma tuwunel phpbb' (games/owncast/tube OFF)" \
+  || bad "builder built-in default is not 'akkoma tuwunel phpbb'"
 grep -q -- '--all-services' "${BUILDER}" && ok "builder accepts --all-services CLI flag" || bad "builder missing --all-services flag"
 grep -qE 'OPTIONAL_SERVICES="\$\{USER_LEVEL_SERVICES\}"' "${BUILDER}" \
   && ok "builder expands the 'all' sentinel to USER_LEVEL_SERVICES" || bad "builder missing 'all' sentinel expansion"
@@ -765,7 +764,7 @@ grep -qE "^[[:space:]]*games:[[:space:]]*\"true\"" "${TREE}/manifests/policy/ins
 # (d) EXCLUDE_SERVICES=phpbb removes a DEFAULT-ON service from the default set.
 seed_tree "exclude-default-on"
 OPTIONAL_SERVICES="$(resolve_selection "" "phpbb")"   # default set minus phpbb
-case " ${OPTIONAL_SERVICES} " in *" phpbb "*) bad "EXCLUDE_SERVICES=phpbb did not drop the default-on phpbb (got: ${OPTIONAL_SERVICES})" ;; *" tuwunel "*) ok "EXCLUDE_SERVICES=phpbb removed the DEFAULT-ON phpbb, kept tuwunel (got: ${OPTIONAL_SERVICES})" ;; *) bad "EXCLUDE on default set produced unexpected result (got: ${OPTIONAL_SERVICES})" ;; esac
+case " ${OPTIONAL_SERVICES} " in *" phpbb "*) bad "EXCLUDE_SERVICES=phpbb did not drop the default-on phpbb (got: ${OPTIONAL_SERVICES})" ;; *" akkoma "*) ok "EXCLUDE_SERVICES=phpbb removed the DEFAULT-ON phpbb, kept akkoma+tuwunel (got: ${OPTIONAL_SERVICES})" ;; *) bad "EXCLUDE on default set produced unexpected result (got: ${OPTIONAL_SERVICES})" ;; esac
 gate_optional_services
 [ ! -f "${TREE}/apps/${OWNED_APP[phpbb]}" ] && ok "EXCLUDE phpbb: 30-phpbb.yaml PRUNED" || bad "EXCLUDE phpbb: app survived"
 grep -qE "^[[:space:]]*phpbb:[[:space:]]*\"false\"" "${TREE}/manifests/policy/installed-services-configmap.yaml" \

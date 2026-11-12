@@ -2897,9 +2897,13 @@ RAW_DIGEST_KNOWN_GAPS = {
 
 # Third-party refs whose tag is a floating channel name and which could not be pinned
 # when this ratchet was introduced. Exact `name:tag` -> reason.
-# (Empty since hugmesh-akkoma replaced git.akkoma.dev/akkomagang/akkoma:stable, whose
-# host does not resolve and which upstream never published: images/akkoma/.)
 FLOATING_TAG_KNOWN_GAPS = {
+    "git.akkoma.dev/akkomagang/akkoma:stable":
+        "the akkoma registry host did not resolve from the machine that introduced this "
+        "check, so neither a release tag nor a digest could be verified; the manifests "
+        "already carry a `pin a real tag` marker. Resolve the digest (crane digest "
+        "git.akkoma.dev/akkomagang/akkoma:<release>), pin it in akkoma.yaml, "
+        "admin-sync-job.yaml and the test-runner manifest, and delete this entry",
 }
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")

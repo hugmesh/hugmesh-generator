@@ -387,14 +387,8 @@ def classify_artifact_flavor(name: str) -> str:
 
 def flavors_for_platform(platform: str) -> tuple[str, ...]:
     """The flavour choices offered for a worklist entry's platform: always "auto",
-    plus exactly what that platform's builder can emit.
-
-    A platform this table does not know (including "", which is what a caller has
-    when it cannot resolve the entry at all) gets "auto" ONLY (#478). It used to get
-    the x86 menu for "" and ("auto", "img") for anything else: both are guesses, and
-    a guessed flavour the real builder cannot emit is skipped at flash time every
-    time. "auto" takes whatever the build produced, so it is never wrong."""
-    return (FLAVOR_AUTO,) + _PLATFORM_FLAVORS.get(platform, ())
+    plus exactly what that platform's builder can emit."""
+    return (FLAVOR_AUTO,) + _PLATFORM_FLAVORS.get(platform or "x86", ("img",))
 
 
 @dataclass(frozen=True)

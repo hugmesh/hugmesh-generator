@@ -102,8 +102,6 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000            # read access to the 0440 config file
         seccompProfile: { type: RuntimeDefault }
       containers:
         # Runs pleroma_ctl from the akkoma image against the shared akkoma config
@@ -111,15 +109,12 @@ spec:
         # akkoma pod serves. The image already ships pleroma_ctl + reads the same
         # config volume; the python sync script is layered in read-only.
         - name: sync
-          image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:0000000000000000000000000000000000000000000000000000000000000000   # PLACEHOLDER digest: hugmesh-akkoma is not published yet (images/akkoma/README.md, "Pinning")
+          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag (match akkoma.yaml)
           command: ["python3", "/script/sync.py"]
           env:
             - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
             - { name: CASDOOR_ORG, value: "hugmesh" }
             - { name: PLEROMA_CTL, value: "/opt/akkoma/bin/pleroma_ctl" }
-            # No akkoma node runs in this pod, so pleroma_ctl must evaluate the task
-            # here (against the shared DB) instead of rpc-ing a local node.
-            - { name: PLEROMA_CTL_RPC_DISABLED, value: "true" }
           envFrom: [{ secretRef: { name: akkoma-secrets } }]
           securityContext:
             allowPrivilegeEscalation: false
@@ -129,16 +124,11 @@ spec:
             - { name: script,  mountPath: /script, readOnly: true }
             - { name: config,  mountPath: /etc/akkoma, readOnly: true }
             - { name: casdoor, mountPath: /secrets/casdoor, readOnly: true }
-            # The release writes its generated sys.config and the per-container
-            # Erlang cookie under RELEASE_TMP=/tmp; the root filesystem is read-only.
-            - { name: tmp,     mountPath: /tmp }
       volumes:
         - name: script
           configMap: { name: akkoma-admin-sync-script, defaultMode: 0555 }
         - name: config
-          configMap: { name: akkoma-config, defaultMode: 0440 }
-        - name: tmp
-          emptyDir: {}
+          configMap: { name: akkoma-config }
         # ESO-materialized from Vault — never committed. casdoor-app-secrets holds
         # the OAuth2 client used to read ROLE_MOD/ROLE_ADMIN membership.
         - name: casdoor

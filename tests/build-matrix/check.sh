@@ -1337,15 +1337,15 @@ run_gui_threading_checks() {
     guithr g384-anubis-force-off \
         '{"platform":"x86","role":"backend","mode":"mesh","env":"prod","anubis":"off"}' \
         '--optional-services -anubis' '!--exclude-services' \
-        'PLAN:^PLAN_OPTIONAL_SERVICES=tuwunel phpbb -anubis$'
+        'PLAN:^PLAN_OPTIONAL_SERVICES=akkoma tuwunel phpbb -anubis$'
     guithr g384-anubis-force-off-with-none \
         '{"platform":"x86","role":"backend","mode":"mesh","env":"prod","anubis":"off","optional_services":["none"]}' \
-        '--optional-services -anubis' "--exclude-services 'tuwunel phpbb'" \
+        '--optional-services -anubis' "--exclude-services 'akkoma tuwunel phpbb'" \
         'PLAN:^PLAN_OPTIONAL_SERVICES=-anubis$'
     guithr g384-anubis-force-on \
         '{"platform":"x86","role":"backend","mode":"mesh","env":"test","anubis":"on"}' \
-        "--optional-services 'tuwunel phpbb anubis'" \
-        'PLAN:^PLAN_OPTIONAL_SERVICES=tuwunel phpbb anubis$'
+        "--optional-services 'akkoma tuwunel phpbb anubis'" \
+        'PLAN:^PLAN_OPTIONAL_SERVICES=akkoma tuwunel phpbb anubis$'
     guithr g14-all-services \
         '{"platform":"x86","role":"backend","mode":"mesh","env":"test","optional_services":["all"]}' \
         '--all-services' 'PLAN:^PLAN_OPTIONAL_SERVICES=.*akkoma'

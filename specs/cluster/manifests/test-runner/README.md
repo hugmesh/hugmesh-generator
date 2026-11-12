@@ -92,7 +92,7 @@ a Kyverno ClusterPolicy and a RUNTIME PreSync hook Job).
 | orchestrator (lean+heavy edges) | `orchestrator.yaml` | DONE |
 | LEAN Job template | `test-job-lean.yaml` | DONE |
 | HEAVY Job template | `test-job-heavy.yaml` | DONE |
-| non-federation observer peer | `akkoma-peer.yaml` | UNWIRED from `kustomization.yaml` while the hugmesh-akkoma digest is the placeholder (`images/akkoma/README.md`, "Pinning") |
+| non-federation observer peer | `akkoma-peer.yaml` | DONE (image is the floating `akkoma:stable`) |
 | RBAC + PVC + kustomization | `namespace-rbac.yaml` `pvc.yaml` `kustomization.yaml` | DONE |
 | heavy-tier ArgoCD app split | `apps/35-analytics-*.yaml` `36-observability.yaml` | DONE (`docs/HEAVY-TIER.md`) |
 | runtime prod-hygiene gate | `apps/00-prod-hygiene.yaml` `manifests/prod-hygiene/` | DONE |
@@ -103,11 +103,9 @@ a Kyverno ClusterPolicy and a RUNTIME PreSync hook Job).
 Known gaps:
 
 - The lean and heavy Jobs use the floating `registry.hugmesh.net/hugmesh-test-runner:dev`.
-  A prod build pins `:dev` tags to `RELEASE_TAG`, but it prunes this bundle first. Test
-  builds keep `:dev`.
-- `akkoma-peer.yaml` names `ghcr.io/hugmesh/hugmesh-akkoma` at the same digest as the
-  cluster's Akkoma. Until that image is published the digest is a placeholder and the
-  peer is not in `kustomization.yaml`, so specs 19-22 skip.
+  `akkoma-peer.yaml` uses `akkoma:stable`, marked "pin a real tag" in the file. A prod
+  build pins `:dev` tags to `RELEASE_TAG`, but it prunes this bundle first. Test builds
+  keep `:dev`.
 - The live federation, SSE and disabled-UI assertions switch on when the domain-lock
   gate and the role-conditional UI land. The framework primitives already exist (see
   the spec-18-style stubs).

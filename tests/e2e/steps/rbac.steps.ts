@@ -855,52 +855,6 @@ When('the API client POSTs {string} with the JSON body {string}',
     await recordResponse(world, `POST ${path}`, await api.post(path, { data }));
   });
 
-// ── request SHAPES at the front door (hugmesh-gateway GUI-08) ─────────────────
-//
-// The fe gateway tells a browser's top-level document navigation apart from every
-// other request (hugmesh-gateway BrowserNavigation.isDocumentNavigation: GET,
-// Accept naming text/html, Sec-Fetch-Mode absent or `navigate`, Sec-Fetch-Dest
-// absent or `document`, no X-Requested-With: XMLHttpRequest), and answers it
-// differently in two ways: an anonymous page load of a walled route gets
-// 302 /login?next=<path> instead of the bare 401, and an anonymous page load of
-// /home or /about is served. 'the API client GETs {string}' (mined-identity)
-// sends Playwright's default Accept: */*, which is the OTHER shape, so the two
-// steps below make the client send each shape on purpose and a scenario says
-// which half of the contract it is probing.
-//
-// maxRedirects: 0 on both. The gateway's own answer is the claim; following the
-// 302 would record the login page's 200 and call a redirect "served".
-
-/** What Chrome sends for a typed URL, a bookmark or a reload. */
-const PAGE_LOAD_HEADERS: Record<string, string> = {
-  accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-  'sec-fetch-mode': 'navigate',
-  'sec-fetch-dest': 'document',
-  'sec-fetch-site': 'none',
-  'sec-fetch-user': '?1',
-  'upgrade-insecure-requests': '1',
-};
-
-/** What fetch() sends when a same-origin script asks for the same URL as HTML. */
-const SCRIPT_FETCH_HEADERS: Record<string, string> = {
-  accept: 'text/html',
-  'sec-fetch-mode': 'cors',
-  'sec-fetch-dest': 'empty',
-  'sec-fetch-site': 'same-origin',
-};
-
-When('the API client GETs {string} as a browser page load', async ({ world }, path: string) => {
-  const api = world.get<APIRequestContext>('api');
-  await recordResponse(world, `GET ${path} (as a browser page load)`,
-    await api.get(path, { headers: PAGE_LOAD_HEADERS, maxRedirects: 0 }));
-});
-
-When('the API client GETs {string} as a script asking for HTML', async ({ world }, path: string) => {
-  const api = world.get<APIRequestContext>('api');
-  await recordResponse(world, `GET ${path} (as a script asking for HTML)`,
-    await api.get(path, { headers: SCRIPT_FETCH_HEADERS, maxRedirects: 0 }));
-});
-
 Then('the response body does not contain {string}', async ({ world }, needle: string) => {
   const body = world.get<string>('responseBody');
   expect(body.includes(needle), `${responseLabel(world)} must not contain ${JSON.stringify(needle)}`)
