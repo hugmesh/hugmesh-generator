@@ -1145,10 +1145,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #926 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 240 of 282.
 # PR #972 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 242 of 284.
 # PR #966 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 243 of 285.
+# PR #984 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 244 of 286.
 # +1 (fix/node-telemetry-egress-off, PR #965): tests/scripts/test-node-telemetry-off.sh, named by shell-suites.yml; MEASURED with GUARD_PREMERGE=0 on the merge with origin/main 39b953ad: 238 of 280.
 # PR #965 merged with origin/main 96e0f6df (after #983, #926, #972, #966) on 2026-11-11: main 243 of 285 + this
 # branch's 1 = 244 of 286, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-244}"
+# PR #965 merged with origin/main bd4550d2 (after #984) on 2026-11-11: main 244 of 286 + this branch's 1 =
+# 245 of 287, MEASURED by running this file with GUARD_PREMERGE=0 on the merged tree.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-245}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
