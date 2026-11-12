@@ -13,13 +13,8 @@ hugmesh-generator build scripts of their own release. The MSI and the tarball do
 them yet. ["What a package gives you"](#what-a-package-gives-you) says what that means on
 first start.
 
-**To release one:** `scripts/release-studio.sh <version>`. That is the whole procedure;
-["Cutting a release"](#cutting-a-release) below explains what it does and the one
-other way (a button in Actions). The first beta, `0.3.0-beta.1`, shipped on
-2026-10-22.
-A whole-org beta release (every library and image, then the Studio, then the site) calls
-this same script from `scripts/release-beta.sh --studio <version>`; see
-[`RELEASING.md`](RELEASING.md).
+Maintainers cut a release with `scripts/release-studio.sh <version>`; see
+["Cutting a release"](#cutting-a-release).
 
 | Artifact | Platform | Built by |
 |---|---|---|

@@ -56,8 +56,6 @@ Then two cards. Pick one:
 
 **Start building** is pre-selected, so Next or Enter with no other input takes the ordinary path. **Clicking a card both selects it and advances**; there is no confirm step. Space, Return or Enter on a focused card does the same, and the arrow keys move the selection between cards. Back works if you overshoot.
 
-(A third card, **Start a local mesh**, was removed on 2026-08-26. It duplicated the build menu's own **Local Docker mesh** card. That flow is now reached through **Start building**; see `STUDIO-WIZARD-FLOW.md`.)
-
 One exception: a **Restart** from a prior session sets the wizard's start page to the build-progress page. You never see this screen on that path.
 
 ### Prior sessions — only if you asked for it
@@ -253,7 +251,7 @@ Downstream: nothing. Terminal.
 
 ### Run e2e tests
 
-Added 2026-08-27 at the operator's request — *"remove QEMU device emulation menu item as it does not do anything that cannot be done from the other menu, but add the run e2e tests button"*. It holds the mode-menu slot that the **QEMU device tests** card used to hold. That card is gone. The page behind it remains, and this screen is its door.
+This screen is the door to the **QEMU device tests** page, which has no card of its own on the build menu.
 
 Two arms, chosen by radio.
 
@@ -272,7 +270,7 @@ The 35 handwritten spec files (`tests/e2e/specs/NN-*.spec.ts`) are a separate la
 
 ### QEMU device tests
 
-Reached from **Run e2e tests**, and from nowhere else in the menu; its own card was removed 2026-08-27. (The post-build opt-in is unaffected. The Build screen's "run the QEMU emulated-device tests" checkbox still runs this same containerized harness when a build finishes, with no menu involved.) The page stayed because it is the only place in Studio that can spawn the Playwright-on-an-emulated-device harness and the SELinux AVC workout. Mesh emulation offers neither.
+Reached from **Run e2e tests**, and from nowhere else in the menu. (The post-build opt-in is unaffected. The Build screen's "run the QEMU emulated-device tests" checkbox still runs this same containerized harness when a build finishes, with no menu involved.) The page stayed because it is the only place in Studio that can spawn the Playwright-on-an-emulated-device harness and the SELinux AVC workout. Mesh emulation offers neither.
 
 This is the **test** lane of emulation: ephemeral asserted boots. It boots a session's images, checks they provisioned correctly, and powers them off. Two arms, chosen by radio.
 
