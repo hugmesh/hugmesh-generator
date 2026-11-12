@@ -1314,9 +1314,20 @@ class LocalMeshBootstrap:
         lines.append(f"Brand:      {c.brand}"
                      + (f"  ({c.superbrand.get('title')})" if c.superbrand.get("title")
                         else ""))
-        lines.append(f"Domain:     {c.resolved_domain()}"
-                     + ("" if c.is_prod() else "  (brand default; not a public issuer in test)"))
-        lines.append(f"Issuer:     {c.issuer()}")
+        # A prod mesh with no public apex has NO domain and NO issuer yet: validate()
+        # refuses the start for exactly that reason (the BLOCKERS at the foot of this
+        # plan). resolved_domain()/issuer() fall back to the brand default, which is
+        # right for the test lane and for their other callers, but printed here it
+        # read as a real "Domain: <brand apex> / Issuer: https://id.<brand apex>"
+        # directly above the blocker saying none was given (GUI-21).
+        apex_unset = c.is_prod() and not c.cluster_domain.strip()
+        if apex_unset:
+            lines.append("Domain:     (not set — required in prod)")
+        else:
+            lines.append(f"Domain:     {c.resolved_domain()}"
+                         + ("" if c.is_prod()
+                            else "  (brand default; not a public issuer in test)"))
+            lines.append(f"Issuer:     {c.issuer()}")
         # I6.6: disclose the chosen IdP — and the honest external-mode limit
         # (the Makefile consumes all three vars, so token VALIDATION really
         # re-points at the external issuer/JWKS; the coupled login/MFA/role legs
@@ -1437,8 +1448,9 @@ class LocalMeshBootstrap:
                          "own Casdoor")
             lines.append("             (+ postgres) behind the `own-casdoor` profile; "
                          "every other")
-            lines.append(f"             domain signs in via the superdomain Casdoor "
-                         f"({c.issuer()}")
+            lines.append("             domain signs in via the superdomain Casdoor "
+                         + ("(issuer not set yet — needs the prod domain"
+                            if apex_unset else f"({c.issuer()}"))
             lines.append("             = tenant `default`):")
             # the stack node allocates by table position and reads no stored port
             # (#654): when the record stores a different one, say so here rather than
@@ -1544,6 +1556,11 @@ class LocalMeshBootstrap:
         if overlay:
             lines.append("      ATTACHED — prod + auth key supplied; joins the real tailnet"
                          + (f" via {c.login_server}" if c.login_server.strip() else ""))
+        elif c.is_prod():
+            # not "skipped, comes up fine": a prod start REFUSES without the key
+            # (validate(), the BLOCKERS below) — the plan must not promise otherwise
+            lines.append("      NOT SET — prod requires a tailnet/headscale auth key;")
+            lines.append("      the start refuses until one is given (BLOCKERS below).")
         else:
             lines.append("      SKIPPED — LAN-only (no TS_AUTHKEY); the from-scratch")
             lines.append("      platform still comes up fully without a tailnet.")
