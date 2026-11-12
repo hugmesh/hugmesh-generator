@@ -4,10 +4,19 @@
 faces are tested against a fake ``ssh`` put first on PATH: it plays the guest. The
 remote command arrives as ssh's last argument (golive_target.remote_argv shlex-joins
 it into ONE element), and the shim answers each shape the core sends — the probe, the
-driver's ``list`` / ``status`` / ``plan``, the token staging over stdin, the artifact
-listing and ``cat``, the token ``rm``. ``list`` is the CHECKOUT's real driver ``list``,
-so the provider rows are the real registry's. Every argv is appended to
-``calls.jsonl``, so a test can assert what was (and what was never) on an argv.
+driver's ``list`` / ``status`` / ``plan``, the posture read (``status`` + the nft
+release-gate table), the token staging over stdin, the artifact listing and ``cat``,
+the token ``rm``. ``list`` is the CHECKOUT's real driver ``list``, so the provider rows
+are the real registry's. Every argv is appended to ``calls.jsonl``, so a test can
+assert what was (and what was never) on an argv.
+
+The POSTURE is the guest's own state, as on a real node: ``/etc/hugmesh/go-live`` (the
+marker a commit writes) and ``/etc/hugmesh/release-state`` decide ``effective
+posture:`` exactly as specs/usr/sbin/hugmesh-go-live does, and the nft table is the one
+hugmesh-firewall-reconcile loads for that posture (converged) — unless
+``FAKE_GUEST_NFT`` says ``public`` / ``internal`` / ``absent`` (nft exits 1 and echoes
+the command on stderr, as the real one does), which is how a test shows the 60 s
+reconcile not having caught up. :func:`set_public` flips the marker.
 
 No network, no docker, no qemu: the "guest filesystem" is ``<root>/fs``.
 """
@@ -40,6 +49,43 @@ except ValueError:
 fs = os.path.join(root, "fs")
 def g(p):
     return os.path.join(fs, p.lstrip("/"))
+def posture():
+    try:
+        rs = open(g("/etc/hugmesh/release-state"), encoding="utf-8").read().strip()
+    except OSError:
+        rs = ""
+    rs = rs or "internal"
+    marker = os.path.exists(g("/etc/hugmesh/go-live"))
+    return rs, marker, ("public" if rs == "public" or marker else "internal")
+def status_text():
+    rs, marker, eff = posture()
+    return ("domain (cluster):    " + os.environ.get("FAKE_GUEST_DOMAIN", "mesh.example")
+            + "\nrelease-state:       " + rs + "   (/etc/hugmesh/release-state)"
+            + "\ngo-live marker:      " + ("present" if marker else "absent")
+            + "   (/etc/hugmesh/go-live)\neffective posture:   " + eff + "\n\n"
+            "Posture is enforced by hugmesh-firewall-reconcile (boot + 60s cron).\n"
+            "This wizard only TRIPS it: 'commit' writes the marker; 'rollback' deletes it.\n")
+NFT_HEAD = ("table inet hugmesh_release_gate {{\n\tchain input {{\n"
+            "\t\ttype filter hook input priority filter + 10; policy accept;\n"
+            "\t\tip saddr 100.64.0.0/10 tcp dport {{ 80, 443 }} accept\n"
+            "\t\tiifname \"lo\" accept\n")
+NFT_DROP = "\t\ttcp dport {{ 80, 443 }} drop\n"
+NFT_TAIL = "\t}}\n}}\n"
+if "@@nftrc" in cmd:
+    # the posture read: `hugmesh-go-live status; echo @@nft@@; nft list table …;
+    # echo @@nftrc=$?@@; echo @@end@@`, answered from the guest's own state
+    sys.stdout.write(status_text())
+    print("@@nft@@")
+    table = os.environ.get("FAKE_GUEST_NFT") or posture()[2]
+    if table == "absent":
+        sys.stderr.write("Error: No such file or directory\n"
+                         "list table inet hugmesh_release_gate\n")
+        print("@@nftrc=1@@")
+    else:
+        sys.stdout.write(NFT_HEAD + (NFT_DROP if table == "internal" else "") + NFT_TAIL)
+        print("@@nftrc=0@@")
+    print("@@end@@")
+    sys.exit(0)
 if "::driver" in cmd:
     drv = os.environ.get("FAKE_GUEST_DRIVER", "/usr/sbin/hugmesh-go-live")
     print("::driver")
@@ -71,8 +117,7 @@ for lead in (["sudo", "-n", "hugmesh-go-live"], ["sudo", "hugmesh-go-live"]):
             sys.stdout.write(r.stdout)
             sys.exit(r.returncode)
         if verb == "status":
-            print("Go-live status (fake guest)")
-            print("  posture: INTERNAL")
+            sys.stdout.write(status_text())
             sys.exit(0)
         if verb == "plan":
             out = rest[rest.index("--out-dir") + 1]
@@ -157,9 +202,21 @@ def install(tmp_path, monkeypatch) -> FakeGuest:
     return FakeGuest(str(root), str(work), str(key))
 
 
+def set_public(guest: FakeGuest, public: bool = True) -> None:
+    """What a confirmed ``commit`` (public) or ``rollback`` leaves in the guest: the
+    /etc/hugmesh/go-live marker, present or not."""
+    marker = os.path.join(guest.root, "fs", "etc", "hugmesh", "go-live")
+    if public:
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as fh:
+            fh.write("provider=byo-domain\n")
+    elif os.path.exists(marker):
+        os.remove(marker)
+
+
 def register(guest: FakeGuest, label="rpi5/pki", platform="rpi5", role="pki",
              port=22401, state="running", started_at="2026-11-09T20:00:00Z",
-             user="hugmesh", key=None):
+             user="hugmesh", key=None, boot_save=""):
     """Write a keep-alive device record (the entrypoint's own JSON) into the work dir,
     where golive_target.targets finds it. Returns the Device."""
     from hugmesh_studio.core import qemu_devices
@@ -167,7 +224,7 @@ def register(guest: FakeGuest, label="rpi5/pki", platform="rpi5", role="pki",
                               container=f"hugmesh-qemu-{label.replace('/', '-')}",
                               ssh_host_port=port, ssh_user=user,
                               ssh_key=guest.key if key is None else key,
-                              state=state, started_at=started_at)
+                              state=state, started_at=started_at, boot_save=boot_save)
     safe = label.replace("/", "_").replace("+", "_")
     with open(os.path.join(guest.work_dir, "devices", f"{safe}.json"), "w",
               encoding="utf-8") as fh:

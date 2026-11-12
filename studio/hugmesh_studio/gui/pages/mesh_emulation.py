@@ -2338,7 +2338,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 return False, []
             for res in report.results:
                 if res.ok:
-                    on_line(f"saved {res.label} -> {res.target}")
+                    on_line(f"saved {res.label} -> {res.target} (go-live posture when "
+                            f"saved: {golive_target.posture_phrase(res.golive_posture)})")
                     for piece in res.keys_copied:
                         on_line(f"  keys: {piece}")
                     if res.keys_error:
