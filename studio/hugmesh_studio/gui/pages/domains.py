@@ -374,6 +374,15 @@ class _OwnCellLabel(QtWidgets.QLabel):
 _FIT_GIVE_ORDER = ((_COL_TITLE,), (_COL_SERVICES, _COL_APPLIES, _COL_IDP, _COL_CA),
                    (_COL_NAME,))
 _TITLE_FLOOR_CHARS = 10
+#: The columns whose cells are ITEMS the operator may type in, and the room such a
+#: column is asked for — in average characters — while one of its cells can be typed
+#: in: a domain name (every added row's, and the own row's on a prod local mesh, where
+#: it is the public apex) and a title. The fit measures a column by its text, and a
+#: cell nobody has typed in yet has none: left to that, the apex cell was fitted down
+#: to its header, 52 px (GUI-22 round 2). Fourteen characters is about the 100 px Qt's
+#: default section gave the Domain column before the fit — which it is never under
+#: either, see :meth:`_DomainsGrid.typing_room` — and ten is Title's floor.
+_TYPING_CHARS = {_COL_NAME: 14, _COL_TITLE: _TITLE_FLOOR_CHARS}
 #: Breathing room past a header's or a cell's own size hint, so no text sits flush
 #: against the grid line (the cell is the section less that line).
 _FIT_PAD = 4
@@ -391,10 +400,17 @@ class _DomainsGrid(QtWidgets.QTableWidget):
     is elided) and never from GitHub org (#647: a control nobody can scroll to is not
     there). Only when even those floors do not fit does a horizontal scrollbar appear.
 
+    A column the operator TYPES in (``_TYPING_CHARS``) is asked for its typing room
+    however short or empty its text is: the cell a name goes into is not fitted to the
+    text it does not have yet. That room is width like any other, though: Domain gives
+    it back LAST, and only once every other column is at its floor, rather than push
+    the org cell out of the viewport.
+
     The fit re-runs — coalesced on a zero-length timer — whenever what it measures
-    changes: the viewport is resized, a row is inserted or removed, a cell widget is
-    set, a column is shown or hidden, the font or style changes. A host that changes a
-    cell's TEXT in place calls :meth:`schedule_fit` itself."""
+    changes: the viewport is resized, a row is inserted or removed, an item's data
+    changes (a name typed into a cell and committed, or written by the host), a cell
+    widget is set, a column is shown or hidden, the font or style changes. A host that
+    changes a cell WIDGET's text in place calls :meth:`schedule_fit` itself."""
 
     def __init__(self, rows: int, columns: int):
         super().__init__(rows, columns)
@@ -405,6 +421,9 @@ class _DomainsGrid(QtWidgets.QTableWidget):
         self.horizontalHeader().setStretchLastSection(False)
         self.model().rowsInserted.connect(self.schedule_fit)
         self.model().rowsRemoved.connect(self.schedule_fit)
+        # an ITEM's text is part of what the fit measures: a name typed into a cell and
+        # committed, or written by the host (a loaded record), re-fits like a new row
+        self.model().dataChanged.connect(self.schedule_fit)
 
     def schedule_fit(self, *_args) -> None:
         timer = getattr(self, "_fit_timer", None)
@@ -445,9 +464,25 @@ class _DomainsGrid(QtWidgets.QTableWidget):
             QtWidgets.QStyle.SubElement.SE_ItemViewItemText, opt, self)
         return max(0, opt.rect.width() - text.width())
 
+    def typing_room(self, column: int) -> int:
+        """The least width ``column`` is asked for while one of its cells can be TYPED
+        in, however short or empty the text in it is; 0 for a column nobody types in
+        (a column of cell widgets, or one whose every item is read-only)."""
+        chars = _TYPING_CHARS.get(column)
+        if chars is None or not any(
+                item is not None and bool(item.flags() & Qt.ItemFlag.ItemIsEditable)
+                for item in (self.item(r, column) for r in range(self.rowCount()))):
+            return 0
+        room = self.fontMetrics().averageCharWidth() * chars
+        if column == _COL_NAME:
+            # ...and never under what the cell had before the fit: Qt's default section
+            room = max(room, self.horizontalHeader().defaultSectionSize())
+        return room
+
     def column_need(self, column: int) -> int:
-        """The width at which ``column``'s header and every cell are drawn whole."""
-        return max(self.header_need(column),
+        """The width at which ``column``'s header and every cell are drawn whole, and
+        a cell that is typed in has its typing room."""
+        return max(self.header_need(column), self.typing_room(column),
                    self.sizeHintForColumn(column) + self.cell_margin() + _FIT_PAD)
 
     def _floor(self, column: int) -> int:
