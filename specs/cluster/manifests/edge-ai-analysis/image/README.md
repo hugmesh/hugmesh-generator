@@ -13,6 +13,13 @@ and `../configmap.yaml` for the verdict schema.
 - `POST /v1/analyze/log/summarize` — log/anomaly triage (llama reasoning)
 - `GET /healthz` (liveness) · `GET /readyz` (ready iff the edge-AI upstream answers)
 
+The image endpoints take `image_b64` or `image_url`. An `image_url` must be http(s), and
+every address its host resolves to must be globally routable. That rules out the CGNAT
+tailnet range `100.64.0.0/10`. The fetch is pinned to the checked address, never follows
+a redirect, and fails with one generic message. See "Image input" in
+[docs/EDGE-AI.md](../../../../../docs/EDGE-AI.md) and
+`tests/scripts/test-edge-ai-analysis-ssrf.sh`.
+
 Tenancy is enforced at the be-gateway (`/v1/analyze/** = ROLE_USER`). This service
 trusts and stamps the gateway-validated `X-Tenant-ID` / `X-User-ID` headers.
 
