@@ -258,6 +258,102 @@ def test_role_numbers_are_the_chosen_devices_derived_types():
         assert j.cfg.role == roles[-1][0], did
 
 
+@pytest.mark.parametrize("back", ("b", "B", ""))
+def test_back_goes_up_one_browse_level_at_a_time(back):
+    """``b`` (or a bare Enter) on a browse screen goes up ONE level: device -> family
+    -> architecture -> the type list. Never straight back to the types, and the
+    arch/family picked on the way down are what the levels above show again."""
+    did = next(iter(RAW_BY_ID))
+    j = _to_role_step("standalone")
+    a, f, _n = _raw_path(did)
+    for line in ("d", str(a), str(f)):
+        j.feed(line)
+    raw = RAW_BY_ID[did]
+    assert j.screen().view == "device"
+    j.feed(back)
+    assert j.screen().view == "family"
+    assert "pick the family" in "\n".join(j.lines())
+    j.feed(back)
+    assert j.screen().view == "arch"
+    assert "Pick the architecture" in "\n".join(j.lines())
+    j.feed(back)
+    assert j.screen().view == "roles"
+    assert j.slug == "role"                             # backing out never commits
+    # and down again lands on the same family's rows
+    for line in ("d", str(a), str(f)):
+        j.feed(line)
+    assert f"{raw['label']} — {raw['soc']}" in "\n".join(j.lines())
+
+
+def _no_image_devices(mode: str) -> list[tuple[str, str]]:
+    """(device id, a role whose platforms carry its builder) for each raw row that
+    HAS builder axes but no image type in ``mode`` — rows a config can still name."""
+    out = []
+    for did, raw in RAW_BY_ID.items():
+        if raw["status"] == "unsupported" or not raw.get("builder"):
+            continue
+        if device_catalog.roles_for(did, mode):
+            continue
+        plat = raw["builder"]["platform"]
+        role = next((r for r, plats, _l in ROLE_CHOICES[mode] if plat in plats), None)
+        if role is not None:
+            out.append((did, role))
+    return out
+
+
+def test_enter_is_refused_when_the_shown_device_has_no_image_here():
+    """A config can name a device that has builder axes but no image on this path
+    (the step opens on it). Enter on that type list must refuse and write nothing:
+    no role, platform or board change, and the step stays where it is. Checked over
+    both single-image paths together: a path may have no such row at all."""
+    from hugmesh_studio.core.config import ImageConfig
+    reached = 0
+    for mode, did, role in [(m, d, r) for m in SINGLE_IMAGE_MODES
+                            for d, r in _no_image_devices(m)]:
+        raw = RAW_BY_ID[did]
+        cfg = ImageConfig(mode=mode, role=role, platform=raw["builder"]["platform"],
+                          board=raw["builder"].get("board", ""))
+        j = journey.Journey(".", cfg=cfg)
+        j.goto("role")
+        if j.screen().device != did:
+            continue        # the axes resolve to another device: not this case
+        reached += 1
+        before = (j.cfg.role, j.cfg.platform, j.cfg.board)
+        assert "has no image on this path" in "\n".join(j.lines()), did
+        j.feed("")
+        assert j.slug == "role", did
+        assert j.status.startswith("refused: "), (did, j.status)
+        assert (j.cfg.role, j.cfg.platform, j.cfg.board) == before, did
+        j.feed("1")                                     # a number is refused too
+        assert j.slug == "role" and j.status.startswith("refused: "), did
+        assert (j.cfg.role, j.cfg.platform, j.cfg.board) == before, did
+    assert reached, "no raw row with builder axes lacks an image on a single-image path"
+
+
+def test_a_committed_alias_device_comes_back_as_itself():
+    """Two pickable rows can share builder axes (an experimental alias of a supported
+    board). The axes alone map back to the supported one, so the step must remember
+    the exact row it committed: re-entering it shows THAT row, not its twin."""
+    mode = "standalone"
+    groups: dict[tuple[str, str], list[str]] = {}
+    for did, raw in RAW_BY_ID.items():
+        if raw.get("builder") and _expected_pickable(did, mode):
+            key = (raw["builder"]["platform"], raw["builder"].get("board", ""))
+            groups.setdefault(key, []).append(did)
+    shared = [ids for ids in groups.values() if len(ids) > 1]
+    assert shared, "the catalog has no two pickable rows sharing builder axes"
+    for ids in shared:
+        for did in ids:
+            j = _to_role_step(mode)
+            _browse_to(j, did)
+            j.feed("")                                  # commit it
+            assert j.slug != "role", did
+            j.goto("role")                              # come back to the step
+            assert j.screen().device == did, (did, j.screen().device)
+            raw = RAW_BY_ID[did]
+            assert f"{raw['label']} — {raw['soc']}" in "\n".join(j.lines()), did
+
+
 # ── the plain face, scripted end to end ─────────────────────────────────────────────
 @pytest.mark.parametrize("mode", SINGLE_IMAGE_MODES)
 def test_scripted_plain_session_reaches_every_row(mode, tmp_path):
