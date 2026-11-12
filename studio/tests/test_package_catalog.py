@@ -13,6 +13,10 @@ from hugmesh_studio.core.config import ImageConfig, ROLE_CHOICES, image_class
 _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # raw (non-deduped) per-platform atom totals — pinned to the tree (design 2.8 counts).
+# +1 on every platform for #1004: each base packages.list requests net-misc/curl, the
+# tool keys-provision asks the baked HEADSCALE_URL with (is the mesh live?). It is in
+# every stage3 seed already; requesting it puts it behind the completeness gate, and
+# being in the base list makes it essential (locked) in every role.
 # x86 153 / rpi5 77 / jetson 68 / frite 57 / orangepi5 75 since e425be8d (#865, ARM
 # desktop-governance runtime) added sys-auth/polkit and dev-lang/python to the rpi5,
 # jetson, orangepi5 and orangepi4-lts desktop lists (+2 each) and sys-fs/mtd-utils
@@ -34,8 +38,8 @@ _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # orangepi5 = 57 (packages 33 + desktop 23 + live 1) + 8 + 10: its cluster NODE roles
 # (EXPERIMENTAL) read the Raspberry Pi k8s node set (specs-rpi5/portage/packages-k8s.list, 8 atoms) and the node host list
 # (specs-rpi5/portage/packages-node-host.list, 10 atoms) rather than a copy.
-_RAW_TOTALS = {"x86": 153, "rpi5": 77, "jetson": 68, "frite": 57,
-               "orangepi5": 75, "orangepizero2": 32, "orangepizero2w": 32}
+_RAW_TOTALS = {"x86": 154, "rpi5": 78, "jetson": 69, "frite": 58,
+               "orangepi5": 76, "orangepizero2": 33, "orangepizero2w": 33}
 
 _CONFIGS = [
     ("x86 omnibus node", ImageConfig(mode="mesh", role="omnibus", platform="x86")),
