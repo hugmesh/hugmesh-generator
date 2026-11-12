@@ -144,9 +144,12 @@ every network user of the running server. How the build meets that:
    is tracked in this public repo; that upstream commit plus this directory at the
    release tag is the complete corresponding source. The `.ex` carries the
    `AGPL-3.0-only` SPDX header.
-3. **Surface an in-app source offer.** `AKKOMA_SOURCE_URL` (set in the Dockerfile)
-   points at `images/akkoma`. Expose it to instance users (still to do: Akkoma does
-   not render it by itself).
+3. **Surface an in-app source offer (still to do).** Akkoma's only source link is
+   nodeinfo 2.1's `repository` field, which is `mix.exs`'s `source_url` compiled in
+   at build time (upstream's repository, not this image's source). No environment
+   variable changes it; the image used to set an `AKKOMA_SOURCE_URL` that nothing
+   read, and no longer does. Pointing users at `images/akkoma` needs a build-time
+   change to `source_url` or an instance page that links it.
 4. **The manifests reference it.** `akkoma.yaml`, `admin-sync-job.yaml`,
    `domainlock-sync-job.yaml` and `test-runner/akkoma-peer.yaml` all name
    `ghcr.io/hugmesh/hugmesh-akkoma` at one digest

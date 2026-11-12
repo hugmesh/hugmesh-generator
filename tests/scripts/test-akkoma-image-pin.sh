@@ -34,7 +34,7 @@ out="$(python3 -I "${CHECK}" "${REPO}" 2>&1)"; rc=$?
 printf '%s\n' "${out}"
 if [ "${rc}" = 0 ]; then ok "the real tree passes every check"; else bad "the real tree fails (rc ${rc})"; fi
 n_pass="$(printf '%s\n' "${out}" | grep -c '^  PASS \[' || true)"
-if [ "${n_pass}" -eq 10 ]; then ok "the checker ran all 10 of its checks"; else bad "${n_pass} PASS lines, not 10: a check stopped running (or one was added without this pin)"; fi
+if [ "${n_pass}" -eq 11 ]; then ok "the checker ran all 11 of its checks"; else bad "${n_pass} PASS lines, not 11: a check stopped running (or one was added without this pin)"; fi
 
 FILES=(
   specs/cluster
@@ -43,6 +43,8 @@ FILES=(
   scripts/_optional-services-lib.sh
   build-x86-host-stage4.sh
   build-rpi5-stage4.sh
+  build-jetson-stage4.sh
+  scripts/build-menu.sh
   studio/hugmesh_studio/core/config.py
   .github/workflows/akkoma-release.yml
   .github/workflows/akkoma-image-ci.yml
@@ -126,6 +128,12 @@ expect "akkoma back in the x86 builder default" defaults \
   build-x86-host-stage4.sh "s.replace('OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-tuwunel phpbb}\"', 'OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}\"', 1)"
 expect "akkoma back in the rpi5 builder default" defaults \
   build-rpi5-stage4.sh "s.replace('OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-tuwunel phpbb}\"', 'OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}\"', 1)"
+expect "akkoma back in the jetson builder default" defaults \
+  build-jetson-stage4.sh "s.replace('OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-tuwunel phpbb}\"', 'OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}\"', 1)"
+expect "build-menu pre-ticks akkoma in the services checklist" defaults \
+  scripts/build-menu.sh "s.replace('cur=\"tuwunel,phpbb\"', 'cur=\"akkoma,tuwunel,phpbb\"', 1)"
+expect "build-menu's OPT_SERVICES default names akkoma" defaults \
+  scripts/build-menu.sh "re.sub(r'(?m)^OPT_SERVICES=\"\"', 'OPT_SERVICES=\"akkoma,tuwunel,phpbb\"', s, count=1)"
 expect "akkoma back in Studio's BUILTIN_DEFAULT_SERVICES" defaults \
   studio/hugmesh_studio/core/config.py "s.replace('BUILTIN_DEFAULT_SERVICES = (\"tuwunel\", \"phpbb\")', 'BUILTIN_DEFAULT_SERVICES = (\"akkoma\", \"tuwunel\", \"phpbb\")', 1)"
 expect "registry akkoma default: on" defaults \
@@ -140,6 +148,20 @@ expect "the test-runner bundle wires akkoma-peer with the placeholder" defaults 
   specs/cluster/manifests/test-runner/kustomization.yaml "s.replace('  # - akkoma-peer.yaml\n', '  - akkoma-peer.yaml\n', 1)"
 expect "an unreadable default source fails closed" defaults \
   scripts/_optional-services-lib.sh "s.replace('_OPT_BUILTIN_DEFAULT_SERVICES=', '_OPT_DEFAULTS=', 1)"
+expect "akkoma-config loses its upload base_url" config \
+  "${AK}" "re.sub(r'(?m)^    config :pleroma, Pleroma\.Upload, base_url: [^\n]*\n', '', s, count=1)"
+expect "akkoma-config's base_url only in a comment" config \
+  "${AK}" "re.sub(r'(?m)^    (config :pleroma, Pleroma\.Upload, base_url:)', r'    # \1', s, count=1)"
+expect "the test-runner peer loses its upload base_url" config \
+  "${PEER}" "re.sub(r'(?m)^    config :pleroma, Pleroma\.Upload, base_url: [^\n]*\n', '', s, count=1)"
+expect "the smoke test stops booting the cluster's own akkoma-config" config \
+  images/akkoma/smoke-test.sh "s.replace('\"akkoma-config|\$akkoma_manifest\" ', '', 1)"
+expect "deps.get without --check-locked" dockerfile \
+  images/akkoma/Dockerfile "s.replace('mix deps.get --only prod --check-locked', 'mix deps.get --only prod', 1)"
+expect "rebar3 back to whatever hex lists newest" dockerfile \
+  images/akkoma/Dockerfile "s.replace('mix local.rebar rebar3 \"\$REBAR3_URL\" --sha512 \"\$REBAR3_SHA512\" --force', 'mix local.rebar --force', 1)"
+expect "the rebar3 checksum is not a SHA-512" dockerfile \
+  images/akkoma/Dockerfile "re.sub(r'(ARG REBAR3_SHA512=)[0-9a-f]{128}', r'\1deadbeef', s, count=1)"
 expect "runtime base unpinned" dockerfile \
   images/akkoma/Dockerfile "re.sub(r'(ARG RUNTIME_IMAGE=[^@\n]*)@sha256:[0-9a-f]{64}', r'\1', s, count=1)"
 expect "a stage FROM an unpinned image" dockerfile \
@@ -168,6 +190,18 @@ expect "the first build pushes" release-wf \
   "${REL}" "re.sub(r'(- name: Build the image \(no push\)(?:.*\n)*?\s+)push: false', r'\1push: true', s, count=1)"
 expect "the release drops arm64" release-wf \
   "${REL}" "s.replace('platforms: linux/amd64,linux/arm64\n          pull: true\n          push: true', 'platforms: linux/amd64\n          pull: true\n          push: true', 1)"
+expect "the publishing job moves to a self-hosted runner" release-wf \
+  "${REL}" "s.replace('  image:\n    needs: version\n    runs-on: ubuntu-latest', '  image:\n    needs: version\n    runs-on: self-hosted', 1)"
+expect "the release boot test is switched off" release-wf \
+  "${REL}" "s.replace(\"      - name: Boot-test the image before pushing it\n        if: steps.exists.outputs.skip != 'true'\n\", \"      - name: Boot-test the image before pushing it\n        if: false\n\", 1)"
+expect "the release boot test may fail and the push goes on" release-wf \
+  "${REL}" "s.replace(\"      - name: Boot-test the image before pushing it\n        if: steps.exists.outputs.skip != 'true'\n\", \"      - name: Boot-test the image before pushing it\n        if: steps.exists.outputs.skip != 'true'\n        continue-on-error: true\n\", 1)"
+expect "the PR boot test is switched off" pr-wf \
+  "${CI}" "s.replace('      - name: Boot-test the image\n', '      - name: Boot-test the image\n        if: false\n', 1)"
+expect "the PR build no longer runs when akkoma.yaml changes" pr-wf \
+  "${CI}" "s.replace(\"      - 'specs/cluster/manifests/akkoma/akkoma.yaml'\n\", '', 1)"
+expect "the PR build moves to a self-hosted runner" pr-wf \
+  "${CI}" "s.replace('runner: ubuntu-latest', 'runner: self-hosted', 1)"
 expect "the PR build loses its native arm64 leg" pr-wf \
   "${CI}" "s.replace('runner: ubuntu-24.04-arm', 'runner: ubuntu-latest', 1)"
 expect "the PR build gains packages: write" pr-wf \
