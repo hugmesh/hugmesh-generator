@@ -1,0 +1,4795 @@
+{
+  "arches": [
+    {
+      "catalog_arch": "riscv64",
+      "id": "riscv64",
+      "keyword": "riscv",
+      "label": "RISC-V 64 (rv64, lp64d)",
+      "profile": "default/linux/riscv/23.0/rv64/lp64d",
+      "selinux": true,
+      "stack": [
+        "features/hardened",
+        "features/selinux"
+      ]
+    },
+    {
+      "catalog_arch": "riscv64",
+      "id": "riscv64-noselinux",
+      "keyword": "riscv",
+      "label": "RISC-V 64 (rv64, lp64d), shipped without SELinux",
+      "profile": "default/linux/riscv/23.0/rv64/lp64d",
+      "selinux": false,
+      "stack": [
+        "features/hardened"
+      ]
+    },
+    {
+      "catalog_arch": "mips64el",
+      "id": "mips64el",
+      "keyword": "mips",
+      "label": "MIPS64 little-endian (mipsel, n64)",
+      "profile": "default/linux/mips/23.0/mipsel/n64",
+      "selinux": true,
+      "stack": [
+        "features/hardened",
+        "features/selinux"
+      ]
+    },
+    {
+      "catalog_arch": "mips64",
+      "id": "mips64",
+      "keyword": "mips",
+      "label": "MIPS64 big-endian (n64)",
+      "profile": "default/linux/mips/23.0/n64",
+      "selinux": true,
+      "stack": [
+        "features/hardened",
+        "features/selinux"
+      ]
+    }
+  ],
+  "cells": {
+    "mips64": {
+      "appliance": {
+        "first_missing": {
+          "atom": "dev-embedded/u-boot-tools",
+          "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "appliance-light": {
+        "first_missing": {
+          "atom": "app-emulation/spice-vdagent",
+          "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-emulation/spice-vdagent",
+            "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "lxde-base/lxpanel",
+            "reason": "lxde-base/lxpanel-0.10.1-r2: masked by missing keyword"
+          },
+          {
+            "atom": "lxde-base/lxsession",
+            "reason": "lxde-base/lxsession-0.5.6: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-vdagent",
+            "reason": "sec-policy/selinux-vdagent-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "www-client/netsurf",
+            "reason": "www-client/netsurf-3.11-r1: masked by missing keyword"
+          },
+          {
+            "atom": "x11-misc/lightdm",
+            "reason": "x11-misc/lightdm-1.32.0-r5: masked by missing keyword"
+          },
+          {
+            "atom": "x11-misc/lightdm-gtk-greeter",
+            "reason": "x11-misc/lightdm-gtk-greeter-2.0.9-r1: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-wm",
+            "reason": "sec-policy/selinux-wm-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "x11-wm/openbox-3.6.1-r11::gentoo",
+              "x11-wm/openbox"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "backend": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/nvme-cli",
+            "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "backend-gpu": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/nerdctl",
+            "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-util/vulkan-tools",
+            "reason": "dev-util/vulkan-tools-1.4.357.0: masked by missing keyword"
+          },
+          {
+            "atom": "media-libs/vulkan-loader",
+            "reason": "media-libs/vulkan-loader-1.4.357.0: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/firewalld",
+            "reason": "net-firewall/firewalld-2.5.2: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword",
+            "required_by": [
+              "sys-apps/openrc-0.64.1::gentoo",
+              "sys-auth/pambase-20260730::gentoo[-systemd]",
+              "sys-libs/pam-1.7.2::gentoo",
+              "sys-auth/pam_xdg-0.8.5::gentoo"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "edge-ai": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/nerdctl",
+            "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-util/vulkan-tools",
+            "reason": "dev-util/vulkan-tools-1.4.357.0: masked by missing keyword"
+          },
+          {
+            "atom": "media-libs/vulkan-loader",
+            "reason": "media-libs/vulkan-loader-1.4.357.0: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/firewalld",
+            "reason": "net-firewall/firewalld-2.5.2: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword",
+            "required_by": [
+              "sys-apps/openrc-0.64.1::gentoo",
+              "sys-auth/pambase-20260730::gentoo[-systemd]",
+              "sys-libs/pam-1.7.2::gentoo",
+              "sys-auth/pam_xdg-0.8.5::gentoo"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "frontend": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/nvme-cli",
+            "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "generic": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/nvme-cli",
+            "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "omnibus": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/nvme-cli",
+            "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "pki": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/nvme-cli",
+            "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      }
+    },
+    "mips64el": {
+      "appliance": {
+        "first_missing": {
+          "atom": "dev-embedded/u-boot-tools",
+          "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "appliance-light": {
+        "first_missing": {
+          "atom": "app-emulation/spice-vdagent",
+          "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-emulation/spice-vdagent",
+            "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "lxde-base/lxpanel",
+            "reason": "lxde-base/lxpanel-0.10.1-r2: masked by missing keyword"
+          },
+          {
+            "atom": "lxde-base/lxsession",
+            "reason": "lxde-base/lxsession-0.5.6: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-vdagent",
+            "reason": "sec-policy/selinux-vdagent-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "www-client/netsurf",
+            "reason": "www-client/netsurf-3.11-r1: masked by missing keyword"
+          },
+          {
+            "atom": "x11-misc/lightdm",
+            "reason": "x11-misc/lightdm-1.32.0-r5: masked by missing keyword"
+          },
+          {
+            "atom": "x11-misc/lightdm-gtk-greeter",
+            "reason": "x11-misc/lightdm-gtk-greeter-2.0.9-r1: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-wm",
+            "reason": "sec-policy/selinux-wm-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "x11-wm/openbox-3.6.1-r11::gentoo",
+              "x11-wm/openbox"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "backend": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/nvme-cli",
+            "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "backend-gpu": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/nerdctl",
+            "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-util/vulkan-tools",
+            "reason": "dev-util/vulkan-tools-1.4.357.0: masked by missing keyword"
+          },
+          {
+            "atom": "media-libs/vulkan-loader",
+            "reason": "media-libs/vulkan-loader-1.4.357.0: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/firewalld",
+            "reason": "net-firewall/firewalld-2.5.2: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword",
+            "required_by": [
+              "sys-apps/openrc-0.64.1::gentoo",
+              "sys-auth/pambase-20260730::gentoo[-systemd]",
+              "sys-libs/pam-1.7.2::gentoo",
+              "sys-auth/pam_xdg-0.8.5::gentoo"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "edge-ai": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/nerdctl",
+            "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-util/vulkan-tools",
+            "reason": "dev-util/vulkan-tools-1.4.357.0: masked by missing keyword"
+          },
+          {
+            "atom": "media-libs/vulkan-loader",
+            "reason": "media-libs/vulkan-loader-1.4.357.0: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/firewalld",
+            "reason": "net-firewall/firewalld-2.5.2: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword",
+            "required_by": [
+              "sys-apps/openrc-0.64.1::gentoo",
+              "sys-auth/pambase-20260730::gentoo[-systemd]",
+              "sys-libs/pam-1.7.2::gentoo",
+              "sys-auth/pam_xdg-0.8.5::gentoo"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "frontend": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/nvme-cli",
+            "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "generic": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/nvme-cli",
+            "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "omnibus": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/nvme-cli",
+            "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "pki": {
+        "first_missing": {
+          "atom": "app-admin/setools",
+          "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-admin/setools",
+            "reason": "app-admin/setools-4.7.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cni-plugins",
+            "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/containerd",
+            "reason": "app-containers/containerd-2.4.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/runc",
+            "reason": "app-containers/runc-1.4.3: masked by missing keyword"
+          },
+          {
+            "atom": "dev-embedded/u-boot-tools",
+            "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword"
+          },
+          {
+            "atom": "net-firewall/conntrack-tools",
+            "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword"
+          },
+          {
+            "atom": "net-misc/networkmanager",
+            "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base",
+            "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-base-policy",
+            "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-container",
+            "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/nvme-cli",
+            "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword"
+          },
+          {
+            "atom": "sys-apps/policycoreutils",
+            "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      }
+    },
+    "riscv64": {
+      "appliance": {
+        "first_missing": {
+          "atom": "sec-policy/selinux-gpg",
+          "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+          "required_by": [
+            "app-crypt/gnupg-2.5.24::gentoo",
+            "app-alternatives/gpg-1-r3::gentoo[reference]",
+            "app-portage/gemato-20.15::gentoo[gpg]",
+            "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
+            "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+            "dev-lang/perl-5.44.0::gentoo[-minimal]"
+          ]
+        },
+        "missing_atoms": [],
+        "note": "",
+        "packages": 0,
+        "residual": null,
+        "status": "unresolvable"
+      },
+      "appliance-light": {
+        "first_missing": {
+          "atom": "app-emulation/spice-vdagent",
+          "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-emulation/spice-vdagent",
+            "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-vdagent",
+            "reason": "sec-policy/selinux-vdagent-2.20260616_p1: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-wm",
+            "reason": "sec-policy/selinux-wm-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "x11-wm/openbox-3.6.1-r11::gentoo",
+              "x11-wm/openbox"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "backend": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "backend-gpu": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/nerdctl",
+            "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": ">=sec-policy/selinux-openrc-2.20170204-r4",
+            "reason": "sec-policy/selinux-openrc-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "sys-apps/openrc-0.64.1::gentoo",
+              "sys-auth/pambase-20260730::gentoo[-systemd]",
+              "sys-libs/pam-1.7.2::gentoo",
+              "sys-auth/pam_xdg-0.8.5::gentoo"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "edge-ai": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/nerdctl",
+            "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": ">=sec-policy/selinux-openrc-2.20170204-r4",
+            "reason": "sec-policy/selinux-openrc-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "sys-apps/openrc-0.64.1::gentoo",
+              "sys-auth/pambase-20260730::gentoo[-systemd]",
+              "sys-libs/pam-1.7.2::gentoo",
+              "sys-auth/pam_xdg-0.8.5::gentoo"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "frontend": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "generic": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "omnibus": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "pki": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sec-policy/selinux-virt",
+            "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": "sec-policy/selinux-gpg",
+            "reason": "sec-policy/selinux-gpg-2.20260616_p1: masked by missing keyword",
+            "required_by": [
+              "app-crypt/gnupg-2.5.24::gentoo",
+              "app-alternatives/gpg-1-r3::gentoo[reference]",
+              "app-portage/gemato-20.15::gentoo[gpg]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
+              "dev-lang/perl-5.44.0::gentoo[-minimal]"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      }
+    },
+    "riscv64-noselinux": {
+      "appliance": {
+        "first_missing": null,
+        "missing_atoms": [],
+        "note": "only a dependency cycle, which a stage3 seed breaks",
+        "packages": 422,
+        "residual": null,
+        "status": "resolvable"
+      },
+      "appliance-light": {
+        "first_missing": {
+          "atom": "app-emulation/spice-vdagent",
+          "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-emulation/spice-vdagent",
+            "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": {
+            "atom": ">=dev-libs/glib-2.82.0:2[introspection]",
+            "reason": "no ebuild with the required USE flags",
+            "required_by": [
+              "dev-libs/gobject-introspection-1.86.0::gentoo",
+              "dev-lang/vala-0.56.19::gentoo",
+              "lxde-base/lxsession-0.5.6::gentoo",
+              "lxde-base/lxsession"
+            ]
+          },
+          "note": "",
+          "packages": 0,
+          "status": "unresolvable"
+        },
+        "status": "unresolvable"
+      },
+      "backend": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": null,
+          "note": "only a dependency cycle, which a stage3 seed breaks",
+          "packages": 342,
+          "status": "resolvable"
+        },
+        "status": "unresolvable"
+      },
+      "backend-gpu": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/nerdctl",
+            "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": null,
+          "note": "only a dependency cycle, which a stage3 seed breaks",
+          "packages": 430,
+          "status": "resolvable"
+        },
+        "status": "unresolvable"
+      },
+      "edge-ai": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "app-containers/nerdctl",
+            "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": null,
+          "note": "only a dependency cycle, which a stage3 seed breaks",
+          "packages": 430,
+          "status": "resolvable"
+        },
+        "status": "unresolvable"
+      },
+      "frontend": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": null,
+          "note": "only a dependency cycle, which a stage3 seed breaks",
+          "packages": 342,
+          "status": "resolvable"
+        },
+        "status": "unresolvable"
+      },
+      "generic": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": null,
+          "note": "only a dependency cycle, which a stage3 seed breaks",
+          "packages": 342,
+          "status": "resolvable"
+        },
+        "status": "unresolvable"
+      },
+      "omnibus": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": null,
+          "note": "only a dependency cycle, which a stage3 seed breaks",
+          "packages": 342,
+          "status": "resolvable"
+        },
+        "status": "unresolvable"
+      },
+      "pki": {
+        "first_missing": {
+          "atom": "app-containers/cri-tools",
+          "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+          "required_by": []
+        },
+        "missing_atoms": [
+          {
+            "atom": "app-containers/cri-tools",
+            "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubeadm",
+            "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubectl",
+            "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword"
+          },
+          {
+            "atom": "sys-cluster/kubelet",
+            "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword"
+          }
+        ],
+        "note": "",
+        "packages": 0,
+        "residual": {
+          "first_missing": null,
+          "note": "only a dependency cycle, which a stage3 seed breaks",
+          "packages": 342,
+          "status": "resolvable"
+        },
+        "status": "unresolvable"
+      }
+    }
+  },
+  "components": {
+    "mips64": {
+      "app-admin/setools": {
+        "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+        "visible": false
+      },
+      "app-admin/sudo": {
+        "reason": "",
+        "visible": true
+      },
+      "app-containers/cni-plugins": {
+        "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/containerd": {
+        "reason": "app-containers/containerd-2.4.0: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/cri-tools": {
+        "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/nerdctl": {
+        "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/runc": {
+        "reason": "app-containers/runc-1.4.3: masked by missing keyword",
+        "visible": false
+      },
+      "app-editors/nano": {
+        "reason": "",
+        "visible": true
+      },
+      "app-emulation/spice-vdagent": {
+        "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword",
+        "visible": false
+      },
+      "app-misc/jq": {
+        "reason": "",
+        "visible": true
+      },
+      "app-misc/screen": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-embedded/u-boot-tools": {
+        "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword",
+        "visible": false
+      },
+      "dev-lang/python": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-util/pahole": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-util/vulkan-tools": {
+        "reason": "dev-util/vulkan-tools-1.4.357.0: masked by missing keyword",
+        "visible": false
+      },
+      "gui-libs/display-manager-init": {
+        "reason": "",
+        "visible": true
+      },
+      "lxde-base/lxappearance": {
+        "reason": "",
+        "visible": true
+      },
+      "lxde-base/lxpanel": {
+        "reason": "lxde-base/lxpanel-0.10.1-r2: masked by missing keyword",
+        "visible": false
+      },
+      "lxde-base/lxsession": {
+        "reason": "lxde-base/lxsession-0.5.6: masked by missing keyword",
+        "visible": false
+      },
+      "media-fonts/dejavu": {
+        "reason": "",
+        "visible": true
+      },
+      "media-fonts/noto": {
+        "reason": "",
+        "visible": true
+      },
+      "media-gfx/feh": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/libva": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/mesa": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/vulkan-loader": {
+        "reason": "media-libs/vulkan-loader-1.4.357.0: masked by missing keyword",
+        "visible": false
+      },
+      "net-firewall/conntrack-tools": {
+        "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword",
+        "visible": false
+      },
+      "net-firewall/firewalld": {
+        "reason": "net-firewall/firewalld-2.5.2: masked by missing keyword",
+        "visible": false
+      },
+      "net-firewall/iptables": {
+        "reason": "",
+        "visible": true
+      },
+      "net-firewall/nftables": {
+        "reason": "",
+        "visible": true
+      },
+      "net-fs/cifs-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "net-fs/nfs-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/networkmanager": {
+        "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword",
+        "visible": false
+      },
+      "net-misc/openssh": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/socat": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/headscale": {
+        "reason": "net-vpn/headscale-0.29.2: masked by missing keyword",
+        "visible": false
+      },
+      "net-vpn/openvpn": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/tailscale": {
+        "reason": "net-vpn/tailscale-1.102.2: masked by missing keyword",
+        "visible": false
+      },
+      "net-vpn/wireguard-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "net-wireless/wpa_supplicant": {
+        "reason": "",
+        "visible": true
+      },
+      "sec-policy/selinux-base": {
+        "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sec-policy/selinux-base-policy": {
+        "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sec-policy/selinux-container": {
+        "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sec-policy/selinux-vdagent": {
+        "reason": "sec-policy/selinux-vdagent-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sec-policy/selinux-virt": {
+        "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sys-apps/checkpolicy": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/ethtool": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/haveged": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/i2c-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/iproute2": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/nvme-cli": {
+        "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword",
+        "visible": false
+      },
+      "sys-apps/pciutils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/policycoreutils": {
+        "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword",
+        "visible": false
+      },
+      "sys-apps/selinux-python": {
+        "reason": "sys-apps/selinux-python-3.11-r1: masked by missing keyword",
+        "visible": false
+      },
+      "sys-apps/semodule-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/systemd-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/usbutils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/util-linux": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-auth/polkit": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-block/parted": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-boot/shim": {
+        "reason": "sys-boot/shim-16.1_p8: masked by package.mask, missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubeadm": {
+        "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubectl": {
+        "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubelet": {
+        "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-fs/cryptsetup": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/dosfstools": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/e2fsprogs": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/lvm2": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/mtd-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/xfsprogs": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/dracut": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/gentoo-sources": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/linux-firmware": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-libs/libseccomp": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-libs/libselinux": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-process/audit": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-process/cronie": {
+        "reason": "",
+        "visible": true
+      },
+      "www-client/chromium": {
+        "reason": "www-client/chromium-151.0.7922.169-r1: masked by missing keyword",
+        "visible": false
+      },
+      "www-client/firefox": {
+        "reason": "www-client/firefox-156.0.1: masked by missing keyword",
+        "visible": false
+      },
+      "www-client/firefox-bin": {
+        "reason": "www-client/firefox-bin-156.0.1: masked by missing keyword",
+        "visible": false
+      },
+      "www-client/netsurf": {
+        "reason": "www-client/netsurf-3.11-r1: masked by missing keyword",
+        "visible": false
+      },
+      "x11-apps/setxkbmap": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-apps/xrandr": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-apps/xset": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-base/xorg-drivers": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-base/xorg-server": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-libs/libdrm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-misc/lightdm": {
+        "reason": "x11-misc/lightdm-1.32.0-r5: masked by missing keyword",
+        "visible": false
+      },
+      "x11-misc/lightdm-gtk-greeter": {
+        "reason": "x11-misc/lightdm-gtk-greeter-2.0.9-r1: masked by missing keyword",
+        "visible": false
+      },
+      "x11-misc/pcmanfm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-terms/xterm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-wm/openbox": {
+        "reason": "",
+        "visible": true
+      }
+    },
+    "mips64el": {
+      "app-admin/setools": {
+        "reason": "app-admin/setools-4.7.0: masked by missing keyword",
+        "visible": false
+      },
+      "app-admin/sudo": {
+        "reason": "",
+        "visible": true
+      },
+      "app-containers/cni-plugins": {
+        "reason": "app-containers/cni-plugins-1.9.1: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/containerd": {
+        "reason": "app-containers/containerd-2.4.0: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/cri-tools": {
+        "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/nerdctl": {
+        "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/runc": {
+        "reason": "app-containers/runc-1.4.3: masked by missing keyword",
+        "visible": false
+      },
+      "app-editors/nano": {
+        "reason": "",
+        "visible": true
+      },
+      "app-emulation/spice-vdagent": {
+        "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword",
+        "visible": false
+      },
+      "app-misc/jq": {
+        "reason": "",
+        "visible": true
+      },
+      "app-misc/screen": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-embedded/u-boot-tools": {
+        "reason": "dev-embedded/u-boot-tools-2025.01-r3: masked by missing keyword",
+        "visible": false
+      },
+      "dev-lang/python": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-util/pahole": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-util/vulkan-tools": {
+        "reason": "dev-util/vulkan-tools-1.4.357.0: masked by missing keyword",
+        "visible": false
+      },
+      "gui-libs/display-manager-init": {
+        "reason": "",
+        "visible": true
+      },
+      "lxde-base/lxappearance": {
+        "reason": "",
+        "visible": true
+      },
+      "lxde-base/lxpanel": {
+        "reason": "lxde-base/lxpanel-0.10.1-r2: masked by missing keyword",
+        "visible": false
+      },
+      "lxde-base/lxsession": {
+        "reason": "lxde-base/lxsession-0.5.6: masked by missing keyword",
+        "visible": false
+      },
+      "media-fonts/dejavu": {
+        "reason": "",
+        "visible": true
+      },
+      "media-fonts/noto": {
+        "reason": "",
+        "visible": true
+      },
+      "media-gfx/feh": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/libva": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/mesa": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/vulkan-loader": {
+        "reason": "media-libs/vulkan-loader-1.4.357.0: masked by missing keyword",
+        "visible": false
+      },
+      "net-firewall/conntrack-tools": {
+        "reason": "net-firewall/conntrack-tools-1.4.9: masked by missing keyword",
+        "visible": false
+      },
+      "net-firewall/firewalld": {
+        "reason": "net-firewall/firewalld-2.5.2: masked by missing keyword",
+        "visible": false
+      },
+      "net-firewall/iptables": {
+        "reason": "",
+        "visible": true
+      },
+      "net-firewall/nftables": {
+        "reason": "",
+        "visible": true
+      },
+      "net-fs/cifs-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "net-fs/nfs-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/networkmanager": {
+        "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword",
+        "visible": false
+      },
+      "net-misc/openssh": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/socat": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/headscale": {
+        "reason": "net-vpn/headscale-0.29.2: masked by missing keyword",
+        "visible": false
+      },
+      "net-vpn/openvpn": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/tailscale": {
+        "reason": "net-vpn/tailscale-1.102.2: masked by missing keyword",
+        "visible": false
+      },
+      "net-vpn/wireguard-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "net-wireless/wpa_supplicant": {
+        "reason": "",
+        "visible": true
+      },
+      "sec-policy/selinux-base": {
+        "reason": "sec-policy/selinux-base-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sec-policy/selinux-base-policy": {
+        "reason": "sec-policy/selinux-base-policy-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sec-policy/selinux-container": {
+        "reason": "sec-policy/selinux-container-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sec-policy/selinux-vdagent": {
+        "reason": "sec-policy/selinux-vdagent-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sec-policy/selinux-virt": {
+        "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sys-apps/checkpolicy": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/ethtool": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/haveged": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/i2c-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/iproute2": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/nvme-cli": {
+        "reason": "sys-apps/nvme-cli-2.16: masked by missing keyword",
+        "visible": false
+      },
+      "sys-apps/pciutils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/policycoreutils": {
+        "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword",
+        "visible": false
+      },
+      "sys-apps/selinux-python": {
+        "reason": "sys-apps/selinux-python-3.11-r1: masked by missing keyword",
+        "visible": false
+      },
+      "sys-apps/semodule-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/systemd-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/usbutils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/util-linux": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-auth/polkit": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-block/parted": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-boot/shim": {
+        "reason": "sys-boot/shim-16.1_p8: masked by package.mask, missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubeadm": {
+        "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubectl": {
+        "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubelet": {
+        "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-fs/cryptsetup": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/dosfstools": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/e2fsprogs": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/lvm2": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/mtd-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/xfsprogs": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/dracut": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/gentoo-sources": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/linux-firmware": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-libs/libseccomp": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-libs/libselinux": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-process/audit": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-process/cronie": {
+        "reason": "",
+        "visible": true
+      },
+      "www-client/chromium": {
+        "reason": "www-client/chromium-151.0.7922.169-r1: masked by missing keyword",
+        "visible": false
+      },
+      "www-client/firefox": {
+        "reason": "www-client/firefox-156.0.1: masked by missing keyword",
+        "visible": false
+      },
+      "www-client/firefox-bin": {
+        "reason": "www-client/firefox-bin-156.0.1: masked by missing keyword",
+        "visible": false
+      },
+      "www-client/netsurf": {
+        "reason": "www-client/netsurf-3.11-r1: masked by missing keyword",
+        "visible": false
+      },
+      "x11-apps/setxkbmap": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-apps/xrandr": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-apps/xset": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-base/xorg-drivers": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-base/xorg-server": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-libs/libdrm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-misc/lightdm": {
+        "reason": "x11-misc/lightdm-1.32.0-r5: masked by missing keyword",
+        "visible": false
+      },
+      "x11-misc/lightdm-gtk-greeter": {
+        "reason": "x11-misc/lightdm-gtk-greeter-2.0.9-r1: masked by missing keyword",
+        "visible": false
+      },
+      "x11-misc/pcmanfm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-terms/xterm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-wm/openbox": {
+        "reason": "",
+        "visible": true
+      }
+    },
+    "riscv64": {
+      "app-admin/setools": {
+        "reason": "",
+        "visible": true
+      },
+      "app-admin/sudo": {
+        "reason": "",
+        "visible": true
+      },
+      "app-containers/cni-plugins": {
+        "reason": "",
+        "visible": true
+      },
+      "app-containers/containerd": {
+        "reason": "",
+        "visible": true
+      },
+      "app-containers/cri-tools": {
+        "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/nerdctl": {
+        "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/runc": {
+        "reason": "",
+        "visible": true
+      },
+      "app-editors/nano": {
+        "reason": "",
+        "visible": true
+      },
+      "app-emulation/spice-vdagent": {
+        "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword",
+        "visible": false
+      },
+      "app-misc/jq": {
+        "reason": "",
+        "visible": true
+      },
+      "app-misc/screen": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-embedded/u-boot-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-lang/python": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-util/pahole": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-util/vulkan-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "gui-libs/display-manager-init": {
+        "reason": "",
+        "visible": true
+      },
+      "lxde-base/lxappearance": {
+        "reason": "",
+        "visible": true
+      },
+      "lxde-base/lxpanel": {
+        "reason": "",
+        "visible": true
+      },
+      "lxde-base/lxsession": {
+        "reason": "",
+        "visible": true
+      },
+      "media-fonts/dejavu": {
+        "reason": "",
+        "visible": true
+      },
+      "media-fonts/noto": {
+        "reason": "",
+        "visible": true
+      },
+      "media-gfx/feh": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/libva": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/mesa": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/vulkan-loader": {
+        "reason": "",
+        "visible": true
+      },
+      "net-firewall/conntrack-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "net-firewall/firewalld": {
+        "reason": "",
+        "visible": true
+      },
+      "net-firewall/iptables": {
+        "reason": "",
+        "visible": true
+      },
+      "net-firewall/nftables": {
+        "reason": "",
+        "visible": true
+      },
+      "net-fs/cifs-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "net-fs/nfs-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/networkmanager": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/openssh": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/socat": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/headscale": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/openvpn": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/tailscale": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/wireguard-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "net-wireless/wpa_supplicant": {
+        "reason": "",
+        "visible": true
+      },
+      "sec-policy/selinux-base": {
+        "reason": "",
+        "visible": true
+      },
+      "sec-policy/selinux-base-policy": {
+        "reason": "",
+        "visible": true
+      },
+      "sec-policy/selinux-container": {
+        "reason": "",
+        "visible": true
+      },
+      "sec-policy/selinux-vdagent": {
+        "reason": "sec-policy/selinux-vdagent-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sec-policy/selinux-virt": {
+        "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sys-apps/checkpolicy": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/ethtool": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/haveged": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/i2c-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/iproute2": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/nvme-cli": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/pciutils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/policycoreutils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/selinux-python": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/semodule-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/systemd-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/usbutils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/util-linux": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-auth/polkit": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-block/parted": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-boot/shim": {
+        "reason": "sys-boot/shim-16.1_p8: masked by package.mask, missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubeadm": {
+        "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubectl": {
+        "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubelet": {
+        "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-fs/cryptsetup": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/dosfstools": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/e2fsprogs": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/lvm2": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/mtd-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/xfsprogs": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/dracut": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/gentoo-sources": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/linux-firmware": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-libs/libseccomp": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-libs/libselinux": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-process/audit": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-process/cronie": {
+        "reason": "",
+        "visible": true
+      },
+      "www-client/chromium": {
+        "reason": "www-client/chromium-151.0.7922.169-r1: masked by missing keyword",
+        "visible": false
+      },
+      "www-client/firefox": {
+        "reason": "",
+        "visible": true
+      },
+      "www-client/firefox-bin": {
+        "reason": "www-client/firefox-bin-156.0.1: masked by missing keyword",
+        "visible": false
+      },
+      "www-client/netsurf": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-apps/setxkbmap": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-apps/xrandr": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-apps/xset": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-base/xorg-drivers": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-base/xorg-server": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-libs/libdrm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-misc/lightdm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-misc/lightdm-gtk-greeter": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-misc/pcmanfm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-terms/xterm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-wm/openbox": {
+        "reason": "",
+        "visible": true
+      }
+    },
+    "riscv64-noselinux": {
+      "app-admin/setools": {
+        "reason": "",
+        "visible": true
+      },
+      "app-admin/sudo": {
+        "reason": "",
+        "visible": true
+      },
+      "app-containers/cni-plugins": {
+        "reason": "",
+        "visible": true
+      },
+      "app-containers/containerd": {
+        "reason": "",
+        "visible": true
+      },
+      "app-containers/cri-tools": {
+        "reason": "app-containers/cri-tools-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/nerdctl": {
+        "reason": "app-containers/nerdctl-2.3.5: masked by missing keyword",
+        "visible": false
+      },
+      "app-containers/runc": {
+        "reason": "",
+        "visible": true
+      },
+      "app-editors/nano": {
+        "reason": "",
+        "visible": true
+      },
+      "app-emulation/spice-vdagent": {
+        "reason": "app-emulation/spice-vdagent-0.22.1: masked by missing keyword",
+        "visible": false
+      },
+      "app-misc/jq": {
+        "reason": "",
+        "visible": true
+      },
+      "app-misc/screen": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-embedded/u-boot-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-lang/python": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-util/pahole": {
+        "reason": "",
+        "visible": true
+      },
+      "dev-util/vulkan-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "gui-libs/display-manager-init": {
+        "reason": "",
+        "visible": true
+      },
+      "lxde-base/lxappearance": {
+        "reason": "",
+        "visible": true
+      },
+      "lxde-base/lxpanel": {
+        "reason": "",
+        "visible": true
+      },
+      "lxde-base/lxsession": {
+        "reason": "",
+        "visible": true
+      },
+      "media-fonts/dejavu": {
+        "reason": "",
+        "visible": true
+      },
+      "media-fonts/noto": {
+        "reason": "",
+        "visible": true
+      },
+      "media-gfx/feh": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/libva": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/mesa": {
+        "reason": "",
+        "visible": true
+      },
+      "media-libs/vulkan-loader": {
+        "reason": "",
+        "visible": true
+      },
+      "net-firewall/conntrack-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "net-firewall/firewalld": {
+        "reason": "",
+        "visible": true
+      },
+      "net-firewall/iptables": {
+        "reason": "",
+        "visible": true
+      },
+      "net-firewall/nftables": {
+        "reason": "",
+        "visible": true
+      },
+      "net-fs/cifs-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "net-fs/nfs-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/networkmanager": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/openssh": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/socat": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/headscale": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/openvpn": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/tailscale": {
+        "reason": "",
+        "visible": true
+      },
+      "net-vpn/wireguard-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "net-wireless/wpa_supplicant": {
+        "reason": "",
+        "visible": true
+      },
+      "sec-policy/selinux-base": {
+        "reason": "",
+        "visible": true
+      },
+      "sec-policy/selinux-base-policy": {
+        "reason": "",
+        "visible": true
+      },
+      "sec-policy/selinux-container": {
+        "reason": "",
+        "visible": true
+      },
+      "sec-policy/selinux-vdagent": {
+        "reason": "sec-policy/selinux-vdagent-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sec-policy/selinux-virt": {
+        "reason": "sec-policy/selinux-virt-2.20260616_p1: masked by missing keyword",
+        "visible": false
+      },
+      "sys-apps/checkpolicy": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/ethtool": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/haveged": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/i2c-tools": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/iproute2": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/nvme-cli": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/pciutils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/policycoreutils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/selinux-python": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/semodule-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/systemd-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/usbutils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-apps/util-linux": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-auth/polkit": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-block/parted": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-boot/shim": {
+        "reason": "sys-boot/shim-16.1_p8: masked by package.mask, missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubeadm": {
+        "reason": "sys-cluster/kubeadm-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubectl": {
+        "reason": "sys-cluster/kubectl-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-cluster/kubelet": {
+        "reason": "sys-cluster/kubelet-1.37.0: masked by missing keyword",
+        "visible": false
+      },
+      "sys-fs/cryptsetup": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/dosfstools": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/e2fsprogs": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/lvm2": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/mtd-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-fs/xfsprogs": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/dracut": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/gentoo-sources": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-kernel/linux-firmware": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-libs/libseccomp": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-libs/libselinux": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-process/audit": {
+        "reason": "",
+        "visible": true
+      },
+      "sys-process/cronie": {
+        "reason": "",
+        "visible": true
+      },
+      "www-client/chromium": {
+        "reason": "www-client/chromium-151.0.7922.169-r1: masked by missing keyword",
+        "visible": false
+      },
+      "www-client/firefox": {
+        "reason": "",
+        "visible": true
+      },
+      "www-client/firefox-bin": {
+        "reason": "www-client/firefox-bin-156.0.1: masked by missing keyword",
+        "visible": false
+      },
+      "www-client/netsurf": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-apps/setxkbmap": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-apps/xrandr": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-apps/xset": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-base/xorg-drivers": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-base/xorg-server": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-libs/libdrm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-misc/lightdm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-misc/lightdm-gtk-greeter": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-misc/pcmanfm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-terms/xterm": {
+        "reason": "",
+        "visible": true
+      },
+      "x11-wm/openbox": {
+        "reason": "",
+        "visible": true
+      }
+    }
+  },
+  "generator": "scripts/package-resolution-report.py",
+  "image": {
+    "id": "sha256:4d486b83077b32a363a88ed4fd6761db9e3c6e366427002d34cdfd9851232007",
+    "name": "hugmesh-builder:latest"
+  },
+  "measured": "2026-11-12",
+  "method": {
+    "accept_keywords": "<arch> ~<arch>",
+    "command": "emerge --pretend --autounmask=n <atoms>",
+    "no_selinux_variant": "features/hardened only, USE=-selinux, and every sec-policy/* atom and app-admin/setools, sys-apps/checkpolicy, sys-apps/policycoreutils, sys-apps/semodule-utils, sys-libs/libselinux, sys-apps/selinux-python left out of the role sets",
+    "profile_stack": [
+      "features/hardened",
+      "features/selinux"
+    ],
+    "root": "/ as a native root of the measured arch, with nothing installed (an empty tmpfs over /var/db/pkg), so build, run and install time dependencies all resolve under the arch's own keywords and flags",
+    "use": "USE and POLICY_TYPES from the reference platform's make.conf.tmpl; its package.use and package.mask copied in"
+  },
+  "roles": [
+    {
+      "atoms": [
+        "app-admin/sudo",
+        "app-editors/nano",
+        "app-misc/jq",
+        "app-misc/screen",
+        "dev-embedded/u-boot-tools",
+        "net-firewall/iptables",
+        "net-fs/cifs-utils",
+        "net-fs/nfs-utils",
+        "net-misc/networkmanager",
+        "net-misc/openssh",
+        "net-misc/socat",
+        "net-vpn/openvpn",
+        "net-vpn/wireguard-tools",
+        "net-wireless/wpa_supplicant",
+        "sec-policy/selinux-base",
+        "sec-policy/selinux-base-policy",
+        "sys-apps/checkpolicy",
+        "sys-apps/haveged",
+        "sys-apps/i2c-tools",
+        "sys-apps/policycoreutils",
+        "sys-apps/semodule-utils",
+        "sys-apps/usbutils",
+        "sys-apps/util-linux",
+        "sys-block/parted",
+        "sys-fs/dosfstools",
+        "sys-fs/e2fsprogs",
+        "sys-fs/mtd-utils",
+        "sys-kernel/gentoo-sources",
+        "sys-kernel/linux-firmware",
+        "sys-libs/libseccomp",
+        "sys-libs/libselinux",
+        "sys-process/audit",
+        "sys-process/cronie"
+      ],
+      "dropped": [
+        {
+          "atom": "x11-base/xorg-server",
+          "why": "not part of this role's desktop axis"
+        },
+        {
+          "atom": "x11-misc/lightdm",
+          "why": "not part of this role's desktop axis"
+        },
+        {
+          "atom": "x11-wm/openbox",
+          "why": "not part of this role's desktop axis"
+        }
+      ],
+      "id": "appliance",
+      "source": {
+        "file": "docs/catalog/packages-catalog.json",
+        "platform": "frite",
+        "role": "frite",
+        "tiers": [
+          "essential"
+        ]
+      },
+      "substituted": {},
+      "what": "headless mesh-client appliance (--desktop none)"
+    },
+    {
+      "atoms": [
+        "app-admin/sudo",
+        "app-editors/nano",
+        "app-emulation/spice-vdagent",
+        "app-misc/jq",
+        "app-misc/screen",
+        "dev-embedded/u-boot-tools",
+        "dev-lang/python",
+        "gui-libs/display-manager-init",
+        "lxde-base/lxappearance",
+        "lxde-base/lxpanel",
+        "lxde-base/lxsession",
+        "media-fonts/dejavu",
+        "media-fonts/noto",
+        "media-gfx/feh",
+        "net-firewall/iptables",
+        "net-fs/cifs-utils",
+        "net-fs/nfs-utils",
+        "net-misc/networkmanager",
+        "net-misc/openssh",
+        "net-misc/socat",
+        "net-vpn/openvpn",
+        "net-vpn/wireguard-tools",
+        "net-wireless/wpa_supplicant",
+        "sec-policy/selinux-base",
+        "sec-policy/selinux-base-policy",
+        "sec-policy/selinux-vdagent",
+        "sys-apps/checkpolicy",
+        "sys-apps/haveged",
+        "sys-apps/i2c-tools",
+        "sys-apps/policycoreutils",
+        "sys-apps/semodule-utils",
+        "sys-apps/usbutils",
+        "sys-apps/util-linux",
+        "sys-auth/polkit",
+        "sys-block/parted",
+        "sys-fs/dosfstools",
+        "sys-fs/e2fsprogs",
+        "sys-fs/mtd-utils",
+        "sys-kernel/gentoo-sources",
+        "sys-kernel/linux-firmware",
+        "sys-libs/libseccomp",
+        "sys-libs/libselinux",
+        "sys-process/audit",
+        "sys-process/cronie",
+        "www-client/netsurf",
+        "x11-apps/setxkbmap",
+        "x11-apps/xrandr",
+        "x11-apps/xset",
+        "x11-base/xorg-drivers",
+        "x11-base/xorg-server",
+        "x11-misc/lightdm",
+        "x11-misc/lightdm-gtk-greeter",
+        "x11-misc/pcmanfm",
+        "x11-terms/xterm",
+        "x11-wm/openbox"
+      ],
+      "dropped": [],
+      "id": "appliance-light",
+      "source": {
+        "file": "docs/catalog/packages-catalog.json",
+        "platform": "frite",
+        "role": "frite",
+        "tiers": [
+          "essential",
+          "removable"
+        ]
+      },
+      "substituted": {},
+      "what": "mesh-client appliance with the light desktop (--desktop light: LXDE, lightdm, a browser)"
+    },
+    {
+      "atoms": [
+        "app-admin/setools",
+        "app-admin/sudo",
+        "app-containers/cni-plugins",
+        "app-containers/containerd",
+        "app-containers/cri-tools",
+        "app-containers/runc",
+        "app-editors/nano",
+        "app-misc/jq",
+        "app-misc/screen",
+        "dev-embedded/u-boot-tools",
+        "net-firewall/conntrack-tools",
+        "net-firewall/iptables",
+        "net-firewall/nftables",
+        "net-fs/cifs-utils",
+        "net-fs/nfs-utils",
+        "net-misc/networkmanager",
+        "net-misc/openssh",
+        "net-misc/socat",
+        "net-vpn/openvpn",
+        "net-vpn/wireguard-tools",
+        "net-wireless/wpa_supplicant",
+        "sec-policy/selinux-base",
+        "sec-policy/selinux-base-policy",
+        "sec-policy/selinux-container",
+        "sec-policy/selinux-virt",
+        "sys-apps/checkpolicy",
+        "sys-apps/ethtool",
+        "sys-apps/haveged",
+        "sys-apps/i2c-tools",
+        "sys-apps/iproute2",
+        "sys-apps/nvme-cli",
+        "sys-apps/pciutils",
+        "sys-apps/policycoreutils",
+        "sys-apps/semodule-utils",
+        "sys-apps/usbutils",
+        "sys-apps/util-linux",
+        "sys-block/parted",
+        "sys-cluster/kubeadm",
+        "sys-cluster/kubectl",
+        "sys-cluster/kubelet",
+        "sys-fs/cryptsetup",
+        "sys-fs/dosfstools",
+        "sys-fs/e2fsprogs",
+        "sys-fs/lvm2",
+        "sys-fs/xfsprogs",
+        "sys-kernel/gentoo-sources",
+        "sys-libs/libseccomp",
+        "sys-libs/libselinux",
+        "sys-process/audit",
+        "sys-process/cronie"
+      ],
+      "dropped": [
+        {
+          "atom": "dev-embedded/raspberrypi-utils",
+          "why": "Raspberry Pi board tool"
+        },
+        {
+          "atom": "dev-embedded/rpi-eeprom",
+          "why": "Raspberry Pi bootloader EEPROM"
+        },
+        {
+          "atom": "sys-boot/raspberrypi-firmware",
+          "why": "Raspberry Pi GPU firmware boot chain"
+        },
+        {
+          "atom": "sys-firmware/raspberrypi-wifi-ucode",
+          "why": "Raspberry Pi Wi-Fi firmware"
+        },
+        {
+          "atom": "sys-kernel/raspberrypi-sources",
+          "why": "Raspberry Pi kernel fork"
+        }
+      ],
+      "id": "generic",
+      "source": {
+        "file": "docs/catalog/packages-catalog.json",
+        "platform": "rpi5",
+        "role": "generic",
+        "tiers": [
+          "essential",
+          "removable"
+        ]
+      },
+      "substituted": {
+        "sys-kernel/raspberrypi-sources": "sys-kernel/gentoo-sources"
+      },
+      "what": "generic server node"
+    },
+    {
+      "atoms": [
+        "app-admin/setools",
+        "app-admin/sudo",
+        "app-containers/cni-plugins",
+        "app-containers/containerd",
+        "app-containers/cri-tools",
+        "app-containers/runc",
+        "app-editors/nano",
+        "app-misc/jq",
+        "app-misc/screen",
+        "dev-embedded/u-boot-tools",
+        "net-firewall/conntrack-tools",
+        "net-firewall/iptables",
+        "net-firewall/nftables",
+        "net-fs/cifs-utils",
+        "net-fs/nfs-utils",
+        "net-misc/networkmanager",
+        "net-misc/openssh",
+        "net-misc/socat",
+        "net-vpn/openvpn",
+        "net-vpn/wireguard-tools",
+        "net-wireless/wpa_supplicant",
+        "sec-policy/selinux-base",
+        "sec-policy/selinux-base-policy",
+        "sec-policy/selinux-container",
+        "sec-policy/selinux-virt",
+        "sys-apps/checkpolicy",
+        "sys-apps/ethtool",
+        "sys-apps/haveged",
+        "sys-apps/i2c-tools",
+        "sys-apps/iproute2",
+        "sys-apps/nvme-cli",
+        "sys-apps/pciutils",
+        "sys-apps/policycoreutils",
+        "sys-apps/semodule-utils",
+        "sys-apps/usbutils",
+        "sys-apps/util-linux",
+        "sys-block/parted",
+        "sys-cluster/kubeadm",
+        "sys-cluster/kubectl",
+        "sys-cluster/kubelet",
+        "sys-fs/cryptsetup",
+        "sys-fs/dosfstools",
+        "sys-fs/e2fsprogs",
+        "sys-fs/lvm2",
+        "sys-fs/xfsprogs",
+        "sys-kernel/gentoo-sources",
+        "sys-libs/libseccomp",
+        "sys-libs/libselinux",
+        "sys-process/audit",
+        "sys-process/cronie"
+      ],
+      "dropped": [
+        {
+          "atom": "dev-embedded/raspberrypi-utils",
+          "why": "Raspberry Pi board tool"
+        },
+        {
+          "atom": "dev-embedded/rpi-eeprom",
+          "why": "Raspberry Pi bootloader EEPROM"
+        },
+        {
+          "atom": "sys-boot/raspberrypi-firmware",
+          "why": "Raspberry Pi GPU firmware boot chain"
+        },
+        {
+          "atom": "sys-firmware/raspberrypi-wifi-ucode",
+          "why": "Raspberry Pi Wi-Fi firmware"
+        },
+        {
+          "atom": "sys-kernel/raspberrypi-sources",
+          "why": "Raspberry Pi kernel fork"
+        }
+      ],
+      "id": "pki",
+      "source": {
+        "file": "docs/catalog/packages-catalog.json",
+        "platform": "rpi5",
+        "role": "pki",
+        "tiers": [
+          "essential",
+          "removable"
+        ]
+      },
+      "substituted": {
+        "sys-kernel/raspberrypi-sources": "sys-kernel/gentoo-sources"
+      },
+      "what": "PKI node"
+    },
+    {
+      "atoms": [
+        "app-admin/setools",
+        "app-admin/sudo",
+        "app-containers/cni-plugins",
+        "app-containers/containerd",
+        "app-containers/cri-tools",
+        "app-containers/runc",
+        "app-editors/nano",
+        "app-misc/jq",
+        "app-misc/screen",
+        "dev-embedded/u-boot-tools",
+        "net-firewall/conntrack-tools",
+        "net-firewall/iptables",
+        "net-firewall/nftables",
+        "net-fs/cifs-utils",
+        "net-fs/nfs-utils",
+        "net-misc/networkmanager",
+        "net-misc/openssh",
+        "net-misc/socat",
+        "net-vpn/openvpn",
+        "net-vpn/wireguard-tools",
+        "net-wireless/wpa_supplicant",
+        "sec-policy/selinux-base",
+        "sec-policy/selinux-base-policy",
+        "sec-policy/selinux-container",
+        "sec-policy/selinux-virt",
+        "sys-apps/checkpolicy",
+        "sys-apps/ethtool",
+        "sys-apps/haveged",
+        "sys-apps/i2c-tools",
+        "sys-apps/iproute2",
+        "sys-apps/nvme-cli",
+        "sys-apps/pciutils",
+        "sys-apps/policycoreutils",
+        "sys-apps/semodule-utils",
+        "sys-apps/usbutils",
+        "sys-apps/util-linux",
+        "sys-block/parted",
+        "sys-cluster/kubeadm",
+        "sys-cluster/kubectl",
+        "sys-cluster/kubelet",
+        "sys-fs/cryptsetup",
+        "sys-fs/dosfstools",
+        "sys-fs/e2fsprogs",
+        "sys-fs/lvm2",
+        "sys-fs/xfsprogs",
+        "sys-kernel/gentoo-sources",
+        "sys-libs/libseccomp",
+        "sys-libs/libselinux",
+        "sys-process/audit",
+        "sys-process/cronie"
+      ],
+      "dropped": [
+        {
+          "atom": "dev-embedded/raspberrypi-utils",
+          "why": "Raspberry Pi board tool"
+        },
+        {
+          "atom": "dev-embedded/rpi-eeprom",
+          "why": "Raspberry Pi bootloader EEPROM"
+        },
+        {
+          "atom": "sys-boot/raspberrypi-firmware",
+          "why": "Raspberry Pi GPU firmware boot chain"
+        },
+        {
+          "atom": "sys-firmware/raspberrypi-wifi-ucode",
+          "why": "Raspberry Pi Wi-Fi firmware"
+        },
+        {
+          "atom": "sys-kernel/raspberrypi-sources",
+          "why": "Raspberry Pi kernel fork"
+        }
+      ],
+      "id": "backend",
+      "source": {
+        "file": "docs/catalog/packages-catalog.json",
+        "platform": "rpi5",
+        "role": "backend",
+        "tiers": [
+          "essential",
+          "removable"
+        ]
+      },
+      "substituted": {
+        "sys-kernel/raspberrypi-sources": "sys-kernel/gentoo-sources"
+      },
+      "what": "backend node"
+    },
+    {
+      "atoms": [
+        "app-admin/setools",
+        "app-admin/sudo",
+        "app-containers/cni-plugins",
+        "app-containers/containerd",
+        "app-containers/cri-tools",
+        "app-containers/runc",
+        "app-editors/nano",
+        "app-misc/jq",
+        "app-misc/screen",
+        "dev-embedded/u-boot-tools",
+        "net-firewall/conntrack-tools",
+        "net-firewall/iptables",
+        "net-firewall/nftables",
+        "net-fs/cifs-utils",
+        "net-fs/nfs-utils",
+        "net-misc/networkmanager",
+        "net-misc/openssh",
+        "net-misc/socat",
+        "net-vpn/openvpn",
+        "net-vpn/wireguard-tools",
+        "net-wireless/wpa_supplicant",
+        "sec-policy/selinux-base",
+        "sec-policy/selinux-base-policy",
+        "sec-policy/selinux-container",
+        "sec-policy/selinux-virt",
+        "sys-apps/checkpolicy",
+        "sys-apps/ethtool",
+        "sys-apps/haveged",
+        "sys-apps/i2c-tools",
+        "sys-apps/iproute2",
+        "sys-apps/nvme-cli",
+        "sys-apps/pciutils",
+        "sys-apps/policycoreutils",
+        "sys-apps/semodule-utils",
+        "sys-apps/usbutils",
+        "sys-apps/util-linux",
+        "sys-block/parted",
+        "sys-cluster/kubeadm",
+        "sys-cluster/kubectl",
+        "sys-cluster/kubelet",
+        "sys-fs/cryptsetup",
+        "sys-fs/dosfstools",
+        "sys-fs/e2fsprogs",
+        "sys-fs/lvm2",
+        "sys-fs/xfsprogs",
+        "sys-kernel/gentoo-sources",
+        "sys-libs/libseccomp",
+        "sys-libs/libselinux",
+        "sys-process/audit",
+        "sys-process/cronie"
+      ],
+      "dropped": [
+        {
+          "atom": "dev-embedded/raspberrypi-utils",
+          "why": "Raspberry Pi board tool"
+        },
+        {
+          "atom": "dev-embedded/rpi-eeprom",
+          "why": "Raspberry Pi bootloader EEPROM"
+        },
+        {
+          "atom": "sys-boot/raspberrypi-firmware",
+          "why": "Raspberry Pi GPU firmware boot chain"
+        },
+        {
+          "atom": "sys-firmware/raspberrypi-wifi-ucode",
+          "why": "Raspberry Pi Wi-Fi firmware"
+        },
+        {
+          "atom": "sys-kernel/raspberrypi-sources",
+          "why": "Raspberry Pi kernel fork"
+        }
+      ],
+      "id": "frontend",
+      "source": {
+        "file": "docs/catalog/packages-catalog.json",
+        "platform": "rpi5",
+        "role": "frontend",
+        "tiers": [
+          "essential",
+          "removable"
+        ]
+      },
+      "substituted": {
+        "sys-kernel/raspberrypi-sources": "sys-kernel/gentoo-sources"
+      },
+      "what": "frontend node"
+    },
+    {
+      "atoms": [
+        "app-admin/setools",
+        "app-admin/sudo",
+        "app-containers/cni-plugins",
+        "app-containers/containerd",
+        "app-containers/cri-tools",
+        "app-containers/runc",
+        "app-editors/nano",
+        "app-misc/jq",
+        "app-misc/screen",
+        "dev-embedded/u-boot-tools",
+        "net-firewall/conntrack-tools",
+        "net-firewall/iptables",
+        "net-firewall/nftables",
+        "net-fs/cifs-utils",
+        "net-fs/nfs-utils",
+        "net-misc/networkmanager",
+        "net-misc/openssh",
+        "net-misc/socat",
+        "net-vpn/openvpn",
+        "net-vpn/wireguard-tools",
+        "net-wireless/wpa_supplicant",
+        "sec-policy/selinux-base",
+        "sec-policy/selinux-base-policy",
+        "sec-policy/selinux-container",
+        "sec-policy/selinux-virt",
+        "sys-apps/checkpolicy",
+        "sys-apps/ethtool",
+        "sys-apps/haveged",
+        "sys-apps/i2c-tools",
+        "sys-apps/iproute2",
+        "sys-apps/nvme-cli",
+        "sys-apps/pciutils",
+        "sys-apps/policycoreutils",
+        "sys-apps/semodule-utils",
+        "sys-apps/usbutils",
+        "sys-apps/util-linux",
+        "sys-block/parted",
+        "sys-cluster/kubeadm",
+        "sys-cluster/kubectl",
+        "sys-cluster/kubelet",
+        "sys-fs/cryptsetup",
+        "sys-fs/dosfstools",
+        "sys-fs/e2fsprogs",
+        "sys-fs/lvm2",
+        "sys-fs/xfsprogs",
+        "sys-kernel/gentoo-sources",
+        "sys-libs/libseccomp",
+        "sys-libs/libselinux",
+        "sys-process/audit",
+        "sys-process/cronie"
+      ],
+      "dropped": [
+        {
+          "atom": "dev-embedded/raspberrypi-utils",
+          "why": "Raspberry Pi board tool"
+        },
+        {
+          "atom": "dev-embedded/rpi-eeprom",
+          "why": "Raspberry Pi bootloader EEPROM"
+        },
+        {
+          "atom": "sys-boot/raspberrypi-firmware",
+          "why": "Raspberry Pi GPU firmware boot chain"
+        },
+        {
+          "atom": "sys-firmware/raspberrypi-wifi-ucode",
+          "why": "Raspberry Pi Wi-Fi firmware"
+        },
+        {
+          "atom": "sys-kernel/raspberrypi-sources",
+          "why": "Raspberry Pi kernel fork"
+        }
+      ],
+      "id": "omnibus",
+      "source": {
+        "file": "docs/catalog/packages-catalog.json",
+        "platform": "rpi5",
+        "role": "omnibus",
+        "tiers": [
+          "essential",
+          "removable"
+        ]
+      },
+      "substituted": {
+        "sys-kernel/raspberrypi-sources": "sys-kernel/gentoo-sources"
+      },
+      "what": "omnibus node"
+    },
+    {
+      "atoms": [
+        "app-admin/setools",
+        "app-admin/sudo",
+        "app-containers/cni-plugins",
+        "app-containers/containerd",
+        "app-containers/cri-tools",
+        "app-containers/nerdctl",
+        "app-containers/runc",
+        "app-editors/nano",
+        "app-misc/jq",
+        "app-misc/screen",
+        "dev-util/pahole",
+        "dev-util/vulkan-tools",
+        "media-libs/libva",
+        "media-libs/mesa",
+        "media-libs/vulkan-loader",
+        "net-firewall/conntrack-tools",
+        "net-firewall/firewalld",
+        "net-firewall/iptables",
+        "net-firewall/nftables",
+        "net-fs/cifs-utils",
+        "net-fs/nfs-utils",
+        "net-misc/networkmanager",
+        "net-misc/openssh",
+        "net-misc/socat",
+        "sec-policy/selinux-base",
+        "sec-policy/selinux-base-policy",
+        "sec-policy/selinux-container",
+        "sec-policy/selinux-virt",
+        "sys-apps/checkpolicy",
+        "sys-apps/ethtool",
+        "sys-apps/haveged",
+        "sys-apps/iproute2",
+        "sys-apps/policycoreutils",
+        "sys-apps/semodule-utils",
+        "sys-apps/systemd-utils",
+        "sys-apps/util-linux",
+        "sys-block/parted",
+        "sys-cluster/kubeadm",
+        "sys-cluster/kubectl",
+        "sys-cluster/kubelet",
+        "sys-fs/cryptsetup",
+        "sys-fs/dosfstools",
+        "sys-fs/e2fsprogs",
+        "sys-fs/lvm2",
+        "sys-fs/xfsprogs",
+        "sys-kernel/dracut",
+        "sys-kernel/gentoo-sources",
+        "sys-kernel/linux-firmware",
+        "sys-libs/libseccomp",
+        "sys-libs/libselinux",
+        "sys-process/audit",
+        "sys-process/cronie",
+        "x11-libs/libdrm"
+      ],
+      "dropped": [
+        {
+          "atom": "app-crypt/efitools",
+          "why": "Secure Boot chain, x86-only, greyed as its own feature"
+        },
+        {
+          "atom": "app-crypt/sbsigntools",
+          "why": "Secure Boot chain, x86-only, greyed as its own feature"
+        },
+        {
+          "atom": "sys-boot/grub",
+          "why": "x86 boot chain; riscv64 boots OpenSBI + U-Boot, not compiled here"
+        },
+        {
+          "atom": "sys-firmware/intel-microcode",
+          "why": "x86 CPU microcode"
+        }
+      ],
+      "id": "backend-gpu",
+      "source": {
+        "file": "docs/catalog/packages-catalog.json",
+        "platform": "x86",
+        "role": "backend-gpu",
+        "tiers": [
+          "essential",
+          "removable"
+        ]
+      },
+      "substituted": {},
+      "what": "GPU backend node"
+    },
+    {
+      "atoms": [
+        "app-admin/setools",
+        "app-admin/sudo",
+        "app-containers/cni-plugins",
+        "app-containers/containerd",
+        "app-containers/cri-tools",
+        "app-containers/nerdctl",
+        "app-containers/runc",
+        "app-editors/nano",
+        "app-misc/jq",
+        "app-misc/screen",
+        "dev-util/pahole",
+        "dev-util/vulkan-tools",
+        "media-libs/libva",
+        "media-libs/mesa",
+        "media-libs/vulkan-loader",
+        "net-firewall/conntrack-tools",
+        "net-firewall/firewalld",
+        "net-firewall/iptables",
+        "net-firewall/nftables",
+        "net-fs/cifs-utils",
+        "net-fs/nfs-utils",
+        "net-misc/networkmanager",
+        "net-misc/openssh",
+        "net-misc/socat",
+        "sec-policy/selinux-base",
+        "sec-policy/selinux-base-policy",
+        "sec-policy/selinux-container",
+        "sec-policy/selinux-virt",
+        "sys-apps/checkpolicy",
+        "sys-apps/ethtool",
+        "sys-apps/haveged",
+        "sys-apps/iproute2",
+        "sys-apps/policycoreutils",
+        "sys-apps/semodule-utils",
+        "sys-apps/systemd-utils",
+        "sys-apps/util-linux",
+        "sys-block/parted",
+        "sys-cluster/kubeadm",
+        "sys-cluster/kubectl",
+        "sys-cluster/kubelet",
+        "sys-fs/cryptsetup",
+        "sys-fs/dosfstools",
+        "sys-fs/e2fsprogs",
+        "sys-fs/lvm2",
+        "sys-fs/xfsprogs",
+        "sys-kernel/dracut",
+        "sys-kernel/gentoo-sources",
+        "sys-kernel/linux-firmware",
+        "sys-libs/libseccomp",
+        "sys-libs/libselinux",
+        "sys-process/audit",
+        "sys-process/cronie",
+        "x11-libs/libdrm"
+      ],
+      "dropped": [
+        {
+          "atom": "app-crypt/efitools",
+          "why": "Secure Boot chain, x86-only, greyed as its own feature"
+        },
+        {
+          "atom": "app-crypt/sbsigntools",
+          "why": "Secure Boot chain, x86-only, greyed as its own feature"
+        },
+        {
+          "atom": "sys-boot/grub",
+          "why": "x86 boot chain; riscv64 boots OpenSBI + U-Boot, not compiled here"
+        },
+        {
+          "atom": "sys-firmware/intel-microcode",
+          "why": "x86 CPU microcode"
+        }
+      ],
+      "id": "edge-ai",
+      "source": {
+        "file": "docs/catalog/packages-catalog.json",
+        "platform": "x86",
+        "role": "edge-ai",
+        "tiers": [
+          "essential",
+          "removable"
+        ]
+      },
+      "substituted": {},
+      "what": "edge-AI node"
+    }
+  ],
+  "schema": "package-resolution-report/v1",
+  "tree": {
+    "categories": [
+      "acct-group",
+      "acct-user",
+      "app-accessibility",
+      "app-admin",
+      "app-alternatives",
+      "app-antivirus",
+      "app-arch",
+      "app-backup",
+      "app-benchmarks",
+      "app-cdr",
+      "app-containers",
+      "app-crypt",
+      "app-dicts",
+      "app-doc",
+      "app-editors",
+      "app-emacs",
+      "app-emulation",
+      "app-eselect",
+      "app-forensics",
+      "app-i18n",
+      "app-laptop",
+      "app-metrics",
+      "app-misc",
+      "app-mobilephone",
+      "app-office",
+      "app-officeext",
+      "app-pda",
+      "app-portage",
+      "app-shells",
+      "app-text",
+      "app-vim",
+      "app-xemacs",
+      "dev-ada",
+      "dev-build",
+      "dev-cpp",
+      "dev-db",
+      "dev-debug",
+      "dev-dotnet",
+      "dev-embedded",
+      "dev-erlang",
+      "dev-games",
+      "dev-gap",
+      "dev-go",
+      "dev-haskell",
+      "dev-java",
+      "dev-lang",
+      "dev-libs",
+      "dev-lisp",
+      "dev-lua",
+      "dev-ml",
+      "dev-perl",
+      "dev-php",
+      "dev-python",
+      "dev-qt",
+      "dev-ruby",
+      "dev-scheme",
+      "dev-tcltk",
+      "dev-tex",
+      "dev-texlive",
+      "dev-util",
+      "dev-vcs",
+      "games-action",
+      "games-arcade",
+      "games-board",
+      "games-emulation",
+      "games-engines",
+      "games-fps",
+      "games-kids",
+      "games-misc",
+      "games-mud",
+      "games-puzzle",
+      "games-roguelike",
+      "games-rpg",
+      "games-server",
+      "games-simulation",
+      "games-sports",
+      "games-strategy",
+      "games-util",
+      "gnome-base",
+      "gnome-extra",
+      "gnustep-apps",
+      "gnustep-base",
+      "gnustep-libs",
+      "gui-apps",
+      "gui-libs",
+      "gui-wm",
+      "kde-apps",
+      "kde-frameworks",
+      "kde-misc",
+      "kde-plasma",
+      "llvm-core",
+      "llvm-runtimes",
+      "lxde-base",
+      "lxqt-base",
+      "mail-client",
+      "mail-filter",
+      "mail-mta",
+      "mate-base",
+      "mate-extra",
+      "media-fonts",
+      "media-gfx",
+      "media-libs",
+      "media-plugins",
+      "media-radio",
+      "media-sound",
+      "media-tv",
+      "media-video",
+      "net-analyzer",
+      "net-dialup",
+      "net-dns",
+      "net-firewall",
+      "net-fs",
+      "net-ftp",
+      "net-im",
+      "net-irc",
+      "net-libs",
+      "net-mail",
+      "net-misc",
+      "net-nds",
+      "net-news",
+      "net-nntp",
+      "net-p2p",
+      "net-print",
+      "net-proxy",
+      "net-voip",
+      "net-vpn",
+      "net-wireless",
+      "perl-core",
+      "sci-astronomy",
+      "sci-biology",
+      "sci-calculators",
+      "sci-chemistry",
+      "sci-electronics",
+      "sci-geosciences",
+      "sci-libs",
+      "sci-mathematics",
+      "sci-misc",
+      "sci-ml",
+      "sci-physics",
+      "sci-visualization",
+      "sec-keys",
+      "sec-policy",
+      "sys-apps",
+      "sys-auth",
+      "sys-block",
+      "sys-boot",
+      "sys-cluster",
+      "sys-devel",
+      "sys-fabric",
+      "sys-firmware",
+      "sys-fs",
+      "sys-kernel",
+      "sys-libs",
+      "sys-power",
+      "sys-process",
+      "virtual",
+      "www-apache",
+      "www-apps",
+      "www-client",
+      "www-misc",
+      "www-nginx",
+      "www-plugins",
+      "www-servers",
+      "x11-apps",
+      "x11-base",
+      "x11-drivers",
+      "x11-libs",
+      "x11-misc",
+      "x11-plugins",
+      "x11-terms",
+      "x11-themes",
+      "x11-wm",
+      "xfce-base",
+      "xfce-extra"
+    ],
+    "portage": "Portage 3.0.82.2",
+    "timestamp": "Thu, 24 Sep 2026 00:45:00 +0000"
+  }
+}

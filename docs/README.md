@@ -31,6 +31,7 @@ The docs for the image/infra layer. State key used throughout:
 - [`SUPERADMIN-MESH-CLIENT.md`](SUPERADMIN-MESH-CLIENT.md) — how a platform superadmin joins the tailnet mesh and reaches nodes over SSH.
 - [`IMAGE-GEN-PROGRESS.md`](IMAGE-GEN-PROGRESS.md) — the image-build worker's optional non-terminal `PROGRESS_URL` side channel. It fills the web progress bar between the start frame and the terminal `COMPLETED`/`FAILED`/`ERROR` result.
 - [`PACKAGE-FLAG-BADGES.md`](PACKAGE-FLAG-BADGES.md) — ground truth for the Studio's per-package flag display: every USE-flag state portage can render (re-derived from portage 3.0.81.2's own formatter), which of the four columns (USE_EXPAND / USE / KEYWORDS / LICENSE) each channel can source, the 100%-coverage **offline** hover-doc sources, and the badge colour+emoji mapping (🔭 semantics only; no feature code).
+- [`PACKAGE-RESOLUTION-RISCV-MIPS.md`](PACKAGE-RESOLUTION-RISCV-MIPS.md) — the measured package resolution report for riscv64 (with and without SELinux), mips64el and mips64: per role, resolvable or the first missing component, from a pretend resolve in the existing builder image (`scripts/package-resolution-report.py`). It is the source of every greyed role reason for those arches, and a Studio test holds the catalog to it.
 
 ## Architecture
 

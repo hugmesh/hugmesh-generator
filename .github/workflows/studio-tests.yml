@@ -74,6 +74,13 @@ on:
       # drift that guard exists to catch.
       - 'docs/STUDIO-INSTALLERS.md'
       - '.github/workflows/studio-release.yml'
+      # hugmesh-generator#1056: studio/tests/test_package_resolution_report.py holds the
+      # device catalog's greyed riscv64/MIPS reasons to the measured resolution report,
+      # and the report to its generator. The report, its rendering and the script all
+      # live outside studio/, and a re-measure lands only there.
+      - 'scripts/package-resolution-report.py'
+      - 'docs/catalog/package-resolution-report.json'
+      - 'docs/PACKAGE-RESOLUTION-RISCV-MIPS.md'
   # A PUSH to main, for the Studio release machinery only. The release guard tests
   # (test_studio_beta_version.py, test_studio_release_signing.py,
   # test_studio_release_cut.py) parse the release workflows, and on 2026-10-22/23
