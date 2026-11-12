@@ -131,8 +131,9 @@ NM_TABLE=(
 )
 # rpi5 writes it inside its INACTIVE_TIMEOUT=60 block (#858), which ends at its `fi`
 # (rpi5 has no build-time SELinux label pass); every other builder has its own block,
-# which ends at a blank line. x86's INACTIVE_TIMEOUT=60 is pinned by
-# tests/qemu/mesh_client_test.sh section F1.
+# which ends at a blank line. x86 has BOTH blocks, apart: the probe block before the
+# label pass, the INACTIVE_TIMEOUT=60 block (also pinned by tests/qemu/mesh_client_test.sh
+# section F1) after it. The x86 section at the end of this file pins that pair.
 nm_block() { # $1 builder  $2 wait|probe
     case "$2" in
         wait)  awk '/^# ── NetworkManager: wait for the link before handing over `net`/{p=1} p{print} p&&/^fi$/{exit}' "$1" ;;
@@ -182,6 +183,12 @@ for row in "${NM_TABLE[@]}"; do
     if [ -z "${src}" ] || ! grep -q '90-hugmesh-no-connectivity-check.conf' <<<"${src}"; then
         bad "${b}: the NetworkManager connectivity-probe block was not found"; continue
     fi
+    # Exactly ONE write per builder. A merge that keeps a block from each side (the
+    # block in its old place and in its new one) still has a block this loop finds and
+    # likes; the second copy is what it would not see.
+    wn="$(grep -c '> "\${SYSROOT}/etc/NetworkManager/conf.d/90-hugmesh-no-connectivity-check.conf"' "${f}")"
+    if [ "${wn}" = 1 ]; then ok "${b}: writes the connectivity-probe file exactly once"
+    else bad "${b}: writes the connectivity-probe file ${wn} times (expected 1: one block, one place)"; fi
     # Placement: in the sysroot before it is packaged (and so before the live/installer
     # squashfs is cut from it), and, on a builder that labels at build time (frite,
     # x86), BEFORE that label pass: the file is a new inode, so written after setfiles
@@ -220,6 +227,57 @@ for row in "${NM_TABLE[@]}"; do
         else ok "${b} (${keep}): a desktop keeps the package's connectivity check"; fi
     fi
 done
+
+echo "== x86: the probe block and its neighbours between the label pass and the pack =="
+# The x86 builder's run-up to the stage4 pack is shared ground. This PR's probe block
+# sits BEFORE the build-time label pass; after the pass come the INACTIVE_TIMEOUT=60
+# block (#858, which the probe write lived in until it was moved before the pass) and
+# the fatal build_sudoers_gate call (#983), the last look before the pack. Merging
+# origin/main into a head from before that move put the probe write back inside the
+# #858 block, after the label pass, with the old expectation in this file. So the
+# whole order is pinned here, both sides of it, and the #858 block is EXECUTED: it
+# must still set its timeout and must NOT be where the probe file is written.
+X86="${REPO}/build-x86-host-stage4.sh"
+x_pb="$(nm_block_line "${X86}" probe)"
+x_lb="$(grep -n 'slx_label_tree "\${SYSROOT}"' "${X86}" | head -n 1 | cut -d: -f1)"
+x_wt="$(nm_block_line "${X86}" wait)"
+x_pk="$(grep -n '^banner "Packaging stage4 tarball"' "${X86}" | head -n 1 | cut -d: -f1)"
+# The LAST fatal gate call at column 0 before the banner (the live-pack one is indented
+# and comes after it).
+x_gt="$(awk -v pk="${x_pk:-0}" 'NR<pk && /^build_sudoers_gate [|][|] [{] .*exit 1; [}]$/ {n=NR} END{if(n)print n}' "${X86}")"
+if [ -n "${x_pb}" ] && [ -n "${x_lb}" ] && [ -n "${x_wt}" ] && [ -n "${x_gt}" ] && [ -n "${x_pk}" ]; then
+    ok "x86: found the probe block, the label pass, the INACTIVE_TIMEOUT block, the sudoers gate and the pack banner"
+    if [ "${x_pb}" -lt "${x_lb}" ] && [ "${x_lb}" -lt "${x_wt}" ] && [ "${x_wt}" -lt "${x_gt}" ] && [ "${x_gt}" -lt "${x_pk}" ]; then
+        ok "x86: probe block < label pass < INACTIVE_TIMEOUT block < fatal sudoers gate < stage4 pack"
+    else
+        bad "x86: order broken: probe block ${x_pb}, label pass ${x_lb}, INACTIVE_TIMEOUT block ${x_wt}, sudoers gate ${x_gt}, pack banner ${x_pk}"
+    fi
+    # Nothing is written into the sysroot between the gate and the pack: the gate is
+    # only the last look while what follows it is comment or the banner itself.
+    x_between="$(awk -v a="${x_gt}" -v z="${x_pk}" 'NR>a && NR<z && !/^[[:space:]]*(#|$)/' "${X86}")"
+    if [ -z "${x_between}" ]; then ok "x86: no command between the sudoers gate and the pack banner"
+    else bad "x86: a command sits between the sudoers gate (line ${x_gt}) and the pack banner (line ${x_pk}), unseen by the gate"; fi
+else
+    bad "x86: a piece of the run-up to the pack is missing (probe block '${x_pb}', label pass '${x_lb}', INACTIVE_TIMEOUT block '${x_wt}', fatal sudoers gate '${x_gt}', pack banner '${x_pk}')"
+fi
+x_src="$(nm_block "${X86}" wait)"
+if [ -z "${x_src}" ]; then
+    bad "x86: the INACTIVE_TIMEOUT=60 block (#858) was not found"
+else
+    run_block build-x86-host-stage4.sh "${x_src}" "ROLE_CLIENT=false"; rc=$?
+    if [ "${rc}" -eq 2 ]; then bad "x86 (ROLE_CLIENT=false): the INACTIVE_TIMEOUT block failed to run under set -u"
+    else
+        if [ "$(grep -c '^INACTIVE_TIMEOUT=60$' "${RUN_SYS}/etc/conf.d/NetworkManager" 2>/dev/null)" = 1 ]; then
+            ok "x86 (ROLE_CLIENT=false): INACTIVE_TIMEOUT=60 is still written"
+        else bad "x86 (ROLE_CLIENT=false): INACTIVE_TIMEOUT=60 is no longer written"; fi
+        if [ "${rc}" -eq 1 ]; then ok "x86: the INACTIVE_TIMEOUT block does not write the probe file (that is the earlier block's job)"
+        else bad "x86: the INACTIVE_TIMEOUT block writes the probe file, after the label pass, so it ships unlabelled"; fi
+    fi
+    run_block build-x86-host-stage4.sh "${x_src}" "ROLE_CLIENT=true"; rc=$?
+    if [ "${rc}" -eq 2 ]; then bad "x86 (ROLE_CLIENT=true): the INACTIVE_TIMEOUT block failed to run under set -u"
+    elif [ -e "${RUN_SYS}/etc/conf.d/NetworkManager" ]; then bad "x86 (ROLE_CLIENT=true): a client desktop got the 60s wait (an offline laptop would stall its boot)"
+    else ok "x86 (ROLE_CLIENT=true): a client desktop keeps the stock NetworkManager timeout"; fi
+fi
 
 echo "== test-node-telemetry-off: ${P} passed, ${N} failed =="
 [ "${N}" -eq 0 ]
