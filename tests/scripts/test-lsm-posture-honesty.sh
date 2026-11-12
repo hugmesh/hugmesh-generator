@@ -90,25 +90,6 @@ def read(rel):
     with open(p, encoding="utf-8", errors="replace") as f:
         return f.read()
 
-# The x86 post-olddefconfig guard moved out of the builder's chroot heredoc into
-# scripts/_x86-kernel-asserts.sh (ONE list, shared with scripts/kernel-reconfig-x86.sh).
-# It only counts as the builder's guard while the builder stages it into the sysroot
-# and runs it AFTER `make olddefconfig`; otherwise the builder is read alone and fails.
-X86_BUILDER = "build-x86-host-stage4.sh"
-X86_ASSERTS = "scripts/_x86-kernel-asserts.sh"
-def builder_text(rel):
-    t = read(rel)
-    if t is None or rel != X86_BUILDER:
-        return t
-    od = re.search(r"^make olddefconfig\s*$", t, re.M)
-    call = re.search(r'^bash /tmp/hm-x86-kernel-asserts\.sh "\$\{ROLE_K8S\}"\s*$', t, re.M)
-    staged = 'scripts/_x86-kernel-asserts.sh" "${SYSROOT}/tmp/hm-x86-kernel-asserts.sh"' in t
-    a = read(X86_ASSERTS)
-    if od and call and staged and call.start() > od.start() and a:
-        return t + "\n" + a
-    return t
-
-
 # The two fragment dialects: x86/rpi5 are scripts/config action lines
 # (`enable CONFIG_X` / `set-str CONFIG_LSM "…"`), the ARM boards are literal
 # .config lines (`CONFIG_X=y`). Both must parse, or a lint that only understands
@@ -199,7 +180,7 @@ for board, frag, cmdf, kind, builder in BOARDS:
 print()
 print("-- 3) each builder's guard is fail-closed AND derives symbols from CONFIG_LSM --")
 for board, frag, cmdf, kind, builder in BOARDS:
-    btext = builder_text(builder)
+    btext = read(builder)
     if btext is None:
         bad("%s: builder %s is missing" % (board, builder)); continue
     want = lsm_by_board.get(board)

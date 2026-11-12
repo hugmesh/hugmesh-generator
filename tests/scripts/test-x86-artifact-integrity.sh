@@ -132,12 +132,7 @@ fi
 seal_ln=$(grep -n 'refusing to seal an .img' "${BUILDER}" | head -1 | cut -d: -f1)
 mkimg_ln=$(grep -n 'Building GRUB-EFI core image' "${BUILDER}" | head -1 | cut -d: -f1)
 gate_ln=$(grep -n '^# ── DISK-INITRAMFS GATE' "${BUILDER}" | head -1 | cut -d: -f1)
-# The dracut step lives in scripts/_x86-kernel-install.sh (shared with the kernel
-# reconfiguration path); the builder line that RUNS it is the kernel phase's dracut step.
-dracut_ln=""
-if grep -F 'WARN: dracut (disk initramfs) failed' "${REPO}/scripts/_x86-kernel-install.sh" >/dev/null 2>&1; then
-  dracut_ln=$(grep -n '^bash /tmp/hm-x86-kernel-install\.sh ' "${BUILDER}" | head -1 | cut -d: -f1)
-fi
+dracut_ln=$(grep -n 'WARN: dracut (disk initramfs) failed' "${BUILDER}" | head -1 | cut -d: -f1)
 sb_ln=$(grep -n '^# ── Secure Boot: org signing-key generation' "${BUILDER}" | head -1 | cut -d: -f1)
 if [ -n "${seal_ln}" ] && [ -n "${mkimg_ln}" ] && [ "${seal_ln}" -lt "${mkimg_ln}" ]; then
   ok "seal gate (${seal_ln}) runs before grub-mkimage (${mkimg_ln})"

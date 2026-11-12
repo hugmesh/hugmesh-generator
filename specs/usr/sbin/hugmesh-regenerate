@@ -1,8 +1,7 @@
 #!/bin/bash
 # hugmesh-regenerate — build a fresh, customized HugMesh live/installer ISO
 # from the generator source bundled into this image (shipped at
-# /usr/share/hugmesh/generator-src when the image was built with --bundle-source;
-# the builder's BUNDLE_SOURCE_DIR. Not /usr/src: every artifact drops that whole).
+# /usr/src/hugmesh-generator when the image was built with --bundle-source).
 #
 # Run as root from the installed desktop (or the live env). Any arguments are passed
 # straight through to the builder, so you can tweak the role / GPU / home / installer
@@ -12,7 +11,7 @@
 #        --home-encrypted --installer-ui all -w /media/out
 #
 set -euo pipefail
-SRC="${HUGMESH_SRC:-/usr/share/hugmesh/generator-src}"
+SRC="${HUGMESH_SRC:-/usr/src/hugmesh-generator}"
 [ -d "${SRC}" ] || { echo "No bundled source at ${SRC}. Rebuild the image with --bundle-source." >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || { echo "Run as root (it partitions loop images / chroots): sudo $0 $*" >&2; exit 1; }
 cd "${SRC}"
