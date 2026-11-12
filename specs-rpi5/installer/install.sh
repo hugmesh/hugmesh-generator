@@ -35,7 +35,8 @@ LUKS_PASS=""
 # are files on the FAT boot partition, DERIVED from the final cmdline.txt/config.txt:
 # cmdline-rescue.txt (enforcing=0), cmdline-enforcing-test.txt (enforcing=1) and
 # tryboot.txt (config.txt + cmdline=cmdline-enforcing-test.txt; Pi 4/5 read it for
-# ONE boot after `reboot "0 tryboot"`). This installer rewrites root= below, so it
+# ONE boot while the firmware tryboot flag is set: `reboot -m "0 tryboot"` under the
+# image's sysvinit, see build-rpi5-stage4.sh). This installer rewrites root= below, so it
 # re-derives them after its last edit — or the rescue would boot the card's root=.
 rpi_selinux_boot_variants() {
     local b="${1:?rpi_selinux_boot_variants: boot dir required}" base
@@ -48,7 +49,7 @@ rpi_selinux_boot_variants() {
     printf '%s enforcing=0\n' "${base}" > "${b}/cmdline-rescue.txt" || return 1
     printf '%s enforcing=1\n' "${base}" > "${b}/cmdline-enforcing-test.txt" || return 1
     { cat "${b}/config.txt" \
-      && printf '\n# tryboot.txt: config.txt for ONE boot after `reboot "0 tryboot"` (SELinux\n# enforcing trial). Regenerated from config.txt at build/install time.\n[all]\ncmdline=cmdline-enforcing-test.txt\n'; } \
+      && printf '\n# tryboot.txt: config.txt for ONE boot while the firmware tryboot flag is set (SELinux\n# enforcing trial). Start it with: reboot -m "0 tryboot" (sysvinit; plain reboot takes no\n# argument). Regenerated from config.txt at build/install time.\n[all]\ncmdline=cmdline-enforcing-test.txt\n'; } \
         > "${b}/tryboot.txt" || return 1
 }
 

@@ -1927,10 +1927,16 @@ _sed_rep_escape() {
 #   cmdline-enforcing-test.txt  cmdline.txt + enforcing=1, used by tryboot.txt;
 #   tryboot.txt                 config.txt + 'cmdline=cmdline-enforcing-test.txt'.
 #                               Pi 4/5 firmware reads tryboot.txt INSTEAD of config.txt
-#                               for ONE boot after `reboot "0 tryboot"`, then falls
-#                               back on its own: an enforcing trial that cannot strand
-#                               the node (a hang is cleared by a power cycle). Pi 3
-#                               firmware has no tryboot and ignores the file;
+#                               for ONE boot while its tryboot flag is set, then falls
+#                               back on its own (a hang is cleared by a power cycle).
+#                               The kernel sets that flag on a restart whose argument
+#                               contains "tryboot". This image runs sysvinit, NOT systemd:
+#                               `reboot "0 tryboot"` is a usage error there (halt.c:
+#                               leftover args -> usage(), exit 1); the sysvinit spelling
+#                               is `reboot -m "0 tryboot"` (LINUX_REBOOT_CMD_RESTART2 with
+#                               that message). -m implies -f: it syncs and restarts
+#                               WITHOUT running the shutdown runlevel.
+#                               Pi 3 firmware has no tryboot and ignores the file;
 #   cmdline-rescue.txt          cmdline.txt + enforcing=0. The permissive rescue: from
 #                               any computer, add 'cmdline=cmdline-rescue.txt' as the
 #                               last line of config.txt (see the note there).
@@ -1950,7 +1956,7 @@ rpi_selinux_boot_variants() {
     printf '%s enforcing=0\n' "${base}" > "${b}/cmdline-rescue.txt" || return 1
     printf '%s enforcing=1\n' "${base}" > "${b}/cmdline-enforcing-test.txt" || return 1
     { cat "${b}/config.txt" \
-      && printf '\n# tryboot.txt: config.txt for ONE boot after `reboot "0 tryboot"` (SELinux\n# enforcing trial). Regenerated from config.txt at build/install time.\n[all]\ncmdline=cmdline-enforcing-test.txt\n'; } \
+      && printf '\n# tryboot.txt: config.txt for ONE boot while the firmware tryboot flag is set (SELinux\n# enforcing trial). Start it with: reboot -m "0 tryboot" (sysvinit; plain reboot takes no\n# argument). Regenerated from config.txt at build/install time.\n[all]\ncmdline=cmdline-enforcing-test.txt\n'; } \
         > "${b}/tryboot.txt" || return 1
 }
 
@@ -4798,7 +4804,7 @@ else
         # hardening (e.g. a defconfig bump dropping a dep that olddefconfig
         # then prunes), mirroring the x86 build's guard — stable, long-standing
         # KSPP/LSM symbols only. A malformed CONFIG_LSM == SELinux disabled.
-        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM \
+        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM CONFIG_SECURITY_SELINUX_DEVELOP \
                     CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_SOURCE \
                     CONFIG_HARDENED_USERCOPY; do
             grep -q "^${must}=y" .config || { err "hardened kernel option ${must} not enabled after olddefconfig"; exit 1; }

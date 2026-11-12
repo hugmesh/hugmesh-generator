@@ -1053,7 +1053,9 @@ o="$( . "${LIB}"; slx_fix_cross_python_ext "${PX}" aarch64 2>&1 )"; rc=$?
 for b in "${ALL_BUILDERS[@]}"; do
     bn="${b##*/}"; bnc="${TMP}/${bn}.nc9"; grep -nvE '^[[:space:]]*#' "${b}" > "${bnc}"
     l_fix="$({ grep -E -m1 '^[0-9]+:slx_fix_cross_python_ext "\$\{SYSROOT\}" aarch64 \\$' "${bnc}" || true; } | cut -d: -f1)"
-    l_ffl="$({ grep -E -m1 '^[0-9]+:    \|\| \{ err "could not give the cross-built python extensions' "${bnc}" || true; } | cut -d: -f1)"
+    # The WHOLE fail line, through `exit 1; }` at its end: a prefix match let a
+    # `|| { err ...; true; }` (non-fatal) pass as "(fatal)" (#944 review, M08).
+    l_ffl="$({ grep -E -m1 '^[0-9]+:    \|\| \{ err "could not give the cross-built python extensions[^"]*"; exit 1; \}[[:space:]]*$' "${bnc}" || true; } | cut -d: -f1)"
     if [ "${bn}" = build-x86-host-stage4.sh ]; then
         [ -z "${l_fix}" ] && ok "I9: ${bn} (native build) does not call it" || bad "I9: the native x86 builder calls the cross-suffix fix"
         continue
@@ -1065,6 +1067,23 @@ for b in "${ALL_BUILDERS[@]}"; do
         && [ -n "${l_frz}" ] && [ "${l_fix}" -lt "${l_frz}" ] \
         && ok "I9: ${bn} fixes python extension suffixes after its last cross-emerge and before its sysroot is labelled/packed (fatal)" \
         || bad "I9: ${bn}: fix=${l_fix:-none} fail-line=${l_ffl:-none} last-cross-emerge=${l_emg:-?} frozen-at=${l_frz:-?}"
+done
+
+# I10) enforcing=0|1 on the kernel cmdline — what every rescue/trial entry above
+# rides — is honoured ONLY with CONFIG_SECURITY_SELINUX_DEVELOP=y. Only x86 and
+# rpi5 set it; the eight other boards relied on the Kconfig default and no guard
+# checked it (#944 review). Every board's fragment must ENABLE it and every
+# builder's post-olddefconfig SELinux guard must REFUSE a kernel without it.
+echo "-- I10) every kernel carries SELINUX_DEVELOP (cmdline enforcing= is honoured) --"
+for b in "${ALL_BUILDERS[@]}"; do
+    bn="${b##*/}"; board="${bn#build-}"; board="${board%-stage4.sh}"; [ "${board}" = x86-host ] && board=x86
+    frag="$(grep -lE '^(CONFIG_SECURITY_SELINUX_DEVELOP=y|enable CONFIG_SECURITY_SELINUX_DEVELOP)$' "${REPO}/specs-${board}/kernel/"*.config 2>/dev/null | head -1)"
+    [ -n "${frag}" ] && ! grep -qE '^(# CONFIG_SECURITY_SELINUX_DEVELOP is not set|CONFIG_SECURITY_SELINUX_DEVELOP=n|disable CONFIG_SECURITY_SELINUX_DEVELOP)$' "${REPO}/specs-${board}/kernel/"*.config \
+        && ok "I10: ${bn}: specs-${board}/kernel/${frag##*/} enables CONFIG_SECURITY_SELINUX_DEVELOP" \
+        || bad "I10: ${bn}: no specs-${board}/kernel fragment enables CONFIG_SECURITY_SELINUX_DEVELOP (or one disables it)"
+    grep -vE '^[[:space:]]*#' "${b}" | grep -E '^[[:space:]]*for must in CONFIG_SECURITY_SELINUX ' | grep -w 'CONFIG_SECURITY_SELINUX_DEVELOP' >/dev/null \
+        && ok "I10: ${bn}: the kernel guard refuses a .config without CONFIG_SECURITY_SELINUX_DEVELOP=y" \
+        || bad "I10: ${bn}: the kernel guard does not check CONFIG_SECURITY_SELINUX_DEVELOP"
 done
 
 echo

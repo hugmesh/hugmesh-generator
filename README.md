@@ -62,7 +62,15 @@ _As of 2026-08-05, except the kind SSO e2e bullets, re-measured 2026-10-14. Stat
   for Secure Boot as well as GRUB+vmlinuz), `grub.d` snippets for installed
   x86 nodes, extra `LABEL`s in every extlinux board's menu, and on the Pi
   `cmdline-rescue.txt` (add `cmdline=cmdline-rescue.txt` to `config.txt`)
-  plus a `tryboot.txt` trial (`reboot "0 tryboot"`).
+  plus a one-boot `tryboot.txt` trial. The image runs sysvinit, so the trial is
+  started with `reboot -m "0 tryboot"`; systemd's `reboot "0 tryboot"` is a
+  usage error there. `-m` implies `-f`: it restarts without running the
+  shutdown runlevel.
+  The signed `-selinux-rescue` UKI is a Secure Boot-signed permissive path that
+  anyone at the `.img` GRUB menu can pick (no GRUB superusers): once enforcing
+  becomes the default, physical console access means permissive. LUKS still
+  gates an encrypted root. That trade is deliberate, because a rescue has to
+  exist before enforcing can be the default.
 - **✅ SELinux node policy compiled + loaded (all ten builders)** — the hugmesh
   node-policy modules are compiled against the *sysroot's* refpolicy headers,
   installed into every image and loaded at first boot from

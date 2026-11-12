@@ -60,5 +60,10 @@ arm_boost=1
 #                               at the very end of this file. Remove it to go back.
 #   cmdline-enforcing-test.txt  ... enforcing=1  used by tryboot.txt;
 #   tryboot.txt                 this file + cmdline=cmdline-enforcing-test.txt.
-#                               `reboot "0 tryboot"` boots it ONCE (Pi 4/5), then the
-#                               firmware returns to this file by itself.
+#                               Pi 4/5 firmware boots it ONCE when its tryboot flag is
+#                               set, then returns to this file by itself. Set the flag
+#                               with (sysvinit; `reboot "0 tryboot"` is systemd's form
+#                               and a usage error here):
+#                                   reboot -m "0 tryboot"
+#                               -m implies -f: it syncs and restarts without running
+#                               the shutdown runlevel, so stop what must stop first.

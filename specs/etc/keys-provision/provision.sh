@@ -3608,7 +3608,9 @@ selinux_policy_loaded() {
 # warn loudly + persist the reason where the enforce-gate looks for it.
 selinux_provision_failed() {
     warn "SELinux: $*"
-    warn "SELinux: this image was BUILT selinux-aware but first boot ends WITHOUT a working policy load."
+    # Callers include a failed root login MAPPING after a good policy load, so this
+    # line must not claim the load failed: the reason above says which step it was.
+    warn "SELinux: this image was BUILT selinux-aware but first-boot SELinux setup did NOT complete (the step that failed is named above; the policy itself may still have loaded)."
     warn "SELinux: recording ${SELINUX_FAIL_MARKER}; /etc/init.d/selinux-enforce-gate refuses to flip while it exists."
     warn "SELinux: fix the load, then re-provision (KEYS_FORCE=1 or .provision-force) to clear it."
     echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" >> "${SELINUX_FAIL_MARKER}"
