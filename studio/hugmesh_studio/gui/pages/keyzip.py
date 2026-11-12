@@ -148,7 +148,10 @@ class KeyZipPage(QtWidgets.QWizardPage):
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.path, 1); h.addWidget(btn)
         lay.addWidget(_row("Key-zip file", w))
-        imp = QtWidgets.QPushButton("Import & apply")
+        # '&&', not '&': a button reads a bare ampersand as a mnemonic on the next
+        # character, so "Import & apply" rendered as "Import _apply" (the space
+        # underlined, Alt+Space bound). See tests/test_gui_button_mnemonics.py.
+        imp = QtWidgets.QPushButton("Import && apply")
         imp.clicked.connect(self._import)
         lay.addWidget(imp)
 
