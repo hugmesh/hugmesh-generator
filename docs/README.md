@@ -88,6 +88,7 @@ The docs for the image/infra layer. State key used throughout:
 - [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) — per-user device images (FD-04 ✅ shipped; FD-06/07/08 + desktop-app governance 🔭 deferred).
 - [`MDM.md`](MDM.md) — the fourth onboarding form (✅ merged): verified GrapheneOS onto a USB-connected Pixel → attest → Headwind MDM enroll → mesh enroll → escrowed enterprise profile → device-registry ingest (`scripts/phone-wizard.sh`); real pre-deploy gaps remain (see its Deferred section).
 - [`STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md) — hardened standalone NVIDIA desktop images (not a cluster node).
+- [`design/PLATFORM-EXPANSION.md`](design/PLATFORM-EXPANSION.md) — Studio hosts beyond Linux and Windows (macOS finish, BSD, Solaris and illumos), a 64-bit Solaris omnibus option, RISC-V and MIPS images, and what happens to every planned device (🔭 design only; every lane is held until the operator confirms).
 
 ## Testing
 
