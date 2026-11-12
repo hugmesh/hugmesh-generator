@@ -76,9 +76,8 @@ class QuestPage(QtWidgets.QWizardPage):
         self._running = False
         self.setTitle("MDM Quest headset")
         self.setSubTitle("Enroll a USB-connected Meta Quest 3/3S as an MDM-managed "
-                         "mesh device — no image build, no flash (the headset keeps "
-                         "Horizon OS). Every gate lives in the driver itself. This is "
-                         "the end of this path: Exit closes the Studio.")
+                         "mesh device — no image build, no flash (it keeps Horizon OS); "
+                         "the driver holds every gate. Exit closes the Studio.")
         self.setFinalPage(True)
         # Pressing the final button here does nothing but close the Studio — no
         # build, no apply, no write, no state commit — so it says so (_widgets:

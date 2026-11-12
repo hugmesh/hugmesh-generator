@@ -396,18 +396,22 @@ def test_save_mesh_delegates_planner_rows_to_emulation_save(deploy_plan, monkeyp
     seen = {}
 
     def _spy_save(generator_dir, items=None, *, work_dir="", session="", stamp="",
-                  overwrite=False, budget_bytes=0, run=None, disk_usage=None):
+                  overwrite=False, budget_bytes=0, run=None, disk_usage=None,
+                  read_posture=None):
         seen.update(generator_dir=generator_dir, items=items, work_dir=work_dir,
-                    session=session, overwrite=overwrite)
+                    session=session, overwrite=overwrite, read_posture=read_posture)
         return emulation_save.MeshSaveReport(session=session, session_dir="",
                                              work_dir=work_dir)
 
     monkeypatch.setattr(emulation_save, "save_mesh", _spy_save)
-    em.save_mesh(deploy_plan, session="mesh-x", overwrite=True)
+    reader = object()
+    em.save_mesh(deploy_plan, session="mesh-x", overwrite=True, read_posture=reader)
     assert seen["generator_dir"] == deploy_plan.generator_dir
     assert seen["work_dir"] == deploy_plan.work_dir
     assert [i.label for i in seen["items"]] == deploy_plan.labels
     assert seen["session"] == "mesh-x" and seen["overwrite"] is True
+    # the go-live posture read (before each pause) is the orchestrator's, passed through
+    assert seen["read_posture"] is reader
 
 
 def test_plan_mesh_save_surfaces_unbootable_planned_rows(deploy_plan):

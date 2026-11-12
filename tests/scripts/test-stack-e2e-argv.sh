@@ -37,7 +37,8 @@
 #
 # Optional leg: E2E_NODE_MODULES=/path/to/tests/e2e/node_modules runs the REAL
 # `playwright test --list` enumeration. Without it that leg SKIPS LOUDLY and is
-# counted as a skip, never as a pass.
+# counted as a skip, never as a pass. Section 5 always runs: it checks statically
+# that the scratch copy the leg lists from has every file the specs import.
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -387,8 +388,189 @@ else
     fi
 fi
 
+# stage_e2e_copy SRC DST: build the scratch copy of tests/e2e that section 6's real
+# `playwright test --list` runs in. Section 5 scans the same copy. Both sections call
+# this ONE function, so the guard checks the copy the leg really makes, not a
+# description of it.
+#
+# It copies the WHOLE directory, minus the generated output that tests/e2e/.gitignore
+# lists. Until 2026-11-11 the leg copied four named paths instead (specs/, reporters/,
+# playwright.config.ts, package.json). Then spec 34 began to import
+# '../steps/governance', and --list exited 1 ("Cannot find module
+# '../steps/governance'") on every box that had node_modules. CI has none, so it
+# skipped the leg and stayed green. A list of directories to copy breaks again the
+# next time a spec imports from a new one; a list of directories to leave out only
+# has to follow .gitignore.
+#   node_modules            the leg symlinks E2E_NODE_MODULES into its place
+#   .features-gen           bddgen output; a stale local copy would add the bdd
+#                           lane's generated specs to the listing
+#   test-results, playwright-report, shots   per-run artefacts; nothing imports them
+# features/ IS copied. With no .features-gen beside it, playwright.config.ts prints
+# its "GHERKIN LANE NOT GENERATED" banner to stderr on every listing. That banner is
+# expected here, and it is not the reason when the leg fails.
+stage_e2e_copy() {
+    local src dst e name rc
+    src="$1"; dst="$2"; rc=0
+    mkdir -p "${dst}" || return 1
+    for e in "${src}"/* "${src}"/.[!.]*; do
+        # An unmatched glob stays literal; skip it, but keep a dangling symlink.
+        [ -e "${e}" ] || [ -L "${e}" ] || continue
+        name="${e##*/}"
+        case "${name}" in
+          node_modules|.features-gen|test-results|playwright-report|shots) continue ;;
+        esac
+        cp -R "${e}" "${dst}/" || rc=1
+    done
+    return "${rc}"
+}
+
+# scan_imports STAGED SRC: print one "PROBLEM <file> imports <spec>: <why>" line for
+# each relative import reachable from STAGED/playwright.config.ts, STAGED/specs/ and
+# STAGED/reporters/ that does not resolve inside STAGED. Then print
+# "SUMMARY <files> <edges> <staged specs> <SRC specs>". Section 5 runs it on a
+# fixture with known answers before it trusts it on the real copy.
+scan_imports() {
+    python3 - "$1" "$2" <<'PY' 2>&1
+import os, re, sys
+
+root = os.path.realpath(sys.argv[1])
+src = os.path.realpath(sys.argv[2])
+SRC_EXT = ('.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs')
+# Playwright's default testMatch: **/*.@(spec|test).?(c|m)[jt]s?(x)
+SPEC_RE = re.compile(r'\.(spec|test)\.[cm]?[jt]sx?$')
+# The relative specifier of every `from '…'` (import and export-from), bare
+# `import '…'`, `import('…')` and `require('…')`. Bare package names resolve
+# from node_modules, which the leg symlinks in whole, so only ./ and ../ count.
+IMPORT_RE = re.compile(r'''\b(?:from|import|require)\s*\(?\s*(['"])(\.{1,2}/[^'"\r\n]*)\1''')
+
+def sources_under(d):
+    out = []
+    for dp, dns, fns in os.walk(d):
+        dns[:] = [n for n in dns if n != 'node_modules']
+        out += [os.path.join(dp, f) for f in fns if f.endswith(SRC_EXT)]
+    return sorted(out)
+
+def n_specs(d):
+    return sum(1 for f in sources_under(d) if SPEC_RE.search(f))
+
+def resolve(base, spec):
+    p = os.path.normpath(os.path.join(base, spec))
+    cands = [p + e for e in ('',) + SRC_EXT + ('.json',)]
+    cands += [os.path.join(p, 'index' + e) for e in SRC_EXT]
+    stem, ext = os.path.splitext(p)
+    if ext in ('.js', '.jsx', '.mjs', '.cjs'):  # TS-style './x.js' naming x.ts
+        cands += [stem + e for e in ('.ts', '.tsx', '.mts', '.cts')]
+    for c in cands:
+        if os.path.isfile(c):
+            return c
+    return None
+
+def rel(p):
+    return os.path.relpath(p, root)
+
+roots = [os.path.join(root, 'playwright.config.ts')]
+roots += sources_under(os.path.join(root, 'specs'))
+roots += sources_under(os.path.join(root, 'reporters'))
+seen, todo, edges = set(), list(roots), 0
+for r in roots:
+    if not os.path.isfile(r):
+        print('PROBLEM missing entry point ' + rel(r))
+while todo:
+    f = todo.pop()
+    if f in seen or not os.path.isfile(f):
+        continue
+    seen.add(f)
+    with open(f, encoding='utf-8', errors='replace') as fh:
+        text = fh.read()
+    for m in IMPORT_RE.finditer(text):
+        edges += 1
+        spec = m.group(2)
+        t = resolve(os.path.dirname(f), spec)
+        if t is None:
+            print('PROBLEM %s imports %r: not in the staged copy' % (rel(f), spec))
+        elif not os.path.realpath(t).startswith(root + os.sep):
+            print('PROBLEM %s imports %r: resolves OUTSIDE the staged copy' % (rel(f), spec))
+        elif t.endswith(SRC_EXT):
+            todo.append(t)
+print('SUMMARY %d %d %d %d' % (len(seen), edges,
+      n_specs(os.path.join(root, 'specs')), n_specs(os.path.join(src, 'specs'))))
+PY
+}
+
 echo
-echo "-- 5) OPTIONAL: the real 'playwright test --list' really does enumerate offline --"
+echo "-- 5) the scratch copy the --list leg runs in is import-complete (no node_modules needed) --"
+# Section 6 is the only leg that loads the specs, and CI always skips it because CI
+# has no node_modules. So this section checks the one thing that leg depends on and
+# CI CAN see: every relative import reachable from playwright.config.ts, specs/ and
+# reporters/ must resolve to a file INSIDE the staged copy. The scan is static
+# (python3, which the alpine shell job installs). It cannot see a module that reads
+# a repo file through __dirname/../../.. while it loads; only section 6 can.
+if ! command -v python3 >/dev/null 2>&1; then
+    _bad "python3 is not installed — the import-closure check below asserted NOTHING"
+else
+    # Staging must keep what it should and drop what it should. A fixture checks
+    # this, because a CI checkout has no node_modules or .features-gen to drop.
+    FX="${TMP}/fx-src"
+    mkdir -p "${FX}/specs" "${FX}/steps" "${FX}/node_modules/pkg" "${FX}/.features-gen" "${FX}/test-results"
+    # Three imports with known answers: one resolves, one names a directory that
+    # does not exist, and one names a file that exists but OUTSIDE the copy
+    # (fx-dst/specs/../../fx-outside.ts is ${TMP}/fx-outside.ts).
+    printf '%s\n' "import { b } from '../steps/b';" "import { gone } from '../gone/x';" \
+        "import { far } from '../../fx-outside';" "export const all = [b, gone, far];" > "${FX}/specs/a.spec.ts"
+    printf 'export const b = 1;\n' > "${FX}/steps/b.ts"
+    printf 'export const far = 1;\n' > "${TMP}/fx-outside.ts"
+    : > "${FX}/playwright.config.ts"; : > "${FX}/.gitignore"
+    : > "${FX}/node_modules/pkg/index.js"; : > "${FX}/.features-gen/x.spec.js"; : > "${FX}/test-results/junit.xml"
+    stage_e2e_copy "${FX}" "${TMP}/fx-dst"; fx_rc=$?
+    fx_wrong=""
+    for p in specs/a.spec.ts steps/b.ts .gitignore; do
+        [ -f "${TMP}/fx-dst/${p}" ] || fx_wrong="${fx_wrong} dropped:${p}"
+    done
+    for p in node_modules .features-gen test-results; do
+        [ -e "${TMP}/fx-dst/${p}" ] && fx_wrong="${fx_wrong} copied:${p}"
+    done
+    if [ "${fx_rc}" -eq 0 ] && [ -z "${fx_wrong}" ]; then
+        _ok "staging copies every source dir and dotfile, and leaves out node_modules, .features-gen and test-results"
+    else
+        _bad "stage_e2e_copy on a fixture: rc=${fx_rc}${fx_wrong}"
+    fi
+    # A scanner that reports nothing would pass the real copy below whatever it
+    # holds. So it must first find exactly the two bad imports in the fixture.
+    fx_got="$(scan_imports "${TMP}/fx-dst" "${FX}" | sed -n 's/^PROBLEM //p' | LC_ALL=C sort)"
+    fx_want="$(printf '%s\n' \
+        "specs/a.spec.ts imports '../gone/x': not in the staged copy" \
+        "specs/a.spec.ts imports '../../fx-outside': resolves OUTSIDE the staged copy" | LC_ALL=C sort)"
+    eq "${fx_got}" "${fx_want}" "the import scan flags a missing import and an escaping one in a fixture, and passes the one that resolves"
+
+    STAGED="${TMP}/staged"
+    stage_e2e_copy "${REPO}/tests/e2e" "${STAGED}" \
+        || _bad "staging ${REPO}/tests/e2e into a scratch dir failed — the --list leg would run against a partial copy"
+    closure="$(scan_imports "${STAGED}" "${REPO}/tests/e2e")"
+    scanned=""; edges=""; n_staged=""; n_src=""
+    read -r scanned edges n_staged n_src <<EOF
+$(printf '%s\n' "${closure}" | sed -n 's/^SUMMARY //p')
+EOF
+    problems="$(printf '%s\n' "${closure}" | sed -n 's/^PROBLEM /         /p')"
+    if [ -z "${n_src}" ]; then
+        _bad "the import-closure scan printed no SUMMARY line, so it asserted nothing:"$'\n'"${closure}"
+    else
+        if [ "${n_src}" -gt 0 ] && [ "${n_staged}" = "${n_src}" ]; then
+            _ok "the staged copy carries all ${n_src} spec file(s) of tests/e2e/specs"
+        else
+            _bad "the staged copy carries ${n_staged} spec file(s); tests/e2e/specs has ${n_src}"
+        fi
+        if [ "${edges}" -eq 0 ]; then
+            _bad "the scan followed ZERO relative imports across ${scanned} file(s). The specs have dozens, so the pattern is broken and 'all resolved' would mean nothing"
+        elif [ -z "${problems}" ]; then
+            _ok "all ${edges} relative imports reachable from playwright.config.ts, specs/ and reporters/ resolve inside the staged copy (${scanned} files)"
+        else
+            _bad "relative imports that the --list leg's scratch copy cannot satisfy (playwright --list exits 1 on any that is loaded at run time):"$'\n'"${problems}"
+        fi
+    fi
+fi
+
+echo
+echo "-- 6) OPTIONAL: the real 'playwright test --list' really does enumerate offline --"
 # The claim in the Makefile comment is that --list needs no stack and no network.
 # It was verified by hand on 2026-08-26 (under `unshare -rn`: rc=0, 1.1s, 33 spec
 # files / 221 tests). Re-verifying it here needs an INSTALLED node_modules, which
@@ -396,13 +578,12 @@ echo "-- 5) OPTIONAL: the real 'playwright test --list' really does enumerate of
 # a skip, never as a pass. Point E2E_NODE_MODULES at an installed tree to run it.
 NM="${E2E_NODE_MODULES:-${REPO}/tests/e2e/node_modules}"
 if [ ! -x "${NM}/.bin/playwright" ]; then
-    _skip "no Playwright at ${NM}/.bin/playwright — set E2E_NODE_MODULES=<installed tests/e2e/node_modules> to run the real --list leg (nothing in section 5 was asserted)"
+    _skip "no Playwright at ${NM}/.bin/playwright — set E2E_NODE_MODULES=<installed tests/e2e/node_modules> to run the real --list leg (nothing in section 6 was asserted)"
 else
     # Run against a COPY so a listing can never touch the repo's tests/e2e.
     LIVE="${TMP}/live"
-    mkdir -p "${LIVE}"
-    cp -r "${REPO}/tests/e2e/specs" "${REPO}/tests/e2e/reporters" \
-          "${REPO}/tests/e2e/playwright.config.ts" "${REPO}/tests/e2e/package.json" "${LIVE}/" 2>/dev/null
+    stage_e2e_copy "${REPO}/tests/e2e" "${LIVE}" \
+        || _bad "staging ${REPO}/tests/e2e into ${LIVE} failed — the listing below runs against a partial copy"
     ln -snf "${NM}" "${LIVE}/node_modules"
     REPDIR="${TMP}/reportdir"; mkdir -p "${REPDIR}"
     listing="${TMP}/listing.json"
@@ -410,7 +591,29 @@ else
         ./node_modules/.bin/playwright test -c playwright.config.ts --list --reporter=json ) >"${listing}" 2>"${TMP}/listing.err"
     rc=$?
     if [ "${rc}" -ne 0 ]; then
-        _bad "playwright --list exited ${rc} with the stack down; see ${TMP}/listing.err"
+        # Quote the reason here. ${TMP} is removed on EXIT, so a path to
+        # listing.err points nowhere. A load failure ("Cannot find module …") is
+        # in the JSON report's errors[] on stdout, not on stderr, and stderr
+        # always carries the expected Gherkin banner (see stage_e2e_copy).
+        why="$(python3 - "${listing}" "${TMP}/listing.err" <<'PY' 2>/dev/null
+import json, sys
+msgs = []
+try:
+    for e in json.load(open(sys.argv[1])).get("errors", []):
+        lines = [l for l in (e.get("message") or "").splitlines() if l.strip()]
+        if lines:
+            msgs.append(" / ".join(lines[:2]))
+except Exception:
+    pass
+if not msgs:
+    try:
+        msgs = ["stderr: " + l for l in open(sys.argv[2]).read().splitlines() if l.strip()][-3:]
+    except Exception:
+        pass
+print(" | ".join(msgs[:3]) or "no error text captured")
+PY
+)"
+        _bad "playwright --list exited ${rc} with the stack down: ${why:-no error text captured}"
     else
         n="$(python3 - "${listing}" <<'PY' 2>/dev/null
 import json, sys

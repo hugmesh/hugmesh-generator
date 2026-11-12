@@ -13,7 +13,10 @@ an operator with a paused fleet:
   ever called;
 * one device's failure never touches another device's save;
 * the KEYS stick is COPIED BACK (the run's exact payload), never regenerated, and
-  its absence is a warning on a still-successful disk save.
+  its absence is a warning on a still-successful disk save;
+* each device's go-live posture is read from it BEFORE its pause and recorded in the
+  manifest (the posture read is a spy too — autouse — so no test here ever sshes into
+  whatever listens on a fabricated record's port).
 """
 import json
 import os
@@ -27,6 +30,39 @@ from hugmesh_studio.core import qemu_devices as qd
 
 GEN = "/gen"
 STAMP = "20260819T000000Z"
+
+#: the real reader, kept before the autouse spy replaces it (its own wiring test below)
+REAL_POSTURE_READER = es._read_device_posture
+
+
+def _posture(verdict):
+    from hugmesh_studio.core import golive_target as gt
+    if verdict == "unknown":
+        return gt.Posture(error="no channel", at="T").as_record()
+    return gt.Posture(status=verdict, nft=verdict, reachable=True, at="T").as_record()
+
+
+class PostureSpy:
+    """The posture read before each pause: records labels (into ``events`` when a
+    test shares one with the runner spy) and answers per label."""
+
+    def __init__(self, events=None):
+        self.read = []
+        self.events = events
+        self.answers = {}
+
+    def __call__(self, dev):
+        self.read.append(dev.label)
+        if self.events is not None:
+            self.events.append(("posture", dev.label))
+        return self.answers.get(dev.label, _posture("internal"))
+
+
+@pytest.fixture(autouse=True)
+def posture_spy(monkeypatch):
+    spy = PostureSpy()
+    monkeypatch.setattr(es, "_read_device_posture", spy)
+    return spy
 
 
 def _dev(label="rpi5/pki", **overrides):
@@ -358,3 +394,111 @@ def test_cli_plan_exits_nonzero_when_nothing_is_saveable(tmp_path, monkeypatch,
     rc = es.main(["plan", "--generator-dir", GEN, "--work", work])
     assert rc == 1
     assert "nothing is saveable" in capsys.readouterr().err
+
+
+# ── the go-live posture at save time ─────────────────────────────────────────────
+
+class OrderedRunnerSpy(RunnerSpy):
+    def __init__(self, events):
+        super().__init__()
+        self.events = events
+
+    def __call__(self, argv):
+        self.events.append(("save", argv[argv.index("--save-device") + 1]))
+        return super().__call__(argv)
+
+
+def test_each_posture_is_read_before_its_pause_and_recorded(tmp_path, monkeypatch):
+    events = []
+    spy = PostureSpy(events)
+    spy.answers = {"rpi5/pki": _posture("public"), "x86/omnibus": _posture("internal")}
+    report, _runner, _work = _save(tmp_path, [_dev("rpi5/pki"), _dev("x86/omnibus")],
+                                   spy=OrderedRunnerSpy(events), read_posture=spy)
+    # BEFORE each pause: the disk about to be copied is the one that was asked about
+    assert events == [("posture", "rpi5/pki"), ("save", "rpi5/pki"),
+                      ("posture", "x86/omnibus"), ("save", "x86/omnibus")]
+    assert [r.golive_posture["posture"] for r in report.results] == ["public", "internal"]
+    manifest = json.load(open(report.manifest_path, encoding="utf-8"))
+    assert [d["golive_posture"] for d in manifest["devices"]] == [
+        _posture("public"), _posture("internal")]
+    # read back by the disk's NAME, as boot-from-save finds it
+    found = es.saved_device_entry(report.results[0].target)
+    assert found == {"session": report.session, "created_at": manifest["created_at"],
+                     "label": "rpi5/pki", "golive_posture": _posture("public")}
+
+
+def test_a_failed_posture_read_never_costs_the_save(tmp_path):
+    def boom(dev):
+        raise RuntimeError("ssh exploded")
+    report, runner, _work = _save(tmp_path, [_dev("rpi5/pki")], read_posture=boom)
+    assert report.ok and runner.labels() == ["rpi5/pki"]
+    rec = report.results[0].golive_posture
+    assert rec["posture"] == "unknown" and "ssh exploded" in rec["error"]
+
+
+def test_a_blocked_device_is_never_asked_and_records_none(tmp_path, posture_spy):
+    report, runner, _work = _save(tmp_path, [_dev("rpi5/pki"),
+                                             _dev("rpi5/worker", state="stopped")])
+    assert posture_spy.read == ["rpi5/pki"] and runner.labels() == ["rpi5/pki"]
+    manifest = json.load(open(report.manifest_path, encoding="utf-8"))
+    assert manifest["devices"][1]["golive_posture"] is None
+
+
+def test_saved_device_entry_reads_old_and_missing_sets(tmp_path):
+    assert es.saved_device_entry("") == {}
+    assert es.saved_device_entry(str(tmp_path / "nowhere" / "x86_pki.qcow2")) == {}
+    sdir = tmp_path / "mesh-old"
+    sdir.mkdir()
+    (sdir / es.MANIFEST_NAME).write_text(json.dumps({
+        "session": "mesh-old", "created_at": "C",
+        "devices": [{"label": "x86/pki", "target": "/moved/x86_pki.qcow2", "ok": True}]}))
+    # a set written before the posture was recorded: found, with no posture key
+    assert es.saved_device_entry(str(sdir / "x86_pki.qcow2")) == {
+        "session": "mesh-old", "created_at": "C", "label": "x86/pki"}
+    assert es.saved_device_entry(str(sdir / "rpi5_pki.qcow2")) == {}
+    (sdir / es.MANIFEST_NAME).write_text("{not json")
+    assert es.saved_device_entry(str(sdir / "x86_pki.qcow2")) == {}
+
+
+def test_the_default_reader_asks_the_device_over_ssh(tmp_path, monkeypatch):
+    """The real reader is golive_target.read_posture on the device's own target: the
+    two witnesses over the record's ssh channel — and a save then boot reads back
+    'booted from a save taken while PUBLIC'."""
+    import dataclasses
+    import subprocess
+    from hugmesh_studio.core import golive_target as gt
+    calls = []
+
+    def guest(argv, **kw):
+        calls.append(list(argv))
+        out = ("effective posture:   public\n@@nft@@\n"
+               "table inet hugmesh_release_gate {\n\tchain input {\n\t}\n}\n"
+               "@@nftrc=0@@\n@@end@@\n")
+        return subprocess.CompletedProcess(argv, 0, out, "")
+    monkeypatch.setattr(gt.subprocess, "run", guest)
+    dev = _dev("x86/pki", ssh_key=str(tmp_path / "id_ed25519"))
+    rec = REAL_POSTURE_READER(dev)
+    assert rec["posture"] == "public" and rec["reachable"] is True
+    assert calls == [gt.posture_argv(gt.target_from_device(dev))]
+    # the live registry record is what a save resolves a running device from (and
+    # the record is what carries its ssh port and user)
+    _write_record(tmp_path / "work", "x86/pki", ssh_key=dev.ssh_key)
+    report, _runner, _work = _save(tmp_path, ["x86/pki"],
+                                   read_posture=REAL_POSTURE_READER)
+    assert report.results[0].golive_posture["posture"] == "public"
+    booted = dataclasses.replace(gt.target_from_device(dev),
+                                 boot_save=report.results[0].target)
+    assert gt.boot_origin(booted).startswith(
+        f"booted from a save taken while PUBLIC ({report.session}, saved ")
+
+
+def test_cli_save_says_the_posture_each_device_was_saved_in(tmp_path, monkeypatch,
+                                                            capsys, posture_spy):
+    work = str(tmp_path / "work")
+    _write_record(work, "rpi5/pki")
+    posture_spy.answers = {"rpi5/pki": _posture("public")}
+    monkeypatch.setattr(es, "_run_argv", RunnerSpy())
+    monkeypatch.setattr(es, "_disk_usage", _roomy)
+    assert es.main(["save", "--generator-dir", GEN, "--work", work,
+                    "--session", "mesh-cli-posture"]) == 0
+    assert "(go-live posture when saved: PUBLIC)" in capsys.readouterr().out

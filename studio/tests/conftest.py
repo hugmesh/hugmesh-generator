@@ -56,8 +56,14 @@ def _host_independent_build_defaults(monkeypatch):
     dispatch-time read (_meminfo_fresh: low-memory warnings) — to a canonical
     healthy 32 GiB reading (cap auto-derives, warnings stay quiet). Tests that
     exercise the formulas pass explicit env/meminfo (which win) or re-monkeypatch
-    the relevant override point themselves."""
-    from hugmesh_studio.core import host_resources
+    the relevant override point themselves.
+
+    And the Docker ENGINE's CPU count (core/resource_limits: a Mac's Docker VM, which
+    caps a build's --cpus) is pinned to 0, "no ceiling": on a developer's Mac the first
+    resource_limits.effective() would otherwise ask the real ``docker info`` and clamp
+    every expected ``--cpus`` to whatever that VM has. Tests of the clamp set it."""
+    from hugmesh_studio.core import host_resources, resource_limits
+    monkeypatch.setattr(resource_limits, "_ENGINE_CPUS", 0)
     monkeypatch.setenv(host_resources.JOBS_ENV, "8")
     monkeypatch.delenv(host_resources.MEMORY_ENV, raising=False)
     healthy = {"MemTotal": 32 * host_resources.GIB,
@@ -66,6 +72,25 @@ def _host_independent_build_defaults(monkeypatch):
                "SwapFree": 4 * host_resources.GIB}
     monkeypatch.setattr(host_resources, "_meminfo_cached", lambda: dict(healthy))
     monkeypatch.setattr(host_resources, "_meminfo_fresh", lambda: dict(healthy))
+
+
+@pytest.fixture(autouse=True)
+def _roomy_build_disk(monkeypatch):
+    """Answer "4 TiB free" from the free-space probe on ANY test host, and clear any
+    ambient per-image override. WorklistDriver.preflight() BLOCKS when the output
+    filesystem cannot hold the first image (55 GiB + margin for x86), so without this
+    every test that expects a clean x86 preflight would pass or fail by the host's real
+    free space: a CI runner has far less than that, and so did this workstation's /home
+    the day the check landed. The probe is ``emulation_save._disk_usage``, the seam
+    ``emulation_save.free_bytes_for`` reads. Tests of the check
+    (test_build_disk_space_guard.py) and of mesh saves re-pin it in their own body or
+    pass ``disk_usage=`` explicitly, and theirs wins."""
+    import collections
+    from hugmesh_studio.core import build_driver, emulation_save
+    usage = collections.namedtuple("usage", "total used free")
+    roomy = usage(total=8 << 40, used=4 << 40, free=4 << 40)
+    monkeypatch.delenv(build_driver.SPACE_ENV, raising=False)
+    monkeypatch.setattr(emulation_save, "_disk_usage", lambda _path: roomy)
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +104,20 @@ def _no_node_image_meshes_up(monkeypatch):
     probe is ``probe_running_img_projects``."""
     from hugmesh_studio.core import local_stack_node
     monkeypatch.setattr(local_stack_node, "running_img_projects", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def _no_save_posture_ssh(monkeypatch):
+    """A mesh save reads each device's go-live posture over ssh before pausing it
+    (core.emulation_save._read_device_posture). Tests fabricate device records on the
+    harness's REAL loopback port range (223xx), where this workstation may be running
+    real devices, so no test may ask one by accident: the default reader records
+    "not read" here. Tests of the reader keep a reference to the real function (taken
+    at import, before this runs) or inject ``read_posture=`` themselves."""
+    from hugmesh_studio.core import emulation_save, golive_target
+    unread = golive_target.Posture(asked=False, error="tests ask no device over ssh")
+    monkeypatch.setattr(emulation_save, "_read_device_posture",
+                        lambda dev: unread.as_record())
 
 
 def _live_qapplication():

@@ -18,7 +18,8 @@
 # run of pages.yml). Nobody writes that file by hand. The publish job below still
 # attaches a `releases.json` to the release (the same shape, plus the signature
 # material) and sends the dispatch when SITE_DISPATCH_TOKEN exists; without the
-# secret the site catches up within the hour.
+# secret, or when GitHub refuses the dispatch (a ::warning::, never a red run), the
+# site catches up within the hour.
 #
 # TRIGGER: workflow_dispatch, plus a `studio-v*` tag. A run on a tag ref is the
 # publish decision; a dispatch on main is a build-only rehearsal.
@@ -37,9 +38,13 @@
 # ticked and the version typed into confirm). A republish replaces every file of the
 # release with new bytes, so every checksum, signature and attestation changes and
 # anyone who downloaded earlier can no longer verify what they have; the release
-# notes and the run summary then say so. The old green-skip gates (eleven `if:` lines
-# that let a run publish nothing and still pass) are gone: they were deleted by hand on
-# main on 2026-10-22, and a green skip is exactly what nobody notices.
+# notes and the run summary then say so. The version job asks the same question
+# first ("Refuse an existing release before anything is built"), so a re-run or a
+# dispatch of a version that is already out fails in seconds instead of after seven
+# minutes of builds; the publish job's check stays the last guard. The old green-skip
+# gates (eleven `if:` lines that let a run publish nothing and still pass) are gone:
+# they were deleted by hand on main on 2026-10-22, and a green skip is exactly what
+# nobody notices.
 #
 # RUNNERS: GITHUB-HOSTED ONLY (operator rule, 2026-10-21). Every download that is
 # published must be built and signed on GitHub's own runners. So every job here names
@@ -167,6 +172,47 @@ jobs:
         run: |
           echo "::error::publish was ticked on $REF, which never publishes. To release: scripts/release-studio.sh <version>, or Actions > Cut a Studio release"
           exit 1
+
+      - name: Refuse an existing release before anything is built
+        # The publish job's "Never overwrite a published release" step is the guard that
+        # counts, but it runs only after the msi, linux and both flatpak jobs. The re-run
+        # of run 41047656293 on 2026-11-06 built for seven minutes and then got
+        # "studio-v0.3.0-beta.3 already exists; nothing was changed". This step asks the
+        # same question before any build starts, and decides the same way: an existing
+        # release is RED unless republish=true, republish=true with no release is RED,
+        # and anything other than gh's own "release not found" is RED, never a guess.
+        #
+        # It runs only when the publish job would run: this `if:` is the publish job's
+        # `if:` word for word. A build-only dispatch, on main or on a tag without
+        # "publish" ticked, never asks. The publish job still asks again at the end,
+        # because a release can appear while the builds run.
+        #
+        # contents: read (the workflow default) is enough to read a release, so this job
+        # stays without a permissions block like every job except publish.
+        if: startsWith(github.ref, 'refs/tags/studio-v') && (github.event_name == 'push' || inputs.publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.read.outputs.version }}
+          REPUBLISH: ${{ inputs.republish }}
+        run: |
+          if out=$(gh release view "studio-v$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1); then
+            if [ "$REPUBLISH" = "true" ]; then
+              echo "::warning::release studio-v$VERSION exists and republish=true: the publish job will replace its files, and every checksum, signature and attestation changes"
+            else
+              echo "::error::release studio-v$VERSION already exists; refused before any build ran, nothing was changed. To replace its files on purpose (every checksum changes): scripts/release-studio.sh $VERSION --republish"
+              exit 1
+            fi
+          else
+            case "$out" in
+              *"release not found"*)
+                if [ "$REPUBLISH" = "true" ]; then
+                  echo "::error::republish was requested but release studio-v$VERSION does not exist; run a normal release"
+                  exit 1
+                fi
+                echo "release studio-v$VERSION does not exist yet; this run may publish it" ;;
+              *) echo "::error::could not tell whether release studio-v$VERSION exists: $out"; exit 1 ;;
+            esac
+          fi
 
       - name: Say whether this run will publish
         if: always()
@@ -508,6 +554,11 @@ jobs:
     # Hosted on purpose: `sudo apt-get` below cannot run on the Gentoo self-hosted runner.
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      # This bundle's file name when its own --self-check placed the generator tree it
+      # carries and checked that tree; empty otherwise. The publish job turns it into
+      # "generatorSeed" in releases.json and the "nothing to clone" line of the notes.
+      generator_seed: ${{ steps.seed.outputs.generator_seed }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
@@ -613,6 +664,46 @@ jobs:
             exit 1
           fi
 
+      - name: Record whether the bundle carries the generator it placed
+        id: seed
+        working-directory: studio/packaging/flatpak
+        # The release notes and the site's Downloads page tell a user there is nothing to
+        # clone ONLY for a file named in this job output. So the fact comes from what the
+        # bundle's own --self-check above did, never from its kind: it found the seed in
+        # the installed bundle, placed it without an error, and the tree the Studio
+        # resolved and checked IS that placed copy. Anything less writes an empty value
+        # and a warning, and the file is then listed as one that still needs a clone.
+        # The MSI and the tarball carry no seed yet, so their jobs have no such step.
+        run: |
+          python3 - "hugmesh-studio-${VERSION}-x86_64.flatpak" <<'PY'
+          import json, os, sys
+          name, why, placed = sys.argv[1], "", {}
+          try:
+              with open("self-check.json", encoding="utf-8") as fh:
+                  report = json.load(fh)
+          except (OSError, ValueError) as exc:
+              report, why = {}, f"self-check.json is unreadable ({exc})"
+          if not why and not isinstance(report, dict):
+              why = "self-check.json is not a report"
+          if not why:
+              placed = report.get("placed") if isinstance(report.get("placed"), dict) else {}
+              if not report.get("seed"):
+                  why = "the self-check found no seed in the bundle"
+              elif placed.get("error") or not placed.get("path"):
+                  why = f"the seed was not placed ({placed.get('error') or 'no path'})"
+              elif report.get("generator_dir") != placed.get("path"):
+                  why = (f"the Studio checked {report.get('generator_dir')}, not the placed "
+                         f"copy {placed.get('path')}")
+              elif report.get("problems"):
+                  why = "the self-check reported problems"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"generator_seed={'' if why else name}\n")
+          if why:
+              print(f"::warning::{name} is NOT recorded as carrying the generator: {why}")
+          else:
+              print(f"{name} carries the generator tree it placed at {placed['path']}")
+          PY
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: flatpak
@@ -638,6 +729,10 @@ jobs:
     # app's Qt-FREE path and so proves nothing about the aarch64 wheels.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
+    outputs:
+      # As in the x86_64 job: this bundle's file name only when its own --self-check
+      # placed and checked the generator tree it carries.
+      generator_seed: ${{ steps.seed.outputs.generator_seed }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
       ARCH: aarch64
@@ -729,6 +824,42 @@ jobs:
             exit 1
           fi
 
+      - name: Record whether the bundle carries the generator it placed
+        id: seed
+        working-directory: studio/packaging/flatpak
+        # The twin of the x86_64 job's step (tests/test_studio_release_signing.py holds the
+        # two together): the file name only when this bundle's own --self-check placed the
+        # seed it carries and checked that placed tree; empty and a warning otherwise.
+        run: |
+          python3 - "hugmesh-studio-${VERSION}-${ARCH}.flatpak" <<'PY'
+          import json, os, sys
+          name, why, placed = sys.argv[1], "", {}
+          try:
+              with open("self-check.json", encoding="utf-8") as fh:
+                  report = json.load(fh)
+          except (OSError, ValueError) as exc:
+              report, why = {}, f"self-check.json is unreadable ({exc})"
+          if not why and not isinstance(report, dict):
+              why = "self-check.json is not a report"
+          if not why:
+              placed = report.get("placed") if isinstance(report.get("placed"), dict) else {}
+              if not report.get("seed"):
+                  why = "the self-check found no seed in the bundle"
+              elif placed.get("error") or not placed.get("path"):
+                  why = f"the seed was not placed ({placed.get('error') or 'no path'})"
+              elif report.get("generator_dir") != placed.get("path"):
+                  why = (f"the Studio checked {report.get('generator_dir')}, not the placed "
+                         f"copy {placed.get('path')}")
+              elif report.get("problems"):
+                  why = "the self-check reported problems"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"generator_seed={'' if why else name}\n")
+          if why:
+              print(f"::warning::{name} is NOT recorded as carrying the generator: {why}")
+          else:
+              print(f"{name} carries the generator tree it placed at {placed['path']}")
+          PY
+
       - name: Smoke-test the bundle (Qt starts offscreen on the aarch64 wheels)
         working-directory: studio/packaging/flatpak
         # The same check as build-flatpak-local.sh's smoke test 2: PySide6 (not a PyQt6
@@ -793,6 +924,11 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       AUTHENTICODE: ${{ needs.msi.outputs.authenticode }}
+      # The installers that carry the hugmesh-generator tree, by file name, each named
+      # only by the job whose own --self-check proved it ("Record whether the bundle
+      # carries the generator it placed"). Read by releases.json and the release notes.
+      # The MSI and the tarball carry no seed yet, so nothing names them here.
+      GENERATOR_SEED: ${{ needs.flatpak.outputs.generator_seed }} ${{ needs.flatpak-aarch64.outputs.generator_seed }}
     steps:
       - name: Never overwrite a published release
         # RED, NOT A GREEN SKIP. An existing release stops this job with an error
@@ -902,16 +1038,28 @@ jobs:
         # field added for signing (per-installer "sbom", top-level "checksums",
         # "signature", "provenance", "verify") is additive: the page ignores keys it does
         # not know. A "linux" + "tarball" entry is listed with the Linux downloads, and
-        # the two "linux" + "flatpak" entries carry an "arch" (x86_64 or aarch64).
+        # the two "linux" + "flatpak" entries carry an "arch" (x86_64 or aarch64). Every
+        # entry carries "generatorSeed": true only for a file GENERATOR_SEED names, and
+        # the page then drops its "clone hugmesh-generator" step for that file.
         run: |
           python3 - <<'PY'
           import hashlib, json, os, pathlib, datetime
           version = os.environ["VERSION"]
           repo = os.environ["GITHUB_REPOSITORY"]
           signed = os.environ.get("AUTHENTICODE") == "true"
+          # File names whose build job proved they carry the generator tree (the publish
+          # job's GENERATOR_SEED). Absent or empty means none: never inferred from a kind.
+          seeded = set(os.environ.get("GENERATOR_SEED", "").split())
           tag = f"studio-v{version}"
           base = f"https://github.com/{repo}/releases/download/{tag}"
           release = pathlib.Path("release")
+
+          def generator_note(name):
+              if name in seeded:
+                  return ("Carries the hugmesh-generator build scripts of this release and "
+                          "sets them up on first start, so there is nothing to clone. ")
+              return ("Does not include the hugmesh-generator build scripts yet: on first "
+                      "start Studio asks for the folder you cloned hugmesh-generator into. ")
 
           def entry(path, platform, kind, label, notes, sbom):
               data = path.read_bytes()
@@ -924,21 +1072,26 @@ jobs:
                   "size": f"{len(data) / (1024 * 1024):.0f} MB",
                   "sha256": hashlib.sha256(data).hexdigest(),
                   "notes": notes,
+                  # Read by the site's Downloads page: true only for a file named above.
+                  "generatorSeed": path.name in seeded,
               }
               if sbom and (release / sbom).exists():
                   out["sbom"] = f"{base}/{sbom}"
               return out
 
-          msi_note = ("Per-user install, no administrator rights required. "
+          def msi_note(name):
+              return ("Per-user install, no administrator rights required. "
                       + ("Authenticode-signed. " if signed else
                          "Not code-signed yet, so Windows SmartScreen will warn on first run; "
                          "verify the checksum and the GitHub attestation before running it. ")
+                      + generator_note(name)
                       + "Building images additionally needs Docker Desktop.")
           installers = []
           for path in sorted(release.iterdir()):
               if path.name.endswith(".msi"):
                   installers.append(entry(path, "windows", "msi", "Windows installer (x64)",
-                                          msi_note, f"hugmesh-studio-{version}-windows-x64.spdx.json"))
+                                          msi_note(path.name),
+                                          f"hugmesh-studio-{version}-windows-x64.spdx.json"))
               elif path.name.endswith(".flatpak"):
                   # One bundle per architecture, named hugmesh-studio-<version>-<arch>.flatpak
                   # by the flatpak jobs; the label and the arch field say which is which.
@@ -950,8 +1103,8 @@ jobs:
                       "Install with: flatpak install --user ./" + path.name + " (needs the "
                       "org.kde.Platform 6.11 runtime for " + arch + "; the bundle names Flathub "
                       "as its source, so the install offers to add that remote and fetch it). "
-                      "Point it at a hugmesh-generator checkout on first run; building images "
-                      "needs Docker on the host.", None)
+                      + generator_note(path.name)
+                      + "Building images needs Docker on the host.", None)
                   item["arch"] = arch
                   installers.append(item)
               elif path.name.endswith(".tar.gz"):
@@ -959,7 +1112,8 @@ jobs:
                       path, "linux", "tarball", "Linux tarball (x86_64, glibc 2.39+)",
                       "Unpack and run hugmesh-studio-" + version + "-linux-x86_64/hugmesh-studio. "
                       "No install step; needs glibc 2.39 or newer (Ubuntu 24.04, Debian 13, "
-                      "Fedora 40 or later). Older systems: use the Flatpak.",
+                      "Fedora 40 or later). Older systems: use the Flatpak. "
+                      + generator_note(path.name).rstrip(),
                       f"hugmesh-studio-{version}-linux-x86_64.spdx.json"))
 
           workflow = f"{repo}/.github/workflows/studio-release.yml"
@@ -1042,6 +1196,25 @@ jobs:
             win_sign="It is **not code-signed** yet (no certificate is configured), so SmartScreen will warn on first run. Verify it as below before running it."
           fi
           case "$VERSION" in *-*) stage=" (beta, pre-release)" ;; *) stage="" ;; esac
+          # Which files carry the hugmesh-generator tree: only those GENERATOR_SEED names
+          # (each proved by its own job's --self-check), never inferred from the kind.
+          gen_with=""
+          gen_without=""
+          for f in "hugmesh-studio-$VERSION-x64.msi" "hugmesh-studio-$VERSION-x86_64.flatpak" \
+                   "hugmesh-studio-$VERSION-aarch64.flatpak" "hugmesh-studio-$VERSION-linux-x86_64.tar.gz"; do
+            case " ${GENERATOR_SEED:-} " in
+              *" $f "*) gen_with="$gen_with${gen_with:+, }\`$f\`" ;;
+              *) gen_without="$gen_without${gen_without:+, }\`$f\`" ;;
+            esac
+          done
+          gen_with_note=""
+          gen_without_note=""
+          if [ -n "$gen_with" ]; then
+            gen_with_note="These carry the \`hugmesh-generator\` build scripts and cluster specs of this release, and Studio sets them up on first start, so there is nothing to clone: $gen_with."
+          fi
+          if [ -n "$gen_without" ]; then
+            gen_without_note="These do not include the \`hugmesh-generator\` build scripts yet: $gen_without. On first start Studio asks for the folder you cloned \`hugmesh-generator\` into (\`git clone https://github.com/hugmesh/hugmesh-generator\`)."
+          fi
           cat > release-notes.md <<EOF
           HugMesh Image Studio $VERSION$stage.
           ${replaced_note:+
@@ -1053,7 +1226,11 @@ jobs:
 
           **Linux aarch64** (ARM64: Raspberry Pi 4/5 desktops, Apple-silicon VMs, Ampere machines): \`hugmesh-studio-$VERSION-aarch64.flatpak\`, built on GitHub's hosted arm64 runner from the same manifest and installed the same way (\`flatpak install --user ./hugmesh-studio-$VERSION-aarch64.flatpak\`). There is no aarch64 tarball.
 
-          Every bundle carries its architecture in its name; \`flatpak install\` refuses one built for another architecture. All packages contain the same application. The Studio drives host tooling (Docker, QEMU, kubectl) rather than replacing it, and needs a \`hugmesh-generator\` checkout to read build scripts and cluster specs from: point it at one on first run.
+          Every bundle carries its architecture in its name; \`flatpak install\` refuses one built for another architecture. All packages contain the same application. The Studio drives host tooling (Docker, QEMU, kubectl) rather than replacing it.
+
+          $gen_with_note
+
+          $gen_without_note
 
           ## Verify what you downloaded
 
@@ -1155,6 +1332,14 @@ jobs:
         # rebuilds the site's data from the Releases API. GITHUB_TOKEN cannot reach
         # another repository; SITE_DISPATCH_TOKEN is a fine-grained token (or GitHub App
         # token) with Contents: read and write on hugmesh/hugmesh.github.io only.
+        #
+        # NEVER FATAL (2026-11-11). This step runs after the release is published, so its
+        # answer cannot change what was released. It used `curl -fsS`, which turned
+        # GitHub's 403 for SITE_DISPATCH_TOKEN into exit 22: the published
+        # studio-v0.4.4-beta.1 run went red (run 42882326209) and GitHub's reason was
+        # thrown away. Only a 204 counts as sent. Any other answer (a refused or
+        # unapproved token, a GitHub error, no connection) is a ::warning:: that carries
+        # GitHub's own message, and the step stays green.
         env:
           SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
           SITE_REPO: hugmesh/hugmesh.github.io
@@ -1164,10 +1349,29 @@ jobs:
             exit 0
           fi
           payload=$(python3 -c 'import json,os; v=os.environ["VERSION"]; r=os.environ["GITHUB_REPOSITORY"]; t="studio-v"+v; print(json.dumps({"event_type":"releases-updated","client_payload":{"source":r,"kind":"studio","version":v,"tag":t,"releases_json":"https://github.com/%s/releases/download/%s/releases.json"%(r,t)}}))')
-          curl -fsS -X POST \
+          resp=$(mktemp)
+          rc=0
+          http_code=$(curl -sS -o "$resp" -w '%{http_code}' --max-time 30 -X POST \
             -H "Authorization: Bearer $SITE_DISPATCH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/$SITE_REPO/dispatches" \
-            -d "$payload"
-          echo "sent releases-updated to $SITE_REPO: $payload"
+            -d "$payload") || rc=$?
+          if [ "$rc" = 0 ] && [ "$http_code" = 204 ]; then
+            echo "sent releases-updated to $SITE_REPO: $payload"
+            exit 0
+          fi
+          why=$(python3 - "$resp" <<'PY'
+          import json, sys
+          raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+          try:
+              msg = json.loads(raw).get("message") or raw
+          except Exception:
+              msg = raw
+          # One line, escaped for a workflow command: this text lands inside ::warning::.
+          print(" ".join(str(msg).split())[:300].replace("%", "%25"))
+          PY
+          ) || why=""
+          [ "$rc" = 0 ] || why="curl exit $rc${why:+; $why}"
+          echo "::warning::releases-updated dispatch to $SITE_REPO was not accepted (HTTP ${http_code:-000}): ${why:-no response body}. The release is published and unaffected. The site rebuilds releases.json from the Releases API within the hour (pages.yml cron), or now via: gh workflow run pages.yml --repo $SITE_REPO. Do not re-run this workflow for it (a re-run is a republish). A 401, 403 or 404 means SITE_DISPATCH_TOKEN cannot write to $SITE_REPO: re-issue it as a fine-grained token with resource owner hugmesh, only $SITE_REPO, Contents read and write (approved, if the org requires approval)."
+          exit 0

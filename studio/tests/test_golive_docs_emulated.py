@@ -61,8 +61,10 @@ EXPECTED_REACH = {
     "funnel": "refused",
 }
 
-EPHEMERAL = ("this posture lasts until the device stops; a restart boots the golden "
-             "image INTERNAL again — Save the device to keep a copy")
+EPHEMERAL = ("this posture lives on this run's disk only: the next boot starts again "
+             "from the golden image (in whatever posture it bakes) or from a Save (in "
+             "the posture it was saved in) — Save the device to keep it; Status reads "
+             "the posture from the device itself")
 REHEARSAL = ("REHEARSAL — the posture flips inside the emulated node, but nothing "
              "outside this workstation can reach it; the harness publishes loopback ssh only")
 TUNNEL_LABEL = ("can be really reachable (outbound only); but the tunnel token is consumed "
@@ -178,10 +180,46 @@ def test_cloudflare_token_claim_matches_specs(section: str):
 
 
 # ── persistence ──────────────────────────────────────────────────────────────────
-def test_ephemeral_banner_and_restart_reset(section: str):
+def test_ephemeral_banner_and_status_reads_the_device(section: str):
     flat = _flat(section)
     assert EPHEMERAL in flat
-    assert "*reset by a restart*" in flat
+    # the posture is read, never inferred: the doc says so, names both witnesses and
+    # the words every face prints, and no longer promises an INTERNAL restart
+    assert "**Status never infers the posture.**" in flat
+    assert "`hugmesh-go-live status`" in flat
+    assert "`nft list table inet hugmesh_release_gate`" in flat
+    assert "`unknown (device not reachable)`" in flat
+    # ...and each face's line, with its read time, as that face prints it (#1007 r2)
+    from hugmesh_studio.core import golive_target as gt
+    from hugmesh_studio.tui import golive as tui
+    read = gt.Posture(status="public", nft="public", reachable=True, at="<UTC time>")
+    now_line = gt.posture_line(read)
+    assert now_line.startswith("device posture now (read <UTC time>): PUBLIC")
+    assert flat.count("`device posture now (read <UTC time>): …`") == 2     # CLI, GUI
+    tui_line = gt.posture_line(read, when=tui.LAST_S)
+    assert tui_line.startswith("device posture at the last s (read <UTC time>): PUBLIC")
+    assert "`device posture at the last s (read <UTC time>): …`" in flat
+    assert "never calls it *now*" in flat
+    assert gt.posture_line(gt.Posture(asked=False, error="<why>")) == (
+        "device posture: unknown (not read) — <why>")
+    assert "`device posture: unknown (not read) — <why>` on every face" in flat
+    page = _read("studio", "hugmesh_studio", "gui", "pages", "golive.py")
+    for button in ("Refresh status", "Re-scan devices", "Recheck posture (driver status)"):
+        assert f"**{button}**" in flat and f'QPushButton("{button}")' in page, button
+    tui_src = _read("studio", "hugmesh_studio", "tui", "golive.py")
+    assert "`output of s (read <UTC time>):`" in flat
+    assert "`output of p (run <UTC time>):`" in flat
+    assert "`output of s (read <UTC time>): not shown — …`" in flat
+    assert 'f"output of {self.run_log_of}: not shown — ' in tui_src
+    assert 'of = f"s (read {self.posture.at})"' in tui_src
+    assert 'of = f"p (run {golive_target.utc_now()})"' in tui_src
+    assert ("*last booted from a save taken while PUBLIC (…) — it is not running "
+            "now*") in flat
+    assert "*resumed from save … — a save taken while PUBLIC (…)*" in flat
+    assert "*during an earlier boot*" in flat
+    assert "*booted from a save taken while PUBLIC (mesh-…, saved …)*" in flat
+    assert "`golive_posture` in `mesh-save.json`" in flat
+    assert "reset by a restart" not in flat and "INTERNAL again" not in flat
     assert "`<work>/golive/<label>.json`" in flat
     assert "It holds no secrets" in flat
 
@@ -392,20 +430,42 @@ def test_flow_quotes_the_core_wording(section: str):
     assert REACH_LINE in flat
 
 
-# ── the section against core.golive_target (FG1, merged as #927) ──────────────────
+# ── the section against what has landed (FG1 #927, FG2, FG5 #932, FG3 #926) ────────
 def test_status_callout_says_what_has_landed(section: str):
     flat = _flat(section)
     assert "**Status: specification." not in flat, "FG1 is in the tree; the callout is stale"
     assert ("The target model, the ssh path and the CLI "
             "(`hugmesh_studio.core.golive_target`, group FG1) are in the tree.") in flat
-    # The faces are not: the wizard has no target picker on this tree yet. When FG2
-    # lands, this goes red on purpose, and the callout must be updated with it.
+    # FG2 (the faces) is in the tree: the wizard has its target picker, the TUI its
+    # target list. The callout says so, and no longer says the wizard drives only
+    # this host.
     page = _read("studio", "hugmesh_studio", "gui", "pages", "golive.py")
-    if "target_pick" not in page:
-        assert "The GUI and TUI faces (group FG2) and the proof lane (group FG3) are not yet" in flat
-    else:
-        assert "faces (group FG2) and the proof lane (group FG3) are not yet" not in flat, (
-            "FG2's target picker is in the tree: update the status callout")
+    tui = _read("studio", "hugmesh_studio", "tui", "golive.py")
+    assert "target_pick" in page and "def _lines_target" in tui
+    assert "faces (group FG2) and the proof lane (group FG3) are not yet" not in flat, (
+        "FG2's target picker is in the tree: update the status callout")
+    assert "The GUI and TUI faces (group FG2) are in the tree too" in flat
+    assert "Studio's wizard drives only **This host**" not in flat
+    # FG5 (boot from a save) is in the tree as a CLI/Makefile lane, with no GUI button:
+    # the callout and the Persistence part say exactly that, and the wizard still
+    # calls the posture ephemeral.
+    makefile = _read("Makefile")
+    assert "--from-save" in makefile and "FROM_SAVE" in makefile
+    assert "from_save" not in page.lower(), (
+        "a GUI boot-from-save entry exists: update the callout and Persistence")
+    assert "(group FG5) is in the tree as a CLI and Makefile lane only" in flat
+    assert "`make mesh-emu-up FROM_SAVE=mesh-<stamp>`" in flat
+    assert "is a later follow-up (group FG5)" not in flat
+    # FG3 (the harness proof lane) is in the tree (#926), and the callout says so and
+    # names the file. (This went red on purpose when the lane landed with the callout
+    # still saying "has not merged".)
+    lane = [f for f in os.listdir(os.path.join(REPO, "tests", "qemu"))
+            if "golive" in f or "go-live" in f]
+    assert "golive-emulated.sh" in lane, lane
+    assert "has not merged" not in flat and "except the proof lane" not in flat
+    assert "**Status: landed.**" in flat
+    assert ("The harness proof lane (group FG3) is in the tree too, as "
+            "`tests/qemu/golive-emulated.sh`") in flat
 
 
 def _fake_target(gt, tmp_path):
@@ -492,6 +552,13 @@ def test_section_matches_the_golive_target_core(tmp_path, section: str):
     js = gt.journal_status(str(tmp_path), t)
     assert "did NOT go through" in js and "last commit from this host" in js
     assert gt.read_journal(str(tmp_path), t.label)["refused"]["rc"] == 1
+    import dataclasses
+    later = dataclasses.replace(t, started_at="2099-01-01T00:00:00Z")
+    assert "during an earlier boot" in gt.journal_status(str(tmp_path), later)
+    # the posture words the section quotes are the core's own
+    assert gt.Posture(error="x").sentence().startswith("unknown (device not reachable)")
+    assert gt._NFT_HEADER_RE.pattern.startswith("^table inet hugmesh_release_gate")
+    assert gt.RELEASE_GATE_TABLE == "hugmesh_release_gate"
 
     # the probe reads what the flow says it reads
     for path in PROBE_READS:

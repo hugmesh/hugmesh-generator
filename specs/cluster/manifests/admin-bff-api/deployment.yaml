@@ -176,6 +176,36 @@ spec:
             # deployed Service is hugmesh-pki-gateway in hugmesh-pki, plain HTTP 8080.
             - { name: PKI_GATEWAY_BASE,   value: "http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080" }
             - { name: BROKER_GATEWAY_URL, value: "http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080" }
+            # ── Gateway fast-path revocation: STAYS OFF, on purpose ─────────────
+            # The write is POSTed by auth-core's GatewayRevocationClient with NO
+            # Authorization header, and the gateway's /api/gateway/revocations is
+            # hasRole('ADMIN') (hugmesh-gateway ControlPlaneWriteAuthzSpringBootTest
+            # pins anonymous POST/DELETE -> 401). The client swallows the 401 as a
+            # WARN, so "true" here would claim a cut-off that never lands. It flips
+            # together with the service credential, which waits on the operator
+            # (hugmesh-admin-bff-api#45; hugmesh-generator#347 decision 45). It also
+            # waits on every gateway keeping the LATER expiry of a key
+            # (hugmesh-gateway#69): admin-bff writes the same subject:<user> key at
+            # 168 h (revoke, disable) and at 1 h (role grant, suspension tick), and a
+            # last-write-wins gateway lets the 1 h write cut the 168 h one short.
+            # tests/scripts/test-subject-revocation-ttl.sh fails if this turns on
+            # (true/on/yes/1) on its own.
+            - { name: BROKER_GATEWAY_REVOCATION_ENABLED, value: "false" }
+            # How long a subject:<user> cut-off key lives (account-disable, role
+            # revoke, desktop-sudo revoke). The gateway refuses EVERY token for the
+            # subject while the key exists, so the key must outlive the LONGEST
+            # token Casdoor issues or a revoked token works again when it lapses:
+            # casdoor/init-job.yaml seeds expireInHours: 168 for every app-* client
+            # and hugmesh-desktop (only app-user-bff is 4). It was a 1 h literal in
+            # admin-bff. tests/scripts/test-subject-revocation-ttl.sh fails if this
+            # drops below the largest expireInHours seeded under
+            # manifests/casdoor*/, x 3600. Raising expireInHours means raising this.
+            # Cost: the same 168 h also locks the person out (no iat comparison at
+            # the gateway) — shortening either number is an operator decision.
+            # Binds admin-bff's broker.gateway-revocation.subject-cutoff-ttl-seconds
+            # (hugmesh-admin-bff-api#157); an image older than that change ignores
+            # it and keeps the 1 h literal.
+            - { name: BROKER_GATEWAY_REVOCATION_SUBJECT_CUTOFF_TTL_SECONDS, value: "604800" }
             # casdoor.admin.base-url — the Casdoor ADMIN write API (add-user /
             # update-role). Ships dark (casdoor.admin.enabled=false) but its default is
             # the same pre-rebrand casdoor host, and it is ALSO the
@@ -363,6 +393,26 @@ spec:
                 secretKeyRef:
                   name: cassandra-app-creds
                   key: admin-bff
+            # hs_tokens registry write (broker.hs-token-registry.enabled): every
+            # brokered Matrix/Mastodon token admin-bff mints gets a
+            # {sha256(token) -> localpart, platform, kind=brokered} row in
+            # hugmesh_gateway.hs_tokens, through the same authenticated session as
+            # the route mirror above. The table EXISTS in every profile that runs
+            # this Deployment: it is hugmesh-gateway migration 006
+            # (CassandraSchemaMigrations "006-hs-tokens-table"), replayed on boot by
+            # each gateway whose Cassandra access is `schema-owner` (apps/20-gateway-
+            # fe/be/pki.yaml; kind's sso profile runs the fe one), and
+            # cassandra-init grants admin_bff_cass MODIFY on hugmesh_gateway. The
+            # write is best-effort (a failure is logged; the token is still issued),
+            # but the mint WAITS for it: with Cassandra unreachable each brokered mint
+            # waits for the driver to give up — measured ~2-3 s per mint with the port
+            # refusing, ~7 s with the host unroutable (2026-11-11, throwaway run).
+            # Nothing ENFORCES with it yet: the gateway's HomeserverTokenRevocationFilter
+            # (app.hs-revocation.enabled) is off in every lane. It is on now because
+            # that filter fails CLOSED on a bearer it has no row for, so rows must
+            # exist before anyone turns it on. Pinned by
+            # tests/scripts/test-subject-revocation-ttl.sh.
+            - { name: BROKER_HS_TOKEN_REGISTRY_ENABLED, value: "true" }
             # ── Anubis PoW anti-scraper sidecar proxy (SUPERADMIN BFF surface) ──
             # The anubis package (GET /bff/admin/anubis/{status,metrics}) proxies
             # the Anubis management port. ANUBIS_ENABLED=true wires the BFF surface;

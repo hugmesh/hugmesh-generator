@@ -38,9 +38,9 @@ import os
 import shlex
 
 from ..core import emulation as emu
-from ..core import emulation_save
+from ..core import emulation_save, golive_target
 from ..core import mesh_emulation as me
-from ..core import qemu_devices, qemu_tests, qemu_windows
+from ..core import platform_info, qemu_devices, qemu_tests, qemu_windows
 from ..core.domain_services import session_boot_gate_reason
 from . import model
 
@@ -48,7 +48,48 @@ __all__ = ["MeshEmuScreen", "BACKEND_KEY", "WHPX_ONE_AT_A_TIME", "WHPX_NOT_HERE"
            "WHPX_CLI_PREFIXES", "backend_label", "next_backend", "default_backend",
            "native_blocker_lines", "backend_lines", "whpx_cli_args", "whpx_device_table",
            "whpx_detail_lines", "device_table", "device_detail_lines",
-           "plan_summary_lines", "save_hint_lines"]
+           "plan_summary_lines", "save_hint_lines", "GO_LIVE_KEY", "GO_LIVE_ACTION",
+           "front_door_target", "go_live_lines"]
+
+#: The key that opens the Go-Live screen on the mesh's front door (the GUI page's
+#: "Go live from this mesh…" button). Not b/q/r and not a digit.
+GO_LIVE_KEY = "g"
+GO_LIVE_ACTION = "Go live from this mesh…"
+
+
+def front_door_target(plan: me.MeshPlan, devices: list, backend: str
+                      ) -> golive_target.GoLiveTarget | None:
+    """The go-live TARGET for the mesh's front door (its gateway row): the docker
+    lane's keep-alive record, or — under QEMU for Windows — the native record. None
+    when that row is not running at all."""
+    label = plan.gateway_label
+    if not label:
+        return None
+    if backend == qemu_windows.BACKEND_WHPX:
+        rec = _whpx_live(plan).get(label)
+        return golive_target.target_from_whpx(rec, plan.work_dir) if rec else None
+    dev = qemu_devices.device_by_label(devices, label)
+    return golive_target.target_from_device(dev, plan.work_dir) if dev else None
+
+
+def go_live_refusal(plan: me.MeshPlan, target) -> str:
+    """Why the front door cannot be gone live from, "" when it can (the record's own
+    refusal — the device is probed when the Go-Live screen takes it)."""
+    if target is None:
+        return (f"the front door ({plan.gateway_label or 'none'}) is not running — "
+                "start it first")
+    return golive_target.refusal(target)
+
+
+def go_live_lines(plan: me.MeshPlan, devices: list, backend: str) -> list[str]:
+    """The front-door row's go-live line: the action and its key, or the sentence
+    that refuses it."""
+    why = go_live_refusal(plan, front_door_target(plan, devices, backend))
+    if why:
+        return [f"{GO_LIVE_ACTION} — not offered: {why}"]
+    return [f"{GO_LIVE_ACTION} press {GO_LIVE_KEY}: the Go-Live screen on "
+            f"{plan.gateway_label} (its own driver over ssh; plan here, the flip on its "
+            "TTY)."]
 
 #: The key that switches the emulation backend, cycling ``qemu_windows.BACKENDS`` —
 #: the TUI twin of the GUI page's chooser. Not "q" (BACK), not "r" (refresh) and not
@@ -72,13 +113,25 @@ WHPX_CLI_PREFIXES = (("hugmesh-studio", "--qemu-windows"),
 
 
 def backend_label(backend: str) -> str:
-    return dict(qemu_windows.BACKENDS)[backend]
+    """This host's label for ``backend`` (``qemu_windows.backends()``), or its general
+    one where this host does not offer it (QEMU for Windows, named on a Mac)."""
+    return dict(qemu_windows.backends()).get(backend) or dict(qemu_windows.BACKENDS)[backend]
 
 
 def next_backend(backend: str) -> str:
-    """The backend :data:`BACKEND_KEY` switches to: the next of ``BACKENDS``, wrapping."""
-    ids = [bid for bid, _label in qemu_windows.BACKENDS]
+    """The backend :data:`BACKEND_KEY` switches to: the next of the backends this host
+    offers (``qemu_windows.backends()``), wrapping. A Mac offers one, so there the key
+    stays on Docker instead of landing on QEMU for Windows."""
+    ids = [bid for bid, _label in qemu_windows.backends()]
+    if backend not in ids:
+        return ids[0]
     return ids[(ids.index(backend) + 1) % len(ids)]
+
+
+def switch_hint(sep: str = " · ") -> str:
+    """"b = switch backend · " for the key hints, "" where there is nothing to switch
+    to (a Mac's one backend)."""
+    return f"{BACKEND_KEY} = switch backend{sep}" if len(qemu_windows.backends()) > 1 else ""
 
 
 def default_backend(osname: str | None = None) -> str:
@@ -95,10 +148,18 @@ def native_blocker_lines(switch: str) -> list[str]:
 
     ``qemu_tests.native_blocker()`` verbatim — the sentence the GUI and the emulation
     CLI refuse with — plus where the one lane that does run there lives (``switch``
-    says how to reach it from the screen showing this)."""
+    says how to reach it from the screen showing this).
+
+    A Mac missing Homebrew's GNU tools is refused by the same sentence function, and
+    gets only its own lines (the ``brew install`` command on a line by itself): it is
+    not a Windows Studio, has no WSL2, and QEMU for Windows cannot boot anything
+    there, so ``switch`` is not offered."""
     blocker = qemu_tests.native_blocker()
     if not blocker:
         return []
+    if platform_info.blocker_kind(blocker) == "darwin":
+        return ["! not on this Mac yet:"] + [
+            "  " + line for line in platform_info.blocker_lines(blocker)]
     return ["! not from this Windows Studio:", "  " + blocker,
             "  To boot ONE x86 device image (a thin desktop or a single node) on this "
             f"PC without WSL2: {switch} “{backend_label(qemu_windows.BACKEND_WHPX)}”."]
@@ -106,7 +167,8 @@ def native_blocker_lines(switch: str) -> list[str]:
 
 def backend_lines(backend: str, osname: str | None = None) -> list[str]:
     """Which backend the hints below are for, and whether it can run here."""
-    out = [f"backend   {backend_label(backend)}  ({BACKEND_KEY} = switch)"]
+    switch = f"  ({BACKEND_KEY} = switch)" if len(qemu_windows.backends()) > 1 else ""
+    out = [f"backend   {backend_label(backend)}{switch}"]
     if backend != qemu_windows.BACKEND_WHPX:
         return out + native_blocker_lines(f"press {BACKEND_KEY} for the backend")
     why = qemu_windows.blocker(osname)
@@ -319,6 +381,8 @@ def whpx_detail_lines(eplan: emu.EmulationPlan, planned: me.PlannedDevice,
                          "desktop window, --mem N for memory) — paste into a Windows "
                          "terminal, this screen spawns nothing:")
             lines += _whpx_cli_lines(eplan, "start", planned.label, osname)
+    if planned.label == plan.gateway_label:
+        lines += go_live_lines(plan, [], qemu_windows.BACKEND_WHPX)
     if not refusal:
         lines.append("stop it — ACPI power-off first, a hard kill only if it does "
                      "not go; the session's image is never written:")
@@ -388,6 +452,8 @@ def device_detail_lines(eplan: emu.EmulationPlan, planned: me.PlannedDevice,
             emu.start_device_argv(eplan, planned.label)))
         lines.append(f"once up, ssh lands on {me.SSH_HOST}:{planned.ssh_port} "
                      "(planned — the device registry is authoritative).")
+    if gateway:
+        lines += go_live_lines(plan, devices, backend)
     lines.append("")
     if not boot_refusal:
         lines.append("start the WHOLE mesh with:")
@@ -457,9 +523,11 @@ class MeshEmuScreen:
         assert self._plan is not None and self._eplan is not None
         if self._sub == "detail" and self._detail is not None:
             devices = [] if self._whpx else self._devices()
+            gl = (f" · {GO_LIVE_KEY} = {GO_LIVE_ACTION}"
+                  if self._detail.label == self._plan.gateway_label else "")
             return device_detail_lines(self._eplan, self._detail, devices,
                                        self._refusal, self._backend, self.osname) + \
-                ["", f"({BACKEND_KEY} = switch backend · r = refresh · "
+                ["", f"({switch_hint()}r = refresh{gl} · "
                      "q = back to the device list)"]
         # Under WHPX only the plan line: the front door rides the Docker backend's
         # web tunnel, which this backend does not have.
@@ -480,7 +548,7 @@ class MeshEmuScreen:
             headers, rows = device_table(self._plan, self._devices())
             out += model.format_table(headers, rows)
         out += ["", "(a NUMBER opens a device's detail + access hints · "
-                    f"{BACKEND_KEY} = switch backend · r = refresh · q = back)"]
+                    f"{switch_hint()}r = refresh · q = back)"]
         return out
 
     def prompt(self, j) -> str:  # noqa: ARG002 — screen-protocol signature
@@ -509,12 +577,19 @@ class MeshEmuScreen:
         if low == BACKEND_KEY:
             # Table or detail: the next qemu_windows.BACKENDS id. Switching boots and
             # stops nothing — it changes which backend the hints are for.
+            if len(qemu_windows.backends()) < 2:
+                # a Mac: Docker is the one backend, so say that instead of "switching"
+                j.status = (f"backend: {backend_label(self._backend)} (the only "
+                            "emulation backend on this host)")
+                return
             self._backend = next_backend(self._backend)
             j.status = f"backend: {backend_label(self._backend)}"
             return
         if self._sub == "detail":
             if low in ("q", "quit", "exit"):
                 self._sub = "table"
+            elif low == GO_LIVE_KEY and self._detail is not None:
+                self._go_live(j)
             # r (or anything else) re-renders — the detail reads live state
             return
         # table
@@ -530,6 +605,30 @@ class MeshEmuScreen:
             return
         self._detail = self._plan.devices[row]
         self._sub = "detail"
+
+
+    def _go_live(self, j) -> None:
+        """``g`` on the front door's detail: the Go-Live screen over this one, on that
+        device; ``b`` on its first step comes back here."""
+        assert self._plan is not None and self._detail is not None
+        if self._detail.label != self._plan.gateway_label:
+            j.status = (f"{GO_LIVE_ACTION} is the front door's "
+                        f"({self._plan.gateway_label}) — open that row")
+            return
+        devices = [] if self._whpx else self._devices()
+        target = front_door_target(self._plan, devices, self._backend)
+        why = go_live_refusal(self._plan, target)
+        if why:
+            j.status = why
+            return
+        from .golive import GoLiveScreen
+        screen = GoLiveScreen()
+        screen.back_to = "Mesh emulation"
+        j.open_overlay(screen)
+        why = screen.preselect_target(j, target, work_dir=self._plan.work_dir)
+        if why:
+            j.close_overlay()
+            j.status = why
 
 
 def _index(line: str, count: int) -> int | None:

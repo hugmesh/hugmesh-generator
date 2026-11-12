@@ -79,6 +79,8 @@ from .. import console
 from ..styles import MUTED, WARN
 from ...core import (emulation, emulation_save, mesh_emulation, platform_info,
                      qemu_devices, qemu_tests, qemu_windows)
+from ...core import golive_target
+from ...tui.meshemu import GO_LIVE_ACTION
 from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
@@ -370,8 +372,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self.setTitle("Mesh emulation")
         self.setSubTitle(
             "Boot every image of a finished build session as persistent emulated "
-            "devices and drive the whole mesh locally — status per device, ssh "
-            "logins, the QEMU console, disk saves, and the mesh's web front door.")
+            "devices and drive the whole mesh locally: status, ssh, the QEMU console, "
+            "disk saves, the web front door.")
         # Terminal side-flow: the final button does nothing but close the Studio (the
         # emulated devices keep running — the verbs on this page are what start and
         # stop them), so it says Exit (_widgets.label_finish_as_exit).
@@ -427,13 +429,18 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         backend_row = QtWidgets.QHBoxLayout()
         backend_row.addWidget(QtWidgets.QLabel("Emulation backend:"))
         self.backend_combo = QtWidgets.QComboBox()
-        for key, text in qemu_windows.BACKENDS:
+        for key, text in qemu_windows.backends():
             self.backend_combo.addItem(text, key)
         self.backend_combo.setToolTip(
             "Docker container: the full lanes — every device of the mesh, the QMP "
             "console, saves — through the bash runner (Linux, or the Studio inside "
             "WSL2). QEMU for Windows (WHPX): ONE x86 device at a time — a thin desktop "
-            "or a single node — with no bash, Docker or WSL2.")
+            "or a single node — with no bash, Docker or WSL2."
+            if self.backend_combo.count() > 1 else
+            # a Mac: one backend, so nothing about the Windows one applies
+            "Docker container: the full lanes — every device of the mesh, the QMP "
+            "console, saves — through the bash runner, inside this Mac's Docker VM "
+            "(Docker Desktop, colima or OrbStack).")
         backend_row.addWidget(self.backend_combo)
         # The options for the NEXT QEMU for Windows start; shown only on that backend.
         self.whpx_opts = QtWidgets.QWidget()
@@ -554,6 +561,14 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self.tunnel_close_btn.clicked.connect(
             lambda: self._close_tunnels("closed from this page"))
         web.addWidget(self.tunnel_close_btn)
+        # Go live FROM this mesh: the Go-Live wizard opened on the front door (its
+        # own baked driver, over ssh — core.golive_target). Greyed with the reason
+        # beside it whenever that row cannot be a go-live target.
+        self.golive_btn = QtWidgets.QPushButton(GO_LIVE_ACTION)
+        self.golive_btn.setEnabled(False)
+        self.golive_btn.clicked.connect(self._go_live)
+        web.addWidget(self.golive_btn)
+        self._golive_wiz = None
         self.web_note = QtWidgets.QLabel()
         self.web_note.setWordWrap(True)
         self.web_note.setTextFormat(Qt.TextFormat.RichText)
@@ -569,6 +584,15 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self.tunnel_note.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(self.tunnel_note)
+        # why "Go live from this mesh…" is greyed, said INLINE (a disabled button's
+        # tooltip is the only other place, and it is easy never to find)
+        self.golive_note = QtWidgets.QLabel()
+        self.golive_note.setWordWrap(True)
+        self.golive_note.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.golive_note.setStyleSheet(f"color: {MUTED};")
+        self.golive_note.setVisible(False)
+        lay.addWidget(self.golive_note)
 
         # ── the device table ─────────────────────────────────────────────────────
         self.devices = common.make_table(_HEADERS, min_height=200)
@@ -763,8 +787,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         else:
             blocker = qemu_tests.native_blocker()
             self.docker_note.setText(
-                f'<span style="color:{WARN}">{html.escape(blocker)}</span>' if blocker
-                else common.docker_note_html(self._docker_answer))
+                f'<span style="color:{WARN}">{common.blocker_html(blocker)}</span>'
+                if blocker else common.docker_note_html(self._docker_answer))
         self._sync_controls()
 
     # ── QEMU for Windows (WHPX) ─────────────────────────────────────────────────
@@ -1369,6 +1393,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 f'<span style="color:{MUTED}">No QEMU for Windows device is '
                 "running.</span>")
         self._sync_tunnel_note()
+        self._sync_golive(not self._running)
 
     def _arm_row(self, row: _Row, idle: bool):
         up = row.up
@@ -1634,6 +1659,62 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 f"(<tt>{self.plan.gateway_label or '?'}</tt>) is not up yet — start "
                 "the mesh, then Refresh.</span>")
         self._sync_tunnel_note()
+        self._sync_golive(idle)
+
+    # ── go live FROM this mesh (core.golive_target) ─────────────────────────────
+    def _golive_target(self):
+        """The front door as a go-live TARGET: its keep-alive record (Docker), or
+        under QEMU for Windows its native record. None when it is not running."""
+        if self.plan is None or not self.plan.gateway_label:
+            return None
+        work = self.plan.work_dir
+        if self._whpx:
+            rec = self._native.get(self.plan.gateway_label)
+            return golive_target.target_from_whpx(rec, work) if rec else None
+        row = self._gateway_row()
+        if row is None or row.dev is None:
+            return None
+        return golive_target.target_from_device(row.dev, work)
+
+    def golive_refusal(self) -> str:
+        """Why the front door cannot be gone live from, "" when it can (its record's
+        refusal: not running, no ssh channel, a client or driverless platform, a WHPX
+        record without an ssh identity)."""
+        if self.plan is None:
+            return ""
+        t = self._golive_target()
+        if t is None:
+            return (f"The front door ({self.plan.gateway_label or 'none'}) is not "
+                    "running — start it first.")
+        return golive_target.refusal(t)
+
+    def _sync_golive(self, idle: bool):
+        why = self.golive_refusal()
+        ok = idle and self.plan is not None and not why
+        self.golive_btn.setEnabled(ok)
+        self.golive_btn.setToolTip(
+            why or (f"Open the Go-Live wizard on {self.plan.gateway_label}: its OWN "
+                    "go-live driver, over ssh. Plan runs inside the device; the flip "
+                    "opens an ssh terminal where the device asks you to confirm. The "
+                    "posture lasts until the device stops." if self.plan else ""))
+        self.golive_note.setText(f"{GO_LIVE_ACTION} — not offered: {why}" if why else "")
+        self.golive_note.setVisible(bool(why) and self.plan is not None)
+
+    def _go_live(self):
+        t = self._golive_target()
+        why = self.golive_refusal()
+        if t is None or why:
+            self.note.setText(html.escape(why))
+            return
+        from .golive import open_go_live
+        try:
+            self._golive_wiz = open_go_live(self.wiz.generator_dir, target=t,
+                                            current=self._golive_wiz,
+                                            work_dir=self.plan.work_dir)
+        except Exception as exc:            # noqa: BLE001 — PyQt6 aborts on a slot raise
+            self.note.setText(html.escape(f"Could not open the Go-Live wizard: {exc}"))
+            return
+        console.write(self.log, f"[go-live] opened the Go-Live wizard on {t.label}")
 
     def _sync_tunnel_note(self):
         """The tunnel's state, ON the page. This is the operator's "why can't I
@@ -2262,7 +2343,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 return False, []
             for res in report.results:
                 if res.ok:
-                    on_line(f"saved {res.label} -> {res.target}")
+                    on_line(f"saved {res.label} -> {res.target} (go-live posture when "
+                            f"saved: {golive_target.posture_phrase(res.golive_posture)})")
                     for piece in res.keys_copied:
                         on_line(f"  keys: {piece}")
                     if res.keys_error:

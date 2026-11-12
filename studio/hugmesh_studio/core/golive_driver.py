@@ -600,7 +600,8 @@ class GoLiveDriver:
         ok, said = self._run_in_terminal(inner)
         if ok and self.remote:
             # Launched, not confirmed: the operator answers on the device's TTY. The
-            # journal is what lets Status say "reset by a restart" later.
+            # journal is what lets Status say what this host asked, and of which boot
+            # (the posture itself is always read from the device).
             golive_target.write_journal(
                 dataclasses.replace(self.target, work_dir=self.work_dir), "commit",
                 opts.provider, opts.domain)

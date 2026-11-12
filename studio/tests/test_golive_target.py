@@ -5,13 +5,17 @@ Every ssh argv is pinned. The laws these tests hold:
   * no -y/--yes anywhere: commit/rollback run the guest driver's confirm on the ssh pty;
   * the guest token file is deleted on the error path too;
   * each refusal says why, in a sentence;
-  * a journal from an earlier boot of the device reads "reset by a restart";
+  * a journal from an earlier boot of the device says WHEN ("during an earlier boot"),
+    never a posture: the posture is READ from the device (both witnesses), and an
+    unreachable device reads "unknown (device not reachable)" — never INTERNAL;
   * the WSL and native-Windows terminal shapes.
 Nothing here starts ssh: subprocess.run / Popen are fakes that record argv and stdin.
 """
+import dataclasses
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -69,9 +73,12 @@ class FakeRun:
     """subprocess.run stand-in: records (argv, input) and answers by verb."""
 
     def __init__(self, probe_text="", stage_path="/run/hugmesh-golive-tok.Ab12Cd",
-                 listing="dns-records.txt\ninstructions.txt\n", fail_rm=False):
+                 listing="dns-records.txt\ninstructions.txt\n", fail_rm=False,
+                 posture_text="", posture_rc=0, posture_err=""):
         self.calls = []
         self.probe_text = probe_text
+        self.posture_text, self.posture_rc = posture_text, posture_rc
+        self.posture_err = posture_err
         self.stage_path = stage_path
         self.listing = listing
         self.fail_rm = fail_rm
@@ -81,6 +88,9 @@ class FakeRun:
         self.kws = getattr(self, "kws", []) + [kw]
         remote = argv[-1]
         out, rc = "", 0
+        if "@@nftrc" in remote:
+            return subprocess.CompletedProcess(argv, self.posture_rc, self.posture_text,
+                                               self.posture_err)
         if "mktemp" in remote:
             out = self.stage_path + "\n"
         elif " rm -f " in f" {remote} ":
@@ -143,6 +153,42 @@ def _all_argv_tokens(calls):
 PROBE_OK = ("::driver\n/usr/sbin/hugmesh-go-live\n::cluster-domain\nexample.org\n"
             "::domains\n\n::release-state\ninternal\n"
             f"::tor hostname\n{ONION}\n::tor shop.hostname\n{ONION2}\n::end\n")
+
+
+# ── the posture read: the guest's own answers, as the real tools print them ─────────
+def _status(posture, release="internal", marker="present"):
+    """``hugmesh-go-live status`` exactly as specs/usr/sbin/hugmesh-go-live prints it."""
+    return ("domain (cluster):    hugmesh.net\n"
+            f"release-state:       {release}   (/etc/hugmesh/release-state)\n"
+            f"go-live marker:      {marker}   (/etc/hugmesh/go-live)\n"
+            f"effective posture:   {posture}\n\n"
+            "Posture is enforced by hugmesh-firewall-reconcile (boot + 60s cron).\n"
+            "This wizard only TRIPS it: 'commit' writes the marker; 'rollback' deletes it.\n")
+
+
+#: ``nft list table inet hugmesh_release_gate`` as nft prints the table
+#: hugmesh-firewall-reconcile loads (internal: with the 80/443 drop rule).
+NFT_TABLE = ("table inet hugmesh_release_gate {{\n"
+             "\tchain input {{\n"
+             "\t\ttype filter hook input priority filter + 10; policy accept;\n"
+             "\t\tip saddr 100.64.0.0/10 tcp dport {{ 80, 443 }} accept\n"
+             "\t\tiifname \"lo\" accept\n"
+             "{drop}"
+             "\t}}\n"
+             "}}\n")
+NFT_INTERNAL = NFT_TABLE.format(drop="\t\ttcp dport { 80, 443 } drop\n")
+NFT_PUBLIC = NFT_TABLE.format(drop="")
+
+
+def _posture_out(status_posture="public", nft=NFT_PUBLIC, nftrc=0, end=True, **kw):
+    out = _status(status_posture, **kw) + "@@nft@@\n" + nft
+    if nftrc is not None:
+        out += f"@@nftrc={nftrc}@@\n"
+    return out + ("@@end@@\n" if end else "")
+
+
+POSTURE_PUBLIC_OUT = _posture_out("public", NFT_PUBLIC)
+POSTURE_INTERNAL_OUT = _posture_out("internal", NFT_INTERNAL, marker="absent")
 
 
 # ── targets + refusals ───────────────────────────────────────────────────────────────
@@ -454,7 +500,7 @@ def test_terminal_native_windows_is_a_new_console():
 
 
 # ── journal ──────────────────────────────────────────────────────────────────────────
-def test_journal_round_trip_has_no_secret_and_detects_a_restart(tmp_path):
+def test_journal_round_trip_has_no_secret_and_says_when_not_what(tmp_path):
     t = _target(tmp_path)
     path = gt.write_journal(t, "commit", "byo-domain", "example.invalid",
                             confirmed=True, now="2026-11-09T11:00:00Z")
@@ -463,17 +509,262 @@ def test_journal_round_trip_has_no_secret_and_detects_a_restart(tmp_path):
     assert set(j) == {"label", "kind", "action", "provider", "domain", "started_at",
                       "at", "confirmed", "rc", "refused"}
     assert j["started_at"] == t.started_at
-    assert not gt.reset_by_restart(j, t)
-    assert "reset by a restart" not in gt.journal_status(str(tmp_path), t)
+    assert not gt.earlier_boot(j, t)
+    assert "earlier boot" not in gt.journal_status(str(tmp_path), t)
     rebooted = _target(tmp_path, started_at="2026-11-09T12:00:00Z")
-    assert gt.reset_by_restart(j, rebooted)
-    assert "reset by a restart" in gt.journal_status(str(tmp_path), rebooted)
-    assert not gt.reset_by_restart(None, rebooted)
+    assert gt.earlier_boot(j, rebooted)
+    said = gt.journal_status(str(tmp_path), rebooted)
+    assert said == ("last commit from this host: byo-domain example.invalid at "
+                    "2026-11-09T11:00:00Z — during an earlier boot (the device booted "
+                    "again at 2026-11-09T12:00:00Z)")
+    # WHEN, never WHAT: the old restart inference is gone from the journal line
+    assert "INTERNAL" not in said.upper().replace("EXAMPLE.INVALID", "")
+    assert "reset" not in said and not hasattr(gt, "reset_by_restart")
+    assert not gt.earlier_boot(None, rebooted)
     assert gt.journal_status(str(tmp_path), t).startswith("last commit from this host:")
     gt.write_journal(t, "commit", "byo-domain", "example.invalid")      # GUI: launched
     said = gt.journal_status(str(tmp_path), t)
     assert said.startswith("commit launched from this host") and "device's TTY" in said
-    assert not gt.reset_by_restart(j, gt.local_target())
+    assert not gt.earlier_boot(j, gt.local_target())
+
+
+# ── the posture: READ from the device, both witnesses, never inferred ────────────────
+@pytest.mark.parametrize("out,want", [
+    (POSTURE_PUBLIC_OUT, ("public", "public", True)),
+    (POSTURE_INTERNAL_OUT, ("internal", "internal", True)),
+    # the 60 s reconcile has not caught up yet (the FG3 lane saw this for ~50 s)
+    (_posture_out("public", NFT_INTERNAL), ("public", "internal", True)),
+    # the table is ABSENT: real nft exits 1; its echo of the command must not read as a
+    # loaded table with no drop rule (that would be "public")
+    (_posture_out("public", "Error: No such file or directory\n"
+                  "list table inet hugmesh_release_gate\n"
+                  "                ^^^^^^^^^^^^^^^^^^^^\n", nftrc=1),
+     ("public", "unknown", True)),
+    # nft exited 0 but printed no anchored header: not loaded
+    (_posture_out("public", "  table inet hugmesh_release_gate {\n}\n"),
+     ("public", "unknown", True)),
+    # an exit 0 with the header but a listing that is NOT our table's — nor one whose
+    # name merely starts with ours
+    (_posture_out("internal", "table inet other {\n}\n"), ("internal", "unknown", True)),
+    (_posture_out("public", "table inet hugmesh_release_gate_v2 {\n}\n"),
+     ("public", "unknown", True)),
+    # cut short before nft's exit status: a missing rc is not 0, and not complete
+    (_posture_out("public", NFT_PUBLIC, nftrc=None, end=False), ("public", "unknown", False)),
+    # a driver whose status does not say public/internal; ANSI colour is ignored
+    (_posture_out("weird", NFT_INTERNAL), ("unknown", "internal", True)),
+    ("\x1b[0;32m" + POSTURE_PUBLIC_OUT, ("public", "public", True)),
+    # the FIRST `effective posture:` line is the driver's (the lane's head -n1)
+    ("effective posture:   public\neffective posture:   internal\n@@nft@@\n" + NFT_PUBLIC
+     + "@@nftrc=0@@\n@@end@@\n", ("public", "public", True)),
+    ("", ("unknown", "unknown", False)),
+])
+def test_parse_posture_follows_the_proof_lanes_rules(out, want):
+    assert gt.parse_posture(out) == want
+
+
+def test_posture_argv_is_one_read_only_round_trip(tmp_path):
+    argv = gt.posture_argv(_target(tmp_path))
+    assert argv[:-1] == BASE + BATCH + [DEST]
+    assert shlex.split(argv[-1])[:4] == ["sudo", "-n", "sh", "-c"]
+    script = shlex.split(argv[-1])[4]
+    assert script == ("hugmesh-go-live status; echo @@nft@@; nft list table inet "
+                      "hugmesh_release_gate; echo @@nftrc=$?@@; echo @@end@@")
+    for writer in ("commit", "rollback", "rm ", "tee", ">", "-f ", "flush", "add "):
+        assert writer not in script, writer
+
+
+def test_read_posture_reads_both_witnesses(tmp_path):
+    run = FakeRun(posture_text=POSTURE_PUBLIC_OUT)
+    p = gt.read_posture(_target(tmp_path), run=run, now="2026-11-11T15:31:14Z")
+    assert (p.status, p.nft, p.reachable, p.verdict) == ("public", "public", True,
+                                                         "public")
+    assert p.sentence() == ("PUBLIC — both witnesses say public (hugmesh-go-live status; "
+                            "nft table inet hugmesh_release_gate)")
+    assert run.calls[0][0] == gt.posture_argv(_target(tmp_path))
+    p = gt.read_posture(_target(tmp_path), run=FakeRun(posture_text=POSTURE_INTERNAL_OUT))
+    assert p.verdict == "internal" and p.sentence().startswith("INTERNAL — ")
+    mixed = gt.read_posture(_target(tmp_path), run=FakeRun(
+        posture_text=_posture_out("public", NFT_INTERNAL)))
+    assert mixed.verdict == "mixed"
+    assert mixed.sentence().startswith("MIXED — hugmesh-go-live status says public, the "
+                                       "nft release gate says internal")
+    assert "converges them at boot and every 60 s" in mixed.sentence()     # a lag
+    absent = gt.read_posture(_target(tmp_path), run=FakeRun(posture_text=_posture_out(
+        "public", "", nftrc=1)))
+    assert absent.verdict == "mixed"
+    assert absent.sentence() == ("MIXED — hugmesh-go-live status says public, the nft "
+                                 "release gate says unknown (table inet "
+                                 "hugmesh_release_gate absent or unreadable)")
+
+
+def test_an_unreachable_device_is_unknown_never_internal(tmp_path):
+    import dataclasses
+    # ssh's own failure (exit 255): the device was not asked
+    p = gt.read_posture(_target(tmp_path), run=FakeRun(
+        posture_rc=255, posture_err="ssh: connect to host 127.0.0.1 port 2201: "
+        "Connection refused\n"))
+    assert p.verdict == "unknown" and not p.reachable
+    assert p.sentence() == ("unknown (device not reachable) — ssh to rpi5/pki failed "
+                            "(exit 255): ssh: connect to host 127.0.0.1 port 2201: "
+                            "Connection refused")
+    # a stopped device is not asked at all: its port may be another device's now
+    run = FakeRun(posture_text=POSTURE_PUBLIC_OUT)
+    stopped = dataclasses.replace(_target(tmp_path), running=False)
+    p = gt.read_posture(stopped, run=run)
+    assert run.calls == [] and p.verdict == "unknown"
+    assert p.sentence().startswith("unknown (device not reachable) — rpi5/pki is not "
+                                   "running")
+
+    # a client image is reachable, but bakes no go-live driver: not asked, and not
+    # called unreachable either
+    desk = _target(tmp_path, label="rpi5/desk", role="desktop")
+    p = gt.read_posture(desk, run=run)
+    assert run.calls == [] and p.verdict == "unknown"
+    assert p.sentence().startswith("unknown (not read) — rpi5/desk is a desktop client")
+
+    def boom(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 45)
+    assert gt.read_posture(_target(tmp_path), run=boom).sentence().startswith(
+        "unknown (device not reachable) — ssh to rpi5/pki failed")
+    # a device that answered but whose witnesses could not be read (sudo refused)
+    p = gt.read_posture(_target(tmp_path), run=FakeRun(
+        posture_rc=1, posture_err="sudo: a password is required\n"))
+    assert p.reachable and p.verdict == "unknown"
+    assert "neither witness could be read" in p.sentence()
+    assert "the answer was cut short (exit 1): sudo: a password is required" in p.sentence()
+    for q in (p, gt.Posture(error="x"), gt.Posture(asked=False)):
+        assert "INTERNAL" not in q.sentence() and "internal" not in q.sentence()
+
+
+def test_posture_record_round_trips_and_recomputes_the_verdict():
+    p = gt.Posture(status="public", nft="public", reachable=True, at="T")
+    rec = p.as_record()
+    assert rec == {"posture": "public", "status": "public", "nft": "public",
+                   "reachable": True, "asked": True, "error": "", "at": "T"}
+    assert gt.Posture.from_record(rec) == p
+    # the stored verdict is for a reader; the witnesses decide on the way back in
+    assert gt.Posture.from_record(dict(rec, posture="internal")).verdict == "public"
+    assert gt.Posture.from_record(dict(rec, nft="garbage")).verdict == "mixed"
+    assert gt.Posture.from_record(None).verdict == "unknown"
+    assert gt.posture_phrase(rec) == "PUBLIC"
+    assert gt.posture_phrase(None) == "not recorded"
+    assert gt.posture_phrase(gt.Posture(error="e").as_record()) == \
+        "unknown (device not reachable)"
+
+
+def _save_set(tmp_path, posture=None, name="mesh-20261111T152704Z", label="x86/pki"):
+    """A mesh save-set on disk, as emulation_save writes it (posture=None: a set
+    written before the posture was recorded)."""
+    from hugmesh_studio.core import qemu_devices
+    sdir = tmp_path / "saves" / name
+    sdir.mkdir(parents=True)
+    disk = sdir / qemu_devices.save_basename(label)
+    disk.write_text("qcow2")
+    dev = {"label": label, "target": str(disk), "ok": True}
+    if posture is not None:
+        dev["golive_posture"] = posture
+    (sdir / "mesh-save.json").write_text(json.dumps(
+        {"session": name, "created_at": "2026-11-11T15:30:29Z", "devices": [dev]}))
+    return str(disk)
+
+
+def _committed_then_rebooted(tmp_path, **over):
+    """A device this host committed on, which has BOOTED AGAIN since (new started_at)."""
+    gt.write_journal(_target(tmp_path, label="x86/pki", platform="x86",
+                             started_at="2026-11-11T15:11:59Z"),
+                     "commit", "byo-domain", "example.invalid", rc=0,
+                     now="2026-11-11T15:26:38Z")
+    return _target(tmp_path, label="x86/pki", platform="x86",
+                   started_at="2026-11-11T15:31:13Z", **over)
+
+
+def test_boot_from_a_save_taken_while_public_reads_public(tmp_path):
+    """THE live defect (prover, go-live round 2): x86/pki saved while PUBLIC, booted
+    from that save; both witnesses said public 1 s after boot, yet every face printed
+    'reset by a restart (… INTERNAL)'. Now: the device's own reading, the save it booted
+    from with the posture that save was taken in, and the journal's WHEN."""
+    saved = gt.Posture(status="public", nft="public", reachable=True,
+                       at="2026-11-11T15:30:20Z").as_record()
+    t = _committed_then_rebooted(tmp_path, boot_save=_save_set(tmp_path, saved))
+    assert t.boot_save
+    now = gt.read_posture(t, run=FakeRun(posture_text=POSTURE_PUBLIC_OUT),
+                          now="2026-11-11T15:31:14Z")
+    report = gt.device_report(str(tmp_path), t, now)
+    assert report.splitlines() == [
+        "device posture now (read 2026-11-11T15:31:14Z): PUBLIC — both witnesses say "
+        "public (hugmesh-go-live status; nft table inet hugmesh_release_gate)",
+        "booted from a save taken while PUBLIC (mesh-20261111T152704Z, saved "
+        "2026-11-11T15:30:29Z)",
+        "last commit from this host: byo-domain example.invalid at 2026-11-11T15:26:38Z "
+        "— during an earlier boot (the device booted again at 2026-11-11T15:31:13Z)",
+    ]
+    assert "INTERNAL" not in report and "reset by a restart" not in report
+
+
+def test_a_restart_while_public_reads_public(tmp_path):
+    """A device restarted from its golden image (no save) that is PUBLIC now — a
+    golden built public, say: the posture is what the device says, not what a restart
+    'should' have done."""
+    t = _committed_then_rebooted(tmp_path)
+    assert not t.boot_save and gt.boot_origin(t) == ""
+    report = gt.device_report(str(tmp_path), t, gt.read_posture(
+        t, run=FakeRun(posture_text=POSTURE_PUBLIC_OUT)))
+    assert "device posture now" in report and "): PUBLIC — " in report
+    assert "during an earlier boot" in report and "booted from a save" not in report
+    assert "INTERNAL" not in report and "reset by a restart" not in report
+    # and one restarted INTERNAL says INTERNAL — because the device said so
+    report = gt.device_report(str(tmp_path), t, gt.read_posture(
+        t, run=FakeRun(posture_text=POSTURE_INTERNAL_OUT)))
+    assert "): INTERNAL — both witnesses say internal (hugmesh-go-live status; nft" in report
+
+
+def test_an_unreachable_rebooted_device_is_unknown_with_its_save_and_journal(tmp_path):
+    saved = gt.Posture(status="public", nft="public", reachable=True).as_record()
+    t = _committed_then_rebooted(tmp_path, boot_save=_save_set(tmp_path, saved))
+    report = gt.device_report(str(tmp_path), t, gt.read_posture(
+        t, run=FakeRun(posture_rc=255, posture_err="Connection refused\n")))
+    lines = report.splitlines()
+    assert ": unknown (device not reachable) — ssh to x86/pki failed (exit 255)" in lines[0]
+    assert lines[1].startswith("booted from a save taken while PUBLIC")
+    assert "during an earlier boot" in lines[2]
+    assert "INTERNAL" not in report and "reset by a restart" not in report
+
+
+def test_boot_origin_says_what_each_save_recorded(tmp_path):
+    import dataclasses
+    old = _save_set(tmp_path, None, name="mesh-20261101T000000Z")
+    t = dataclasses.replace(_target(tmp_path), boot_save=old)
+    assert gt.boot_origin(t) == ("booted from a save (mesh-20261101T000000Z, saved "
+                                 "2026-11-11T15:30:29Z) whose go-live posture was not "
+                                 "recorded when it was saved")
+    unknown = _save_set(tmp_path, gt.Posture(error="refused").as_record(),
+                        name="mesh-20261102T000000Z")
+    assert gt.boot_origin(dataclasses.replace(t, boot_save=unknown)).startswith(
+        "booted from a save taken while its posture was unknown (device not reachable)")
+    mixed = _save_set(tmp_path, gt.Posture(status="public", nft="internal",
+                                           reachable=True).as_record(),
+                      name="mesh-20261103T000000Z")
+    assert gt.boot_origin(dataclasses.replace(t, boot_save=mixed)).startswith(
+        "booted from a save taken while MIXED (hugmesh-go-live status public, the nft "
+        "release gate internal)")
+    # a bare --save-device copy has no manifest beside it
+    bare = tmp_path / "saves" / "rpi5_pki.qcow2"
+    bare.write_text("x")
+    assert gt.boot_origin(dataclasses.replace(t, boot_save=str(bare))).endswith(
+        "whose go-live posture was not recorded when it was saved")
+    assert gt.boot_origin(gt.local_target()) == ""
+    assert gt.device_report(str(tmp_path), gt.local_target(), gt.Posture()) == ""
+
+
+def test_the_old_restart_inference_is_gone_everywhere():
+    """No face text claims INTERNAL from a restart: the journal, the stale-binding
+    sentence and the EPHEMERAL note say WHEN or WHAT A BOOT STARTS FROM, never a
+    posture the device was not asked for."""
+    import inspect
+    src = inspect.getsource(gt)
+    assert "reset by a restart" not in src and "reset_by_restart" not in src
+    assert "INTERNAL again" not in gt.EPHEMERAL_NOTE
+    assert "in the posture it was saved in" in gt.EPHEMERAL_NOTE
 
 
 # ── the driver, routed through a target ──────────────────────────────────────────────
@@ -777,6 +1068,173 @@ def test_cli_refused_commit_never_reads_as_a_commit(tmp_path, monkeypatch):
     assert "did NOT go through" not in gt.journal_status(work, t)
 
 
+def test_cli_status_after_a_boot_from_a_save_says_public(tmp_path, monkeypatch):
+    """The CLI face of the live defect: status after a boot from a save taken while
+    PUBLIC prints the guest's status, then the device's posture (both witnesses), the
+    save and the journal's WHEN — never 'reset by a restart … INTERNAL'."""
+    saved = gt.Posture(status="public", nft="public", reachable=True).as_record()
+    boot_save = _save_set(tmp_path, saved)
+    work = _work(tmp_path, _record(label="x86/pki", platform="x86",
+                                   started_at="2026-11-11T15:31:13Z", boot_save=boot_save))
+    gt.write_journal(gt.dataclasses.replace(_target(tmp_path, label="x86/pki"),
+                                            work_dir=work,
+                                            started_at="2026-11-11T15:11:59Z"),
+                     "commit", "byo-domain", "example.invalid", rc=0)
+    run = FakeRun(probe_text=PROBE_OK, posture_text=POSTURE_PUBLIC_OUT)
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run", run)
+    rc, out = _cli(["status", "--target", "x86/pki", "--work", work,
+                    "--generator-dir", str(tmp_path)])
+    assert rc == 0
+    assert "): PUBLIC — both witnesses say public (hugmesh-go-live status; nft table" in out
+    assert "booted from a save taken while PUBLIC (mesh-20261111T152704Z" in out
+    assert "during an earlier boot (the device booted again at 2026-11-11T15:31:13Z)" in out
+    assert "INTERNAL" not in out and "reset by a restart" not in out
+    assert any("@@nftrc" in argv[-1] for argv, _in in run.calls)
+
+
+def test_cli_status_of_an_unreachable_device_is_unknown(tmp_path, monkeypatch):
+    work = _work(tmp_path, _record())
+    gt.write_journal(gt.dataclasses.replace(_target(tmp_path), work_dir=work,
+                                            started_at="2026-11-09T09:00:00Z"),
+                     "commit", "byo-domain", "example.invalid", rc=0)
+
+    sent = []
+
+    def down(argv, **kw):
+        sent.append(argv[-1])
+        return subprocess.CompletedProcess(argv, 255, "", "ssh: connect to host "
+                                           "127.0.0.1 port 2201: Connection refused\n")
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run", down)
+    rc, out = _cli(["status", "--target", "rpi5/pki", "--work", work,
+                    "--generator-dir", str(tmp_path)])
+    assert rc == 2
+    assert out.startswith("!! rpi5/pki: cannot read the device")
+    assert re.search(r"^device posture now \(read [0-9TZ:-]+\): unknown \(device not "
+                     r"reachable\) — rpi5/pki: cannot read the device", out, re.M), out
+    # the probe got no answer: that IS the read attempt — the dead port is not asked
+    # a second time for a posture
+    assert len(sent) == 1 and "::driver" in sent[0] and "@@nftrc" not in sent[0], sent
+    assert "last commit from this host: byo-domain" in out and "earlier boot" in out
+    assert "INTERNAL" not in out
+    # a stopped device: refused, nothing sent, still unknown — and still no guess
+    work2 = _work(tmp_path / "b", _record(state="stopped"))
+    calls = []
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run",
+                        lambda argv, **kw: calls.append(argv))
+    rc, out = _cli(["status", "--target", "rpi5/pki", "--work", work2,
+                    "--generator-dir", str(tmp_path)])
+    assert rc == 2 and calls == []
+    assert "unknown (device not reachable) — rpi5/pki is not running" in out
+
+
+def test_cli_status_of_a_client_image_says_not_read(tmp_path, monkeypatch):
+    """Round 2 of #1007 (R7): `status` on a running CLIENT image printed 'device
+    posture now (read T): unknown (device not reachable)'. It is reachable, it was not
+    asked and nothing was read: 'unknown (not read)', no 'now', no read time."""
+    work = _work(tmp_path, _record(label="x86/laptop", platform="x86", role="laptop"))
+    calls = []
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run",
+                        lambda argv, **kw: calls.append(argv))
+    rc, out = _cli(["status", "--target", "x86/laptop", "--work", work,
+                    "--generator-dir", str(tmp_path)])
+    assert rc == 2 and calls == [], "a refused client was sent something"
+    lines = out.splitlines()
+    assert lines[0].startswith("!! x86/laptop is a laptop client")
+    assert lines[1].startswith("device posture: unknown (not read) — x86/laptop is a "
+                               "laptop client — client images bake no go-live driver")
+    assert "posture now" not in out and "(read " not in out
+    assert "not reachable" not in out
+
+
+def test_cli_status_of_a_guest_with_no_driver_still_asks_its_firewall(tmp_path,
+                                                                      monkeypatch):
+    """The other half of the blocker path (R7): a SERVER guest that answers the probe
+    but bakes no driver is blocked, yet it IS asked — its nft table can still say what
+    it enforces. Only a probe that got no answer is 'not reachable' unasked."""
+    work = _work(tmp_path, _record())
+    run = FakeRun(probe_text="::driver\n::cluster-domain\nexample.org\n::domains\n\n"
+                             "::release-state\ninternal\n::end\n",
+                  posture_text="sh: hugmesh-go-live: not found\n@@nft@@\n" + NFT_INTERNAL
+                               + "@@nftrc=0@@\n@@end@@\n")
+    monkeypatch.setattr("hugmesh_studio.core.golive_target.subprocess.run", run)
+    rc, out = _cli(["status", "--target", "rpi5/pki", "--work", work,
+                    "--generator-dir", str(tmp_path)])
+    assert rc == 2
+    assert "no go-live driver" in out.splitlines()[0]
+    assert len([argv for argv, _in in run.calls if "@@nftrc" in argv[-1]]) == 1
+    assert re.search(r"^device posture now \(read \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\): "
+                     r"MIXED — hugmesh-go-live status says unknown, the nft release "
+                     r"gate says internal$", out, re.M), out
+    assert "converges them" not in out               # an absent driver is not a lag
+
+
+# ── the one posture line every face prints (round 2 of #1007) ───────────────────────
+def test_posture_line_always_carries_the_read_time(tmp_path):
+    read = gt.Posture(status="internal", nft="internal", reachable=True,
+                      at="2026-11-11T15:31:14Z")
+    assert gt.posture_line(read) == (
+        "device posture now (read 2026-11-11T15:31:14Z): INTERNAL — both witnesses say "
+        "internal (hugmesh-go-live status; nft table inet hugmesh_release_gate)")
+    # a face that QUOTES an earlier reading says so instead of "now" — with the time
+    quoted = gt.posture_line(read, when="at the last s")
+    assert quoted.startswith("device posture at the last s (read 2026-11-11T15:31:14Z): "
+                             "INTERNAL — ")
+    assert "now" not in quoted
+    # a reading with no time on it is never called "now"
+    untimed = gt.posture_line(dataclasses.replace(read, at=""))
+    assert untimed.startswith("device posture (read time not recorded): INTERNAL — ")
+    assert "now" not in untimed
+    # nothing sent: no "now" and no time, whatever the caller passes
+    for when in (gt.READ_NOW, "at the last s"):
+        unasked = gt.posture_line(gt.Posture(asked=False, error="re-scan first",
+                                             at="2026-11-11T15:31:14Z"), when=when)
+        assert unasked == "device posture: unknown (not read) — re-scan first"
+    # an ssh that failed WAS a read attempt, at a time
+    down = gt.posture_line(gt.Posture(error="ssh failed", at="2026-11-11T15:31:14Z"))
+    assert down == ("device posture now (read 2026-11-11T15:31:14Z): unknown (device "
+                    "not reachable) — ssh failed")
+    # device_report's first line is that line, for either wording
+    t = _target(tmp_path)
+    assert gt.device_report(str(tmp_path), t, read).splitlines()[0] == gt.posture_line(read)
+    assert gt.device_report(str(tmp_path), t, read, when="at the last s") == quoted
+    assert _STAMP.fullmatch(gt.utc_now())
+    assert _STAMP.fullmatch(gt.read_posture(
+        t, run=FakeRun(posture_text=POSTURE_PUBLIC_OUT)).at)
+
+
+_STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
+
+
+def test_the_save_line_is_about_a_boot_that_is_running(tmp_path):
+    """A record that is not running (stopped, or gone since it was picked) keeps the
+    save its next Start resumes from. That is not the boot of a running device: the
+    line says LAST booted, and that it is not running."""
+    saved = gt.Posture(status="public", nft="public", reachable=True).as_record()
+    t = _target(tmp_path, label="x86/pki", platform="x86",
+                boot_save=_save_set(tmp_path, saved))
+    origin = ("a save taken while PUBLIC (mesh-20261111T152704Z, saved "
+              "2026-11-11T15:30:29Z)")
+    assert gt.boot_origin(t) == f"booted from {origin}"
+    stopped = dataclasses.replace(t, running=False)
+    assert gt.boot_origin(stopped) == f"last booted from {origin} — it is not running now"
+    report = gt.device_report(str(tmp_path), stopped, gt.read_posture(stopped))
+    assert report.splitlines()[1] == gt.boot_origin(stopped)
+    # a pick gone stale is reported against the record as it is NOW (rebind), so a
+    # restart from the golden image prints no save line at all
+    golden = _record(label="x86/pki", platform="x86", started_at="2026-11-11T16:00:00Z")
+    from hugmesh_studio.core.qemu_devices import device_from_record
+    rows = [gt.target_from_device(device_from_record(golden))]
+    fresh = gt.rebind(t, rows)
+    assert gt.binding_change(t, rows) and not fresh.boot_save
+    unasked = gt.Posture(asked=False, error="re-scan the devices first")
+    assert gt.device_report(str(tmp_path), fresh, unasked) == (
+        "device posture: unknown (not read) — re-scan the devices first")
+    # ...and a record that is gone is the picked one, NOT running
+    gone = gt.rebind(t, [])
+    assert gt.device_report(str(tmp_path), gone, unasked).splitlines()[1] == (
+        f"last booted from {origin} — it is not running now")
+
+
 def test_journal_refused_after_a_gui_launch_keeps_the_launch_wording(tmp_path):
     t = _target(tmp_path)
     gt.write_journal(t, "commit", "byo-domain", "example.invalid")      # GUI: launched
@@ -851,3 +1309,51 @@ def test_cli_plan_prints_the_reachability_verdict_and_refuses_funnel(tmp_path, m
                    call=lambda a: pytest.fail("ssh -t must not start"), isatty=lambda: True)
     assert rc == 2 and "does not implement Funnel" in out
     assert gt.read_journal(work, "rpi5/pki") is None
+
+
+# ── re-binding a picked device to its fresh record (#931 round 2) ────────────────────
+def test_same_binding_is_the_boot_and_channel_not_the_label(tmp_path):
+    t = _target(tmp_path)
+    assert gt.same_binding(t, t)
+    import dataclasses
+    for change in (dict(ssh_port=22999), dict(started_at="2026-11-10T09:00:00Z"),
+                   dict(running=False), dict(ssh_base_argv=("ssh", "x@127.0.0.1"))):
+        assert not gt.same_binding(t, dataclasses.replace(t, **change)), change
+    # the work dir is where the journal lives, not where the ssh lands
+    assert gt.same_binding(t, dataclasses.replace(t, work_dir="/elsewhere"))
+
+
+def test_rebind_takes_the_fresh_record_and_a_vanished_one_is_not_running(tmp_path):
+    import dataclasses
+    t = _target(tmp_path)
+    moved = dataclasses.replace(t, ssh_port=22999, started_at="2026-11-10T09:00:00Z",
+                                work_dir="")
+    other = dataclasses.replace(t, label="rpi5/be", ssh_port=t.ssh_port)
+    got = gt.rebind(t, [gt.local_target(), other, moved])
+    assert got.ssh_port == 22999 and got.started_at == "2026-11-10T09:00:00Z"
+    assert got.work_dir == t.work_dir                     # kept from the pick
+    gone = gt.rebind(t, [gt.local_target(), other])       # its port went to rpi5/be
+    assert gone.label == t.label and not gone.running
+    assert "not running" in gt.refusal(gone, osname="posix")
+    assert gt.rebind(gt.local_target(), []) == gt.local_target()
+    # the same label under QEMU for Windows is ANOTHER device: never taken for it
+    whpx = gt.target_from_whpx({"label": t.label, "ssh_port": 22777, "ssh_key": "/k/w",
+                                "ssh_user": "hugmesh"})
+    got = gt.rebind(t, [gt.local_target(), whpx, moved])
+    assert got.kind == gt.KIND_DOCKER and got.ssh_port == 22999
+    assert not gt.rebind(t, [gt.local_target(), whpx]).running
+
+
+def test_binding_change_says_what_moved(tmp_path):
+    import dataclasses
+    t = _target(tmp_path)
+    assert gt.binding_change(t, [t]) == ""
+    assert gt.binding_change(gt.local_target(), []) == ""
+    moved = dataclasses.replace(t, ssh_port=22999, started_at="2026-11-10T09:00:00Z")
+    why = gt.binding_change(t, [moved])
+    assert "restarted since it was picked" in why
+    assert f"ssh port {t.ssh_port} -> 22999" in why and "2026-11-10T09:00:00Z" in why
+    assert "INTERNAL" not in why and "belongs to the earlier boot, not this one" in why
+    stopped = dataclasses.replace(t, running=False)
+    assert "stopped since it was picked" in gt.binding_change(t, [stopped])
+    assert "stopped since it was picked" in gt.binding_change(t, [])

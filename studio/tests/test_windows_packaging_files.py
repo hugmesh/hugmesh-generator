@@ -139,7 +139,8 @@ def _run_spec(monkeypatch, icon=None, tz=("datas", "binaries", "hidden"), spec=N
     """Execute the spec and return {kind: FIRST recorded call}, plus "EXES": every EXE
     in order. ``tz`` is what collect_all ("tzdata") hands back: a truthy datas list is
     "tzdata is installed". ``platform`` is the sys.platform the spec sees (the console
-    twin exists only on "win32"), so the answer does not depend on the test host."""
+    twin exists only on "win32", the .app BUNDLE only on "darwin"), so the answer does
+    not depend on the test host."""
     monkeypatch.setattr(sys, "platform", platform)
     _Rec.log = []
     hooks = types.ModuleType("PyInstaller.utils.hooks")
@@ -156,7 +157,7 @@ def _run_spec(monkeypatch, icon=None, tz=("datas", "binaries", "hidden"), spec=N
         monkeypatch.setenv("HUGMESH_STUDIO_ICON", icon)
     path = spec or SPEC
     namespace = {"SPECPATH": os.path.dirname(path), "__name__": "spec",
-                 **{k: _Rec(k) for k in ("Analysis", "PYZ", "EXE", "COLLECT")}}
+                 **{k: _Rec(k) for k in ("Analysis", "PYZ", "EXE", "COLLECT", "BUNDLE")}}
     exec(compile(open(path, encoding="utf-8").read(), path, "exec"), namespace)
     calls = {}
     for r in _Rec.log:

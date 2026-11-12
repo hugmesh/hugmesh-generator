@@ -57,6 +57,12 @@ def _pinned_host(monkeypatch):
     # Linux host does unless a test says it is a native Windows Studio.
     monkeypatch.setattr(platform_info, "native_windows_blocker",
                         functools.partial(_REAL_NATIVE_BLOCKER, osname="posix"))
+    # ...and for the backend chooser, which a Mac is offered a shorter one of
+    # (qemu_windows.backends): on a developer's Mac this file still answers as Linux.
+    real_kind = platform_info.host_kind
+    monkeypatch.setattr(platform_info, "host_kind",
+                        lambda osname=None, sysplatform=None:
+                        real_kind(osname, sysplatform or "linux"))
 
 
 @pytest.fixture(autouse=True)
@@ -143,6 +149,46 @@ def wiz(qapp, fake_generator):
 def _page(wiz):
     pick_mode(wiz, "meshemu")
     return advance_to(wiz, wizard_mod.MeshEmulationPage)
+
+
+@pytest.fixture
+def stock_mac(monkeypatch):
+    """This process is a Mac without Homebrew's GNU tools (set up BEFORE the wizard
+    builds its pages: name it ahead of ``wiz``)."""
+    real = platform_info.host_kind
+    # a Mac is posix AND darwin: on a Windows runner os.name is "nt", which host_kind
+    # answers before it looks at sys.platform, so both are given
+    monkeypatch.setattr(platform_info, "host_kind",
+                        lambda osname=None, sysplatform=None:
+                        real(osname or "posix", sysplatform or "darwin"))
+    monkeypatch.setattr(platform_info, "_GNU_MISSING", ["bash", "gnu-sed", "coreutils"])
+
+
+def test_a_mac_is_offered_the_docker_backend_alone(stock_mac, wiz, qapp):
+    """QEMU for Windows cannot boot anything on a Mac, so the chooser does not offer
+    it, and neither its tooltip nor the availability note says anything Windows: the
+    note is the Mac's sentence, with the brew command on a line of its own."""
+    from hugmesh_studio.core import macos_host
+    page = _page(wiz)
+    qapp.processEvents()
+    combo = page.backend_combo
+    assert [combo.itemData(i) for i in range(combo.count())] == [qw.BACKEND_DOCKER]
+    assert combo.itemText(0) == qw.DOCKER_LABEL_MACOS
+    assert not page._whpx and not page.whpx_opts.isVisible()
+    for where, text in (("the chooser's tooltip", combo.toolTip()),
+                        ("the availability note", page.docker_note.text())):
+        for word in ("Windows", "WSL", "WHPX", "this PC"):
+            assert word not in text, (where, word, text)
+    assert f"<tt>{macos_host.BREW_INSTALL}</tt>" in page.docker_note.text()
+    assert not page._docker_ok                        # every verb stays disabled
+
+
+def test_the_chooser_is_unchanged_off_a_mac(wiz):
+    page = _page(wiz)
+    combo = page.backend_combo
+    assert tuple((combo.itemData(i), combo.itemText(i)) for i in range(combo.count())) \
+        == qw.BACKENDS
+    assert "QEMU for Windows (WHPX): ONE x86 device at a time" in combo.toolTip()
 
 
 def _choose(page, backend):
@@ -464,3 +510,30 @@ def test_the_test_page_points_native_windows_at_this_backend(wiz, monkeypatch):
     assert "WSL2" in text and "Mesh emulation" in text
     assert dict(qw.BACKENDS)[qw.BACKEND_WHPX] in text
     assert not page._docker_ok and not page.run_btn.isEnabled()   # gating unchanged
+
+
+# ---- go live from this mesh under WHPX: the NATIVE record is the target ---------------
+
+def test_go_live_under_whpx_needs_an_ssh_identity_in_the_native_record(
+        wiz, whpx_ready, live, monkeypatch):
+    from hugmesh_studio.gui.pages import golive as golive_page
+    opened = []
+    monkeypatch.setattr(golive_page, "open_go_live",
+                        lambda gen, domain="", current=None, target=None, work_dir="":
+                        opened.append(target) or object())
+    page = _page(wiz)
+    _choose(page, qw.BACKEND_WHPX)
+    gw = next(r for r in page._rows if r.label == page.plan.gateway_label)
+    live.append(_rec(gw))                             # today's record: no key, no user
+    page._refresh_reality()
+    assert not page.golive_btn.isEnabled()
+    assert "QEMU for Windows" in page.golive_note.text()
+    assert "no ssh key or user" in page.golive_note.text()
+    # it does NOT repeat the bash / WSL2 blocker: this path needs only ssh
+    assert "WSL" not in page.golive_note.text()
+    live[:] = [_rec(gw, ssh_key=r"C:\keys\id_ed25519", ssh_user="hugmesh")]
+    page._refresh_reality()
+    assert page.golive_btn.isEnabled(), page.golive_note.text()
+    page.golive_btn.click()
+    (t,) = opened
+    assert t.kind == "emulated-whpx" and t.label == gw.label and t.ssh_port == 2222
