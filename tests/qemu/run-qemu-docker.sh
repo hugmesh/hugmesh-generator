@@ -144,6 +144,8 @@ TIMEOUT="2400"
 # as a number here: this script only forwards what the operator actually asked
 # for, so the default lives in exactly one file and cannot drift between them.
 ASSERT_TIMEOUT=""
+# Same rule: empty = the entrypoint's own --boot-stall-grace default.
+BOOT_STALL_GRACE=""
 LIST_ONLY=false
 FORCE_BUILD=false
 KEEP=false
@@ -298,6 +300,11 @@ Usage: $0 [OPTIONS]
                     wall clock for the in-guest assertion ssh, forwarded to the
                     container. Used verbatim, never clamped. Unset = the
                     entrypoint's own default.
+  --boot-stall-grace SEC
+                    FAIL a row this many seconds after its guest console shows
+                    a login prompt while ssh still does not answer (a stalled
+                    boot, e.g. a lost udev coldplug). 0 = wait the full
+                    --timeout. Unset = the entrypoint's own default.
   --list            enumerate the rows that WOULD run, then exit
   --build-image     (re)build the runner image before running
   --keep            keep per-run scratch dirs
@@ -430,6 +437,7 @@ while [[ $# -gt 0 ]]; do
         --smp)          SMP="$2"; shift 2 ;;
         -t|--timeout)   TIMEOUT="$2"; shift 2 ;;
         --assert-timeout) ASSERT_TIMEOUT="$2"; shift 2 ;;
+        --boot-stall-grace) BOOT_STALL_GRACE="$2"; shift 2 ;;
         --list)         LIST_ONLY=true; shift ;;
         --build-image)  FORCE_BUILD=true; shift ;;
         --keep)         KEEP=true; shift ;;
@@ -478,6 +486,8 @@ done
 # into the argv below and come back as "Unknown arg" instead of the real cause.
 [ -z "${ASSERT_TIMEOUT}" ] || [[ "${ASSERT_TIMEOUT}" =~ ^[0-9]+$ ]] \
     || die "--assert-timeout must be a whole number of seconds, got '${ASSERT_TIMEOUT}'"
+[ -z "${BOOT_STALL_GRACE}" ] || [[ "${BOOT_STALL_GRACE}" =~ ^[0-9]+$ ]] \
+    || die "--boot-stall-grace must be a whole number of seconds, got '${BOOT_STALL_GRACE}'"
 
 # Same class of check, and the same reason: this one reaches the perl client's
 # `alarm`, where a non-numeric value would be read as 0 — i.e. no alarm at all,
@@ -2431,6 +2441,7 @@ run_row() {
         --img "/artifacts/$(basename "${img}")" \
         --mem "${MEM}" --smp "${SMP}" --timeout "${TIMEOUT}" \
         ${ASSERT_TIMEOUT:+--assert-timeout "${ASSERT_TIMEOUT}"} \
+        ${BOOT_STALL_GRACE:+--boot-stall-grace "${BOOT_STALL_GRACE}"} \
         --label "${label}" $( ${KEEP} && echo --keep ) \
         "${bs_args[@]}" \
         > "${log}" 2>&1
@@ -2846,6 +2857,7 @@ start_device_row() {
             --img "/artifacts/$(basename "${img}")" \
             --mem "${MEM}" --smp "${SMP}" --timeout "${TIMEOUT}" \
             ${ASSERT_TIMEOUT:+--assert-timeout "${ASSERT_TIMEOUT}"} \
+            ${BOOT_STALL_GRACE:+--boot-stall-grace "${BOOT_STALL_GRACE}"} \
             --label "${label}" --keep --keep-alive \
             "${bs_args[@]}" \
             "${EXTRA_USER_ARGS[@]}" 2>&1)"

@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+# udev-coldplug-guard — sysinit oneshot: make sure the coldplug udev-trigger
+# fired actually reached udevd, and re-run it once if it did not.
+#
+# udev-trigger can fire its `udevadm trigger --action=add` before systemd-udevd
+# has bound its uevent socket (the udev service is command_background, and udevd
+# 260 binds the socket late), and every uevent sent in that window is lost. The
+# full mechanism, the evidence and the checks are in the helper:
+# /usr/libexec/udev-coldplug-guard. It prints one console line, and its FAIL
+# line is what the QEMU runner keys its fail-fast on.
+
+description="Re-run a udev coldplug that udevd never received"
+
+depend() {
+	need udev
+	after udev-trigger
+	before udev-settle
+	keyword -containers -docker -lxc -systemd-nspawn -vserver
+}
+
+start() {
+	ebegin "Checking that the udev coldplug reached udevd"
+	/usr/libexec/udev-coldplug-guard
+	eend $? "udev coldplug incomplete (see the udev-coldplug-guard line above)"
+}
