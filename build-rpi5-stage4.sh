@@ -154,6 +154,10 @@ source "${SCRIPT_DIR}/scripts/_node-storage-bake-lib.sh"
 # EXCLUDE_SERVICES). See the lib header for the observed symptoms.
 # shellcheck source=scripts/_optional-services-lib.sh
 source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
+# The ENV=prod clean-up of the baked cluster tree (test-harness prune, :dev pin,
+# static prod-hygiene self-check), shared with build-x86-host-stage4.sh.
+# shellcheck source=scripts/_prod-gate-lib.sh
+source "${SCRIPT_DIR}/scripts/_prod-gate-lib.sh"
 # Cluster NODE plumbing shared with the Orange Pi node builders: here only the
 # headscale-host rule (pki/omnibus/generic) and the k8s topology word, so the two
 # builders cannot disagree about which roles run the mesh control server.
@@ -275,9 +279,10 @@ GAMES_DOMAIN="games.hugmesh.net"
 # OPTIONAL_SERVICES=all / --all-services expands to.
 USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
 # OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
-#   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
-#   DEFAULT-OFF (must be specifically added): games owncast tube (and any future
-#               user-level service) — pruned unless explicitly selected.
+#   DEFAULT-ON  (the built-in default when NO selection is given): tuwunel phpbb.
+#   DEFAULT-OFF (must be specifically added): akkoma games owncast tube (and any
+#               future user-level service) — pruned unless explicitly selected.
+#               akkoma: image not yet published (images/akkoma/README.md).
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services) expands to EVERY
 # user-level slug (USER_LEVEL_SERVICES) just before EXCLUDE_SERVICES subtracts, so
 # `all` + EXCLUDE_SERVICES="games" still drops games. GAMES IS OPT-IN / OFF BY
@@ -286,7 +291,7 @@ USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio ch
 # ENABLE_GAMES=true, by listing 'games' in --optional-services, or via 'all').
 # brand.conf narrows; --optional-services overrides both (built-in < brand.conf <
 # flag). Unselected slugs are pruned by gate_optional_services.
-OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
 # EXCLUDE_SERVICES — the SUBTRACTIVE build-time exclusion knob (brand.conf /
 # --exclude-services). Any user-level slug listed here is REMOVED from the final
 # selection AFTER all positive sources (built-in default, brand.conf
@@ -328,6 +333,10 @@ ENV="test"
 #   outside the tailnet unless /etc/hugmesh/go-live exists.
 # public: the above restrictions are lifted (rebuild-time go-live).
 RELEASE_STATE="internal"
+# Pinned first-party release tag for ENV=prod: gate_env_apps replaces every
+# floating `:dev` first-party image tag in the baked tree with it, so the static
+# prod-hygiene gate finds none. Same default and flag as build-x86-host-stage4.sh.
+RELEASE_TAG="${RELEASE_TAG:-$(date -u +%Y%m%d)}"
 CONFIG_FILE=""                      # optional drop-in brand profile (sourced)
 DEFAULT_USER="pi"
 # NO baked default password. Real creds come from the KEYS USB ($6$ hashes in
@@ -425,6 +434,11 @@ SEED_STAGE3_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/latest-s
 
 # Mesh VPN (installed as upstream static arm64 binaries, not emerged)
 HEADSCALE_VERSION="0.23.0"
+# Opt-in: ALSO list Tailscale's public DERP map in headscale. Default OFF: the pki
+# node's headscale runs its embedded relay only, so the mesh starts and relays
+# offline (docs/HEADSCALE-DERP.md). --headscale-public-derp or env/brand.conf
+# HEADSCALE_PUBLIC_DERP=true bakes /etc/hugmesh/headscale-public-derp.
+HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
@@ -702,8 +716,9 @@ OPTIONS
         boot partition and alignment — so it flashes fast and is NOT padded
         to the size of the target USB. growroot then expands the root to fill
         the medium (or the --grow cap) on first boot, so this only needs to
-        fit the stage4 plus a little headroom.
-        Default: 9216
+        fit the stage4 plus a little headroom. A stage4 that does not fit is
+        not an error: the root is grown to the payload plus ~15%.
+        Default: 9216 (omnibus: 20480)
 
     --grow fill|none|<size>
         First-boot grow policy baked into the image (/etc/growfs.conf, read
@@ -796,6 +811,11 @@ OPTIONS
         tailscale client are installed as upstream static aarch64
         binaries rather than emerged, so no overlay is required.
 
+    --headscale-public-derp
+        Also list Tailscale's public DERP map in the pki node's headscale.
+        Default: OFF — the embedded relay only, so the mesh starts and relays
+        offline (docs/HEADSCALE-DERP.md). env/brand.conf: HEADSCALE_PUBLIC_DERP=true
+
     --headscale-version VER
         Headscale release to install (from GitHub releases).
         Default: 0.23.0
@@ -873,8 +893,8 @@ OPTIONS
         akkoma tuwunel phpbb games owncast tube character-studio character-forge, or
         the literal "all" (every user-level slug). Unlisted slugs are pruned from the
         baked GitOps tree by gate_optional_services. Built-in DEFAULT (no selection
-        given) is "akkoma tuwunel phpbb"; games/owncast/tube/character-studio/
-        character-forge are DEFAULT-OFF (opt-in).
+        given) is "tuwunel phpbb"; akkoma/games/owncast/tube/character-studio/
+        character-forge are DEFAULT-OFF (opt-in; akkoma: image not yet published).
         (env/brand.conf: OPTIONAL_SERVICES; OPTIONAL_SERVICES=all = the full set)
 
     --all-services
@@ -1003,6 +1023,14 @@ OPTIONS
                go-live app is kept (creds from the keys USB) and the LAN wildcard
                DNS app is pruned. ACME is ADDITIVE to the internal cluster CA.
                Prints a LOUD announced banner before building.
+               Also prunes the ENV=test e2e harness (apps/99-test-runner.yaml,
+               manifests/test-runner), pins first-party :dev image tags to
+               --release-tag, and fails the build if the static prod-hygiene
+               check (scripts/validate-prod-hygiene.sh) finds anything left.
+    --release-tag TAG
+        The tag ENV=prod pins first-party :dev image tags to. Letters, digits,
+        . _ - only, and not dev/main/latest; with --env prod a bad tag is
+        refused before the build starts. Default: the UTC build date (YYYYMMDD).
 
   Per-domain identity provider (issue #47)
     --domain-idp DOMAIN=own|superdomain
@@ -1173,6 +1201,7 @@ while [[ $# -gt 0 ]]; do
         -r|--role)            ROLE="$2";               shift 2 ;;
         -C|--config)          CONFIG_FILE="$2";        shift 2 ;;  # sourced above
         --env)                ENV="$2";                shift 2 ;;
+        --release-tag)        RELEASE_TAG="$2";        shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
         --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
@@ -1208,6 +1237,7 @@ while [[ $# -gt 0 ]]; do
         --packages-add)       PACKAGES_ADD="$2";       shift 2 ;;
         --packages-drop)      PACKAGES_DROP="$2";      shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";  shift 2 ;;
+        --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";  shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;        shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;   shift   ;;
@@ -1278,6 +1308,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+# --headscale-public-derp / HEADSCALE_PUBLIC_DERP: one spelling, checked before any work.
+case "${HEADSCALE_PUBLIC_DERP}" in
+    true|1|yes|on)   HEADSCALE_PUBLIC_DERP=true ;;
+    false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
+    *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
+esac
 
 # Comma tolerance: accept "akkoma,tuwunel" (the CSV spelling GUIs/configs tend to
 # emit) as well as the native space-separated list — normalized HERE, right after
@@ -1559,6 +1595,13 @@ if ${STANDALONE}; then
     info "STANDALONE desktop: $([ "${MESH_FORCED}" = on ] && echo 'tailnet client kept (--with-tailscale), no mesh association' || echo 'no mesh'); local user '${LOCAL_USER}'; LUKS2-encrypted root (installer ISO)"
 fi
 
+# tailscaled version floor (scripts/_download-lib.sh): the shared init script passes
+# --no-logs-no-support, which tailscaled only accepts from 1.32.0 on. Refuse an older
+# --tailscale-version HERE, after the --standalone posture above has settled whether
+# tailscale ships at all and before any download, instead of shipping a mesh client
+# that exits on an unknown flag.
+${SKIP_MESH} || ${SKIP_TAILSCALE} || dlv_tailscale_version_ok "${TAILSCALE_VERSION}" || exit 1
+
 # --encrypt-root independent of --standalone: forces the installer ISO, since
 # encryption happens at INSTALL time (specs-rpi5/installer/install.sh), not by
 # writing the default .img directly. The plaintext .img (if also produced)
@@ -1764,6 +1807,11 @@ case "${ENV}" in
     test|prod) ;;
     *) err "--env must be one of: test | prod  (got '${ENV}')"; exit 1 ;;
 esac
+# ENV=prod pins first-party :dev image tags to RELEASE_TAG at bake time; refuse a
+# floating or malformed tag NOW, not after the emerge phase (scripts/_prod-gate-lib.sh).
+if [ "${ENV}" = "prod" ]; then
+    prod_gate_validate_release_tag "${RELEASE_TAG}" || exit 1
+fi
 
 # ── Validate the release-state posture (baked into the image) ─────────────
 case "${RELEASE_STATE}" in
@@ -1891,6 +1939,45 @@ _sed_rep_escape() {
 # Usage: render_template <src> <dst>
 # All brand/domain/identity/kernel substitutions go through _sed_rep_escape so a
 # value carrying sed metacharacters cannot corrupt or inject into the s-program.
+# ── rpi_selinux_boot_variants <bootdir> ───────────────────────────────────────
+# The Pi firmware has NO boot menu, so the SELinux entries the GRUB/extlinux images
+# carry (#863 refute, blockers 3 and 4) are files on the FAT boot partition here:
+#   cmdline-enforcing-test.txt  cmdline.txt + enforcing=1, used by tryboot.txt;
+#   tryboot.txt                 config.txt + 'cmdline=cmdline-enforcing-test.txt'.
+#                               Pi 4/5 firmware reads tryboot.txt INSTEAD of config.txt
+#                               for ONE boot while its tryboot flag is set, then falls
+#                               back on its own (a hang is cleared by a power cycle).
+#                               The kernel sets that flag on a restart whose argument
+#                               contains "tryboot". This image runs sysvinit, NOT systemd:
+#                               `reboot "0 tryboot"` is a usage error there (halt.c:
+#                               leftover args -> usage(), exit 1); the sysvinit spelling
+#                               is `reboot -m "0 tryboot"` (LINUX_REBOOT_CMD_RESTART2 with
+#                               that message). -m implies -f: it syncs and restarts
+#                               WITHOUT running the shutdown runlevel.
+#                               Pi 3 firmware has no tryboot and ignores the file;
+#   cmdline-rescue.txt          cmdline.txt + enforcing=0. The permissive rescue: from
+#                               any computer, add 'cmdline=cmdline-rescue.txt' as the
+#                               last line of config.txt (see the note there).
+# DERIVED from the FINAL cmdline.txt/config.txt, never templated separately, so a
+# root= rewrite (build_img's PARTUUID, the installer's NVMe/LUKS seds) or a config
+# edit can never leave them pointing at another root. Every writer that changes
+# cmdline.txt or config.txt calls this again afterwards; the installer carries the
+# same function (specs-rpi5/installer/install.sh) and the shell-suite pins both.
+rpi_selinux_boot_variants() {
+    local b="${1:?rpi_selinux_boot_variants: boot dir required}" base
+    [ -s "${b}/cmdline.txt" ] && [ -s "${b}/config.txt" ] \
+        || { err "rpi_selinux_boot_variants: ${b} has no cmdline.txt/config.txt"; return 1; }
+    base="$(tr -d '\n' < "${b}/cmdline.txt")"
+    case " ${base} " in
+        *" enforcing="*) err "rpi_selinux_boot_variants: ${b}/cmdline.txt already carries enforcing= ('${base}')"; return 1 ;;
+    esac
+    printf '%s enforcing=0\n' "${base}" > "${b}/cmdline-rescue.txt" || return 1
+    printf '%s enforcing=1\n' "${base}" > "${b}/cmdline-enforcing-test.txt" || return 1
+    { cat "${b}/config.txt" \
+      && printf '\n# tryboot.txt: config.txt for ONE boot while the firmware tryboot flag is set (SELinux\n# enforcing trial). Start it with: reboot -m "0 tryboot" (sysvinit; plain reboot takes no\n# argument). Regenerated from config.txt at build/install time.\n[all]\ncmdline=cmdline-enforcing-test.txt\n'; } \
+        > "${b}/tryboot.txt" || return 1
+}
+
 render_template() {
     local src="$1" dst="$2"
     local cbuild
@@ -2302,6 +2389,15 @@ gate_env_apps() {
     if [ "${ENV}" = "prod" ]; then
         rm -f "${apps}/09-lan-dns.yaml" && \
             info "ENV=prod: pruned LAN wildcard-DNS app 09-lan-dns.yaml from the baked tree"
+        # Prune the ENV=test e2e harness, pin :dev tags and run the static
+        # prod-hygiene self-check (scripts/_prod-gate-lib.sh). This used to exist
+        # on x86 only, so ENV=prod Pi and Orange Pi node images shipped the
+        # tier:test test-runner Application. RELEASE_TAG has a default here
+        # because the Orange Pi node builders load this function without it.
+        prod_gate_cluster_tree "${SYSROOT}/var/lib/hugmesh/cluster" \
+            "${RELEASE_TAG:-$(date -u +%Y%m%d)}" \
+            "${SCRIPT_DIR}/scripts/validate-prod-hygiene.sh" \
+            || { err "ENV=prod: the baked cluster tree is not clean for prod (see above); refusing to build a prod image"; exit 1; }
     else
         # ENV=test
         rm -f "${apps}/12-cloudflared.yaml" && \
@@ -3985,6 +4081,16 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/hugmesh/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/hugmesh/headscale-url"
 fi
+# Public Tailscale DERP map opt-in (default OFF: headscale's embedded relay only).
+# keys-provision reads the marker at first boot; provision.json .headscale.public_derp
+# outranks it either way.
+if [ "${HEADSCALE_PUBLIC_DERP}" = true ]; then
+    mkdir -p "${SYSROOT}/etc/hugmesh"
+    echo true > "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+    info "Baked HEADSCALE_PUBLIC_DERP=true -> /etc/hugmesh/headscale-public-derp (public Tailscale DERP map opted in)"
+else
+    rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+fi
 # Mesh secrets store (#224): the Vault connection facts keys-provision seeds ESO
 # from when the KEYS manifest has no .vault block. "" = byte no-op; desktop = warn.
 bake_vault_conf
@@ -4426,7 +4532,9 @@ fi
 if [ -d "${SYSROOT}/boot" ]; then
     render_template "${SPECS_DIR}/boot/config.txt.tmpl"   "${SYSROOT}/boot/config.txt"
     render_template "${SPECS_DIR}/boot/cmdline.txt.tmpl"  "${SYSROOT}/boot/cmdline.txt"
-    info "Boot config written (config.txt + cmdline.txt) over the firmware defaults"
+    rpi_selinux_boot_variants "${SYSROOT}/boot" \
+        || { err "could not derive the SELinux boot files (cmdline-rescue.txt, cmdline-enforcing-test.txt, tryboot.txt)"; exit 1; }
+    info "Boot config written (config.txt + cmdline.txt + SELinux rescue/trial files) over the firmware defaults"
 fi
 
 if ${SKIP_MESH}; then
@@ -4724,7 +4832,7 @@ else
         # hardening (e.g. a defconfig bump dropping a dep that olddefconfig
         # then prunes), mirroring the x86 build's guard — stable, long-standing
         # KSPP/LSM symbols only. A malformed CONFIG_LSM == SELinux disabled.
-        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM \
+        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM CONFIG_SECURITY_SELINUX_DEVELOP \
                     CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_SOURCE \
                     CONFIG_HARDENED_USERCOPY; do
             grep -q "^${must}=y" .config || { err "hardened kernel option ${must} not enabled after olddefconfig"; exit 1; }
@@ -4989,6 +5097,16 @@ fi
 # The image still boots PERMISSIVE: the enforce-gate service ships INERT (not in
 # any runlevel, /etc/conf.d/selinux-enforce-gate SELINUX_ENFORCE_GATE=no) unless
 # HUGMESH_SELINUX_ENFORCE_GATE=1 is set at build time. See the lib header for why.
+# /srv + the portage-tmpdir.conf mask: systemd-tmpfiles-setup otherwise creates both
+# in "/" at every boot and is denied under enforcing (see the lib; #863 refute,
+# blocker 3: this used to ship on x86 only).
+slx_ship_bootpath_files "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "could not ship the SELinux boot-path files (/srv, portage-tmpdir.conf mask)"; exit 1; }
+# Cross-built python extensions can carry the build host's x86_64 suffix, and the
+# target python then cannot import them: semanage died with "No module named
+# '_semanage'" on the #944 rpi5 image, so the root login mapping failed (see the lib).
+slx_fix_cross_python_ext "${SYSROOT}" aarch64 \
+    || { err "could not give the cross-built python extensions the target's suffix (semanage would not import on the node)"; exit 1; }
 slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
     || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
 # ── END shared block: SELinux node-policy modules ─────────────────────────────
@@ -5011,6 +5129,18 @@ if ! ${ROLE_CLIENT}; then
         '# (containerd, kubelet, the host firewall, tor) starts on a slow boot too.' \
         'INACTIVE_TIMEOUT=60' > "${SYSROOT}/etc/conf.d/NetworkManager"
     info "NetworkManager: INACTIVE_TIMEOUT=60 (cluster node — need-net services wait for the link)"
+    # No connectivity check on a cluster node. NetworkManager's default probe
+    # fetches a fixed public URL (nmcheck.gnome.org) every few minutes, on every
+    # node, forever: an unsolicited phone-home from a self-hosted mesh, and DNS
+    # noise on an offline or egress-filtered LAN. A server has no captive portal
+    # to detect. 90- so it sorts after the package's own conf.d files.
+    mkdir -p "${SYSROOT}/etc/NetworkManager/conf.d"
+    printf '%s\n' \
+        '# Written by the HugMesh builder (cluster-node roles): no connectivity probe' \
+        '# to a public URL. Delete this file to restore the package default.' \
+        '[connectivity]' \
+        'enabled=false' > "${SYSROOT}/etc/NetworkManager/conf.d/90-hugmesh-no-connectivity-check.conf"
+    info "NetworkManager: connectivity check OFF (cluster node — no public probe URL)"
 fi
 
 banner "Packaging stage4 tarball"
@@ -5024,19 +5154,23 @@ STAGE4_TARBALL="${WORK_DIR}/${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.s
 # scripts/_builder-resume-lib.sh has the measurement behind this — the old
 # unconditional owner-0 flatten shipped a root:root /var/lib/tor that tor
 # refuses, so tor never started on a tor-selected node.
+#
+# What the stage4 does NOT carry: ONE list, read by both pack commands below AND by
+# build_img's pre-flight, which must measure what the .img root will actually hold.
+# The pre-flight used to `du` the whole sysroot. Under --skip-clean that counted the
+# kernel build tree in usr/src, which is never packed: the 2026-11-11 pki.rpi5 build
+# measured 15450 MiB and aborted, while its stage4 held 2786 MiB (xz --list).
+# The patterns are relative to the sysroot ('./...'), so measure from inside it.
+STAGE4_PACK_EXCLUDES=(--exclude='./usr/src' --exclude='./var/cache' --exclude='./tmp/*')
 hmr_pack_owner_args "${SYSROOT}"
 tar -C "${SYSROOT}" \
     --xattrs-include='*.*' \
     "${HMR_PACK_OWNER_ARGS[@]}" \
-    --exclude='./usr/src' \
-    --exclude='./var/cache' \
-    --exclude='./tmp/*' \
+    "${STAGE4_PACK_EXCLUDES[@]}" \
     -cJf "${STAGE4_TARBALL}" . 2>/dev/null || \
 tar -C "${SYSROOT}" \
     "${HMR_PACK_OWNER_ARGS[@]}" \
-    --exclude='./usr/src' \
-    --exclude='./var/cache' \
-    --exclude='./tmp/*' \
+    "${STAGE4_PACK_EXCLUDES[@]}" \
     -cJf "${STAGE4_TARBALL}" .
 
 info "Stage4 tarball: ${STAGE4_TARBALL}"
@@ -5064,16 +5198,24 @@ build_img() {
     # 1MiB alignment gap + 512MiB FAT boot + ROOT_MiB ext4 root + 1MiB slack.
     img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
 
-    # Pre-flight (fail in seconds, not after a long extraction): does the finished
-    # payload fit the ROOT_MiB root partition? Converts the cryptic mid-tar "No space
-    # left on device" into an upfront, actionable error. Mirrors the x86 builder.
+    # Pre-flight (before any loop device or extraction): does the payload fit the
+    # ROOT_MiB root partition? The payload is what the stage4 CARRIES, measured with
+    # the pack's own exclude list (STAGE4_PACK_EXCLUDES) from inside the sysroot, so
+    # a kernel build tree kept by --skip-clean is not counted (it is never packed).
     local payload_mib cap_mib
-    payload_mib="$(du -sxBM "${SYSROOT}" 2>/dev/null | cut -f1 | tr -dc '0-9')"
+    payload_mib="$(cd "${SYSROOT}" && du -sxBM "${STAGE4_PACK_EXCLUDES[@]}" . 2>/dev/null | cut -f1 | tr -dc '0-9')"
     cap_mib=$(( ROOT_MiB * 93 / 100 ))   # ext4 metadata + 5% reserved ≈ 7% overhead
     if [ -n "${payload_mib}" ] && [ "${payload_mib}" -gt "${cap_mib}" ]; then
-        err "Payload ${payload_mib} MiB exceeds the ${ROOT_MiB} MiB root partition (usable ~${cap_mib} MiB)."
-        err "Re-run with a bigger root, e.g.  --img-size $(( (payload_mib * 115 / 100 / 1024 + 1) * 1024 ))"
-        exit 1
+        # AUTO-GROW (was a fatal error, after hours of emerge), as the x86 builder
+        # does: size the compact root to the payload + ~15% headroom, rounded up to
+        # a GiB. growroot still expands it to the medium on first boot, so a larger
+        # compact .img costs only flash time. An explicit --img-size is grown too.
+        # img_size_mib was computed above from the old ROOT_MiB, so recompute it.
+        local new_root=$(( (payload_mib * 115 / 100 / 1024 + 1) * 1024 ))
+        warn "Payload ${payload_mib} MiB exceeds the ${ROOT_MiB} MiB root (usable ~${cap_mib} MiB) — auto-growing the .img root to ${new_root} MiB (growroot still resizes on boot)."
+        ROOT_MiB="${new_root}"
+        cap_mib=$(( ROOT_MiB * 93 / 100 ))
+        img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
     fi
     info "Pre-flight: payload ${payload_mib:-?} MiB fits the ${ROOT_MiB} MiB root (usable ~${cap_mib} MiB)"
 
@@ -5232,6 +5374,10 @@ build_img() {
             -e "s#^/dev/mmcblk0p2#PARTUUID=${p2_uuid}#" \
             "${root_mnt}/etc/fstab"
     fi
+    # The SELinux rescue/trial files, derived AFTER every cmdline.txt/config.txt edit
+    # above (root=PARTUUID, the initramfs comment-out), so they boot this image's root.
+    rpi_selinux_boot_variants "${root_mnt}/boot" \
+        || { err "could not derive the SELinux boot files on the .img boot partition"; exit 1; }
 
     # ── Filesystem tarball ────────────────────────────────────────────
     # Capture the FULLY-MOUNTED tree (ext4 root with the FAT /boot mounted in

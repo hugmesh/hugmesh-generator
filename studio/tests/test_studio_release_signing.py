@@ -12,7 +12,9 @@ GITHUB ACTIONS AND SIGNED THERE. For ``.github/workflows/studio-release.yml`` th
 * Authenticode signing of the MSI is optional and runs only when its secret is set;
 * the release notes carry verify commands whose identity is the one cosign signs with;
 * the site is told with a ``releases-updated`` repository_dispatch, skipped (green) when
-  ``SITE_DISPATCH_TOKEN`` is not set.
+  ``SITE_DISPATCH_TOKEN`` is not set, and a ``::warning::`` carrying GitHub's message,
+  never a red run, when GitHub answers anything but 204 or cannot be reached (the
+  release is already published by then).
 
 Several tests run the workflow's own ``run:`` scripts with fake tools, so they test what
 GitHub would execute, not a copy of it.
@@ -27,10 +29,14 @@ version (as ``replace("0.4.0", "0x4x0")`` did) is red there before it is red in 
 """
 from __future__ import annotations
 
+import http.server
 import json
 import os
 import re
+import shutil
+import socket
 import subprocess
+import threading
 
 import pytest
 import yaml
@@ -110,11 +116,13 @@ def test_only_publish_writes_and_only_publish_can_sign():
 
 def test_no_other_workflow_can_sign():
     """Over EVERY workflow file: a job that can mint a signing identity (id-token) or
-    store attestations is one of the two release workflows' publish jobs and nothing
-    else. The cut workflow in particular writes contents and actions only: it creates
+    store attestations is one of the three release workflows' publish jobs and nothing
+    else (Studio, the mesh-node image, and the hugmesh-akkoma image, whose
+    akkoma-release.yml is mesh-node-release.yml with the names swapped). The cut workflow in particular writes contents and actions only: it creates
     the tag and starts the publishing run, it never signs."""
     workflows = os.path.join(GENERATOR_DIR, ".github", "workflows")
-    allowed = {("studio-release.yml", "publish"), ("mesh-node-release.yml", "image")}
+    allowed = {("studio-release.yml", "publish"), ("mesh-node-release.yml", "image"),
+               ("akkoma-release.yml", "image")}
     seen = set()
     for name in sorted(os.listdir(workflows)):
         if not name.endswith((".yml", ".yaml")):
@@ -479,40 +487,327 @@ def test_the_arch_check_and_the_qt_smoke_test_refuse_what_they_must(tmp_path):
 
 
 # ── site notification ──────────────────────────────────────────────────────────────
-def _dispatch_env(tmp_path, token: str) -> dict:
+# The step runs AFTER the release is published, so nothing it hears back may turn the
+# run red. On 2026-11-10 it did: `curl -fsS` turned GitHub's 403 for SITE_DISPATCH_TOKEN
+# into exit 22, the published studio-v0.4.4-beta.1 run (42882326209) went red, and
+# GitHub's reason was thrown away. These tests run the step's own script with the REAL
+# curl against a loopback stand-in for api.github.com, so what is under test is curl's
+# actual --fail / -o / -w behaviour, not a stub's idea of it.
+DISPATCH_STEP = "Tell hugmesh.github.io to rebuild its downloads data"
+SITE_REPO = "hugmesh/hugmesh.github.io"
+SITE_TOKEN = "site-dispatch-test-token-0d1f"
+REAL_CURL = shutil.which("curl")
+GITHUB_403 = json.dumps({
+    "message": "Resource not accessible by personal access token",
+    "documentation_url": "https://docs.github.com/rest/repos/repos#create-a-repository-dispatch-event",
+    "status": "403"})
+
+
+@pytest.fixture
+def fake_github():
+    """start(status, body) -> (port, seen): a loopback server answering every POST."""
+    servers = []
+
+    def start(status: int, body: str = ""):
+        seen = []
+        payload = body.encode()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                seen.append({"path": self.path, "auth": self.headers.get("Authorization"),
+                             "body": self.rfile.read(length)})
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return server.server_address[1], seen
+
+    yield start
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+def _closed_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _dispatch_env(tmp_path, token: str, port: int = 0) -> dict:
+    # `curl` on PATH logs its argv, rewrites https://api.github.com/ to the loopback port
+    # and execs the real curl. Any other URL is refused, so no test can reach a network.
+    assert REAL_CURL, "these tests need curl: they exercise its real --fail/-w behaviour"
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
-    log = tmp_path / "curl.log"
     curl = bindir / "curl"
-    curl.write_text('#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > "$CURL_LOG"\n')
+    curl.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$@" > "$CURL_LOG"\n'
+        "for a do\n"
+        "  shift\n"
+        '  case "$a" in\n'
+        '    https://api.github.com/*) a="http://127.0.0.1:$SITE_PORT/${a#https://api.github.com/}" ;;\n'
+        '    http://*|https://*) echo "test curl: refusing $a" >&2; exit 99 ;;\n'
+        "  esac\n"
+        '  set -- "$@" "$a"\n'
+        "done\n"
+        'exec "$REAL_CURL" "$@"\n')
     curl.chmod(0o755)
     return {"PATH": f"{bindir}:/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
-            "SITE_DISPATCH_TOKEN": token, "SITE_REPO": "hugmesh/hugmesh.github.io",
-            "CURL_LOG": str(log)}
+            "SITE_DISPATCH_TOKEN": token, "SITE_REPO": SITE_REPO,
+            "CURL_LOG": str(tmp_path / "curl.log"), "REAL_CURL": REAL_CURL,
+            "SITE_PORT": str(port)}
+
+
+def _dispatch(tmp_path, token: str, port: int = 0) -> subprocess.CompletedProcess:
+    step = _step("publish", DISPATCH_STEP)
+    return _run_bash(step["run"], _dispatch_env(tmp_path, token, port), tmp_path)
+
+
+def _one_warning(proc) -> str:
+    warnings = [line for line in proc.stdout.splitlines() if line.startswith("::warning::")]
+    assert len(warnings) == 1, proc.stdout
+    return warnings[0]
 
 
 def test_site_dispatch_is_skipped_green_without_its_secret(tmp_path):
-    step = _step("publish", "Tell hugmesh.github.io to rebuild its downloads data")
+    step = _step("publish", DISPATCH_STEP)
     assert step["env"]["SITE_DISPATCH_TOKEN"] == "${{ secrets.SITE_DISPATCH_TOKEN }}"
-    proc = _run_bash(step["run"], _dispatch_env(tmp_path, ""), tmp_path)
+    proc = _dispatch(tmp_path, "")
     assert proc.returncode == 0, proc.stderr
     assert "::notice::SITE_DISPATCH_TOKEN is not set" in proc.stdout
     assert not (tmp_path / "curl.log").exists(), "curl ran without a token"
 
 
-def test_site_dispatch_sends_releases_updated(tmp_path):
-    step = _step("publish", "Tell hugmesh.github.io to rebuild its downloads data")
-    proc = _run_bash(step["run"], _dispatch_env(tmp_path, "tok"), tmp_path)
+def test_site_dispatch_sends_releases_updated(tmp_path, fake_github):
+    port, seen = fake_github(204)
+    proc = _dispatch(tmp_path, SITE_TOKEN, port)
     assert proc.returncode == 0, proc.stderr
+    assert f"sent releases-updated to {SITE_REPO}" in proc.stdout
+    assert "::warning::" not in proc.stdout
     args = (tmp_path / "curl.log").read_text().splitlines()
-    assert "https://api.github.com/repos/hugmesh/hugmesh.github.io/dispatches" in args
-    assert "Authorization: Bearer tok" in args
-    body = json.loads(args[args.index("-d") + 1])
+    assert f"https://api.github.com/repos/{SITE_REPO}/dispatches" in args
+    assert len(seen) == 1, seen
+    assert seen[0]["path"] == f"/repos/{SITE_REPO}/dispatches"
+    assert seen[0]["auth"] == f"Bearer {SITE_TOKEN}"
+    body = json.loads(seen[0]["body"])
     assert body["event_type"] == "releases-updated"
     assert body["client_payload"] == {
         "source": REPO, "kind": "studio", "version": VERSION, "tag": TAG,
         "releases_json": f"https://github.com/{REPO}/releases/download/{TAG}/releases.json"}
     # Runs after the release, and also on a re-run whose release already exists.
+    step = _step("publish", DISPATCH_STEP)
     steps = _jobs()["publish"]["steps"]
     assert steps[-1] is step or steps[-1] == step
     assert "if" not in step
+    assert "continue-on-error" not in step, "green must come from the script, not be painted on"
+
+
+@pytest.mark.parametrize("status, body, reason", [
+    # The answer run 42882326209 got: a token GitHub will not let write to the site.
+    (403, GITHUB_403, "Resource not accessible by personal access token"),
+    (401, json.dumps({"message": "Bad credentials", "status": "401"}), "Bad credentials"),
+    (404, json.dumps({"message": "Not Found", "status": "404"}), "Not Found"),
+    # GitHub's text is folded onto one line: a newline would end the ::warning:: early.
+    (422, json.dumps({"message": "Invalid request.\n\nFor 'links/0/schema', nil is not an object.",
+                      "status": "422"}),
+     "Invalid request. For 'links/0/schema', nil is not an object."),
+    # Not JSON, and a % that a workflow command would otherwise read as an escape.
+    (500, "<html>upstream\r\n50% unavailable</html>", "<html>upstream 50%25 unavailable</html>"),
+    (502, "", "no response body"),
+    # Only 204 counts as sent; dispatches never answers 200, so a 200 is not trusted.
+    (200, "{}", "{}"),
+], ids=["403-token-refused", "401-bad-credentials", "404-not-visible", "422-multiline",
+        "500-not-json", "502-empty", "200-not-204"])
+def test_a_refused_dispatch_is_a_warning_and_the_published_release_stays_green(
+        tmp_path, fake_github, status, body, reason):
+    port, seen = fake_github(status, body)
+    proc = _dispatch(tmp_path, SITE_TOKEN, port)
+    assert len(seen) == 1, "the dispatch never reached the stand-in for api.github.com"
+    assert proc.returncode == 0, f"HTTP {status} turned a published release red: {proc.stderr}"
+    warning = _one_warning(proc)
+    assert f"was not accepted (HTTP {status}): {reason}. " in warning, warning
+    assert "The release is published and unaffected." in warning
+    assert f"gh workflow run pages.yml --repo {SITE_REPO}" in warning
+    assert "sent releases-updated" not in proc.stdout
+    assert SITE_TOKEN not in proc.stdout + proc.stderr, "the token was printed"
+
+
+def test_an_unreachable_api_is_a_warning_and_the_published_release_stays_green(tmp_path):
+    proc = _dispatch(tmp_path, SITE_TOKEN, _closed_port())
+    assert proc.returncode == 0, f"no connection turned a published release red: {proc.stderr}"
+    warning = _one_warning(proc)
+    # curl exit 7 is "failed to connect"; it reports http_code 000.
+    assert "was not accepted (HTTP 000): curl exit 7" in warning, warning
+    assert f"gh workflow run pages.yml --repo {SITE_REPO}" in warning
+    assert "sent releases-updated" not in proc.stdout
+
+
+# ── which packages carry the generator tree (the "nothing to clone" claim) ──────────
+SEED_STEP = "Record whether the bundle carries the generator it placed"
+FLATPAK_JOBS = {"flatpak": "x86_64", "flatpak-aarch64": "aarch64"}
+
+
+def _all_installers(rel):
+    names = [f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-x86_64.flatpak",
+             f"hugmesh-studio-{VERSION}-aarch64.flatpak",
+             f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"]
+    for name in names:
+        (rel / name).write_bytes(b"x" * 2048)
+    return names
+
+
+def _self_check(placed_path="/home/runner/.local/share/hugmesh-studio/generator", **change):
+    report = {"generator_dir": placed_path, "in_flatpak": True, "problems": [],
+              "seed": {"dir": "/app/share/hugmesh-studio", "version": VERSION,
+                       "commit": "0" * 40, "files": 3302},
+              "placed": {"path": placed_path, "action": "seeded", "error": ""}}
+    report.update(change)
+    return report
+
+
+def _seed_fact(job, tmp_path, report):
+    """Run the job's own seed-fact step against a self-check report; return what it wrote
+    to GITHUB_OUTPUT and the process."""
+    step = _step(job, SEED_STEP)
+    work = tmp_path / job
+    work.mkdir(exist_ok=True)
+    if report is not None:
+        (work / "self-check.json").write_text(
+            report if isinstance(report, str) else json.dumps(report))
+    elif (work / "self-check.json").exists():
+        (work / "self-check.json").unlink()
+    out = work / "github_output"
+    out.write_text("")
+    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_OUTPUT": str(out),
+           **({"ARCH": _jobs()[job]["env"]["ARCH"]} if "ARCH" in _jobs()[job].get("env", {}) else {})}
+    proc = _run_bash(step["run"], env, work)
+    return out.read_text(), proc
+
+
+@pytest.mark.parametrize("job", sorted(FLATPAK_JOBS))
+def test_each_flatpak_job_records_the_seed_only_from_its_own_self_check(tmp_path, job):
+    """The site and the notes stop telling a user to clone only for a file whose OWN
+    installed self-check placed the bundled tree and checked that tree. Never from the
+    kind: a Flatpak whose report says anything less is recorded as not carrying it."""
+    arch = FLATPAK_JOBS[job]
+    name = f"hugmesh-studio-{VERSION}-{arch}.flatpak"
+    steps = [s.get("name") for s in _jobs()[job]["steps"]]
+    assert steps.index(SEED_STEP) == steps.index(
+        "Smoke-test the bundle (--self-check, the generator tree it carries)") + 1
+    step = _step(job, SEED_STEP)
+    assert step["id"] == "seed" and step["working-directory"] == "studio/packaging/flatpak"
+    assert _jobs()[job]["outputs"]["generator_seed"] == "${{ steps.seed.outputs.generator_seed }}"
+
+    written, proc = _seed_fact(job, tmp_path, _self_check())
+    assert proc.returncode == 0, proc.stderr
+    assert written == f"generator_seed={name}\n", written
+
+    refused = {
+        "no seed in the bundle": _self_check(seed=None),
+        "placing failed": _self_check(placed={"path": "", "action": "", "error": "disk full"}),
+        # The same path as the tree checked, so only the error itself can refuse it.
+        "placed with an error": _self_check(placed={
+            "path": _self_check()["generator_dir"], "action": "seeded", "error": "sha256 mismatch"}),
+        "checked another tree": _self_check(generator_dir="/home/runner/work/hugmesh-generator"),
+        "problems reported": _self_check(problems=["make foo is not defined"]),
+        "not an object": "[1, 2]",
+        "not JSON": "garbage",
+        "no report at all": None,
+    }
+    for why, report in refused.items():
+        written, proc = _seed_fact(job, tmp_path, report)
+        assert proc.returncode == 0, (why, proc.stderr)
+        assert written == "generator_seed=\n", (why, written)
+        assert f"::warning::{name} is NOT recorded as carrying the generator" in proc.stdout, why
+
+
+def test_the_two_seed_fact_steps_are_twins():
+    x86 = _step("flatpak", SEED_STEP)["run"]
+    arm = _step("flatpak-aarch64", SEED_STEP)["run"]
+    assert x86.replace('"hugmesh-studio-${VERSION}-x86_64.flatpak"',
+                       '"hugmesh-studio-${VERSION}-${ARCH}.flatpak"') == arm
+
+
+def test_publish_reads_the_seed_facts_of_both_flatpak_jobs_only():
+    seed = _jobs()["publish"]["env"]["GENERATOR_SEED"]
+    assert seed.split() == ["${{", "needs.flatpak.outputs.generator_seed", "}}",
+                            "${{", "needs.flatpak-aarch64.outputs.generator_seed", "}}"], seed
+    # The MSI and the tarball carry no seed yet; their jobs must not claim one by kind.
+    for job in ("msi", "linux"):
+        assert "generator_seed" not in (_jobs()[job].get("outputs") or {}), job
+
+
+@pytest.mark.parametrize("seeded", ["both-flatpaks", "none"])
+def test_releases_json_says_per_file_whether_it_carries_the_generator(tmp_path, seeded):
+    script = _step("publish", "Generate releases.json for the documentation site")["run"]
+    rel = tmp_path / "release"
+    rel.mkdir()
+    names = _all_installers(rel)
+    flatpaks = [n for n in names if n.endswith(".flatpak")]
+    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+           "AUTHENTICODE": "false",
+           # As the publish job's env renders it: an empty output leaves a lone space.
+           "GENERATOR_SEED": " ".join(flatpaks) if seeded == "both-flatpaks" else " "}
+    proc = _run_bash(script, env, tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads((rel / "releases.json").read_text())
+    for item in data["installers"]:
+        carries = seeded == "both-flatpaks" and item["kind"] == "flatpak"
+        assert item["generatorSeed"] is carries, item
+        assert "Point it at a hugmesh-generator checkout" not in item["notes"]
+        if carries:
+            assert "nothing to clone" in item["notes"], item["notes"]
+            assert "clone" not in item["notes"].replace("nothing to clone", ""), item["notes"]
+        else:
+            assert "does not include the hugmesh-generator build scripts yet" in item["notes"].lower(), item
+            assert "folder you cloned hugmesh-generator into" in item["notes"], item["notes"]
+
+
+def test_releases_json_without_seed_facts_claims_nothing(tmp_path):
+    # An older caller (or a hand run) with no GENERATOR_SEED at all: every file says false.
+    script = _step("publish", "Generate releases.json for the documentation site")["run"]
+    rel = tmp_path / "release"
+    rel.mkdir()
+    _all_installers(rel)
+    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+           "AUTHENTICODE": "false"}
+    proc = _run_bash(script, env, tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads((rel / "releases.json").read_text())
+    assert [i["generatorSeed"] for i in data["installers"]] == [False] * 4
+
+
+@pytest.mark.parametrize("seeded", ["both-flatpaks", "none"])
+def test_release_notes_say_per_file_whether_a_clone_is_needed(tmp_path, seeded):
+    script = _step("publish", "Write the release notes")["run"]
+    flatpaks = [f"hugmesh-studio-{VERSION}-{arch}.flatpak" for arch in FLATPAK_ARCHES]
+    env = {"PATH": "/usr/bin:/bin", "VERSION": VERSION, "GITHUB_REPOSITORY": REPO,
+           "AUTHENTICODE": "false",
+           "GENERATOR_SEED": " ".join(flatpaks) if seeded == "both-flatpaks" else " "}
+    proc = _run_bash(script, env, tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    notes = (tmp_path / "release-notes.md").read_text()
+    assert "point it at one on first run" not in notes
+    with_line = next((l for l in notes.splitlines() if "nothing to clone" in l), "")
+    without_line = next((l for l in notes.splitlines() if "do not include" in l), "")
+    others = [f"hugmesh-studio-{VERSION}-x64.msi", f"hugmesh-studio-{VERSION}-linux-x86_64.tar.gz"]
+    if seeded == "both-flatpaks":
+        for name in flatpaks:
+            assert f"`{name}`" in with_line and f"`{name}`" not in without_line, name
+        for name in others:
+            assert f"`{name}`" in without_line and f"`{name}`" not in with_line, name
+    else:
+        assert with_line == "", with_line
+        for name in flatpaks + others:
+            assert f"`{name}`" in without_line, name
+    assert "git clone https://github.com/hugmesh/hugmesh-generator" in without_line

@@ -37,7 +37,7 @@ import argparse
 import os
 import sys
 
-from .core import crashlog, flatpak_host, no_console
+from .core import crashlog, entry, flatpak_host, no_console
 
 
 def _default_generator_dir() -> str:
@@ -46,6 +46,17 @@ def _default_generator_dir() -> str:
     from .core import generator_dir
     here = os.path.dirname(os.path.abspath(__file__))
     return generator_dir.resolve(os.path.abspath(os.path.join(here, "..", "..")))
+
+
+def _generator_dir(args) -> str:
+    """``--generator-dir``, resolved the FIRST time a path needs it (and kept on
+    ``args``). Never at parser construction: :func:`_default_generator_dir` can end in
+    ``managed_generator.ensure()``, which places the bundled 133 MB copy in an
+    installed Flatpak, and ``--help``, ``--print-specs`` or ``--mesh-token`` must not
+    write anything (#936 refute, round 2: both placed 3263 files)."""
+    if args.generator_dir is None:
+        args.generator_dir = _default_generator_dir()
+    return args.generator_dir
 
 
 def _asks_for_the_checkout(tray_only: bool, tray_available: bool) -> bool:
@@ -137,7 +148,8 @@ def utf8_stdio(osname: str | None = None, streams=None) -> None:
             pass
 
 
-def print_backend(asked: str, default_backend: str, osname: str | None = None) -> str | None:
+def print_backend(asked: str, default_backend: str, osname: str | None = None,
+                  sysplatform: str | None = None) -> str | None:
     """The backend --print-command/--print-commands print for: None (the host's default)
     unless ``asked`` names one. On a host that cannot build at all the command is still
     printed, deterministically: the native one on Linux, but the DOCKER one on native
@@ -147,21 +159,29 @@ def print_backend(asked: str, default_backend: str, osname: str | None = None) -
     ``osname`` is ``os.name`` unless a test passes another."""
     backend = None if asked == "auto" else asked
     if backend is None and default_backend == "none":
-        native_windows = (os.name if osname is None else osname) == "nt"
-        backend = "docker" if native_windows else "native"
+        # A Mac builds only through Docker too (a native build is a Gentoo chroot).
+        from .core import platform_info
+        backend = "docker" if platform_info.builds_in_docker_vm(osname, sysplatform) \
+            else "native"
     return backend
 
 
-def _native_print_note(backend: str | None, osname: str | None = None) -> None:
-    """An explicit ``--backend native`` on native Windows still prints (it was asked
-    for), but stderr says why that command cannot run here; stdout stays argv only."""
+def _native_print_note(backend: str | None, osname: str | None = None,
+                       sysplatform: str | None = None) -> None:
+    """An explicit ``--backend native`` on native Windows or macOS still prints (it was
+    asked for), but stderr says why that command cannot run here; stdout stays argv
+    only."""
     if backend != "native":
         return
     from .core import platform_info
-    if platform_info.native_windows_blocker("A native build", osname=osname):
+    if platform_info.host_kind(osname, sysplatform) == "windows":
         print("note: a native build runs sudo and bash on a Gentoo host, which the "
               "Windows build of the Studio cannot do. Use --backend docker (Docker "
               "Desktop), or run the Studio inside WSL2.", file=sys.stderr)
+    elif platform_info.host_kind(osname, sysplatform) == "darwin":
+        print("note: " + platform_info.native_build_blocker("A native build", osname,
+                                                            sysplatform),
+              file=sys.stderr)
 
 
 def go_live_target_label(rest: list[str]) -> str:
@@ -192,6 +212,11 @@ def main(argv=None) -> int:
     # make, git, qemu and the generator's scripts live on the HOST, which the sandbox
     # reaches only through flatpak-spawn --host (a no-op outside the Flatpak).
     flatpak_host.install()
+    # And the Mac's: an app opened from Finder gets launchd's PATH (/usr/bin:/bin:...),
+    # which has no Homebrew, no Docker Desktop CLI and no colima, so every probe said
+    # "not installed". Puts them back, GNU tools first (a no-op off macOS). The text UI
+    # and the module command lines make the same call (core/entry.py).
+    entry.bootstrap()
     # Third, before anything prints: a path outside cp1252 must not turn a redirected
     # print into a traceback or a false "bad input" (a no-op off Windows).
     utf8_stdio()
@@ -201,8 +226,11 @@ def main(argv=None) -> int:
     from .core import ollama_docker
     ollama_docker.host_env_defaults(os.environ)
     ap = argparse.ArgumentParser(description="HugMesh Image Studio")
-    ap.add_argument("--generator-dir", default=_default_generator_dir(),
-                    help="path to the hugmesh-generator checkout")
+    # default=None, resolved lazily by _generator_dir(args) on the paths that use it
+    ap.add_argument("--generator-dir", default=None,
+                    help="path to the hugmesh-generator checkout (default: this "
+                         "source tree, $HUGMESH_GENERATOR_DIR, the current folder, the "
+                         "folder chosen last time, or the copy this install carries)")
     ap.add_argument("--tray", action="store_true", help="run only the mesh-node tray controller")
     ap.add_argument("--stack-tray", action="store_true",
                     help="run only the local dev-stack (make stack-up) tray controller")
@@ -307,6 +335,25 @@ def main(argv=None) -> int:
                          "three-way guard as the GUI's delete affordance.")
     ap.add_argument("--yes", action="store_true",
                     help="with --delete-session: the required explicit confirmation.")
+    # ── kernel reconfiguration (core/kernel_reconfig.py; x86 images) ────────
+    ap.add_argument("--kernel-config", metavar="SESSION[:IMAGE]",
+                    help="open menuconfig for a built x86 image's kernel IN THIS TERMINAL "
+                         "(on a copy of the build's own .config), then print the change. "
+                         "IMAGE defaults to the session's first x86 image.")
+    ap.add_argument("--kernel-config-set", metavar="SESSION[:IMAGE]",
+                    help="a scripted kernel config edit: scripts/config with "
+                         "--kernel-config-args (e.g. \"--set-str LOCALVERSION -hmtest\")")
+    ap.add_argument("--kernel-config-args", metavar="ARGS", default="",
+                    help="with --kernel-config-set: the scripts/config arguments as ONE string, given with = "
+                         "(--kernel-config-args=\"--set-str LOCALVERSION -hmtest\")")
+    ap.add_argument("--kernel-config-diff", metavar="SESSION[:IMAGE]",
+                    help="print the pending kernel config change, symbol by symbol")
+    ap.add_argument("--kernel-config-apply", metavar="SESSION[:IMAGE]",
+                    help="rebuild the kernel + modules from the pending edit, re-sign the "
+                         "UKI with the key the build used and repackage the stage4, .img, "
+                         "fs.tar and ISOs (streams; refuses in one sentence when it cannot)")
+    ap.add_argument("--kernel-config-discard", metavar="SESSION[:IMAGE]",
+                    help="drop the pending kernel config edit")
     ap.add_argument("--delete-artifacts", action="store_true",
                     help="with --delete-session: ALSO remove the session's "
                          "<out>/sessions/<id>/ artifact tree (guarded by the same "
@@ -399,7 +446,7 @@ def main(argv=None) -> int:
         # printed as the same text. Runs only git and gh (through the engine's one
         # runner), never a Qt binding.
         from .core.org_export import run_cli as _run_org_export
-        return _run_org_export(args, args.generator_dir)
+        return _run_org_export(args, _generator_dir(args))
 
     go_live_label = ""
     if args.go_live_target is not None:
@@ -414,13 +461,13 @@ def main(argv=None) -> int:
             # Qt-free path: golive_target runs only ssh (never bash, never a Qt
             # binding), so it works from hugmesh-studio-cli.exe with no display.
             from .core.golive_target import run_studio_cli as _run_golive_target
-            return _run_golive_target(args.go_live_target, args.generator_dir)
+            return _run_golive_target(args.go_live_target, _generator_dir(args))
 
     if args.qemu_windows is not None:
         # Qt-free path: runs only qemu-img / qemu-system-x86_64 (and taskkill), never a
         # Qt binding, so it works from hugmesh-studio-cli.exe with no display.
         from .core.qemu_windows import run_studio_cli as _run_qemu_windows
-        return _run_qemu_windows(args.qemu_windows, args.generator_dir)
+        return _run_qemu_windows(args.qemu_windows, _generator_dir(args))
 
     if args.login_agent:
         # Qt-free path: the loopback login agent is stdlib-only and blocks in
@@ -431,7 +478,7 @@ def main(argv=None) -> int:
     if args.self_check:
         # Qt-free path, run by the release workflow inside the built Flatpak.
         from .core import self_check
-        return self_check.run_cli(args.generator_dir, as_json=args.json)
+        return self_check.run_cli(_generator_dir(args), as_json=args.json)
 
     if args.print_command:
         # Qt-free path: core only — must work with no display and no Qt installed.
@@ -445,9 +492,9 @@ def main(argv=None) -> int:
         # graphical stays False (default): this is the headless single-build command
         # channel — its sudo prefix is a literal `sudo ` the callers strip (test_headless
         # removeprefix, build-matrix check.sh ${cmdline#sudo }), never `sudo -A`/pkexec.
-        if not _generator_dir_or_say(args.generator_dir):
+        if not _generator_dir_or_say(_generator_dir(args)):
             return 2
-        driver = BuildDriver(args.generator_dir)
+        driver = BuildDriver(_generator_dir(args))
         # still print a deterministic command on a host that can't build
         backend = print_backend(args.backend, driver.host.default_backend)
         _native_print_note(backend)
@@ -486,9 +533,9 @@ def main(argv=None) -> int:
         from .core.build_driver import BuildDriver
         from .core.config import ImageConfig
         from .core.worklist import load_any, synthesize
-        if not _generator_dir_or_say(args.generator_dir):
+        if not _generator_dir_or_say(_generator_dir(args)):
             return 2
-        driver = BuildDriver(args.generator_dir)
+        driver = BuildDriver(_generator_dir(args))
         backend = print_backend(args.backend, driver.host.default_backend)
         _native_print_note(backend)
         try:
@@ -685,6 +732,22 @@ def main(argv=None) -> int:
         print()
         return 0
 
+    kc = [(v, getattr(args, f"kernel_config_{v}" if v != "edit" else "kernel_config"))
+          for v in ("edit", "set", "diff", "apply", "discard")]
+    kc = [(v, a) for v, a in kc if a]
+    if kc:
+        # Qt-free: every decision lives in core/kernel_reconfig.py, shared with the GUI
+        # panel and the TUI.
+        from .core import kernel_reconfig
+        if len(kc) > 1:
+            print("error: give one --kernel-config* action at a time", file=sys.stderr)
+            return 2
+        if not _generator_dir_or_say(args.generator_dir):
+            return 2
+        verb, target = kc[0]
+        return kernel_reconfig.cli(verb, target, args.generator_dir,
+                                   config_args=args.kernel_config_args)
+
     if args.list_sessions or args.show_session or args.session_artifacts \
             or args.delete_session:
         # Qt-free path: the build-session history (core/build_sessions.py — the same
@@ -811,9 +874,9 @@ def main(argv=None) -> int:
     # operator is right there. See _asks_for_the_checkout for the tray-only case.
     if _asks_for_the_checkout(tray_only,
                               QtWidgets.QSystemTrayIcon.isSystemTrayAvailable()):
-        args.generator_dir = _choose_generator_dir(args.generator_dir, QtWidgets)
+        args.generator_dir = _choose_generator_dir(_generator_dir(args), QtWidgets)
     shell = shell_mod.StudioShell(
-        args.generator_dir,
+        _generator_dir(args),
         remember_roles_for_passwordless_login=args.remember_roles_for_passwordless_login,
         login_manifest_path=args.login_manifest,
         server=server)
@@ -828,7 +891,7 @@ def main(argv=None) -> int:
         nonlocal golive
         from .gui.pages.golive import GoLiveWizard
         if golive is None:
-            golive = GoLiveWizard(args.generator_dir, target=go_live_label or None)
+            golive = GoLiveWizard(_generator_dir(args), target=go_live_label or None)
         golive.show()
         golive.raise_()
 
@@ -836,7 +899,7 @@ def main(argv=None) -> int:
         nonlocal fleet
         from .gui.pages.fleet import FleetDialog
         if fleet is None:
-            fleet = FleetDialog(args.generator_dir)
+            fleet = FleetDialog(_generator_dir(args))
         fleet.show()
         fleet.raise_()
 

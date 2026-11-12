@@ -371,6 +371,22 @@ mk_sysroot() {
         : > "${s}/usr/share/selinux/mcs/kubernetes.pp"
         : > "${s}/usr/share/selinux/mcs/tor.pp"
     fi
+    ship_entrypoints "${s}"
+}
+
+# The hugmesh entrypoints, read from the REAL .fc: every literal /usr/sbin path
+# typed hugmesh_*_exec_t. A mesh-role builder copies each into
+# ${SYSROOT}/usr/sbin (`cp "${SHARED_SPECS}/usr/sbin/<x>" "${SYSROOT}/usr/sbin/<x>"`),
+# so mk_sysroot ships them all; the lib skips a module whose entrypoints the
+# sysroot lacks (C-role). Here /usr/sbin is a REAL directory (no usrmerge), so a
+# lib that looked only at the /usr/bin spelling would skip every module.
+mapfile -t ENTRYPOINTS < <(awk '$1 ~ /^\/usr\/sbin\/[A-Za-z0-9._-]+$/ && $2 == "--" &&
+    $3 ~ /object_r:hugmesh_[a-z0-9_]+_exec_t,/ { print $1 }' "${SRC}"/*.fc | sort -u)
+ship_entrypoints() {  # ship_entrypoints <sysroot> [<path>...]  (default: all of them)
+    local s="$1" e; shift
+    [ "$#" -gt 0 ] || set -- "${ENTRYPOINTS[@]}"
+    mkdir -p "${s}/usr/sbin"
+    for e in "$@"; do printf '#!/bin/sh\n' > "${s}${e}"; chmod +x "${s}${e}"; done
 }
 
 # mk_sysroot_fedora — the second-choice layout the lib still accepts, so a
@@ -382,6 +398,7 @@ mk_sysroot_fedora() {
     : > "${s}/usr/share/selinux/mcs/base.pp"
     mk_headers "${s}/usr/share/selinux/devel/include" "$2" "$3"
     mv "${s}/usr/share/selinux/devel/include/Makefile" "${s}/usr/share/selinux/devel/Makefile"
+    ship_entrypoints "${s}"
 }
 
 # A fake ${SHARED_SPECS}: real specs/selinux, plus the real enforce-gate.
@@ -518,6 +535,150 @@ for m in "${DEPENDENT[@]}"; do grep -qx "${m}" "${MAN3B}" 2>/dev/null && named="
 printf '%s' "${out}" | grep 'sec-policy/selinux-kubernetes' >/dev/null \
     && ok "C3b the skip message names the package that would fix it" \
     || bad "C3b skip message does not name sec-policy/selinux-kubernetes"$'\n'"${out}"
+
+# ── C-role) A ROLE THAT SHIPS NO HUGMESH ENTRYPOINT (standalone-unaffiliated) ──
+# THE DEFECT (Studio session 20261110-073450-306003): a standalone-unaffiliated
+# x86 build refused to pack after ~13.5 h of building:
+#     probe table: the manifest lists hugmesh modules but no hugmesh entrypoint is labellable
+#     probe table ...: 9 probe(s), 0 hugmesh entrypoint(s)
+#     SELinux build-time labelling failed ... refusing to pack an unlabelled image
+# --unaffiliated skips the whole mesh-platform bake, so the image carries none of
+# the hugmesh entrypoints, yet slx_stage_node_policy put every hugmesh_* module in
+# the manifest and the store, so file_contexts labelled entrypoints nobody shipped.
+# This section runs the REAL stage step on that sysroot shape, writes the store's
+# file_contexts from the manifest the step wrote (what `semodule -i` of exactly
+# those modules yields), then runs the REAL slx_write_probe_table with chroot,
+# readlink and matchpathcon stubbed. Against the pre-fix lib the unaffiliated case
+# fails with the build's own words.
+echo "-- C-role) a role that ships no hugmesh entrypoint (standalone-unaffiliated) --"
+# declares_ep <module>: its real .fc types a /usr/(s)bin path hugmesh_*_exec_t.
+declares_ep() { awk '$1 ~ /^\/usr\/s?bin\// && $2 == "--" && $3 ~ /object_r:hugmesh_[a-z0-9_]+_exec_t,/ { f = 1 } END { exit !f }' "${SRC}/$1.fc"; }
+man_mods() { grep -vE '^#|^$' "$1/usr/share/hugmesh/selinux-modules.list" 2>/dev/null | sort | tr '\n' ' '; }
+# usrmerge <sysroot>: /usr/sbin -> bin, as on every x86 and Frite image.
+usrmerge() {
+    local s="$1"; mkdir -p "${s}/usr/bin"
+    if [ -d "${s}/usr/sbin" ] && [ ! -L "${s}/usr/sbin" ]; then cp -a "${s}/usr/sbin/." "${s}/usr/bin/"; rm -rf "${s}/usr/sbin"; fi
+    ln -sfn bin "${s}/usr/sbin"
+}
+# fc_store <sysroot> [nohugmesh]: the compiled file_contexts of a store holding the
+# manifest's modules: the lib's own core-probe rules, then every manifest module's
+# real .fc lines with gen_context(u:r:t,s0) written out as u:r:t:s0. 'nohugmesh'
+# is a store install that never reached file_contexts (core rules only).
+fc_store() {
+    local s="$1" f="$1/etc/selinux/mcs/contexts/files/file_contexts" m
+    mkdir -p "${f%/*}"
+    ( source "${LIB}"; for m in "${_SLX_CORE_PROBES[@]}"; do printf '%s\tsystem_u:object_r:%s:s0\n' "${m%%:*}" "${m##*:}"; done ) > "${f}"
+    [ "${2:-}" = nohugmesh ] && return 0
+    for m in $(grep -vE '^#|^$' "${s}/usr/share/hugmesh/selinux-modules.list"); do
+        awk '/^[[:space:]]*(#|$)/ { next }
+             { c = $NF; sub(/^gen_context\(/, "", c); sub(/\)$/, "", c); sub(/,/, ":", c)
+               if ($2 == "--") print $1 "\t--\t" c; else print $1 "\t" c }' "${SRC}/${m}.fc" >> "${f}"
+    done
+}
+run_probe() {  # run_probe <sysroot> <table> -> rc, output on stdout
+    ( set -u
+      # shellcheck disable=SC1090
+      source "${LIB}"
+      chroot()       { local r="$1"; shift; SR_ROOT="${r}" "$@"; }
+      readlink()     { [ "$1" = -f ] && shift; printf '%s\n' "$1"; }
+      matchpathcon() { [ "$1" = -n ] && shift
+                       awk -v p="$1" '$1 == p { print $NF; exit }' "${SR_ROOT}/etc/selinux/mcs/contexts/files/file_contexts"; }
+      slx_write_probe_table "$1" mcs "$2" ) 2>&1
+}
+n_ep_mods=0; for m in "${MANDATORY[@]}" "${DEPENDENT[@]}"; do declares_ep "${m}" && n_ep_mods=$((n_ep_mods+1)); done
+{ [ "${#ENTRYPOINTS[@]}" -ge 1 ] && [ "${n_ep_mods}" -ge 1 ] && printf '%s\n' "${ENTRYPOINTS[@]}" | grep -x /usr/sbin/hugmesh-authorized-keys-lookup >/dev/null; } \
+    && ok "C-role fixture armed: ${#ENTRYPOINTS[@]} entrypoints across ${n_ep_mods} modules read from the real .fc" \
+    || bad "C-role fixture is inert: entrypoints=[${ENTRYPOINTS[*]}] modules-with-entrypoints=${n_ep_mods}"
+
+# U: standalone-unaffiliated — merged /usr, not one hugmesh entrypoint.
+S="${TMP}/crole-u/sysroot"; SP="${TMP}/crole-u/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
+rm -rf "${S}/usr/sbin"; usrmerge "${S}"
+out="$(run_lib "${S}" "${SP}")"; rc=$?
+[ "${rc}" -eq 0 ] && ok "C-role U: the stage step succeeds on an image with no hugmesh entrypoint" \
+                  || bad "C-role U: rc=${rc}"$'\n'"${out}"
+MANU="${S}/usr/share/hugmesh/selinux-modules.list"
+leak=""; for m in $(man_mods "${S}"); do declares_ep "${m}" && leak="${leak} ${m}"; done
+[ -z "${leak}" ] && ok "C-role U: the manifest names no module whose entrypoints the image lacks [$(man_mods "${S}")]" \
+                 || bad "C-role U: the manifest names module(s) nothing can enter:${leak}"
+grep -qx hugmesh_bootpath "${MANU}" 2>/dev/null \
+    && ok "C-role U: hugmesh_bootpath (no entrypoint by design, boot-path grants) is still installed" \
+    || bad "C-role U: hugmesh_bootpath dropped — the boot-path grants belong on every role"
+norec=""
+for m in "${MANDATORY[@]}"; do
+    declares_ep "${m}" || continue
+    grep -qx "# skipped: ${m} (no entrypoint shipped in this image)" "${MANU}" 2>/dev/null || norec="${norec} ${m}(no-reason)"
+    [ -e "${S}/usr/share/selinux/mcs/${m}.pp" ] && norec="${norec} ${m}(.pp-installed)"
+done
+[ -z "${norec}" ] && ok "C-role U: every skipped module is recorded '# skipped: <m> (no entrypoint shipped in this image)' and has no .pp" \
+                  || bad "C-role U:${norec}"$'\n'"$(cat "${MANU}" 2>/dev/null)"
+fc_store "${S}"
+pout="$(run_probe "${S}" "${TMP}/crole-u/probes.tsv")"; prc=$?
+{ [ "${prc}" -eq 0 ] && printf '%s' "${pout}" | grep -E 'probe\(s\), 0 hugmesh entrypoint\(s\)' >/dev/null; } \
+    && ok "C-role U: the REAL probe table passes with 0 hugmesh entrypoints (the 13.5 h refusal is gone)" \
+    || bad "C-role U: the probe table refused the unaffiliated image: rc=${prc}"$'\n'"${pout}"
+
+# M: a mesh role on merged /usr — every entrypoint shipped, every module kept, probed.
+S="${TMP}/crole-m/sysroot"; SP="${TMP}/crole-m/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
+usrmerge "${S}"
+out="$(run_lib "${S}" "${SP}")"; rc=$?
+want="$(printf '%s\n' "${MANDATORY[@]}" | sort | tr '\n' ' ')"
+{ [ "${rc}" -eq 0 ] && [ "$(man_mods "${S}")" = "${want}" ]; } \
+    && ok "C-role M: a mesh role (merged /usr) keeps all ${#MANDATORY[@]} modules" \
+    || bad "C-role M: rc=${rc} manifest [$(man_mods "${S}")] want [${want}]"$'\n'"${out}"
+fc_store "${S}"
+pout="$(run_probe "${S}" "${TMP}/crole-m/probes.tsv")"; prc=$?
+{ [ "${prc}" -eq 0 ] && grep -qxF "$(printf 'usr/bin/hugmesh-authorized-keys-lookup\thugmesh_authkeys_exec_t')" "${TMP}/crole-m/probes.tsv"; } \
+    && ok "C-role M: the probe table carries the hugmesh entrypoints ($(printf '%s' "${pout}" | grep -oE '[0-9]+ hugmesh entrypoint\(s\)'))" \
+    || bad "C-role M: rc=${prc} table=[$(tr '\n' ' ' < "${TMP}/crole-m/probes.tsv" 2>/dev/null)]"$'\n'"${pout}"
+# The defect's end state, kept as a refusal: the policy labels entrypoints, the image
+# ships none (a manifest written before the skip existed). Must still refuse to pack.
+rm -f "${S}"/usr/bin/*
+pout="$(run_probe "${S}" "${TMP}/crole-m/probes2.tsv")"; prc=$?
+{ [ "${prc}" -ne 0 ] && printf '%s' "${pout}" | grep 'no hugmesh entrypoint is labellable' >/dev/null; } \
+    && ok "C-role R: policy labels hugmesh entrypoints the image does not ship -> the probe table still refuses" \
+    || bad "C-role R: entrypoint rules with no shipped entrypoint PASSED: rc=${prc}"$'\n'"${pout}"
+# The guard the old check existed for: modules in the manifest, nothing in file_contexts.
+usrmerge "${S}"; ship_entrypoints "${S}"
+fc_store "${S}" nohugmesh
+pout="$(run_probe "${S}" "${TMP}/crole-m/probes3.tsv")"; prc=$?
+{ [ "${prc}" -ne 0 ] && printf '%s' "${pout}" | grep 'store install missing' >/dev/null; } \
+    && ok "C-role S: hugmesh modules in the manifest, no hugmesh_ rule in file_contexts -> refuses (store install missing)" \
+    || bad "C-role S: a store install that never reached file_contexts PASSED: rc=${prc}"$'\n'"${pout}"
+
+# P: only ONE module's entrypoint shipped. A kept module that requires another's
+# types pins it (hugmesh_domain_reconcile requires hugmesh_authkeys_cache_t), or
+# the kept one could not load.
+S="${TMP}/crole-p/sysroot"; SP="${TMP}/crole-p/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
+rm -rf "${S}/usr/sbin"; ship_entrypoints "${S}" /usr/sbin/hugmesh-domain-reconcile
+out="$(run_lib "${S}" "${SP}")"; rc=$?
+got="$(man_mods "${S}")"
+{ [ "${rc}" -eq 0 ] && [ "${got}" = "hugmesh_authkeys hugmesh_bootpath hugmesh_domain_reconcile " ]; } \
+    && ok "C-role P: domain-reconcile shipped alone -> it, the hugmesh_authkeys it requires, and bootpath; nothing else" \
+    || bad "C-role P: rc=${rc} manifest [${got}]"$'\n'"${out}"
+printf '%s' "${out}" | grep 'KEEP hugmesh_authkeys: .* hugmesh_domain_reconcile requires its types' >/dev/null \
+    && ok "C-role P: the build log says why hugmesh_authkeys stayed" \
+    || bad "C-role P: no KEEP line for hugmesh_authkeys"$'\n'"${out}"
+# One of a module's two entrypoints is enough to keep it; a bin_t helper is none.
+S="${TMP}/crole-1/sysroot"; SP="${TMP}/crole-1/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
+rm -rf "${S}/usr/sbin"; ship_entrypoints "${S}" /usr/sbin/hugmesh-vpn-reconcile
+run_lib "${S}" "${SP}" >/dev/null
+grep -qx hugmesh_vpn "${S}/usr/share/hugmesh/selinux-modules.list" 2>/dev/null \
+    && ok "C-role 1: hugmesh-vpn-reconcile without hugmesh-vpn-runner keeps hugmesh_vpn (skip only when ALL are absent)" \
+    || bad "C-role 1: hugmesh_vpn skipped although one of its entrypoints ships: [$(man_mods "${S}")]"
+# An entrypoint shipped as an ABSOLUTE in-image symlink dangles from the build host
+# (-e follows it out of the sysroot). It still ships; the probe table counts it too.
+S="${TMP}/crole-l/sysroot"; SP="${TMP}/crole-l/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
+rm -rf "${S}/usr/sbin"; mkdir -p "${S}/usr/sbin"; ln -s /usr/lib/hugmesh/no-such-target-on-the-host "${S}/usr/sbin/hugmesh-vpn-reconcile"
+run_lib "${S}" "${SP}" >/dev/null
+grep -qx hugmesh_vpn "${S}/usr/share/hugmesh/selinux-modules.list" 2>/dev/null \
+    && ok "C-role L: an entrypoint that is an absolute in-image symlink (dangling from the host) still counts as shipped" \
+    || bad "C-role L: a dangling in-image symlink entrypoint was treated as absent: [$(man_mods "${S}")]"
+S="${TMP}/crole-b/sysroot"; SP="${TMP}/crole-b/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
+rm -rf "${S}/usr/sbin"; ship_entrypoints "${S}" /usr/sbin/hugmesh-vpn-mark /usr/sbin/hugmesh-tor-ingress-admit
+run_lib "${S}" "${SP}" >/dev/null
+grep -qx hugmesh_vpn "${S}/usr/share/hugmesh/selinux-modules.list" 2>/dev/null \
+    && bad "C-role B: a bin_t helper (hugmesh-vpn-mark) counted as an entrypoint and kept hugmesh_vpn" \
+    || ok "C-role B: bin_t helpers (hugmesh-vpn-mark, hugmesh-tor-ingress-admit) are not entrypoints"
 
 # C3c: USRMERGE — a /usr/sbin .fc rule can never match on these images.
 # Measured in the booted guest: /usr/sbin is a symlink to bin (and /sbin to
@@ -1152,9 +1313,13 @@ grep -qE 'for m in base container otel_collector localpath_provisioner' "${SVC}"
 grep -q 'Refusing to flip' "${SVC}" \
     && ok "a manifest-less (pre-wiring) image refuses to flip" \
     || bad "service does not refuse to flip without a manifest"
-grep -q 'hugmesh_authkeys_t' "${SVC}" \
-    && ok "check_avc_clean covers the hugmesh domains this wiring now loads" \
-    || bad "check_avc_clean does not cover the hugmesh domains"
+# check_avc_clean used to carry a domain list (container/kernel_t/init_t/hugmesh_*)
+# and ignore every denial outside it (#863 refute, blocker 2). It must not come back:
+# the gate counts every denial. (Executed below in D-run-scope; this is the cheap pin.)
+awk '/^check_avc_clean\(\)/{f=1} f{print} f&&/^}/{exit}' "${SVC}" | grep -vE '^[[:space:]]*#' \
+    | grep -E '(scontext|tcontext)=|hugmesh_authkeys_t|container_t' >/dev/null \
+    && bad "check_avc_clean filters on a domain list again (denials outside it would not block)" \
+    || ok "check_avc_clean carries no domain list (every denial counts)"
 
 # ── D-run) the enforce-gate's start() actually EXECUTED ──────────────────────
 # The static block above is greps and line numbers; it constrains nothing about
@@ -1186,8 +1351,17 @@ gate_run() {
       setenforce()     { echo "setenforce $*" >> "${G}/calls"; return 0; }
       semodule()       { echo "semodule $*" >> "${G}/calls"; printf '%s' "${FX_SEMODULE_L:-}"; return "${FX_SEMODULE_RC:-0}"; }
       restorecon()     { printf '%s' "${FX_RESTORECON_OUT:-}"; return 0; }
-      ausearch()       { printf '%s' "${FX_AUSEARCH_OUT:-}"; return "${FX_AUSEARCH_RC:-0}"; }
+      # ausearch: records on stdout, its verdict on stderr, its args in calls. Without
+      # --input-logs a real ausearch reads STDIN when stdin is a pipe (is_pipe(0)) and
+      # answers "<no matches>"; the stub models that, so dropping the flag is red.
+      ausearch()       { echo "ausearch $*" >> "${G}/calls"
+                         case " $* " in *" --input-logs "*) ;; *) printf '<no matches>\n' >&2; return 1 ;; esac
+                         printf '%s' "${FX_AUSEARCH_OUT:-}"; printf '%s' "${FX_AUSEARCH_ERR:-}" >&2
+                         return "${FX_AUSEARCH_RC:-0}"; }
       dmesg()          { printf '%s' "${FX_DMESG_OUT:-}"; return 0; }
+      # pidof: "is auditd running?" — no by default (this host's real auditd, if any,
+      # must never decide a fixture); FX_AUDITD_RUNNING=1 says yes.
+      pidof()          { [ "${FX_AUDITD_RUNNING:-0}" = 1 ]; }
       rc-update()      { echo "rc-update $*" >> "${G}/calls"; return 0; }
       # shellcheck disable=SC1090
       source "${SVC}"
@@ -1201,6 +1375,11 @@ gate_run() {
       # Where the AVC record is read from: the stub functions above by default; a
       # case points AUSEARCH/DMESG at a path that does not exist to take them away.
       AUSEARCH="${FX_AUSEARCH_BIN:-ausearch}"; AUDIT_LOG="${G}/audit.log"; DMESG="${FX_DMESG_BIN:-dmesg}"
+      AVC_SCRATCH_DIR="${G}"
+      AUDITD_INITD="${G}/auditd-initd"   # absent unless a case creates it (the image ships auditd)
+      # The allow-list is a plain assignment in the shipped file (empty); a case may
+      # set FX_AVC_ALLOW_ERE to exercise a populated one.
+      [ -n "${FX_AVC_ALLOW_ERE+x}" ] && AVC_ALLOW_ERE="${FX_AVC_ALLOW_ERE}"
       start ) 2>&1
 }
 
@@ -1213,9 +1392,11 @@ gate_fixture() {
     # `semodule -l` output shape: one "name<TAB>version" line per loaded module.
     export FX_SEMODULE_L=$'base\t1.0.0\nhugmesh_authkeys\t1.0.0\nhugmesh_vpn\t1.0.0\n'
     export FX_SEMODULE_RC=0 FX_GETENFORCE=Permissive FX_SELINUX_ENABLED_RC=0
-    export FX_RESTORECON_OUT="" FX_AUSEARCH_OUT="" FX_AUSEARCH_RC=0
-    export FX_AUSEARCH_BIN=ausearch FX_DMESG_BIN=dmesg FX_DMESG_OUT=""
-    rm -f "${G}/audit.log"
+    # ausearch's real answer on a clean boot: nothing on stdout, rc=1, "<no matches>".
+    export FX_RESTORECON_OUT="" FX_AUSEARCH_OUT="" FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR=$'<no matches>\n'
+    export FX_AUSEARCH_BIN=ausearch FX_DMESG_BIN=dmesg FX_DMESG_OUT="" FX_AUDITD_RUNNING=0
+    unset FX_AVC_ALLOW_ERE
+    rm -rf "${G}/audit.log" "${G}/audit.log".[0-9]* "${G}/auditd-initd"
 }
 gate_flipped()  { grep -q '^setenforce 1' "$1/calls" 2>/dev/null; }
 gate_enforcing() { grep -q '^SELINUX=enforcing' "$1/config" 2>/dev/null; }
@@ -1274,7 +1455,7 @@ fx_module_absent() { export FX_SEMODULE_L=$'base\t1.0.0\n'; }
 fx_semodule_fail() { export FX_SEMODULE_RC=1; }
 fx_autorelabel()   { touch "$1/autorelabel"; }
 fx_mislabel()      { export FX_RESTORECON_OUT='Would relabel /mnt/data/local-path from a to b'; }
-fx_avc()           { export FX_AUSEARCH_OUT='type=AVC msg=audit(0.0:1): avc: denied { read } scontext=system_u:system_r:hugmesh_authkeys_t:s0 tcontext=system_u:object_r:etc_t:s0'; }
+fx_avc()           { export FX_AUSEARCH_RC=0 FX_AUSEARCH_ERR='' FX_AUSEARCH_OUT='type=AVC msg=audit(0.0:1): avc: denied { read } scontext=system_u:system_r:hugmesh_authkeys_t:s0 tcontext=system_u:object_r:etc_t:s0'; }
 fx_already_enf()   { export FX_GETENFORCE=Enforcing; }
 fx_selinux_off()   { export FX_SELINUX_ENABLED_RC=1; }
 # A container image additionally requires the `container` module — which the
@@ -1322,9 +1503,149 @@ o="$(gate_run "${G}" yes)"
 { gate_flipped "${G}" && printf '%s' "${o}" | grep 'kernel ring buffer' >/dev/null; } \
     && ok "POSITIVE CONTROL: no ausearch, no audit.log, a clean dmesg flips, and says the ring buffer was read" \
     || bad "dmesg fallback with a clean ring buffer did not flip: ${o}"
-G="${TMP}/gavc4"; gate_fixture "${G}"; touch "${G}/marker"; export FX_AUSEARCH_RC=1
+G="${TMP}/gavc4"; gate_fixture "${G}"; touch "${G}/marker"; export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR=$'<no matches>\n'
 o="$(gate_run "${G}" yes)"
-gate_flipped "${G}" && ok "ausearch rc=1 (<no matches>) is a clean boot, not an error: flips" || bad "ausearch rc=1 blocked the flip: ${o}"
+gate_flipped "${G}" && ok "ausearch rc=1 with '<no matches>' on stderr is a clean boot, not an error: flips" || bad "ausearch rc=1 <no matches> blocked the flip: ${o}"
+grep -E '^ausearch .*--input-logs' "${G}/calls" >/dev/null \
+    && ok "the gate calls ausearch with --input-logs (a piped stdin would otherwise be searched instead of the logs)" \
+    || bad "ausearch was not called with --input-logs: $(grep '^ausearch' "${G}/calls")"
+grep -E '^ausearch .*(--raw|(^| )-r( |$))' "${G}/calls" >/dev/null \
+    && bad "ausearch is called --raw: raw mode never prints '<no matches>', so a clean boot can no longer be told from an error" \
+    || ok "ausearch is not called --raw (the '<no matches>' discriminator survives)"
+
+# ── D-run-ausearch: rc=1 is NOT "clean" by itself (#863 refute, blocker 1). audit 4.x
+# returns 1 for "<no matches>" AND for an unopenable log ("Error opening ...") and for
+# parameter errors ("Invalid ..."). The old `rc <= 1 => clean` flipped a node whose
+# audit log could not be read. Each untrusted answer must fall through to audit.log /
+# dmesg, and with neither, refuse.
+AS_EOPEN=$'Error opening /var/log/audit/audit.log (Permission denied)\n'
+AS_EINVAL=$'Invalid message type - AVCX\n'
+fx_as_eopen_log_avc()   { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}"; printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+fx_as_einval_log_avc()  { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EINVAL}"; printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+fx_as_empty_log_avc()   { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR=''; printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+fx_as_both_log_avc()    { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}<no matches>"$'\n'; printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+fx_as_eopen_nosrc()     { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}" FX_DMESG_BIN=/nonexistent/dmesg; }
+fx_as_einval_nosrc()    { export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EINVAL}" FX_DMESG_BIN=/nonexistent/dmesg; }
+fx_as_partial_log_avc() { export FX_AUSEARCH_RC=0 FX_AUSEARCH_ERR=$'Error opening /var/log/audit/audit.log.1 (Permission denied)\n' \
+                                 FX_AUSEARCH_OUT='type=USER_AVC msg=audit(0.0:2): pid=1 uid=0 msg='"'"'avc:  received policyload notice (seqno=2)'"'"
+                          printf '%s\n' "${AVC_HUG}" > "$1/audit.log"; }
+gate_blocks "ausearch rc=1 'Error opening' (log unreadable): falls back, audit.log carries the AVC" fx_as_eopen_log_avc
+gate_blocks "ausearch rc=1 'Invalid ...' (parameter error): falls back, audit.log carries the AVC" fx_as_einval_log_avc
+gate_blocks "ausearch rc=1 with EMPTY stderr (no '<no matches>'): falls back, audit.log carries the AVC" fx_as_empty_log_avc
+gate_blocks "ausearch rc=1 '<no matches>' next to 'Error opening': not trusted, audit.log carries the AVC" fx_as_both_log_avc
+gate_blocks "ausearch rc=1 'Error opening', no audit.log, no dmesg: fail closed" fx_as_eopen_nosrc
+gate_blocks "ausearch rc=1 'Invalid ...', no audit.log, no dmesg: fail closed" fx_as_einval_nosrc
+gate_blocks "ausearch rc=0 with an 'Error opening' for a rotated log (partial read): falls back, audit.log carries the AVC" fx_as_partial_log_avc
+G="${TMP}/gas1"; gate_fixture "${G}"; touch "${G}/marker"; export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}"; : > "${G}/audit.log"
+o="$(gate_run "${G}" yes)"
+{ gate_flipped "${G}" && printf '%s' "${o}" | grep 'without a clean' >/dev/null && printf '%s' "${o}" | grep 'reading .*audit.log directly' >/dev/null; } \
+    && ok "POSITIVE CONTROL: ausearch 'Error opening' + a clean, readable audit.log flips, and says it fell back and why" \
+    || bad "ausearch 'Error opening' with a clean audit.log: no flip or no fallback message (the fallback is closed by accident): ${o}"
+gate_fixture "${TMP}/gavc-reset"
+
+# ── D-run-ringbuffer: a clean dmesg is NOT a clean boot on an image that runs auditd.
+# Measured on the #944 x86 .img and rpi5 images (2026-11-11, prove lane): with
+# audit.log hidden, ausearch said "Error opening ... (No such file or directory)",
+# the gate fell through to dmesg, found 0 denials there and said CLEAN — while
+# audit.log held 6-12 denials from that very boot (the U4/U5/U6/T12/C2 cases).
+# Once auditd is connected the kernel hands it every record and printk's none, so
+# the ring buffer is empty of AVCs BY DESIGN; reading it as the whole record is
+# fail-open. dmesg may still ADD denials (early boot, backlog overflow), but on an
+# image that ships or runs auditd it can never stand in for the audit log.
+fx_auditd_image()      { printf '#!/sbin/openrc-run\n' > "$1/auditd-initd"; chmod +x "$1/auditd-initd"; }
+fx_rb_initd_nolog()    { fx_auditd_image "$1"; export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}" FX_DMESG_OUT='[ 1.0] SELinux:  Initializing.'; }
+fx_rb_running_nolog()  { export FX_AUDITD_RUNNING=1 FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}" FX_DMESG_OUT=''; }
+fx_rb_noas_initd()     { fx_auditd_image "$1"; export FX_AUSEARCH_BIN=/nonexistent/ausearch FX_DMESG_OUT='[ 1.0] SELinux:  Initializing.'; }
+fx_rb_log_unreadable() { mkdir -p "$1/audit.log"; export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}" FX_DMESG_OUT=''; }
+fx_rb_log_dir_nodmesg(){ mkdir -p "$1/audit.log"; export FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}" FX_DMESG_BIN=/nonexistent/dmesg; }
+fx_rb_rotated_avc()    { fx_auditd_image "$1"; export FX_AUSEARCH_BIN=/nonexistent/ausearch; : > "$1/audit.log"; printf '%s\n' "${REC_TMPF_EARLY}" > "$1/audit.log.1"; }
+REC_TMPF_EARLY='type=AVC msg=audit(1793853120.1:5): avc:  denied  { write } for  pid=402 comm="systemd-tmpfile" name="/" dev="sda2" scontext=system_u:system_r:systemd_tmpfiles_t:s0 tcontext=system_u:object_r:root_t:s0 tclass=dir permissive=1'
+gate_blocks "ring buffer: ausearch cannot open the log, no audit.log, the image ships auditd, dmesg clean (T12)" fx_rb_initd_nolog
+gate_blocks "ring buffer: auditd RUNNING, ausearch cannot open the log, dmesg rc0 empty (U4/U6/C2)" fx_rb_running_nolog
+gate_blocks "ring buffer: no ausearch, no audit.log, the image ships auditd, dmesg clean" fx_rb_noas_initd
+gate_blocks "audit.log is a DIRECTORY ([ -r ] is true, grep reads nothing), dmesg clean (T11)" fx_rb_log_unreadable
+gate_blocks "audit.log is a DIRECTORY, no dmesg (T11)" fx_rb_log_dir_nodmesg
+gate_blocks "audit.log fallback: this boot's denial is in the ROTATED audit.log.1" fx_rb_rotated_avc
+fx_rb_rotated_dir()    { fx_auditd_image "$1"; export FX_AUSEARCH_BIN=/nonexistent/ausearch; : > "$1/audit.log"; mkdir -p "$1/audit.log.1"; }
+gate_blocks "audit.log fallback: a rotation that cannot be read (audit.log.1 is a directory)" fx_rb_rotated_dir
+G="${TMP}/grb1"; gate_fixture "${G}"; touch "${G}/marker"; fx_rb_running_nolog "${G}"
+o="$(gate_run "${G}" yes)"
+printf '%s' "${o}" | grep 'cannot stand in for the audit log' >/dev/null \
+    && ok "ring buffer refused as the whole record: the gate says why" || bad "ring-buffer refusal without its reason: ${o}"
+# Positive controls: each one keeps a fallback OPEN that the cases above must not close by accident.
+G="${TMP}/grb2"; gate_fixture "${G}"; touch "${G}/marker"; fx_auditd_image "${G}"
+export FX_AUDITD_RUNNING=1 FX_AUSEARCH_RC=1 FX_AUSEARCH_ERR="${AS_EOPEN}"; : > "${G}/audit.log"; : > "${G}/audit.log.1"
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "POSITIVE CONTROL: auditd running, ausearch untrusted, a clean readable audit.log (+ clean rotation) flips" \
+    || bad "auditd running + clean readable audit.log did not flip (the audit.log fallback is closed by accident): ${o}"
+G="${TMP}/grb3"; gate_fixture "${G}"; touch "${G}/marker"; fx_auditd_image "${G}"; export FX_AUDITD_RUNNING=1
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "POSITIVE CONTROL: auditd running + ausearch's trusted '<no matches>' flips (the normal clean boot)" \
+    || bad "the normal clean boot on an auditd image did not flip: ${o}"
+G="${TMP}/grb4"; gate_fixture "${G}"; touch "${G}/marker"; fx_auditd_image "${G}"; export FX_AUDITD_RUNNING=1 FX_DMESG_OUT="${DMESG_HUG}"
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && bad "auditd running, ausearch clean, a denial only in dmesg: flipped (dmesg no longer ADDS denials): ${o}" \
+    || ok "auditd running, ausearch clean, a denial only in dmesg: still blocks (dmesg still adds)"
+gate_fixture "${TMP}/gavc-reset"
+
+# ── D-run-scope: EVERY boot-path denial counts (#863 refute, blocker 2). The check
+# used to match only container/kernel_t/init_t/hugmesh_* scontexts, so the 25 #852
+# denials (NetworkManager_t, systemd_tmpfiles_t, local_login_t, udev_t) were all
+# outside it and that boot would have FLIPPED. Records in the shapes they were
+# measured in (ausearch, dmesg).
+REC_NM='type=AVC msg=audit(1793853137.1:40): avc:  denied  { sys_admin } for  pid=812 comm="NetworkManager" capability=21  scontext=system_u:system_r:NetworkManager_t:s0 tcontext=system_u:system_r:NetworkManager_t:s0 tclass=capability permissive=1'
+REC_TMPF='type=AVC msg=audit(1793853137.2:26): avc:  denied  { use } for  pid=1083 comm=systemd-tmpfile path=/dev/console scontext=system_u:system_r:systemd_tmpfiles_t:s0 tcontext=system_u:system_r:init_t:s0 tclass=fd permissive=1'
+REC_LOGIN='type=AVC msg=audit(1793853137.3:51): avc:  denied  { search } for  pid=1502 comm="login" name="root" dev="sda2" ino=12 scontext=system_u:system_r:local_login_t:s0 tcontext=system_u:object_r:default_t:s0 tclass=dir permissive=1'
+REC_UDEV='type=AVC msg=audit(1793853137.4:27): avc:  denied  { getattr } for  pid=1141 comm="udevadm" path="/run/netns" scontext=system_u:system_r:udev_t:s0 tcontext=system_u:object_r:nsfs_t:s0 tclass=file permissive=1'
+REC_UAVC_DENY="type=USER_AVC msg=audit(1793853137.5:60): pid=700 uid=101 auid=4294967295 ses=4294967295 subj=system_u:system_r:system_dbusd_t:s0 msg='avc:  denied  { send_msg } for msgtype=method_call interface=org.freedesktop.DBus scontext=system_u:system_r:NetworkManager_t:s0 tcontext=system_u:system_r:system_dbusd_t:s0 tclass=dbus permissive=1 exe=\"/usr/bin/dbus-daemon\"'"
+REC_UAVC_LOAD="type=USER_AVC msg=audit(1793853137.6:61): pid=700 uid=101 auid=4294967295 ses=4294967295 subj=system_u:system_r:system_dbusd_t:s0 msg='avc:  received policyload notice (seqno=2)  exe=\"/usr/bin/dbus-daemon\"'"
+REC_GRANTED='type=AVC msg=audit(1793853137.7:62): avc:  granted  { read } for  pid=900 comm="x" scontext=system_u:system_r:hugmesh_vpn_runner_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file'
+DMESG_TMPF='[    3.21] audit: type=1400 audit(1793853120.1:5): avc:  denied  { write } for  pid=402 comm="systemd-tmpfile" name="/" dev="sda2" scontext=system_u:system_r:systemd_tmpfiles_t:s0 tcontext=system_u:object_r:root_t:s0 tclass=dir permissive=1'
+fx_rec() { export FX_AUSEARCH_RC=0 FX_AUSEARCH_ERR='' FX_AUSEARCH_OUT="$1"; }
+fx_nm()        { fx_rec "${REC_NM}"; }
+fx_tmpfiles()  { fx_rec "${REC_TMPF}"; }
+fx_login()     { fx_rec "${REC_LOGIN}"; }
+fx_udev()      { fx_rec "${REC_UDEV}"; }
+fx_uavc_deny() { fx_rec "${REC_UAVC_DENY}"; }
+fx_dmesg_only() { export FX_DMESG_OUT="${DMESG_TMPF}"; }   # ausearch clean (<no matches>), the denial only in the ring buffer
+fx_log_tmpf()  { export FX_AUSEARCH_BIN=/nonexistent/ausearch; printf '%s\n' "${REC_TMPF}" > "$1/audit.log"; }
+gate_blocks "scope: a NetworkManager_t denial (outside the old domain list)" fx_nm
+gate_blocks "scope: a systemd_tmpfiles_t denial (outside the old domain list)" fx_tmpfiles
+gate_blocks "scope: a local_login_t denial (outside the old domain list)" fx_login
+gate_blocks "scope: a udev_t denial (outside the old domain list)" fx_udev
+gate_blocks "scope: a USER_AVC denial (dbus)" fx_uavc_deny
+gate_blocks "scope: ausearch clean, the denial only in dmesg (early boot, dropped from the backlog)" fx_dmesg_only
+gate_blocks "scope: no ausearch, a systemd_tmpfiles_t denial in audit.log" fx_log_tmpf
+# Positive controls for the record filter: records that are NOT denials must not block.
+G="${TMP}/gsc1"; gate_fixture "${G}"; touch "${G}/marker"; fx_rec "${REC_UAVC_LOAD}"
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "POSITIVE CONTROL: a USER_AVC 'received policyload notice' (dbus, every boot) is not a denial: flips" \
+    || bad "a policyload notice blocked the flip (the filter keys on record type, not on the decision): ${o}"
+G="${TMP}/gsc2"; gate_fixture "${G}"; touch "${G}/marker"; fx_rec "${REC_GRANTED}"
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "POSITIVE CONTROL: an 'avc: granted' (auditallow instrument) is not a denial: flips" \
+    || bad "an avc: granted record blocked the flip: ${o}"
+G="${TMP}/gsc3"; gate_fixture "${G}"; touch "${G}/marker"; fx_nm "${G}"
+o="$(gate_run "${G}" yes)"
+printf '%s' "${o}" | grep -F 'NetworkManager_t' >/dev/null \
+    && ok "a blocked flip names the denial it blocked on" || bad "the gate blocked without showing the record: ${o}"
+# The allow-list: empty today, and an empty list must not filter anything (`grep -vE ''`
+# drops every line). A populated list filters only its own pattern.
+grep -E "^AVC_ALLOW_ERE=''\$" "${SVC}" >/dev/null \
+    && ok "the shipped allow-list is empty and a plain assignment (conf.d cannot widen it)" \
+    || bad "the shipped AVC_ALLOW_ERE is not the empty plain assignment: $(grep -n 'AVC_ALLOW_ERE=' "${SVC}")"
+G="${TMP}/gal1"; gate_fixture "${G}"; touch "${G}/marker"; fx_udev "${G}"; export FX_AVC_ALLOW_ERE='scontext=[^ ]*:udev_t:.* tcontext=[^ ]*:nsfs_t:'
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "allow-list: a populated entry lets ITS record through (the mechanism works)" \
+    || bad "allow-list: a matching entry did not let the record through: ${o}"
+G="${TMP}/gal2"; gate_fixture "${G}"; touch "${G}/marker"; fx_rec "${REC_UDEV}"$'\n'"${REC_NM}"; export FX_AVC_ALLOW_ERE='scontext=[^ ]*:udev_t:.* tcontext=[^ ]*:nsfs_t:'
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && bad "allow-list: an entry for udev_t also let a NetworkManager_t denial through: ${o}" \
+    || ok "allow-list: an entry for one record does not let another through"
+G="${TMP}/gal3"; gate_fixture "${G}"; touch "${G}/marker"; fx_udev "${G}"; export FX_AVC_ALLOW_ERE=''
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && bad "allow-list: an EMPTY list let a denial through (grep -vE '' drops every line)" \
+    || ok "allow-list: an empty list filters nothing"
 gate_fixture "${TMP}/gavc-reset"
 
 # ── E) the first-boot loader half in provision.sh ────────────────────────────
@@ -1415,6 +1736,65 @@ else
     bad "(failure marker on non-loaded module)"; bad "(status matched pair)"
     bad "(autorelabel consumption)"; bad "(policy-loaded postcondition)"
     bad "(selinux-load-failed pair)"; bad "(selinux-built pair)"
+fi
+
+# ── E-root) provision.sh's FIRST-BOOT root login mapping, EXECUTED (#863 refute,
+# blocker 3). The x86 and Frite builders map root in the store at build time; the
+# other ARM images build their store at first boot, so provision_selinux() maps it
+# there. Without it /root stays default_t and local_login_t is denied at every console
+# login. semanage/selinux_provision_failed/log/warn are stubbed; the function runs as
+# shipped, against a fixture /etc/selinux/<type>/seusers (path rewritten to a scratch root).
+echo "-- E-root) provision_selinux's first-boot root login mapping, executed --"
+PR="${TMP}/provroot"; mkdir -p "${PR}"
+awk '/^selinux_map_root_login\(\) \{/{f=1} f{print} f&&/^}/{exit}' "${PROV}" | sed "s#/etc/selinux/#${PR}/etc/selinux/#g" > "${PR}/fn.sh"
+if ! grep -q 'semanage login' "${PR}/fn.sh"; then
+    bad "E-root: could not cut selinux_map_root_login() out of provision.sh"
+else
+    # prov_rootmap <case> <aware> <seusers content|ABSENT> <semanage: ok|fail|noop|absent> -> rc; outputs in ${PR}/<case>/
+    prov_rootmap() {
+        local d="${PR}/$1"; rm -rf "${d}"; mkdir -p "${d}/etc/selinux/mcs"
+        [ "$3" = ABSENT ] || printf '%b' "$3" > "${d}/etc/selinux/mcs/seusers"
+        sed "s#${PR}/etc/selinux/#${d}/etc/selinux/#g" "${PR}/fn.sh" > "${d}/fn.sh"
+        ( log()  { echo "log: $*"; }; warn() { echo "warn: $*"; }
+          selinux_provision_failed() { echo "FAILED-MARKER: $*" >> "${d}/marker"; }
+          have() { [ "$1" = semanage ] && [ "${SEM}" != absent ]; }
+          semanage() { echo "semanage $*" >> "${d}/calls"
+                       case "${SEM}" in
+                           ok)   printf 'root:%s:%s\n' "$6" "$8" >> "${d}/etc/selinux/mcs/seusers"; return 0 ;;
+                           noop) return 0 ;;
+                           *)    echo "ValueError: Could not add login mapping for root" >&2; return 1 ;;
+                       esac; }
+          SEM="$4"; . "${d}/fn.sh"; selinux_map_root_login mcs "$2" ) > "${d}/out" 2>&1
+    }
+    SEU='__default__:user_u:s0\nsystem_u:system_u:s0-s0:c0.c1023\n'
+    prov_rootmap map 1 "${SEU}" ok; rc=$?
+    grep -E '^semanage login -S mcs -a -s user_u -r s0 root$' "${PR}/map/calls" >/dev/null && grep -q '^root:user_u:s0$' "${PR}/map/etc/selinux/mcs/seusers" \
+        && [ ! -e "${PR}/map/marker" ] && [ "${rc}" = 0 ] \
+        && ok "E-root: an unmapped store gets 'semanage login -a -s <__default__ user> -r <its range> root', postcondition read back" \
+        || bad "E-root: mapping did not happen: rc=${rc} calls=$(cat "${PR}/map/calls" 2>/dev/null) out=$(cat "${PR}/map/out")"
+    prov_rootmap already 1 "root:staff_u:s0\n${SEU}" ok; rc=$?
+    [ ! -e "${PR}/already/calls" ] && [ ! -e "${PR}/already/marker" ] && grep -q 'already mapped' "${PR}/already/out" \
+        && ok "E-root: an existing root: line (x86/Frite build-time mapping) is left alone — no semanage call" \
+        || bad "E-root: re-mapped an already-mapped root: $(cat "${PR}/already/calls" 2>/dev/null)"
+    prov_rootmap nosem 1 "${SEU}" absent
+    grep -q 'FAILED-MARKER: root login mapping: no semanage' "${PR}/nosem/marker" 2>/dev/null \
+        && ok "E-root: selinux-aware image with no semanage -> the selinux-load-failed marker (the gate refuses to flip)" \
+        || bad "E-root: no semanage on an aware image was not recorded: $(cat "${PR}/nosem/out")"
+    prov_rootmap semfail 1 "${SEU}" fail
+    grep -q 'FAILED-MARKER: root login mapping: semanage login failed: ValueError' "${PR}/semfail/marker" 2>/dev/null \
+        && ok "E-root: semanage failing -> recorded with semanage's own words" \
+        || bad "E-root: a failing semanage was not recorded: $(cat "${PR}/semfail/out")"
+    prov_rootmap semnoop 1 "${SEU}" noop
+    grep -q "FAILED-MARKER: root login mapping: .*still has no 'root:user_u:' line" "${PR}/semnoop/marker" 2>/dev/null \
+        && ok "E-root: semanage exits 0 but writes nothing -> the read-back postcondition records it (exit status is not trusted)" \
+        || bad "E-root: a no-op semanage passed: $(cat "${PR}/semnoop/out")"
+    prov_rootmap noseusers 1 ABSENT ok
+    grep -q 'FAILED-MARKER: root login mapping: .*seusers missing' "${PR}/noseusers/marker" 2>/dev/null \
+        && ok "E-root: no seusers in the store -> recorded" || bad "E-root: missing seusers not recorded: $(cat "${PR}/noseusers/out")"
+    prov_rootmap unaware 0 "${SEU}" absent
+    [ ! -e "${PR}/unaware/marker" ] && grep -q 'warn: SELinux: root login mapping: no semanage' "${PR}/unaware/out" \
+        && ok "E-root: on an image never built selinux-aware it only warns (no marker), like the rest of provision_selinux" \
+        || bad "E-root: unaware image: marker=$([ -e "${PR}/unaware/marker" ] && echo y || echo n) out=$(cat "${PR}/unaware/out")"
 fi
 
 # ── F) the store is now populated AT BUILD TIME (#503) ───────────────────────

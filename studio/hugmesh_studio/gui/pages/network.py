@@ -41,7 +41,7 @@ from __future__ import annotations
 # moved to _widgets.py for their one remaining consumer. Importing Qt "just in case" would
 # leave the next reader a working import for the very idiom this page is now defined by
 # not having.
-from ..qt import QtWidgets
+from ..qt import QtCore, QtWidgets
 from ._scroll import scrollable
 # Imported as a MODULE, not by name, purely so this page can prefer core.config's named
 # predicate the moment it exists without an import-time hard dependency on it — see
@@ -86,6 +86,7 @@ from ._gating import (
 from ._widgets import _file_picker, _row, collapsible
 # one sentence and one rule for both faces (the TUI Network step shows the same)
 from ...tui.network_step import brand_mirror_text, brand_mirrored
+from ...core.validate import domain_name_problem
 
 # ── DEFINITE OFF: why there is no tri-state left on this page ────────────────────────
 # Operator, verbatim (asks 1 + 4): "gui studio should leave optional services and edge ai
@@ -201,6 +202,12 @@ _HELP_SKIP_TAILSCALE = (
     "That is a headscale-only posture — a control node that SERVES the tailnet "
     "rather than joining it as a peer. It is not the same as declining to join the "
     "mesh, which is the Tailnet + SSO checkbox above.")
+_HELP_HEADSCALE_PUBLIC_DERP = (
+    "Emit --headscale-public-derp: ALSO hand the mesh Tailscale's public DERP relay "
+    "map. Off by default — the control node's headscale runs its own built-in relay, "
+    "so the mesh starts and relays with no internet and sends nothing to Tailscale's "
+    "servers. Turn this on only for a mesh that wants Tailscale's relays as a fallback "
+    "across the internet; the built-in relay stays in the map either way.")
 # ASK 5, "rename orchestration superdomain to tailscale root domain". The operator's
 # term is the one on screen everywhere now — but the value does TWO jobs in the
 # builders and the second one has to be said somewhere or the Users page's
@@ -302,11 +309,12 @@ _SERVICES_NODE_SCOPE_CAVEAT = (
 # The builders resolve this precedence themselves — build-x86-host-stage4.sh:193-196 and
 # build-rpi5-stage4.sh:252-254, both verbatim "built-in < brand.conf < flag":
 #
-#     OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+#     OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
 #
+# (akkoma left that default on 2026-11-11: its image is not yet published.)
 # i.e. --optional-services does not ADD to the built-in default, it REPLACES it. So an
 # explicit tick-list is already a complete subtraction: to build "forum-less" you tick
-# akkoma and tuwunel and leave phpbb alone. That is what --exclude-services was for from
+# tuwunel and leave phpbb alone. That is what --exclude-services was for from
 # this screen, and it is why a free-text slug field sitting next to a checklist that
 # already expresses the same thing "makes no sense". The flag itself is untouched and
 # still reachable from a brand profile (-C) or extra flags — it is the only knob that can
@@ -410,6 +418,20 @@ _BRAND_IDENTITY_NOTE = (
     "non-zero if it is given any of them for this role. Its LOOK is still yours: theme, "
     "wallpaper, accent colour and the login/GRUB backgrounds are set on the branding "
     "step and bake under neutral names.")
+
+
+# The fields NetworkPage refuses on Next (GUI-20), in _refuse_malformed's order.
+_REFUSABLE_FIELDS = ("cluster_domain", "games_domain", "superdomain", "egress_vpn")
+
+
+def _refusal_label(name: str) -> QtWidgets.QLabel:
+    """A hidden red inline-refusal label (the hostname_error / login_err look)."""
+    label = QtWidgets.QLabel("")
+    label.setObjectName(name)
+    label.setWordWrap(True)
+    label.setStyleSheet("color: #c62828;")
+    label.setVisible(False)
+    return label
 
 
 def _identity_help_text(brand: bool, cluster: bool, superdomain_on_screen: bool) -> str:
@@ -662,11 +684,21 @@ class NetworkPage(QtWidgets.QWizardPage):
         # permanently-internal Tailscale root domain in the mesh-networking section below.
         self.domain_row = _row("Public Apex Domain", self.domain)
         il.addWidget(self.domain_row)
+        # The inline refusals on this page (GUI-20): a red label directly under each
+        # field a Next can be refused for, never a modal (validatePage runs headless).
+        # Before these, a malformed apex / games domain, Tailscale root domain or a
+        # missing egress profile passed Next and surfaced pages later as "Cannot assemble
+        # this build" (or only in Review's preflight pane), worded against the config
+        # field rather than the caption the operator typed into.
+        self.domain_error = _refusal_label("domain_error")
+        il.addWidget(self.domain_error)
         # games domain (G6, x86+rpi5): the games.<domain> host + games OIDC issuer.
         self.games_domain = QtWidgets.QLineEdit()
         self.games_domain.setPlaceholderText("games.<cluster domain>  (empty = builder default)")
         self.games_domain_row = _row("Games Domain", self.games_domain)
         il.addWidget(self.games_domain_row)
+        self.games_domain_error = _refusal_label("games_domain_error")
+        il.addWidget(self.games_domain_error)
         # release state (G4, x86+rpi5): the baked Layer-3 nftables / go-live posture.
         self.release_state = QtWidgets.QComboBox()
         self.release_state.addItems(("default", *RELEASE_STATE_CHOICES))
@@ -739,6 +771,10 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.skip_tailscale = QtWidgets.QCheckBox(
             "Skip the Tailscale agent (headscale-only posture)")
         cp.addWidget(self.skip_tailscale)
+        # DERP relay: built-in (offline-first) by default; the public map is an opt-in.
+        self.headscale_public_derp = QtWidgets.QCheckBox(
+            "Also use Tailscale's public relays (default: built-in relay only)")
+        cp.addWidget(self.headscale_public_derp)
         # Tailscale root domain (spec 5): the permanently-internal <brand>.internal
         # every mesh node joins (manifest + KEYS channel, plus the WS-SUPER-B builder
         # bake: --superdomain on a mesh build writes <etc>/superdomain + the headscale
@@ -747,6 +783,8 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.superdomain = QtWidgets.QLineEdit()
         self.superdomain_row = _row("Tailscale Root Domain", self.superdomain)
         cp.addWidget(self.superdomain_row)
+        self.superdomain_error = _refusal_label("superdomain_error")
+        cp.addWidget(self.superdomain_error)
         # ASK 8's "this mesh also hosts other domains" CHECKBOX used to sit here, under
         # the superdomain row. ASK 19 promoted that decision to its own choice-card
         # screen (gui/pages/domains_choice.py) in the ModePage idiom — "proceed with the
@@ -779,6 +817,8 @@ class NetworkPage(QtWidgets.QWizardPage):
             "profile (optional). Lock it to stop a managed node's user removing it."))
         self.egress_field_row = _row("Egress VPN", w)
         eg.addWidget(self.egress_field_row)
+        self.egress_error = _refusal_label("egress_error")
+        eg.addWidget(self.egress_error)
         self.egress_locked = QtWidgets.QCheckBox("Lock the egress VPN")
         eg.addWidget(self.egress_locked)
         self.egress_section = collapsible("Egress VPN", self.egress_box)
@@ -1293,6 +1333,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.headscale_version.setText(c.headscale_version)
         self.tailscale_version.setText(c.tailscale_version)
         self.skip_tailscale.setChecked(c.skip_tailscale)
+        self.headscale_public_derp.setChecked(c.headscale_public_derp)
         # superdomain: editable in mesh (explicit text, empty = derived); a read-only
         # derived display in cloud (never write the derived value back to the config).
         mesh = c.mode == "mesh"
@@ -1374,6 +1415,10 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.identity_reason.setVisible(bool(reasons))
         self.egress.setText(c.egress_vpn)
         self.egress_locked.setChecked(c.egress_vpn_locked)
+        # a refusal from an earlier visit describes values this visit has just re-seeded
+        for label in (self.domain_error, self.games_domain_error, self.superdomain_error,
+                      self.egress_error):
+            label.setVisible(False)
         # same rule for the edge_ai role's auto-check (G11: jetson greys out too)
         edge_on = _on_off(c.edge_ai_service)
         if c.role in ("edge-ai", "edge_ai"):
@@ -1441,10 +1486,11 @@ class NetworkPage(QtWidgets.QWizardPage):
         picked = [s for s in c.optional_services if s not in (SERVICES_NONE, SERVICES_ALL)]
         # ── the builders' OWN default set arrives TICKED ──────────────────────────────
         # Ask 23's rule, verbatim: "anything off by default is UNCHECKED; only pre-check
-        # what is genuinely on by default" — and akkoma / tuwunel / phpbb are genuinely on
-        # by default. `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"`
-        # (build-x86-host-stage4.sh:196, build-rpi5-stage4.sh:254) means an untouched mesh
-        # ships all three, so three unticked boxes over three running services is the same
+        # what is genuinely on by default" — and BUILTIN_DEFAULT_SERVICES (tuwunel / phpbb
+        # since 2026-11-11, when akkoma left it: image not yet published) are genuinely on
+        # by default. `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"` (both
+        # builders) means an untouched mesh ships them, so unticked boxes over running
+        # services is the same
         # lie as a part-checked square, merely spelled differently — and it made unticking
         # `phpbb` a no-op, because --optional-services REPLACES rather than subtracts, so
         # "nothing ticked" emitted nothing and left the forum up.
@@ -1887,6 +1933,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             (self.headscale_version_row, _HELP_HEADSCALE_VERSION),
             (self.tailscale_version_row, _HELP_TAILSCALE_VERSION),
             (self.skip_tailscale, _HELP_SKIP_TAILSCALE),
+            (self.headscale_public_derp, _HELP_HEADSCALE_PUBLIC_DERP),
             (self.superdomain_row, _HELP_SUPERDOMAIN),
             (self.egress_field_row, _HELP_EGRESS),
             (self.egress_locked, _HELP_EGRESS_LOCKED),
@@ -1982,12 +2029,16 @@ class NetworkPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         c = self.wiz.cfg
+        # what the refusable fields held BEFORE this collect — _refuse_malformed puts a
+        # refused one back, so a value the build rejects is never written through
+        prior = {f: getattr(c, f) for f in _REFUSABLE_FIELDS}
         c.tailscale = self.tailscale.isChecked()
         c.sso = self.sso.isChecked()
         c.headscale_url = self.headscale_url.text().strip()
         c.headscale_version = self.headscale_version.text().strip()
         c.tailscale_version = self.tailscale_version.text().strip()
         c.skip_tailscale = self.skip_tailscale.isChecked()
+        c.headscale_public_derp = self.headscale_public_derp.isChecked()
         # superdomain is user-set ONLY in mesh (editable); in cloud the field shows the
         # DERIVED value read-only — never write it back (would pin the derived string).
         if c.mode == "mesh":
@@ -2230,4 +2281,71 @@ class NetworkPage(QtWidgets.QWizardPage):
             "optional_services", "exclude_services", "enable_games", "anubis",
             "managed_services",
         ))
-        return True
+        return self._refuse_malformed(c, prior)
+
+    def _refuse_malformed(self, c, prior: dict) -> bool:
+        """Refuse Next, inline, on a value this page just collected that the build would
+        reject anyway (GUI-20). True when there is nothing to refuse.
+
+        Run LAST, on the values as COLLECTED — after every scope gate above and
+        clear_unsupported — for two reasons. (1) What is checked is exactly what reaches
+        the argv: a hidden or platform-cleared field is already back at its default
+        here, so a value the operator cannot see is never refused. (2) collect_all()
+        re-runs validatePage and ignores its answer, so an early return would silently
+        drop every field below the bad one from a Review/save collect.
+
+        The checks are the build's own: validate_domain_name is what validate_identity
+        applies to --cluster-domain / --games-domain / --superdomain, and the egress file
+        test is BuildDriver.preflight's. Each refusal names the CAPTION the operator typed
+        into, sits under that field, opens the section it lives in, and is scrolled into
+        view (the fleet.py Domains-step precedent: a refusal nobody can see is a modal's
+        worst property without the modal).
+
+        A refused field is put back to ``prior`` (what it held before this collect) —
+        the hostname refusal's "never written through" rule. Otherwise the bad value
+        stays in the config, and a person who walks Back and switches flow instead of
+        fixing it (cloud -> standalone hides the apex; mesh -> cloud makes the Tailscale
+        Root Domain a read-only display) carries it onto a flow with no field to fix it,
+        to meet it again at Review as "Cannot assemble this build"."""
+        apex = games = ""
+        if _cluster_identity_applies(c):
+            apex = domain_name_problem("Public Apex Domain", c.cluster_domain)
+            if apex and brand_mirrored(c):
+                # read-only here on a mesh (#654): say where it CAN be changed
+                apex += (f" On a mesh it is set in the {plain_words.term('superbrand')} "
+                         "step at the top of the Branding page — use the button above.")
+            if c.games_domain:
+                games = domain_name_problem("Games Domain", c.games_domain)
+        superdomain = ""
+        if c.mode == "mesh" and c.superdomain:
+            superdomain = domain_name_problem("Tailscale Root Domain", c.superdomain)
+        egress = ""
+        drv = getattr(self.wiz, "driver", None)
+        if c.egress_vpn and drv is not None:
+            missing = drv.missing_host_path(c.egress_vpn)
+            if missing:
+                where = "" if missing == c.egress_vpn else f" (looked for {missing})"
+                egress = (f"Egress VPN: there is no file at {c.egress_vpn!r}{where}. Pick "
+                          "the VPN profile with Browse…, or clear the field for no "
+                          "egress VPN.")
+        shown = []
+        for field, label, section, text in (
+                ("cluster_domain", self.domain_error, self.identity_section, apex),
+                ("games_domain", self.games_domain_error, self.identity_section, games),
+                ("superdomain", self.superdomain_error, self.mesh_section, superdomain),
+                ("egress_vpn", self.egress_error, self.egress_section, egress)):
+            label.setText(text)
+            label.setVisible(bool(text))
+            if text:
+                setattr(c, field, prior[field])
+                section.set_expanded(True)
+                shown.append(label)
+        if shown:
+            # AFTER the layout pass the setVisible calls only POSTED, or the scroll uses
+            # the hidden label's stale geometry (fleet.py's measured lesson)
+            QtCore.QCoreApplication.sendPostedEvents(
+                None, QtCore.QEvent.Type.LayoutRequest)
+            scroll = getattr(self, "_content_scroll", None)
+            if scroll is not None:
+                scroll.ensureWidgetVisible(shown[0])
+        return not shown

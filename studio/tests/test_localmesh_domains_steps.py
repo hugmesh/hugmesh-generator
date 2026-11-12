@@ -49,7 +49,7 @@ from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E
 from hugmesh_studio.gui.pages import domain_services as dsp_mod        # noqa: E402
 from hugmesh_studio.gui.pages import domains as domains_mod            # noqa: E402
 from hugmesh_studio.gui.pages import localmesh as localmesh_mod        # noqa: E402
-from hugmesh_studio.gui.qt import Qt, QtWidgets                        # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtCore, QtWidgets                # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -648,6 +648,115 @@ def test_a_blank_prod_apex_is_an_inline_note_never_a_refusal_to_advance(wiz):
     assert any("cluster domain" in p for p in ctl.boot.validate())
 
 
+def _box_in(widget, outer):
+    """``widget``'s rectangle in ``outer``'s coordinates (x, y, w, h)."""
+    tl = widget.mapTo(outer, QtCore.QPoint(0, 0))
+    return tl.x(), tl.y(), widget.width(), widget.height()
+
+
+def test_a_blank_prod_apex_is_said_on_entry_and_follows_row_0_live(wiz, qapp):
+    """GUI-21: the step's red note used to be written only by its own Next — which
+    then moved on — so a prod walk reached the plan's BLOCKERS without ever seeing
+    it. It is on screen from ENTRY, follows row 0 as it is typed (no Next needed),
+    and the live slot writes nothing: ``mesh_domains``/``boot_domain`` are still
+    committed by the step's Next alone. Next stays enabled (a note, not a refusal)."""
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    ctl.env_prod.setChecked(True)
+    step = _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    qapp.processEvents()
+    note, t = ctl.domains_note, ctl.domains_table
+    assert note.isVisibleTo(note.parentWidget()), "no note on entry"
+    assert note.text() == localmesh_mod.PROD_APEX_NOTE
+    assert step.isComplete() is True
+    assert wiz.button(QtWidgets.QWizard.WizardButton.NextButton).isEnabled()
+    # SEEN, not merely set: drawn inside the step at the wizard's own size, below the
+    # table, with a real height (look at the UI you built)
+    wiz.grab()
+    x, y, w, h = _box_in(note, wiz)
+    _tx, ty, _tw, th = _box_in(t.table, wiz)
+    assert h > 0 and w > 0 and x >= 0 and x + w <= wiz.width(), (x, y, w, h)
+    assert y >= ty + th and y + h <= wiz.height(), (y, h, ty, th, wiz.height())
+    # live: typing row 0 clears it, blanking it brings it back — with no Next
+    t.table.item(0, 0).setText("example.com")
+    assert not note.isVisibleTo(note.parentWidget())
+    assert ctl.boot_domain.text() == "" and ctl.mesh_domains.own_name == ""
+    t.table.item(0, 0).setText("  ")
+    assert note.isVisibleTo(note.parentWidget())
+    t.table.item(0, 0).setText("example.com")
+    wiz.next()
+    assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshDomainServicesPage)
+    assert ctl.boot_domain.text() == "example.com"
+
+
+def test_a_refusal_stays_on_the_note_while_row_0_is_typed(wiz):
+    """The live apex line is ADDED to the last Next's refusals, never written over
+    them: typing row 0 after a refused Next leaves the refusal on screen."""
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    ctl.env_prod.setChecked(True)
+    _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    ctl.domains_table._add("junk", "")
+    before = wiz.currentId()
+    wiz.next()
+    assert wiz.currentId() == before
+    said = ctl.domains_note.text()
+    assert "not a domain name: 'junk'" in said and localmesh_mod.PROD_APEX_NOTE in said
+    ctl.domains_table.table.item(0, 0).setText("example.com")
+    said = ctl.domains_note.text()
+    assert "not a domain name: 'junk'" in said, said
+    assert localmesh_mod.PROD_APEX_NOTE not in said, said
+
+
+def test_a_test_mesh_shows_no_apex_note(wiz):
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    note = ctl.domains_note
+    assert not note.isVisibleTo(note.parentWidget())
+    # and a prod walk that goes Back and switches to test loses the note on re-entry
+    _back_to(wiz, localmesh_mod.LocalMeshEnvPage)
+    ctl.env_prod.setChecked(True)
+    _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    assert note.isVisibleTo(note.parentWidget()) and "#c62828" in note.styleSheet()
+    _back_to(wiz, localmesh_mod.LocalMeshEnvPage)
+    ctl.env_test.setChecked(True)
+    _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    assert not note.isVisibleTo(note.parentWidget())
+
+
+def test_the_overlay_step_says_which_prod_requirement_is_missing(wiz, qapp):
+    """GUI-21: both overlay fields were labelled 'required in prod' and Next walked
+    past them empty with nothing said. A red note inside the prod group names each
+    missing one and where it is set (the apex is a read-only mirror of the Domains
+    step's row 0 here), never echoes the key, and Next still advances."""
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    ctl.env_prod.setChecked(True)
+    _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    step = _to(wiz, localmesh_mod.LocalMeshOverlayPage)
+    qapp.processEvents()
+    note = ctl.overlay_note
+    assert note.parentWidget() is ctl.prod_group or ctl.prod_group.isAncestorOf(note)
+    assert note.isVisibleTo(ctl.prod_group), "no note on entry"
+    assert "public apex domain" in note.text() and "‘Domains’ step" in note.text()
+    assert "auth key" in note.text() and "#c62828" in note.styleSheet()
+    assert step.isComplete() is True
+    wiz.grab()
+    x, y, w, h = _box_in(note, wiz)
+    assert h > 0 and w > 0 and x >= 0 and x + w <= wiz.width(), (x, y, w, h)
+    assert y + h <= wiz.height(), (y, h, wiz.height())
+    ctl.boot_auth_key.setText("tskey-auth-NEVER-IN-THE-NOTE")
+    assert note.isVisibleTo(ctl.prod_group)
+    assert "auth key" not in note.text() and "NEVER-IN-THE-NOTE" not in note.text()
+    ctl.boot_domain.setText("example.com")
+    assert not note.isVisibleTo(ctl.prod_group)
+    ctl.boot_auth_key.setText("")
+    assert note.isVisibleTo(ctl.prod_group) and "apex" not in note.text()
+    wiz.next()
+    assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshReviewPage)
+
+
 def test_switching_env_renames_row_0_rather_than_adding_a_second_own_row(wiz):
     ctl = _ctl(wiz)
     _to_env(wiz)
@@ -750,7 +859,7 @@ def test_a_prod_apex_that_is_not_a_domain_name_is_refused(wiz):
     before = wiz.currentId()
     wiz.next()
     assert wiz.currentId() == before
-    assert "row 0: not a domain name" in ctl.domains_note.text()
+    assert "the first row: not a domain name" in ctl.domains_note.text()
 
 
 def test_a_back_keeps_a_refused_row_so_it_can_be_fixed(wiz):

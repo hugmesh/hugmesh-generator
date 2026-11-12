@@ -261,7 +261,20 @@ pip install -r requirements.txt        # PySide6 (or use an existing PyQt6)
 
 # Windows — the .bat is a guided bootstrapper: just double-click (or run) it
 hugmesh-studio.bat
+
+# macOS (13 or newer), from the root of a checkout: the GNU tools the generator's
+# scripts need, a Docker runtime (Docker Desktop, colima or OrbStack), then as on Linux
+brew install bash coreutils gnu-sed findutils grep make
+cd studio && python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt && ./hugmesh-studio
 ```
+
+On macOS the Studio puts Homebrew's GNU tools, Docker Desktop's and colima's CLI folders
+in front of its own PATH when it starts (a Mac app opened from Finder gets none of them),
+builds only through Docker (no native backend), opens Terminal.app (or iTerm2) for the
+commands that need a terminal, and says what is missing with the one `brew install` line.
+`hugmesh-studio --self-check` reports it. The `.app` and `.dmg`, what is proven on a real
+Mac and what is not yet: [docs/STUDIO-INSTALLERS.md](../docs/STUDIO-INSTALLERS.md#macos).
 
 On Windows, `hugmesh-studio.bat` sets up a bare box from start to finish:
 
@@ -331,6 +344,9 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   python -m hugmesh_studio --list-sessions [--json]        # one line per session:
                                                            # id, date, roles, status, artifact count
   python -m hugmesh_studio --show-session ID [--json]      # full record + per-image outcomes
+  python -m hugmesh_studio --kernel-config SESSION[:IMAGE]  # x86: menuconfig the built kernel here,
+  python -m hugmesh_studio --kernel-config-apply SESSION[:IMAGE]  # then rebuild + re-sign + repackage
+                                                          # (also -set/-diff/-discard; docs/KERNEL-RECONFIG.md)
   python -m hugmesh_studio --session-artifacts ID [--json] # files under <out>/sessions/<ID>/
   python -m hugmesh_studio --delete-session ID --yes       # record only; REFUSES without --yes
   python -m hugmesh_studio --delete-session ID --yes --delete-artifacts
@@ -461,8 +477,9 @@ what [docs/LOCAL-AI-ASSISTANT.md](../docs/LOCAL-AI-ASSISTANT.md) tells a person 
   which can be pressed before any copy exists, also has the clone, remote-removal and branch
   lines first. Every line is chained to the one before with `&&`, so a failed clone or a
   missing copy stops the rest instead of running them in whatever folder your shell is in.
-  Native Windows and macOS do not open a window; run the Studio inside WSL2 or
-  follow the doc by hand.
+  Native Windows does not open a window; run the Studio inside WSL2 or follow the doc
+  by hand. macOS opens Terminal.app (iTerm2 when installed) on a self-deleting
+  `.command` file that exports only the allowlisted variables.
 
 Code: `core/local_agent.py` (Qt-free) and `gui/pages/_local_agent_widget.py`; tests:
 `tests/test_local_agent.py`, `tests/test_local_agent_gui.py`.
@@ -490,6 +507,52 @@ then appends a log hint ("likely killed by its memory cap") that names the cap v
 remedies. One asymmetry: **native builds cannot be memory-capped by the Studio**. On a tight
 host, prefer the Docker backend. On hosts without `/proc/meminfo` (Windows/macOS) behaviour
 falls back to the old rules: no cap, jobs = `min(cores, 8)`, no warnings.
+
+## Free-space guard (2026-11-10 full-disk incident)
+
+A build session is checked against the disk under its output folder **before** anything is
+dispatched, and again **before every queued image**. A 23-image session that ran for 1.5 hours
+into a full disk is why: its first image died at the `.img` step and four more after it, and
+the record held `No space left on device` crashes where a refusal belonged.
+
+- **At session start** the first image must fit, or the Review and Progress pages refuse (no
+  build is started, nothing is written). When the first image fits but the whole worklist
+  does not, they show a **warning** and the session may start.
+- **Before each image** the check runs again. An image that no longer fits is never started.
+  It is marked failed with a `!! <image> not started: not enough free disk space ...` line,
+  which the session record keeps, and the images after it still get their turn (an ARM image
+  may fit where an x86 one did not).
+
+| Image | Counted as | Of which its build system (`wl-<id>/sysroot`) |
+|---|---|---|
+| x86 | 55 GiB | 23 GiB |
+| ARM (rpi5, jetson, frite, Orange Pi) | 20 GiB | 7 GiB |
+
+Every image also needs 10 GiB left free on top. `HUGMESH_BUILD_IMAGE_SPACE` replaces the
+per-image figure with a number of GiB (the margin still applies); `0`, `off` or `none` turns
+the check off, and anything else is ignored so that a typo never does. When free space cannot
+be read, nothing is refused.
+
+**Restart.** A restart builds into the same session folder, where each image's build system
+from the earlier run still is. What that holds is not needed a second time: with **Resume**
+ticked (`--resume`, pre-ticked when build trees exist) the builder continues from it, and
+without it the builder rebuilds it in the same place. So the check counts it, up to the
+build-system figure in the table, and never tells you to delete it:
+
+- The check at session start runs on the GUI thread and does not read the tree. It takes a
+  populated build system as finished and refuses only an image that would not fit even then
+  (x86: under 42 GiB free, not under 65).
+- Right before an image starts, on the build thread, its build system is measured when the
+  answer depends on it, and only what is found is counted. A run that died early leaves a few
+  GiB, and that image needs nearly its whole figure again. Measuring takes from seconds to
+  minutes (a line in the log says it started), stops as soon as enough is found, gives up
+  after 5 minutes with what it has, and stops when you press Stop.
+- A build tree with no extracted system in it (no `sysroot/etc/gentoo-release`, the builders'
+  own test) is not counted: the builder starts that one over.
+
+Not covered: the fleet window (`build-all-roles.sh`) and builds started from a terminal.
+The figures are flat per platform and assume `--compress` (the default): an x86 `--capable`
+desktop, a Jetson, an omnibus node on ARM, or an uncompressed x86 build can need more.
 
 Tray-only (mesh-node controller):
 
@@ -643,7 +706,11 @@ reused as is).
 python -m hugmesh_studio.tui                       # the guided journey (welcome screen
                                                    #   first — the GUI wizard's page order)
 python -m hugmesh_studio.tui --sessions            # sessions review (build history):
-                                                   #   status · artifacts · delete-with-confirm
+                                                   #   status · why an image was not started
+                                                   #   · artifacts · delete-with-confirm
+                                                   #   (an unreadable record too) · restart
+                                                   #   (the GUI's gate, then where to run it)
+                                                   #   · redo into the journey · delete all
 python -m hugmesh_studio.tui --worklist SESSION_ID # read-only worklist table for one session
 python -m hugmesh_studio.tui --meshemu SESSION     # whole-mesh emulation status list
 python -m hugmesh_studio.tui --fleet               # fleet build (scripts/build-all-roles.sh)
@@ -794,8 +861,9 @@ Studio inside WSL2, on the Docker backend.
 
 ## Package a Windows .exe
 
-The PyInstaller spec is committed at `packaging/hugmesh-studio.spec`; the MSI, the Flatpak
-and the local build commands are in [docs/STUDIO-INSTALLERS.md](../docs/STUDIO-INSTALLERS.md).
+The PyInstaller spec is committed at `packaging/hugmesh-studio.spec`; the MSI, the Flatpak,
+the macOS `.app`/`.dmg` (`packaging/build-macos-app.sh`) and the local build commands are in
+[docs/STUDIO-INSTALLERS.md](../docs/STUDIO-INSTALLERS.md).
 
 ## Layout
 

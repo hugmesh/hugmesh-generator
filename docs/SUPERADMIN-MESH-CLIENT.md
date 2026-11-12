@@ -62,7 +62,10 @@ tailscale up \
 Resolve `<headscale-url>` the way the fleet does. In order of precedence:
 `provision.json .headscale.server_url`, then `provision.json .mesh.endpoint`, then
 the baked brand var `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`), then
-`http://<primary-LAN-IPv4>:8080`. See
+`https://<primary-LAN-IPv4>:8080` (headscale serves TLS there with a certificate from
+the mesh CA, so this machine must trust that CA: install the pki stick's
+`certs/cluster-ca.crt` into its trust store first; see
+[`HEADSCALE-DERP.md`](HEADSCALE-DERP.md#every-node-needs-the-mesh-ca)). See
 [`keys-template/headscale/config.yaml`](../keys-template/headscale/config.yaml)
 and `specs/etc/keys-provision/provision.sh` for endpoint resolution.
 
@@ -113,6 +116,14 @@ To give the newly joined device SSH reach, do this on the control node:
    tags bypass `tagOwners`; a node that only *advertises* `tag:superadmin` gets it in
    `invalid_tags`, because the policy lists `tag:superadmin` with the empty owner list
    `[]`. So nobody can forge the SSH source.
+
+4. **Open a session.** From the tagged device, `ssh <privileged user>@<node's tailnet
+   IP>` (or `tailscale ssh`). Every shipped policy carries one `acls` rule for this,
+   `tag:superadmin → tag:hugmesh:22`, so the connection reaches the node; before
+   2026-11-11 no policy had it and the session timed out. Root is refused, and so is
+   every node that is only a mesh member: `tag:superadmin` is the only source any
+   `ssh` rule names. The netmap updates without a reconnect (measured on headscale
+   0.23.0 + tailscale 1.78.1: about a second after the force-tag pass).
 
 ## Why the allowlist step is deliberately manual (not a bug)
 

@@ -48,6 +48,25 @@
 # inbound replies to unrelated outbound UDP flows whose local port landed in
 # the window.
 #
+# HEADSCALE STUN CARVE-OUT (operator decision 2026-11-10, "Built-in relay on";
+# docs/HEADSCALE-DERP.md). The pki node's headscale runs an EMBEDDED DERP relay
+# whose STUN listener is UDP 3478 — the same port this table drops by default, and
+# exactly the port a LAN peer that is not on the tailnet yet must reach. keys-
+# provision (provision_headscale_derp) writes that port to ONE marker:
+#
+#   /etc/hugmesh/headscale-derp-stun   "<port>"  => admit <port>/udp, nothing else
+#
+# The marker exists only where headscale runs with its embedded relay on (the pki
+# node); everywhere else this script behaves exactly as before. The carve-out is a
+# single `udp dport <port> accept` ahead of the drops (no TCP, no 5349, no relay
+# window) and, where firewalld runs, the same single <port>/udp in the default zone.
+# A malformed marker is ignored (fail-closed: nothing is admitted). On a node that
+# is ALSO a coturn-public relay (an omnibus node), coturn and headscale would both
+# bind 3478/udp on the host, and a headscale (re)start that loses that race exits
+# (headscale 0.23 treats a STUN bind failure as fatal). The clash is logged; the fix
+# is another stun_listen_addr in that node's KEYS headscale/config.yaml (the marker,
+# and so this carve-out, follow the port).
+#
 # FAIL-CLOSED: any render/apply error KEEPS the existing ruleset; the
 # first-ever posture (no marker) is CLOSED — deny by default, never allow.
 # "Keep the existing ruleset" is only fail-closed when this table IS loaded. When
@@ -68,6 +87,10 @@ TABLE="hugmesh_coturn_relay"
 # v6 ULA prefix needs its own rules — the hugmesh-sunshine-firewall lesson).
 TS_V4_PREFIX="${HUGMESH_TS_V4_PREFIX:-100.64.0.0/10}"
 TS_V6_PREFIX="${HUGMESH_TS_V6_PREFIX:-fd7a:115c:a1e0::/48}"
+HS_STUN_MARKER="${HUGMESH_HEADSCALE_STUN_MARKER:-/etc/hugmesh/headscale-derp-stun}"
+# The headscale STUN port this script last admitted in firewalld, so a port the marker
+# no longer names (it moved, or headscale's relay went away) is taken back out.
+HS_STUN_FW_STATE="${HUGMESH_HEADSCALE_STUN_FW_STATE:-/var/lib/hugmesh/headscale-derp-stun.firewalld}"
 RELAY_MIN="${HUGMESH_COTURN_RELAY_MIN:-49152}"
 RELAY_MAX="${HUGMESH_COTURN_RELAY_MAX:-49200}"
 LOG_TAG="hugmesh-coturn-firewall"
@@ -92,6 +115,24 @@ mark_unprotected() {
 table_live() { nft list table inet "${TABLE}" >/dev/null 2>&1; }
 
 PUBLIC="absent"; [ -e "${MARKER}" ] && PUBLIC="present"
+
+# headscale embedded-DERP STUN port (see the header): a single 1-65535 integer or
+# nothing at all.
+HS_STUN_PORT=""
+if [ -e "${HS_STUN_MARKER}" ]; then
+    _hs_port="$(tr -d '[:space:]' < "${HS_STUN_MARKER}" 2>/dev/null)"
+    if [[ "${_hs_port}" =~ ^[0-9]{1,5}$ ]] && [ "${_hs_port}" -ge 1 ] && [ "${_hs_port}" -le 65535 ]; then
+        HS_STUN_PORT="${_hs_port}"
+    else
+        warn "ignoring ${HS_STUN_MARKER}: '${_hs_port}' is not a port number — no headscale STUN port admitted"
+    fi
+    unset _hs_port
+fi
+if [ -n "${HS_STUN_PORT}" ] && [ "${PUBLIC}" = "present" ] && [ "${HS_STUN_PORT}" = "3478" ]; then
+    warn "coturn-public AND headscale's embedded DERP both want 3478/udp on this node — only one can bind it, and a headscale (re)start that loses the race EXITS (STUN bind failure is fatal); move headscale's stun_listen_addr via a KEYS headscale/config.yaml (docs/HEADSCALE-DERP.md)"
+fi
+HS_STUN_RULE=""
+[ -n "${HS_STUN_PORT}" ] && HS_STUN_RULE="        udp dport ${HS_STUN_PORT} accept  # headscale embedded DERP STUN (${HS_STUN_MARKER})"
 
 # ── Layer 1: the own-table nftables backstop (fail-closed gate) ──────────────
 if command -v nft >/dev/null 2>&1; then
@@ -131,6 +172,7 @@ table inet ${TABLE} {
         # Tailnet admitted both families (mirrors the release-gate admit-set).
         ip saddr ${TS_V4_PREFIX} accept
         ip6 saddr ${TS_V6_PREFIX} accept
+${HS_STUN_RULE}
 ${DROP_RULES}
     }
 }
@@ -161,7 +203,10 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
         warn "firewalld is running but --get-default-zone returned nothing — leaving firewalld untouched"
     else
         PORTS="3478/udp 3478/tcp 5349/udp 5349/tcp ${RELAY_MIN}-${RELAY_MAX}/udp"
+        HS_FW_PORT=""; [ -n "${HS_STUN_PORT}" ] && HS_FW_PORT="${HS_STUN_PORT}/udp"
         for p in ${PORTS}; do
+            # The headscale STUN port is admitted below; never remove it here.
+            [ "${p}" = "${HS_FW_PORT}" ] && continue
             if [ "${PUBLIC}" = "present" ]; then
                 firewall-cmd --zone="${ZONE}" --query-port="${p}" >/dev/null 2>&1 \
                     || firewall-cmd --zone="${ZONE}" --add-port="${p}" >/dev/null 2>&1 \
@@ -173,6 +218,29 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
                 fi
             fi
         done
+        # A port an earlier run admitted for headscale STUN that the marker no longer
+        # names comes back out, unless the coturn pass above owns it right now.
+        HS_FW_PREV="$(tr -d '[:space:]' < "${HS_STUN_FW_STATE}" 2>/dev/null)"
+        if [[ "${HS_FW_PREV}" =~ ^[0-9]{1,5}/udp$ ]] && [ "${HS_FW_PREV}" != "${HS_FW_PORT}" ]; then
+            case " ${PORTS} " in
+                *" ${HS_FW_PREV} "*) [ "${PUBLIC}" = "present" ] && HS_FW_PREV="" ;;
+            esac
+            if [ -n "${HS_FW_PREV}" ] && firewall-cmd --zone="${ZONE}" --query-port="${HS_FW_PREV}" >/dev/null 2>&1; then
+                firewall-cmd --zone="${ZONE}" --remove-port="${HS_FW_PREV}" >/dev/null 2>&1 \
+                    && log "headscale STUN port ${HS_FW_PREV} is no longer named by ${HS_STUN_MARKER} — removed from firewalld (zone ${ZONE})" \
+                    || warn "firewall-cmd --remove-port=${HS_FW_PREV} failed (zone ${ZONE}) — stale headscale STUN port"
+            fi
+        fi
+        if [ -n "${HS_FW_PORT}" ]; then
+            firewall-cmd --zone="${ZONE}" --query-port="${HS_FW_PORT}" >/dev/null 2>&1 \
+                || firewall-cmd --zone="${ZONE}" --add-port="${HS_FW_PORT}" >/dev/null 2>&1 \
+                || warn "firewall-cmd --add-port=${HS_FW_PORT} failed (zone ${ZONE}) — headscale STUN"
+            mkdir -p "$(dirname "${HS_STUN_FW_STATE}")" 2>/dev/null
+            printf '%s\n' "${HS_FW_PORT}" > "${HS_STUN_FW_STATE}" 2>/dev/null \
+                || warn "could not record the admitted headscale STUN port in ${HS_STUN_FW_STATE}"
+        else
+            rm -f "${HS_STUN_FW_STATE}" 2>/dev/null
+        fi
     fi
 else
     # No firewalld => nothing to admit here. EXPECTED on ARM images (deliberate
@@ -186,5 +254,5 @@ if [ -n "${UNPROTECTED}" ]; then
     error "firewalld layer reconciled (zone=${ZONE:-?}) but the nftables backstop is NOT loaded — exiting 1 (${UNPROTECTED})"
     exit 1
 fi
-log "applied: coturn-public=${PUBLIC} zone=${ZONE:-?} relay=${RELAY_MIN}-${RELAY_MAX}/udp"
+log "applied: coturn-public=${PUBLIC} zone=${ZONE:-?} relay=${RELAY_MIN}-${RELAY_MAX}/udp headscale-stun=${HS_STUN_PORT:-none}"
 exit 0

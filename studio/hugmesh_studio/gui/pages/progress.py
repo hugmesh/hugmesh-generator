@@ -75,10 +75,13 @@ from ...core.emerge_packages import (
     EmergePackageParser, GROUP_UNKNOWN, PackageProgress, STEP_DONE, STEP_FAILED,
     STEP_QUEUED, find_package_log)
 from ...core.progress_parse import ProgressParser, platform_phases, strip_ansi
-from ...core.stage_tracker import StageTracker
+from ...core.stage_tracker import DONE as STAGE_DONE, StageTracker
+from ...core import kernel_reconfig
 from ...core.worklist_driver import WorklistDriver
 from ._images_mesh import LocalMeshPanel
+from ._kernel_reconfig_panel import KernelReconfigPanel
 from ._widgets import hold_thread, label_finish_as_exit
+from ._scroll import scrollable
 
 # Residual control bytes AFTER strip_ansi() — a bare ESC that formed no complete
 # SGR/CSI sequence, plus BEL/BS/CR/VT/FF (the x86 emerge stream carries CR from its
@@ -257,6 +260,23 @@ _LOG_MAX_BLOCKS = 20000
 # (Qt greys a disabled QToolButton; the :disabled rule below pins the grey rather than
 # trusting the active style) and carries the honest reason as its tooltip. It enables per
 # job, the moment THAT job's emerge phase really starts — see ProgressPage._sync_pkg_expand.
+# "Kernel config…" (core/kernel_reconfig.py) — on the Build kernel STAGE row's Flags cell
+# (only package rows write flag text there). Same one-way latch as the package button:
+# created disabled, enabled once THIS job's kernel stage is DONE (_sync_kernel_btn).
+_KERNEL_BTN_TEXT = "Kernel config…"
+_KERNEL_BTN_HINT = "available once this image's Build kernel step has finished"
+_KERNEL_BTN_READY_HINT = ("Open menuconfig for this image's kernel in its own terminal "
+                          "window, then rebuild + re-sign + repackage with the change")
+
+
+def _kernel_stage_index(platform: str) -> int | None:
+    """Index of the "kernel" phase in the platform's progress table (None: it has none)."""
+    for i, ph in enumerate(platform_phases(platform or "x86")):
+        if ph.get("id") == kernel_reconfig.KERNEL_STAGE:
+            return i
+    return None
+
+
 _PKG_EXPAND_TEXT = "Packages ▸"
 _PKG_EXPAND_HINT = "packages appear once the build reaches the emerge phase"
 _PKG_EXPAND_READY_HINT = ("Show this image's packages — expands its emerge groups "
@@ -419,6 +439,53 @@ class _DetachedLogWindow(QtWidgets.QWidget):
         ev.accept()
 
 
+class _FloorSplitter(QtWidgets.QSplitter):
+    """The tree/log splitter. Its preferred height is its MINIMUM.
+
+    The page lives in a scroll area (pages/_scroll.scrollable). When a word-wrapped
+    label is shown on the page, the content layout has height-for-width. This happens
+    with the saved-mesh banner, the flash progress label or the "flashing cannot work
+    here" note. QScrollArea then sizes the content to the layout's heightForWidth(),
+    and QBoxLayout adds up PREFERRED heights for that. The tree and the log each prefer
+    about 200 px, so the splitter asked for 649 px against a 299 px minimum.
+
+    Measured: after an all-ok mesh run with the banner shown, the content was 941 px
+    tall at EVERY window size. There was a page scrollbar even at 1920x1040, and the log
+    and the Flash group were below the fold. With the splitter preferring its minimum,
+    the content is its real minimum when the window is small and the viewport when it
+    is not. The splitter is the one stretch item, so it still takes all the spare
+    height, as before."""
+
+    def sizeHint(self):
+        return self.minimumSizeHint()
+
+
+class _WrapLabel(QtWidgets.QLabel):
+    """A word-wrapped label whose MINIMUM height is what its text needs at its width.
+
+    Used for the two wrapped labels inside the splitter's panes: the footer under the
+    tree and the watch-it-in-a-terminal help under the log. QSplitter does no
+    height-for-width. It never gives a pane less than the pane's minimumSizeHint, but a
+    wrapped QLabel's minimumSizeHint is computed at a width Qt picks, not the label's
+    real width. So the tree pane's minimum did not include the footer's real lines. With
+    the pane at its minimum, the three-line footer ("mesh manifest written: ...", one
+    key-zip per node) was drawn over the job rows (GUI-13).
+
+    Here the minimum follows heightForWidth(width()). A width change re-asks the layout,
+    so the floor stays right when the window is resized."""
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        if self.text() and self.width() > 0:
+            hint.setHeight(max(hint.height(), self.heightForWidth(self.width())))
+        return hint
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if event.oldSize().width() != event.size().width():
+            self.updateGeometry()
+
+
 class _Row:
     """The per-image UI + parse state (one worklist entry)."""
 
@@ -489,6 +556,11 @@ class _Row:
         # finished build keeps its packages browsable). See ProgressPage._sync_pkg_expand.
         self.pkg_btn: QtWidgets.QToolButton | None = None
         self.pkg_expandable = False
+        # the "Kernel config…" affordance on the Build kernel stage row + its one-way latch
+        self.platform = platform or "x86"
+        self.kernel_btn: QtWidgets.QToolButton | None = None
+        self.kernel_stage: int | None = None
+        self.kernel_ready = False
 
 
 class ProgressPage(QtWidgets.QWizardPage):
@@ -510,7 +582,16 @@ class ProgressPage(QtWidgets.QWizardPage):
         # button starts nothing and writes nothing, it only closes the Studio, so it
         # says Exit (_widgets.label_finish_as_exit).
         label_finish_as_exit(self)
-        lay = QtWidgets.QVBoxLayout(self)
+        # The page scrolls (pages/_scroll.py); the tree and the log inside it still
+        # scroll themselves. Its minimum is the total-bar block, the tree's minimum, the
+        # log header and, after a run, the saved-mesh banner, the footer lines and the
+        # Flash group. Before an outer scroll area that came to 462-671 px, in the 405 px
+        # page of the 942x552 netbook window. Qt grew the window past a 600 px screen,
+        # or laid the page out below its minimum and drew the footer over the job rows
+        # (GUI-13). With the scroll area the content keeps its minimum and the page
+        # scrolls. Where the page has room, the content fills the viewport and the
+        # splitter below still takes all the spare height.
+        lay = scrollable(self)
 
         # ── view controls: a single "Configure view" entry point above everything
         # else, so the operator can add/remove columns without hunting for a header
@@ -625,7 +706,13 @@ class ProgressPage(QtWidgets.QWizardPage):
         # per-badge child widgets — a real build has 300+ packages) and keeps every column
         # hidden until a row gives it content.
         self.flag_columns = flag_badges.FlagColumns(self.tree, _FLAG_COLS)
-        self.tree.setMinimumHeight(180)
+        # 100, down from 180: the header and about three job rows. The splitter gives
+        # the tree two shares of any spare height, so this is a FLOOR and not its size.
+        # Every pixel of it is page minimum, though. Measured on a finished mesh run (the
+        # Flash group shown, no saved-mesh banner) in the 1040x780 window of a 1080p
+        # screen: 648 px of content at 180, in a 592 px viewport, so the page scrolled.
+        # At 100 the content is 498 px and fits (GUI-13; tests/test_wizard_netbook_fit.py).
+        self.tree.setMinimumHeight(100)
         # NO setMaximumHeight: the tree is the PRIMARY surface and must grow with the
         # window. It used to be capped at 340px, which (once the stretch below was fixed)
         # left a growing band of dead grey space under it inside its own splitter pane at
@@ -634,7 +721,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_tree_menu)
 
-        self.footer = QtWidgets.QLabel("")
+        self.footer = _WrapLabel("")
         self.footer.setWordWrap(True)
         self.footer.setStyleSheet("color: gray;")
 
@@ -649,13 +736,42 @@ class ProgressPage(QtWidgets.QWizardPage):
         # A QSplitter fixes the proportions AND hands the operator the drag handle: the
         # tree pane gets stretch 2, the log pane stretch 1 (~2:1, log <= 1/3), and only the
         # LOG pane is collapsible — the tree can never be dragged shut.
-        self.splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
+        self.splitter = _FloorSplitter(Qt.Orientation.Vertical)
 
         tree_pane = QtWidgets.QWidget()
         tree_lay = QtWidgets.QVBoxLayout(tree_pane)
         tree_lay.setContentsMargins(0, 0, 0, 0)
         tree_lay.addWidget(self.tree, 1)      # stretch 1: the tree absorbs the pane
         tree_lay.addWidget(self.footer)       # the footer rides directly under the tree
+        # ── "Kernel config…" pane (hidden until a job's button or context entry opens it)
+        # Under the tree, in the TREE pane; opening it collapses the docked log body to
+        # its header (the existing collapse control — Hide restores what was there).
+        # Measured at the smallest window (942x552): a group added under the splitter, or
+        # a third splitter pane, raised the page's minimum height from 466 to 597 px —
+        # past the window. With the log collapsed while it is open the page stays inside
+        # it. The splitter itself stays the two-pane tree/log splitter its sizing code is
+        # written for.
+        self.kernel_group = QtWidgets.QGroupBox("Kernel config")
+        kg = QtWidgets.QVBoxLayout(self.kernel_group)
+        kg.setContentsMargins(6, 4, 6, 4)
+        self.kernel_panel = KernelReconfigPanel(
+            self.wiz.generator_dir, show_title=False,
+            driver_factory=lambda: self._kernel_driver())
+        # scrolled: at the smallest window the panel's controls scroll inside the pane
+        # instead of adding their whole height to the page's minimum
+        kscroll = QtWidgets.QScrollArea()
+        kscroll.setWidgetResizable(True)
+        kscroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        kscroll.setMinimumHeight(90)
+        kscroll.setWidget(self.kernel_panel)
+        self.kernel_scroll = kscroll
+        kg.addWidget(kscroll, 1)
+        kclose = QtWidgets.QPushButton("Hide (back to the log)")
+        kclose.clicked.connect(self._hide_kernel_panel)
+        kg.addWidget(kclose, 0, Qt.AlignmentFlag.AlignRight)
+        self.kernel_group.setVisible(False)
+        self._kernel_log_was_collapsed: bool | None = None
+        tree_lay.addWidget(self.kernel_group, 1)
         self.splitter.addWidget(tree_pane)
 
         # the log PANEL (header row + log + watch-help) is the unit that collapses and
@@ -707,7 +823,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.log_help_row = QtWidgets.QWidget()
         help_lay = QtWidgets.QHBoxLayout(self.log_help_row)
         help_lay.setContentsMargins(0, 0, 0, 0)
-        self.log_help = QtWidgets.QLabel("")
+        self.log_help = _WrapLabel("")
         self.log_help.setWordWrap(True)
         self.log_help.setStyleSheet("color: gray;")      # greyed, like self.footer
         # greyed help the operator cannot copy is useless — make it a real selection.
@@ -728,6 +844,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.splitter.setStretchFactor(1, 1)      # log pane:  1 share  -> ~1/3
         self.splitter.setCollapsible(0, False)    # the tree can never be dragged shut
         self.splitter.setCollapsible(1, True)     # the log can
+
         lay.addWidget(self.splitter, 1)           # the splitter absorbs ALL spare height
 
         # ── post-build "Flash to a device" group (hidden until an all-ok run finishes) ──
@@ -859,7 +976,13 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.next_fail_btn.clicked.connect(self._next_failure)
         btns.addWidget(self.next_fail_btn)
         btns.addStretch(1)
-        lay.addLayout(btns)
+        # UNDER the scroll area, not in it. In the 942x552 netbook window a running
+        # build's content is taller than the page (413 px in a 364 px viewport), so it
+        # scrolls. Stop all must not be what scrolls off. Here the row is on screen at
+        # any window size, like the wizard's own buttons, and lines up with the content.
+        m = lay.contentsMargins()
+        btns.setContentsMargins(m.left(), 0, m.right(), m.bottom())
+        self.layout().addLayout(btns)
 
         self.driver: WorklistDriver | None = None
         self.worker: _WorklistWorker | None = None
@@ -1543,6 +1666,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_plan_table.setRowCount(0)
         self.flash_plan_box.setVisible(False)
         self.flash_group.setVisible(False)        # only an all-ok finish reveals it
+        self._hide_kernel_panel()                  # only a job's Kernel config… reopens it
         self.flash_blocked_note.setVisible(False)  # ... or, where flashing cannot work, this
         self.total_bar.setRange(0, 100)
         self.total_bar.setValue(0)
@@ -1595,6 +1719,18 @@ class ProgressPage(QtWidgets.QWizardPage):
             child.setData(_COL_NAME, Qt.ItemDataRole.UserRole, (index, j))
             row.stage_items.append(child)
             self._render_stage(row, j, now)
+        kidx = _kernel_stage_index(platform)
+        if kidx is not None and kidx < len(row.stage_items):
+            kb = QtWidgets.QToolButton()
+            kb.setText(_KERNEL_BTN_TEXT)
+            kb.setAutoRaise(True)
+            kb.setStyleSheet(_PKG_EXPAND_QSS)
+            kb.setEnabled(False)
+            kb.setToolTip(_KERNEL_BTN_HINT if row.platform == "x86"
+                          else kernel_reconfig.NOT_X86.format(board=row.platform))
+            kb.clicked.connect(lambda _=False, i=index: self._open_kernel_panel(i))
+            self.tree.setItemWidget(row.stage_items[kidx], _COL_FLAGS, kb)
+            row.kernel_btn, row.kernel_stage = kb, kidx
         self._set_status(row, "queued")
         self._rows.append(row)
 
@@ -1748,6 +1884,7 @@ class ProgressPage(QtWidgets.QWizardPage):
             self._apply_state(row, row.parser.state())
             self._render_scheduler(row)
             self._sync_pkg_expand(row)
+            self._sync_kernel_btn(row)
         if touched_rows:
             self._write_status()
             self._refresh_overall()
@@ -1873,6 +2010,9 @@ class ProgressPage(QtWidgets.QWizardPage):
             self._render_stage(row, j, now)
         self._set_status(row, status)
         row.terminal = True
+        self._sync_kernel_btn(row)
+        if self.kernel_panel.image_id == row.label and not self.kernel_group.isHidden():
+            self.kernel_panel.set_running(False)
         if status == "ok" and self.driver is not None:
             # record the artifact THIS entry produced (diff vs its start baseline);
             # "" (nothing new / compressed-only output) stays unrecorded, so a flash
@@ -2233,6 +2373,59 @@ class ProgressPage(QtWidgets.QWizardPage):
             # only realistic fault here is a widget whose C++ object went away with the
             # page, and a log line about that would be noise on top of a teardown.
             return
+
+    def _sync_kernel_btn(self, row: _Row) -> None:
+        """Flip one job's "Kernel config…" from greyed to live, ONCE: the x86 kernel stage
+        is DONE (the build kept the final .config right there, before the next banner).
+        A Qt slot path on PyQt6, so every step is guarded (see _sync_pkg_expand)."""
+        if row.kernel_ready or row.kernel_btn is None or row.platform != "x86":
+            return
+        try:
+            if row.tracker.stages[row.kernel_stage].state != STAGE_DONE:
+                return
+            row.kernel_ready = True
+            row.kernel_btn.setEnabled(True)
+            row.kernel_btn.setToolTip(_KERNEL_BTN_READY_HINT)
+        except Exception:                # noqa: BLE001 - see _sync_pkg_expand
+            return
+
+    def _live_container(self, i: int) -> str:
+        """The docker container still building image ``i`` ("" when none): menuconfig
+        mid-build goes into IT (docker exec), never into a second container."""
+        try:
+            d = getattr(self.driver, "_drivers", {}).get(i)
+            if d is not None and getattr(d, "_backend", "") == "docker" and not self._rows[i].terminal:
+                return d.container_name
+        except Exception:                # noqa: BLE001
+            pass
+        return ""
+
+    def _open_kernel_panel(self, i: int) -> None:
+        """Show the inline kernel panel for job ``i`` (button and context menu)."""
+        try:
+            if not (0 <= i < len(self._rows)) or self._session is None:
+                return
+            row = self._rows[i]
+            self.kernel_group.setTitle(f"Kernel config — {row.label}")
+            self.kernel_panel.bind(self._session, row.label, image_running=not row.terminal,
+                                   live_container=self._live_container(i))
+            if self._kernel_log_was_collapsed is None:
+                self._kernel_log_was_collapsed = self.log_collapse_btn.isChecked()
+            if self._log_window is None:            # docked log: collapse to its header
+                self.log_collapse_btn.setChecked(True)
+            self.kernel_group.setVisible(True)
+        except Exception:                # noqa: BLE001 - a slot: never abort the Studio
+            traceback.print_exc()
+
+    def _hide_kernel_panel(self) -> None:
+        try:
+            self.kernel_group.setVisible(False)
+            was = self._kernel_log_was_collapsed
+            self._kernel_log_was_collapsed = None
+            if was is not None and self._log_window is None:
+                self.log_collapse_btn.setChecked(was)
+        except Exception:                # noqa: BLE001 - a slot
+            traceback.print_exc()
 
     def _expand_packages(self, i: int) -> None:
         """Open job `i`'s package list — the action behind the affordance.
@@ -2693,6 +2886,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         if not self._rows[i].terminal:
             act = menu.addAction(f"Stop {self._rows[i].label}")
             act.triggered.connect(lambda _=False, idx=i: self._stop_one(idx))
+        if self._rows[i].kernel_ready:
+            kact = menu.addAction("Kernel config…")
+            kact.triggered.connect(lambda _=False, idx=i: self._open_kernel_panel(idx))
         # §5's copy-paste guarantee: what lands on the clipboard is the KEY="…" text
         # portage itself printed, never a re-rendering of our badges.
         flags = self.flag_columns.copy_text_for(item)
@@ -2701,6 +2897,11 @@ class ProgressPage(QtWidgets.QWizardPage):
             cact.triggered.connect(lambda _=False, t=flags: self._copy_to_clipboard(t))
         if menu.actions():
             menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _kernel_driver(self):
+        from ...core.build_driver import BuildDriver
+        return BuildDriver(self.wiz.generator_dir, getattr(self.wiz, "host", None),
+                           graphical=True)
 
     def _copy_to_clipboard(self, text: str) -> None:
         """Clipboard write, guarded: a headless/clipboard-less session must never take

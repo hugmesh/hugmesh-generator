@@ -131,7 +131,7 @@ KEYS/                                 (FAT32, volume label "KEYS")
 | `timezone` | Sets the system timezone. |
 | `network.wifi.{ssid,psk,country}` | Synthesises a NetworkManager Wi-Fi profile. |
 | `network` *(or `network/*.nmconnection`)* | Verbatim NM connection profiles are also copied. |
-| `mesh.endpoint` | Mesh control-server URL override. **Empty = local-first**: defaults to the pki node's primary LAN IPv4 (`http://<lanip>:8080`), so the node works before any public DNS exists. |
+| `mesh.endpoint` | Mesh control-server URL override. **Empty = local-first**: defaults to the pki node's primary LAN IPv4 (`https://<lanip>:8080`: headscale serves TLS there with a certificate from this stick's mesh CA, see [`docs/HEADSCALE-DERP.md`](../docs/HEADSCALE-DERP.md)), so the node works before any public DNS exists. |
 | `mesh.magic_dns_domain` | The **Tailscale root domain** — the internal MagicDNS zone (headscale `dns.base_domain`) every mesh node joins. **Permanently internal**: it is `<brand>.internal` (default `hugmesh.internal`), distinct from the public `hugmesh.cluster_domain`, and is **never** go-live-flipped. `gen-provision-keys.sh` writes the effective value here (`SUPERDOMAIN` / `--superdomain`, default `<BRAND>.internal`). |
 | `mesh.cp_dns_name` | **Stable** MagicDNS control-plane name (default `kube-api.<magic_dns_domain>`) used as kubeadm `controlPlaneEndpoint` + every join target. |
 | `headscale.enabled` | Start the headscale control server (PKI node). |

@@ -155,6 +155,14 @@ source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 # destination or a dead branch all leave untouched.
 # shellcheck source=scripts/_node-storage-bake-lib.sh
 source "${SCRIPT_DIR}/scripts/_node-storage-bake-lib.sh"
+# OPTIONAL-SERVICE gate: gate_optional_services() + every _opt_* helper/renderer,
+# the ONE definition build-rpi5-stage4.sh and build-x86-host-stage4.sh source too.
+# Until 2026-11-12 this builder baked the WHOLE specs/cluster tree ungated, so a
+# Jetson cluster image applied every optional service's Application whatever was
+# selected (tests/scripts/test-selected-services-only.sh A4), including akkoma,
+# whose image is not yet published.
+# shellcheck source=scripts/_optional-services-lib.sh
+source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
 
 WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-jetson}"  # per-arch isolation (never shares the Pi/Frite/x86 sysroot)
@@ -231,6 +239,16 @@ ORG="hugmesh"
 # ENV (test|prod) selector — same semantics as the cluster builders: it shapes
 # branding/creds and gates the baked cluster tree's env apps posture.
 ENV="test"
+# OPTIONAL services baked into a cluster role's GitOps tree. The same selection
+# model and built-in default as build-rpi5-stage4.sh: the user-level set, the
+# DEFAULT-ON pair (tuwunel phpbb; akkoma is DEFAULT-OFF until its image is
+# published, images/akkoma/README.md), `all` for the whole user-level set, and
+# EXCLUDE_SERVICES subtracting last. The edge-ai and omnibus roles fold `edge-ai`
+# in (the role's own service). brand.conf narrows; --optional-services overrides
+# both. Every unselected slug is pruned from the baked tree by gate_optional_services.
+USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
+EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"
 CONFIG_FILE=""
 DEFAULT_USER="jetson"
 # NO baked default password (fleet OWASP posture): real creds come from the KEYS
@@ -274,6 +292,11 @@ DLV_OFFLINE_KEYRING="${DLV_OFFLINE_KEYRING:-${SCRIPT_DIR}/scripts/gentoo-release
 # Mesh VPN (installed as upstream static arm64 binaries, not emerged) — IDENTICAL
 # to the Pi5/Frite images so the Orin joins the same headscale/tailscale mesh.
 HEADSCALE_VERSION="0.23.0"
+# Opt-in: ALSO list Tailscale's public DERP map in headscale. Default OFF: the pki
+# node's headscale runs its embedded relay only, so the mesh starts and relays
+# offline (docs/HEADSCALE-DERP.md). --headscale-public-derp or env/brand.conf
+# HEADSCALE_PUBLIC_DERP=true bakes /etc/hugmesh/headscale-public-derp.
+HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
@@ -352,6 +375,21 @@ OPTIONS
     -H hostname / -T timezone / -u user
     -C, --config FILE   drop-in brand.conf profile (sourced; CLI overrides it).
 
+  Optional cluster services  (cluster roles; specs/cluster/optional-services.yaml)
+    --optional-services "<slugs>"
+                        Space- or comma-separated slugs to bake: akkoma tuwunel
+                        phpbb games owncast tube character-studio character-forge
+                        (plus edge-ai, tor, ... as on the other builders), or
+                        "all". Unlisted slugs are pruned from the baked GitOps tree
+                        by gate_optional_services. Built-in DEFAULT is "tuwunel
+                        phpbb"; --role edge-ai and --role omnibus add edge-ai.
+                        akkoma is DEFAULT-OFF (image not yet published).
+                        (env/brand.conf: OPTIONAL_SERVICES)
+    --all-services      The whole user-level set (= --optional-services all).
+    --exclude-services "<slugs>"
+                        Remove these slugs last, however they were selected.
+                        (env/brand.conf: EXCLUDE_SERVICES)
+
   Image
     --img / --no-img    build / skip the flashable raw .img (default: build).
     --img-size MiB      ext4 root size in the .img (default per role; growroot
@@ -365,6 +403,8 @@ OPTIONS
 
   Mesh / radios  (same as the Pi5/Frite builders)
     --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
+    --headscale-public-derp  Also list Tailscale's public DERP map (default: the
+                            embedded relay only — offline-first, docs/HEADSCALE-DERP.md).
     --with-tailscale      Keep the tailnet client on a --standalone desktop (dropped
                           by default) so the greeter SSO can reach an IdP over a
                           tailnet; the image stays standalone (ungoverned).
@@ -495,6 +535,9 @@ while [[ $# -gt 0 ]]; do
         -H|--hostname)        HOSTNAME="$2";              shift 2 ;;
         -C|--config)          CONFIG_FILE="$2";           shift 2 ;;  # sourced above
         --env)                ENV="$2";                   shift 2 ;;
+        --optional-services)  OPTIONAL_SERVICES="$2";     shift 2 ;;
+        --all-services)       OPTIONAL_SERVICES="all";    shift   ;;
+        --exclude-services)   EXCLUDE_SERVICES="$2";      shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2";   shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
         --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
@@ -519,6 +562,7 @@ while [[ $# -gt 0 ]]; do
         --packages-add)       PACKAGES_ADD="$2";          shift 2 ;;
         --packages-drop)      PACKAGES_DROP="$2";         shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";     shift 2 ;;
+        --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";     shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;      shift   ;;
@@ -549,6 +593,12 @@ while [[ $# -gt 0 ]]; do
         *)  err "Unexpected argument: $1"; echo "    Run with --help for usage." >&2; exit 1 ;;
     esac
 done
+# --headscale-public-derp / HEADSCALE_PUBLIC_DERP: one spelling, checked before any work.
+case "${HEADSCALE_PUBLIC_DERP}" in
+    true|1|yes|on)   HEADSCALE_PUBLIC_DERP=true ;;
+    false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
+    *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
+esac
 
 # Default work directory: ./out under CWD (local + gitignored)
 [ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/out"
@@ -620,6 +670,45 @@ case "${ROLE}" in
         exit 1 ;;
 esac
 
+# ── OPTIONAL-SERVICE selection: resolve it here, after the role (edge-ai folds
+# in) and before --print-plan, so the plan states what the gate will keep. The
+# same order as build-rpi5-stage4.sh: commas -> negative-only veto -> `all` ->
+# role fold -> EXCLUDE_SERVICES last. The rules shared with the other builders
+# (_opt_negative_only_keeps_defaults, _opt_negative_tokens) come from
+# scripts/_optional-services-lib.sh.
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
+_opt_negative_only_keeps_defaults
+case " ${OPTIONAL_SERVICES} " in
+    *" all "*)
+        _opt_neg="$(_opt_negative_tokens)"
+        OPTIONAL_SERVICES="${USER_LEVEL_SERVICES}${_opt_neg}"
+        unset _opt_neg
+        info "OPTIONAL_SERVICES: 'all' sentinel expanded to every user-level slug: ${OPTIONAL_SERVICES}"
+        ;;
+esac
+# The edge-ai and omnibus roles exist to run the edge-ai service, so the role
+# selects it. An operator who does not want it builds --role backend-gpu, or
+# lists it in EXCLUDE_SERVICES.
+if ${EDGE_AI}; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" edge-ai "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES:+${OPTIONAL_SERVICES} }edge-ai" ;;
+    esac
+fi
+if [ -n "${EXCLUDE_SERVICES//[[:space:],]/}" ]; then
+    _excl_x=""
+    for _x in ${EXCLUDE_SERVICES//,/ }; do
+        _kept=""
+        for _s in ${OPTIONAL_SERVICES}; do
+            [ "${_s}" = "${_x}" ] || _kept="${_kept} ${_s}"
+        done
+        OPTIONAL_SERVICES="${_kept# }"
+        _excl_x="${_excl_x} ${_x}"
+    done
+    info "OPTIONAL_SERVICES: EXCLUDE_SERVICES removed:${_excl_x} (final selection: ${OPTIONAL_SERVICES:-none})"
+    unset _excl_x _x _s _kept
+fi
+
 # ── STANDALONE posture (composable onto --role desktop only — a k8s cluster
 # role can't be a standalone appliance) ─────────────────────────────────────
 # --sso-issuer names the IdP, so it means SSO ON (also on a standalone desktop,
@@ -650,6 +739,13 @@ if ${STANDALONE}; then
     [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
     info "STANDALONE desktop: $([ "${MESH_FORCED}" = on ] && echo 'tailnet client kept (--with-tailscale), no mesh association' || echo 'no mesh'); local user '${LOCAL_USER}'; LUKS2-encrypted root"
 fi
+
+# tailscaled version floor (scripts/_download-lib.sh): the shared init script passes
+# --no-logs-no-support, which tailscaled only accepts from 1.32.0 on. Refuse an older
+# --tailscale-version HERE, after the --standalone posture above has settled whether
+# tailscale ships at all and before any download, instead of shipping a mesh client
+# that exits on an unknown flag.
+${SKIP_MESH} || ${SKIP_TAILSCALE} || dlv_tailscale_version_ok "${TAILSCALE_VERSION}" || exit 1
 
 # ── --encrypt-root on a headless k8s role: this platform's disk-boot
 # initramfs only supports an interactive passphrase prompt (no keyfile/
@@ -889,7 +985,7 @@ if ${PRINT_PLAN}; then
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
     _plan HOSTNAME           "${HOSTNAME}"
-    _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || { ${EDGE_AI} && echo edge-ai || echo none; })"
+    _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo "n/a (role=desktop; no cluster GitOps tree baked)" || echo "${OPTIONAL_SERVICES:-none}")"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan STANDALONE         "${STANDALONE}"
     _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
@@ -1838,16 +1934,18 @@ chmod +x "${SYSROOT}/usr/share/hugmesh/generator/scripts/gen-keystores.sh" "${SY
 # ── Cluster GitOps tree (k8s roles only) — the SAME shared specs/cluster tree
 # the rpi5/x86 node builders bake; the edge-ai manifests are arch-portable
 # (Ollama ships arm64 + Jetson images; nvidia-device-plugin/RuntimeClass apply
-# on arm64 GPU nodes). EXPERIMENTAL note: this bakes the WHOLE tree — the
-# per-slug optional-services pruning gate (gate_optional_services) is NOT
-# replicated here yet; ArgoCD's installed-services ConfigMap still gates
-# activation at runtime. Revisit with hardware validation. ──────────
+# on arm64 GPU nodes). gate_optional_services then prunes every optional
+# service not in OPTIONAL_SERVICES and renders the install-state artefacts
+# (installed-services ConfigMap, 13a ApplicationSet flags, seed OptionalService
+# CRs, federation gate.sql) from the same selection, exactly as on rpi5/x86.
+# bootstrap.sh applies the baked apps/ tree, so this prune IS the deployed set. ──
 if [ "${ROLE_K8S}" != "none" ]; then
     if [ -d "${SHARED_SPECS}/cluster" ]; then
         mkdir -p "${SYSROOT}/var/lib/hugmesh"
         rm -rf "${SYSROOT}/var/lib/hugmesh/cluster"
         cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/hugmesh/cluster"
         info "Baked shared cluster GitOps tree -> /var/lib/hugmesh/cluster (role=${ROLE})"
+        gate_optional_services     # prune OPTIONAL services not in OPTIONAL_SERVICES
     else
         warn "shared specs/cluster tree not found — k8s role '${ROLE}' will have no baked GitOps tree"
     fi
@@ -1871,6 +1969,16 @@ echo "${KERNEL_FLAVOR}"  > "${SYSROOT}/etc/hugmesh/kernel-flavor"
 if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/hugmesh/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/hugmesh/headscale-url"
+fi
+# Public Tailscale DERP map opt-in (default OFF: headscale's embedded relay only).
+# keys-provision reads the marker at first boot; provision.json .headscale.public_derp
+# outranks it either way.
+if [ "${HEADSCALE_PUBLIC_DERP}" = true ]; then
+    mkdir -p "${SYSROOT}/etc/hugmesh"
+    echo true > "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+    info "Baked HEADSCALE_PUBLIC_DERP=true -> /etc/hugmesh/headscale-public-derp (public Tailscale DERP map opted in)"
+else
+    rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
 fi
 if ${STANDALONE}; then
     # STANDALONE desktop: bake the marker so keys-provision skips all
@@ -2236,7 +2344,7 @@ else
             bash scripts/kconfig/merge_config.sh -m .config "${_kernel_fragments[@]}"
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
         # Refuse to ship a kernel that silently lost SELinux (fleet posture guard).
-        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
+        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM CONFIG_SECURITY_SELINUX_DEVELOP; do
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
         grep -q '^CONFIG_LSM="lockdown,yama,selinux"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux); lockdown/SELinux would not activate"; exit 1; }
@@ -2500,6 +2608,23 @@ if [ ! -f "${SYSROOT}/boot/${JETSON_KERNEL_IMG}" ]; then
     fi
 fi
 
+# ── NetworkManager: no connectivity probe (non-desktop roles) ──
+# The networkmanager package ships /usr/lib/NetworkManager/conf.d/20-connectivity.conf,
+# which polls a fixed public URL (nmcheck.gnome.org) every few minutes, forever: an
+# unsolicited phone-home from a self-hosted mesh, and DNS noise on an offline or
+# egress-filtered LAN. A node or edge-AI box has no captive portal to detect; --role desktop keeps
+# the package default, because captive-portal detection is useful on a person's desktop. 90- so it sorts after the package's
+# own conf.d files. Pinned by tests/scripts/test-node-telemetry-off.sh.
+if ! ${ROLE_CLIENT}; then
+    mkdir -p "${SYSROOT}/etc/NetworkManager/conf.d"
+    printf '%s\n' \
+        '# Written by the HugMesh builder (non-desktop role): no connectivity probe' \
+        '# to a public URL. Delete this file to restore the package default.' \
+        '[connectivity]' \
+        'enabled=false' > "${SYSROOT}/etc/NetworkManager/conf.d/90-hugmesh-no-connectivity-check.conf"
+    info "NetworkManager: connectivity check OFF (non-desktop role — no public probe URL)"
+fi
+
 # ── BEGIN shared block: SELinux node-policy modules ───────────────────────────
 # Compile specs/selinux/*.te into .pp ON THE X86 BUILD HOST and install them into
 # ${SYSROOT}/usr/share/selinux/<type>/ — the exact directory provision_selinux()
@@ -2513,6 +2638,16 @@ fi
 # The image still boots PERMISSIVE: the enforce-gate service ships INERT (not in
 # any runlevel, /etc/conf.d/selinux-enforce-gate SELINUX_ENFORCE_GATE=no) unless
 # HUGMESH_SELINUX_ENFORCE_GATE=1 is set at build time. See the lib header for why.
+# /srv + the portage-tmpdir.conf mask: systemd-tmpfiles-setup otherwise creates both
+# in "/" at every boot and is denied under enforcing (see the lib; #863 refute,
+# blocker 3: this used to ship on x86 only).
+slx_ship_bootpath_files "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "could not ship the SELinux boot-path files (/srv, portage-tmpdir.conf mask)"; exit 1; }
+# Cross-built python extensions can carry the build host's x86_64 suffix, and the
+# target python then cannot import them: semanage died with "No module named
+# '_semanage'" on the #944 rpi5 image, so the root login mapping failed (see the lib).
+slx_fix_cross_python_ext "${SYSROOT}" aarch64 \
+    || { err "could not give the cross-built python extensions the target's suffix (semanage would not import on the node)"; exit 1; }
 slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
     || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
 # ── END shared block: SELinux node-policy modules ─────────────────────────────

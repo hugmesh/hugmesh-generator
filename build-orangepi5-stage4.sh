@@ -194,6 +194,9 @@ source "${SCRIPT_DIR}/scripts/_node-storage-bake-lib.sh"
 # calls anything from either file).
 # shellcheck source=scripts/_optional-services-lib.sh
 source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
+# prod_gate_cluster_tree, called by the Pi builder's gate_env_apps for ENV=prod.
+# shellcheck source=scripts/_prod-gate-lib.sh
+source "${SCRIPT_DIR}/scripts/_prod-gate-lib.sh"
 # shellcheck source=scripts/_node-role-lib.sh
 source "${SCRIPT_DIR}/scripts/_node-role-lib.sh"
 
@@ -262,6 +265,11 @@ RAM_GB=""                                       # --ram-gb N : GB of RAM on the 
 NODE_ROLE=false                                 # true for a cluster NODE role (pki backend frontend omnibus); false for the desktop
 ROLE_CLIENT=true                                # the Pi gate functions read this: false on a node role
 CLUSTER_ARGS_GIVEN=""                           # cluster-choice flags given (--release-state, --idp, ...); a desktop refuses them
+# Pinned first-party release tag for an ENV=prod NODE role (--release-tag): the Pi
+# gate_env_apps pins the baked tree's floating `:dev` images to it. Same default and
+# check as build-rpi5-stage4.sh / build-x86-host-stage4.sh, so an explicit empty
+# --release-tag is refused here exactly as it is there.
+RELEASE_TAG="${RELEASE_TAG:-$(date -u +%Y%m%d)}"
 GROW_POLICY="fill"
 COMPRESS_IMG=false
 COMPRESS_LEVEL=9        # xz preset --compress uses (0-9); --compress-level N
@@ -330,6 +338,11 @@ DLV_OFFLINE_KEYRING="${DLV_OFFLINE_KEYRING:-${SCRIPT_DIR}/scripts/gentoo-release
 # Mesh VPN (installed as upstream static arm64 binaries, not emerged) — IDENTICAL
 # to the Frite/Pi5 client images so this board joins the same headscale/tailscale mesh.
 HEADSCALE_VERSION="0.23.0"
+# Opt-in: ALSO list Tailscale's public DERP map in headscale. Default OFF: the pki
+# node's headscale runs its embedded relay only, so the mesh starts and relays
+# offline (docs/HEADSCALE-DERP.md). --headscale-public-derp or env/brand.conf
+# HEADSCALE_PUBLIC_DERP=true bakes /etc/hugmesh/headscale-public-derp.
+HEADSCALE_PUBLIC_DERP="${HEADSCALE_PUBLIC_DERP:-false}"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
@@ -416,6 +429,10 @@ OPTIONS
 
   Branding / env / system  (same knobs as the other builders)
     --brand / --brand-title / --org / --cluster-domain / --env test|prod
+    --release-tag TAG   NODE roles only, used by --env prod: the tag the baked
+        cluster tree's first-party :dev images are pinned to. Letters, digits,
+        . _ - only, and not dev/main/latest; a bad tag is refused before the
+        build starts. Default: the UTC build date (YYYYMMDD).
     --domain-idp DOMAIN=own|superdomain   (repeatable) Casdoor for DOMAIN's sign-in:
         own = a dedicated instance, superdomain = the mesh's (default; bakes
         nothing). Only `own` is baked: /etc/hugmesh/domain-idp. DOMAIN must be
@@ -436,6 +453,8 @@ OPTIONS
 
   Mesh / radios  (same as the Frite/Pi5 builders)
     --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
+    --headscale-public-derp  Also list Tailscale's public DERP map (default: the
+                            embedded relay only — offline-first, docs/HEADSCALE-DERP.md).
     --with-tailscale      Keep the tailnet client on a --standalone desktop (dropped
                           by default) so the greeter SSO can reach an IdP over a
                           tailnet; the image stays standalone (ungoverned).
@@ -598,6 +617,7 @@ while [[ $# -gt 0 ]]; do
         --packages-add)       PACKAGES_ADD="$2";          shift 2 ;;
         --packages-drop)      PACKAGES_DROP="$2";         shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";     shift 2 ;;
+        --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";     shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;      shift   ;;
@@ -616,6 +636,7 @@ while [[ $# -gt 0 ]]; do
         # same spellings the Raspberry Pi builder parses; validated after the role is
         # known by node_role_resolve_cluster_choices (scripts/_node-role-lib.sh).
         --release-state)      RELEASE_STATE="$2";      CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
+        --release-tag)        RELEASE_TAG="$2";        CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
         --games-domain)       GAMES_DOMAIN="$2";       CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
         --optional-services)  OPTIONAL_SERVICES="$2";  CLUSTER_ARGS_GIVEN+=" $1"; shift 2 ;;
         --all-services)       OPTIONAL_SERVICES="all"; CLUSTER_ARGS_GIVEN+=" $1"; shift   ;;
@@ -642,6 +663,12 @@ while [[ $# -gt 0 ]]; do
         *)  err "Unexpected argument: $1"; echo "    Run with --help for usage." >&2; exit 1 ;;
     esac
 done
+# --headscale-public-derp / HEADSCALE_PUBLIC_DERP: one spelling, checked before any work.
+case "${HEADSCALE_PUBLIC_DERP}" in
+    true|1|yes|on)   HEADSCALE_PUBLIC_DERP=true ;;
+    false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
+    *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
+esac
 
 # Default work directory: ./out under CWD (local + gitignored)
 [ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/out"
@@ -714,6 +741,12 @@ if ${NODE_ROLE}; then
     # validated and resolved exactly as the Pi does; a host-daemon slug this board
     # does not carry (tor, egress-vpn, domain-registry-bridge) is refused.
     node_role_resolve_cluster_choices orangepi5 || exit 1
+    # ENV=prod pins the baked tree's first-party :dev image tags to RELEASE_TAG
+    # (--release-tag, or the UTC-date default above); refuse a floating or
+    # malformed tag now, not after the emerge phase (scripts/_prod-gate-lib.sh).
+    if [ "${ENV}" = "prod" ]; then
+        prod_gate_validate_release_tag "${RELEASE_TAG}" || exit 1
+    fi
 else
     if [ -n "${RAM_GB}" ]; then
         warn "--ram-gb ${RAM_GB} is ignored for the desktop (no RAM floor on it)."
@@ -783,6 +816,13 @@ if ${STANDALONE}; then
     BUILD_INSTALLER=true        # guarantee the installer artifact (the FDE path)
     info "STANDALONE desktop: $([ "${MESH_FORCED}" = on ] && echo 'tailnet client kept (--with-tailscale), no mesh association' || echo 'no mesh'); local user '${LOCAL_USER}'; LUKS2 FDE on install"
 fi
+
+# tailscaled version floor (scripts/_download-lib.sh): the shared init script passes
+# --no-logs-no-support, which tailscaled only accepts from 1.32.0 on. Refuse an older
+# --tailscale-version HERE, after the --standalone posture above has settled whether
+# tailscale ships at all and before any download, instead of shipping a mesh client
+# that exits on an unknown flag.
+${SKIP_MESH} || ${SKIP_TAILSCALE} || dlv_tailscale_version_ok "${TAILSCALE_VERSION}" || exit 1
 # --encrypt-root composed onto a plain (non-standalone) build also needs the
 # installer flavor — LUKS is laid down by install-orangepi5.sh, not the live medium.
 ${ENCRYPT_ROOT} && BUILD_INSTALLER=true
@@ -1977,6 +2017,16 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/hugmesh/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/hugmesh/headscale-url"
 fi
+# Public Tailscale DERP map opt-in (default OFF: headscale's embedded relay only).
+# keys-provision reads the marker at first boot; provision.json .headscale.public_derp
+# outranks it either way.
+if [ "${HEADSCALE_PUBLIC_DERP}" = true ]; then
+    mkdir -p "${SYSROOT}/etc/hugmesh"
+    echo true > "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+    info "Baked HEADSCALE_PUBLIC_DERP=true -> /etc/hugmesh/headscale-public-derp (public Tailscale DERP map opted in)"
+else
+    rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+fi
 if ${STANDALONE}; then
     # STANDALONE desktop: bake the marker so keys-provision skips all
     # mesh-seeking no-ops and a normal LOCAL USER logs in with the build-set
@@ -2445,7 +2495,7 @@ else
         fi
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
         # Refuse to ship a kernel that silently lost SELinux (fleet posture guard).
-        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
+        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM CONFIG_SECURITY_SELINUX_DEVELOP; do
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
         if ${NODE_ROLE}; then
@@ -2794,6 +2844,23 @@ if ${ENCRYPT_ROOT} && ${BUILD_INSTALLER} && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY};
     fi
 fi
 
+# ── NetworkManager: no connectivity probe (cluster-node roles) ──
+# The networkmanager package ships /usr/lib/NetworkManager/conf.d/20-connectivity.conf,
+# which polls a fixed public URL (nmcheck.gnome.org) every few minutes, forever: an
+# unsolicited phone-home from a self-hosted mesh, and DNS noise on an offline or
+# egress-filtered LAN. A server has no captive portal to detect; the desktop keeps the package
+# default, because captive-portal detection is useful on a person's desktop. 90- so it sorts after the package's
+# own conf.d files. Pinned by tests/scripts/test-node-telemetry-off.sh.
+if ! ${ROLE_CLIENT}; then
+    mkdir -p "${SYSROOT}/etc/NetworkManager/conf.d"
+    printf '%s\n' \
+        '# Written by the HugMesh builder (cluster-node role): no connectivity probe' \
+        '# to a public URL. Delete this file to restore the package default.' \
+        '[connectivity]' \
+        'enabled=false' > "${SYSROOT}/etc/NetworkManager/conf.d/90-hugmesh-no-connectivity-check.conf"
+    info "NetworkManager: connectivity check OFF (cluster-node role — no public probe URL)"
+fi
+
 # ── BEGIN shared block: SELinux node-policy modules ───────────────────────────
 # Compile specs/selinux/*.te into .pp ON THE X86 BUILD HOST and install them into
 # ${SYSROOT}/usr/share/selinux/<type>/ — the exact directory provision_selinux()
@@ -2807,6 +2874,16 @@ fi
 # The image still boots PERMISSIVE: the enforce-gate service ships INERT (not in
 # any runlevel, /etc/conf.d/selinux-enforce-gate SELINUX_ENFORCE_GATE=no) unless
 # HUGMESH_SELINUX_ENFORCE_GATE=1 is set at build time. See the lib header for why.
+# /srv + the portage-tmpdir.conf mask: systemd-tmpfiles-setup otherwise creates both
+# in "/" at every boot and is denied under enforcing (see the lib; #863 refute,
+# blocker 3: this used to ship on x86 only).
+slx_ship_bootpath_files "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "could not ship the SELinux boot-path files (/srv, portage-tmpdir.conf mask)"; exit 1; }
+# Cross-built python extensions can carry the build host's x86_64 suffix, and the
+# target python then cannot import them: semanage died with "No module named
+# '_semanage'" on the #944 rpi5 image, so the root login mapping failed (see the lib).
+slx_fix_cross_python_ext "${SYSROOT}" aarch64 \
+    || { err "could not give the cross-built python extensions the target's suffix (semanage would not import on the node)"; exit 1; }
 slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
     || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
 # ── END shared block: SELinux node-policy modules ─────────────────────────────

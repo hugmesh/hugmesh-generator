@@ -28,3 +28,30 @@ LABEL orangepi5
     FDT /dtb/@@OPI5_DTB@@
 @@OPI5_INITRD_LINE@@
     APPEND @@OPI5_APPEND@@
+
+# ── SELinux entries (#863 refute, blockers 3 and 4) ─────────────────────────────
+# DEFAULT above is unchanged; these two are picked from the boot menu on the serial
+# console (U-Boot shows it because of the MENU TITLE line; the Jetson's L4TLauncher
+# lists every LABEL). Same kernel, FDT, initrd and cmdline as the default, plus ONE
+# token: the kernel takes the LAST enforcing=, and libselinux lets it override
+# /etc/selinux/config.
+#   orangepi5-selinux-rescue          enforcing=0  boot a node whose enforcing policy
+#                                   breaks its boot (permissive, for this boot only)
+#   orangepi5-selinux-enforcing-test  enforcing=1  try enforcing for ONE boot without
+#                                   touching /etc/selinux/config
+# The installers rewrite root= with a per-line sed, so these APPEND lines get the
+# installed root= exactly like the default's.
+
+LABEL orangepi5-selinux-rescue
+    MENU LABEL @@BRAND_TITLE@@ light desktop (SELinux permissive rescue)
+    LINUX /@@OPI5_KERNEL_IMG@@
+    FDT /dtb/@@OPI5_DTB@@
+@@OPI5_INITRD_LINE@@
+    APPEND @@OPI5_APPEND@@ enforcing=0
+
+LABEL orangepi5-selinux-enforcing-test
+    MENU LABEL @@BRAND_TITLE@@ light desktop (SELinux enforcing (test))
+    LINUX /@@OPI5_KERNEL_IMG@@
+    FDT /dtb/@@OPI5_DTB@@
+@@OPI5_INITRD_LINE@@
+    APPEND @@OPI5_APPEND@@ enforcing=1

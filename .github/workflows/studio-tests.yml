@@ -67,6 +67,13 @@ on:
       - 'scripts/build-all-roles.sh'
       - 'scripts/_roles-lib.sh'
       - 'build-rpi5-stage4.sh'
+      # studio/tests/test_studio_installers_doc.py holds the installers page's "clone
+      # hugmesh-generator" rows to the release jobs that prove a package carries the
+      # tree. The page and the release workflow are both outside studio/, and a change
+      # to either alone (a seed step added to the MSI job, a row edited) is exactly the
+      # drift that guard exists to catch.
+      - 'docs/STUDIO-INSTALLERS.md'
+      - '.github/workflows/studio-release.yml'
   # A PUSH to main, for the Studio release machinery only. The release guard tests
   # (test_studio_beta_version.py, test_studio_release_signing.py,
   # test_studio_release_cut.py) parse the release workflows, and on 2026-10-22/23
@@ -370,3 +377,248 @@ jobs:
           tests/test_ollama_docker.py
           tests/test_local_ai_dock.py
           tests/test_local_ai_dock_pull.py
+
+  macos:
+    # The macOS app: "HugMesh Image Studio.app" in a .dmg, for Apple silicon and Intel.
+    # A Mac runs the Studio as a POSIX program whose builds go through a Docker VM
+    # (Docker Desktop, colima or OrbStack), like Windows and unlike Linux; the darwin
+    # branches in core/ are unit-tested on Linux with an injected sys.platform, and THIS
+    # job is where they meet a real Mac: real diskutil/sysctl output, real /bin/bash 3.2,
+    # a real Finder-style PATH, a real cocoa window.
+    #
+    # NAMED FILES, as in the windows job: these are the macOS contract, and a new macOS
+    # fix adds its test here. Then packaging/build-macos-app.sh freezes, checks,
+    # smoke-tests and packs the app. studio-release.yml has no macOS job yet (the .dmg
+    # is not on a release); when it gets one it must run this SAME script, so that what
+    # a pull request proves is what the release ships.
+    #
+    # macos-15 is Apple silicon (arm64) and macos-15-intel is x86_64; both are GitHub's
+    # standard hosted images, pinned by version rather than macos-latest so the
+    # minimum-macOS floor the bundle is tested on does not move silently. No Docker on
+    # either (hosted macOS runners have no nested virtualisation), so a Mac BUILD of an
+    # image is not proven here; the Studio says so (EXPERIMENTAL) in its preflight.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: studio/packaging/macos-build-requirements.txt
+
+      - name: Record the host facts the darwin code parses
+        # What core/macos_host.py and core/flash_targets.py read on a Mac, captured from
+        # the runner itself, so the test fixtures are this output and not someone's
+        # memory of it. Never fails the job; the files are uploaded below.
+        continue-on-error: true
+        run: |
+          out="$RUNNER_TEMP/host-facts"
+          mkdir -p "$out"
+          cap() { name=$1; shift; "$@" > "$out/$name" 2>&1 || echo "exit $?" >> "$out/$name"; }
+          cap uname.txt uname -a
+          cap sw_vers.txt sw_vers
+          cap sysctl.txt sysctl hw.optional.arm64 kern.hv_support hw.memsize hw.ncpu machdep.cpu.brand_string kern.osproductversion
+          cap bash-bin.txt /bin/bash --version
+          cap bash-path.txt bash --version
+          cap which.txt which -a bash sed make readlink find grep awk xz qemu-system-x86_64 docker colima
+          cap gnu.txt sh -c 'sed --version | head -1; make --version | head -1; readlink --version | head -1; find --version | head -1; grep --version | head -1; awk --version | head -1'
+          cap brew-opt.txt ls /opt/homebrew/opt /usr/local/opt
+          cap diskutil-list.plist diskutil list -plist
+          cap diskutil-list-external.plist diskutil list -plist external physical
+          cap diskutil-info-root.plist diskutil info -plist /
+          cap diskutil-apfs.plist diskutil apfs list -plist
+          cap launchctl.txt launchctl managername
+          cap env-path.txt sh -c 'echo "$PATH"'
+          ls -la "$out"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-host-facts-${{ matrix.arch }}
+          path: ${{ runner.temp }}/host-facts
+          retention-days: 14
+
+      - name: Install the pinned build dependencies, then pytest
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --only-binary=:all: -r studio/packaging/macos-build-requirements.txt
+          "$RUNNER_TEMP/venv/bin/python" -m pip install pytest PyYAML jsonschema
+          "$RUNNER_TEMP/venv/bin/python" -m pip freeze
+          "$RUNNER_TEMP/venv/bin/python" -c "import PySide6.QtCore as q; print('PySide6', q.qVersion())"
+
+      - name: Run the macOS contract
+        working-directory: studio
+        env:
+          QT_QPA_PLATFORM: offscreen
+        # -v: the tests marked "needs a real Mac" are this job's proof, so each one is
+        # named in the log as PASSED rather than folded into a row of dots.
+        run: >-
+          "$RUNNER_TEMP/venv/bin/python" -m pytest -v -rs
+          tests/test_macos_packaging.py
+          tests/test_macos_host.py
+          tests/test_platform_macos.py
+          tests/test_macos_terminals.py
+          tests/test_entry_bootstrap.py
+          tests/test_macos_docker_cpus.py
+          tests/test_macos_stock_texts.py
+          tests/test_macos_stock_texts_gui.py
+          tests/test_pages_build_macos.py
+
+      - name: A stock Mac - the self-check names the missing GNU tools and exits 1
+        # Before Homebrew's GNU tools are installed: macOS's own bash 3.2 and BSD sed,
+        # find, grep and stat. Run from the checkout with launchd's PATH (what a Finder
+        # launch gets); the refusal must name each missing formula and the brew line.
+        run: |
+          set +e
+          env -i HOME="$RUNNER_TEMP/stock-home" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            PYTHONPATH="$GITHUB_WORKSPACE/studio" \
+            "$RUNNER_TEMP/venv/bin/python" -m hugmesh_studio --self-check --json \
+            --generator-dir "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/stock.json"
+          rc=$?
+          set -e
+          "$RUNNER_TEMP/venv/bin/python" studio/packaging/check_macos_bundle.py \
+            --self-check-report "$RUNNER_TEMP/stock.json" --exit-code "$rc" --require-gnu 0
+          "$RUNNER_TEMP/venv/bin/python" - "$RUNNER_TEMP/stock.json" <<'PY'
+          import json, sys
+          mac = json.load(open(sys.argv[1]))["macos"]
+          want = {"bash", "gnu-sed", "coreutils", "findutils", "grep"}
+          missing = set(mac["gnu_missing"])
+          assert want <= missing, f"a stock Mac should lack {sorted(want - missing)}: {mac}"
+          print("stock Mac refused as it should:", sorted(missing))
+          PY
+
+      - name: Install the GNU userland the docs ask for
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: brew install bash coreutils gnu-sed findutils grep make
+
+      - name: Build, check and smoke-test the app, then pack the .dmg
+        run: >-
+          bash studio/packaging/build-macos-app.sh
+          --python "$RUNNER_TEMP/venv/bin/python"
+          --arch ${{ matrix.arch }}
+          --dist "$RUNNER_TEMP/dist"
+          --gui-smoke
+          --require-gnu
+
+      - name: From the checkout, with launchd's PATH - the whole self-check passes
+        # The half the frozen app cannot do (it has no Python sources to list the
+        # generator paths from): every path and make target the Studio names, and
+        # `bash -n` on every script, with the bash 5 the PATH hook found.
+        run: |
+          env -i HOME="$RUNNER_TEMP/full-home" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            PYTHONPATH="$GITHUB_WORKSPACE/studio" \
+            "$RUNNER_TEMP/venv/bin/python" -m hugmesh_studio --self-check --json \
+            --generator-dir "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/full.json"
+          "$RUNNER_TEMP/venv/bin/python" - "$RUNNER_TEMP/full.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          print(json.dumps({k: r.get(k) for k in ("checked_paths", "scripts_parsed", "macos", "problems")}, indent=1))
+          assert r["macos"]["gnu_missing"] == [] and r["macos"]["bash_major"] >= 4, r["macos"]
+          assert r["checked_paths"] > 0 and r["scripts_parsed"] > 0, "a vacuous self-check"
+          assert not r["problems"], r["problems"]
+          PY
+
+      - name: With launchd's PATH - the text UI and a module command line find the GNU tools too
+        # The PATH hook used to run for the window only. Homebrew leaves its GNU tools
+        # in <prefix>/opt/<formula>/libexec/gnubin, off every shell's PATH, so the text
+        # UI and `python -m hugmesh_studio.core.<module>` refused a Mac that HAD run the
+        # brew line. Both are started here with the PATH a Finder launch gets, against
+        # the runner's real Homebrew: first shown to lack the tools without the hook
+        # (so this proves something), then driven through their real entries.
+        run: |
+          env -i HOME="$RUNNER_TEMP/tui-home" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            PYTHONPATH="$GITHUB_WORKSPACE/studio" GEN="$GITHUB_WORKSPACE" \
+            "$RUNNER_TEMP/venv/bin/python" - <<'PY'
+          import io, os, subprocess, sys
+          from hugmesh_studio.core import macos_host, platform_info
+          before = macos_host.gnu_userland_missing()
+          assert before, "launchd's PATH already holds the GNU tools: the hook proves nothing"
+          print("without the hook this PATH lacks:", before)
+          finder_env = dict(os.environ)
+          from hugmesh_studio.tui import app as tui
+          rc = tui.main(["--worklist", "no-such-session"], inp=io.StringIO(""), out=io.StringIO())
+          assert rc == 2, rc
+          assert macos_host.gnu_userland_missing() == [], macos_host.gnu_userland_missing()
+          said = platform_info.host_script_blocker("Mesh emulation")
+          assert said == "", said
+          print("text UI entry: the GNU tools are found; PATH now starts", os.environ["PATH"].split(":")[:3])
+          # a module command line, in a process of its own, from the same Finder PATH
+          cli = subprocess.run(
+              [sys.executable, "-m", "hugmesh_studio.core.cloud_deploy", "list",
+               "--generator-dir", os.environ["GEN"]],
+              env=finder_env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+              timeout=300)
+          out = cli.stdout + cli.stderr
+          print("cloud_deploy list: exit", cli.returncode)
+          print(out[:2000])
+          assert "this Mac is missing" not in out, "the module command line was refused"
+          PY
+
+      - name: The case-sensitive APFS volume the build preflight asks for
+        # The remedy the build preflight prints for a case-folding output folder, run
+        # for real: add the volume to the boot container, check that a folder on it
+        # does NOT fold case (that is what clears the refusal) while the default volume
+        # still does, then delete it. It says whether addVolume and the folder needed
+        # sudo, because the remedy text has to say so too.
+        run: |
+          container=$(diskutil info -plist / | plutil -extract APFSContainerReference raw -)
+          echo "boot container: $container"
+          if diskutil apfs addVolume "$container" 'Case-sensitive APFS' HugMeshProbe; then
+            echo "PROBE addVolume: as the user, no sudo"
+          else
+            echo "PROBE addVolume: needed sudo"
+            sudo diskutil apfs addVolume "$container" 'Case-sensitive APFS' HugMeshProbe
+          fi
+          ls -ld /Volumes/HugMeshProbe
+          if mkdir -p /Volumes/HugMeshProbe/out; then
+            echo "PROBE folder: user-writable"
+          else
+            echo "PROBE folder: needed sudo"
+            sudo mkdir -p /Volumes/HugMeshProbe/out
+            sudo chown "$USER" /Volumes/HugMeshProbe/out
+          fi
+          PYTHONPATH="$GITHUB_WORKSPACE/studio" "$RUNNER_TEMP/venv/bin/python" - <<'PY'
+          import os, tempfile
+          from hugmesh_studio.core import platform_info
+          from hugmesh_studio.core.build_driver import BuildDriver
+          from hugmesh_studio.core.config import ImageConfig
+          out = "/Volumes/HugMeshProbe/out"
+          assert platform_info.folds_case(out) is False, platform_info.folds_case(out)
+          assert platform_info.folds_case(tempfile.gettempdir()) is True
+          host = platform_info.HostInfo(os="darwin", is_gentoo=False, has_docker=True,
+                                        has_bash=True, has_kvm=False, is_root=False,
+                                        builder_image="hugmesh-builder")
+          gen = os.environ["GITHUB_WORKSPACE"]
+          on_volume = BuildDriver(gen, host, workdir=out).preflight(ImageConfig(), "docker")
+          assert not any("ignores case" in p for p in on_volume), on_volume
+          default = BuildDriver(gen, host, workdir=tempfile.gettempdir()).preflight(
+              ImageConfig(), "docker")
+          assert any("ignores case" in p for p in default), default
+          print("the case-sensitive volume clears the refusal; the default volume is refused")
+          PY
+          diskutil apfs deleteVolume /Volumes/HugMeshProbe \
+            || sudo diskutil apfs deleteVolume /Volumes/HugMeshProbe \
+            || echo "could not delete the probe volume (the runner is discarded anyway)"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-dmg-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/dist/*.dmg
+            ${{ runner.temp }}/dist/*.dmg.sha256
+            ${{ runner.temp }}/dist/*.png
+          if-no-files-found: warn
+          retention-days: 7

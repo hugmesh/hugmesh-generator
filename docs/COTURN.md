@@ -1,9 +1,8 @@
 # coturn — TURN/STUN relay for Matrix (tuwunel) audio/video
 
-> **Status: OPTIONAL service, DEFAULT-OFF, ships dark.** A default build deploys
-> NO coturn pod and changes NOTHING for existing Matrix calls. Clients keep their
-> current host-only ICE behaviour (`iceServers: []`). Turning coturn on is an
-> explicit, reversible, per-domain runtime add.
+coturn is optional and off by default. A default build deploys no coturn pod, and
+Matrix calls keep their current host-only behaviour (`iceServers: []`). Turning it on is
+a per-domain change at run time, and you can turn it off again.
 
 ## 1. What it is and why
 
@@ -153,6 +152,11 @@ mainline before the overlay.
      `trusted`, and it is **the whole gate on ARM**, where `net-firewall/firewalld`
      is a deliberate exclusion (it does not cross-compile; see
      `specs-rpi5/portage/packages.list`).
+
+   The same script also admits headscale's embedded-DERP STUN port (3478/udp only)
+   on the pki node, from `/etc/hugmesh/headscale-derp-stun`. On an omnibus node that
+   is also a coturn-public relay, the two contend for 3478/udp; see
+   [`HEADSCALE-DERP.md`](HEADSCALE-DERP.md#firewall).
 
    Delete the marker to close again (within 60s). To widen the relay window, edit
    `min-port`/`max-port`, the NetworkPolicy range **and**

@@ -6,6 +6,7 @@ no Qt required.
 """
 import getpass
 import json
+import os
 import re
 
 import pytest
@@ -1498,7 +1499,27 @@ def test_g29_version_pins_and_skip_tailscale(platform, role, mode):
     assert "--skip-tailscale" in args
 
 
-def test_g30_version_all_release_tag_x86_only():
+@pytest.mark.parametrize("platform", sorted(BUILDER_SCRIPTS))
+def test_headscale_public_derp_opt_in_every_builder(platform):
+    """The public Tailscale DERP map is an OPT-IN (docs/HEADSCALE-DERP.md): off by
+    default on every platform, emitted as --headscale-public-derp when set, and the
+    builder that receives it really parses that exact flag."""
+    off = ImageConfig(mode="mesh", role="omnibus", platform=platform).to_cli_args()
+    on = ImageConfig(mode="mesh", role="omnibus", platform=platform,
+                     headscale_public_derp=True).to_cli_args()
+    assert "--headscale-public-derp" not in off
+    assert on.count("--headscale-public-derp") == 1
+    builder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                           BUILDER_SCRIPTS[platform])
+    with open(builder, encoding="utf-8") as fh:
+        src = fh.read()
+    assert "--headscale-public-derp) HEADSCALE_PUBLIC_DERP=true" in src, builder
+
+
+def test_g30_version_all_release_tag_on_the_cluster_tree_builders():
+    # --release-tag is the tag an ENV=prod build pins first-party :dev images to
+    # (scripts/_prod-gate-lib.sh). x86, rpi5 and the Orange Pi NODE roles bake a
+    # cluster tree and parse it; the builders with no cluster tree do not.
     x = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
                     version="2026.07", release_tag="rc1").to_cli_args()
     assert ("--version", "2026.07") in pairs(x)
@@ -1506,7 +1527,23 @@ def test_g30_version_all_release_tag_x86_only():
     r = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                     version="2026.07", release_tag="rc1").to_cli_args()
     assert ("--version", "2026.07") in pairs(r)
-    assert "--release-tag" not in r
+    assert ("--release-tag", "rc1") in pairs(r)
+    assert r.count("--release-tag") == 1
+    for plat, role, ram in (("orangepi5", "pki", "8"), ("orangepi4-lts", "frontend", "4")):
+        o = ImageConfig(mode="mesh", role=role, platform=plat, ram_gb=ram,
+                        version="2026.07", release_tag="rc1").to_cli_args()
+        assert ("--release-tag", "rc1") in pairs(o), plat
+        assert o.count("--release-tag") == 1, plat
+    # the Orange Pi DESKTOP builder refuses every cluster choice: never emitted there
+    for plat in ("orangepi5", "orangepi4-lts"):
+        d = ImageConfig(mode="cloud", role=plat, platform=plat,
+                        version="2026.07", release_tag="rc1").to_cli_args()
+        assert "--release-tag" not in d, plat
+    for plat, role in (("frite", "frite"), ("jetson", "edge-ai")):
+        n = ImageConfig(mode="mesh", role=role, platform=plat,
+                        version="2026.07", release_tag="rc1").to_cli_args()
+        assert ("--version", "2026.07") in pairs(n), plat
+        assert "--release-tag" not in n, plat
 
 
 # ---- G31/G32/G33: home extras / media / cuda+grub-theme (x86) --------------------
@@ -1849,6 +1886,7 @@ _FIELD_PROBE = {
     "headscale_version": {"headscale_version": "0.23"},
     "tailscale_version": {"tailscale_version": "1.60"},
     "skip_tailscale": {"skip_tailscale": True},
+    "headscale_public_derp": {"headscale_public_derp": True},
     "gpu_driver": {"gpu_driver": "nvidia"}, "nvidia_cuda": {"nvidia_cuda": True},
     "kernel_builtin": {"kernel_builtin": True},
     "enable_wifi": {"enable_wifi": True}, "enable_bluetooth": {"enable_bluetooth": True},
