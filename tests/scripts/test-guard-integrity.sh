@@ -1181,7 +1181,10 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #984 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 244 of 286.
 # PR #1016 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 245 of 287.
 # PR #993 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 246 of 288.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-246}"
+# 246 -> 247 on 2026-11-12 (x0/guest-host-facts, #1048): +1 gated, +1 total —
+# tests/scripts/test-guest-host-facts.sh, named by shell-suites.yml's alpine job.
+# MEASURED with GUARD_PREMERGE=0 on the branch over origin/main cbfd5ee4: 247 of 289.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-247}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
