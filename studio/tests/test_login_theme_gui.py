@@ -167,9 +167,11 @@ def test_mesh_branding_page_greys_desktop_half_but_login_half_stays_live(qapp):
     page = wizard_mod.BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
     page.initializePage()
     assert not page.form.isEnabled()            # desktop half: greyed (spec 2)
-    # web half: no longer here — the page says where it is chosen
+    # web half: no longer here — the page says where it is chosen, once (GUI-25)
     assert not hasattr(page, "login_theme")
-    assert page.look_pointer.isVisibleTo(page) and "Look" in page.look_pointer.text()
+    from test_branding_page_gui import look_pointers_shown
+    shown = look_pointers_shown(page)
+    assert len(shown) == 1 and "Look" in shown[0].text(), [lb.text() for lb in shown]
 
 
 def test_login_fields_survive_the_unaffiliated_and_mesh_clears(qapp):

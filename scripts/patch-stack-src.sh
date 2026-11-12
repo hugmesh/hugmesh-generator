@@ -99,18 +99,10 @@ POM_NEEDS_PRIVATE_AWK='
   END { exit(found ? 0 : 1) }
 '
 
-wire_local_maven_registry() { # <repo-checkout-dir>
-  local d="$1" df="$1/Dockerfile" pom="$1/pom.xml" settings="$1/hugmesh-local-settings.xml"
-  [ -f "${df}" ] && [ -f "${pom}" ]                  || return 0
-  [ ! -f "$1/settings.xml" ]                         || return 0   # already wired
-  grep -q 'hugmesh-local-settings.xml' "${df}"       && return 0   # already patched
-  awk "${POM_NEEDS_PRIVATE_AWK}" "${pom}"            || return 0   # no private dependency
-  grep -q '^FROM .* AS build' "${df}"                || {
-    echo "  ! $(basename "${d}")/Dockerfile: no '... AS build' stage to inject into — NOT patched" >&2
-    return 0
-  }
-
-  cat > "${settings}" <<'XML'
+# The settings file the injected Dockerfile lines COPY in. ONE writer for both
+# the first wiring and the restore below, so the two can never drift apart.
+write_local_settings() { # <settings-file>
+  cat > "$1" <<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Written by scripts/patch-stack-src.sh for the LOCAL docker-compose stack.
      Points maven at the local private-artifact registry container
@@ -143,6 +135,31 @@ wire_local_maven_registry() { # <repo-checkout-dir>
   </mirrors>
 </settings>
 XML
+}
+
+wire_local_maven_registry() { # <repo-checkout-dir>
+  local d="$1" df="$1/Dockerfile" pom="$1/pom.xml" settings="$1/hugmesh-local-settings.xml"
+  [ -f "${df}" ] && [ -f "${pom}" ]                  || return 0
+  [ ! -f "$1/settings.xml" ]                         || return 0   # already wired
+  # Already patched. The Dockerfile edit is TRACKED but the settings file is
+  # UNTRACKED, so a `git clean` (or a fresh worktree carrying a committed patched
+  # Dockerfile) leaves a COPY of a file that is not there and the image build
+  # dies at that COPY. Re-write the file; never inject the Dockerfile lines twice.
+  if grep -q 'hugmesh-local-settings.xml' "${df}"; then
+    if [ ! -s "${settings}" ]; then
+      write_local_settings "${settings}"
+      echo "  ~ $(basename "${d}")/hugmesh-local-settings.xml: restored (Dockerfile already wired, file was missing or empty)"
+      patched=$((patched+1))
+    fi
+    return 0
+  fi
+  awk "${POM_NEEDS_PRIVATE_AWK}" "${pom}"            || return 0   # no private dependency
+  grep -q '^FROM .* AS build' "${df}"                || {
+    echo "  ! $(basename "${d}")/Dockerfile: no '... AS build' stage to inject into — NOT patched" >&2
+    return 0
+  }
+
+  write_local_settings "${settings}"
 
   awk '
     /^FROM .* AS build/ && !done {

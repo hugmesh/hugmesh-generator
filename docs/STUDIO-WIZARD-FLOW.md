@@ -249,8 +249,9 @@ A GUI-only reorganisation — **emission is byte-identical** (the build-matrix `
   in standalone, since jetson is not a standalone platform, but it is correct if reached.
 - **Per-node encryption scoping** (`worklist.py`). The mesh worklist has a per-row
   **Encryption** column (`default` / `on` / `off` → `WorklistEntry.encrypt_root`). It
-  answers "which device gets encrypted?" per node. Jetson rows show a disabled
-  *"off — jetson cannot encrypt"* cell. A hint says the unattended LUKS passphrase (set once
+  answers "which device gets encrypted?" per node. Jetson rows show a disabled *"off"*
+  cell whose tooltip says why (the builder cannot encrypt the Orin's single boot+root
+  partition); the row's Notes say it too. A hint says the unattended LUKS passphrase (set once
   on the Home step) applies to **every** encrypted node. The column is additive and
   defaults to `default` (inherit the base), so an untouched worklist is byte-identical to
   before.

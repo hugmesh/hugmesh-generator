@@ -732,10 +732,23 @@ def test_build_stamps_x86(wiz):
     assert ("--release-tag", "2026.07-rc1") in p
 
 
-def test_build_release_tag_greys_on_arm_version_flows(wiz):
+def test_build_release_tag_shown_on_rpi5(wiz):
+    # rpi5 parses --release-tag (the ENV=prod image pin), so the field is live there
     pick_role(wiz, "generic")
     build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.release_tag.isVisible() and build.release_tag.isEnabled()
+    build.release_tag.setText("2026.07-rc1")
+    build._preview()
+    assert ("--release-tag", "2026.07-rc1") in pairs(wiz.cfg.to_cli_args())
+
+
+def test_build_release_tag_greys_on_arm_version_flows(wiz):
+    pick_role(wiz, "frite")             # no cluster tree: no --release-tag on this builder
+    build = advance_to(wiz, wizard_mod.BuildPage)
     assert build.version.isEnabled() and not build.release_tag.isVisible()
+    # the whole ROW goes, label included: hiding only the line edit left a bare
+    # "Release tag" label on every builder that takes no tag
+    assert not build.release_tag_row.isVisible()
     build.version.setText("1.2.3")
     build.release_tag.setText("stale")   # greyed — must be cleared, not emitted
     build._preview()
@@ -743,6 +756,22 @@ def test_build_release_tag_greys_on_arm_version_flows(wiz):
     args = wiz.cfg.to_cli_args()
     assert ("--version", "1.2.3") in pairs(args)
     assert "--release-tag" not in args
+
+
+@pytest.mark.parametrize("mode,role", [("standalone", "orangepi5"), ("cloud", "orangepi4-lts")])
+def test_build_release_tag_hidden_on_the_orange_pi_desktop(wiz, mode, role):
+    # The Orange Pi builders parse --release-tag for a NODE role only (the desktop refuses
+    # every cluster choice), so the platform table alone would show a live field here whose
+    # value is never emitted. The row is hidden on the desktop and the value is cleared.
+    pick_mode(wiz, mode)
+    pick_role(wiz, role)
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert wiz.cfg.platform == role
+    assert not build.release_tag_row.isVisible() and not build.release_tag.isVisible()
+    build.release_tag.setText("stale")
+    build._preview()
+    assert wiz.cfg.release_tag == ""
+    assert "--release-tag" not in wiz.cfg.to_cli_args()
 
 
 # ---- BuildPage: plumbing (G38) + PENTEST (G40) ------------------------------------
@@ -1067,6 +1096,72 @@ def test_three_arg_preflight_done_still_works(wiz):
     build._on_preflight_done([], False, build._recompute_gen)
     assert "Warnings" not in build.log.toPlainText()
     assert build.isComplete()
+    build._join_preflight_worker()
+
+
+def test_blocking_preflight_names_its_reason_above_the_fold_and_on_continue(wiz, qapp):
+    """GUI-15: a blocking preflight problem greyed Continue while the only words saying
+    why sat in the monospace pane at the bottom of an ~1800px scroll page. The reason
+    must be on screen at the TOP of the page with the scrollbar untouched, and on the
+    Continue button's tooltip; both must clear once nothing blocks."""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    # Quiesce the page's own off-thread preflight first: this test pumps events for
+    # layout, and a real probe result carrying the live req_id would otherwise land
+    # after the injection below and overwrite it.
+    build._recompute_timer.stop()
+    build._join_preflight_worker()
+    qapp.processEvents()
+    commit = wiz.button(QtWidgets.QWizard.WizardButton.CommitButton)
+    first = "egress-vpn path does not exist: garbage endpoint"
+
+    build._on_preflight_done([first, "second problem", "third problem"], False,
+                             build._recompute_gen)
+    want = f"Continue is disabled: {first} (+2 more — see Preflight below)"
+    assert build.blocked_note.text() == want
+    assert commit.toolTip() == want
+    assert not build.isComplete() and not commit.isEnabled()
+    # the bottom pane still lists every one of them
+    assert "Preflight:\n  - " + first in build.log.toPlainText()
+
+    scroll = build._content_scroll
+    content = scroll.widget()
+    for size in ((1200, 800), (942, 552)):
+        wiz.resize(*size)
+        scroll.verticalScrollBar().setValue(0)
+        for _ in range(5):
+            qapp.processEvents()
+        assert build.blocked_note.isVisible(), size
+        # above the fold: wholly inside the scroll viewport with the page scrolled to top
+        top = build.blocked_note.mapTo(scroll.viewport(), build.blocked_note.rect().topLeft())
+        assert top.y() >= 0, size
+        assert top.y() + build.blocked_note.height() <= scroll.viewport().height(), size
+        # at the top of the page: above the summary and the first section, not below them
+        y = build.blocked_note.mapTo(content, build.blocked_note.rect().topLeft()).y()
+        assert y < build.summary.mapTo(content, build.summary.rect().topLeft()).y(), size
+        assert y < build.exec_section.mapTo(content, build.exec_section.rect().topLeft()).y()
+
+    # one problem: no "+0 more"
+    build._on_preflight_done([first], False, build._recompute_gen)
+    assert build.blocked_note.text() == f"Continue is disabled: {first}"
+    assert commit.toolTip() == f"Continue is disabled: {first}"
+
+    # nothing blocks: both clear, and the empty label takes no room
+    build._on_preflight_done([], False, build._recompute_gen)
+    qapp.processEvents()
+    assert build.blocked_note.text() == ""
+    assert not build.blocked_note.isVisible()
+    assert commit.toolTip() == ""
+    assert build.isComplete() and commit.isEnabled()
+
+    # the page's OTHER blocking exit — a config that cannot assemble a command at all
+    # (_preview's ValueError path) — names its reason in the same two places
+    build.extra_flags.setText('--foo "unbalanced')
+    build.preview_btn.click()
+    assert build.cmd.toPlainText() == ""            # the ValueError exit was taken
+    assert build.blocked_note.isVisible()
+    assert build.blocked_note.text().startswith("Continue is disabled: ")
+    assert commit.toolTip() == build.blocked_note.text()
+    assert not build.isComplete()
     build._join_preflight_worker()
 
 

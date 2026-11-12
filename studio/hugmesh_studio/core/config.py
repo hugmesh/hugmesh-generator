@@ -559,7 +559,7 @@ OPTIONAL_SERVICES_BY_PLATFORM = {
 }
 
 # --optional-services sentinels (mirror build-menu.sh's OPT_SERVICES + the builders):
-#   optional_services == []            -> emit nothing (builder default akkoma tuwunel phpbb)
+#   optional_services == []            -> emit nothing (builder default tuwunel phpbb)
 #   optional_services == [SERVICES_NONE] -> emit --optional-services "" (EXPLICIT none, G13)
 #   optional_services == [SERVICES_ALL]  -> emit --all-services (full user-level set, G14)
 #   optional_services == [slug, ...]     -> emit --optional-services "slug ..." (allow-list)
@@ -567,8 +567,12 @@ SERVICES_NONE = "none"
 SERVICES_ALL = "all"
 
 # The builders' OWN built-in default selection when no --optional-services is given:
-#   build-x86-host-stage4.sh:196   OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
-#   build-rpi5-stage4.sh:254       (identical line)
+#   build-x86-host-stage4.sh       OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
+#   build-rpi5-stage4.sh           (identical line)
+# akkoma left the default on 2026-11-11: its image (hugmesh-akkoma) is not yet published,
+# so a default build would deploy a pod that cannot pull. tests/scripts/
+# test-akkoma-image-pin.sh refuses akkoma back in this tuple while its digest is the
+# placeholder.
 # The services table PRE-TICKS exactly these rows on arrival, because they are what an
 # untouched build genuinely ships — eight unticked boxes over a mesh that runs three of
 # them anyway is the same lie as a part-checked square (ask 23: "anything off by default
@@ -576,7 +580,7 @@ SERVICES_ALL = "all"
 # unticking `phpbb` a no-op, since --optional-services REPLACES rather than subtracts.
 # tests/test_services_section.py parses both builder scripts and asserts set-equality with
 # this tuple, so it cannot go stale into a comment.
-BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
+BUILTIN_DEFAULT_SERVICES = ("tuwunel", "phpbb")
 
 # What the `all` sentinel / --all-services ACTUALLY expands to, mirrored from the single
 # line both node builders declare it on:
@@ -723,7 +727,7 @@ def with_service_slug(services, slug: str) -> list[str]:
 # stops a new slug landing as a bare identifier again.
 SERVICE_DESCRIPTIONS: dict[str, str] = {
     "akkoma": "Fediverse social server — ActivityPub timelines, follows and DMs "
-              "at social.<domain>.",
+              "at social.<domain>. Off by default: image not yet published.",
     "tuwunel": "Matrix homeserver — end-to-end-encrypted chat rooms and DMs for "
                "everyone on the mesh.",
     "phpbb": "Web forum — threaded boards at forum.<domain>, SSO-linked to mesh "
@@ -1435,7 +1439,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "uboot_url": _UBOOT_PLATFORMS, "uboot_defconfig": _UBOOT_PLATFORMS, "skip_uboot": _UBOOT_PLATFORMS,
     # build plumbing.
     "skip_kernel": _ALL_PLATFORMS, "skip_clean": _ALL_PLATFORMS, "build_subdir": _ALL_PLATFORMS,
-    "seed_url": _ALL_PLATFORMS, "version": _ALL_PLATFORMS, "release_tag": _X86,
+    "seed_url": _ALL_PLATFORMS, "version": _ALL_PLATFORMS, "release_tag": _X86_RPI5_OPI,
     "distdir": _X86, "extra_packages": _ARM_PLATFORMS,
     # user package deltas — parsed identically by all six builders (WS-BUILDER flip).
     "packages_add": _ALL_PLATFORMS, "packages_drop": _ALL_PLATFORMS,
@@ -1524,7 +1528,8 @@ _ORANGEPI_NODE_ROLE_IDS = ("pki", "backend", "frontend", "omnibus")
 # and its DESKTOP does not: node-class only on _OPI_NODE_PLATFORMS (FIELD_SCOPE).
 _OPI_NODE_CLASS_FIELDS = ("games_domain", "release_state", "idp", "idp_issuer",
                           "idp_client_id", "idp_jwks", "vault_addr", "vault_external_addr",
-                          "optional_services", "exclude_services", "enable_games", "anubis")
+                          "optional_services", "exclude_services", "enable_games", "anubis",
+                          "release_tag")
 DESKTOP_ROLES = X86_CLIENT_ROLES + _STANDALONE_DESKTOP_ROLES + _ARM_DESKTOP_ROLES
 # Cluster-node / headless-appliance family (root-encrypted infra). X86_NODE_ROLES already
 # covers pki/backend/frontend/backend-gpu/omnibus/edge-ai (x86 AND rpi5 share
@@ -3603,7 +3608,7 @@ class ImageConfig:
     superdomain: str = ""            # Tailscale root domain all mesh nodes join; "" = derived <brand>.internal. Emitted as --superdomain for MESH builds (WS-SUPER-B: baked to <etc>/superdomain + headscale MagicDNS); permanently internal, never go-live-flipped (I7)
     games_domain: str = ""             # --games-domain (games.<domain> host + OIDC issuer; x86+rpi5)
     release_state: str = ""            # --release-state internal|public (x86+rpi5; "" = builder default)
-    release_tag: str = ""              # --release-tag image stamp (x86)
+    release_tag: str = ""              # --release-tag: the tag ENV=prod pins first-party :dev images to (x86 + rpi5 + Orange Pi node roles; "" = builder default, the UTC build date)
     version: str = ""                  # -v/--version image stamp (all)
     person_role: str = ""              # --person-role user|mod|admin|superadmin (x86 CLIENT roles; "" = derive)
     hostname: str = ""                 # -H/--hostname baked host identity (all)
@@ -4447,7 +4452,7 @@ class ImageConfig:
         if self.hostname:
             validate_domain_name(self.hostname)   # a hostname is a DNS label/name
         if self.user:
-            validate_username(self.user)
+            validate_username(self.user, "user")   # not "local_user": a different field
         if self.timezone and not _TIMEZONE_RE.fullmatch(self.timezone):
             raise IdentityValidationError(
                 f"invalid timezone: {self.timezone!r} — rejected by the identity allowlist")
@@ -4957,6 +4962,10 @@ class ImageConfig:
         # the optional-services checklist) — the other ARM builders bake no cluster tree.
         if self.release_state:
             a += ["--release-state", self.release_state]
+        # --release-tag: the tag the builder's ENV=prod gate pins first-party :dev
+        # images to (scripts/_prod-gate-lib.sh), the same flag x86 takes.
+        if self.release_tag:
+            a += ["--release-tag", self.release_tag]
         if self.games_domain:
             a += ["--games-domain", self.games_domain]
         a += self._services_args()
@@ -5114,6 +5123,9 @@ class ImageConfig:
         a: list[str] = []
         if self.release_state:
             a += ["--release-state", self.release_state]
+        # the ENV=prod image-pin tag (scripts/_prod-gate-lib.sh), as _rpi5_args emits it
+        if self.release_tag:
+            a += ["--release-tag", self.release_tag]
         if self.games_domain:
             a += ["--games-domain", self.games_domain]
         a += self._services_args()

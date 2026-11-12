@@ -46,7 +46,8 @@ def test_desktop_row_emits_none_of_them(platform):
 def test_cluster_choices_are_node_class_only_on_the_orange_pi(platform):
     node = ImageConfig(mode="mesh", platform=platform, role="frontend")
     desk = ImageConfig(mode="mesh", platform=platform, role=platform)
-    for f in ("release_state", "idp", "vault_addr", "optional_services", "games_domain"):
+    for f in ("release_state", "idp", "vault_addr", "optional_services", "games_domain",
+              "release_tag"):
         assert field_in_scope(f, node), f
         assert not field_in_scope(f, desk), f
 
@@ -161,6 +162,41 @@ def test_node_row_page_shows_release_state_and_the_services(wiz):
     for slug in ("tor", "egress-vpn"):
         box = page.service_boxes.get(slug)
         assert box is None or not box.isVisible(), f"{slug} is offered on an Orange Pi node"
+
+
+def _build(wiz, **cfg_kw):
+    pid = [i for i in wiz.pageIds() if isinstance(wiz.page(i), wizard_mod.BuildPage)][0]
+    wiz.cfg = ImageConfig(**cfg_kw)
+    wiz.setStartId(pid)
+    wiz.restart()
+    wiz.setStartId(-1)
+    QtWidgets.QApplication.processEvents()
+    page = wiz.page(pid)
+    assert wiz.currentPage() is page
+    return page
+
+
+@pytest.mark.parametrize("platform,role,ram", [("orangepi5", "pki", "8"),
+                                               ("orangepi4-lts", "frontend", "4")])
+def test_node_row_build_page_offers_and_emits_the_release_tag(wiz, platform, role, ram):
+    page = _build(wiz, mode="mesh", platform=platform, role=role, ram_gb=ram)
+    _grab(page, f"build-{platform}-{role}.png")
+    assert _usable(page.release_tag_row) and _usable(page.release_tag), page.release_tag.size()
+    page.release_tag.setText("2026.07-rc1")
+    page._preview()
+    args = wiz.cfg.to_cli_args()
+    assert args[args.index("--release-tag") + 1] == "2026.07-rc1"
+
+
+@pytest.mark.parametrize("platform", ["orangepi5", "orangepi4-lts"])
+def test_desktop_row_build_page_hides_the_release_tag(wiz, platform):
+    page = _build(wiz, mode="mesh", platform=platform, role=platform)
+    _grab(page, f"build-{platform}-desktop.png")
+    assert not page.release_tag_row.isVisible()
+    page.release_tag.setText("stale")
+    page._preview()
+    assert wiz.cfg.release_tag == ""
+    assert "--release-tag" not in wiz.cfg.to_cli_args()
 
 
 def test_desktop_row_page_does_not_offer_release_state(wiz):

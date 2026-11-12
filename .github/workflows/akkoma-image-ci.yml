@@ -1,0 +1,93 @@
+# Pull-request build of hugmesh-akkoma (images/akkoma). Builds the image from the
+# same Dockerfile akkoma-release.yml publishes, once per platform it publishes and
+# NATIVELY on each (ubuntu-24.04-arm for arm64, so the arm64 compile and boot are
+# proven here; the release builds arm64 under QEMU), boot-tests each with
+# images/akkoma/smoke-test.sh, and pushes NOTHING: no registry login, no packages
+# permission, read-only token. Publishing happens only in akkoma-release.yml, which
+# never runs on a pull request.
+name: Akkoma image (PR build)
+
+on:
+  pull_request:
+    paths:
+      - 'images/akkoma/**'
+      - '.github/workflows/akkoma-image-ci.yml'
+      - '.github/workflows/akkoma-release.yml'
+      # smoke-test.sh step 8 boots these two ConfigMaps as shipped, so a change
+      # to either must rebuild and boot-test here.
+      - 'specs/cluster/manifests/akkoma/akkoma.yaml'
+      - 'specs/cluster/manifests/test-runner/akkoma-peer.yaml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: akkoma-image-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CONTEXT: images/akkoma
+
+jobs:
+  build:
+    name: build and boot-test (no push, ${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            machine: x86_64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # A runner label that silently lands on the other architecture would build
+      # and boot-test the wrong half and pass.
+      - name: Check the runner architecture
+        env:
+          WANT: ${{ matrix.machine }}
+        run: |
+          got="$(uname -m)"
+          if [ "$got" != "$WANT" ]; then
+            echo "::error::runner is $got, expected $WANT"
+            exit 1
+          fi
+
+      - name: Lint the scripts
+        run: |
+          bash -n "$CONTEXT/smoke-test.sh"
+          bash -n "$CONTEXT/check-upstream-pin.sh"
+
+      - name: Check the upstream tag still names the pinned commit
+        run: bash "$CONTEXT/check-upstream-pin.sh"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          platforms: ${{ matrix.platform }}
+          pull: true
+          push: false
+          load: true
+          tags: hugmesh-akkoma:pr-${{ github.event.pull_request.number }}
+
+      - name: Boot-test the image
+        env:
+          IMAGE: hugmesh-akkoma:pr-${{ github.event.pull_request.number }}
+        run: bash "$CONTEXT/smoke-test.sh" "$IMAGE" "$(sed -n 's/^ARG AKKOMA_VERSION=//p' "$CONTEXT/Dockerfile" | head -n 1)"
+
+      - name: Image size, architecture and labels
+        env:
+          IMAGE: hugmesh-akkoma:pr-${{ github.event.pull_request.number }}
+        run: |
+          docker image inspect "$IMAGE" --format '{{.Architecture}} {{.Size}} bytes'
+          docker image inspect "$IMAGE" --format '{{json .Config.Labels}}'

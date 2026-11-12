@@ -60,15 +60,17 @@ exist but ship dark (`docs/CLUSTER-HARDENING-PLAN.md` §B).
      per-room `m.federate` set at creation.
 
 2. **Custom Akkoma `ForceLocalForUsers` MRF** (the authoritative Mastodon leg).
-   - `manifests/akkoma/mrf/force_local_for_users_policy.ex`: for any actor in the
+   - `images/akkoma/mrf/force_local_for_users_policy.ex`: for any actor in the
      force-local set, it filters the outbound recipient set to **local inboxes
      only**, for all activity types and visibilities (public, unlisted,
      followers-only, direct, Announce/boosts, replies, profile Update, outbound
      Follow). Rewriting `as:Public` to `#Public` alone would leave the
      visibility-scoped, boost/reply, existing-remote-follower and profile/follow
      leaks open.
-   - `manifests/akkoma/Dockerfile` builds the custom image: `FROM` a pinned Akkoma
-     digest, `COPY` the `.ex`, recompile the release.
+   - `images/akkoma/Dockerfile` builds the custom image, `hugmesh-akkoma`, from
+     upstream source at a pinned commit with the `.ex` compiled in. Upstream
+     publishes no container image, so this is the only Akkoma image the cluster
+     pins.
    - `manifests/akkoma/domainlock-sync-job.yaml` is a PostSync reconcile. It
      turns `ROLE_MASTODON_DOMAINLOCKED` into the live force-local set the MRF
      reads. It is a clone of `admin-sync-job.yaml`.
@@ -85,9 +87,9 @@ Leg 1 is the foundation. Leg 2 is the Mastodon-specific layer on top.
 | `ROLE_*_DOMAINLOCKED` seeds | **LIVE** (empty roles, inert) | — |
 | `homeserver-egress.yaml` NetworkPolicy | **LIVE**: listed in `manifests/networkpolicy/kustomization.yaml`, which the auto-sync (prune + selfHeal) app `apps/08-networkpolicy.yaml` applies | remove the line from the kustomization to roll back |
 | `egress-proxy` deploy | ships **PASS-THROUGH** (forwards all); its app `apps/29a-egress-proxy.yaml` is **MANUAL-sync** | `DOMAINLOCK_EGRESS_ENABLED` (default `"false"`) |
-| akkoma MRF `.ex` + `Dockerfile` | in repo, **not built or pinned**: the Dockerfile still carries the `REPLACE_WITH_PINNED_AKKOMA_DIGEST` and `REPLACE_WITH_AKKOMA_GIT_TAG` placeholders | build and pin the custom image |
+| akkoma MRF `.ex` + `images/akkoma/Dockerfile` | **built** by `.github/workflows/akkoma-release.yml` (compiled in, inert until listed in `:mrf policies`); **not yet published**, so every Akkoma ref carries a marked placeholder digest and `akkoma` is DEFAULT-OFF | publish, then pin the digest (`images/akkoma/README.md`, "Pinning") |
 | `:mrf policies` in `akkoma-config` | **commented out** | uncomment after the custom image exists |
-| `domainlock-sync-job.yaml` | **not wired** into `manifests/akkoma/kustomization.yaml`; its `image` is the placeholder `REPLACE_WITH_CUSTOM_AKKOMA_IMAGE` | `homeserver.domainlock.enabled` |
+| `domainlock-sync-job.yaml` | **not wired** into `manifests/akkoma/kustomization.yaml`; its `image` is `hugmesh-akkoma` at the same digest as `akkoma.yaml` | `homeserver.domainlock.enabled` |
 
 The first two rows interact. The egress policy is live, and the proxy it forces
 traffic through is a manual-sync app. A cluster that has not synced
@@ -128,28 +130,36 @@ Direct egress is then restored. To stop the proxy, remove the `egress-proxy` app
 
 ## Custom Akkoma image build + AGPL source publication
 
-Akkoma is **AGPL-3.0**. The custom image (`manifests/akkoma/Dockerfile`) is a
-**derivative work**. AGPL §13 (the network-use clause) requires you to offer the
-**complete corresponding source** to every network user of the running server.
+Akkoma is **AGPL-3.0**. The custom image (`images/akkoma/Dockerfile`,
+`ghcr.io/hugmesh/hugmesh-akkoma`) is a **derivative work**. AGPL §13 (the
+network-use clause) requires you to offer the **complete corresponding source** to
+every network user of the running server. How the build meets that:
+1. **The upstream source is pinned.** The Dockerfile fetches upstream by commit id
+   (`AKKOMA_COMMIT`), checks it after checkout, and checks that `mix.exs` declares
+   `AKKOMA_VERSION`. Both are image labels and are named in each GitHub Release.
+   `images/akkoma/check-upstream-pin.sh` refuses a build whose upstream tag has
+   moved off that commit.
+2. **The overlay is published.** `images/akkoma/` (the Dockerfile,
+   `hugmesh-env.sh`, `hugmesh-vm.args` and `mrf/force_local_for_users_policy.ex`)
+   is tracked in this public repo; that upstream commit plus this directory at the
+   release tag is the complete corresponding source. The `.ex` carries the
+   `AGPL-3.0-only` SPDX header.
+3. **Surface an in-app source offer (still to do).** Akkoma's only source link is
+   nodeinfo 2.1's `repository` field, which is `mix.exs`'s `source_url` compiled in
+   at build time (upstream's repository, not this image's source). No environment
+   variable changes it; the image used to set an `AKKOMA_SOURCE_URL` that nothing
+   read, and no longer does. Pointing users at `images/akkoma` needs a build-time
+   change to `source_url` or an instance page that links it.
+4. **The manifests reference it.** `akkoma.yaml`, `admin-sync-job.yaml`,
+   `domainlock-sync-job.yaml` and `test-runner/akkoma-peer.yaml` all name
+   `ghcr.io/hugmesh/hugmesh-akkoma` at one digest
+   (`tests/scripts/test-akkoma-image-pin.sh`).
 
-No script in this repo builds the image yet: no `build-*.sh`, script or Makefile
-target references `manifests/akkoma/Dockerfile`. Whatever builds it MUST:
-1. **Pin** the upstream base as a digest (`AKKOMA_BASE=...@sha256:...`) and keep
-   `AKKOMA_SOURCE_REF` (the matching upstream git tag) in lock-step. The
-   prod-hygiene gate forbids floating `:stable`/`:latest`.
-2. **Publish this overlay.** `manifests/akkoma/Dockerfile` and
-   `mrf/force_local_for_users_policy.ex` are tracked in this public repo, which is
-   the source contribution. The `.ex` carries the `AGPL-3.0-only` SPDX header.
-3. **Surface an in-app source offer.** `AKKOMA_SOURCE_URL` (set in the Dockerfile)
-   points at this `manifests/akkoma` tree. Expose it to instance users.
-4. **Update `akkoma.yaml` and `domainlock-sync-job.yaml`** to reference the pinned
-   custom image. Replace `git.akkoma.dev/akkomagang/akkoma:stable` and the
-   `REPLACE_WITH_CUSTOM_AKKOMA_IMAGE` placeholder.
-
-The Dockerfile sketches two recompile strategies (source-image or OTP-release
-base). Pick the one that matches the pinned base and validate the recompile. The
-MRF reports itself in `/nodeinfo` through `describe/0`, so the e2e self-check can
-assert that the custom image is the one running.
+The MRF is compiled into every hugmesh-akkoma image and stays inert until it is
+listed in `:mrf policies`. It reports itself in `/nodeinfo` through `describe/0`
+once enabled, so the e2e self-check can assert that the custom image is running.
+The module itself is still a SKELETON (see its header): validate it against the
+pinned source before turning domain-lock on.
 
 ## Files (this repo)
 
@@ -158,5 +168,6 @@ assert that the custom image is the one running.
   kustomization beside it).
 - `manifests/egress-proxy/`: forward proxy, gated allowlist, and its ArgoCD app
   (`apps/29a-egress-proxy.yaml`).
-- `manifests/akkoma/Dockerfile`, `mrf/force_local_for_users_policy.ex`,
-  `domainlock-sync-job.yaml`, and the dark `:mrf` block in `akkoma.yaml`.
+- `images/akkoma/` (Dockerfile, `mrf/force_local_for_users_policy.ex`), and
+  `manifests/akkoma/domainlock-sync-job.yaml` plus the dark `:mrf` block in
+  `akkoma.yaml`.
