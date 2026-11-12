@@ -13,8 +13,10 @@ mainline U-Boot defconfig and kernel device tree, looked up at named release tag
 3. runs the lookup script against small local git repositories, so the lookup that
    wrote the evidence is itself tested without touching the network.
 
-x86-64 rows are out of scope: they boot through UEFI, with no U-Boot defconfig or
-device tree to look up. Evidence is necessary for promotion, never sufficient.
+x86-64 rows are the one exemption: they boot through UEFI, with no U-Boot defconfig
+or device tree to look up. Every other arch is checked, including one the catalog
+gains later (a new arch must not slip past the guard by not being on a list).
+Evidence is necessary for promotion, never sufficient.
 
 Pure-core: no Qt import.
 """
@@ -43,8 +45,11 @@ NOT_FOUND = "not found"
 # The boards hugmesh-generator#1057 names. The evidence may list more, never fewer.
 CANDIDATES = {"rock-5b", "nanopc-t6", "visionfive-2", "bpi-f3", "opi5-pro", "opi5-max"}
 
-# Arches whose boards boot from a U-Boot defconfig and a device tree. x86-64 is the one
-# catalog arch that does not.
+# The arches the guard exempts: they boot without a U-Boot defconfig or device tree.
+# Exempting is explicit; an arch not named here is checked, known or not.
+EXEMPT_ARCHES = frozenset({"x86-64"})
+
+# Evidence boards' arch -> the directory name both upstream trees use for it.
 DT_ARCHES = {"arm64": "arm64", "riscv64": "riscv", "armv7": "arm"}
 
 # Every non-x86 row that was experimental or supported when this guard landed
@@ -77,13 +82,13 @@ def _catalog_rows() -> list[SimpleNamespace]:
 
 
 def promotion_violations(rows, evidence: dict, grandfathered=GRANDFATHERED) -> list[str]:
-    """One sentence per catalog row that is promoted (status not "unsupported") on a
-    device-tree arch, is not grandfathered, and has no "found" verdict in ``evidence``.
+    """One sentence per catalog row that is promoted (status not "unsupported") on any
+    arch outside EXEMPT_ARCHES, is not grandfathered, and has no "found" verdict in ``evidence``.
     The ONE predicate: the real assertion and every negative case below call it."""
     verdicts = {b["id"]: b.get("verdict") for b in evidence["boards"]}
     out = []
     for r in rows:
-        if r.status == "unsupported" or r.arch not in DT_ARCHES or r.id in grandfathered:
+        if r.status == "unsupported" or r.arch in EXEMPT_ARCHES or r.id in grandfathered:
             continue
         v = verdicts.get(r.id)
         if v != FOUND:
@@ -173,7 +178,7 @@ def test_grandfathered_rows_are_still_promoted_non_x86_catalog_rows():
         assert rows[rid].status != "unsupported", (
             f"{rid}: demoted to unsupported, so it loses its grandfathered place; remove "
             "it from GRANDFATHERED (promoting it again then needs mainline evidence)")
-        assert rows[rid].arch in DT_ARCHES, rid
+        assert rows[rid].arch not in EXEMPT_ARCHES, rid
 
 
 def test_promoting_each_real_not_found_board_is_refused():
@@ -198,8 +203,9 @@ def test_promotion_guard_negative_cases_do_not_depend_on_todays_upstream():
     # a "not found" row, promoted to either status, is refused
     assert promotion_violations([row("board-miss", "experimental")], ev, frozenset())
     assert promotion_violations([row("board-miss", "supported")], ev, frozenset())
-    # a promoted row with no evidence entry at all is refused, on every device-tree arch
-    for arch in DT_ARCHES:
+    # a promoted row with no evidence entry at all is refused on every non-exempt arch,
+    # including one no list here names (the design's planned mips64el)
+    for arch in (*DT_ARCHES, "mips64el", "some-future-arch"):
         assert promotion_violations([row("board-none", "experimental", arch)], ev, frozenset())
     # and the accepting cases, so the predicate is not simply "always refuse"
     assert promotion_violations([row("board-hit", "experimental")], ev, frozenset()) == []
