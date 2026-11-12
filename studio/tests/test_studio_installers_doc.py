@@ -29,6 +29,8 @@ JOB_LABELS = {
     "flatpak-aarch64": "Flatpak",
     "msi": "Windows MSI",
     "linux": "Linux tarball",
+    "macos": "macOS .dmg",
+    "macos-intel": "macOS .dmg",
 }
 
 
@@ -93,3 +95,22 @@ def test_the_developer_checkout_section_is_separate_and_says_when_it_is_needed()
     intro = _doc().split("\n## ", 1)[0]
     assert "(#developer-run-the-studio-from-a-checkout)" in intro
     assert "That is still the main way" not in intro
+
+
+def test_the_macos_section_says_the_release_carries_both_dmg_files():
+    # The paragraph that said "Not on a release yet" outlived the release jobs once
+    # they existed; the workflow and the guide move together.
+    with open(WORKFLOW, encoding="utf-8") as handle:
+        jobs = yaml.safe_load(handle)["jobs"]
+    assert {"macos", "macos-intel"} <= set(jobs["publish"]["needs"]), "no macOS release jobs"
+    body = _section("macOS")
+    assert "Not on a release yet" not in body
+    for words in ("hugmesh-studio-<version>-macos-arm64.dmg",
+                  "hugmesh-studio-<version>-macos-x86_64.dmg",
+                  "`macos` and `macos-intel` jobs", ".github/workflows/studio-release.yml`", "SHA256SUMS",
+                  "releases.json", "not notarized", "EXPERIMENTAL"):
+        assert words in body, words
+    # The opening no longer sends Mac users to a checkout for want of a package.
+    intro = _doc().split("\n## ", 1)[0]
+    assert "macOS and BSD, which have no package yet" not in intro
+    assert "hugmesh-studio-<version>-macos-arm64.dmg" in intro

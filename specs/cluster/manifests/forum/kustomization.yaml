@@ -25,6 +25,13 @@ configMapGenerator:
     files:
       - initdb/00-hardening.sql
       - initdb/10-roles.sh
+  # idp-trust: the issuer/JWKS value surface, see the block at the end of this file.
+  - name: idp-trust
+    options:
+      annotations:
+        config.kubernetes.io/local-config: "true"
+        platform.hugmesh.net/idp-issuer: "https://id.hugmesh.net"
+        platform.hugmesh.net/idp-jwks: "https://id.hugmesh.net/.well-known/jwks"
 
 generatorOptions:
   disableNameSuffixHash: true
@@ -44,3 +51,25 @@ patches:
         path: /spec/template/spec/imagePullSecrets
         value:
           - name: harbor-registry
+
+# ── THE IDENTITY PROVIDER THIS SERVICE TRUSTS (issue #530) ──────────────────────
+# ArgoCD serves this directory from GIT, never from the device's baked tree, so
+# rewrite_idp_sysroot()'s sed over the baked manifests/ copy cannot reach it. The
+# issuer/JWKS move HERE, at render time, the way the Vault base does (#285). The
+# idp-trust ConfigMap (configMapGenerator above) is local-config: kustomize never emits it,
+# it is only the value surface. Its platform.hugmesh.net/idp-* annotations are set
+# by a one-line JSON-6902 op in apps/30-phpbb.yaml, which IS baked, so
+# rewrite_idp_sysroot() re-points that op at the external IdP for --idp != casdoor,
+# and `replacements` copies it onto the env below. At the casdoor defaults this
+# block is a byte no-op. Pinned by tests/scripts/test-eso-remoteref-brand.sh (7).
+replacements:
+  - source: { version: v1, kind: ConfigMap, name: idp-trust, fieldPath: "metadata.annotations.[platform.hugmesh.net/idp-issuer]" }
+    targets:
+      - select: { group: apps, kind: Deployment, name: phpbb }
+        fieldPaths:
+          - spec.template.spec.containers.[name=phpbb].env.[name=HUGMESH_JWT_ISSUER].value
+  - source: { version: v1, kind: ConfigMap, name: idp-trust, fieldPath: "metadata.annotations.[platform.hugmesh.net/idp-jwks]" }
+    targets:
+      - select: { group: apps, kind: Deployment, name: phpbb }
+        fieldPaths:
+          - spec.template.spec.containers.[name=phpbb].env.[name=HUGMESH_JWKS_URI].value

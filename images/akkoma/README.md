@@ -68,7 +68,8 @@ here is the top of that range.
   builds arm64 under QEMU, and the build stage sets `ERL_FLAGS="+JMsingle true"`
   because the BEAM JIT's dual-mapped code memory crashes under QEMU. Pull requests
   build and boot-test arm64 natively on `ubuntu-24.04-arm`. The release's QEMU leg
-  first runs on the first push to `main`; if it fails, nothing is pushed.
+  first ran on the first push to `main` (run 43210930759, green): it published an
+  index with both architectures. If that leg fails, nothing is pushed.
 - **The MRF** (`mrf/force_local_for_users_policy.ex`) is compiled in and does nothing
   until config lists it under `:mrf policies`. See
   [`docs/DOMAIN-LOCK.md`](../../docs/DOMAIN-LOCK.md).

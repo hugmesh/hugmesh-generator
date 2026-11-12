@@ -162,6 +162,13 @@ def check(gen_dir: str, *, sysplatform: str | None = None, mac_probe=None) -> di
         # already the problem above, so the scripts are not parsed with the wrong one.
         report["scripts_skipped"] = len(scripts)
         scripts = []
+    elif platform_info.host_kind(sysplatform=sysplatform) == "windows":
+        # Native Windows runs none of these scripts (platform_info.native_windows_blocker
+        # refuses every bash driver), and the "bash" on PATH there is WSL's launcher or
+        # Git's MSYS bash: WSL's strips the backslashes out of a C:\ path and reports
+        # every script as "No such file or directory". Said, not counted.
+        report["scripts_skipped"] = len(scripts)
+        scripts = []
     for rel in scripts:
         try:
             result = subprocess.run(["bash", "-n", os.path.join(gen_dir, rel)],
@@ -199,6 +206,9 @@ def run_cli(gen_dir: str, as_json: bool = False) -> int:
             print("note:          this frozen build carries no Python sources, so the "
                   "generator paths the Studio names were not listed; run --self-check "
                   "from a checkout for that part")
+        if report.get("scripts_skipped") and report.get("macos") is None:
+            print(f"note:          {report['scripts_skipped']} scripts not parsed: native "
+                  "Windows runs no bash scripts (run the Studio inside WSL2 for that)")
         mac = report.get("macos")
         if mac is not None:
             vm = (f"{mac['docker_runtime']}, {mac['docker_vm_mem'] / 2**30:.0f} GiB VM"

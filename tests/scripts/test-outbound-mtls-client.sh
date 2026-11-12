@@ -393,14 +393,30 @@ if [ -z "${tls_hosts// /}" ]; then
   # that is not a finding, it just means this rule has nothing to say about them.
   [ "${CHILD}" = yes ] || bad "derived NO TLS-serving services — the SSL_ENABLED shape moved, so rule 4 proves NOTHING"
 else
-  http_viol=""
+  http_viol=""; r4_blind=no
+  # FAILS CLOSED. This scan used to end `2>/dev/null || true`, and busybox grep
+  # (the alpine CI job's grep until 2026-11-11) has no --include: it exited 2 with
+  # "unrecognized option", the message went to /dev/null, and the empty result read
+  # as "no http:// URL anywhere". MEASURED in alpine:3: the rule passed with
+  # "(0 known-broken, listed)" against the five exempt hits it really has, and an
+  # http:// URL planted for admin-bff in mod-bff-api passed too. An erroring grep
+  # prints exactly what a clean tree prints, so any status above 1 is a FAIL here,
+  # stderr stays visible, and the control pair below runs this same rule over a
+  # planted http:// URL so a blind scan cannot come back green.
   for h in ${tls_hosts}; do
-    hits="$(grep -rn "http://${h}\." "${DIR}/.." --include=*.yaml 2>/dev/null \
-            | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' || true)"
+    raw="$(grep -a -rn --include='*.yaml' -e "http://${h}\." "${DIR}/..")"
+    r4rc=$?
+    if [ "${r4rc}" -gt 1 ]; then
+      bad "rule 4: the scan for http://${h}. FAILED (grep exited ${r4rc}, reason above) — it read nothing, which is not the same as finding nothing"
+      r4_blind=yes; continue
+    fi
+    hits="$(printf '%s\n' "${raw}" | grep -a -v -e '^$' -e '^[^:]*:[0-9]*:[[:space:]]*#')"
+    r4rc=$?
+    [ "${r4rc}" -le 1 ] || { bad "rule 4: filtering the hits for ${h} FAILED (grep exited ${r4rc})"; r4_blind=yes; }
     [ -n "${hits}" ] && http_viol="${http_viol}
 ${hits}"
   done
-  n_bad=0; n_exempt=0
+  n_bad=0; n_exempt=0; exempt_seen=" "
   while IFS= read -r line; do
     [ -n "${line}" ] || continue
     rel="${line#"${DIR}/../"}"; rel="specs/cluster/${rel}"
@@ -408,14 +424,14 @@ ${hits}"
     skip=no
     for e in ${EXEMPT_HTTP_TLS}; do [ "${path}" = "${e}" ] && skip=yes; done
     if [ "${skip}" = yes ]; then
-      n_exempt=$((n_exempt+1))
+      n_exempt=$((n_exempt+1)); exempt_seen="${exempt_seen}${path} "
       [ "${CHILD}" = yes ] || echo "     known-broken (exempt, see header + findings doc): ${rel}"
     else
       bad "http:// URL addressing a TLS-serving peer (it dies as 'Connection prematurely closed BEFORE response'): ${rel}"
       n_bad=$((n_bad+1))
     fi
   done <<< "${http_viol}"
-  [ "${n_bad}" -eq 0 ] && ok "no unexempted http:// URL addresses any of the $(echo ${tls_hosts} | wc -w) TLS-serving services (${n_exempt} known-broken, listed)"
+  [ "${n_bad}" -eq 0 ] && [ "${r4_blind}" = no ] && ok "no unexempted http:// URL addresses any of the $(echo ${tls_hosts} | wc -w) TLS-serving services (${n_exempt} known-broken, listed)"
 
   # ANTI-ROT on the exemptions: an exemption for a file that no longer has the
   # defect is a licence nobody revoked. Parent-only — probe trees have neither file.
@@ -426,6 +442,12 @@ ${hits}"
         bad "exemption names a file that no longer exists: ${e} — remove it"
       elif ! grep -qE 'http://hugmesh-[a-z-]+\.' "${f}"; then
         bad "exemption for ${e} is STALE (it no longer contains an http:// peer URL) — remove it so the rule bites again"
+      elif case "${exempt_seen}" in *" ${e} "*) false ;; *) true ;; esac; then
+        # The file still has an http:// peer URL, yet the rule-4 scan never reported
+        # it. Busybox grep produced exactly this pair: "0 known-broken" beside four
+        # "still present" passes. Either the scan is blind, or that URL no longer
+        # names a TLS-serving service and the exemption is no longer needed.
+        bad "exemption for ${e}: the file has an http:// peer URL but the rule-4 scan did not report it — the scan is blind, or the URL no longer addresses a TLS-serving service (then remove the exemption)"
       else
         ok "exemption still describes a real, still-present defect: ${e}"
       fi
@@ -728,6 +750,44 @@ elif MTLS_MANIFEST_DIR="${T}/r5-nocreds" bash "${SAB5}" --scan-only >/dev/null 2
   ok "sabotage control (rule 5): with rule 5 blanked, the credential-less probe is NO LONGER caught — so its controls exercise it"
 else
   bad "sabotage control (rule 5): the credential-less probe still 'fails' with rule 5 blanked — the controls are measuring something else"
+fi
+
+# 7. RULE 4, POSITIVE CONTROL. A TLS-serving service and a caller that addresses it
+#    over http:// must be caught; the same caller over https://, with the old http://
+#    URL left in a comment, must be clean. Rule 4 scans ${DIR}/.., so each probe gets
+#    its own parent (r4-*/manifests/<svc>/) and cannot see the other's files. Under a
+#    grep that cannot run the scan (busybox: no --include) the defective probe is
+#    either missed or both probes fail, and this pair is red either way.
+probe4() { # <root> <scheme:http|https>
+  local m="$1/manifests"
+  mkdir -p "${m}/probe-tls" "${m}/probe-caller"
+  printf '%s\n' \
+    'apiVersion: apps/v1' 'kind: Deployment' 'metadata:' '  name: hugmesh-probe-tls' \
+    'spec:' '  template:' '    spec:' '      containers:' '        - name: probe' '          env:' \
+    '            - { name: SSL_ENABLED, value: "true" }' > "${m}/probe-tls/deployment.yaml"
+  printf '%s\n' \
+    'apiVersion: apps/v1' 'kind: Deployment' 'metadata:' '  name: hugmesh-probe-caller' \
+    'spec:' '  template:' '    spec:' '      containers:' '        - name: probe' '          env:' \
+    '            # was http://hugmesh-probe-tls.hugmesh-backend.svc.cluster.local:8080 before TLS' \
+    '            - name: PEER_BASE_URL' \
+    "              value: \"$2://hugmesh-probe-tls.hugmesh-backend.svc.cluster.local:8080\"" > "${m}/probe-caller/deployment.yaml"
+}
+probe4 "${T}/r4-bad" http
+probe4 "${T}/r4-good" https
+pair "rule 4, http:// to a TLS-serving peer" "${T}/r4-bad/manifests" "${T}/r4-good/manifests"
+
+# 8. THE SAME SABOTAGE CONTROL FOR RULE 4. Blank its region in a copy and require that
+#    the http:// probe is then NOT caught, with the mutation proven to have landed.
+SAB4="${T}/sabotage4.sh"
+sed '/^# >>> RULE4$/,/^# <<< RULE4$/c\
+: rule 4 blanked' "${BASH_SOURCE[0]}" > "${SAB4}"
+if [ ! -s "${SAB4}" ] || cmp -s "${SAB4}" "${BASH_SOURCE[0]}" || ! bash -n "${SAB4}" 2>/dev/null \
+   || ! grep -q '^: rule 4 blanked$' "${SAB4}" || grep -q '^tls_hosts=""$' "${SAB4}"; then
+  bad "sabotage control (rule 4): the sabotaged copy is empty, unchanged, invalid or not blanked — this control proves NOTHING"
+elif MTLS_MANIFEST_DIR="${T}/r4-bad/manifests" bash "${SAB4}" --scan-only >/dev/null 2>&1; then
+  ok "sabotage control (rule 4): with rule 4 blanked, the http:// probe is NO LONGER caught — so its control exercises it"
+else
+  bad "sabotage control (rule 4): the http:// probe still 'fails' with rule 4 blanked — the control is measuring something else"
 fi
 
 echo
