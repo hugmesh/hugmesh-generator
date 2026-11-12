@@ -421,9 +421,14 @@ def test_progress_dispatch_survives_a_panel_that_raises(monkeypatch, qapp, wiz,
     assert page.driver.results[0].status == "ok"
 
 
-def test_look_at_the_progress_page_with_the_panel(monkeypatch, qapp, wiz, tmp_path):
+def test_the_progress_page_draws_the_panel_whole(monkeypatch, qapp, wiz, tmp_path):
     """The whole progress page of a mesh build whose local copy was refused: the panel
-    sits between the overall bar and the image rows, and its status is fully drawn."""
+    sits between the overall bar and the image rows, and its status is fully drawn.
+
+    Not a ``test_look_*`` test: it measures one style at the default font and runs in
+    the ordinary run, so tests/test_look.py (which starts ``test_look_*`` tests in a
+    fresh interpreter under every LOOK_CASES style) must not count it as one of its own
+    — under that name it failed test_look::test_every_look_test_is_run since #937."""
     from hugmesh_studio.core import worklist_driver as wd
 
     class FakeBuildDriver:

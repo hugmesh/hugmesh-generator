@@ -142,6 +142,12 @@ class DeviceSaveResult:
     #: The shared-L2 SPEC the device ran on ("" = none). A resume must bring the
     #: same L2 back: the saved disk's mesh0 profile is bound to its mesh MAC.
     mesh_net: str = ""
+    #: The go-live posture the device REPORTED just before it was paused for the save
+    #: (golive_target.Posture.as_record: both witnesses, when, or why it could not
+    #: be read). The saved disk carries that posture, so a boot from this save comes
+    #: up in it — the go-live faces quote it ("booted from a save taken while
+    #: PUBLIC"). None when the device was never asked (no save was attempted).
+    golive_posture: dict | None = None
 
 
 @dataclass
@@ -395,6 +401,15 @@ def _save_argv(generator_dir: str, work_dir: str, dev: qd.Device, target: str,
     return argv
 
 
+def _read_device_posture(dev: qd.Device) -> dict:
+    """The go-live posture ``dev`` reports right now, as a manifest record — one
+    read-only ssh round trip (golive_target.read_posture). Never raises and never
+    blocks a save: a device that cannot be asked reads "unknown" with the reason.
+    The tests' override point (``read_posture=`` on save_mesh)."""
+    from hugmesh_studio.core import golive_target   # lazy: it reads saves back via us
+    return golive_target.read_posture(golive_target.target_from_device(dev)).as_record()
+
+
 def _run_argv(argv: list[str]) -> int:
     """Execute one runner invocation, streaming its output. The injectable override point:
     tests swap this for a spy, exactly like the GUI swaps in its process runner."""
@@ -457,7 +472,8 @@ def plan_mesh_save(generator_dir: str, items=None, *, work_dir: str = "",
 
 def save_mesh(generator_dir: str, items=None, *, work_dir: str = "",
               session: str = "", stamp: str = "", overwrite: bool = False,
-              budget_bytes: int = 0, run=None, disk_usage=None) -> MeshSaveReport:
+              budget_bytes: int = 0, run=None, disk_usage=None,
+              read_posture=None) -> MeshSaveReport:
     """Save every requested device's disk + KEYS set into ONE save-set directory.
 
     Orchestration rules, each of which a test pins:
@@ -473,9 +489,16 @@ def save_mesh(generator_dir: str, items=None, *, work_dir: str = "",
     * a blocked or unresolved device costs a report row, never an exception —
       "save everything" must save everything that exists to be saved.
 
+    * each device's go-live posture is READ from it (both witnesses, over ssh)
+      right before the runner pauses it, and written into the manifest beside its
+      disk — so a boot from the save can say what posture the save was taken in
+      instead of anyone guessing it later. An unreadable posture is recorded as
+      unknown, with the reason; it never stops the save.
+
     ``run`` is the process override point (argv -> returncode); default runs the runner
-    for real. The report's ``ok`` is strict: True only when EVERY requested
-    device's disk landed.
+    for real. ``read_posture`` (Device -> record dict) is the posture read's; default
+    asks the device over ssh. The report's ``ok`` is strict: True only when EVERY
+    requested device's disk landed.
     """
     work = work_dir or qd.default_work_dir(generator_dir)
     name = session or session_name(stamp)
@@ -496,6 +519,7 @@ def save_mesh(generator_dir: str, items=None, *, work_dir: str = "",
         os.makedirs(sdir, exist_ok=True)
 
     executor = run or _run_argv
+    reader = read_posture or _read_device_posture
     for dev in devices:
         res = DeviceSaveResult(label=dev.label, platform=dev.platform,
                                role=dev.role, artifacts=dev.artifacts,
@@ -512,6 +536,13 @@ def save_mesh(generator_dir: str, items=None, *, work_dir: str = "",
         except ValueError as exc:            # refused target / unarmed overwrite
             res.error = str(exc)
             continue
+        # BEFORE the pause: what the disk about to be saved says about going live
+        try:
+            res.golive_posture = dict(reader(dev))
+        except Exception as exc:             # noqa: BLE001 — a read never costs a save
+            res.golive_posture = {"posture": "unknown", "status": "unknown",
+                                  "nft": "unknown", "reachable": False, "asked": True,
+                                  "error": f"the posture read failed: {exc}", "at": ""}
         rc = executor(res.argv)
         if rc != 0:
             res.error = (f"run-qemu-docker.sh exited {rc} saving {dev.label}; any "
@@ -569,6 +600,9 @@ def _write_manifest(generator_dir: str, report: MeshSaveReport) -> str:
             "image": r.image,
             "boot_save": r.boot_save,
             "mesh_net": r.mesh_net,
+            # the posture the device reported right before it was paused (None:
+            # never asked — the device was blocked or unresolved)
+            "golive_posture": r.golive_posture,
         } for r in report.results],
     }
     tmp = f"{path}.tmp.{os.getpid()}"
@@ -689,6 +723,39 @@ def load_save_set(work_dir: str, ref: str) -> SaveSet:
                    on_mesh_net=tuple(on_mesh))
 
 
+def saved_device_entry(boot_save: str) -> dict:
+    """What the save-set holding ``boot_save`` (a saved ``<label>.qcow2``) says about
+    that disk: ``{"session", "created_at", "label", "golive_posture"}`` from the
+    ``mesh-save.json`` beside it, matched by the disk's file NAME (as load_save_set
+    does: a set may have been moved). {} when there is no readable manifest there or
+    it does not list that disk; ``golive_posture`` is absent from a set saved before
+    the posture was recorded. Read-only, never raises."""
+    if not boot_save:
+        return {}
+    path = os.path.join(os.path.dirname(os.path.abspath(boot_save)), MANIFEST_NAME)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(rec, dict) or not isinstance(rec.get("devices"), list):
+        return {}
+    name = os.path.basename(boot_save)
+    for d in rec["devices"]:
+        if not isinstance(d, dict):
+            continue
+        target = os.path.basename(str(d.get("target") or "")) or qd.save_basename(
+            str(d.get("label") or ""))
+        if target == name:
+            found = {"session": str(rec.get("session") or ""),
+                     "created_at": str(rec.get("created_at") or ""),
+                     "label": str(d.get("label") or "")}
+            if "golive_posture" in d:
+                found["golive_posture"] = d["golive_posture"]
+            return found
+    return {}
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────────
 # The same subcommand shape as core/local_mesh_bootstrap and core/cloud_deploy:
 # `plan` previews (pure), `save` acts. The Makefile face is qemu-save-mesh[-plan].
@@ -784,9 +851,11 @@ def main(argv: list[str] | None = None) -> int:
     except MeshSaveError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 1
+    from hugmesh_studio.core.golive_target import posture_phrase
     for res in report.results:
         if res.ok:
-            print(f"  saved {res.label} -> {res.target}")
+            print(f"  saved {res.label} -> {res.target} (go-live posture when saved: "
+                  f"{posture_phrase(res.golive_posture)})")
             if res.keys_error:
                 print(f"    keys warning: {res.keys_error}")
             for piece in res.keys_copied:
