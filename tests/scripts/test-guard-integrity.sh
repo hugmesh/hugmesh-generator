@@ -1145,6 +1145,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #926 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 240 of 282.
 # PR #972 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 242 of 284.
 # PR #966 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 243 of 285.
+# PR #984 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 244 of 286.
+# PR #1016 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 245 of 287.
 # 238 -> 240 (feat/headscale-embedded-derp-20261110): +2 gated, +2 total — the headscale DERP static + live suites; MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main b3eafff5.
 # 240 -> 241 (MERGED fix/control-endpoint-lan-first-20261111 into feat/headscale-onion-control-20261111): +1 gated, +1 total —
 # tests/scripts/test-control-endpoint-lan-first.sh, named by shell-suites.yml (debian leg)
@@ -1159,7 +1161,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-mesh-control-headscale-start.sh, named by shell-suites.yml's host
 # docker job (it starts the pinned headscale). PREMERGE_UNGATED is untouched. MEASURED
 # with GUARD_PREMERGE=0 on the branch merged with origin/main 96e0f6df: 248 of 291.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-248}"
+# Merge of origin/main 365ace63 into feat/headscale-onion-control-20261111 (round 2): MEASURED with GUARD_PREMERGE=0 on the merged tree: 250 of 293.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-250}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
@@ -1371,6 +1374,12 @@ PREMERGE_UNGATED=(
   # pwsh; Pester 5.6.1 must be installed), DELETE this entry and raise PREMERGE_BASELINE
   # by one to the number this file then prints.
   tests/docker-mesh-node/test-launcher-parity.sh
+  # NOT for want of the hugmesh-admin-bff-api sibling (public now; shell-suites.yml's
+  # layer-a job checks it out at a pin): its two policy-mode checks are red against the
+  # BFF's `database` declaration by design until the #634 cut-over (#634 item 4). Its
+  # cross-repo fixture identity leg IS gated, as test-layer-a-bff-fixture-identity.sh.
+  # TO CLOSE THIS: after #634, add it to the layer-a job, DELETE this entry, raise
+  # PREMERGE_BASELINE by one.
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
   # Offline, bash + python3 only, 48 passed / 0 failed on 2026-10-14 (#654 D12:
