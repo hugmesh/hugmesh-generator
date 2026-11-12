@@ -161,6 +161,21 @@ def load_catalog() -> DeviceCatalog:
     return _CACHE
 
 
+# ---- SELinux per architecture (riscv64 ships "no SELinux", #1059) ----------------
+
+def arch_has_selinux(arch_id: str) -> bool:
+    """Whether images for ``arch_id`` carry SELinux. False only for riscv64, which
+    ships labelled "no SELinux" (#1059); every other arch keeps hardened/selinux."""
+    return next(a for a in load_catalog().archs if a.id == arch_id).selinux
+
+
+def selinux_label(device_id: str) -> str:
+    """``"no SELinux — <why>"`` for a device on a no-SELinux arch, else ``""``."""
+    if arch_has_selinux(load_catalog().device(device_id).arch):
+        return ""
+    return f"{NO_SELINUX} — {NO_SELINUX_WHY}"
+
+
 # ---- the honesty predicates (module-level, catalog-cached) ------------------------
 
 def roles_for(device_id: str, mode: str) -> tuple[tuple[str, str], ...]:
@@ -254,19 +269,6 @@ def status_reason(device_id: str) -> str:
         return (dev.reason if dev.reason.lower().startswith("experimental")
                 else f"{EXPERIMENTAL_CAVEAT}: {dev.reason}")
     return dev.reason
-
-
-def arch_has_selinux(arch_id: str) -> bool:
-    """Whether images for ``arch_id`` carry SELinux. False only for riscv64, which
-    ships labelled "no SELinux" (#1059); every other arch keeps hardened/selinux."""
-    return next(a for a in load_catalog().archs if a.id == arch_id).selinux
-
-
-def selinux_label(device_id: str) -> str:
-    """``"no SELinux — <why>"`` for a device on a no-SELinux arch, else ``""``."""
-    if arch_has_selinux(load_catalog().device(device_id).arch):
-        return ""
-    return f"{NO_SELINUX} — {NO_SELINUX_WHY}"
 
 
 def default_device_for_platform(platform: str) -> str:
