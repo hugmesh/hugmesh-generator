@@ -51,7 +51,7 @@ __all__ = [
     "DEFAULT_HOST", "DEFAULT_MODEL", "DOC", "STALE_AFTER", "LocalAIError", "NotLoopback",
     "Job", "Snapshot", "StartResult", "state_dir", "ollama_host", "base_url",
     "read_snapshot", "summary_line", "send_prompt", "pick_model", "write_status",
-    "start_assistant", "windows_refusal", "windows_worker_note", "chat_loop", "format_status", "commands", "GROUNDED_ENV",
+    "start_assistant", "windows_refusal", "windows_worker_note", "start_tooltip", "system_ollama_note", "chat_loop", "format_status", "commands", "GROUNDED_ENV",
 ]
 
 STATE_ENV = "HUGMESH_LOCAL_AI_DIR"
@@ -956,6 +956,26 @@ WINDOWS_NATIVE_PATH = ("Or keep this Windows build: start Ollama for Windows you
                        "answers on 127.0.0.1:11434), or choose the Studio's own Ollama in "
                        "Docker, and the panel asks it directly; only the queue worker needs "
                        "the script.")
+#: The same way forward on a Mac that has not installed the GNU tools yet. Nothing here
+#: is Windows': the Mac sentence in front of it already gave the ``brew install`` line.
+MACOS_NATIVE_PATH = ("Until then the panel still works: start Ollama on this Mac yourself "
+                     "(the Ollama app, or `ollama serve`; it answers on 127.0.0.1:11434), "
+                     "or choose the Studio's own Ollama in Docker, and the panel asks it "
+                     "directly; only the queue worker needs the script.")
+
+
+def _script_refusal(action: str, osname: str | None):
+    """The host-script blocker for ``action`` plus the way forward ON THAT HOST, as a
+    ``platform_info.HostBlocker`` so a caller can still ask which host it is
+    (``platform_info.blocker_kind``); "" where the script runs."""
+    from . import platform_info
+    said = platform_info.native_windows_blocker(
+        action, osname=osname, runs="the bash script scripts/local-ai.sh")
+    if not said:
+        return ""
+    kind = platform_info.blocker_kind(said)
+    path = MACOS_NATIVE_PATH if kind == "darwin" else WINDOWS_NATIVE_PATH
+    return platform_info.HostBlocker(f"{said} {path}", kind)
 
 
 def windows_refusal(osname: str | None = None) -> str:
@@ -963,12 +983,12 @@ def windows_refusal(osname: str | None = None) -> str:
     MSI), with both ways forward; "" anywhere else, WSL included. ``bash`` there is
     System32's WSL launcher, which runs the script inside the Linux VM where a C:\\
     checkout path means nothing (#827 group 1, the same gate as the other bash
-    drivers). ``osname`` is ``os.name`` unless a test passes another."""
-    from . import platform_info
-    said = platform_info.native_windows_blocker(
-        "Starting the local assistant", osname=osname,
-        runs="the bash script scripts/local-ai.sh")
-    return f"{said} {WINDOWS_NATIVE_PATH}" if said else ""
+    drivers). ``osname`` is ``os.name`` unless a test passes another.
+
+    The name is historical: a Mac without Homebrew's GNU tools is refused here too
+    (the script is bash 4 and GNU sed), with the Mac's own way forward and no Windows
+    advice. ``platform_info.blocker_kind`` of the answer says which."""
+    return _script_refusal("Starting the local assistant", osname)
 
 
 def windows_worker_note(osname: str | None = None) -> str:
@@ -978,12 +998,56 @@ def windows_worker_note(osname: str | None = None) -> str:
 
     Every one of those lines is the bash script, which PowerShell cannot run and
     System32's bash runs inside the Linux VM where a C:\\ path means nothing; the
-    panel's own questions go to Ollama over HTTP and need none of it."""
+    panel's own questions go to Ollama over HTTP and need none of it.
+
+    Also the note on a Mac without the GNU tools (see :func:`windows_refusal`)."""
+    return _script_refusal("The local assistant's queue worker", osname)
+
+
+#: What "Start local assistant" does where scripts/local-ai.sh cannot run, per host.
+_WINDOWS_START_TOOLTIP = (
+    "In Docker mode: start the Studio's Ollama container and wait until it "
+    "answers. With the system Ollama there is nothing to start from here: "
+    "Ollama for Windows runs in the background once installed.")
+_MACOS_START_TOOLTIP = (
+    "In Docker mode: start the Studio's Ollama container and wait until it "
+    "answers. With the system Ollama there is nothing to start from here until the "
+    "GNU tools are installed: open the Ollama app, or run `ollama serve`.")
+_WINDOWS_SYSTEM_OLLAMA = (
+    "The Studio does not start or stop the system Ollama from here: "
+    "Ollama for Windows runs in the background once installed (start it "
+    f"from the Start menu when it is not answering; get it from "
+    f"{OLLAMA_DOWNLOAD}).")
+_MACOS_SYSTEM_OLLAMA = (
+    "The Studio does not start or stop the system Ollama from here until the GNU "
+    "tools are installed (Start local assistant runs scripts/local-ai.sh): open the "
+    "Ollama app, or run `ollama serve`, when it is not answering; get it from "
+    f"{OLLAMA_DOWNLOAD}.")
+
+
+def start_tooltip(osname: str | None = None) -> str:
+    """The "Start local assistant" tooltip where the script cannot run (native Windows,
+    or a Mac without the GNU tools): what the button does THERE, then
+    :func:`windows_worker_note`. "" where the script runs and the default tooltip,
+    which names it, is true."""
     from . import platform_info
-    said = platform_info.native_windows_blocker(
-        "The local assistant's queue worker", osname=osname,
-        runs="the bash script scripts/local-ai.sh")
-    return f"{said} {WINDOWS_NATIVE_PATH}" if said else ""
+    note = windows_worker_note(osname)
+    if not note:
+        return ""
+    head = (_MACOS_START_TOOLTIP if platform_info.blocker_kind(note) == "darwin"
+            else _WINDOWS_START_TOOLTIP)
+    return f"{head}\n\n{note}"
+
+
+def system_ollama_note(osname: str | None = None) -> str:
+    """Who starts the SYSTEM Ollama where the script cannot (see :func:`start_tooltip`);
+    "" where "Start local assistant" does."""
+    from . import platform_info
+    note = windows_worker_note(osname)
+    if not note:
+        return ""
+    return (_MACOS_SYSTEM_OLLAMA if platform_info.blocker_kind(note) == "darwin"
+            else _WINDOWS_SYSTEM_OLLAMA)
 
 
 def start_assistant(generator_dir: str, *, env: dict | None = None,
@@ -1204,6 +1268,8 @@ def main(argv: list | None = None, *, out=None, err=None, inp=None) -> int:
 
 
 if __name__ == "__main__":
+    from .entry import bootstrap as _bootstrap   # the Mac PATH hook: core/entry.py
+    _bootstrap()
     if os.name == "nt":
         # UTF-8 out, as packaging/run_studio.py does for the MSI: a redirected stream is
         # the ANSI code page there (cp1252), and a state path under C:\Users\Łukasz
