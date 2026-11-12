@@ -135,7 +135,7 @@ def docker_available() -> Capability:
         False,
         detail="the docker daemon is not reachable",
         remedy="Start Docker (or, under WSL, enable Docker Desktop's WSL integration "
-               "for this distro) and reopen this dialog.")
+               "for this distro), then press Refresh.")
 
 
 class DockerDidNotAnswer(RuntimeError):
@@ -358,6 +358,10 @@ _REMEDY_START_LANE = (
 _WINDOWS_HOST_ROUTE = (
     "Or point VAULT_ADDR (with VAULT_TOKEN) at an existing Vault this PC can reach; that "
     "route needs the `vault` CLI installed on Windows.")
+#: The same route on a Mac that has not installed the GNU tools the lane needs.
+_MACOS_HOST_ROUTE = (
+    "Or point VAULT_ADDR (with VAULT_TOKEN) at an existing Vault this Mac can reach; that "
+    "route needs only the `vault` CLI on this Mac.")
 
 
 def _lane_remedy(linux: str, osname: str | None = None, first: str = "") -> str:
@@ -366,11 +370,17 @@ def _lane_remedy(linux: str, osname: str | None = None, first: str = "") -> str:
     route instead: that Studio refuses every lane verb and cannot run `make`, so the
     Linux remedy sent the operator to controls that can only refuse. ``first`` goes in
     front of the Windows text (a step that still works there, such as Refresh).
+    A Mac missing Homebrew's GNU tools is refused by the same verbs, so it gets its own
+    sentence (the ``brew install`` line) and the same route, with nothing Windows in it.
     ``osname`` is ``os.name`` unless a test passes another."""
     from . import platform_info
     said = platform_info.native_windows_blocker("The DevOps (Kubernetes) lane",
                                                 osname=osname)
-    return f"{first}{said} {_WINDOWS_HOST_ROUTE}" if said else linux
+    if not said:
+        return linux
+    route = (_MACOS_HOST_ROUTE if platform_info.blocker_kind(said) == "darwin"
+             else _WINDOWS_HOST_ROUTE)
+    return f"{first}{said} {route}"
 
 
 @dataclass(frozen=True)

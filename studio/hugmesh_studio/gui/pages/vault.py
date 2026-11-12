@@ -91,7 +91,7 @@ from ...core.config import (
     vault_field_error)
 from ._gating import gate_widgets_role_class, out_of_scope_note_flow, scope_allows_flow
 from ._scroll import scrollable
-from ._widgets import _row
+from ._widgets import _row, page_intro
 
 #: The certificate file picker, as a MODULE-LEVEL OVERRIDE POINT. Tests monkeypatch it to drive
 #: the add-a-certificate path with no real dialog; production keeps Qt's own. It is
@@ -161,14 +161,18 @@ class VaultPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Secrets store")
+        # Two lines at most: the wizard header clips the rest mid-sentence (GUI-14 — the
+        # longer subtitle stopped at "…so first-boot"). What an address does is the
+        # body's first line; what an EMPTY one does is the note under the fields, which
+        # says it for whatever is typed there.
         self.setSubTitle(
             "Where this mesh's nodes fetch cluster secrets from, and the base CA "
-            "certificates its domains chain to. Leave the internal address empty and "
-            "no flag is emitted: the builders bake nothing unless the brand profile "
-            "(brand.conf VAULT_ADDR) names a Vault. Enter a HashiCorp Vault address "
-            "to bake it into every node so first-boot provisioning can seed External "
-            "Secrets from it.")
+            "certificates its domains chain to.")
         lay = scrollable(self)
+        lay.addWidget(page_intro(
+            "Enter a HashiCorp Vault address to bake it into every node, so first-boot "
+            "provisioning can seed External Secrets from it. Empty is a valid answer: "
+            "the note under the addresses says what this flow then bakes."))
 
         self.box = QtWidgets.QGroupBox("HashiCorp Vault")
         vb = QtWidgets.QVBoxLayout(self.box)

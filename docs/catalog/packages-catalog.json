@@ -169,8 +169,7 @@
           {
             "atoms": [
               "media-gfx/feh",
-              "app-editors/nano",
-              "www-client/netsurf"
+              "app-editors/nano"
             ],
             "title": "Minimal apps"
           },
@@ -320,8 +319,7 @@
           {
             "atoms": [
               "media-gfx/feh",
-              "app-editors/nano",
-              "www-client/netsurf"
+              "app-editors/nano"
             ],
             "title": "Minimal apps"
           },
@@ -577,8 +575,7 @@
           {
             "atoms": [
               "media-gfx/feh",
-              "app-editors/nano",
-              "www-client/netsurf"
+              "app-editors/nano"
             ],
             "title": "Minimal apps"
           },
@@ -774,8 +771,7 @@
           {
             "atoms": [
               "media-gfx/feh",
-              "app-editors/nano",
-              "www-client/netsurf"
+              "app-editors/nano"
             ],
             "title": "Minimal apps"
           },
@@ -1663,7 +1659,6 @@
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
           "sys-auth/polkit",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -1685,7 +1680,6 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sys-auth/polkit",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -1759,7 +1753,6 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sys-auth/polkit",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -1887,7 +1880,6 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sys-auth/polkit",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -1907,7 +1899,6 @@
           "media-fonts/noto",
           "media-gfx/feh",
           "sys-auth/polkit",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -2028,7 +2019,6 @@
           "sec-policy/selinux-vdagent",
           "sys-auth/polkit",
           "sys-kernel/dracut",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -2168,7 +2158,6 @@
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
           "sys-auth/polkit",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -2194,7 +2183,6 @@
           "sec-policy/selinux-vdagent",
           "sys-auth/polkit",
           "sys-kernel/dracut",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -2276,7 +2264,6 @@
           "sec-policy/selinux-vdagent",
           "sys-auth/polkit",
           "sys-kernel/dracut",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -2358,7 +2345,6 @@
           "sec-policy/selinux-vdagent",
           "sys-auth/polkit",
           "sys-kernel/dracut",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -2498,7 +2484,6 @@
           "media-gfx/feh",
           "sec-policy/selinux-vdagent",
           "sys-auth/polkit",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",
@@ -2522,7 +2507,6 @@
           "sec-policy/selinux-vdagent",
           "sys-auth/polkit",
           "sys-kernel/dracut",
-          "www-client/netsurf",
           "x11-apps/setxkbmap",
           "x11-apps/xrandr",
           "x11-apps/xset",

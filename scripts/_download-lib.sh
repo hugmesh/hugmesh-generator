@@ -79,6 +79,14 @@
 #   dlv_gpg_cleanup
 #       — remove the ephemeral GNUPGHOME created by dlv_import_key.
 #
+#   dlv_tailscale_version_ok <version>
+#       — refuse a --tailscale-version older than DLV_TAILSCALE_MIN_VERSION
+#         (1.32.0). Every image's /etc/init.d/tailscaled (the shared
+#         specs/etc/init.d/tailscaled) passes --no-logs-no-support, a flag
+#         tailscaled only has from 1.32.0 on: an older binary exits on the unknown
+#         flag and the node never joins the mesh. Also refuses a version that is
+#         not MAJOR.MINOR[.PATCH] (pkgs.tailscale.com names releases that way).
+#
 #   dlv_verify_sshsig <file> <sig> <allowed_signers> <identity> <namespace> [expected_key_fp]
 #       — verify an OpenSSH sshsig signature (`ssh-keygen -Y verify`) against a
 #         pinned allowed_signers file (GrapheneOS factory images use this). When
@@ -569,5 +577,35 @@ dlv_verify_sshsig() {
         return 1
     fi
     dlv_info "sshsig OK: $(basename "${file}") (identity=${identity}, namespace='${namespace}')"
+    return 0
+}
+
+# ── tailscaled version floor ──────────────────────────────────────
+# specs/etc/init.d/tailscaled adds --no-logs-no-support (no log upload to the
+# vendor's log service) unless TAILSCALED_UPLOAD_LOGS=yes. The flag first appears
+# in tailscale 1.32.0. Measured on the vendor's stable amd64 tarballs: 1.30.2's
+# tailscaled exits 2 on it ("flag provided but not defined: -no-logs-no-support"),
+# 1.32.0's lists it in --help and accepts it. So a build pinned below the floor
+# would ship a node whose mesh client never starts. Refuse it at argument time,
+# before any download. Pure bash: no `sort -V` (busybox lacks it).
+DLV_TAILSCALE_MIN_VERSION="1.32.0"
+dlv_tailscale_version_ok() {
+    local v
+    v="${1:-}"
+    local min_maj min_min ver_maj ver_min
+    if ! [[ "${v}" =~ ^([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]]; then
+        dlv_die "--tailscale-version '${v}' is not a MAJOR.MINOR[.PATCH] tailscale release (e.g. 1.78.1)."
+        return 1
+    fi
+    ver_maj=$((10#${BASH_REMATCH[1]}))
+    ver_min=$((10#${BASH_REMATCH[2]}))
+    min_maj="${DLV_TAILSCALE_MIN_VERSION%%.*}"
+    min_min="${DLV_TAILSCALE_MIN_VERSION#*.}"
+    min_min="${min_min%%.*}"
+    if [ "${ver_maj}" -lt "${min_maj}" ] \
+       || { [ "${ver_maj}" -eq "${min_maj}" ] && [ "${ver_min}" -lt "${min_min}" ]; }; then
+        dlv_die "--tailscale-version ${v} is older than ${DLV_TAILSCALE_MIN_VERSION}: the image's tailscaled init script passes --no-logs-no-support (no log upload to the vendor), which tailscaled only accepts from ${DLV_TAILSCALE_MIN_VERSION}, so this tailscaled would refuse to start. Pick ${DLV_TAILSCALE_MIN_VERSION} or newer, or --skip-tailscale."
+        return 1
+    fi
     return 0
 }

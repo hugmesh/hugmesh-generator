@@ -2608,7 +2608,16 @@ run_portage_config_sync_checks() {
 # legs without bumping this counter — the same #550 class the SLX comment above
 # documents). Deliberate bump; verified by running the delegate standalone:
 # it emits 25 assertions, 0 failed.
-RAR_EXPECTED=25
+# 61 = 25 + 36 from defect L6 (sections F, F' and G): 10 per-platform
+# package.provided overlap legs, 4 package.provided-coverage legs, 16 synthesised
+# negative controls, 3 report-path probes and 3 cifs-utils/samba legs (rpi5,
+# frite, jetson). The six orangepi boards in G's CIFS_UNMEASURED print a NOTE,
+# not an assertion; moving one out of that list adds a leg here. Verified by
+# running the delegate standalone: 61 assertions, 0 failed.
+# 77 = 61 + 16 from G' (a mutation run found G could be made vacuous): 10
+# synthesised cifs-utils verdict controls and 6 report-bucket probes. Verified by
+# running the delegate standalone: 77 assertions, 0 failed.
+RAR_EXPECTED=77
 RAR_PASS=0; RAR_FAIL=0
 run_requested_atoms_checks() {
     local out="${TMP_DIR}/reqatoms.out"

@@ -372,6 +372,63 @@ slx_mark_selinux_built() {
     chmod 0644 "${sysroot}/usr/share/hugmesh/selinux-built"
 }
 
+# ── A MODULE WHOSE ENTRYPOINTS THE IMAGE DOES NOT SHIP CONFINES NOTHING ───────
+# A hugmesh_* domain is entered by exec'ing its entrypoint, a /usr/bin|/usr/sbin
+# binary labelled hugmesh_*_exec_t in the module's .fc. Not every role ships
+# them: --unaffiliated (standalone-unaffiliated) skips the whole mesh-platform
+# bake in build-x86-host-stage4.sh, and no x86 role ships hugmesh-vpn-runner or
+# hugmesh-vpn-reconcile. Listing such a module in the manifest put a domain on
+# the image that nothing can enter, and slx_write_probe_table then refused to
+# pack: "the manifest lists hugmesh modules but no hugmesh entrypoint is
+# labellable" (a standalone-unaffiliated x86 build, 2026-11-10, after ~13.5 h).
+# slx_stage_node_policy therefore skips a module when its .fc declares at least
+# one entrypoint and the sysroot ships none of them (either spelling: builders
+# copy into /usr/sbin, which is a real directory where usr is not merged). The
+# skip is recorded in the manifest with its reason, like the dependency skips.
+# A module that declares NO entrypoint (hugmesh_bootpath: boot-path grants and
+# the /run/hugmesh label) is installed on every role, as before.
+
+# slx_module_entrypoints <fc> -> the literal /usr/bin and /usr/sbin paths the .fc
+# types hugmesh_*_exec_t, one per line. bin_t helpers (hugmesh-vpn-mark,
+# hugmesh-tor-ingress-admit) are not entrypoints: no domain is entered through them.
+slx_module_entrypoints() {
+    local fc="${1:?slx_module_entrypoints: fc required}"
+    [ -r "${fc}" ] || return 0
+    awk '$1 ~ /^\/usr\/s?bin\/[A-Za-z0-9._-]+$/ && $2 == "--" &&
+         $3 ~ /^gen_context\(system_u:object_r:hugmesh_[a-z0-9_]+_exec_t,/ { print $1 }' "${fc}"
+}
+
+# slx_ships_entrypoint <sysroot> <fc> -> 0 iff the sysroot carries at least one of
+# the .fc's entrypoints (a file, or a link: usrmerge makes /usr/sbin one).
+slx_ships_entrypoint() {
+    local sysroot="${1:?}" fc="${2:?}" p
+    while read -r p; do
+        [ -n "${p}" ] || continue
+        if [ -e "${sysroot}${p}" ] || [ -L "${sysroot}${p}" ]; then return 0; fi
+    done < <(slx_module_entrypoints "${fc}")
+    return 1
+}
+
+# slx_required_by <dir> <module> <kept module...> -> the first kept module whose
+# .te names a type <module>.te declares ("" when none). hugmesh_domain_reconcile,
+# hugmesh_node_storage, hugmesh_policy_sync and hugmesh_device_registry_sync all
+# `require` hugmesh_authkeys_cache_t, so hugmesh_authkeys must stay installed
+# wherever one of them does, entrypoint or not, or that module cannot load.
+# Declarations are the column-0 `type <name>;` lines; requires are indented.
+slx_required_by() {
+    local dir="${1:?}" mod="${2:?}" types k
+    shift 2
+    types="$(awk '/^type[[:space:]]+[A-Za-z0-9_]+/ { t = $2; sub(/[;,].*/, "", t); print t }' "${dir}/${mod}.te")"
+    [ -n "${types}" ] || return 0
+    for k in "$@"; do
+        [ "${k}" = "${mod}" ] && continue
+        # grep without -q reads to EOF: no SIGPIPE under the builders' pipefail.
+        if sed 's/#.*//' "${dir}/${k}.te" | grep -wF -- "${types}" >/dev/null; then
+            printf '%s' "${k}"; return 0
+        fi
+    done
+}
+
 # ── slx_stage_node_policy <sysroot> <shared_specs> ───────────────────────────
 # THE ONE CALL SITE. Compiles every specs/selinux module the sysroot can support,
 # installs the .pp into the policy store provision_selinux() already loads,
@@ -461,9 +518,44 @@ slx_stage_node_policy() {
 
     _slx_say "refpolicy headers: ${hdr}   policy store: ${store}"
 
+    # Decide the entrypoint skips BEFORE compiling: whether a module stays can
+    # depend on another module staying (slx_required_by), so the whole set is
+    # settled first. Dependency skips are left to the compile loop below.
     local te built=() skipped=() rc=0 log="${work}/compile.log"
+    local noep=() kept=() cand=() m by changed
     for te in "${work}"/*.te; do
         name="$(basename "${te}" .te)"
+        [ -n "$(slx_missing_deps "${name}" "${store}")" ] && continue
+        if [ -n "$(slx_module_entrypoints "${work}/${name}.fc")" ] \
+            && ! slx_ships_entrypoint "${sysroot}" "${work}/${name}.fc"; then
+            cand+=("${name}")
+        else
+            kept+=("${name}")
+        fi
+    done
+    changed=1
+    while [ "${changed}" = 1 ] && [ "${#cand[@]}" -gt 0 ]; do
+        changed=0
+        for m in "${cand[@]}"; do
+            [ -n "${m}" ] || continue
+            by="$(slx_required_by "${work}" "${m}" ${kept[@]+"${kept[@]}"})"
+            [ -n "${by}" ] || continue
+            _slx_say "KEEP ${m}: this image ships none of its entrypoints, but ${by} requires its types"
+            kept+=("${m}"); changed=1
+            local i; for i in "${!cand[@]}"; do [ "${cand[i]}" = "${m}" ] && cand[i]=""; done
+        done
+    done
+    for m in ${cand[@]+"${cand[@]}"}; do
+        [ -n "${m}" ] || continue
+        noep+=("${m}")
+        _slx_say "SKIP ${m}: this image ships none of its entrypoints ($(slx_module_entrypoints "${work}/${m}.fc" | tr '\n' ' '))"
+        _slx_say "     a domain nothing can enter confines nothing, and the probe table would"
+        _slx_say "     refuse an image whose policy labels entrypoints it does not carry."
+    done
+
+    for te in "${work}"/*.te; do
+        name="$(basename "${te}" .te)"
+        for m in ${noep[@]+"${noep[@]}"}; do [ "${m}" = "${name}" ] && continue 2; done
         local miss; miss="$(slx_missing_deps "${name}" "${store}")"
         if [ -n "${miss}" ]; then
             skipped+=("${name}")
@@ -530,11 +622,15 @@ slx_stage_node_policy() {
         for name in ${skipped[*]-}; do
             echo "# skipped: ${name} (container policy headers absent — not a k8s node image)"
         done
+        for name in ${noep[*]-}; do
+            echo "# skipped: ${name} (no entrypoint shipped in this image)"
+        done
     } > "${sysroot}/usr/share/hugmesh/selinux-modules.list"
     chmod 0644 "${sysroot}/usr/share/hugmesh/selinux-modules.list"
 
     _slx_say "installed ${#built[@]} module(s) into ${store}: ${built[*]}"
     [ "${#skipped[@]}" -eq 0 ] || _slx_say "not applicable to this image: ${skipped[*]-}"
+    [ "${#noep[@]}" -eq 0 ] || _slx_say "no entrypoint shipped in this image: ${noep[*]-}"
     _slx_say "the builder now installs them into the ${type} store at build time (slx_store_install_modules); a KEYS first boot re-installs them via provision_selinux()'s 'hugmesh node-policy load' block (PERMISSIVE)"
 
     rm -rf "${work}"
@@ -896,7 +992,7 @@ slx_label_tree() {
 # whose file is present in the sysroot (localpath_provisioner/otel_collector have
 # no host entrypoint; an absent binary is logged, not failed).
 slx_write_probe_table() {
-    local root="${1:?}" type="${2:?}" out="${3:?}" e p want canon got rc=0 nh=0
+    local root="${1:?}" type="${2:?}" out="${3:?}" e p want canon got rc=0 nh=0 nd=0
     local fc="${root}/etc/selinux/${type}/contexts/files/file_contexts"
     [ -s "${fc}" ] || { _slx_fail "probe table: ${fc} missing"; return 1; }
     : > "${out}" || return 1
@@ -922,8 +1018,23 @@ slx_write_probe_table() {
         fi
     done < <(awk '$1 ~ /^\/usr\/bin\/[A-Za-z0-9._-]+$/ && $2 == "--" {
                  split($3, c, ":"); if (c[3] ~ /^hugmesh_[a-z0-9_]+_exec_t$/) print $1, c[3] }' "${fc}" | sort -u)
-    if [ "$(_slx_count grep -c '^hugmesh_' "${root}/usr/share/hugmesh/selinux-modules.list")" -gt 0 ] && [ "${nh}" -eq 0 ]; then
-        _slx_fail "probe table: the manifest lists hugmesh modules but no hugmesh entrypoint is labellable — store install missing?"; rc=1
+    # Two refusals, each keyed on what the POLICY says rather than on module names:
+    # a manifest module may legitimately declare no entrypoint (hugmesh_bootpath is
+    # installed on every role, standalone-unaffiliated included).
+    #  1. the manifest lists hugmesh modules and file_contexts carries no hugmesh_
+    #     type at all: the store install never reached file_contexts;
+    #  2. file_contexts labels hugmesh entrypoints (either spelling) and none of them
+    #     is a probe: the image ships none, so a manifest module confines nothing
+    #     (slx_stage_node_policy skips those), or the binaries are only reachable at
+    #     a /usr/sbin spelling the gates never see (no usrmerge).
+    if [ "$(_slx_count grep -c '^hugmesh_' "${root}/usr/share/hugmesh/selinux-modules.list")" -gt 0 ] \
+        && [ "$(_slx_count grep -c 'hugmesh_' "${fc}")" -eq 0 ]; then
+        _slx_fail "probe table: the manifest lists hugmesh modules but ${fc#"${root}"} carries no hugmesh_ type — store install missing?"; rc=1
+    fi
+    nd="$(_slx_count awk '$1 ~ /^\/usr\/s?bin\/[A-Za-z0-9._-]+$/ && $2 == "--" {
+             split($3, c, ":"); if (c[3] ~ /^hugmesh_[a-z0-9_]+_exec_t$/) n++ } END { print n+0 }' "${fc}")"
+    if [ "${nd}" -gt 0 ] && [ "${nh}" -eq 0 ]; then
+        _slx_fail "probe table: the policy labels ${nd} hugmesh entrypoint rule(s) but no hugmesh entrypoint is labellable — a manifest module whose entrypoints this image does not ship?"; rc=1
     fi
     _slx_say "probe table ${out}: $(wc -l < "${out}") probe(s), ${nh} hugmesh entrypoint(s)"
     return "${rc}"
