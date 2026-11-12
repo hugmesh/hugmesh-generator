@@ -74,6 +74,20 @@ data:
     turn_uris = ["turn:coturn.hugmesh-backend.svc.cluster.local:3478?transport=udp", "turn:coturn.hugmesh-backend.svc.cluster.local:3478?transport=tcp"]
     turn_secret = ""    # DARK: filled at runtime by TUWUNEL_TURN_SECRET only when coturn is up
     turn_ttl = 86400
+    # --- New-account displayname: NO suffix ---------------------------------------
+    # tuwunel appends `new_user_displayname_suffix` (default "💕", Conduit's was a
+    # lightning bolt) to the displayname it auto-creates at registration, with a
+    # space before it. Every account the BFF brokers mint therefore read
+    # "<localpart> 💕" in every Matrix client, and an account whose localpart is a
+    # Casdoor UUID showed "c18f905c-... 💕". "" disables it (the documented spelling
+    # in the v1.7.0 tuwunel-example.toml). The real displayname, the Casdoor
+    # username, is set by the brokers after registration; this only stops the
+    # homeserver decorating the placeholder. It applies to NEW registrations only:
+    # accounts minted before this change keep the suffix until the admin-bff
+    # displayname reconcile rewrites them. Compose lane: the
+    # TUWUNEL_NEW_USER_DISPLAYNAME_SUFFIX env in tests/stack/compose.real.yaml.
+    # Pinned by section (D) of tests/stack/test-front-door-client-surface.sh.
+    new_user_displayname_suffix = ""
 
     # ── Client/server AUTODISCOVERY (.well-known/matrix/client|server) ──────────
     # MUST BE THE LAST THING IN THIS FILE. TOML sub-tables swallow every bare key

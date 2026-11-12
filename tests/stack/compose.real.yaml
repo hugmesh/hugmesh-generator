@@ -109,6 +109,17 @@ services:
       TUWUNEL_REGISTRATION_SHARED_SECRET: ${MATRIX_REG_SECRET:-hugmesh-reg-secret}
       TUWUNEL_GRANT_ADMIN_TO_FIRST_USER: "false"
       TUWUNEL_ALLOW_FEDERATION: "false"
+      # No suffix on the displayname tuwunel auto-creates at registration. Its
+      # default appends " 💕", so every BFF-minted account read "<localpart> 💕"
+      # (a Casdoor-UUID localpart showed "c18f905c-... 💕"). The value MUST be the
+      # quoted empty string: a bare `KEY:` is null, which compose treats as "pass
+      # through from the host" and the default suffix comes back. Verified against
+      # this image: unset -> "<localpart> 💕", "" -> "<localpart>". New
+      # registrations only; existing accounts are fixed by the admin-bff
+      # displayname reconcile. Cluster twin: new_user_displayname_suffix in
+      # specs/cluster/manifests/tuwunel/tuwunel.yaml. Pinned by section (D) of
+      # tests/stack/test-front-door-client-surface.sh.
+      TUWUNEL_NEW_USER_DISPLAYNAME_SUFFIX: ""
       # ── Client/server AUTODISCOVERY (.well-known/matrix/*) ──────────────
       # Makes tuwunel actually SERVE the two discovery documents the fe-gateway
       # route `matrix-wellknown` proxies to it. Without these keys tuwunel does
