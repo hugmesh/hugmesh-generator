@@ -59,6 +59,33 @@ hugmesh_pretend_needs() {
         /^The following keyword changes are necessary to proceed/  { kind = "accept_keywords"; next }
         /^The following mask changes are necessary to proceed/     { kind = "mask"; next }
         /^The following license changes are necessary to proceed/  { kind = "license"; next }
+        # The OTHER form a USE wall takes. When autounmask does not list the change
+        # (the real 2026-11-11 OBS run: the keyword change listed, the ffmpeg USE wall
+        # not), portage prints its suggestion as a hint instead:
+        #   emerge: there are no ebuilds built with USE flags to satisfy "...".
+        #   !!! One of the following packages is required to complete your request:
+        #   - media-video/ffmpeg-8.1.2::gentoo (Change USE: +opus +x264)
+        # The first alternative is portage'"'"'s preferred one (highest version), and its
+        # line becomes ">=CAT/PN-VER opus x264" (what --autounmask-write writes). Only
+        # a hint that is NOTHING BUT a USE change counts: ", this change violates use
+        # flag constraints ..." or "Missing IUSE" stay unnamed, so the result is error.
+        /^!!! One of the following packages is required to complete your request/ { oneof = 1; kind = ""; next }
+        oneof && /^- / {
+            oneof = 0
+            if (match($0, /^- [a-z0-9][a-z0-9+._-]*\/[A-Za-z0-9+_.-]+(::[A-Za-z0-9_-]+)? \(Change USE: [^),]+\)[[:space:]]*$/)) {
+                cpv = $2; sub(/::.*$/, "", cpv)
+                chg = $0; sub(/^.*\(Change USE: /, "", chg); sub(/\)[[:space:]]*$/, "", chg)
+                n = split(chg, f, /[[:space:]]+/); flags = ""; okf = (n > 0)
+                for (i = 1; i <= n; i++) {
+                    if (f[i] ~ /^\+[A-Za-z0-9][A-Za-z0-9+_@-]*$/) flags = flags " " substr(f[i], 2)
+                    else if (f[i] ~ /^-[A-Za-z0-9][A-Za-z0-9+_@-]*$/) flags = flags " " f[i]
+                    else okf = 0
+                }
+                if (okf && flags != "") print "package.use >=" cpv flags
+            }
+            next
+        }
+        { oneof = 0 }
         kind == "" { next }
         /^[[:space:]]*$/ { next }
         /^[[:space:]]*\(see / { next }
