@@ -5,10 +5,11 @@
 #   studio/packaging/build-macos-app.sh                         # every phase
 #   studio/packaging/build-macos-app.sh --python .venv/bin/python --gui-smoke
 #
-# The SAME script runs in three places, so what a pull request proves is what a release
-# ships: the `macos` job of .github/workflows/studio-tests.yml (every Studio pull
-# request, Apple silicon and Intel), the `macos` job of studio-release.yml, and a
-# developer's Mac.
+# The SAME script runs in both places it is built today: the `macos` job of
+# .github/workflows/studio-tests.yml (every Studio pull request, Apple silicon and
+# Intel) and a developer's Mac. studio-release.yml has no macOS job yet (the .dmg is
+# not on a release); when it gets one it runs this script too, so what a pull request
+# proves is what that release ships.
 #
 #   icons    gen_icons.py --iconset, then iconutil      ->  build/icons/hugmesh-studio.icns
 #   freeze   PyInstaller, packaging/hugmesh-studio.spec  ->  dist/HugMesh Image Studio.app

@@ -387,9 +387,10 @@ jobs:
     # a real Finder-style PATH, a real cocoa window.
     #
     # NAMED FILES, as in the windows job: these are the macOS contract, and a new macOS
-    # fix adds its test here. Then packaging/build-macos-app.sh, the SAME script the
-    # release's macos jobs run, freezes, checks, smoke-tests and packs the app, so what
-    # a pull request proves is what a release ships.
+    # fix adds its test here. Then packaging/build-macos-app.sh freezes, checks,
+    # smoke-tests and packs the app. studio-release.yml has no macOS job yet (the .dmg
+    # is not on a release); when it gets one it must run this SAME script, so that what
+    # a pull request proves is what the release ships.
     #
     # macos-15 is Apple silicon (arm64) and macos-15-intel is x86_64; both are GitHub's
     # standard hosted images, pinned by version rather than macos-latest so the
@@ -467,6 +468,11 @@ jobs:
           tests/test_macos_host.py
           tests/test_platform_macos.py
           tests/test_macos_terminals.py
+          tests/test_entry_bootstrap.py
+          tests/test_macos_docker_cpus.py
+          tests/test_macos_stock_texts.py
+          tests/test_macos_stock_texts_gui.py
+          tests/test_pages_build_macos.py
 
       - name: A stock Mac - the self-check names the missing GNU tools and exits 1
         # Before Homebrew's GNU tools are installed: macOS's own bash 3.2 and BSD sed,
@@ -522,6 +528,42 @@ jobs:
           assert r["macos"]["gnu_missing"] == [] and r["macos"]["bash_major"] >= 4, r["macos"]
           assert r["checked_paths"] > 0 and r["scripts_parsed"] > 0, "a vacuous self-check"
           assert not r["problems"], r["problems"]
+          PY
+
+      - name: With launchd's PATH - the text UI and a module command line find the GNU tools too
+        # The PATH hook used to run for the window only. Homebrew leaves its GNU tools
+        # in <prefix>/opt/<formula>/libexec/gnubin, off every shell's PATH, so the text
+        # UI and `python -m hugmesh_studio.core.<module>` refused a Mac that HAD run the
+        # brew line. Both are started here with the PATH a Finder launch gets, against
+        # the runner's real Homebrew: first shown to lack the tools without the hook
+        # (so this proves something), then driven through their real entries.
+        run: |
+          env -i HOME="$RUNNER_TEMP/tui-home" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            PYTHONPATH="$GITHUB_WORKSPACE/studio" GEN="$GITHUB_WORKSPACE" \
+            "$RUNNER_TEMP/venv/bin/python" - <<'PY'
+          import io, os, subprocess, sys
+          from hugmesh_studio.core import macos_host, platform_info
+          before = macos_host.gnu_userland_missing()
+          assert before, "launchd's PATH already holds the GNU tools: the hook proves nothing"
+          print("without the hook this PATH lacks:", before)
+          finder_env = dict(os.environ)
+          from hugmesh_studio.tui import app as tui
+          rc = tui.main(["--worklist", "no-such-session"], inp=io.StringIO(""), out=io.StringIO())
+          assert rc == 2, rc
+          assert macos_host.gnu_userland_missing() == [], macos_host.gnu_userland_missing()
+          said = platform_info.host_script_blocker("Mesh emulation")
+          assert said == "", said
+          print("text UI entry: the GNU tools are found; PATH now starts", os.environ["PATH"].split(":")[:3])
+          # a module command line, in a process of its own, from the same Finder PATH
+          cli = subprocess.run(
+              [sys.executable, "-m", "hugmesh_studio.core.cloud_deploy", "list",
+               "--generator-dir", os.environ["GEN"]],
+              env=finder_env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+              timeout=300)
+          out = cli.stdout + cli.stderr
+          print("cloud_deploy list: exit", cli.returncode)
+          print(out[:2000])
+          assert "this Mac is missing" not in out, "the module command line was refused"
           PY
 
       - name: The case-sensitive APFS volume the build preflight asks for

@@ -11,8 +11,9 @@ THE PATH A FINDER-LAUNCHED APP GETS. An app started from Finder, the Dock or
 Launchpad inherits launchd's PATH, ``/usr/bin:/bin:/usr/sbin:/sbin``, not the login
 shell's. Homebrew (``/opt/homebrew/bin`` on Apple silicon, ``/usr/local/bin`` on
 Intel), Docker Desktop's CLI and colima are all outside it, so ``shutil.which("docker")``
-said "not installed" on a Mac that had Docker running. :func:`install` (called from
-``app.main`` before anything spawns a process) puts them back, in this order:
+said "not installed" on a Mac that had Docker running. :func:`install` (called through
+``core/entry.bootstrap()`` by EVERY process entry: the window, the text UI and each
+module command line, before anything spawns a process) puts them back, in this order:
 
   1. Homebrew's ``gnubin`` directories (coreutils, gnu-sed, findutils, grep, make),
      so ``sed``, ``readlink``, ``find`` and ``make`` are the GNU tools the generator's

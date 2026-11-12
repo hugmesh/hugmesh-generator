@@ -490,7 +490,9 @@ The executable inside the bundle is also the command-line tool:
   brew install bash coreutils gnu-sed findutils grep make
   ```
 
-  You do not need to change your shell or PATH. When the Studio starts, it puts
+  You do not need to change your shell or PATH. When the Studio starts (the window,
+  the text UI `python -m hugmesh_studio.tui`, or any `python -m hugmesh_studio.core.…`
+  command line), it puts
   Homebrew's `gnubin` folders and `bin` first in its own PATH. It also adds Docker
   Desktop's, colima's and OrbStack's CLI folders, so an app opened from Finder finds them
   (Finder gives an app only `/usr/bin:/bin:/usr/sbin:/sbin`). Without the tools, every
@@ -505,10 +507,26 @@ The executable inside the bundle is also the command-line tool:
   colima start --vm-type vz --vz-rosetta --cpu 8 --memory 16 --disk 200
   ```
 
-  On Intel, use `--arch x86_64` instead of `--vz-rosetta`. On Apple silicon, also turn on
+  On Intel, use `--arch x86_64` instead of `--vz-rosetta`:
+
+  ```sh
+  colima start --vm-type vz --cpu 8 --memory 16 --disk 200 --arch x86_64
+  ```
+
+  On Apple silicon, also turn on
   Docker Desktop's "Use Rosetta for x86_64/amd64 emulation on Apple Silicon" (colima:
   `--vz-rosetta`). The builder image is x86_64, so the Studio runs it with
   `--platform linux/amd64` there.
+
+  A build gets at most the VM's CPUs. Docker refuses to start a container that asks for
+  more CPUs than its VM has ("range of CPUs is from 0.01 to 8.00"), and the Studio's
+  default CPU limit is every core of the Mac but one. So the Studio reads the VM's CPU
+  count when it starts and lowers the limit to it, for a build's `--cpus` and for the
+  local stack's compose limits, and the build preflight says when it did. To build
+  faster, give the VM more CPUs and restart the Studio. To leave more of the VM free,
+  set `HUGMESH_CPUS` (for example `HUGMESH_CPUS=4`) or use the Studio's resource limits.
+  The VM's memory needs no such step: Docker accepts a memory limit above what the VM
+  has.
 - **A case-sensitive folder for the build output.** A build writes a Linux kernel tree
   and a Gentoo root into its output directory, and APFS ignores case by default. The
   build preflight checks the folder itself and refuses one that ignores case. The fix

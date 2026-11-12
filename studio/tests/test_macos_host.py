@@ -89,9 +89,13 @@ def test_install_keeps_an_activated_venv_ahead_of_homebrew():
 def test_app_main_installs_the_hook_before_anything_spawns():
     import inspect
     from hugmesh_studio import app
+    from hugmesh_studio.core import entry
     src = inspect.getsource(app.main)
-    assert src.index("macos_host.install()") < src.index("ap = argparse.ArgumentParser")
-    assert src.index("flatpak_host.install()") < src.index("macos_host.install()")
+    # core/entry.bootstrap() IS macos_host.install(): the one call every entry (the
+    # window, the text UI, each module command line) makes; tests/test_entry_bootstrap.py
+    assert "macos_host.install()" in inspect.getsource(entry.bootstrap)
+    assert src.index("entry.bootstrap()") < src.index("ap = argparse.ArgumentParser")
+    assert src.index("flatpak_host.install()") < src.index("entry.bootstrap()")
 
 
 @on_a_mac

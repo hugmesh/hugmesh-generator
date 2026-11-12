@@ -421,6 +421,22 @@ def docker_platform_args(host) -> list[str]:
     return []
 
 
+def docker_engine_cpus(host) -> int:
+    """The CPU count of the Docker ENGINE a build on ``host`` runs in, where that is not
+    the host's own and is known: a Mac's Docker VM (``docker info`` NCPU, probed by
+    detect()). 0 on every other host and when the probe did not answer.
+
+    It is the ceiling for a builder's ``--cpus`` (resource_limits.clamp_cpus): dockerd
+    refuses a container that asks for more CPUs than it has, and the auto cap is counted
+    from the MAC's cores. Takes any host object (a test's stand-in included)."""
+    if getattr(host, "os", "") != "darwin":
+        return 0
+    try:
+        return max(0, int(getattr(host, "docker_vm_cpus", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def folds_case(path: str) -> "bool | None":
     """Does the filesystem holding ``path`` (or its nearest existing parent) ignore
     case? True on APFS's and NTFS's defaults, False on ext4/btrfs/xfs and on a
@@ -472,6 +488,10 @@ def macos_build_warnings(host) -> list[str]:
         out.append(f"Docker's VM has {mem / 2**30:.1f} GiB of memory; a build wants at "
                    f"least 16 GB. Raise it in Docker Desktop (Settings -> Resources) or "
                    f"restart colima with --memory 16.")
+    # The CPU cap is counted from the Mac's cores and the VM usually has fewer: say so
+    # when it was lowered to what the VM has (never silently, and before the build).
+    from . import resource_limits
+    out += resource_limits.engine_cpu_warnings(docker_engine_cpus(host))
     return out
 
 
@@ -598,6 +618,46 @@ def builds_in_docker_vm(osname: str | None = None, sysplatform: str | None = Non
     return host_kind(osname, sysplatform) in ("windows", "darwin")
 
 
+class HostBlocker(str):
+    """A :func:`host_script_blocker` sentence that remembers WHICH host it refuses.
+
+    The sentence is a plain ``str`` to everything that shows it. ``kind`` ("windows" or
+    "darwin") is for the consumers that ADD advice to it: "use QEMU for Windows (WHPX)",
+    "start Ollama for Windows", "install the vault CLI on Windows" are true for the MSI
+    and nonsense on a Mac that is only missing Homebrew's GNU tools. Before this, a
+    non-empty blocker MEANT native Windows, and a Mac was told all of that.
+
+    Read it with :func:`blocker_kind`, from the value a blocker function returned and
+    BEFORE formatting it: an f-string, ``html.escape`` or ``+`` gives back a plain str.
+    """
+
+    kind: str = ""
+
+    def __new__(cls, text: str = "", kind: str = "") -> "HostBlocker":
+        self = super().__new__(cls, text)
+        self.kind = kind
+        return self
+
+
+def blocker_kind(blocker) -> str:
+    """"windows", "darwin" or "" (no blocker): the host a blocker sentence refuses.
+
+    A plain non-empty ``str`` is "windows": that is what a non-empty blocker meant
+    before a Mac could be refused, and what a caller's (or a test's) own stand-in
+    sentence still means. Only a :class:`HostBlocker` made for a Mac says "darwin"."""
+    if not blocker:
+        return ""
+    return getattr(blocker, "kind", "") or "windows"
+
+
+def blocker_lines(blocker: str) -> list[str]:
+    """The sentence as display lines. The Windows one is a single line; the Mac one
+    carries its ``brew install`` command on a line of its own, so a face that joins or
+    wraps text (HTML drops a newline, a text screen indents by line) keeps the command
+    apart from the prose and copyable by itself."""
+    return [ln for ln in str(blocker).splitlines() if ln.strip()]
+
+
 def host_script_blocker(action: str, osname: str | None = None,
                         runs: str = "`make` and bash scripts", *,
                         sysplatform: str | None = None,
@@ -612,16 +672,20 @@ def host_script_blocker(action: str, osname: str | None = None,
       does not have, naming the flag and not the cause. ``gnu_missing`` is the list
       core/macos_host.gnu_userland_missing() returns, probed once when not given.
 
+    The answer is a :class:`HostBlocker`: a str that also says which of the two it is
+    (:func:`blocker_kind`), for the callers that add platform advice of their own.
+
     ``osname`` / ``sysplatform`` are ``os.name`` / ``sys.platform`` unless a test passes
     others."""
     kind = host_kind(osname, sysplatform)
     if kind == "windows":
-        return (f"{action} runs {runs} from a hugmesh-generator checkout, "
-                f"which the Windows build of the Studio cannot run. On Windows, run the "
-                f"Studio inside WSL2 instead: in a WSL2 distro (Ubuntu) with Docker "
-                f"Desktop's WSL integration turned on for it, clone hugmesh-generator into "
-                f"~ (not /mnt/c) and start the Linux build of the Studio from that "
-                f"checkout; WSLg shows its window on the Windows desktop.")
+        return HostBlocker(
+            f"{action} runs {runs} from a hugmesh-generator checkout, "
+            f"which the Windows build of the Studio cannot run. On Windows, run the "
+            f"Studio inside WSL2 instead: in a WSL2 distro (Ubuntu) with Docker "
+            f"Desktop's WSL integration turned on for it, clone hugmesh-generator into "
+            f"~ (not /mnt/c) and start the Linux build of the Studio from that "
+            f"checkout; WSLg shows its window on the Windows desktop.", "windows")
     if kind != "darwin":
         return ""
     missing = list(_gnu_missing_cached() if gnu_missing is None else gnu_missing)
@@ -630,11 +694,12 @@ def host_script_blocker(action: str, osname: str | None = None,
     from .macos_host import BREW_INSTALL
     what = ", ".join("bash 4 or newer (macOS ships 3.2)" if m == "bash" else m
                      for m in missing)
-    return (f"{action} runs {runs} written for bash 4 and the GNU tools, and this Mac is "
-            f"missing: {what}. Install them with Homebrew (https://brew.sh):\n"
-            f"    {BREW_INSTALL}\n"
-            f"then restart the Studio. You do not need to change your shell or PATH: the "
-            f"Studio puts Homebrew's GNU tools first for every command it runs.")
+    return HostBlocker(
+        f"{action} runs {runs} written for bash 4 and the GNU tools, and this Mac is "
+        f"missing: {what}. Install them with Homebrew (https://brew.sh):\n"
+        f"    {BREW_INSTALL}\n"
+        f"then restart the Studio. You do not need to change your shell or PATH: the "
+        f"Studio puts Homebrew's GNU tools first for every command it runs.", "darwin")
 
 
 def native_windows_blocker(action: str, osname: str | None = None,
@@ -649,7 +714,10 @@ def native_windows_blocker(action: str, osname: str | None = None,
     C:\\Windows\\System32\\bash.exe is the WSL launcher, which runs a script inside the
     Linux VM where a C:\\ checkout path means nothing. ``runs`` names what ``action``
     actually needs (Go Live, cloud deploy and the phone wizard are bash drivers with no
-    `make` in them). ``osname`` is ``os.name`` unless a test passes another."""
+    `make` in them). ``osname`` is ``os.name`` unless a test passes another.
+
+    A caller that ADDS platform advice to the sentence must ask :func:`blocker_kind`
+    which host it is for: non-empty no longer means Windows."""
     return host_script_blocker(action, osname, runs)
 
 
@@ -685,7 +753,8 @@ _GNU_MISSING: "list[str] | None" = None
 def _gnu_missing_cached() -> list[str]:
     """macos_host.gnu_userland_missing(), once per process: it starts six probes, and
     the blocker is asked on every page refresh. Read AFTER macos_host.install() has put
-    Homebrew on PATH (app.main), so an installed GNU userland is found."""
+    Homebrew on PATH, so an installed GNU userland is found: every process entry (the
+    window, the text UI, each module command line) calls core/entry.bootstrap() first."""
     global _GNU_MISSING
     if _GNU_MISSING is None:
         from .macos_host import gnu_userland_missing
@@ -700,10 +769,15 @@ def macos_docker_remedy(docker_state: str = "", mac_arch: str = "") -> str:
                " On Apple silicon also turn on \"Use Rosetta for x86_64/amd64 emulation on "
                "Apple Silicon\" (Docker Desktop: Settings -> General), or start colima "
                "with --vz-rosetta: the builder image is x86_64.")
-    colima_arch = "" if mac_arch == "arm64" else " --arch x86_64"
+    # Rosetta translates x86_64 for an ARM VM, so it is Apple silicon's flag only; an
+    # Intel Mac runs the x86_64 builder natively and says --arch x86_64 instead
+    # (docs/STUDIO-INSTALLERS.md gives the same two lines).
+    colima_flags = (" --vz-rosetta --cpu 8 --memory 16 --disk 200" if mac_arch == "arm64"
+                    else " --cpu 8 --memory 16 --disk 200 --arch x86_64")
     sizing = (f" Give the VM at least 16 GB of memory and a 200 GB disk (Docker Desktop: "
-              f"Settings -> Resources; colima: `colima start --vm-type vz --vz-rosetta "
-              f"--cpu 8 --memory 16 --disk 200{colima_arch}`).{rosetta}")
+              f"Settings -> Resources; colima: `colima start --vm-type vz"
+              f"{colima_flags}`). A build uses at most the VM's CPUs; HUGMESH_CPUS sets a "
+              f"lower cap.{rosetta}")
     if docker_state == DOCKER_MISSING or not docker_state:
         return ("No docker command was found (the Studio looked in Homebrew, Docker "
                 "Desktop's and colima's folders too). Install one Docker runtime: Docker "
@@ -931,6 +1005,11 @@ def detect(builder_image: str = "hugmesh-builder") -> HostInfo:
         mac = {"mac_arch": macos_host.mac_arch(), "has_hvf": macos_host.hvf_available(),
                "gnu_missing": tuple(_gnu_missing_cached()), "docker_runtime": vm.runtime,
                "docker_vm_mem": vm.mem_bytes, "docker_vm_cpus": vm.cpus}
+        # Every lane that hands Docker a CPU cap (a build's --cpus, the local stack's
+        # and the mesh node's compose overlays) is held to the VM's CPU count, which
+        # dockerd refuses to exceed. The lanes with no HostInfo read it from here.
+        from . import resource_limits
+        resource_limits.set_engine_cpus(vm.cpus)
     return HostInfo(
         os=osname,
         is_gentoo=(osname == "linux" and _is_gentoo(in_flatpak)),

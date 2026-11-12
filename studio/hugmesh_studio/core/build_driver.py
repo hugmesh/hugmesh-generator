@@ -229,9 +229,15 @@ def windows_docker_remedy(osname: str | None = None, docker_cli: bool | None = N
             "the Studio so it checks again. " + alt)
 
 
-def docker_limit_args() -> list[str]:
+def docker_limit_args(host=None) -> list[str]:
     """The full ``docker run`` resource-limit wrapper for a builder run: CPU, memory
     and GPU, resolved by :mod:`hugmesh_studio.core.resource_limits`.
+
+    ``host`` is the driver's HostInfo. On a Mac its Docker VM's CPU count
+    (``docker_vm_cpus``, read from ``docker info``) is the ceiling for ``--cpus``:
+    dockerd refuses a container that asks for more CPUs than its VM has, and the auto
+    formula counts the MAC's cores (platform_info.docker_engine_cpus; 0 on every other
+    host, which clamps nothing). Without ``host`` the count detect() recorded applies.
 
     Supersedes :func:`docker_memory_args`, which capped memory and left CPU
     unbounded — half of the 2026-07-15 host-freeze defence. With every limit off this
@@ -240,7 +246,8 @@ def docker_limit_args() -> list[str]:
 
     Evaluated at command()-assembly time, so the PREVIEW the operator is shown and
     the argv that is DISPATCHED are the same by construction."""
-    return resource_limits.docker_run_args(resource_limits.effective())
+    engine = None if host is None else platform_info.docker_engine_cpus(host)
+    return resource_limits.docker_run_args(resource_limits.effective(engine=engine))
 
 
 def docker_memory_args() -> list[str]:
@@ -604,7 +611,7 @@ class BuildDriver:
                 "--init", "--name", self._container_name,
                 # Container CPU/memory/GPU caps (docker-run wrapper only — the inner
                 # builder argv below is byte-untouched): see docker_limit_args.
-                *docker_limit_args(),
+                *docker_limit_args(self.host),
                 "-v", f"{self.generator_dir}:/src",
                 "-v", f"{out}:/out",
                 *asset_mounts,
@@ -1053,14 +1060,31 @@ class BuildDriver:
         # + a node role). Catching them here turns a post-dispatch dead-end into a second-0
         # message; the accepted-but-wrong shapes warn instead (see _config_warnings).
         problems += scope_violations(cfg)[0]
-        if backend == "docker" and getattr(self.host, "os", "") == "darwin":
-            problems += self._macos_workdir_problems(cfg)
+        problems += self._macos_docker_problems(cfg, backend)
         # A standalone image whose only login was never given a password: the build
         # would succeed and produce an image nobody can log in to.
         login = standalone_login_problem(cfg)
         if login:
             problems.append(login)
         return problems
+
+    def _macos_docker_problems(self, cfg, backend: str | None) -> list[str]:
+        """Every BLOCKING check a docker build on a Mac needs, [] on any other host or
+        backend. ONE seam for BuildDriver.preflight and FleetDriver.preflight (which
+        overrides preflight wholesale and so reached none of them: a fleet build mounts
+        the same ``-v <out>:/out`` and was started into a folder that cannot hold it).
+        A new Mac refusal goes here and both lanes get it."""
+        if backend != "docker" or getattr(self.host, "os", "") != "darwin":
+            return []
+        return self._macos_workdir_problems(cfg)
+
+    def _macos_docker_warnings(self, backend: str | None) -> list[str]:
+        """The ADVISORY twin of :meth:`_macos_docker_problems`: EXPERIMENTAL, x86_64
+        emulation on Apple silicon, a small Docker VM, a CPU cap lowered to the VM's
+        CPU count. BuildDriver.preflight_warnings and FleetDriver.advisories share it."""
+        if backend != "docker" or getattr(self.host, "os", "") != "darwin":
+            return []
+        return platform_info.macos_build_warnings(self.host)
 
     def _macos_workdir_problems(self, cfg: ImageConfig) -> list[str]:
         """A Mac's docker build writes its work dir through ``-v <out>:/out`` from
@@ -1126,8 +1150,7 @@ class BuildDriver:
         # so the two SOURCES stay visually separable, as _config_warnings' docstring says.
         out += self._config_warnings(cfg)
         out += host_resources.low_memory_warnings(backend=backend)
-        if backend == "docker" and getattr(self.host, "os", "") == "darwin":
-            out += platform_info.macos_build_warnings(self.host)
+        out += self._macos_docker_warnings(backend)
         return out
 
     def _config_warnings(self, cfg: ImageConfig) -> list[str]:

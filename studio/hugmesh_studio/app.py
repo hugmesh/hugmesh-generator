@@ -37,7 +37,7 @@ import argparse
 import os
 import sys
 
-from .core import crashlog, flatpak_host, macos_host, no_console
+from .core import crashlog, entry, flatpak_host, no_console
 
 
 def _default_generator_dir() -> str:
@@ -203,8 +203,9 @@ def main(argv=None) -> int:
     flatpak_host.install()
     # And the Mac's: an app opened from Finder gets launchd's PATH (/usr/bin:/bin:...),
     # which has no Homebrew, no Docker Desktop CLI and no colima, so every probe said
-    # "not installed". Puts them back, GNU tools first (a no-op off macOS).
-    macos_host.install()
+    # "not installed". Puts them back, GNU tools first (a no-op off macOS). The text UI
+    # and the module command lines make the same call (core/entry.py).
+    entry.bootstrap()
     # Third, before anything prints: a path outside cp1252 must not turn a redirected
     # print into a traceback or a false "bad input" (a no-op off Windows).
     utf8_stdio()

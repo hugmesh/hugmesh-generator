@@ -429,7 +429,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         backend_row = QtWidgets.QHBoxLayout()
         backend_row.addWidget(QtWidgets.QLabel("Emulation backend:"))
         self.backend_combo = QtWidgets.QComboBox()
-        for key, text in qemu_windows.BACKENDS:
+        for key, text in qemu_windows.backends():
             self.backend_combo.addItem(text, key)
         self.backend_combo.setToolTip(
             "Docker container: the full lanes — every device of the mesh, the QMP "
@@ -782,8 +782,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         else:
             blocker = qemu_tests.native_blocker()
             self.docker_note.setText(
-                f'<span style="color:{WARN}">{html.escape(blocker)}</span>' if blocker
-                else common.docker_note_html(self._docker_answer))
+                f'<span style="color:{WARN}">{common.blocker_html(blocker)}</span>'
+                if blocker else common.docker_note_html(self._docker_answer))
         self._sync_controls()
 
     # ── QEMU for Windows (WHPX) ─────────────────────────────────────────────────

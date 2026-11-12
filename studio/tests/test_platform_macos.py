@@ -223,7 +223,82 @@ def test_on_a_mac_the_default_volume_folds_case_and_the_remedy_names_its_contain
     assert out.returncode == 0 and out.stdout.strip().startswith("disk"), out
 
 
+# ── the fleet build runs the image build's Mac checks ───────────────────────────────
+def _fleet(host, out) -> fleet.FleetDriver:
+    drv = fleet.FleetDriver(GENERATOR_DIR, host)
+    drv.workdir = str(out)
+    return drv
+
+
+def test_a_case_folding_output_dir_blocks_a_mac_fleet_build_too(tmp_path, monkeypatch):
+    """FleetDriver.preflight overrides BuildDriver's wholesale and reached none of its
+    Mac checks: a fleet build (which mounts the same ``-v <out>:/out``) was started into
+    a folder that cannot hold a kernel tree, where the image build beside it refused."""
+    out = tmp_path / "out"
+    monkeypatch.setattr(platform_info, "folds_case", lambda path: True)
+    image = [p for p in BuildDriver(GENERATOR_DIR, mac(), workdir=str(out))
+             .preflight(ImageConfig(), "docker") if "ignores case" in p]
+    said = [p for p in _fleet(mac(), out).preflight(fleet.FleetConfig(), "docker")
+            if "ignores case" in p]
+    assert said and said == image                  # the same sentence, the same folder
+    assert str(out) in said[0] and "diskutil apfs addVolume" in said[0]
+    # the folder it checked is the folder its argv mounts
+    argv = _fleet(mac(), out).command(fleet.FleetConfig(), "docker")
+    assert f"{out}:/out" in argv
+    for answer in (False, None):
+        monkeypatch.setattr(platform_info, "folds_case", lambda path, a=answer: a)
+        assert not any("ignores case" in p for p in
+                       _fleet(mac(), out).preflight(fleet.FleetConfig(), "docker"))
+    # never on Linux or Windows, and never for the native backend
+    monkeypatch.setattr(platform_info, "folds_case", lambda path: True)
+    assert not any("ignores case" in p for p in
+                   _fleet(LINUX, out).preflight(fleet.FleetConfig(), "docker"))
+    assert not any("ignores case" in p for p in
+                   _fleet(mac(), out).preflight(fleet.FleetConfig(), "native"))
+
+
+def test_the_fleet_review_says_experimental_and_sizes_the_vm(tmp_path):
+    """The fleet window shows advisories(), never preflight_warnings(), so a Mac fleet
+    build was told neither EXPERIMENTAL nor that its Docker VM is small."""
+    notes = "\n".join(_fleet(mac(), tmp_path).advisories(fleet.FleetConfig(), "docker"))
+    assert "EXPERIMENTAL" in notes
+    assert "x86_64 emulation" in notes                   # arm64
+    assert "8.0 GiB of memory" in notes                  # an 8 GiB VM
+    image = BuildDriver(GENERATOR_DIR, mac(), workdir=str(tmp_path)).preflight_warnings(
+        ImageConfig(), "docker")
+    assert [n for n in image if "EXPERIMENTAL" in n][0] in notes     # the same words
+    # the default backend of a Mac is docker, so the page's bare call gets them too
+    assert mac().default_backend == "docker"
+    assert "EXPERIMENTAL" in "\n".join(_fleet(mac(), tmp_path).advisories(fleet.FleetConfig()))
+    # nothing on Linux, and nothing for a backend that is not docker
+    assert _fleet(LINUX, tmp_path).advisories(fleet.FleetConfig(), "docker") == []
+    assert _fleet(mac(), tmp_path).advisories(fleet.FleetConfig(), "native") == []
+
+
 # ── docker, KVM, flashing: the darwin remedies ──────────────────────────────────────
+def test_the_intel_colima_line_has_no_rosetta_flag():
+    """Rosetta translates x86_64 for an ARM VM. The Intel remedy printed
+    ``colima start --vm-type vz --vz-rosetta ... --arch x86_64``; the docs say to use
+    ``--arch x86_64`` INSTEAD of ``--vz-rosetta``."""
+    for state in (DOCKER_MISSING, DOCKER_DOWN, DOCKER_TIMEOUT):
+        intel = platform_info.macos_docker_remedy(state, "x86_64")
+        assert "rosetta" not in intel.lower(), intel
+        assert "`colima start --vm-type vz --cpu 8 --memory 16 --disk 200 --arch x86_64`" \
+            in intel
+        arm = platform_info.macos_docker_remedy(state, "arm64")
+        assert "`colima start --vm-type vz --vz-rosetta --cpu 8 --memory 16 --disk 200`" in arm
+        assert "--arch x86_64" not in arm
+
+
+def test_the_docs_give_the_same_two_colima_lines():
+    with open(os.path.join(GENERATOR_DIR, "docs", "STUDIO-INSTALLERS.md"),
+              encoding="utf-8") as fh:
+        doc = fh.read()
+    assert "colima start --vm-type vz --vz-rosetta --cpu 8 --memory 16 --disk 200\n" in doc
+    assert "colima start --vm-type vz --cpu 8 --memory 16 --disk 200 --arch x86_64\n" in doc
+    assert "HUGMESH_CPUS" in doc
+
+
 def test_the_docker_remedy_names_every_mac_runtime_and_sizes_the_vm():
     text = mac(has_docker=False, docker_state=DOCKER_MISSING).docker_remedy()
     for word in ("Docker Desktop", "colima", "OrbStack", "16 GB", "200 GB", "Rosetta"):

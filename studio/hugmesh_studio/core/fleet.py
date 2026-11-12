@@ -614,7 +614,7 @@ class FleetDriver(BuildDriver):
                 # also the only lane with no cap at all: BuildDriver capped memory for
                 # single images and this one inherited nothing. Same wrapper, same
                 # knobs, same byte-identical argv when limits are off.
-                *build_driver.docker_limit_args(),
+                *build_driver.docker_limit_args(self.host),
                 "-v", f"{self.generator_dir}:/src",
                 "-v", f"{out}:/out",
                 *asset_mounts,
@@ -653,12 +653,18 @@ class FleetDriver(BuildDriver):
             self._nvd_key_file = None
             cleanup()
 
-    def advisories(self, cfg: FleetConfig) -> list[str]:
+    def advisories(self, cfg: FleetConfig, backend: str | None = None) -> list[str]:
         """NON-blocking notes for the Review pane (preflight() problems refuse the run;
-        these do not): today, a pen-test run with no NVD API key stored."""
+        these do not): a pen-test run with no NVD API key stored, and, for a docker
+        build on a Mac, BuildDriver's macOS warnings (EXPERIMENTAL, the Docker VM's
+        memory and CPUs). This is the channel the fleet window shows; it never called
+        preflight_warnings(), so a Mac fleet build was told none of them. ``backend``
+        is the host's default unless given."""
+        backend = backend or self.host.default_backend
         notes: list[str] = []
         if (cfg.pentest or cfg.pentest_only) and not nvd_key.status().stored:
             notes.append(nvd_key.PREFLIGHT_NO_KEY)
+        notes += self._macos_docker_warnings(backend)
         return notes
 
     def preflight(self, cfg: FleetConfig, backend: str | None = None) -> list[str]:  # type: ignore[override]
@@ -704,6 +710,10 @@ class FleetDriver(BuildDriver):
             cfg.validate()
         except IdentityValidationError as e:
             problems.append(str(e))
+        # BuildDriver.preflight's macOS refusals (an output folder on a filesystem that
+        # ignores case), which this override never reached either: the fleet mounts the
+        # same -v <out>:/out and fails the same way, partway through.
+        problems += self._macos_docker_problems(cfg, backend)
         # THE PER-DOMAIN SERVICES GATE (#587) — the same seam every other build route
         # calls. Here, so "Build fleet now" (FleetPage._start refuses on any preflight
         # problem, inline) and a previous-builds RESTART both refuse BEFORE

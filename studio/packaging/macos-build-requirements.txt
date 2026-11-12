@@ -1,5 +1,6 @@
 # Build dependencies for the macOS app and .dmg (packaging/build-macos-app.sh, run by
-# the `macos` jobs in .github/workflows/studio-tests.yml and studio-release.yml).
+# the `macos` job in .github/workflows/studio-tests.yml; studio-release.yml has no macOS
+# job yet, so no release carries the .dmg).
 # Installed with
 #   pip install --only-binary=:all: -r macos-build-requirements.txt
 #
