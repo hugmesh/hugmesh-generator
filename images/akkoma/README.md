@@ -61,7 +61,7 @@ here is the top of that range.
 - **`HEALTHCHECK`** is `curl` against `/api/v1/instance`.
 - **Not included: ffmpeg and ImageMagick.** They are needed only for the media preview
   proxy and the `AnalyzeMetadata` upload filter, and both are off unless configured.
-- **linux/amd64 and linux/arm64.** Akkoma is selectable on rpi5 and x86 meshes
+- **linux/amd64 and linux/arm64.** Akkoma is selectable on rpi5, Jetson and x86 meshes
   (`optional-services.yaml` `buildGate`). Unlike the cluster's other first-party
   images, which it builds in-cluster into Harbor for its own architecture, this one is
   pulled from GHCR, so the published index must carry both. The release workflow
@@ -143,7 +143,8 @@ in any default while the placeholder is in place. After a release:
 3. Re-wire `akkoma-peer.yaml` in `specs/cluster/manifests/test-runner/kustomization.yaml`.
    It is unwired while the digest is the placeholder, because that bundle syncs from
    git on every ENV=test mesh whatever the selection.
-4. Then turn `akkoma` back on in the defaults: the builder lib, both builders, Studio's
+4. Then turn `akkoma` back on in the defaults: the builder lib, the three cluster
+   builders (x86, rpi5, jetson), `build-menu.sh`'s pre-ticked services, Studio's
    `BUILTIN_DEFAULT_SERVICES`, the registry's `default:`, the installed-services
    baseline, the seed OptionalService and the federation `gate.sql`. The test-suite
    expectations that this change moved must move back too.
