@@ -44,7 +44,8 @@ from . import proc_text
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
-from .build_driver import BuildDriver, disk_space_refusal, disk_space_warning
+from .build_driver import (BuildDriver, disk_space_refusal, disk_space_warning,
+                           dispatch_space_refusal)
 from . import domain_ca_keys
 from . import roles
 from .config import (ImageConfig, User, brand_header_fields, image_class,
@@ -242,18 +243,28 @@ class WorklistDriver:
                      for entry, cfg in self.materialize()]
         return problems + self._aggregate_per_entry(per_entry)
 
+    def _build_tree(self, entry: WorklistEntry) -> str:
+        """This image's ``wl-<id>`` dir under the work dir. On a RESTART into the same
+        session it holds the build system the earlier run left, and the free-space
+        check counts what that holds (build_driver.image_space)."""
+        return os.path.join(self._output_dir(), entry.build_subdir)
+
     def _disk_space_problems(self) -> list[str]:
         """Can the output filesystem take the NEXT image? (empty = yes)
 
         Only the first entry blocks the session: a later one that will not fit is
         refused by run_all()'s re-check when its turn comes, and an ARM image after it
-        may still fit. preflight_warnings() says up front when the whole list will not."""
+        may still fit. preflight_warnings() says up front when the whole list will not.
+
+        This runs on the GUI thread at dispatch, so it never measures a build tree an
+        earlier run left: it takes one as finished and refuses only what would not fit
+        even then. run_all() measures before it starts the image."""
         materialized = self.materialize()
         if not materialized:
             return []
         entry, cfg = materialized[0]
-        why = disk_space_refusal(cfg, self._output_dir(), build_tree=os.path.join(
-            self._output_dir(), entry.build_subdir))
+        why = disk_space_refusal(cfg, self._output_dir(),
+                                 build_tree=self._build_tree(entry))
         return [why] if why else []
 
     def _output_dir_problems(self) -> list[str]:
@@ -309,8 +320,10 @@ class WorklistDriver:
                         graphical=self.graphical, workdir=self.workdir)
                       .preflight_warnings(cfg, self.backend))
                      for entry, cfg in self.materialize()]
-        space = disk_space_warning([cfg for _entry, cfg in self.materialize()],
-                                   self._output_dir())
+        materialized = self.materialize()
+        space = disk_space_warning(
+            [cfg for _entry, cfg in materialized], self._output_dir(),
+            build_trees=[self._build_tree(entry) for entry, _cfg in materialized])
         return self._aggregate_per_entry(per_entry) + ([space] if space else [])
 
     # ---- mesh manifest v2 (design 2.6) ------------------------------------
@@ -409,9 +422,24 @@ class WorklistDriver:
             # may not hold image 5. A refused image is never dispatched: it takes the
             # normal FAILED path below, and its "!!" line is what the session record's
             # error tail keeps, instead of an ENOSPC crash an hour into the build.
-            refusal = disk_space_refusal(cfg, self._output_dir(), build_tree=os.path.join(
-                self._output_dir(), entry.build_subdir))
-            if refusal:
+            #
+            # On a RESTART the image's build tree from the earlier run is still in the
+            # session dir, and what it holds is not needed again. This is the build
+            # thread, so that tree is measured here when the answer depends on it (it
+            # can take minutes, hence the line before it and the Stop check during it).
+            refusal = dispatch_space_refusal(
+                cfg, self._output_dir(), build_tree=self._build_tree(entry),
+                should_stop=lambda i=i: self._stop_requested(i),
+                on_measure=(lambda tree, i=i: on_line(
+                    i, f"== free disk space: measuring the build tree an earlier run "
+                       f"left at {tree} (up to a few minutes on a slow disk) ..."))
+                if on_line else None)
+            if refusal is None or self._stop_requested(i):
+                # Stopped before anything was dispatched (most likely while the tree
+                # was being measured). There is no driver to cancel and no verdict to
+                # report: the row settles STOPPED below, with no exit code.
+                code = None
+            elif refusal:
                 if on_line:
                     on_line(i, f"!! {entry.id} not started: {refusal}")
                 code = 1
@@ -643,6 +671,11 @@ class WorklistDriver:
         return 0
 
     # ---- cancel ------------------------------------------------------------
+    def _stop_requested(self, i: int) -> bool:
+        """Has the operator stopped image ``i`` (or the whole run)?"""
+        with self._lock:
+            return i in self._cancelled or self._cancel_all.is_set()
+
     def cancel(self, i: int) -> None:
         """Stop image ``i``: kill it if running, or skip it if not yet started (the
         sequential loop marks it stopped). Safe to call for a finished image."""

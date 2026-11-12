@@ -397,6 +397,81 @@ def test_restart_resume_does_not_ratchet_on(monkeypatch, qapp, wiz, tmp_path):
     assert bs.load(ok.path()).config["base"]["resume"] is False
 
 
+def _finished_tree(session_workdir, entry_id):
+    """The populated build system an earlier run left for one image. Every builder tests
+    ``sysroot/etc/gentoo-release`` before it reuses one."""
+    etc = os.path.join(session_workdir, f"wl-{entry_id}", "sysroot", "etc")
+    os.makedirs(etc)
+    with open(os.path.join(etc, "gentoo-release"), "w", encoding="utf-8") as fh:
+        fh.write("Gentoo Base System release 2.18\n")
+    return os.path.dirname(etc)
+
+
+def _pin_disk_and_tree(monkeypatch, free_gib, tree_gib):
+    """``free_gib`` free on the output disk, and ``tree_gib`` in any build tree that is
+    measured. Returns the list of trees that were measured."""
+    import collections
+    from hugmesh_studio.core import build_driver, emulation_save
+    usage = collections.namedtuple("usage", "total used free")
+    monkeypatch.setattr(emulation_save, "_disk_usage",
+                        lambda _path: usage(1 << 42, 0, free_gib << 30))
+    walked = []
+
+    def measure(path, *, enough=0, seconds=0, should_stop=None):
+        walked.append(path)
+        return build_driver.TreeMeasure(bytes=tree_gib << 30)
+
+    # raising=False: where the seam does not exist yet, fail on what the page did.
+    monkeypatch.setattr(build_driver, "_measure_tree", measure, raising=False)
+    return walked
+
+
+def test_a_resume_restart_over_a_finished_tree_is_dispatched_at_43_gib(monkeypatch, qapp, wiz,
+                                                                      tmp_path):
+    """Defect L4, round 2, through the real restart path. The sessions list pre-ticks
+    "Resume from existing build tree (--resume)" whenever wl-* trees exist, so a restart
+    over a finished 23 GiB x86 tree continues from it and writes about 32 GiB more. With
+    43 GiB free that ended in "Preflight FAILED": the check wanted all 65 GiB again, and
+    told the operator to delete the tree the restart was about to resume from."""
+    walked = _pin_disk_and_tree(monkeypatch, free_gib=43, tree_gib=23)
+    made = _install_fake_builddriver(monkeypatch)
+    ok, _bad = _seed_sessions(tmp_path)
+    sysroot = _finished_tree(ok.workdir, "standalone-thick.x86")
+    wiz.start_build_from_session(bs.load(ok.path()), resume=True)
+    page = _progress_page(wiz)
+    _run_to_completion(qapp, page)
+    assert "Preflight FAILED" not in page.log.toPlainText()
+    assert [m.ran for m in made if m.ran] == [True]
+    assert page.driver.worklist.base.resume is True        # --resume is what was passed
+    on_disk = bs.load(ok.path())
+    assert on_disk.status == "complete" and on_disk.restarts == 1
+    assert walked == [sysroot]      # measured once, by the build thread, before the image
+
+
+def test_a_resume_restart_that_cannot_fit_is_refused_without_delete_advice(monkeypatch, qapp,
+                                                                          wiz, tmp_path):
+    """30 GiB free: even over a finished tree the image needs 55 - 23 + 10 = 42. The page
+    refuses before dispatch, says the restart continues from the tree, and never walks
+    it (this is the GUI thread)."""
+    walked = _pin_disk_and_tree(monkeypatch, free_gib=30, tree_gib=23)
+    made = _install_fake_builddriver(monkeypatch)
+    ok, _bad = _seed_sessions(tmp_path)
+    sysroot = _finished_tree(ok.workdir, "standalone-thick.x86")
+    wiz.start_build_from_session(bs.load(ok.path()), resume=True)
+    page = _progress_page(wiz)
+    _run_to_completion(qapp, page)
+    log = page.log.toPlainText()
+    assert "Preflight FAILED" in log and "not enough free disk space" in log
+    assert f"build tree at {sysroot}" in log
+    assert "continues from it (the builder is passed --resume)" in log
+    assert "delet" not in log.lower() and "wipe" not in log.lower(), log
+    assert "needs about 42 GiB" in log and "12.0 GiB short" in log
+    assert not [m for m in made if m.ran]
+    assert walked == []
+    on_disk = bs.load(ok.path())                           # nothing dispatched or written
+    assert on_disk.status == "complete" and on_disk.restarts == 0
+
+
 def test_restart_refused_while_running_elsewhere(qapp, wiz, tmp_path):
     from hugmesh_studio.gui.pages.sessions_widget import PreviousBuildsWidget
     s = bs.new_session(synthesize(_standalone_cfg(tmp_path)), GENERATOR_DIR)
