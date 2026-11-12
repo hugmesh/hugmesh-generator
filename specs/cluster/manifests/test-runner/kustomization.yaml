@@ -9,7 +9,14 @@ resources:
   - namespace-rbac.yaml   # SA + read-mostly ClusterRole + Job create/delete Role
   - pvc.yaml              # test-reports PVC (lean/ + heavy/ run artifacts)
   - orchestrator.yaml     # orchestrator ConfigMap + the trigger Deployment
-  - akkoma-peer.yaml      # TEST-ONLY 2nd federating peer (the non-federation proof's external observer, specs 19-22)
+  # akkoma-peer.yaml — TEST-ONLY 2nd federating peer (the non-federation proof's external
+  # observer, specs 19-22). UNWIRED while hugmesh-akkoma is not yet published: its image
+  # ref carries the placeholder digest, and this bundle is synced from git on every
+  # ENV=test mesh whatever the akkoma selection, so wiring it now would park a pod in
+  # ImagePullBackOff. Specs 19-22 skip without it (SNAP_FEDERATION_PEER unset).
+  # Re-wire it in the change that pins the published digest;
+  # tests/scripts/test-akkoma-image-pin.sh refuses it wired with the placeholder.
+  # - akkoma-peer.yaml
 
 # The lean/heavy Job TEMPLATES are mounted into the orchestrator as the
 # test-job-lean / test-job-heavy ConfigMaps (projected volume in orchestrator.yaml)

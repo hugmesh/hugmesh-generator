@@ -784,26 +784,30 @@ def test_leaving_an_arriving_whole_set_preset_hands_its_rows_over(wiz):
 # =====================================================================================
 
 def test_the_builtin_default_set_arrives_ticked_and_is_really_removable(wiz):
-    """The three services every untouched mesh ships arrive TICKED (ask 23: "only
+    """The services every untouched mesh ships arrive TICKED (ask 23: "only
     pre-check what is genuinely on by default"), and — the half that is not cosmetic —
     unticking one genuinely stops it being built.
 
     Before the fix `--optional-services` was emitted only for rows the operator ticked, so
     with nothing ticked no flag went out and the builder's own
-    `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"` put all three back:
-    unticking `phpbb` left the forum running and the screen said otherwise."""
+    `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-...}"` put them all back: unticking `phpbb`
+    left the forum running and the screen said otherwise. (akkoma left that default on
+    2026-11-11 — image not yet published — so it must arrive UNticked.)"""
     mesh(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     for slug in BUILTIN_DEFAULT_SERVICES:
         assert net.service_boxes[slug].isChecked(), f"{slug} does not arrive ticked"
+    assert not net.service_boxes["akkoma"].isChecked(), (
+        "akkoma arrives ticked, but it is off by default until its image is published")
     net.service_boxes["phpbb"].setChecked(False)
     advance_to(wiz, wizard_mod.KeyZipPage)
     baked = resolve_optional_services(wiz.cfg.to_cli_args())
     assert "phpbb" not in baked, (
         "unticking the forum did not turn it off — the emitted argv resolves to "
         f"{sorted(baked)}")
-    assert {"akkoma", "tuwunel"} <= baked, (
+    assert {"tuwunel"} <= baked, (
         f"unticking phpbb took its neighbours with it: {sorted(baked)}")
+    assert "akkoma" not in baked, f"akkoma was baked without being ticked: {sorted(baked)}"
     # …and the choice ROUND-TRIPS: re-entering the page shows what was chosen, not the
     # defaults re-applied over the top. The seed must fire only for a config that carries
     # no selection at all, or "off by default" would become "off until you look away".
@@ -816,7 +820,7 @@ def test_the_builtin_default_set_arrives_ticked_and_is_really_removable(wiz):
     net.initializePage()
     assert not net.service_boxes["phpbb"].isChecked(), (
         "phpbb was re-ticked from the builder defaults over an explicit selection")
-    assert net.service_boxes["akkoma"].isChecked()
+    assert net.service_boxes["tuwunel"].isChecked()
 
 
 def test_unticking_every_row_means_none_not_the_builder_default(wiz):
@@ -1335,7 +1339,7 @@ def test_a_hidden_picker_cannot_inherit_a_brand_profiles_services(wiz, tmp_path)
     client drop."""
     profile = _services_profile(tmp_path, 'OPTIONAL_SERVICES="akkoma tor"')
     # the control: this profile really does decide the build when nothing overrides it
-    assert _plan_optional_services([], tmp_path) == {"akkoma", "tuwunel", "phpbb"}
+    assert _plan_optional_services([], tmp_path) == {"tuwunel", "phpbb"}
     assert _plan_optional_services(["--config", str(profile)], tmp_path) == {"akkoma", "tor"}
 
     pick_role(wiz, "standalone-thick")

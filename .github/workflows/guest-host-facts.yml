@@ -1,0 +1,228 @@
+# Guest host facts — a DISPATCH-ONLY experiment (hugmesh-generator#1048, lane X0).
+#
+# docs/design/PLATFORM-EXPANSION.md (sections 3, 4 and 8): before the Studio gains a
+# `bsd` or `sunos` CI job, a dispatch-only experiment boots each guest, records its
+# facts and an argv log, and sizes the text-UI/CLI contract list, so the later PR job
+# starts from MEASURED fixtures. This file is that experiment and nothing more:
+#   - it changes no Studio code and is not part of studio-tests.yml;
+#   - it runs only when a person dispatches it (never on push or pull_request, never
+#     from a release workflow), so it gates nothing;
+#   - every action is pinned by commit SHA, the token is read-only and no secret is
+#     referenced. No VM step sets `envs:`; the pinned actions still send GITHUB_* and
+#     CI into the guest over ssh SendEnv whatever `envs:` says. GITHUB_TOKEN is not in
+#     the step env, so no secret is among them;
+#   - each guest image is third-party (anyvm-org builders), so the image it booted is
+#     hashed ON THE RUNNER and recorded beside the facts (image.tsv);
+#   - checkout does not persist credentials: the workspace is rsynced into the guest,
+#     and a persisted token would travel with .git/config;
+#   - data-dir is $HOME/vm-data (the action expands $HOME), OUTSIDE $HOME/work. The
+#     action rsyncs all of $HOME/work into the guest, excluding only _actions and
+#     _PipelineMapping, so a data-dir under runner.temp (<work>/_temp) would push the
+#     guest's own extracted qcow2 and its ssh key into the guest and back;
+#   - disable-cache is on: with the cache on, anyvm moves the qcow2 into the cache
+#     dir, and the digest step would find nothing to hash.
+#
+# Seven x86-64 guests, each at an explicit release so the fixture names what booted:
+#   freebsd 15.1, openbsd 8.0, netbsd 11.1, dragonfly 6.4.2 (the release this action
+#   offers; the design lists DragonFly only if its packages install HERE),
+#   solaris 11.4 (CBE), omnios r151060, openindiana 202610.
+#
+# Inside each guest tests/guest-facts/collect.sh records, as one file per probe:
+# uname -a/-o/-p, isainfo -k, /etc/release, sysctl hw, the package list, the stock
+# `--self-check`, every candidate install line for Python 3.11+, urwid, PySide6 and
+# PyQt6 with its return code, `--self-check` after the installs, a scripted
+# plain-text-UI session with the argv of every process the Studio started, and a
+# per-file run of the Qt-free candidate list (the contract sizing).
+#
+# THE RESULT: the `guest-host-facts` artifact of the summary job is laid out as
+# tests/guest-facts/fixtures/ (one directory per guest, SUMMARY.md, contract-list.txt).
+# Committing the fixtures is a plain unzip at the repository root, in its own PR.
+#
+# Speed: hosted-runner KVM availability is unmeasured (design section 8), so each job
+# budgets for TCG; runner.txt records whether /dev/kvm was present.
+name: Guest host facts (experiment)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guest-host-facts
+  cancel-in-progress: false
+
+jobs:
+  guest:
+    name: host facts (${{ matrix.guest }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - guest: freebsd
+            release: '15.1'
+            action: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b
+          - guest: openbsd
+            release: '8.0'
+            action: vmactions/openbsd-vm@f1ca8bc8ecc5b6ef7218e5b914836e067e1546d3
+          - guest: netbsd
+            release: '11.1'
+            action: vmactions/netbsd-vm@5957cf330aef2e6ddc63c604364c99ce2e02b91d
+          - guest: dragonfly
+            release: '6.4.2'
+            action: vmactions/dragonflybsd-vm@4ab776fa9f914fbea72f13715b451e77e7ef5c41
+          - guest: solaris
+            release: '11.4'
+            action: vmactions/solaris-vm@1c166978f5a2c1f87f1c9d4d8dd85ae3d1eff6f7
+          - guest: omnios
+            release: 'r151060'
+            action: vmactions/omnios-vm@aeee92416495d9685b2997d954f6b063ae5b832d
+          - guest: openindiana
+            release: '202610'
+            action: vmactions/openindiana-vm@b0669479e0325a25198dc7ed2a4b6089e98f91b3
+    env:
+      OUT: guest-facts-out/${{ matrix.guest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Record the runner and list the contract candidates
+        run: |
+          mkdir -p "$OUT"
+          python3 tests/guest-facts/size_contract.py candidates --repo . > "$OUT/contract-candidates.txt"
+          {
+            echo "image_os=${ImageOS:-}"
+            echo "image_version=${ImageVersion:-}"
+            echo "nproc=$(nproc)"
+            if [ -e /dev/kvm ]; then echo "kvm=present"; else echo "kvm=absent"; fi
+          } > "$OUT/runner.txt"
+          cat "$OUT/runner.txt"
+
+      # One step per guest: `uses:` cannot be a matrix expression. Each step's pin is
+      # the same commit as matrix.action above (the guard checks that they agree).
+      - name: FreeBSD 15.1
+        if: matrix.guest == 'freebsd'
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b  # v1.6.0
+        with:
+          release: '15.1'
+          sync: rsync
+          disable-cache: 'true'
+          data-dir: $HOME/vm-data
+          run: sh tests/guest-facts/collect.sh freebsd guest-facts-out/freebsd
+
+      - name: OpenBSD 8.0
+        if: matrix.guest == 'openbsd'
+        uses: vmactions/openbsd-vm@f1ca8bc8ecc5b6ef7218e5b914836e067e1546d3  # v1.4.9
+        with:
+          release: '8.0'
+          sync: rsync
+          disable-cache: 'true'
+          data-dir: $HOME/vm-data
+          run: sh tests/guest-facts/collect.sh openbsd guest-facts-out/openbsd
+
+      - name: NetBSD 11.1
+        if: matrix.guest == 'netbsd'
+        uses: vmactions/netbsd-vm@5957cf330aef2e6ddc63c604364c99ce2e02b91d  # v1.5.3
+        with:
+          release: '11.1'
+          sync: rsync
+          disable-cache: 'true'
+          data-dir: $HOME/vm-data
+          run: sh tests/guest-facts/collect.sh netbsd guest-facts-out/netbsd
+
+      - name: DragonFly 6.4.2
+        if: matrix.guest == 'dragonfly'
+        uses: vmactions/dragonflybsd-vm@4ab776fa9f914fbea72f13715b451e77e7ef5c41  # v1.3.4
+        with:
+          release: '6.4.2'
+          sync: rsync
+          disable-cache: 'true'
+          data-dir: $HOME/vm-data
+          run: sh tests/guest-facts/collect.sh dragonfly guest-facts-out/dragonfly
+
+      - name: Solaris 11.4
+        if: matrix.guest == 'solaris'
+        uses: vmactions/solaris-vm@1c166978f5a2c1f87f1c9d4d8dd85ae3d1eff6f7  # v1.4.2
+        with:
+          release: '11.4'
+          sync: rsync
+          disable-cache: 'true'
+          data-dir: $HOME/vm-data
+          run: sh tests/guest-facts/collect.sh solaris guest-facts-out/solaris
+
+      - name: OmniOS r151060
+        if: matrix.guest == 'omnios'
+        uses: vmactions/omnios-vm@aeee92416495d9685b2997d954f6b063ae5b832d  # v1.3.8
+        with:
+          release: 'r151060'
+          sync: rsync
+          disable-cache: 'true'
+          data-dir: $HOME/vm-data
+          run: sh tests/guest-facts/collect.sh omnios guest-facts-out/omnios
+
+      - name: OpenIndiana 202610
+        if: matrix.guest == 'openindiana'
+        uses: vmactions/openindiana-vm@b0669479e0325a25198dc7ed2a4b6089e98f91b3  # v1.2.0
+        with:
+          release: '202610'
+          sync: rsync
+          disable-cache: 'true'
+          data-dir: $HOME/vm-data
+          run: sh tests/guest-facts/collect.sh openindiana guest-facts-out/openindiana
+
+      - name: Record the guest image digest
+        if: always()
+        env:
+          ACTION: ${{ matrix.action }}
+          RELEASE: ${{ matrix.release }}
+        run: |
+          python3 tests/guest-facts/runner_side.py image --out "$OUT" \
+            --action "$ACTION" --release "$RELEASE" \
+            --data-dir "$HOME/vm-data" --actions-dir "$RUNNER_WORKSPACE/../_actions"
+          cat "$OUT/image.tsv"
+
+      - name: Upload this guest's facts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: guest-facts-${{ matrix.guest }}
+          path: guest-facts-out/${{ matrix.guest }}
+          retention-days: 30
+          if-no-files-found: error
+
+  summary:
+    name: host facts summary
+    needs: guest
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          pattern: guest-facts-*
+          path: downloaded
+
+      - name: Lay the fixtures out and summarize them
+        run: |
+          root=out/tests/guest-facts/fixtures
+          mkdir -p "$root"
+          for d in downloaded/guest-facts-*; do
+            [ -d "$d" ] || continue
+            cp -R "$d" "$root/${d#downloaded/guest-facts-}"
+          done
+          python3 tests/guest-facts/runner_side.py summarize --root "$root"
+          cat "$root/SUMMARY.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: guest-host-facts
+          path: out
+          retention-days: 90
+          if-no-files-found: error

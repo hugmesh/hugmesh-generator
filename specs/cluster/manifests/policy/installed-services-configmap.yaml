@@ -66,7 +66,10 @@ data:
   # Per-slug install-state. "true" = installed (ApplicationSet creates its app);
   # "false" = removed (ApplicationSet prunes it). Rendered from optional-services.yaml
   # at build time; flip at runtime for live add/remove.
-  akkoma: "true"
+  # akkoma — DEFAULT-OFF since 2026-11-11: its image (hugmesh-akkoma) is not yet
+  # published, so a repo-synced cluster must not create a pod that cannot pull.
+  # _opt_render_installed_services rewrites this to "true" when akkoma is selected.
+  akkoma: "false"
   tuwunel: "true"
   phpbb: "true"
   # games — DEFAULT-OFF (policy 2026-06-17): the games subdomain + casdoor-games +

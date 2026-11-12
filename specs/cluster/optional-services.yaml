@@ -14,20 +14,21 @@
 #     egress-vpn / workloadConsole / anubis, gated the same way.)
 #
 # DEFAULT-INCLUSION POLICY (user 2026-06-17):
-#   * DEFAULT-ON  (the built-in default when NO selection is given): akkoma, tuwunel
+#   * DEFAULT-ON  (the built-in default when NO selection is given): tuwunel
 #     (Matrix), phpbb.
-#   * DEFAULT-OFF (must be specifically added): games, owncast, tube,
+#   * DEFAULT-OFF (must be specifically added): akkoma, games, owncast, tube,
 #     character-studio, character-forge — and any future user-level service. games
-#     moved from default-on to DEFAULT-OFF here.
+#     moved from default-on to DEFAULT-OFF here; akkoma moved on 2026-11-11 because
+#     its image (hugmesh-akkoma, images/akkoma/) is not yet published.
 #   * FULL-SET sentinel: OPTIONAL_SERVICES=all (and --all-services) selects EVERY
 #     user-level slug (akkoma tuwunel phpbb games owncast tube character-studio
 #     character-forge).
-# The per-slug `default: on|off` below records THIS policy (akkoma/tuwunel/phpbb on;
-# games/owncast/tube off).
+# The per-slug `default: on|off` below records THIS policy (tuwunel/phpbb on;
+# akkoma/games/owncast/tube off).
 #
 # BUILD-TIME EXCLUSION (the per-service generation-time enable/disable): the
 # builder resolves a positive allow-list OPTIONAL_SERVICES (built-in default
-# "akkoma tuwunel phpbb" < brand.conf < --optional-services; OPTIONAL_SERVICES=all
+# "tuwunel phpbb" < brand.conf < --optional-services; OPTIONAL_SERVICES=all
 # expands to every user-level slug; + the games opt-in) and then applies the
 # SUBTRACTIVE knob EXCLUDE_SERVICES (brand.conf / --exclude-services) LAST. Any
 # user-level slug NOT in the final selection is pruned by gate_optional_services
@@ -194,7 +195,9 @@ spec:
     - slug: akkoma
       displayName: "Akkoma (Mastodon)"
       namespace: hugmesh-backend
-      default: on
+      # off until hugmesh-akkoma is published (image not yet published); flipping it
+      # back on is gated by tests/scripts/test-akkoma-image-pin.sh on a real digest.
+      default: off
       tier: user-level
       gate: build-time
       buildGate: [rpi5, x86]

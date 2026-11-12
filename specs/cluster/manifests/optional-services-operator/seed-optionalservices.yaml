@@ -4,7 +4,8 @@
 #
 # `enabled` MIRRORS the installed-services ConfigMap git baseline (the real
 # install-state), NOT 13a's all-"false" pre-cut-over element baseline:
-#   akkoma/tuwunel/phpbb = true (DEFAULT-ON), everything else = false (DEFAULT-OFF).
+#   tuwunel/phpbb = true (DEFAULT-ON), everything else = false (DEFAULT-OFF). akkoma
+#   is DEFAULT-OFF since 2026-11-11: its image is not yet published.
 # The stage4 builders REWRITE these per the resolved OPTIONAL_SERVICES selection via
 # _opt_render_optionalservice_cr() (alongside _opt_render_installed_services), so a
 # USB built WITHOUT a slug ships that slug's CR enabled:false.
@@ -25,8 +26,8 @@ metadata:
   labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: akkoma
-  enabled: true
-  reason: build-seed (DEFAULT-ON baseline)
+  enabled: false
+  reason: build-seed (DEFAULT-OFF baseline; image not yet published)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
 apiVersion: platform.hugmesh.net/v1alpha1

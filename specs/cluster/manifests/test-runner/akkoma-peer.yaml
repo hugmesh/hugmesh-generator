@@ -48,6 +48,12 @@ data:
       email: "peer@peer.test",
       # OPEN registration so the e2e can make a follower account here via the API.
       registrations_open: true
+    # Uploads base_url: without one `pleroma start` exits ("No base_url set for
+    # uploads"). Same host as the endpoint, like the system under test's
+    # akkoma-config: the peer is a test observer with no media host of its own,
+    # and same-host only logs a warning. images/akkoma/smoke-test.sh boots this
+    # ConfigMap too.
+    config :pleroma, Pleroma.Upload, base_url: "https://peer.test/media/"
     # NO MRF, NO domain-lock, NO egress restriction: this is the OBSERVER, not the
     # system under test. It accepts and stores whatever federates to its inbox.
     config :pleroma, Pleroma.Repo,
@@ -156,18 +162,21 @@ spec:
         hugmesh.net/seam-probe: "http://akkoma-peer.hugmesh-backend.svc.cluster.local:4000/api/v1/instance#seam"
     spec:
       securityContext:
+        # hugmesh-akkoma's user is akkoma (1000:1000); fsGroup reads the 0440 config.
         runAsNonRoot: true
-        runAsUser: 100
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile: { type: RuntimeDefault }
       initContainers:
         - name: migrate
-          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
+          image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:0000000000000000000000000000000000000000000000000000000000000000   # PLACEHOLDER digest: hugmesh-akkoma is not published yet (images/akkoma/README.md, "Pinning")
           command: ["/opt/akkoma/bin/pleroma_ctl", "migrate"]
           envFrom: [{ secretRef: { name: akkoma-peer-secrets } }]
           volumeMounts: [{ name: config, mountPath: /etc/akkoma }]
       containers:
         - name: akkoma
-          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
+          image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:0000000000000000000000000000000000000000000000000000000000000000   # PLACEHOLDER digest: hugmesh-akkoma is not published yet (images/akkoma/README.md, "Pinning")
           envFrom: [{ secretRef: { name: akkoma-peer-secrets } }]
           ports: [{ name: http, containerPort: 4000 }]
           resources:
@@ -185,7 +194,7 @@ spec:
             periodSeconds: 15
       volumes:
         - name: config
-          configMap: { name: akkoma-peer-config }
+          configMap: { name: akkoma-peer-config, defaultMode: 0440 }   # the release refuses a world-readable config.exs
         - name: uploads
           emptyDir: {}
 ---

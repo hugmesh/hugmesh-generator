@@ -350,7 +350,7 @@ def test_services_client_note_visible_and_nonblocking_on_a_client_role(wiz):
     assert "rpi5-desktop" in net.services_role_note.text()
     assert net.services_box.isEnabled()                     # hint, not a gate
     assert net.service_boxes["akkoma"].isEnabled()
-    assert net.service_boxes["akkoma"].isChecked()      # a builder default, ticked
+    assert net.service_boxes["tuwunel"].isChecked()     # a builder default, ticked
     net.service_boxes["owncast"].setChecked(True)
     advance_to(wiz, wizard_mod.KeyZipPage)
     # emission untouched by the note: the builder accepts (and itself ignores) the flag
@@ -473,7 +473,7 @@ def test_the_hidden_pickers_explicit_none_does_not_escape_the_standalone_flow(wi
     net.validatePage()
     args = c.to_cli_args()
     i = args.index("--optional-services")
-    assert args[i + 1] == "akkoma tuwunel phpbb", (
+    assert args[i + 1] == " ".join(BUILTIN_DEFAULT_SERVICES), (
         f"the cloud desktop silently lost its built-in services: {args[i + 1]!r}")
 
 
@@ -532,7 +532,7 @@ def test_the_cloud_desktop_services_path_is_deliberately_untouched(wiz):
     assert net.services_box.isVisible() and net.services_section.isVisible()
     assert net.services_role_note.isVisible()
     assert "IGNORED" in net.services_role_note.text()
-    assert net.service_boxes["akkoma"].isChecked()      # builder default, still ticked
+    assert net.service_boxes["tuwunel"].isChecked()     # builder default, still ticked
     advance_to(wiz, wizard_mod.KeyZipPage)
     assert dict(pairs(wiz.cfg.to_cli_args()))["--optional-services"] == (
         " ".join(BUILTIN_DEFAULT_SERVICES))
@@ -548,7 +548,7 @@ def test_the_rpi5_standalone_node_keeps_its_services(wiz):
     wiz.restart()
     net = advance_to(wiz, wizard_mod.NetworkPage)
     assert net.services_box.isVisible() and net.services_section.isVisible()
-    assert net.service_boxes["akkoma"].isChecked()
+    assert net.service_boxes["tuwunel"].isChecked()
     net.validatePage()
     assert dict(pairs(wiz.cfg.to_cli_args()))["--optional-services"] == (
         " ".join(BUILTIN_DEFAULT_SERVICES))

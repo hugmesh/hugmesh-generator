@@ -2222,7 +2222,7 @@ else
             bash scripts/kconfig/merge_config.sh -m .config "${SPECS_DIR}/kernel/hardened-appliance.config"
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
         # Refuse to ship a kernel that silently lost SELinux (fleet posture guard).
-        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
+        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM CONFIG_SECURITY_SELINUX_DEVELOP; do
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
         grep -q '^CONFIG_LSM="lockdown,yama,selinux"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux); lockdown/SELinux would not activate"; exit 1; }
@@ -2604,6 +2604,16 @@ info "NetworkManager: connectivity check OFF (headless appliance — no public p
 # The image still boots PERMISSIVE: the enforce-gate service ships INERT (not in
 # any runlevel, /etc/conf.d/selinux-enforce-gate SELINUX_ENFORCE_GATE=no) unless
 # HUGMESH_SELINUX_ENFORCE_GATE=1 is set at build time. See the lib header for why.
+# /srv + the portage-tmpdir.conf mask: systemd-tmpfiles-setup otherwise creates both
+# in "/" at every boot and is denied under enforcing (see the lib; #863 refute,
+# blocker 3: this used to ship on x86 only).
+slx_ship_bootpath_files "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "could not ship the SELinux boot-path files (/srv, portage-tmpdir.conf mask)"; exit 1; }
+# Cross-built python extensions can carry the build host's x86_64 suffix, and the
+# target python then cannot import them: semanage died with "No module named
+# '_semanage'" on the #944 rpi5 image, so the root login mapping failed (see the lib).
+slx_fix_cross_python_ext "${SYSROOT}" aarch64 \
+    || { err "could not give the cross-built python extensions the target's suffix (semanage would not import on the node)"; exit 1; }
 slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
     || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
 # ── END shared block: SELinux node-policy modules ─────────────────────────────

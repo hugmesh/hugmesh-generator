@@ -494,7 +494,7 @@ has "${out}" "edge-ai-tts selected on CLIENT role 'laptop' — dropped" && has "
     && ok "B615 x86 CLIENT laptop --optional-services: the drop is WARNED however the slug arrived" \
     || bad "B615 x86 CLIENT laptop --optional-services: not warned"
 out="$(plan build-x86-host-stage4.sh --role backend --with-edge-ai --with-character-studio --with-character-forge --with-edge-ai-tts)"
-hasnt "${out}" "on CLIENT role" && [ "$(plan_val "${out}" OPTIONAL_SERVICES)" = "akkoma tuwunel phpbb edge-ai character-studio character-forge edge-ai-tts" ] \
+hasnt "${out}" "on CLIENT role" && [ "$(plan_val "${out}" OPTIONAL_SERVICES)" = "tuwunel phpbb edge-ai character-studio character-forge edge-ai-tts" ] \
     && ok "B615 x86 NODE backend keeps all four (no CLIENT warning, plan lists them)" \
     || bad "B615 x86 NODE backend: a node role lost a cluster service or was warned as CLIENT"
 # edge-ai-analysis is the fifth cluster-only slug: --with-edge-ai-analysis folds BOTH
@@ -512,7 +512,7 @@ has "${out}" "edge-ai-analysis selected on CLIENT role 'backend' — dropped" \
     && ok "B615 x86 backend --standalone --with-edge-ai-analysis: the drop is WARNED" \
     || bad "B615 x86 backend --standalone --with-edge-ai-analysis: dropped SILENTLY"
 out="$(plan build-x86-host-stage4.sh --role backend --with-edge-ai-analysis)"
-hasnt "${out}" "on CLIENT role" && [ "$(plan_val "${out}" OPTIONAL_SERVICES)" = "akkoma tuwunel phpbb edge-ai edge-ai-analysis" ] \
+hasnt "${out}" "on CLIENT role" && [ "$(plan_val "${out}" OPTIONAL_SERVICES)" = "tuwunel phpbb edge-ai edge-ai-analysis" ] \
     && ok "B615 x86 NODE backend --with-edge-ai-analysis keeps edge-ai + edge-ai-analysis (no CLIENT warning)" \
     || bad "B615 x86 NODE backend --with-edge-ai-analysis: lost a slug or was warned as CLIENT"
 # the refusal must run AFTER the role case and the STANDALONE fold

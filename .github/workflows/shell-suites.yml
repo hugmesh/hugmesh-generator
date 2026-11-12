@@ -26,6 +26,13 @@
 # requirements file and no other leg does. Without them it exits 2 rather than
 # skipping, which was measured in a bare python:3.12-slim.
 #
+# MEASURED, 2026-11-11: tests/scripts/test-akkoma-image-pin.sh was executed in
+# python:3.12-slim with the checkout mounted READ-ONLY and --network=none before
+# being added to the debian job's first leg: 40 passed / 0 failed, rc=0, including
+# its 37-mutation battery (37 caught / 0 survived, each mutation verified to change
+# its file) and one positive control. In an image without python3 it prints FATAL
+# and exits 2 rather than passing. It is a NEGATIVE guard, hence debian.
+#
 # MEASURED, 2026-11-09: tests/scripts/test-compose-no-literal-passwords.sh and
 # tests/stack/test-gen-stack-db-env.sh (hugmesh-generator#857) were executed in
 # python:3.12-slim with this job's apt packages, the checkout mounted READ-ONLY,
@@ -534,6 +541,7 @@ jobs:
             tests/scripts/test-github-auth-lib.sh
             tests/scripts/test-frite-kernel-emulation-symbols.sh
             tests/scripts/test-guard-integrity.sh
+            tests/scripts/test-guest-host-facts.sh
             tests/scripts/test-harbor-robots-ownership.sh
             tests/scripts/test-host-accept-keywords.sh
             tests/scripts/test-host-bdep-pool.sh
@@ -678,6 +686,7 @@ jobs:
               tests/platform-capability-rbac/test-argocd-route-honesty.sh
               tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
               tests/phone/test-phone-wizard.sh
+              tests/scripts/test-akkoma-image-pin.sh
               tests/scripts/test-appstore-effector-flags.sh
               tests/scripts/test-argocd-serverside-diff.sh
               tests/scripts/test-backing-service-endpoints-closure.sh
@@ -747,7 +756,7 @@ jobs:
     steps:
       - run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless squashfs-tools
+          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless squashfs-tools squashfs-tools-ng
           pip install --quiet pyyaml
       - uses: actions/checkout@v4
       - name: trust the workspace

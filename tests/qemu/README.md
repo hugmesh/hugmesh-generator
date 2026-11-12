@@ -77,6 +77,7 @@ runner polls until `--timeout`. Console output goes to
 | `run-matrix-e2e.sh` | Opt-in matrix driver: walk `matrix.tsv`, boot each cell + assert size/load. |
 | `mesh-cluster.sh` | Opt-in 3-node k8s cluster: CP `kubeadm init` + two pinned-token joins over a shared QEMU mcast L2 (issue #48). `--identities FILE` takes the nodes' MAC/IP/L2 from the planner. |
 | `mesh-identities.sh` | **Sourced, not run.** The one reader of the planner's identity file, shared by `mesh-cluster.sh` and `run-qemu-docker.sh` (parse + per-row sanity; each lane keeps its own policy). |
+| `registry-mirror.sh` | Host-side registry mirror for the emulated cluster's CNI: Calico + Tigera operator chart + ArgoCD images (issue #516). `--dry-run` lists the set. |
 | `mesh-cluster_test.sh` | Static gate + hermetic tests for the whole mesh lane — all three launchers, the driver, the shared identity reader and the runner's shared-L2 plumbing (nothing boots; also run by `tests/build-matrix/check.sh`'s smokes + CI `lint:qemu-mesh-cluster`). |
 | `matrix-assertions.sh` | `assert_size` / `assert_build_load` / `assert_runtime_load` helpers (limits read from the code). |
 | `make-test-keys.sh` | Packs a directory into a FAT32 `KEYS` image (reusable, non-root with mtools). |
@@ -138,8 +139,42 @@ All join material is minted **offline**, so nothing scrapes the serial console:
 
 Gates: the CP's `Running kubeadm init` → `First control plane initialised` →
 `=== keys-provision complete ===` console markers; `Joined cluster (` on both
-workers; and `kubectl get nodes` listing 3 registered nodes. Ready needs a CNI. That
-is the post-build campaign's phase, so it is reported, not gated.
+workers; and `kubectl get nodes` listing 3 registered nodes. Ready needs a CNI, so
+by default it is reported, not gated. `MESH_CLUSTER_GATE_READY=1` gates it (issue
+#516): after registration the driver polls for up to `--ready-timeout` seconds
+(default 1800) and fails with `ready-count:N/3` when fewer than 3 nodes are Ready.
+The gate stays opt-in until one live emulated run has proved the CNI path below.
+
+### CNI images: the host-side registry mirror (`registry-mirror.sh`, issue #516)
+
+The guests have no reliable route to `docker.io`/`quay.io`, so their Calico images,
+the Tigera operator chart and ArgoCD's own images come from a registry on the host
+(decision 97a = B). `--dry-run` lists the set and pulls nothing:
+
+```bash
+make qemu-mirror-list        # tests/qemu/registry-mirror.sh --dry-run
+make qemu-mirror             # start + fill (docker, helm, and skopeo|crane|docker)
+make qemu-mirror-down        # remove the container (only if it carries the mirror's label)
+tests/qemu/registry-mirror.sh hosts-toml out/qemu-mirror/certs.d   # guest containerd stanzas
+```
+
+| Set | Images |
+|-----|--------|
+| Calico v3.29.7 (newest patch in `01-calico.yaml`'s `v3.29.x`) | `docker.io/calico/{node,cni,kube-controllers,typha,pod2daemon-flexvol,csi,node-driver-registrar,apiserver,key-cert-provisioner}:v3.29.7` |
+| Tigera operator (from the chart's `values.yaml`) | `quay.io/tigera/operator:v1.36.16` + chart `tigera-operator-v3.29.7.tgz` (sha256-pinned), pushed as `oci://<mirror>/charts/tigera-operator` |
+| ArgoCD v3.5.3 (= `bootstrap.sh`'s `ARGOCD_VERSION`) | `quay.io/argoproj/argocd:v3.5.3`, `ghcr.io/dexidp/dex:v2.45.1`, `public.ecr.aws/docker/library/redis:8.2.3-alpine` |
+
+The registry binds `127.0.0.1:5000`, which is `10.0.2.2:5000` from inside every
+guest's user-mode NIC. The `--mesh-net` L2 has no host interface, so the mirror is
+**not** reachable over it yet. The script refuses to run (in every mode) when
+`01-calico.yaml`'s `targetRevision` or `bootstrap.sh`'s ArgoCD pin moves away from
+the baked set, and a fill also checks the chart's sha256, its operator version and
+that ArgoCD's `install.yaml` names nothing the set lacks.
+
+Not wired yet (follow-up, needs a live run): installing the `hosts.toml` stanzas on
+the guests, pointing the Calico Application at the mirror's chart, turning
+`gitops.enabled` on for emulated nodes, and putting ArgoCD's repo credential on
+their KEYS sticks (decision 97b = C).
 
 ```bash
 make qemu-mesh-enumerate                          # the plan; nothing boots
