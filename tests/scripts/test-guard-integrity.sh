@@ -1145,7 +1145,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #926 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 240 of 282.
 # PR #972 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 242 of 284.
 # PR #966 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 243 of 285.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-243}"
+# PR #984 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 244 of 286.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-244}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
