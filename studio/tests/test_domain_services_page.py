@@ -420,9 +420,10 @@ def test_the_mesh_start_gate_uses_the_one_seam(local_mesh_page):
 # cell is a read-only MIRROR refreshed only when that page becomes current, so on a
 # forward walk it still holds the pre-step slugs. DomainsPage.validatePage does NOT
 # run only when the operator leaves that page — collect_all() re-runs every visited
-# page's validatePage, BuildPage._preview calls collect_all(), and
-# BuildPage.validatePage calls _preview, so collect_all re-enters itself and the LAST
-# writer in one Build->Launch transition is DomainsPage, hundreds of times over.
+# page's validatePage, and BuildPage._preview calls collect_all() on every preview and
+# on Continue, so DomainsPage writes again AFTER the step. (collect_all also used to
+# re-enter itself through BuildPage.validatePage, hundreds of times per Continue; it
+# is one pass now, and the wipe never depended on that count.)
 #
 # test_ticking_reaches_cfg_... above stops at UsersChoicePage — one page after the
 # step, and before BuildPage ever calls collect_all. That is why it stayed green.

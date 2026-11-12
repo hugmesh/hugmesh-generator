@@ -511,7 +511,23 @@ def test_both_unaffiliated_spellings_gate_identically(qapp, cfg_fn):
 # ── the web login theme is NOT on this page any more (2026-10-21) ─────────────────
 # The operator: "the theme selection should be there instead of where it is now" — in
 # each domain's section. It is chosen on the Look tab of the mesh's own domain (row 0)
-# on the Domain services step; on a mesh this page says where, in one line.
+# on the Domain services step; on a mesh this page says where, in ONE line (GUI-25: the
+# superbrand design's "2. Look" line and the page's own "Web sign-in look" line both
+# carried LOOK_POINTER, so an open design printed it twice).
+
+def look_pointers_shown(page):
+    """Every label on ``page`` a person would see that says where the look is chosen.
+
+    Matches a prefix with no character html.escape rewrites (the constant's apostrophe
+    becomes &#x27; in the labels, so the whole raw string matches nothing and any
+    "at most one" assertion over it passes vacuously). Shared with
+    tests/journey/test_brand_screens_window.py and tests/test_login_theme_gui.py."""
+    from hugmesh_studio.tui.brand_step import LOOK_POINTER
+    needle = LOOK_POINTER[:40]
+    assert "'" not in needle and "&" not in needle
+    return [lb for lb in page.findChildren(QtWidgets.QLabel)
+            if lb.isVisibleTo(page) and needle in lb.text()]
+
 
 def test_the_web_login_theme_section_is_gone_and_a_mesh_says_where_it_went(qapp):
     from hugmesh_studio.tui.brand_step import LOOK_POINTER
@@ -521,19 +537,20 @@ def test_the_web_login_theme_section_is_gone_and_a_mesh_says_where_it_went(qapp)
     assert not [g for g in page.findChildren(QtWidgets.QGroupBox)
                 if g.title().startswith("Themes")]
     page, _ = _page_for(ImageConfig(mode="mesh", role="pki", platform="x86"))
-    assert page.look_pointer.isVisibleTo(page)
-    assert "Look" in page.look_pointer.text() and LOOK_POINTER[:40] in page.look_pointer.text()
+    shown = look_pointers_shown(page)
+    assert len(shown) == 1, [lb.text() for lb in shown]
+    assert "Look" in shown[0].text() and LOOK_POINTER[:40] in shown[0].text()
 
 
-@pytest.mark.parametrize("mode,role,shown", [("standalone", "standalone-thick", False),
-                                             ("standalone", UNAFFILIATED_ROLE, False),
-                                             ("cloud", "laptop", False),
-                                             ("mesh", "pki", True)])
+@pytest.mark.parametrize("mode,role,shown", [("standalone", "standalone-thick", 0),
+                                             ("standalone", UNAFFILIATED_ROLE, 0),
+                                             ("cloud", "laptop", 0),
+                                             ("mesh", "pki", 1)])
 def test_the_look_pointer_is_shown_only_in_mesh(qapp, mode, role, shown):
     """It points at the login-ui look a MESH serves to browsers; a standalone/cloud
-    desktop serves no login-ui, so it says nothing there."""
+    desktop serves no login-ui, so it says nothing there — and a mesh says it once."""
     page, _ = _page_for(ImageConfig(mode=mode, role=role, platform="x86"))
-    assert page.look_pointer.isVisibleTo(page) is shown
+    assert len(look_pointers_shown(page)) == shown
 
 
 def test_web_login_values_still_round_trip_through_a_stray_visit(qapp):
