@@ -188,7 +188,8 @@ _As of 2026-08-05, except the kind SSO e2e bullets, re-measured 2026-10-14. Stat
   **metrics-server** / **keda** / **kyverno** / **observability** /
   **service-catalog-builder** / **optional-services-operator**. The UI
   greys out when a service is absent, games defaults to `games.<domain>`. A build
-  with no selection bakes `akkoma tuwunel phpbb`; the other user-level slugs are opt-in.
+  with no selection bakes `tuwunel phpbb`; the other user-level slugs are opt-in
+  (`akkoma` until its own-built image is published: `images/akkoma/README.md`).
   Build-time prune ships; the **🚧 live ApplicationSet cut-over is pending**.
 - **✅ A/V relay via coturn (TURN/STUN) — ships dark** — the `coturn` slug is a
   DEFAULT-OFF optional service running RFC-5766 REST long-term-credential mode
@@ -516,7 +517,9 @@ cluster._
   still runs `mode: file` with the node renderer writing, tracked in
   hugmesh-generator#634 (switch the mode, seed the stored policy so the tailnet does
   not fall to allow-all, retire the node-side writer; needs a live control node to
-  confirm). Until then **nobody may flip `enabled`**. The BFF now refuses to wire the
+  confirm). Until then **nobody may flip `enabled`**. keys-provision now refuses to
+  start headscale unless headscale's own reading of its config is `policy.mode: file`
+  with `/etc/headscale/policy.hujson`, so #634 has to change that check as well. The BFF now refuses to wire the
   push client unless it declares `policy-mode: database`
   (`HeadscaleAclConfig.requireDbPolicyMode`, hugmesh-admin-bff-api), but headscale's
   API does not report its mode, so the guard can only check the declaration.

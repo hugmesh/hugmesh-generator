@@ -372,8 +372,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self.setTitle("Mesh emulation")
         self.setSubTitle(
             "Boot every image of a finished build session as persistent emulated "
-            "devices and drive the whole mesh locally — status per device, ssh "
-            "logins, the QEMU console, disk saves, and the mesh's web front door.")
+            "devices and drive the whole mesh locally: status, ssh, the QEMU console, "
+            "disk saves, the web front door.")
         # Terminal side-flow: the final button does nothing but close the Studio (the
         # emulated devices keep running — the verbs on this page are what start and
         # stop them), so it says Exit (_widgets.label_finish_as_exit).

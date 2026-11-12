@@ -423,7 +423,16 @@ headscale so the rewritten file is the one in force.
 - **SSH is a separate, default-deny block.** `tailscale up --ssh` is on by default
   (`.tailscale.ssh`). The `ssh` section of the policy allows only the privileged
   user (`@@TS_SSH_USER@@`, rewritten by keys-provision; root and other accounts are
-  denied). The image bakes `policy.bootstrap.hujson`, which first boot stages as
+  denied), and only from `tag:superadmin`: every `ssh` rule's source in every
+  shipped and rendered policy is `tag:superadmin` and nothing else. Tailscale SSH
+  answers :22 itself, so the device's sshd key checks are not on that path and
+  whoever a rule names as its source gets a privileged session; `tag:hugmesh` and the
+  role tags are self-applied by every node holding a pre-auth key, so they are never
+  a source. The one :22 rule in `acls` is `tag:superadmin → tag:hugmesh:22`; without
+  it the superadmin's session could not reach the node. keys-provision refuses a
+  KEYS-stick policy (and a stick-supplied bootstrap) whose `ssh` rules name any other
+  source, under every spelling headscale reads: it stages the clean bootstrap or
+  removes those sources. The image bakes `policy.bootstrap.hujson`, which first boot stages as
   `/etc/headscale/policy.hujson` unless the KEYS stick carries its own
   `headscale/policy.hujson` (that wins). On the control node, `gen-headscale-policy.sh`
   (Layer A of the device-license registry) re-renders it from
@@ -435,12 +444,43 @@ headscale so the rewritten file is the one in force.
   node its forced tags plus every advertised tag its own user owns, so a security tag
   owned by `hugmesh` could be claimed by anyone holding a pre-auth key.
   keys-provision refuses to load a KEYS-stick policy that gives one an owner, and a
-  key minted by the Studio may not carry one (headscale forces a key's tags at join). See
+  key minted by the Studio may not carry one (headscale forces a key's tags at join).
+  The check reads owners the way headscale does: under a case variant such as
+  `TagOwners` and in every repeat of a `tagOwners` member (headscale's Go JSON
+  decoder honours both; a plain `.tagOwners` query saw neither). A refused policy is
+  replaced by the clean baked bootstrap policy, or, with no clean bootstrap, by the
+  same policy with those owners emptied and checked again. Everything else **fails
+  closed**: a policy that can be neither narrowed nor read, and no policy at all, get
+  a static deny-all policy (no ACL, no SSH rule, no tag owner: nodes join but reach
+  nothing and cannot claim a tag), first-boot health is marked UNPROTECTED in
+  `/run/hugmesh/firewall-health/headscale_policy.unprotected` (with an ERROR line in
+  `/var/log/keys-provision.log` and a `daemon.crit` syslog line), and when even the
+  deny-all policy cannot be written headscale is not started. The first verified
+  Layer-A sync, or re-provisioning with a clean policy, replaces the deny-all policy. See
   [`docs/DEVICE-REGISTRY-KEY-ROTATION.md`](DEVICE-REGISTRY-KEY-ROTATION.md).
+  All of these checks are on `/etc/headscale/policy.hujson`, and headscale loads the
+  file its own configuration names, which comes from the KEYS stick. So right before
+  starting headscale, keys-provision asks headscale itself (`headscale dumpConfig`, the
+  same config search and resolution `headscale serve` does) what it will load, and
+  starts it only on `policy.mode: file` with `policy.path: /etc/headscale/policy.hujson`.
+  A stick config that names another file (another stick file such as `acl.hujson`
+  could own `tag:superadmin`), names none (headscale then runs allow-all), selects
+  database mode, uses a relative path, or cannot be read is **refused**: headscale is
+  not started, health is marked UNPROTECTED with `state=not-started`, and the config
+  is moved aside to `/etc/headscale/config.*.refused`, because OpenRC's `restart`
+  starts a stopped service and later steps restart headscale (the CP DNS record, the
+  Layer-A policy-sync apply leg). `publish_cp_dns_record`, which rewrites
+  `config.yaml` after that first check, runs the same check again before its restart.
+  Measured on
+  headscale 0.23.0, a line-by-line read of `config.yaml` is not enough to know the
+  answer (case-variant and dotted keys, `<<:` merges, CR/NEL/U+2028 line breaks, a
+  quoted scalar that swallows a later `policy:` block, a second YAML document, a
+  `config.json` beside the yaml). The boundary: a `HEADSCALE_*` variable in the
+  daemon's own environment is not visible to the check; the image's init script sets
+  none and the stick cannot.
   `specs/etc/headscale/policy.hujson` is a reference copy that the builders no
   longer bake; neither it nor `keys-template/headscale/policy.hujson` carries the
-  any-to-any rule, though the header comments of both still describe the old
-  full-mesh policy.
+  any-to-any rule.
 - **Pods/services as one LAN.** Each node advertises the cluster pod
   (`10.244.0.0/16`) and service (`10.96.0.0/12`) CIDRs
   (`--advertise-routes=...`) and accepts approved routes (`--accept-routes`).

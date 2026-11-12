@@ -26,6 +26,13 @@
 # requirements file and no other leg does. Without them it exits 2 rather than
 # skipping, which was measured in a bare python:3.12-slim.
 #
+# MEASURED, 2026-11-11: tests/scripts/test-akkoma-image-pin.sh was executed in
+# python:3.12-slim with the checkout mounted READ-ONLY and --network=none before
+# being added to the debian job's first leg: 40 passed / 0 failed, rc=0, including
+# its 37-mutation battery (37 caught / 0 survived, each mutation verified to change
+# its file) and one positive control. In an image without python3 it prints FATAL
+# and exits 2 rather than passing. It is a NEGATIVE guard, hence debian.
+#
 # MEASURED, 2026-11-09: tests/scripts/test-compose-no-literal-passwords.sh and
 # tests/stack/test-gen-stack-db-env.sh (hugmesh-generator#857) were executed in
 # python:3.12-slim with this job's apt packages, the checkout mounted READ-ONLY,
@@ -317,7 +324,10 @@ jobs:
       # binutils (strings), file, xorriso: tests/scripts/test-verify-artifact-neutrality-frite.sh
       # runs scripts/verify-artifact-neutrality.sh, whose host preflight FAILs closed
       # without all three; the suite builds its frite FAT media with mtools (already here).
-      - run: apk add --no-cache attr bash binutils coreutils curl e2fsprogs-extra file flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
+      # nginx: tests/stack/test-mastodon-front.sh runs the committed
+      # mastodon-front/default.conf through a real nginx (alpine's is built with
+      # http_sub_module); without it that suite exits 2 "SKIPPED-LOUDLY".
+      - run: apk add --no-cache attr bash binutils coreutils curl e2fsprogs-extra file flock gawk git git-daemon helm jq make mtools nginx nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
       # xorriso: tests/qemu/launch_arm_medium_test.sh builds a real ISO9660 Frite
       # medium fixture with it (the launcher reads such media with xorriso or
       # bsdtar); without it that suite exits 2 "SKIPPING LOUDLY", a red job.
@@ -430,6 +440,15 @@ jobs:
           # Mutation-tested on a Gentoo host: 18 planted defects in the lane in
           # round 2, 17 caught; round 3's two missing-rc-marker mutants, both caught
           # (they survived the round-2 suite). The survivor is named in the PR.
+          # tests/scripts/test-rpi5-img-preflight.sh (2026-11-11): the rpi5 .img
+          # pre-flight measures what the stage4 carries and grows a too-small root.
+          # It is here, not in the debian job, because it packs its fixture with the
+          # builder's own `tar -cJf` and python:3.12-slim has no xz even after that
+          # job's apt line (measured). It needs GNU du (--exclude; coreutils, which
+          # this job installs) and checks for it, so it fails closed under busybox du.
+          # MEASURED in alpine:3 with this job's apk set (checkout copied in; busybox
+          # sed/grep/cmp): 16 passed / 0 failed, and a 14-mutation battery against
+          # the real builder run in that image: 14 caught / 0 survived.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
@@ -546,6 +565,7 @@ jobs:
             tests/scripts/test-makefile-reown-skips-sysroot.sh
             tests/scripts/test-no-duplicate-env.sh
             tests/scripts/test-no-literal-vault-brand-prose.sh
+            tests/scripts/test-node-telemetry-off.sh
             tests/scripts/test-nullmailer-cross-postinst.sh
             tests/scripts/test-outbound-mtls-client.sh
             tests/scripts/test-password-reset-front-door.sh
@@ -560,6 +580,7 @@ jobs:
             tests/scripts/test-route-access-coverage-scanner.sh
             tests/scripts/test-route-access-oracle.sh
             tests/scripts/test-rpi5-builder-input-validation.sh
+            tests/scripts/test-rpi5-img-preflight.sh
             tests/scripts/test-rpi5-per-board-pkgdir.sh
             tests/scripts/test-seed-password-reconcile.sh
             tests/scripts/test-shared-build-assets.sh
@@ -587,6 +608,7 @@ jobs:
             tests/stack/test-coturn-optional-service.sh
             tests/stack/test-derive-games-admin.sh
             tests/stack/test-front-door-client-surface.sh
+            tests/stack/test-mastodon-front.sh
             tests/stack/test-no-store-posture.sh
             tests/stack/test-optional-services-exclude.sh
             tests/stack/test-optional-services-parity.sh
@@ -654,6 +676,7 @@ jobs:
           - part: ''
             suites: |
               tests/auto-update/test-builder-opt-in.sh
+              tests/device-registry/test-headscale-policy-fallback.sh
               tests/device-registry/test-headscale-security-tag-owners.sh
               tests/egress-vpn/test-vpn-reconcile-verify.sh
               tests/keystores/test-keystores-multidomain.sh
@@ -663,6 +686,7 @@ jobs:
               tests/platform-capability-rbac/test-argocd-route-honesty.sh
               tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
               tests/phone/test-phone-wizard.sh
+              tests/scripts/test-akkoma-image-pin.sh
               tests/scripts/test-appstore-effector-flags.sh
               tests/scripts/test-argocd-serverside-diff.sh
               tests/scripts/test-backing-service-endpoints-closure.sh
@@ -689,6 +713,7 @@ jobs:
               tests/scripts/test-standalone-login-firstboot.sh
               tests/scripts/test-subject-revocation-ttl.sh
               tests/scripts/test-pki-role-san-coverage.sh
+              tests/scripts/test-prod-gate-env-apps.sh
               tests/scripts/test-provision-keys-escrow-guard.sh
               tests/scripts/test-python-targets-seed.sh
               tests/scripts/test-run-ungated-lane.sh
@@ -1066,6 +1091,25 @@ jobs:
     # one suite on disk that nothing ran (check 3 and check 7b of
     # tests/scripts/test-guard-integrity.sh both named it): it landed in 1abc9bf3 /
     # 2ab3325f with neither this file nor .gitlab-ci.yml naming it.
+    # tests/device-registry/test-headscale-policy-fallback-live.sh runs the PINNED
+    # headscale and tailscale on a private --internal network against the deny-all
+    # policy keys-provision falls back to (cut from the real provision.sh): headscale
+    # starts on it, joining nodes get no self-advertised tag and an empty packet
+    # filter, and the owner spellings the old check missed ("TagOwners", a repeated
+    # tagOwners member) really grant tag:superadmin; controls show a granting policy
+    # is seen and that the text without its group is refused as an empty policy.
+    # Exits 2 (a failure here) without docker or an image. MEASURED 2026-11-11 on a
+    # Linux host with docker, images cached: 14 passed / 0 failed in 29 s at load
+    # average 45 (3.5 min at 75), and each of four mutations of the deny-all text or
+    # the owner check (an allow-all rule, no group, an owned tag:hugmesh, the old
+    # `.tagOwners` read) turned it red. It also checks keys-provision's config gate
+    # against the binary: over 18 config.yaml spellings, what `headscale serve` loads,
+    # what `headscale dumpConfig` reports and the gate's verdict must agree, and the
+    # real provision_headscale refuses stick configs that redirect the policy or name
+    # none, while with the gate off those sticks really grant tag:superadmin / run
+    # allow-all, and a refused config is set aside so a later restart cannot start it
+    # (the CP DNS rewrite is re-checked too). MEASURED 2026-11-11 with the gate: 96
+    # passed / 0 failed in about 2 min.
     # tests/device-registry/test-headscale-tag-ownership.sh starts throwaway
     # headscale 0.23.0 + tailscale 1.78.1 containers (and curlimages/curl as a
     # LocalAPI client) on one private docker network, no published ports, and
@@ -1101,6 +1145,7 @@ jobs:
         run: |
           SUITES="
             tests/boot/test-gpu-worker-node-labels.sh
+            tests/device-registry/test-headscale-policy-fallback-live.sh
             tests/device-registry/test-headscale-tag-ownership.sh
             tests/device-registry/test-headscale-security-tag-live.sh
             tests/device-registry/test-headscale-tag-minters-live.sh
@@ -1142,16 +1187,33 @@ jobs:
     # LAYERA_BFF_PIN (a full 40-hex commit of hugmesh/hugmesh-admin-bff-api) whenever
     # the BFF side of the contract changes; the run-suites step asserts the checkout
     # is that commit. The suite exits 1 (never 0, never 3) when the checkout is absent.
-    # MEASURED 2026-11-11 in alpine:3 with this job's apk set and CI=true, against the
-    # BFF fix commit pinned below: 24 passed / 0 failed in ~11 s (its negative controls
-    # include three runs of test-layer-a-headscale-acl.sh on an absent or partial
-    # sibling). Against hugmesh-admin-bff-api main de019243 (the pre-fix golden): 2
-    # failed (the golden DIFFERS; owners on tag:superadmin and tag:dev_*).
+    #
+    # WHAT THE PIN MAY BE: a commit on the BFF's main, or the head commit of a BFF
+    # pull request. A change to the shared golden has to land in both repositories,
+    # and the pull request here cannot be green until the BFF's copy exists, so the
+    # pin names the BFF pull request's head. It does NOT have to move when that pull
+    # request is squash-merged: GitHub keeps the head under refs/pull/<n>/head after
+    # the merge and after the branch is deleted, and serves it to the checkout's
+    # `fetch --depth=1 origin <sha>`. Seen on run 43168293125: #159's head 1fb23d8f
+    # was fetched 83 minutes after #159 was squash-merged as 0b5ba2ec, when no branch
+    # held it. This job compares bytes, not history, so moving the pin to the squash
+    # commit later changes nothing unless the squash changed a fixture. Two things DO
+    # need a pin bump: a further commit on the BFF pull request, and any later change
+    # to the BFF's compiler or fixtures. Never force-push a pinned BFF branch.
+    #
+    # THE PIN NOW: hugmesh-admin-bff-api#161's head (the compiler sources every ssh
+    # rule from tag:superadmin and emits the one :22 accept, like the renderer here).
+    # MEASURED 2026-11-11 in alpine:3 with this job's apk set and CI=true, against
+    # that commit: 24 passed / 0 failed in 9 s (its negative controls include three
+    # runs of test-layer-a-headscale-acl.sh on an absent or partial sibling). Against
+    # the previous pin 1fb23d8f and against hugmesh-admin-bff-api main 93460e29 (both
+    # carry the golden whose per-node ssh src is tag:hugmesh): 1 failed (the golden
+    # DIFFERS).
     timeout-minutes: 10
     container:
       image: alpine:3
     env:
-      LAYERA_BFF_PIN: 1fb23d8f2602b867c98297b8506a5f3e5b3a8916
+      LAYERA_BFF_PIN: 0163b9ebef31f2a02b79bd131aa44b36abfdace7
     steps:
       - run: apk add --no-cache bash coreutils diffutils gawk git grep jq openssl sed
       - uses: actions/checkout@v4
