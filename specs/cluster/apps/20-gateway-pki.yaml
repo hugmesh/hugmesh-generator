@@ -20,6 +20,15 @@ spec:
     helm:
       releaseName: hugmesh-pki-gateway
       values: |
+        # THE IDENTITY PROVIDER this gateway validates tokens against (issue #530).
+        # The chart is served from git, so its values.yaml defaults are the SAME
+        # bytes on every mesh; these two lines are in this BAKED Application, which
+        # is what rewrite_idp_sysroot() (stage4 builders) can reach for --idp other
+        # than casdoor. They equal the chart defaults, so a casdoor mesh renders
+        # unchanged. Pinned by tests/scripts/test-eso-remoteref-brand.sh section (7).
+        casdoor:
+          issuerUri: https://id.hugmesh.net
+          jwksUri: http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks
         instance:
           name: hugmesh-pki-gateway
         # PULL SECRET OVERRIDE — hugmesh-pki only. The chart default is
