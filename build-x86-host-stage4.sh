@@ -5846,12 +5846,13 @@ live_root_gate() {
     # same key), and the basename of a non-default CONFIG_MODULE_SIG_KEY (file paths
     # only; a pkcs11: URI names no file) read from the sysroot's kernel config.
     local _re='(^|[[:space:]/])signing_key[^/[:space:]]*\.pem[^/[:space:]]*([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/'
-    local _sk=""
-    _sk="$(sed -nE 's/^CONFIG_MODULE_SIG_KEY="([^"]*)"$/\1/p' "${SYSROOT:-/nonexistent}/usr/src/linux/.config" 2>/dev/null)" || _sk=""
-    case "${_sk}" in ''|*:*) ;; *)
-        _sk="${_sk##*/}"
-        _re+="|(^|[[:space:]/])$(sed 's/[][\.*^$+?(){}|/]/\\&/g' <<<"${_sk}")([[:space:]]|$)" ;;
-    esac
+    local _sk="" _ske=""
+    # (tr strips the value's quotes: \042 is '"', spelled so the line holds no bare one)
+    _sk="$(sed -n 's/^CONFIG_MODULE_SIG_KEY=//p' "${SYSROOT:-/nonexistent}/usr/src/linux/.config" 2>/dev/null | tr -d '\042')" || _sk=""
+    if [ -n "${_sk}" ] && [ "${_sk#*:}" = "${_sk}" ]; then
+        _ske="$(sed 's/[][\.*^$+?(){}|/]/\\&/g' <<<"${_sk##*/}")"
+        _re+="|(^|[[:space:]/])${_ske}([[:space:]]|$)"
+    fi
     _leak="$(grep -E -e "${_re}" <<<"${_all}" | head -3)" || true
     if [ -n "${_leak}" ]; then
         err "live-root gate: ${sq} carries the kernel module-signing PRIVATE key:"
