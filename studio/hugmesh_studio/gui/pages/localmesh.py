@@ -1469,8 +1469,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         problems = added_row_problems([d.name for d in md.domains[1:]], md.own_name)
         own = (md.own_name or "").strip()
         if self.env_prod.isChecked() and own and not DOMAIN_NAME_RE.match(own):
-            problems.insert(0, f"row 0: not a domain name: {own!r} (lowercase "
-                               "dotted hostname, e.g. example.org)")
+            problems.insert(0, f"the first row: not a domain name: {own!r} "
+                               "(lowercase dotted hostname, e.g. example.org)")
         return problems
 
     def _commit_domains(self) -> bool:
@@ -1526,9 +1526,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         lines = list(problems)
         if blank:
             lines.append(
-                "A prod mesh needs its public apex domain in row 0 — the minted "
-                "issuer and superadmin align with it. The mesh cannot start without "
-                "it.")
+                "A prod mesh needs its public apex domain in the first row — the "
+                "minted issuer and superadmin align with it. The mesh cannot start "
+                "without it.")
         if problems:
             lines.append("Fix or remove these rows to continue.")
         self.domains_note.setText("\n".join(lines))
@@ -1836,8 +1836,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # (_seed_domains flips it): one domain field the operator types, one place it
         # is shown again. A host with no steps (LocalMeshDialog) keeps it editable.
         self.boot_domain_note = QtWidgets.QLabel(
-            "Set on the ‘Domains’ step (row 0, this mesh's own domain); shown here "
-            "read-only so the overlay and the domains table can never disagree.")
+            "Set on the ‘Domains’ step (the first row, this mesh's own domain); shown "
+            "here read-only so the overlay and the domains table can never disagree.")
         self.boot_domain_note.setWordWrap(True)
         self.boot_domain_note.setStyleSheet("color: gray;")
         self.boot_domain_note.setVisible(False)

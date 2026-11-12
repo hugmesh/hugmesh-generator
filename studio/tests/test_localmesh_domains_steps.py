@@ -750,7 +750,7 @@ def test_a_prod_apex_that_is_not_a_domain_name_is_refused(wiz):
     before = wiz.currentId()
     wiz.next()
     assert wiz.currentId() == before
-    assert "row 0: not a domain name" in ctl.domains_note.text()
+    assert "the first row: not a domain name" in ctl.domains_note.text()
 
 
 def test_a_back_keeps_a_refused_row_so_it_can_be_fixed(wiz):

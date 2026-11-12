@@ -740,7 +740,8 @@ class DomainsTableBody:
             if problem:
                 item = self.table.item(r, _COL_NAME)
                 name = item.text().strip() if item else ""
-                out.append(f"row {r} ({name or 'unnamed'}): {problem}")
+                # numbered as the table numbers it: the vertical header counts from 1
+                out.append(f"row {r + 1} ({name or 'unnamed'}): {problem}")
         return out
 
     def _add_own(self, name: str, title: str = "", services=None,

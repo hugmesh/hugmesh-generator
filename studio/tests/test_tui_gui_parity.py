@@ -452,6 +452,52 @@ def test_the_own_row_is_the_first_row_in_the_same_words_on_every_face(
         assert "row 0" not in text.lower(), text
 
 
+def test_the_prod_route_calls_the_apex_row_the_first_row_in_every_sentence(
+        wiz, monkeypatch, tmp_path):
+    """Round 2: three more sentences on the generate-a-new-mesh PROD route said "row 0"
+    beside a table that numbers the row 1: the note under the Mesh overlay step's
+    mirror, the blank-apex note, and the refusal of an apex that is no domain name."""
+    from hugmesh_studio.gui.pages import localmesh as gui_lm
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    ctl = _localmesh_domains_step(wiz, prod=True)
+    said = [ctl.boot_domain_note.text()]
+    wiz.next()                                  # a blank apex is a note, not a refusal
+    assert isinstance(wiz.currentPage(), gui_lm.LocalMeshDomainServicesPage)
+    said.append(ctl.domains_note.text())
+    assert "public apex domain in the first row" in said[-1], said[-1]
+    wiz.back()
+    ctl.domains_table.table.item(0, gui_domains._COL_NAME).setText("Not A Domain")
+    before = wiz.currentId()
+    wiz.next()                                  # refused, inline
+    assert wiz.currentId() == before
+    said.append(ctl.domains_note.text())
+    assert said[-1].startswith("the first row: not a domain name: 'Not A Domain'"), said[-1]
+    for text in said:
+        assert "the first row" in text and "row 0" not in text.lower(), text
+
+
+def test_a_refused_org_names_its_row_by_the_number_the_table_shows(qapp):
+    """The org refusal counted rows from 0, so the own row was "row 0" and the first
+    added one "row 1" beside a vertical header that says 1 and 2."""
+    host = gui_domains.DomainsTableWidget(cfg=None)
+    try:
+        host.fill([], "mesh.example")
+        host._add("chat.example", "Chat")
+        table = host.table
+        for row in (0, 1):
+            # a trailing hyphen: the cell lets it be typed, the rule refuses it
+            table.cellWidget(row, gui_domains._COL_ORG).setText("acme-")
+        shown = [table.model().headerData(r, Qt.Orientation.Vertical) for r in (0, 1)]
+        assert shown == [1, 2]
+        assert [p.split(":")[0] for p in host.org_problems()] == \
+            ["row 1 (mesh.example)", "row 2 (chat.example)"]
+    finally:
+        host.close()
+        host.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        qapp.processEvents()
+
+
 #: The window sizes the 2026-11-11 retest walked, and the two routes that host the
 #: table, plus one narrower than any of them (where the columns MUST give width back).
 #: Where the viewport holds every column whole the own row's labels must be whole:
