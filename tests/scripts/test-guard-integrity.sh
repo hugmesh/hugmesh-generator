@@ -1197,7 +1197,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # floor); this branch adds tests/scripts/test-sec-policy-keyword-coherence.sh, named by
 # shell-suites.yml's debian leg. PREMERGE_UNGATED untouched. MEASURED with GUARD_PREMERGE=0
 # on the branch: 262 of 304.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-262}"
+# Main CI merge-collision fix 2026-11-12: main itself measured 261 of 303 (merges after
+# batch3 gated suites without moving the floor); +1 gated, +1 total for
+# tests/scripts/test-github-workflows-wellformed.sh, named by shell-suites.yml (debian)
+# and .github/workflows/workflows-wellformed.yml. PREMERGE_UNGATED untouched.
+# MEASURED with GUARD_PREMERGE=0 on the tree based on origin/main 111f0f82: 262 of 304.
+# Merge of origin/main 7c266b78 (#1090) into the main-CI fix: both sides' suites gated.
+# MEASURED with GUARD_PREMERGE=0 on the merged tree: 263 of 305.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-263}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
