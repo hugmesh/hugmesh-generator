@@ -99,6 +99,7 @@ import tarfile
 import tempfile
 import zlib
 from dataclasses import asdict, dataclass, field
+from typing import Callable
 
 from . import json_files
 from .config import OPTIONAL_SERVICES_CHOICES, Domain, github_org_problem
@@ -802,21 +803,37 @@ def rename_rules(cfg: ExportConfig, repo_names) -> list[tuple[re.Pattern, str, s
         (re.compile(r"(?<![A-Za-z0-9_@.-])hugmesh/(?=hugmesh-[A-Za-z0-9])"), f"{org}/",
          "owner/repo reference"),
     ]
-    for name in sorted(set(repo_names), key=len, reverse=True):
+    for rx, _rep, _note in rules:
+        _RULE_NEEDLE[rx] = "hugmesh/"
+    # longest first; equal lengths by name, so two plans of one tree list the rules
+    # alike (set order follows the hash seed, which changes with every process)
+    for name in sorted(set(repo_names), key=lambda n: (-len(n), n)):
         target = repo_target_name(name, cfg)
         if target != name:
-            rules.append((re.compile(_TOKEN_BEFORE + re.escape(name) + _TOKEN_AFTER),
-                          target, f"repository name {name} -> {target}"))
+            rx = re.compile(_TOKEN_BEFORE + re.escape(name) + _TOKEN_AFTER)
+            _RULE_NEEDLE[rx] = name
+            rules.append((rx, target, f"repository name {name} -> {target}"))
     for rule in cfg.rename_map.get("tokens") or []:
         rules.append((re.compile(rule["pattern"]), str(rule["replace"]),
                       str(rule.get("note") or "extra rule")))
     return rules
 
 
+#: A built-in rule's pattern -> text every match of it contains, so a file that lacks
+#: the text skips the rule without running it (the org rules all match "hugmesh/", a
+#: repository-name rule matches the name itself). An operator's own token rule has no
+#: entry and always runs. Most files name no repository at all, and running ~25
+#: patterns over each of them was half of a plan's time on Windows (2026-11-13).
+_RULE_NEEDLE: dict = {}
+
+
 def rewrite_text(text: str, rules) -> tuple[str, int]:
     """Apply the rules; ``(new text, number of replacements)``."""
     total = 0
     for rx, rep, _note in rules:
+        needle = _RULE_NEEDLE.get(rx)
+        if needle is not None and needle not in text:
+            continue
         text, n = rx.subn(rep, text)
         total += n
     return text, total
@@ -943,6 +960,9 @@ class Plan:
 #: A file larger than this is refused rather than half-scanned (a person can exclude
 #: it with the rename map's exclude list).
 SCAN_LIMIT = 128 << 20
+#: A file up to this size keeps its bytes from the rewrite pass for the scan (see
+#: _scan_entries' ``known``); a larger one is read again, so memory stays bounded.
+_KNOWN_LIMIT = 4 << 20
 
 
 def _scan_file(path: str) -> tuple[list[str], str, bool]:
@@ -998,13 +1018,18 @@ def _marker_labels(views: list[str]) -> list[str]:
     return [label for label, rx in BANNED_MARKERS if any(rx.search(v) for v in views)]
 
 
-def _scan_entries(workdir: str) -> list[str]:
+def _scan_entries(workdir: str, known: dict | None = None) -> list[str]:
     """``"<path>: <label>"`` for every banned marker in what a commit of ``workdir``
     publishes: every PATH (a file or folder name is published too), every link's
     TARGET (git stores it as the link's content), and every file's bytes. A path and
     a link target get the same BYTE checks as file content (a token in cp037, the
     robot footer in UTF-16): git stores and publishes them as bytes. The plan runs it,
-    and apply scans the commit's own objects again (:func:`_scan_commit`)."""
+    and apply scans the commit's own objects again (:func:`_scan_commit`).
+
+    ``known`` maps a path to the bytes its file holds now, when the caller has them
+    in hand (the rewrite pass read or wrote them a moment ago): those are scanned
+    without opening the file a third time, which cost a third of a plan's file opens
+    on Windows. Any other path is read from the folder, as before."""
     found: list[str] = []
     for rel in _tree_entries(workdir):
         full = os.path.join(workdir, rel)
@@ -1017,7 +1042,9 @@ def _scan_entries(workdir: str) -> list[str]:
             else:
                 labels += [lb for lb in _scan_bytes(target)[0] if lb not in labels]
         else:
-            labels += [lb for lb in _scan_file(full)[0] if lb not in labels]
+            data = known.get(rel) if known else None
+            scanned = _scan_bytes(data) if data is not None else _scan_file(full)
+            labels += [lb for lb in scanned[0] if lb not in labels]
         # a name that is not UTF-8 is shown with replacement characters: the plan
         # files are written as UTF-8 and a raw (surrogate-escaped) name cannot be
         found += [f"{_shown(os.fsencode(rel))}: {label}" for label in labels]
@@ -1389,6 +1416,8 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
     lost: list[tuple[str, str]] = []          # (name, why)
     held: dict[str, str] = {}                 # Windows: case-blind path -> the one written
     merged: set[str] = set()                  # Windows: folders the volume made one
+    root = os.path.realpath(workdir)
+    resolved: dict[str, str] = {}             # parent folder -> its realpath
     with tarfile.open(fileobj=io.BytesIO(r.stdout), mode="r:") as tf:
         for member in tf.getmembers():
             if not (member.isfile() or member.isdir() or member.issym()):
@@ -1405,7 +1434,7 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
             if windows and _ntfs_git_alias(member.name):
                 lost.append((member.name, "a name Windows reads as the .git folder"))
                 continue
-            if not _member_stays_inside(workdir, member):
+            if not _member_stays_inside(workdir, member, root=root, resolved=resolved):
                 if windows and not member.isdir():
                     lost.append((member.name, "a path that leaves the work folder here"))
                 continue
@@ -1463,6 +1492,11 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
                 if windows and not member.isdir():
                     lost.append((member.name, f"could not be written here ({exc})"))
                 continue
+            finally:
+                if member.issym():
+                    # a link now on disk (or half-written) can redirect a folder a
+                    # later member lands in: resolve every parent afresh from here
+                    resolved.clear()
             if windows and member.isfile() and member.mode & 0o111:
                 executables.append(member.name)
             # a link is published too (its target is its content): it goes through
@@ -1475,17 +1509,30 @@ def _snapshot(runner: Runner, path: str, ref: str, workdir: str,
     return sorted(files)
 
 
-def _member_stays_inside(workdir: str, member: tarfile.TarInfo) -> bool:
+def _member_stays_inside(workdir: str, member: tarfile.TarInfo, *, root: str = "",
+                         resolved: dict | None = None) -> bool:
     """True when extracting ``member`` can only write inside ``workdir``. Checked
     whether or not the Python has extraction filters, so the safety does not hang on
     the interpreter's default: the name must stay under the folder, the folder it lands
     in must RESOLVE (links followed) to somewhere under it, and a link must be
-    relative and point inside."""
-    root = os.path.realpath(workdir)
+    relative and point inside.
+
+    ``root`` is ``realpath(workdir)`` and ``resolved`` caches each parent's realpath,
+    when the caller passes them: a snapshot asked twice per member, and on Windows
+    every realpath opens the path (40,900 calls, 11 s of one plan). The caller must
+    clear ``resolved`` once a link is written, as a link can change what a later
+    parent resolves to."""
+    root = root or os.path.realpath(workdir)
     dest = os.path.normpath(os.path.join(root, member.name))
     if dest != root and not dest.startswith(root + os.sep):
         return False
-    parent = os.path.realpath(os.path.dirname(dest))
+    folder = os.path.dirname(dest)
+    if resolved is None:
+        parent = os.path.realpath(folder)
+    else:
+        parent = resolved.get(folder)
+        if parent is None:
+            parent = resolved[folder] = os.path.realpath(folder)
     if parent != root and not parent.startswith(root + os.sep):
         return False
     if member.issym():
@@ -1598,6 +1645,9 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
         # plain jar built with `mvn`): the generated step must not assume it
         rp.has_mvnw = os.path.isfile(os.path.join(rp.workdir, "mvnw"))
     unrewritten: list[str] = []
+    # path -> the bytes the file holds once this loop is done, for the scan below
+    # (files up to _KNOWN_LIMIT, so a repository of large assets is not held in memory)
+    known: dict[str, bytes] = {}
     for rel in kept:
         full = os.path.join(rp.workdir, rel)
         if os.path.islink(full) or _glob_matches(rel, name, skip_globs):
@@ -1614,18 +1664,23 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
         except UnicodeDecodeError:
             text, clean_utf8 = data.decode("utf-8", "replace"), False
         new, n = rewrite_text(text, rules)
-        if not n:
-            continue
-        if not clean_utf8:
-            # the bytes are published as they are (decoding with replacement and
-            # writing back would corrupt them); the plan says which files it left
-            unrewritten.append(rel)
+        if not n or not clean_utf8:
+            if len(data) <= _KNOWN_LIMIT:
+                known[rel] = data          # left byte for byte
+            if n:
+                # the bytes are published as they are (decoding with replacement and
+                # writing back would corrupt them); the plan says which files it left
+                unrewritten.append(rel)
             continue
         rp.rewrites[rel] = n
-        # newline="": the text keeps its own line endings (a text-mode write on
-        # Windows turned every LF into CRLF, and a CRLF into CR CR LF)
-        with open(full, "w", encoding="utf-8", newline="") as fh:
-            fh.write(new)
+        # written as bytes: the text keeps its own line endings (a text-mode write on
+        # Windows turned every LF into CRLF, and a CRLF into CR CR LF), and the scan
+        # below is handed exactly what is on disk
+        written = new.encode("utf-8")
+        with open(full, "wb") as fh:
+            fh.write(written)
+        if len(written) <= _KNOWN_LIMIT:
+            known[rel] = written
     if unrewritten:
         shown = ", ".join(unrewritten[:5]) + (" ..." if len(unrewritten) > 5 else "")
         rp.notes.append(f"{len(unrewritten)} file(s) name a renamed token but are not UTF-8 "
@@ -1634,7 +1689,7 @@ def _prepare_repo(runner: Runner, name: str, cfg: ExportConfig, rules, out_dir: 
     # published: every path, every link target and every file's bytes (a file that is
     # not UTF-8, or holds a NUL, a link, and a file name were each once skipped here
     # and a token in them was published)
-    rp.banned = _scan_entries(rp.workdir)
+    rp.banned = _scan_entries(rp.workdir, known)
     # what is counted is what the commit must hold (apply checks it): files and links
     rp.files = len(_tree_entries(rp.workdir))
     if rp.banned:
@@ -1724,12 +1779,15 @@ def _probe(runner: Runner, rp: RepoPlan, cfg: ExportConfig) -> None:
 
 
 def plan(cfg: ExportConfig, runner: Runner | None = None, *, probe: bool = True,
-         stamp: str = "", osname: str | None = None) -> Plan:
+         stamp: str = "", osname: str | None = None,
+         progress: Callable[[str], None] | None = None) -> Plan:
     """The read-only half: the repository set, one snapshot per repository under
     ``<out>/work/``, the rewrites and exclusions per file, the banned-marker scan,
     the generated site repository, and the plan files. Nothing is created or
     pushed; with ``probe`` the target repositories are LOOKED AT through ``gh``.
-    ``osname`` (``os.name`` by default) picks the native-Windows snapshot rules."""
+    ``osname`` (``os.name`` by default) picks the native-Windows snapshot rules.
+    ``progress`` gets one line as each repository starts (a plan of the generator
+    takes minutes, and the CLI printed nothing until the end)."""
     runner = runner or SubprocessRunner()
     problems = cfg.problems()
     if problems:
@@ -1744,7 +1802,9 @@ def plan(cfg: ExportConfig, runner: Runner | None = None, *, probe: bool = True,
     rules = rename_rules(cfg, names)
     skip_globs = list(cfg.rename_map.get("skip_rewrite") or [])
     repos: list[RepoPlan] = []
-    for name in names:
+    for i, name in enumerate(names, 1):
+        if progress is not None:
+            progress(f"[plan {i}/{len(names)}] {name}: snapshot, rewrite and scan")
         rp = _prepare_repo(runner, name, cfg, rules, out_dir, skip_globs, osname=osname)
         if not rp.action:
             if probe:
@@ -2458,7 +2518,7 @@ def run_cli(args, generator_dir: str, out=print, err=None) -> int:
                 err(f"error: {pr}")
             return 2
         runner = SubprocessRunner()
-        p = plan(cfg, runner, probe=not args.no_probe)
+        p = plan(cfg, runner, probe=not args.no_probe, progress=err)
     except (ValueError, OSError, RuntimeError) as exc:
         err(f"error: {exc}")
         return 2
