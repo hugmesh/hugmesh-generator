@@ -1213,7 +1213,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-mesh-control-headscale-start.sh, named by shell-suites.yml's host
 # docker job (it starts the pinned headscale). PREMERGE_UNGATED is untouched. MEASURED
 # with GUARD_PREMERGE=0 on the branch merged with origin/main 96e0f6df: 248 of 291.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-263}"
+# Mesh control over Tor (#1086) replayed onto main + #1091: MEASURED with GUARD_PREMERGE=0 on that tree: 265 of 308.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-265}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

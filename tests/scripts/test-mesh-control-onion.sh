@@ -105,7 +105,8 @@ run_mc() {  # run_mc <manifest-json> <expr...>: evaluate in the sourced copy, sa
 # ── A. lan changes nothing ───────────────────────────────────────────────────
 echo "-- A. lan (the default) changes nothing --"
 LANM='{"mesh":{"magic_dns_domain":"acme.internal","endpoint":"","control_onion":"'"${ONION}"'"},"nodes":[{"ip":"10.0.0.10","role":"pki"}]}'
-expect "no transport: the worker endpoint is unchanged" "https://10.0.0.10:8080" "$(run_mc "${LANM}" resolve_control_endpoint 2>/dev/null)"
+# (The LAN dial is http:// since #1004; control_url_tls_migrate moves it to https:// when the pki serves TLS.)
+expect "no transport: the worker endpoint is unchanged" "http://10.0.0.10:8080" "$(run_mc "${LANM}" resolve_control_endpoint 2>/dev/null)"
 expect "no transport: the pki endpoint is unchanged" "https://192.168.9.9:8080" "$(run_mc "${LANM}" resolve_endpoint 2>/dev/null)"
 rm -rf "${SB}"; mkdir -p "${SB}/etc"; printf '127.0.0.1 localhost\n' > "${SB}/etc/hosts"
 run_mc "${LANM}" provision_mesh_control >/dev/null 2>&1
@@ -155,14 +156,14 @@ expect "a custom control name and port" "https://ctl.acme-ops.example:9443" \
 expect "control_port 8080 (headscale's own) is refused -> 7443" "${URL}" \
     "$(run_mc '{"mesh":{"magic_dns_domain":"acme.internal","control_transport":"onion","control_port":8080,"control_onion":"'"${ONION}"'"}}' resolve_control_endpoint 2>/dev/null)"
 # lan+onion degrades to lan, loudly
-expect "lan+onion: a control name INSIDE the MagicDNS domain keeps the node on lan" "https://192.168.1.10:8080" \
+expect "lan+onion: a control name INSIDE the MagicDNS domain keeps the node on lan" "http://192.168.1.10:8080" \
     "$(run_mc '{"mesh":{"magic_dns_domain":"acme.internal","pki_lan_ip":"192.168.1.10","control_transport":"lan+onion","control_name":"hs.acme.internal","control_onion":"'"${ONION}"'"}}' resolve_control_endpoint 2>/dev/null)"
 run_mc '{"mesh":{"magic_dns_domain":"acme.internal","control_transport":"lan+onion","control_name":"hs.acme.internal","control_onion":"'"${ONION}"'"}}' resolve_mesh_control_name > "${WORK}/clash.out" 2>&1
 grep -a -F "contains the MagicDNS domain 'acme.internal'" "${WORK}/clash.out" >/dev/null \
     && ok "the refusal says why (a sentence naming the MagicDNS domain)" || bad "the clash refusal gave no reason: $(cat "${WORK}/clash.out")"
-expect "lan+onion: no tor keeps the node on lan" "https://192.168.1.10:8080" "$(STUB_TOR=0 run_mc "${W}" resolve_control_endpoint 2>/dev/null)"
-expect "lan+onion: no socat keeps the node on lan" "https://192.168.1.10:8080" "$(STUB_SOCAT=0 run_mc "${W}" resolve_control_endpoint 2>/dev/null)"
-expect "a bogus transport keeps the node on lan" "https://192.168.1.10:8080" \
+expect "lan+onion: no tor keeps the node on lan" "http://192.168.1.10:8080" "$(STUB_TOR=0 run_mc "${W}" resolve_control_endpoint 2>/dev/null)"
+expect "lan+onion: no socat keeps the node on lan" "http://192.168.1.10:8080" "$(STUB_SOCAT=0 run_mc "${W}" resolve_control_endpoint 2>/dev/null)"
+expect "a bogus transport keeps the node on lan" "http://192.168.1.10:8080" \
     "$(run_mc '{"mesh":{"magic_dns_domain":"acme.internal","pki_lan_ip":"192.168.1.10","control_transport":"tor","control_onion":"'"${ONION}"'"}}' resolve_control_endpoint 2>/dev/null)"
 # Tor only FAILS CLOSED — every reason
 expect "Tor only, no tor: NO endpoint (not the LAN)" "" "$(STUB_TOR=0 run_mc "${WO}" resolve_control_endpoint 2>/dev/null)"
@@ -205,7 +206,7 @@ grep -a -F -- "--login-server https://explicit.example" "${WORK}/stub.log" >/dev
     && ok "provision_tailscale, Tor only without tor but an explicit .tailscale.login_server: the operator's override runs" \
     || bad "an explicit login_server was blocked: $(tr '\n' '|' < "${WORK}/stub.log")"
 ts_run "${TSWL}" STUB_TOR=0
-grep -a -F -- "--login-server https://192.168.1.10:8080" "${WORK}/stub.log" >/dev/null \
+grep -a -F -- "--login-server http://192.168.1.10:8080" "${WORK}/stub.log" >/dev/null \
     && ok "provision_tailscale, lan+onion without tor: degrades to the LAN (loudly), as documented" \
     || bad "lan+onion without tor: $(tr '\n' '|' < "${WORK}/stub.log")"
 # provision_mesh_control on a worker

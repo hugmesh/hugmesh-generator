@@ -2168,11 +2168,14 @@ class NetworkPage(QtWidgets.QWizardPage):
             # page here, inline (headscale would refuse to start on the pki).
             msg = self._mesh_control_name_problem() if t != "lan" else ""
             if msg:
+                # refuses Next by the same GUI-20 rule: no early return, every field
+                # below is still collected; the choice is not written through
                 self.mesh_control_note.setText(msg)
                 self.mesh_control_note.setVisible(True)
-                return False
-            c.mesh_control_transport = "" if t == "lan" else t
-            c.mesh_control_onion_mint = t != "lan" and self.mesh_control_mint.isChecked()
+                pki_refused = True
+            else:
+                c.mesh_control_transport = "" if t == "lan" else t
+                c.mesh_control_onion_mint = t != "lan" and self.mesh_control_mint.isChecked()
         # ── the identity rows, collected ONLY while their axis has them on screen ──
         # THE HOUSE RULE, both halves. initializePage hides a row it does not apply to,
         # and a hidden QLineEdit KEEPS its text — so a collect that ignores scope here would let
@@ -2421,7 +2424,10 @@ class NetworkPage(QtWidgets.QWizardPage):
                     None, QtCore.QEvent.Type.LayoutRequest)
                 scroll = getattr(self, "_content_scroll", None)
                 if scroll is not None:
-                    scroll.ensureWidgetVisible(self.pki_lan_note)
+                    mc = getattr(self, "mesh_control_note", None)
+                    note = (mc if mc is not None and mc.isVisible()
+                            and not self.pki_lan_note.isVisible() else self.pki_lan_note)
+                    scroll.ensureWidgetVisible(note)
         return refused_ok and not pki_refused
 
     def _refuse_malformed(self, c, prior: dict) -> bool:
