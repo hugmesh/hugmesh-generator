@@ -60,6 +60,19 @@ def queue_job(state, bucket, name, line="draft hugmesh-generator 5"):
 @pytest.fixture
 def worker_proc():
     p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "local-ai-worker"])
+    # The liveness check reads /proc/<pid>/cmdline. Right after Popen the child can still
+    # be the forked interpreter (exec has not run yet), whose command line does not name
+    # the worker; under load the test then saw "no worker running". Wait for the exec.
+    cmdline = f"/proc/{p.pid}/cmdline"
+    deadline = time.time() + 10
+    while os.path.exists("/proc/self/cmdline") and time.time() < deadline:
+        try:
+            with open(cmdline, "rb") as fh:
+                if b"local-ai-worker" in fh.read():
+                    break
+        except OSError:
+            pass
+        time.sleep(0.01)
     yield p
     p.kill()
     p.wait()
