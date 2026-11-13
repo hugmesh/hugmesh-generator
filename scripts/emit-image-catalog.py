@@ -128,7 +128,7 @@ def build_image_catalog() -> dict:
         "roles": roles,
         "platform_labels": dict(PLATFORM_LABELS),
         "role_class": {"desktop": list(DESKTOP_ROLES), "node": list(NODE_ROLES)},
-        "archs": [{"id": a.id, "label": a.label} for a in cat.archs],
+        "archs": [{"id": a.id, "label": a.label, "selinux": a.selinux} for a in cat.archs],
         "families": [{"id": f.id, "label": f.label, "vendor": f.vendor, "arch": f.arch}
                      for f in cat.families],
         "devices": [device_entry(d) for d in cat.devices],

@@ -597,6 +597,7 @@ jobs:
             tests/scripts/test-qt6-keyword-preseeds.sh
             tests/scripts/test-rebrand-frozen-label-keys.sh
             tests/scripts/test-role-key-spelling.sh
+            tests/scripts/test-riscv64-no-selinux.sh
             tests/scripts/test-reserved-prefix-copy-gate.sh
             tests/scripts/test-route-access-coverage-scanner.sh
             tests/scripts/test-route-access-oracle.sh

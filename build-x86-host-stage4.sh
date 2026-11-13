@@ -92,6 +92,9 @@ source "${SCRIPT_DIR}/scripts/_desktop-config-lib.sh"
 # ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
 # shellcheck source=scripts/_selinux-policy-lib.sh
 source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
+# Whether this image carries SELinux, worded the same in every build summary and
+# in publish-manifest.json (riscv64 ships "no SELinux"; hugmesh-generator#1059).
+source "${SCRIPT_DIR}/scripts/_selinux-posture-lib.sh"
 # ── END shared block: SELinux node-policy lib ─────────────────────────────────
 
 # NODE-STORAGE bake: bake_node_storage() — ONE definition of the four-file bake for
@@ -8819,6 +8822,7 @@ else
     echo -e "\n${CYAN}${BOLD}=== ${BRAND_TITLE} x86_64 (hardened k8s, role=${ROLE}) ===${RST}"
 fi
 echo "  Profile:    $(readlink "${SYSROOT}/etc/portage/make.profile" | sed 's|.*/profiles/||')  (effective: read from the make.profile symlink, not from a spec copy)"
+selinux_summary_line x86-64 "${SPECS_DIR}"
 echo "  Kernel:     $(${SKIP_KERNEL} && echo 'skipped' || echo 'Gentoo hardened (gentoo-sources + hardened profile + KSPP/SELinux config)')"
 if ${UNAFFILIATED}; then
     echo "  Role:       ${ROLE}   (no cluster affiliation)"

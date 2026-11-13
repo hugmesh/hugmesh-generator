@@ -175,8 +175,10 @@ assert len(m["images"]) == 6
 ids = {e["id"] for e in m["images"]}
 assert ids == {"pki.x86", "be.rpi5"}, ids
 for e in m["images"]:
-    assert set(e) == {"id","role","platform","flavor","kind","file","bytes","sha256","builtAt"}, e
+    assert set(e) == {"id","role","platform","flavor","kind","selinux","file","bytes","sha256","builtAt"}, e
     assert e["bytes"] > 0 and len(e["sha256"]) == 64
+    # amd64 and arm64 images carry SELinux; only riscv64 ships "no SELinux" (#1059).
+    assert e["selinux"] is True, e
 be = [e for e in m["images"] if e["id"] == "be.rpi5"][0]
 assert be["role"] == "be" and be["platform"] == "rpi5"
 assert be["builtAt"] == "2026-08-07T18:54:15Z"

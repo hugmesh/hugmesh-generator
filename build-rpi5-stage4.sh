@@ -119,6 +119,9 @@ source "${SCRIPT_DIR}/scripts/_portage-config-lib.sh"
 # ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
 # shellcheck source=scripts/_selinux-policy-lib.sh
 source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
+# Whether this image carries SELinux, worded the same in every build summary and
+# in publish-manifest.json (riscv64 ships "no SELinux"; hugmesh-generator#1059).
+source "${SCRIPT_DIR}/scripts/_selinux-posture-lib.sh"
 # ── END shared block: SELinux node-policy lib ─────────────────────────────────
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
@@ -5617,6 +5620,7 @@ echo "  Role:             ${ROLE}$(${ROLE_CLIENT} || echo "   (cluster domain: $
 echo "  ENV:              ${ENV}   $([ "${ENV}" = test ] && echo '(LAN-first: cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "  Brand:            ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}${CONFIG_FILE:+   (profile: ${CONFIG_FILE})}"
 echo "  Hostname:         ${HOSTNAME}"
+selinux_summary_line arm64 "${SPECS_DIR}"
 echo "  Timezone:         ${TIMEZONE}"
 _console_desc="GPIO-header UART"
 case "${BOARD}" in

@@ -47,11 +47,21 @@ BOARDLESS_PLATFORMS = ("x86", "orangepizero2", "orangepizero2w", "orangepizero3"
 # PLATFORM_LABELS tag text + the fail-loud-preflight convention from #351).
 EXPERIMENTAL_CAVEAT = "EXPERIMENTAL — hardware validation pending; fail-loud preflight"
 
+# The words for an architecture whose images carry no SELinux (operator decision
+# 2026-11-12, hugmesh-generator#1059: riscv64 ships labelled "no SELinux", because
+# Gentoo ships no hardened or SELinux riscv profile). The arch's own label carries
+# them, so every channel that names the arch says it. scripts/_selinux-posture-lib.sh
+# uses the same words for the build summary and publish-manifest.json, and
+# tests/scripts/test-riscv64-no-selinux.sh pins the two together.
+NO_SELINUX = "no SELinux"
+NO_SELINUX_WHY = "Gentoo ships no hardened or SELinux profile for riscv"
+
 
 @dataclass(frozen=True)
 class Arch:
     id: str
     label: str
+    selinux: bool = True           # False: images for this arch ship "no SELinux"
 
 
 @dataclass(frozen=True)
@@ -149,6 +159,21 @@ def load_catalog() -> DeviceCatalog:
         )
         _CACHE = DeviceCatalog(archs=archs, families=families, devices=devices)
     return _CACHE
+
+
+# ---- SELinux per architecture (riscv64 ships "no SELinux", #1059) ----------------
+
+def arch_has_selinux(arch_id: str) -> bool:
+    """Whether images for ``arch_id`` carry SELinux. False only for riscv64, which
+    ships labelled "no SELinux" (#1059); every other arch keeps hardened/selinux."""
+    return next(a for a in load_catalog().archs if a.id == arch_id).selinux
+
+
+def selinux_label(device_id: str) -> str:
+    """``"no SELinux — <why>"`` for a device on a no-SELinux arch, else ``""``."""
+    if arch_has_selinux(load_catalog().device(device_id).arch):
+        return ""
+    return f"{NO_SELINUX} — {NO_SELINUX_WHY}"
 
 
 # ---- the honesty predicates (module-level, catalog-cached) ------------------------
