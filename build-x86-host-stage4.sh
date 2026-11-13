@@ -298,6 +298,7 @@ SSO_ISSUER=""
 SKIP_KERNEL=false
 SKIP_CLEAN=false
 RESUME=false
+FROM_STEP=""          # --from-step: rerun from a late step (X86_LATE_STEPS)
 # ── Radio attack surface (DISABLED BY DEFAULT — hardened posture) ───
 # WiFi + Bluetooth are OFF by default to shrink the attack surface: at first boot
 # rfkill blocks both radios, their kernel modules are blacklisted, and no wifi/
@@ -992,6 +993,13 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             verifies against its signed DIGESTS, or when it
                             cannot link a C program; then rebuild without
                             --resume (#659).
+      --from-step STEP      With --resume: rerun a build that already got past
+                            its last sysroot change from one of its late steps
+                            (package-stage4, image-raw, image-live,
+                            image-installer). The steps before STEP are kept,
+                            not repeated, and every artifact keeps the earlier
+                            run's build stamp. Refused when this build tree
+                            holds no run that got that far.
       --print-plan          Resolve + validate all flags, print the build plan
                             (PLAN_KEY=VALUE lines) and exit 0 — no root, no
                             writes, no network. Secrets print as REDACTED.
@@ -1351,6 +1359,8 @@ while [[ $# -gt 0 ]]; do
         # deliverable; this simply ensures no ISO is built (already the default).
         --skip-iso|--no-iso) LIVE_ISO=false; INSTALLER_ISO=false; shift ;;
         --resume) RESUME=true; shift ;;
+        --from-step) [ -n "${2:-}" ] || { err "--from-step needs a STEP (package-stage4, image-raw, image-live or image-installer)"; exit 1; }
+                     FROM_STEP="$2"; shift 2 ;;
         # User package deltas (validated + mandatory-floor-checked below). x86 has
         # no -p/--extra-packages; --packages-add is the add spelling here.
         --packages-add) PACKAGES_ADD="$2"; shift 2 ;;
@@ -2281,6 +2291,21 @@ if ${PRETEND_ONLY} && { ${PACKAGES_ONLY} || ${RESUME}; }; then
     err "--pretend-only cannot be combined with --packages-only or --resume (a pretend sysroot is a fresh throwaway)"
     exit 1
 fi
+# --from-step: the late steps, in build order. Everything before package-stage4 changes
+# the sysroot; from there on each step only reads it (and the stage4), so a rerun can
+# start at any of these and keep what the earlier run made. The Studio's progress
+# table names the same steps (core/progress-tables.json, x86 phase ids).
+X86_LATE_STEPS=(package-stage4 image-raw image-live image-installer)
+if [ -n "${FROM_STEP}" ]; then
+    case " ${X86_LATE_STEPS[*]} " in
+        *" ${FROM_STEP} "*) ;;
+        *) err "--from-step must be one of: ${X86_LATE_STEPS[*]} (got '${FROM_STEP}')"; exit 1 ;;
+    esac
+    ${RESUME} || { err "--from-step needs --resume: it continues an existing build tree"; exit 1; }
+    if ${PRETEND_ONLY} || ${PACKAGES_ONLY}; then
+        err "--from-step cannot be combined with --pretend-only or --packages-only"; exit 1
+    fi
+fi
 # --pretend-only removes WORK_DIR/BUILD_SUBDIR (root rm -rf) when it is done, so the
 # subdir must be ONE plain path component: a '/' or '..' (pretend-x/../..) would point
 # that rm outside WORK_DIR. The Studio sends pretend-<sha8>; this is the CLI backstop.
@@ -2938,7 +2963,56 @@ IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log"
 #   ${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.<ext>
 # (the ${BRAND}- prefix + role token keep the QEMU launcher's and flash-disk.sh's
 #  'hugmesh-x86-*' / 'hugmesh-*-<role>-*' autodetect globs matching.)
+# The role tag IS the role. It only ever translated because `be+gpu` carried a `+`
+# that is illegal in a filename-ish token; `backend-gpu` is filename-safe, so the
+# be+gpu->host fold (and its --print-plan twin) is gone. Consumers that must still
+# find an OLD artifact glob the aliases (hugmesh_role_aliases_of).
+ROLE_TAG="${ROLE}"
+# FD-08: client device artifacts carry the person-role + primary-domain tag so the
+# filename identifies who/what the device is tied to (cosmetic per ADR-12 — the real
+# isolation is per-domain authz, not the name). e.g. laptop-user-acme_example.
+# UNAFFILIATED artifacts carry no person-role/domain tie — the bare role name.
+if ${ROLE_CLIENT} && ! ${UNAFFILIATED}; then
+    _primary_domain="${DOMAINS%%[ ,]*}"                       # first domain (space/comma sep)
+    _domtag="${_primary_domain//./_}"                         # filesystem-safe
+    ROLE_TAG="${ROLE}-${PERSON_ROLE}${_domtag:+-${_domtag}}"
+fi
+
+# --from-step: the late-step record. A full run writes it fresh at the point where the
+# sysroot is final (just before the stage4 is packed) and removes any old one first
+# thing, so a run that dies earlier leaves none. Each late step appends done=<step>.
+LATE_STATE="${BUILD_ROOT}/late-steps.state"
+late_state_get() { sed -n "s/^$1=//p" "${LATE_STATE}" 2>/dev/null | tail -1; }
+# late_entry_build_ts — print the stamp of the run a --from-step rerun continues, or
+# say why there is none (rc 1). The record above is the evidence; a build from before
+# it existed is accepted on the build lock's stamp (the lock is rewritten by every run
+# at its start, so it names the LAST run) together with that run's stage4, which only
+# a run that got past its last sysroot change can have written.
+late_entry_build_ts() {
+    local ts="" from="" s4
+    if [ -s "${LATE_STATE}" ]; then
+        ts="$(late_state_get BUILD_TS)"; from="${LATE_STATE}"
+    elif [ -s "${BUILD_ROOT}.lock" ]; then
+        ts="$(sed -n 's/.*build_ts=\([^[:space:]]*\).*/\1/p' "${BUILD_ROOT}.lock" | tail -1)"
+        from="${BUILD_ROOT}.lock"
+    fi
+    if ! [[ "${ts}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+        err "--from-step ${FROM_STEP}: this build tree holds no earlier run to continue (nothing usable in ${LATE_STATE} or ${BUILD_ROOT}.lock)"
+        return 1
+    fi
+    s4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${ts}.stage4.tar.xz"
+    if [ "${from}" != "${LATE_STATE}" ] || [ "${FROM_STEP}" != package-stage4 ]; then
+        if [ ! -s "${s4}" ]; then
+            err "--from-step ${FROM_STEP}: the run ${ts} (from ${from}) has no stage4 at ${s4}, so it never got past its last sysroot change — run the build without --from-step"
+            return 1
+        fi
+    fi
+    printf '%s\n' "${ts}"
+}
 BUILD_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+if [ -n "${FROM_STEP}" ]; then
+    BUILD_TS="$(late_entry_build_ts)" || exit 1
+fi
 info "Build stamp: ${BUILD_TS} (UTC; brand=${BRAND}, env=${ENV})"
 
 # GPU-derived make.conf tokens — the --gpu-driver matrix selects VIDEO_CARDS and
@@ -4111,6 +4185,459 @@ if [ -d "${SYSROOT}" ]; then
         exit 1
     fi
 fi
+# ── Definitions the late steps share (ahead of the skippable region) ────────────
+# A --from-step rerun skips everything from here to the stage4 pack, so what the
+# late steps (stage4, .img, live ISO, installer ISO) call or read is defined here, on
+# every path: the sudoers helpers, the chroot mount helpers with the live-ISO pack
+# helpers, and the names and paths below. Only definitions — nothing here touches
+# the sysroot. tests/scripts/test-x86-from-step.sh checks that no late step reads a
+# name only the skipped region sets.
+build_sudoers_strip() {
+    [ -n "${SYSROOT:-}" ] && [ -d "${SYSROOT}/etc" ] || return 0
+    [ "$(cd "${SYSROOT}" && pwd -P)" != / ] || return 0
+    rm -f "${SYSROOT}/etc/sudoers.d/build-notty"
+    # Revert main sudoers: restore requiretty and remove the includedir line we added
+    if [[ -f "${SYSROOT}/etc/sudoers" ]]; then
+        sed -i 's/^Defaults !requiretty/Defaults requiretty/' "${SYSROOT}/etc/sudoers"
+        sed -i '/^#includedir \/etc\/sudoers.d # build-added$/d' "${SYSROOT}/etc/sudoers"
+    fi
+}
+build_sudoers_gate() {
+    local f rc=0
+    [ -n "${SYSROOT:-}" ] && [ -d "${SYSROOT}/etc" ] \
+        || { err "build-only sudoers gate: no sysroot at '${SYSROOT:-}' to check"; return 1; }
+    if [ -e "${SYSROOT}/etc/sudoers.d/build-notty" ] || [ -L "${SYSROOT}/etc/sudoers.d/build-notty" ]; then
+        err "build-only sudoers gate: /etc/sudoers.d/build-notty is still in the sysroot"
+        rc=1
+    fi
+    # Any non-comment line naming portage (user or %group, alone or in a list) that
+    # carries NOPASSWD, in the main file or any drop-in, whatever the drop-in is called.
+    for f in "${SYSROOT}/etc/sudoers" "${SYSROOT}"/etc/sudoers.d/*; do
+        [ -f "${f}" ] || continue
+        if awk '/^[[:space:]]*#/ {next}
+                /NOPASSWD/ && /(^|[^[:alnum:]_.-])portage([^[:alnum:]_.-]|$)/ {hit=1}
+                END {exit !hit}' "${f}"; then
+            err "build-only sudoers gate: ${f#"${SYSROOT}"} grants the portage user NOPASSWD sudo"
+            rc=1
+        fi
+    done
+    if [ -f "${SYSROOT}/etc/sudoers" ] \
+       && grep -a -x -F '#includedir /etc/sudoers.d # build-added' "${SYSROOT}/etc/sudoers" >/dev/null 2>&1; then
+        err "build-only sudoers gate: /etc/sudoers still carries the build-added includedir line"
+        rc=1
+    fi
+    return "${rc}"
+}
+
+mount_chroot() {
+    # Exclusive-build guard FIRST (idempotent — see the flock rationale at the
+    # Extract phase): a --resume run reaches here without passing the fresh-start
+    # wipe, so this is the last stop before two builds could share one chroot.
+    acquire_build_lock
+    mount -t proc none "${SYSROOT}/proc"
+    mount --rbind /sys  "${SYSROOT}/sys";  mount --make-rslave "${SYSROOT}/sys"
+    mount --rbind /dev  "${SYSROOT}/dev";  mount --make-rslave "${SYSROOT}/dev"
+    mount --rbind /run  "${SYSROOT}/run";  mount --make-rslave "${SYSROOT}/run"
+    # Reuse the host's portage tree if present (much faster than webrsync)
+    if [ -d /var/db/repos/gentoo ]; then
+        mkdir -p "${SYSROOT}/var/db/repos/gentoo"
+        mount --bind /var/db/repos/gentoo "${SYSROOT}/var/db/repos/gentoo"
+        HOST_REPO_MOUNTED=true
+    else
+        HOST_REPO_MOUNTED=false
+    fi
+    # Shared binpkg pool (issue #46): bind the per-arch pool over the chroot's
+    # PKGDIR (/var/cache/binpkgs, make.conf.tmpl) so every amd64 role reads and
+    # writes ONE pool instead of a discarded per-wl-<id> one — the wave-1 fix for
+    # 0% x86 binpkg reuse. Same pattern as the repo/distfiles binds above: mounted
+    # here, detached in umount_chroot, and the Phase-8 clean re-verifies the
+    # detach with mountpoint -q before touching anything under the path (an rm -rf
+    # through a live bind would empty the FLEET's pool). The pool was fingerprint-
+    # guarded (sa_pool_guard) before this point; a mismatched pool never mounts.
+    # NOTE: no fail-soft fallback — under `set -e` a failed bind aborts the build,
+    # exactly like the repo bind (an unguarded silent fallback pool would be worse).
+    if [ -n "${X86_POOL_DIR}" ] && [ -d "${X86_POOL_DIR}" ]; then
+        mkdir -p "${SYSROOT}/var/cache/binpkgs"
+        mount --bind "${X86_POOL_DIR}" "${SYSROOT}/var/cache/binpkgs"
+        X86_POOL_MOUNTED=true
+        info "Binpkg pool: shared ${X86_POOL_DIR} -> /var/cache/binpkgs (--usepkg reuse across all amd64 roles; --binpkg-respect-use=y prunes USE mismatches per-package)"
+    else
+        X86_POOL_MOUNTED=false
+    fi
+    # Package build scratch on a NON-eCryptfs filesystem. The work dir often lives
+    # on eCryptfs (/home/.Private), whose ~143-char filename limit makes Go builds
+    # (kubelet/runc/cni-plugins/containerd — long vendored/cache paths) die with
+    # "File name too long". Bind the chroot's /var/tmp/portage onto a host xfs dir
+    # so package builds dodge the limit; INSTALLED files (short names) still land in
+    # the eCryptfs sysroot fine. Only kicks in when the sysroot is actually eCryptfs.
+    PORTAGE_SCRATCH_MOUNTED=false
+    if df -T "${SYSROOT}" 2>/dev/null | awk 'NR==2{exit($2=="ecryptfs"?0:1)}'; then
+        # Prefer the dedicated /var/tmp/portage partition (its own large xfs) when
+        # present — /var/tmp itself may be on a small root fs. Falls back to /var/tmp.
+        local scratchbase=/var/tmp
+        mountpoint -q /var/tmp/portage 2>/dev/null && scratchbase=/var/tmp/portage
+        local scratch="${scratchbase}/snap-portage-${BUILD_SUBDIR}"
+        # The scratch path is keyed on BUILD_SUBDIR ALONE, so same-role builds
+        # from DIFFERENT WORK_DIRs (each holding its own BUILD_ROOT lock) still
+        # collide right here — the 20260725-140638-09692d kill (see the flock
+        # rationale at the Extract phase). Sibling lockfile, non-blocking, held
+        # on fd 218 for the life of the build.
+        if [ -z "${_SCRATCH_LOCK_HELD:-}" ]; then
+            exec 218>>"${scratch}.lock"
+            if ! flock -n 218; then
+                err "portage build scratch ${scratch} is held by another build:"
+                err "holder: $(cat "${scratch}.lock" 2>/dev/null || echo '<unreadable>')"
+                err "(same --build-subdir from another work dir — both chroots would bind THIS"
+                err "dir at /var/tmp/portage and portage's own per-package clean would delete"
+                err "the other build's in-flight compile tree). Refusing to share it."
+                exit 1
+            fi
+            printf 'pid=%s build_ts=%s role=%s work_dir=%s started=%s\n' \
+                "$$" "${BUILD_TS}" "${ROLE:-?}" "${WORK_DIR}" "$(date -u +%FT%TZ)" > "${scratch}.lock"
+            _SCRATCH_LOCK_HELD=1
+        fi
+        local availg; availg=$(df -BG --output=avail "${scratchbase}" 2>/dev/null | tail -1 | tr -dc '0-9')
+        [ "${availg:-99}" -lt 15 ] && warn "only ${availg}G free on ${scratchbase} (xfs) for build scratch; a large parallel build may fill it (EMERGE_JOBS is held low to bound this)."
+        mkdir -p "${scratch}" "${SYSROOT}/var/tmp/portage"
+        mount --bind "${scratch}" "${SYSROOT}/var/tmp/portage" && PORTAGE_SCRATCH_MOUNTED=true
+        info "Build scratch -> non-eCryptfs xfs ${scratch} (eCryptfs 143-char filename-limit workaround)"
+    fi
+    # Reuse a Gentoo distfiles cache from a mounted drive (skip re-downloads / build
+    # offline). Search --distdir, then the top level of any /media/* drive, then the
+    # mounted portage scratch. Exposed READ-ONLY via PORTAGE_RO_DISTDIRS so a cache on
+    # a read-only USB still works (new sources still download into the normal DISTDIR).
+    DISTFILES_MOUNTED=false
+    local dd=""
+    if [ -n "${DISTDIR_SRC}" ] && [ -d "${DISTDIR_SRC}" ]; then
+        dd="${DISTDIR_SRC}"
+    elif [ -n "${SHARED_DISTDIR}" ] && [ -d "${SHARED_DISTDIR}" ]; then
+        # The fleet-wide distfiles the CROSS builders write (arch-independent source
+        # tarballs — no ABI risk). Exposed READ-ONLY via the same bind + PORTAGE_RO_DISTDIRS
+        # path an explicit --distdir takes; x86's own new fetches still land in its private
+        # chroot DISTDIR, so this build never writes the shared cache.
+        dd="${SHARED_DISTDIR}"
+    else
+        for cand in /media/distfiles /media/*/distfiles /media/*/portage/distfiles \
+                    /var/tmp/portage/distfiles; do
+            [ -d "${cand}" ] && { dd="${cand}"; break; }
+        done
+    fi
+    if [ -n "${dd}" ]; then
+        mkdir -p "${SYSROOT}/var/cache/distfiles-ro"
+        if mount --bind "${dd}" "${SYSROOT}/var/cache/distfiles-ro"; then
+            DISTFILES_MOUNTED=true
+            grep -q 'PORTAGE_RO_DISTDIRS' "${SYSROOT}/etc/portage/make.conf" 2>/dev/null \
+                || echo 'PORTAGE_RO_DISTDIRS="/var/cache/distfiles-ro"' >> "${SYSROOT}/etc/portage/make.conf"
+            info "Distfiles: reusing cache ${dd} via PORTAGE_RO_DISTDIRS (read-only; no re-downloads)"
+        fi
+    fi
+}
+# ── Live-ISO root pack helpers ───────────────────────────────────────────────
+# The live ISO's rootfs is this sysroot squashed. Two properties of that pack decide
+# whether the live boot survives `dracut: Switching root`. Both were wrong in every
+# live ISO this builder ever shipped (the exclude list dates from the first commit),
+# and the 2026-10-23 standalone-thick live ISO showed exactly the operator's symptom
+# — "not booting past the root filesystem mounting": root mounted, root switched,
+# then silence:
+#
+# 1. The kernel-filesystem MOUNT POINTS must exist in the squashfs. The pack passed
+#    `mksquashfs -e proc sys dev run`, and -e drops the DIRECTORY, not just its
+#    contents (the stage4 tar spells the same intent `--exclude=./proc/*`, which keeps
+#    the directory — which is why the .img had all four and the live root had none).
+#    util-linux switch_root then cannot `mount --move` /dev /proc /sys /run into the
+#    new root, force-unmounts them instead, and PID 1 starts with no console, no
+#    /proc and no /sys: sysvinit prints "Mount failed for selinuxfs on
+#    /sys/fs/selinux: No such file or directory", OpenRC's init-early.sh is the last
+#    process the kernel ever logs, and nothing is printed again. Proven in QEMU on the
+#    shipped ISO: `mkdir /sysroot/{dev,proc,sys,run}` from a rd.break=pre-pivot shell
+#    and the very same squashfs boots on to agetty.
+# 2. /etc/fstab must be the LIVE one. The sysroot's fstab is the installed image's
+#    (PARTUUID=__ROOT_PARTUUID__ for / and __ESP_PARTUUID__ for /boot/efi; build_img
+#    substitutes the real PARTUUIDs into ITS extracted copy, the sysroot keeps the
+#    tokens). On a live boot neither device exists: OpenRC's fsck says "Filesystems
+#    couldn't be fixed", then "rc: Aborting!", and the boot runlevel never completes.
+#    mksquashfs cannot override a file that exists in the source (a -p pseudo file
+#    loses to the source file, and -e of that path discards the pseudo file too), so
+#    the sysroot's fstab is SWAPPED for a tmpfs-only one for the duration of the pack
+#    and restored immediately after. The pack block arms its OWN `trap
+#    live_fstab_restore EXIT` for the window in between (the umount_chroot EXIT trap
+#    is already disarmed by then: `umount_chroot; trap - EXIT` runs before the live
+#    pack), so an `exit 1` or a signal mid-pack still puts the installed image's
+#    fstab back and leaves no fstab.img-tokens behind. A leftover would not reach an
+#    artifact — the specs fstab is re-copied into the sysroot on every run before
+#    the stage4 tar — but a sysroot that lies about its own fstab is not left lying.
+#
+# live_root_gate() is the fail-closed check of both on the packed squashfs, and
+# tests/scripts/test-x86-live-root-pack.sh executes these helpers and the pack block.
+LIVE_ROOT_MOUNTPOINTS="proc sys dev run"
+LIVE_FSTAB_SAVED=""
+LIVE_SQUASH_EXCL=()
+
+# live_squash_excludes <mksquashfs|tar> — fills LIVE_SQUASH_EXCL with the exclude
+# ARGUMENTS for the live pack. Both spellings keep the mount-point directory and drop
+# its contents; the dotfile pattern is explicit because mksquashfs's `*` does not
+# match a leading dot (the sysroot's /dev carries static nodes, /run may carry
+# dotfiles). An array, not a word-split string: `proc/*` must reach mksquashfs
+# unexpanded whatever the cwd holds.
+#
+# usr/src is dropped WHOLE, as the stage4 tar has always done (--exclude=./usr/src): the
+# sysroot keeps the BUILT kernel tree for kernel reconfiguration, and that tree holds
+# certs/signing_key.pem — the module-signing PRIVATE key. Until 2026-11-11 every live ISO
+# shipped it (proven on a real pki live.iso), so anyone holding the ISO could sign a
+# module the .img/stage4/installed kernels of that build accept under lockdown=integrity.
+# live_root_gate refuses a squashfs that still carries one.
+live_squash_excludes() {
+    local mode="$1" m
+    LIVE_SQUASH_EXCL=()
+    case "${mode}" in
+        mksquashfs)
+            for m in ${LIVE_ROOT_MOUNTPOINTS}; do LIVE_SQUASH_EXCL+=("${m}/*" "${m}/.*"); done
+            LIVE_SQUASH_EXCL+=(var/cache/distfiles "home/${DEFAULT_USER}" usr/src) ;;
+        tar)
+            for m in ${LIVE_ROOT_MOUNTPOINTS}; do LIVE_SQUASH_EXCL+=("--exclude=./${m}/*"); done
+            LIVE_SQUASH_EXCL+=(--exclude=./var/cache/distfiles "--exclude=./home/${DEFAULT_USER}" --exclude=./usr/src) ;;
+        *) err "live_squash_excludes: unknown mode '${mode}' (mksquashfs|tar)"; return 1 ;;
+    esac
+}
+
+# live_fstab_swap_in — replace ${SYSROOT}/etc/fstab with the live one (every
+# disk-addressed line dropped, the tmpfs hardening lines kept), keeping the original
+# OUTSIDE the sysroot so the saved copy cannot ride into the squashfs itself.
+live_fstab_swap_in() {
+    local f="${SYSROOT}/etc/fstab"
+    [ -f "${f}" ] || { err "live pack: ${f} is missing — no fstab to derive the live one from"; return 1; }
+    [ -z "${LIVE_FSTAB_SAVED}" ] || { err "live pack: fstab already swapped (${LIVE_FSTAB_SAVED}) — restore first"; return 1; }
+    local saved="${BUILD_ROOT}/fstab.img-tokens"
+    cp -a "${f}" "${saved}" || return 1
+    LIVE_FSTAB_SAVED="${saved}"
+    {
+        printf '# /etc/fstab — LIVE ISO root (tmpfs overlay over the squashfs).\n'
+        printf '# The installed image'"'"'s PARTUUID lines for / and /boot/efi are omitted on purpose:\n'
+        printf '# a live boot has no such disk, and OpenRC fsck/localmount would abort the boot\n'
+        printf '# runlevel on them. The installer writes the real fstab onto the target disk.\n'
+        awk '$1 !~ /^(PARTUUID|UUID|LABEL|PARTLABEL)=|^\/dev\//' "${saved}"
+    } > "${f}"
+}
+
+# live_fstab_restore — put the installed image's fstab back. Idempotent; called
+# right after the pack and from the EXIT trap.
+live_fstab_restore() {
+    [ -n "${LIVE_FSTAB_SAVED:-}" ] && [ -f "${LIVE_FSTAB_SAVED}" ] || return 0
+    mv -f "${LIVE_FSTAB_SAVED}" "${SYSROOT}/etc/fstab" && LIVE_FSTAB_SAVED=""
+}
+
+# live_root_gate <squashfs.img> — refuse to ship a live rootfs that cannot be booted:
+# every mount point in LIVE_ROOT_MOUNTPOINTS must be a top-level directory of the
+# squashfs, and /etc/fstab must not address a disk. Reads the packed image, not the
+# argv that produced it. unsquashfs (squashfs-tools) first, rdsquashfs
+# (squashfs-tools-ng, the tar2sqfs fallback's sibling) second; with neither the gate
+# cannot look and says so — it does not pretend to have checked.
+live_root_gate() {
+    local sq="$1" top="" fstab="" m
+    [ -s "${sq}" ] || { err "live-root gate: ${sq} is missing or empty"; return 1; }
+    if command -v unsquashfs >/dev/null; then
+        top="$(unsquashfs -ls -max-depth 1 -d '' "${sq}" 2>/dev/null | grep -E '^/[^/]+$')" \
+            || top="$(unsquashfs -ls -d '' "${sq}" 2>/dev/null | grep -E '^/[^/]+$')"
+        fstab="$(unsquashfs -cat "${sq}" etc/fstab 2>/dev/null)" \
+            || { err "live-root gate: ${sq} has no /etc/fstab"; return 1; }
+    elif command -v rdsquashfs >/dev/null; then
+        top="$(rdsquashfs -l / "${sq}" 2>/dev/null | sed -E 's#.*[[:space:]/]##; s#^#/#')"
+        fstab="$(rdsquashfs -c /etc/fstab "${sq}" 2>/dev/null)" \
+            || { err "live-root gate: ${sq} has no /etc/fstab"; return 1; }
+    else
+        err "live-root gate: neither unsquashfs nor rdsquashfs on this host — cannot verify that ${sq} carries /proc /sys /dev /run, a live /etc/fstab and no module-signing key; refusing to ship it unchecked"
+        return 1
+    fi
+    for m in ${LIVE_ROOT_MOUNTPOINTS}; do
+        grep -qx "/${m}" <<<"${top}" || {
+            err "live-root gate: ${sq} has no /${m} directory — switch_root cannot move the kernel filesystems into the live root and the boot dies right after 'Switching root' (exclude '${m}/*', never '${m}')"
+            return 1
+        }
+    done
+    # KEY-LEAK GATE: the module-signing PRIVATE key must never ride into a live root
+    # (see live_squash_excludes). Reads the packed image's full listing, captured first
+    # and then searched — never `listing | grep -q` under pipefail, where grep's early
+    # exit SIGPIPEs the lister and a FOUND key would read as a clean pass.
+    local _all="" _leak=""
+    if command -v unsquashfs >/dev/null; then
+        _all="$(unsquashfs -ls -d '' "${sq}" 2>/dev/null)" || _all=""
+    else
+        _all="$(rdsquashfs -d "${sq}" 2>/dev/null)" || _all=""     # gensquashfs-style: "file usr/src/... 0644 0 0"
+    fi
+    [ -n "${_all}" ] || { err "live-root gate: cannot list ${sq} — refusing to ship a live root nobody checked for the module-signing key"; return 1; }
+    # unsquashfs prints "/usr/src/...", rdsquashfs "file usr/src/..." (no leading slash):
+    # the certs/ alternative accepts either, or a renamed key would pass the rdsquashfs arm.
+    _leak="$(grep -E 'signing_key\.pem([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/' <<<"${_all}" | head -3)" || true
+    # The name alternative takes any signing_key*.pem* (a signing_key.pem.bak copy is the
+    # same key), and the basename of a non-default CONFIG_MODULE_SIG_KEY (file paths
+    # only; a pkcs11: URI names no file) read from the sysroot's kernel config.
+    local _re='(^|[[:space:]/])signing_key[^/[:space:]]*\.pem[^/[:space:]]*([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/'
+    local _sk="" _ske=""
+    # (tr strips the value's quotes: \042 is '"', spelled so the line holds no bare one)
+    _sk="$(sed -n 's/^CONFIG_MODULE_SIG_KEY=//p' "${SYSROOT:-/nonexistent}/usr/src/linux/.config" 2>/dev/null | tr -d '\042')" || _sk=""
+    if [ -n "${_sk}" ] && [ "${_sk#*:}" = "${_sk}" ]; then
+        _ske="$(sed 's/[][\.*^$+?(){}|/]/\\&/g' <<<"${_sk##*/}")"
+        _re+="|(^|[[:space:]/])${_ske}([[:space:]]|$)"
+    fi
+    _leak="$(grep -E -e "${_re}" <<<"${_all}" | head -3)" || true
+    if [ -n "${_leak}" ]; then
+        err "live-root gate: ${sq} carries the kernel module-signing PRIVATE key:"
+        err "  ${_leak//$'\n'/$'\n'  }"
+        err "anyone holding this ISO could sign a module every kernel of this build accepts —"
+        err "usr/src must be excluded from the live pack (live_squash_excludes)."
+        return 1
+    fi
+    if printf '%s\n' "${fstab}" | awk '$1 ~ /^(PARTUUID|UUID|LABEL|PARTLABEL)=|^\/dev\// {found=1} END {exit !found}'; then
+        err "live-root gate: ${sq}'s /etc/fstab still addresses a disk (PARTUUID/UUID/LABEL//dev line) — OpenRC fsck/localmount would abort the live boot runlevel; the pack must run between live_fstab_swap_in and live_fstab_restore"
+        return 1
+    fi
+    info "Live-root gate: /${LIVE_ROOT_MOUNTPOINTS// / /} present and /etc/fstab is the live one"
+}
+
+# live_label_gate <squashfs.img> — refuse to ship a live root without SELinux labels
+# (#503). Reads the PACKED image: a full unsquashfs into a scratch dir (13 s for the
+# 1.9 GB backend squashfs), then slx_label_gate's exact-type probes and its >= 99%
+# census. Unlike live_root_gate this has NO "cannot look, return 0" branch: with no
+# unsquashfs on the host it FAILS — an unverified label set is the exact state that
+# shipped every live ISO before this gate existed (1,124 labelled of 159,376).
+live_label_gate() {
+    local sq="$1" tmp rc=0
+    [ -s "${sq}" ] || { err "live-label gate: ${sq} is missing or empty"; return 1; }
+    command -v unsquashfs >/dev/null || { err "live-label gate: no unsquashfs on this host — cannot read ${sq}'s labels, refusing to ship it unverified"; return 1; }
+    tmp="$(mktemp -d "${BUILD_ROOT}/live-label-gate.XXXXXX")" || return 1
+    if ! unsquashfs -no-progress -f -d "${tmp}" "${sq}" >/dev/null; then
+        err "live-label gate: unsquashfs could not extract ${sq}"; rm -rf "${tmp}"; return 1
+    fi
+    slx_label_gate "${tmp}" squashfs "${SLX_PROBE_TABLE}" --census || rc=1
+    rm -rf "${tmp}"
+    return "${rc}"
+}
+umount_chroot() {
+    # Detach exactly what mount_chroot attached in THIS run — each flag below is
+    # set by the matching mount above — and nothing else: a mount somebody else
+    # made under the sysroot is theirs, and the stale-mount refusal at the
+    # Extract phase names it before the next build. The distfiles-ro bind was
+    # MISSING from this list until #659: every build (failed or successful)
+    # left one behind per mount_chroot call, stacked on the previous run's.
+    # Each flag is reset after its umount so a second mount_chroot/umount_chroot
+    # pair (the live-ISO dracut step) starts from a clean slate. hmr_umount_own
+    # peels ONE layer (ours) whatever the mount table says (the umount never
+    # waits for a count, so a path spelled differently from the kernel's — a
+    # symlink, a space, an umlaut, a relative --work-dir — is unmounted like any
+    # other), then counts layers before and after and warns when the count did
+    # not go down (`umount -l ... || true` alone is silent).
+    if ${DISTFILES_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/cache/distfiles-ro" || true; DISTFILES_MOUNTED=false
+    fi
+    if ${PORTAGE_SCRATCH_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/tmp/portage" || true; PORTAGE_SCRATCH_MOUNTED=false
+    fi
+    if ${HOST_REPO_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/db/repos/gentoo" || true; HOST_REPO_MOUNTED=false
+    fi
+    if ${X86_POOL_MOUNTED:-false}; then
+        hmr_umount_own "${SYSROOT}/var/cache/binpkgs" || true; X86_POOL_MOUNTED=false
+    fi
+    for m in run dev sys proc; do umount -lR "${SYSROOT}/$m" 2>/dev/null || true; done
+}
+
+if ${UNAFFILIATED}; then
+    HOME_CONF_DIR="/etc/gentoo"; HOME_SETUP_NAME="home-setup"
+else
+    HOME_CONF_DIR="/etc/hugmesh"; HOME_SETUP_NAME="hugmesh-home-setup"
+fi
+BRAND_GRUB_BG_STAGED=""
+BRAND_GRUB_THEME_STAGED=""
+# ── Neutral naming for the UNAFFILIATED image (operator decision 2026-08-26) ──
+# --theme/--wallpaper/--accent-color/... are ALLOWED on an unaffiliated build now
+# (see the UNAFFILIATED fold's contract note above), so this lane is the one that
+# has to keep the promise the fold makes: a look, but no HugMesh-NAMED artefact.
+# Same shape as HOME_CONF_DIR/HOME_SETUP_NAME (home provisioning) and
+# CALAMARES_BRIDGE/AUTOSTART_NAME (graphical installer) further up — one pair of
+# variables per name, chosen by ${UNAFFILIATED}, so the BRANDED path keeps every
+# byte of its existing layout (/etc/hugmesh, /usr/sbin/hugmesh-branding,
+# /boot/grub/hugmesh-background.png, /boot/grub/themes/hugmesh) untouched.
+# These are declared HERE, unconditionally at top level, and not inside the
+# branding-flags `if` below, because the live-ISO packer (grub.cfg generation, far
+# below) reads BRAND_GRUB_BG_NAME/BRAND_GRUB_THEME_NAME on every build — including
+# builds that passed no branding flag at all, where the `if` never runs (set -u).
+if ${UNAFFILIATED}; then
+    BRAND_CONF_DIR="/etc/gentoo"                     # was /etc/hugmesh
+    BRANDING_APPLIER_NAME="branding"                 # was hugmesh-branding
+    BRAND_SHARE_REAL="/usr/share/gentoo/branding"    # was /usr/share/hugmesh/branding
+    BRAND_GRUB_BG_NAME="gentoo-background.png"       # was hugmesh-background.png
+    BRAND_GRUB_THEME_NAME="gentoo"                   # was themes/hugmesh
+    BRAND_COLORSCHEME_FILE="Gentoo.colors"           # was HugMesh.colors
+    BRAND_WALLPAPER_PKG="Gentoo"                     # was wallpapers/HugMesh
+    # env-var PREFIX the applier reads for its build-time staging contract
+    # (HUGMESH_BRANDING_ROOT / _BUILD). Renamed with everything else, because the
+    # staged copy is rewritten to read the neutral spelling — a plain-Gentoo image
+    # must not ship a /usr/sbin/branding that greps for a HUGMESH_* env var.
+    BRAND_ENV_PREFIX="BRANDING"
+else
+    BRAND_CONF_DIR="/etc/hugmesh"
+    BRANDING_APPLIER_NAME="hugmesh-branding"
+    BRAND_SHARE_REAL="/usr/share/hugmesh/branding"
+    BRAND_GRUB_BG_NAME="hugmesh-background.png"
+    BRAND_GRUB_THEME_NAME="hugmesh"
+    BRAND_COLORSCHEME_FILE="HugMesh.colors"
+    BRAND_WALLPAPER_PKG="HugMesh"
+    BRAND_ENV_PREFIX="HUGMESH_BRANDING"
+fi
+# branding_requested — any branding flag given (the desktop branding bake runs on it).
+branding_requested() {
+    [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
+        || [ -n "${BRAND_WALLPAPER}" ] || [ -n "${BRAND_GRUB_BG}" ] \
+        || [ -n "${BRAND_GRUB_THEME}" ] || [ -n "${BRAND_LOGIN_BG}" ] || [ -n "${BRAND_LOGO}" ] \
+        || [ -n "${BRAND_ACCENT}" ] || [ -n "${BRAND_COLOR_SCHEME}" ] \
+        || ${BRAND_LOCKED}
+}
+# brand_grub_staged_scan — hand the baked GRUB background + theme to the live-ISO builder.
+brand_grub_staged_scan() {
+    [ -f "${SYSROOT}/boot/grub/${BRAND_GRUB_BG_NAME}" ] && BRAND_GRUB_BG_STAGED="${SYSROOT}/boot/grub/${BRAND_GRUB_BG_NAME}"
+    [ -f "${SYSROOT}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/theme.txt" ] && BRAND_GRUB_THEME_STAGED="${SYSROOT}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}"
+    return 0
+}
+KRC_DIR="${BUILD_ROOT}/kernel"
+SBDIR="${WORK_DIR}/secureboot"
+SBKEY="${SBDIR}/sb.key"; SBCRT="${SBDIR}/sb.crt"; SBCER="${SBDIR}/sb.cer"
+SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
+# late_step_runs <step> — does this run perform <step>? (every step without --from-step)
+late_step_runs() {
+    [ -z "${FROM_STEP}" ] && return 0
+    local s on=false
+    for s in "${X86_LATE_STEPS[@]}"; do
+        [ "${s}" = "${FROM_STEP}" ] && on=true
+        [ "${s}" = "$1" ] && { ${on}; return; }
+    done
+    return 1
+}
+late_step_done() { printf 'done=%s\n' "$1" >> "${LATE_STATE}"; }
+# late_kept <path>... — the first earlier artifact that exists, or "(not built)".
+late_kept() { local f; for f in "$@"; do [ -s "${f}" ] && { printf '%s' "${f}"; return 0; }; done; printf '(not built)'; }
+
+if [ -n "${FROM_STEP}" ]; then
+    banner "Rerunning from step ${FROM_STEP} (build ${BUILD_TS}: the steps before it are kept, not repeated)"
+    [ -f "${SYSROOT}/etc/gentoo-release" ] \
+        || { err "--from-step ${FROM_STEP}: no build system at ${SYSROOT} to continue"; exit 1; }
+    hmr_owner_gate "${SYSROOT}" || exit 1
+    [ -s "${SLX_PROBE_TABLE}" ] \
+        || { err "--from-step ${FROM_STEP}: ${SLX_PROBE_TABLE} is missing — the earlier run never labelled the sysroot"; exit 1; }
+    SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
+    if ${ROLE_CLIENT} && branding_requested; then brand_grub_staged_scan; fi
+    KCACHE_HIT="$(late_state_get KCACHE_HIT)"
+    case "${KCACHE_HIT}" in true|false) ;; *) KCACHE_HIT=false ;; esac
+    if [ ! -s "${LATE_STATE}" ]; then
+        # A build from before the record existed: start one, so the steps run now are recorded.
+        printf 'BUILD_TS=%s\nKCACHE_HIT=%s\n' "${BUILD_TS}" "${KCACHE_HIT}" > "${LATE_STATE}"
+    fi
+else
+    rm -f "${LATE_STATE}"
+fi
+
+# ── The skippable region: every step that changes the sysroot ─────────────────
+# (a --from-step rerun goes straight to the stage4 pack below)
+if [ -z "${FROM_STEP}" ]; then
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     # A build system is only reusable when it is still ROOT'S. After a native
     # build through `make`, chown-artifacts used to hand the whole work
@@ -4160,42 +4687,6 @@ fi
 #                        squash; the .img, fs.tar and installer ISO are built from
 #                        the stage4.
 # tests/scripts/test-x86-build-sudoers-strip.sh executes all of it.
-build_sudoers_strip() {
-    [ -n "${SYSROOT:-}" ] && [ -d "${SYSROOT}/etc" ] || return 0
-    [ "$(cd "${SYSROOT}" && pwd -P)" != / ] || return 0
-    rm -f "${SYSROOT}/etc/sudoers.d/build-notty"
-    # Revert main sudoers: restore requiretty and remove the includedir line we added
-    if [[ -f "${SYSROOT}/etc/sudoers" ]]; then
-        sed -i 's/^Defaults !requiretty/Defaults requiretty/' "${SYSROOT}/etc/sudoers"
-        sed -i '/^#includedir \/etc\/sudoers.d # build-added$/d' "${SYSROOT}/etc/sudoers"
-    fi
-}
-build_sudoers_gate() {
-    local f rc=0
-    [ -n "${SYSROOT:-}" ] && [ -d "${SYSROOT}/etc" ] \
-        || { err "build-only sudoers gate: no sysroot at '${SYSROOT:-}' to check"; return 1; }
-    if [ -e "${SYSROOT}/etc/sudoers.d/build-notty" ] || [ -L "${SYSROOT}/etc/sudoers.d/build-notty" ]; then
-        err "build-only sudoers gate: /etc/sudoers.d/build-notty is still in the sysroot"
-        rc=1
-    fi
-    # Any non-comment line naming portage (user or %group, alone or in a list) that
-    # carries NOPASSWD, in the main file or any drop-in, whatever the drop-in is called.
-    for f in "${SYSROOT}/etc/sudoers" "${SYSROOT}"/etc/sudoers.d/*; do
-        [ -f "${f}" ] || continue
-        if awk '/^[[:space:]]*#/ {next}
-                /NOPASSWD/ && /(^|[^[:alnum:]_.-])portage([^[:alnum:]_.-]|$)/ {hit=1}
-                END {exit !hit}' "${f}"; then
-            err "build-only sudoers gate: ${f#"${SYSROOT}"} grants the portage user NOPASSWD sudo"
-            rc=1
-        fi
-    done
-    if [ -f "${SYSROOT}/etc/sudoers" ] \
-       && grep -a -x -F '#includedir /etc/sudoers.d # build-added' "${SYSROOT}/etc/sudoers" >/dev/null 2>&1; then
-        err "build-only sudoers gate: /etc/sudoers still carries the build-added includedir line"
-        rc=1
-    fi
-    return "${rc}"
-}
 
 # Portage pkg_postinst calls sudo internally (as the portage build user); stage3
 # sudoers has requiretty which breaks non-interactive builds. Patch the main
@@ -4695,11 +5186,6 @@ fi
 # internal hugmesh-* literals (conf path; the first-login-encrypt rename is now a no-op) are
 # rewritten on the staged copy. install-x86.sh's staged copy gets the matching
 # conf-path rewrite where the installer ISO is built (below).
-if ${UNAFFILIATED}; then
-    HOME_CONF_DIR="/etc/gentoo"; HOME_SETUP_NAME="home-setup"
-else
-    HOME_CONF_DIR="/etc/hugmesh"; HOME_SETUP_NAME="hugmesh-home-setup"
-fi
 mkdir -p "${SYSROOT}${HOME_CONF_DIR}"
 # home.conf is dot-sourced as ROOT at first boot (hugmesh-home-setup) AND by the
 # installer (install-x86.sh). HOME_DEVICE/HOME_BACKUP are free-text operator fields, so
@@ -4921,56 +5407,11 @@ fi
 # in-session wallpaper autostart). The same tool re-themes the running desktop
 # later, UNLESS --brand-locked drops the lock. Applies to EVERY desktop image
 # (standalone OR tailnet client; any installer front-end).
-BRAND_GRUB_BG_STAGED=""
-BRAND_GRUB_THEME_STAGED=""
-# ── Neutral naming for the UNAFFILIATED image (operator decision 2026-08-26) ──
-# --theme/--wallpaper/--accent-color/... are ALLOWED on an unaffiliated build now
-# (see the UNAFFILIATED fold's contract note above), so this lane is the one that
-# has to keep the promise the fold makes: a look, but no HugMesh-NAMED artefact.
-# Same shape as HOME_CONF_DIR/HOME_SETUP_NAME (home provisioning) and
-# CALAMARES_BRIDGE/AUTOSTART_NAME (graphical installer) further up — one pair of
-# variables per name, chosen by ${UNAFFILIATED}, so the BRANDED path keeps every
-# byte of its existing layout (/etc/hugmesh, /usr/sbin/hugmesh-branding,
-# /boot/grub/hugmesh-background.png, /boot/grub/themes/hugmesh) untouched.
-# These are declared HERE, unconditionally at top level, and not inside the
-# branding-flags `if` below, because the live-ISO packer (grub.cfg generation, far
-# below) reads BRAND_GRUB_BG_NAME/BRAND_GRUB_THEME_NAME on every build — including
-# builds that passed no branding flag at all, where the `if` never runs (set -u).
-if ${UNAFFILIATED}; then
-    BRAND_CONF_DIR="/etc/gentoo"                     # was /etc/hugmesh
-    BRANDING_APPLIER_NAME="branding"                 # was hugmesh-branding
-    BRAND_SHARE_REAL="/usr/share/gentoo/branding"    # was /usr/share/hugmesh/branding
-    BRAND_GRUB_BG_NAME="gentoo-background.png"       # was hugmesh-background.png
-    BRAND_GRUB_THEME_NAME="gentoo"                   # was themes/hugmesh
-    BRAND_COLORSCHEME_FILE="Gentoo.colors"           # was HugMesh.colors
-    BRAND_WALLPAPER_PKG="Gentoo"                     # was wallpapers/HugMesh
-    # env-var PREFIX the applier reads for its build-time staging contract
-    # (HUGMESH_BRANDING_ROOT / _BUILD). Renamed with everything else, because the
-    # staged copy is rewritten to read the neutral spelling — a plain-Gentoo image
-    # must not ship a /usr/sbin/branding that greps for a HUGMESH_* env var.
-    BRAND_ENV_PREFIX="BRANDING"
-else
-    BRAND_CONF_DIR="/etc/hugmesh"
-    BRANDING_APPLIER_NAME="hugmesh-branding"
-    BRAND_SHARE_REAL="/usr/share/hugmesh/branding"
-    BRAND_GRUB_BG_NAME="hugmesh-background.png"
-    BRAND_GRUB_THEME_NAME="hugmesh"
-    BRAND_COLORSCHEME_FILE="HugMesh.colors"
-    BRAND_WALLPAPER_PKG="HugMesh"
-    BRAND_ENV_PREFIX="HUGMESH_BRANDING"
-fi
 # Branding flags only apply to desktop (ROLE_CLIENT) images; warn if set on a server role.
-if ! ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
-        || [ -n "${BRAND_WALLPAPER}" ] || [ -n "${BRAND_GRUB_BG}" ] || [ -n "${BRAND_GRUB_THEME}" ] \
-        || [ -n "${BRAND_LOGIN_BG}" ] || [ -n "${BRAND_LOGO}" ] || [ -n "${BRAND_ACCENT}" ] \
-        || [ -n "${BRAND_COLOR_SCHEME}" ] || ${BRAND_LOCKED}; }; then
+if ! ${ROLE_CLIENT} && branding_requested; then
     warn "branding flags given for a non-desktop role (${ROLE}); branding applies to desktop images only — ignoring."
 fi
-if ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
-        || [ -n "${BRAND_WALLPAPER}" ] || [ -n "${BRAND_GRUB_BG}" ] \
-        || [ -n "${BRAND_GRUB_THEME}" ] || [ -n "${BRAND_LOGIN_BG}" ] || [ -n "${BRAND_LOGO}" ] \
-        || [ -n "${BRAND_ACCENT}" ] || [ -n "${BRAND_COLOR_SCHEME}" ] \
-        || ${BRAND_LOCKED}; }; then
+if ${ROLE_CLIENT} && branding_requested; then
     banner "Branding desktop image (theme=${BRANDING_THEME:-none} locked=${BRAND_LOCKED})"
     _bd="$(mktemp -d)"
     # 1) named preset (lowest precedence) — specs-x86/branding/themes/<name>/
@@ -5169,8 +5610,7 @@ if ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
 HOOK
     chmod +x "${SYSROOT}/etc/local.d/04-branding.start"
     # hand the resolved GRUB background + theme to the live-ISO builder (boot-screen brand)
-    [ -f "${SYSROOT}/boot/grub/${BRAND_GRUB_BG_NAME}" ] && BRAND_GRUB_BG_STAGED="${SYSROOT}/boot/grub/${BRAND_GRUB_BG_NAME}"
-    [ -f "${SYSROOT}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/theme.txt" ] && BRAND_GRUB_THEME_STAGED="${SYSROOT}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}"
+    brand_grub_staged_scan
     rm -rf "${_bd}"
     info "Branding baked into ${BRAND_CONF_DIR}/branding: $(ls "${SYSROOT}${BRAND_CONF_DIR}/branding" 2>/dev/null | tr '\n' ' ')"
 fi
@@ -5758,317 +6198,6 @@ if [ -e "${SYSROOT}/bin/bash" ] && ! file -L "${SYSROOT}/bin/bash" 2>/dev/null |
 fi
 
 cp -L /etc/resolv.conf "${SYSROOT}/etc/resolv.conf" 2>/dev/null || true
-mount_chroot() {
-    # Exclusive-build guard FIRST (idempotent — see the flock rationale at the
-    # Extract phase): a --resume run reaches here without passing the fresh-start
-    # wipe, so this is the last stop before two builds could share one chroot.
-    acquire_build_lock
-    mount -t proc none "${SYSROOT}/proc"
-    mount --rbind /sys  "${SYSROOT}/sys";  mount --make-rslave "${SYSROOT}/sys"
-    mount --rbind /dev  "${SYSROOT}/dev";  mount --make-rslave "${SYSROOT}/dev"
-    mount --rbind /run  "${SYSROOT}/run";  mount --make-rslave "${SYSROOT}/run"
-    # Reuse the host's portage tree if present (much faster than webrsync)
-    if [ -d /var/db/repos/gentoo ]; then
-        mkdir -p "${SYSROOT}/var/db/repos/gentoo"
-        mount --bind /var/db/repos/gentoo "${SYSROOT}/var/db/repos/gentoo"
-        HOST_REPO_MOUNTED=true
-    else
-        HOST_REPO_MOUNTED=false
-    fi
-    # Shared binpkg pool (issue #46): bind the per-arch pool over the chroot's
-    # PKGDIR (/var/cache/binpkgs, make.conf.tmpl) so every amd64 role reads and
-    # writes ONE pool instead of a discarded per-wl-<id> one — the wave-1 fix for
-    # 0% x86 binpkg reuse. Same pattern as the repo/distfiles binds above: mounted
-    # here, detached in umount_chroot, and the Phase-8 clean re-verifies the
-    # detach with mountpoint -q before touching anything under the path (an rm -rf
-    # through a live bind would empty the FLEET's pool). The pool was fingerprint-
-    # guarded (sa_pool_guard) before this point; a mismatched pool never mounts.
-    # NOTE: no fail-soft fallback — under `set -e` a failed bind aborts the build,
-    # exactly like the repo bind (an unguarded silent fallback pool would be worse).
-    if [ -n "${X86_POOL_DIR}" ] && [ -d "${X86_POOL_DIR}" ]; then
-        mkdir -p "${SYSROOT}/var/cache/binpkgs"
-        mount --bind "${X86_POOL_DIR}" "${SYSROOT}/var/cache/binpkgs"
-        X86_POOL_MOUNTED=true
-        info "Binpkg pool: shared ${X86_POOL_DIR} -> /var/cache/binpkgs (--usepkg reuse across all amd64 roles; --binpkg-respect-use=y prunes USE mismatches per-package)"
-    else
-        X86_POOL_MOUNTED=false
-    fi
-    # Package build scratch on a NON-eCryptfs filesystem. The work dir often lives
-    # on eCryptfs (/home/.Private), whose ~143-char filename limit makes Go builds
-    # (kubelet/runc/cni-plugins/containerd — long vendored/cache paths) die with
-    # "File name too long". Bind the chroot's /var/tmp/portage onto a host xfs dir
-    # so package builds dodge the limit; INSTALLED files (short names) still land in
-    # the eCryptfs sysroot fine. Only kicks in when the sysroot is actually eCryptfs.
-    PORTAGE_SCRATCH_MOUNTED=false
-    if df -T "${SYSROOT}" 2>/dev/null | awk 'NR==2{exit($2=="ecryptfs"?0:1)}'; then
-        # Prefer the dedicated /var/tmp/portage partition (its own large xfs) when
-        # present — /var/tmp itself may be on a small root fs. Falls back to /var/tmp.
-        local scratchbase=/var/tmp
-        mountpoint -q /var/tmp/portage 2>/dev/null && scratchbase=/var/tmp/portage
-        local scratch="${scratchbase}/snap-portage-${BUILD_SUBDIR}"
-        # The scratch path is keyed on BUILD_SUBDIR ALONE, so same-role builds
-        # from DIFFERENT WORK_DIRs (each holding its own BUILD_ROOT lock) still
-        # collide right here — the 20260725-140638-09692d kill (see the flock
-        # rationale at the Extract phase). Sibling lockfile, non-blocking, held
-        # on fd 218 for the life of the build.
-        if [ -z "${_SCRATCH_LOCK_HELD:-}" ]; then
-            exec 218>>"${scratch}.lock"
-            if ! flock -n 218; then
-                err "portage build scratch ${scratch} is held by another build:"
-                err "holder: $(cat "${scratch}.lock" 2>/dev/null || echo '<unreadable>')"
-                err "(same --build-subdir from another work dir — both chroots would bind THIS"
-                err "dir at /var/tmp/portage and portage's own per-package clean would delete"
-                err "the other build's in-flight compile tree). Refusing to share it."
-                exit 1
-            fi
-            printf 'pid=%s build_ts=%s role=%s work_dir=%s started=%s\n' \
-                "$$" "${BUILD_TS}" "${ROLE:-?}" "${WORK_DIR}" "$(date -u +%FT%TZ)" > "${scratch}.lock"
-            _SCRATCH_LOCK_HELD=1
-        fi
-        local availg; availg=$(df -BG --output=avail "${scratchbase}" 2>/dev/null | tail -1 | tr -dc '0-9')
-        [ "${availg:-99}" -lt 15 ] && warn "only ${availg}G free on ${scratchbase} (xfs) for build scratch; a large parallel build may fill it (EMERGE_JOBS is held low to bound this)."
-        mkdir -p "${scratch}" "${SYSROOT}/var/tmp/portage"
-        mount --bind "${scratch}" "${SYSROOT}/var/tmp/portage" && PORTAGE_SCRATCH_MOUNTED=true
-        info "Build scratch -> non-eCryptfs xfs ${scratch} (eCryptfs 143-char filename-limit workaround)"
-    fi
-    # Reuse a Gentoo distfiles cache from a mounted drive (skip re-downloads / build
-    # offline). Search --distdir, then the top level of any /media/* drive, then the
-    # mounted portage scratch. Exposed READ-ONLY via PORTAGE_RO_DISTDIRS so a cache on
-    # a read-only USB still works (new sources still download into the normal DISTDIR).
-    DISTFILES_MOUNTED=false
-    local dd=""
-    if [ -n "${DISTDIR_SRC}" ] && [ -d "${DISTDIR_SRC}" ]; then
-        dd="${DISTDIR_SRC}"
-    elif [ -n "${SHARED_DISTDIR}" ] && [ -d "${SHARED_DISTDIR}" ]; then
-        # The fleet-wide distfiles the CROSS builders write (arch-independent source
-        # tarballs — no ABI risk). Exposed READ-ONLY via the same bind + PORTAGE_RO_DISTDIRS
-        # path an explicit --distdir takes; x86's own new fetches still land in its private
-        # chroot DISTDIR, so this build never writes the shared cache.
-        dd="${SHARED_DISTDIR}"
-    else
-        for cand in /media/distfiles /media/*/distfiles /media/*/portage/distfiles \
-                    /var/tmp/portage/distfiles; do
-            [ -d "${cand}" ] && { dd="${cand}"; break; }
-        done
-    fi
-    if [ -n "${dd}" ]; then
-        mkdir -p "${SYSROOT}/var/cache/distfiles-ro"
-        if mount --bind "${dd}" "${SYSROOT}/var/cache/distfiles-ro"; then
-            DISTFILES_MOUNTED=true
-            grep -q 'PORTAGE_RO_DISTDIRS' "${SYSROOT}/etc/portage/make.conf" 2>/dev/null \
-                || echo 'PORTAGE_RO_DISTDIRS="/var/cache/distfiles-ro"' >> "${SYSROOT}/etc/portage/make.conf"
-            info "Distfiles: reusing cache ${dd} via PORTAGE_RO_DISTDIRS (read-only; no re-downloads)"
-        fi
-    fi
-}
-# ── Live-ISO root pack helpers ───────────────────────────────────────────────
-# The live ISO's rootfs is this sysroot squashed. Two properties of that pack decide
-# whether the live boot survives `dracut: Switching root`. Both were wrong in every
-# live ISO this builder ever shipped (the exclude list dates from the first commit),
-# and the 2026-10-23 standalone-thick live ISO showed exactly the operator's symptom
-# — "not booting past the root filesystem mounting": root mounted, root switched,
-# then silence:
-#
-# 1. The kernel-filesystem MOUNT POINTS must exist in the squashfs. The pack passed
-#    `mksquashfs -e proc sys dev run`, and -e drops the DIRECTORY, not just its
-#    contents (the stage4 tar spells the same intent `--exclude=./proc/*`, which keeps
-#    the directory — which is why the .img had all four and the live root had none).
-#    util-linux switch_root then cannot `mount --move` /dev /proc /sys /run into the
-#    new root, force-unmounts them instead, and PID 1 starts with no console, no
-#    /proc and no /sys: sysvinit prints "Mount failed for selinuxfs on
-#    /sys/fs/selinux: No such file or directory", OpenRC's init-early.sh is the last
-#    process the kernel ever logs, and nothing is printed again. Proven in QEMU on the
-#    shipped ISO: `mkdir /sysroot/{dev,proc,sys,run}` from a rd.break=pre-pivot shell
-#    and the very same squashfs boots on to agetty.
-# 2. /etc/fstab must be the LIVE one. The sysroot's fstab is the installed image's
-#    (PARTUUID=__ROOT_PARTUUID__ for / and __ESP_PARTUUID__ for /boot/efi; build_img
-#    substitutes the real PARTUUIDs into ITS extracted copy, the sysroot keeps the
-#    tokens). On a live boot neither device exists: OpenRC's fsck says "Filesystems
-#    couldn't be fixed", then "rc: Aborting!", and the boot runlevel never completes.
-#    mksquashfs cannot override a file that exists in the source (a -p pseudo file
-#    loses to the source file, and -e of that path discards the pseudo file too), so
-#    the sysroot's fstab is SWAPPED for a tmpfs-only one for the duration of the pack
-#    and restored immediately after. The pack block arms its OWN `trap
-#    live_fstab_restore EXIT` for the window in between (the umount_chroot EXIT trap
-#    is already disarmed by then: `umount_chroot; trap - EXIT` runs before the live
-#    pack), so an `exit 1` or a signal mid-pack still puts the installed image's
-#    fstab back and leaves no fstab.img-tokens behind. A leftover would not reach an
-#    artifact — the specs fstab is re-copied into the sysroot on every run before
-#    the stage4 tar — but a sysroot that lies about its own fstab is not left lying.
-#
-# live_root_gate() is the fail-closed check of both on the packed squashfs, and
-# tests/scripts/test-x86-live-root-pack.sh executes these helpers and the pack block.
-LIVE_ROOT_MOUNTPOINTS="proc sys dev run"
-LIVE_FSTAB_SAVED=""
-LIVE_SQUASH_EXCL=()
-
-# live_squash_excludes <mksquashfs|tar> — fills LIVE_SQUASH_EXCL with the exclude
-# ARGUMENTS for the live pack. Both spellings keep the mount-point directory and drop
-# its contents; the dotfile pattern is explicit because mksquashfs's `*` does not
-# match a leading dot (the sysroot's /dev carries static nodes, /run may carry
-# dotfiles). An array, not a word-split string: `proc/*` must reach mksquashfs
-# unexpanded whatever the cwd holds.
-#
-# usr/src is dropped WHOLE, as the stage4 tar has always done (--exclude=./usr/src): the
-# sysroot keeps the BUILT kernel tree for kernel reconfiguration, and that tree holds
-# certs/signing_key.pem — the module-signing PRIVATE key. Until 2026-11-11 every live ISO
-# shipped it (proven on a real pki live.iso), so anyone holding the ISO could sign a
-# module the .img/stage4/installed kernels of that build accept under lockdown=integrity.
-# live_root_gate refuses a squashfs that still carries one.
-live_squash_excludes() {
-    local mode="$1" m
-    LIVE_SQUASH_EXCL=()
-    case "${mode}" in
-        mksquashfs)
-            for m in ${LIVE_ROOT_MOUNTPOINTS}; do LIVE_SQUASH_EXCL+=("${m}/*" "${m}/.*"); done
-            LIVE_SQUASH_EXCL+=(var/cache/distfiles "home/${DEFAULT_USER}" usr/src) ;;
-        tar)
-            for m in ${LIVE_ROOT_MOUNTPOINTS}; do LIVE_SQUASH_EXCL+=("--exclude=./${m}/*"); done
-            LIVE_SQUASH_EXCL+=(--exclude=./var/cache/distfiles "--exclude=./home/${DEFAULT_USER}" --exclude=./usr/src) ;;
-        *) err "live_squash_excludes: unknown mode '${mode}' (mksquashfs|tar)"; return 1 ;;
-    esac
-}
-
-# live_fstab_swap_in — replace ${SYSROOT}/etc/fstab with the live one (every
-# disk-addressed line dropped, the tmpfs hardening lines kept), keeping the original
-# OUTSIDE the sysroot so the saved copy cannot ride into the squashfs itself.
-live_fstab_swap_in() {
-    local f="${SYSROOT}/etc/fstab"
-    [ -f "${f}" ] || { err "live pack: ${f} is missing — no fstab to derive the live one from"; return 1; }
-    [ -z "${LIVE_FSTAB_SAVED}" ] || { err "live pack: fstab already swapped (${LIVE_FSTAB_SAVED}) — restore first"; return 1; }
-    local saved="${BUILD_ROOT}/fstab.img-tokens"
-    cp -a "${f}" "${saved}" || return 1
-    LIVE_FSTAB_SAVED="${saved}"
-    {
-        printf '# /etc/fstab — LIVE ISO root (tmpfs overlay over the squashfs).\n'
-        printf '# The installed image'"'"'s PARTUUID lines for / and /boot/efi are omitted on purpose:\n'
-        printf '# a live boot has no such disk, and OpenRC fsck/localmount would abort the boot\n'
-        printf '# runlevel on them. The installer writes the real fstab onto the target disk.\n'
-        awk '$1 !~ /^(PARTUUID|UUID|LABEL|PARTLABEL)=|^\/dev\//' "${saved}"
-    } > "${f}"
-}
-
-# live_fstab_restore — put the installed image's fstab back. Idempotent; called
-# right after the pack and from the EXIT trap.
-live_fstab_restore() {
-    [ -n "${LIVE_FSTAB_SAVED:-}" ] && [ -f "${LIVE_FSTAB_SAVED}" ] || return 0
-    mv -f "${LIVE_FSTAB_SAVED}" "${SYSROOT}/etc/fstab" && LIVE_FSTAB_SAVED=""
-}
-
-# live_root_gate <squashfs.img> — refuse to ship a live rootfs that cannot be booted:
-# every mount point in LIVE_ROOT_MOUNTPOINTS must be a top-level directory of the
-# squashfs, and /etc/fstab must not address a disk. Reads the packed image, not the
-# argv that produced it. unsquashfs (squashfs-tools) first, rdsquashfs
-# (squashfs-tools-ng, the tar2sqfs fallback's sibling) second; with neither the gate
-# cannot look and says so — it does not pretend to have checked.
-live_root_gate() {
-    local sq="$1" top="" fstab="" m
-    [ -s "${sq}" ] || { err "live-root gate: ${sq} is missing or empty"; return 1; }
-    if command -v unsquashfs >/dev/null; then
-        top="$(unsquashfs -ls -max-depth 1 -d '' "${sq}" 2>/dev/null | grep -E '^/[^/]+$')" \
-            || top="$(unsquashfs -ls -d '' "${sq}" 2>/dev/null | grep -E '^/[^/]+$')"
-        fstab="$(unsquashfs -cat "${sq}" etc/fstab 2>/dev/null)" \
-            || { err "live-root gate: ${sq} has no /etc/fstab"; return 1; }
-    elif command -v rdsquashfs >/dev/null; then
-        top="$(rdsquashfs -l / "${sq}" 2>/dev/null | sed -E 's#.*[[:space:]/]##; s#^#/#')"
-        fstab="$(rdsquashfs -c /etc/fstab "${sq}" 2>/dev/null)" \
-            || { err "live-root gate: ${sq} has no /etc/fstab"; return 1; }
-    else
-        err "live-root gate: neither unsquashfs nor rdsquashfs on this host — cannot verify that ${sq} carries /proc /sys /dev /run, a live /etc/fstab and no module-signing key; refusing to ship it unchecked"
-        return 1
-    fi
-    for m in ${LIVE_ROOT_MOUNTPOINTS}; do
-        grep -qx "/${m}" <<<"${top}" || {
-            err "live-root gate: ${sq} has no /${m} directory — switch_root cannot move the kernel filesystems into the live root and the boot dies right after 'Switching root' (exclude '${m}/*', never '${m}')"
-            return 1
-        }
-    done
-    # KEY-LEAK GATE: the module-signing PRIVATE key must never ride into a live root
-    # (see live_squash_excludes). Reads the packed image's full listing, captured first
-    # and then searched — never `listing | grep -q` under pipefail, where grep's early
-    # exit SIGPIPEs the lister and a FOUND key would read as a clean pass.
-    local _all="" _leak=""
-    if command -v unsquashfs >/dev/null; then
-        _all="$(unsquashfs -ls -d '' "${sq}" 2>/dev/null)" || _all=""
-    else
-        _all="$(rdsquashfs -d "${sq}" 2>/dev/null)" || _all=""     # gensquashfs-style: "file usr/src/... 0644 0 0"
-    fi
-    [ -n "${_all}" ] || { err "live-root gate: cannot list ${sq} — refusing to ship a live root nobody checked for the module-signing key"; return 1; }
-    # unsquashfs prints "/usr/src/...", rdsquashfs "file usr/src/..." (no leading slash):
-    # the certs/ alternative accepts either, or a renamed key would pass the rdsquashfs arm.
-    _leak="$(grep -E 'signing_key\.pem([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/' <<<"${_all}" | head -3)" || true
-    # The name alternative takes any signing_key*.pem* (a signing_key.pem.bak copy is the
-    # same key), and the basename of a non-default CONFIG_MODULE_SIG_KEY (file paths
-    # only; a pkcs11: URI names no file) read from the sysroot's kernel config.
-    local _re='(^|[[:space:]/])signing_key[^/[:space:]]*\.pem[^/[:space:]]*([[:space:]]|$)|(^|[[:space:]/])usr/src/linux[^/[:space:]]*/certs/'
-    local _sk="" _ske=""
-    # (tr strips the value's quotes: \042 is '"', spelled so the line holds no bare one)
-    _sk="$(sed -n 's/^CONFIG_MODULE_SIG_KEY=//p' "${SYSROOT:-/nonexistent}/usr/src/linux/.config" 2>/dev/null | tr -d '\042')" || _sk=""
-    if [ -n "${_sk}" ] && [ "${_sk#*:}" = "${_sk}" ]; then
-        _ske="$(sed 's/[][\.*^$+?(){}|/]/\\&/g' <<<"${_sk##*/}")"
-        _re+="|(^|[[:space:]/])${_ske}([[:space:]]|$)"
-    fi
-    _leak="$(grep -E -e "${_re}" <<<"${_all}" | head -3)" || true
-    if [ -n "${_leak}" ]; then
-        err "live-root gate: ${sq} carries the kernel module-signing PRIVATE key:"
-        err "  ${_leak//$'\n'/$'\n'  }"
-        err "anyone holding this ISO could sign a module every kernel of this build accepts —"
-        err "usr/src must be excluded from the live pack (live_squash_excludes)."
-        return 1
-    fi
-    if printf '%s\n' "${fstab}" | awk '$1 ~ /^(PARTUUID|UUID|LABEL|PARTLABEL)=|^\/dev\// {found=1} END {exit !found}'; then
-        err "live-root gate: ${sq}'s /etc/fstab still addresses a disk (PARTUUID/UUID/LABEL//dev line) — OpenRC fsck/localmount would abort the live boot runlevel; the pack must run between live_fstab_swap_in and live_fstab_restore"
-        return 1
-    fi
-    info "Live-root gate: /${LIVE_ROOT_MOUNTPOINTS// / /} present and /etc/fstab is the live one"
-}
-
-# live_label_gate <squashfs.img> — refuse to ship a live root without SELinux labels
-# (#503). Reads the PACKED image: a full unsquashfs into a scratch dir (13 s for the
-# 1.9 GB backend squashfs), then slx_label_gate's exact-type probes and its >= 99%
-# census. Unlike live_root_gate this has NO "cannot look, return 0" branch: with no
-# unsquashfs on the host it FAILS — an unverified label set is the exact state that
-# shipped every live ISO before this gate existed (1,124 labelled of 159,376).
-live_label_gate() {
-    local sq="$1" tmp rc=0
-    [ -s "${sq}" ] || { err "live-label gate: ${sq} is missing or empty"; return 1; }
-    command -v unsquashfs >/dev/null || { err "live-label gate: no unsquashfs on this host — cannot read ${sq}'s labels, refusing to ship it unverified"; return 1; }
-    tmp="$(mktemp -d "${BUILD_ROOT}/live-label-gate.XXXXXX")" || return 1
-    if ! unsquashfs -no-progress -f -d "${tmp}" "${sq}" >/dev/null; then
-        err "live-label gate: unsquashfs could not extract ${sq}"; rm -rf "${tmp}"; return 1
-    fi
-    slx_label_gate "${tmp}" squashfs "${SLX_PROBE_TABLE}" --census || rc=1
-    rm -rf "${tmp}"
-    return "${rc}"
-}
-umount_chroot() {
-    # Detach exactly what mount_chroot attached in THIS run — each flag below is
-    # set by the matching mount above — and nothing else: a mount somebody else
-    # made under the sysroot is theirs, and the stale-mount refusal at the
-    # Extract phase names it before the next build. The distfiles-ro bind was
-    # MISSING from this list until #659: every build (failed or successful)
-    # left one behind per mount_chroot call, stacked on the previous run's.
-    # Each flag is reset after its umount so a second mount_chroot/umount_chroot
-    # pair (the live-ISO dracut step) starts from a clean slate. hmr_umount_own
-    # peels ONE layer (ours) whatever the mount table says (the umount never
-    # waits for a count, so a path spelled differently from the kernel's — a
-    # symlink, a space, an umlaut, a relative --work-dir — is unmounted like any
-    # other), then counts layers before and after and warns when the count did
-    # not go down (`umount -l ... || true` alone is silent).
-    if ${DISTFILES_MOUNTED:-false}; then
-        hmr_umount_own "${SYSROOT}/var/cache/distfiles-ro" || true; DISTFILES_MOUNTED=false
-    fi
-    if ${PORTAGE_SCRATCH_MOUNTED:-false}; then
-        hmr_umount_own "${SYSROOT}/var/tmp/portage" || true; PORTAGE_SCRATCH_MOUNTED=false
-    fi
-    if ${HOST_REPO_MOUNTED:-false}; then
-        hmr_umount_own "${SYSROOT}/var/db/repos/gentoo" || true; HOST_REPO_MOUNTED=false
-    fi
-    if ${X86_POOL_MOUNTED:-false}; then
-        hmr_umount_own "${SYSROOT}/var/cache/binpkgs" || true; X86_POOL_MOUNTED=false
-    fi
-    for m in run dev sys proc; do umount -lR "${SYSROOT}/$m" 2>/dev/null || true; done
-}
 # Replaces the build-only sudoers trap armed at the grant (bash has one EXIT slot),
 # so it strips that grant too: a build that fails in the chroot phase leaves none.
 trap 'build_sudoers_strip || true; umount_chroot' EXIT
@@ -7256,7 +7385,7 @@ kernel_cache_store() {
 #                                       (written at the very end, kernel_reconfig_env);
 #   <BUILD_ROOT>/kernel/reconfigured    written BY the reconfig apply: the sysroot now
 #                                       carries a hand-edited kernel (kernel_reconfig_reset).
-KRC_DIR="${BUILD_ROOT}/kernel"
+# (KRC_DIR is set before the skippable region: a --from-step rerun needs it.)
 KRC_FORCE_MISS=false
 KCACHE_RESTORED_CONFIG=""
 
@@ -7505,8 +7634,7 @@ fi
 # Signing happens on the HOST (not in chroot) so the key stays outside the image.
 # The unsigned UKI was built by dracut --uefi above inside the chroot.
 # SBDIR persists across builds in WORK_DIR so the same org cert covers all roles.
-SBDIR="${WORK_DIR}/secureboot"
-SBKEY="${SBDIR}/sb.key"; SBCRT="${SBDIR}/sb.crt"; SBCER="${SBDIR}/sb.cer"
+# (SBDIR/SBKEY/SBCRT/SBCER are set before the skippable region: a --from-step rerun needs them.)
 UKI_UNSIGNED="${SYSROOT}/boot/${UKI_NAME%.efi}-unsigned.efi"
 UKI_SIGNED="${SYSROOT}/boot/${UKI_NAME}"
 # A KEYS-USB / explicit signing key (--keys-usb, --secureboot-key/-cert) lets the
@@ -7828,7 +7956,7 @@ chroot "${SYSROOT}" chgrp utmp /var/log/wtmp 2>/dev/null \
 # paths are labelled (/srv is a core probe: var_t at every pack hop).
 slx_ship_bootpath_files "${SYSROOT}" "${SHARED_SPECS}" \
     || { err "could not ship the SELinux boot-path files (/srv, portage-tmpdir.conf mask)"; exit 1; }
-SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"
+# (SLX_PROBE_TABLE is set before the skippable region.)
 SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
 info "Labelling the sysroot (SELinux ${SLX_TYPE}: store install -> root login mapping -> config -> setfiles -> gate)"
 slx_store_install_modules "${SYSROOT}" "${SLX_TYPE}" chroot \
@@ -7861,22 +7989,13 @@ fi
 
 # Last look before the first pack (the stage4 is also what the .img, fs.tar and
 # installer ISO are built from): no build-only sudoers grant may ride into it.
+# The sysroot is final: from here on every step only reads it. Record that (the
+# evidence a later --from-step rerun is checked against).
+printf 'BUILD_TS=%s\nKCACHE_HIT=%s\n' "${BUILD_TS}" "${KCACHE_HIT:-false}" > "${LATE_STATE}"
+fi   # ── end of the skippable region ──
 build_sudoers_gate || { err "the sysroot carries a build-only sudoers grant — refusing to pack it"; exit 1; }
 banner "Packaging stage4 tarball"
-# The role tag IS the role. It only ever translated because `be+gpu` carried a `+`
-# that is illegal in a filename-ish token; `backend-gpu` is filename-safe, so the
-# be+gpu->host fold (and its --print-plan twin) is gone. Consumers that must still
-# find an OLD artifact glob the aliases (hugmesh_role_aliases_of).
-ROLE_TAG="${ROLE}"
-# FD-08: client device artifacts carry the person-role + primary-domain tag so the
-# filename identifies who/what the device is tied to (cosmetic per ADR-12 — the real
-# isolation is per-domain authz, not the name). e.g. laptop-user-acme_example.
-# UNAFFILIATED artifacts carry no person-role/domain tie — the bare role name.
-if ${ROLE_CLIENT} && ! ${UNAFFILIATED}; then
-    _primary_domain="${DOMAINS%%[ ,]*}"                       # first domain (space/comma sep)
-    _domtag="${_primary_domain//./_}"                         # filesystem-safe
-    ROLE_TAG="${ROLE}-${PERSON_ROLE}${_domtag:+-${_domtag}}"
-fi
+# (ROLE_TAG is set before the build stamp, where a --from-step rerun needs it.)
 STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar.xz"
 # Multi-threaded xz (-T0) over the tar stream — -cJf is single-threaded and
 # left 27 cores idle on the multi-GB sysroot; mirrors the fs.tar codepath below.
@@ -7892,6 +8011,7 @@ STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar
 # ONE tar, xattrs ON, failure FATAL. The old `2>/dev/null || tar ...` fallback re-ran
 # the pack WITHOUT xattrs on any error and said nothing: the stage4 (and the .img and
 # fs.tar built from it) then shipped with every security.selinux label stripped.
+if late_step_runs package-stage4; then
 tar -C "${SYSROOT}" --xattrs --xattrs-include='*.*' --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
     --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude="./home/${DEFAULT_USER}" -cpf - . \
@@ -7900,6 +8020,11 @@ tar -C "${SYSROOT}" --xattrs --xattrs-include='*.*' --numeric-owner \
 info "Stage4: ${STAGE4} ($(du -sh "${STAGE4}" | cut -f1))"
 slx_tar_label_gate "${STAGE4}" stage4 "${SLX_PROBE_TABLE}" \
     || { err "stage4 label gate failed — ${STAGE4} lost its SELinux labels"; exit 1; }
+late_step_done package-stage4
+else
+    [ -s "${STAGE4}" ] || { err "--from-step ${FROM_STEP}: the earlier stage4 ${STAGE4} is gone — rerun from package-stage4"; exit 1; }
+    info "Stage4: kept from the earlier run: ${STAGE4}"
+fi
 
 # ── 10. Raw .img (DEFAULT deliverable) ─────────────────────────────
 # UEFI GPT image mirroring the rpi5 build_img, adapted MBR->GPT + a GRUB-EFI
@@ -8304,7 +8429,13 @@ build_img() {
     info "Size: $(du -sh "${IMG_PATH}" | cut -f1)"
 }
 
-if ${BUILD_IMG}; then
+if ${BUILD_IMG} && ! late_step_runs image-raw; then
+    banner "SKIPPED raw .img (kept from the earlier run: --from-step ${FROM_STEP})"
+    _img_base="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}"
+    IMG_PATH="$(late_kept "${_img_base}.img.xz" "${_img_base}.img")"
+    FS_TAR_PATH="$(late_kept "${_img_base}.fs.tar.xz")"
+    info "Image: ${IMG_PATH}; FS tarball: ${FS_TAR_PATH}"
+elif ${BUILD_IMG}; then
     banner "Building raw .img (UEFI GPT: ESP + ext4 root, GRUB-EFI --removable)"
     # A bootable image needs a kernel on the ext4 /boot. Guard like the ISO path:
     # if no vmlinuz is present (kernel skipped / build failed), skip rather than crash.
@@ -8313,6 +8444,7 @@ if ${BUILD_IMG}; then
         IMG_PATH="(not built — kernel missing)"
     else
         build_img
+        [ -f "${IMG_PATH}" ] && late_step_done image-raw
     fi
 else
     banner "SKIPPED raw .img (--no-img)"
@@ -8324,7 +8456,11 @@ if ! ${SKIP_ISO}; then
     KVER="$(ls "${SYSROOT}/lib/modules" 2>/dev/null | sort -V | tail -1)"
     VMLINUZ="$(ls -1 "${SYSROOT}/boot/vmlinuz-"* "${SYSROOT}/boot/vmlinuz" 2>/dev/null | sort -V | tail -1 || true)"
 
-    if ${LIVE_ISO} && [ -n "${VMLINUZ}" ] && [ -n "${KVER}" ]; then
+    if ${LIVE_ISO} && ! late_step_runs image-live; then
+        banner "SKIPPED LIVE image (kept from the earlier run: --from-step ${FROM_STEP})"
+        ISO_PATH="$(late_kept "${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.live.iso")"
+        info "Live ISO: ${ISO_PATH}"
+    elif ${LIVE_ISO} && [ -n "${VMLINUZ}" ] && [ -n "${KVER}" ]; then
         ISO_PATH="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.live.iso"
         banner "Building LIVE image (bootable ISO: grub-mkrescue + squashfs)"
         # Live initramfs (dmsquash-live) built inside the chroot.
@@ -8696,6 +8832,7 @@ CHROOT
     elif ${LIVE_ISO}; then
         warn "Live ISO requested but no vmlinuz/modules present — skipping (don't pass --skip-kernel)"
     fi
+    if ${LIVE_ISO} && late_step_runs image-live && [ -f "${ISO_PATH}" ]; then late_step_done image-live; fi
 
     if ${INSTALLER_ISO}; then
         INSTALLER_ISO_PATH="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.installer.iso"
@@ -8759,6 +8896,7 @@ CHROOT
             warn "xorriso missing — left an installable tree at ${INST_DIR}"
             [ "${ISO_PATH}" = "(not built)" ] && ISO_PATH="${INSTALLER_ISO_PATH}"
         fi
+        if [ -f "${INSTALLER_ISO_PATH}" ]; then late_step_done image-installer; fi
     fi
 fi
 

@@ -138,8 +138,11 @@ def test_button_is_on_the_kernel_stage_greyed_until_that_stage_is_done(wiz, qapp
     page = _page(wiz, (("pki.x86", "x86"),))
     row = page._rows[0]
     k = progress_mod._kernel_stage_index("x86")
-    btn = page.tree.itemWidget(row.stage_items[k], progress_mod._COL_FLAGS)
-    assert btn is row.kernel_btn and btn.text() == progress_mod._KERNEL_BTN_TEXT
+    # the kernel stage's Flags cell holds "Kernel config…" beside that stage's rerun icon
+    cell = page.tree.itemWidget(row.stage_items[k], progress_mod._COL_FLAGS)
+    btn = row.kernel_btn
+    assert btn is not None and btn.parentWidget() is cell and btn.text() == progress_mod._KERNEL_BTN_TEXT
+    assert row.rerun_btns[k].parentWidget() is cell
     assert row.stage_items[k].text(progress_mod._COL_NAME).endswith("Build kernel")
     assert not btn.isEnabled() and btn.toolTip() == progress_mod._KERNEL_BTN_HINT
     _through_kernel(page, 0, extra=0)                     # kernel stage RUNNING

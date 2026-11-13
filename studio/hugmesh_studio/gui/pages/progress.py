@@ -77,6 +77,7 @@ from ...core.emerge_packages import (
 from ...core.progress_parse import ProgressParser, platform_phases, strip_ansi
 from ...core.stage_tracker import DONE as STAGE_DONE, StageTracker
 from ...core import kernel_reconfig
+from ...core import rerun_step
 from ...core.worklist_driver import WorklistDriver
 from ._images_mesh import LocalMeshPanel
 from ._kernel_reconfig_panel import KernelReconfigPanel
@@ -264,6 +265,7 @@ _LOG_MAX_BLOCKS = 20000
 # (only package rows write flag text there). Same one-way latch as the package button:
 # created disabled, enabled once THIS job's kernel stage is DONE (_sync_kernel_btn).
 _KERNEL_BTN_TEXT = "Kernel config…"
+_RERUN_BTN_TEXT = "↻ Rerun"
 _KERNEL_BTN_HINT = "available once this image's Build kernel step has finished"
 _KERNEL_BTN_READY_HINT = ("Open menuconfig for this image's kernel in its own terminal "
                           "window, then rebuild + re-sign + repackage with the change")
@@ -561,6 +563,14 @@ class _Row:
         self.kernel_btn: QtWidgets.QToolButton | None = None
         self.kernel_stage: int | None = None
         self.kernel_ready = False
+        # the per-stage rerun icons (core/rerun_step.py), keyed by stage index
+        self.rerun_btns: dict[int, QtWidgets.QToolButton] = {}
+
+
+def _stage_id(row: "_Row", j: int) -> str:
+    """The progress-table id of ``row``'s stage ``j`` (the table its tracker was built from)."""
+    phases = platform_phases(row.platform or "x86")
+    return phases[j].get("id", "") if 0 <= j < len(phases) else ""
 
 
 class ProgressPage(QtWidgets.QWizardPage):
@@ -652,6 +662,30 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.relogin_confirm.returnPressed.connect(self._relogin_submit)
         self.relogin.setVisible(False)
         lay.addWidget(self.relogin)
+
+        # RERUN FROM A STEP (core/rerun_step.py): the operator's "rerun icon after each
+        # finished step, to stop and prompt to be sure, then retry the build from that
+        # point". The icon on a stage row opens this inline confirmation (never a modal:
+        # page logic must not block the offscreen suite); confirming stops a running
+        # build first, then dispatches the session again from that step.
+        self.rerun_box = QtWidgets.QGroupBox("Rerun from a step")
+        rr = QtWidgets.QVBoxLayout(self.rerun_box)
+        self.rerun_note = QtWidgets.QLabel("")
+        self.rerun_note.setWordWrap(True)
+        rr.addWidget(self.rerun_note)
+        rrow = QtWidgets.QHBoxLayout()
+        rrow.addStretch(1)
+        self.rerun_cancel_btn = QtWidgets.QPushButton("Cancel")
+        self.rerun_cancel_btn.clicked.connect(self._rerun_cancel)
+        rrow.addWidget(self.rerun_cancel_btn)
+        self.rerun_go_btn = QtWidgets.QPushButton("Rerun from here")
+        self.rerun_go_btn.clicked.connect(self._rerun_confirm)
+        rrow.addWidget(self.rerun_go_btn)
+        rr.addLayout(rrow)
+        self.rerun_box.setVisible(False)
+        self._rerun_ask: tuple[int, int] | None = None       # (row index, stage index) shown
+        self._rerun_pending: tuple[int, int] | None = None   # confirmed; waiting for the stop
+        lay.addWidget(self.rerun_box)
 
         # ── OVERALL / TOTAL progress (across the WHOLE worklist) — a prominent block
         # ABOVE the per-image rows. It is a pure READER of the existing
@@ -1729,8 +1763,30 @@ class ProgressPage(QtWidgets.QWizardPage):
             kb.setToolTip(_KERNEL_BTN_HINT if row.platform == "x86"
                           else kernel_reconfig.NOT_X86.format(board=row.platform))
             kb.clicked.connect(lambda _=False, i=index: self._open_kernel_panel(i))
-            self.tree.setItemWidget(row.stage_items[kidx], _COL_FLAGS, kb)
             row.kernel_btn, row.kernel_stage = kb, kidx
+        # a rerun icon on every stage row (hidden until that stage has run); on the
+        # kernel stage it shares the Flags cell with "Kernel config…"
+        for j, child in enumerate(row.stage_items):
+            rb = QtWidgets.QToolButton()
+            rb.setText(_RERUN_BTN_TEXT)
+            rb.setAutoRaise(True)
+            rb.setStyleSheet(_PKG_EXPAND_QSS)
+            rb.setAccessibleName(f"Rerun from {row.tracker.stages[j].label}")
+            rb.clicked.connect(lambda _=False, i=index, k=j: self._ask_rerun(i, k))
+            rb.setVisible(False)
+            row.rerun_btns[j] = rb
+            if row.kernel_btn is not None and j == row.kernel_stage:
+                cell = QtWidgets.QWidget()
+                hl = QtWidgets.QHBoxLayout(cell)
+                hl.setContentsMargins(0, 0, 0, 0)
+                hl.setSpacing(2)
+                hl.addWidget(row.kernel_btn)
+                hl.addWidget(rb)
+                hl.addStretch(1)
+                self.tree.setItemWidget(child, _COL_FLAGS, cell)
+            else:
+                self.tree.setItemWidget(child, _COL_FLAGS, rb)
+            self._sync_rerun(row, j)
         self._set_status(row, "queued")
         self._rows.append(row)
 
@@ -2090,6 +2146,10 @@ class ProgressPage(QtWidgets.QWizardPage):
             self._maybe_qemu_tests()
         self.completeChanged.emit()
         self._sync_back_button()
+        if self._rerun_pending is not None:
+            # the stop a confirmed rerun asked for has landed: dispatch it now (deferred,
+            # so this slot returns before the wizard rebuilds its pages)
+            QtCore.QTimer.singleShot(0, self._do_rerun)
 
     def _finalize_session(self, status: str | None = None) -> None:
         """FINISH write for the session record (once per run): status from the driver
@@ -2230,6 +2290,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         item.setForeground(_COL_NAME, QtGui.QBrush(QtGui.QColor(colour)))
         item.setText(_COL_PROGRESS, st.state)
         item.setText(_COL_TIME, _fmt_elapsed(st.elapsed(now)))
+        self._sync_rerun(row, j)
 
     # ---- per-package rendering (JOB -> STAGE -> GROUP -> PACKAGE) -----------------
     def _group_item(self, row: _Row, group: str) -> QtWidgets.QTreeWidgetItem:
@@ -2924,6 +2985,92 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.footer.setText("\n".join(parts))
 
     # ---- stop -------------------------------------------------------------------
+    # ---- rerun from a step (core/rerun_step.py) ------------------------------------
+    def _rerun_refusal(self) -> str:
+        s = self._session
+        return rerun_step.refusal(len(self._rows), s is not None,
+                                  getattr(s, "kind", "wizard") if s is not None else "")
+
+    def _sync_rerun(self, row: _Row, j: int) -> None:
+        """Show stage ``j``'s rerun icon once that stage has run (done, failed or
+        stopped), with what a click would do — or greyed with why it cannot."""
+        rb = row.rerun_btns.get(j)
+        if rb is None:
+            return
+        try:
+            st = row.tracker.stages[j]
+            rb.setVisible(st.state in rerun_step.RERUNNABLE_STATES)
+            why = self._rerun_refusal()
+            rb.setEnabled(not why and self._rerun_pending is None)
+            rb.setToolTip(why or rerun_step.plan(row.platform, _stage_id(row, j), st.label).sentence)
+        except Exception:                # noqa: BLE001 - a Qt slot path (see _sync_pkg_expand)
+            return
+
+    def _sync_all_rerun(self) -> None:
+        for row in self._rows:
+            for j in row.rerun_btns:
+                self._sync_rerun(row, j)
+
+    def _ask_rerun(self, i: int, j: int) -> None:
+        """The icon was clicked: say what the rerun does and ask to be sure (inline)."""
+        why = self._rerun_refusal()
+        if why or not (0 <= i < len(self._rows)):
+            return
+        row = self._rows[i]
+        st = row.tracker.stages[j]
+        p = rerun_step.plan(row.platform, _stage_id(row, j), st.label)
+        running = not self._all_terminal
+        self._rerun_ask = (i, j)
+        self.rerun_note.setText(
+            f"Rerun {row.label} from “{st.label}”? {p.sentence}"
+            + (" The build that is running now is stopped first." if running else ""))
+        self.rerun_go_btn.setText("Stop and rerun from here" if running else "Rerun from here")
+        self.rerun_go_btn.setEnabled(True)
+        self.rerun_box.setVisible(True)
+        # the panel takes height from the tree: keep the row that was clicked in view
+        QtCore.QTimer.singleShot(0, lambda it=row.stage_items[j]: self.tree.scrollToItem(it))
+
+    def _rerun_cancel(self) -> None:
+        self._rerun_ask = None
+        self.rerun_box.setVisible(False)
+
+    def _rerun_confirm(self) -> None:
+        if self._rerun_ask is None:
+            return
+        self._rerun_pending, self._rerun_ask = self._rerun_ask, None
+        self.rerun_go_btn.setEnabled(False)
+        self.rerun_cancel_btn.setEnabled(False)
+        self._sync_all_rerun()
+        if self._all_terminal:
+            QtCore.QTimer.singleShot(0, self._do_rerun)
+        else:
+            self.rerun_note.setText(self.rerun_note.text().replace(
+                " The build that is running now is stopped first.", "")
+                + " Stopping the running build…")
+            self._stop_all()
+
+    def _do_rerun(self) -> None:
+        """Dispatch the confirmed rerun: the session again, into the same work dir,
+        with --resume and (for a step a builder can start at) --from-step."""
+        pend, self._rerun_pending = self._rerun_pending, None
+        self.rerun_box.setVisible(False)
+        self.rerun_cancel_btn.setEnabled(True)
+        if pend is None or self._session is None:
+            return
+        i, j = pend
+        row = self._rows[i]
+        st = row.tracker.stages[j]
+        p = rerun_step.plan(row.platform, _stage_id(row, j), st.label)
+        try:
+            session = build_sessions.load(os.path.join(build_sessions.sessions_dir(),
+                                                       f"{self._session.id}.json"))
+        except (OSError, ValueError) as exc:
+            self.log.appendPlainText(f"\n=== rerun from “{st.label}” not started: "
+                                     f"the session record could not be read ({exc}) ===")
+            return
+        self.log.appendPlainText(f"\n=== rerun from “{st.label}” ===")
+        self.wiz.start_build_from_session(session, resume=True, from_step=p.from_step)
+
     def _stop_one(self, i: int) -> None:
         if self.driver is not None:
             self.driver.cancel(i)
