@@ -567,7 +567,7 @@ OPTIONAL_SERVICES_BY_PLATFORM = {
 }
 
 # --optional-services sentinels (mirror build-menu.sh's OPT_SERVICES + the builders):
-#   optional_services == []            -> emit nothing (builder default tuwunel phpbb)
+#   optional_services == []            -> emit nothing (builder default akkoma tuwunel phpbb)
 #   optional_services == [SERVICES_NONE] -> emit --optional-services "" (EXPLICIT none, G13)
 #   optional_services == [SERVICES_ALL]  -> emit --all-services (full user-level set, G14)
 #   optional_services == [slug, ...]     -> emit --optional-services "slug ..." (allow-list)
@@ -575,12 +575,8 @@ SERVICES_NONE = "none"
 SERVICES_ALL = "all"
 
 # The builders' OWN built-in default selection when no --optional-services is given:
-#   build-x86-host-stage4.sh       OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
-#   build-rpi5-stage4.sh           (identical line)
-# akkoma left the default on 2026-11-11: its image (hugmesh-akkoma) is not yet published,
-# so a default build would deploy a pod that cannot pull. tests/scripts/
-# test-akkoma-image-pin.sh refuses akkoma back in this tuple while its digest is the
-# placeholder.
+#   build-x86-host-stage4.sh:196   OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+#   build-rpi5-stage4.sh:254       (identical line)
 # The services table PRE-TICKS exactly these rows on arrival, because they are what an
 # untouched build genuinely ships — eight unticked boxes over a mesh that runs three of
 # them anyway is the same lie as a part-checked square (ask 23: "anything off by default
@@ -588,7 +584,7 @@ SERVICES_ALL = "all"
 # unticking `phpbb` a no-op, since --optional-services REPLACES rather than subtracts.
 # tests/test_services_section.py parses both builder scripts and asserts set-equality with
 # this tuple, so it cannot go stale into a comment.
-BUILTIN_DEFAULT_SERVICES = ("tuwunel", "phpbb")
+BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
 
 # What the `all` sentinel / --all-services ACTUALLY expands to, mirrored from the single
 # line both node builders declare it on:
@@ -735,7 +731,7 @@ def with_service_slug(services, slug: str) -> list[str]:
 # stops a new slug landing as a bare identifier again.
 SERVICE_DESCRIPTIONS: dict[str, str] = {
     "akkoma": "Fediverse social server — ActivityPub timelines, follows and DMs "
-              "at social.<domain>. Off by default: image not yet published.",
+              "at social.<domain>.",
     "tuwunel": "Matrix homeserver — end-to-end-encrypted chat rooms and DMs for "
                "everyone on the mesh.",
     "phpbb": "Web forum — threaded boards at forum.<domain>, SSO-linked to mesh "

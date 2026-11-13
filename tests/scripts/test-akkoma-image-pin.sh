@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 # test-akkoma-image-pin.sh — hugmesh-akkoma: every Akkoma ref pinned to our own image
-# by digest, Akkoma DEFAULT-OFF while that digest is the placeholder, and the release
-# workflow kept equal to the mesh-node template (tests/scripts/akkoma_image_pin.py
-# says what each check is and why).
+# by digest, Akkoma DEFAULT-OFF whenever that digest is a placeholder, branded meshes
+# kept on the HugMesh-published image, and the release workflow kept equal to the
+# mesh-node template (tests/scripts/akkoma_image_pin.py says what each check is and why).
 #
-# 1. the checker on the real tree must PASS;
+# 1. the checker on the real tree must PASS (since 2026-11-12 the real tree pins the
+#    published digest and has Akkoma default-on);
 # 2. a battery of planted defects, each in a fresh copy of the files the checker
 #    reads, must each FAIL with the expected check tag; every mutation is verified
 #    to have actually changed its file, so a mutation whose sed matched nothing
-#    cannot read as "caught";
-# 3. one positive control: a REAL digest with Akkoma default-on must PASS, so the
-#    guard allows flipping the default back once the image is published.
+#    cannot read as "caught". The default-source controls start from the pre-release
+#    state (prepublish: placeholder digest, Akkoma off everywhere) and turn ONE
+#    source back on, which [defaults] must name;
+# 3. one positive control: that pre-release state itself must PASS, so a future image
+#    can go back to a placeholder by turning every default off again;
+# 4. the three builders that bake specs/cluster are driven through their real
+#    rebrand_sysroot with a custom brand and org: the Akkoma refs must survive, and
+#    deleting each builder's rule must be caught.
 #
-# Needs bash and python3 (stdlib only). No network, no docker.
+# Needs bash, sed, awk and python3 (stdlib only). No network, no docker.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,75 +82,106 @@ PY
 
 Z64="0000000000000000000000000000000000000000000000000000000000000000"
 R64="9f1c2e3d4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
-R64B="1111111111111111111111111111111111111111111111111111111111111112"
 AK=specs/cluster/manifests/akkoma/akkoma.yaml
 AS=specs/cluster/manifests/akkoma/admin-sync-job.yaml
+DL=specs/cluster/manifests/akkoma/domainlock-sync-job.yaml
 PEER=specs/cluster/manifests/test-runner/akkoma-peer.yaml
 REL=.github/workflows/akkoma-release.yml
 CI=.github/workflows/akkoma-image-ci.yml
 
+# The pinned ref, read from the real tree (the mutations below anchor on it, so a
+# re-pin needs no edit here). [lockstep] on the real tree proves every ref carries it.
+PIN="$(grep -o 'ghcr\.io/hugmesh/hugmesh-akkoma[:@][^[:space:]"]*' "${REPO}/${AK}" | head -n 1)"
+DIG="${PIN##*@sha256:}"
+NAMETAG="${PIN%@*}"
+case "${DIG}" in
+  *[!0-9a-f]*|"") echo "FATAL: no pinned hugmesh-akkoma digest in ${AK} (got '${PIN}')"; exit 2 ;;
+esac
+[ "${#DIG}" -eq 64 ] || { echo "FATAL: ${AK} pins '${DIG}', not a 64-hex digest"; exit 2; }
+[ "${NAMETAG}" != "${PIN}" ] || { echo "FATAL: ${PIN} has no @sha256: part"; exit 2; }
+
+# prepublish: rewrite $T back to the state before the first release (the placeholder
+# digest, marked, and akkoma OFF in every default source the checker reads). The
+# controls that start from it then turn exactly ONE source back on.
+prepublish() {
+  local f
+  for f in "${AK}" "${AS}" "${DL}" "${PEER}"; do
+    edit "${f}" "s.replace('${PIN}', 'ghcr.io/hugmesh/hugmesh-akkoma@sha256:${Z64}   # PLACEHOLDER digest: control')" || return 1
+  done
+  edit scripts/_optional-services-lib.sh "s.replace('_OPT_BUILTIN_DEFAULT_SERVICES=\"akkoma tuwunel phpbb\"', '_OPT_BUILTIN_DEFAULT_SERVICES=\"tuwunel phpbb\"', 1)" || return 1
+  for f in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh; do
+    edit "${f}" "s.replace('OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}\"', 'OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-tuwunel phpbb}\"', 1)" || return 1
+  done
+  edit scripts/build-menu.sh "s.replace('cur=\"akkoma,tuwunel,phpbb\"', 'cur=\"tuwunel,phpbb\"', 1)" || return 1
+  edit studio/hugmesh_studio/core/config.py "s.replace('BUILTIN_DEFAULT_SERVICES = (\"akkoma\", \"tuwunel\", \"phpbb\")', 'BUILTIN_DEFAULT_SERVICES = (\"tuwunel\", \"phpbb\")', 1)" || return 1
+  edit specs/cluster/optional-services.yaml "re.sub(r'(- slug: akkoma\n(?:.*\n)*?\s+)default: on', r'\1default: off', s, count=1)" || return 1
+  edit specs/cluster/manifests/policy/installed-services-configmap.yaml "s.replace('  akkoma: \"true\"', '  akkoma: \"false\"', 1)" || return 1
+  edit specs/cluster/manifests/optional-services-operator/seed-optionalservices.yaml "re.sub(r'(slug: akkoma\n\s+)enabled: true', r'\1enabled: false', s, count=1)" || return 1
+  edit specs/cluster/manifests/federation-modules-gate/sql/gate.sql "s.replace(\"enabled = true WHERE slug = 'mastodon'\", \"enabled = false WHERE slug = 'mastodon'\", 1)" || return 1
+  edit specs/cluster/manifests/test-runner/kustomization.yaml "re.sub(r'(?m)^  - akkoma-peer\.yaml\n', '  # - akkoma-peer.yaml\n', s, count=1)" || return 1
+}
+
 # expect NAME TAG FILE EXPR [FILE EXPR ...]: the mutated copy must fail with [TAG].
+# PRE=prepublish starts from the pre-release state instead of the real tree; NEED=<text>
+# also requires a FAIL [TAG] line to contain <text> (the source the check must name).
 expect() {
   local name="$1" tag="$2"; shift 2
   fresh "m$((pass + fail))"
+  if [ -n "${PRE:-}" ] && ! "${PRE}" 2>"${T}.err"; then bad "control '${name}': ${PRE}: $(cat "${T}.err")"; return; fi
   while [ $# -gt 0 ]; do
     if ! edit "$1" "$2" 2>"${T}.err"; then bad "control '${name}': $(cat "${T}.err")"; return; fi
     shift 2
   done
   local o rc=0
   o="$(python3 -I "${CHECK}" "${T}" 2>&1)" || rc=$?
-  if [ "${rc}" != 0 ] && printf '%s\n' "${o}" | grep -F "  FAIL [${tag}]" >/dev/null; then
-    ok "control '${name}' -> caught by [${tag}]"
+  if [ "${rc}" != 0 ] && printf '%s\n' "${o}" | grep -F "  FAIL [${tag}]" | grep -F -- "${NEED:-  FAIL}" >/dev/null; then
+    ok "control '${name}' -> caught by [${tag}]${NEED:+ naming ${NEED}}"
   else
-    bad "control '${name}' -> NOT caught by [${tag}] (rc ${rc}): $(printf '%s\n' "${o}" | grep FAIL | head -3 | tr '\n' ';')"
+    bad "control '${name}' -> NOT caught by [${tag}]${NEED:+ naming ${NEED}} (rc ${rc}): $(printf '%s\n' "${o}" | grep FAIL | head -3 | tr '\n' ';')"
   fi
 }
 
 echo "== negative controls: each planted defect must fail =="
 expect "the dead registry host is back in akkoma.yaml" dead-host \
-  "${AK}" "s.replace('image: ghcr.io/hugmesh/hugmesh-akkoma@', 'image: git.akkoma.dev/akkomagang/akkoma@', 1)"
+  "${AK}" "s.replace('image: ${NAMETAG}', 'image: git.akkoma.dev/akkomagang/akkoma:stable', 1)"
 expect "the unofficial compose-lane image in a manifest" dead-host \
-  "${PEER}" "s.replace('ghcr.io/hugmesh/hugmesh-akkoma@sha256:${Z64}', 'teslamint/akkoma:v3.20.0', 1)"
+  "${PEER}" "s.replace('${PIN}', 'teslamint/akkoma:v3.20.0', 1)"
 expect "a ref pinned by tag only" refs \
-  "${AS}" "s.replace('hugmesh-akkoma@sha256:${Z64}', 'hugmesh-akkoma:0.4.0-beta.1', 1)"
+  "${AS}" "s.replace('${PIN}', '${NAMETAG}', 1)"
 expect "a ref on another registry" refs \
-  "${AS}" "s.replace('ghcr.io/hugmesh/hugmesh-akkoma@', 'docker.io/hugmesh/hugmesh-akkoma@', 1)"
+  "${AS}" "s.replace('ghcr.io/hugmesh/hugmesh-akkoma', 'docker.io/hugmesh/hugmesh-akkoma', 1)"
 expect "a new Akkoma ref in a new file, tag only" refs \
   specs/cluster/manifests/akkoma/kustomization.yaml "s + '\n# extra\n---\n# x\n' + 'images:\n  - name: foo\n    newName: hugmesh/akkoma-extra\n'"
 expect "both test-runner refs dropped" sites \
-  "${PEER}" "s.replace('image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:${Z64}', 'image: busybox')"
+  "${PEER}" "s.replace('image: ${PIN}', 'image: busybox')"
 expect "two different digests" lockstep \
-  "${AK}" "s.replace('@sha256:${Z64}', '@sha256:${R64}', 1)"
-expect "the placeholder line lost its marker" placeholder \
-  "${AS}" "re.sub(r'(hugmesh-akkoma@sha256:0+)\s+# PLACEHOLDER digest[^\n]*', r'\1', s, count=1)"
+  "${AK}" "s.replace('@sha256:${DIG}', '@sha256:${R64}', 1)"
 expect "a real digest that still says PLACEHOLDER" placeholder \
-  "${AK}" "s.replace('${Z64}', '${R64}')" \
-  "${AS}" "s.replace('${Z64}', '${R64}')" \
-  specs/cluster/manifests/akkoma/domainlock-sync-job.yaml "s.replace('${Z64}', '${R64}')" \
-  "${PEER}" "s.replace('${Z64}', '${R64}')"
-expect "akkoma back in the builder lib default" defaults \
+  "${AK}" "s.replace('${PIN}', '${PIN}   # PLACEHOLDER digest: stale', 1)"
+PRE=prepublish expect "the placeholder line lost its marker" placeholder \
+  "${AS}" "re.sub(r'(hugmesh-akkoma@sha256:0+)\s+# PLACEHOLDER digest[^\n]*', r'\1', s, count=1)"
+# Each default source on its own, with the placeholder back: [defaults] must name it.
+PRE=prepublish NEED=_optional-services-lib.sh expect "placeholder + akkoma in the builder lib default" defaults \
   scripts/_optional-services-lib.sh "s.replace('_OPT_BUILTIN_DEFAULT_SERVICES=\"tuwunel phpbb\"', '_OPT_BUILTIN_DEFAULT_SERVICES=\"akkoma tuwunel phpbb\"', 1)"
-expect "akkoma back in the x86 builder default" defaults \
-  build-x86-host-stage4.sh "s.replace('OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-tuwunel phpbb}\"', 'OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}\"', 1)"
-expect "akkoma back in the rpi5 builder default" defaults \
-  build-rpi5-stage4.sh "s.replace('OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-tuwunel phpbb}\"', 'OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}\"', 1)"
-expect "akkoma back in the jetson builder default" defaults \
-  build-jetson-stage4.sh "s.replace('OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-tuwunel phpbb}\"', 'OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}\"', 1)"
-expect "build-menu pre-ticks akkoma in the services checklist" defaults \
+for b in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh; do
+  PRE=prepublish NEED="${b}" expect "placeholder + akkoma in the ${b} default" defaults \
+    "${b}" "s.replace('OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-tuwunel phpbb}\"', 'OPTIONAL_SERVICES=\"\${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}\"', 1)"
+done
+PRE=prepublish NEED='scripts/build-menu.sh: if [ -z' expect "placeholder + build-menu pre-ticks akkoma" defaults \
   scripts/build-menu.sh "s.replace('cur=\"tuwunel,phpbb\"', 'cur=\"akkoma,tuwunel,phpbb\"', 1)"
-expect "build-menu's OPT_SERVICES default names akkoma" defaults \
+PRE=prepublish NEED='OPT_SERVICES="akkoma' expect "placeholder + build-menu's OPT_SERVICES default names akkoma" defaults \
   scripts/build-menu.sh "re.sub(r'(?m)^OPT_SERVICES=\"\"', 'OPT_SERVICES=\"akkoma,tuwunel,phpbb\"', s, count=1)"
-expect "akkoma back in Studio's BUILTIN_DEFAULT_SERVICES" defaults \
+PRE=prepublish NEED=config.py expect "placeholder + akkoma in Studio's BUILTIN_DEFAULT_SERVICES" defaults \
   studio/hugmesh_studio/core/config.py "s.replace('BUILTIN_DEFAULT_SERVICES = (\"tuwunel\", \"phpbb\")', 'BUILTIN_DEFAULT_SERVICES = (\"akkoma\", \"tuwunel\", \"phpbb\")', 1)"
-expect "registry akkoma default: on" defaults \
+PRE=prepublish NEED=optional-services.yaml expect "placeholder + registry akkoma default: on" defaults \
   specs/cluster/optional-services.yaml "re.sub(r'(- slug: akkoma\n(?:.*\n)*?\s+)default: off', r'\1default: on', s, count=1)"
-expect "installed-services baseline akkoma true" defaults \
+PRE=prepublish NEED=installed-services-configmap.yaml expect "placeholder + installed-services baseline akkoma true" defaults \
   specs/cluster/manifests/policy/installed-services-configmap.yaml "s.replace('  akkoma: \"false\"', '  akkoma: \"true\"', 1)"
-expect "seed OptionalService akkoma enabled" defaults \
+PRE=prepublish NEED=seed-optionalservices.yaml expect "placeholder + seed OptionalService akkoma enabled" defaults \
   specs/cluster/manifests/optional-services-operator/seed-optionalservices.yaml "re.sub(r'(slug: akkoma\n\s+)enabled: false', r'\1enabled: true', s, count=1)"
-expect "federation gate.sql mastodon on" defaults \
+PRE=prepublish NEED=gate.sql expect "placeholder + federation gate.sql mastodon on" defaults \
   specs/cluster/manifests/federation-modules-gate/sql/gate.sql "s.replace(\"enabled = false WHERE slug = 'mastodon'\", \"enabled = true WHERE slug = 'mastodon'\", 1)"
-expect "the test-runner bundle wires akkoma-peer with the placeholder" defaults \
+PRE=prepublish NEED=kustomization.yaml expect "placeholder + the test-runner bundle wires akkoma-peer" defaults \
   specs/cluster/manifests/test-runner/kustomization.yaml "s.replace('  # - akkoma-peer.yaml\n', '  - akkoma-peer.yaml\n', 1)"
 expect "an unreadable default source fails closed" defaults \
   scripts/_optional-services-lib.sh "s.replace('_OPT_BUILTIN_DEFAULT_SERVICES=', '_OPT_DEFAULTS=', 1)"
@@ -211,19 +248,78 @@ expect "the PR build logs in to a registry" pr-wf \
 expect "the PR build also runs on push" pr-wf \
   "${CI}" "s.replace('on:\n  pull_request:', 'on:\n  push:\n    branches: [main]\n  pull_request:', 1)"
 
-echo "== positive control: a real digest may be default-on =="
+echo "== positive control: the pre-release state (placeholder, akkoma off everywhere) passes =="
+# The real tree (above) is the published digest with akkoma default-on. This is the
+# state before the first release; it must stay legal, so a future image that has to go
+# back to a placeholder can, by turning every default off again.
 fresh positive
-for f in "${AK}" "${AS}" specs/cluster/manifests/akkoma/domainlock-sync-job.yaml "${PEER}"; do
-  edit "${f}" "re.sub(r'@sha256:0{64}\s+# PLACEHOLDER digest[^\n]*', '@sha256:${R64B}', s)" || bad "positive control: could not rewrite ${f}"
-done
-edit scripts/_optional-services-lib.sh "s.replace('_OPT_BUILTIN_DEFAULT_SERVICES=\"tuwunel phpbb\"', '_OPT_BUILTIN_DEFAULT_SERVICES=\"akkoma tuwunel phpbb\"', 1)" \
-  || bad "positive control: could not flip the lib default"
-o="$(python3 -I "${CHECK}" "${T}" 2>&1)"; rc=$?
-if [ "${rc}" = 0 ]; then
-  ok "a real digest with akkoma default-on passes (the guard does not block the follow-up)"
+if prepublish 2>"${T}.err"; then
+  o="$(python3 -I "${CHECK}" "${T}" 2>&1)"; rc=$?
+  if [ "${rc}" = 0 ] && printf '%s\n' "${o}" | grep -F '  PASS [placeholder] the digest is the PLACEHOLDER' >/dev/null; then
+    ok "the placeholder with akkoma off in every default source passes"
+  else
+    bad "the pre-release state was refused (rc ${rc}): $(printf '%s\n' "${o}" | grep FAIL | head -3 | tr '\n' ';')"
+  fi
 else
-  bad "a real digest with akkoma default-on was refused: $(printf '%s\n' "${o}" | grep FAIL | head -3 | tr '\n' ';')"
+  bad "positive control: prepublish could not rewrite the copy: $(cat "${T}.err")"
 fi
+
+# ── branded meshes keep the HugMesh-published image ─────────────────────────
+# rebrand_sysroot rewrites `hugmesh-` to `<brand>-` and `hugmesh` to `<org>` across the
+# baked cluster tree. Without its @@SDSYSAKKOMAIMG@@ rule every Akkoma ref became
+# ghcr.io/<org>/<brand>-akkoma@<this digest>, a name that holds no such image. Each of
+# the three builders that bake specs/cluster is driven here with a custom brand and
+# org: the Akkoma refs must survive byte for byte, a neighbouring HugMesh image must
+# still rebrand (the rule must not over-protect), and no sentinel may leak. Then the
+# rule is deleted from each builder's copy and the same run must notice.
+echo "== branded meshes: rebrand_sysroot keeps ghcr.io/hugmesh/hugmesh-akkoma =="
+extract_fn() { awk "/^$1\\(\\) \\{/{p=1} p{print} /^\\}/{if(p){exit}}" "$2"; }
+rebrand_run() { # builder-file sysroot -> rebrands the sysroot with a custom brand/org
+  (
+    info() { :; }; warn() { :; }; banner() { :; }
+    eval "$(extract_fn _sed_rep_escape "$1")"
+    eval "$(extract_fn rebrand_sysroot "$1")"
+    BRAND=acme BRAND_TITLE="Acme Mesh" CLUSTER_DOMAIN=example.org ORG=acmeorg \
+      GAMES_DOMAIN=games.example.org HARBOR_PROJECT="" SYSROOT="$2"
+    rebrand_sysroot
+  )
+}
+brand_case() { # builder-file label -> prints PASS/FAIL detail on stdout, rc 0 = the Akkoma refs survived
+  local b="$1" sr="${TMP}/brand-$2" d
+  rm -rf "${sr}"
+  d="${sr}/var/lib/hugmesh/cluster/manifests"
+  mkdir -p "${d}/akkoma" "${d}/test-runner" "${d}/probe"
+  cp "${REPO}/${AK}" "${REPO}/${AS}" "${REPO}/${DL}" "${d}/akkoma/"
+  cp "${REPO}/${PEER}" "${d}/test-runner/"
+  printf 'image: ghcr.io/hugmesh/hugmesh-mesh-node:main\n' > "${d}/probe/neighbour.yaml"
+  rebrand_run "${b}" "${sr}" >/dev/null 2>&1
+  local want got neighbour leak
+  want="$(cd "${REPO}" && grep -h 'ghcr\.io/hugmesh/hugmesh-akkoma' "${AK}" "${AS}" "${DL}" "${PEER}" | sort)"
+  got="$(grep -rh 'ghcr\.io/hugmesh/hugmesh-akkoma' "${d}/akkoma" "${d}/test-runner" | sort)"
+  neighbour="$(cat "${d}/probe/neighbour.yaml")"
+  leak="$(grep -rl '@@SDSYS' "${sr}" || true)"
+  if [ -z "${want}" ]; then echo "no Akkoma ref in the real manifests"; return 2; fi
+  if [ "${neighbour}" != "image: ghcr.io/acmeorg/acme-mesh-node:main" ]; then
+    echo "the rebrand did not run (neighbour HugMesh image is '${neighbour}')"; return 2
+  fi
+  if [ -n "${leak}" ]; then echo "a sentinel leaked into: ${leak}"; return 1; fi
+  if [ "${got}" != "${want}" ]; then echo "Akkoma refs became: $(printf '%s' "${got}" | head -n 2 | tr '\n' ';')"; return 1; fi
+  echo "$(printf '%s\n' "${want}" | wc -l) lines naming the image unchanged, neighbour rebranded to ghcr.io/acmeorg/acme-mesh-node"
+}
+for b in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh; do
+  msg="$(brand_case "${REPO}/${b}" "${b%%-stage4.sh}")"; rc=$?
+  if [ "${rc}" = 0 ]; then ok "${b}: ${msg}"; else bad "${b}: ${msg}"; fi
+  # control: the same builder without the rule must lose the refs
+  cp "${REPO}/${b}" "${TMP}/${b}"
+  sed -i '/@@SDSYSAKKOMAIMG@@/d' "${TMP}/${b}"
+  if cmp -s "${REPO}/${b}" "${TMP}/${b}"; then
+    bad "control '${b} without its Akkoma rule': the mutation changed nothing"
+  else
+    msg="$(brand_case "${TMP}/${b}" "${b%%-stage4.sh}-ctl")"; rc=$?
+    if [ "${rc}" = 1 ]; then ok "control '${b} without its Akkoma rule' -> refs rebranded, caught"
+    else bad "control '${b} without its Akkoma rule' -> NOT caught (rc ${rc}): ${msg}"; fi
+  fi
+done
 
 echo "== test-akkoma-image-pin.sh: ${pass} passed, ${fail} failed =="
 [ "${fail}" -eq 0 ]
