@@ -1203,6 +1203,8 @@ headscale_lan_control_marker() {
     mkdir -p "$(dirname "${HEADSCALE_LAN_CONTROL_MARKER}")"
     printf '%s\n' "${port}" > "${HEADSCALE_LAN_CONTROL_MARKER}"
     log "headscale LAN control port ${port}/tcp -> ${HEADSCALE_LAN_CONTROL_MARKER} (admitted from RFC1918 sources by hugmesh-coturn-firewall)"
+}
+
 # ── headscale DERP relay: offline-first, public map opt-in ─────────────────────
 # Operator decision 2026-11-10 ("Built-in relay on"): the shipped configs turn
 # headscale's EMBEDDED DERP server on and ship NO public DERP map (urls: []), so the
