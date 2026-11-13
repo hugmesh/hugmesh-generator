@@ -641,7 +641,7 @@ T="$1"; R="$2"; W="${T}/llg"; mkdir -p "${W}"
 mount -t tmpfs llg "${W}" 2>/dev/null || true
 cd "${W}" || exit 9
 probe="$(mktemp -p "${W}")"
-setfattr -n security.selinux -v system_u:object_r:etc_t:s0 "${probe}" 2>/dev/null || { echo "SKIP cannot write security.selinux here"; exit 0; }
+setfattr -n security.selinux -v system_u:object_r:etc_t:s0 "${probe}" 2>/dev/null || { echo "SKIP cannot write security.selinux here"; exit 77; }
 mkfix() { # $1 = dir, $2 = 1 to label
   mkdir -p "$1/etc" "$1/usr/bin" "$1/proc" "$1/sys" "$1/dev" "$1/run"
   echo s > "$1/etc/shadow"; echo i > "$1/usr/bin/init"; echo f > "$1/etc/fstab"
@@ -676,13 +676,18 @@ out="$(g run-nox good.sqfs)" && echo "FAIL a gate that unpacks without -X PASSED
 rm -f "${RBIN}/rdsquashfs"
 out="$(g run good.sqfs)" && echo "FAIL gate PASSED with neither unsquashfs nor rdsquashfs" \
   || case "${out}" in *"neither unsquashfs nor rdsquashfs"*) echo "PASS gate refuses when neither unpacker is on the host, and says so";; *) echo "FAIL no-unpacker refusal with the wrong message: ${out}";; esac
-umount "${W}" 2>/dev/null || true
+cd / && umount "${W}" 2>/dev/null || true
 CASES
 if ! command -v rdsquashfs >/dev/null || ! command -v tar2sqfs >/dev/null || ! command -v setfattr >/dev/null || ! command -v getfattr >/dev/null; then
   note "rdsquashfs/tar2sqfs/setfattr/getfattr not all on this host — skipping the executed rdsquashfs label-gate cases"
 else
-  if [ "$(id -u)" = 0 ]; then llg_out="$(bash "${TMPD}/llg-cases.sh" "${TMPD}" "${REPO}" 2>&1)"
-  else llg_out="$(unshare -rm bash "${TMPD}/llg-cases.sh" "${TMPD}" "${REPO}" 2>&1)" || llg_out="SKIP no user namespace: ${llg_out}"; fi
+  # A private mount namespace either way, so the case script's tmpfs never outlives it.
+  if [ "$(id -u)" = 0 ]; then ns=(unshare -m); else ns=(unshare -rm); fi
+  llg_rc=0; llg_out="$("${ns[@]}" bash "${TMPD}/llg-cases.sh" "${TMPD}" "${REPO}" 2>&1)" || llg_rc=$?
+  case "${llg_rc}" in
+    0|77) ;;
+    *) grep -qE '^(PASS|FAIL) ' <<<"${llg_out}" || llg_out="SKIP no private mount namespace here (${ns[*]} rc=${llg_rc}): ${llg_out}" ;;
+  esac
   while IFS= read -r l; do
     case "${l}" in PASS\ *) ok "${l#PASS }" ;; FAIL\ *) bad "${l#FAIL }" ;; SKIP\ *) note "executed label-gate cases skipped: ${l#SKIP }" ;; esac
   done <<<"${llg_out}"
