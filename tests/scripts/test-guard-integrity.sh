@@ -1214,7 +1214,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # docker job (it starts the pinned headscale). PREMERGE_UNGATED is untouched. MEASURED
 # with GUARD_PREMERGE=0 on the branch merged with origin/main 96e0f6df: 248 of 291.
 # Mesh control over Tor (#1086) replayed onto main + #1091: MEASURED with GUARD_PREMERGE=0 on that tree: 265 of 308.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-265}"
+# Integration batch5-20261113: MEASURED with GUARD_PREMERGE=0 on the combined tree: 266 of 309.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-266}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
