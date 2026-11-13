@@ -238,7 +238,9 @@ SAMPLES = {
     "tailscale_version": [{"tailscale_version": "1.60"}],
     "skip_tailscale": [{"skip_tailscale": True}],
     "headscale_public_derp": [{"headscale_public_derp": True}],
-    "mesh_control_transport": [{"mesh_control_transport": "lan+onion"}],
+    # mesh only, like superdomain: a value left from a mesh walk never reaches a
+    # cloud or standalone image.
+    "mesh_control_transport": [{"mode": "mesh", "mesh_control_transport": "lan+onion"}],
     "gpu_driver": [{"gpu_driver": "nvidia"}], "nvidia_cuda": [{"nvidia_cuda": True}],
     "kernel_builtin": [{"kernel_builtin": True}],
     "enable_wifi": [{"enable_wifi": True}], "enable_bluetooth": [{"enable_bluetooth": True}],

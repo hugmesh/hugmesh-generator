@@ -145,15 +145,17 @@ def is_minted(out_dir: str) -> bool:
 def mint_problem(out_dir: str, *, osname: str | None = None, environ=None) -> str:
     """Why the control onion cannot be minted for this run on this computer ("" = it
     can, or it already is). The mint needs tor here (or MESH_CONTROL_TOR_IMAGE and
-    docker): the builder image carries no tor, and on Windows the bash mint cannot run
-    at all. Checked BEFORE any image is built."""
+    docker): the builder image carries no tor. On Windows the bash mint cannot run at
+    all, and every run writes into a new session folder, so there is no folder to
+    prepare by hand either: a Tor transport is refused there outright. Checked BEFORE
+    any image is built."""
+    if (osname or os.name) == "nt":
+        return ("Tor: the Studio on Windows cannot create the control onion (it needs "
+                "tor and bash on this computer). Build a Tor mesh from Linux or macOS, "
+                "or choose 'Local network only' here.")
     if is_minted(out_dir):
         return ""
     where = onion_dir(out_dir)
-    if (osname or os.name) == "nt":
-        return ("Tor: the control onion cannot be created on Windows. Create it on a "
-                f"Linux or macOS computer with tor ({MINT_SCRIPT} <folder>) and copy "
-                f"that folder to {where}, then build again.")
     if _which("tor"):
         return ""
     env = os.environ if environ is None else environ

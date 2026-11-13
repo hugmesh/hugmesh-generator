@@ -135,8 +135,9 @@ carry only the public address in `provision.json .mesh.control_onion`. The rules
   instead (`MESH_CONTROL_TOR_IMAGE`). The builder image carries no tor, so the mint
   always runs on the build host, before any image is built: `build-all-roles.sh` and
   the Makefile's docker leg run it first, and the Studio checks that it can before a
-  run starts. The Studio on Windows cannot mint: create the folder on a Linux or macOS
-  computer and copy it into the session's `mesh-control-onion` folder. The run
+  run starts. The Studio on Windows refuses a Tor transport: it cannot run the mint,
+  and every run writes into a new session folder. Build a Tor mesh from Linux or
+  macOS. The run
   waits for all three key files, then stops tor and judges the result by the files,
   never by tor's exit status: a stop that lands before tor installs its signal
   handlers exits 143, and that used to end the script with no message.

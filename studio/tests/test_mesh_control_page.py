@@ -161,13 +161,15 @@ def test_mint_problem_needs_tor_here_or_a_tor_image(tmp_path, monkeypatch):
 
 def test_mint_problem_on_windows_and_an_already_minted_dir(tmp_path, monkeypatch):
     out = str(tmp_path)
-    assert "cannot be created on Windows" in mesh_control.mint_problem(out, osname="nt")
+    assert "on Windows cannot create the control onion" in mesh_control.mint_problem(out, osname="nt")
     _no_tor(monkeypatch)
     (tmp_path / "mesh-control-onion").mkdir()
     (tmp_path / "mesh-control-onion" / "hostname").write_text("x.onion\n")
     assert mesh_control.is_minted(out)
-    assert mesh_control.mint_problem(out, osname="nt") == ""
     assert mesh_control.mint_problem(out, osname="posix", environ={}) == ""
+    # Windows refuses even a minted folder: each run writes into a new session folder,
+    # so the folder the preflight saw is not the one the keys step would use.
+    assert "on Windows" in mesh_control.mint_problem(out, osname="nt")
 
 
 def test_preflight_refuses_a_mint_this_computer_cannot_do(tmp_path, monkeypatch):

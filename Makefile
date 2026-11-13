@@ -923,7 +923,9 @@ ifeq ($(MESH_CONTROL_HOST_MINT),:)
 	$(DOCKER_RUN) make rebuild NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
 else
 # Mesh control over Tor: wipe first, THEN mint on this computer (a mint before the
-# wipe would be wiped with it), then build the whole fleet from scratch.
+# wipe would be wiped with it), then build the whole fleet from scratch. WORK_DIR is
+# made here first: a bind source docker creates is root's, and the mint runs as you.
+	mkdir -p "$(WORK_DIR)"
 	$(DOCKER_RUN) make clean NATIVE=1 WORK_DIR=/out
 	$(MESH_CONTROL_HOST_MINT)
 	$(DOCKER_RUN) make build-all NATIVE=1 WORK_DIR=/out RESUME= IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)

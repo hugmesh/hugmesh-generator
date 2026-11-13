@@ -46,7 +46,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SELF="${REPO}/tests/scripts/test-mesh-control-onion.sh"
 ROOT="${MCO_GUARD_ROOT:-${REPO}}"
 . "${REPO}/tests/lib/guard-preflight.sh"
-guard_require_tools python3 jq awk sed openssl ssh-keygen od cmp
+guard_require_tools python3 jq awk sed openssl ssh-keygen od cmp make
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
@@ -653,6 +653,10 @@ if command -v make >/dev/null 2>&1 && [ -f "${ROOT}/Makefile" ]; then
     mk() { make -s -n -C "${ROOT}" "$@" WORK_DIR=/w/out 2>/dev/null | grep -a -E '^(docker run|bash ./scripts/mint-control-onion.sh)' | awk '{print $1}' | paste -sd' '; }
     expect "make build-all, Tor + mint: the host mints, then the container builds" "bash docker" "$(mk build-all MESH_CONTROL_TRANSPORT=onion MESH_CONTROL_ONION_MINT=1)"
     expect "make rebuild, Tor + mint: wipe, mint on the host, then build" "docker bash docker" "$(mk rebuild MESH_CONTROL_TRANSPORT=lan+onion MESH_CONTROL_ONION_MINT=1)"
+    make -s -n -C "${ROOT}" rebuild MESH_CONTROL_TRANSPORT=onion MESH_CONTROL_ONION_MINT=1 WORK_DIR=/w/out 2>/dev/null \
+        | grep -a -E '^(mkdir -p "/w/out"|docker run)' | head -1 | grep -a -q '^mkdir' \
+        && ok "make rebuild, Tor: the work dir is made as you before docker can create it as root" \
+        || bad "make rebuild, Tor: docker runs before the work dir exists (a root-owned dir the host mint cannot write)"
     expect "make build-all on lan: no mint" "docker" "$(mk build-all)"
     make -s -n -C "${ROOT}" build-all MESH_CONTROL_TRANSPORT=onion MESH_CONTROL_ONION_MINT=1 WORK_DIR=/w/out 2>/dev/null \
         | grep -a -x -F 'bash ./scripts/mint-control-onion.sh "/w/out/mesh-control-onion"' >/dev/null \
