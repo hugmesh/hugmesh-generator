@@ -553,6 +553,8 @@ PY
         echo "         so workers find it on the LAN before go-live." >&2
         unset _tmpl_pki
     fi
+fi
+
 # ── headscale DERP: public Tailscale map opt-in -> provision.json ──────────────
 # Only an opt-in is stamped (see HEADSCALE_PUBLIC_DERP above): an absent key lets a
 # builder-baked /etc/hugmesh/headscale-public-derp marker decide at first boot.

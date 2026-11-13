@@ -361,7 +361,25 @@ def guard_elevation(cmd: list[str]) -> None:
     raise ElevationRefused(
         f"refusing to spawn {prog} ({why}): this process must not elevate, and an "
         f"unanswerable password prompt would leave a root-owned launcher hung forever "
-        f"(command starts: {shlex.join(cmd[:4])} ...)")
+        f"(command starts: {shlex.join(_preview_tokens(cmd))} ...)")
+
+
+def _preview_tokens(cmd: list[str], n: int = 4) -> list[str]:
+    """The leading ``n`` tokens of ``cmd`` for a message, with an ``env NAME=VALUE ...``
+    prefix after the elevation program left out: the values may be secrets, and the
+    prefix would otherwise push the program that would run out of the preview."""
+    out: list[str] = []
+    i = 0
+    while i < len(cmd) and len(out) < n:
+        tok = cmd[i]
+        if tok == "env" and out and os.path.basename(out[0]) in ELEVATION_PROGRAMS:
+            i += 1
+            while i < len(cmd) and "=" in cmd[i] and not cmd[i].startswith("-"):
+                i += 1
+            continue
+        out.append(tok)
+        i += 1
+    return out
 
 
 def _operator_askpass() -> str | None:
