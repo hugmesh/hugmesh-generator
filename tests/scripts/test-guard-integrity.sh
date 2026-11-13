@@ -1192,7 +1192,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # named by shell-suites.yml (alpine) and the .gitlab-ci.yml desktop job. PREMERGE_UNGATED
 # untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main 99afee80: 254 of 296.
 # Integration batch3-20261112: MEASURED with GUARD_PREMERGE=0 on the combined tree: 254 of 296.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-254}"
+# 254 -> 262 on 2026-11-12 (fix/x86-selinux-xserver-policy-skew-20261112, over origin/main 111f0f82):
+# main itself measured 261 of 303 (the merges of the day wired suites without moving the
+# floor); this branch adds tests/scripts/test-sec-policy-keyword-coherence.sh, named by
+# shell-suites.yml's debian leg. PREMERGE_UNGATED untouched. MEASURED with GUARD_PREMERGE=0
+# on the branch: 262 of 304.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-262}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
