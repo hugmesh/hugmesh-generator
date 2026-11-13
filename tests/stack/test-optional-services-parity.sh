@@ -298,12 +298,11 @@ diff -q "$(appset_of "${_a}")" "$(appset_of "${_x}")" >/dev/null 2>&1 \
 # ═════════════════════════════════════════════════════════════════════════════
 echo "-- D2: anubis ENV policy + explicit deselect (both builders) --"
 # case = "<label>|<ENV>|<OPTIONAL_SERVICES>|<expected flag>|<expected ingress>"
-ANUBIS_CASES="prod-default|prod|tuwunel phpbb|true|anubis
-test-default|test|tuwunel phpbb|false|direct
-prod-deselected|prod|tuwunel phpbb -anubis|false|direct
-prod-deselected-no|prod|tuwunel phpbb no-anubis|false|direct
-test-selected|test|tuwunel phpbb anubis|true|anubis
-prod-with-akkoma|prod|akkoma tuwunel phpbb|true|anubis"
+ANUBIS_CASES="prod-default|prod|akkoma tuwunel phpbb|true|anubis
+test-default|test|akkoma tuwunel phpbb|false|direct
+prod-deselected|prod|akkoma tuwunel phpbb -anubis|false|direct
+prod-deselected-no|prod|akkoma tuwunel phpbb no-anubis|false|direct
+test-selected|test|akkoma tuwunel phpbb anubis|true|anubis"
 while IFS='|' read -r label env sel want_flag want_ing; do
     [ -n "${label}" ] || continue
     for b in ${BUILDERS}; do
@@ -478,13 +477,12 @@ fi
 #    failure. This is what would have caught D1/D2/D3 on the day they landed.
 # ═════════════════════════════════════════════════════════════════════════════
 echo "-- whole-tree parity across a spread of selections --"
-SWEEP="default|tuwunel phpbb||test
-default-prod|tuwunel phpbb||prod
-with-akkoma|akkoma tuwunel phpbb||prod
+SWEEP="default|akkoma tuwunel phpbb||test
+default-prod|akkoma tuwunel phpbb||prod
 all-user|akkoma tuwunel phpbb games owncast tube character-studio character-forge||prod
 exclude-two|akkoma tuwunel phpbb games owncast tube|phpbb tuwunel|prod
 none|||prod
-anubis-off-prod|tuwunel phpbb -anubis||prod
+anubis-off-prod|akkoma tuwunel phpbb -anubis||prod
 edge-ai-full|akkoma edge-ai edge-ai-analysis edge-ai-tts||prod"
 while IFS='|' read -r label sel excl env; do
     [ -n "${label}" ] || continue

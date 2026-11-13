@@ -38,15 +38,21 @@ data:
     # set for uploads" (Pleroma.Config.DeprecationWarnings.check_uploader_base_url_set)
     # and exits, so the pod crash-loops. images/akkoma/smoke-test.sh boots THIS
     # ConfigMap, extracted from this file, against Postgres to keep it that way.
-    # SAME host as the endpoint, on purpose for now: the be-gateway's mastodon-web
-    # route already sends every path on this host (so /media/**) to Akkoma, and
-    # cloudflared, DNS and the cert already cover it; rebrand_sysroot rewrites this
-    # literal with the rest of the domain. Upstream advises a SEPARATE media host
-    # (user uploads on the instance's origin are an XSS risk) and logs an
-    # error-level "Your Akkoma Host and your Upload base_url's host are the same!"
-    # at boot, but it only logs: it does not refuse to start. A media.<domain> host
-    # needs its own DNS name, certificate, cloudflared rule and gateway route; that
-    # is a follow-up (images/akkoma/README.md, "Pinning").
+    # SAME host as the endpoint, by decision (2026-11-12): the cluster has no media
+    # host. The be-gateway's mastodon-web route already sends every path on this host
+    # (so /media/**) to Akkoma, route-access gates /media/** to ROLE_MASTODON/MOD/ADMIN,
+    # and cloudflared, DNS and the cert already cover it. A media.<domain> name would
+    # today fall into cloudflared's *.<domain> vanity-profile wildcard.
+    # THE TRADE-OFF: upstream advises a separate media host, because a user upload
+    # served from the instance's own origin is an XSS risk, and logs an error-level
+    # "Your Akkoma Host and your Upload base_url's host are the same!" at boot (it
+    # only logs). Measured on the published image with this ConfigMap: an uploaded
+    # .html is served as application/octet-stream and an uploaded .svg as
+    # image/svg+xml, both with "content-security-policy: sandbox" and
+    # "x-content-type-options: nosniff". The sandbox gives the document an opaque
+    # origin, so a script in it cannot read this origin's cookies or storage. What is
+    # left is a browser or client that ignores the CSP; a separate media host would
+    # stop that too. images/akkoma/README.md, "Media host".
     config :pleroma, Pleroma.Upload, base_url: "https://mastodon.hugmesh.net/media/"
     # --- DOMAIN-LOCK MRF (homeserver.domainlock.enabled) — GATED / SHIPS DARK ---
     # The custom ForceLocalForUsers MRF (images/akkoma/mrf/, compiled into
@@ -55,16 +61,18 @@ data:
     # delivery to LOCAL inboxes only (ALL visibilities + boosts/replies/
     # profile-Update/Follow), not just rewriting as:Public.
     #
-    # SHIPS DARK: the MRF is NOT enabled below by default. The module is compiled
-    # into the image but does nothing until it is listed under :mrf policies, and
-    # it is still a skeleton (see its header). To turn domain-lock ON
-    # (homeserver.domainlock.enabled):
-    #   1. pin a PUBLISHED hugmesh-akkoma digest in this file and in
-    #      domainlock-sync-job.yaml (images/akkoma/README.md, "Pinning"),
-    #   2. add the policy to the :mrf policies list and the empty default set below,
-    #   3. wire domainlock-sync-job.yaml into the akkoma kustomization so the
+    # SHIPS DARK, AND ENFORCES NOTHING: the module is compiled into the published
+    # image (Code.ensure_loaded? is true) but is not listed under :mrf policies, so
+    # Akkoma never calls it (the running policy list is upstream's defaults only).
+    # It is still a skeleton (see its header), and listing it today would still
+    # enforce nothing: the module reads config key [:mrf_force_local, :forced_actors]
+    # as a MapSet, the commented block below writes another key, and
+    # domainlock-sync-job.yaml's `pleroma_ctl config set` is not a pleroma_ctl task in
+    # 3.20.1 (it exits non-zero). images/akkoma/README.md, "The MRF". To turn
+    # domain-lock ON (homeserver.domainlock.enabled), after that is fixed:
+    #   1. add the policy to the :mrf policies list and the empty default set below,
+    #   2. wire domainlock-sync-job.yaml into the akkoma kustomization so the
     #      force-local set is materialized from ROLE_MASTODON_DOMAINLOCKED.
-    # Even once enabled, an EMPTY forced_actors set is a no-op for every actor.
     #
     # config :pleroma, :mrf,
     #   policies: [Pleroma.Web.ActivityPub.MRF.ForceLocalForUsersPolicy]
@@ -227,14 +235,14 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
         - name: migrate
-          image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:0000000000000000000000000000000000000000000000000000000000000000   # PLACEHOLDER digest: hugmesh-akkoma is not published yet (images/akkoma/README.md, "Pinning")
+          image: ghcr.io/hugmesh/hugmesh-akkoma:0.4.0-beta.1@sha256:ad4d894e603cac04df6381d7036c587668bd582c37548aace28d89d6392f9bbf
           command: ["/opt/akkoma/bin/pleroma_ctl", "migrate"]
           envFrom: [{ secretRef: { name: akkoma-secrets } }]
           securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
           volumeMounts: [{ name: config, mountPath: /etc/akkoma }]
       containers:
         - name: akkoma
-          image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:0000000000000000000000000000000000000000000000000000000000000000   # PLACEHOLDER digest: hugmesh-akkoma is not published yet (images/akkoma/README.md, "Pinning")
+          image: ghcr.io/hugmesh/hugmesh-akkoma:0.4.0-beta.1@sha256:ad4d894e603cac04df6381d7036c587668bd582c37548aace28d89d6392f9bbf
           # akkoma-smtp is OPTIONAL (optional: true): when ESO has not materialized
           # it (no SMTP creds) the env stay unset, AKKOMA_SMTP_RELAY is "" and the
           # Pleroma.Mailer is disabled. When present it injects the AKKOMA_SMTP_*

@@ -6,7 +6,8 @@ resources:
   # DOMAIN-LOCK (homeserver.domainlock.enabled) — SHIPS DARK, NOT wired by default.
   # domainlock-sync-job.yaml materializes ROLE_MASTODON_DOMAINLOCKED -> the
   # ForceLocalForUsers MRF force-local set. hugmesh-akkoma (images/akkoma/) compiles
-  # the module in; it also needs the :mrf policies block enabled in akkoma.yaml and a
-  # PUBLISHED image digest pinned (images/akkoma/README.md, "Pinning"). Uncomment the
+  # the module in; it also needs the :mrf policies block enabled in akkoma.yaml, and
+  # the module, this Job and that block to agree on one config key and a write path
+  # that exists (they do not yet: images/akkoma/README.md, "The MRF"). Uncomment the
   # line below ONLY after both. See docs/DOMAIN-LOCK.md.
   # - domainlock-sync-job.yaml

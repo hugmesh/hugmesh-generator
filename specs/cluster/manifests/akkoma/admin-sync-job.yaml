@@ -111,7 +111,7 @@ spec:
         # akkoma pod serves. The image already ships pleroma_ctl + reads the same
         # config volume; the python sync script is layered in read-only.
         - name: sync
-          image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:0000000000000000000000000000000000000000000000000000000000000000   # PLACEHOLDER digest: hugmesh-akkoma is not published yet (images/akkoma/README.md, "Pinning")
+          image: ghcr.io/hugmesh/hugmesh-akkoma:0.4.0-beta.1@sha256:ad4d894e603cac04df6381d7036c587668bd582c37548aace28d89d6392f9bbf
           command: ["python3", "/script/sync.py"]
           env:
             - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
