@@ -141,7 +141,8 @@ class IssueTokenDialog(QtWidgets.QDialog):
         self.domain = QtWidgets.QLineEdit(domain)
         self.domain.setPlaceholderText("example.org")
         self.domain.setToolTip("The access domain the token grants. The login server must "
-                               "be this domain or a name under it.")
+                               "be this domain or a name under it, or a Tor v3 onion "
+                               "(an onion is outside DNS; the signature binds it).")
         form.addRow("Access domain", self.domain)
         self.role = QtWidgets.QComboBox()
         self.role.addItems(list(mt.ROLES))

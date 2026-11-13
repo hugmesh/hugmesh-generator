@@ -45,6 +45,8 @@ def _check(login_server, domain="example.org"):
 @pytest.mark.parametrize("url", [
     f"http://{ONION}", f"https://{ONION}", f"http://{ONION}/", f"https://{ONION}/",
     f"http://{ONION}:8080", f"https://{ONION2}:443/", f"http://{ONION.upper()}",
+    # Tor ignores names in front of the address; the service sees them as its Host
+    f"https://hs.{ONION}", f"https://a.b.{ONION}:8443",
 ])
 def test_a_v3_onion_is_a_login_server_in_any_access_domain(url):
     assert mt.login_server_problem(url, "example.org") == ""
@@ -62,8 +64,10 @@ def test_a_v3_onion_is_a_login_server_in_any_access_domain(url):
     (f"http://{ONION[:-7]}1.onion", "outside the onion alphabet"),
     # one character mistyped: same length, same alphabet, fails the checksum
     (f"http://e{ONION[1:]}", "checksum does not match"),
-    # a name in front of the address
-    (f"http://hs.{ONION}", "name in front of the onion address"),
+    # a name in front of the address that is not a DNS label
+    (f"http://-hs.{ONION}", "name in front of the onion address"),
+    # a name in front of a mistyped address
+    (f"http://hs.e{ONION[1:]}", "checksum does not match"),
 ])
 def test_a_malformed_onion_is_refused_with_its_own_reason(url, needle):
     why = mt.login_server_problem(url, "example.org")
@@ -109,8 +113,9 @@ def test_the_hint_is_the_reason_else_the_onion_note_else_nothing():
     assert "outside" in mt.login_server_hint("https://hs.example.org", "other.org")
 
 
-def test_the_example_onion_is_one_the_rule_accepts():
+def test_the_example_onion_is_one_the_rule_accepts_and_names_no_real_service():
     assert mt.is_onion_login(mt.ONION_EXAMPLE)
+    assert ONION not in mt.ONION_EXAMPLE and ONION2 not in mt.ONION_EXAMPLE
 
 
 # ── the issued token carries the onion, and the tray acts on it ───────────────────
@@ -186,12 +191,15 @@ def test_the_cli_issues_an_onion_token_and_says_what_it_needs(issuer, tmp_path, 
     assert mt.ONION_NOTE in err
 
 
-def test_the_cli_refuses_a_v2_onion_before_anything_is_created(tmp_path, monkeypatch):
-    monkeypatch.setattr(mt, "ensure_issuer", lambda *a, **k: pytest.fail("created"))
+def test_the_cli_refuses_a_v2_onion_before_anything_is_created(tmp_path, monkeypatch,
+                                                               capsys):
+    created = []
+    monkeypatch.setattr(mt, "ensure_issuer", lambda *a, **k: created.append(a))
     keyfile = tmp_path / "key.txt"
     keyfile.write_text("hskey-not-real\n")
-    with pytest.raises(mt.TokenError, match="v2 onion"):
-        mt._cli_issue(type("A", (), dict(
-            mesh="west", domain="example.org", role="user", shell=False,
-            login_server="http://expyuzz4wqqyqhjn.onion", expires=3600, node_name="",
-            key="", mint=False, authkey_file=str(keyfile)))())
+    rc = mt.main(["issue", "--mesh", "west", "--domain", "example.org", "--role", "user",
+                  "--login-server", "http://expyuzz4wqqyqhjn.onion",
+                  "--authkey-file", str(keyfile), "--expires", "1h"])
+    out, err = capsys.readouterr()
+    assert rc != 0 and created == [] and out == ""
+    assert "v2 onion address" in err and "Traceback" not in err

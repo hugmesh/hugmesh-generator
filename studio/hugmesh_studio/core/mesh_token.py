@@ -25,7 +25,10 @@ WHAT THE TRAY ENFORCES with a verified token (:class:`GrantedMeshNode`):
   ambient ``TS_AUTHKEY``;
 * ACCESS DOMAIN: the node joins ONLY the control plane inside the token's domain
   (the login server's host must be the domain or a name under it, checked at
-  issue AND at verify), and its tailnet hostname carries the domain's first label;
+  issue AND at verify), and its tailnet hostname carries the domain's first label.
+  The one exception is a Tor v3 onion login server (:func:`login_server_problem`):
+  an onion has no place in DNS, so it cannot sit under the domain, and the issuer's
+  signature over it is what binds it to the token;
 * ROLE: only :data:`SHELL_ROLES` can hold shell access — the issuer refuses to sign
   shell for any other role and the verifier refuses a token that claims it;
 * SHELL ACCESS: the node's Tailscale SSH server is switched on (``--ssh``) only when
@@ -385,8 +388,9 @@ def _issuer_key(issuer: str) -> str:
 LOGIN_SERVER_FORMS = ("https://host[:port] inside the access domain, or a Tor v3 onion "
                       "http(s)://<56 characters>.onion[:port]")
 
-#: A v3 onion for examples — a well-known public one (it passes the checksum).
-ONION_EXAMPLE = "http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
+#: A v3 onion for examples: made from a fixed made-up key (sha256 of "hugmesh example
+#: onion login server"), so it passes the checksum but names no one's service.
+ONION_EXAMPLE = "http://jhbnhua6kdvln3elglvmwjddbhqeobiunswe4xzu5xij2dlb2fwx6fad.onion"
 
 #: Said next to an onion login server, by the CLI, the window and the text interface:
 #: what the token cannot do on its own.
@@ -395,6 +399,7 @@ ONION_NOTE = ("An onion login server is reached over Tor: the joining computer's
               "one up), and headscale must be published on that onion. The local Docker "
               "mesh's own .onion serves its web front door, not headscale.")
 
+_DNS_LABEL_RE = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 _LOGIN_RE = re.compile(r"(https?)://([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?/?")
 _ONION_ALPHABET = frozenset("abcdefghijklmnopqrstuvwxyz234567")
 
@@ -407,8 +412,13 @@ def onion_problem(host: str) -> str:
     other service."""
     name = host.lower()[:-len(".onion")]
     if "." in name:
-        return (f"{host} has a name in front of the onion address; use the bare "
-                f"{name.rsplit('.', 1)[-1] or '<address>'}.onion.")
+        # Names in front of the address (hs.<address>.onion) reach the same service:
+        # Tor ignores them, and the service sees them in its Host header (which is how
+        # the local mesh's front door picks headscale by its hs. name). Each must be a
+        # DNS label; the address itself is the last one.
+        front, _, name = name.rpartition(".")
+        if not all(_DNS_LABEL_RE.fullmatch(p) for p in front.split(".")):
+            return f"{host} has a name in front of the onion address that is not usable."
     bad = sorted(set(name) - _ONION_ALPHABET)
     if len(name) == 16 and not bad:
         return (f"{host} is a v2 onion address. Tor retired v2 onions in 2021; use the "
@@ -448,8 +458,9 @@ def login_server_problem(url: str, domain: str | None) -> str:
       encrypts and authenticates the connection to the onion's own key, so ``http``
       is as private there as https is on the clear web; and an onion has no place in
       DNS, so it cannot sit "under" an access domain — the issuer's signature binds
-      it to the token instead. A v2 address, a wrong length or alphabet, a mistyped
-      character (the v3 checksum) or a name in front of the address is refused.
+      it to the token instead. Names in front of the address (``hs.<onion>.onion``)
+      are allowed, as Tor allows them. A v2 address, a wrong length or alphabet or a
+      mistyped character (the v3 checksum) is refused.
 
     Nothing else — no path, query or whitespace: the URL lands in ``TS_EXTRA_ARGS``,
     which the tailscale container word-splits, so whitespace (or a path carrying it)

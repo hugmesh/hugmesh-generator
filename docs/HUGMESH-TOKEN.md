@@ -47,9 +47,10 @@ No other fields are allowed.
 A `login_server` may be a Tor v3 onion address. It is checked as one: exactly 56
 characters of the onion alphabet (`a-z`, `2-7`) before `.onion`, with the v3 version byte
 and checksum (Tor rend-spec-v3, "Encoding onion addresses"), so a mistyped character is
-refused instead of naming another service. A v2 (16-character) address, a name in front
-of the address (`hs.<onion>.onion`) and anything after the port are refused, each with
-its own sentence. `http://` is accepted for an onion only: Tor encrypts and authenticates
+refused instead of naming another service. A v2 (16-character) address and anything
+after the port are refused, each with its own sentence. Names in front of the address
+(`hs.<onion>.onion`) are accepted, as Tor accepts them: they reach the same service and
+arrive in its `Host` header. `http://` is accepted for an onion only: Tor encrypts and authenticates
 the connection to the onion's key. An onion has no place in DNS, so the
 "inside the access domain" rule does not apply to it; the issuer's signature is what
 binds it to the token.
