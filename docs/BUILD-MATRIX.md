@@ -544,6 +544,49 @@ orchestrator, not a dry run, so the `matrix.tsv`/`check.sh` harness above does n
 verify it. A new platform lands here in the *same* change as its
 `matrix.tsv`/`check.sh` wiring, not afterwards.
 
+## SELinux by architecture
+
+Every image carries the hardened SELinux profile except riscv64. Gentoo ships no
+hardened or SELinux profile for riscv, so riscv64 images ship labelled
+**no SELinux** (operator decision, 2026-11-12, hugmesh-generator#1059). The riscv64
+builder uses the plain `rv64/lp64d` profile. It does not assemble a
+`features/selinux` stack.
+
+<!-- selinux-by-arch:begin -->
+| Architecture | SELinux | Portage profile |
+|---|---|---|
+| x86-64 | yes | `default/linux/amd64/23.0/hardened/selinux` |
+| arm64 | yes | `default/linux/arm64/23.0/hardened/selinux` |
+| armv7 | yes | no builder |
+| riscv64 | no SELinux | `default/linux/riscv/23.0/rv64/lp64d` (builder not yet written: hugmesh-generator#1063) |
+<!-- selinux-by-arch:end -->
+
+Each surface says the same thing, from one of two sources:
+
+- **The device catalog.** Each arch row in `studio/hugmesh_studio/core/device-catalog.json`
+  has a `selinux` flag, and the riscv64 label reads "RISC-V 64 (no SELinux; no builder
+  yet)". The Studio's architecture buttons and `docs/catalog/image-catalog.json`
+  (`archs[].selinux`) both show it. So will the text UI's device browser and
+  `--list-devices`, which print the arch label.
+- **`scripts/_selinux-posture-lib.sh`.** Every builder's summary prints an `SELinux:`
+  line from the profile the build actually selected. It reads `no SELinux — …` for
+  riscv64, and it says `MISSING` or `WRONG` when the profile and the architecture
+  disagree. `publish-manifest.json` records `"selinux": true|false` for each image.
+
+`tests/scripts/test-riscv64-no-selinux.sh` fails in two cases:
+
+- something riscv64 claims SELinux: the catalog flag, a `specs-riscv64*` profile, a
+  riscv64 builder's summary, or this table;
+- an image of another architecture loses SELinux: a catalog flag, any other
+  `specs-*/portage/profile/parent`, or a builder that does not print the line.
+
+**What enforcing would need.** No riscv profile exists to build on. A
+project-assembled stack of `rv64/lp64d` + `features/hardened` + `features/selinux`
+would have to reach enforcing at boot under `qemu-system-riscv64 -M virt`. That run
+has not been made. Its result belongs on hugmesh-generator#1059, together with
+whether a Firefox source build completes for riscv64. Until then, riscv64 stays
+"no SELinux".
+
 ## Related
 
 - Channel parity per feature area: [`docs/STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md),

@@ -2,10 +2,10 @@
   "schema": "device-catalog/v1",
   "_comment": "Device catalog — the arch -> family -> device taxonomy the Studio, the web catalog and the docs render. Deliberately stores NO role lists: device_catalog.roles_for() derives them at runtime from config.py's ROLE_CHOICES + rpi_boards_for_role(), so a role can only ever be one the builders really accept (role_allow may only NARROW). status honesty: supported = real recipe + verified role axis; experimental = an existing builder plausibly covers the board, labelled + fail-loud; unsupported = visible but NOT selectable, reason shown. Guarded by studio/tests/test_device_catalog.py in three directions (catalog<->config.py<->builder allowlists).",
   "archs": [
-    {"id": "x86-64", "label": "x86-64 (Intel/AMD PCs)"},
-    {"id": "arm64", "label": "ARM64 (single-board / edge devices)"},
-    {"id": "armv7", "label": "ARMv7 (32-bit — no aarch64 toolchain fit)"},
-    {"id": "riscv64", "label": "RISC-V 64 (no builder / no toolchain)"}
+    {"id": "x86-64", "label": "x86-64 (Intel/AMD PCs)", "selinux": true},
+    {"id": "arm64", "label": "ARM64 (single-board / edge devices)", "selinux": true},
+    {"id": "armv7", "label": "ARMv7 (32-bit — no aarch64 toolchain fit)", "selinux": true},
+    {"id": "riscv64", "label": "RISC-V 64 (no SELinux; no builder yet)", "selinux": false}
   ],
   "families": [
     {"id": "x86-pcs", "label": "x86 PCs", "vendor": "various (Intel/AMD UEFI)", "arch": "x86-64"},

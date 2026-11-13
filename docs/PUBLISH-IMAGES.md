@@ -59,7 +59,9 @@ IMAGE <role>.<platform> FILE <path> BYTES <n> SHA256 <hex>
 
 `publish-manifest.json` carries `schema` (`hugmesh.net/publish-images/v1`), the
 `session.id`, `producedAt`, and one entry per file with `id`, `role`,
-`platform`, `flavor`, `bytes`, `sha256` and `builtAt`. It is self-checked for
+`platform`, `flavor`, `kind`, `selinux`, `file`, `bytes`, `sha256` and
+`builtAt`. `selinux` is `false` only for riscv64 images, which ship without
+SELinux ([the build matrix](BUILD-MATRIX.md#selinux-by-architecture)). It is self-checked for
 well-formedness before the tree is moved into place (a malformed manifest is a
 refusal, as in `provenance.sh`).
 

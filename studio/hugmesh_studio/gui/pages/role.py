@@ -684,8 +684,13 @@ class RolePage(QtWidgets.QWizardPage):
         # clear the selection outright (the item-changed handler disarms the role list
         # and Next) and say so honestly instead of a silent dead screen.
         self.device_tree.setCurrentItem(None)
-        self.note.setText("No buildable device on this architecture yet — each row's "
-                          "status column says why.")
+        note = ("No buildable device on this architecture yet — each row's "
+                "status column says why.")
+        if not device_catalog.arch_has_selinux(arch):
+            # riscv64 ships "no SELinux" (#1059): say it where the arch is chosen.
+            note += (f" Images for this architecture ship with "
+                     f"{device_catalog.NO_SELINUX}: {device_catalog.NO_SELINUX_WHY}.")
+        self.note.setText(note)
 
     def _selected_device(self) -> str | None:
         it = self.device_tree.currentItem()
@@ -710,8 +715,10 @@ class RolePage(QtWidgets.QWizardPage):
         self._update_boxes(dev.builder_platform)
         self._role_changed(self.roles.currentRow())
         self._apply_device_pin(dev)
-        self.note.setText(device_catalog.status_reason(did)
-                          if dev.status == "experimental" else "")
+        # the EXPERIMENTAL caveat and, on a no-SELinux arch (riscv64, #1059), that label
+        self.note.setText(" ".join(t for t in (
+            device_catalog.status_reason(did) if dev.status == "experimental" else "",
+            device_catalog.selinux_label(did)) if t))
         self.completeChanged.emit()
 
     # last role the user actually picked in the list this visit — survives a keyboard
