@@ -408,3 +408,17 @@ def test_headless_harnesses_and_docs_carry_the_no_elevation_requirement():
     readme = (repo / "studio" / "README.md").read_text(encoding="utf-8")
     i = readme.index("HUGMESH_STUDIO_NO_ELEVATION")
     assert "offscreen" in readme[max(0, i - 300):i + 600]
+
+
+def test_the_refusal_preview_skips_an_env_prefix_and_never_shows_its_values():
+    """A mesh fleet runs ``sudo -A env PKI_LAN_IP=... bash ./scripts/build-all-roles.sh``.
+    The refusal must still name the program it would have run, and an env value (which
+    may be a secret) must not reach the message."""
+    from hugmesh_studio.core import build_driver as bd
+    cmd = ["sudo", "-A", "env", "PKI_LAN_IP=192.168.1.10", "SECRET_X=hunter2",
+           "bash", "./scripts/build-all-roles.sh", "-j", "8"]
+    assert bd._preview_tokens(cmd) == ["sudo", "-A", "bash", "./scripts/build-all-roles.sh"]
+    assert bd._preview_tokens(["sudo", "-A", "kill", "-TERM", "-123"]) == \
+        ["sudo", "-A", "kill", "-TERM"]
+    # env outside an elevation program is an ordinary token
+    assert bd._preview_tokens(["env", "A=1", "bash"]) == ["env", "A=1", "bash"]

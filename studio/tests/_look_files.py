@@ -12,4 +12,5 @@ fresh interpreter it runs in. Paths are relative to tests/.
 
 LOOK_FILES = ("test_anubis_tristate_page.py", "test_localcloud_nodes.py",
               "test_pages_qemu.py", "test_pages_mesh_emulation.py",
-              "test_look_editor.py", "test_launch_save_mesh.py")
+              "test_look_editor.py", "test_launch_save_mesh.py",
+              "test_pki_lan_page.py")

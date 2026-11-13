@@ -781,10 +781,11 @@ def main(argv=None) -> int:
         if len(kc) > 1:
             print("error: give one --kernel-config* action at a time", file=sys.stderr)
             return 2
-        if not _generator_dir_or_say(args.generator_dir):
+        gen = _generator_dir(args)
+        if not _generator_dir_or_say(gen):
             return 2
         verb, target = kc[0]
-        return kernel_reconfig.cli(verb, target, args.generator_dir,
+        return kernel_reconfig.cli(verb, target, gen,
                                    config_args=args.kernel_config_args)
 
     if args.list_sessions or args.show_session or args.session_artifacts \
