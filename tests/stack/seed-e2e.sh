@@ -1024,7 +1024,19 @@ matrix_reconcile_password() { # <user>
     fi
     die "matrix user ${u}: logged in with a previous run's password, but changing it to this run's answered HTTP ${code} and this run's value still does not log in"
   done
-  die "matrix user ${u} exists on ${SYNAPSE_URL} but logs in with neither this run's E2E_PASSWORD nor any of the ${n} previous value(s) kept in E2E_PASSWORD_PREVIOUS (${E2E_CREDENTIALS_FILE}). The tuwunel volume was seeded by a run this file no longer remembers. Re-run with E2E_PASSWORD=<the value it was seeded with>, or recreate the tuwunel volume."
+  # WHO seeded it. compose labels the container with the tree it was created from
+  # (2026-11-12: a second clone had seeded the shared hugmesh-local volumes, and this
+  # message said only "recreate the volume", which had no make or Studio action, so
+  # the operator's one button was the full clean).
+  local owner_note="" here_tree wd
+  here_tree="$(cd "${HERE}/../.." && pwd -P)"
+  wd="$(docker ps -a --filter label=com.docker.compose.service=tuwunel \
+          --format '{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null | head -1 || true)"
+  wd="${wd%/}"; wd="${wd%/tests/stack}"
+  if [ -n "${wd}" ] && [ "$(readlink -m -- "${wd}" 2>/dev/null || echo "${wd}")" != "${here_tree}" ]; then
+    owner_note=" The running tuwunel container was created from ANOTHER tree, ${wd}, so it was most likely seeded with THAT tree's .e2e-credentials: seed from there, or copy its E2E_PASSWORD here (E2E_PASSWORD=<it> make stack-seed)."
+  fi
+  die "matrix user ${u} exists on ${SYNAPSE_URL} but logs in with neither this run's E2E_PASSWORD nor any of the ${n} previous value(s) kept in E2E_PASSWORD_PREVIOUS (${E2E_CREDENTIALS_FILE}). The tuwunel volume was seeded by a run this file no longer remembers.${owner_note} To reset ONLY the Matrix data (users, rooms; every other volume, image and the maven registry are kept) and re-seed: make stack-reset-volume SVC=tuwunel (the Studio: 'Reset one service's data'). Not 'Stop and clean', which drops everything."
 }
 
 matrix_room_by_alias() { # <alias-localpart> -> room_id or empty

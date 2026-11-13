@@ -67,6 +67,21 @@
 # were initialised differently, copy the right value into the file by hand. A second
 # checkout of the repo adopts from the first one's containers while they exist.
 #
+# VERIFY (2026-11-12). A key already in the file is never re-probed, and every
+# checkout has its own .env while the project, and so the volumes, is shared. A
+# second tree that created phpbb-pg/akkoma-pg/casdoor-brandb-pg locked the operator's
+# checkout out of them, and the first symptom was a service crash-looping on auth.
+# --verify checks each key against the project's existing data BEFORE compose runs:
+#   a. its Postgres container is RUNNING: the value is tried over TCP inside it
+#      (`psql -h 127.0.0.1`, which the postgres image password-checks; the value
+#      goes through stdin, never argv). That is the volume's real credential, so a
+#      rotation done with --rotate-sql passes;
+#   b. a STOPPED container: the value it was created with must equal the file's;
+#   c. no container, but a volume: a value this script GENERATED more than a minute
+#      after the volume was created cannot be what initialised it.
+# A mismatch names the key, the container or volume and the tree that created it
+# (compose labels), never a value, and points at --rotate-sql or the owning tree.
+#
 # URL- AND CONNSTRING-SAFE BY CONSTRUCTION. Casdoor reads its password inside a libpq
 # connection string (`password=... host=...`) and the BFFs inside r2dbc/JDBC configs,
 # so a value outside [A-Za-z0-9._~-] (hand-edited, or adopted) is refused.
@@ -79,6 +94,9 @@
 #        gen-stack-db-env.sh --remove      strip this script's block and keys from the
 #                                          file; delete the file if nothing else is left
 #        gen-stack-db-env.sh --rotate-sql KEY   print the rotation steps for KEY
+#        gen-stack-db-env.sh --verify      READ ONLY: refuse (exit 4) when a value in the
+#                                          file is NOT what the project's existing data
+#                                          holds (see VERIFY above); make stack-up runs it
 # Env:   STACK_DB_ENV_FILE  the file (default tests/stack/.env)
 #        STACK_DB_TABLE     the key table (default tests/stack/stack-db-passwords.tsv)
 #        STACK_DB_PROJECT   compose project (default ${COMPOSE_PROJECT_NAME:-hugmesh-local})
@@ -131,6 +149,7 @@ case "${1:-}" in
     arg="${2:-}"
     [ -n "${arg}" ] || { echo "${ME}: $1 needs a KEY" >&2; exit 2; } ;;
   --keys) mode=keys ;;
+  --verify) mode=verify ;;
   --remove) mode=remove ;;
   "") ;;
   *) echo "${ME}: unknown argument: $1" >&2; exit 2 ;;
@@ -277,6 +296,86 @@ container_value() {
   FROM_CTR="$("${DOCKER}" inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${cid}" 2>/dev/null \
     | sed -n "s/^$2=//p" | tail -1)" || FROM_CTR=""
 }
+
+# to_epoch <docker/ISO time> -> seconds since the epoch, or nothing.
+to_epoch() { date -u -d "$1" +%s 2>/dev/null || true; }
+
+# pg_auth_ok <container> <password> -> 0 the password signs in over TCP, 1 it is
+# refused, 2 the probe could not tell (no psql, not ready, ...).
+pg_auth_ok() {
+  local out
+  out="$(printf '%s\n' "$2" | "${DOCKER}" exec -i "$1" sh -c \
+    'IFS= read -r PGPASSWORD; export PGPASSWORD; exec psql -X -q -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select 1"' 2>&1)"
+  case "${out}" in
+    1) return 0 ;;
+    *"password authentication failed"*) return 1 ;;
+  esac
+  return 2
+}
+
+if [ "${mode}" = verify ]; then
+  [ -f "${ENV_FILE}" ] || exit 0
+  command -v "${DOCKER}" >/dev/null 2>&1 || exit 0
+  bad=0
+  for i in "${!K_KEY[@]}"; do
+    key="${K_KEY[$i]}"; svc="${K_SVC[$i]}"
+    val="$(read_key "${ENV_FILE}" "${key}")"
+    [ -n "${val}" ] || continue
+    cid="$("${DOCKER}" ps -a -q --filter "label=com.docker.compose.project=${PROJECT}" \
+            --filter "label=com.docker.compose.service=${svc}" 2>/dev/null)" || cid=""
+    cid="${cid%%$'\n'*}"
+    why=""
+    if [ -n "${cid}" ]; then
+      running="$("${DOCKER}" inspect -f '{{.State.Running}}' "${cid}" 2>/dev/null || echo false)"
+      if [ "${running}" = true ] && [ "${K_CENV[$i]}" = POSTGRES_PASSWORD ]; then
+        pg_auth_ok "${cid}" "${val}" && rc=0 || rc=$?
+        [ "${rc}" -ne 1 ] || why="the running ${svc} container's database refuses it"
+      else
+        container_value "${svc}" "${K_CENV[$i]}"
+        if [ -n "${FROM_CTR}" ] && [ "${FROM_CTR}" != "${val}" ]; then
+          why="the existing ${svc} container was created with a different value"
+        fi
+      fi
+      if [ -n "${why}" ]; then
+        wd="$("${DOCKER}" inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "${cid}" 2>/dev/null || true)"
+        [ -z "${wd}" ] || why="${why} (that container was created from ${wd%/tests/stack})"
+      fi
+    else
+      gen="$(origin_of "${ENV_FILE}" "${key}")"
+      case "${gen}" in
+        "generated "*)
+          g="$(to_epoch "${gen#generated }")"
+          for vol in ${K_VOLS[$i]}; do
+            c="$("${DOCKER}" volume inspect -f '{{.CreatedAt}}' "${PROJECT}_${vol}" 2>/dev/null)" || continue
+            c="$(to_epoch "${c}")"
+            if [ -n "${g}" ] && [ -n "${c}" ] && [ "${c}" -lt $((g - 60)) ]; then
+              why="volume ${PROJECT}_${vol} was created before this value was generated, so it holds another one"
+              break
+            fi
+          done ;;
+      esac
+    fi
+    if [ -n "${why}" ]; then
+      bad=$((bad + 1))
+      echo "${ME}: ${key} in ${ENV_FILE} does not match project ${PROJECT}'s data: ${why}." >&2
+    fi
+  done
+  if [ "${bad}" -gt 0 ]; then
+    cat >&2 <<EOF
+${ME}: REFUSED: ${bad} key(s) above would make their service fail to sign in to its own
+  database (a crash loop on "password authentication failed"). The data was created
+  by another tree, or the file lost the value it was created with. Do one of:
+    * drive the stack from the tree that created it (make stack-owner-check names it);
+    * copy that tree's value for each key into ${ENV_FILE};
+    * keep this file's value and re-key the database while it runs:
+        bash tests/stack/${ME} --rotate-sql <KEY>   (prints the steps, keeps the data)
+    * or drop just that service's data: make stack-reset-volume SVC=<service>.
+  No value is printed. Nothing was changed.
+EOF
+    exit 4
+  fi
+  exit 0
+fi
 
 # Resolve every key first; write once at the end (or not at all).
 VALS=(); ORIGINS=(); missing=0

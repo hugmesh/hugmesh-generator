@@ -47,13 +47,6 @@ services:
       POSTGRES_DB: phpbb
       POSTGRES_USER: phpbb
       POSTGRES_PASSWORD: ${PHPBB_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
-    networks:
-      default:
-        # The extension repo's shipped install YAML hardcodes `dbhost: db`, and it
-        # is consumed verbatim by the image entrypoint on first boot. An alias is
-        # cheaper and less surprising than forking their file or renaming this
-        # service to the very generic `db`.
-        aliases: [db]
     volumes: [phpbb-pg:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U phpbb"]
@@ -86,10 +79,11 @@ services:
       PHPBB_DB_USER: phpbb
       PHPBB_APP_PASSWORD: ${PHPBB_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}
       PHPBB_TABLE_PREFIX: phpbb_
-      # Shipped BY the extension repo for exactly this lane; the entrypoint runs it
-      # once against an empty DB, then removes install/. Dev-only literals
-      # (sysadmin/adminadmin) live in that file, not here.
-      PHPBB_INSTALL_CONFIG: /var/www/html/ext/hugmesh/forumapi/docker/install-config.compose.yml
+      # The headless install YAML the entrypoint runs ONCE against an empty DB
+      # (then it removes install/). Rendered HERE, from the same ${PHPBB_DB_PASSWORD}
+      # phpbb-db was initialised with — see the top-level `configs:` below for why
+      # it is no longer the extension repo's own docker/install-config.compose.yml.
+      PHPBB_INSTALL_CONFIG: /run/hugmesh/phpbb-install.yml
       # The extension validates the Casdoor JWT server-side and fails CLOSED, so
       # both must be right or every API call 401s. JWKS is fetched in-network from
       # the casdoor container; the issuer must match the `iss` claim the browser's
@@ -105,6 +99,10 @@ services:
       # including /health, answers HTML 500. Never set this in a cluster.
       HUGMESH_JWKS_ALLOW_INSECURE_HTTP: "1"
       HUGMESH_JWT_ISSUER: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+    configs:
+      - source: phpbb-install
+        target: /run/hugmesh/phpbb-install.yml
+        mode: 0444
     depends_on:
       phpbb-db: { condition: service_healthy }
     # Published for direct access; the gateway also serves it at /social/phpbb/.
@@ -164,3 +162,51 @@ volumes:
   phpbb-pg:
   akkoma-pg:
   akkoma-data:
+
+# The phpBB headless-install YAML, rendered by compose from .env (2026-11-12).
+#
+# WHY NOT THE EXTENSION REPO'S FILE. hugmesh-forum-api ships
+# docker/install-config.compose.yml with `dbhost: db` and `dbpasswd: phpbb`, the
+# literal every compose file used before #857. Since then phpbb-db is initialised
+# with a RANDOM ${PHPBB_DB_PASSWORD} (gen-stack-db-env.sh), so on every fresh
+# phpbb-pg volume the one-time install failed with `password authentication failed
+# for user "phpbb"`, the entrypoint logged "headless install complete" anyway,
+# removed install/, and the board had no tables: /api/v1/hugmesh/* answered 503
+# for good (a restart can never retry; install/ is gone).
+#
+# The values here are the ones phpbb-db and the phpbb service already use, so the
+# installer can only ever authenticate with what the volume holds. The password is
+# single-quoted YAML; gen-stack-db-env.sh only ever writes [A-Za-z0-9._~-].
+# The admin account is the dev-only local literal the extension's file used.
+# Guard: tests/stack/test-phpbb-install-config.sh.
+configs:
+  phpbb-install:
+    content: |
+      installer:
+          admin:
+              name: sysadmin
+              password: adminadmin
+              email: admin@example.com
+          board:
+              lang: en
+              name: 'HugMesh Forum (local stack)'
+              description: 'Local stack (headless via hugmesh/forumapi)'
+          database:
+              dbms: postgres
+              dbhost: phpbb-db
+              dbport: 5432
+              dbuser: phpbb
+              dbpasswd: '${PHPBB_DB_PASSWORD:?run tests/stack/gen-stack-db-env.sh (make stack-up does)}'
+              dbname: phpbb
+              table_prefix: phpbb_
+          email:
+              enabled: false
+          server:
+              cookie_secure: false
+              server_protocol: 'http://'
+              force_server_vars: false
+              server_name: localhost
+              server_port: 8080
+              script_path: /
+          extensions:
+              - hugmesh/forumapi

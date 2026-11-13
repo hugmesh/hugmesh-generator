@@ -1578,8 +1578,12 @@ kind-doctor-test: ## offline: prove kind-doctor detects the outage it was writte
 # on its own side port is how a broken federated route stays invisible.
 # LANE=kind-svc opts into the platform's own UIs when you are debugging it.
 # See docs/LOCAL-TESTING.md "Browsing the mesh from THIS machine".
-view: ## serve the local front doors in the browser (LANE=kind|kind-svc|compose|device; OPEN=1 launches it)
-	python3 scripts/hugmesh-view.py up --lane '$(or $(LANE),kind)' --background \
+# LANE unset: the first of kind, compose whose front door ANSWERS (2026-11-12: the
+# hardcoded kind default served 502 on a compose-only machine and still said
+# "serving"); none answering is a refusal that names both. An explicit LANE whose
+# door is down is served with a warning that names the lane that is up.
+view: ## serve the local front doors in the browser (LANE=kind|kind-svc|compose|device, default: whichever is up; OPEN=1 launches it)
+	python3 scripts/hugmesh-view.py up $(if $(strip $(LANE)),--lane '$(strip $(LANE))',) --background \
 	  $(if $(OPEN),--open,) $(VIEW_ARGS)
 
 # One-time, per workstation. Installs the loopback-only CA into THIS user's own
@@ -1595,8 +1599,10 @@ view-untrust: ## remove the local CA from this user's browser trust stores
 view-list: ## show the domain -> loopback-port map (no side effects)
 	python3 scripts/hugmesh-view.py list $(VIEW_ARGS)
 
-view-stop: ## stop the background view session (and sweep any stale port-forwards)
-	python3 scripts/hugmesh-view.py stop $(VIEW_ARGS)
+# ALL=1 also stops every OTHER hugmesh-view session of this user (another clone's
+# or worktree's, which keep their own state dir and so are invisible to a plain stop).
+view-stop: ## stop the background view session (and sweep any stale port-forwards; ALL=1: every tree's)
+	python3 scripts/hugmesh-view.py stop $(if $(strip $(ALL)),--all,) $(VIEW_ARGS)
 
 # Offline gate for the above: a fake kubectl and a fake certutil on PATH, HOME
 # redirected into a temp dir so no real browser trust store is reachable, a
@@ -2306,7 +2312,32 @@ stack-route-access-env: ## ensure tests/stack/.env holds ROUTE_ACCESS_DB_PASSWOR
 stack-db-env: ## ensure tests/stack/.env holds the local stack's per-role DB passwords (create-if-missing, adopts existing volumes)
 	@bash tests/stack/gen-stack-db-env.sh
 
-stack-build: stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## build every service from its cloned repo (no run)
+# ── who OWNS the compose project (2026-11-12) ──
+# compose.local.yaml pins `name: hugmesh-local`, so every clone or worktree of this
+# repo drives the SAME containers and volumes, while the credentials those volumes
+# were seeded with live per tree (.e2e-credentials, tests/stack/.env). A second
+# clone's stack-up + stack-seed left the operator's checkout unable to seed Matrix,
+# and the only button left was a full clean. tests/stack/stack-owner.sh refuses a
+# tree that is not the one the project's containers (or, after stack-halt, its
+# recorded owner) came from, and refuses agent worktrees on hugmesh-local outright;
+# STACK_ADOPT_FOREIGN=1 / STACK_WORKTREE_OK=1 override (read its header). It is the
+# FIRST prerequisite of every target that creates, seeds or removes the project's
+# data, so it runs before stack-route-access-env / stack-db-env write .env.
+# Guard: tests/stack/test-stack-owner.sh.
+STACK_OWNER := bash tests/stack/stack-owner.sh
+.PHONY: stack-owner-check stack-db-verify
+stack-owner-check: ## refuse to drive the local stack from a tree that does not own it (names the owner)
+	@$(STACK_OWNER) check '$(MAKECMDGOALS)'
+
+# Every DB password in tests/stack/.env must be what the project's EXISTING data
+# holds (gen-stack-db-env.sh --verify: a running Postgres is asked over TCP, a
+# stopped container's env or a volume's age is compared otherwise). Fails before
+# compose runs, naming the key and the owning tree, never a value — instead of a
+# service crash-looping on "password authentication failed".
+stack-db-verify: stack-db-env ## check every tests/stack/.env DB password against the project's existing data
+	@bash tests/stack/gen-stack-db-env.sh --verify
+
+stack-build: stack-owner-check stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## build every service from its cloned repo (no run)
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 
 # stack-up's LAST step reconciles gateway_route_access (the line right after
@@ -2320,14 +2351,16 @@ stack-build: stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_
 # would otherwise send the seed to that server and leave this table stale.
 # stack-halt -> stack-up is the resume path, so this covers it (and the Studio,
 # which shells out to `make stack-up`). Guard: tests/stack/test-route-access-reconcile.sh.
-stack-up: stack-route-access-env stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
+stack-up: stack-owner-check stack-route-access-env stack-db-env stack-db-verify stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
+	@$(STACK_OWNER) record
 	$(STACK_ENV) POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
+	@echo "    In THIS machine's browser with no cert warning: make view LANE=compose  (https://127.0.0.1:9091/login/)"
 	$(if $(strip $(HEADSCALE)),@echo "    Tailnet control server (HEADSCALE=1): https://hs.$(STACK_HUGMESH_DOMAIN):$(PUBLIC_HTTPS_PORT)  |  token issuer fingerprint: make stack-mesh-token-key",)
 
 # The post-seed registration note, chosen at PARSE time by
@@ -2361,13 +2394,13 @@ define STACK_SEED_STAGE2_NOTE
 endef
 endif
 
-stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
+stack-seed: stack-owner-check ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
 	@echo "==> Seeding the running stack (Casdoor$(if $(strip $(SOCIAL)), + social,) tier)"
 	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )$(if $(strip $(BRAND_B)),CASDOOR_BRAND_B_URL='$(BRANDB_CASDOOR)' )bash tests/stack/seed-e2e.sh
 	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin); the shared password is in .e2e-credentials at the repo root (minted NEW by every stack-seed; E2E_PASSWORD_KEEP=1 keeps the previous one) (not printed here: this output is persisted by the Studio run log)."
 	$(STACK_SEED_STAGE2_NOTE)
 
-stack-halt: stack-db-env  ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)
+stack-halt: stack-owner-check stack-db-env  ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)
 	# The NON-DESTRUCTIVE stop. `stack-down` below passes -v, which drops every
 	# named volume — Casdoor identity, Matrix rooms, Mastodon accounts, the phpBB
 	# board and all the BFF databases. That is the right default for a throwaway
@@ -2377,13 +2410,16 @@ stack-halt: stack-db-env  ## stop the local stack but KEEP its data (identity, r
 	# forum until a full re-seed. Containers and images still go; only the data
 	# survives, so `make stack-up` brings the same mesh back.
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down
+	@bash tests/stack/stack-strays.sh --list
 
-stack-down: stack-db-env  ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
+stack-down: stack-owner-check stack-db-env  ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
 	# Every profile is listed UNCONDITIONALLY (not via the PHPBB=1/AKKOMA=1
 	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
 	# akkoma containers and volumes orphaned while reporting success.
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
+	@$(STACK_OWNER) forget
+	@bash tests/stack/stack-strays.sh --list
 	bash tests/stack/gen-route-access-env.sh --remove
 	bash tests/stack/gen-stack-db-env.sh --remove
 
@@ -2402,15 +2438,41 @@ stack-down: stack-db-env  ## stop the local stack and DROP ITS VOLUMES (destroys
 # project other than the checkout's own, and for hugmesh-local itself while any
 # hugmesh-img-* project is up. Only 1/true/yes keep it; 0/false/no/empty remove it.
 STACK_CLEAN_KEEP_M2_ON = $(filter 1 true yes TRUE YES True Yes,$(strip $(STACK_CLEAN_KEEP_M2)))
-stack-clean: stack-db-env  ## stop the local stack AND remove the images it built + the m2 registry/cache
+stack-clean: stack-owner-check stack-db-env  ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) -f $(STACK_TOR_DOMAINS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn --profile headscale $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
+	@$(STACK_OWNER) forget
+	@# What down cannot see: containers `docker run` from this stack's images (the
+	@# project label is inherited, compose never created them) and volumes no compose
+	@# file declares any more (hugmesh-local_synapse). tests/stack/stack-strays.sh.
+	bash tests/stack/stack-strays.sh --remove
 	bash tests/stack/gen-route-access-env.sh --remove
 	bash tests/stack/gen-stack-db-env.sh --remove
 	$(if $(STACK_CLEAN_KEEP_M2_ON),@echo "==> The private-maven registry $(M2_REGISTRY_NAME) is KEPT (STACK_CLEAN_KEEP_M2: another mesh shares it).",@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true)
 	$(if $(STACK_CLEAN_KEEP_M2_ON),,@rm -f $(STACK_M2_ENV))
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'
+
+# Drop ONE service's data and bring it back empty, keeping every other volume, every
+# image and the maven registry (2026-11-12). The seed's Matrix-lockout message used
+# to say "recreate the tuwunel volume" with no action behind it; the closest Studio
+# button was stack-clean, i.e. a cold build of more than an hour. Pass the SAME knobs
+# you started the stack with (SOCIAL=1 for tuwunel, PHPBB=1 for phpbb-db, ...): the
+# compose flags below are stack-up's, so `up --no-deps SVC` recreates it exactly as
+# stack-up would. RESEED=1 (the default) then runs stack-seed with
+# E2E_PASSWORD_KEEP=1, so the reset service is seeded with the CURRENT
+# .e2e-credentials value and nothing else is rotated; RESEED=0 skips it.
+# stack-reset-matrix is the one the seed message names. Guard:
+# tests/stack/test-stack-reset-volume.sh.
+RESEED ?= 1
+.PHONY: stack-reset-volume stack-reset-matrix
+stack-reset-volume: stack-owner-check stack-db-env ## drop ONE service's data volume(s) and re-seed (SVC=tuwunel|casdoor-db|...; pass your stack-up knobs)
+	@[ -n "$(strip $(SVC))" ] || { echo "usage: make stack-reset-volume SVC=<compose service> [SOCIAL=1 ...the knobs you started it with] [RESEED=0]"; exit 2; }
+	$(STACK_ENV) bash tests/stack/stack-reset-volume.sh '$(strip $(SVC))' -- $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS)
+	$(if $(filter 1,$(RESEED)),$(MAKE) --no-print-directory stack-seed E2E_PASSWORD_KEEP=1,@echo "==> RESEED=0: not seeded. Run make stack-seed E2E_PASSWORD_KEEP=1 when ready.")
+
+stack-reset-matrix: ## drop ONLY the Matrix (tuwunel) data and re-seed it — the seed's lockout remedy
+	$(MAKE) --no-print-directory stack-reset-volume SVC=tuwunel SOCIAL=1
 
 # Run the Playwright e2e suite (tests/e2e) against the RUNNING local stack's TLS
 # front door. Preconditions: `make stack-up` + `make stack-seed` (stack-seed's
