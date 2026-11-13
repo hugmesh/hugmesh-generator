@@ -31,7 +31,8 @@ from ._scroll import scrollable
 from ...core import device_catalog, profiles
 from ...core.config import (
     FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES,
-    JETSON_BOARDS, KERNEL_FLAVOR_CHOICES, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
+    JETSON_BOARDS, KERNEL_FLAVOR_CHOICES, KERNEL_FLAVOR_REFUSED,
+    ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
     ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS, ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS,
     ORANGEPI4LTS_FLAVORS,
     ROLE_CHOICES, RPI_BOARDS,
@@ -40,7 +41,7 @@ from ...core.config import (
     rpi_boards_for_role, x86_desktop_axis,
 )
 from ._gating import gate_widgets_role_class, out_of_scope_note, scope_allows
-from ._widgets import _row, status_badge
+from ._widgets import _row, add_refused_items, offered_index, status_badge
 from ._widgets import _tri_state, _tri_value
 
 # canonical machine order — x86 first (the default platform), matching today's
@@ -380,16 +381,17 @@ class RolePage(QtWidgets.QWizardPage):
         self.jetson_board = QtWidgets.QComboBox()
         self.jetson_board.addItems(list(JETSON_BOARDS))
         jl.addWidget(_row("Board", self.jetson_board))
-        # --kernel-flavor mainline|l4t (G36): a plan-valid axis — the matrix and
-        # --print-plan accept it — surfaced with the l4t caveat spelled out.
+        # --kernel-flavor (G36): only the flavours that build are offered. l4t is
+        # listed greyed with its reason (KERNEL_FLAVOR_REFUSED): the builder exits
+        # non-zero on it by design, so it is never a choice here.
         self.kernel_flavor = QtWidgets.QComboBox()
         self.kernel_flavor.addItem("(builder default: mainline)", "")
         for kf in KERNEL_FLAVOR_CHOICES:
             self.kernel_flavor.addItem(kf, kf)
+        add_refused_items(self.kernel_flavor, KERNEL_FLAVOR_REFUSED)
         self.kernel_flavor.setToolTip(
-            "--kernel-flavor mainline|l4t. CAVEAT: the l4t kernel BUILD is a stub "
-            "that hard-errors today — the plan/matrix (--print-plan) accept the "
-            "axis, but a real l4t image build fails until the L4T path lands.")
+            "--kernel-flavor. mainline is the one flavour that builds (no CUDA). "
+            "l4t is shown greyed: " + KERNEL_FLAVOR_REFUSED["l4t"])
         jl.addWidget(_row("Kernel flavor", self.kernel_flavor))
         lay.addWidget(self.jetson_box)
 
@@ -520,12 +522,17 @@ class RolePage(QtWidgets.QWizardPage):
         cl.addWidget(self.desktop_help)
         # Thin-desktop stream host (Sunshine; §8b) — tri-state like the Network
         # page's service toggles (G34: on / force-off / leave builder default).
-        self.sunshine = QtWidgets.QCheckBox(
-            "Thin-desktop stream host (Sunshine) — stream this desktop to mesh "
-            "headsets over the tailnet only (default off)")
+        # A check box never wraps: the name only, the explanation in a wrapping note
+        # (the long one-line label set the page's minimum width and cut it on CI fonts).
+        self.sunshine = QtWidgets.QCheckBox("Thin-desktop stream host (Sunshine)")
         self.sunshine.setTristate(True)
         # Tooltip applied by _sync_client_gates, NOT here — see _SUNSHINE_TIP.
         cl.addWidget(self.sunshine)
+        self.sunshine_note = QtWidgets.QLabel(
+            "Streams this desktop to mesh headsets over the tailnet only (default off).")
+        self.sunshine_note.setWordWrap(True)
+        self.sunshine_note.setStyleSheet("color: gray;")
+        cl.addWidget(self.sunshine_note)
         # --capable (the KDE Plasma payload, composable onto any client role — G21) is
         # the Desktop step's "KDE Plasma" environment now.
         # --unaffiliated composes onto the other standalone roles (G22): an
@@ -979,7 +986,7 @@ class RolePage(QtWidgets.QWizardPage):
             url_w.setText(c.uboot_url)
             defconfig_w.setText(c.uboot_defconfig)
             skip_w.setChecked(c.skip_uboot)
-        self.kernel_flavor.setCurrentIndex(max(0, self.kernel_flavor.findData(c.kernel_flavor or "")))
+        self.kernel_flavor.setCurrentIndex(offered_index(self.kernel_flavor, c.kernel_flavor or ""))
         # Restore from cfg on the axis that MATTERS, and only that one. The isEnabled()
         # conjunct this replaces read the widget's paint state, which the tautology above
         # it had already forced to False in every mode — so a loaded unaffiliated=True was
@@ -1169,6 +1176,7 @@ class RolePage(QtWidgets.QWizardPage):
             hide=True)
         if sunshine_ok:
             self.sunshine.setToolTip(_SUNSHINE_TIP)
+        self.sunshine_note.setVisible(not self.sunshine.isHidden())
 
         # (2c) composable --unaffiliated: ONE axis decides the clear, and it is NOT the
         # hide axis. See the module-level block for the measurement that forced this

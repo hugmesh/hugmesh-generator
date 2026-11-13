@@ -90,7 +90,7 @@ new builders" below.
 **Arch-first device taxonomy** ✅ (Studio) / 🔭 (menu, CLI guided help): the
 Studio's machine tier now offers an architecture selector over a family-grouped
 **device catalog** (`studio/hugmesh_studio/core/device_catalog.py` +
-`core/device-catalog.json`). The catalog carries the #351 honesty statuses:
+`core/device-catalog.json`). The catalog carries three honesty statuses:
 supported; experimental (labelled); unsupported (visible but not selectable, with
 the reason shown). A device is exactly a `(platform, board)` pair, and its roles
 are **derived** from `ROLE_CHOICES` + `rpi_boards_for_role()`. This regroups
@@ -161,7 +161,7 @@ sources that file, and `studio/hugmesh_studio/core/roles.py` reads it:
 | `backend` | backend k8s worker | x86, rpi5, orangepi5 |
 | `frontend` | frontend k8s worker | x86, rpi5, orangepi5, orangepi4-lts |
 | `backend-gpu` | backend worker + GPU, no inference service | x86, jetson |
-| `omnibus` | every cluster role on one node | x86, jetson, rpi5 (Pi 4 / Pi 5), orangepi5 |
+| `omnibus` | every cluster role on one node | x86, jetson, rpi5 (Pi 5 only: omnibus needs 16 GB), orangepi5 |
 | `edge-ai` | GPU inference node (OpenAI-compatible model API) | x86, jetson |
 | `generic` | plain unbranded arm64 server | rpi5 |
 | `laptop` `chromebook` `desktop` | person-device desktops | x86 (+ `desktop` on rpi5/jetson) |

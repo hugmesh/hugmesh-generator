@@ -48,6 +48,28 @@
 # inbound replies to unrelated outbound UDP flows whose local port landed in
 # the window.
 #
+# HEADSCALE LAN CONTROL CARVE-OUT (the pki node only). Before go-live a worker
+# reaches the control plane at http://<pki LAN address>:<port> (keys-provision
+# resolve_control_endpoint) — it cannot use the tailnet, it is joining it. No
+# shipped image enables firewalld today (x86 ships it NOT enabled; ARM leaves it
+# out) and the nftables tables do not drop that port, so the dial is open as built.
+# An operator who enables firewalld on an ENV=prod image gets DefaultZone=drop,
+# which WOULD drop it; this carve-out keeps it open then. keys-provision
+# (provision_headscale) writes headscale's listen port to ONE marker:
+#
+#   /etc/hugmesh/headscale-lan-control   "<port>"  => admit <port>/tcp from the
+#                                                    RFC1918 ranges ONLY
+#
+# Admitted as firewalld RUNTIME rich rules (one per range, never --permanent: the
+# same convergence-floor model as the TURN ports), never from a public source, and
+# never through the nftables table below (which drops only the TURN port set, so it
+# has nothing to lift). Marker absent or malformed => the rules this script wrote
+# are removed (fail-closed). This script removes ONLY what it wrote: the port it
+# admitted is recorded in a runtime state file (/run, gone with a reboot exactly
+# as runtime rules are), and a rule is removed only when it has the carve-out's
+# exact shape AND that recorded port. An operator's rich rule for any other port
+# is never touched; an identical hand-added rule for the SAME range and port is
+# indistinguishable from ours and goes with it.
 # HEADSCALE STUN CARVE-OUT (operator decision 2026-11-10, "Built-in relay on";
 # docs/HEADSCALE-DERP.md). The pki node's headscale runs an EMBEDDED DERP relay
 # whose STUN listener is UDP 3478 — the same port this table drops by default, and
@@ -87,6 +109,9 @@ TABLE="hugmesh_coturn_relay"
 # v6 ULA prefix needs its own rules — the hugmesh-sunshine-firewall lesson).
 TS_V4_PREFIX="${HUGMESH_TS_V4_PREFIX:-100.64.0.0/10}"
 TS_V6_PREFIX="${HUGMESH_TS_V6_PREFIX:-fd7a:115c:a1e0::/48}"
+HS_LAN_MARKER="${HUGMESH_HEADSCALE_LAN_MARKER:-/etc/hugmesh/headscale-lan-control}"
+HS_LAN_SOURCES="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+HS_LAN_FW_STATE="${HUGMESH_HEADSCALE_LAN_FW_STATE:-/run/hugmesh/headscale-lan-control.fw}"
 HS_STUN_MARKER="${HUGMESH_HEADSCALE_STUN_MARKER:-/etc/hugmesh/headscale-derp-stun}"
 # The headscale STUN port this script last admitted in firewalld, so a port the marker
 # no longer names (it moved, or headscale's relay went away) is taken back out.
@@ -116,6 +141,30 @@ table_live() { nft list table inet "${TABLE}" >/dev/null 2>&1; }
 
 PUBLIC="absent"; [ -e "${MARKER}" ] && PUBLIC="present"
 
+# headscale LAN control port (see the header): a single 1-65535 integer or nothing.
+HS_LAN_PORT=""
+if [ -e "${HS_LAN_MARKER}" ]; then
+    _hs_lan="$(tr -d '[:space:]' < "${HS_LAN_MARKER}" 2>/dev/null)"
+    if [[ "${_hs_lan}" =~ ^[0-9]{1,5}$ ]] && [ "${_hs_lan}" -ge 1 ] && [ "${_hs_lan}" -le 65535 ]; then
+        HS_LAN_PORT="${_hs_lan}"
+    else
+        warn "ignoring ${HS_LAN_MARKER}: '${_hs_lan}' is not a port number — no headscale LAN control port admitted"
+    fi
+    unset _hs_lan
+fi
+# The exact rich rule for one source range (firewall-cmd --list-rich-rules prints
+# this same spelling back).
+hs_lan_rule() { printf 'rule family="ipv4" source address="%s" port port="%s" protocol="tcp" accept' "$1" "$2"; }
+# The port(s) this script admitted and has not yet taken back (the state file
+# above: whitespace-separated port numbers; anything else in it is ignored).
+HS_LAN_PREV=""
+if [ -r "${HS_LAN_FW_STATE}" ]; then
+    for _hs_prev in $(tr -c '0-9\n' ' ' < "${HS_LAN_FW_STATE}" 2>/dev/null); do
+        [[ "${_hs_prev}" =~ ^[0-9]{1,5}$ ]] && [ "${_hs_prev}" -ge 1 ] && [ "${_hs_prev}" -le 65535 ] \
+            && HS_LAN_PREV="${HS_LAN_PREV} ${_hs_prev}"
+    done
+    unset _hs_prev
+fi
 # headscale embedded-DERP STUN port (see the header): a single 1-65535 integer or
 # nothing at all.
 HS_STUN_PORT=""
@@ -218,6 +267,38 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
                 fi
             fi
         done
+        # headscale LAN control port: take back what this script admitted earlier and
+        # no longer wants (a changed port, or no marker) — only rules of the
+        # carve-out's exact shape for a RECORDED port — then admit the wanted set.
+        # The record is written BEFORE the adds, so a half-applied set is still taken
+        # back on a later run, and a port whose removal failed stays recorded.
+        HS_LAN_RECORD="${HS_LAN_PORT}"
+        for p in ${HS_LAN_PREV}; do
+            [ "${p}" = "${HS_LAN_PORT}" ] && continue
+            while IFS= read -r r; do
+                [ -n "${r}" ] || continue
+                for src in ${HS_LAN_SOURCES}; do
+                    [ "${r}" = "$(hs_lan_rule "${src}" "${p}")" ] || continue
+                    firewall-cmd --zone="${ZONE}" --remove-rich-rule="${r}" >/dev/null 2>&1 && continue
+                    warn "firewall-cmd --remove-rich-rule failed (zone ${ZONE}): ${r}"
+                    case " ${HS_LAN_RECORD} " in *" ${p} "*) ;; *) HS_LAN_RECORD="${HS_LAN_RECORD} ${p}" ;; esac
+                done
+            done < <(firewall-cmd --zone="${ZONE}" --list-rich-rules 2>/dev/null)
+        done
+        if [ -n "${HS_LAN_RECORD// /}" ]; then
+            { mkdir -p "$(dirname "${HS_LAN_FW_STATE}")" && printf '%s\n' "${HS_LAN_RECORD# }" > "${HS_LAN_FW_STATE}"; } 2>/dev/null \
+                || warn "cannot record the admitted headscale LAN control port in ${HS_LAN_FW_STATE} — a later port change or marker removal will not take these rules back"
+        else
+            rm -f "${HS_LAN_FW_STATE}" 2>/dev/null || true
+        fi
+        if [ -n "${HS_LAN_PORT}" ]; then
+            for src in ${HS_LAN_SOURCES}; do
+                r="$(hs_lan_rule "${src}" "${HS_LAN_PORT}")"
+                firewall-cmd --zone="${ZONE}" --query-rich-rule="${r}" >/dev/null 2>&1 \
+                    || firewall-cmd --zone="${ZONE}" --add-rich-rule="${r}" >/dev/null 2>&1 \
+                    || warn "firewall-cmd --add-rich-rule failed (zone ${ZONE}) — headscale LAN control from ${src}"
+            done
+        fi
         # A port an earlier run admitted for headscale STUN that the marker no longer
         # names comes back out, unless the coturn pass above owns it right now.
         HS_FW_PREV="$(tr -d '[:space:]' < "${HS_STUN_FW_STATE}" 2>/dev/null)"
@@ -254,5 +335,6 @@ if [ -n "${UNPROTECTED}" ]; then
     error "firewalld layer reconciled (zone=${ZONE:-?}) but the nftables backstop is NOT loaded — exiting 1 (${UNPROTECTED})"
     exit 1
 fi
+log "applied: coturn-public=${PUBLIC} zone=${ZONE:-?} relay=${RELAY_MIN}-${RELAY_MAX}/udp headscale-lan=${HS_LAN_PORT:-none}"
 log "applied: coturn-public=${PUBLIC} zone=${ZONE:-?} relay=${RELAY_MIN}-${RELAY_MAX}/udp headscale-stun=${HS_STUN_PORT:-none}"
 exit 0

@@ -386,9 +386,9 @@ Every claim here is read off the wizard in `studio/hugmesh_studio/gui/`.
 
 Skipped in mesh. Mesh picks role and platform on the worklist screen instead.
 
-You pick three things, top to bottom. First the **architecture** (x86-64, ARM64, ARMv7, RISC-V 64). RISC-V 64 is labelled "no SELinux": riscv64 images ship without it, because Gentoo has no hardened or SELinux riscv profile (see [the build matrix](BUILD-MATRIX.md#selinux-by-architecture)). Then a **device** from a searchable tree grouped by vendor family: 51 devices across 11 families today, with a Status column. Then the **image type**, a list of only the roles that device supports in the mode you are in.
+You pick three things, top to bottom. First the **architecture** (x86-64, ARM64, ARMv7, RISC-V 64). RISC-V 64 is labelled "no SELinux": riscv64 images ship without it, because Gentoo has no hardened or SELinux riscv profile (see [the build matrix](BUILD-MATRIX.md#selinux-by-architecture)). Then a **device** from a searchable tree grouped by vendor family: 50 devices across 11 families today, with a Status column. Then the **image type**, a list of only the roles that device supports in the mode you are in.
 
-The catalogue is honest rather than tidy. Unsupported devices are listed with the reason they cannot be built, and you cannot select them. 27 of the 51 are in that state, including everything under ARMv7 and RISC-V. A device that is buildable but has no image type in *this* mode is also unselectable, with an inline note saying which path does offer it. Search matches the device name, its SoC, and its family or vendor.
+The catalogue is honest rather than tidy. Unsupported devices are listed with the reason they cannot be built, and you cannot select them. 26 of the 50 are in that state, including everything under ARMv7 and RISC-V. A device that is buildable but has no image type in *this* mode is also unselectable, with an inline note saying which path does offer it. Search matches the device name, its SoC, and its family or vendor.
 
 Underneath, only the knobs the chosen platform has appear:
 
@@ -411,7 +411,7 @@ Traps worth knowing:
 - Once you select a device, the board combo below becomes a read-only display of that device's board. To change the board, pick a different device row.
 - Arrow-keying through the tree can land on a bold family header. That is not a device, so the image-type list empties and Next greys out. Click a device row.
 - Choosing the unaffiliated role, or ticking the composable Unaffiliated box, turns off source bundling and resets the brand id, title, org, logo and lock to their defaults the moment you press Next. The look fields (theme, wallpaper and the rest) are not touched, and the Branding screen stays in the flow.
-- The Jetson `l4t` kernel flavor is accepted by the plan and the matrix, but the l4t kernel build is a stub that hard-errors. Do not select it for a real build.
+- The Jetson kernel flavor offers `mainline` only. `l4t` is listed greyed and cannot be picked: the builder exits non-zero on it by design, because NVIDIA's L4T kernel and CUDA userspace are EULA-gated downloads it does not fetch. Hover it for the reason. A saved config that still names `l4t` opens here with the builder default selected instead.
 - Sunshine is a three-state box that starts in the middle state, which means "leave the builder default". Checked bakes it. Unchecked emits the explicit off.
 
 ### Choose the images to build — mesh only
@@ -428,7 +428,7 @@ A fresh mesh flow arrives with one row already checked: the mode default, `omnib
 
 Checking a desktop-class row asks who uses it. The dialog opens when you tick the row with the mouse. A programmatic check, such as a loaded worklist re-seeding the tree, never opens it. The named people appear in a **Desktop users** table below the tree, and double-clicking a row there edits one. Cancelling the dialog unchecks the row. Next stays disabled until every checked desktop has a named user, and the placeholder row shows in red until it does. That account is created on the internal Tailscale root domain, and the person's role rides the image. The dialog asks for the person's tier (`user`, `mod`, `admin`, `superadmin`) and any grants (`games`, `games-services`). The tier is what `--person-role` bakes into the image. The grants ride only the manifest account, which holds the tier plus every ticked grant, and the **Desktop users** table lists the full set.
 
-Two things a survey of this page usually misses. First, a checkbox reads "Also list the 37 devices that cannot be mesh nodes". It is off by default, and it brings back read-only rows that explain why each device has nothing to build here. Second, the combos in this tree ignore the scroll wheel on purpose. A plain combo would change a board or an encryption setting under the cursor while you scrolled the table, which is how one node once shipped with the wrong board.
+Two things a survey of this page usually misses. First, a checkbox reads "Also list the 33 devices that cannot be mesh nodes". It is off by default, and it brings back read-only rows that explain why each device has nothing to build here. Second, the combos in this tree ignore the scroll wheel on purpose. A plain combo would change a board or an encryption setting under the cursor while you scrolled the table, which is how one node once shipped with the wrong board.
 
 Downstream, the worklist stamps the base config's role from the first checked row and pins its platform to x86 as the option superset, so later screens show the widest field set. Unchecking a row also removes its id from every domain's "Applies to" list.
 

@@ -131,7 +131,10 @@ def _settle(qapp, page=None):
 
 @pytest.mark.parametrize("cfg_kw", [
     dict(mode="standalone", role="standalone-thick", platform="x86"),   # was a dead end
-    dict(mode="mesh", role="laptop", platform="x86"),                   # was silent
+    # the mesh row carries the pki node's fixed LAN address (core/pki_lan.py) a mesh
+    # build refuses without
+    dict(mode="mesh", role="laptop", platform="x86",
+         pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True),                # was silent
 ])
 def test_restart_asks_for_the_login_password_in_place(monkeypatch, qapp, wiz, tmp_path,
                                                       cfg_kw):
@@ -180,7 +183,9 @@ def test_restart_without_a_prior_password_does_not_ask(monkeypatch, qapp, wiz, t
     seen: list[str] = []
     _fake_builddriver(monkeypatch, seen)
     cfg = ImageConfig(mode="mesh", role="laptop", platform="x86",
-                      output_dir=str(tmp_path / "out"), local_user="magus")
+                      output_dir=str(tmp_path / "out"), local_user="magus",
+                      # the pki node's fixed LAN address (core/pki_lan.py) a mesh build refuses without
+                      pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True)
     s = build_sessions.new_session(synthesize(cfg), GENERATOR_DIR)
     build_sessions.start(s)
     build_sessions.finish(s, build_sessions.FAILED)

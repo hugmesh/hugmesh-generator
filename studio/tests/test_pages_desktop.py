@@ -381,7 +381,7 @@ def _rect_in(top, w):
 
 
 @pytest.mark.parametrize("size", [(1200, 800), (942, 552)])
-def test_look_at_the_desktop_step(wiz, qapp, size):
+def test_the_desktop_step_fits(wiz, qapp, size):
     page = _desktop(wiz)
     page._add_user_row("ann", False, "pw")
     page.session_checks["i3"].setChecked(True)

@@ -48,6 +48,12 @@ OLD_ROOT_SENTENCE = "Native build needs root (the Studio will prepend sudo)."
 NO_HELPER = "no elevation helper is available"
 
 
+def _mesh_cfg(**kw) -> FleetConfig:
+    """A fleet config the PKI LAN rule (core/pki_lan.py, #1004) accepts: these tests are
+    about elevation, so the pki node's fixed LAN address is given, as an operator must."""
+    return FleetConfig(pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True, **kw)
+
+
 def _host(**kw) -> HostInfo:
     """The operator's machine: Gentoo, not root, no docker — "auto" is native."""
     base = dict(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
@@ -98,14 +104,14 @@ def test_non_root_native_fleet_is_not_refused_when_it_can_elevate(monkeypatch):
     _force_sudo_a(monkeypatch)
     d = FleetDriver(GENERATOR_DIR, _host(), graphical=True)
     assert d.host.default_backend == "native"       # what "auto" means on this host
-    assert d.preflight(FleetConfig()) == []         # auto -> native, nothing refused
-    assert d.preflight(FleetConfig(), "native") == []
+    assert d.preflight(_mesh_cfg()) == []         # auto -> native, nothing refused
+    assert d.preflight(_mesh_cfg(), "native") == []
 
 
 def test_non_root_native_fleet_with_only_pkexec_is_not_refused(monkeypatch):
     _force_pkexec(monkeypatch)
     d = FleetDriver(GENERATOR_DIR, _host(), graphical=True)
-    assert d.preflight(FleetConfig(), "native") == []
+    assert d.preflight(_mesh_cfg(), "native") == []
 
 
 def test_non_root_native_fleet_is_refused_only_when_nothing_can_elevate(monkeypatch):
@@ -134,7 +140,7 @@ def test_the_fleet_and_the_single_image_route_agree_on_the_dead_end(monkeypatch,
 def test_root_native_fleet_is_unchanged(monkeypatch):
     _no_helper(monkeypatch)                           # root needs no helper at all
     d = FleetDriver(GENERATOR_DIR, _host(is_root=True), graphical=True)
-    assert d.preflight(FleetConfig(), "native") == []
+    assert d.preflight(_mesh_cfg(), "native") == []
 
 
 def test_native_fleet_from_the_flatpak_is_refused_with_the_flatpak_reason(monkeypatch):
@@ -300,9 +306,12 @@ def test_route_sessions_fleet_review_build_reaches_the_dispatch(monkeypatch, tmp
         page = wiz.fleet_window.page
         assert page.backend.currentText() == "auto"
         page.output_dir.setText(str(tmp_path / "out"))
+        page.pki_lan_ip.setText("192.168.1.10")       # core/pki_lan.py: KEYS need it
+        page.pki_lan_fixed.setChecked(True)
         page._goto(fleet_mod.STEP_REVIEW)
         assert page.problems.toPlainText() == "Preflight: OK"
-        assert page.cmd.toPlainText().startswith(f"sudo -A bash ./{FLEET_SCRIPT} ")
+        assert page.cmd.toPlainText().startswith(
+            f"sudo -A env PKI_LAN_IP=192.168.1.10 bash ./{FLEET_SCRIPT} ")
         assert page.next_btn.text() == "Build fleet now" and page.next_btn.isEnabled()
 
         # From here on, a sudo/pkexec or build-all-roles start is a failure: the

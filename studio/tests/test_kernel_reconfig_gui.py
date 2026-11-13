@@ -178,7 +178,7 @@ def test_open_binds_the_panel_and_swaps_the_log_down(wiz, qapp, tmp_path):
 
 
 @pytest.mark.parametrize("w,h", SIZES)
-def test_look_progress_page_with_the_panel_open(wiz, qapp, tmp_path, w, h):
+def test_the_progress_page_with_the_panel_open_fits(wiz, qapp, tmp_path, w, h):
     page = _page(wiz, (("pki.x86", "x86"), ("pki.rpi5", "rpi5")))
     page._session = make_session(str(tmp_path), pending=True)
     k = _through_kernel(page, 0)
@@ -298,7 +298,7 @@ def test_panel_rebuild_refusal_is_shown_not_recorded(qapp, tmp_path):
 
 
 @pytest.mark.parametrize("w,h", SIZES)
-def test_look_kernel_config_window(qapp, tmp_path, w, h):
+def test_the_kernel_config_window_fits(qapp, tmp_path, w, h):
     s = make_session(str(tmp_path), pending=True)
     win = KernelConfigWindow(GENERATOR_DIR, s, driver_factory=lambda: FakeDriver(),
                              opener=lambda t, ctx: (False, kr.NO_TERMINAL.format(

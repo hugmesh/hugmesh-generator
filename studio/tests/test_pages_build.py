@@ -323,10 +323,13 @@ def test_role_kernel_flavor_cannot_linger_off_jetson(wiz, mode, role, platform):
     enforces it: ModePage clears no such field, and to_cli_args() can only hide a stale
     value (--kernel-flavor lives in _jetson_args), never remove it from the config that
     gets saved, re-emitted and round-tripped."""
-    wiz.cfg.kernel_flavor = "l4t"          # e.g. loaded from a saved jetson config
+    # mainline, not l4t: l4t is no longer an offered flavour (KERNEL_FLAVOR_REFUSED), so
+    # a restore never puts it on the combo (test_kernel_flavor_offer.py); mainline is
+    # the value that can still be restored and so can still linger.
+    wiz.cfg.kernel_flavor = "mainline"     # e.g. loaded from a saved jetson config
     pick_mode(wiz, mode)
     page = pick_role(wiz, role)
-    assert page.kernel_flavor.currentData() == "l4t"   # restored onto the combo...
+    assert page.kernel_flavor.currentData() == "mainline"   # restored onto the combo...
     assert not page.jetson_box.isVisible()             # ...which is never shown here
     advance_to(wiz, wizard_mod.HardwarePage)
     assert wiz.cfg.platform == platform

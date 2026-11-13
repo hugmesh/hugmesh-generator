@@ -48,6 +48,7 @@ from ._scroll import scrollable
 # _cluster_identity_applies() for why both routes are the same rule and neither is a
 # page-local copy of it.
 from ...core import config as _config
+from ...core import pki_lan
 from ...core import plain_words
 from ...core.config import (
     ANUBIS_CHOICES,
@@ -190,7 +191,9 @@ _HELP_HEADSCALE_URL = (
     "The mesh control-server URL this image talks to. Baked to "
     "/etc/hugmesh/headscale-url and delivered to the builder as the HEADSCALE_URL "
     "environment variable — not a CLI flag, so it is never platform-greyed. Empty = "
-    "local-first: the control node uses its own LAN IP.")
+    "local-first: the control node uses its own LAN IP. On a mesh, workers dial the "
+    "PKI LAN Address below instead until go-live (a public URL cannot answer "
+    "before then).")
 _HELP_HEADSCALE_VERSION = (
     "Pin the version of Headscale, the control server that runs the tailnet "
     "(--headscale-version). Empty = whatever the builder ships.")
@@ -785,6 +788,29 @@ class NetworkPage(QtWidgets.QWizardPage):
         cp.addWidget(self.superdomain_row)
         self.superdomain_error = _refusal_label("superdomain_error")
         cp.addWidget(self.superdomain_error)
+        # The pki node's LAN address (core/pki_lan.py) — MESH ONLY. Every other node
+        # dials it before go-live, so a mesh build refuses without it (the Review page /
+        # WorklistDriver.preflight); this row says why, takes the address, and asks
+        # for the "it is fixed" confirmation. A malformed address is refused right here,
+        # inline (no dialog — a modal in page logic hangs the headless tests).
+        self.pki_lan_box = QtWidgets.QWidget()
+        pl = QtWidgets.QVBoxLayout(self.pki_lan_box)
+        pl.setContentsMargins(0, 0, 0, 0)
+        self.pki_lan_why = _hint(pki_lan.WHY)
+        pl.addWidget(self.pki_lan_why)
+        self.pki_lan_ip = QtWidgets.QLineEdit()
+        self.pki_lan_ip.setPlaceholderText("e.g. 192.168.1.10  (the PKI node's fixed LAN IPv4)")
+        self.pki_lan_ip_row = _row(pki_lan.LABEL_IP, self.pki_lan_ip)
+        pl.addWidget(self.pki_lan_ip_row)
+        self.pki_lan_fixed = QtWidgets.QCheckBox(pki_lan.LABEL_FIXED)
+        pl.addWidget(self.pki_lan_fixed)
+        self.pki_lan_note = QtWidgets.QLabel()
+        self.pki_lan_note.setWordWrap(True)
+        self.pki_lan_note.setStyleSheet("color: #b00020;")
+        pl.addWidget(self.pki_lan_note)
+        cp.addWidget(self.pki_lan_box)
+        self.pki_lan_ip.textChanged.connect(self._pki_lan_changed)
+        self.pki_lan_fixed.toggled.connect(self._pki_lan_changed)
         # ASK 8's "this mesh also hosts other domains" CHECKBOX used to sit here, under
         # the superdomain row. ASK 19 promoted that decision to its own choice-card
         # screen (gui/pages/domains_choice.py) in the ModePage idiom — "proceed with the
@@ -1344,6 +1370,11 @@ class NetworkPage(QtWidgets.QWizardPage):
                 f"{c.brand or 'hugmesh'}.internal  (empty = derived)")
         else:
             self.superdomain.setText(c.effective_superdomain())
+        # pki LAN address: a mesh concept (an image that joins no mesh dials no pki).
+        self.pki_lan_box.setVisible(mesh)
+        self.pki_lan_ip.setText(c.pki_lan_ip)
+        self.pki_lan_fixed.setChecked(bool(c.pki_lan_ip_fixed))
+        self._pki_lan_changed()
         self.brand_profile.setText(c.brand_profile)
         self.brand.setText(c.brand)
         self.brand_title.setText(c.brand_title)
@@ -2027,6 +2058,25 @@ class NetworkPage(QtWidgets.QWizardPage):
                                   and bool(getattr(self, "_service_offered", {}).get(
                                       "tor", True)))
 
+    def _pki_lan_changed(self, *_):
+        """Re-say what is missing about the pki LAN address, live, under the row. The
+        same words the build's refusal uses (core/pki_lan.problem), minus the WHY the
+        hint above already shows."""
+        ip_text = self.pki_lan_ip.text().strip()
+        err = pki_lan.ip_error(ip_text)
+        if err:
+            msg = f"{pki_lan.LABEL_IP}: {err}."
+        elif not ip_text:
+            msg = (f"{pki_lan.LABEL_IP} is required for a mesh: the build will refuse "
+                   "until it is set and confirmed fixed.")
+        elif not self.pki_lan_fixed.isChecked():
+            msg = ("Tick the box once the address is a static IP or a DHCP reservation: "
+                   "the build will refuse until it is confirmed fixed.")
+        else:
+            msg = ""
+        self.pki_lan_note.setText(msg)
+        self.pki_lan_note.setVisible(bool(msg))
+
     def validatePage(self):
         c = self.wiz.cfg
         # what the refusable fields held BEFORE this collect — _refuse_malformed puts a
@@ -2041,8 +2091,23 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.headscale_public_derp = self.headscale_public_derp.isChecked()
         # superdomain is user-set ONLY in mesh (editable); in cloud the field shows the
         # DERIVED value read-only — never write it back (would pin the derived string).
+        pki_refused = False
         if c.mode == "mesh":
             c.superdomain = self.superdomain.text().strip()
+            # The pki LAN address: a malformed one refuses Next, inline, and is never
+            # written through (the GUI-20 rule _refuse_malformed keeps: no early return,
+            # so every field below is still collected). An EMPTY or unconfirmed one does
+            # not refuse (the walk may continue and be saved); the build refuses it with
+            # the same words (WorklistDriver.preflight).
+            ip_text = self.pki_lan_ip.text().strip()
+            err = pki_lan.ip_error(ip_text)
+            if err:
+                self.pki_lan_note.setText(f"{pki_lan.LABEL_IP}: {err}.")
+                self.pki_lan_note.setVisible(True)
+                pki_refused = True
+            else:
+                c.pki_lan_ip = pki_lan.canonical(ip_text)
+                c.pki_lan_ip_fixed = self.pki_lan_fixed.isChecked()
         # ── the identity rows, collected ONLY while their axis has them on screen ──
         # THE HOUSE RULE, both halves. initializePage hides a row it does not apply to,
         # and a hidden QLineEdit KEEPS its text — so a collect that ignores scope here would let
@@ -2281,7 +2346,18 @@ class NetworkPage(QtWidgets.QWizardPage):
             "optional_services", "exclude_services", "enable_games", "anubis",
             "managed_services",
         ))
-        return self._refuse_malformed(c, prior)
+        refused_ok = self._refuse_malformed(c, prior)
+        if pki_refused:
+            # the pki row sits in the mesh section: open it, and scroll to the refusal
+            # when _refuse_malformed scrolled to nothing (same layout-pass ordering)
+            self.mesh_section.set_expanded(True)
+            if refused_ok:
+                QtCore.QCoreApplication.sendPostedEvents(
+                    None, QtCore.QEvent.Type.LayoutRequest)
+                scroll = getattr(self, "_content_scroll", None)
+                if scroll is not None:
+                    scroll.ensureWidgetVisible(self.pki_lan_note)
+        return refused_ok and not pki_refused
 
     def _refuse_malformed(self, c, prior: dict) -> bool:
         """Refuse Next, inline, on a value this page just collected that the build would

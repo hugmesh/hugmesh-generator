@@ -3873,6 +3873,7 @@ orphan-guards-verify:
         tests/scripts/test-builder-resume-safety.sh
         tests/scripts/test-calamares-boost-seed.sh
         tests/scripts/test-casdoor-jwt-no-preferred-username.sh
+        tests/scripts/test-control-endpoint-lan-first.sh
         tests/scripts/test-edge-ai-cuda-host-compiler.sh
         tests/scripts/test-edge-ai-ollama-pin.sh
         tests/scripts/test-eso-remoteref-brand.sh

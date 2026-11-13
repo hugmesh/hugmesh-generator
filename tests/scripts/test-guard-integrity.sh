@@ -1171,6 +1171,10 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/scripts/test-edge-ai-analysis-ssrf.sh, named by shell-suites.yml's debian
 # edge-ai-analysis leg. PREMERGE_UNGATED is untouched. MEASURED with GUARD_PREMERGE=0 on
 # the branch over origin/main 39b953ad: 238 of 280.
+# 238 -> 239 on 2026-11-11 (fix/control-endpoint-lan-first-20261111, merged with origin/main b3eafff5): +1 gated, +1 total —
+# tests/scripts/test-control-endpoint-lan-first.sh, named by shell-suites.yml (debian leg)
+# and .gitlab-ci.yml's orphan-guards-verify. PREMERGE_UNGATED is untouched. MEASURED by
+# running this file on the merged tree: 239 of 281.
 # PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
 # PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
 # PR #983 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 239 of 281.
@@ -1182,12 +1186,25 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # PR #1016 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 245 of 287.
 # PR #993 landing 2026-11-11: MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main: 246 of 288.
 # Integration batch 2026-11-12: MEASURED with GUARD_PREMERGE=0 on the combined tree: 252 of 294.
+# PR #1004 merged with origin/main 19a2909f (after the integration batch): MEASURED with GUARD_PREMERGE=0 on the merged tree: 253 of 295.
 # Integration batch2-20261112: MEASURED with GUARD_PREMERGE=0 on the combined tree: 253 of 295.
 # +1 gated, +1 total on feat/desktop-config-20261111: tests/scripts/test-desktop-config-lib.sh,
 # named by shell-suites.yml (alpine) and the .gitlab-ci.yml desktop job. PREMERGE_UNGATED
 # untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main 99afee80: 254 of 296.
 # Integration batch3-20261112: MEASURED with GUARD_PREMERGE=0 on the combined tree: 254 of 296.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-254}"
+# 254 -> 262 on 2026-11-12 (fix/x86-selinux-xserver-policy-skew-20261112, over origin/main 111f0f82):
+# main itself measured 261 of 303 (the merges of the day wired suites without moving the
+# floor); this branch adds tests/scripts/test-sec-policy-keyword-coherence.sh, named by
+# shell-suites.yml's debian leg. PREMERGE_UNGATED untouched. MEASURED with GUARD_PREMERGE=0
+# on the branch: 262 of 304.
+# Main CI merge-collision fix 2026-11-12: main itself measured 261 of 303 (merges after
+# batch3 gated suites without moving the floor); +1 gated, +1 total for
+# tests/scripts/test-github-workflows-wellformed.sh, named by shell-suites.yml (debian)
+# and .github/workflows/workflows-wellformed.yml. PREMERGE_UNGATED untouched.
+# MEASURED with GUARD_PREMERGE=0 on the tree based on origin/main 111f0f82: 262 of 304.
+# Merge of origin/main 7c266b78 (#1090) into the main-CI fix: both sides' suites gated.
+# MEASURED with GUARD_PREMERGE=0 on the merged tree: 263 of 305.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-263}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
