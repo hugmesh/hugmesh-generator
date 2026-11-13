@@ -50,9 +50,15 @@ is_sh_shebang() {
 
 # scan_one FILE — echo offending "line:content" hits with REAL file line numbers
 # (grep -n first, THEN drop full-line comments); empty output = clean.
+# An assignment is matched with quoted text blanked out ('...' and "..." spans become
+# ''/""): text such as the sudoers rule "%wheel ALL=(ALL) ALL" is data, not an array.
+# Expansions and builtins are matched on the raw line: "${ARR[@]}" inside double quotes
+# is still an array.
 scan_one() {
-  grep -nE "${PAT_ASSIGN}|${PAT_EXPAND}|${PAT_BUILTIN}" -- "$1" 2>/dev/null \
-    | grep -vE '^[0-9]+:[[:space:]]*#' || true
+  {
+    sed -e "s/'[^']*'/''/g" -e 's/"[^"]*"/""/g' -- "$1" 2>/dev/null | grep -nE "${PAT_ASSIGN}"
+    grep -nE "${PAT_EXPAND}|${PAT_BUILTIN}" -- "$1" 2>/dev/null
+  } | grep -vE '^[0-9]+:[[:space:]]*#' | sort -t: -k1,1n -u || true
 }
 
 # ── section 1: detector SELF-TEST (mutation guard — never allow a vacuous pass) ──
@@ -85,7 +91,9 @@ printf '%s\n' '#!/bin/sh' \
   'case "$1" in a|b) : ;; *) : ;; esac' \
   'f() { :; }' \
   'i=$((i+1))' \
-  'v="${x%/*}${y#a}"'                                    > "${selftest}/good-posix.sh"
+  'v="${x%/*}${y#a}"' \
+  'echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers' \
+  "grep -q '^%wheel ALL=(ALL) ALL' /etc/sudoers"         > "${selftest}/good-posix.sh"
 printf '%s\n' '#!/bin/bash' 'ARR=()' 'echo "${ARR[@]}"'  > "${selftest}/good-bash-scope.sh"
 if [ -z "$(scan_one "${selftest}/good-posix.sh")" ]; then
   ok "negative control: POSIX idioms (set --, \$(cmd), case, \$((..)) ) scan clean"

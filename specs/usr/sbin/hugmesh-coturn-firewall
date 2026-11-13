@@ -298,6 +298,7 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
                     || firewall-cmd --zone="${ZONE}" --add-rich-rule="${r}" >/dev/null 2>&1 \
                     || warn "firewall-cmd --add-rich-rule failed (zone ${ZONE}) — headscale LAN control from ${src}"
             done
+        fi
         # A port an earlier run admitted for headscale STUN that the marker no longer
         # names comes back out, unless the coturn pass above owns it right now.
         HS_FW_PREV="$(tr -d '[:space:]' < "${HS_STUN_FW_STATE}" 2>/dev/null)"

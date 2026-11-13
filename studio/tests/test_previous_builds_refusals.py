@@ -860,7 +860,13 @@ def test_in_a_short_window_the_tallest_reason_scrolls_instead_of_being_squeezed(
     w = page.previous_builds
     _select(w, _is_session(s))
     qapp.processEvents()
-    assert wiz.size() == QtCore.QSize(*size)
+    # The window is the size asked for, except where the wizard's own minimum is wider:
+    # a QWizard never shrinks below its header, and that minimum follows the fonts (the
+    # subtitle's word-wrap floor is about 80 average characters: under 518 px with the
+    # fonts this was measured with, 567 on a stock Ubuntu runner's DejaVu).
+    want = QtCore.QSize(max(size[0], wiz.minimumSizeHint().width(), wiz.minimumWidth()),
+                        max(size[1], wiz.minimumSizeHint().height(), wiz.minimumHeight()))
+    assert wiz.size() == want, (wiz.size(), want)
     note = w.gate_note
     assert note.isVisible() and sw.MISSING_DIR_REASON in note.text()
     # whole: every wrapped line of it, and no button squeezed to make room for it

@@ -674,7 +674,10 @@ jobs:
   debian:
     name: shell suites (debian/python${{ matrix.part }})
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 25 -> 40 on 2026-11-12: the leg measured 1480 s of suites once the workflow file was
+    # valid again (test-control-endpoint-lan-first.sh alone 626 s; it had never run in CI)
+    # and was cancelled at 25 min. 40 is the alpine leg's limit.
+    timeout-minutes: 40
     # SPLIT 2026-10-07 (GEN-5). One job ran all 44 suites serially and finished run
     # 37682082806 in 24 min 34 s against a 25-minute timeout; two suites were 16 of
     # those minutes (test-tor-flip-wiring.sh 9m04s, test-cluster-manifest-integrity.sh
@@ -730,6 +733,7 @@ jobs:
               tests/scripts/test-fragment-route-target.sh
               tests/scripts/test-games-screens-wiring.sh
               tests/scripts/test-gitlab-ci-wellformed.sh
+              tests/scripts/test-github-workflows-wellformed.sh
               tests/scripts/test-headscale-embedded-derp.sh
               tests/scripts/test-headscale-oidc-secret-staging.sh
               tests/scripts/test-mfa-raw-jwt-posture.sh
@@ -746,6 +750,7 @@ jobs:
               tests/scripts/test-docs-command-coverage.sh
               tests/scripts/test-x86-artifact-integrity.sh
               tests/scripts/test-x86-build-sudoers-strip.sh
+              tests/scripts/test-sec-policy-keyword-coherence.sh
               tests/scripts/test-x86-live-root-pack.sh
               tests/stack/test-anubis-flip-wiring.sh
               tests/stack/test-gen-route-access-env.sh
@@ -1158,7 +1163,6 @@ jobs:
     # 30 passed / 0 failed in 25 s (images cached) to ~3 min; against origin/main
     # 39b953ad, 22 failed (incl. an admin session from the factory default via a
     # non-loopback address).
-    timeout-minutes: 15
     # tests/device-registry/test-headscale-tag-minters-live.sh runs the same pinned
     # headscale and tailscale with keys minted by the REAL minters: the whole
     # keys-provision engine (inside the kindest/node image the gpu-labels suite
