@@ -72,6 +72,7 @@ The docs for the image/infra layer. State key used throughout:
 - [`GAMES-APPSTORE.md`](GAMES-APPSTORE.md) — per-domain FOSS game-server catalog + instance lifecycle.
 - [`EDGE-AI.md`](EDGE-AI.md) — GPU inference node serving an OpenAI-compatible model API to the mesh (DEFAULT-OFF, GPU-gated).
 - [`LOCAL-AI-ASSISTANT.md`](LOCAL-AI-ASSISTANT.md) — set up Ollama on your own PC from the CLI, choose a local coding model for an 8 GB GPU, run a code assistant on a scratch copy of the mesh code (`scripts/local-ai-bench.sh` measures the models on your machine), and run it all without Claude: `scripts/local-ai.sh` (queue, worker, drafts, chat, watch), the Studio's Local AI bar on every page, the text UI's F2 screen, and `--local-ai-status` / `--local-ai-prompt` on the command line.
+- [`MESH-CONTROL-OVER-TOR.md`](MESH-CONTROL-OVER-TOR.md) — OPT-IN: a stable control name behind a node-local relay that prefers the pki on the LAN and falls back to the pki's control onion (`--mesh-control-transport lan+onion|onion`), with the measured trade-offs and the KEYS-time key custody.
 - [`HEADSCALE-DERP.md`](HEADSCALE-DERP.md) — headscale's built-in DERP relay (on by default, offline-first), the public Tailscale map opt-in (`--headscale-public-derp` / `HEADSCALE_PUBLIC_DERP`), and the ports it needs.
 - [`COTURN.md`](COTURN.md) — TURN/STUN relay for Matrix (tuwunel) audio/video (DEFAULT-OFF, runtime-only slug).
 - [`GROUP-CALL-SFU.md`](GROUP-CALL-SFU.md) — MatrixRTC group calls on a LiveKit SFU (🔭 design + staged plan; client half dark in matrix-ui, server half not built).

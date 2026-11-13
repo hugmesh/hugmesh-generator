@@ -636,6 +636,14 @@ fi
 # mistaken for a deliverable), and the orchestrator exits nonzero at the end
 # listing every role whose keys failed.
 KEYS_FAILED=()
+# Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md): every role's keys run
+# shares ONE control onion key directory (gen-provision-keys.sh reads these from the
+# env); its secret key goes onto the pki stick only and is removed here afterwards.
+if [ -n "${MESH_CONTROL_TRANSPORT:-}" ] && [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
+    export MESH_CONTROL_TRANSPORT
+    export MESH_CONTROL_ONION_DIR="${MESH_CONTROL_ONION_DIR:-${WORK_DIR}/mesh-control-onion}"
+    [ -n "${MESH_CONTROL_ONION_MINT:-}" ] && export MESH_CONTROL_ONION_MINT
+fi
 if [ "${SKIP_KEYS:-0}" != "1" ]; then
     echo "############################################################"
     echo "#  Generate provisioning keys (all built roles)"
@@ -772,6 +780,31 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
         done
     fi
 fi
+
+# The control onion's SECRET key leaves this computer on the pki stick only: it is
+# removed here ONLY on positive evidence that the pki stick holds it — a keys folder of
+# THIS run carries a byte-identical copy at headscale/control-onion/. A failed pki keys
+# run had its partial folder removed above, so its key stays for the re-run the failure
+# message asks for; SKIP_KEYS=1 made no stick, so the key stays. The address stays
+# either way, for a later worker stick.
+mesh_control_forget_secret() {
+    local d="${MESH_CONTROL_ONION_DIR:-}" k
+    [ -n "${d}" ] && [ -e "${d}/hs_ed25519_secret_key" ] || return 0
+    if [ "${SKIP_KEYS:-0}" = "1" ]; then
+        echo "==> mesh control: SKIP_KEYS=1 made no stick — the control onion's secret key stays in ${d}"
+        return 0
+    fi
+    for k in "${WORK_DIR}"/keys-*/headscale/control-onion/hs_ed25519_secret_key; do
+        if [ -f "${k}" ] && cmp -s "${k}" "${d}/hs_ed25519_secret_key"; then
+            rm -f "${d}/hs_ed25519_secret_key" "${d}/hs_ed25519_public_key"
+            echo "==> mesh control: removed the control onion's secret key from ${d} (the pki stick ${k%/headscale/control-onion/hs_ed25519_secret_key} holds it)"
+            return 0
+        fi
+    done
+    echo "!! mesh control: no keys folder of this run holds the control onion's secret key — it STAYS in ${d} (make the pki stick from it, then delete it)" >&2
+    return 0
+}
+mesh_control_forget_secret
 
 echo
 echo "==> Done. Products in ${WORK_DIR}:"

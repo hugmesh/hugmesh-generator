@@ -14,7 +14,7 @@ proof-of-work gate decided by the build's ENV with no way to say otherwise from 
 """
 from __future__ import annotations
 
-from ..core import pki_lan, plain_words
+from ..core import mesh_control, pki_lan, plain_words
 from ..core.config import (
     ANUBIS_CHOICES, ANUBIS_LABELS, PLATFORM_FIELD_SUPPORT, SERVICE_DESCRIPTIONS,
     UNAFFILIATED_ROLE, _OPI_NODE_PLATFORMS, anubis_locked, anubis_shown,
@@ -44,6 +44,14 @@ def pki_lan_lines(cfg) -> list[str]:
     if problem:
         first = problem.split(". ")[0].rstrip(".")
         out.append(f"! the build will refuse until this is set: {first}.")
+    t = mesh_control.transport(cfg)
+    out += ["", mesh_control.QUESTION, f"  transport  {mesh_control.LABELS[t]}"]
+    if t != "lan":
+        out += [mesh_control.WHY,
+                f"  mint  {'yes' if cfg.mesh_control_onion_mint else 'no'}  ({mesh_control.MINT_LABEL})"]
+        clash = mesh_control.name_problem(cfg)
+        if clash:
+            out.append(f"! the build will refuse: {clash}")
     return out
 
 
@@ -63,6 +71,19 @@ def pki_lan_feed(cfg, line: str) -> str | None:
             return f"{pki_lan.LABEL_IP} not changed: {err}"
         cfg.pki_lan_ip = pki_lan.canonical(arg)
         return f"{pki_lan.LABEL_IP} -> {cfg.pki_lan_ip}"
+    if verb == "transport":
+        if arg not in mesh_control.LABELS:
+            return "transport takes lan, lan+onion or onion"
+        cfg.mesh_control_transport = "" if arg == "lan" else arg
+        if arg == "lan":
+            cfg.mesh_control_onion_mint = False
+        clash = mesh_control.name_problem(cfg)
+        return f"transport -> {mesh_control.LABELS[arg]}" + (f" — {clash}" if clash else "")
+    if verb == "mint":
+        if mesh_control.transport(cfg) == "lan":
+            return "mint applies to a Tor transport only (transport lan+onion|onion first)"
+        cfg.mesh_control_onion_mint = arg.lower() in ("on", "yes", "y", "1")
+        return "mint -> " + ("yes" if cfg.mesh_control_onion_mint else "no")
     if verb == "fixed":
         if arg.lower() in ("on", "yes", "y", "1"):
             cfg.pki_lan_ip_fixed = True
@@ -163,7 +184,7 @@ class NetworkScreen:
         pki = pki_lan_lines(j.cfg)
         out += pki
         out.append("commands: 1=cycle · default · on · off"
-                   + (" · ip ADDR · fixed on|off" if pki else "")
+                   + (" · ip ADDR · fixed on|off · transport lan|lan+onion|onion · mint on|off" if pki else "")
                    + (f" · s={plain_words.term('superbrand')} step" if mirror else "")
                    + " · Enter=continue")
         return out

@@ -271,6 +271,10 @@ class FleetConfig:
     # Required when the run makes KEYS folders, with the "fixed" confirmation.
     pki_lan_ip: str = ""               # PKI_LAN_IP
     pki_lan_ip_fixed: bool = False     # static IP / DHCP reservation confirmed
+    # Mesh control over Tor (core/mesh_control.py; OPT-IN): MESH_CONTROL_TRANSPORT for
+    # the x86/rpi5 builders and every keys run, MESH_CONTROL_ONION_MINT=1 the consent.
+    mesh_control_transport: str = ""   # "" / lan | lan+onion | onion
+    mesh_control_onion_mint: bool = False
     # ── pass-through builder args (forwarded to EVERY per-role builder) ──
     env: str = ""                      # --env test|prod ("" = the builders' default test)
     brand_profile: str = ""            # --config brands/*.conf
@@ -399,6 +403,10 @@ class FleetConfig:
     def validate(self) -> None:
         if self.cluster_domain:
             validate_domain_name(self.cluster_domain)
+        if self.mesh_control_transport not in ("", "lan", "lan+onion", "onion"):
+            raise IdentityValidationError(
+                f"mesh_control_transport must be lan, lan+onion or onion, not "
+                f"{self.mesh_control_transport!r}")
         if self.pki_lan_ip:
             err = pki_lan.ip_error(self.pki_lan_ip)
             if err:
@@ -513,6 +521,8 @@ class FleetConfig:
             ("SKIP_KEYS", self.skip_keys),
             ("PENTEST", self.pentest), ("PENTEST_ONLY", self.pentest_only),
             ("WITH_TOR", self.with_tor),
+            ("MESH_CONTROL_ONION_MINT", self.mesh_control_onion_mint
+             and self.mesh_control_transport not in ("", "lan")),
         ):
             if val:
                 env[var] = "1"
@@ -537,6 +547,8 @@ class FleetConfig:
             ("PENTEST_PIPELINE", self.pentest_pipeline),
             ("HEADSCALE_URL", self.headscale_url),
             ("PKI_LAN_IP", pki_lan.canonical(self.pki_lan_ip)),
+            ("MESH_CONTROL_TRANSPORT", "" if self.mesh_control_transport == "lan"
+             else self.mesh_control_transport),
             ("OPTIONAL_SERVICES", self._services_words()),
         ):
             if val:
@@ -754,4 +766,8 @@ class FleetDriver(BuildDriver):
             pki_problem = pki_lan.problem(cfg)
             if pki_problem:
                 problems.append(pki_problem)
+            if cfg.mesh_control_transport not in ("", "lan") and not cfg.mesh_control_onion_mint:
+                from . import mesh_control
+                problems.append(f"{mesh_control.LABELS[cfg.mesh_control_transport]}: tick "
+                                f"'{mesh_control.MINT_LABEL}'.")
         return problems

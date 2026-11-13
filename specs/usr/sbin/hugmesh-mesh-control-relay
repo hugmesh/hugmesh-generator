@@ -1,0 +1,185 @@
+#!/bin/bash
+# hugmesh-mesh-control-relay — the node-local relay behind the mesh's stable control
+# name, for the OPT-IN Tor fallback (docs/MESH-CONTROL-OVER-TOR.md).
+#
+# WHY. A worker's first boot happens before go-live: no public DNS, IP or
+# port-forward. With .mesh.control_transport lan+onion|onion every node dials ONE
+# stable name, https://<control_name>:<port> (default hs.<first superdomain
+# label>-control.<rest>:7443), which /etc/hosts points at 127.77.0.1. This relay
+# listens there and passes each TCP connection, unread (TLS stays end to end with the
+# pki's headscale), to:
+#   lan+onion: the pki on the LAN (<pki LAN address>:8080, headscale's own listener)
+#              while the keeper says it answers, else the pki's dedicated control onion
+#              through the local Tor SOCKS port;
+#   onion:     the control onion, always;
+#   local:     (the pki itself) headscale's own listener, 127.0.0.1:8080 — the URL's
+#              port is not headscale's, so the pki needs this forward too. No keeper.
+# tailscaled itself carries NO proxy variable (measured: HTTPS_PROXY leaks the onion
+# name to the LAN resolver and Tailscale's bootstrap DNS); only TS_FORCE_NOISE_443.
+# The DERP host is the same name, so relayed traffic takes the same path.
+#
+# Every connection over Tor uses ONE SOCKS isolation user, so all of them share the
+# rendezvous circuit the keeper keeps warm: a fresh circuit per connection measured
+# slower than tailscaled's ~5 s TLS budget.
+#
+# SUBCOMMANDS
+#   listen     exec socat on LISTEN, one `upstream` per connection (the OpenRC
+#              service hugmesh-mesh-control-relay supervises this)
+#   upstream   one connection: stdin/stdout to the chosen upstream (socat EXEC child)
+#   keeper     loop (hugmesh-mesh-control-keeper): every KEEPER_INTERVAL seconds,
+#              probe the LAN path (writes ${STATE}/lan-ok for `upstream`), open one
+#              stream to the onion on the relay's isolation (keeps the circuit warm),
+#              and after NEWNYM_AFTER failures in a row send SIGNAL NEWNYM over Tor's
+#              cookie-authenticated control socket. The NEWNYM recovery is the
+#              measured manual fix for a stuck rendezvous circuit, AUTOMATED HERE
+#              WITHOUT A LIVE MEASUREMENT of the automation itself.
+#   status     print the configuration and the keeper's last results
+#
+# CONFIG (written by keys-provision provision_mesh_control; KEY=VALUE, parsed, never
+# sourced, every value shape-checked — a bad line disables the relay, loudly):
+#   TRANSPORT=lan+onion|onion|local   LISTEN=127.77.0.1:<port>   LAN=<ipv4>:<port>|""
+#   ONION=<56 base32>.onion:<port> (not with local)   SOCKS=127.0.0.1:<port>   ISOLATION=<word>
+#   TOR_CONTROL=<unix socket path>   TOR_COOKIE=<cookie file path>
+set -uo pipefail
+
+CONF="${HUGMESH_MESH_CONTROL_CONF:-/etc/hugmesh/mesh-control/relay.conf}"
+STATE="${HUGMESH_MESH_CONTROL_STATE:-/run/hugmesh/mesh-control}"
+SELF="${HUGMESH_MESH_CONTROL_SELF:-/usr/sbin/hugmesh-mesh-control-relay}"
+KEEPER_INTERVAL="${HUGMESH_MESH_CONTROL_KEEPER_INTERVAL:-20}"
+NEWNYM_AFTER="${HUGMESH_MESH_CONTROL_NEWNYM_AFTER:-3}"
+LAN_OK_MAX_AGE="${HUGMESH_MESH_CONTROL_LAN_OK_MAX_AGE:-60}"
+LOG_TAG="hugmesh-mesh-control-relay"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >&2; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+die()  { log "ERROR: $*"; exit 1; }
+
+TRANSPORT="" LISTEN="" LAN="" ONION="" SOCKS="127.0.0.1:9050" ISOLATION="hugmesh-control"
+TOR_CONTROL="/var/lib/tor/data/control" TOR_COOKIE="/var/lib/tor/data/control_auth_cookie"
+
+_hostport_ok() {  # <value> <host-regex>
+    [[ "$1" =~ ^($2):([0-9]{1,5})$ ]] || return 1
+    local p="${BASH_REMATCH[${#BASH_REMATCH[@]}-1]}"
+    [ "$((10#${p}))" -ge 1 ] && [ "$((10#${p}))" -le 65535 ]
+}
+_IPV4='([0-9]{1,3}\.){3}[0-9]{1,3}'
+_ONION='[a-z2-7]{56}\.onion'
+load_conf() {
+    [ -r "${CONF}" ] || die "no ${CONF} — the relay is not configured on this node"
+    local line k v
+    while IFS= read -r line || [ -n "${line}" ]; do
+        case "${line}" in ''|'#'*) continue ;; esac
+        [[ "${line}" =~ ^([A-Z_]+)=(.*)$ ]] || die "malformed line in ${CONF}: ${line}"
+        k="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
+        case "${k}" in
+            TRANSPORT) [[ "${v}" =~ ^(lan\+onion|onion|local)$ ]] || die "TRANSPORT '${v}'"; TRANSPORT="${v}" ;;
+            LISTEN)    _hostport_ok "${v}" "${_IPV4}" || die "LISTEN '${v}'"; LISTEN="${v}" ;;
+            LAN)       [ -z "${v}" ] || _hostport_ok "${v}" "${_IPV4}" || die "LAN '${v}'"; LAN="${v}" ;;
+            ONION)     _hostport_ok "${v}" "${_ONION}" || die "ONION (not a v3 onion:port)"; ONION="${v}" ;;
+            SOCKS)     _hostport_ok "${v}" "${_IPV4}" || die "SOCKS '${v}'"; SOCKS="${v}" ;;
+            ISOLATION) [[ "${v}" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "ISOLATION '${v}'"; ISOLATION="${v}" ;;
+            TOR_CONTROL) [[ "${v}" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "TOR_CONTROL '${v}'"; TOR_CONTROL="${v}" ;;
+            TOR_COOKIE)  [[ "${v}" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "TOR_COOKIE '${v}'"; TOR_COOKIE="${v}" ;;
+            *) die "unknown key ${k} in ${CONF}" ;;
+        esac
+    done < "${CONF}"
+    [ -n "${TRANSPORT}" ] && [ -n "${LISTEN}" ] || die "${CONF} lacks TRANSPORT or LISTEN"
+    if [ "${TRANSPORT}" = local ]; then
+        [ -n "${LAN}" ] || die "${CONF}: TRANSPORT=local needs LAN (headscale's own listener)"
+        ONION=""
+    else
+        [ -n "${ONION}" ] || die "${CONF} lacks ONION"
+    fi
+    [ "${TRANSPORT}" = onion ] && LAN=""
+    return 0
+}
+
+# A loggable form of the onion: its first 8 characters. The address is not a secret,
+# but every copy widens who can reach the control onion.
+onion_short() { [ -n "${ONION}" ] && printf '%s…' "${ONION:0:8}" || printf 'none'; }
+
+# The socat address of the onion through Tor, on the relay's isolation user.
+onion_addr() { echo "SOCKS4A:${SOCKS%:*}:${ONION%:*}:${ONION##*:},socksport=${SOCKS##*:},socksuser=${ISOLATION}"; }
+
+# lan-ok is fresh (the keeper refreshes it every KEEPER_INTERVAL seconds).
+lan_ok() {
+    [ -n "${LAN}" ] && [ -f "${STATE}/lan-ok" ] || return 1
+    local now m
+    now="$(date +%s)"; m="$(stat -c %Y "${STATE}/lan-ok" 2>/dev/null)" || return 1
+    [ $((now - m)) -le "${LAN_OK_MAX_AGE}" ]
+}
+
+cmd_listen() {
+    load_conf
+    mkdir -p "${STATE}"
+    log "listening on ${LISTEN} (transport ${TRANSPORT}; LAN ${LAN:-none}; onion $(onion_short))"
+    exec socat "TCP-LISTEN:${LISTEN##*:},bind=${LISTEN%:*},fork,reuseaddr" "EXEC:${SELF} upstream"
+}
+
+cmd_upstream() {
+    load_conf
+    if [ "${TRANSPORT}" = local ]; then
+        exec socat STDIO "TCP:${LAN},connect-timeout=3"
+    fi
+    if lan_ok; then
+        exec socat STDIO "TCP:${LAN},connect-timeout=3"
+    fi
+    exec socat STDIO "$(onion_addr)"
+}
+
+# Tor control: SIGNAL NEWNYM with the cookie (hex), over the unix control socket.
+newnym() {
+    local cookie
+    cookie="$(od -An -tx1 -v "${TOR_COOKIE}" 2>/dev/null | tr -d ' \n')"
+    [ "${#cookie}" -eq 64 ] || { log "NEWNYM: no 32-byte cookie at ${TOR_COOKIE}"; return 1; }
+    printf 'AUTHENTICATE %s\r\nSIGNAL NEWNYM\r\nQUIT\r\n' "${cookie}" \
+        | timeout 10 socat -t 5 - "UNIX-CONNECT:${TOR_CONTROL}" 2>/dev/null | grep -q '^250 OK' \
+        && { log "sent SIGNAL NEWNYM (onion stream failed ${NEWNYM_AFTER} times in a row)"; return 0; }
+    log "NEWNYM over ${TOR_CONTROL} failed"
+    return 1
+}
+
+cmd_keeper() {
+    load_conf
+    [ "${TRANSPORT}" = local ] && { log "keeper: TRANSPORT=local (the control node's own forward) has nothing to keep"; return 0; }
+    mkdir -p "${STATE}"
+    local fails=0 t0 lan_res onion_res
+    log "keeper: every ${KEEPER_INTERVAL}s (LAN probe ${LAN:-off}; onion keep-warm; NEWNYM after ${NEWNYM_AFTER} failures)"
+    while :; do
+        lan_res="off"
+        if [ -n "${LAN}" ]; then
+            if timeout 5 socat -u /dev/null "TCP:${LAN},connect-timeout=2" 2>/dev/null; then
+                touch "${STATE}/lan-ok"; lan_res="ok"
+            else
+                rm -f "${STATE}/lan-ok"; lan_res="down"
+            fi
+        fi
+        t0="$(date +%s)"
+        if timeout 25 socat -u /dev/null "$(onion_addr)" 2>/dev/null; then
+            onion_res="ok $(( $(date +%s) - t0 ))s"; fails=0
+        else
+            fails=$((fails + 1)); onion_res="fail#${fails}"
+            if [ "${fails}" -ge "${NEWNYM_AFTER}" ]; then newnym; fails=0; fi
+        fi
+        printf 'time=%s lan=%s onion=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${lan_res}" "${onion_res}" > "${STATE}/status.tmp" \
+            && mv -f "${STATE}/status.tmp" "${STATE}/status"
+        [ "${HUGMESH_MESH_CONTROL_KEEPER_ONCE:-0}" = 1 ] && return 0
+        sleep "${KEEPER_INTERVAL}"
+    done
+}
+
+cmd_status() {
+    load_conf
+    echo "transport: ${TRANSPORT}"; echo "listen:    ${LISTEN}"; echo "lan:       ${LAN:-none}"
+    echo "onion:     $(onion_short)"; echo "socks:     ${SOCKS} (isolation ${ISOLATION})"
+    if [ "${TRANSPORT}" = local ]; then echo "path now:  local (headscale on this node)"; return 0; fi
+    if lan_ok; then echo "path now:  LAN"; else echo "path now:  onion"; fi
+    cat "${STATE}/status" 2>/dev/null || echo "keeper:    no result yet"
+}
+
+case "${1:-}" in
+    listen)   cmd_listen ;;
+    upstream) cmd_upstream ;;
+    keeper)   cmd_keeper ;;
+    status)   cmd_status ;;
+    *) echo "usage: ${0##*/} listen|upstream|keeper|status" >&2; exit 2 ;;
+esac
