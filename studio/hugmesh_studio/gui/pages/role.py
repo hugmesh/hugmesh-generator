@@ -975,7 +975,6 @@ class RolePage(QtWidgets.QWizardPage):
             defconfig_w.setText(c.uboot_defconfig)
             skip_w.setChecked(c.skip_uboot)
         self.kernel_flavor.setCurrentIndex(offered_index(self.kernel_flavor, c.kernel_flavor or ""))
-        self.capable.setChecked(c.capable)
         # Restore from cfg on the axis that MATTERS, and only that one. The isEnabled()
         # conjunct this replaces read the widget's paint state, which the tautology above
         # it had already forced to False in every mode — so a loaded unaffiliated=True was
