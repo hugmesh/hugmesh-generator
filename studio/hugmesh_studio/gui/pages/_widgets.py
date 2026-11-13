@@ -7,6 +7,7 @@ established ``from ..wizard import _file_picker, _row`` import.
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
+from ...core.device_catalog import STATUS_BADGE_TEXT
 from ..styles import muted
 
 
@@ -205,11 +206,12 @@ def _row(label, widget):
 # Device-catalog status badges (shared by RolePage's device browser and the mesh
 # WorklistPage group rows): (badge text, color). SUPPORTED carries no badge —
 # buildability is the default claim; the non-default statuses must be explicit (#351).
+# The badge WORDS are core.device_catalog.STATUS_BADGE_TEXT (the TUI and the CLI print
+# the same ones); only the colour is a GUI decision.
 _STATUS_BADGES = {
-    "supported": ("", ""),
-    "experimental": ("EXPERIMENTAL — hardware validation pending; fail-loud preflight",
-                     "#a65d00"),
-    "unsupported": ("NOT BUILDABLE", "#777777"),
+    "supported": (STATUS_BADGE_TEXT["supported"], ""),
+    "experimental": (STATUS_BADGE_TEXT["experimental"], "#a65d00"),
+    "unsupported": (STATUS_BADGE_TEXT["unsupported"], "#777777"),
 }
 
 

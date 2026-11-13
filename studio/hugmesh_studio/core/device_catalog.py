@@ -32,6 +32,9 @@ from .config import ROLE_CHOICES, rpi_boards_for_role
 
 CATALOG_PATH = os.path.join(os.path.dirname(__file__), "device-catalog.json")
 SCHEMA = "device-catalog/v1"
+#: The ``--list-devices --json`` document: rows as every channel labels them, not the
+#: catalog file's own shape (that is ``SCHEMA``, carried alongside as ``catalog``).
+LIST_SCHEMA = "device-list/v1"
 
 # status vocabulary (the #351 honesty buckets). SELECTABLE_STATUSES gates the GUI:
 # an unsupported device is visible but never selectable for a build.
@@ -269,6 +272,167 @@ def status_reason(device_id: str) -> str:
         return (dev.reason if dev.reason.lower().startswith("experimental")
                 else f"{EXPERIMENTAL_CAVEAT}: {dev.reason}")
     return dev.reason
+
+
+# ---- the ONE row presenter every channel renders (GUI, TUI, CLI) ------------------
+#
+# The GUI device tree, the TUI's arch -> family -> device browse and the CLI's
+# --list-devices all label a row with these functions and nothing else, so a device can
+# never read one way in a window and another way in a terminal. Colours stay in the
+# GUI (gui/pages/_widgets.py); only the WORDS live here.
+
+#: The status badge text per catalog status. SUPPORTED carries no badge: buildable is
+#: the default claim, and the two non-default statuses must say so explicitly (#351).
+STATUS_BADGE_TEXT = {
+    "supported": "",
+    "experimental": EXPERIMENTAL_CAVEAT,
+    "unsupported": "NOT BUILDABLE",
+}
+
+
+@dataclass(frozen=True)
+class DeviceRow:
+    """One device as every channel shows it in ``mode``.
+
+    ``status_text`` is the GUI tree's Status column, verbatim. ``pickable`` is the
+    selection gate: False for an UNSUPPORTED device, and for a selectable device that
+    derives no image type in this mode. ``refusal`` is the sentence a channel prints
+    when someone tries to pick a row that is not pickable ("" when it is pickable).
+    ``detail`` is the GUI tooltip: the reason or caveat, else the device notes."""
+    id: str
+    label: str
+    soc: str
+    arch: str
+    family: str
+    status: str
+    status_text: str
+    pickable: bool
+    refusal: str
+    detail: str
+    board_axis: str
+
+
+def family_heading(family_id: str) -> str:
+    """A family group's heading: ``"<label> — <vendor>"`` (the GUI tree's bold row)."""
+    fam = load_catalog().family(family_id)
+    return f"{fam.label} — {fam.vendor}"
+
+
+def board_axis(device_id: str) -> str:
+    """The builder axes a device selects, as the flags they become: ``--platform rpi5
+    --board rpi4``, ``--platform x86 (no --board axis)``, or ``no builder`` for an
+    UNSUPPORTED device (it has no axes to write)."""
+    dev = load_catalog().device(device_id)
+    if dev.builder_platform is None:
+        return "no builder"
+    if dev.builder_board:
+        return f"--platform {dev.builder_platform} --board {dev.builder_board}"
+    return f"--platform {dev.builder_platform} (no --board axis)"
+
+
+def device_row(device_id: str, mode: str) -> DeviceRow:
+    """The row for ``device_id`` in Studio ``mode`` — the rule RolePage's device tree
+    has always applied, lifted here so the TUI and the CLI apply the same one:
+
+    * UNSUPPORTED: ``NOT BUILDABLE — <reason>``, never pickable;
+    * selectable but no image type in this mode: ``no <mode> image — <notes, or the
+      modes that do offer it>``, not pickable here;
+    * otherwise the status badge ("" for supported, the EXPERIMENTAL caveat)."""
+    dev = load_catalog().device(device_id)
+    roles = roles_for(device_id, mode)
+    if dev.status == "unsupported":
+        text = f"{STATUS_BADGE_TEXT['unsupported']} — {dev.reason}"
+        pickable = False
+        refusal = f"{dev.label} cannot be built: {dev.reason}"
+    elif not roles:
+        others = [m for m in ROLE_CHOICES if roles_for(device_id, m)]
+        text = (f"no {mode} image — " + (dev.notes or
+                f"offered on the {'/'.join(others) or 'other'} path"))
+        pickable = False
+        refusal = f"{dev.label}: {text}"
+    else:
+        text = STATUS_BADGE_TEXT[dev.status]
+        pickable = True
+        refusal = ""
+    return DeviceRow(
+        id=dev.id, label=dev.label, soc=dev.soc, arch=dev.arch, family=dev.family,
+        status=dev.status, status_text=text, pickable=pickable, refusal=refusal,
+        detail=status_reason(device_id) or dev.notes, board_axis=board_axis(device_id))
+
+
+def browse(mode: str) -> list[tuple["Arch", list[tuple["Family", list[DeviceRow]]]]]:
+    """The whole catalog as arch -> family -> device rows, in catalog order. EVERY arch
+    with at least one device appears (an all-refused arch such as ARMv7 included, so
+    its reasons are reachable); a family appears under each arch it has devices on."""
+    cat = load_catalog()
+    out = []
+    for arch in cat.archs:
+        fams = []
+        for fam in cat.families_for_arch(arch.id):
+            rows = [device_row(d.id, mode) for d in cat.devices_in_family(fam.id)
+                    if d.arch == arch.id]
+            if rows:
+                fams.append((fam, rows))
+        if fams:
+            out.append((arch, fams))
+    return out
+
+
+def row_text_lines(row: DeviceRow, number: int | None = None,
+                   current: bool = False) -> list[str]:
+    """A device row as terminal text — what the TUI browse and ``--list-devices``
+    both print: ``label — SoC``, then the status (the GUI Status column's words, when
+    there are any), the builder axes, and the reason or caveat (the GUI tooltip)."""
+    marker = "*" if current else " "
+    head = f" {marker}{number:2d}. " if number is not None else "   "
+    out = [f"{head}{row.label} — {row.soc}"]
+    pad = " " * len(head)
+    if row.status_text:
+        out.append(f"{pad}status: {row.status_text}")
+    out.append(f"{pad}builds as: {row.board_axis}")
+    if row.detail and row.detail not in row.status_text:
+        out.append(f"{pad}about: {row.detail}")
+    return out
+
+
+def list_devices_lines(mode: str) -> list[str]:
+    """``--list-devices`` as text: every catalog row, arch -> family -> device, each
+    with its id (what ``--json`` keys on) and :func:`row_text_lines`."""
+    out = [f"Device catalog — labelled for {mode} images "
+           f"(--mode {'|'.join(ROLE_CHOICES)} for another path). Rows marked NOT "
+           f"BUILDABLE, or with no image on this path, cannot be picked."]
+    for arch, fams in browse(mode):
+        out.append("")
+        out.append(arch.label)
+        for fam, rows in fams:
+            out.append(f"  {family_heading(fam.id)}")
+            for row in rows:
+                lines = row_text_lines(row)
+                out.append(f"    [{row.id}]")
+                out += ["    " + ln for ln in lines]
+    return out
+
+
+def list_devices_json(mode: str) -> dict:
+    """``--list-devices --json``: the same rows as data. ``pickable`` is the selection
+    gate and ``refusal`` its sentence; ``roles`` lists the image types the device
+    derives on this path (empty for a refused row)."""
+    devices = []
+    for arch, fams in browse(mode):
+        for fam, rows in fams:
+            for row in rows:
+                dev = load_catalog().device(row.id)
+                devices.append({
+                    "id": row.id, "label": row.label, "soc": row.soc,
+                    "arch": arch.id, "arch_label": arch.label,
+                    "family": fam.id, "family_heading": family_heading(fam.id),
+                    "status": row.status, "status_text": row.status_text,
+                    "pickable": row.pickable, "refusal": row.refusal,
+                    "detail": row.detail, "board_axis": row.board_axis,
+                    "platform": dev.builder_platform, "board": dev.builder_board,
+                    "roles": [r for r, _l in roles_for(row.id, mode)],
+                })
+    return {"schema": LIST_SCHEMA, "catalog": SCHEMA, "mode": mode, "devices": devices}
 
 
 def default_device_for_platform(platform: str) -> str:
