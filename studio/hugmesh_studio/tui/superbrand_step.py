@@ -46,7 +46,8 @@ import os
 from typing import Any
 
 from ..core import brand_look, brand_model, plain_words, validate as validators
-from ..core.config import DOMAIN_FIELDS, Domain, ImageConfig, unaffiliated_image
+from ..core.config import (DOMAIN_FIELDS, DOMAIN_IDP_SUPERDOMAIN, Domain, ImageConfig,
+                           unaffiliated_image)
 
 __all__ = ["CREATE_KEY", "CREATE_LABEL", "UNAFFILIATED_REASON", "Choice", "BrandHost",
            "ImageHost", "BootstrapHost", "FleetHost", "BrandSession", "SuperbrandScreen",
@@ -120,6 +121,9 @@ class MeshWrites:
                       "change")
     tor_refusal = "this route keeps no mesh-wide Tor setting"
     egress_refusal = "this route keeps no mesh-wide egress setting"
+    #: (#1107) the ways the mesh's own domain offers to sign in
+    signin_methods_refusal = ("this route keeps no list of ways to sign in for the "
+                              "mesh's own domain")
     vpn_where = "this route keeps no mesh-wide VPN setting"
 
     def __init__(self):
@@ -148,6 +152,10 @@ class MeshWrites:
     def egress(self) -> tuple[str, str]:
         return ("direct", "")
 
+    def signin_methods(self) -> list[str]:
+        """The mesh's own domain's stored sign-in methods ([] = password only)."""
+        return []
+
     # the writers
     def set_signin(self, idp: str, issuer: str = "", client_id: str = "",
                    jwks: str = "") -> list[str]:
@@ -158,6 +166,9 @@ class MeshWrites:
 
     def set_egress(self, mode: str, conf: str = "") -> list[str]:
         return [self.egress_refusal]
+
+    def set_signin_methods(self, methods) -> list[str]:
+        return [self.signin_methods_refusal]
 
 
 def _signin_problems(idp: str, issuer: str, client_id: str, jwks: str) -> tuple[
@@ -197,7 +208,7 @@ class ImageMeshWrites(MeshWrites):
     Network step's Tor service (``tor_onion_service``) and egress VPN file
     (``egress_vpn``), on the wizard's ``ImageConfig``."""
 
-    signin_refusal = tor_refusal = ""
+    signin_refusal = tor_refusal = signin_methods_refusal = ""
     vpn_where = ("every node of a mesh joins the mesh's VPN: the mesh flow turns it on "
                  "for every image, so it is not a choice")
 
@@ -254,6 +265,21 @@ class ImageMeshWrites(MeshWrites):
         if problems:
             return problems
         self.cfg.egress_vpn = conf.strip() if mode == "vpn" else ""
+        return self._done()
+
+    def signin_methods(self) -> list[str]:
+        return list(self.cfg.cluster_domain_signin_methods or [])
+
+    def set_signin_methods(self, methods) -> list[str]:
+        """``ImageConfig.cluster_domain_signin_methods`` through the one writer's rules
+        (``set_domain_signin_methods`` on a stand-in row that signs in through this
+        mesh's own provider)."""
+        from ..core.config import set_domain_signin_methods
+        probe = Domain(name="", idp=DOMAIN_IDP_SUPERDOMAIN)
+        problems = set_domain_signin_methods(probe, methods, mesh=self.cfg)
+        if problems:
+            return problems
+        self.cfg.cluster_domain_signin_methods = list(probe.signin_methods)
         return self._done()
 
 

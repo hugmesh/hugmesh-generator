@@ -43,8 +43,10 @@ import dataclasses
 from ..core import (brand_look, brand_model, domain_reach, plain_words, platform_info,
                     reach_apply)
 from ..core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, SIGNIN_FROM_MESH,
-                           SIGNIN_SOURCE_WORDS, Domain, effective_signin,
-                           set_domain_signin)
+                           SIGNIN_METHOD_LABELS, SIGNIN_METHODS, SIGNIN_METHODS_EXTERNAL,
+                           SIGNIN_METHODS_NOT_APPLIED, SIGNIN_SOURCE_WORDS, Domain,
+                           effective_signin, effective_signin_methods, set_domain_signin,
+                           set_domain_signin_methods)
 from .superbrand_step import MESH_SIGNIN_CHOICES, BrandSession
 
 __all__ = ["SECTIONS", "SECTION_LOOK", "SECTION_SERVICES", "BrandView", "brand_view",
@@ -375,6 +377,54 @@ class BrandView:
         effect = self.signin_effect()
         return bool(effect) and effect != SIGNIN_DOCKER_APPLIED
 
+    # ── 1c. Ways to sign in: per domain (hugmesh-generator#1107) ──────────────────
+    def signin_methods_refusal(self) -> str:
+        """Why this row offers no choice of ways to sign in ("" = it does): the route
+        keeps no such list for row 0, or the domain signs in through an external
+        provider, which decides its own ways."""
+        if self.own:
+            why = self.writes().signin_methods_refusal
+            if not why and (self.writes().signin()[0] or "casdoor") != "casdoor":
+                why = SIGNIN_METHODS_EXTERNAL
+            return (why[:1].upper() + why[1:]) if why else ""
+        r = self.row
+        if r is not None and effective_signin(r, self.mesh()).provider != "casdoor":
+            return SIGNIN_METHODS_EXTERNAL[:1].upper() + SIGNIN_METHODS_EXTERNAL[1:]
+        return ""
+
+    def signin_methods(self) -> list[str]:
+        """The ways this domain offers now (the stored list, or password only)."""
+        if self.own:
+            stored = self.writes().signin_methods()
+        else:
+            r = self.row
+            stored = list(r.signin_methods) if r is not None else []
+        return effective_signin_methods(stored)
+
+    def signin_methods_words(self) -> str:
+        return ", ".join(SIGNIN_METHOD_LABELS[m] for m in self.signin_methods())
+
+    def signin_methods_note(self) -> str:
+        """What every screen says beside the methods until the cluster side reads them."""
+        return SIGNIN_METHODS_NOT_APPLIED
+
+    def set_signin_methods(self, methods) -> list[str]:
+        """Write the ways this domain offers through ``set_domain_signin_methods`` (the
+        one writer); row 0 writes where its route keeps the mesh's own value. Returns
+        the problems; nothing is written while there is one."""
+        why = self.signin_methods_refusal()
+        if why:
+            return [why]
+        if self.own:
+            return self.writes().set_signin_methods(list(methods or ()))
+        r = self.row
+        if r is None:
+            return [f"no domain named {self.name} on this screen"]
+        problems = set_domain_signin_methods(r, list(methods or ()), mesh=self.mesh())
+        if not problems:
+            self.session.touched = True
+        return problems
+
     # ── 4b. Ways: Tor, VPN and egress, per domain ─────────────────────────────────
     def _set_ways(self, **kw) -> list[str]:
         """Write this brand's ways through ``brand_model.set_ways`` (the one writer)
@@ -651,7 +701,7 @@ def identity_lines(view: BrandView) -> list[str]:
         why = view.signin_refusal()
         if why:
             out += ["", SIGNIN_MESH_HOME, "   " + why]
-            return out
+            return out + _methods_lines(view)
         out += ["", SIGNIN_MESH_EDIT]
     vals = view.signin_values()
     out.append("   choices       " + ", ".join(k for k, _l in view.signin_choices())
@@ -661,7 +711,23 @@ def identity_lines(view: BrandView) -> list[str]:
         out.append(f"   client id        {vals['client_id'] or '(not set)'}")
         out.append(f"   key address      {vals['jwks'] or '(derived from the sign-in address)'}")
     out += ["", _signin_commands(view)]
-    return out
+    return out + _methods_lines(view)
+
+
+#: The text face's command for the ways to sign in (a full word: a one-letter verb
+#: collides with other screens' commands).
+METHODS_COMMAND = "methods"
+METHODS_COMMAND_LINE = ("commands: " + METHODS_COMMAND + " "
+                        + " ".join(SIGNIN_METHODS) + "  (name every way to offer)")
+
+
+def _methods_lines(view: BrandView) -> list[str]:
+    """The ways this domain offers to sign in (#1107), under its sign-in."""
+    out = ["", "   Ways to sign in  " + view.signin_methods_words()]
+    why = view.signin_methods_refusal()
+    if why:
+        return out + ["   " + why]
+    return out + ["   " + view.signin_methods_note(), "", METHODS_COMMAND_LINE]
 
 
 def _signin_commands(view: BrandView) -> str:
@@ -673,6 +739,11 @@ def feed_identity(view: BrandView, line: str) -> str:
     """One command of section 1 (the window's sign-in controls, as text). Returns the
     status sentence; nothing is written when it names a problem."""
     words = line.split()
+    if words and words[0].lower() == METHODS_COMMAND:
+        problems = view.set_signin_methods([w.lower() for w in words[1:]])
+        if problems:
+            return "Not changed: " + problems[0]
+        return f"{view.name}: ways to sign in -> {view.signin_methods_words()}"
     if not words or words[0].lower() != "signin":
         return _signin_commands(view)
     if len(words) < 2:

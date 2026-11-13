@@ -3212,6 +3212,15 @@ class Domain:
     # no Casdoor is stood up for it. Written through ONE function,
     # ``set_domain_signin``; read through ``effective_signin``. OMIT-WHEN-EMPTY.
     idp_settings: dict[str, Any] = field(default_factory=dict)
+    # Which ways of signing in this domain OFFERS its people (hugmesh-generator#1107,
+    # operator decision 2026-11-13): a subset of SIGNIN_METHODS, in that order. EMPTY —
+    # the default and every row written before the field existed — is password only
+    # (DEFAULT_SIGNIN_METHODS), today's behaviour; no row inherits another's. Only a
+    # domain that signs in through Casdoor (the mesh's or its own) carries any: an
+    # external provider decides its own ways. Written through ONE function,
+    # ``set_domain_signin_methods``; read through ``effective_signin_methods``.
+    # OMIT-WHEN-EMPTY, so every earlier row keeps its bytes.
+    signin_methods: list[str] = field(default_factory=list)
 
 
 #: Every field a brand row carries, in declaration order — THE key list every copy
@@ -3222,7 +3231,8 @@ DOMAIN_FIELDS: tuple[str, ...] = tuple(Domain.__dataclass_fields__)
 #: Row keys left out of every SAVED shape when they are empty/false/zero, so a row
 #: that does not use them is written exactly as before the field existed.
 DOMAIN_OMIT_WHEN_EMPTY: tuple[str, ...] = ("id", "tor", "look", "ways", "issuer_port",
-                                           "github_org", "idp_settings")
+                                           "github_org", "idp_settings",
+                                           "signin_methods")
 
 
 # ── per-domain identity-provider settings (2026-10-21) ──────────────────────────────
@@ -3249,6 +3259,81 @@ OWN_SIGNIN_NOT_APPLIED_ON_IMAGE = (
     "Not applied by a built image yet: an Own choice is kept with this configuration "
     "and the domain signs in through the mesh until the cluster side is built "
     "(docs/DOMAIN-IDP.md).")
+
+
+# ── per-domain sign-in METHODS (hugmesh-generator#1107) ─────────────────────────────
+#: The ways a domain can offer its people to sign in, in canonical (display) order.
+SIGNIN_METHODS: tuple[str, ...] = ("password", "google", "discord")
+#: What a row with no list offers: password only (every row before #1107).
+DEFAULT_SIGNIN_METHODS: tuple[str, ...] = ("password",)
+SIGNIN_METHOD_LABELS = {"password": "Password", "google": "Google", "discord": "Discord"}
+#: What every screen says beside the methods until the cluster side reads them.
+SIGNIN_METHODS_NOT_APPLIED = (
+    "Kept with this configuration, not applied yet: sign-in still offers a password "
+    "only, until the login page and user-bff read this list "
+    "(hugmesh-generator#1107).")
+#: Why a domain with an external provider offers no choice of methods.
+SIGNIN_METHODS_EXTERNAL = ("this domain signs in through an external provider, which "
+                           "decides its own ways to sign in")
+
+
+def signin_methods_problem(methods) -> str:
+    """Why ``methods`` is not a usable list of sign-in methods ("" when it is). None
+    and [] are the default (password only); anything else must be a list of
+    SIGNIN_METHODS names, each at most once."""
+    if methods is None:
+        return ""
+    if not isinstance(methods, (list, tuple)):
+        return f"signin_methods must be a list, got {methods!r}"
+    seen: set[str] = set()
+    for m in methods:
+        if not isinstance(m, str) or m not in SIGNIN_METHODS:
+            return (f"signin_methods: unknown sign-in method {m!r} (known: "
+                    f"{', '.join(SIGNIN_METHODS)})")
+        if m in seen:
+            return f"signin_methods: {m!r} is listed twice"
+        seen.add(m)
+    return ""
+
+
+def clean_signin_methods(methods) -> list[str]:
+    """The STORED form of a valid list: canonical order, and [] for the default (so a
+    row that says password only keeps its pre-#1107 bytes)."""
+    chosen = [m for m in SIGNIN_METHODS if m in set(methods or ())]
+    return [] if tuple(chosen) == DEFAULT_SIGNIN_METHODS else chosen
+
+
+def effective_signin_methods(methods) -> list[str]:
+    """What a stored list MEANS: [] (or None) is the default, password only."""
+    chosen = [m for m in SIGNIN_METHODS if m in set(methods or ())]
+    return chosen or list(DEFAULT_SIGNIN_METHODS)
+
+
+def set_domain_signin_methods(row, methods, mesh=None) -> list[str]:
+    """THE ONE WRITER of a domain's sign-in methods, for every screen. Refuses an
+    unknown method, an empty choice (a domain nobody can sign in to) and a domain
+    whose sign-in is an external provider; nothing is written when there is a
+    problem. Accepts a Domain or a recorded row dict."""
+    methods = list(methods or ())
+    problem = signin_methods_problem(methods)
+    if problem:
+        return [problem]
+    if not methods:
+        return ["choose at least one way to sign in; a domain with none could not be "
+                "signed in to"]
+    name = (_row_get(row, "name", "") or "").strip()
+    if effective_signin(row, mesh).provider != "casdoor":
+        return [f"domain {name}: {SIGNIN_METHODS_EXTERNAL}" if name
+                else SIGNIN_METHODS_EXTERNAL]
+    clean = clean_signin_methods(methods)
+    if isinstance(row, dict):
+        if clean:
+            row["signin_methods"] = clean
+        else:
+            row.pop("signin_methods", None)
+    else:
+        row.signin_methods = clean
+    return []
 
 
 class DomainSignIn(NamedTuple):
@@ -3459,6 +3544,8 @@ def set_domain_signin(row, idp: str, *, provider: str = "", issuer: str = "",
                                                     if o is not row])
     if problems:
         return problems
+    # the sign-in methods are Casdoor's (#1107): an external provider decides its own
+    external = effective_signin(probe, mesh).provider != "casdoor"
     if isinstance(row, dict):
         row["idp"] = idp
         if block:
@@ -3467,11 +3554,15 @@ def set_domain_signin(row, idp: str, *, provider: str = "", issuer: str = "",
             row.pop("idp_settings", None)
         if not runs_own_casdoor(row):
             row.pop("issuer_port", None)
+        if external:
+            row.pop("signin_methods", None)
     else:
         row.idp = idp
         row.idp_settings = dict(block)
         if not runs_own_casdoor(row):
             row.issuer_port = 0
+        if external:
+            row.signin_methods = []
     return []
 
 
@@ -3744,6 +3835,11 @@ class ImageConfig:
     # takes no part in the Go-Live export step; OMIT-WHEN-EMPTY in to_dict and the
     # manifest, so every pre-existing config and manifest keeps its bytes.
     cluster_domain_github_org: str = ""
+    # The ways the MESH'S OWN domain offers to sign in (``Domain.signin_methods`` for
+    # the implicit own domain, hugmesh-generator#1107 — the github_org precedent: a
+    # separate field, not a ``domains`` row). [] = password only; OMIT-WHEN-EMPTY in
+    # to_dict and both manifests, so every pre-existing config keeps its bytes.
+    cluster_domain_signin_methods: list[str] = field(default_factory=list)
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
@@ -4018,6 +4114,10 @@ class ImageConfig:
         # a config that never met the field keeps its bytes
         if not (d.get("cluster_domain_github_org") or "").strip():
             d.pop("cluster_domain_github_org", None)
+        # the own domain's sign-in methods: OMIT-WHEN-EMPTY (the default), like its
+        # domains[] twin
+        if not d.get("cluster_domain_signin_methods"):
+            d.pop("cluster_domain_signin_methods", None)
         # the Desktop step's spec is OMIT-WHEN-EMPTY too (core/desktop_spec.py), and its
         # secret twin never appears unless a caller asked for secrets AND one was typed
         if not d.get("desktop_spec"):
@@ -4112,6 +4212,13 @@ class ImageConfig:
         if problem:
             raise ValueError(f"domain {kw.get('name', '')!r}: {problem}")
         kw["idp_settings"] = clean_idp_settings(st or {})
+        # per-domain sign-in methods (#1107): absent/null/[] is password only; junk
+        # fails loudly at load like idp does, never silently narrowed or widened.
+        sm = kw.get("signin_methods")
+        problem = signin_methods_problem(sm)
+        if problem:
+            raise ValueError(f"domain {kw.get('name', '')!r}: {problem}")
+        kw["signin_methods"] = clean_signin_methods(sm or [])
         return Domain(**kw)
 
     @staticmethod
@@ -4205,6 +4312,14 @@ class ImageConfig:
             if problem:
                 raise ValueError(f"cluster_domain_github_org: {problem}")
             d["cluster_domain_github_org"] = v.strip()
+        # The own domain's sign-in methods (#1107): the per-domain rule — absent/null is
+        # the default, junk fails loudly at load.
+        if "cluster_domain_signin_methods" in d:
+            v = d["cluster_domain_signin_methods"]
+            problem = signin_methods_problem(v)
+            if problem:
+                raise ValueError(f"cluster_domain_{problem}")
+            d["cluster_domain_signin_methods"] = clean_signin_methods(v or [])
         # MIGRATE the pre-2026-08-26 spelling of the post-build device-test opt-in.
         # from_dict filters unknown keys, so without this a config saved under the old
         # name would load with the opt-in silently OFF — the `games` precedent above:
@@ -5775,6 +5890,9 @@ class ImageConfig:
             # the own domain's export org (the Go-Live export step) — OMIT-WHEN-EMPTY
             **({"cluster_domain_github_org": self.cluster_domain_github_org.strip()}
                if (self.cluster_domain_github_org or "").strip() else {}),
+            # the own domain's sign-in methods (#1107) — OMIT-WHEN-EMPTY (password only)
+            **({"cluster_domain_signin_methods": list(self.cluster_domain_signin_methods)}
+               if self.cluster_domain_signin_methods else {}),
         }
 
     def write_mesh_manifest(self, output_dir: str) -> str:
