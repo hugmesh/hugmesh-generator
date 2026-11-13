@@ -1895,7 +1895,6 @@ _FIELD_PROBE = {
     "tailscale_version": {"tailscale_version": "1.60"},
     "skip_tailscale": {"skip_tailscale": True},
     "headscale_public_derp": {"headscale_public_derp": True},
-    "mesh_control_transport": {"mesh_control_transport": "lan+onion"},
     "gpu_driver": {"gpu_driver": "nvidia"}, "nvidia_cuda": {"nvidia_cuda": True},
     "kernel_builtin": {"kernel_builtin": True},
     "enable_wifi": {"enable_wifi": True}, "enable_bluetooth": {"enable_bluetooth": True},
@@ -2028,7 +2027,8 @@ def test_field_probe_covers_the_whole_capability_table():
     # test below instead of the shared before/after differ.
     # `desktop_spec` (the Desktop step) needs a DESKTOP role on each board — the shared
     # baselines are node roles on rpi5/jetson — so it has its own test below too.
-    assert set(_FIELD_PROBE) | {"unaffiliated", "superdomain", "desktop_spec"} \
+    assert set(_FIELD_PROBE) | {"unaffiliated", "superdomain", "desktop_spec",
+                                "mesh_control_transport"} \
         == set(PLATFORM_FIELD_SUPPORT)
 
 
@@ -2041,6 +2041,22 @@ _DESKTOP_BASELINES = {
     "orangepi5": dict(mode="cloud", role="orangepi5", platform="orangepi5"),
     "orangepi4-lts": dict(mode="cloud", role="orangepi4-lts", platform="orangepi4-lts"),
 }
+
+
+def test_mesh_control_transport_emits_on_the_tor_builders_in_mesh_mode_only():
+    # Mesh-only (the Network page offers it only in mesh mode), so the mixed cloud/mesh
+    # baselines cannot isolate it: probe every board in mesh mode, then check that a
+    # value left over from a mesh walk never reaches a cloud or standalone image.
+    probe = {"mesh_control_transport": "lan+onion"}
+    derived = {p for p in _PROBE_PLATFORMS
+               if _emits_on(dict(_BASELINES[p], mode="mesh"), probe)
+               or (p in _NODE_BASELINES and _emits_on(_NODE_BASELINES[p], probe))}
+    assert derived == set(PLATFORM_FIELD_SUPPORT["mesh_control_transport"])
+    for mode in ("cloud", "standalone"):
+        for plat in ("x86", "rpi5"):
+            args = ImageConfig(mode=mode, role="desktop" if plat == "x86" else "rpi5-desktop",
+                               platform=plat, mesh_control_transport="onion").to_cli_args()
+            assert "--mesh-control-transport" not in args, (mode, plat)
 
 
 def test_desktop_spec_emits_exactly_on_the_desktop_builders():

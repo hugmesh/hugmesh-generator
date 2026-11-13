@@ -41,7 +41,7 @@ import shlex
 from dataclasses import MISSING, asdict, dataclass, field, fields
 from typing import Any, ClassVar
 
-from . import build_driver, nvd_key, pki_lan, platform_info
+from . import build_driver, mesh_control, nvd_key, pki_lan, platform_info
 from .build_driver import BuildDriver
 from .config import (Domain, IdentityValidationError, ImageConfig,
                      domain_rows_to_dict, validate_domain_name)
@@ -675,6 +675,12 @@ class FleetDriver(BuildDriver):
                     "none stored — " + nvd_key.PREFLIGHT_NO_KEY))
         self._nvd_key_file = path
         try:
+            rc = self._host_mint(cfg, backend or self.host.default_backend, sink)
+            if rc != 0:
+                if sink is not None:
+                    sink("!! mesh control: the control onion could not be created on this "
+                         "computer — nothing was built")
+                return rc
             return super().run(cfg, backend, on_line=sink)
         finally:
             self._nvd_key_file = None
@@ -766,8 +772,39 @@ class FleetDriver(BuildDriver):
             pki_problem = pki_lan.problem(cfg)
             if pki_problem:
                 problems.append(pki_problem)
-            if cfg.mesh_control_transport not in ("", "lan") and not cfg.mesh_control_onion_mint:
-                from . import mesh_control
-                problems.append(f"{mesh_control.LABELS[cfg.mesh_control_transport]}: tick "
-                                f"'{mesh_control.MINT_LABEL}'.")
+            if cfg.mesh_control_transport not in ("", "lan"):
+                if not cfg.mesh_control_onion_mint:
+                    problems.append(f"{mesh_control.LABELS[cfg.mesh_control_transport]}: tick "
+                                    f"'{mesh_control.MINT_LABEL}'.")
+                else:
+                    # Minted on THIS computer before the run (build-all-roles.sh natively,
+                    # or run() ahead of the docker container, which has no tor).
+                    mint = mesh_control.mint_problem(self._fleet_out(cfg))
+                    if mint:
+                        problems.append(mint)
+        # Only the x86/rpi5 builders bake Tor; the others exit 1 on a Tor transport,
+        # after hours of x86/rpi5 builds (build-all-roles.sh refuses it too).
+        problems += mesh_control.fleet_board_problems(cfg)
         return problems
+
+    def _fleet_out(self, cfg: FleetConfig) -> str:
+        """The run's host output dir, as command() resolves it."""
+        return self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
+
+    def _host_mint(self, cfg: FleetConfig, backend: str, on_line=None) -> int:
+        """The docker leg runs build-all-roles.sh in the builder image, which has no
+        tor: mint the control onion on THIS computer first, into <out>/mesh-control-onion
+        (the container's /out/mesh-control-onion, build-all-roles.sh's default). 0 when
+        there is nothing to do."""
+        out = self._fleet_out(cfg)
+        if (backend != "docker" or cfg.mesh_control_transport in ("", "lan")
+                or not cfg.mesh_control_onion_mint or cfg.skip_keys or cfg.pentest_only
+                or mesh_control.is_minted(out)):
+            return 0
+        import subprocess
+        proc = subprocess.run(mesh_control.host_mint_command(self.generator_dir, out),
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if on_line is not None:
+            for line in (proc.stdout or "").splitlines():
+                on_line(line)
+        return proc.returncode

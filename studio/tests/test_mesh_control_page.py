@@ -38,6 +38,19 @@ def _pinned_host(monkeypatch):
                         lambda builder_image="hugmesh-builder": HOST)
 
 
+@pytest.fixture(autouse=True)
+def _tor_on_path(monkeypatch):
+    """The mint check looks for tor on PATH; pin it found (CI's runners have none).
+    The tests of that check pin it themselves."""
+    monkeypatch.setattr(mesh_control, "_which",
+                        lambda name: f"/usr/bin/{name}" if name == "tor" else None)
+
+
+def _no_tor(monkeypatch, docker=False):
+    monkeypatch.setattr(mesh_control, "_which",
+                        lambda name: "/usr/bin/docker" if (docker and name == "docker") else None)
+
+
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
@@ -132,6 +145,61 @@ def test_preflight_refuses_a_node_whose_builder_cannot_bake_tor(tmp_path):
                                             mesh_control_onion_mint=True),
                          host=HOST, backend="native")
     assert any("orangepi5 builder cannot bake Tor" in p for p in drv.preflight())
+
+
+# ── minting: checked before any image is built (review of #1096) ──────────────────
+def test_mint_problem_needs_tor_here_or_a_tor_image(tmp_path, monkeypatch):
+    out = str(tmp_path)
+    assert mesh_control.mint_problem(out, osname="posix") == ""          # tor on PATH
+    _no_tor(monkeypatch)
+    assert "needs tor on this computer" in mesh_control.mint_problem(out, osname="posix", environ={})
+    _no_tor(monkeypatch, docker=True)
+    assert "needs tor" in mesh_control.mint_problem(out, osname="posix", environ={})
+    assert mesh_control.mint_problem(
+        out, osname="posix", environ={"MESH_CONTROL_TOR_IMAGE": "example/tor:1"}) == ""
+
+
+def test_mint_problem_on_windows_and_an_already_minted_dir(tmp_path, monkeypatch):
+    out = str(tmp_path)
+    assert "cannot be created on Windows" in mesh_control.mint_problem(out, osname="nt")
+    _no_tor(monkeypatch)
+    (tmp_path / "mesh-control-onion").mkdir()
+    (tmp_path / "mesh-control-onion" / "hostname").write_text("x.onion\n")
+    assert mesh_control.is_minted(out)
+    assert mesh_control.mint_problem(out, osname="nt") == ""
+    assert mesh_control.mint_problem(out, osname="posix", environ={}) == ""
+
+
+def test_preflight_refuses_a_mint_this_computer_cannot_do(tmp_path, monkeypatch):
+    _no_tor(monkeypatch)
+    monkeypatch.delenv("MESH_CONTROL_TOR_IMAGE", raising=False)
+    drv = WorklistDriver(GENERATOR_DIR, _wl(output_dir=str(tmp_path),
+                                            mesh_control_transport="lan+onion",
+                                            mesh_control_onion_mint=True),
+                         host=HOST, backend="native")
+    assert any("needs tor on this computer" in p for p in drv.preflight())
+    # lan: nothing to mint, nothing said
+    drv = WorklistDriver(GENERATOR_DIR, _wl(output_dir=str(tmp_path)), host=HOST, backend="native")
+    assert not any("tor" in p.lower() for p in drv.preflight())
+
+
+def test_windows_docker_keys_mount_the_onion_dir_instead_of_passing_a_host_path():
+    """Review of #1096: the host path went through raw, and inside the container (cwd
+    /src, the generator checkout) the script made a directory named after it there."""
+    import ntpath
+    import types
+    wl = types.SimpleNamespace(backend="docker", generator_dir=r"C:\src\hugmesh-generator",
+                               host=types.SimpleNamespace(builder_image="hugmesh-builder"))
+    out = r"C:\out\sessions\s1"
+    cfg = ImageConfig(mode="mesh", mesh_control_transport="onion", mesh_control_onion_mint=True)
+    args = ["--role", "pki", "--out", out + r"\keys-pki", "--random",
+            *mesh_control.genkeys_args(cfg, out)]
+    cmd = WorklistDriver._genkeys_command(wl, "ignored", "acme", args, osname="nt")
+    host_dir = ntpath.join(out, "mesh-control-onion")
+    assert f"{host_dir}:{mesh_control.CONTAINER_ONION_DIR}" in cmd
+    tail = cmd[cmd.index("hugmesh-builder") + 1:]
+    assert tail[tail.index("--mesh-control-onion-dir") + 1] == mesh_control.CONTAINER_ONION_DIR
+    assert not any("C:" in a for a in tail), tail          # no host path inside the container
 
 
 def test_lan_adds_no_refusal(tmp_path):
