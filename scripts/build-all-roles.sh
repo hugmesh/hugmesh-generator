@@ -464,6 +464,71 @@ if ${_rpi_tor}; then
 fi
 unset _r _rpi_tor
 
+# ── Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md): resolved ONCE, ──
+# checked BEFORE any image is built. The transport reaches the builders three ways,
+# and the keys step must see the same one, or the images bake Tor while the sticks say
+# lan (the node then fails closed and never joins):
+#   * the environment (the Makefile's MESH_CONTROL_TRANSPORT=...);
+#   * the brand profile the builders source (--config/-C, else ./brand.conf, else the
+#     repo's brand.conf that gen-provision-keys.sh sources), read here in a subshell
+#     the way they read it (a profile's assignment beats the environment);
+#   * a pass-through --mesh-control-transport, which the builders parse last.
+_mc_cfg=""
+for ((_i = 1; _i <= $#; _i++)); do
+    case "${!_i}" in -C|--config) _j=$((_i + 1)); _mc_cfg="${!_j}" ;; esac
+done
+[ -z "${_mc_cfg}" ] && [ -f "$(pwd)/brand.conf" ] && _mc_cfg="$(pwd)/brand.conf"
+[ -z "${_mc_cfg}" ] && [ -f "${REPO_DIR}/brand.conf" ] && _mc_cfg="${REPO_DIR}/brand.conf"
+if [ -n "${_mc_cfg}" ] && [ -f "${_mc_cfg}" ]; then
+    _mc_from_cfg="$( set +eu; . "${_mc_cfg}" >/dev/null 2>&1; printf '%s|%s' "${MESH_CONTROL_TRANSPORT:-}" "${MESH_CONTROL_ONION_MINT:-}" )"
+    [ -n "${_mc_from_cfg%%|*}" ] && MESH_CONTROL_TRANSPORT="${_mc_from_cfg%%|*}"
+    [ -n "${_mc_from_cfg#*|}" ] && MESH_CONTROL_ONION_MINT="${_mc_from_cfg#*|}"
+fi
+for ((_i = 1; _i <= $#; _i++)); do
+    case "${!_i}" in --mesh-control-transport) _j=$((_i + 1)); MESH_CONTROL_TRANSPORT="${!_j}" ;; esac
+done
+unset _mc_cfg _mc_from_cfg
+MESH_CONTROL_TRANSPORT="${MESH_CONTROL_TRANSPORT:-lan}"
+case "${MESH_CONTROL_TRANSPORT}" in
+    lan|lan+onion|onion) ;;
+    *) echo "!! MESH_CONTROL_TRANSPORT must be lan, lan+onion or onion (got '${MESH_CONTROL_TRANSPORT}')" >&2; exit 2 ;;
+esac
+if [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
+    # Only the x86 and rpi5 builders can bake Tor; every other builder exits 1 on a Tor
+    # transport, which would end this run after the x86/rpi5 builds.
+    _mc_refuse=()
+    for _b in FRITE JETSON ORANGEPI5 ORANGEPIZERO2 ORANGEPIZERO2W ORANGEPIZERO3 ORANGEPI3LTS ORANGEPI4LTS; do
+        _v="BUILD_${_b}_IMG"; [ "${!_v}" = true ] && _mc_refuse+=("${_b}")
+    done
+    if [ "${#_mc_refuse[@]}" -gt 0 ]; then
+        echo "!! mesh control transport ${MESH_CONTROL_TRANSPORT}: only the x86 and rpi5 builders can bake Tor, and this" >&2
+        echo "!!   run also builds ${_mc_refuse[*]}. Build those in a separate lan run, or use lan here." >&2
+        exit 2
+    fi
+    unset _mc_refuse _b _v
+    export MESH_CONTROL_TRANSPORT
+    export MESH_CONTROL_ONION_DIR="${MESH_CONTROL_ONION_DIR:-${WORK_DIR}/mesh-control-onion}"
+    [ -n "${MESH_CONTROL_ONION_MINT:-}" ] && export MESH_CONTROL_ONION_MINT
+    # The control onion is minted NOW, where tor is, not at the keys step after every
+    # image: the builder image carries no tor (the Makefile's docker leg mints on the
+    # host before it starts the container, so the directory is already minted there).
+    if [ "${SKIP_KEYS:-0}" != "1" ] && [ ! -s "${MESH_CONTROL_ONION_DIR}/hostname" ]; then
+        case "${MESH_CONTROL_ONION_MINT:-}" in
+            true|1|yes|on)
+                bash "${SCRIPT_DIR}/mint-control-onion.sh" "${MESH_CONTROL_ONION_DIR}" \
+                    || { echo "!! mesh control: the control onion could not be minted — nothing was built. In the" >&2
+                         echo "!!   builder container (no tor), pass MESH_CONTROL_TRANSPORT and MESH_CONTROL_ONION_MINT=1" >&2
+                         echo "!!   to make itself, which mints on this computer first, or set MESH_CONTROL_ONION_DIR" >&2
+                         echo "!!   to a directory an earlier run minted." >&2; exit 2; } ;;
+            *)
+                echo "!! mesh control transport ${MESH_CONTROL_TRANSPORT}: ${MESH_CONTROL_ONION_DIR} holds no control onion." >&2
+                echo "!!   Set MESH_CONTROL_ONION_MINT=1 to mint it on this computer, or MESH_CONTROL_ONION_DIR to the" >&2
+                echo "!!   directory an earlier run minted. Nothing was built." >&2
+                exit 2 ;;
+        esac
+    fi
+fi
+
 
 echo "==> RPi5 roles:  ${RPI_ROLES[*]:-(none)}  (board=${RPI_BOARD_SEL})"
 echo "==> x86 roles:   ${X86_BUILD_ROLES[*]:-(none)}"
@@ -639,11 +704,8 @@ KEYS_FAILED=()
 # Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md): every role's keys run
 # shares ONE control onion key directory (gen-provision-keys.sh reads these from the
 # env); its secret key goes onto the pki stick only and is removed here afterwards.
-if [ -n "${MESH_CONTROL_TRANSPORT:-}" ] && [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
-    export MESH_CONTROL_TRANSPORT
-    export MESH_CONTROL_ONION_DIR="${MESH_CONTROL_ONION_DIR:-${WORK_DIR}/mesh-control-onion}"
-    [ -n "${MESH_CONTROL_ONION_MINT:-}" ] && export MESH_CONTROL_ONION_MINT
-fi
+# (Resolved, exported and minted before any build: the "Mesh control over Tor" block
+# above. lan exports nothing.)
 if [ "${SKIP_KEYS:-0}" != "1" ]; then
     echo "############################################################"
     echo "#  Generate provisioning keys (all built roles)"

@@ -247,6 +247,14 @@ class WorklistDriver:
             if pki_problem:
                 problems.append(pki_problem)
             problems += mesh_control.problems(self.worklist)
+            # The keys step mints the control onion where it runs: on this computer
+            # (needs tor here), or, on Windows, in the builder image, which has none.
+            # Refused here, before any image is built, not at the first keys step.
+            if (mesh_control.is_tor(self.worklist.base)
+                    and getattr(self.worklist.base, "mesh_control_onion_mint", False)):
+                mint = mesh_control.mint_problem(self._output_dir())
+                if mint:
+                    problems.append(mint)
         per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
                         graphical=self.graphical, workdir=self.workdir)
                       .preflight(cfg, self.backend))
@@ -571,6 +579,14 @@ class WorklistDriver:
             # at /ca and every path into it is rewritten; nothing else of it moves.
             mounts += ["-v", f"{ca_dir}:/ca:ro"]
             args = [self._ca_arg_in_container(a, ca_dir) for a in args]
+        if "--mesh-control-onion-dir" in args:
+            # The control onion dir is a HOST path too: passed raw, the script made a
+            # directory named after the Windows path inside the generator checkout
+            # (/src), and the onion key would have been written there. It is mounted
+            # at its own path; the Studio removes its secret key from the host folder.
+            j = args.index("--mesh-control-onion-dir") + 1
+            mounts += ["-v", f"{ntpath.abspath(args[j])}:{mesh_control.CONTAINER_ONION_DIR}"]
+            args[j] = mesh_control.CONTAINER_ONION_DIR
         return ["docker", "run", "--rm", "--init", *mounts,
                 "-e", f"BRAND={brand}", "-w", "/src", self.host.builder_image,
                 "bash", "./" + GENKEYS_SCRIPT.replace(os.sep, "/"), *args]

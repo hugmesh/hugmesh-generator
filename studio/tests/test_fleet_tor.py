@@ -242,3 +242,83 @@ def test_with_tor_refuses_when_the_rpi5_default_cannot_be_read(tree):
     assert r.returncode == 0, r.stdout + r.stderr
     rpi = _by_role(_invocations(r.stdout), "build-rpi5-stage4.sh")["backend"]
     assert rpi[rpi.index("--optional-services") + 1] == "akkoma tor"
+
+
+# ── mesh control over Tor in a fleet (review of #1096) ─────────────────────────────
+from hugmesh_studio.core import mesh_control  # noqa: E402
+
+
+def _tor_fleet(tmp_path, **kw):
+    return FleetConfig(mesh_control_transport="lan+onion", mesh_control_onion_mint=True,
+                       pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True,
+                       output_dir=str(tmp_path), **kw)
+
+
+@pytest.mark.parametrize("board", ["frite", "jetson_only", "orangepi5", "orangepizero3",
+                                   "orangepi4lts_only"])
+def test_fleet_preflight_refuses_tor_next_to_a_board_that_cannot_bake_it(tmp_path, monkeypatch, board):
+    monkeypatch.setattr(mesh_control, "_which", lambda n: "/usr/bin/tor" if n == "tor" else None)
+    problems = FleetDriver(GENERATOR_DIR, HOST).preflight(_tor_fleet(tmp_path, **{board: True}),
+                                                          backend="native")
+    assert any("only the x86 and Raspberry Pi 5 builders can bake Tor" in p for p in problems), problems
+    lan = FleetConfig(pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True,
+                      output_dir=str(tmp_path), **{board: True})
+    assert not any("bake Tor" in p for p in FleetDriver(GENERATOR_DIR, HOST).preflight(lan, backend="native"))
+
+
+def test_fleet_preflight_refuses_a_mint_this_computer_cannot_do(tmp_path, monkeypatch):
+    monkeypatch.setattr(mesh_control, "_which", lambda n: None)
+    monkeypatch.delenv("MESH_CONTROL_TOR_IMAGE", raising=False)
+    problems = FleetDriver(GENERATOR_DIR, HOST).preflight(_tor_fleet(tmp_path), backend="docker")
+    assert any("needs tor on this computer" in p for p in problems), problems
+    monkeypatch.setattr(mesh_control, "_which", lambda n: "/usr/bin/tor" if n == "tor" else None)
+    problems = FleetDriver(GENERATOR_DIR, HOST).preflight(_tor_fleet(tmp_path), backend="docker")
+    assert not any("tor" in p.lower() and "onion" in p.lower() for p in problems), problems
+
+
+def test_fleet_docker_run_mints_on_this_computer_before_the_container(tmp_path, monkeypatch):
+    """The builder image has no tor: build-all-roles.sh in the container would refuse.
+    The docker leg mints on the host first, into <out>/mesh-control-onion."""
+    import hugmesh_studio.core.build_driver as bd
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, "==> Minting\n", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(bd.BuildDriver, "run", lambda self, cfg, backend=None, on_line=None:
+                        calls.append(["container"]) or 0)
+    drv = FleetDriver(GENERATOR_DIR, HOST)
+    assert drv.run(_tor_fleet(tmp_path), backend="docker", on_line=lambda line: None) == 0
+    assert calls[0] == mesh_control.host_mint_command(GENERATOR_DIR, str(tmp_path))
+    assert calls[0][-1] == os.path.join(str(tmp_path), "mesh-control-onion")
+    assert calls[1] == ["container"]
+    # lan, native, or an already minted dir: no host mint
+    for cfg, backend in ((FleetConfig(output_dir=str(tmp_path)), "docker"),
+                         (_tor_fleet(tmp_path), "native")):
+        calls.clear()
+        drv.run(cfg, backend=backend)
+        assert calls == [["container"]], (cfg.mesh_control_transport, backend)
+    (tmp_path / "mesh-control-onion").mkdir()
+    (tmp_path / "mesh-control-onion" / "hostname").write_text("x.onion\n")
+    calls.clear()
+    drv.run(_tor_fleet(tmp_path), backend="docker")
+    assert calls == [["container"]]
+
+
+def test_fleet_docker_run_stops_when_the_host_mint_fails(tmp_path, monkeypatch):
+    import hugmesh_studio.core.build_driver as bd
+    ran = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw:
+                        subprocess.CompletedProcess(argv, 1, "ERROR: no tor\n", ""))
+    monkeypatch.setattr(bd.BuildDriver, "run", lambda *a, **k: ran.append(1) or 0)
+    lines = []
+    assert FleetDriver(GENERATOR_DIR, HOST).run(_tor_fleet(tmp_path), backend="docker",
+                                                on_line=lines.append) == 1
+    assert not ran and any("nothing was built" in line for line in lines), lines
+
+
+def test_the_host_mint_script_exists_where_the_driver_calls_it():
+    argv = mesh_control.host_mint_command(GENERATOR_DIR, "/o")
+    assert os.path.isfile(argv[1]), argv
