@@ -426,8 +426,169 @@ def port_collisions(entries: list[Entry]) -> list[str]:
         if seen.get(e.port) == e.name and not port_is_free(e.port):
             problems.append(
                 f"port {e.port} ({e.name}) is already in use — "
+                f"{describe_holder(e.port)} — "
                 f"set {env_var_for(e.name)}=<free port>")
     return problems
+
+
+# ── who holds a port (2026-11-12) ─────────────────────────────────────────────
+# `make view LANE=compose` said only "port 9090 (compose-app) ... already in use":
+# the holder was ANOTHER TREE's hugmesh-view session (its own state dir, its own
+# CA), which this tree's `make view-stop` cannot see. So a collision now names the
+# holder, and says when it is a hugmesh-view session and which tree started it.
+
+def _listen_inodes(port: int) -> set[str]:
+    """Socket inodes LISTENING on `port` (any address), from /proc/net/tcp{,6}."""
+    inodes: set[str] = set()
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(table, encoding="ascii") as fh:
+                next(fh, None)
+                for line in fh:
+                    f = line.split()
+                    if len(f) > 9 and f[3] == "0A" and int(f[1].rsplit(":", 1)[1], 16) == port:
+                        inodes.add(f[9])
+        except (OSError, ValueError):
+            continue
+    return inodes
+
+
+def port_holder(port: int) -> tuple[int, str] | None:
+    """(pid, argv) of a process of THIS user listening on `port`, or None."""
+    inodes = _listen_inodes(port)
+    if not inodes:
+        return None
+    wanted = {f"socket:[{i}]" for i in inodes}
+    for pid_s in os.listdir("/proc") if os.path.isdir("/proc") else ():
+        if not pid_s.isdigit():
+            continue
+        fd_dir = f"/proc/{pid_s}/fd"
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue                      # another user's process: not readable
+        for fd in fds:
+            try:
+                if os.readlink(os.path.join(fd_dir, fd)) in wanted:
+                    return int(pid_s), cmdline(int(pid_s)).strip()
+            except OSError:
+                continue
+    return None
+
+
+def _argv_value(argv: list[str], flag: str) -> str:
+    for i, a in enumerate(argv):
+        if a == flag and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith(flag + "="):
+            return a.split("=", 1)[1]
+    return ""
+
+
+def view_session_tree(argv: list[str]) -> str:
+    """The tree a hugmesh-view process belongs to: its --state is <tree>/out/hugmesh-view
+    by default, else the script's own repo."""
+    state = _argv_value(argv, "--state")
+    if state.rstrip("/").endswith(os.path.join("out", "hugmesh-view")):
+        return os.path.dirname(os.path.dirname(state.rstrip("/")))
+    for a in argv:
+        if a.endswith(os.path.join("scripts", "hugmesh-view.py")):
+            return os.path.dirname(os.path.dirname(a))
+    return ""
+
+
+def describe_holder(port: int) -> str:
+    held = port_holder(port)
+    if held is None:
+        return ("held by a process this user cannot see (another user's, or "
+                "root's), or by a container's published port")
+    pid, argv = held
+    words = argv.split()
+    if any(w.endswith("hugmesh-view.py") for w in words):
+        tree = view_session_tree(words) or "an unknown tree"
+        mine = os.path.realpath(tree) == os.path.realpath(REPO)
+        where = "THIS tree" if mine else f"ANOTHER tree, {tree}"
+        return (f"held by a hugmesh-view session (pid {pid}) started from {where} "
+                f"(state {_argv_value(words, '--state') or '?'}); "
+                + ("`make view-stop` stops it" if mine else
+                   "this tree's `make view-stop` cannot see it: `make view-stop ALL=1` "
+                   "stops every hugmesh-view session of this user"))
+    return f"held by pid {pid}: {argv[:160]}"
+
+
+def view_sessions() -> list[tuple[int, list[str]]]:
+    """Every running `hugmesh-view.py up` of THIS user except this process."""
+    found = []
+    me = os.getpid()
+    uid = os.getuid()
+    for pid_s in os.listdir("/proc") if os.path.isdir("/proc") else ():
+        if not pid_s.isdigit() or int(pid_s) == me:
+            continue
+        try:
+            if os.stat(f"/proc/{pid_s}").st_uid != uid:
+                continue
+        except OSError:
+            continue
+        words = cmdline(int(pid_s)).split()
+        if any(w.endswith("hugmesh-view.py") for w in words) and "up" in words:
+            found.append((int(pid_s), words))
+    return found
+
+
+# ── which lane, when none is named (2026-11-12) ───────────────────────────────
+# `make view` used to hardcode LANE=kind. With the compose mesh up and no kind
+# cluster it started happily, printed https://127.0.0.1:9080/ and served 502 (its
+# upstream, the kind ingress on :8443, did not exist). Now an UNSET lane picks the
+# lane whose front door actually answers, and refuses, naming both, when none does.
+AUTO_LANES = ("kind", "compose")
+
+
+def upstream_answers(entry: "Entry", timeout: float = 1.0) -> bool | None:
+    """True/False for a plain http(s) upstream that does/does not accept a TCP
+    connection; None for one this cannot probe (k8s+, device+)."""
+    m = _UPSTREAM_DIRECT.match(entry.upstream)
+    if not m:
+        return None
+    host = m.group(2)
+    port = int(m.group(3) or (443 if m.group(1) == "https" else 80))
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def lane_answers(entries: list["Entry"], lane: str) -> tuple[bool | None, list[str]]:
+    """(any door of the lane answers?, the upstreams probed)."""
+    rows = [e for e in entries if e.lane == lane]
+    probed, seen = [], False
+    verdict: bool | None = None
+    for e in rows:
+        r = upstream_answers(e)
+        if r is None:
+            continue
+        probed.append(e.upstream)
+        seen = True
+        if r:
+            return True, probed
+    return (False if seen else verdict), probed
+
+
+def auto_lane(entries: list["Entry"], out=sys.stdout) -> str:
+    tried = []
+    for lane in AUTO_LANES:
+        ok, probed = lane_answers(entries, lane)
+        if ok:
+            if lane != AUTO_LANES[0]:
+                print(f"  (no LANE given and the {AUTO_LANES[0]} front door is not "
+                      f"answering — serving the {lane} lane; pass LANE= to choose)",
+                      file=out)
+            return lane
+        tried.append(f"{lane}: {', '.join(probed) or 'no probeable door'}")
+    raise ViewError("no LANE given and no local front door is answering:\n    "
+                    + "\n    ".join(tried)
+                    + "\n  start one (make stack-up for compose, make kind-up for "
+                      "kind), or name the lane: make view LANE=compose|kind|kind-svc|device")
 
 
 def wait_for_port(port: int, deadline: float, proc=None) -> bool:
@@ -1470,6 +1631,15 @@ def open_browser(url: str, env) -> None:
 
 
 def cmd_up(args, entries: list[Entry], env, out=sys.stdout) -> int:
+    if not args.lane and not args.only:
+        args.lane = auto_lane(entries, out)
+    elif args.lane and not args.only:
+        ok, probed = lane_answers(entries, args.lane)
+        if ok is False:
+            alt = [ln for ln in AUTO_LANES if ln != args.lane and lane_answers(entries, ln)[0]]
+            print(f"  WARNING: the {args.lane} lane's front door is not answering "
+                  f"({', '.join(probed)}): its doors will serve 502"
+                  + (f" — did you mean LANE={alt[0]}?" if alt else "."), file=out)
     chosen = select(entries, args.lane or "kind", args.only)
 
     killed, owner_alive = sweep(args.state, out)
@@ -1622,7 +1792,41 @@ def _spawn_background(args, out=sys.stdout) -> int:
     raise ViewError(f"background session never became ready; see {log}")
 
 
+def stop_all(out=sys.stdout) -> int:
+    """Stop EVERY hugmesh-view session of this user, whichever tree started it."""
+    stopped = 0
+    for pid, words in view_sessions():
+        state = _argv_value(words, "--state")
+        sess = read_session(state) if state else None
+        if sess and int(sess.get("pid") or 0) == pid:
+            for child in sess.get("children") or []:
+                if kill_pid(int(child.get("pid") or 0), child.get("marker") or ""):
+                    print(f"  stopped {child.get('kind')} for '{child.get('name')}'", file=out)
+        if kill_pid(pid, "hugmesh-view"):
+            stopped += 1
+            tree = view_session_tree(words) or "?"
+            print(f"  stopped hugmesh-view (pid {pid}) started from {tree}", file=out)
+            if state and sess and int(sess.get("pid") or 0) == pid:
+                try:
+                    os.unlink(state_file(state))
+                except OSError:
+                    pass
+    if not stopped:
+        print("  no hugmesh-view session of this user is running.", file=out)
+    return 0
+
+
 def cmd_stop(args, out=sys.stdout) -> int:
+    if getattr(args, "all", False):
+        rc = 0
+        if read_session(args.state):
+            rc = _stop_one(args, out)
+        stop_all(out)
+        return rc
+    return _stop_one(args, out)
+
+
+def _stop_one(args, out=sys.stdout) -> int:
     sess = read_session(args.state)
     if not sess:
         print("  no hugmesh-view session recorded — nothing to stop.", file=out)
@@ -1656,7 +1860,8 @@ def build_parser() -> argparse.ArgumentParser:
                    or DEFAULT_CATALOG,
                    help="TSV of doors (default: scripts/hugmesh-view.tsv)")
     p.add_argument("--lane", default="",
-                   help="kind | compose | device (default: kind)")
+                   help="kind | kind-svc | compose | device (default: the first of "
+                        "kind, compose whose front door answers)")
     p.add_argument("--only", action="append", default=[],
                    help="serve just this row (repeatable); wins over --lane")
     p.add_argument("--state", default=os.environ.get("HUGMESH_VIEW_STATE")
@@ -1666,6 +1871,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="detach and return; stop it with `stop`")
     p.add_argument("--open", action="store_true",
                    help="launch a browser at the first door")
+    p.add_argument("--all", action="store_true",
+                   help="stop: also stop every OTHER hugmesh-view session of this "
+                        "user, whichever tree started it")
     p.add_argument("--verbose", action="store_true")
     return p
 
