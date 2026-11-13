@@ -61,6 +61,19 @@ NAME_CONTAINER_TIP = ("Name the running headscale container under Headscale cont
 UNITS = (("days", 86400), ("hours", 3600))
 
 
+#: The Login server field's placeholder: both forms a login server can take.
+LOGIN_PLACEHOLDER = "https://hs.example.org  or  http://<56 characters>.onion"
+
+LOGIN_TIP = (f"The mesh's headscale URL: {mt.LOGIN_SERVER_FORMS}. A v3 onion looks "
+             f"like {mt.ONION_EXAMPLE}.")
+
+
+def login_hint(url: str, domain: str) -> str:
+    """The line said under the login server: :func:`core.mesh_token.login_server_hint`
+    (the same words in the window, the text interface and the command line)."""
+    return mt.login_server_hint(url, domain)
+
+
 def valid_mesh_name(name: str) -> bool:
     """Whether ``name`` is a mesh name a token (and an issuer key) can carry."""
     return bool(mt._MESH_RE.match(name or ""))
@@ -128,7 +141,8 @@ class IssueTokenDialog(QtWidgets.QDialog):
         self.domain = QtWidgets.QLineEdit(domain)
         self.domain.setPlaceholderText("example.org")
         self.domain.setToolTip("The access domain the token grants. The login server must "
-                               "be this domain or a name under it.")
+                               "be this domain or a name under it, or a Tor v3 onion "
+                               "(an onion is outside DNS; the signature binds it).")
         form.addRow("Access domain", self.domain)
         self.role = QtWidgets.QComboBox()
         self.role.addItems(list(mt.ROLES))
@@ -136,10 +150,19 @@ class IssueTokenDialog(QtWidgets.QDialog):
         self.shell = QtWidgets.QCheckBox("Grant shell access (Tailscale SSH on the node)")
         form.addRow("", self.shell)
         self.login_server = QtWidgets.QLineEdit(login_server)
-        self.login_server.setPlaceholderText("https://headscale.example.org")
-        self.login_server.setToolTip("The mesh's headscale URL: https://host or "
-                                     "https://host:port, inside the access domain.")
+        self.login_server.setPlaceholderText(LOGIN_PLACEHOLDER)
+        self.login_server.setToolTip(LOGIN_TIP)
         form.addRow("Login server", self.login_server)
+        #: why the typed login server is refused, or what an onion one needs — said
+        #: inline as it is typed, from the same core rule Issue applies
+        self.login_hint = QtWidgets.QLabel("")
+        self.login_hint.setWordWrap(True)
+        self.login_hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop
+                                     | QtCore.Qt.AlignmentFlag.AlignLeft)
+        self.login_hint.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.login_hint.setVisible(False)
+        form.addRow("", self.login_hint)
         life = QtWidgets.QHBoxLayout()
         self.lifetime = QtWidgets.QSpinBox()
         self.lifetime.setMinimum(1)
@@ -213,6 +236,8 @@ class IssueTokenDialog(QtWidgets.QDialog):
         lay.addLayout(bottom)
 
         self.role.currentTextChanged.connect(self._sync_shell)
+        self.login_server.textChanged.connect(self._sync_login)
+        self.domain.textChanged.connect(self._sync_login)
         self.unit.currentTextChanged.connect(self._sync_unit)
         self.mint_radio.toggled.connect(self._sync_source)
         self.container.currentTextChanged.connect(self._sync_mint)
@@ -224,6 +249,7 @@ class IssueTokenDialog(QtWidgets.QDialog):
         self.lifetime.setValue(7)
         self._sync_shell()
         self._sync_source()
+        self._sync_login()
         self._find_container()
 
     # ── field gating ─────────────────────────────────────────────────────────────
@@ -233,6 +259,32 @@ class IssueTokenDialog(QtWidgets.QDialog):
             self.shell.setChecked(False)
         self.shell.setEnabled(allowed)
         self.shell.setToolTip("" if allowed else SHELL_ONLY_TIP)
+
+    def _sync_login(self, *_args) -> None:
+        """The inline line under Login server: :func:`login_hint` for what is typed."""
+        text = login_hint(self.login_server.text().strip(), self.domain.text().strip())
+        self.login_hint.setText(text)
+        self.login_hint.setVisible(bool(text))
+        self._grow_to_fit()
+
+    def _grow_to_fit(self) -> None:
+        """Grow the window when wrapped lines (the login server's inline line, the
+        issued sentence, the fingerprint) need more height than it has: a top-level
+        window's minimum height does not count their extra lines, so the form rows
+        were squeezed and the inline line drawn over the next row."""
+        lay = self.layout()
+        if lay is None or not self.isVisible():
+            return
+        extra = sum(max(0, lab.heightForWidth(lab.width()) - lab.minimumSizeHint().height())
+                    for lab in self.findChildren(QtWidgets.QLabel)
+                    if lab.wordWrap() and lab.isVisible() and lab.text())
+        want = lay.totalMinimumSize().height() + extra
+        if want > self.height():
+            self.resize(self.width(), want)
+
+    def showEvent(self, event):  # noqa: N802 — Qt override
+        super().showEvent(event)
+        self._grow_to_fit()
 
     def _sync_unit(self, *_args) -> None:
         self.lifetime.setMaximum(mt.MAX_LIFETIME_S // self._unit_s())
@@ -413,6 +465,7 @@ class IssueTokenDialog(QtWidgets.QDialog):
             f"Issuer fingerprint: {fp}"
             + (" (this issuer key was created now; this computer trusts it)" if created
                else "") + f"\n{FINGERPRINT_NOTE}")
+        self._grow_to_fit()
 
     def _copy(self) -> None:
         QtWidgets.QApplication.clipboard().setText(self.token_view.toPlainText())
@@ -427,4 +480,5 @@ def open_issue_token_dialog(parent=None, **prefill) -> None:
 
 
 __all__ = ["IssueTokenDialog", "open_issue_token_dialog", "known_meshes", "valid_mesh_name",
+           "login_hint", "LOGIN_PLACEHOLDER", "LOGIN_TIP",
            "FINGERPRINT_NOTE", "DEFAULT_USER_TIP", "NO_KEY", "SHELL_ONLY_TIP", "TITLE"]

@@ -406,3 +406,36 @@ def test_the_mint_line_without_a_user_mints_for_the_default(at_token, monkeypatc
     assert mt.main(argv[argv.index("--mesh-token") + 1:]) == 0
     assert (seen["mint"]["user"], tuple(seen["mint"]["tags"])) == (user, tags)
     assert f"for the headscale user {user}" in capsys.readouterr().err
+
+
+# ── an onion login server (operator report 2026-11-12) ────────────────────────────
+ONION = "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
+
+
+def test_the_empty_login_server_row_shows_the_onion_form(at_token):
+    j, _s = at_token
+    assert ".onion" in _text(j)
+
+
+@needs_keygen
+def test_an_onion_login_server_is_accepted_and_issued(at_token, keyfile):
+    j, s = at_token
+    _fill(j, role="user", shell=False)
+    j.feed(f"l http://{ONION}")
+    assert not j.status, j.status
+    assert mt.ONION_NOTE in _text(j)                   # the dialog's inline line
+    j.feed(f"k {keyfile}")
+    j.feed("i")
+    assert s.token, j.status
+    assert mt.parse(s.token)[0].login_server == f"http://{ONION}"
+
+
+def test_a_v2_onion_is_refused_with_its_reason(at_token, keyfile):
+    j, s = at_token
+    _fill(j, role="user", shell=False)
+    j.feed("l http://expyuzz4wqqyqhjn.onion")
+    assert "v2 onion address" in _text(j)
+    j.feed(f"k {keyfile}")
+    j.feed("i")
+    assert not s.token
+    assert "v2 onion address" in j.status
