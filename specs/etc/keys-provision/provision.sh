@@ -1948,6 +1948,8 @@ MESH_CONTROL_TOR_ONLY="${MESH_CONTROL_TOR_ONLY:-/etc/hugmesh/tor/mesh-control-on
 MESH_CONTROL_HS_DIR="${MESH_CONTROL_HS_DIR:-/var/lib/tor/hugmesh-control}"
 MESH_CONTROL_TS_CONF="${MESH_CONTROL_TS_CONF:-/etc/conf.d/tailscaled}"
 MESH_CONTROL_HOSTS="${MESH_CONTROL_HOSTS:-/etc/hosts}"
+MESH_CONTROL_RUNLEVEL="${MESH_CONTROL_RUNLEVEL:-/etc/runlevels/default}"
+MESH_CONTROL_TOR_CRON="${MESH_CONTROL_TOR_CRON:-/etc/cron.d/hugmesh-tor-reconcile}"
 
 mesh_control_hosts_line() {  # <name|""> — (re)write the one managed /etc/hosts line
     local tmp
@@ -1987,10 +1989,38 @@ EOT
     rm -f "${tmp}"
 }
 
+# mesh_control_off — undo what provision_mesh_control set up, and nothing else: on a
+# node that never ran a Tor transport every branch below is a no-op. The relay and
+# keeper are stopped and unlinked. Tor itself is unlinked only where this step linked
+# it, which the mesh-control-only marker records (the tor optional service was not
+# selected): left running, hugmesh-tor-reconcile would find no mesh-control marker,
+# drop into its full mode and publish this node's own fe-gateway onion, which nobody
+# chose. Where the tor optional service runs Tor anyway, the reconcile is re-run so the
+# ControlSocket and the control onion leave the torrc.
 mesh_control_off() {
+    local had_marker=false svc
     grep -q -F "${MESH_CONTROL_HOSTS_TAG}" "${MESH_CONTROL_HOSTS}" 2>/dev/null && mesh_control_hosts_line ""
     [ -f "${MESH_CONTROL_TS_CONF}" ] && mesh_control_tailscaled_env off
+    [ -e "${MESH_CONTROL_TOR_MARKER}" ] && had_marker=true
     rm -f "${MESH_CONTROL_TOR_MARKER}" "${MESH_CONTROL_DIR}/relay.conf" 2>/dev/null || true
+    for svc in hugmesh-mesh-control-keeper hugmesh-mesh-control-relay; do
+        if [ -e "${MESH_CONTROL_RUNLEVEL}/${svc}" ]; then
+            rc-service "${svc}" stop 2>/dev/null || true
+            rc-update del "${svc}" default 2>/dev/null || true
+        fi
+    done
+    if [ -e "${MESH_CONTROL_TOR_ONLY}" ]; then
+        rc-service tor stop 2>/dev/null || true
+        rc-update del tor default 2>/dev/null || true
+        rc-update del hugmesh-tor-reconcile default 2>/dev/null || true
+        rm -f "${MESH_CONTROL_TOR_CRON}" 2>/dev/null || true
+        # Last: while it exists, a reconcile run that slips in publishes no onion.
+        rm -f "${MESH_CONTROL_TOR_ONLY}" 2>/dev/null || true
+        log "mesh control: off — tor ran here for the control plane only; it is stopped and unlinked"
+    elif ${had_marker}; then
+        have hugmesh-tor-reconcile && hugmesh-tor-reconcile </dev/null >/dev/null 2>&1 \
+            || warn "mesh control: off, but hugmesh-tor-reconcile failed (see /var/log/hugmesh-tor-reconcile.log)"
+    fi
     return 0
 }
 
@@ -2037,7 +2067,7 @@ provision_mesh_control() {
 
     # Tor: a client everywhere, the control onion on the pki.
     mkdir -p "$(dirname "${MESH_CONTROL_TOR_MARKER}")" "${MESH_CONTROL_DIR}"
-    if [ ! -e /etc/runlevels/default/hugmesh-tor-reconcile ]; then
+    if [ ! -e "${MESH_CONTROL_RUNLEVEL}/hugmesh-tor-reconcile" ]; then
         : > "${MESH_CONTROL_TOR_ONLY}"
         log "mesh control: the tor optional service is not selected here — Tor runs for the control plane only (no onion of this node's own)"
     fi
@@ -2061,7 +2091,15 @@ provision_mesh_control() {
         else
             warn "mesh control: no headscale/control-onion/ on the pki stick — the control onion is NOT published; workers reach this node over the LAN only"
         fi
-        printf 'control %s %s\n' "${port}" "${svc_port}" > "${MESH_CONTROL_TOR_MARKER}"
+        # Publish the control onion only from the key the sticks name: with no key in
+        # place tor would mint a random one and publish headscale at an address no
+        # worker knows. A key installed by an earlier run (and matching) still counts.
+        if [ -s "${MESH_CONTROL_HS_DIR}/hs_ed25519_secret_key" ] \
+           && [ "$(tr -d '[:space:]' < "${MESH_CONTROL_HS_DIR}/hostname" 2>/dev/null)" = "${onion}" ]; then
+            printf 'control %s %s\n' "${port}" "${svc_port}" > "${MESH_CONTROL_TOR_MARKER}"
+        else
+            printf 'client\n' > "${MESH_CONTROL_TOR_MARKER}"
+        fi
         # The URL's port -> headscale's own TLS listener (TLS passes through untouched).
         {
             echo "# Written by keys-provision (provision_mesh_control). hugmesh-mesh-control-relay"
@@ -2092,11 +2130,11 @@ provision_mesh_control() {
     chmod 0600 "${MESH_CONTROL_DIR}/relay.conf"
 
     # Tor itself: the reconcile renders the torrc from the markers and starts tor.
-    if [ ! -e /etc/runlevels/default/hugmesh-tor-reconcile ]; then
+    if [ ! -e "${MESH_CONTROL_RUNLEVEL}/hugmesh-tor-reconcile" ]; then
         rc-update add hugmesh-tor-reconcile default 2>/dev/null || true
         rc-update add tor default 2>/dev/null || true
         [ -f /etc/hugmesh/registry/cron-tor-reconcile ] \
-            && cp -f /etc/hugmesh/registry/cron-tor-reconcile /etc/cron.d/hugmesh-tor-reconcile
+            && cp -f /etc/hugmesh/registry/cron-tor-reconcile "${MESH_CONTROL_TOR_CRON}"
     fi
     have hugmesh-tor-reconcile && hugmesh-tor-reconcile </dev/null >/dev/null 2>&1 \
         || warn "mesh control: hugmesh-tor-reconcile failed (see /var/log/hugmesh-tor-reconcile.log)"
@@ -2270,6 +2308,10 @@ provision_headscale() {
     # rewrites the single server_url line idempotently so LAN peers can register at
     # first boot, sets the MagicDNS base domain and renders the DERP block.
     [ -f /etc/headscale/config.yaml ] && provision_headscale_config /etc/headscale/config.yaml
+    # Mesh control over Tor (OPT-IN): headscale runs without OIDC; first sign-in is the
+    # pre-auth keys (no-op on lan). BEFORE the CONFIG GATE: this edit is line-based, so
+    # the gate must judge the file it leaves, the one headscale starts on.
+    mesh_control_oidc_off /etc/headscale/config.yaml
 
     # CONFIG GATE. Every check above is on /etc/headscale/policy.hujson, but headscale
     # loads the policy its EFFECTIVE configuration names (policy.mode, policy.path), and
@@ -2286,7 +2328,7 @@ provision_headscale() {
     # that no later restart can start it on that configuration either. The deny-all
     # policy is no fallback here, because such a configuration does not read the file it
     # is staged in. This runs after this function's last edit to config.yaml (server_url,
-    # base_domain) and right before the start; publish_cp_dns_record, which edits it
+    # base_domain, the Tor modes' OIDC removal) and right before the start; publish_cp_dns_record, which edits it
     # again later, runs the same check before its restart.
     local cfg_fail=""
     if ! cfg_fail="$(headscale_config_gate)"; then
@@ -2297,9 +2339,6 @@ provision_headscale() {
     # LAN workers dial this node's headscale port before go-live
     # (resolve_control_endpoint). Hand that port to the node firewall.
     headscale_lan_control_marker /etc/headscale/config.yaml
-    # Mesh control over Tor (OPT-IN): headscale runs without OIDC; first sign-in is the
-    # pre-auth keys (no-op on lan).
-    mesh_control_oidc_off /etc/headscale/config.yaml
 
     chown -R headscale:headscale /etc/headscale /var/lib/headscale /run/headscale
     chmod 0600 /var/lib/headscale/*.key 2>/dev/null || true

@@ -199,6 +199,12 @@ PKI_LAN_IP ?=
 #                nothing changes.
 MESH_CONTROL_TRANSPORT ?=
 MESH_CONTROL_ONION_MINT ?=
+# The builder image carries no tor, so the docker leg of build-all/rebuild mints the
+# control onion on THIS computer before it starts the container (tor on PATH, or
+# MESH_CONTROL_TOR_IMAGE=<an image with tor> and docker), into the directory the
+# container sees as /out/mesh-control-onion (build-all-roles.sh's default). ":" when
+# there is nothing to mint.
+MESH_CONTROL_HOST_MINT = $(if $(filter lan+onion onion,$(strip $(MESH_CONTROL_TRANSPORT))),$(if $(filter 1 true yes on,$(strip $(MESH_CONTROL_ONION_MINT))),bash ./scripts/mint-control-onion.sh "$(WORK_DIR)/mesh-control-onion",:),:)
 
 
 
@@ -631,6 +637,7 @@ clean: ## wipe the work dir (forces a from-scratch rebuild)
 build-all: ## build the DEFAULT fleet: 3 Pi + x86 pki/backend/frontend/backend-gpu (--resume reuses sysroots)
 ifndef NATIVE
 	$(MAKE) ensure-image
+	$(MESH_CONTROL_HOST_MINT)
 	$(DOCKER_RUN) make build-all NATIVE=1 WORK_DIR=/out RESUME='$(RESUME)' IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
 else
 	$(call build-then-reown,$(ALL) $(RESUME))
@@ -912,7 +919,15 @@ deploy-destroy: ## run the rendered plan's destroy.sh (driver TTY-confirms)
 rebuild: ## from-scratch: wipe the work dir, then build the whole default fleet
 ifndef NATIVE
 	$(MAKE) ensure-image
+ifeq ($(MESH_CONTROL_HOST_MINT),:)
 	$(DOCKER_RUN) make rebuild NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
+else
+# Mesh control over Tor: wipe first, THEN mint on this computer (a mint before the
+# wipe would be wiped with it), then build the whole fleet from scratch.
+	$(DOCKER_RUN) make clean NATIVE=1 WORK_DIR=/out
+	$(MESH_CONTROL_HOST_MINT)
+	$(DOCKER_RUN) make build-all NATIVE=1 WORK_DIR=/out RESUME= IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
+endif
 else
 	$(MAKE) clean NATIVE=1
 	$(call build-then-reown,$(ALL))
