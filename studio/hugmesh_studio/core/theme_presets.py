@@ -110,6 +110,23 @@ RAMPS: Dict[str, Dict[str, str]] = {
         "--sd-bg-0": "#12100f", "--sd-bg-1": "#1a1817", "--sd-bg-2": "#242120",
         "--sd-border": "#2f2b29", "--sd-text": "#ece7e3", "--sd-text-muted": "#b0a8a2",
     },
+    # HIGH CONTRAST: pure black / pure white surfaces, full-strength text and edges.
+    # For low vision and bright-sunlight use; pairs with the "High contrast" presets.
+    "contrast-dark": {
+        "--sd-bg-0": "#000000", "--sd-bg-1": "#0a0a0a", "--sd-bg-2": "#141414",
+        "--sd-border": "#ffffff", "--sd-text": "#ffffff", "--sd-text-muted": "#e6e6e6",
+        "--sd-surface": "#000000", "--sd-charcoal": "#000000",
+        "--sd-muted": "#d0d0d0", "--sd-light": "#f0f0f0", "--sd-offwhite": "#ffffff",
+        "--sd-mid": "#808080",
+    },
+    "contrast-light": {
+        "--sd-bg-0": "#ffffff", "--sd-bg-1": "#f5f5f5", "--sd-bg-2": "#ebebeb",
+        "--sd-border": "#000000", "--sd-text": "#000000", "--sd-text-muted": "#1f1f1f",
+        "--sd-success": "#006400", "--sd-error": "#b00000",
+        "--sd-surface": "#ffffff", "--sd-charcoal": "#ffffff",
+        "--sd-muted": "#333333", "--sd-light": "#111111", "--sd-offwhite": "#000000",
+        "--sd-mid": "#808080",
+    },
     # deepest and coolest — near-black with a blue cast, for a dark room.
     "midnight": {
         "--sd-bg-0": "#05060c", "--sd-bg-1": "#0a0c16", "--sd-bg-2": "#111423",
@@ -279,7 +296,29 @@ PRESETS: Tuple[ThemePreset, ...] = (
 )
 
 
+# The extended catalogue (theme_catalogue.py): named palettes x every background the
+# shell renders, plus a high-contrast set. Data, appended after the hand-written presets
+# so their order (and every existing id) is unchanged.
+from . import theme_catalogue as _catalogue  # noqa: E402
+
+#: The hand-written presets, in their original order. They declare no background effect
+#: and no font, so every theme file composed from them is byte-identical to before.
+HAND_PRESETS: Tuple[ThemePreset, ...] = PRESETS
+
+PRESETS = PRESETS + tuple(
+    _p(pid, label, group, primary, secondary, note=note, effect=effect, font=font)
+    for pid, label, group, primary, secondary, note, effect, font in _catalogue.rows())
+
+_BY_ID: Dict[str, ThemePreset] = {p.preset_id: p for p in PRESETS}
+if len(_BY_ID) != len(PRESETS):  # a duplicate id would silently shadow a preset
+    raise RuntimeError("duplicate theme preset id in the catalogue")
+
+
 def by_id(preset_id: str) -> ThemePreset:
+    found = _BY_ID.get(preset_id)
+    if found is not None:
+        return found
+    # PRESETS can be extended at runtime (tests do); fall back to a scan of it.
     for p in PRESETS:
         if p.preset_id == preset_id:
             return p

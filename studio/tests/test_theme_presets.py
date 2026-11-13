@@ -21,7 +21,10 @@ def test_catalogue_shape_and_unique_ids():
     ids = [p.preset_id for p in tp.PRESETS]
     assert len(ids) == len(set(ids)), "duplicate preset ids"
     # "Desktop" carries the familiar editor/terminal schemes (operator ask 2026-08-14).
-    assert tp.groups() == ["Core", "Colours", "Desktop", "Pride flags"]
+    assert tp.groups()[:4] == ["Core", "Colours", "Desktop", "Pride flags"]
+    # then the generated catalogue's groups (theme_catalogue.py), in table order
+    assert tp.groups()[4:] == ["Nature", "Gemstones", "Cities", "Seasons", "Cosmic",
+                               "Retro", "Food", "High contrast"]
     # the operator's ask, literally: light + dark cores, basic colours, flags
     assert "dark" in ids and "light" in ids
     assert sum(1 for p in tp.PRESETS if p.group == "Colours") >= 6
@@ -132,8 +135,8 @@ def test_shipped_presets_declare_no_effect_and_emit_no_effect_token():
     # OMIT-WHEN-DEFAULT: the shipped catalogue declares nothing, so every preset
     # composes byte-identically to what it emitted before the field existed and
     # consumers keep their shipped gradient (login-ui PR #6's default clause).
-    for p in tp.PRESETS:
-        assert p.effect == "", f"{p.preset_id} grew an effect — that changes " \
+    for p in tp.HAND_PRESETS:
+        assert p.effect == "" and p.font == "", f"{p.preset_id} grew an effect or font — that changes " \
             "the bytes every existing theme file composes"
         assert "--sd-bg-effect" not in tp.compose_css(p.preset_id, "dark")
         assert "--sd-bg-effect" not in tp.delta_css(p.preset_id, "dark")
