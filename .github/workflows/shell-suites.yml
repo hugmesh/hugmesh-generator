@@ -673,7 +673,10 @@ jobs:
   debian:
     name: shell suites (debian/python${{ matrix.part }})
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 25 -> 40 on 2026-11-12: the leg measured 1480 s of suites once the workflow file was
+    # valid again (test-control-endpoint-lan-first.sh alone 626 s; it had never run in CI)
+    # and was cancelled at 25 min. 40 is the alpine leg's limit.
+    timeout-minutes: 40
     # SPLIT 2026-10-07 (GEN-5). One job ran all 44 suites serially and finished run
     # 37682082806 in 24 min 34 s against a 25-minute timeout; two suites were 16 of
     # those minutes (test-tor-flip-wiring.sh 9m04s, test-cluster-manifest-integrity.sh
