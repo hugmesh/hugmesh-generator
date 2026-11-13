@@ -381,7 +381,9 @@ for b in "${REPO}"/build-*-stage4.sh; do
         || bad "${n}: usage does not document --local-admin"
 done
 for b in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh build-frite-stage4.sh \
-         build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+         build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh \
+         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh \
+         build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh; do
     awk '/^if ! \$\{LOCAL_ADMIN\}; then$/ { a = 1; next }
          a && /warn "No --local-admin: the local login account will NOT be an administrator\./ { f = 1 }
          a && /^fi$/ { a = 0 }

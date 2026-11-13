@@ -32,7 +32,10 @@ Three families, in the order an operator meets them:
    let the builder warn-and-ignore it".
 3. **Node fallback login** (``--user-password``/``--root-password``; G27) — ASK 10: an
    explicit OPT-IN, unchecked by default, whose password fields do not exist on screen
-   until it is ticked and are wiped the moment it is un-ticked.
+   until it is ticked and are wiped the moment it is un-ticked. The builders now IGNORE
+   both flags (no password is baked; a keyless node's fallback login gets a random
+   one-time password and is not an administrator without --local-admin), and the notes
+   on screen say so.
 
 Kept separate from NetworkPage (mesh/brand plane) and HomePage (local login /
 encryption). Registration: StudioWizard/WIZARD_PAGE_SLUGS register this page under the
@@ -408,16 +411,18 @@ class SystemPage(QtWidgets.QWizardPage):
             "Set console/rescue passwords for these node images")
         cl.addWidget(self.creds_optin)
         cl.addWidget(_muted(
-            "Off by default: the mesh signs in through SSO, so a node normally needs no "
-            "local login at all. Tick this only if you want a fallback console/rescue "
-            "login on the node images you are building."))
+            "Off by default, and it changes nothing on the image: the builders ignore "
+            "these two passwords. A node booted without a KEYS stick gets a fallback "
+            "login with a random one-time password on the console, and that account "
+            "is NOT an administrator. To administer a node, provision it with a KEYS "
+            "stick, or build it with --local-admin."))
         self.creds_fields = QtWidgets.QWidget()
         fl = QtWidgets.QVBoxLayout(self.creds_fields)
         fl.setContentsMargins(0, 0, 0, 0)
         self.creds_note = QtWidgets.QLabel(
-            "Sets the baked USER and ROOT account passwords for the mesh node images "
-            "you are building. x86 nodes only; hashed at build time; never written to a "
-            "saved config, and cleared if you un-tick the box above.")
+            "Passed as --user-password / --root-password, which the builders ignore: "
+            "no password is baked into the image and root stays locked. Never written "
+            "to a saved config, and cleared if you un-tick the box above.")
         self.creds_note.setWordWrap(True)
         fl.addWidget(self.creds_note)
         self.user_password = QtWidgets.QLineEdit()

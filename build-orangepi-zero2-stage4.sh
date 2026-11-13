@@ -1182,6 +1182,14 @@ if ${PRINT_PLAN}; then
     exit 0
 fi
 
+# ── Admin is opt-in (operator rule: the local login account is not admin unless asked) ──
+# Without --local-admin the local account (or the keyless fallback account) is NOT in
+# wheel and has no sudoers grant; root stays locked. Say so at build time so a box
+# nobody can administer is never a surprise (first boot says it on the console too).
+if ! ${LOCAL_ADMIN}; then
+    warn "No --local-admin: the local login account will NOT be an administrator. On a standalone or keyless (no KEYS stick) boot root is locked, so nobody on the device can use sudo; pass --local-admin to make the local account the administrator (docs/STANDALONE-DESKTOP.md)."
+fi
+
 # ── Stage4 package-set resolver (single source of truth) ──────────────────────
 # Factored VERBATIM from the former inline Phase-2 assembly so the
 # prerequisites-time qemu preflight and Phase 2 resolve the IDENTICAL package

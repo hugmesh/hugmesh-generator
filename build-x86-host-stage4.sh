@@ -814,9 +814,12 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --superdomain D       Orchestration superdomain (mesh MagicDNS suffix) baked to
                             /etc/<brand>/superdomain + headscale base_domain. Mesh only;
                             permanently internal (never the go-live apex). Default: derived
-  -u, --user NAME           Fallback user. Default: ${DEFAULT_USER}
-      --user-password PASS  Default: ${DEFAULT_USER_PASS}
-      --root-password PASS  Default: ${ROOT_PASS}
+  -u, --user NAME           Fallback user (random one-time password at first boot;
+                            not an administrator without --local-admin).
+                            Default: ${DEFAULT_USER}
+      --user-password PASS  Ignored: no password is baked into the image.
+      --root-password PASS  Ignored: root is locked; set it via the KEYS USB
+                            users.json hash.
       --headscale-version V Default: ${HEADSCALE_VERSION}
       --headscale-public-derp  Also list Tailscale's public DERP map in headscale.
                             Default OFF: the embedded relay only, offline-first
@@ -1271,8 +1274,8 @@ while [[ $# -gt 0 ]]; do
         # (see specs/cluster/backing-services.yaml + docs/MANAGED-SERVICES.md).
         --managed-service)   MANAGED_SERVICES="${MANAGED_SERVICES:+${MANAGED_SERVICES} }$2"; shift 2 ;;
         -u|--user) DEFAULT_USER="$2"; shift 2 ;;
-        --user-password) DEFAULT_USER_PASS="$2"; shift 2 ;;
-        --root-password) ROOT_PASS="$2"; shift 2 ;;
+        --user-password) warn "--user-password is ignored: no password is baked into the image (random first-boot fallback + KEYS provisioning)"; DEFAULT_USER_PASS="$2"; shift 2 ;;
+        --root-password) warn "--root-password is ignored: root is locked on keyless boot; set root via the KEYS USB users.json hash"; ROOT_PASS="$2"; shift 2 ;;
         --headscale-version) HEADSCALE_VERSION="$2"; shift 2 ;;
         --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
         --tailscale-version) TAILSCALE_VERSION="$2"; shift 2 ;;
@@ -3976,7 +3979,7 @@ fi
 # routed to the operator's terminal (>&3) without landing in the logs — same
 # fd 3/4 idiom as the ARM builders. (Audited: LUKS_PASS is only ever written
 # to a 0600 file on the installer ISO and REDACTED in --print-plan output;
-# DEFAULT_USER_PASS is sed-substituted into sysroot config, never echoed.)
+# DEFAULT_USER_PASS / ROOT_PASS reach no rendered file and are never echoed.)
 exec 3>&1 4>&2
 exec > >(tee -a "${LOG_FILE}" "${IMAGE_LOG_FILE}") 2>&1
 info "Logging to ${LOG_FILE} (session-shared) + ${IMAGE_LOG_FILE} (this image)"

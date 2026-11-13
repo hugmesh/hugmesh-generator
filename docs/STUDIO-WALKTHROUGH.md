@@ -623,7 +623,7 @@ Trap: on a mesh worklist whose rows derive *different* default accounts, the def
 
 The whole group is hidden wherever the builder would discard the flag: standalone always, unaffiliated images, and cluster-node roles. The picker itself greys out on the ARM platforms, whose builders take no such flag. In mesh the page tests the *first checked worklist row*, so a worklist led by a node row hides the picker even if a laptop row follows it.
 
-**Node fallback login** — off by default. The two password fields do not exist on screen until you tick it. Un-ticking wipes them, and nothing is collected unless the box is ticked. The group appears only when some image in this flow is a node-class role on x86; a desktop image logs in with the account from the next step. These passwords are hashed at build time and never written to a saved config, so a reloaded config always comes back un-opted-in.
+**Node fallback login** — off by default. The two password fields do not exist on screen until you tick it. Un-ticking wipes them, and nothing is collected unless the box is ticked. The group appears only when some image in this flow is a node-class role on x86; a desktop image logs in with the account from the next step. The builders ignore these two passwords today: no password is baked into a node image, and root stays locked. A node booted without a KEYS stick gets a fallback login with a random one-time password on the console, and that account is **not** an administrator. To administer a node, provision it with a KEYS stick, or build it with `--local-admin`. The fields are never written to a saved config, so a reloaded config always comes back un-opted-in.
 
 ### Secrets store — mesh only
 

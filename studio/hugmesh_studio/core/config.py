@@ -976,8 +976,8 @@ SECURE_BOOT_CHOICES = ("", "on", "off")
 
 # Plaintext secrets that are NEVER persisted to a saved JSON config — they exist only
 # for the live command line (the builder hashes them at build time). user_password /
-# root_password are the x86 node FALLBACK credentials (G27); local_pass / luks_pass the
-# standalone/FDE ones.
+# root_password are the legacy x86 node FALLBACK credentials (G27), which the builders
+# now ignore; local_pass / luks_pass the standalone/FDE ones.
 SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password",
                  # the Desktop step's extra local accounts' first-login passwords
                  # (NAME:PASSWORD lines; core/desktop_spec.py) — staged to a 0600 file
@@ -3647,8 +3647,8 @@ class ImageConfig:
     local_user: str = field(default_factory=default_local_user)  # the INVOKING user, not a baked operator name
     local_pass: str = ""               # --local-pass (SECRET — never saved; live cmd only)
     local_admin: bool = False          # --local-admin: the local account is an administrator (sudo) on ANY image; off = not
-    user_password: str = ""            # --user-password node FALLBACK cred (SECRET; x86)
-    root_password: str = ""            # --root-password node FALLBACK cred (SECRET; x86)
+    user_password: str = ""            # --user-password (SECRET; x86; the builder ignores it)
+    root_password: str = ""            # --root-password (SECRET; x86; the builder ignores it)
     standalone: bool = False           # --standalone (arm64 only; x86 gets it via role name)
     capable: bool = False              # --capable (most-capable Plasma payload, 50GiB root; x86, composable)
     unaffiliated: bool = False         # --unaffiliated as a COMPOSABLE flag (x86; role standalone-unaffiliated presets it)
