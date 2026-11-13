@@ -153,13 +153,16 @@ class UsersPage(QtWidgets.QWizardPage):
         # screen; this row under it is where a person actually types them. It reads
         # and writes the same cells, so the two can never disagree.
         self._handles_loading = False
+        # the "for <user>" line sits on its own wrapped line: on one line with the two
+        # boxes the row needed 764 px, over the wizard's 736 px medium width
+        self.handles_for = QtWidgets.QLabel("")
+        self.handles_for.setObjectName("users_handles_for")
+        self.handles_for.setWordWrap(True)
+        lay.addWidget(self.handles_for)
         self.handles_row = QtWidgets.QWidget()
         self.handles_row.setObjectName("users_handles_row")
         hr = QtWidgets.QHBoxLayout(self.handles_row)
         hr.setContentsMargins(0, 0, 0, 0)
-        self.handles_for = QtWidgets.QLabel("")
-        self.handles_for.setObjectName("users_handles_for")
-        hr.addWidget(self.handles_for)
         self.handle_edits: dict[str, QtWidgets.QLineEdit] = {}
         for prov, placeholder in (("google", "name@gmail.com"),
                                   ("discord", "their Discord username")):
@@ -167,7 +170,7 @@ class UsersPage(QtWidgets.QWizardPage):
             edit = QtWidgets.QLineEdit()
             edit.setObjectName(f"users_handle_{prov}")
             edit.setPlaceholderText(placeholder)
-            edit.setMinimumWidth(170)
+            edit.setMinimumWidth(120)
             edit.textEdited.connect(
                 lambda text, p=prov: self._handle_edited(p, text))
             hr.addWidget(edit, 1)

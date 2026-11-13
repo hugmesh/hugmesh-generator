@@ -212,7 +212,7 @@ def test_the_editor_under_the_table_edits_the_selected_row_and_is_visible(qapp):
                                 User(username="bob", signin_handles={"discord": "bob_2"})])
     for prov, edit in page.handle_edits.items():
         assert edit.isVisible() and edit.isEnabled(), prov
-        assert edit.width() >= 170, (prov, edit.width())
+        assert edit.width() >= 120, (prov, edit.width())
         right = edit.mapTo(page, qt.QtCore.QPoint(edit.width(), 0)).x()
         assert right <= page.width(), (prov, right, page.width())
     assert page.table.currentRow() == 0
@@ -236,3 +236,11 @@ def test_add_user_selects_the_new_row_for_the_editor(qapp):
     page.handle_edits["discord"].setText("new_user")
     page.handle_edits["discord"].textEdited.emit("new_user")
     assert page.table.item(1, m._COL_DISCORD).text() == "new_user"
+
+
+def test_the_page_fits_the_wizards_medium_width(qapp):
+    """The handles editor must not force the window wider than the 736 px medium
+    (test_wizard_sizing pins every page; this pins the cause here)."""
+    wiz, page, m = _page(qapp, [User(username="a-rather-long-user-name")])
+    assert page.minimumSizeHint().width() <= 736, page.minimumSizeHint()
+    assert page.handles_row.minimumSizeHint().width() <= 700
