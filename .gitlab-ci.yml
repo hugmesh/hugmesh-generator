@@ -3121,6 +3121,9 @@ desktop-governance-verify:
     # sysroot, the Python-target union, the pretend parser against a stub emerge, and
     # the six desktop builders' wiring.
     - bash tests/scripts/test-desktop-config-lib.sh
+    # The rpi5 desktop cross-builds librsvg: the build container's rustc gets the target
+    # std from the signed upstream rust-std (scripts/_host-guard-lib.sh), offline here.
+    - bash tests/scripts/test-host-guard-rust-std.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -3130,6 +3133,10 @@ desktop-governance-verify:
         - scripts/desktop-config/**/*
         - tests/scripts/test-desktop-config-lib.sh
         - tests/scripts/fixtures/desktop-pretend/**/*
+        - scripts/_host-guard-lib.sh
+        - scripts/rust-release-key.asc
+        - tests/scripts/test-host-guard-rust-std.sh
+        - build-rpi5-stage4.sh
         - specs/etc/keys-provision/provision.sh
         - specs/etc/hugmesh/desktop-governance/**/*
         - specs/etc/pam.d/lightdm

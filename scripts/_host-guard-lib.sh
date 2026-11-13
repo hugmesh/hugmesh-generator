@@ -439,3 +439,171 @@ hostguard_ensure_cross_gpep517() {
     _hg_err "      make docker-image && make <target>"
     return 1
 }
+
+# ── HOST Rust standard library for the cross target ────────────────
+# hostguard_ensure_cross_rust_std <rust-target> [cache-dir]
+#
+# WHY: a cross-built Rust crate (gnome-base/librsvg on the rpi5 desktop: gtk+:3
+# and adwaita-icon-theme need it, and dbus/elogind/polkit/pam hang off gtk+ in
+# the same --keep-going graph) is compiled by the BUILD CONTAINER's rustc with
+# --target <rust-target>. Gentoo's dev-lang/rust-bin installs the standard
+# library for the HOST target only (its multilib leg covers x86 ABIs, never
+# aarch64), so meson's rustc probe dies at configure with
+#     error[E0463]: can't find crate for `std`
+#     = note: the `aarch64-unknown-linux-gnu` target may not be installed
+# (rpi5 desktop run 2026-11-12: librsvg failed, 18 packages were dropped behind
+# it, and the payload gate refused the image for missing NetworkManager, Xorg,
+# lightdm and the rest). The other ARM desktop boards never reach this: their
+# profile/package.provided keeps librsvg out of the graph.
+#
+# WHAT: install the upstream rust-std component for <rust-target> into the
+# host rustc's own sysroot (`rustc --print sysroot`/lib/rustlib/<target>), at
+# EXACTLY the host rustc's release (`rustc -Vv`), because rustc refuses a std
+# built by another release (E0514). The tarball and its detached signature come
+# from static.rust-lang.org/dist and are GPG-verified against the vendored Rust
+# release key (scripts/rust-release-key.asc, the key Gentoo's
+# sec-keys/openpgp-keys-rust ships; its SHA512 matched that package's Manifest)
+# with the primary fingerprint PINNED below: a valid signature by any other key
+# is refused. A cached tarball is re-verified on every use and deleted if it
+# fails. After the install a metadata-only rustc --target compile must succeed.
+#
+# Container (hostguard_mutation_allowed + root): fetch, verify, install, probe.
+# Real host: write nothing, print the exact commands, return 1. No host rustc:
+# nothing to provide, return 0. Returns 0 when <rust-target>'s std is usable.
+: "${HOSTGUARD_RUST_KEY_FPR:=108F66205EAEB0AAA8DD5E1C85AB96E6FA1BE5FE}"
+: "${HOSTGUARD_RUST_DIST_URL:=https://static.rust-lang.org/dist}"
+: "${HOSTGUARD_RUST_KEYFILE:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rust-release-key.asc}"
+
+_hg_rust_std_usable() {
+    local rustc="$1" target="$2" probe
+    probe="$(mktemp -d)" || return 1
+    printf 'pub fn hugmesh_probe() -> String { String::new() }\n' > "${probe}/probe.rs"
+    if "${rustc}" --target "${target}" --crate-type=lib --emit=metadata \
+            --out-dir "${probe}" "${probe}/probe.rs" >"${probe}/log" 2>&1; then
+        rm -rf "${probe}"
+        return 0
+    fi
+    sed 's/^/    /' "${probe}/log" >&2
+    rm -rf "${probe}"
+    return 1
+}
+
+_hg_rust_fetch() {
+    local url="$1" dest="$2"
+    if declare -F dlv_fetch_retry >/dev/null 2>&1; then
+        dlv_fetch_retry "${url}" "${dest}" --proto '=https' --tlsv1.2
+    else
+        curl -fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-delay 5 -o "${dest}" "${url}"
+    fi
+}
+
+# _hg_rust_verify <tarball> <signature>: 0 iff <signature> is a good signature
+# over <tarball> made by the pinned Rust release key (primary fingerprint).
+_hg_rust_verify() {
+    local file="$1" sig="$2" gh status rc=1
+    command -v gpg >/dev/null 2>&1 || { _hg_err "gpg not found: cannot verify $(basename "${file}")"; return 1; }
+    [ -f "${HOSTGUARD_RUST_KEYFILE}" ] || { _hg_err "Rust release key missing: ${HOSTGUARD_RUST_KEYFILE}"; return 1; }
+    gh="$(mktemp -d)" || return 1
+    chmod 700 "${gh}"
+    if GNUPGHOME="${gh}" gpg --batch --quiet --import "${HOSTGUARD_RUST_KEYFILE}" >/dev/null 2>&1; then
+        status="$(GNUPGHOME="${gh}" gpg --batch --status-fd 1 --verify "${sig}" "${file}" 2>/dev/null || true)"
+        # VALIDSIG <signing-fpr> ... <primary-fpr>: the LAST field is the primary key.
+        if printf '%s\n' "${status}" | awk -v want="${HOSTGUARD_RUST_KEY_FPR}" '
+                $1 == "[GNUPG:]" && $2 == "VALIDSIG" && toupper($NF) == toupper(want) { ok = 1 }
+                END { exit ok ? 0 : 1 }'; then
+            rc=0
+        fi
+    fi
+    rm -rf "${gh}"
+    return "${rc}"
+}
+
+hostguard_ensure_cross_rust_std() {
+    local target="${1:?usage: hostguard_ensure_cross_rust_std <rust-target> [cache-dir]}"
+    local cache="${2:-}"
+    local rustc="${HOSTGUARD_RUSTC:-rustc}"
+    local release sysroot name url work dir tarball sig comp
+
+    if ! command -v "${rustc}" >/dev/null 2>&1; then
+        _hg_info "No HOST rustc: no Rust standard library to provide for ${target}."
+        return 0
+    fi
+    release="$("${rustc}" -Vv 2>/dev/null | awk '$1 == "release:" { print $2 }')"
+    sysroot="$("${rustc}" --print sysroot 2>/dev/null)"
+    if [ -z "${release}" ] || [ -z "${sysroot}" ] || [ ! -d "${sysroot}/lib/rustlib" ]; then
+        _hg_err "Cannot read the HOST rustc release/sysroot (release='${release}' sysroot='${sysroot}')."
+        return 1
+    fi
+    if compgen -G "${sysroot}/lib/rustlib/${target}/lib/libstd-*.rlib" >/dev/null; then
+        return 0
+    fi
+    if ! [[ "${release}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        _hg_err "HOST rustc release '${release}' is not a stable X.Y.Z release; no signed rust-std-${release}-${target} to fetch."
+        return 1
+    fi
+    name="rust-std-${release}-${target}.tar.xz"
+    url="${HOSTGUARD_RUST_DIST_URL}/${name}"
+
+    if ! { hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ]; }; then
+        _hg_err "The HOST rustc ${release} (${sysroot}) has no standard library for ${target}."
+        _hg_err "Every cross-built Rust crate (gnome-base/librsvg on a desktop image) fails at configure: error[E0463]: can't find crate for 'std'."
+        _hg_err "This build will NOT change your system. Review and run on the BUILD host yourself:"
+        _hg_err "  curl -fLO ${url} -O ${url}.asc"
+        _hg_err "  gpg --import scripts/rust-release-key.asc && gpg --verify ${name}.asc ${name}   # key ${HOSTGUARD_RUST_KEY_FPR}"
+        _hg_err "  tar -xJf ${name} && sudo cp -a rust-std-${release}-${target}/rust-std-${target}/lib/rustlib/${target} ${sysroot}/lib/rustlib/"
+        _hg_err "Or build in the container instead, which touches nothing on this host:"
+        _hg_err "      make docker-image && make <target>"
+        return 1
+    fi
+
+    work="$(mktemp -d)" || return 1
+    dir="${work}"
+    if [ -n "${cache}" ] && mkdir -p "${cache}" 2>/dev/null && [ -w "${cache}" ]; then
+        dir="${cache}"
+    fi
+    tarball="${dir}/${name}"
+    sig="${dir}/${name}.asc"
+    _hg_info "HOST rustc ${release} has no ${target} standard library: installing the signed upstream rust-std component."
+    if [ ! -s "${tarball}" ] && ! _hg_rust_fetch "${url}" "${tarball}"; then
+        _hg_err "Failed to download ${url}"
+        rm -f "${tarball}"; rm -rf "${work}"
+        return 1
+    fi
+    # The signature is always fetched fresh; the tarball may come from the cache,
+    # which is never trusted: it is verified on every use.
+    rm -f "${sig}"
+    if ! _hg_rust_fetch "${url}.asc" "${sig}"; then
+        _hg_err "Failed to download ${url}.asc"
+        rm -f "${sig}"; rm -rf "${work}"
+        return 1
+    fi
+    if ! _hg_rust_verify "${tarball}" "${sig}"; then
+        _hg_err "GPG verification FAILED for ${name}: no valid signature by the Rust release key ${HOSTGUARD_RUST_KEY_FPR}. Deleted; nothing installed."
+        rm -f "${tarball}" "${sig}"; rm -rf "${work}"
+        return 1
+    fi
+    _hg_info "GPG signature OK (Rust release key ${HOSTGUARD_RUST_KEY_FPR}): ${name}"
+    if ! tar -xJf "${tarball}" -C "${work}"; then
+        _hg_err "Failed to unpack ${name}"
+        rm -rf "${work}"
+        return 1
+    fi
+    comp="${work}/rust-std-${release}-${target}/rust-std-${target}/lib/rustlib/${target}"
+    if [ ! -d "${comp}/lib" ]; then
+        _hg_err "${name} does not contain rust-std-${target}/lib/rustlib/${target}/lib"
+        rm -rf "${work}"
+        return 1
+    fi
+    if ! cp -a "${comp}" "${sysroot}/lib/rustlib/"; then
+        _hg_err "Failed to install ${target} standard library into ${sysroot}/lib/rustlib"
+        rm -rf "${work}"
+        return 1
+    fi
+    rm -rf "${work}"
+    if ! _hg_rust_std_usable "${rustc}" "${target}"; then
+        _hg_err "Installed rust-std ${release} for ${target}, but rustc --target ${target} still cannot load std."
+        return 1
+    fi
+    _hg_info "HOST rustc ${release} can now build for ${target} (${sysroot}/lib/rustlib/${target})."
+    return 0
+}

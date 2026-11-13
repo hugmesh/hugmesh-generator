@@ -345,6 +345,9 @@ jobs:
       # medium fixture with it (the launcher reads such media with xorriso or
       # bsdtar); without it that suite exits 2 "SKIPPING LOUDLY", a red job.
       - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git git-daemon grep helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xorriso xz
+      # gnupg: tests/scripts/test-host-guard-rust-std.sh signs and verifies throwaway
+      # rust-std tarballs with gpg (the fingerprint-pin cases); without it the suite exits 2.
+      - run: apk add --no-cache gnupg
       - run: apk add --no-cache attr bash coreutils curl dosfstools e2fsprogs e2fsprogs-extra flock gawk git git-daemon grep helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl parted py3-yaml python3 tar util-linux xz
       - uses: actions/checkout@v4
       - name: trust the workspace
@@ -551,6 +554,7 @@ jobs:
             tests/scripts/test-desktop-sso-bake.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh
+            tests/scripts/test-host-guard-rust-std.sh
             tests/scripts/test-e2e-persona-catalogue.sh
             tests/scripts/test-edge-ai-cuda-host-compiler.sh
             tests/scripts/test-edge-ai-ollama-pin.sh

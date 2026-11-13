@@ -3513,6 +3513,16 @@ fi
 # --with-bdeps=n means the cross emerge never upgrades it. Full rationale in
 # scripts/_host-guard-lib.sh. Must run before the first cross_emerge.
 hostguard_ensure_cross_gpep517 || exit 1
+# --role desktop cross-builds gnome-base/librsvg (a Rust crate: gtk+:3, the adwaita icon
+# themes and, behind them, dbus/elogind/polkit/pam in the same --keep-going graph). The
+# build container's rustc ships the HOST std only, so its configure died with
+# "error[E0463]: can't find crate for std" (2026-11-12 rpi5 desktop run: 13 packages
+# failed and the payload gate refused the image). The node roles cross-build no Rust
+# crate. Full rationale: hostguard_ensure_cross_rust_std in scripts/_host-guard-lib.sh.
+# Must run before the first cross_emerge.
+if ${ROLE_CLIENT}; then
+    hostguard_ensure_cross_rust_std aarch64-unknown-linux-gnu "${SHARED_DISTDIR:-}" || exit 1
+fi
 info "Host SELinux policy build tools present (checkpolicy, checkmodule, semodule_package, m4)"
 
 if ! ${SKIP_ISO} && ! command -v xorrisofs &>/dev/null; then

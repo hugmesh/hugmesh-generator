@@ -78,6 +78,13 @@ on:
       # drift that guard exists to catch.
       - 'docs/STUDIO-INSTALLERS.md'
       - '.github/workflows/studio-release.yml'
+      # hugmesh-generator#1056: studio/tests/test_package_resolution_report.py holds the
+      # device catalog's greyed riscv64/MIPS reasons to the measured resolution report,
+      # and the report to its generator. The report, its rendering and the script all
+      # live outside studio/, and a re-measure lands only there.
+      - 'scripts/package-resolution-report.py'
+      - 'docs/catalog/package-resolution-report.json'
+      - 'docs/PACKAGE-RESOLUTION-RISCV-MIPS.md'
       # hugmesh-generator#1057: studio/tests/test_mainline_evidence.py RUNS this script
       # against local git repositories, and the evidence file it writes gates catalog
       # promotions. A change to the lookup lands only here.
