@@ -32,7 +32,7 @@ from ..styles import muted
 from ...core import desktop_pretend as dp
 from ...core import desktop_spec as ds
 from ._scroll import scrollable
-from ._widgets import _row
+from ._widgets import _row, own_probe
 
 _ERR = "color: #b00020;"
 _WARN = "color: #8a6d00;"
@@ -41,7 +41,14 @@ _BLOCKS_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
 
 
 class _PretendWorker(QtCore.QThread):
-    """Runs desktop_pretend.run() off the GUI thread."""
+    """Runs desktop_pretend.run() off the GUI thread.
+
+    ``done`` is emitted from INSIDE run(), so its queued slot can reach the GUI thread
+    while this thread is still running (run() returning, the OS thread exiting). The page
+    therefore holds the worker through ``own_probe`` until ``finished`` — never drops it
+    in the ``done`` slot: a QThread whose last Python reference goes while it still runs
+    is destroyed mid-run, ``QThread: Destroyed while thread is still running``, a qFatal
+    that takes the whole Studio down (the 2026-11-12 "it just crashes")."""
     line = Signal(str)
     done = Signal(object)
 
@@ -102,7 +109,8 @@ class DesktopPage(QtWidgets.QWizardPage):
             "(native or Flatpak) and Python for this build. Check with emerge --pretend "
             "asks Gentoo whether it all builds.")
         self.last_result: dp.PretendResult | None = None
-        self._worker: _PretendWorker | None = None
+        self._worker: _PretendWorker | None = None  # held by own_probe until `finished`
+        self._pretend_running = False  # a check is in flight (until `done`)
         self._pending_offer: list[ds.OverlayChange] = []
         self._last_applied: list[ds.OverlayChange] = []
         self._entry = None                      # the mesh row being edited (None = the one image)
@@ -735,7 +743,7 @@ class DesktopPage(QtWidgets.QWizardPage):
         self.greyed.setVisible(bool(greyed))
         # pretend availability
         why = dp.supported(self._pretend_cfg())
-        running = self._worker is not None
+        running = self._pretend_running
         self.pretend_btn.setEnabled(not why and not running)
         if why and not running and self.last_result is None:
             self.pretend_status.setText(why)
@@ -814,7 +822,7 @@ class DesktopPage(QtWidgets.QWizardPage):
 
     def start_pretend(self) -> str:
         """Start the check; returns "" when it started, else why not (also shown inline)."""
-        if self._worker is not None:
+        if self._pretend_running:
             return "A check is already running."
         self._collect()
         cfg = self._pretend_cfg()
@@ -841,13 +849,16 @@ class DesktopPage(QtWidgets.QWizardPage):
         self.pretend_status.setStyleSheet("")
         self.pretend_status.setText("Checking… (the builder unpacks the seed and asks the "
                                     "resolver; this takes a few minutes)")
-        self._worker = _PretendWorker(cfg, driver, self._out_dir())
+        # own_probe: un-parented, held until `finished` (then cleared + deleteLater) —
+        # never released by the `done` slot, which runs while the thread still runs.
+        worker = own_probe(self, "_worker", _PretendWorker(cfg, driver, self._out_dir()))
         self._worker_driver = driver
-        self._worker.line.connect(self.pretend_log.appendPlainText)
-        self._worker.done.connect(self._pretend_done)
+        self._pretend_running = True
+        worker.line.connect(self.pretend_log.appendPlainText)
+        worker.done.connect(self._pretend_done)
         self.pretend_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self._worker.start()
+        worker.start()
         return ""
 
     def _stop_pretend(self) -> None:
@@ -859,9 +870,18 @@ class DesktopPage(QtWidgets.QWizardPage):
                 pass
 
     def _pretend_done(self, res) -> None:
-        self._worker = None
+        # The worker is NOT released here (own_probe does that on `finished`); only the
+        # in-flight state ends, so Re-check works at once.
+        self._pretend_running = False
         self.stop_btn.setEnabled(False)
-        self.show_result(res)
+        try:
+            self.show_result(res)
+        except Exception as exc:                # noqa: BLE001 — a slot must never raise
+            # (PyQt6 turns an exception escaping a slot into a qFatal: the Studio exits)
+            self.pretend_status.setText(f"The check finished but its result could not be "
+                                        f"shown: {exc.__class__.__name__}: {exc}")
+            self.pretend_status.setStyleSheet(_ERR)
+            self.pretend_btn.setEnabled(not dp.supported(self._pretend_cfg()))
 
     def show_result(self, res: dp.PretendResult) -> None:
         """Render a result (from a run, or a test) and record its summary."""

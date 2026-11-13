@@ -371,3 +371,95 @@ def test_the_check_runs_in_the_container_even_on_a_native_default_host(tmp_path)
                          has_kvm=False, is_root=False, builder_image="hugmesh-builder")
     res = dp.run(_laptop(), BuildDriver(GEN, no_docker, workdir=str(tmp_path)), out_dir=str(tmp_path))
     assert res.status == "error" and "Docker is not available" in res.reason
+
+
+# ── the operator's three real runs of 2026-11-12 (the builder's report, argv line cut) ─
+
+def _real(name):
+    with open(os.path.join(FIX, name), encoding="utf-8") as fh:
+        return fh.read().splitlines()
+
+
+def test_the_real_pahole_wall_is_named_not_failed_without_naming_a_change():
+    """12ab44f2: extra Python target python3_15 made the single target python3_15, which
+    dev-util/pahole does not support; portage printed a REQUIRED_USE wall and named no
+    change. The Studio said only "failed without naming a USE or keyword change"."""
+    r = dp.parse(_real("error-real-pahole-required-use.out"), 1)
+    assert r.status == "error" and r.needs == []
+    assert r.required_use == [(
+        "dev-util/pahole-1.31",
+        "exactly-one-of ( python_single_target_python3_12 python_single_target_python3_13 "
+        "python_single_target_python3_14 )")]
+    assert "without naming" not in r.reason
+    assert "dev-util/pahole-1.31" in r.reason and "REQUIRED_USE" in r.reason
+    assert "'dev-util/pahole PYTHON_SINGLE_TARGET: python3_14'" in r.reason
+    assert "Python single target" in r.reason
+    assert any("REQUIRED_USE" in f for f in dp.facts(r))
+    # nothing the overlay would refuse is offered as an applicable change
+    assert r.applicable_needs() == []
+
+
+def test_a_required_use_wall_that_is_not_a_target_group_is_named_without_a_change():
+    lines = ["==> Pretend result: status=error rc=1 seed_python=python3_14 video_cards=intel",
+             dp.EXCERPT_BEGIN,
+             '!!! The ebuild selected to satisfy "media-libs/x" has unmet requirements.',
+             '- media-libs/x-2.0::gentoo USE="-a -b"',
+             "  The following REQUIRED_USE flag constraints are unsatisfied:",
+             "    a? ( b )",
+             dp.EXCERPT_END]
+    r = dp.parse(lines, 1)
+    assert r.required_use == [("media-libs/x-2.0", "a? ( b )")]
+    assert r.reason == "media-libs/x-2.0 cannot be built: its REQUIRED_USE 'a? ( b )' is not met."
+
+
+def test_the_real_wayfire_and_element_round_offers_both_changes():
+    """401cfb17: wayfire wants wlroots:0.19[x11-backend] (a "(Change USE: ...)" hint) and
+    element-desktop-bin wants ~amd64 — both are named and both are applicable."""
+    r = dp.parse(_real("needs-real-wayfire-element.out"), 3)
+    assert r.status == "needs", r.reason
+    assert r.needs == [("accept_keywords", "=net-im/element-desktop-bin-1.12.28 ~amd64"),
+                       ("package.use", ">=gui-libs/wlroots-0.19.2 x11-backend")]
+    assert [c.kind for c in r.applicable_needs()] == ["accept_keywords", "package.use"]
+    assert r.required_use == []
+
+
+def test_the_real_clean_desktop_plan_stays_clean():
+    """d44aa4ab: a full desktop plan the resolver accepted (regression fixture)."""
+    r = dp.parse(_real("clean-real-desktop-plan.out"), 0)
+    assert r.status == "clean" and r.needs == [] and r.required_use == [] and not r.reason
+    assert r.seed_python == ["python3_14"]
+    assert len(r.excerpt) > 150 and r.excerpt[-1].startswith("Total: ")
+
+
+# ── no secret reaches the pretend log ────────────────────────────────────────────────
+
+def test_no_secret_reaches_the_pretend_argv_or_its_log(tmp_path):
+    """run() writes the argv as the log's first line; on 2026-11-12 the disk passphrase
+    (--luks-pass) sat there in the clear, because only local_pass was blanked."""
+    from hugmesh_studio.core.config import SECRET_FIELDS
+    cfg = _laptop(encrypt_root=True, luks_pass="disk-SECRET-1", local_pass="login-SECRET-2",
+                  root_password="root-SECRET-3", user_password="user-SECRET-4")
+    secrets = ("disk-SECRET-1", "login-SECRET-2", "root-SECRET-3", "user-SECRET-4")
+    pcfg = dp.pretend_config(cfg)
+    assert all(getattr(pcfg, f) in ("", None) for f in SECRET_FIELDS if hasattr(pcfg, f))
+    assert cfg.luks_pass == "disk-SECRET-1"           # the user's own config is untouched
+    drv = BuildDriver(GEN, HOST, workdir=str(tmp_path))
+    argv = " ".join(dp.command(cfg, drv, "docker"))
+    assert "--encrypt-root" in argv                   # the shape is kept, the secret is not
+    assert not [s for s in secrets if s in argv]
+
+    class Fake:
+        host = HOST
+
+        def command(self, c, backend=None):
+            return drv.command(c, backend)
+
+        def _stream(self, argv, sink, backend):
+            for line in CLEAN:
+                sink(line)
+            return 0
+
+    res = dp.run(cfg, Fake(), out_dir=str(tmp_path), backend="docker")
+    assert res.status == "clean"
+    log = open(res.log_path, encoding="utf-8").read()
+    assert log.startswith("$ ") and not [s for s in secrets if s in log]

@@ -124,6 +124,16 @@ lib "DC_PACKAGE_USE='media-libs/mesa vulkan'; dc_apply_portage_overlay '${SR}' t
 [ ! -e "${pu}" ] && [ ! -e "${SR}/etc/portage/package.accept_keywords/zz-hugmesh-studio" ] \
     && ok "no lines -> no overlay files (a resumed sysroot's stale copy is removed)" || bad "empty overlay left files behind"
 
+# Sessions that cannot merge without a package.use line get it, in their own file
+# (2026-11-12 pretend: wayfire needs gui-libs/wlroots[x11-backend]).
+ps="${SR}/etc/portage/package.use/zz-hugmesh-sessions"
+lib "DC_SESSIONS='i3 wayfire sway'; dc_apply_portage_overlay '${SR}' t" >/dev/null
+grep -x 'gui-libs/wlroots x11-backend' "${ps}" >/dev/null \
+    && ok "wayfire -> package.use/zz-hugmesh-sessions carries 'gui-libs/wlroots x11-backend'" || bad "session use: $(cat "${ps}" 2>&1)"
+[ "$(grep -vc '^#' "${ps}")" = 1 ] && ok "only wayfire needs a line (sway/i3 add none)" || bad "session lines: $(cat "${ps}")"
+lib "DC_SESSIONS='i3 sway'; dc_apply_portage_overlay '${SR}' t" >/dev/null
+[ ! -e "${ps}" ] && ok "no session that needs a line -> no zz-hugmesh-sessions (a stale one is removed)" || bad "stale sessions file kept"
+
 echo "== 4. dc_bake_desktop"
 SR="${TMP}/bake"; mkdir -p "${SR}/etc/lightdm"
 printf '[Seat:*]\ngreeter-session=lightdm-gtk-greeter\nuser-session=LXDE\n' > "${SR}/etc/lightdm/lightdm.conf"
@@ -239,6 +249,15 @@ grep -x 'PYTHON_TARGETS="python3_12 python3_13 python3_14"' "${PS}/etc/portage/m
     && ok "extras WIDEN the seed set (${seed_line} + extras, sorted)" || bad "union: $(grep PYTHON_ "${PS}/etc/portage/make.conf")"
 grep -x 'PYTHON_SINGLE_TARGET="python3_14"' "${PS}/etc/portage/make.conf" >/dev/null && ok "single target honoured" || bad "single: $(grep PYTHON_SINGLE "${PS}/etc/portage/make.conf")"
 [ "$(grep -c '^PYTHON_TARGETS=' "${PS}/etc/portage/make.conf")" = 1 ] && ok "one assignment, never two" || bad "duplicate assignments"
+# Extras WITHOUT a single target (the 2026-11-12 pahole wall): the set widens, the single
+# target stays the SEED's — never the newest extra, which most single-target packages
+# (dev-util/pahole: up to 3_14) do not support yet.
+lib "PT_EXTRA_TARGETS='python3_14 python3_15'; pt_apply_seed_targets '${PS}' t" >/dev/null
+grep -x 'PYTHON_TARGETS="python3_13 python3_14 python3_15"' "${PS}/etc/portage/make.conf" >/dev/null \
+    && ok "extras alone widen the set" || bad "extras alone: $(grep PYTHON_ "${PS}/etc/portage/make.conf")"
+grep -x 'PYTHON_SINGLE_TARGET="python3_13"' "${PS}/etc/portage/make.conf" >/dev/null \
+    && ok "extras alone keep the seed's single target (python3_13), not the newest extra" \
+    || bad "extras alone moved the single target: $(grep PYTHON_SINGLE "${PS}/etc/portage/make.conf")"
 if out="$(lib "PT_SINGLE_TARGET=python3_15; pt_apply_seed_targets '${PS}' t")"; then bad "a single target outside the set was accepted"
 else case "${out}" in *"is not in PYTHON_TARGETS"*) ok "a single target outside the set fails";; *) bad "single outside: ${out}";; esac; fi
 

@@ -1011,7 +1011,7 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --flatpak-remotes "name=https://.../x.flatpakrepo ..."  Extra remotes.
       --python-extra-targets "python3_13"  Widen PYTHON_TARGETS beyond the seed's
                             (never narrows it).
-      --python-single-target python3_13  PYTHON_SINGLE_TARGET (must be in the set).
+      --python-single-target python3_13  PYTHON_SINGLE_TARGET (must be in the set; default: the seed's own).
       --package-use "ATOM FLAG...;..."     package.use lines (zz-hugmesh-studio).
       --accept-keywords "ATOM [~amd64];..." package.accept_keywords lines.
       --pretend-only        Resolve @world + the payload with emerge --pretend
