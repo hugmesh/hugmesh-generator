@@ -596,6 +596,46 @@ def unquote_pasted_path(text: str, osname: str | None = None) -> str:
     return text
 
 
+def is_terminal(stream, osname: str | None = None, console_mode=None) -> bool:
+    """Is ``stream`` a terminal someone can type into? ``isatty()``, except on native
+    Windows, where the NUL device (``< NUL``, ``stdin=DEVNULL``, a job with no input)
+    is a character device and so ``isatty()`` says True: there it is a terminal only
+    when the console answers ``GetConsoleMode`` for its handle. Without that check
+    ``getpass`` (which reads the console keyboard on Windows, not stdin) waited for a
+    key that a script or CI job never presses. A stream with no file descriptor (a
+    test's fake) is taken at its ``isatty()`` word. ``osname`` is ``os.name`` and
+    ``console_mode(handle) -> bool`` asks the console, unless a test passes others."""
+    try:
+        if stream is None or not stream.isatty():
+            return False
+    except (AttributeError, ValueError, OSError):
+        return False
+    if (os.name if osname is None else osname) != "nt":
+        return True
+    try:
+        fd = stream.fileno()
+    except (AttributeError, ValueError, OSError):
+        return True
+    try:
+        import msvcrt
+        handle = msvcrt.get_osfhandle(fd)
+    except (ImportError, OSError, ValueError):
+        return False
+    if console_mode is None:
+        console_mode = _windows_console_mode
+    return bool(console_mode(handle))
+
+
+def _windows_console_mode(handle) -> bool:
+    try:
+        import ctypes
+        mode = ctypes.c_uint32()
+        return bool(ctypes.windll.kernel32.GetConsoleMode(ctypes.c_void_p(handle),
+                                                          ctypes.byref(mode)))
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
 def host_kind(osname: str | None = None, sysplatform: str | None = None) -> str:
     """"windows", "darwin" or "linux": the ONE question every platform branch asks.
 

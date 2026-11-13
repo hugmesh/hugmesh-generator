@@ -466,6 +466,16 @@ jobs:
           tests/test_local_ai_dock.py
           tests/test_local_ai_dock_pull.py
           tests/test_self_check_windows.py
+          tests/test_tui_command_words.py
+          tests/test_tui_desktop.py
+          tests/test_windows_measure_tree.py
+          tests/test_build_disk_space_guard.py
+          tests/test_windows_nul_stdin.py
+          tests/test_nvd_key_cli.py
+          tests/test_local_ai_tui_windows_note.py
+          tests/test_local_ai_tui.py
+          tests/test_windows_view_doors_pid.py
+          tests/test_view_doors.py
 
   macos:
     # The macOS app: "HugMesh Image Studio.app" in a .dmg, for Apple silicon and Intel.
