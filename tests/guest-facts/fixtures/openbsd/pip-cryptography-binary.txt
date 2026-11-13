@@ -1,0 +1,9 @@
+$ /tmp/guest-facts.54896/venv/bin/python -m pip install --only-binary=:all: cryptography
+/tmp/guest-facts.54896/venv/lib/python3.14/site-packages/pip/_vendor/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 4.4.0'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+ERROR: Could not find a version that satisfies the requirement cryptography (from versions: none)
+
+[notice] A new release of pip is available: 26.2.1 -> 26.3
+[notice] To update, run: /tmp/guest-facts.54896/venv/bin/python -m pip install --upgrade pip
+ERROR: No matching distribution found for cryptography
+rc=1

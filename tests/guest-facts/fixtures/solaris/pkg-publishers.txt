@@ -1,0 +1,4 @@
+$ pkg publisher
+PUBLISHER                   TYPE     STATUS P LOCATION
+solaris                     origin   online F http://pkg.oracle.com/solaris/release/
+rc=0

@@ -1,0 +1,32 @@
+$ as_root sh -c pkg install -y py312-urwidgets-0.2.1_1
+Updating Avalon repository catalogue...
+Avalon repository is up to date.
+All repositories are up to date.
+pkg: python312: duplicate dependency listing: openssl
+pkg: rsync: duplicate dependency listing: openssl
+pkg: bind-tools: duplicate dependency listing: openssl
+pkg: libevent: duplicate dependency listing: openssl
+pkg: libevent: duplicate dependency listing: openssl
+pkg: python311: duplicate dependency listing: openssl
+pkg: curl: duplicate dependency listing: openssl
+pkg: libssh2: duplicate dependency listing: openssl
+pkg: libssh2: duplicate dependency listing: openssl
+pkg: git-lite: duplicate dependency listing: openssl
+pkg: curl: duplicate dependency listing: openssl
+pkg: p5-Net-SSLeay: duplicate dependency listing: openssl
+pkg: opusfile: duplicate dependency listing: openssl
+pkg: opusfile: duplicate dependency listing: openssl
+pkg: isc-dhcp44-server: duplicate dependency listing: openssl
+The following 1 package(s) will be affected (of 0 checked):
+
+New packages to be INSTALLED:
+	py312-urwidgets: 0.2.1_1 [Avalon]
+
+Number of packages to be installed: 1
+
+24 KiB to be downloaded.
+[1/1] Fetching py312-urwidgets-0.2.1_1: ... done
+Checking integrity... done (0 conflicting)
+[1/1] Installing py312-urwidgets-0.2.1_1...
+[1/1] Extracting py312-urwidgets-0.2.1_1: .......... done
+rc=0

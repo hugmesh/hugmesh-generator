@@ -1,0 +1,4 @@
+$ sh -c echo '/usr/pkg/bin/python3.12'; /usr/pkg/bin/python3.12 -VV
+/usr/pkg/bin/python3.12
+Python 3.12.14 (main, Nov  7 2026, 23:05:29) [GCC 12.5.0]
+rc=0

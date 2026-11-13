@@ -1,0 +1,3 @@
+$ uname -m
+i86pc
+rc=0

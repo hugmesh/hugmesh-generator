@@ -1,0 +1,2 @@
+$ pkg search -q pyside6
+rc=1

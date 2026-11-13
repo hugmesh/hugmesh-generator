@@ -1,0 +1,3 @@
+step	rc	seconds	argv
+tui	0	0.4	python -m hugmesh_studio.tui --plain --generator-dir <repo>
+print	0	0.3	python -m hugmesh_studio --print-command --config <out>/standalone.json --backend docker --generator-dir <repo>

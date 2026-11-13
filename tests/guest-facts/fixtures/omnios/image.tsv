@@ -1,0 +1,5 @@
+kind	path	bytes	sha256
+action	vmactions/omnios-vm@aeee92416495d9685b2997d954f6b063ae5b832d		
+release	r151060		
+image	omnios/v2.1.4/omnios-r151060.qcow2	1175257088	aac8d4959aaafab5be86769b8f0c53e7103a4a5a5a208aadbc5e55e6a0c3a248
+anyvm.py	anyvm.py	624113	c192b299b9bf1b9f07b1d5e5b3977b518f8f24a9af9c20da259cdca22271d9f5

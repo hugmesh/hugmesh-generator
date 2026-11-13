@@ -1,0 +1,6 @@
+$ cat /etc/release
+             OpenIndiana Hipster 2026.10 (powered by illumos)
+        OpenIndiana Project, part of The Illumos Foundation (C) 2010-2026
+                        Use is subject to license terms.
+                           Assembled 30 October 2026
+rc=0

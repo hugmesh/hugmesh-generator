@@ -1,0 +1,12 @@
+$ cat /etc/os-release
+NAME="OmniOS"
+PRETTY_NAME="OmniOS Community Edition v11 r151060"
+CPE_NAME="cpe:/o:omniosce:omnios:11:151060:0"
+ID=omnios
+VERSION=r151060
+VERSION_ID=r151060
+BUILD_ID=151060.0.2026.10.22
+HOME_URL="https://omnios.org/"
+SUPPORT_URL="https://omnios.org/"
+BUG_REPORT_URL="https://github.com/omniosorg/omnios-build/issues/new"
+rc=0

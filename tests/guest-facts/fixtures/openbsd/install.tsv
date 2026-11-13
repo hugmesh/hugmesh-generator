@@ -1,0 +1,6 @@
+component	kind	install_rc	imports	line
+python	preinstalled	0	yes	/usr/local/bin/python3.14
+urwid	static	0	yes	pkg_add -I py3-urwid
+pyside6	static	0	no	pkg_add -I py3-pyside6
+pyside6	search	0	yes	pkg_add -I debug-pyside6-6.11.2
+pyqt6	static	0	yes	pkg_add -I py3-qt6

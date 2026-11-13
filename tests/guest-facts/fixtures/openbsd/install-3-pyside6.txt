@@ -1,0 +1,18 @@
+$ as_root sh -c pkg_add -I debug-pyside6-6.11.2
+quirks-7.227 signed on 2026-11-12T17:48:00Z
+useradd: Warning: home directory `/var/run/pulse' doesn't exist, and -m was not specified
+Updating font cache: ok
+The following new rcscripts were installed: /etc/rc.d/messagebus /etc/rc.d/pcscd
+See rcctl(8) for details.
+New and changed readme(s):
+	/usr/local/share/doc/pkg-readmes/consolekit2
+	/usr/local/share/doc/pkg-readmes/dbus
+	/usr/local/share/doc/pkg-readmes/ffmpeg
+	/usr/local/share/doc/pkg-readmes/gtk+3
+	/usr/local/share/doc/pkg-readmes/llvm-22
+	/usr/local/share/doc/pkg-readmes/sdl2
+--- +flite-2.2 -------------------
+The festival lite package was modified from the original source.
+You can find the modifications on
+https://cvsweb.openbsd.org/ports/audio/flite/patches/
+rc=0

@@ -1,0 +1,2 @@
+$ /tmp/guest-facts.869/venv/bin/python tests/guest-facts/argv_session.py --repo /home/runner/work/hugmesh-generator/hugmesh-generator --out /home/runner/work/hugmesh-generator/hugmesh-generator/guest-facts-out/dragonfly/session
+rc=0

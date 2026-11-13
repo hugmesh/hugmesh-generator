@@ -1,0 +1,2 @@
+$ /usr/local/bin/python3.11 -m venv --system-site-packages /tmp/guest-facts.869/venv
+rc=0

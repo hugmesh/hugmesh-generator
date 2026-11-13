@@ -1,0 +1,10 @@
+$ /tmp/guest-facts.693/venv/bin/python -m pip install --only-binary=:all: jsonschema
+Requirement already satisfied: jsonschema in /usr/lib/python3.13/vendor-packages (4.26.0)
+Requirement already satisfied: attrs>=22.2.0 in /usr/lib/python3.13/vendor-packages (from jsonschema) (26.1.0)
+Requirement already satisfied: jsonschema-specifications>=2023.03.6 in /usr/lib/python3.13/vendor-packages (from jsonschema) (2025.9.1)
+Requirement already satisfied: referencing>=0.28.4 in /usr/lib/python3.13/vendor-packages (from jsonschema) (0.37.0)
+Requirement already satisfied: rpds-py>=0.25.0 in /usr/lib/python3.13/vendor-packages (from jsonschema) (2026.6.3)
+
+[notice] A new release of pip is available: 26.2.1 -> 26.3
+[notice] To update, run: /tmp/guest-facts.693/venv/bin/python -m pip install --upgrade pip
+rc=0

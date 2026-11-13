@@ -1,0 +1,5 @@
+component	kind	install_rc	imports	line
+python	preinstalled	0	yes	/usr/local/bin/python3.12
+urwid	static	0	yes	pkg install -y py312-urwid
+pyside6	static	1	no	pkg install -y py312-pyside6
+pyqt6	static	0	yes	pkg install -y py312-qt6-pyqt

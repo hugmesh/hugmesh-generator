@@ -1,0 +1,5 @@
+kind	path	bytes	sha256
+action	vmactions/openindiana-vm@b0669479e0325a25198dc7ed2a4b6089e98f91b3		
+release	202610		
+image	openindiana/v2.1.5/openindiana-202610.qcow2	10259070976	e42f12ced03e730116713a99dac10d87521a2b6944bae0a20fdc6a4cc88285da
+anyvm.py	anyvm.py	624113	c192b299b9bf1b9f07b1d5e5b3977b518f8f24a9af9c20da259cdca22271d9f5

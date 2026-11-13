@@ -1,0 +1,4 @@
+$ uname -o
+uname: unknown option -- o
+usage: uname [-amnprsv]
+rc=1

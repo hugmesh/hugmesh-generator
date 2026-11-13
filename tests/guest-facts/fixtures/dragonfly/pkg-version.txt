@@ -1,0 +1,3 @@
+$ as_root pkg -v
+2.2.0
+rc=0

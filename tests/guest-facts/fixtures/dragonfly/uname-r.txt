@@ -1,0 +1,3 @@
+$ uname -r
+6.4-RELEASE
+rc=0

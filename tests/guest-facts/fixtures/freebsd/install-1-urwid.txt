@@ -1,0 +1,34 @@
+$ as_root sh -c pkg install -y py312-urwid
+Updating FreeBSD-ports repository catalogue...
+Fetching data: .......... done
+Processing entries: .......... done
+FreeBSD-ports repository update completed. 38539 packages processed.
+Updating FreeBSD-ports-kmods repository catalogue...
+Fetching data: ...... done
+Processing entries: .......... done
+FreeBSD-ports-kmods repository update completed. 294 packages processed.
+Updating FreeBSD-base repository catalogue...
+FreeBSD-base repository is up to date.
+All repositories are up to date.
+The following 3 package(s) will be affected (of 0 checked):
+
+New packages to be INSTALLED:
+	py312-typing-extensions: 4.16.0 [FreeBSD-ports]
+	py312-urwid: 3.0.3 [FreeBSD-ports]
+	py312-wcwidth: 0.9.1 [FreeBSD-ports]
+
+Number of packages to be installed: 3
+
+The process will require 11 MiB more space.
+1 MiB to be downloaded.
+[1/3] Fetching py312-typing-extensions-4.16.0: .......... done
+[2/3] Fetching py312-urwid-3.0.3: .......... done
+[3/3] Fetching py312-wcwidth-0.9.1: .......... done
+Checking integrity... done (0 conflicting)
+[1/3] Installing py312-typing-extensions-4.16.0...
+[1/3] Extracting py312-typing-extensions-4.16.0: .......... done
+[2/3] Installing py312-wcwidth-0.9.1...
+[2/3] Extracting py312-wcwidth-0.9.1: .......... done
+[3/3] Installing py312-urwid-3.0.3...
+[3/3] Extracting py312-urwid-3.0.3: .......... done
+rc=0

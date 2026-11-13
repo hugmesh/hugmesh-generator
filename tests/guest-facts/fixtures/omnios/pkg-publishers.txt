@@ -1,0 +1,7 @@
+$ pkg publisher
+PUBLISHER                   TYPE     STATUS P LOCATION
+omnios                      origin   online F https://pkg.omnios.org/r151060/core/
+omnios                      mirror   online F https://us-west.mirror.omnios.org/r151060/core/
+extra.omnios                origin   online F https://pkg.omnios.org/r151060/extra/
+extra.omnios                mirror   online F https://us-west.mirror.omnios.org/r151060/extra/
+rc=0

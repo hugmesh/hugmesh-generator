@@ -1,0 +1,46 @@
+$ pkg info
+abseil-20230125.3              Abseil Common Libraries (C++)
+bind-tools-9.18.30             Command line tools from BIND: delv, dig, host, nslookup...
+ca_root_nss-3.93_2             Root certificate bundle from the Mozilla Project
+cdrtools-2024.03.21            Tools for ripping from and recording to CDs and DVDs
+curl-8.10.0                    Command line tool and library for transferring data with URLs
+expat-2.6.2                    XML 1.0 parser written in C
+fstrm-0.6.1_1                  Implementation of the Frame Streams data transport protocol in C
+fusefs-libs3-3.17.1            FUSE library version 3 for filesystems implemented in userspace
+fusefs-sshfs-3.7.3_3           Mount remote directories over ssh
+gettext-runtime-0.22.5         GNU gettext runtime libraries and programs
+git-lite-2.45.2_1              Distributed source code management tool (lite flavor)
+git-litem-1.0                  Distributed source code management tool (lite version)
+glib-2.80.5_1,2                Some useful routines of C programming (current stable version)
+indexinfo-0.3.1                Utility to regenerate the GNU info page index
+isc-dhcp44-server-4.4.3P1_1    ISC Dynamic Host Configuration Protocol server
+json-c-0.17                    JSON (JavaScript Object Notation) implementation in C
+jsoncpp-1.9.5                  JSON reader and writer library for C++
+libedit-3.1.20240517,1         Command line editor library
+libevent-2.1.12                API for executing callback functions on events or timeouts
+libffi-3.4.6                   Foreign Function Interface
+libiconv-1.17_1                Character set conversion library
+libidn2-2.3.7                  Implementation of IDNA2008 internationalized domain names
+liblz4-1.10.0,1                LZ4 compression library, lossless and very fast
+libnghttp2-1.62.1              HTTP/2.0 C Library
+libpsl-0.21.5_1                C library to handle the Public Suffix List
+libssh2-1.11.0_1,3             Library implementing the SSH2 protocol
+libunistring-1.2               Unicode string library
+libuv-1.48.0                   Multi-platform support library with a focus on asynchronous I/O
+libxml2-2.11.8                 XML parser library for GNOME
+mpdecimal-4.0.0                C/C++ arbitrary precision decimal floating point libraries
+ncurses-6.5                    Library for terminal-independent, full-screen output
+openssl-3.0.15,1               TLSv1.3 capable SSL and crypto library
+pcre2-10.43                    Perl Compatible Regular Expressions library, version 2
+pkg-2.2.0                      Package manager
+protobuf-24.4,1                Data interchange format library
+protobuf-c-1.4.1_2             Code generator and libraries to use Protocol Buffers from pure C
+py311-packaging-24.2           Core utilities for Python packages
+python311-3.11.12_1            Interpreted object-oriented programming language
+readline-8.2.10                Library for editing command lines as they are typed
+rsync-3.4.1_2                  Network file distribution/synchronization utility
+schilybase-2024.03.21          Support files and libraries for the schilytools
+tree-2.2.1                     Display a tree-view of directories with optional color or HTML output
+xxhash-0.8.3                   Extremely fast non-cryptographic hash algorithm
+zstd-1.5.7                     Fast real-time compression algorithm
+rc=0

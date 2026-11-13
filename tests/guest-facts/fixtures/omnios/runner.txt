@@ -1,0 +1,4 @@
+image_os=ubuntu26
+image_version=20261101.186.1
+nproc=4
+kvm=present

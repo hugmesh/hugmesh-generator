@@ -1,0 +1,2 @@
+$ /tmp/guest-facts.1835/venv/bin/python tests/guest-facts/size_contract.py run --repo /home/runner/work/hugmesh-generator/hugmesh-generator --list /home/runner/work/hugmesh-generator/hugmesh-generator/guest-facts-out/netbsd/contract-candidates.txt --out /home/runner/work/hugmesh-generator/hugmesh-generator/guest-facts-out/netbsd/contract-sizing.tsv --budget 2400
+rc=0
