@@ -551,6 +551,7 @@ jobs:
             tests/scripts/test-desktop-sso-bake.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh
+            tests/scripts/test-host-guard-rust-std.sh
             tests/scripts/test-e2e-persona-catalogue.sh
             tests/scripts/test-edge-ai-cuda-host-compiler.sh
             tests/scripts/test-edge-ai-ollama-pin.sh
