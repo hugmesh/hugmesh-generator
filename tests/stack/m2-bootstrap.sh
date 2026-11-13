@@ -138,6 +138,17 @@ PINS=(
   "hugmesh-parent|dd9ff5d3174b502a45bee1fbb9225cb281ca73f9|hugmesh-parent|2.9.0-beta.1|pom|net/hugmesh"
   "hugmesh-commons|126e85b3f8591f2118a2a8de46378f06ecaef994|hugmesh-commons|2.2.0-beta.1|jar+tests|net/hugmesh"
   "hugmesh-auth-core|0237a8661236e55f72795a834ecbbef5f0d08919|hugmesh-auth-core|2.6.0-beta.1|jar|net/hugmesh"
+  # The 2026-11-12 beta line: the org release merged parent 2.10.0-beta.1 into every
+  # Java consumer main (admin/user/forum/wiki/owncast/tube/mod/character-forge BFFs,
+  # federation-api), and parent 2.10.0-beta.1 manages commons 2.3.0-beta.1 +
+  # auth-core 2.7.0-beta.1 and pulls build-config 0.7.0-beta.1. Without these rows the
+  # operator's cold `make stack-up` died at owncast-bff with "Non-resolvable parent
+  # POM ... hugmesh-parent:pom:2.10.0-beta.1 (absent)". Each SHA is that repo's main
+  # at its "Release: version <v>" commit. Same order rule.
+  "hugmesh-build-config|24e8d6323bb7ca7f7abd03591d910904bb52f92d|hugmesh-build-config|0.7.0-beta.1|jar|net/hugmesh"
+  "hugmesh-parent|d9c299beab9f94604c9861e12a8b2b0db174fafc|hugmesh-parent|2.10.0-beta.1|pom|net/hugmesh"
+  "hugmesh-commons|479e54d5524ec8dec4d253c0921d45b371506084|hugmesh-commons|2.3.0-beta.1|jar+tests|net/hugmesh"
+  "hugmesh-auth-core|c3b456baaf676389d7495b3986dbb462e8e7461a|hugmesh-auth-core|2.7.0-beta.1|jar|net/hugmesh"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"
