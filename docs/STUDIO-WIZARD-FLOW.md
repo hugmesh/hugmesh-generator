@@ -213,6 +213,12 @@ assembled brand dir; otherwise a preset would walk around the conflict.
 - Per-user **first-login registration method** (discord / gmail / password / derive) is
   now a first-class column on `users.py`, backed by the additive `User.registration`
   manifest field (see the emission note below).
+- Per-user **other sign-in handles** (hugmesh-generator#1107): an optional Google account
+  (email) and Discord username per user, in `User.signin_handles`. They are typed in the
+  editor under the Users table (for the selected row), shown in the text UI's users table,
+  checked at load and on Next (a bad one is refused inline), and carried in the saved
+  config and both manifests only when set. They are kept, not applied, until provisioning
+  turns them into allowlist invites and the Google/Discord sign-in lands; the page says so.
 
 ### Selection-clarity pass (`role.py` / `hardware.py` / `system.py` / `home.py` / `worklist.py`)
 

@@ -29,7 +29,10 @@ orange warning that names each such domain once — never silently rewritten.
 from __future__ import annotations
 
 from ..qt import QtCore, QtWidgets
-from ...core.config import (USER_ROLE_CHOICES, User, normalize_user_roles,
+from ...core.config import (SIGNIN_HANDLE_LABELS, SIGNIN_HANDLES_NOT_APPLIED,
+                            USER_ROLE_CHOICES, User, clean_signin_handles,
+                            normalize_user_roles, signin_handle_problem,
+                            user_signin_handle_warnings,
                             users_table_applies)
 from ...core.domain_services import domain_names_for_services
 
@@ -46,7 +49,9 @@ USER_REGISTRATION_CHOICES = ("derive", "discord", "gmail", "password")
 
 # Registration is appended as the LAST column so the Domain/Role cell indices tests
 # read (cellWidget(row, 1) / cellWidget(row, 2)) are unchanged.
-_COL_USER, _COL_DOMAIN, _COL_ROLE, _COL_EMAIL, _COL_REG = range(5)
+_COL_USER, _COL_DOMAIN, _COL_ROLE, _COL_EMAIL, _COL_REG, _COL_GOOGLE, _COL_DISCORD = range(7)
+#: the handle columns, by provider (hugmesh-generator#1107)
+_HANDLE_COLS = {"google": _COL_GOOGLE, "discord": _COL_DISCORD}
 # a loaded domain that is not among the defined domains is kept, but flagged — never
 # silently rewritten to a defined one.
 _UNDEFINED = " (not defined)"
@@ -135,11 +140,41 @@ class UsersPage(QtWidgets.QWizardPage):
             "domain's users, and how each first signs in: Discord or Gmail "
             "self-registration, or an issued password.")
         lay = QtWidgets.QVBoxLayout(self)
-        self.table = QtWidgets.QTableWidget(0, 5)
+        self.table = QtWidgets.QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ["Username", "Domain", "Roles", "Email", "Registration"])
+            ["Username", "Domain", "Roles", "Email", "Registration",
+             SIGNIN_HANDLE_LABELS["google"], SIGNIN_HANDLE_LABELS["discord"]])
         self.table.horizontalHeader().setStretchLastSection(True)
         lay.addWidget(self.table)
+        # typing a handle or a name re-checks the registration advice at once
+        self.table.itemChanged.connect(self._item_changed)
+        # #1107: the selected row's other sign-in handles. The table is wider than the
+        # page (the Roles column alone is ~450 px), so its last two columns sit off
+        # screen; this row under it is where a person actually types them. It reads
+        # and writes the same cells, so the two can never disagree.
+        self._handles_loading = False
+        self.handles_row = QtWidgets.QWidget()
+        self.handles_row.setObjectName("users_handles_row")
+        hr = QtWidgets.QHBoxLayout(self.handles_row)
+        hr.setContentsMargins(0, 0, 0, 0)
+        self.handles_for = QtWidgets.QLabel("")
+        self.handles_for.setObjectName("users_handles_for")
+        hr.addWidget(self.handles_for)
+        self.handle_edits: dict[str, QtWidgets.QLineEdit] = {}
+        for prov, placeholder in (("google", "name@gmail.com"),
+                                  ("discord", "their Discord username")):
+            hr.addWidget(QtWidgets.QLabel(SIGNIN_HANDLE_LABELS[prov]))
+            edit = QtWidgets.QLineEdit()
+            edit.setObjectName(f"users_handle_{prov}")
+            edit.setPlaceholderText(placeholder)
+            edit.setMinimumWidth(170)
+            edit.textEdited.connect(
+                lambda text, p=prov: self._handle_edited(p, text))
+            hr.addWidget(edit, 1)
+            self.handle_edits[prov] = edit
+        lay.addWidget(self.handles_row)
+        self.table.currentCellChanged.connect(
+            lambda row, _c, _pr, _pc: self._load_handles(row))
         # issue #228: what the Roles checkboxes mean.
         self.roles_help = QtWidgets.QLabel(
             "Roles: tick every role the account holds. The highest tier "
@@ -158,6 +193,21 @@ class UsersPage(QtWidgets.QWizardPage):
         self.reg_help.setWordWrap(True)
         self.reg_help.setStyleSheet("color: gray;")
         lay.addWidget(self.reg_help)
+        # #1107: the person's other sign-in handles, and what happens to them today
+        self.handles_help = QtWidgets.QLabel(
+            "Google account / Discord username: the person's other sign-in handles, "
+            "each optional. " + SIGNIN_HANDLES_NOT_APPLIED)
+        self.handles_help.setObjectName("users_handles_help")
+        self.handles_help.setWordWrap(True)
+        self.handles_help.setStyleSheet("color: #a65d00;")
+        lay.addWidget(self.handles_help)
+        # a handle that cannot be an invite: said here, nothing is written (no dialog)
+        self.handles_error = QtWidgets.QLabel("")
+        self.handles_error.setObjectName("users_handles_error")
+        self.handles_error.setWordWrap(True)
+        self.handles_error.setStyleSheet("color: #b00020;")
+        self.handles_error.setVisible(False)
+        lay.addWidget(self.handles_error)
         # shown when a row references a domain that is not (yet) defined on the Domains
         # page — kept as-is, flagged (never silently rewritten).
         self.warn = QtWidgets.QLabel("")
@@ -168,7 +218,9 @@ class UsersPage(QtWidgets.QWizardPage):
         btns = QtWidgets.QHBoxLayout()
         add = QtWidgets.QPushButton("Add user")
         rem = QtWidgets.QPushButton("Remove selected")
-        add.clicked.connect(lambda: self._add())
+        # a new row is selected, so the handles editor under the table edits it
+        add.clicked.connect(lambda: (self._add(), self.table.setCurrentCell(
+            self.table.rowCount() - 1, _COL_USER)))
         rem.clicked.connect(self._remove)
         btns.addWidget(add); btns.addWidget(rem); btns.addStretch(1)
         lay.addLayout(btns)
@@ -249,7 +301,8 @@ class UsersPage(QtWidgets.QWizardPage):
             dom_combo.setEnabled(True)
         self._update_warning()
 
-    def _add(self, username="", domain="", role="user", email="", registration=""):
+    def _add(self, username="", domain="", role="user", email="", registration="",
+             handles=None):
         """``role`` is one role name OR an iterable of them (issue #228) — the
         single-string spelling every caller used before multi-role still works."""
         roles = [role] if isinstance(role, str) else list(role)
@@ -270,10 +323,55 @@ class UsersPage(QtWidgets.QWizardPage):
         reg_combo = QtWidgets.QComboBox()
         reg_combo.addItems(USER_REGISTRATION_CHOICES)
         reg_combo.setCurrentText(registration or "derive")
+        reg_combo.currentTextChanged.connect(lambda _t: self._update_warning())
         self.table.setCellWidget(r, _COL_REG, reg_combo)
+        for prov, col in _HANDLE_COLS.items():
+            self.table.setItem(r, col, QtWidgets.QTableWidgetItem(
+                str((handles or {}).get(prov) or "")))
         self.table.resizeColumnToContents(_COL_ROLE)
         self._apply_role_lock(dom_combo, role_cell)
         self._fit_domain_column()
+
+    # ---- the selected row's other sign-in handles (#1107) -------------------------
+    def _item_changed(self, item) -> None:
+        if item is not None and item.row() == self.table.currentRow() \
+                and item.column() in (_COL_USER, _COL_GOOGLE, _COL_DISCORD):
+            self._load_handles(item.row())
+        self._update_warning()
+
+    def _load_handles(self, row: int) -> None:
+        """Show row ``row``'s handles in the editor under the table (disabled, with
+        nothing in it, when no row is selected)."""
+        self._handles_loading = True
+        try:
+            ok = 0 <= row < self.table.rowCount()
+            name = ""
+            if ok:
+                it = self.table.item(row, _COL_USER)
+                name = it.text().strip() if it is not None else ""
+            self.handles_for.setText(
+                f"Other sign-ins for {name or 'this user'}:" if ok
+                else "Other sign-ins (select a user):")
+            for prov, edit in self.handle_edits.items():
+                it = self.table.item(row, _HANDLE_COLS[prov]) if ok else None
+                edit.setText(it.text() if it is not None else "")
+                edit.setEnabled(ok)
+        finally:
+            self._handles_loading = False
+
+    def _handle_edited(self, prov: str, text: str) -> None:
+        """Typed in the editor: write the selected row's cell (the one store)."""
+        if self._handles_loading:
+            return
+        row = self.table.currentRow()
+        if not 0 <= row < self.table.rowCount():
+            return
+        col = _HANDLE_COLS[prov]
+        it = self.table.item(row, col)
+        if it is None:
+            self.table.setItem(row, col, QtWidgets.QTableWidgetItem(text))
+        else:
+            it.setText(text)
 
     def _remove(self):
         for idx in sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True):
@@ -290,13 +388,26 @@ class UsersPage(QtWidgets.QWizardPage):
                 name = self._raw_domain(dom.currentText())
                 if name not in undef:
                     undef.append(name)
+        lines = []
         if undef:
-            self.warn.setText(
+            lines.append(
                 "Domain(s) not defined on the Domains page: " + ", ".join(undef) +
                 " — define them there or pick a defined domain.")
-            self.warn.setVisible(True)
-        else:
-            self.warn.setVisible(False)
+        # #1107: a first-login registration through a provider with no handle for it
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, _COL_USER)
+            reg = self.table.cellWidget(r, _COL_REG)
+            hand = {}
+            for prov, col in _HANDLE_COLS.items():
+                it = self.table.item(r, col)
+                hand[prov] = it.text().strip() if it is not None else ""
+            u = User(username=item.text().strip() if item is not None else "",
+                     registration=(reg.currentText() if isinstance(
+                         reg, QtWidgets.QComboBox) else ""),
+                     signin_handles={k: v for k, v in hand.items() if v})
+            lines += [w[:1].upper() + w[1:] + "." for w in user_signin_handle_warnings(u)]
+        self.warn.setText("\n".join(lines))
+        self.warn.setVisible(bool(lines))
 
     def applies_to(self, cfg) -> bool:
         """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
@@ -327,7 +438,8 @@ class UsersPage(QtWidgets.QWizardPage):
         if self.table.rowCount() == 0:
             for u in c.users:
                 self._add(u.username, u.domain, list(u.roles), u.email,
-                          getattr(u, "registration", ""))
+                          getattr(u, "registration", ""),
+                          getattr(u, "signin_handles", None))
         else:
             # back-nav: newly-defined domains must appear in every row's dropdown, and
             # a superadmin lock re-pins to the current superdomain.
@@ -339,6 +451,9 @@ class UsersPage(QtWidgets.QWizardPage):
                     if isinstance(role_cell, RoleCell):
                         self._apply_role_lock(dom, role_cell)
             self._fit_domain_column()
+        if self.table.rowCount() and self.table.currentRow() < 0:
+            self.table.setCurrentCell(0, _COL_USER)
+        self._load_handles(self.table.currentRow())
         self._update_warning()
 
     def forget_rows(self) -> None:
@@ -354,6 +469,7 @@ class UsersPage(QtWidgets.QWizardPage):
         if self.wiz.cfg is not self._cfg_seen:
             return True                     # no table for THIS config yet: write nothing
         out = []
+        problems: list[str] = []
         for r in range(self.table.rowCount()):
             username = self.table.item(r, _COL_USER).text().strip() if self.table.item(r, _COL_USER) else ""
             if not username:
@@ -366,8 +482,25 @@ class UsersPage(QtWidgets.QWizardPage):
             reg_combo = self.table.cellWidget(r, _COL_REG)
             reg = reg_combo.currentText() if isinstance(reg_combo, QtWidgets.QComboBox) else "derive"
             registration = "" if reg == "derive" else reg
-            out.append(User(username=username, domain=domain, roles=roles, email=email,
-                            registration=registration))
+            # the other sign-in handles (#1107): every row is collected before any
+            # refusal (the GUI-20 rule), and a bad handle refuses the page inline
+            handles: dict[str, str] = {}
+            for prov, col in _HANDLE_COLS.items():
+                item = self.table.item(r, col)
+                v = item.text().strip() if item is not None else ""
+                problem = signin_handle_problem(prov, v)
+                if problem:
+                    problems.append(f"{username}: {problem}")
+                handles[prov] = v
+            user = User(username=username, domain=domain, roles=roles, email=email,
+                        registration=registration,
+                        signin_handles=clean_signin_handles(handles))
+            out.append(user)
+        if problems:
+            self.handles_error.setText("Not saved: " + "; ".join(problems) + ".")
+            self.handles_error.setVisible(True)
+            return False
+        self.handles_error.setVisible(False)
         c = self.wiz.cfg
         c.users = out
         return True
