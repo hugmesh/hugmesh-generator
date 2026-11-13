@@ -798,9 +798,13 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --superdomain D       Orchestration superdomain (mesh MagicDNS suffix) baked to
                             /etc/<brand>/superdomain + headscale base_domain. Mesh only;
                             permanently internal (never the go-live apex). Default: derived
-  -u, --user NAME           Fallback user. Default: ${DEFAULT_USER}
-      --user-password PASS  Default: ${DEFAULT_USER_PASS}
-      --root-password PASS  Default: ${ROOT_PASS}
+  -u, --user NAME           Console login account made when no KEYS stick provisions
+                            users; not an administrator unless --local-admin.
+                            Default: ${DEFAULT_USER}
+      --user-password PASS  Not used: no image takes a password from it (the account
+                            gets --local-pass or a random one-time password).
+      --root-password PASS  Not used: root stays locked unless a KEYS stick's
+                            users.json sets a root password hash.
       --headscale-version V Default: ${HEADSCALE_VERSION}
       --tailscale-version V Default: ${TAILSCALE_VERSION}
       --seed-url URL        amd64 stage3 index URL.

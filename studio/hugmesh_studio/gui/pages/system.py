@@ -408,25 +408,26 @@ class SystemPage(QtWidgets.QWizardPage):
             "Set console/rescue passwords for these node images")
         cl.addWidget(self.creds_optin)
         cl.addWidget(_muted(
-            "Off by default: the mesh signs in through SSO, so a node normally needs no "
-            "local login at all. Tick this only if you want a fallback console/rescue "
-            "login on the node images you are building."))
+            "Off by default, and today it changes nothing on the image. A node booted "
+            "without KEYS users gets a console account with a random one-time password; "
+            "that account is not an administrator and root is locked. To administer a "
+            "node, provision it with a KEYS stick whose users.json grants sudo."))
         self.creds_fields = QtWidgets.QWidget()
         fl = QtWidgets.QVBoxLayout(self.creds_fields)
         fl.setContentsMargins(0, 0, 0, 0)
         self.creds_note = QtWidgets.QLabel(
-            "Sets the baked USER and ROOT account passwords for the mesh node images "
-            "you are building. x86 nodes only; hashed at build time; never written to a "
-            "saved config, and cleared if you un-tick the box above.")
+            "Passed to the x86 builder as --user-password / --root-password, which "
+            "accepts them but no image uses them: no password is baked in. Never "
+            "written to a saved config, and cleared if you un-tick the box above.")
         self.creds_note.setWordWrap(True)
         fl.addWidget(self.creds_note)
         self.user_password = QtWidgets.QLineEdit()
         self.user_password.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self.user_password.setPlaceholderText("hashed at build time; NOT saved to configs")
+        self.user_password.setPlaceholderText("not used by any image; NOT saved to configs")
         fl.addWidget(_row("User password", self.user_password))
         self.root_password = QtWidgets.QLineEdit()
         self.root_password.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self.root_password.setPlaceholderText("hashed at build time; NOT saved to configs")
+        self.root_password.setPlaceholderText("not used by any image; NOT saved to configs")
         fl.addWidget(_row("Root password", self.root_password))
         self.creds_fields.setVisible(False)          # ask 10: hidden until opted in
         cl.addWidget(self.creds_fields)

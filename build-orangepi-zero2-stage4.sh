@@ -724,6 +724,14 @@ if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
     fi
 fi
 
+# ── Admin is opt-in (operator rule: the local login account is not admin unless asked) ──
+# Without --local-admin the local account (or the keyless fallback account) is NOT in
+# wheel and has no sudoers grant; root stays locked. Say so at build time so a box
+# nobody can administer is never a surprise (first boot says it on the console too).
+if ! ${LOCAL_ADMIN}; then
+    warn "No --local-admin: the local login account will NOT be an administrator. On a standalone or keyless (no KEYS stick) boot root is locked, so nobody on the device can use sudo; pass --local-admin to make the local account the administrator (docs/STANDALONE-DESKTOP.md)."
+fi
+
 # ── Charset allowlists for brand/identity/kernel/toolchain fields (fail-closed) ──
 # (mirrors build-frite-stage4.sh / build-rpi5-stage4.sh / build-orangepi5-stage4.sh)
 # These values come from CLI flags or a sourced brand.conf and flow into

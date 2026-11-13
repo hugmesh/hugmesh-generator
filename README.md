@@ -1033,8 +1033,14 @@ mounts it read-only, and applies (all optional):
   an NFS/CIFS share
 - **GitOps** — on the pki control plane, bootstrap ArgoCD + the app-of-apps
 
-If no KEYS stick is present the image still boots and creates a fallback user so
-you are never locked out. Full schema + examples: [`keys-template/`](keys-template/).
+If no KEYS stick provisions any users, the image still boots and creates a local
+login account. That account can log in but cannot administer the device: it is
+not in `wheel`, has no sudo, and root is locked. There is no other way to get admin
+on such a boot. To administer the device, either provision it with a KEYS stick
+whose `users.json` grants sudo, or build the image with `--local-admin` (the
+Studio's *Administrator* box, which needs a Login Password). See
+[`docs/STANDALONE-DESKTOP.md`](docs/STANDALONE-DESKTOP.md) for each case. Full
+KEYS schema + examples: [`keys-template/`](keys-template/).
 
 ## Cluster / GitOps
 
@@ -1395,7 +1401,9 @@ on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 
 ## Security notes
 
-- SSH is key-only; provide a key via KEYS or use the console fallback user.
+- SSH is key-only; provide a key via KEYS. Without KEYS users the console login
+  account exists but is not an administrator unless the image was built with
+  `--local-admin`.
 - Prefer `password_hash` over plaintext; generate with `gen-provision-keys.sh`.
 - The KEYS stick holds the cluster CA, preauth and backup credentials — keep it
   offline once provisioning is done. Generated secrets and build output are

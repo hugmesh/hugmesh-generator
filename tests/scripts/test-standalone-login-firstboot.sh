@@ -381,7 +381,9 @@ for b in "${REPO}"/build-*-stage4.sh; do
         || bad "${n}: usage does not document --local-admin"
 done
 for b in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh build-frite-stage4.sh \
-         build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh; do
+         build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh \
+         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh \
+         build-orangepi3-lts-stage4.sh; do
     awk '/^if ! \$\{LOCAL_ADMIN\}; then$/ { a = 1; next }
          a && /warn "No --local-admin: the local login account will NOT be an administrator\./ { f = 1 }
          a && /^fi$/ { a = 0 }
@@ -389,6 +391,13 @@ for b in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh bu
         && ok "${b}: warns at build time when there is no --local-admin" \
         || bad "${b}: builds an image with no administrator silently (no --local-admin warning)"
 done
+
+echo "== C3c. the template carries no password token (x86 used to render --user-password/--root-password into a comment) =="
+grep -qE '@@(DEFAULT_USER_PASS|ROOT_PASS)@@' "${TMPL}" \
+    && bad "template: still carries a @@DEFAULT_USER_PASS@@/@@ROOT_PASS@@ token" \
+    || ok "template: no password token for a builder to render"
+grep -q 'never locked out' "${TMPL}" && bad "template: still promises 'never locked out'" \
+    || ok "template: no 'never locked out' promise"
 
 echo "== C4. a standalone DESKTOP builder refuses a real build with no password =="
 for b in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh build-frite-stage4.sh \

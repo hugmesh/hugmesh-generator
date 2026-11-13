@@ -168,7 +168,8 @@ cp brands/example.conf brands/acme.conf
 | `OPTIONAL_SERVICES` | `tuwunel phpbb` | which optional services to bake (see §2a) |
 | `GAMES_DOMAIN` | `games.<CLUSTER_DOMAIN>` | games portal host + OIDC issuer (see §2b) |
 | `GROW_POLICY` | `fill` | first-boot root-grow policy baked into the `.img` (see §2c) |
-| `DEFAULT_USER` / `DEFAULT_USER_PASS` / `ROOT_PASS` | `pi` / `raspberry` / `gentoo` | **fallback** console accounts when no KEYS stick is present — change for real builds |
+| `DEFAULT_USER` | `pi` | name of the console login account created when no KEYS stick provisions users; it is **not** an administrator unless the build passes `--local-admin` (see §7d) |
+| `DEFAULT_USER_PASS` / `ROOT_PASS` | `raspberry` / `gentoo` | **not used**: no image takes a password from these any more (the account gets the Login Password or a random one-time password; root is locked) |
 | `ADMIN_EMAILS` | `admin@<domain>` | seeded Casdoor admin + BFF allowlist (the platform login admin; see §7d) |
 | `MAIL_PROVIDER` | `protonmail` | SMTP preset; `none` disables mail (see §2d) |
 | `TIMEZONE` | `UTC` | image timezone |
@@ -689,16 +690,23 @@ Insert each node's KEYS stick and power on. The `keys-provision` service finds t
 FAT32 `KEYS` partition, mounts it read-only, and applies (all optional): users,
 SSH host keys + authorized_keys, hostname/timezone/Wi-Fi, certificates/files,
 headscale+tailscale, the Kubernetes PKI + kubeadm init/join, attached
-storage (LUKS), backups and, on the pki node, the GitOps bootstrap. With no
-KEYS stick the image still boots and creates the fallback console user, so you are
-never locked out.
+storage (LUKS), backups and, on the pki node, the GitOps bootstrap. If no KEYS
+stick provisions any users, the image still boots and creates a local login
+account, but that account **cannot administer the device**: it is not in `wheel`,
+has no sudo, and root is locked. Nothing else on the device grants admin. To
+administer a node, provision it with a KEYS stick whose `users.json` grants sudo,
+or build the image with `--local-admin` (see `docs/STANDALONE-DESKTOP.md`).
 
 ### 7d. Operator logins after boot
 
 - **Node / SSH**: log in over SSH with the key from the KEYS stick
-  (`ssh -i keys-pki/ssh/admin_ed25519 admin@<node>`); login is key-only. The
-  console fallback user (`DEFAULT_USER`/`DEFAULT_USER_PASS`, `ROOT_PASS` from
-  `brand.conf`) exists only when no KEYS stick is present.
+  (`ssh -i keys-pki/ssh/admin_ed25519 admin@<node>`); login is key-only. When no
+  KEYS stick provisions any users, first boot creates the console account
+  `DEFAULT_USER` (from `brand.conf`, or the `--local-user` name) instead. Its
+  password is the build's Login Password (`--local-pass`) if one was given, and
+  otherwise a random one-time password printed once on the console. No password
+  is taken from `brand.conf`. That account is **not** an administrator and root is
+  locked, unless the image was built with `--local-admin`.
 - **ArgoCD**, the GitOps engine, over the VPN: get the initial admin password
   with the command in §8.
 - **Casdoor (the platform identity admin)**: seeded from `ADMIN_EMAILS`

@@ -53,9 +53,9 @@ _HOME_ROLE_CLASS_REASON = (
 # nodes)" group, which is a different pair of flags with a different lifetime.
 _LOCAL_LOGIN_REASON = (
     "This is the DESKTOP login for a personal image — the account you sit down at. The "
-    "images in this build are cluster nodes, which log in over SSO and keep their "
-    "console/rescue credentials on the System step's \"Node fallback login\" group "
-    "instead. Not offered here so one concept is not asked twice.")
+    "images in this build are cluster nodes, which log in over SSO and are "
+    "administered through the users on their KEYS stick. Not offered here so one "
+    "concept is not asked twice.")
 
 # The Steam/Vaults media device: desktop-class for the same builder reason as the egress
 # VPN row (see core.config.external_media_applies) — a node would emerge the package set
