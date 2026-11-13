@@ -218,7 +218,12 @@ else
     freebsd)   install python "" python3 "pkg install -y python311" "pkg install -y python312" ;;
     dragonfly) install python "" python3 "pkg install -y python311" "pkg install -y python312" ;;
     openbsd)   install python "" python "pkg_add -I python%3.12" "pkg_add -I python%3.13" "pkg_add -I python%3.11" ;;
-    netbsd)    install python "" python3 "pkgin -y install python312" "pkgin -y install python313" "pkgin -y install python311" ;;
+    # The NetBSD image ships pkg_install (pkg_add) but no pkgin: bootstrap pkgin from
+    # the release's binary package path in the same line, then install Python with it.
+    netbsd)    install python "" python3 \
+                 'PKG_PATH=https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$(uname -m)/$(uname -r)/All pkg_add pkgin && pkgin -y update && pkgin -y install python312' \
+                 'PKG_PATH=https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$(uname -m)/$(uname -r | cut -d. -f1).0/All pkg_add pkgin && pkgin -y update && pkgin -y install python312' \
+                 "pkgin -y install python313" "pkgin -y install python311" ;;
     solaris)   install python "" python-31 "pkg install --accept runtime/python-311" "pkg install --accept runtime/python-313" ;;
     *)         install python "" python-31 "pkg install runtime/python-313" "pkg install runtime/python-312" "pkg install runtime/python-311" ;;
   esac
