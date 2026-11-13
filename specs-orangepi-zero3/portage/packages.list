@@ -43,6 +43,11 @@ sys-fs/dosfstools
 # ── Networking ──────────────────────────────────────────────────────────────
 net-misc/networkmanager
 net-misc/openssh
+# curl: keys-provision asks the mesh's baked control URL whether it answers as a
+# control server before a worker picks its login server (resolve_control_endpoint
+# in specs/etc/keys-provision/provision.sh). The stage3 seed already carries it;
+# naming it here puts it behind the requested-atom completeness gate.
+net-misc/curl
 net-firewall/iptables
 net-misc/socat
 # Egress VPN (split-tunnel, fail-closed) — wg-quick (WireGuard, first-class) +

@@ -161,7 +161,11 @@ OPT_FRITE_DESKTOP="light"     # light (LEAN LXDE desktop) | none (headless base)
 OPT_RPI_BOARD="rpi5"          # rpi5 (DEFAULT, BCM2712/Cortex-A76) | rpi4 (BCM2711/Cortex-A72) | rpi3 (BCM2837/Cortex-A53, desktop-only)
 # ── Jetson Orin (arm64 Tegra234; EXPERIMENTAL — hardware validation pending) ────
 OPT_JETSON_BOARD="orin-nano"  # orin-nano | orin-nano-4gb | orin-nx-8gb | orin-nx-16gb
-OPT_JETSON_KFLAVOR="mainline" # mainline (buildable; NO CUDA) | l4t (documented stub)
+OPT_JETSON_KFLAVOR="mainline" # mainline (buildable; NO CUDA) — the ONLY offered flavour
+# l4t is NOT offered: build-jetson-stage4.sh exits 1 on it by design. It is listed in
+# the Jetson kernel menu with this reason and can never be selected (the Studio shows
+# it greyed with the same reason, KERNEL_FLAVOR_REFUSED in core/config.py).
+JETSON_L4T_REASON="not offered: the builder exits non-zero on it by design. NVIDIA's L4T kernel and CUDA userspace are EULA-gated downloads it does not fetch; flash them out of band (specs-jetson/installer/TEGRAFLASH.md). mainline builds, without CUDA."
 # ── Orange Pi 5 (arm64 Rockchip RK3588/RK3588S; EXPERIMENTAL — hardware
 # validation pending) ────────────────────────────────────────────────────────
 OPT_ORANGEPI5_BOARD="orange-pi-5-plus"   # orange-pi-5-plus (DEFAULT) | orange-pi-5
@@ -223,6 +227,9 @@ OPT_ROOT_LOGIN="no"       # no (DEFAULT, hardened) | prohibit-password | yes  (P
 # Restore saved options from a previous session (best-effort; ignore a bad file).
 # shellcheck disable=SC1090
 [ -f "${CONF_FILE}" ] && source "${CONF_FILE}" 2>/dev/null || true
+# A menu.conf saved before l4t stopped being offered may still name it; the fleet path
+# would pass it straight to make, so it falls back to the one flavour that builds.
+[ "${OPT_JETSON_KFLAVOR}" = mainline ] || OPT_JETSON_KFLAVOR="mainline"
 
 save_conf() {
     {
@@ -372,6 +379,25 @@ ui_menu() {
             printf '%s' "${tags[$((choice-1))]}"; return 0
         fi
         warn "invalid choice — enter 1-${#tags[@]} or q"
+    done
+}
+
+# jetson_kernel_menu — pick the Jetson --kernel-flavor. Only mainline is offered. The
+# l4t row is listed with its reason (the builder exits non-zero on it by design) under
+# a tag that is not a flavour, and choosing it explains why and asks again, so
+# OPT_JETSON_KFLAVOR can never become l4t here. rc=1 on back/cancel.
+jetson_kernel_menu() {
+    local kflavor
+    while true; do
+        kflavor="$(ui_menu "Jetson kernel" "Kernel route (--kernel-flavor; current: ${OPT_JETSON_KFLAVOR}):" \
+            mainline "mainline — gentoo-sources, buildable (DEFAULT; NO CUDA)" \
+            l4t-not-offered "l4t      — not offered: exits non-zero by design (select for why)" \
+            back "‹ back")" || return 1
+        case "${kflavor}" in
+            mainline) OPT_JETSON_KFLAVOR=mainline; return 0 ;;
+            l4t-not-offered) ui_msg "l4t is not offered" "l4t ${JETSON_L4T_REASON}" ;;
+            *) return 1 ;;
+        esac
     done
 }
 
@@ -2112,12 +2138,7 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
                 back "‹ back")" || return 0
             [ "${board}" = back ] && return 0
             OPT_JETSON_BOARD="${board}"
-            kflavor="$(ui_menu "Jetson kernel" "Kernel route (--kernel-flavor; current: ${OPT_JETSON_KFLAVOR}):" \
-                mainline "mainline — gentoo-sources, buildable (DEFAULT; NO CUDA)" \
-                l4t "l4t      — NVIDIA L4T/CUDA kernel (documented STUB, not buildable yet)" \
-                back "‹ back")" || return 0
-            [ "${kflavor}" = back ] && return 0
-            OPT_JETSON_KFLAVOR="${kflavor}"
+            jetson_kernel_menu || return 0
             # --standalone only composes onto --role desktop, same reasoning as rpi5.
             if [ "${role}" = desktop ]; then
                 arm_secrets_prompt "Jetson ${role} (${OPT_JETSON_BOARD})" required || return 0

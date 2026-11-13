@@ -122,6 +122,11 @@ def _sessions_page(wiz):
 # generator_dir=/gen and the pinned HOST above. Byte-identical argv is the fleet's
 # emission contract — do NOT regenerate these to make a refactor pass.
 #
+# One deliberate edit since: "everything" chose jetson_kernel_flavor="l4t", which the
+# fleet page no longer offers (the builder exits 1 on it by design; hugmesh-generator
+# #1060). It now chooses "mainline", the one offered non-default value, and the env
+# golden says JETSON_KERNEL_FLAVOR=mainline. The translation itself is unchanged.
+#
 # BuildDriver.__init__ resolves generator_dir with os.path.abspath, so the /src bind
 # mount carries the resolved form: exactly "/gen" on Linux (the captured golden), and
 # "<drive of the cwd>:\gen" on Windows, which Docker Desktop mounts the same way.
@@ -135,7 +140,7 @@ GOLDEN_CHOICES = {
         frite=True, frite_only=True, frite_board="le-potato", frite_flavor="live",
         frite_desktop="none",
         jetson=True, jetson_only=True, jetson_roles="edge_ai desktop",
-        jetson_board="orin-nx-16gb", jetson_kernel_flavor="l4t",
+        jetson_board="orin-nx-16gb", jetson_kernel_flavor="mainline",
         orangepi5=True, orangepi5_only=True, orangepi5_board="orange-pi-5",
         orangepi5_flavor="installer",
         orangepizero2=True, orangepizero2_only=True, orangepizero2_flavor="live",
@@ -171,7 +176,7 @@ _EVERYTHING_ENV = [
     "RPI_ROLES=pki backend frontend desktop", "RPI_BOARD=rpi4",
     "FRITE_BOARD=le-potato", "FRITE_FLAVOR=live", "FRITE_DESKTOP=none",
     "JETSON_ROLES=edge_ai desktop", "JETSON_BOARD=orin-nx-16gb",
-    "JETSON_KERNEL_FLAVOR=l4t", "ORANGEPI5_BOARD=orange-pi-5",
+    "JETSON_KERNEL_FLAVOR=mainline", "ORANGEPI5_BOARD=orange-pi-5",
     "ORANGEPI5_FLAVOR=installer", "ORANGEPIZERO2_FLAVOR=live",
     "ORANGEPIZERO2W_FLAVOR=installer",
     "ORANGEPIZERO3_FLAVOR=installer",
@@ -231,6 +236,8 @@ def _drive(page, choices):
         elif isinstance(w, QtWidgets.QComboBox):
             i = w.findData(val)
             assert i >= 0, f"{name}: {val!r} not in the combo"
+            # an operator cannot pick a greyed (not offered) item, so neither can this
+            assert w.model().item(i).isEnabled(), f"{name}: {val!r} is not offered"
             w.setCurrentIndex(i)
         elif isinstance(w, QtWidgets.QSpinBox):
             w.setValue(val)
@@ -357,6 +364,9 @@ def _open_ready_window(wiz, tmp_path, code, lines=("fleet line 1", "fleet line 2
 
     page.driver.run = fake_run
     page.output_dir.setText(str(tmp_path / "out"))
+    # the KEYS folders need the pki node's fixed LAN address (core/pki_lan.py)
+    page.pki_lan_ip.setText("192.168.1.10")
+    page.pki_lan_fixed.setChecked(True)
     return win, page
 
 
@@ -453,7 +463,8 @@ def test_restart_routes_fleet_session_back_into_fleet_window(qapp, wiz, tmp_path
     config reloaded, Review step, prior outcome archived into history on redispatch."""
     wiz.restart()
     cfg = FleetConfig(skip_x86=True, rpi_roles="pki desktop",
-                      output_dir=str(tmp_path / "out"), jobs=5)
+                      output_dir=str(tmp_path / "out"), jobs=5,
+                      pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True)
     s = bs.new_fleet_session(cfg, GENERATOR_DIR)
     bs.start(s)
     bs.update_image(s, 0, status="failed", exit_code=2)
@@ -528,6 +539,8 @@ def held_run(qapp, wiz, tmp_path):
 
         page.driver.run = fake_run
         page.output_dir.setText(str(tmp_path / "out"))
+        page.pki_lan_ip.setText("192.168.1.10")       # core/pki_lan.py: KEYS need it
+        page.pki_lan_fixed.setChecked(True)
         page._goto(fleet_mod.STEP_REVIEW)
         assert page.problems.toPlainText() == "Preflight: OK"
         sid = page.pending_session_id

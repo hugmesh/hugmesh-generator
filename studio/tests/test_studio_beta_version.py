@@ -495,7 +495,7 @@ def test_an_existing_release_is_refused_before_any_build():
                             "REPUBLISH": "${{ inputs.republish }}"}, early["env"]
     assert "continue-on-error" not in early, "a refusal that does not fail the job builds anyway"
     # A red version job stops every build job only while each one needs it.
-    for name in ("msi", "linux", "flatpak", "flatpak-aarch64"):
+    for name in ("msi", "linux", "flatpak", "flatpak-aarch64", "macos", "macos-intel"):
         needs = jobs[name]["needs"]
         assert "version" in ([needs] if isinstance(needs, str) else needs), name
     # The publish job keeps its own check as the first step: the last guard stays.

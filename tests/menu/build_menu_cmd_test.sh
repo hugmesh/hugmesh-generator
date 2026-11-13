@@ -1200,6 +1200,42 @@ grep -qE 'arm_secrets_prompt "Orange Pi Zero 2 headless appliance" *(required)' 
     && _bad "appliance caller requires a password" || _ok
 unset -f ui_yesno
 
+# ── Jetson kernel flavour: l4t is LISTED with its reason, never SELECTED ───────
+# build-jetson-stage4.sh exits 1 on --kernel-flavor l4t by design, so no menu path
+# may set OPT_JETSON_KFLAVOR=l4t: the row carries a non-flavour tag and choosing it
+# only explains why. A stale menu.conf naming l4t falls back to mainline on load.
+KM_TAGS="${SNAP_MENU_STATE}/km.tags"; KM_ITEMS="${SNAP_MENU_STATE}/km.items"; KM_MSGS="${SNAP_MENU_STATE}/km.msgs"
+: >"${KM_TAGS}"; : >"${KM_ITEMS}"; : >"${KM_MSGS}"
+ui_menu() {
+    shift 2
+    while [ "$#" -ge 2 ]; do printf '%s\n' "$1" >>"${KM_TAGS}"; printf '%s\n' "$2" >>"${KM_ITEMS}"; shift 2; done
+    _q_pop "${_UI_MENU_Q}"
+}
+ui_msg() { printf 'msg:%s:%s\n' "$1" "$2" >>"${KM_MSGS}"; }
+reset_opts; OPT_JETSON_KFLAVOR=mainline
+printf '%s\n' l4t-not-offered mainline >"${_UI_MENU_Q}"
+jetson_kernel_menu && [ "${OPT_JETSON_KFLAVOR}" = mainline ] && _ok \
+    || _bad "jetson_kernel_menu: picking the l4t row then mainline did not end on mainline"
+grep -qx 'l4t' "${KM_TAGS}" && _bad "jetson_kernel_menu: 'l4t' is a selectable menu tag" || _ok
+grep -q '^l4t .*not offered' "${KM_ITEMS}" && _ok || _bad "jetson_kernel_menu: the l4t row is not listed as not offered"
+grep -qF "msg:l4t is not offered:l4t ${JETSON_L4T_REASON:-<unset>}" "${KM_MSGS}" && _ok \
+    || _bad "jetson_kernel_menu: choosing the l4t row did not show its reason"
+case "${JETSON_L4T_REASON:-}" in *"exits non-zero"*TEGRAFLASH.md*) _ok ;; *) _bad "JETSON_L4T_REASON lost its reason: ${JETSON_L4T_REASON:-<unset>}" ;; esac
+# a stale tag that IS the flavour name still cannot set it
+reset_opts; OPT_JETSON_KFLAVOR=mainline; printf '%s\n' l4t >"${_UI_MENU_Q}"
+jetson_kernel_menu; [ "${OPT_JETSON_KFLAVOR}" = mainline ] && _ok || _bad "jetson_kernel_menu: a raw 'l4t' answer set the flavour"
+[ -s "${_UI_MENU_Q}" ] && _bad "jetson_kernel_menu: ui_menu queue not consumed: $(cat "${_UI_MENU_Q}")" || _ok
+# the jetson screen asks through jetson_kernel_menu, and no other line can assign l4t
+grep -qE '^ *jetson_kernel_menu \|\| return 0$' "${MENU_SH}" && _ok || _bad "jetson screen no longer asks via jetson_kernel_menu"
+grep -E 'OPT_JETSON_KFLAVOR="?\$|OPT_JETSON_KFLAVOR="?l4t' "${MENU_SH}" | grep -vE '^[[:space:]]*#' >/dev/null \
+    && _bad "build-menu.sh assigns OPT_JETSON_KFLAVOR from a variable or to l4t" || _ok
+# a saved menu.conf from before keeps l4t; loading it must fall back to mainline
+KM_STATE="$(mktemp -d)"; printf 'OPT_JETSON_KFLAVOR=l4t\n' >"${KM_STATE}/menu.conf"
+_km_loaded="$(SNAP_MENU_STATE="${KM_STATE}" NO_TUI=1 bash -c 'source "$1" >/dev/null 2>&1; printf %s "${OPT_JETSON_KFLAVOR}"' _ "${MENU_SH}")"
+rm -rf "${KM_STATE}"
+assert_eq "menu.conf with l4t loads as mainline" "${_km_loaded}" "mainline"
+unset -f ui_menu
+
 unset -f launch_build save_conf ui_msg ui_password
 
 for _d in "${REPO_DIR}"/.hugmesh-secrets/login.*; do

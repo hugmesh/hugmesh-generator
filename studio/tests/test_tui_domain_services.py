@@ -281,7 +281,10 @@ def test_the_build_screen_names_an_unwalked_own_domain():
 
 
 def test_the_build_screen_is_quiet_once_every_domain_is_walked():
-    cfg = ImageConfig(mode="mesh", domains=[Domain(name="acme.example")])
+    # the pki node's fixed LAN address is the other thing a mesh build refuses without
+    # (core/pki_lan.py) — set, so only the domain gate is under test here
+    cfg = ImageConfig(mode="mesh", domains=[Domain(name="acme.example")],
+                      pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True)
     ds.record_reviewed(cfg, [cfg.cluster_domain, "acme.example"])
     assert "will refuse" not in _build_lines(cfg)
 
@@ -299,4 +302,8 @@ def test_a_walked_default_mesh_reaches_a_quiet_build_screen():
         j.feed("")
     assert j.slug == "build"
     assert j.cfg.cluster_domain in ds.reviewed_names(j.cfg)
+    # the pki LAN address (core/pki_lan.py) is refused by name until it is set; set it
+    # the way the Network step does, so only the domain gate is under test here
+    assert "PKI LAN Address is required" in "\n".join(j.lines())
+    j.cfg.pki_lan_ip, j.cfg.pki_lan_ip_fixed = "192.168.1.10", True
     assert "will refuse" not in "\n".join(j.lines())

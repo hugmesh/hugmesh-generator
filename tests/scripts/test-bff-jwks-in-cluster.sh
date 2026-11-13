@@ -457,7 +457,11 @@ for dirpath, _dn, filenames in os.walk(MAN):
             lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
         except OSError:
             continue
-        named = sum(1 for ln in lines if "CASDOOR_ISSUER_URI" in ln and not ln.lstrip().startswith("#"))
+        # A kustomize `replacements` fieldPath (the issue #530 idp-trust blocks) only
+        # writes into an env entry the workload already declares, so it names the
+        # variable without carrying a second one: not counted.
+        named = sum(1 for ln in lines if "CASDOOR_ISSUER_URI" in ln and not ln.lstrip().startswith("#")
+                    and not ln.rstrip().endswith(".env.[name=CASDOOR_ISSUER_URI].value"))
         if named > seen_in_file.get(path, 0):
             bad("%s: %d non-comment line(s) name CASDOOR_ISSUER_URI but only %d workload container(s) there were judged — a kind this gate does not walk (CronJob, Pod, ConfigMap) or a second spelling; extend the gate" % (rel(path), named, seen_in_file.get(path, 0)))
 
@@ -672,8 +676,11 @@ expect_red "(11c) systems issuer keys pointed at the games Casdoor" "validates t
   sed -i "s#https://id.hugmesh.net=http://casdoor.hugmesh-pki#https://id.hugmesh.net=http://casdoor-games.hugmesh-games#" "$T/'"${GM}"'"'
 expect_red "(11d) the realms stamped with two domains" "map every issuer to ONE domain" '
   sed -i "s#https://id.hugmesh.net=default#https://id.hugmesh.net=mesh#" "$T/'"${GM}"'"'
+# (14) moves the jwksUri in EVERY place it is set: the chart default and the inline
+# values each gateway Application now carries (issue #530: the baked Application
+# is what the external-IdP rewrite reaches), which shadow that default.
 expect_red "(14) chart values jwksUri pointed at the public host" "chart hugmesh-gateway" '
-  sed -i "s#jwksUri: '"${INC}"'#jwksUri: '"${PUB}"'#" "$T/'"${CH}"'/values.yaml"'
+  sed -i "s#jwksUri: '"${INC}"'#jwksUri: '"${PUB}"'#" "$T/'"${CH}"'/values.yaml" "$T"/apps/20-gateway-*.yaml "$T"/apps/22-gateway-superadmin.yaml'
 expect_red "(15) chart template loses its CASDOOR_JWKS_URI env" "no CASDOOR_JWKS_URI env" '
   sed -i "/- name: CASDOOR_JWKS_URI/,+1d" "$T/'"${CH}"'/templates/deployment.yaml"'
 expect_red "(16) an Application overrides casdoor.jwksUri with the public host" "hugmesh-fe-gateway" '
