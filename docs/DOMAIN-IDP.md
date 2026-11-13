@@ -49,6 +49,28 @@ What changes and what does not:
   provider, or it would stand up a Casdoor that nobody uses. That writer is not built
   yet (see Open follow-ups).
 
+## Ways to sign in, per domain (`Domain.signin_methods`, hugmesh-generator#1107)
+
+Each domain chooses which ways of signing in it offers its people: **Password**,
+**Google** and **Discord**. The Studio shows them as three check boxes on the domain's
+Identity tab, and the text screen offers them as `methods password google discord`
+in section 1.
+
+- **Where it is stored.** An added domain keeps the list in `domains[].signin_methods`.
+  The mesh's own domain keeps it in `cluster_domain_signin_methods`; the image route
+  can set it, and the Docker and fleet routes keep no such list for row 0 and say so.
+- **The default.** An absent or empty list means password only, which is what every
+  mesh did before the field existed. Both manifests leave the key out in that case,
+  so earlier configs and manifests keep their bytes.
+- **Rules.** At least one way must stay on, and unknown names are refused, at load
+  and in the screens. A domain whose sign-in is an external provider (Entra, Cognito,
+  OIDC) offers no choice, because that provider decides its own ways; switching a
+  domain to one clears the list.
+- **Not applied yet.** The list is kept with the configuration and carried in the
+  mesh manifest. The login page still offers a password only until user-bff's
+  Google/Discord flow and the login page read it (#1107). The screens say so beside
+  the check boxes.
+
 ## The issuer contract (proven by tests/stack/compose.brand-b.yaml)
 
 * issuer / `origin` = the domain's PUBLISHED URL: `https://id.<clusterDomain>`.

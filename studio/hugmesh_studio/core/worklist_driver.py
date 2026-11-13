@@ -379,6 +379,10 @@ class WorklistDriver:
             # the own domain's export org: OMIT-WHEN-EMPTY, exactly as the v1 shim.
             **({"cluster_domain_github_org": base.cluster_domain_github_org.strip()}
                if (getattr(base, "cluster_domain_github_org", "") or "").strip() else {}),
+            # the own domain's sign-in methods (#1107): OMIT-WHEN-EMPTY, as the v1 shim.
+            **({"cluster_domain_signin_methods":
+                list(base.cluster_domain_signin_methods)}
+               if getattr(base, "cluster_domain_signin_methods", None) else {}),
         }
 
     def manifest_users(self) -> list[User]:
