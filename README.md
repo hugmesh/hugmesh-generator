@@ -1050,10 +1050,10 @@ mounts it read-only, and applies (all optional):
 If no KEYS stick is present the image still boots and creates a fallback login
 account with a random one-time password, printed once on the console. That account
 can log in but **cannot administer** the device: it is not in `wheel` and root is
-locked. To administer a node, provision it with a KEYS stick, or build the image
-with `--local-admin` (the Studio's *Administrator* box, offered with a Login
-Password); see [`docs/STANDALONE-DESKTOP.md`](docs/STANDALONE-DESKTOP.md). There is
-no other way in as an administrator. Full schema + examples:
+locked. To administer a node, provision it with a KEYS stick, or build the image with
+`--local-admin` on the builder command line (the Studio offers this as the
+*Administrator* box on desktop images that have a Login Password); see
+[`docs/STANDALONE-DESKTOP.md`](docs/STANDALONE-DESKTOP.md). Full schema + examples:
 [`keys-template/`](keys-template/).
 
 ## Cluster / GitOps

@@ -12,9 +12,8 @@
 #   * a FALLBACK default user — created ONLY when keys-provision did not
 #     create any users (i.e. you booted without a KEYS stick). It can log in
 #     (random one-time password on the console) but is NOT an administrator
-#     unless the build passed --local-admin: root stays locked, and there is no
-#     other admin path. To administer, provision with a KEYS stick or build
-#     with --local-admin.
+#     unless the build passed --local-admin, and root stays locked. To
+#     administer, provision with a KEYS stick or build with --local-admin.
 #
 # SUPPLY-CHAIN / OWASP: this finaliser NO LONGER bakes a known default password
 # into the image. Earlier, the builders substituted the DEFAULT_USER_PASS /

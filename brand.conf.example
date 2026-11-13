@@ -103,8 +103,8 @@ RELEASE_STATE="internal"            # internal (DEFAULT, LAN/tailnet-only) | pub
 # administrator unless the build passed --local-admin. DEFAULT_USER_PASS and
 # ROOT_PASS are not used by any builder (no password is baked; root is locked).
 DEFAULT_USER="pi"                   # fallback non-root user (name only)
-DEFAULT_USER_PASS="raspberry"       # not used (kept so older configs load)
-ROOT_PASS="gentoo"                  # not used (kept so older configs load)
+DEFAULT_USER_PASS="raspberry"       # not used
+ROOT_PASS="gentoo"                  # not used
 ADMIN_EMAILS="admin@hugmesh.net"   # seeded Casdoor admin (BFF allowlist)
 
 # ── Outbound mail (OPTIONAL — absent by default) ───────────────────

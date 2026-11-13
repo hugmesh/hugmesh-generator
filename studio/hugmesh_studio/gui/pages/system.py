@@ -415,7 +415,7 @@ class SystemPage(QtWidgets.QWizardPage):
             "these two passwords. A node booted without a KEYS stick gets a fallback "
             "login with a random one-time password on the console, and that account "
             "is NOT an administrator. To administer a node, provision it with a KEYS "
-            "stick, or build it with --local-admin."))
+            "stick, or build it with --local-admin on the builder command line."))
         self.creds_fields = QtWidgets.QWidget()
         fl = QtWidgets.QVBoxLayout(self.creds_fields)
         fl.setContentsMargins(0, 0, 0, 0)

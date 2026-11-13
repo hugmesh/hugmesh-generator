@@ -169,7 +169,7 @@ cp brands/example.conf brands/acme.conf
 | `GAMES_DOMAIN` | `games.<CLUSTER_DOMAIN>` | games portal host + OIDC issuer (see §2b) |
 | `GROW_POLICY` | `fill` | first-boot root-grow policy baked into the `.img` (see §2c) |
 | `DEFAULT_USER` | `pi` | name of the **fallback** console user made when no KEYS stick is present. It gets a random one-time password at first boot and is **not** an administrator unless the build passed `--local-admin` (see §7c) |
-| `DEFAULT_USER_PASS` / `ROOT_PASS` | `raspberry` / `gentoo` | **not used**: no password is baked into an image, and root is locked. Kept only so older `brand.conf` files still load |
+| `DEFAULT_USER_PASS` / `ROOT_PASS` | `raspberry` / `gentoo` | **not used**: no password is baked into an image, and root is locked |
 | `ADMIN_EMAILS` | `admin@<domain>` | seeded Casdoor admin + BFF allowlist (the platform login admin; see §7d) |
 | `MAIL_PROVIDER` | `protonmail` | SMTP preset; `none` disables mail (see §2d) |
 | `TIMEZONE` | `UTC` | image timezone |
@@ -693,10 +693,10 @@ headscale+tailscale, the Kubernetes PKI + kubeadm init/join, attached
 storage (LUKS), backups and, on the pki node, the GitOps bootstrap. With no
 KEYS stick the image still boots and creates a fallback console user with a random
 one-time password, printed once on the console. That user can log in but **cannot
-administer** the node: it is not in `wheel` and root is locked. To administer a node,
-provision it with a KEYS stick, or build the image with `--local-admin` (the
-Studio's *Administrator* box, offered with a Login Password). There is no other
-admin path; see [`docs/STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md).
+administer** the node: it is not in `wheel` and root is locked. To administer a
+node, provision it with a KEYS stick, or build the image with `--local-admin` on
+the builder command line (the Studio offers this as the *Administrator* box on
+desktop images that have a Login Password); see [`docs/STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md).
 
 ### 7d. Operator logins after boot
 
