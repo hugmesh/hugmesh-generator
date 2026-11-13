@@ -1,0 +1,30 @@
+$ as_root sh -c pkg install -y py311-urwid
+Updating Avalon repository catalogue...
+Fetching meta.conf: . done
+Fetching data.pkg: .......... done
+Processing entries: .......... done
+Avalon repository update completed. 33573 packages processed.
+All repositories are up to date.
+New version of pkg detected; it needs to be installed first.
+The following 1 package(s) will be affected (of 0 checked):
+
+Installed packages to be UPGRADED:
+	pkg: 2.2.0 -> 2.8.4_1 [Avalon]
+
+Number of packages to be upgraded: 1
+
+The operation will free 1 MiB.
+4 MiB to be downloaded.
+[1/1] Fetching pkg-2.8.4_1.pkg: .......... done
+Checking integrity... done (0 conflicting)
+[1/1] Upgrading pkg from 2.2.0 to 2.8.4_1...
+[1/1] Extracting pkg-2.8.4_1: .......... done
+Updating Avalon repository catalogue...
+pkg: need to re-create repo Avalon to upgrade schema version
+Fetching meta.conf: . done
+Fetching data: .......... done
+Processing entries: .......... done
+Avalon repository update completed. 33573 packages processed.
+All repositories are up to date.
+pkg: No packages available to install matching 'py311-urwid' have been found in the repositories
+rc=1

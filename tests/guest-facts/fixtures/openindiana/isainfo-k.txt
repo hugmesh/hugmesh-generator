@@ -1,0 +1,3 @@
+$ isainfo -k
+amd64
+rc=0

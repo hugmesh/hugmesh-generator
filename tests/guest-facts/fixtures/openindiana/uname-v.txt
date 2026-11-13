@@ -1,0 +1,3 @@
+$ uname -v
+illumos-336772c3cc
+rc=0

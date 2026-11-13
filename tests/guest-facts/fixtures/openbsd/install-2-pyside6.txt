@@ -1,0 +1,4 @@
+$ as_root sh -c pkg_add -I py3-pyside6
+quirks-7.227 signed on 2026-11-12T17:48:00Z
+Can't find py3-pyside6
+rc=0

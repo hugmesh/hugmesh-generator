@@ -1,0 +1,4 @@
+$ uname -o
+uname: illegal option -- o
+usage: uname [-aiKmnprsUvP]
+rc=1

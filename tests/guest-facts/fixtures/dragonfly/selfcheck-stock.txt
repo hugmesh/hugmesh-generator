@@ -1,0 +1,3 @@
+$ sh -c cd studio && exec python3 -m hugmesh_studio --self-check --generator-dir ..
+exec: python3: not found
+rc=127

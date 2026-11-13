@@ -1,0 +1,3 @@
+$ uname -o
+FreeBSD
+rc=0

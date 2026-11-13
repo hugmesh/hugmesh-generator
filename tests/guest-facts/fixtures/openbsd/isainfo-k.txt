@@ -1,0 +1,3 @@
+$ isainfo -k
+tests/guest-facts/collect.sh[94]: isainfo: not found
+rc=127

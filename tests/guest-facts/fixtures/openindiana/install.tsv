@@ -1,0 +1,4 @@
+component	kind	install_rc	imports	line
+python	preinstalled	0	yes	/usr/bin/python3.14
+urwid	static	1	no	pkg install library/python/urwid-314
+urwid	pip	0	yes	python3.14 -m venv --system-site-packages VENV && VENV/bin/python -m pip install urwid

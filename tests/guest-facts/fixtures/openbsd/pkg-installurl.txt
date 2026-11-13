@@ -1,0 +1,3 @@
+$ cat /etc/installurl
+https://cdn.openbsd.org/pub/OpenBSD
+rc=0
