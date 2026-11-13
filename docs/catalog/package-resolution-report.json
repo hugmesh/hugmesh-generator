@@ -88,7 +88,7 @@
               "app-crypt/gnupg-2.5.24::gentoo",
               "app-alternatives/gpg-1-r3::gentoo[reference]",
               "app-portage/gemato-20.15::gentoo[gpg]",
-              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
               "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
               "dev-lang/perl-5.44.0::gentoo[-minimal]"
             ]
@@ -141,10 +141,6 @@
           {
             "atom": "sys-apps/policycoreutils",
             "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
-          },
-          {
-            "atom": "www-client/netsurf",
-            "reason": "www-client/netsurf-3.11-r1: masked by missing keyword"
           },
           {
             "atom": "x11-misc/lightdm",
@@ -258,7 +254,7 @@
               "app-crypt/gnupg-2.5.24::gentoo",
               "app-alternatives/gpg-1-r3::gentoo[reference]",
               "app-portage/gemato-20.15::gentoo[gpg]",
-              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
               "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
               "dev-lang/perl-5.44.0::gentoo[-minimal]"
             ]
@@ -658,7 +654,7 @@
               "app-crypt/gnupg-2.5.24::gentoo",
               "app-alternatives/gpg-1-r3::gentoo[reference]",
               "app-portage/gemato-20.15::gentoo[gpg]",
-              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
               "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
               "dev-lang/perl-5.44.0::gentoo[-minimal]"
             ]
@@ -852,7 +848,7 @@
               "app-crypt/gnupg-2.5.24::gentoo",
               "app-alternatives/gpg-1-r3::gentoo[reference]",
               "app-portage/gemato-20.15::gentoo[gpg]",
-              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
               "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
               "dev-lang/perl-5.44.0::gentoo[-minimal]"
             ]
@@ -903,7 +899,7 @@
               "app-crypt/gnupg-2.5.24::gentoo",
               "app-alternatives/gpg-1-r3::gentoo[reference]",
               "app-portage/gemato-20.15::gentoo[gpg]",
-              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
               "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
               "dev-lang/perl-5.44.0::gentoo[-minimal]"
             ]
@@ -956,10 +952,6 @@
           {
             "atom": "sys-apps/policycoreutils",
             "reason": "sys-apps/policycoreutils-3.11: masked by missing keyword"
-          },
-          {
-            "atom": "www-client/netsurf",
-            "reason": "www-client/netsurf-3.11-r1: masked by missing keyword"
           },
           {
             "atom": "x11-misc/lightdm",
@@ -1073,7 +1065,7 @@
               "app-crypt/gnupg-2.5.24::gentoo",
               "app-alternatives/gpg-1-r3::gentoo[reference]",
               "app-portage/gemato-20.15::gentoo[gpg]",
-              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
               "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
               "dev-lang/perl-5.44.0::gentoo[-minimal]"
             ]
@@ -1376,7 +1368,7 @@
               "app-crypt/gnupg-2.5.24::gentoo",
               "app-alternatives/gpg-1-r3::gentoo[reference]",
               "app-portage/gemato-20.15::gentoo[gpg]",
-              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
               "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
               "dev-lang/perl-5.44.0::gentoo[-minimal]"
             ]
@@ -1667,7 +1659,7 @@
               "app-crypt/gnupg-2.5.24::gentoo",
               "app-alternatives/gpg-1-r3::gentoo[reference]",
               "app-portage/gemato-20.15::gentoo[gpg]",
-              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
               "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
               "dev-lang/perl-5.44.0::gentoo[-minimal]"
             ]
@@ -1688,7 +1680,7 @@
             "app-crypt/gnupg-2.5.24::gentoo",
             "app-alternatives/gpg-1-r3::gentoo[reference]",
             "app-portage/gemato-20.15::gentoo[gpg]",
-            "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
+            "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
             "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
             "dev-lang/perl-5.44.0::gentoo[-minimal]"
           ]
@@ -1970,7 +1962,7 @@
               "app-crypt/gnupg-2.5.24::gentoo",
               "app-alternatives/gpg-1-r3::gentoo[reference]",
               "app-portage/gemato-20.15::gentoo[gpg]",
-              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
+              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
               "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
               "dev-lang/perl-5.44.0::gentoo[-minimal]"
             ]
@@ -2019,7 +2011,7 @@
               "app-crypt/gnupg-2.5.24::gentoo",
               "app-alternatives/gpg-1-r3::gentoo[reference]",
               "app-portage/gemato-20.15::gentoo[gpg]",
-              "sys-apps/portage-3.0.82.2::gentoo[-build,rsync-verify]",
+              "sys-apps/portage-3.0.82.2::gentoo[rsync-verify,-build]",
               "app-admin/perl-cleaner-2.31-r3::gentoo[-pkgcore]",
               "dev-lang/perl-5.44.0::gentoo[-minimal]"
             ]
@@ -2085,7 +2077,7 @@
         "first_missing": null,
         "missing_atoms": [],
         "note": "only a dependency cycle, which a stage3 seed breaks",
-        "packages": 422,
+        "packages": 407,
         "residual": null,
         "status": "resolvable"
       },
@@ -2494,6 +2486,10 @@
         "reason": "",
         "visible": true
       },
+      "net-misc/curl": {
+        "reason": "",
+        "visible": true
+      },
       "net-misc/networkmanager": {
         "reason": "net-misc/networkmanager-1.58.1-r1: masked by missing keyword",
         "visible": false
@@ -2857,6 +2853,10 @@
         "visible": true
       },
       "net-fs/nfs-utils": {
+        "reason": "",
+        "visible": true
+      },
+      "net-misc/curl": {
         "reason": "",
         "visible": true
       },
@@ -3226,6 +3226,10 @@
         "reason": "",
         "visible": true
       },
+      "net-misc/curl": {
+        "reason": "",
+        "visible": true
+      },
       "net-misc/networkmanager": {
         "reason": "",
         "visible": true
@@ -3592,6 +3596,10 @@
         "reason": "",
         "visible": true
       },
+      "net-misc/curl": {
+        "reason": "",
+        "visible": true
+      },
       "net-misc/networkmanager": {
         "reason": "",
         "visible": true
@@ -3839,7 +3847,7 @@
     "id": "sha256:4d486b83077b32a363a88ed4fd6761db9e3c6e366427002d34cdfd9851232007",
     "name": "hugmesh-builder:latest"
   },
-  "measured": "2026-11-12",
+  "measured": "2026-11-13",
   "method": {
     "accept_keywords": "<arch> ~<arch>",
     "command": "emerge --pretend --autounmask=n <atoms>",
@@ -3862,6 +3870,7 @@
         "net-firewall/iptables",
         "net-fs/cifs-utils",
         "net-fs/nfs-utils",
+        "net-misc/curl",
         "net-misc/networkmanager",
         "net-misc/openssh",
         "net-misc/socat",
@@ -3933,6 +3942,7 @@
         "net-firewall/iptables",
         "net-fs/cifs-utils",
         "net-fs/nfs-utils",
+        "net-misc/curl",
         "net-misc/networkmanager",
         "net-misc/openssh",
         "net-misc/socat",
@@ -3960,7 +3970,6 @@
         "sys-libs/libselinux",
         "sys-process/audit",
         "sys-process/cronie",
-        "www-client/netsurf",
         "x11-apps/setxkbmap",
         "x11-apps/xrandr",
         "x11-apps/xset",
@@ -4003,6 +4012,7 @@
         "net-firewall/nftables",
         "net-fs/cifs-utils",
         "net-fs/nfs-utils",
+        "net-misc/curl",
         "net-misc/networkmanager",
         "net-misc/openssh",
         "net-misc/socat",
@@ -4093,6 +4103,7 @@
         "net-firewall/nftables",
         "net-fs/cifs-utils",
         "net-fs/nfs-utils",
+        "net-misc/curl",
         "net-misc/networkmanager",
         "net-misc/openssh",
         "net-misc/socat",
@@ -4183,6 +4194,7 @@
         "net-firewall/nftables",
         "net-fs/cifs-utils",
         "net-fs/nfs-utils",
+        "net-misc/curl",
         "net-misc/networkmanager",
         "net-misc/openssh",
         "net-misc/socat",
@@ -4273,6 +4285,7 @@
         "net-firewall/nftables",
         "net-fs/cifs-utils",
         "net-fs/nfs-utils",
+        "net-misc/curl",
         "net-misc/networkmanager",
         "net-misc/openssh",
         "net-misc/socat",
@@ -4363,6 +4376,7 @@
         "net-firewall/nftables",
         "net-fs/cifs-utils",
         "net-fs/nfs-utils",
+        "net-misc/curl",
         "net-misc/networkmanager",
         "net-misc/openssh",
         "net-misc/socat",
@@ -4459,6 +4473,7 @@
         "net-firewall/nftables",
         "net-fs/cifs-utils",
         "net-fs/nfs-utils",
+        "net-misc/curl",
         "net-misc/networkmanager",
         "net-misc/openssh",
         "net-misc/socat",
@@ -4546,6 +4561,7 @@
         "net-firewall/nftables",
         "net-fs/cifs-utils",
         "net-fs/nfs-utils",
+        "net-misc/curl",
         "net-misc/networkmanager",
         "net-misc/openssh",
         "net-misc/socat",
