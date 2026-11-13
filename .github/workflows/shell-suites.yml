@@ -729,6 +729,7 @@ jobs:
               tests/scripts/test-fragment-route-target.sh
               tests/scripts/test-games-screens-wiring.sh
               tests/scripts/test-gitlab-ci-wellformed.sh
+              tests/scripts/test-github-workflows-wellformed.sh
               tests/scripts/test-headscale-embedded-derp.sh
               tests/scripts/test-headscale-oidc-secret-staging.sh
               tests/scripts/test-mfa-raw-jwt-posture.sh
@@ -1157,7 +1158,6 @@ jobs:
     # 30 passed / 0 failed in 25 s (images cached) to ~3 min; against origin/main
     # 39b953ad, 22 failed (incl. an admin session from the factory default via a
     # non-loopback address).
-    timeout-minutes: 15
     # tests/device-registry/test-headscale-tag-minters-live.sh runs the same pinned
     # headscale and tailscale with keys minted by the REAL minters: the whole
     # keys-provision engine (inside the kindest/node image the gpu-labels suite

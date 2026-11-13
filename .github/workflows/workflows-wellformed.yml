@@ -1,0 +1,34 @@
+# Every GitHub workflow file must be one GitHub accepts.
+#
+# On 2026-11-12 two merges each gave the shell-suites `docker` job its own
+# `timeout-minutes:` and git combined them without a conflict. GitHub rejects a
+# workflow file with a duplicate key, so shell-suites.yml ran NO job at all from
+# that merge on. tests/scripts/test-github-workflows-wellformed.sh refuses a
+# duplicate key in any .github/workflows/*.yml (PyYAML's safe_load accepts it).
+#
+# It runs here as well as in shell-suites.yml's debian leg on purpose: a
+# duplicate key in shell-suites.yml stops that whole workflow, so a check that
+# lived only there could never report the file it most needs to read. No paths
+# filter, so a change to any workflow file is read on its own pull request.
+name: workflows-wellformed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  no-duplicate-keys:
+    name: workflow files have no duplicate keys
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: install PyYAML
+        run: python3 -m pip install --quiet pyyaml || python3 -m pip install --quiet --break-system-packages pyyaml
+      - name: run the guard
+        run: bash tests/scripts/test-github-workflows-wellformed.sh </dev/null

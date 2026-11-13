@@ -1192,7 +1192,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # named by shell-suites.yml (alpine) and the .gitlab-ci.yml desktop job. PREMERGE_UNGATED
 # untouched. MEASURED with GUARD_PREMERGE=0 on the tree merged with origin/main 99afee80: 254 of 296.
 # Integration batch3-20261112: MEASURED with GUARD_PREMERGE=0 on the combined tree: 254 of 296.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-254}"
+# Main CI merge-collision fix 2026-11-12: main itself measured 261 of 303 (merges after
+# batch3 gated suites without moving the floor); +1 gated, +1 total for
+# tests/scripts/test-github-workflows-wellformed.sh, named by shell-suites.yml (debian)
+# and .github/workflows/workflows-wellformed.yml. PREMERGE_UNGATED untouched.
+# MEASURED with GUARD_PREMERGE=0 on the tree based on origin/main 111f0f82: 262 of 304.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-262}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
