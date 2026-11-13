@@ -4700,7 +4700,10 @@ class ImageConfig:
         if self.headscale_public_derp:
             a += ["--headscale-public-derp"]
         # x86 + rpi5 only: the other builders refuse a Tor transport (they cannot bake Tor).
-        if self.mesh_control_transport not in ("", "lan") and (self.platform or "x86") in _X86_RPI5:
+        # Mesh only: the Network page hides the choice outside mesh mode, so a value left
+        # from an earlier mesh walk must not bake Tor into a cloud or standalone image.
+        if (self.mode == "mesh" and self.mesh_control_transport not in ("", "lan")
+                and (self.platform or "x86") in _X86_RPI5):
             a += ["--mesh-control-transport", self.mesh_control_transport]
         return a
 

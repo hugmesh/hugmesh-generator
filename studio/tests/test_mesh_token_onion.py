@@ -113,6 +113,26 @@ def test_the_hint_is_the_reason_else_the_onion_note_else_nothing():
     assert "outside" in mt.login_server_hint("https://hs.example.org", "other.org")
 
 
+@pytest.mark.parametrize("domain", ["Example.org", "example.org.", " EXAMPLE.ORG. "])
+def test_the_hint_normalises_the_domain_as_issuing_does(domain):
+    # Review of #1092: the hint compared the lowercased host with the raw domain, so
+    # "Example.org" or "example.org." showed "outside its access domain ... refused"
+    # while Issue (which lowercases and strips dots in _new_grant) accepted it.
+    assert mt.login_server_hint("https://hs.example.org", domain) == ""
+    assert "outside" in mt.login_server_hint("https://hs.other.org", domain)
+
+
+@needs_keygen
+@pytest.mark.parametrize("domain", ["Example.org", "example.org."])
+def test_issue_accepts_what_the_hint_accepts(issuer, domain):
+    assert mt.login_server_hint("https://hs.example.org", domain) == ""
+    token = mt.issue(key_path=issuer, mesh="west", domain=domain, role="user",
+                     shell=False, login_server="https://hs.example.org",
+                     auth_key="hskey-not-real", lifetime_s=3600)
+    mt.trust_issuer(open(issuer + ".pub").read())
+    assert mt.verify(token).domain == "example.org"
+
+
 def test_the_example_onion_is_one_the_rule_accepts_and_names_no_real_service():
     assert mt.is_onion_login(mt.ONION_EXAMPLE)
     assert ONION not in mt.ONION_EXAMPLE and ONION2 not in mt.ONION_EXAMPLE

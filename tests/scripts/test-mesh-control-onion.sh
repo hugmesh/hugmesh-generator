@@ -34,6 +34,11 @@
 #      build-all-roles' secret removal on positive evidence only.
 #   F. builder parity: all ten parse the flag; x86 + rpi5 bake it; eight refuse; the
 #      bash / Python name derivations agree.
+#   H. the build pipeline (review of #1096): build-all-roles.sh takes the transport from
+#      the environment, a --config brand profile or a pass-through flag alike, refuses
+#      a Tor transport next to a board that cannot bake it, and mints the control onion
+#      BEFORE any image build (the builder image has no tor; the Makefile's docker leg
+#      mints on the host first).
 #   G. negative controls: each mutation of a copy of the tree must turn the guard red.
 set -uo pipefail
 
@@ -41,7 +46,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SELF="${REPO}/tests/scripts/test-mesh-control-onion.sh"
 ROOT="${MCO_GUARD_ROOT:-${REPO}}"
 . "${REPO}/tests/lib/guard-preflight.sh"
-guard_require_tools python3 jq awk sed openssl ssh-keygen od cmp
+guard_require_tools python3 jq awk sed openssl ssh-keygen od cmp make
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
@@ -92,9 +97,10 @@ sbenv() {
     echo "MESH_CONTROL_TOR_ONLY=${SB}/etc/hugmesh/tor/mesh-control-only MESH_CONTROL_HS_DIR=${SB}/var/lib/tor/hugmesh-control"
     echo "MESH_CONTROL_TS_CONF=${SB}/etc/conf.d/tailscaled MESH_CONTROL_HOSTS=${SB}/etc/hosts"
     echo "MESH_CONTROL_TRANSPORT_BAKED=${SB}/etc/hugmesh/mesh-control-transport"
+    echo "MESH_CONTROL_RUNLEVEL=${SB}/etc/runlevels/default MESH_CONTROL_TOR_CRON=${SB}/etc/cron.d/hugmesh-tor-reconcile"
 }
 mkdir -p "${WORK}/bin"
-for c in rc-update rc-service chown tailscale; do printf '#!/bin/sh\necho "%s $*" >> "${STUB_LOG:-/dev/null}"\nexit 0\n' "${c}" > "${WORK}/bin/${c}"; chmod +x "${WORK}/bin/${c}"; done
+for c in rc-update rc-service chown tailscale hugmesh-tor-reconcile; do printf '#!/bin/sh\necho "%s $*" >> "${STUB_LOG:-/dev/null}"\nexit 0\n' "${c}" > "${WORK}/bin/${c}"; chmod +x "${WORK}/bin/${c}"; done
 run_mc() {  # run_mc <manifest-json> <expr...>: evaluate in the sourced copy, sandboxed
     local m="${WORK}/m.json"; printf '%s\n' "$1" > "${m}"; shift
     env $(sbenv) MANIFEST="${m}" BASE="${SB}/keys" STUB_LOG="${WORK}/stub.log" PATH="${WORK}/bin:${PATH}" \
@@ -248,6 +254,54 @@ run_mc '{"mesh":{"control_transport":"lan"}}' provision_mesh_control >/dev/null 
 ! grep -q hugmesh-mesh-control "${SB}/etc/hosts" && ! grep -q TS_FORCE_NOISE_443 "${SB}/etc/conf.d/tailscaled" \
     && [ ! -e "${SB}/etc/hugmesh/mesh-control/relay.conf" ] && ok "back to lan: the hosts line, the env and relay.conf are removed" \
     || bad "back to lan left mesh-control state behind"
+# Back to lan undoes what the Tor run linked (review of #1096): a worker WITHOUT the tor
+# optional service, where provision_mesh_control linked tor + the reconcile itself.
+mc_linked() {  # mark what provision_mesh_control links as linked (rc-update is a stub)
+    mkdir -p "${SB}/etc/runlevels/default" "${SB}/etc/cron.d"
+    for s in "$@"; do : > "${SB}/etc/runlevels/default/${s}"; done
+    : > "${SB}/etc/cron.d/hugmesh-tor-reconcile"
+}
+rm -rf "${SB}"; mkdir -p "${SB}/etc"; printf '127.0.0.1 localhost\n' > "${SB}/etc/hosts"
+run_mc "${W}" provision_mesh_control >/dev/null 2>&1
+[ -e "${SB}/etc/hugmesh/tor/mesh-control-only" ] && ok "Tor on a node without the tor optional service: mesh-control-only is written" \
+    || bad "no mesh-control-only marker on a node without the tor optional service"
+mc_linked hugmesh-tor-reconcile tor hugmesh-mesh-control-relay hugmesh-mesh-control-keeper
+: > "${WORK}/stub.log"
+run_mc '{"mesh":{"control_transport":"lan"}}' provision_mesh_control > "${WORK}/off.log" 2>&1
+for want in "rc-update del tor default" "rc-update del hugmesh-tor-reconcile default" \
+            "rc-update del hugmesh-mesh-control-relay default" "rc-update del hugmesh-mesh-control-keeper default" \
+            "rc-service tor stop" "rc-service hugmesh-mesh-control-relay stop"; do
+    grep -a -x -F "${want}" "${WORK}/stub.log" >/dev/null && ok "back to lan (tor linked for the control plane only): ${want}" \
+        || bad "back to lan did not run '${want}' (tor would publish this node's own onion): $(tr '\n' '|' < "${WORK}/stub.log")"
+done
+[ ! -e "${SB}/etc/cron.d/hugmesh-tor-reconcile" ] && [ ! -e "${SB}/etc/hugmesh/tor/mesh-control-only" ] \
+    && [ ! -e "${SB}/etc/hugmesh/tor/mesh-control" ] && ok "back to lan: the reconcile cron and both Tor markers are gone" \
+    || bad "back to lan left: $(find "${SB}/etc/cron.d" "${SB}/etc/hugmesh/tor" -type f 2>/dev/null | tr '\n' ' ')"
+# ... and WITH the tor optional service: tor stays (the operator chose it); the
+# reconcile re-renders without the control parts.
+rm -rf "${SB}"; mkdir -p "${SB}/etc"; printf '127.0.0.1 localhost\n' > "${SB}/etc/hosts"
+mc_linked hugmesh-tor-reconcile tor
+run_mc "${W}" provision_mesh_control >/dev/null 2>&1
+[ ! -e "${SB}/etc/hugmesh/tor/mesh-control-only" ] && ok "Tor with the tor optional service: no mesh-control-only" || bad "mesh-control-only written although the tor optional service runs"
+: > "${WORK}/stub.log"
+run_mc '{"mesh":{"control_transport":"lan"}}' provision_mesh_control >/dev/null 2>&1
+! grep -a -E 'rc-update del (tor|hugmesh-tor-reconcile) |rc-service tor stop' "${WORK}/stub.log" >/dev/null \
+    && grep -a -x 'hugmesh-tor-reconcile ' "${WORK}/stub.log" >/dev/null \
+    && ok "back to lan with the tor optional service: tor stays, the reconcile re-renders without the control parts" \
+    || bad "back to lan with the tor optional service: $(tr '\n' '|' < "${WORK}/stub.log")"
+# ... and on a node that never ran Tor: nothing at all.
+rm -rf "${SB}"; mkdir -p "${SB}/etc"; printf '127.0.0.1 localhost\n' > "${SB}/etc/hosts"
+mc_linked hugmesh-tor-reconcile tor; : > "${WORK}/stub.log"
+run_mc '{"mesh":{"control_transport":"lan"}}' provision_mesh_control >/dev/null 2>&1
+[ ! -s "${WORK}/stub.log" ] && ok "lan on a node that never ran Tor: no service is touched" || bad "lan touched services: $(tr '\n' '|' < "${WORK}/stub.log")"
+# A lan stick on an image baked with a Tor transport: the stick's explicit lan wins
+# (gen-provision-keys stamps it); a stick that says nothing still takes the baked one.
+mkdir -p "${SB}/etc/hugmesh"; echo onion > "${SB}/etc/hugmesh/mesh-control-transport"
+expect "onion-baked image, a stick that says lan: lan" "lan" "$(run_mc '{"mesh":{"control_transport":"lan"}}' resolve_mesh_control_transport 2>/dev/null)"
+expect "onion-baked image, a lan stick: the worker dials the LAN" "http://10.0.0.10:8080" \
+    "$(run_mc '{"mesh":{"magic_dns_domain":"acme.internal","control_transport":"lan"},"nodes":[{"ip":"10.0.0.10","role":"pki"}]}' resolve_control_endpoint 2>/dev/null)"
+expect "onion-baked image, a stick that says nothing: the baked onion" "onion" "$(run_mc '{"mesh":{}}' resolve_mesh_control_transport 2>/dev/null)"
+rm -rf "${SB}"
 # Tor only, blocked: nothing configured, but tailscaled keeps its no-log block
 rm -rf "${SB}"; mkdir -p "${SB}/etc"; printf '127.0.0.1 localhost\n' > "${SB}/etc/hosts"
 STUB_TOR=0 run_mc "${WO}" provision_mesh_control > "${WORK}/blk.log" 2>&1
@@ -279,6 +333,18 @@ rm -rf "${SB}/var"; printf '%s\n' "${ONION2}" > "${SB}/keys/headscale/control-on
 run_mc "${P_}" provision_mesh_control > "${WORK}/p2.log" 2>&1
 [ ! -e "${SB}/var/lib/tor/hugmesh-control/hs_ed25519_secret_key" ] && grep -a -F 'NOT installed' "${WORK}/p2.log" >/dev/null \
     && ok "pki: a key whose hostname is not the sticks' onion is refused, loudly" || bad "pki installed a mismatched onion key"
+# With no key in place tor would MINT a random control onion and publish headscale at an
+# address no worker knows (review of #1096): no "control" role then.
+expect "pki, the stick's key refused and none installed: Tor is a client only (no control onion)" "client" "$(cat "${SB}/etc/hugmesh/tor/mesh-control" 2>/dev/null)"
+rm -rf "${SB}/var" "${SB}/keys/headscale/control-onion"
+run_mc "${P_}" provision_mesh_control > "${WORK}/p3.log" 2>&1
+expect "pki, no control-onion/ on the stick: Tor is a client only" "client" "$(cat "${SB}/etc/hugmesh/tor/mesh-control" 2>/dev/null)"
+grep -a -F 'NOT published' "${WORK}/p3.log" >/dev/null && ok "pki, no key: says the control onion is NOT published" || bad "pki, no key: no warning"
+# A key installed by an earlier (good) run still publishes, whatever the stick says now.
+mkdir -p "${SB}/var/lib/tor/hugmesh-control"; printf '%s\n' "${ONION}" > "${SB}/var/lib/tor/hugmesh-control/hostname"
+head -c 96 /dev/urandom > "${SB}/var/lib/tor/hugmesh-control/hs_ed25519_secret_key"
+run_mc "${P_}" provision_mesh_control >/dev/null 2>&1
+expect "pki, the matching key installed earlier: the control onion stays published" "control 7443 8080" "$(cat "${SB}/etc/hugmesh/tor/mesh-control" 2>/dev/null)"
 # The TLS passthrough: the pki's headscale serves TLS itself behind the 7443 forward
 expect "TLS passthrough: the control name on 7443" "yes" "$(run_mc "${P_}" 'mesh_control_tls_passthrough hs.acme-control.internal 7443 && echo yes || echo no' 2>/dev/null)"
 expect "TLS passthrough: not another port" "no" "$(run_mc "${P_}" 'mesh_control_tls_passthrough hs.acme-control.internal 443 && echo yes || echo no' 2>/dev/null)"
@@ -291,6 +357,11 @@ awk '/^provision_headscale\(\) \{/{f=1} f; f&&/^}/{exit}' "${PROV}" > "${WORK}/p
 awk '/mesh_control_oidc_off \/etc\/headscale\/config.yaml/{b=NR} /provision_headscale_config \/etc\/headscale\/config.yaml/{c=NR} END{exit !(c && b && b > c)}' "${WORK}/ph.sh" \
     && ok "provision_headscale removes OIDC AFTER the KEYS config is installed" \
     || bad "provision_headscale does not call mesh_control_oidc_off after installing the config"
+# ... and BEFORE the CONFIG GATE (review of #1096): the gate must judge the file
+# headscale starts on, and the OIDC removal is a line-based edit.
+awk '/^[[:space:]]+mesh_control_oidc_off \/etc\/headscale\/config.yaml/{b=NR} /cfg_fail="\$\(headscale_config_gate\)"/{g=NR} /rc-service headscale start/{if(!s)s=NR} END{exit !(b && g && s && b < g && g < s)}' "${WORK}/ph.sh" \
+    && ok "provision_headscale removes OIDC BEFORE the CONFIG GATE, which runs before the start" \
+    || bad "provision_headscale edits config.yaml (OIDC) after the CONFIG GATE passed it"
 printf 'server_url: x\noidc:\n  only_start_if_oidc_is_available: false\n  # a comment\n  issuer: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"\n  client_id: a\n\n# next section\nlog:\n  level: info\n' > "${WORK}/hs-oidc.yaml"
 cp "${WORK}/hs-oidc.yaml" "${WORK}/hs-oidc-lan.yaml"; cp "${WORK}/hs-oidc.yaml" "${WORK}/hs-oidc-worker.yaml"
 run_mc "${P_}" mesh_control_oidc_off "${WORK}/hs-oidc.yaml" > "${WORK}/oidc.log" 2>&1
@@ -435,8 +506,22 @@ if gk "${WORK}/k-pki" --role pki --pki-ip 192.168.1.10 --mesh-control-transport 
     expect "pki stick: the custom name" "ctl.acme-ops.example" "$(jq -r .mesh.control_name "${WORK}/k-pki/provision.json")"
 else bad "gen-provision-keys pki (Tor) failed: $(tail -2 "${WORK}/k-pki.log" | tr '\n' ' ')"; fi
 if gk "${WORK}/k-lan" --role host --pki-ip 192.168.1.10; then
-    expect "lan stick: no .mesh.control_* keys" "0" "$(jq '[.mesh | keys[] | select(startswith("control_"))] | length' "${WORK}/k-lan/provision.json")"
+    # Only the explicit transport (review of #1096): it beats a Tor-baked image's default.
+    expect "lan stick: .mesh.control_transport is lan, and nothing else of mesh control" "control_transport=lan" \
+        "$(jq -r '[.mesh | to_entries[] | select(.key | startswith("control_")) | "\(.key)=\(.value)"] | join(" ")' "${WORK}/k-lan/provision.json")"
 else bad "gen-provision-keys lan failed"; fi
+# An external CA kept OFF the stick: the pre-issued headscale certificate must name the
+# control name in a Tor mode (every node, the pki too, dials https://<name>:7443).
+mkdir -p "${WORK}/xca"
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=test external CA" \
+    -keyout "${WORK}/xca/ca.key" -out "${WORK}/xca/ca.crt" >/dev/null 2>&1
+if gk "${WORK}/k-xca" --role pki --pki-ip 192.168.1.10 --ca-cert "${WORK}/xca/ca.crt" --ca-key "${WORK}/xca/ca.key" \
+        --mesh-control-transport lan+onion --mesh-control-onion-dir "${OD}"; then
+    if [ ! -s "${WORK}/k-xca/headscale/tls.crt" ]; then bad "external CA: no pre-issued headscale/tls.crt ($(grep -a -i 'headscale' "${WORK}/k-xca.log" | head -2 | tr '\n' ' '))"
+    elif openssl x509 -in "${WORK}/k-xca/headscale/tls.crt" -noout -checkhost hs.hugmesh-control.internal 2>/dev/null | grep -F 'does match' >/dev/null; then
+        ok "external CA, Tor mode: the pre-issued headscale certificate names the control name"
+    else bad "external CA, Tor mode: the headscale certificate does not name hs.hugmesh-control.internal: $(openssl x509 -in "${WORK}/k-xca/headscale/tls.crt" -noout -ext subjectAltName 2>/dev/null | tail -1)"; fi
+else bad "gen-provision-keys pki with an external CA (Tor) failed: $(grep -a ERROR "${WORK}/k-xca.log" | head -1)"; fi
 # parity: the name gen-provision-keys stamps == keys-provision's == the Studio's
 for sd in hugmesh.internal acme.example a.b.c; do
     if gk "${WORK}/k-sd" --role host --superdomain "${sd}" --mesh-control-transport onion --mesh-control-onion-dir "${OD}"; then
@@ -516,6 +601,69 @@ if grep -a -q '^mesh_control_forget_secret() {' "${WORK}/forget.sh"; then
     expect "build-all-roles: the pki stick holds an identical copy -> removed" removed "$(forget held)"
 else bad "build-all-roles has no mesh_control_forget_secret (the secret is removed without evidence)"; fi
 
+# ── H. the build pipeline: one transport, minted before any image is built ───
+echo "-- H. build-all-roles.sh / Makefile / mint-control-onion.sh --"
+MINT="${ROOT}/scripts/mint-control-onion.sh"
+mkdir -p "${WORK}/nopath"
+expect "mint --check without tor (and no tor image): refused" "1" "$(PATH="${WORK}/nopath" MESH_CONTROL_TOR_IMAGE= "${BASH}" "${MINT}" --check >/dev/null 2>&1; echo $?)"
+expect "mint --check with tor on PATH: can mint" "0" "$(PATH="${TB}:${PATH}" bash "${MINT}" --check >/dev/null 2>&1; echo $?)"
+# build-all-roles.sh in a sandbox: stub builders and a stub gen-provision-keys that log
+# what they were handed (and whether the onion was minted before them).
+BT="${WORK}/bar"
+bar_tree() {
+    rm -rf "${BT}"; mkdir -p "${BT}/scripts" "${BT}/out"
+    cp -p "${BAR}" "${ROOT}/scripts/_roles-lib.sh" "${MINT}" "${BT}/scripts/"
+    for b in "${ROOT}"/build-*-stage4.sh; do
+        printf '#!/bin/bash\necho "build %s mc=${MESH_CONTROL_TRANSPORT:-} minted=$([ -s "%s/out/mesh-control-onion/hostname" ] && echo yes || echo no) $*" >> "%s/log"\nexit 0\n' \
+            "$(basename "${b}")" "${BT}" "${BT}" > "${BT}/$(basename "${b}")"; chmod +x "${BT}/$(basename "${b}")"
+    done
+    printf '#!/bin/bash\necho "keys mc=${MESH_CONTROL_TRANSPORT:-} dir=${MESH_CONTROL_ONION_DIR:-}" >> "%s/log"\nexit 0\n' "${BT}" > "${BT}/scripts/gen-provision-keys.sh"
+    chmod +x "${BT}/scripts/gen-provision-keys.sh"
+}
+bar() { (cd "${BT}" && env -u MESH_CONTROL_TRANSPORT -u MESH_CONTROL_ONION_MINT -u MESH_CONTROL_ONION_DIR \
+        PATH="${TB}:${PATH}" "$@" > "${BT}/run.log" 2>&1); echo $?; }
+bar_tree
+expect "build-all-roles: a Tor transport with FRITE=1 is refused before any build (exit 2)" "2" \
+    "$(bar MESH_CONTROL_TRANSPORT=onion MESH_CONTROL_ONION_MINT=1 FRITE=1 bash scripts/build-all-roles.sh -w "${BT}/out")"
+[ ! -e "${BT}/log" ] && grep -a -F 'FRITE' "${BT}/run.log" >/dev/null && ok "build-all-roles: nothing was built, the refusal names the board" \
+    || bad "build-all-roles built before refusing FRITE: $(cat "${BT}/log" 2>/dev/null | head -2 | tr '\n' '|') $(tail -2 "${BT}/run.log" | tr '\n' '|')"
+bar_tree
+printf 'MESH_CONTROL_TRANSPORT="onion"\n' > "${BT}/brand-tor.conf"
+expect "build-all-roles: a --config brand profile's Tor transport with no onion and no mint consent: refused (exit 2)" "2" \
+    "$(bar bash scripts/build-all-roles.sh -w "${BT}/out" --config "${BT}/brand-tor.conf")"
+[ ! -e "${BT}/log" ] && grep -a -F 'holds no control onion' "${BT}/run.log" >/dev/null && ok "build-all-roles: the brand profile's transport is seen before any build" \
+    || bad "build-all-roles ignored the brand profile's transport: $(head -2 "${BT}/log" 2>/dev/null | tr '\n' '|') $(grep -a '!!' "${BT}/run.log" | head -1)"
+bar_tree
+rc="$(bar MESH_CONTROL_ONION_MINT=1 bash scripts/build-all-roles.sh -w "${BT}/out" --mesh-control-transport onion)"
+expect "build-all-roles: a pass-through --mesh-control-transport onion + mint consent runs" "0" "${rc}"
+grep -a -E '^build build-x86-host-stage4.sh .*minted=yes' "${BT}/log" >/dev/null \
+    && ! grep -a -E '^build .*minted=no' "${BT}/log" >/dev/null && ok "build-all-roles: the onion is minted BEFORE the first image build" \
+    || bad "build-all-roles minted late (or not at all): $(tr '\n' '|' < "${BT}/log" 2>/dev/null) $(grep -a -i 'error\|!!' "${BT}/run.log" | head -2)"
+grep -a -F "keys mc=onion dir=${BT}/out/mesh-control-onion" "${BT}/log" >/dev/null \
+    && ! grep -a '^keys' "${BT}/log" | grep -a -v -F "keys mc=onion dir=${BT}/out/mesh-control-onion" >/dev/null \
+    && ok "build-all-roles: the keys step gets the pass-through transport and the shared onion dir" \
+    || bad "build-all-roles: the keys step saw: $(grep -a '^keys' "${BT}/log" | head -1)"
+bar_tree
+bar bash scripts/build-all-roles.sh -w "${BT}/out" >/dev/null
+grep -a -x -F "keys mc= dir=" "${BT}/log" >/dev/null && ! grep -a '^keys' "${BT}/log" | grep -a -v -x -F "keys mc= dir=" >/dev/null \
+    && [ ! -e "${BT}/out/mesh-control-onion" ] \
+    && ok "build-all-roles on lan: nothing minted, nothing exported" || bad "build-all-roles on lan: $(grep -a '^keys' "${BT}/log" | head -1)"
+# The Makefile's docker leg mints on THIS computer before the container starts.
+if command -v make >/dev/null 2>&1 && [ -f "${ROOT}/Makefile" ]; then
+    mk() { make -s -n -C "${ROOT}" "$@" WORK_DIR=/w/out 2>/dev/null | grep -a -E '^(docker run|bash ./scripts/mint-control-onion.sh)' | awk '{print $1}' | paste -sd' '; }
+    expect "make build-all, Tor + mint: the host mints, then the container builds" "bash docker" "$(mk build-all MESH_CONTROL_TRANSPORT=onion MESH_CONTROL_ONION_MINT=1)"
+    expect "make rebuild, Tor + mint: wipe, mint on the host, then build" "docker bash docker" "$(mk rebuild MESH_CONTROL_TRANSPORT=lan+onion MESH_CONTROL_ONION_MINT=1)"
+    make -s -n -C "${ROOT}" rebuild MESH_CONTROL_TRANSPORT=onion MESH_CONTROL_ONION_MINT=1 WORK_DIR=/w/out 2>/dev/null \
+        | grep -a -E '^(mkdir -p "/w/out"|docker run)' | head -1 | grep -a -q '^mkdir' \
+        && ok "make rebuild, Tor: the work dir is made as you before docker can create it as root" \
+        || bad "make rebuild, Tor: docker runs before the work dir exists (a root-owned dir the host mint cannot write)"
+    expect "make build-all on lan: no mint" "docker" "$(mk build-all)"
+    make -s -n -C "${ROOT}" build-all MESH_CONTROL_TRANSPORT=onion MESH_CONTROL_ONION_MINT=1 WORK_DIR=/w/out 2>/dev/null \
+        | grep -a -x -F 'bash ./scripts/mint-control-onion.sh "/w/out/mesh-control-onion"' >/dev/null \
+        && ok "make: the host mints into WORK_DIR/mesh-control-onion (the container's /out/mesh-control-onion)" \
+        || bad "make: the host mint targets another directory"
+else bad "no make (or no Makefile) to check the docker leg"; fi
+
 # ── F. builder parity ────────────────────────────────────────────────────────
 echo "-- F. --mesh-control-transport on every builder --"
 nb=0
@@ -569,6 +717,7 @@ if [ -z "${MCO_GUARD_NO_CONTROLS:-}" ]; then
         for f in hugmesh-mesh-control-relay hugmesh-tor-reconcile; do cp -p "${REPO}/specs/usr/sbin/${f}" "${d}/specs/usr/sbin/"; done
         for f in hugmesh-mesh-control-relay hugmesh-mesh-control-keeper; do cp -p "${REPO}/specs/etc/init.d/${f}" "${d}/specs/etc/init.d/"; done
         for f in keys-template scripts brands; do cp -rp "${REPO}/${f}" "${d}/${f}" || return 1; done
+        cp -p "${REPO}/Makefile" "${d}/" || return 1
         cp -p "${REPO}"/build-*-stage4.sh "${d}/"
         ln -s "${REPO}/studio/hugmesh_studio" "${d}/studio/hugmesh_studio"
     }
@@ -661,8 +810,39 @@ export HTTPS_PROXY=http://127.0.0.1:9080'
         'MESH_CONTROL_NAME="hs.${_mc_sd%%.*}-control.${_mc_sd#*.}"' 'MESH_CONTROL_NAME="hs.${_mc_sd}"'
     control "gen-provision-keys accepts a control name inside the superdomain" scripts/gen-provision-keys.sh \
         '    if [[ "https://${MESH_CONTROL_NAME}:${MESH_CONTROL_PORT}" == *"${_mc_sd}"* ]]; then' '    if false; then'
-    control "the mint aborts on tor's exit status" scripts/gen-provision-keys.sh \
-        '        wait "${_mc_pid}" 2>/dev/null || true' '        wait "${_mc_pid}" 2>/dev/null'
+    control "the mint aborts on tor's exit status" scripts/mint-control-onion.sh \
+        'wait "${_mc_pid}" 2>/dev/null || true' 'wait "${_mc_pid}" 2>/dev/null'
+    control "back to lan leaves tor linked for the control plane (it would publish the node's own onion)" specs/etc/keys-provision/provision.sh \
+        '        rc-update del tor default 2>/dev/null || true' '        :'
+    control "back to lan leaves the relay and keeper linked" specs/etc/keys-provision/provision.sh \
+        '            rc-update del "${svc}" default 2>/dev/null || true' '            :'
+    control "back to lan unlinks tor even where the operator chose the tor optional service" specs/etc/keys-provision/provision.sh \
+        '    if [ -e "${MESH_CONTROL_TOR_ONLY}" ]; then
+        rc-service tor stop' '    if true; then
+        rc-service tor stop'
+    control "the pki writes the control role with no key in place (tor mints a random onion)" specs/etc/keys-provision/provision.sh \
+        '        if [ -s "${MESH_CONTROL_HS_DIR}/hs_ed25519_secret_key" ] \
+           && [ "$(tr -d '"'"'[:space:]'"'"' < "${MESH_CONTROL_HS_DIR}/hostname" 2>/dev/null)" = "${onion}" ]; then' '        if true; then'
+    control "the OIDC removal runs after the CONFIG GATE again" specs/etc/keys-provision/provision.sh \
+        '    headscale_lan_control_marker /etc/headscale/config.yaml
+' '    headscale_lan_control_marker /etc/headscale/config.yaml
+    mesh_control_oidc_off /etc/headscale/config.yaml
+'
+    control "a lan stick says nothing (the baked transport wins)" scripts/gen-provision-keys.sh \
+        'd.setdefault("mesh", {})["control_transport"] = "lan"' 'pass'
+    control "the headscale certificate leaves out the control name" scripts/gen-provision-keys.sh \
+        '                [ "${MESH_CONTROL_TRANSPORT}" != lan ] && printf '"'"'%s\n'"'"' "${MESH_CONTROL_NAME}"' '                :'
+    control "build-all-roles ignores the brand profile's transport" scripts/build-all-roles.sh \
+        '    [ -n "${_mc_from_cfg%%|*}" ] && MESH_CONTROL_TRANSPORT="${_mc_from_cfg%%|*}"' '    :'
+    control "build-all-roles ignores a pass-through --mesh-control-transport" scripts/build-all-roles.sh \
+        '    case "${!_i}" in --mesh-control-transport) _j=$((_i + 1)); MESH_CONTROL_TRANSPORT="${!_j}" ;; esac' '    :'
+    control "build-all-roles lets a Tor transport reach the frite builder" scripts/build-all-roles.sh \
+        '        _v="BUILD_${_b}_IMG"; [ "${!_v}" = true ] && _mc_refuse+=("${_b}")' '        :'
+    control "build-all-roles leaves the mint to the keys step (after every image)" scripts/build-all-roles.sh \
+        '    if [ "${SKIP_KEYS:-0}" != "1" ] && [ ! -s "${MESH_CONTROL_ONION_DIR}/hostname" ]; then' '    if false; then'
+    control "the Makefile's docker leg does not mint on the host" Makefile \
+        '	$(MESH_CONTROL_HOST_MINT)
+	$(DOCKER_RUN) make build-all' '	$(DOCKER_RUN) make build-all'
     control "build-all-roles removes the secret without evidence" scripts/build-all-roles.sh \
         '        if [ -f "${k}" ] && cmp -s "${k}" "${d}/hs_ed25519_secret_key"; then' '        if true; then'
     control "an ARM builder accepts a Tor transport it cannot bake" build-orangepi5-stage4.sh \

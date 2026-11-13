@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 
 #: (value, label) — the order the faces offer them.
 CHOICES = (
@@ -60,6 +61,26 @@ TOR_PLATFORMS = ("x86", "rpi5")
 #: The per-run directory (under the run's output dir) the control onion key lives in
 #: between the keys steps of one run.
 ONION_DIRNAME = "mesh-control-onion"
+
+#: Where a docker keys run sees the onion dir (core/worklist_driver.py mounts it).
+CONTAINER_ONION_DIR = "/mesh-control-onion"
+
+#: The mint on its own (tor with its network off): what the fleet's docker leg runs on
+#: this computer before the container starts, since the builder image has no tor.
+MINT_SCRIPT = "scripts/mint-control-onion.sh"
+
+#: FleetConfig switches for builders that cannot bake Tor (each also has an ``_only``
+#: twin). A fleet with any of them on and a Tor transport ends at that builder, after
+#: the x86/rpi5 builds, so the preflight refuses it first.
+FLEET_NON_TOR_BOARDS = (
+    ("frite", "Frite"), ("jetson", "Jetson"), ("orangepi5", "Orange Pi 5"),
+    ("orangepizero2", "Orange Pi Zero 2"), ("orangepizero2w", "Orange Pi Zero 2W"),
+    ("orangepizero3", "Orange Pi Zero 3"), ("orangepi3lts", "Orange Pi 3 LTS"),
+    ("orangepi4lts", "Orange Pi 4 LTS"),
+)
+
+#: The lookup for tor/docker on PATH (a seam for the tests).
+_which = shutil.which
 
 
 def transport(cfg) -> str:
@@ -111,6 +132,57 @@ def name_problem(cfg) -> str:
 
 def onion_dir(out_dir: str) -> str:
     return os.path.join(out_dir, ONION_DIRNAME)
+
+
+def is_minted(out_dir: str) -> bool:
+    """True when the run's onion dir already holds a control onion (its hostname)."""
+    try:
+        return os.path.getsize(os.path.join(onion_dir(out_dir), "hostname")) > 0
+    except OSError:
+        return False
+
+
+def mint_problem(out_dir: str, *, osname: str | None = None, environ=None) -> str:
+    """Why the control onion cannot be minted for this run on this computer ("" = it
+    can, or it already is). The mint needs tor here (or MESH_CONTROL_TOR_IMAGE and
+    docker): the builder image carries no tor. On Windows the bash mint cannot run at
+    all, and every run writes into a new session folder, so there is no folder to
+    prepare by hand either: a Tor transport is refused there outright. Checked BEFORE
+    any image is built."""
+    if (osname or os.name) == "nt":
+        return ("Tor: the Studio on Windows cannot create the control onion (it needs "
+                "tor and bash on this computer). Build a Tor mesh from Linux or macOS, "
+                "or choose 'Local network only' here.")
+    if is_minted(out_dir):
+        return ""
+    where = onion_dir(out_dir)
+    if _which("tor"):
+        return ""
+    env = os.environ if environ is None else environ
+    if env.get("MESH_CONTROL_TOR_IMAGE") and _which("docker"):
+        return ""
+    return ("Tor: creating the control onion needs tor on this computer (or "
+            "MESH_CONTROL_TOR_IMAGE set to an image with tor, and docker). Install tor, "
+            f"or put a folder an earlier run created at {where}.")
+
+
+def host_mint_command(generator_dir: str, out_dir: str) -> list[str]:
+    """argv that mints the run's control onion on this computer (scripts/mint-control-onion.sh)."""
+    return ["bash", os.path.join(generator_dir, *MINT_SCRIPT.split("/")), onion_dir(out_dir)]
+
+
+def fleet_board_problems(cfg) -> list[str]:
+    """A Tor transport next to a fleet board whose builder cannot bake Tor."""
+    t = (getattr(cfg, "mesh_control_transport", "") or "").strip()
+    if t in ("", "lan"):
+        return []
+    on = [label for attr, label in FLEET_NON_TOR_BOARDS
+          if getattr(cfg, attr, False) or getattr(cfg, attr + "_only", False)]
+    if not on:
+        return []
+    return [f"{LABELS.get(t, t)}: only the x86 and Raspberry Pi 5 builders can bake Tor, "
+            f"and this fleet also builds {', '.join(on)}. Build those in a separate run "
+            f"with '{LABELS['lan']}', or choose '{LABELS['lan']}' here."]
 
 
 def genkeys_args(cfg, out_dir: str) -> list[str]:

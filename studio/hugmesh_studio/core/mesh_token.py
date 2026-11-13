@@ -85,7 +85,6 @@ import sys
 import tempfile
 import threading
 import time
-from urllib.parse import urlsplit
 
 from . import proc_text
 from .config import PERSON_ROLE_CHOICES
@@ -494,11 +493,13 @@ def login_server_hint(url: str, domain: str) -> str:
     """The line every face says under the login server as it is typed: why it is
     refused (:func:`login_server_problem`), else :data:`ONION_NOTE` for an onion, else
     "". The domain rule is left out while the access domain is still empty (issuing
-    applies it all the same)."""
+    applies it all the same). The domain is normalised as issuing normalises it
+    (:func:`_new_grant`: lower case, no leading or trailing dot), so the hint never
+    refuses what Issue accepts."""
     url = (url or "").strip()
     if not url:
         return ""
-    why = login_server_problem(url, (domain or "").strip() or None)
+    why = login_server_problem(url, (domain or "").strip().lower().strip(".") or None)
     if why:
         return why
     return ONION_NOTE if is_onion_login(url) else ""

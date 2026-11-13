@@ -47,4 +47,3 @@ tests/journey/test_brand_superbrand_image.py::test_the_four_places_that_refuse_a
 tests/test_local_ai_dock_pull.py::test_an_offer_for_a_named_model_stays_until_that_model_is_in  # the offer row is still shown when wait_for gives up (flaky)
 
 # ── red on main without Qt as well (the go-live lane, #926/#931) ─────────────────────
-tests/test_golive_docs_emulated.py::test_status_callout_says_what_has_landed  # the status callout still says FG3's proof lane has not merged; #926 merged it

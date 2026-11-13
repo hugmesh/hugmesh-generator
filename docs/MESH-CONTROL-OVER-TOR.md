@@ -33,6 +33,15 @@ measurements below showed that both of those happen with a hand-over design.
 | Transport | What a worker does before go-live |
 |---|---|
 | `lan` (default) | Dials `https://<pki LAN address>:8080`. Nothing on this page applies. |
+
+A stick made with `lan` says so (`.mesh.control_transport = "lan"`), and that beats the
+transport an x86/rpi5 image was baked with. So re-making the sticks with `lan` takes an
+image built for Tor back to the LAN. A stick that says nothing (made before this
+option existed) still takes the image's baked transport, so on an image built with
+`onion` it fails closed. Going back to `lan` also undoes what the Tor run set up: the
+relay and keeper are stopped and unlinked, and on a node where the tor optional
+service was not selected, tor, the reconcile and its cron job are unlinked too, so the
+node publishes no onion of its own.
 | `lan+onion` | Dials the control name. The relay prefers the pki on the LAN and falls back to the onion. If the node cannot run the Tor path (no tor or socat on the image, no valid name or onion on the stick), it falls back to `lan`, loudly. |
 | `onion` | Dials the control name. The relay always uses the onion. **Fails closed**: if the node cannot run the Tor path, it dials **nothing** — no LAN address, no baked URL, no `.nodes[]` row; `tailscaled` is stopped and taken out of the runlevel, and keys-provision says why. An explicit `.tailscale.login_server`, `.headscale.server_url` or `.mesh.endpoint` on the stick is the operator's and still wins. |
 
@@ -45,6 +54,10 @@ The transport is set in these places:
 - **Builders:** `--mesh-control-transport lan|lan+onion|onion`, or env/brand.conf
   `MESH_CONTROL_TRANSPORT`. Only the x86 and rpi5 builders can bake Tor. The other
   eight builders parse the flag and refuse a Tor transport before doing any work.
+  `build-all-roles.sh` takes the transport from the environment, the `--config` brand
+  profile (or `brand.conf`) and a pass-through `--mesh-control-transport` alike. It
+  refuses a Tor transport next to a Frite, Jetson or Orange Pi build, and it mints the
+  control onion before any image is built.
 - **KEYS:** `gen-provision-keys.sh` takes these flags:
   - `--mesh-control-transport`
   - `--mesh-control-name` (optional; see below)
@@ -52,6 +65,13 @@ The transport is set in these places:
   - `--mesh-control-onion-mint`: the consent.
   - `lan+onion` also needs `--pki-ip`.
 - **Make:** `make build-all MESH_CONTROL_TRANSPORT=lan+onion MESH_CONTROL_ONION_MINT=1 PKI_LAN_IP=…`.
+  The builder image has no tor, so the docker leg of `build-all` and `rebuild` mints
+  on this computer first (`scripts/mint-control-onion.sh`, into
+  `$(WORK_DIR)/mesh-control-onion`). That needs tor here, or
+  `MESH_CONTROL_TOR_IMAGE=<an image with tor>` and docker. Set the two variables on the
+  `make` command line: a transport that only a `BRAND=` profile sets is not seen
+  before the container starts, and `build-all-roles.sh` then refuses inside it before
+  building anything.
 
 ## The control name must lie outside the superdomain
 
@@ -110,8 +130,14 @@ carry only the public address in `provision.json .mesh.control_onion`. The rules
 
 - **Consent.** Minting happens only with explicit consent: `--mesh-control-onion-mint`
   on the command line, or the checkbox in the Studio.
-- **How it is minted.** `tor` runs with `DisableNetwork 1`, so nothing leaves the
-  computer. A container with tor can do it instead (`MESH_CONTROL_TOR_IMAGE`). The run
+- **How it is minted.** `scripts/mint-control-onion.sh` runs `tor` with
+  `DisableNetwork 1`, so nothing leaves the computer. A container with tor can do it
+  instead (`MESH_CONTROL_TOR_IMAGE`). The builder image carries no tor, so the mint
+  always runs on the build host, before any image is built: `build-all-roles.sh` and
+  the Makefile's docker leg run it first, and the Studio checks that it can before a
+  run starts. The Studio on Windows refuses a Tor transport: it cannot run the mint,
+  and every run writes into a new session folder. Build a Tor mesh from Linux or
+  macOS. The run
   waits for all three key files, then stops tor and judges the result by the files,
   never by tor's exit status: a stop that lands before tor installs its signal
   handlers exits 143, and that used to end the script with no message.
@@ -126,8 +152,12 @@ carry only the public address in `provision.json .mesh.control_onion`. The rules
   mint, so every stick must be made again.
 - **Placement guard.** `gen-provision-keys.sh` refuses to write an onion secret key
   to any stick that is not the pki's.
+- **Certificate.** With an external CA kept off the stick, the headscale certificate
+  `gen-provision-keys.sh` pre-issues also names the control name.
 - **On the pki.** keys-provision installs the key into `/var/lib/tor/hugmesh-control`
-  (`0700`/`0600`, `tor:tor`). It refuses the key if the key's hostname does not match
+  (`0700`/`0600`, `tor:tor`). The pki publishes the control onion only while that key
+  is in place and matches the sticks; otherwise its Tor stays a client, so tor never
+  mints a random control onion of its own. It refuses the key if the key's hostname does not match
   the onion address the sticks carry.
 
 This is the one exception to the in-situ custody rule in
@@ -383,7 +413,9 @@ Notes:
 - `tests/scripts/test-mesh-control-onion.sh` (offline; CI debian leg) runs
   keys-provision, the relay, the Tor reconcile, gen-provision-keys and
   build-all-roles' secret removal against stubs. It checks, among others:
-  - `lan` stays byte-identical;
+  - `lan` writes only `.mesh.control_transport = "lan"`, which beats a Tor-baked image;
+  - going back to `lan` unlinks what the Tor run linked, and nothing on a node that
+    never ran Tor;
   - the default control name lies outside the MagicDNS domain, the clash rule is
     headscale's substring rule, and gen-provision-keys, keys-provision and the Studio
     derive the same name;
@@ -394,9 +426,12 @@ Notes:
   - a worker publishes no onion, the pki installs only a matching key, and the
     reconcile maps 7443 onto headscale's 8080;
   - the mint survives a tor that exits 143 on SIGTERM;
+  - `build-all-roles.sh` reads the transport from every route, refuses boards that
+    cannot bake Tor and mints before the first image build; the Makefile's docker leg
+    mints on the host;
   - the secret leaves the build host only on evidence;
   - all ten builders carry the flag in parity;
-  - 31 negative controls, each of which turns the guard red.
+  - 43 negative controls, each of which turns the guard red.
 - `tests/scripts/test-mesh-control-headscale-start.sh` (CI host-docker job) is
   described above; its negative control is round one's default pairing, which the
   pinned headscale refuses.

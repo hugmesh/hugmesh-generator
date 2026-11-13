@@ -441,41 +441,11 @@ if [ "${MESH_CONTROL_TRANSPORT}" != lan ]; then
         if [ -e "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" ]; then
             echo "ERROR: ${MESH_CONTROL_ONION_DIR} has a secret key but no hostname — refusing to mint over it" >&2; exit 1
         fi
-        mkdir -p "${MESH_CONTROL_ONION_DIR}" && chmod 0700 "${MESH_CONTROL_ONION_DIR}" || exit 1
-        echo "==> Minting the control onion key in ${MESH_CONTROL_ONION_DIR} (tor, DisableNetwork — nothing leaves this computer)"
-        _mc_tmp="$(mktemp -d)"; : > "${_mc_tmp}/torrc"   # tor refuses /dev/null as a torrc
-        _mc_ctr=""
-        if command -v tor >/dev/null 2>&1; then
-            tor --defaults-torrc "${_mc_tmp}/torrc" -f "${_mc_tmp}/torrc" --DisableNetwork 1 --SocksPort 0 \
-                --DataDirectory "${_mc_tmp}/data" --HiddenServiceDir "${MESH_CONTROL_ONION_DIR}" \
-                --HiddenServicePort "${MESH_CONTROL_PORT} 127.0.0.1:8080" --Log "notice file ${_mc_tmp}/tor.log" >/dev/null 2>&1 &
-        elif [ -n "${MESH_CONTROL_TOR_IMAGE}" ] && command -v docker >/dev/null 2>&1; then
-            _mc_ctr="hugmesh-mint-$$-${RANDOM}"
-            docker run --rm --name "${_mc_ctr}" --network none --user "$(id -u):$(id -g)" -v "$(cd "${MESH_CONTROL_ONION_DIR}" && pwd):/hs" \
-                "${MESH_CONTROL_TOR_IMAGE}" sh -c ': > /tmp/torrc; exec tor --defaults-torrc /tmp/torrc -f /tmp/torrc --DisableNetwork 1 --SocksPort 0 --DataDirectory /tmp/data --HiddenServiceDir /hs --HiddenServicePort "7443 127.0.0.1:8080"' >/dev/null 2>&1 &
-        else
-            rm -rf "${_mc_tmp}"
-            echo "ERROR: minting the control onion needs tor on this computer (or MESH_CONTROL_TOR_IMAGE=<an image with tor> and docker)" >&2; exit 1
-        fi
-        _mc_pid=$!
-        # Wait for ALL the files tor writes (hostname last is not guaranteed), then stop it
-        # and reap it WITHOUT letting its exit status end this script: a SIGTERM that lands
-        # before tor installs its signal handlers exits 143, which `wait` returned and
-        # `set -e` turned into a silent abort (measured 15 of 15 when killed the instant
-        # the hostname appeared). Success is judged by the files, never by tor's status.
-        for _i in $(seq 1 120); do
-            [ -s "${MESH_CONTROL_ONION_DIR}/hostname" ] && [ -s "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" ] \
-                && [ -s "${MESH_CONTROL_ONION_DIR}/hs_ed25519_public_key" ] && break
-            kill -0 "${_mc_pid}" 2>/dev/null || break
-            sleep 0.5
-        done
-        if [ -n "${_mc_ctr}" ]; then docker rm -f "${_mc_ctr}" >/dev/null 2>&1 || true; fi
-        kill "${_mc_pid}" 2>/dev/null || true
-        wait "${_mc_pid}" 2>/dev/null || true
-        rm -rf "${_mc_tmp}"; unset _mc_tmp _mc_pid _mc_ctr _i
-        if ! { [ -s "${MESH_CONTROL_ONION_DIR}/hostname" ] && [ -s "${MESH_CONTROL_ONION_DIR}/hs_ed25519_secret_key" ]; }; then
-            echo "ERROR: tor did not mint a control onion key in ${MESH_CONTROL_ONION_DIR}" >&2; exit 1
-        fi
+        # The mint itself (tor DisableNetwork, or MESH_CONTROL_TOR_IMAGE in docker) is
+        # scripts/mint-control-onion.sh, which build-all-roles.sh and the Makefile's
+        # docker leg also run BEFORE any image is built.
+        MESH_CONTROL_PORT="${MESH_CONTROL_PORT}" MESH_CONTROL_TOR_IMAGE="${MESH_CONTROL_TOR_IMAGE}" \
+            bash "${SCRIPT_DIR}/mint-control-onion.sh" "${MESH_CONTROL_ONION_DIR}" || exit 1
     fi
     MESH_CONTROL_ONION="$(tr -d '[:space:]' < "${MESH_CONTROL_ONION_DIR}/hostname")"
     [[ "${MESH_CONTROL_ONION}" =~ ^[a-z2-7]{56}\.onion$ ]] \
@@ -702,7 +672,19 @@ PY
 fi
 
 # ── Mesh control over Tor -> provision.json (+ the pki stick's onion key) ───────
-# lan writes nothing (byte-identical to before the option existed).
+# lan stamps only .mesh.control_transport = "lan": the stick's explicit choice must
+# beat the transport an x86/rpi5 image was baked with (/etc/hugmesh/mesh-control-
+# transport), or a lan stick on a Tor-baked image would fail closed and never join.
+if [ "${MESH_CONTROL_TRANSPORT}" = lan ] && [ -f "${PROV}" ]; then
+    python3 - "${PROV}" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault("mesh", {})["control_transport"] = "lan"
+json.dump(d, open(p, "w"), indent=2)
+open(p, "a").write("\n")
+PY
+fi
 if [ "${MESH_CONTROL_TRANSPORT}" != lan ] && [ -f "${PROV}" ]; then
     MC_T="${MESH_CONTROL_TRANSPORT}" MC_N="${MESH_CONTROL_NAME}" MC_O="${MESH_CONTROL_ONION}" \
         python3 - "${PROV}" <<'PY'
@@ -1402,6 +1384,9 @@ if [ "${ROLE}" = "pki" ]; then
             {
                 printf '%s\n' 127.0.0.1 ::1 localhost headscale.hugmesh-pki.svc.cluster.local headscale.hugmesh-pki.svc
                 [ -f "${PROV}" ] && jq -r '[.headscale.server_url, .mesh.endpoint] | .[] | strings' "${PROV}" 2>/dev/null
+                # In a Tor mode every node, the pki too, dials https://<control name>:<port>
+                # (keys-provision's server_url), so the certificate must name it.
+                [ "${MESH_CONTROL_TRANSPORT}" != lan ] && printf '%s\n' "${MESH_CONTROL_NAME}"
                 printf '%s\n' "${HEADSCALE_URL:-}"
                 [ -f "${PROV}" ] && jq -r '.nodes // [] | .[] | select(.role == "pki") | .ip, .name | strings' "${PROV}" 2>/dev/null
                 printf '%s\n' "${HEADSCALE_TLS_SANS:-}" | tr ' ,' '\n\n'
