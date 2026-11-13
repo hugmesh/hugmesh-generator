@@ -414,9 +414,10 @@ def onion_problem(host: str) -> str:
     name = host.lower()[:-len(".onion")]
     if "." in name:
         # Names in front of the address (hs.<address>.onion) reach the same service:
-        # Tor ignores them, and the service sees them in its Host header (which is how
-        # the local mesh's front door picks headscale by its hs. name). Each must be a
-        # DNS label; the address itself is the last one.
+        # Tor ignores them, and the service sees them in its Host header, so a front
+        # door can route hs.<address>.onion to headscale by name (its certificate must
+        # then name it too; see ONION_NOTE). Each must be a DNS label; the address
+        # itself is the last one.
         front, _, name = name.rpartition(".")
         if not all(_DNS_LABEL_RE.fullmatch(p) for p in front.split(".")):
             return f"{host} has a name in front of the onion address that is not usable."
