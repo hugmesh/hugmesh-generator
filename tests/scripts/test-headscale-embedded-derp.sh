@@ -247,7 +247,9 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 -s
     -keyout "${T}/other/ca.key" -out "${T}/other/ca.crt" >/dev/null 2>&1
 printf '%s\n' '{"hugmesh":{"cluster_domain":"acme.example"},"nodes":[{"name":"hm-pki","ip":"10.0.0.10","role":"pki"}]}' > "${T}/stick/provision.json"
 {
-    for fn in resolve_endpoint resolve_control_endpoint; do sed -n "/^${fn}() {/,/^}/p" "${PROV}"; done
+    # resolve_control_endpoint calls the LAN-first helpers #1004 added; extract them too
+    for fn in resolve_endpoint resolve_control_endpoint ipv4_literal resolve_pki_lan_ip node_is_public \
+              control_endpoint_mesh_is_live; do sed -n "/^${fn}() {/,/^}/p" "${PROV}"; done
 } > "${WORK}/ep-fns.sh"
 cat > "${T}/run.sh" <<'EOF'
 # usage: run.sh <fns> <ep-fns> <config> <stick> <server_url> <out-dir>
@@ -336,10 +338,17 @@ grep -E '^tls_cert_path: /etc/headscale/own.crt$' "${T}/own/config.yaml" >/dev/n
 ep="$( log() { :; }; jqm() { jq -r "$1" "${MANIFEST}" 2>/dev/null; }; . "${WORK}/ep-fns.sh"
        resolve_lan_ip() { echo 192.168.5.6; }; MANIFEST=/dev/null; resolve_endpoint )"
 [ "${ep}" = "https://192.168.5.6:8080" ] && ok "resolve_endpoint's default is https://<LAN IP>:8080" || bad "resolve_endpoint default is '${ep}'"
-ep="$( jqm() { jq -r "$1" "${MANIFEST}" 2>/dev/null; }; . "${WORK}/ep-fns.sh"
+# A worker's default (the pki node in .nodes[]) dials http:// since #1004 (LAN-first,
+# tests/scripts/test-control-endpoint-lan-first.sh): control_url_tls_migrate then moves
+# it to https:// when the pki node's headscale serves TLS, which this suite's section
+# A/B proves it does by default, and keeps it joining when that node has no certificate.
+ep="$( log() { :; }; warn() { :; }; jqm() { jq -r "$1" "${MANIFEST}" 2>/dev/null; }; . "${WORK}/ep-fns.sh"
        MANIFEST="${T}/stick/provision.json"; resolve_control_endpoint )"
-[ "${ep}" = "https://10.0.0.10:8080" ] && ok "resolve_control_endpoint's default (the pki node in .nodes[]) is https" \
+[ "${ep}" = "http://10.0.0.10:8080" ] && ok "resolve_control_endpoint's default (the pki node in .nodes[]) is http://, upgraded by control_url_tls_migrate" \
     || bad "resolve_control_endpoint default is '${ep}'"
+grep -a -F 'control_url_tls_migrate "${login}"' "${PROV}" >/dev/null \
+    && ok "the login URL goes through control_url_tls_migrate (http:// -> https:// when TLS answers)" \
+    || bad "the login URL no longer passes through control_url_tls_migrate"
 # publish_cp_dns_record's re-issue: the tailnet address joins the certificate before the restart.
 (
     log() { :; }; warn() { echo "[warn] $*"; }; jqm() { jq -r "$1" "${MANIFEST}" 2>/dev/null; }
@@ -477,7 +486,7 @@ grep -a -F -- '--headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;' "$
     || bad "gen-provision-keys.sh lacks the opt-in"
 MK="${ROOT}/Makefile"
 grep -a -F 'BRAND_ENV += HEADSCALE_PUBLIC_DERP=$(HEADSCALE_PUBLIC_DERP)' "${MK}" >/dev/null \
-  && grep -a -F "HEADSCALE_PUBLIC_DERP='\$(HEADSCALE_PUBLIC_DERP)' ENV=" "${MK}" >/dev/null \
+  && grep -a -E "^BRAND_PASS :=.* HEADSCALE_PUBLIC_DERP='\\\$\(HEADSCALE_PUBLIC_DERP\)' " "${MK}" >/dev/null \
   && grep -a -E "^STACK_HEADSCALE_ENV :=.*HEADSCALE_PUBLIC_DERP='\\\$\(HEADSCALE_PUBLIC_DERP\)'" "${MK}" >/dev/null \
     && ok "Makefile threads HEADSCALE_PUBLIC_DERP to the builders, the docker re-invoke and the local stack" \
     || bad "Makefile does not thread HEADSCALE_PUBLIC_DERP everywhere"

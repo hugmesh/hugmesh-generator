@@ -113,6 +113,14 @@ def mesh_flow(wiz, *ids):
     return wl
 
 
+def _set_pki_lan(wiz):
+    """Type the pki node's fixed LAN address on the Network step, as an operator would:
+    a mesh build that makes KEYS sticks refuses without it (core/pki_lan.py)."""
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    net.pki_lan_ip.setText("192.168.1.10")
+    net.pki_lan_fixed.setChecked(True)
+
+
 def visited_slugs(wiz):
     """The slugs of the pages this flow has actually VISITED, in wizard order."""
     return [slug for slug, pid in wiz._page_ids.items() if wiz.hasVisitedPage(pid)]
@@ -1689,6 +1697,7 @@ def test_ask22_continue_advances_to_the_run(wiz, qapp, monkeypatch, tmp_path):
     `sudo -A bash ./build-x86-host-stage4.sh` every run."""
     runs = _install_inert_build_driver(monkeypatch)
     mesh_flow(wiz, "pki.x86")
+    _set_pki_lan(wiz)
     _point_output_dir(wiz, tmp_path)
     launch = advance_to(wiz, wizard_mod.LaunchPage)
     assert wiz.worklist.base.output_dir == str(tmp_path / "out")
@@ -1713,6 +1722,7 @@ def test_ask22_an_unstubbed_arrival_is_refused_not_elevated(wiz, qapp, monkeypat
                         lambda name, *a, **k: (f"/usr/bin/{name}" if name in ("sudo", "pkexec")
                                                else real_which(name, *a, **k)))
     mesh_flow(wiz, "pki.x86")
+    _set_pki_lan(wiz)
     _point_output_dir(wiz, tmp_path)
     launch = advance_to(wiz, wizard_mod.LaunchPage)
     launch._continue()

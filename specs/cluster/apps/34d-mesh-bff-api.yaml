@@ -21,6 +21,19 @@ spec:
     repoURL: https://github.com/hugmesh/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/mesh-bff-api
+    kustomize:
+      # THE IDENTITY PROVIDER this service trusts (issue #530). This Application
+      # is applied from the image's BAKED tree; the manifests it points at come
+      # from git. rewrite_idp_sysroot() in the stage4 builders rewrites the values
+      # below to the external IdP when --idp is not casdoor, and the git-served
+      # kustomization.yaml copies them from the idp-trust annotations onto the env.
+      # ONE-LINE ops so each value stays sed-anchorable. At these casdoor defaults
+      # the render is unchanged. Pinned by tests/scripts/test-eso-remoteref-brand.sh.
+      patches:
+        - target: { version: v1, kind: ConfigMap, name: idp-trust }
+          patch: |-
+            - { op: replace, path: /metadata/annotations/platform.hugmesh.net~1idp-issuer, value: "https://id.hugmesh.net" }
+            - { op: replace, path: /metadata/annotations/platform.hugmesh.net~1idp-jwks, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks" }
   destination:
     server: https://kubernetes.default.svc
     namespace: hugmesh-backend

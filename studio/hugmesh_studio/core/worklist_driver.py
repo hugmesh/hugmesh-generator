@@ -47,6 +47,7 @@ from dataclasses import asdict, dataclass, field
 from .build_driver import (BuildDriver, disk_space_refusal, disk_space_warning,
                            dispatch_space_refusal)
 from . import domain_ca_keys
+from . import pki_lan
 from . import roles
 from .config import (ImageConfig, User, brand_header_fields, image_class,
                      manifest_domain_rows)
@@ -237,6 +238,14 @@ class WorklistDriver:
         what the Review page's problems pane renders and isComplete() keys on, and
         what ProgressPage refuses dispatch over."""
         problems = self._output_dir_problems() + self._disk_space_problems()
+        # A mesh's KEYS sticks need the pki node's fixed LAN address (core/pki_lan.py):
+        # without it every worker dials a public URL that cannot answer before go-live.
+        # Blocking here, where the Review page and the dispatch refuse, and only when
+        # this run makes sticks.
+        if self.generate_keys and self._is_mesh():
+            pki_problem = pki_lan.problem(self.worklist.base)
+            if pki_problem:
+                problems.append(pki_problem)
         per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
                         graphical=self.graphical, workdir=self.workdir)
                       .preflight(cfg, self.backend))
@@ -658,10 +667,13 @@ class WorklistDriver:
                             "certificates" if "--ca-key" in ca_args else
                             f"domain CA: this {profile} stick gets public "
                             "certificates only"))
+            # The pki node's LAN address (core/pki_lan.py) goes onto EVERY stick: the
+            # pki's own /etc/hosts rows and each worker's pre-go-live control dial.
             cmd = self._genkeys_command(script, base.brand, [
                 "--role", profile,
                 "--out", keys_dir_, "--random",
-                "--superdomain", base.effective_superdomain(), *ca_args], osname,
+                "--superdomain", base.effective_superdomain(),
+                *pki_lan.genkeys_args(base), *ca_args], osname,
                 ca_dir=ca.root if ca is not None else None)
             env = dict(os.environ)
             env["BRAND"] = base.brand

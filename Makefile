@@ -175,6 +175,11 @@ ENV      ?= test
 #                an explicit flag overrides the profile).
 # HEADSCALE_URL= override the brand's own headscale control server (its own mesh).
 #                Passed through as an env var the brand/mesh setup honors.
+# PKI_LAN_IP=    the pki node's STATIC (or DHCP-reserved) LAN IPv4. Stamped on every
+#                KEYS folder (gen-provision-keys.sh --pki-ip), so a worker dials the pki
+#                on the LAN before go-live instead of a public HEADSCALE_URL that cannot
+#                answer yet. Unset: the keys step warns and workers fall back to it.
+# Usage:  make build-all BRAND=acme DOMAIN=acme.example PKI_LAN_IP=192.168.1.10
 # HEADSCALE_PUBLIC_DERP=true  ALSO list Tailscale's public DERP map in the pki node's
 #                headscale. Default OFF: headscale's embedded relay only, so the mesh
 #                starts and relays offline (docs/HEADSCALE-DERP.md). Same knob as the
@@ -184,6 +189,9 @@ BRAND     ?=
 DOMAIN    ?=
 HEADSCALE_URL ?=
 HEADSCALE_PUBLIC_DERP ?=
+PKI_LAN_IP ?=
+
+
 
 # ── External CA (optional) ─────────────────────────────────────────────────────
 # Point the cert generators at an EXISTING CA (cert + key) to use it as the
@@ -220,6 +228,9 @@ BRAND_ENV :=
 ifneq ($(strip $(HEADSCALE_URL)),)
 BRAND_ENV += HEADSCALE_URL=$(HEADSCALE_URL)
 endif
+ifneq ($(strip $(PKI_LAN_IP)),)
+BRAND_ENV += PKI_LAN_IP=$(PKI_LAN_IP)
+endif
 ifneq ($(strip $(HEADSCALE_PUBLIC_DERP)),)
 BRAND_ENV += HEADSCALE_PUBLIC_DERP=$(HEADSCALE_PUBLIC_DERP)
 endif
@@ -232,7 +243,7 @@ endif
 # BRAND_PASS — brand make-vars forwarded into the in-container `make` re-invoke
 # (the Docker dispatch path) so BRAND_FLAGS/BRAND_ENV are rebuilt identically
 # inside the builder image. brands/ is mounted at /src/brands via -v $(CURDIR):/src.
-BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
+BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' HEADSCALE_PUBLIC_DERP='$(HEADSCALE_PUBLIC_DERP)' PKI_LAN_IP='$(PKI_LAN_IP)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
 
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).
@@ -378,7 +389,8 @@ FRITE_PASS    := FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' FRI
 # validation pending; see specs-jetson/README.md). FRITE-style vars:
 #   JETSON_ROLE          = edge-ai (DEFAULT, headline) | backend-gpu | omnibus | desktop
 #   JETSON_BOARD         = orin-nano (DEFAULT) | orin-nano-4gb | orin-nx-8gb | orin-nx-16gb
-#   JETSON_KERNEL_FLAVOR = mainline (DEFAULT, buildable — NO CUDA) | l4t (stub)
+#   JETSON_KERNEL_FLAVOR = mainline (DEFAULT, the only one that builds — NO CUDA);
+#                          l4t is parsed but the builder exits 1 on it by design
 JETSON_ROLE          ?= edge-ai
 JETSON_BOARD         ?= orin-nano
 JETSON_KERNEL_FLAVOR ?= mainline

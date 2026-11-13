@@ -20,3 +20,33 @@ patches:
         path: /spec/template/spec/imagePullSecrets
         value:
           - name: harbor-registry
+
+# ── THE IDENTITY PROVIDER THIS SERVICE TRUSTS (issue #530) ──────────────────────
+# ArgoCD serves this directory from GIT, never from the device's baked tree, so
+# rewrite_idp_sysroot()'s sed over the baked manifests/ copy cannot reach it. The
+# issuer/JWKS move HERE, at render time, the way the Vault base does (#285). The
+# idp-trust ConfigMap is local-config: kustomize never emits it, it is only the
+# value surface. Its platform.hugmesh.net/idp-* annotations are set by a one-line
+# JSON-6902 op in apps/34b-wiki-bff-api.yaml, which IS baked, so
+# rewrite_idp_sysroot() re-points that op at the external IdP for --idp != casdoor,
+# and `replacements` copies it onto the env below. At the casdoor defaults this
+# block is a byte no-op. Pinned by tests/scripts/test-eso-remoteref-brand.sh (7).
+configMapGenerator:
+  - name: idp-trust
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+        platform.hugmesh.net/idp-issuer: "https://id.hugmesh.net"
+        platform.hugmesh.net/idp-jwks: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks"
+replacements:
+  - source: { version: v1, kind: ConfigMap, name: idp-trust, fieldPath: "metadata.annotations.[platform.hugmesh.net/idp-issuer]" }
+    targets:
+      - select: { group: apps, kind: Deployment, name: hugmesh-wiki-bff-api }
+        fieldPaths:
+          - spec.template.spec.containers.[name=hugmesh-wiki-bff-api].env.[name=CASDOOR_ISSUER_URI].value
+  - source: { version: v1, kind: ConfigMap, name: idp-trust, fieldPath: "metadata.annotations.[platform.hugmesh.net/idp-jwks]" }
+    targets:
+      - select: { group: apps, kind: Deployment, name: hugmesh-wiki-bff-api }
+        fieldPaths:
+          - spec.template.spec.containers.[name=hugmesh-wiki-bff-api].env.[name=CASDOOR_JWKS_URI].value

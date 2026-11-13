@@ -116,6 +116,8 @@ on:
       - 'studio/packaging/build-msi-wine.sh'
       - 'studio/packaging/wix/windows-build-requirements.txt'
       - 'studio/packaging/linux-build-requirements.txt'
+      # test_studio_release_signing.py sources it for dmg_name, the .dmg's file name.
+      - 'studio/packaging/build-macos-app.sh'
       # The cut's guard step runs under pytest.ini's options, so an edit to it can
       # change what the guards do; test_studio_beta_version.py's bump simulation reads it.
       - 'studio/pytest.ini'
@@ -456,6 +458,7 @@ jobs:
           tests/test_ollama_docker.py
           tests/test_local_ai_dock.py
           tests/test_local_ai_dock_pull.py
+          tests/test_self_check_windows.py
 
   macos:
     # The macOS app: "HugMesh Image Studio.app" in a .dmg, for Apple silicon and Intel.
@@ -467,9 +470,10 @@ jobs:
     #
     # NAMED FILES, as in the windows job: these are the macOS contract, and a new macOS
     # fix adds its test here. Then packaging/build-macos-app.sh freezes, checks,
-    # smoke-tests and packs the app. studio-release.yml has no macOS job yet (the .dmg
-    # is not on a release); when it gets one it must run this SAME script, so that what
-    # a pull request proves is what the release ships.
+    # smoke-tests and packs the app. The `macos` and `macos-intel` jobs of
+    # studio-release.yml run this SAME script with the same arguments on the same two
+    # images (test_studio_release_signing.py holds them to this matrix), so that what a
+    # pull request proves is what the release ships.
     #
     # macos-15 is Apple silicon (arm64) and macos-15-intel is x86_64; both are GitHub's
     # standard hosted images, pinned by version rather than macos-latest so the
@@ -552,6 +556,7 @@ jobs:
           tests/test_macos_stock_texts.py
           tests/test_macos_stock_texts_gui.py
           tests/test_pages_build_macos.py
+          tests/test_local_login_no_peer_check.py
 
       - name: A stock Mac - the self-check names the missing GNU tools and exits 1
         # Before Homebrew's GNU tools are installed: macOS's own bash 3.2 and BSD sed,

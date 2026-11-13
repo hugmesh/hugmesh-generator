@@ -76,7 +76,7 @@ from ...core import build_sessions
 from ...core import roles as role_vocab
 from ...core.config import (
     ENV_CHOICES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS,
-    KERNEL_FLAVOR_CHOICES, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
+    KERNEL_FLAVOR_CHOICES, KERNEL_FLAVOR_REFUSED, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
     ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS, ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS,
     ORANGEPI4LTS_FLAVORS,
     RPI_BOARDS,
@@ -86,10 +86,11 @@ from ...core.fleet import (FLEET_LANE_NOTE, JOBS_RANGE, WITH_TOR_NOTE, FleetConf
                            FleetDomains, FleetDriver, commit_fleet_domains,
                            fleet_domain_fields, fleet_domains_from_config,
                            seed_fleet_domains)
+from ...core import pki_lan
 from ...core import plain_words
 from ...tui.superbrand_step import session_for
 from ._nvd_key_widget import NvdKeyWidget
-from ._widgets import _file_picker, _row
+from ._widgets import _file_picker, _row, add_refused_items, offered_index
 from .brand_picker import BrandPicker
 from .domain_services import DomainServicesWidget
 from .domains import _COL_IDP, DomainsTableWidget
@@ -377,7 +378,9 @@ class FleetPage(QtWidgets.QWidget):
         self.jetson_roles.setPlaceholderText("JETSON_ROLES subset (default: edge_ai)")
         self.jetson_board = _default_combo(JETSON_BOARDS)
         self.jetson_kernel_flavor = _default_combo(
-            KERNEL_FLAVOR_CHOICES, "JETSON_KERNEL_FLAVOR — the l4t BUILD is a stub that hard-errors today")
+            KERNEL_FLAVOR_CHOICES,
+            "JETSON_KERNEL_FLAVOR. l4t is shown greyed: " + KERNEL_FLAVOR_REFUSED["l4t"])
+        add_refused_items(self.jetson_kernel_flavor, KERNEL_FLAVOR_REFUSED)
         jl.addWidget(_row("Jetson roles", self.jetson_roles))
         jl.addWidget(_row("Jetson board", self.jetson_board))
         jl.addWidget(_row("Jetson kernel", self.jetson_kernel_flavor))
@@ -482,6 +485,18 @@ class FleetPage(QtWidgets.QWidget):
         self.headscale_url.setPlaceholderText(
             "brand mesh control server (HEADSCALE_URL env — baked to /etc/hugmesh/headscale-url)")
         sl.addWidget(_row("Headscale URL", self.headscale_url))
+        # The pki node's fixed LAN address (core/pki_lan.py): PKI_LAN_IP for every
+        # KEYS folder. FleetDriver.preflight refuses a run that makes folders without
+        # it; the hint says why, the same words as the image route's Network page.
+        self.pki_lan_why = QtWidgets.QLabel(pki_lan.WHY)
+        self.pki_lan_why.setWordWrap(True)
+        self.pki_lan_why.setStyleSheet("color: gray;")
+        sl.addWidget(self.pki_lan_why)
+        self.pki_lan_ip = QtWidgets.QLineEdit()
+        self.pki_lan_ip.setPlaceholderText("e.g. 192.168.1.10  (PKI_LAN_IP — the PKI node's fixed LAN IPv4)")
+        sl.addWidget(_row(pki_lan.LABEL_IP, self.pki_lan_ip))
+        self.pki_lan_fixed = QtWidgets.QCheckBox(pki_lan.LABEL_FIXED)
+        sl.addWidget(self.pki_lan_fixed)
         self.output_dir = QtWidgets.QLineEdit()
         od_btn = _file_picker(self, self.output_dir, "Output directory", directory=True)
         od = QtWidgets.QWidget(); oh = QtWidgets.QHBoxLayout(od); oh.setContentsMargins(0, 0, 0, 0)
@@ -695,6 +710,8 @@ class FleetPage(QtWidgets.QWidget):
             pentest_scan=self.pentest_scan.currentData(),
             pentest_pipeline=self.pentest_pipeline.currentData(),
             headscale_url=self.headscale_url.text().strip(),
+            pki_lan_ip=self.pki_lan_ip.text().strip(),
+            pki_lan_ip_fixed=self.pki_lan_fixed.isChecked(),
             env=self.env.currentData(),
             brand_profile=self.brand_profile.text().strip(),
             cluster_domain=self.cluster_domain.text().strip(),
@@ -731,7 +748,8 @@ class FleetPage(QtWidgets.QWidget):
         self.jetson_only.setChecked(cfg.jetson_only)
         self.jetson_roles.setText(cfg.jetson_roles)
         combo(self.jetson_board, cfg.jetson_board)
-        combo(self.jetson_kernel_flavor, cfg.jetson_kernel_flavor)
+        self.jetson_kernel_flavor.setCurrentIndex(
+            offered_index(self.jetson_kernel_flavor, cfg.jetson_kernel_flavor))
         self.orangepi5.setChecked(cfg.orangepi5)
         self.orangepi5_only.setChecked(cfg.orangepi5_only)
         combo(self.orangepi5_board, cfg.orangepi5_board)
@@ -764,6 +782,8 @@ class FleetPage(QtWidgets.QWidget):
         combo(self.pentest_scan, cfg.pentest_scan)
         combo(self.pentest_pipeline, cfg.pentest_pipeline)
         self.headscale_url.setText(cfg.headscale_url)
+        self.pki_lan_ip.setText(cfg.pki_lan_ip)
+        self.pki_lan_fixed.setChecked(bool(cfg.pki_lan_ip_fixed))
         combo(self.env, cfg.env)
         self.brand_profile.setText(cfg.brand_profile)
         self.cluster_domain.setText(cfg.cluster_domain)

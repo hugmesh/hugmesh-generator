@@ -46,7 +46,7 @@ from ..core.config import (
 )
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
-from ..core import device_catalog, plain_words, platform_info
+from ..core import device_catalog, pki_lan, plain_words, platform_info
 from ..core import plain_words, platform_info
 from ..core.desktop_spec import step_applies as desktop_step_applies
 from ..core.validate import validate_domain_name
@@ -351,6 +351,19 @@ class PendingStep:
 
     def feed(self, j: "Journey", line: str) -> None:  # noqa: ARG002
         j.advance()
+
+
+class KeyZipPendingStep(PendingStep):
+    """The key-zip step is GUI-only, but whether local login is offered on this host is
+    not: show the same one-line reason the GUI and the command line show."""
+
+    def lines(self, j: "Journey") -> list[str]:
+        from ..core import local_login_agent
+        out = super().lines(j)
+        reason = local_login_agent.peer_check_policy().reason
+        if reason:
+            out += ["", reason]
+        return out
 
 
 class IdpScreen:
@@ -1221,6 +1234,13 @@ class BuildScreen:
             out.append("! the GUI build will refuse this configuration: " + refusal)
             out.append("  Walk the ‘Domain services’ step here (it gives every domain "
                        "its own page) before saving.")
+        # The pki LAN address (core/pki_lan.py): the GUI build's keys step refuses a
+        # mesh without it (WorklistDriver.preflight) — say so before the save.
+        pki_refusal = pki_lan.problem(cfg)
+        if pki_refusal:
+            out.append("")
+            out.append("! the GUI build will refuse this configuration: " + pki_refusal)
+            out.append("  Set it on the Network step here (ip ADDR, then fixed on).")
         out.append("")
         out.append("The TUI does not run builds yet — save this configuration "
                    "and build it in the GUI (python -m hugmesh_studio) or "
@@ -1362,7 +1382,8 @@ class Journey:
         for slug, title in _SIDE_FLOW_STUB.items():
             self._screens[slug] = PendingSideFlow(slug, title)
         for slug, title in _PENDING_STEPS.items():
-            self._screens.setdefault(slug, PendingStep(slug, title))
+            step = KeyZipPendingStep if slug == "keyzip" else PendingStep
+            self._screens.setdefault(slug, step(slug, title))
         # "sessions" never renders as a journey screen (the face owns the review),
         # but the registry must still cover EVERY canonical slug — parity-pinned.
         self._screens.setdefault("sessions", PendingStep("sessions", "Sessions"))
