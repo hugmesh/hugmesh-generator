@@ -61,18 +61,21 @@ here is the top of that range.
 - **`HEALTHCHECK`** is `curl` against `/api/v1/instance`.
 - **Not included: ffmpeg and ImageMagick.** They are needed only for the media preview
   proxy and the `AnalyzeMetadata` upload filter, and both are off unless configured.
-- **linux/amd64 and linux/arm64.** Akkoma is selectable on rpi5, Jetson and x86 meshes
-  (`optional-services.yaml` `buildGate`). Unlike the cluster's other first-party
-  images, which it builds in-cluster into Harbor for its own architecture, this one is
-  pulled from GHCR, so the published index must carry both. The release workflow
-  builds arm64 under QEMU, and the build stage sets `ERL_FLAGS="+JMsingle true"`
-  because the BEAM JIT's dual-mapped code memory crashes under QEMU. Pull requests
-  build and boot-test arm64 natively on `ubuntu-24.04-arm`. The release's QEMU leg
-  first ran on the first push to `main` (run 43210930759, green): it published an
-  index with both architectures. If that leg fails, nothing is pushed.
-- **The MRF** (`mrf/force_local_for_users_policy.ex`) is compiled in and does nothing
-  until config lists it under `:mrf policies`. See
-  [`docs/DOMAIN-LOCK.md`](../../docs/DOMAIN-LOCK.md).
+- **linux/amd64 and linux/arm64.** Akkoma is selectable on rpi5 and x86 meshes
+  (`optional-services.yaml` `buildGate`) and on Jetson, whose builder runs the same
+  `gate_optional_services` from `scripts/_optional-services-lib.sh` but does not read
+  the `buildGate` column. Unlike the cluster's other first-party images, which it
+  builds in-cluster into Harbor for its own architecture, this one is pulled from
+  GHCR, so the published index must carry both. The release workflow builds arm64
+  under QEMU, and the build stage sets `ERL_FLAGS="+JMsingle true"` because the BEAM
+  JIT's dual-mapped code memory crashes under QEMU. Pull requests build and boot-test
+  arm64 natively on `ubuntu-24.04-arm`. The release's QEMU leg first ran on the first
+  push to `main` (run 43210930759, green) and published an index with both
+  architectures; if that leg fails, nothing is pushed. The release boot-tests the
+  amd64 image only, so the published arm64 image has been built but never booted
+  (see "Jetson and arm64" below).
+- **The MRF** (`mrf/force_local_for_users_policy.ex`) is compiled in and enforces
+  nothing. See "The MRF" below and [`docs/DOMAIN-LOCK.md`](../../docs/DOMAIN-LOCK.md).
 
 ## AGPL-3.0
 
@@ -128,45 +131,165 @@ the repository has one `release/X.Y` branch. See
 
 ## Pinning
 
-Until the first release, every Akkoma ref in `specs/cluster` carries the placeholder
-digest `sha256:000…0`, marked `PLACEHOLDER digest` on its line, and `akkoma` is
-DEFAULT-OFF everywhere. `tests/scripts/test-akkoma-image-pin.sh` refuses `akkoma` back
-in any default while the placeholder is in place. After a release:
+Every Akkoma ref in `specs/cluster` names one image by digest. The refs are in
+`akkoma.yaml` ×2, `admin-sync-job.yaml`, `domainlock-sync-job.yaml` and
+`test-runner/akkoma-peer.yaml` ×2. `tests/scripts/test-akkoma-image-pin.sh` finds every
+ref and requires that they all carry the same digest.
+
+**Pinned now (2026-11-12):**
+`ghcr.io/hugmesh/hugmesh-akkoma:0.4.0-beta.1@sha256:ad4d894e603cac04df6381d7036c587668bd582c37548aace28d89d6392f9bbf`
+
+- This is the `akkoma-v0.4.0-beta.1` release, run [43364230745](https://github.com/hugmesh/hugmesh-generator/actions/runs/43364230745),
+  cut by the 0.5.0-beta.1 org release at `ccdeca49`. It is an OCI index with
+  linux/amd64 and linux/arm64 manifests, tagged `0.4.0-beta.1`, `beta` and
+  `sha-ccdeca497fa5`. The ref names the release tag; the digest is what the kubelet
+  pulls. (images/akkoma/VERSION has since moved to 0.5.0-beta.1, the generator's
+  release line; the next release cuts that.)
+- Verified, and all three passed:
+
+  ```
+  cosign verify ghcr.io/hugmesh/hugmesh-akkoma@sha256:ad4d894e603cac04df6381d7036c587668bd582c37548aace28d89d6392f9bbf \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --certificate-identity-regexp '^https://github.com/hugmesh/hugmesh-generator/\.github/workflows/akkoma-release\.yml@refs/tags/akkoma-v0\.4\.0-beta\.1$'
+  gh attestation verify oci://ghcr.io/hugmesh/hugmesh-akkoma@sha256:ad4d894e603cac04df6381d7036c587668bd582c37548aace28d89d6392f9bbf --repo hugmesh/hugmesh-generator
+  gh attestation verify oci://ghcr.io/hugmesh/hugmesh-akkoma@sha256:ad4d894e603cac04df6381d7036c587668bd582c37548aace28d89d6392f9bbf --repo hugmesh/hugmesh-generator --predicate-type https://spdx.dev/Document/v2.3
+  ```
+
+  The signing certificate's subject is `akkoma-release.yml@refs/tags/akkoma-v0.4.0-beta.1`.
+  The attestations are SLSA provenance and an SPDX 2.3 SBOM.
+- Booted from GHCR by digest, not from a local build, with the `akkoma-config`
+  ConfigMap as shipped and a throwaway Postgres. It migrated, started and answered
+  `/api/v1/instance` as `mastodon.hugmesh.net`, version
+  `2.7.2 (compatible; Akkoma 3.20.1)`.
+
+To re-pin, for example after a tagged release:
 
 1. Read the digest from the release run's summary, or with
-   `docker buildx imagetools inspect ghcr.io/hugmesh/hugmesh-akkoma:<version>`. Verify
-   it with the `cosign verify` and `gh attestation verify` lines the run prints.
-2. In one change, replace the placeholder in all six refs with
-   `ghcr.io/hugmesh/hugmesh-akkoma:<version>@sha256:<digest>`, and drop the
-   `PLACEHOLDER digest` comments. The refs are in `akkoma.yaml` ×2,
-   `admin-sync-job.yaml`, `domainlock-sync-job.yaml` and
-   `test-runner/akkoma-peer.yaml` ×2.
-3. Re-wire `akkoma-peer.yaml` in `specs/cluster/manifests/test-runner/kustomization.yaml`.
-   It is unwired while the digest is the placeholder, because that bundle syncs from
-   git on every ENV=test mesh whatever the selection.
-4. Then turn `akkoma` back on in the defaults: the builder lib, the three cluster
-   builders (x86, rpi5, jetson), `build-menu.sh`'s pre-ticked services, Studio's
-   `BUILTIN_DEFAULT_SERVICES`, the registry's `default:`, the installed-services
-   baseline, the seed OptionalService and the federation `gate.sql`. The test-suite
-   expectations that this change moved must move back too.
+   `docker buildx imagetools inspect ghcr.io/hugmesh/hugmesh-akkoma:<tag>`. Verify it
+   with the `cosign verify` and `gh attestation verify` lines the run prints.
+2. In one change, replace the ref at every site with
+   `ghcr.io/hugmesh/hugmesh-akkoma:<tag>@sha256:<digest>`.
+3. Boot it: `bash images/akkoma/smoke-test.sh ghcr.io/hugmesh/hugmesh-akkoma@sha256:<digest> 3.20.1`
+   boots both cluster ConfigMaps as shipped.
 
-Three things must be settled before the default goes back on:
+**Going back to a placeholder.** The guard still accepts the pre-release state: a
+repeated-character digest marked `PLACEHOLDER digest` on its line. While a placeholder
+is in place, `akkoma` must be OFF in every default source:
 
-- **A separate media host, or a decision to keep the shared one.** `pleroma start`
-  refuses to run with NO `config :pleroma, Pleroma.Upload, base_url: ...` ("No
-  base_url set for uploads"). That is the only refusal: a `base_url` on the
-  instance's own host boots, and upstream logs an error-level warning about it
-  (`check_uploader_base_url_is_not_base_domain` only logs). Both cluster configs
-  therefore set `https://<instance host>/media/`, which the be-gateway's
-  `mastodon-web` route, cloudflared and the certificate already serve.
-  Upstream advises a separate host because uploads served from the instance's own
-  origin are an XSS risk. Moving to `media.<domain>` needs a DNS name, a
-  certificate, a cloudflared rule and a gateway route.
-- **Branded meshes.** On a non-default brand, `rebrand_sysroot` in both builders turns
-  `ghcr.io/hugmesh/hugmesh-akkoma@sha256:...` into
-  `ghcr.io/<org>/<brand>-akkoma@sha256:...`, the same digest under a name that does
-  not hold it. Either exempt this ref from the rebrand, so every brand pulls the
-  HugMesh-published image (a brand-neutrality decision), or have each brand publish
-  and pin its own.
-- **The MRF is still a skeleton.** See its header. It is inert until listed under
-  `:mrf policies`.
+- the builder lib;
+- the three cluster builders (x86, rpi5, jetson);
+- `build-menu.sh`'s `OPT_SERVICES` default and its pre-ticked services;
+- Studio's `BUILTIN_DEFAULT_SERVICES`;
+- the registry's `default:`, the installed-services baseline, the seed OptionalService
+  and the federation `gate.sql`;
+- the `akkoma-peer.yaml` line in `specs/cluster/manifests/test-runner/kustomization.yaml`.
+
+That bundle syncs from git on every ENV=test mesh whatever the selection.
+
+**Explicit selection is always allowed.** `--optional-services akkoma`, `all`, a
+`brand.conf` list or a ticked box bakes Akkoma whatever the default says (operator
+decision, 2026-11-12).
+
+## Settled for default-on (2026-11-12)
+
+### Media host
+
+**Uploads stay on the instance's own host:** `https://<instance host>/media/`, in both
+ConfigMaps.
+
+`pleroma start` refuses to run with no `config :pleroma, Pleroma.Upload, base_url: ...`,
+so one must be set. The cluster has no media host to move uploads to:
+
+- the be-gateway's `mastodon-web` route already sends every path on the mastodon
+  host to Akkoma;
+- route-access gates `/media/**` to `ROLE_MASTODON` (and MOD/ADMIN);
+- cloudflared, DNS and the certificate already cover that host;
+- a `media.<domain>` name would today fall into cloudflared's `*.<domain>` rule, which
+  serves public user profiles.
+
+**The trade-off.** Upstream advises a separate host, because an upload served from
+the instance's own origin is an XSS risk. Akkoma logs `Your Akkoma Host and your
+Upload base_url's host are the same!` at error level on every boot; it only logs.
+
+Measured on the published image with the as-shipped ConfigMap:
+
+| Upload | Served as | Headers |
+|---|---|---|
+| `.html` | `application/octet-stream` | `content-security-policy: sandbox`, `x-content-type-options: nosniff` |
+| `.svg` | `image/svg+xml` | `content-security-policy: sandbox`, `x-content-type-options: nosniff` |
+
+`sandbox` gives the document an opaque origin, so a script in an uploaded file cannot
+read the instance's cookies or storage, in any browser that honours CSP.
+
+What remains is a client that ignores the header. A separate media host would close
+that too. To make the move:
+
+- reserve the name ahead of the vanity wildcard in cloudflared;
+- add DNS and a certificate;
+- add a be-gateway route and route-access rows;
+- add a `rebrand_sysroot`-safe literal in both ConfigMaps.
+
+### Branded meshes
+
+**Every brand pulls the HugMesh-published image.**
+
+`rebrand_sysroot` in the x86, rpi5 and Jetson builders now hides
+`ghcr.io/hugmesh/hugmesh-akkoma` behind `@@SDSYSAKKOMAIMG@@` and restores it last.
+Before, it turned the ref into `ghcr.io/<org>/<brand>-akkoma@sha256:...`: the same
+digest under a name that does not hold it.
+
+The rewrite only ever hit the baked copy:
+
+- on a branded device, `apps/30-akkoma.yaml` names the brand's own generator repo;
+- ArgoCD reads `specs/cluster/manifests/akkoma` from there;
+- a fork of this repository carries this ref verbatim.
+
+The exemption makes the baked tree say what the cluster pulls.
+
+The image carries no brand material: the instance name, host and contact come from
+the ConfigMap. A brand that wants its own image must publish it, sign it, and pin it
+in its own fork. `test-akkoma-image-pin.sh` runs each builder's real
+`rebrand_sysroot` with a custom brand and org, and catches the rule's removal from any
+one of the three.
+
+### The MRF
+
+**Domain-lock's Mastodon leg is not enforced.** Measured on the published image:
+
+- `ForceLocalForUsersPolicy` is compiled in: `Code.ensure_loaded?` is true.
+- It is not running. The active policy list, and nodeinfo's `mrf_policies`, are
+  upstream's defaults only: ObjectAge, Tag, Hashtag, InlineQuote, NormalizeMarkup and
+  DirectMessageDisabled.
+
+Listing it under `:mrf policies` would still enforce nothing:
+
+- The module reads `[:mrf_force_local, :forced_actors]` as a `MapSet`.
+- The commented-out block in `akkoma-config` sets
+  `Pleroma.Web.ActivityPub.MRF.ForceLocalForUsersPolicy, forced_actors:`, a different
+  key.
+- `domainlock-sync-job.yaml` writes with `pleroma_ctl config set ...`. That is not a
+  `pleroma_ctl` task in 3.20.1: it raises `FunctionClauseError` in
+  `Mix.Tasks.Pleroma.Config.run/1` and exits non-zero.
+
+So the set the module reads is always empty, and `force_local?/1` is false for every
+actor. Default-on Akkoma federates normally. Domain-lock for Mastodon users must not
+be advertised until all of the following are done and tested against this image:
+
+- the key and the write path are made to agree;
+- the module is validated;
+- the Job is wired in.
+
+### Jetson and arm64
+
+**No Akkoma-specific Jetson gate is needed.**
+
+`build-jetson-stage4.sh` runs the shared `gate_optional_services`, so a Jetson cluster
+image bakes Akkoma only when it is selected, the same as rpi5 and x86. Its default now
+includes Akkoma again, like the others.
+
+The published index has a linux/arm64 manifest. It was built under QEMU by the release
+and has not been booted anywhere: the release boot-tests amd64 only, and pull requests
+boot-test their own native arm64 build, not the published bytes. The first arm64 mesh
+that syncs this is the first boot of that image. Verify it with
+`smoke-test.sh ghcr.io/hugmesh/hugmesh-akkoma@sha256:<digest> 3.20.1` on an arm64
+host.

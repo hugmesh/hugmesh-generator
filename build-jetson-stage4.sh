@@ -166,8 +166,7 @@ source "${SCRIPT_DIR}/scripts/_node-storage-bake-lib.sh"
 # the ONE definition build-rpi5-stage4.sh and build-x86-host-stage4.sh source too.
 # Until 2026-11-12 this builder baked the WHOLE specs/cluster tree ungated, so a
 # Jetson cluster image applied every optional service's Application whatever was
-# selected (tests/scripts/test-selected-services-only.sh A4), including akkoma,
-# whose image is not yet published.
+# selected (tests/scripts/test-selected-services-only.sh A4).
 # shellcheck source=scripts/_optional-services-lib.sh
 source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
 
@@ -248,13 +247,13 @@ ORG="hugmesh"
 ENV="test"
 # OPTIONAL services baked into a cluster role's GitOps tree. The same selection
 # model and built-in default as build-rpi5-stage4.sh: the user-level set, the
-# DEFAULT-ON pair (tuwunel phpbb; akkoma is DEFAULT-OFF until its image is
-# published, images/akkoma/README.md), `all` for the whole user-level set, and
+# DEFAULT-ON set (akkoma tuwunel phpbb; ghcr.io/hugmesh/hugmesh-akkoma is published
+# for linux/arm64 as well as amd64), `all` for the whole user-level set, and
 # EXCLUDE_SERVICES subtracting last. The edge-ai and omnibus roles fold `edge-ai`
 # in (the role's own service). brand.conf narrows; --optional-services overrides
 # both. Every unselected slug is pruned from the baked tree by gate_optional_services.
 USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
-OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-tuwunel phpbb}"
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
 EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"
 CONFIG_FILE=""
 DEFAULT_USER="jetson"
@@ -388,9 +387,9 @@ OPTIONS
                         phpbb games owncast tube character-studio character-forge
                         (plus edge-ai, tor, ... as on the other builders), or
                         "all". Unlisted slugs are pruned from the baked GitOps tree
-                        by gate_optional_services. Built-in DEFAULT is "tuwunel
-                        phpbb"; --role edge-ai and --role omnibus add edge-ai.
-                        akkoma is DEFAULT-OFF (image not yet published).
+                        by gate_optional_services. Built-in DEFAULT is "akkoma
+                        tuwunel phpbb"; --role edge-ai and --role omnibus add
+                        edge-ai.
                         (env/brand.conf: OPTIONAL_SERVICES)
     --all-services      The whole user-level set (= --optional-services all).
     --exclude-services "<slugs>"
@@ -1203,6 +1202,13 @@ rebrand_sysroot() {
     _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
     local f
     while IFS= read -r -d '' f; do
+        # The Akkoma image ref ghcr.io/hugmesh/hugmesh-akkoma must NOT rebrand either:
+        # every brand pulls the one HugMesh-published, signed image (there is no
+        # <org>/<brand>-akkoma), and on a branded device ArgoCD reads the akkoma
+        # manifests from the brand's own generator repo, which carries this ref
+        # verbatim. Hidden behind @@SDSYSAKKOMAIMG@@ first, restored last
+        # (images/akkoma/README.md, "Branded meshes"; tests/scripts/
+        # test-akkoma-image-pin.sh drives this function in all three builders).
         # FROZEN protocol identity must NOT rebrand (scripts/tooling/tokens.json
         # frozen_protocol_constants; tests/scripts/test-rebrand-frozen-label-keys.sh
         # drives this exact function over every builder):
@@ -1282,12 +1288,14 @@ rebrand_sysroot() {
             -e "s|\([ {(,=\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|hugmesh\\\\\.net/|@@SDSYSKEYESC@@/|g" \
             -e "s|platform\.hugmesh\.net|@@SDSYSAPIGRP@@|g" \
+            -e "s|ghcr\.io/hugmesh/hugmesh-akkoma|@@SDSYSAKKOMAIMG@@|g" \
             -e "s|HugMesh Systems|${_btitle}|g" \
             -e "s|hugmesh\.net|${_domain}|g" \
             -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
             -e "s|hugmesh-|${_brand}-|g" \
             -e "s|hugmesh|${_org}|g" \
             -e "s|@@SDSYSAPIGRP@@|platform.hugmesh.net|g" \
+            -e "s|@@SDSYSAKKOMAIMG@@|ghcr.io/hugmesh/hugmesh-akkoma|g" \
             -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
             -e "s|@@SDSYSVAULTBASE@@|${_brand}|g" \

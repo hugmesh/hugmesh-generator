@@ -121,7 +121,7 @@ spec:
         # pleroma_ctl + the same config the akkoma pod serves are present. Same
         # digest as akkoma.yaml (tests/scripts/test-akkoma-image-pin.sh).
         - name: sync
-          image: ghcr.io/hugmesh/hugmesh-akkoma@sha256:0000000000000000000000000000000000000000000000000000000000000000   # PLACEHOLDER digest: hugmesh-akkoma is not published yet (images/akkoma/README.md, "Pinning")
+          image: ghcr.io/hugmesh/hugmesh-akkoma:0.4.0-beta.1@sha256:ad4d894e603cac04df6381d7036c587668bd582c37548aace28d89d6392f9bbf
           command: ["python3", "/script/sync.py"]
           env:
             - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }

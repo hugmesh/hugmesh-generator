@@ -467,7 +467,7 @@ def test_saved_tor_mesh_builds_tor_into_x86_and_rpi5_node_images(wiz, monkeypatc
     assert "--with-tor" in x86_argv
     assert "tor" in _optional_services(rpi_argv)
     # ADDITIVE: the rpi5 node keeps the builder's default services next to tor
-    assert {"tuwunel", "phpbb"} <= set(_optional_services(rpi_argv))
+    assert {"akkoma", "tuwunel", "phpbb"} <= set(_optional_services(rpi_argv))
     assert "net-vpn/tor" in x86_atoms
     assert "net-vpn/tor" in rpi_atoms
 

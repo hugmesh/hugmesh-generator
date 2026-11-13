@@ -64,8 +64,9 @@ The platform has two tiers:
 `all` expands to the eight user-level slugs only. Every infra slug is named on its own.
 
 The optional services are **add/remove-by-command on any generated USB image**,
-**identically on Pi5 (arm64) and x86 (amd64)** — the gate operates on the
-arch-agnostic `specs/cluster` GitOps tree that both stage4 builders bake. The
+**identically on Pi5 and Jetson (arm64) and x86 (amd64)** — the gate operates on the
+arch-agnostic `specs/cluster` GitOps tree that all three cluster stage4 builders bake
+(Jetson since 2026-11-12). The
 federation architecture **works with any or all optional services omitted**: a
 minimal install is just the architecture tier, and the host shell / federation
 manifest / home cards / gateway / admin console **degrade gracefully** (greyed
@@ -96,7 +97,7 @@ registry is that missing list). Each service entry carries:
 | `deliveryManifestPath` / `deliveryApp` | (node slugs) a SECOND, dark manifest tree + its MANUAL-sync Application that delivers runtime bytes to the node — `egress-vpn` uses it for the secret-projector (`manifests/egress-vpn` + `apps/13e-egress-vpn.yaml`); pruned with the slug like `manifestPath` |
 | `secretContract` | (node slugs) the file that OWNS the cross-lane delivery contract. When present, the three fields below are **copies** of it and lose every argument to it |
 | `secretNamespace` / `secretLabel` / `secretKey` / `nodeDeliveryLabel` | (node slugs) the cross-lane delivery contract the control-plane/ESO half must satisfy, and the node label that arms the projector — see `docs/EGRESS-VPN.md`. For `egress-vpn` these are COPIES of `specs/cluster/egress-vpn-secret-contract.env` (the contract spans two repos that never build together) and are asserted against it by `tests/egress-vpn/test-secret-contract.sh`; that gate's copy census also fails on any NEW carrier of those values that nothing asserts. `secretKey` shipped as `config` here — unread, unasserted, and wrong — until that census existed. Note the value must stay quoted: `@` cannot start a plain YAML scalar |
-| `default` | `tuwunel`/`phpbb` → `on`; `akkoma` → `off` until its image (`ghcr.io/hugmesh/hugmesh-akkoma`) is published (`images/akkoma/README.md`, "Pinning"); **`games`/`owncast`/`tube`/`character-studio`/`character-forge` → `off` (opt-in; owncast/tube are GPU-gated x86; character-studio is an admin-gated frontend remote; character-forge is an admin-gated multi-app slug — BFF db + BFF api + UI remote)** |
+| `default` | `akkoma`/`tuwunel`/`phpbb` → `on`; **`games`/`owncast`/`tube`/`character-studio`/`character-forge` → `off` (opt-in; owncast/tube are GPU-gated x86; character-studio is an admin-gated frontend remote; character-forge is an admin-gated multi-app slug — BFF db + BFF api + UI remote)** |
 
 There is also a `gamesDomain` block (the `GAMES_DOMAIN` knob + the
 parameterized files) — see §5.
@@ -166,7 +167,7 @@ rows from the Studio's `HUGMESH_FEDERATION_ENABLE` / `_DISABLE` pair.
 > Job does not mean "only selected services start".
 
 Gate: `tests/federation/test-federation-modules-selection.sh` (sources the real
-renderer as **both** stage4 builders resolve it (one shared library, no per-builder copy); asserts post-conditions on the rendered
+renderer as the stage4 builders resolve it (one shared library, no per-builder copy); asserts post-conditions on the rendered
 `gate.sql`, never the renderer's exit code; behavioural legs against a live
 federation-db/capabilities endpoint skip **loudly** when no stack is up).
 
@@ -176,18 +177,10 @@ federation-db/capabilities endpoint skip **loudly** when no stack is up).
 
 | Tier | Slugs | When baked |
 |---|---|---|
-| **DEFAULT-ON** (the built-in default when no selection is given) | `tuwunel` (Matrix), `phpbb` | always, unless `EXCLUDE_SERVICES` removes them |
-| **DEFAULT-OFF** (must be specifically added) | `akkoma`, `games`, `owncast`, `tube`, `character-studio`, `character-forge` — and any future user-level service | only when explicitly selected |
-| **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug — rpi5 **and** x86 builders |
+| **DEFAULT-ON** (the built-in default when no selection is given) | `akkoma`, `tuwunel` (Matrix), `phpbb` | always, unless `EXCLUDE_SERVICES` removes them |
+| **DEFAULT-OFF** (must be specifically added) | `games`, `owncast`, `tube`, `character-studio`, `character-forge` — and any future user-level service | only when explicitly selected |
+| **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug — rpi5, x86 **and** Jetson builders |
 
-> ⚠ **`akkoma` is DEFAULT-OFF since 2026-11-11: its image is not yet published.** Upstream
-> publishes no container image, so HugMesh builds its own (`ghcr.io/hugmesh/hugmesh-akkoma`,
-> `images/akkoma/README.md`); until the first release run
-> publishes it, every Akkoma ref in `specs/cluster` carries a placeholder digest and a pod
-> would sit in ImagePullBackOff. Selecting `akkoma` explicitly still bakes it.
-> `tests/scripts/test-akkoma-image-pin.sh` refuses `akkoma` back in any default while the
-> digest is the placeholder.
->
 > ⚠ **`games` is DEFAULT-OFF** (it was default-on before). Add it with `--enable-games` /
 > `ENABLE_GAMES=true`, by naming `games` in `OPTIONAL_SERVICES`, or through the full set.
 > `owncast` and `tube` are GPU-gated x86 services, also off by default.
@@ -198,10 +191,10 @@ federation-db/capabilities endpoint skip **loudly** when no stack is up).
 > with `--with-character-forge`, by naming it in `OPTIONAL_SERVICES`, or through the full
 > set. See [XR-CHAT.md](XR-CHAT.md).
 
-Two inputs, in precedence order **built-in default (`tuwunel phpbb`;
-akkoma/games/owncast/tube OFF) < `brand.conf` < `--optional-services` CLI flag**:
+Two inputs, in precedence order **built-in default (`akkoma tuwunel phpbb`;
+games/owncast/tube OFF) < `brand.conf` < `--optional-services` CLI flag**:
 
-- **`brand.conf`** knob (sourced by both builders):
+- **`brand.conf`** knob (sourced by all three cluster builders):
   ```sh
   OPTIONAL_SERVICES="akkoma games"      # forum-less + Matrix-less appliance, WITH games
   ENABLE_GAMES=true                     # or keep the default list and just add games
@@ -246,8 +239,9 @@ EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the res
 > see [EDGE-AI.md](EDGE-AI.md#4c-voice-synthesis--tts-api-for-the-mesh-edge-ai-tts).
 
 `gate_optional_services()` lives in one shared library,
-`scripts/_optional-services-lib.sh`, sourced by both `build-x86-host-stage4.sh` and
-`build-rpi5-stage4.sh` (each builder used to carry its own copy; the copies had
+`scripts/_optional-services-lib.sh`, sourced by `build-x86-host-stage4.sh`,
+`build-rpi5-stage4.sh` and, since 2026-11-12, `build-jetson-stage4.sh`, which used to
+bake the tree ungated (each builder used to carry its own copy; the copies had
 drifted). It prunes, **for each unselected slug**:
 
 - its owned `apps/*.yaml` (e.g. `30-akkoma.yaml`; phpbb also drops

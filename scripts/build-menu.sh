@@ -116,8 +116,8 @@ OPT_CHARACTER_STUDIO="no"     # yes => --with-character-studio: VN character-stu
 OPT_CHARACTER_FORGE="no"      # yes => --with-character-forge: 3D character maker (BFF db+api + remote at /character-forge)
 # ── OPTIONAL services catalog (cluster roles; specs/cluster/optional-services.yaml) ─
 # Comma list of user-level slugs {akkoma,tuwunel,phpbb,games,owncast,tube,
-# character-studio,character-forge}. Empty = builder default (tuwunel phpbb;
-# akkoma is off until its image is published); the literal 'none' = EXPLICITLY none (=> --optional-services ""). The
+# character-studio,character-forge}. Empty = builder default (akkoma tuwunel
+# phpbb); the literal 'none' = EXPLICITLY none (=> --optional-services ""). The
 # checklist supersedes the lone character-studio/character-forge toggles above —
 # they are kept in sync both ways.
 OPT_SERVICES=""
@@ -1705,7 +1705,7 @@ services_screen() {
     # legacy lone character-studio toggle migrated in as a pre-checked box.
     local cur
     if [ -z "${OPT_SERVICES}" ]; then
-        cur="tuwunel,phpbb"
+        cur="akkoma,tuwunel,phpbb"
         [ "${OPT_CHARACTER_STUDIO}" = yes ] && cur="${cur},character-studio"
         [ "${OPT_CHARACTER_FORGE}" = yes ] && cur="${cur},character-forge"
     elif [ "${OPT_SERVICES}" = none ]; then
@@ -1730,7 +1730,7 @@ services_screen() {
     done
     local sel
     sel="$(ui_checklist "Optional services" \
-        "OPTIONAL user-level services baked onto CLUSTER images (defaults: tuwunel+phpbb ON; akkoma (image not yet published)/games/owncast/tube/character-studio/character-forge OFF). Unchecked slugs are pruned from the baked GitOps tree:" \
+        "OPTIONAL user-level services baked onto CLUSTER images (defaults: akkoma+tuwunel+phpbb ON; games/owncast/tube/character-studio/character-forge OFF). Unchecked slugs are pruned from the baked GitOps tree:" \
         "${rows[@]}")" || return 0
     # space-separated tags -> the persisted comma list ('' selection = EXPLICIT none)
     set -- ${sel}
@@ -1945,7 +1945,7 @@ options_screen() {
             orangepi5fleet "Orange Pi 5 in fleet  ${orangepi5_fleet_l}   (adds Orange Pi 5 to full fleet; ORANGEPI5=1; EXPERIMENTAL)" \
             pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only; SCA needs NVD_API_KEY_FILE — nvd.nist.gov/developers/request-an-api-key)" \
             edge-ai  "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (backend-gpu/omnibus; edge-ai role always on)" \
-            services "Optional services ... ${OPT_SERVICES:-<default: tuwunel,phpbb>}" \
+            services "Optional services ... ${OPT_SERVICES:-<default: akkoma,tuwunel,phpbb>}" \
             managed  "Managed backing svcs  ${OPT_MANAGED_SERVICES:-<all self-hosted>}   (point a datastore at a hosted cloud endpoint; default self-hosted)" \
             tor      "Tor v3 onion ........ $([ "${OPT_TOR_ONION}" = yes ] && echo on || echo off)   (node service; exposes fe-gateway as .onion; default off)" \
             sunshine "Thin-desktop host ... $([ "${OPT_SUNSHINE}" = yes ] && echo on || echo off)   (Sunshine on tailnet CLIENT desktops; Quest/Moonlight opens it; default off)" \
