@@ -59,8 +59,11 @@ The token carries an onion as written, and the tray passes it to `tailscale up
 --login-server=` unchanged. Joining through it needs two things the token cannot supply:
 the joining computer's tailscale needs a route into Tor (the Studio's own mesh node does
 not set one up), and headscale must be published on that onion. The local Docker
-mesh's own `.onion` (`TOR=1`) serves its web front door, not headscale, which is only
-reachable as `hs.<domain>`. The window, the text interface and the command line say
+mesh's own `.onion` (`TOR=1`) is not such a door: its `:80` is the web front door, and
+its `:443` does pass `hs.<onion>.onion` to headscale, but the stack's certificate names
+only the domain (its CA is name-constrained to it), so tailscale refuses the TLS
+handshake. Headscale there is reachable as `hs.<domain>`. The Studio therefore does not
+offer that onion as a fill-in. The window, the text interface and the command line say
 so beside an onion login server. A Studio from before onion login servers were accepted
 refuses such a token when it verifies it.
 

@@ -397,7 +397,8 @@ ONION_EXAMPLE = "http://jhbnhua6kdvln3elglvmwjddbhqeobiunswe4xzu5xij2dlb2fwx6fad
 ONION_NOTE = ("An onion login server is reached over Tor: the joining computer's "
               "tailscale needs a route into Tor (the Studio's own mesh node does not set "
               "one up), and headscale must be published on that onion. The local Docker "
-              "mesh's own .onion serves its web front door, not headscale.")
+              "mesh's own .onion is not such a door: on :80 it is the web front door, and "
+              "on :443 its certificate does not name the onion, so tailscale refuses it.")
 
 _DNS_LABEL_RE = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 _LOGIN_RE = re.compile(r"(https?)://([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?/?")
