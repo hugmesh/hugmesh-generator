@@ -1,0 +1,3 @@
+$ uname -o
+Solaris
+rc=0

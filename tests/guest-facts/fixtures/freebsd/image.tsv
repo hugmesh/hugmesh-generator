@@ -1,0 +1,6 @@
+kind	path	bytes	sha256
+action	vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b		
+release	15.1		
+image	freebsd/v2.2.9/freebsd-15.1-OVMF_VARS.fd	4194304	bb9f8df61474d25e71fa00722318cd387396ca1736605e1248821cc0de3d3af8
+image	freebsd/v2.2.9/freebsd-15.1.qcow2	3389980672	f4c807c99d871c3edd5a30b4d64486967c4cfdb409c3c199a1ea3f799ed58c2f
+anyvm.py	anyvm.py	632034	36b6f1e6ce978f22c1614725ad22b33b0df3476ee5496f993ac7b0960e561c79

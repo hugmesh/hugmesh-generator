@@ -1,0 +1,171 @@
+
+HugMesh Image Studio
+
+HugMesh is a self-hosted mesh: a small cluster of nodes (Raspberry Pi and x86) that serves chat, social, storage and single-sign-on for your people, plus branded desktop clients that join it. This studio assembles every piece — from a local trial mesh in Docker to production node images you flash onto real hardware.
+New here? Read the getting-started guide: https://github.com/hugmesh/hugmesh-generator#quick-start
+
+  1. Start building
+     Open the menu of choices — build a mesh node, run a local Docker mesh, build a desktop image, enroll MDM devices, publish to a cloud, or run the end-to-end test suite.
+  2. Review prior sessions
+     Previous builds and saved configurations: restart or redo a session, open its artifacts, read its logs — or load/save a config file.
+
+(Enter = Start building — the default)
+[Local AI: no worker running | type local-ai]
+welcome> 
+What do you want to build?
+
+Pick one. Three of these build an image; the rest are side-flows (no image build).
+
+   1. Local Docker mesh
+      Run a mesh on THIS machine in Docker — no separate server hardware. Configure it and launch the dockerized node right here.
+   2. Create nodes for local cloud
+      Turn the local Docker mesh you already run HERE into real device images: an abbreviated mesh wizard that reuses its domain and accounts and offers ONLY the laptop and node image types. The local k8s (DevOps) stack must stop first — the next screen asks you to confirm that.
+   3. Mesh node
+      Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, edge-AI — that run a mesh on dedicated hardware.
+   4. Run e2e tests
+      Run the end-to-end suite against a mesh that is ALREADY RUNNING — the Docker compose stack, the local DevOps (kind) cluster, or a QEMU-emulated device. Browse the suite as a tree, check the features to run, and read exactly why a run is blocked when it is. Starts no mesh. This is also the door to the emulated-device test lanes.
+   5. Mesh emulation
+      Emulate the mesh you are readying for deployment: persistent devices, console, save-back. Boot every image of a prior build session and keep the guests up — per-device status, ssh logins, the QEMU console, disk saves, USB provisioning keys and the mesh's web front door.
+   6. Cloud deploy
+      Publish an already-built, cloud-packaged x86 image to a cloud provider (AWS / Azure / OpenShift / any qcow2 host) — no image build. Plans are rendered offline; apply is confirmed by the driver.
+   7. MDM phone
+      Flash a USB Pixel with VERIFIED GrapheneOS and enroll it in the mesh — no image build. Runs the same driver right here.
+   8. MDM Quest headset
+      Enroll a USB Meta Quest 3/3S as an MDM-managed mesh device (Headwind + tailnet + XR-chat URL) — no image build, no flash. Same driver, quest device class.
+   9. Mesh desktop client
+      Build a branded desktop that JOINS an existing mesh (tailnet + SSO). Load your admin-provided key-zip or configuration link.
+ *10. Standalone Gentoo desktop
+      A personal hardened LUKS/SELinux desktop — or a plain UNAFFILIATED Gentoo desktop with zero HugMesh branding/tooling. No mesh, no SSO.
+
+(Enter = Standalone Gentoo desktop — the default, by id; * marks the loaded config's mode)
+[Local AI: no worker running | type local-ai]
+mode (Enter=Standalone Gentoo desktop)> 
+Target machine & image type
+
+Target device:
+   x86-64 desktop PC / mini-PC (UEFI) — any x86-64 (Intel/AMD) — covers NUC / Beelink / Minisforum / ODROID-H4 class mini-PCs
+   builds as: --platform x86 (no --board axis)
+   about: the generic UEFI x86 target: standalone desktops, cloud clients, and every x86 cluster-node role
+
+(d = browse every device: architecture, then family, then device)
+
+Pick the image type.
+   1. Standalone thin — hardened LXDE desktop, no mesh/SSO
+ * 2. Standalone thick — hardened full desktop, no mesh/SSO
+   3. Unaffiliated desktop — plain Gentoo, no HugMesh (zero branding/tooling baked)
+   4. Chromebook desktop — coreboot/UEFI laptop image (ADR-16), standalone (no mesh/SSO)
+
+(Enter keeps 'standalone-thick')
+[Local AI: no worker running | type local-ai]
+role> 
+Hardware
+
+this step is not yet ported to the TUI — configure it in the GUI (python -m hugmesh_studio) if you need it; Enter keeps the step's defaults and continues.
+[Local AI: no worker running | type local-ai]
+hardware (Enter=continue)> 
+Branding
+
+Branding assets (logo/wallpaper/plymouth) are not yet ported to the TUI — configure them in the GUI if you need them.
+
+  The web sign-in look (themes, colours, header/footer) is chosen per domain: section 2 (Look) of each domain's Brand settings on the Domain services step; the mesh's own look is its own domain's.
+
+(Enter continues)
+[Local AI: no worker running | type local-ai]
+branding> 
+Network
+
+Only the anubis row and, on a mesh, the PKI LAN address of this step are ported to the TUI — configure the rest of it (domain, tailnet, egress, the other services) in the GUI (python -m hugmesh_studio); Enter keeps their defaults and continues.
+
+#  service  choice
+-  -------  ----------------------------------------------
+1  anubis   Default (this image bakes no cluster services)
+
+Anti-scraper proof-of-work gate in front of the public web routes. Force on installs it on any build; Default leaves it to the build (a prod build turns it on by itself, a test build leaves it off); Force off keeps it out of a prod build.
+
+This row cannot be changed here: this image bakes no cluster services.
+commands: 1=cycle · default · on · off · Enter=continue
+[Local AI: no worker running | type local-ai]
+network> 
+System identity
+
+Hostname baked into the image:
+
+#  image                 hostname  if blank
+-  --------------------  --------  ------------------
+1  standalone-thick.x86  (blank)   hugmesh-standalone
+
+N NAME sets row N's hostname; N - blanks it (the role-derived name in the last column).
+Timezone and the default account are not yet ported to the TUI — set them in the GUI if you need them. Enter continues.
+[Local AI: no worker running | type local-ai]
+system> 
+Home
+
+this step is not yet ported to the TUI — configure it in the GUI (python -m hugmesh_studio) if you need it; Enter keeps the step's defaults and continues.
+[Local AI: no worker running | type local-ai]
+home (Enter=continue)> 
+Desktop
+
+Environment, login, window managers, video drivers, extra accounts, apps (native or Flatpak) and Python for this build.
+
+  Login account: root — not an administrator (Home step).
+  Desktop environment: KDE Plasma (most capable; X11 session)
+  Login: LightDM greeter, local account (SSO sign-in off on this image)
+  Default session: plasmax11
+  VIDEO_CARDS: amdgpu radeonsi radeon intel iris nouveau
+  Login manager: LightDM with the GTK greeter, on every desktop image. It is the only greeter the SSO sign-in (PAM device flow) is built for, and every desktop must offer BOTH a local account login and SSO sign-in (standalone, tailnet and mesh). SDDM, GDM and greetd are not offered: swapping the greeter needs that PAM stack ported first.
+  Environments here: plasma (The standalone-thick role IS the most-capable (Plasma) payload; pick another role to change it.)
+  Sessions: openbox (on), i3, picom, sway, wayfire, labwc
+  Apps: firefox(native/flatpak), thunderbird(native/flatpak), element(native/flatpak), libreoffice(native/flatpak), keepassxc(native/flatpak), gedit(native/flatpak), vscodium(native/flatpak), gimp(native/flatpak), inkscape(native/flatpak), krita(native/flatpak), blender(native/flatpak), vlc(native/flatpak), mpv(native/flatpak), audacity(native/flatpak), obs-studio(native/flatpak)
+  Not here (and why):
+    Desktop environment: The standalone-thick role IS the most-capable (Plasma) payload; pick another role to change it.
+    AI assistant for portage walls: The AI assistant's portage card is in the Studio window's Local AI dock only (it needs the check's result beside the chat). Here, apply portage's own suggestion instead: run the emerge --pretend check, then apply what portage names.
+
+commands:
+  env lxde|xfce|plasma                 the desktop environment (x86; the role may pin it)
+  steam default|native|flatpak|none    Steam delivery (x86)
+  s +i3 -picom ...                     add/remove window managers and compositors (x86)
+  default NAME|-                       the greeter's default session
+  gpu PRESET                           the GPU driver preset (x86: all-free, nvidia, amd-free, ...)
+  cards LIST|-                         choose VIDEO_CARDS yourself (x86), '-' = the GPU driver's list
+  login NAME [admin] [pass=FILE]       the login account (not an administrator unless 'admin')
+  user add NAME [admin] pass=FILE      an extra local account (password: FILE's first line)
+  user rm NAME                         remove an extra account
+  app ID native|flatpak|off            a catalog app and how it is delivered
+  app add ATOM | REMOTE:APP.ID         another app (native atom or Flatpak)
+  remote NAME=URL | remote rm NAME     an extra Flatpak remote
+  py +python3_13 -python3_14           extra Python targets
+  py single TARGET|-                   PYTHON_SINGLE_TARGET
+  use LINE | use rm LINE               a package.use line
+  kw LINE | kw rm LINE                 a package.accept_keywords line
+  p                                    check with emerge --pretend (x86; runs the builder, minutes)
+  a / u                                apply portage's own suggested changes / undo that apply
+  row N                                mesh: edit desktop row N
+  Enter                                keep these and continue
+[Local AI: no worker running | type local-ai]
+desktop> 
+Build
+
+Configured:
+  mode      standalone
+  role      standalone-thick (x86)
+  themes    shipped defaults
+
+The TUI does not run builds yet — save this configuration and build it in the GUI (python -m hugmesh_studio) or headlessly (python -m hugmesh_studio --print-commands).
+
+commands: s PATH=save the config · q=finish
+[Local AI: no worker running | type local-ai]
+build> 
+Build
+
+Configured:
+  mode      standalone
+  role      standalone-thick (x86)
+  themes    shipped defaults
+
+The TUI does not run builds yet — save this configuration and build it in the GUI (python -m hugmesh_studio) or headlessly (python -m hugmesh_studio --print-commands).
+
+commands: s PATH=save the config · q=finish
+
+saved to <out>/standalone.json
+[Local AI: no worker running | type local-ai]
+build> 

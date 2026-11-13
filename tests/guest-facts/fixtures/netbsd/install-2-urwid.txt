@@ -1,0 +1,19 @@
+$ as_root sh -c pkgin -y install py312-urwid
+calculating dependencies...done.
+
+3 packages to install:
+  py312-typing-extensions-4.16.0 py312-urwid-4.1.3 py312-wcwidth-0.8.3
+
+0 to remove, 0 to refresh, 0 to upgrade, 3 to install
+931K to download, 11M of additional disk space will be used
+
+[1/3] downloading py312-typing-extensions-4.16.0.tgz done.
+[2/3] downloading py312-urwid-4.1.3.tgz done.
+[3/3] downloading py312-wcwidth-0.8.3.tgz done.
+[1/3] installing py312-typing-extensions-4.16.0...
+[2/3] installing py312-wcwidth-0.8.3...
+[3/3] installing py312-urwid-4.1.3...
+pkg_install warnings: 0, errors: 0
+reading local summary...
+processing local summary...
+rc=0

@@ -1,0 +1,6 @@
+$ pkg search -q urwid
+py312-urwid-3.0.3
+py312-urwid-readline-0.15.1
+py312-urwidgets-0.2.1_1
+py312-urwidtrees-1.0.3_1
+rc=0

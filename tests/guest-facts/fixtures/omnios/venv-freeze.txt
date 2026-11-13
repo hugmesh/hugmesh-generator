@@ -1,0 +1,22 @@
+$ /tmp/guest-facts.693/venv/bin/python -m pip freeze
+attrs @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/attrs-26.1.0/attrs-26.1.0
+cffi @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/cffi-2.1.1/cffi-2.1.1
+cryptography @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/cryptography-50.0.2/cryptography-50.0.2
+iniconfig==2.3.1
+jsonrpclib-pelix @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/jsonrpclib-1.2.0/jsonrpclib-1.2.0
+jsonschema @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/jsonschema-4.26.0/jsonschema-4.26.0
+jsonschema-specifications @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/jsonschema-specifications-2025.9.1/jsonschema_specifications-2025.9.1
+packaging==26.3
+pluggy==1.7.0
+pycparser @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/pycparser-3.0/pycparser-3.0
+pycurl @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/pycurl-7.48.0/pycurl-7.48.0
+Pygments==2.21.0
+pytest==9.2.0
+python-rapidjson==1.25
+PyYAML==6.0.3
+referencing @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/referencing-0.37.0/referencing-0.37.0
+rpds-py @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/rpds-py-2026.6.3/rpds_py-2026.6.3
+setuptools @ file:///data/omnios-build/omniosorg/r151060/_build/python3.13/setuptools-84.0.0/setuptools-84.0.0
+urwid==5.1.3
+wcwidth==0.9.4
+rc=0

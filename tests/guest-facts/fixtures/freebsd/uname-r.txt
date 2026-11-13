@@ -1,0 +1,3 @@
+$ uname -r
+15.1-RELEASE-p6
+rc=0

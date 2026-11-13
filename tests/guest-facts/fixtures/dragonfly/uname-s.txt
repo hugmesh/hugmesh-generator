@@ -1,0 +1,3 @@
+$ uname -s
+DragonFly
+rc=0

@@ -569,3 +569,25 @@ def test_manifest_v2_carries_the_github_org_exactly_as_the_v1_shim(monkeypatch, 
     written = json.loads(open(drv.write_manifest_v2()).read())
     assert written["domains"] == v1["domains"]
     assert written["cluster_domain_github_org"] == "exampleorg"
+
+
+# ── the per-domain sign-in methods (#1107) on the v2 envelope ─────────────────────────
+def test_manifest_v2_carries_the_signin_methods_exactly_as_the_v1_shim(monkeypatch, tmp_path):
+    """``domains[].signin_methods`` and ``cluster_domain_signin_methods`` reach the v2
+    envelope as the v1 shim writes them; with the default (password only) neither key
+    appears, so every earlier manifest keeps its bytes."""
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    wl = _worklist(tmp_path)
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    plain = drv.manifest_v2()
+    assert "cluster_domain_signin_methods" not in plain
+    assert all("signin_methods" not in row for row in plain["domains"])
+    wl.base.cluster_domain_signin_methods = ["password", "google"]
+    wl.base.domains[1].signin_methods = ["discord"]
+    m = drv.manifest_v2()
+    assert m["cluster_domain_signin_methods"] == ["password", "google"]
+    assert [row.get("signin_methods") for row in m["domains"]] == [None, ["discord"]]
+    v1 = wl.base.mesh_manifest()
+    assert m["domains"] == v1["domains"]
+    assert m["cluster_domain_signin_methods"] == v1["cluster_domain_signin_methods"]

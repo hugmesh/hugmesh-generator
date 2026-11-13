@@ -1,0 +1,3 @@
+$ uname -m
+amd64
+rc=0

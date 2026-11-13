@@ -1,0 +1,181 @@
+$ sysctl hw
+hw.machine: x86_64
+hw.model: Intel Core Processor (Broadwell, no TSX, IBRS)
+hw.ncpu: 4
+hw.byteorder: 1234
+hw.physmem: 6406144000
+hw.usermem: 5595459584
+hw.pagesize: 4096
+hw.machine_arch: x86_64
+hw.platform: pc64
+hw.cbb.debug: 0
+hw.cbb.start_32_io: 4096
+hw.cbb.start_16_io: 256
+hw.cbb.start_memory: 2281701376
+hw.pcic.intr_mask: 57016
+hw.cardbus.cis_debug: 0
+hw.cardbus.debug: 0
+hw.ata.ata_wc: 1
+hw.ata.atapi_dma: 1
+hw.ata.ata_dma: 1
+hw.amr.force_sg32: 0
+hw.ath.bstuck: 4
+hw.ath.txbuf_mgmt: 32
+hw.ath.txbuf: 512
+hw.ath.rxbuf: 512
+hw.ath.anical: 100
+hw.ath.resetcal: 1200
+hw.ath.shortcal: 100
+hw.ath.longcal: 30
+hw.bwn.wme: 1
+hw.bwn.usedma: 1
+hw.bwn.hwpctl: 0
+hw.bwn.bluetooth: 1
+hw.bwn.bfp: 0
+hw.ig_hal.debug: 0
+hw.firewire.hold_count: 3
+hw.firewire.try_bmr: 1
+hw.firewire.fwmem.speed: 2
+hw.firewire.fwmem.eui64_lo: 0
+hw.firewire.fwmem.eui64_hi: 0
+hw.firewire.fwe.rx_queue_len: 128
+hw.firewire.fwe.tx_speed: 2
+hw.firewire.fwe.stream_ch: 1
+hw.firewire.sbp.tags: 0
+hw.firewire.sbp.scan_delay: 500
+hw.firewire.sbp.login_delay: 1000
+hw.firewire.sbp.exclusive_login: 1
+hw.firewire.sbp.max_speed: -1
+hw.firewire.sbp.auto_login: 1
+hw.fxp_rnr: 0
+hw.mfi.cmd_timeout: 30
+hw.mfi.detect_jbod_change: 1
+hw.mfi.max_cmds: 128
+hw.mfi.event_class: 0
+hw.mfi.event_locale: 65535
+hw.mmc.debug: 0
+hw.sdhci.debug: 0
+hw.wi.debug: 0
+hw.wi.txerate: 0
+hw.xe.debug: 1
+hw.sensors.dev_idmax: 4
+hw.bus.devctl_disable: 0
+hw.cpu_topology_phys_ids: 1
+hw.cpu_topology_core_ids: 4
+hw.cpu_topology_ht_ids: 1
+hw.pccard.cis_debug: 0
+hw.pccard.debug: 0
+hw.dc_quick: 1
+hw.pci.usb_early_takeover: 1
+hw.pci.honor_msi_blacklist: 1
+hw.pci.enable_msix: 1
+hw.pci.enable_msi: 1
+hw.pci.do_power_resume: 1
+hw.pci.do_power_nodriver: 0
+hw.pci.enable_io_modes: 1
+hw.pci.default_vgapci_unit: 0
+hw.pci.host_mem_start: 2147483648
+hw.usb.debug: 0
+hw.usb.usb_lang_mask: 255
+hw.usb.usb_lang_id: 9
+hw.usb.template: 0
+hw.usb.disable_port_power: 0
+hw.usb.disable_enumeration: 0
+hw.usb.power_timeout: 30
+hw.usb.full_ddesc: 0
+hw.usb.no_cs_fail: 0
+hw.usb.no_shutdown_wait: 0
+hw.usb.no_suspend_wait: 0
+hw.usb.no_boot_wait: 0
+hw.usb.xhci.use_polling: 0
+hw.usb.xhci.streams: 0
+hw.availpages: 1827302
+hw.cpu_mwait_spin: 0
+hw.cpu_mwait_halt: 0
+hw.via_feature_xcrypt: 0
+hw.via_feature_rng: 0
+hw.clflush_enable: -1
+hw.instruction_sse: 1
+hw.clockrate: 2445
+hw.x2apic_enable: 1
+hw.busdma.bounce_alignment: 1
+hw.busdma.max_bpages: 1024
+hw.busdma.total_bpages: 32
+hw.busdma.zone0.total_bpages: 32
+hw.busdma.zone0.free_bpages: 32
+hw.busdma.zone0.reserved_bpages: 0
+hw.busdma.zone0.active_bpages: 0
+hw.busdma.zone0.total_bounced: 3361
+hw.busdma.zone0.total_deferred: 0
+hw.busdma.zone0.reserve_failed: 0
+hw.busdma.zone0.lowaddr: 0xffffffff
+hw.busdma.zone0.alignment: 4096
+hw.psm.elantech_support: 0
+hw.psm.trackpoint_support: 0
+hw.psm.synaptics_support: 0
+hw.psm.tap_timeout: 125000
+hw.psm.tap_threshold: 25
+hw.psm.tap_enabled: -1
+hw.tsc_frequency: 2445428882
+hw.tsc_mpsync: 0
+hw.tsc_invariant: 1
+hw.tsc_present: 1
+hw.i8254.timestamp: 0000000000000000 0000001587c9f3
+hw.i8254.freq: 1193182
+hw.cpu_topology.tree: 
+\-PACKAGE MEMBERS: cpus(0-3) 
+  \-CHIP ID 0: cpus(0-3) 
+    |-CORE ID 0: cpus(0) 
+    |-CORE ID 1: cpus(1) 
+    |-CORE ID 2: cpus(2) 
+    \-CORE ID 3: cpus(3) 
+
+hw.cpu_topology.level_description: 0 - core; 1 - socket; 2 - anything
+hw.cpu_topology.members: cpus(0)
+hw.cpu_topology.cpu0.physical_id: 0
+hw.cpu_topology.cpu0.physical_siblings: cpus(0)
+hw.cpu_topology.cpu0.core_id: 0
+hw.cpu_topology.cpu0.core_siblings: cpus(0)
+hw.cpu_topology.cpu1.physical_id: 0
+hw.cpu_topology.cpu1.physical_siblings: cpus(0)
+hw.cpu_topology.cpu1.core_id: 1
+hw.cpu_topology.cpu1.core_siblings: cpus()
+hw.cpu_topology.cpu2.physical_id: 0
+hw.cpu_topology.cpu2.physical_siblings: cpus(0)
+hw.cpu_topology.cpu2.core_id: 2
+hw.cpu_topology.cpu2.core_siblings: cpus()
+hw.cpu_topology.cpu3.physical_id: 0
+hw.cpu_topology.cpu3.physical_siblings: cpus(0)
+hw.cpu_topology.cpu3.core_id: 3
+hw.cpu_topology.cpu3.core_siblings: cpus()
+hw.acpi.supported_sleep_state: S3 S4 S5
+hw.acpi.power_button_state: S5
+hw.acpi.sleep_button_state: S3
+hw.acpi.lid_switch_state: NONE
+hw.acpi.standby_state: S1
+hw.acpi.suspend_state: S3
+hw.acpi.sleep_delay: 1
+hw.acpi.s4bios: 0
+hw.acpi.verbose: 0
+hw.acpi.disable_on_reboot: 0
+hw.acpi.handle_reboot: 0
+hw.acpi.reset_video: 1
+hw.acpi.cpu.cx_lowest: C1
+hw.acpi.cpu.cx_lowest_use: C1
+hw.acpi.cpu0.cx_supported: C1/0
+hw.acpi.cpu0.cx_lowest: C1
+hw.acpi.cpu0.cx_lowest_use: C1
+hw.acpi.cpu0.cx_usage: 0.00% last 1000000us
+hw.acpi.cpu1.cx_supported: C1/0
+hw.acpi.cpu1.cx_lowest: C1
+hw.acpi.cpu1.cx_lowest_use: C1
+hw.acpi.cpu1.cx_usage: 0.00% last 1000000us
+hw.acpi.cpu2.cx_supported: C1/0
+hw.acpi.cpu2.cx_lowest: C1
+hw.acpi.cpu2.cx_lowest_use: C1
+hw.acpi.cpu2.cx_usage: 0.00% last 1000000us
+hw.acpi.cpu3.cx_supported: C1/0
+hw.acpi.cpu3.cx_lowest: C1
+hw.acpi.cpu3.cx_lowest_use: C1
+hw.acpi.cpu3.cx_usage: 0.00% last 1000000us
+rc=0

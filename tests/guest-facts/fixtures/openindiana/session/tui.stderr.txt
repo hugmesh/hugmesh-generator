@@ -1,0 +1,1 @@
+urwid/TTY not available — using the plain text prompts (set NO_TUI= to re-enable; install dev-python/urwid for the rich UI — it is ~arch on Gentoo, see studio/README.md).

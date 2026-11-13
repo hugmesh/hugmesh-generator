@@ -1,0 +1,2 @@
+$ sh -c for d in /usr/local/bin /usr/pkg/bin /usr/bin /opt/ooce/bin /opt/local/bin; do ls -1 "$d"/python* 2>/dev/null; done; command -v python3 && python3 -V
+rc=127

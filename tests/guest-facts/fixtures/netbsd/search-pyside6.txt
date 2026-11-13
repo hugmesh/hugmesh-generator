@@ -1,0 +1,3 @@
+$ pkgin search pyside6
+No results found for pyside6
+rc=1

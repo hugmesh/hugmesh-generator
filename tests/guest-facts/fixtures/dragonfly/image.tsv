@@ -1,0 +1,5 @@
+kind	path	bytes	sha256
+action	vmactions/dragonflybsd-vm@4ab776fa9f914fbea72f13715b451e77e7ef5c41		
+release	6.4.2		
+image	dragonflybsd/v2.0.7/dragonflybsd-6.4.2.qcow2	1516765184	cf30f23ffec5bacdf1458d8027cef7493fa7994f105165166165c621e8a18c74
+anyvm.py	anyvm.py	618865	40a16e846bc07030759936d792343e770acdeb14d4c9991af7409648661a650d

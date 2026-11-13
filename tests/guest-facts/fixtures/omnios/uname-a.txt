@@ -1,0 +1,3 @@
+$ uname -a
+SunOS omnios 5.11 omnios-r151060-513bc64de92 i86pc i386 i86pc
+rc=0

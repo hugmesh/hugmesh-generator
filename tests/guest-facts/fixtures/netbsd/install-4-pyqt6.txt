@@ -1,0 +1,679 @@
+$ as_root sh -c pkgin -y install py312-qt6
+calculating dependencies...done.
+/usr/X11R7/lib/libxcb.so.2, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libxcb-shape.so.0, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libxcb-dri3.so.0, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libvdpau.so.1, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libXv.so.2, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by ffmpeg8-8.1.2nb3 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtremoteobjects-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by pulseaudio-17.0nb7 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by pulseaudio-17.0nb7 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by pulseaudio-17.0nb7 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by pulseaudio-17.0nb7 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by pulseaudio-17.0nb7 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by xcb-util-cursor-0.1.6 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by xcb-util-cursor-0.1.6 is not present in this system.
+/usr/X11R7/lib/libxcb-render.so.0, needed by xcb-util-cursor-0.1.6 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by xcb-util-cursor-0.1.6 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by xcb-util-cursor-0.1.6 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by libva-2.24.1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri3.so.0, needed by libva-2.24.1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by libva-2.24.1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by libva-2.24.1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by libva-2.24.1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by libva-2.24.1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by libva-2.24.1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by libva-2.24.1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by libva-2.24.1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by dbus-1.16.2nb3 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by dbus-1.16.2nb3 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by dbus-1.16.2nb3 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by dbus-1.16.2nb3 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtimageformats-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtpositioning-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtsvg-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by xcb-util-image-0.4.1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by xcb-util-image-0.4.1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by xcb-util-image-0.4.1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by xcb-util-image-0.4.1 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtshadertools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by xcb-util-keysyms-0.4.1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by xcb-util-keysyms-0.4.1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by xcb-util-keysyms-0.4.1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by libXft-2.3.9 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by libXft-2.3.9 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by libXft-2.3.9 is not present in this system.
+/usr/X11R7/lib/libXrender.so.2, needed by libXft-2.3.9 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by libXft-2.3.9 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by libXft-2.3.9 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by libXft-2.3.9 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by libXft-2.3.9 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by libass-0.17.5nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by libass-0.17.5nb1 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtdeclarative-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by libbluray-1.5.0 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by libbluray-1.5.0 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtspeech-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qttools-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtcharts-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by xcb-util-renderutil-0.3.10 is not present in this system.
+/usr/X11R7/lib/libxcb-render.so.0, needed by xcb-util-renderutil-0.3.10 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by xcb-util-renderutil-0.3.10 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by xcb-util-renderutil-0.3.10 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtlocation-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtquicktimeline-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtquick3d-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by xcb-util-wm-0.4.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by xcb-util-wm-0.4.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by xcb-util-wm-0.4.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by xcb-util-0.4.1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by xcb-util-0.4.1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by xcb-util-0.4.1 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb-xkb.so.1, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb-xinput.so.0, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb-shape.so.0, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb-render.so.0, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb-randr.so.1, needed by qt6-qtbasxmlcatmgr-2.2nb1: copying /usr/pkg/share/examples/xmlcatmgr/catalog.etc.sgml to /usr/pkg/etc/sgml/catalog
+xmlcatmgr-2.2nb1: copying /usr/pkg/share/examples/xmlcatmgr/catalog.etc.xml to /usr/pkg/etc/xml/catalog
+xmlcatmgr-2.2nb1: copying /usr/pkg/share/examples/xmlcatmgr/catalog.share.sgml to /usr/pkg/share/sgml/catalog
+xmlcatmgr-2.2nb1: copying /usr/pkg/share/examples/xmlcatmgr/catalog.share.xml to /usr/pkg/share/xml/catalog
+p11-kit-0.26.5: copying /usr/pkg/share/examples/p11-kit/pkcs11.conf.example to /usr/pkg/etc/pkcs11.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/10-hinting-full.conf to /usr/pkg/etc/fontconfig/conf.d/10-hinting-full.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/10-scale-bitmap-fonts.conf to /usr/pkg/etc/fontconfig/conf.d/10-scale-bitmap-fonts.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/10-sub-pixel-none.conf to /usr/pkg/etc/fontconfig/conf.d/10-sub-pixel-none.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/10-yes-antialias.conf to /usr/pkg/etc/fontconfig/conf.d/10-yes-antialias.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/11-lcdfilter-default.conf to /usr/pkg/etc/fontconfig/conf.d/11-lcdfilter-default.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/11-lcdfilter-none.conf to /usr/pkg/etc/fontconfig/conf.d/11-lcdfilter-none.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/20-unhint-small-vera.conf to /usr/pkg/etc/fontconfig/conf.d/20-unhint-small-vera.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/30-metric-aliases.conf to /usr/pkg/etc/fontconfig/conf.d/30-metric-aliases.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/30-pkgsrc-aliases.conf to /usr/pkg/etc/fontconfig/conf.d/30-pkgsrc-aliases.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/40-nonlatin.conf to /usr/pkg/etc/fontconfig/conf.d/40-nonlatin.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/45-generic.conf to /usr/pkg/etc/fontconfig/conf.d/45-generic.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/45-latin.conf to /usr/pkg/etc/fontconfig/conf.d/45-latin.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/48-spacing.conf to /usr/pkg/etc/fontconfig/conf.d/48-spacing.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/49-sansserif.conf to /usr/pkg/etc/fontconfig/conf.d/49-sansserif.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/50-user.conf to /usr/pkg/etc/fontconfig/conf.d/50-user.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/51-local.conf to /usr/pkg/etc/fontconfig/conf.d/51-local.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/60-generic.conf to /usr/pkg/etc/fontconfig/conf.d/60-generic.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/60-latin.conf to /usr/pkg/etc/fontconfig/conf.d/60-latin.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/65-fonts-persian.conf to /usr/pkg/etc/fontconfig/conf.d/65-fonts-persian.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/65-nonlatin.conf to /usr/pkg/etc/fontconfig/conf.d/65-nonlatin.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/69-unifont.conf to /usr/pkg/etc/fontconfig/conf.d/69-unifont.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/70-no-bitmap-webfonts.conf to /usr/pkg/etc/fontconfig/conf.d/70-no-bitmap-webfonts.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/80-delicious.conf to /usr/pkg/etc/fontconfig/conf.d/80-delicious.conf
+fontconfig-2.18.3: copying /usr/pkg/share/fontconfig/conf.avail/90-synthetic.conf to /usr/pkg/etc/fontconfig/conf.d/90-synthetic.conf
+fontconfig-2.18.3: copying /usr/pkg/share/examples/fontconfig/conf.d/README to /usr/pkg/etc/fontconfig/conf.d/README
+fontconfig-2.18.3: copying /usr/pkg/share/examples/fontconfig/fonts.conf to /usr/pkg/etc/fontconfig/fonts.conf
+libpaper-2.2.8: copying /usr/pkg/share/examples/libpaper/papersize to /usr/pkg/etc/papersize
+libpaper-2.2.8: copying /usr/pkg/share/examples/libpaper/paperspecs to /usr/pkg/etc/paperspecs
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/clients/emacs.conf to /usr/pkg/etc/speech-dispatcher/clients/emacs.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/baratinoo.conf to /usr/pkg/etc/speech-dispatcher/modules/baratinoo.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/cicero.conf to /usr/pkg/etc/speech-dispatcher/modules/cicero.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/dtk-generic.conf to /usr/pkg/etc/speech-dispatcher/modules/dtk-generic.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/epos-generic.conf to /usr/pkg/etc/speech-dispatcher/modules/epos-generic.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/espeak-mbrola-generic.conf to /usr/pkg/etc/speech-dispatcher/modules/espeak-mbrola-generic.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/espeak-ng-mbrola-generic.conf to /usr/pkg/etc/speech-dispatcher/modules/espeak-ng-mbrola-generic.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/espeak-ng-mbrola.conf to /usr/pkg/etc/speech-dispatcher/modules/espeak-ng-mbrola.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/espeak-ng.conf to /usr/pkg/etc/speech-dispatcher/modules/espeak-ng.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/espeak.conf to /usr/pkg/etc/speech-dispatcher/modules/espeak.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/festival.conf to /usr/pkg/etc/speech-dispatcher/modules/festival.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/flite.conf to /usr/pkg/etc/speech-dispatcher/modules/flite.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/kali.conf to /usr/pkg/etc/speech-dispatcher/modules/kali.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/llia_phon-generic.conf to /usr/pkg/etc/speech-dispatcher/modules/llia_phon-generic.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/mary-generic.conf to /usr/pkg/etc/speech-dispatcher/modules/mary-generic.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/mimic3-generic.conf to /usr/pkg/etc/speech-dispatcher/modules/mimic3-generic.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/swift-generic.conf to /usr/pkg/etc/speech-dispatcher/modules/swift-generic.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/modules/voxin.conf to /usr/pkg/etc/speech-dispatcher/modules/voxin.conf
+speech-dispatcher-0.12.1nb4: copying /usr/pkg/share/examples/speech-dispatcher/speechd.conf to /usr/pkg/etc/speech-dispatcher/speechd.conf
+e-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libSM.so.7, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libICE.so.7, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtbase-6.11.2nb2 is not present in this system.
+/usr/X11R7/lib/libxshmfence.so.1, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-xfixes.so.0, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-sync.so.1, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-shm.so.0, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-glx.so.0, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri3.so.0, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb-dri2.so.0, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libvdpau.so.1, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libglapi.so.1, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libgbm.so.1, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfreetype.so.19, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libfontconfig.so.2, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libdrm.so.3, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXxf86vm.so.2, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXrender.so.2, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXrandr.so.3, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXfixes.so.4, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXext.so.7, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXdamage.so.2, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11.so.7, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libX11-xcb.so.1, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libGL.so.3, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libEGL.so.0, needed by qt6-qtmultimedia-6.11.2nb1 is not present in this system.
+/usr/X11R7/lib/libxcb.so.2, needed by libxkbcommon-1.13.2 is not present in this system.
+/usr/X11R7/lib/libxcb-xkb.so.1, needed by libxkbcommon-1.13.2 is not present in this system.
+/usr/X11R7/lib/libXdmcp.so.7, needed by libxkbcommon-1.13.2 is not present in this system.
+/usr/X11R7/lib/libXau.so.7, needed by libxkbcommon-1.13.2 is not present in this system.
+
+94 packages to install:
+  assimp-6.0.5 avahi-0.8nb9 brotli-1.2.1 check-0.15.2 clang-21.1.8nb1
+  curl-8.23.0 dav1d-1.5.4 dotconf-1.4.1 double-conversion-3.4.0 enca-1.22
+  espeak-ng-1.52.0nb4 flac-1.5.0nb1 fontconfig-2.18.3 freetype2-2.14.3
+  fribidi-1.0.16 gdbm-1.26 giflib-6.1.3 gmp-6.3.0 gnutls-3.8.13nb1
+  gobject-introspection-1.86.0nb4 graphite2-1.3.15
+  gsettings-desktop-schemas-50.1nb1 gsl-2.8 gst-plugins1-bad-1.28.6nb1
+  gst-plugins1-base-1.28.6nb1 gstreamer1-1.28.6nb1 gumbo-parser-0.14.0
+  harfbuzz-14.4.0nb1 icu-78.3 iso-codes-4.16.0 jasper-4.2.9 jbigkit-2.1nb1
+  lame-4.0nb1 lcms2-2.19.1 lerc-4.3.0 libao-1.2.2 libao-sun-1.2.2nb2
+  libaom-3.15.0 libb2-0.98.1nb1 libcups-2.4.19nb2 libdaemon-0.14nb2
+  libduktape-2.7.0 libepoll-shim-0.0.20240608 libidn2-2.3.7
+  libjpeg-turbo-3.2.0nb2 libltdl-2.4.7 libogg-1.3.6 libopus-1.6.1nb1
+  libpaper-2.2.8 libproxy-0.5.12nb4 libsndfile-1.2.2nb3 libtasn1-4.21.0
+  libtheora-1.2.0nb1 libunistring-1.4.2 libvorbis-1.3.7 libvpx-1.16.0nb1
+  libwebp-1.6.0nb3 libxml2-2.15.4 litehtml-0.9nb2 llvm-21.1.8nb1 mbrola-3.3
+  md4c-0.5.3 mng-2.0.3nb1 mozilla-rootcerts-1.1.20260908nb2 mpdecimal-4.0.1
+  mpg123-1.33.7 nettle-4.0 nghttp2-1.70.0 p11-kit-0.26.5 pcaudiolib-1.3nb4
+  perl-5.44.0nb2 png-1.6.59 py312-dbus-1.3.2nb3 py312-qt6-6.11.0nb3
+  py312-sip-qt6-13.11.1 py313-setuptools-84.0.0 python313-3.13.15
+  qt6-qtconnectivity-6.11.2nb1 qt6-qtlanguageserver-6.11.2nb1
+  qt6-qtsensors-6.11.2nb1 qt6-qtserialport-6.11.2nb1 qt6-qtwebchannel-6.11.2nb1
+  qt6-qtwebsockets-6.11.2nb1 sonic-0.0.0.225 speech-dispatcher-0.12.1nb4
+  speex-1.2.1 speexdsp-1.2.1 tdb-1.4.15 tiff-4.7.2 wayland-1.25.0 x264-20250608
+  x265-4.2nb1 xmlcatmgr-2.2nb1 xvidcore-1.3.7nb1
+
+0 to remove, 0 to refresh, 0 to upgrade, 94 to install
+270M to download, 1661M of additional disk space will be used
+the following packages have unmet requirements:   ffmpeg8-8.1.2nb3 qt6-qtremoteobjects-6.11.2nb1 pulseaudio-17.0nb7
+  xcb-util-cursor-0.1.6 libva-2.24.1 dbus-1.16.2nb3
+  qt6-qtimageformats-6.11.2nb1 qt6-qtpositioning-6.11.2nb1 qt6-qtsvg-6.11.2nb1
+  xcb-util-image-0.4.1 qt6-qtshadertools-6.11.2nb1 xcb-util-keysyms-0.4.1
+  libXft-2.3.9 libass-0.17.5nb1 qt6-qtdeclarative-6.11.2nb1 libbluray-1.5.0
+  qt6-qtspeech-6.11.2nb1 qt6-qttools-6.11.2nb1 qt6-qtcharts-6.11.2nb1
+  xcb-util-renderutil-0.3.10 qt6-qtlocation-6.11.2nb1
+  qt6-qtquicktimeline-6.11.2nb1 qt6-qtquick3d-6.11.2nb1 xcb-util-wm-0.4.2nb1
+  xcb-util-0.4.1 qt6-qtbase-6.11.2nb2 qt6-qtmultimedia-6.11.2nb1
+  libxkbcommon-1.13.2
+
+
+[1/94] downloading assimp-6.0.5.tgz done.
+[2/94] downloading avahi-0.8nb9.tgz done.
+[3/94] downloading brotli-1.2.1.tgz done.
+[4/94] downloading check-0.15.2.tgz done.
+[5/94] downloading clang-21.1.8nb1.tgz done.
+[6/94] downloading curl-8.23.0.tgz done.
+[7/94] downloading dav1d-1.5.4.tgz done.
+[8/94] downloading dotconf-1.4.1.tgz done.
+[9/94] downloading double-conversion-3.4.0.tgz done.
+[10/94] downloading enca-1.22.tgz done.
+[11/94] downloading espeak-ng-1.52.0nb4.tgz done.
+[12/94] downloading flac-1.5.0nb1.tgz done.
+[13/94] downloading fontconfig-2.18.3.tgz done.
+[14/94] downloading freetype2-2.14.3.tgz done.
+[15/94] downloading fribidi-1.0.16.tgz done.
+[16/94] downloading gdbm-1.26.tgz done.
+[17/94] downloading giflib-6.1.3.tgz done.
+[18/94] downloading gmp-6.3.0.tgz done.
+[19/94] downloading gnutls-3.8.13nb1.tgz done.
+[20/94] downloading gobject-introspection-1.86.0nb4.tgz done.
+[21/94] downloading graphite2-1.3.15.tgz done.
+[22/94] downloading gsettings-desktop-schemas-50.1nb1.tgz done.
+[23/94] downloading gsl-2.8.tgz done.
+[24/94] downloading gst-plugins1-bad-1.28.6nb1.tgz done.
+[25/94] downloading gst-plugins1-base-1.28.6nb1.tgz done.
+[26/94] downloading gstreamer1-1.28.6nb1.tgz done.
+[27/94] downloading gumbo-parser-0.14.0.tgz done.
+[28/94] downloading harfbuzz-14.4.0nb1.tgz done.
+[29/94] downloading icu-78.3.tgz done.
+[30/94] downloading iso-codes-4.16.0.tgz done.
+[31/94] downloading jasper-4.2.9.tgz done.
+[32/94] downloading jbigkit-2.1nb1.tgz done.
+[33/94] downloading lame-4.0nb1.tgz done.
+[34/94] downloading lcms2-2.19.1.tgz done.
+[35/94] downloading lerc-4.3.0.tgz done.
+[36/94] downloading libao-1.2.2.tgz done.
+[37/94] downloading libao-sun-1.2.2nb2.tgz done.
+[38/94] downloading libaom-3.15.0.tgz done.
+[39/94] downloading libb2-0.98.1nb1.tgz done.
+[40/94] downloading libcups-2.4.19nb2.tgz done.
+[41/94] downloading libdaemon-0.14nb2.tgz done.
+[42/94] downloading libduktape-2.7.0.tgz done.
+[43/94] downloading libepoll-shim-0.0.20240608.tgz done.
+[44/94] downloading libidn2-2.3.7.tgz done.
+[45/94] downloading libjpeg-turbo-3.2.0nb2.tgz done.
+[46/94] downloading libltdl-2.4.7.tgz done.
+[47/94] downloading libogg-1.3.6.tgz done.
+[48/94] downloading libopus-1.6.1nb1.tgz done.
+[49/94] downloading libpaper-2.2.8.tgz done.
+[50/94] downloading libproxy-0.5.12nb4.tgz done.
+[51/94] downloading libsndfile-1.2.2nb3.tgz done.
+[52/94] downloading libtasn1-4.21.0.tgz done.
+[53/94] downloading libtheora-1.2.0nb1.tgz done.
+[54/94] downloading libunistring-1.4.2.tgz done.
+[55/94] downloading libvorbis-1.3.7.tgz done.
+[56/94] downloading libvpx-1.16.0nb1.tgz done.
+[57/94] downloading libwebp-1.6.0nb3.tgz done.
+[58/94] downloading libxml2-2.15.4.tgz done.
+[59/94] downloading litehtml-0.9nb2.tgz done.
+[60/94] downloading llvm-21.1.8nb1.tgz done.
+[61/94] downloading mbrola-3.3.tgz done.
+[62/94] downloading md4c-0.5.3.tgz done.
+[63/94] downloading mng-2.0.3nb1.tgz done.
+[64/94] downloading mozilla-rootcerts-1.1.20260908nb2.tgz done.
+[65/94] downloading mpdecimal-4.0.1.tgz done.
+[66/94] downloading mpg123-1.33.7.tgz done.
+[67/94] downloading nettle-4.0.tgz done.
+[68/94] downloading nghttp2-1.70.0.tgz done.
+[69/94] downloading p11-kit-0.26.5.tgz done.
+[70/94] downloading pcaudiolib-1.3nb4.tgz done.
+[71/94] downloading perl-5.44.0nb2.tgz done.
+[72/94] downloading png-1.6.59.tgz done.
+[73/94] downloading py312-dbus-1.3.2nb3.tgz done.
+[74/94] downloading py312-qt6-6.11.0nb3.tgz done.
+[75/94] downloading py312-sip-qt6-13.11.1.tgz done.
+[76/94] downloading py313-setuptools-84.0.0.tgz done.
+[77/94] downloading python313-3.13.15.tgz done.
+[78/94] downloading qt6-qtconnectivity-6.11.2nb1.tgz done.
+[79/94] downloading qt6-qtlanguageserver-6.11.2nb1.tgz done.
+[80/94] downloading qt6-qtsensors-6.11.2nb1.tgz done.
+[81/94] downloading qt6-qtserialport-6.11.2nb1.tgz done.
+[82/94] downloading qt6-qtwebchannel-6.11.2nb1.tgz done.
+[83/94] downloading qt6-qtwebsockets-6.11.2nb1.tgz done.
+[84/94] downloading sonic-0.0.0.225.tgz done.
+[85/94] downloading speech-dispatcher-0.12.1nb4.tgz done.
+[86/94] downloading speex-1.2.1.tgz done.
+[87/94] downloading speexdsp-1.2.1.tgz done.
+[88/94] downloading tdb-1.4.15.tgz done.
+[89/94] downloading tiff-4.7.2.tgz done.
+[90/94] downloading wayland-1.25.0.tgz done.
+[91/94] downloading x264-20250608.tgz done.
+[92/94] downloading x265-4.2nb1.tgz done.
+[93/94] downloading xmlcatmgr-2.2nb1.tgz done.
+[94/94] downloading xvidcore-1.3.7nb1.tgz done.
+[1/94] installing libunistring-1.4.2...
+[2/94] installing python313-3.13.15...
+[3/94] installing libxml2-2.15.4...
+[4/94] installing libtasn1-4.21.0...
+[5/94] installing gmp-6.3.0...
+[6/94] installing mozilla-rootcerts-1.1.20260908nb2...
+[7/94] installing libogg-1.3.6...
+[8/94] installing tiff-4.7.2...
+[9/94] installing libjpeg-turbo-3.2.0nb2...
+[10/94] installing sonic-0.0.0.225...
+[11/94] installing jbigkit-2.1nb1...
+[12/94] installing py313-setuptools-84.0.0...
+[13/94] installing lerc-4.3.0...
+[14/94] installing libao-1.2.2...
+[15/94] installing libopus-1.6.1nb1...
+[16/94] installing gsl-2.8...
+[17/94] installing mbrola-3.3...
+[18/94] installing libvorbis-1.3.7...
+[19/94] installing giflib-6.1.3...
+[20/94] installing flac-1.5.0nb1...
+[21/94] installing lame-4.0nb1...
+[22/94] installing nghttp2-1.70.0...
+[23/94] installing p11-kit-0.26.5...
+[24/94] installing nettle-4.0...
+[25/94] installing speex-1.2.1...
+[26/94] installing libdaemon-0.14nb2...
+[27/94] installing harfbuzz-14.4.0nb1...
+[28/94] installing fontconfig-2.18.3...
+[29/94] installing pcaudiolib-1.3nb4...
+[30/94] installing lcms2-2.19.1...
+[31/94] installing libidn2-2.3.7...
+[32/94] installing xmlcatmgr-2.2nb1...
+[33/94] installing freetype2-2.14.3...
+[34/94] installing enca-1.22...
+[35/94] installing mpg123-1.33.7...
+[36/94] installing png-1.6.59...
+[37/94] installing fribidi-1.0.16...
+[38/94] installing gdbm-1.26...
+[39/94] installing libwebp-1.6.0nb3...
+[40/94] installing libduktape-2.7.0...
+[41/94] installing speexdsp-1.2.1...
+[42/94] installing gsettings-desktop-schemas-50.1nb1...
+[43/94] installing libaom-3.15.0...
+[44/94] installing libtheora-1.2.0nb1...
+[45/94] installing gstreamer1-1.28.6nb1...
+[46/94] installing gnutls-3.8.13nb1...
+[47/94] installing mng-2.0.3nb1...
+[48/94] installing avahi-0.8nb9...
+[49/94] installing libepoll-shim-0.0.20240608...
+[50/94] installing gobject-introspection-1.86.0nb4...
+[51/94] installing check-0.15.2...
+[52/94] installing dotconf-1.4.1...
+[53/94] installing gumbo-parser-0.14.0...
+[54/94] installing gst-plugins1-base-1.28.6nb1...
+[55/94] installing espeak-ng-1.52.0nb4...
+[56/94] installing llvm-21.1.8nb1...
+[57/94] installing libvpx-1.16.0nb1...
+[58/94] installing tdb-1.4.15...
+[59/94] installing libsndfile-1.2.2nb3...
+[60/94] installing xvidcore-1.3.7nb1...
+[61/94] installing graphite2-1.3.15...
+[62/94] installing brotli-1.2.1...
+[63/94] installing mpdecimal-4.0.1...
+[64/94] installing perl-5.44.0nb2...
+[65/94] installing jasper-4.2.9...
+[66/94] installing libpaper-2.2.8...
+[67/94] installing x264-20250608...
+[68/94] installing x265-4.2nb1...
+[69/94] installing curl-8.23.0...
+[70/94] installing iso-codes-4.16.0...
+[71/94] installing libltdl-2.4.7...
+[72/94] installing libao-sun-1.2.2nb2...
+[73/94] installing dav1d-1.5.4...
+[74/94] installing libb2-0.98.1nb1...
+[75/94] installing clang-21.1.8nb1...
+[76/94] installing wayland-1.25.0...
+[77/94] installing gst-plugins1-bad-1.28.6nb1...
+[78/94] installing litehtml-0.9nb2...
+[79/94] installing md4c-0.5.3...
+[80/94] installing qt6-qtlanguageserver-6.11.2nb1...
+[81/94] installing double-conversion-3.4.0...
+[82/94] installing libcups-2.4.19nb2...
+[83/94] installing assimp-6.0.5...
+[84/94] installing qt6-qtserialport-6.11.2nb1...
+[85/94] installing libproxy-0.5.12nb4...
+[86/94] installing qt6-qtwebsockets-6.11.2nb1...
+[87/94] installing speech-dispatcher-0.12.1nb4...
+[88/94] installing icu-78.3...
+[89/94] installing py312-dbus-1.3.2nb3...
+[90/94] installing qt6-qtsensors-6.11.2nb1...
+[91/94] installing py312-sip-qt6-13.11.1...
+[92/94] installing qt6-qtwebchannel-6.11.2nb1...
+[93/94] installing qt6-qtconnectivity-6.11.2nb1...
+[94/94] installing py312-qt6-6.11.0nb3...
+pkg_install warnings: 0, errors: 21
+pkg_install error log can be found in /var/db/pkgin/pkg_install-err.log
+reading local summary...
+processing local summary...
+rc=1

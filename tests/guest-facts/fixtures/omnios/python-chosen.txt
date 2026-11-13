@@ -1,0 +1,4 @@
+$ sh -c echo '/usr/bin/python3.13'; /usr/bin/python3.13 -VV
+/usr/bin/python3.13
+Python 3.13.16 (main, Oct 22 2026, 13:30:44) [GCC 15.2.0]
+rc=0

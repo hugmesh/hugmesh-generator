@@ -1,0 +1,4 @@
+$ sh -c echo '/usr/local/bin/python3.11'; /usr/local/bin/python3.11 -VV
+/usr/local/bin/python3.11
+Python 3.11.12 (main, Feb 18 2026, 01:30:34) [GCC 8.3 [DragonFly] Release/2019-02-22]
+rc=0
