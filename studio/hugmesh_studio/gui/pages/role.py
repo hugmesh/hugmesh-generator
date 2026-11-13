@@ -522,12 +522,17 @@ class RolePage(QtWidgets.QWizardPage):
         cl.addWidget(self.desktop_help)
         # Thin-desktop stream host (Sunshine; §8b) — tri-state like the Network
         # page's service toggles (G34: on / force-off / leave builder default).
-        self.sunshine = QtWidgets.QCheckBox(
-            "Thin-desktop stream host (Sunshine) — stream this desktop to mesh "
-            "headsets over the tailnet only (default off)")
+        # A check box never wraps: the name only, the explanation in a wrapping note
+        # (the long one-line label set the page's minimum width and cut it on CI fonts).
+        self.sunshine = QtWidgets.QCheckBox("Thin-desktop stream host (Sunshine)")
         self.sunshine.setTristate(True)
         # Tooltip applied by _sync_client_gates, NOT here — see _SUNSHINE_TIP.
         cl.addWidget(self.sunshine)
+        self.sunshine_note = QtWidgets.QLabel(
+            "Streams this desktop to mesh headsets over the tailnet only (default off).")
+        self.sunshine_note.setWordWrap(True)
+        self.sunshine_note.setStyleSheet("color: gray;")
+        cl.addWidget(self.sunshine_note)
         # --capable (the KDE Plasma payload, composable onto any client role — G21) is
         # the Desktop step's "KDE Plasma" environment now.
         # --unaffiliated composes onto the other standalone roles (G22): an
@@ -975,7 +980,6 @@ class RolePage(QtWidgets.QWizardPage):
             defconfig_w.setText(c.uboot_defconfig)
             skip_w.setChecked(c.skip_uboot)
         self.kernel_flavor.setCurrentIndex(offered_index(self.kernel_flavor, c.kernel_flavor or ""))
-        self.capable.setChecked(c.capable)
         # Restore from cfg on the axis that MATTERS, and only that one. The isEnabled()
         # conjunct this replaces read the widget's paint state, which the tautology above
         # it had already forced to False in every mode — so a loaded unaffiliated=True was
@@ -1165,6 +1169,7 @@ class RolePage(QtWidgets.QWizardPage):
             hide=True)
         if sunshine_ok:
             self.sunshine.setToolTip(_SUNSHINE_TIP)
+        self.sunshine_note.setVisible(not self.sunshine.isHidden())
 
         # (2c) composable --unaffiliated: ONE axis decides the clear, and it is NOT the
         # hide axis. See the module-level block for the measurement that forced this
