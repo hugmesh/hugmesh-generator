@@ -76,6 +76,8 @@ class PretendResult:
     needs: list[tuple[str, str]] = field(default_factory=list)
     excerpt: list[str] = field(default_factory=list)
     reason: str = ""            # why status is error, in plain words
+    #: REQUIRED_USE walls portage printed: (cpv, constraint, the USE_EXPAND/flag state)
+    required_use: list[tuple[str, str]] = field(default_factory=list)
     run_id: str = ""
     log_path: str = ""
 
@@ -94,6 +96,72 @@ class PretendResult:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+# ── REQUIRED_USE walls ───────────────────────────────────────────────────────
+# Portage names no change for these (autounmask does not touch REQUIRED_USE), so the
+# builder's report says "error" and the Studio said only "failed without naming a
+# change" (2026-11-12, dev-util/pahole). The resolver output carries the wall:
+#
+#   !!! The ebuild selected to satisfy "dev-util/pahole" has unmet requirements.
+#   - dev-util/pahole-1.31::gentoo USE="..." PYTHON_SINGLE_TARGET="-python3_12 -python3_13 -python3_14"
+#     The following REQUIRED_USE flag constraints are unsatisfied:
+#       exactly-one-of ( python_single_target_python3_12 ... python_single_target_python3_14 )
+#
+# (_emerge/depgraph.py _show_unsatisfied_dep). parse() names it in plain words.
+_UNMET_PKG = re.compile(r"^- (?P<cpv>[a-z0-9][a-z0-9+._-]*/[A-Za-z0-9+_.-]+?)(?:::[A-Za-z0-9_-]+)?(?:\s|$)")
+_UNMET_HEAD = "The following REQUIRED_USE flag constraints are unsatisfied:"
+_GROUP = re.compile(r"^(?P<op>exactly-one-of|any-of|at-most-one-of) \( (?P<flags>[^()]+) \)$")
+_PST = "python_single_target_"
+_PT = "python_targets_"
+
+
+def _required_use_walls(excerpt: list[str]) -> list[tuple[str, str]]:
+    walls: list[tuple[str, str]] = []
+    cpv, in_block = "", False
+    for line in excerpt:
+        m = _UNMET_PKG.match(line)
+        if m:
+            cpv, in_block = m["cpv"], False
+            continue
+        if line.strip() == _UNMET_HEAD:
+            in_block = bool(cpv)
+            continue
+        if in_block:
+            if line.startswith("    ") and line.strip():
+                item = (cpv, " ".join(line.split()))
+                if item not in walls:
+                    walls.append(item)
+                continue
+            in_block = False
+    return walls
+
+
+def _pv(t: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", t))
+
+
+def _wall_words(cpv: str, constraint: str, seed_python: list[str]) -> str:
+    """One wall in plain words, with the change it implies when portage's own grammar
+    makes that unambiguous (a group of python targets the image does not enable)."""
+    out = f"{cpv} cannot be built: its REQUIRED_USE '{constraint}' is not met."
+    m = _GROUP.match(constraint)
+    if not m:
+        return out
+    flags = m["flags"].split()
+    for prefix, var, section in ((_PST, "PYTHON_SINGLE_TARGET", "single target"),
+                                 (_PT, "PYTHON_TARGETS", "targets")):
+        if flags and all(f.startswith(prefix) for f in flags) and m["op"] != "at-most-one-of":
+            offered = sorted((f[len(prefix):] for f in flags), key=_pv)
+            seeded = [t for t in offered if t in seed_python]
+            pick = (seeded or offered)[-1]
+            atom = re.sub(r"-[0-9][^/]*$", "", cpv) if re.search(r"-[0-9]", cpv) else cpv
+            return (out + f" It supports {var} {', '.join(offered)} only, and this image "
+                    f"enables none of them for it. Portage implies the package.use change "
+                    f"'{atom} {var}: {pick}'. The Studio overlay does not take per-package "
+                    f"Python targets: set the Desktop step's Python {section} to one of "
+                    f"{', '.join(offered)} instead.")
+    return out
 
 
 def _now() -> str:
@@ -143,6 +211,10 @@ def parse(lines, exit_code: int | None = None) -> PretendResult:
             res.reason = (f"The builder exited {exit_code}, which contradicts "
                           f"status={res.status}.")
             res.status = "error"
+    res.required_use = _required_use_walls(res.excerpt)
+    if res.status == "error" and res.required_use and not res.reason:
+        # the builder said error and named no change, but the resolver stated a wall
+        res.reason = " ".join(_wall_words(c, k, res.seed_python) for c, k in res.required_use)
     if res.status == "error" and not res.reason:
         res.reason = "The resolution failed without naming a USE or keyword change."
     return res
@@ -164,12 +236,20 @@ def supported(cfg) -> str:
 def pretend_config(cfg):
     """The config the check actually runs: the image's own, plus --pretend-only and its
     own build subdir; the extra accounts are left out (they change no package and their
-    passwords exist only at build time)."""
+    passwords exist only at build time).
+
+    EVERY plaintext secret is blanked (config.SECRET_FIELDS), not only the login password:
+    run() writes the argv into ``<out>/pretend/<key>/<run>.log``, and a secret on that argv
+    lands on disk in the clear (2026-11-12: the disk passphrase did, through --luks-pass).
+    None of them changes a package, so the resolution is the same without them."""
+    from .config import SECRET_FIELDS
     pcfg = copy.deepcopy(cfg)
     spec = ds.spec_of(pcfg)
     spec.extra_users = []
     ds.store(pcfg, spec)
-    pcfg.local_pass = ""
+    for name in SECRET_FIELDS:
+        if isinstance(getattr(pcfg, name, None), str):
+            setattr(pcfg, name, "")
     pcfg.build_subdir = f"pretend-{config_key(cfg)}"
     pcfg.resume = False
     flags = (getattr(pcfg, "extra_flags", "") or "").strip()
