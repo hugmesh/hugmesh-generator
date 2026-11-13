@@ -11,6 +11,9 @@
   python -m hugmesh_studio --scan-hardware [--json]
       # headless: the wizard HardwarePage's probe (CPU/GPU/Wi-Fi/Bluetooth +
       # recommended build settings) as a terminal table, or --json for automation
+  python -m hugmesh_studio --list-devices [--mode standalone|cloud|mesh] [--json]
+      # headless: the device catalog, arch -> family -> device, labelled exactly as the
+      # wizard's device browser and the text UI label it (refused rows with the reason)
   python -m hugmesh_studio --list-sessions [--json]
   python -m hugmesh_studio --show-session ID [--json]
   python -m hugmesh_studio --session-artifacts ID [--json]
@@ -414,9 +417,21 @@ def main(argv=None) -> int:
     ap.add_argument("--local-ai-prompt", metavar="TEXT", default=None,
                     help="headless: ask the local model one question (loopback Ollama only) and "
                          "print the answer; exits 1 with a plain sentence when Ollama is down.")
+    # ── the device catalog, from a terminal (Qt-free) ───────────────────────────
+    # The same rows, words and selection gate as the wizard's device browser and the
+    # text UI's arch -> family -> device browse (core/device_catalog.device_row).
+    ap.add_argument("--list-devices", action="store_true",
+                    help="headless: every device in the device catalog, arch -> family -> "
+                         "device, with its status, the builder axes it selects and the "
+                         "reason a refused row cannot be picked. Labelled for --mode "
+                         "(default standalone). --json for the stable row schema.")
+    ap.add_argument("--mode", choices=["standalone", "cloud", "mesh"], default="standalone",
+                    help="with --list-devices: which build path the rows are labelled for "
+                         "(a device with no image on that path is listed as refused).")
     ap.add_argument("--json", action="store_true",
                     help="with --scan-hardware/--list-sessions/--show-session/"
-                         "--session-artifacts/--local-ai-status: machine-readable JSON on stdout.")
+                         "--session-artifacts/--local-ai-status/--list-devices: "
+                         "machine-readable JSON on stdout.")
     # ── the Go-Live "Export to GitHub org" step, from a terminal (Qt-free) ──────
     # --org-export PLAN|APPLY with --domain/--org or --config, --rename-map, --out;
     # APPLY refuses without --apply. The engine is core/org_export.py.
@@ -635,6 +650,16 @@ def main(argv=None) -> int:
             # a FileNotFoundError/TypeError escape as a traceback + exit 1.
             print(f"error: {exc}", file=sys.stderr)
             return 2
+        return 0
+
+    if args.list_devices:
+        # Qt-free: reads core/device-catalog.json and never edits it.
+        from .core import device_catalog
+        if args.json:
+            import json
+            print(json.dumps(device_catalog.list_devices_json(args.mode), indent=2))
+        else:
+            print("\n".join(device_catalog.list_devices_lines(args.mode)))
         return 0
 
     if args.e2e_environments:
