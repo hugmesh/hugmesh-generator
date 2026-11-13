@@ -11,7 +11,7 @@ the spec's history exactly as the GUI's "Apply portage's changes" does.
 from __future__ import annotations
 
 import os
-import shlex
+from . import command_words
 
 from ..core import desktop_pretend as dp
 from ..core import desktop_spec as ds
@@ -157,7 +157,7 @@ class DesktopScreen:
             j.advance()
             return
         try:
-            tok = shlex.split(line)
+            tok = command_words.split(line)
         except ValueError as e:
             j.status = f"unreadable command: {e}"
             return

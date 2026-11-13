@@ -652,6 +652,12 @@ def measure_tree(path: str, *, enough: int = 0, seconds: float = TREE_MEASURE_SE
                         return TreeMeasure(total, cut_short=True, unreadable=unreadable)
                 try:
                     st = entry.stat(follow_symlinks=False)
+                    if not st.st_nlink and not stat.S_ISDIR(st.st_mode):
+                        # A Windows directory listing leaves st_nlink, st_ino and
+                        # st_dev at 0, so every name of a hard-linked file was counted
+                        # again and the measure said MORE than is there (a --resume
+                        # build then got space it does not have). lstat reads them.
+                        st = os.lstat(entry.path)
                 except OSError:
                     unreadable += 1
                     continue

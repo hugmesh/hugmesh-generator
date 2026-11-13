@@ -10,7 +10,7 @@ only, and the Build screen of the GUI asks for the CA again (keys are never save
 from __future__ import annotations
 
 import os
-import shlex
+from . import command_words
 
 from ..core import domain_ca_keys as dca
 from ..core.worklist_driver import node_key_profiles
@@ -87,7 +87,7 @@ class DomainCAKeysScreen:
             j.advance()
             return
         try:
-            tokens = shlex.split(line)
+            tokens = command_words.split(line)
         except ValueError as e:
             j.status = f"unreadable command: {e}"
             return

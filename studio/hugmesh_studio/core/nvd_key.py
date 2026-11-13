@@ -49,6 +49,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from .platform_info import is_terminal
 from .state_paths import state_dir
 
 __all__ = [
@@ -623,7 +624,7 @@ def _read_key_source(path: str, stdin=None, prompt=getpass.getpass) -> str:
     if path:
         with open(path, encoding="utf-8") as fh:
             return fh.read(4096)
-    if not stdin.isatty():
+    if not is_terminal(stdin):          # NUL is a "tty" on Windows (platform_info)
         raise NvdKeyError(MISSING, "refusing: no key source (use --key-file PATH, '-' "
                           "for stdin, or run in a terminal to be prompted)")
     return prompt("NVD API key (not echoed): ")

@@ -223,13 +223,28 @@ def _cmdline(pid: int) -> str:
         return ""
 
 
-def pid_alive(pid: int, marker: str = SESSION_MARKER) -> bool:
+def pid_alive(pid: int, marker: str = SESSION_MARKER, *, os_name: str | None = None,
+              alive_windows=None, cmdline_windows=None) -> bool:
     """Alive AND still the process that was recorded.
 
     ``os.kill(pid, 0)`` alone (the ``build_sessions._pid_alive`` shape) happily
-    confirms a REUSED pid; where /proc is readable the marker check closes that."""
+    confirms a REUSED pid; where /proc is readable the marker check closes that.
+
+    Never ``os.kill(pid, 0)`` on native Windows: signal 0 is CTRL_C_EVENT there, so it
+    sent Ctrl+C to the recorded pid's console group (found 2026-11-13 on Windows 11,
+    where it also called any live pid the view, reused or not). The process API is
+    asked instead, and the marker must be in the command line it reads: one that
+    cannot be read is not ours (a pid written in WSL's pid space names some unrelated
+    Windows process). ``os_name`` is ``os.name`` and the two probes are
+    core/pid_probe's, unless a test passes others."""
     if pid <= 0:
         return False
+    if (os.name if os_name is None else os_name) == "nt":
+        from . import pid_probe
+        if not (alive_windows or pid_probe.alive_windows)(pid):
+            return False
+        line = (cmdline_windows or pid_probe.cmdline_windows)(pid)
+        return line is not None and marker in line
     cmd = _cmdline(pid)
     if cmd:
         return marker in cmd

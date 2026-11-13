@@ -253,14 +253,11 @@ class LocalAIScreen:
             pass
         out += ["", odk.describe(odk.current_mode())]
         note = lai.windows_worker_note()
-        if note:
-            # the lines below are the bash script: PowerShell cannot run them (an
-            # unquoted path with spaces besides), so say what is true here instead.
-            # Line by line: the Mac note has its brew command on a line of its own.
-            out += ["", *note.splitlines(), ""]
-        else:
+        if not note:
             cmds = odk.commands_for(self.generator_dir)
             out += ["", "Run it yourself:  " + cmds["todo"], "                  " + cmds["chat"], ""]
+        else:
+            out += [""]
         if getattr(self, "warning", ""):
             # above the conversation: the transcript shows only its last 12 lines, and a
             # long answer would push a warning above the answer out of view
@@ -269,6 +266,13 @@ class LocalAIScreen:
             out += ["conversation:"] + [f"  {t}" for t in self.transcript[-12:]] + [""]
         if self.message:
             out += [self.message, ""]
+        if note:
+            # In place of the run-it-yourself lines, which are the bash script (PowerShell
+            # cannot run them, an unquoted path with spaces besides). BELOW the reply: the
+            # note is seven lines, and above it a 30-row terminal showed no reply at all,
+            # pull's download consent included (found 2026-11-13 on Windows 11). Line by
+            # line: the Mac note has its brew command on a line of its own.
+            out += [*note.splitlines(), ""]
         return out + _help_lines(bool(note), platform_info.blocker_kind(note))
 
     def where_page_only(self, j) -> actxt.Where:
