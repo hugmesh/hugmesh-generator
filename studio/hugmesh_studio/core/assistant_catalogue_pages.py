@@ -120,6 +120,12 @@ PAGES = {
  "managed_services": [
   "network"
  ],
+ "mesh_control_onion_mint": [
+  "fleet"
+ ],
+ "mesh_control_transport": [
+  "fleet"
+ ],
  "mode": [
   "build",
   "deploy",

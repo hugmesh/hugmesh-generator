@@ -84,6 +84,22 @@ The agent exports each `.onion` hostname — the only artefacts that leave the n
 (`specs/usr/lib/hugmesh/go-live-providers.sh`); an admin-bff status endpoint that reads
 them is tracked separately.
 
+**The one exception: the control onion** ([MESH-CONTROL-OVER-TOR.md](MESH-CONTROL-OVER-TOR.md),
+opt-in). The pki's dedicated control onion (`/var/lib/tor/hugmesh-control`,
+`HiddenServicePort 7443 -> 127.0.0.1:8080`, headscale's own listener) is minted at KEYS time
+on the build host, with the operator's explicit consent, because workers must know its
+address before their own first boot (operator decision 2026-11-11). Its key goes onto the
+pki stick only (`0600`); worker sticks carry the address; the build host's copy of the
+secret key is removed once a stick made in the same run holds an identical copy. It is a
+SECOND onion, never the fe-gateway one (the pki gateway refuses anonymous `/ts2021` and
+`/derp`), and it is never exported. Unlike the fe-gateway onion, it publishes headscale
+directly — its whole HTTP surface and its embedded DERP relay, which has no client
+verification — to anyone who knows the address
+([MESH-CONTROL-OVER-TOR.md](MESH-CONTROL-OVER-TOR.md#who-can-reach-the-control-onion)).
+On a node where the tor optional service was not selected, `mesh-control-only` keeps the
+fe-gateway and domain onions out of the torrc: a worker that runs Tor only as a client for
+the control plane publishes nothing.
+
 ## Routing
 
 Every onion publishes `HiddenServicePort 443` → an upstream, i.e. **HTTPS on the onion's

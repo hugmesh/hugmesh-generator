@@ -815,6 +815,11 @@ OPTIONS
         tailscale client are installed as upstream static aarch64
         binaries rather than emerged, so no overlay is required.
 
+    --mesh-control-transport lan|lan+onion|onion
+        How nodes reach the control plane on first boot. Default lan. A Tor
+        transport bakes tor + the node-local control relay (OPT-IN fallback
+        behind a stable control name; docs/MESH-CONTROL-OVER-TOR.md).
+        (env/brand.conf: MESH_CONTROL_TRANSPORT)
     --headscale-public-derp
         Also list Tailscale's public DERP map in the pki node's headscale.
         Default: OFF — the embedded relay only, so the mesh starts and relays
@@ -1252,6 +1257,7 @@ while [[ $# -gt 0 ]]; do
         --packages-drop)      PACKAGES_DROP="$2";      shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";  shift 2 ;;
         --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
+        --mesh-control-transport) MESH_CONTROL_TRANSPORT="$2"; shift 2 ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";  shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;        shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;   shift   ;;
@@ -1327,6 +1333,14 @@ case "${HEADSCALE_PUBLIC_DERP}" in
     true|1|yes|on)   HEADSCALE_PUBLIC_DERP=true ;;
     false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
     *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
+esac
+# --mesh-control-transport / MESH_CONTROL_TRANSPORT (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md):
+# lan (the default) changes nothing; a Tor transport needs tor + the relay on the image.
+MESH_CONTROL_TRANSPORT="${MESH_CONTROL_TRANSPORT:-lan}"
+case "${MESH_CONTROL_TRANSPORT}" in
+    lan) ;;
+    lan+onion|onion) info "mesh control transport ${MESH_CONTROL_TRANSPORT}: baking tor + the node-local control relay" ;;
+    *) err "MESH_CONTROL_TRANSPORT must be lan, lan+onion or onion (got '${MESH_CONTROL_TRANSPORT}')"; exit 1 ;;
 esac
 
 # Comma tolerance: accept "akkoma,tuwunel" (the CSV spelling GUIs/configs tend to
@@ -3102,6 +3116,11 @@ resolve_stage4_packages() {
         STAGE4_PACKAGES+=("${TOR_NODE_PACKAGES[@]}")
         _rsp_info "OPTIONAL_SERVICES: tor selected — added ${TOR_NODE_PACKAGES[*]} to the node packages (v3 onion daemon; keypair off-git, minted first-boot)"
     fi
+    # Mesh control over Tor (OPT-IN): the same net-vpn/tor as a control-plane client.
+    if [ "${MESH_CONTROL_TRANSPORT:-lan}" != lan ] && ! _tor_node_selected; then
+        STAGE4_PACKAGES+=("${TOR_NODE_PACKAGES[@]}")
+        _rsp_info "MESH_CONTROL_TRANSPORT ${MESH_CONTROL_TRANSPORT}: added ${TOR_NODE_PACKAGES[*]} (control-plane Tor client)"
+    fi
 
     # LUKS2 root (--encrypt-root): dracut generates the disk-boot initramfs that
     # unlocks it. cryptsetup/lvm2 are already unconditional in packages.list (used
@@ -4113,6 +4132,21 @@ if [ "${HEADSCALE_PUBLIC_DERP}" = true ]; then
     info "Baked HEADSCALE_PUBLIC_DERP=true -> /etc/hugmesh/headscale-public-derp (public Tailscale DERP map opted in)"
 else
     rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
+fi
+# Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md): the node-local control
+# relay + keeper and the transport default keys-provision falls back to. lan bakes none
+# of it. (In a Tor mode headscale runs without OIDC: keys-provision removes the block.)
+if [ "${MESH_CONTROL_TRANSPORT:-lan}" != lan ]; then
+    mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/etc/init.d"
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-mesh-control-relay" "${SYSROOT}/usr/sbin/hugmesh-mesh-control-relay"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-mesh-control-relay"
+    for _mc in hugmesh-mesh-control-relay hugmesh-mesh-control-keeper; do
+        cp "${SHARED_SPECS}/etc/init.d/${_mc}" "${SYSROOT}/etc/init.d/${_mc}"; chmod +x "${SYSROOT}/etc/init.d/${_mc}"
+    done
+    echo "${MESH_CONTROL_TRANSPORT}" > "${SYSROOT}/etc/hugmesh/mesh-control-transport"
+    info "Baked mesh control over Tor (${MESH_CONTROL_TRANSPORT}): relay + keeper; keys-provision links them from the KEYS stick"
+else
+    rm -f "${SYSROOT}/etc/hugmesh/mesh-control-transport"
 fi
 # Mesh secrets store (#224): the Vault connection facts keys-provision seeds ESO
 # from when the KEYS manifest has no .vault block. "" = byte no-op; desktop = warn.

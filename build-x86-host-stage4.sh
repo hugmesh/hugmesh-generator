@@ -818,6 +818,11 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --user-password PASS  Default: ${DEFAULT_USER_PASS}
       --root-password PASS  Default: ${ROOT_PASS}
       --headscale-version V Default: ${HEADSCALE_VERSION}
+      --mesh-control-transport lan|lan+onion|onion
+          How nodes reach the control plane on first boot. Default lan. A Tor
+          transport bakes tor + the node-local control relay (OPT-IN fallback
+          behind a stable control name; docs/MESH-CONTROL-OVER-TOR.md).
+          (env/brand.conf: MESH_CONTROL_TRANSPORT)
       --headscale-public-derp  Also list Tailscale's public DERP map in headscale.
                             Default OFF: the embedded relay only, offline-first
                             (docs/HEADSCALE-DERP.md). (env/brand.conf: HEADSCALE_PUBLIC_DERP=true)
@@ -1275,6 +1280,7 @@ while [[ $# -gt 0 ]]; do
         --root-password) ROOT_PASS="$2"; shift 2 ;;
         --headscale-version) HEADSCALE_VERSION="$2"; shift 2 ;;
         --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
+        --mesh-control-transport) MESH_CONTROL_TRANSPORT="$2"; shift 2 ;;
         --tailscale-version) TAILSCALE_VERSION="$2"; shift 2 ;;
         --seed-url) SEED_STAGE3_URL="$2"; shift 2 ;;
         --enable-wifi) ENABLE_WIFI=true; shift ;;
@@ -1469,6 +1475,14 @@ case "${HEADSCALE_PUBLIC_DERP}" in
     true|1|yes|on)   HEADSCALE_PUBLIC_DERP=true ;;
     false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
     *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
+esac
+# --mesh-control-transport / MESH_CONTROL_TRANSPORT (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md):
+# lan (the default) changes nothing; a Tor transport needs tor + the relay on the image.
+MESH_CONTROL_TRANSPORT="${MESH_CONTROL_TRANSPORT:-lan}"
+case "${MESH_CONTROL_TRANSPORT}" in
+    lan) ;;
+    lan+onion|onion) info "mesh control transport ${MESH_CONTROL_TRANSPORT}: baking tor + the node-local control relay" ;;
+    *) err "MESH_CONTROL_TRANSPORT must be lan, lan+onion or onion (got '${MESH_CONTROL_TRANSPORT}')"; exit 1 ;;
 esac
 
 # Comma tolerance: accept "akkoma,tuwunel" (the CSV spelling GUIs/configs tend to
@@ -5248,6 +5262,21 @@ if [ "${HEADSCALE_PUBLIC_DERP}" = true ]; then
 else
     rm -f "${SYSROOT}/etc/hugmesh/headscale-public-derp"
 fi
+# Mesh control over Tor (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md): the node-local control
+# relay + keeper and the transport default keys-provision falls back to. lan bakes none
+# of it. (In a Tor mode headscale runs without OIDC: keys-provision removes the block.)
+if [ "${MESH_CONTROL_TRANSPORT:-lan}" != lan ]; then
+    mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/etc/init.d"
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-mesh-control-relay" "${SYSROOT}/usr/sbin/hugmesh-mesh-control-relay"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-mesh-control-relay"
+    for _mc in hugmesh-mesh-control-relay hugmesh-mesh-control-keeper; do
+        cp "${SHARED_SPECS}/etc/init.d/${_mc}" "${SYSROOT}/etc/init.d/${_mc}"; chmod +x "${SYSROOT}/etc/init.d/${_mc}"
+    done
+    echo "${MESH_CONTROL_TRANSPORT}" > "${SYSROOT}/etc/hugmesh/mesh-control-transport"
+    info "Baked mesh control over Tor (${MESH_CONTROL_TRANSPORT}): relay + keeper; keys-provision links them from the KEYS stick"
+else
+    rm -f "${SYSROOT}/etc/hugmesh/mesh-control-transport"
+fi
 # Mesh secrets store (#224): the Vault connection facts keys-provision seeds ESO
 # from when the KEYS manifest has no .vault block. "" = byte no-op; client = warn.
 bake_vault_conf
@@ -6127,6 +6156,10 @@ fi
 # not carry it. net-vpn/tor inherits USE=selinux from a SELinux node profile, giving the
 # upstream tor_t confinement the reconcile agent's hugmesh_tor.te references.
 _tor_node_selected && PKGS="${PKGS} ${TOR_NODE_PACKAGES[*]}" && info "Tor NODE service: ${TOR_NODE_PACKAGES[*]} for the v3 hidden service (fe-gateway onion; keypair off-git, minted first-boot)"
+# Mesh control over Tor (OPT-IN): the same net-vpn/tor as a client (+ the pki's
+# control onion), when the tor optional service did not already add it.
+[ "${MESH_CONTROL_TRANSPORT:-lan}" != lan ] && ! _tor_node_selected && PKGS="${PKGS} ${TOR_NODE_PACKAGES[*]}" \
+    && info "Mesh control over Tor (${MESH_CONTROL_TRANSPORT}): ${TOR_NODE_PACKAGES[*]} as the control-plane client"
 # Network/host security stack: Squid+Privoxy (desktops), Snort (all), AIDE (opt-in).
 # WANT_PROXY_STACK was resolved at the SVCS step above.
 ${WANT_PROXY_STACK} && PKGS="${PKGS} net-proxy/squid net-proxy/privoxy" && info "Proxy stack: Squid + Privoxy (Firefox wired to 127.0.0.1:8118 -> :3128)"

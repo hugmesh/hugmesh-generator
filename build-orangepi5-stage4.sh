@@ -457,6 +457,9 @@ OPTIONS
 
   Mesh / radios  (same as the Frite/Pi5 builders)
     --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
+    --mesh-control-transport lan
+        Only lan here: this builder cannot bake Tor, so a Tor transport is
+        refused (docs/MESH-CONTROL-OVER-TOR.md). (env: MESH_CONTROL_TRANSPORT)
     --headscale-public-derp  Also list Tailscale's public DERP map (default: the
                             embedded relay only — offline-first, docs/HEADSCALE-DERP.md).
     --with-tailscale      Keep the tailnet client on a --standalone desktop (dropped
@@ -632,6 +635,7 @@ while [[ $# -gt 0 ]]; do
         --packages-drop)      PACKAGES_DROP="$2";         shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";     shift 2 ;;
         --headscale-public-derp) HEADSCALE_PUBLIC_DERP=true; shift ;;
+        --mesh-control-transport) MESH_CONTROL_TRANSPORT="$2"; shift 2 ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";     shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;      shift   ;;
@@ -682,6 +686,14 @@ case "${HEADSCALE_PUBLIC_DERP}" in
     true|1|yes|on)   HEADSCALE_PUBLIC_DERP=true ;;
     false|0|no|off|"") HEADSCALE_PUBLIC_DERP=false ;;
     *) err "HEADSCALE_PUBLIC_DERP must be true or false (got '${HEADSCALE_PUBLIC_DERP}')"; exit 1 ;;
+esac
+# --mesh-control-transport / MESH_CONTROL_TRANSPORT (OPT-IN; docs/MESH-CONTROL-OVER-TOR.md):
+# lan (the default) changes nothing; a Tor transport needs tor + the relay on the image.
+MESH_CONTROL_TRANSPORT="${MESH_CONTROL_TRANSPORT:-lan}"
+case "${MESH_CONTROL_TRANSPORT}" in
+    lan) ;;
+    lan+onion|onion) err "--mesh-control-transport ${MESH_CONTROL_TRANSPORT}: this builder cannot bake Tor (only the x86 and rpi5 builders can) — use lan here (docs/MESH-CONTROL-OVER-TOR.md)"; exit 1 ;;
+    *) err "MESH_CONTROL_TRANSPORT must be lan, lan+onion or onion (got '${MESH_CONTROL_TRANSPORT}')"; exit 1 ;;
 esac
 
 # Default work directory: ./out under CWD (local + gitignored)
