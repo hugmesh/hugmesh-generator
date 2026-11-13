@@ -1,8 +1,23 @@
-# SELinux core/policy packages still ~amd64 — accept them.
+# SELinux userland libraries still ~amd64 — accept them.
 sys-libs/libselinux ~amd64
-sec-policy/selinux-base ~amd64
-sec-policy/selinux-base-policy ~amd64
 # policycoreutils-3.10 (via the selinux-base chain) now wants libsepol-3.11,
-# which is still ~amd64 — same convention as the pins above (2026-07-08 proof
+# which is still ~amd64 — same convention as the pin above (2026-07-08 proof
 # build's autounmask replay demanded it for the NEXT @world resolution).
 sys-libs/libsepol ~amd64
+#
+# NO sec-policy/* line here, on purpose. Every sec-policy package is cut from
+# ONE refpolicy release: selinux-base installs the interface headers
+# (/usr/share/selinux/*/include) and every other selinux-<module> compiles its
+# .te against them. This chroot is stable-keyworded (make.conf
+# ACCEPT_KEYWORDS="amd64"), so keywording only selinux-base and
+# selinux-base-policy ~amd64 moved those two onto the newest testing release
+# while every module stayed on the stable one. That was harmless while the
+# stable and testing releases were the same version; once 2.20260922_p1 reached
+# ~amd64 (it drops the prelink module), selinux-base-2.20260922_p1 headers met
+# selinux-xserver-2.20260616_p1's xserver.te, which still calls
+# prelink_object_file(), and the merge died:
+#   xserver.te:240:ERROR 'syntax error' at token 'prelink_object_file'
+# The stable release (2.20260616_p1) is what scripts/selinux-interface-index.txt
+# and our own modules are checked against. To move to a newer refpolicy,
+# keyword the WHOLE category in one line (sec-policy/* ~amd64), never single
+# atoms; tests/scripts/test-sec-policy-keyword-coherence.sh enforces that.
