@@ -268,11 +268,12 @@ jobs:
         run: python -m pytest -q -p no:cacheprovider studio/tests/test_studio_beta_version.py studio/tests/test_studio_release_signing.py
 
       - name: actionlint the release workflow that will execute, and this one
-        # The image is pinned by digest (rhysd/actionlint:1.7.7 as resolved on
-        # 2026-10-28), the same version the guard tests are run against locally.
+        # The image is pinned by digest (rhysd/actionlint:1.7.12 as resolved on
+        # 2026-11-13; 1.7.7 did not know the macos-15-intel runner label), the same
+        # version the guard tests are run against locally.
         run: |
           docker run --rm -v "$PWD":/repo -w /repo \
-            rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
             -no-color .github/workflows/studio-release.yml .github/workflows/studio-release-cut.yml
 
       - name: Write the plan
