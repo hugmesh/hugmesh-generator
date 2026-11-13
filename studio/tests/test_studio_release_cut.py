@@ -104,7 +104,7 @@ def test_every_action_is_pinned_to_a_commit_with_its_tag_as_a_comment():
         assert re.fullmatch(r"\s+#\s+v\d+(\.\d+)*\s*", rest), f"{action}: no '# vX.Y.Z' comment: {rest!r}"
     # The actionlint image is pinned by digest, not by a floating tag.
     assert re.search(r"rhysd/actionlint@sha256:[0-9a-f]{64}", _read(CUT))
-    assert "rhysd/actionlint:" not in _read(CUT).replace("rhysd/actionlint:1.7.7 as resolved", "")
+    assert "rhysd/actionlint:" not in _read(CUT).replace("rhysd/actionlint:1.7.12 as resolved", "")
 
 
 def test_dispatch_runs_the_release_workflow_on_the_tag_with_declared_inputs_only():
