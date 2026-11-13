@@ -141,7 +141,7 @@ pt_apply_seed_targets() {
     local tag="${2:-python-targets}"
     local mc="${sysroot}/etc/portage/make.conf"
     local pu="${sysroot}/etc/portage/package.use/python-targets"
-    local targets single
+    local targets single seed_targets
 
     if ! targets="$(pt_seed_targets "${sysroot}")"; then
         printf '[%s] ERROR: could not read any python target from the stage3 seed at %s\n' "${tag}" "${sysroot}" >&2
@@ -155,6 +155,7 @@ pt_apply_seed_targets() {
     # set: the result is the UNION seed + extras, never fewer than the seed carries
     # (a make.conf assignment REPLACES the profile value, so a narrower set would
     # orphan the seed's own installed modules — docs/PYTHON-TARGETS-SEED-DRIFT.md).
+    seed_targets="${targets}"
     if [ -n "${PT_EXTRA_TARGETS:-}" ]; then
         # shellcheck disable=SC2086
         targets="$(printf '%s\n' ${targets} ${PT_EXTRA_TARGETS} | sort -u -V | tr '\n' ' ')"
@@ -169,8 +170,16 @@ pt_apply_seed_targets() {
                 return 1 ;;
         esac
     else
+        # The default single target is the SEED's, never the newest of the widened set:
+        # an extra target only ADDS an implementation for multi-target packages, while
+        # PYTHON_SINGLE_TARGET is the ONE interpreter every python-single-r1 package is
+        # built for, and a target newer than the seed's is one most of them do not list
+        # yet. 2026-11-12: extras "python3_14 python3_15" made it python3_15, and
+        # dev-util/pahole (PYTHON_COMPAT up to 3_14) hit an exactly-one-of REQUIRED_USE
+        # wall with every single target off. A newer single target is a choice the
+        # operator makes explicitly (--python-single-target), never a side effect.
         # shellcheck disable=SC2086
-        single="$(pt_seed_single_target ${targets})" || return 1
+        single="$(pt_seed_single_target ${seed_targets})" || return 1
     fi
 
     if [ ! -f "${mc}" ]; then

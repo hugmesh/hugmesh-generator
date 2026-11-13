@@ -333,6 +333,26 @@ dc_client_use_extra() {
     return 0
 }
 
+# dc_session_package_use -> the package.use lines the chosen sessions NEED, one per
+# line (nothing for a session that needs none). Not operator choices: without them the
+# session cannot be merged at all.
+#   wayfire  gui-wm/wayfire depends on gui-libs/wlroots:<slot>[x11-backend] UNCONDITIONALLY
+#            (2026-11-12 pretend: "there are no ebuilds built with USE flags to satisfy
+#            gui-libs/wlroots:0.19[drm(+),libinput(+),x11-backend,X?]"); wlroots defaults
+#            x11-backend off. The line is slot- and version-less on purpose: the slot moves
+#            with the tree (0.19 in the 2026-11 snapshot, 0.20 after it).
+#   sway     wlroots[x11-backend=,X=] follows sway's OWN flags (both default off): no line.
+#   labwc    wlroots[X?,libinput]: X comes from the desktop profile's global USE: no line.
+# tests/scripts/test-desktop-config-lib.sh (section 3) pins the table.
+dc_session_package_use() {
+    local s
+    for s in ${DC_SESSIONS}; do
+        case "${s}" in
+            wayfire) printf '%s\n' "gui-libs/wlroots x11-backend" ;;
+        esac
+    done | awk '!seen[$0]++'
+}
+
 # ── dc_apply_portage_overlay SYSROOT TAG ─────────────────────────────────────
 # Writes package.use/zz-hugmesh-studio and package.accept_keywords/zz-hugmesh-studio
 # from the overlay lines. MUST run after the builder's LAST pcs_sync_dir of those
@@ -344,8 +364,21 @@ dc_apply_portage_overlay() {
     local sysroot="$1"; _DC_TAG="${2:-desktop-config}"
     local pu="${sysroot}/etc/portage/package.use/zz-hugmesh-studio"
     local ak="${sysroot}/etc/portage/package.accept_keywords/zz-hugmesh-studio"
+    local ps="${sysroot}/etc/portage/package.use/zz-hugmesh-sessions"
     local body
-    rm -f "${pu}" "${ak}"
+    rm -f "${pu}" "${ak}" "${ps}"
+    # What the chosen sessions need (dc_session_package_use), in its OWN file: the
+    # zz-hugmesh-studio overlay stays exactly the lines the operator applied.
+    body="$(dc_session_package_use)"
+    if [ -n "${body}" ]; then
+        mkdir -p "$(dirname "${ps}")"
+        {
+            printf '# Written for the chosen --desktop-sessions (dc_session_package_use;\n'
+            printf '# scripts/_desktop-config-lib.sh): what each session needs to be merged at all.\n'
+            printf '%s\n' "${body}"
+        } > "${ps}"
+        _dc_info "session needs: $(printf '%s\n' "${body}" | wc -l) package.use line(s) -> /etc/portage/package.use/zz-hugmesh-sessions"
+    fi
     body="$(_dc_lines "${DC_PACKAGE_USE}")"
     if [ -n "${body}" ]; then
         mkdir -p "$(dirname "${pu}")"

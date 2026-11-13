@@ -1,0 +1,203 @@
+==> Pretend result: status=clean rc=0 seed_python=python3_14 video_cards=amdgpu,radeonsi,radeon
+===== PRETEND RESOLVER OUTPUT =====
+[ebuild  N     ] kde-plasma/kwayland-6.6.6-r1:6::gentoo  USE="-debug -test" 130 KiB
+[ebuild  N     ] kde-apps/libkexiv2-26.04.3:6::gentoo  USE="xmp -debug" 50 KiB
+[ebuild  N     ] kde-apps/libkdcraw-26.04.3:6::gentoo  USE="-debug" 37 KiB
+[ebuild  N     ] media-libs/kimageannotator-0.7.2::gentoo  USE="-test" 266 KiB
+[ebuild  N     ] kde-plasma/ocean-sound-theme-6.6.6-r1:6::gentoo  USE="-debug" 2075 KiB
+[ebuild  N     ] gui-libs/libadwaita-1.8.7:1::gentoo  USE="introspection vala -examples -gtk-doc -test" 2639 KiB
+[ebuild  N     ] kde-frameworks/kmime-6.29.0:6/6.29::gentoo  USE="-debug -test" 171 KiB
+[ebuild  N     ] media-gfx/gimp-3.2.4:0/3::gentoo  USE="X openmp udev -aalib -alsa -bash-completion -doc -fits -gnome -heif -javascript -jpeg2k -jpegxl (-lua) -mng -openexr -postscript -test -unwind -vala -vector-icons -wayland -webp -wmf -xpm" LUA_SINGLE_TARGET="luajit" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 (-python3_15)" 34095 KiB
+[ebuild  N     ] media-gfx/inkscape-1.4.4::gentoo  USE="X openmp readline -cdr -dia -exif -graphicsmagick -imagemagick -inkjar -jpeg -postscript -sourceview -spell -svg2 -test -visio -wayland -wpg" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 52600 KiB
+[ebuild  N     ] kde-frameworks/kcoreaddons-6.29.0:6/6.29::gentoo  USE="dbus -debug -test" 2466 KiB
+[ebuild  N     ] kde-frameworks/ki18n-6.29.0:6/6.29::gentoo  USE="-debug -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 (-python3_15)" 2978 KiB
+[ebuild  N     ] kde-frameworks/kconfig-6.29.0:6/6.29::gentoo  USE="dbus qml -debug -test" 383 KiB
+[ebuild  N     ] kde-frameworks/kwindowsystem-6.29.0:6/6.29::gentoo  USE="X wayland -debug -test" 2267 KiB
+[ebuild  N     ] kde-frameworks/kirigami-6.29.0-r1:6/6.29::gentoo  USE="openmp -debug -examples -test" 662 KiB
+[ebuild  N     ] kde-frameworks/kguiaddons-6.29.0-r1:6/6.29::gentoo  USE="X dbus wayland -debug -test" 95 KiB
+[ebuild  N     ] kde-frameworks/kitemmodels-6.29.0:6/6.29::gentoo  USE="-debug -test" 385 KiB
+[ebuild  N     ] kde-frameworks/solid-6.29.0:6/6.29::gentoo  USE="-debug -ios -test" 311 KiB
+[ebuild  N     ] dev-qt/qt5compat-6.11.2:6/6.11.2::gentoo  USE="gui icu qml -custom-cflags -test" 14279 KiB
+[ebuild  N     ] kde-frameworks/sonnet-6.29.0:6/6.29::gentoo  USE="hunspell qml -aspell -debug -designer -test" 2358 KiB
+[ebuild  N     ] kde-frameworks/syntax-highlighting-6.29.0:6/6.29::gentoo  USE="-debug -test" 3847 KiB
+[ebuild  N     ] kde-plasma/layer-shell-qt-6.6.6-r1:6::gentoo  USE="-debug" 36 KiB
+[ebuild  N     ] dev-qt/qtpositioning-6.11.2:6/6.11.2::gentoo  USE="qml -custom-cflags -geoclue -nmea -test" 641 KiB
+[ebuild  N     ] kde-frameworks/kquickcharts-6.29.0:6/6.29::gentoo  USE="-debug -examples -test" 110 KiB
+[ebuild  N     ] kde-frameworks/kholidays-6.29.0:6/6.29::gentoo  USE="-debug -test" 270 KiB
+[ebuild  N     ] kde-frameworks/ktexttemplate-6.29.0:6/6.29::gentoo  USE="-debug -test" 830 KiB
+[ebuild  N     ] dev-qt/qtwebchannel-6.11.2:6/6.11.2::gentoo  USE="qml -custom-cflags -test" 189 KiB
+[ebuild  N     ] dev-qt/qtquicktimeline-6.11.2:6/6.11.2::gentoo  USE="-custom-cflags -test" 96 KiB
+[ebuild  N     ] dev-python/pyqt6-6.11.0-r1::gentoo  USE="X dbus gui network printsupport qml sql ssl vulkan widgets xml -bluetooth -debug -designer -examples -gles2-only -help -multimedia -nfc -opengl -pdfium -positioning -quick -quick3d (-remoteobjects) -scxml -sensors -serialport -spatialaudio -speech -svg -testlib -wayland -webchannel -websockets" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 1062 KiB
+[ebuild  N     ] kde-apps/kmime-26.04.3:6/26.04::gentoo  USE="-debug -test" 165 KiB
+[ebuild  N     ] kde-frameworks/networkmanager-qt-6.29.0:6/6.29::gentoo  USE="-debug -teamd -test" 184 KiB
+[ebuild  N     ] app-arch/file-roller-44.7::gentoo  USE="introspection -gtk-doc -nautilus" 1040 KiB
+[ebuild  N     ] kde-frameworks/kcrash-6.29.0:6/6.29::gentoo  USE="X -debug -test" 34 KiB
+[ebuild  N     ] kde-frameworks/kdoctools-6.29.0:6/6.29::gentoo  USE="nls -debug -test" 451 KiB
+[ebuild  N     ] kde-frameworks/kcolorscheme-6.29.0:6/6.29::gentoo  USE="-debug" 51 KiB
+[ebuild  N     ] kde-frameworks/kcompletion-6.29.0:6/6.29::gentoo  USE="-debug -designer -test" 2204 KiB
+[ebuild  N     ] kde-frameworks/kpackage-6.29.0:6/6.29::gentoo  USE="-debug -man -test" 179 KiB
+[ebuild  N     ] kde-plasma/plasma-activities-6.6.6-r1:6/7::gentoo  USE="-debug -doc -test" 62 KiB
+[ebuild  N     ] kde-frameworks/kstatusnotifieritem-6.29.0:6/6.29::gentoo  USE="X -debug -test" 50 KiB
+[ebuild  N     ] kde-frameworks/krunner-6.29.0:6/6.29::gentoo  USE="-debug -test" 132 KiB
+[ebuild  N     ] kde-plasma/kdecoration-6.6.6-r1:6::gentoo  USE="-debug -test" 61 KiB
+[ebuild  N     ] kde-frameworks/kfilemetadata-6.29.0:6/6.29::gentoo  USE="-debug -epub -exif -ffmpeg -mobi -pdf -taglib -test" 688 KiB
+[ebuild  N     ] kde-frameworks/kpty-6.29.0:6/6.29::gentoo  USE="-debug -test" 2287 KiB
+[ebuild  N     ] kde-plasma/libkscreen-6.6.6-r2:6/8::gentoo  USE="-debug -doc -test" 118 KiB
+[ebuild  N     ] kde-plasma/knighttime-6.6.6-r1:6::gentoo  USE="-debug -test" 40 KiB
+[ebuild  N     ] kde-frameworks/kcontacts-6.29.0:6/6.29::gentoo  USE="-debug -test" 211 KiB
+[ebuild  N     ] app-crypt/qca-2.3.10-r1:2::gentoo  USE="ssl -botan -debug -doc -examples -gcrypt -gpg -logger -nss -pkcs11 -sasl -softstore -test" 747 KiB
+[ebuild  N     ] dev-qt/qtlocation-6.11.2:6/6.11.2::gentoo  USE="-custom-cflags -test" 3079 KiB
+[ebuild  N     ] dev-qt/qtquick3d-6.11.2:6/6.11.2::gentoo  USE="opengl vulkan -custom-cflags -test" 68309 KiB
+[ebuild  N     ] kde-frameworks/kunitconversion-6.29.0:6/6.29::gentoo  USE="-debug -test" 982 KiB
+[ebuild  N    ~] sys-libs/kpmcore-26.08.1:6/10::gentoo  USE="-debug" 667 KiB
+[ebuild  N     ] dev-libs/quazip-1.5:0/1.5::gentoo  USE="bzip2 -test" 167 KiB
+[ebuild  N     ] kde-frameworks/kservice-6.29.0:6/6.29::gentoo  USE="man -debug -test" 2319 KiB
+[ebuild  N     ] kde-frameworks/kiconthemes-6.29.0:6/6.29::gentoo  USE="-debug -designer -test" 1226 KiB
+[ebuild  N     ] kde-frameworks/kconfigwidgets-6.29.0:6/6.29::gentoo  USE="-debug -designer -test" 2436 KiB
+[ebuild  N     ] kde-frameworks/ksvg-6.29.0:6/6.29::gentoo  USE="-debug -test" 85 KiB
+[ebuild  N     ] kde-frameworks/ktextwidgets-6.29.0:6/6.29::gentoo  USE="-debug -designer -speech -test" 2388 KiB
+[ebuild  N     ] kde-plasma/kde-cli-tools-common-6.6.6-r1::gentoo  USE="handbook" 623 KiB
+[ebuild  N     ] kde-apps/kate-common-26.04.3::gentoo  USE="handbook" 8418 KiB
+[ebuild  N     ] kde-plasma/plasma-activities-stats-6.6.6-r1:6::gentoo  USE="-debug -doc -test" 82 KiB
+[ebuild  N     ] kde-frameworks/kpeople-6.29.0:6/6.29::gentoo  USE="-debug -test" 67 KiB
+[ebuild  N     ] kde-plasma/kde-gtk-config-6.6.6-r1:6::gentoo  USE="-debug" 78 KiB
+[ebuild  N     ] kde-frameworks/kdesu-6.29.0:6/6.29::gentoo  USE="X -debug -test" 57 KiB
+[ebuild  N     ] kde-frameworks/kxmlgui-6.29.0:6/6.29::gentoo  USE="-debug -designer -test" 2810 KiB
+[ebuild  N     ] kde-frameworks/kdeclarative-6.29.0:6/6.29::gentoo  USE="-debug" 2310 KiB
+[ebuild  N     ] kde-frameworks/kbookmarks-6.29.0:6/6.29::gentoo  USE="-debug -test" 1069 KiB
+[ebuild  N     ] kde-frameworks/qqc2-desktop-style-6.29.0:6/6.29::gentoo  USE="-debug -test" 91 KiB
+[ebuild  N     ] kde-frameworks/kded-6.29.0:6/6.29::gentoo  USE="man -debug" 34 KiB
+[ebuild  N     ] kde-plasma/kdesu-gui-6.6.6-r1::gentoo  USE="X -debug" 0 KiB
+[ebuild  N     ] kde-plasma/qqc2-breeze-style-6.6.6-r1:6::gentoo  USE="-debug" 65 KiB
+[ebuild  N     ] kde-apps/akonadi-26.04.3:6/26.04::gentoo  USE="-debug -designer -test -tools -xml" 1743 KiB
+[ebuild  N    ~] media-gfx/krita-6.0.4::gentoo  USE="gsl mypaint-brush-engine raw -color-management -debug -fftw -gif -heif -jpeg2k -jpegxl -media -openexr -pdf -test -wayland -webp" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 201960 KiB
+[ebuild  N     ] media-libs/libpulse-17.0::gentoo  USE="X asyncns dbus glib gtk (selinux) -doc -systemd -test -valgrind" ABI_X86="(64) -32 (-x32)" 1530 KiB
+[ebuild  N     ] media-sound/pulseaudio-daemon-17.0-r2::gentoo  USE="X alsa alsa-plugin asyncns dbus elogind gdbm glib (selinux) ssl udev webrtc-aec -aptx -bluetooth -equalizer -fftw -gstreamer -jack -ldac -lirc -ofono-headset -orc (-oss) -sox (-system-wide) -systemd -tcpd -test -valgrind -zeroconf" 0 KiB
+[ebuild  N     ] media-plugins/alsa-plugins-1.2.12::gentoo  USE="mix pulseaudio usb_stream -arcam_av -debug -ffmpeg -jack -libsamplerate -oss -speex -verify-sig" ABI_X86="(64) -32 (-x32)" 400 KiB
+[ebuild  N     ] media-video/ffmpeg-8.1.2:0/60.62.62::gentoo  USE="X bzip2 dav1d drm fontconfig gnutls gpl libass opus pulseaudio truetype vaapi vdpau vulkan x264 xml zlib -alsa -amf -amr -amrenc (-appkit) -bluray -bs2b -cairo -cdio -chromaprint -chromium -codec2 -cuda-clang -doc -dvd -fdk -flite -frei0r -fribidi -gcrypt -gme -gmp -gsm -iec61883 -ieee1394 -jack -jpeg2k -jpegxl -kvazaar -ladspa -lame -lcms -libaom -libaribb24 -libcaca -libilbc -liblc3 -libplacebo -librtmp -libsoxr -lv2 -lzma -modplug -nvenc -ocr -openal -opencl -opencolorio -opengl -openh264 -openmpt -openssl -qrcode -qsv -quirc -rabbitmq -rav1e -rist -rubberband -samba -sdl -snappy -sndio -soc -speex -srt -ssh -svg -svt-av1 -theora -twolame -v4l -verify-sig -vidstab -vmaf -vorbis -vpx -webp -x265 -xvid -zeromq -zimg -zvbi" ABI_X86="(64) -32 (-x32)" 11437 KiB
+[ebuild  N     ] media-libs/libcanberra-0.30-r8::gentoo  USE="alsa pulseaudio udev -gstreamer -oss -tdb" ABI_X86="(64) -32 (-x32)" 312 KiB
+[ebuild  N     ] dev-qt/qtwebengine-6.11.2:6/6.11.2::gentoo  USE="alsa bindist jumbo-build opengl pdfium pulseaudio qml system-icu vaapi vulkan widgets -accessibility -custom-cflags -designer -geolocation -kerberos -screencast -test -webdriver" 566758 KiB
+[ebuild  N     ] media-libs/pulseaudio-qt-1.8.1:0/5::gentoo  USE="handbook -debug -doc -test" 41 KiB
+[ebuild  N     ] media-libs/pcaudiolib-1.2-r2::gentoo  USE="alsa pulseaudio -oss" 34 KiB
+[ebuild  N     ] media-sound/pavucontrol-qt-2.4.0::gentoo  121 KiB
+[ebuild  N     ] kde-frameworks/knotifications-6.29.0:6/6.29::gentoo  USE="-debug" 67 KiB
+[ebuild  N     ] media-libs/opencv-4.12.0-r1:0/4.12.0::gentoo  USE="eigen ffmpeg openmp vaapi vulkan -atlas -avif -contrib (-contribcvv) -contribdnn -contribfreetype (-contribhdf) (-contribovis) (-contribsfm) (-contribxfeatures2d) (-cuda) (-cudnn) -debug -doc -examples -features2d -gdal (-gflags) -gif (-glog) -gphoto2 -gstreamer -gtk3 -ieee1394 -jasper -java -jpeg -jpeg2k -lapack (-mkl) -non-free -opencl -opencvapps -openexr -opengl -openni -openni2 -png -python -qt6 -quirc -spng -tbb (-tesseract) -test -testprograms -tiff -truetype -v4l (-vtk) -wayland -webp -wechat-qrcode -xine" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse sse2 -avx -avx2 -avx512_4fmaps -avx512_4vnniw -avx512_bitalg -avx512_vbmi2 -avx512_vnni -avx512_vpopcntdq -avx512bw -avx512cd -avx512dq -avx512er -avx512f -avx512ifma -avx512pf -avx512vbmi -avx512vl -f16c -fma3 -popcnt -sse3 -sse4_1 -sse4_2 -ssse3" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" VIDEO_CARDS="-intel" 93141 KiB
+[ebuild  N     ] dev-qt/qtwebview-6.11.2:6/6.11.2::gentoo  USE="-custom-cflags -test" 114 KiB
+[ebuild  N     ] media-sound/sox-14.7.0.9:0/3::gentoo  USE="ffmpeg openmp pulseaudio -alsa -amr -ao -dolbyb -encode -fftw -flac -id3tag -ladspa -loudness -mad -ogg -opus -oss -png -sndfile -sndio -speexdsp -twolame -wavpack" 2038 KiB
+[ebuild  N     ] www-client/firefox-bin-156.0.1:rapid::gentoo  USE="gmp-autoupdate (selinux) -wayland" L10N="-ach -af -an -ar -ast -az -be -bg -bn -br -bs -ca -ca-valencia -cak -cs -cy -da -de -dsb -el -en-CA -en-GB -eo -es-AR -es-CL -es-ES -es-MX -et -eu -fa -ff -fi -fr -fy -ga -gd -gl -gn -gu -he -hi -hr -hsb -hu -hy -ia -id -is -it -ja -ka -kab -kk -km -kn -ko -lij -lt -lv -mk -mr -ms -my -nb -ne -nl -nn -oc -pa -pl -pt-BR -pt-PT -rm -ro -ru -sco -si -sk -skr -sl -son -sq -sr -sv -ta -te -th -tl -tr -trs -uk -ur -uz -vi -xh -zh-CN -zh-TW" 86240 KiB
+[ebuild  N     ] media-video/vlc-4.0.0_pre20260625:0/12-9::gentoo  USE="X dbus dvbpsi dvd encode ffmpeg gcrypt gui libsamplerate ncurses pulseaudio (selinux) ssl udev vaapi vdpau -alsa -aom -archive -aribsub -bidi -bluray -chromaprint -chromecast -dav1d -dc1394 -debug (-directx) -faad -fdk -flac -fluidsynth -fontconfig -gme -gstreamer -ieee1394 -jack -jpeg -kate -keyring -libass -libcaca -libdrm -libnotify -libplacebo -libtiger -linsys -lirc -live -loudness -lua -mad -matroska -modplug -mp3 -mtp -nfs -ogg -omxil -optimisememory -opus -png -projectm -run-as-root -samba -sftp -shout -sid -skins -soxr -speex -srt -svg -taglib -test -theora -tremor -truetype -twolame -upnp -v4l -vnc -vpx -wayland -x264 -x265 -xml -zeroconf -zvbi" CPU_FLAGS_X86="sse" LUA_SINGLE_TARGET="lua5-1" 36756 KiB
+[ebuild  N     ] www-client/firefox-140.16.0:esr::gentoo  USE="X clang dbus jumbo-build pulseaudio (selinux) system-av1 system-harfbuzz system-icu system-jpeg system-libevent system-libvpx system-webp telemetry -debug -eme-free (-gmp-autoupdate) -gnome-shell -hardened -hwaccel -jack -libproxy -openh264 -pgo -sndio -system-pipewire -system-png -test -wasm-sandbox -wayland -wifi" L10N="-ach -af -an -ar -ast -az -be -bg -bn -br -bs -ca -ca-valencia -cak -cs -cy -da -de -dsb -el -en-CA -en-GB -eo -es-AR -es-CL -es-ES -es-MX -et -eu -fa -ff -fi -fr -fur -fy -ga -gd -gl -gn -gu -he -hi -hr -hsb -hu -hy -ia -id -is -it -ja -ka -kab -kk -km -kn -ko -lij -lt -lv -mk -mr -ms -my -nb -ne -nl -nn -oc -pa -pl -pt-BR -pt-PT -rm -ro -ru -sc -sco -si -sk -skr -sl -son -sq -sr -sv -szl -ta -te -th -tl -tr -trs -uk -ur -uz -vi -xh -zh-CN -zh-TW" LLVM_SLOT="21 -20" 617771 KiB
+[ebuild  N     ] mail-client/thunderbird-140.16.0:0/esr::gentoo  USE="X clang hardened pulseaudio (selinux) system-av1 system-harfbuzz system-jpeg system-libevent system-librnp system-libvpx system-webp -debug -eme-free -hwaccel -jack -libproxy (-pgo) -sndio (-system-icu) -system-pipewire -system-png -wayland -wifi" L10N="-af -ar -ast -be -bg -br -ca -cak -cs -cy -da -de -dsb -el -en-CA -en-GB -es-AR -es-ES -es-MX -et -eu -fi -fr -fy -ga -gd -gl -he -hr -hsb -hu -id -is -it -ja -ka -kab -kk -ko -lt -lv -ms -nb -nl -nn -pa -pl -pt-BR -pt-PT -rm -ro -ru -sk -sl -sq -sr -sv -th -tr -uk -uz -vi -zh-CN -zh-TW" LLVM_SLOT="21 -19 -20" 745119 KiB
+[ebuild  N    ~] media-video/obs-studio-32.2.2::gentoo  USE="alsa pulseaudio -browser -decklink -fdk -jack -lua -mpegts -nvenc -python -qsv -screencast -sndio -speex -test-input -truetype -v4l -vlc -wayland -websocket" LUA_SINGLE_TARGET="luajit" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 16178 KiB
+[ebuild  N     ] kde-frameworks/kjobwidgets-6.29.0:6/6.29::gentoo  USE="X -debug -test" 2148 KiB
+[ebuild  N     ] media-libs/kquickimageeditor-0.6.2.1:6::gentoo  USE="opencv -debug -test" 3261 KiB
+[ebuild  N     ] app-accessibility/espeak-ng-1.52.0::gentoo  USE="async klatt sound -man -mbrola -test" L10N="-ru -zh" 17325 KiB
+[ebuild  N     ] kde-plasma/kwrited-6.6.6-r1:6::gentoo  USE="-debug" 23 KiB
+[ebuild  N     ] kde-apps/kcalc-26.04.3:6::gentoo  USE="handbook -debug -test" 476 KiB
+[ebuild  N     ] kde-frameworks/kauth-6.29.0:6/6.29::gentoo  USE="policykit -debug -test" 2221 KiB
+[ebuild  N     ] kde-frameworks/kwallet-6.29.0-r1:6/6.29::gentoo  USE="-debug -minimal -test" 33 KiB
+[ebuild  N     ] kde-frameworks/kwallet-runtime-6.29.0-r1:6/6.29::gentoo  USE="X (keyring) (legacy-kwallet) man -debug -gpg -test" 0 KiB
+[ebuild  N     ] kde-plasma/ksshaskpass-6.6.6-r1:6::gentoo  USE="-debug" 32 KiB
+[ebuild  N     ] kde-plasma/kwallet-pam-6.6.6-r1:6::gentoo  USE="-debug" 22 KiB
+[ebuild  N     ] kde-frameworks/kio-6.29.0:6/6.29::gentoo  USE="X acl handbook kwallet -debug -designer -test -wayland" 3502 KiB
+[ebuild  N     ] kde-frameworks/kcmutils-6.29.0:6/6.29::gentoo  USE="-debug -test" 2347 KiB
+[ebuild  N     ] kde-plasma/libplasma-6.6.6-r1:6/7::gentoo  USE="-debug -doc -gles2-only -test" 1926 KiB
+[ebuild  N     ] kde-plasma/polkit-kde-agent-6.6.6-r1:6::gentoo  USE="-debug" 56 KiB
+[ebuild  N     ] kde-frameworks/kparts-6.29.0:6/6.29::gentoo  USE="-debug -test" 2303 KiB
+[ebuild  N     ] kde-plasma/keditfiletype-6.6.6-r1::gentoo  USE="-debug -test" 0 KiB
+[ebuild  N     ] kde-frameworks/knewstuff-6.29.0:6/6.29::gentoo  USE="-debug -designer -opds" 2978 KiB
+[ebuild  N     ] kde-plasma/kglobalacceld-6.6.6-r2:6::gentoo  USE="X -debug -test" 57 KiB
+[ebuild  N     ] kde-plasma/milou-6.6.6-r1:6::gentoo  USE="-debug -test" 49 KiB
+[ebuild  N     ] kde-apps/kio-extras-26.04.3:6::gentoo  USE="X handbook libproxy man sftp -activities -debug -ios -mtp -nfs -openexr -samba -taglib -test" 5469 KiB
+[ebuild  N     ] kde-plasma/kactivitymanagerd-6.6.6-r1:6::gentoo  USE="-debug" 97 KiB
+[ebuild  N     ] kde-plasma/plasma5support-6.6.6-r1:6::gentoo  USE="X -activities -debug -doc -geolocation -ksysguard -test" 816 KiB
+[ebuild  N     ] kde-plasma/systemsettings-6.6.6-r1:6::gentoo  USE="handbook -debug" 217 KiB
+[ebuild  N     ] kde-frameworks/baloo-6.29.0:6/6.29::gentoo  USE="-debug -test" 333 KiB
+[ebuild  N     ] kde-plasma/kde-cli-tools-6.6.6-r1:6::gentoo  USE="X -debug -kdesu" 0 KiB
+[ebuild  N     ] kde-plasma/kmenuedit-6.6.6-r1:6::gentoo  USE="handbook -debug" 867 KiB
+[ebuild  N     ] kde-plasma/drkonqi-legacy-6.3.80_p20250417:6::gentoo  USE="-debug -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 2097 KiB
+[ebuild  N     ] kde-plasma/plasma-nm-6.6.6-r1:6::gentoo  USE="-debug -openconnect -teamd -test" 1444 KiB
+[ebuild  N     ] kde-plasma/kgamma-6.6.6-r1:6::gentoo  USE="handbook -debug" 86 KiB
+[ebuild  N     ] kde-misc/kio-fuse-5.1.1:6::gentoo  USE="-debug -test" 49 KiB
+[ebuild  N     ] kde-apps/ark-26.04.3:6::gentoo  USE="handbook -debug -test -zip" 2955 KiB
+[ebuild  N     ] kde-apps/okular-26.04.3:6::gentoo  USE="crypt handbook pdf postscript tiff -debug -djvu -epub -markdown -mobi -share -speech -test" 8046 KiB
+[ebuild  N     ] kde-apps/kfind-26.04.3:6::gentoo  USE="handbook -debug" 329 KiB
+[ebuild  N     ] kde-apps/filelight-26.04.3:6::gentoo  USE="handbook -debug -test" 678 KiB
+[ebuild  N     ] kde-apps/khelpcenter-26.04.3:6::gentoo  USE="-debug" 4156 KiB
+[ebuild  N    ~] app-admin/calamares-3.4.2-r1::gentoo  USE="-debug -livecd -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 4825 KiB
+[ebuild  N     ] kde-plasma/libksysguard-6.6.6-r1:6/10::gentoo  USE="filecaps -debug -test" 330 KiB
+[ebuild  N     ] kde-plasma/aurorae-6.6.6-r1:6::gentoo  USE="-debug" 66 KiB
+[ebuild  N     ] kde-plasma/kinfocenter-6.6.6-r1:6::gentoo  USE="handbook -debug -gles2-only -usb" 770 KiB
+[ebuild  N     ] kde-apps/grantleetheme-26.04.3:6/26.04::gentoo  USE="-debug -test" 69 KiB
+[ebuild  N     ] kde-plasma/kscreen-6.6.6-r1:6::gentoo  USE="X -debug -test" 1709 KiB
+[ebuild  N     ] kde-frameworks/frameworkintegration-6.29.0:6/6.29::gentoo  USE="-debug -test" 57 KiB
+[ebuild  N     ] kde-plasma/breeze-6.6.6-r1:6::gentoo  USE="-debug" 41478 KiB
+[ebuild  N     ] kde-plasma/ksystemstats-6.6.6-r1:6::gentoo  USE="filecaps handbook -debug -networkmanager -test" 157 KiB
+[ebuild  N     ] kde-plasma/plasma-vault-6.6.6-r1:6::gentoo  USE="-debug -networkmanager" 199 KiB
+[ebuild  N     ] kde-plasma/plasma-disks-6.6.6-r1:6::gentoo  USE="handbook -debug" 106 KiB
+[ebuild  N     ] kde-plasma/breeze-gtk-6.6.6-r1:6::gentoo  USE="-debug" 40 KiB
+[ebuild  N     ] media-video/pipewire-1.6.8:0/0.4::gentoo  USE="X dbus elogind pulseaudio readline (selinux) ssl -bluetooth -doc -echo-cancel -extra -ffmpeg -fftw -flatpak -gsettings -gstreamer -ieee1394 -jack-client -jack-sdk -libcamera -loudness -lv2 -man -modemmanager -pipewire-alsa -roc -sofa -sound-server (-system-service) -systemd -test -v4l -zeroconf" ABI_X86="(64) -32 (-x32)" 2089 KiB
+[ebuild  N     ] media-video/wireplumber-0.5.15:0/0.5::gentoo  USE="elogind -doc (-system-service) -systemd -test" LUA_SINGLE_TARGET="lua5-4 -lua5-3" 467 KiB
+[ebuild  N     ] dev-qt/qtmultimedia-6.11.2:6/6.11.2::gentoo  USE="X dbus ffmpeg opengl pipewire pulseaudio qml v4l vaapi vulkan -alsa -custom-cflags -eglfs -gstreamer -test -wayland" 10015 KiB
+[ebuild  N     ] sys-apps/xdg-desktop-portal-1.20.4-r1::gentoo  USE="seccomp udev -flatpak -geolocation -gstreamer -systemd -test" 1201 KiB
+[ebuild  N     ] kde-plasma/kpipewire-6.6.6.1-r1:6::gentoo  USE="-debug -test" 151 KiB
+[ebuild  N     ] app-accessibility/speech-dispatcher-0.12.1::gentoo  USE="espeak pipewire pulseaudio python -alsa -ao -flite -nas -systemd" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 7308 KiB
+[ebuild  N     ] media-video/mpv-0.41.0-r2:0/2::gentoo  USE="X alsa cli drm egl iconv libmpv lua pipewire pulseaudio (selinux) uchardet vaapi vdpau vulkan zlib (-aqua) -archive -bluray -cdda (-coreaudio) -debug -dvb -dvd -gamepad -jack -javascript -jpeg -lcms -libcaca -nvenc -openal -rubberband -sdl -sixel -sndio -soc -test -tools -wayland -xv -zimg" LUA_SINGLE_TARGET="(luajit) (-lua5-1)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 7092 KiB
+[ebuild  N     ] dev-libs/kirigami-addons-1.12.1:6::gentoo  USE="-debug -test" 2750 KiB
+[ebuild  N     ] kde-frameworks/prison-6.29.0:6/6.29::gentoo  USE="qml -debug -test" 57 KiB
+[ebuild  N     ] dev-qt/qtspeech-6.11.2:6/6.11.2::gentoo  USE="qml speechd -custom-cflags -flite" 244 KiB
+[ebuild  N     ] kde-frameworks/knotifyconfig-6.29.0:6/6.29::gentoo  USE="-debug" 2265 KiB
+[ebuild  N     ] kde-plasma/xdg-desktop-portal-kde-6.6.6-r1:6::gentoo  USE="-debug -test" 224 KiB
+[ebuild  N     ] x11-base/xwayland-24.1.13::gentoo  USE="libei (selinux) -systemd -test -unwind -xcsecurity" 1276 KiB
+[ebuild  N     ] sys-apps/flatpak-1.18.1::gentoo  USE="X seccomp -doc -introspection -policykit -systemd -test" 1324 KiB
+[ebuild  N     ] net-libs/libquotient-0.9.6.1:0/0.9.6.1::gentoo  USE="-test" 763 KiB
+[ebuild  N     ] dev-libs/ktextaddons-2.0.2:6::gentoo  USE="-debug -designer -speech -test" 1139 KiB
+[ebuild  N     ] sys-apps/xdg-desktop-portal-gtk-1.15.3::gentoo  USE="X -wayland" 93 KiB
+[ebuild  N     ] gui-apps/xwaylandvideobridge-0.5.0::gentoo  USE="-debug" 37 KiB
+[ebuild  N     ] kde-apps/dolphin-26.04.3:6::gentoo  USE="handbook -debug -semantic-desktop -telemetry -test" 5759 KiB
+[ebuild  N     ] kde-apps/gwenview-26.04.3:6::gentoo  USE="X annotate handbook mpris -activities -debug -fits -raw -semantic-desktop -share -test" 6397 KiB
+[ebuild  N     ] kde-frameworks/purpose-6.29.0:6/6.29::gentoo  USE="-bluetooth -debug -test -webengine" 192 KiB
+[ebuild  N     ] kde-frameworks/ktexteditor-6.29.0:6/6.29::gentoo  USE="editorconfig -debug -test" 2907 KiB
+[ebuild  N     ] kde-plasma/plasma-integration-6.6.6-r1:6::gentoo  USE="-debug" 98 KiB
+[ebuild  N     ] kde-plasma/spectacle-6.6.6-r1:6::gentoo  USE="handbook -debug -share -test" 1573 KiB
+[ebuild  N     ] kde-apps/akonadi-contacts-26.04.3:6/26.04::gentoo  USE="-debug -test" 436 KiB
+[ebuild  N     ] kde-plasma/kdeplasma-addons-6.6.6-r1:6::gentoo  USE="alternate-calendar handbook -debug -share -webengine" 1089 KiB
+[ebuild  N     ] kde-plasma/plasma-systemmonitor-6.6.6-r1:6::gentoo  USE="-debug -test" 234 KiB
+[ebuild  N     ] kde-plasma/plasma-welcome-6.6.6-r1:6::gentoo  USE="-debug" 855 KiB
+[ebuild  N     ] kde-plasma/plasma-pa-6.6.6-r1:6::gentoo  USE="handbook -debug -test" 199 KiB
+[ebuild  N     ] kde-apps/konsole-26.04.3:6::gentoo  USE="X handbook -debug -test" 1859 KiB
+[ebuild  N     ] kde-misc/kdeconnect-26.04.3-r3:6::gentoo  USE="X pulseaudio (selinux) (-bluetooth) -debug -telephony -test" 676 KiB
+[ebuild  N     ] kde-apps/kate-lib-26.04.3:6::gentoo  USE="-debug -telemetry -test" 0 KiB
+[ebuild  N     ] kde-plasma/discover-6.6.6-r1:6::gentoo  USE="firmware flatpak -debug -snap -telemetry -test -webengine" 1121 KiB
+[ebuild  N     ] kde-apps/kgpg-26.04.3:6::gentoo  USE="handbook (selinux) -debug" 2981 KiB
+[ebuild  N    ~] net-im/neochat-26.08.1::gentoo  USE="-debug -handbook -test" 1471 KiB
+[ebuild  N     ] kde-apps/kate-addons-26.04.3:6::gentoo  USE="filebrowser projects snippets -debug -lspclient -sql -test" 0 KiB
+[ebuild  N     ] kde-apps/kwrite-26.04.3:6::gentoo  USE="-debug" 0 KiB
+[ebuild  N     ] kde-apps/kate-26.04.3:6::gentoo  USE="-debug" 0 KiB
+[ebuild  N     ] kde-plasma/kscreenlocker-6.6.6-r1:6::gentoo  USE="-debug -test" 183 KiB
+[ebuild  N     ] kde-plasma/kwin-6.6.6-r1:6::gentoo  USE="(filecaps) handbook lock (selinux) shortcuts -accessibility -debug -gamepad -gles2-only -screencast -systemd -test" 8682 KiB
+[ebuild  N     ] kde-plasma/plasma-workspace-6.6.6-r1:6::gentoo  USE="X fontconfig handbook ksysguard policykit semantic-desktop wallpaper-metadata -appstream -debug -networkmanager -screencast -systemd -telemetry -test" 18900 KiB
+[ebuild  N     ] kde-plasma/kwin-x11-6.6.6-r1:6::gentoo  USE="handbook lock (selinux) shortcuts -accessibility -debug -gles2-only -systemd -test" 6727 KiB
+[ebuild  N     ] kde-plasma/plasma-login-sessions-6.6.6-r1:6::gentoo  USE="X wayland" 0 KiB
+[ebuild  N     ] kde-plasma/plasma-desktop-6.6.6-r1:6::gentoo  USE="handbook semantic-desktop -debug -ibus -scim -screencast -sdl -test -webengine" INPUT_DEVICES="-wacom" 16687 KiB
+[ebuild  N     ] kde-plasma/powerdevil-6.6.6-r2:6::gentoo  USE="filecaps handbook -brightness-control -debug -test" 1224 KiB
+[ebuild  N     ] kde-plasma/plasma-browser-integration-6.6.6-r1:6::gentoo  USE="-debug" 235 KiB
+[ebuild  N     ] x11-libs/gtk+-2.24.33-r3:2::gentoo  USE="introspection (-aqua) -cups -examples -test -vim-syntax -xinerama" ABI_X86="(64) -32 (-x32)" 12366 KiB
+[ebuild  N     ] x11-themes/gtk-engines-adwaita-3.28-r1::gentoo  ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] dev-libs/libdbusmenu-16.04.0-r4::gentoo  USE="gtk gtk3 introspection -debug -test" ABI_X86="(64) -32 (-x32)" 743 KiB
+[ebuild  N    ~] sys-fs/ecryptfs-utils-111_p20170609-r1::gentoo  USE="gtk nls pam -doc -gpg -openssl -pkcs11 -suid -tpm" 1401 KiB
+[ebuild  N     ] xfce-base/xfce4-panel-4.20.8::gentoo  USE="X dbusmenu -introspection -vala -wayland" 2290 KiB
+[ebuild  N     ] xfce-base/thunar-4.20.8:0/3::gentoo  USE="pcre trash-panel-plugin udisks -exif -introspection -libnotify" 4444 KiB
+[ebuild  N     ] xfce-extra/xfce4-pulseaudio-plugin-0.5.1::gentoo  USE="keybinder -libcanberra -libnotify" 117 KiB
+[ebuild  N     ] xfce-base/thunar-volman-4.20.0::gentoo  USE="-libnotify" 623 KiB
+[ebuild  N     ] xfce-base/xfdesktop-4.20.2::gentoo  USE="X thunar -libnotify -wayland" 2497 KiB
+[ebuild  N     ] xfce-base/xfce4-meta-4.20::gentoo  USE="pulseaudio svg -archive -calendar -cdr -editor -image -media -minimal -mpd -remote-fs -search -upower" 0 KiB
+[ebuild  N     ] x11-misc/lightdm-1.32.0-r5::gentoo  USE="X (audit) elogind gnome gtk introspection -non-root -systemd -vala" 508 KiB
+[ebuild  N     ] x11-misc/lightdm-gtk-greeter-2.0.9-r1::gentoo  USE="-appindicator -branding" 589 KiB
+[ebuild  N     ] kde-plasma/plasma-meta-6.6.6-r1:6::gentoo  USE="X browser-integration crash-handler crypt display-manager elogind gtk kwallet networkmanager pulseaudio smart wallpapers xwayland -accessibility -bluetooth -cups -discover (-firewall) -flatpak -grub -ocr -oxygen-theme -plymouth -rdp -sddm -sdk (-systemd) -thunderbolt -unsupported -virtualkeyboard -wacom -webengine" 0 KiB
+[ebuild  N     ] media-sound/audacious-4.6.1::gentoo  USE="gtk -qt6 -test" 514 KiB
+[ebuild  N     ] media-plugins/audacious-plugins-4.6.1::gentoo  USE="X alsa gtk mp3 pipewire pulseaudio -aac -ampache -bs2b -cdda -cue -ffmpeg -flac -fluidsynth -gme -http -jack -lame -libnotify -libsamplerate -lirc -mms -modplug -mpris -opengl -openmpt -opus -qt6 -qtmedia -scrobbler -sdl -sid -sndfile -soxr -streamtuner -vorbis -wavpack -wayland" 1806 KiB
+[ebuild  N     ] app-editors/vim-9.1.1652-r2::gentoo  USE="X acl crypt nls (selinux) -cscope -debug -gpm -lua -minimal -perl -python -racket -ruby -sound -tcl -terminal -vim-pager -wayland" LUA_SINGLE_TARGET="lua5-1 -lua5-3 -lua5-4 -luajit" PERL_FEATURES="(-debug) -ithreads -quadmath" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[ebuild  N     ] app-vim/gentoo-syntax-16::gentoo  USE="-ignore-glep31" 21 KiB
+Total: 1086 packages (41 downgrades, 1017 new, 3 in new slots, 25 reinstalls, 515 binaries), Size of downloads: 6344983 KiB
+===== END PRETEND RESOLVER OUTPUT =====
