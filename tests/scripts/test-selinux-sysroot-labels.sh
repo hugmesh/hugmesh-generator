@@ -747,7 +747,11 @@ grep -F "printf 'uki-variants=%s\\n' \"\${UKI_VARIANTS_CHROOT}\"" <<<"${kci}" >/
 
 # I4) x86: the Secure Boot sign step, EXECUTED with sbsign stubbed, for every branch.
 SGB="${TMP}/sign"; mkdir -p "${SGB}"
-awk '/^SBDIR="\$\{WORK_DIR\}\/secureboot"$/{f=1} /^# ── 8\. Clean/{exit} f{print}' "${X86}" > "${SGB}/block.sh"
+# The key paths (SBDIR/SBKEY/SBCRT/SBCER) are set ahead of the builder's --from-step
+# region now, apart from the step: take the builder's own two lines, then the step.
+grep -E '^SBDIR="\$\{WORK_DIR\}/secureboot"$|^SBKEY="\$\{SBDIR\}/sb\.key"; ' "${X86}" > "${SGB}/block.sh"
+[ "$(wc -l < "${SGB}/block.sh")" = 2 ] || bad "I4: could not find the builder's SBDIR/SBKEY lines"
+awk '/^# ── Secure Boot: org signing-key generation/{f=1} /^# ── 8\. Clean/{exit} f{print}' "${X86}" >> "${SGB}/block.sh"
 grep -q 'uki_variant_paths' "${SGB}/block.sh" || bad "I4: could not cut the sign step (no uki_variant_paths in it)"
 # sign_run <case> <secure_boot> <sbsign: stub|absent> <unsigned twins present: all|no-rescue|none> -> rc; dir ${SGB}/<case>
 sign_run() {

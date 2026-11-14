@@ -4185,8 +4185,42 @@ if [ -d "${SYSROOT}" ]; then
         exit 1
     fi
 fi
+if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
+    # A build system is only reusable when it is still ROOT'S. After a native
+    # build through `make`, chown-artifacts used to hand the whole work
+    # directory to the invoking user, sysroot included; a build resumed from
+    # that tree finished green and wrote an image whose every directory was
+    # uid 1002 (sshd, systemd-tmpfiles, snort and tor all refused to start,
+    # #659). This is the FIRST thing that looks at the sysroot on the resume
+    # path: no mount, emerge or write has happened yet. Restoring ownership is
+    # not an option (see the lib: a stage3 ships 24 non-root entries, a built
+    # image many more, and portage records no owner) — refuse, in one sentence.
+    hmr_owner_gate "${SYSROOT}" || exit 1
+    info "Sysroot populated and --resume — skipping extraction"
+else
+    # A non-resume build must start from a CLEAN sysroot. Extracting stage3 OVER a
+    # populated tree leaves stale packages (e.g. extra python slots, old kubelet)
+    # in var/db/pkg — a HYBRID db that breaks dep resolution (observed: 3 python
+    # slots surviving + libselinux[python] conflicts). Wipe first so the extract
+    # is pristine. (Warm reuse is the explicit --resume path above.)
+    if [ -f "${SYSROOT}/etc/gentoo-release" ]; then
+        warn "Non-resume build over a populated sysroot — wiping for a clean stage3 extract"
+        rm -rf "${SYSROOT}"; mkdir -p "${SYSROOT}"
+    fi
+    tar -C "${SYSROOT}" --xattrs-include='*.*' -xpf "${STAGE3_LOCAL}" 2>/dev/null || \
+        tar -C "${SYSROOT}" -xpf "${STAGE3_LOCAL}"
+    # Record which seed this build system came from, BESIDE the sysroot (the
+    # clean step and the image never see it). A later --resume restores the
+    # stripped static libraries from THIS seed, not from whatever seed is
+    # newest that day (binutils moved 2.46.1 -> 2.47 between two seeds a week
+    # apart while glibc and gcc did not; a restore from the wrong one is the
+    # silent variant of the same failure).
+    hmr_seed_marker_write "${BUILD_ROOT}" "${STAGE3_LOCAL}" || true
+fi
+
 # ── Definitions the late steps share (ahead of the skippable region) ────────────
-# A --from-step rerun skips everything from here to the stage4 pack, so what the
+# A --from-step rerun (always --resume: the extraction block above only ran its owner
+# gate and skipped) skips everything from here to the stage4 pack, so what the
 # late steps (stage4, .img, live ISO, installer ISO) call or read is defined here, on
 # every path: the sudoers helpers, the chroot mount helpers with the live-ISO pack
 # helpers, and the names and paths below. Only definitions — nothing here touches
@@ -4620,7 +4654,6 @@ if [ -n "${FROM_STEP}" ]; then
     banner "Rerunning from step ${FROM_STEP} (build ${BUILD_TS}: the steps before it are kept, not repeated)"
     [ -f "${SYSROOT}/etc/gentoo-release" ] \
         || { err "--from-step ${FROM_STEP}: no build system at ${SYSROOT} to continue"; exit 1; }
-    hmr_owner_gate "${SYSROOT}" || exit 1
     [ -s "${SLX_PROBE_TABLE}" ] \
         || { err "--from-step ${FROM_STEP}: ${SLX_PROBE_TABLE} is missing — the earlier run never labelled the sysroot"; exit 1; }
     SLX_TYPE="$(slx_policy_type "${SYSROOT}")"
@@ -4638,38 +4671,6 @@ fi
 # ── The skippable region: every step that changes the sysroot ─────────────────
 # (a --from-step rerun goes straight to the stage4 pack below)
 if [ -z "${FROM_STEP}" ]; then
-if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
-    # A build system is only reusable when it is still ROOT'S. After a native
-    # build through `make`, chown-artifacts used to hand the whole work
-    # directory to the invoking user, sysroot included; a build resumed from
-    # that tree finished green and wrote an image whose every directory was
-    # uid 1002 (sshd, systemd-tmpfiles, snort and tor all refused to start,
-    # #659). This is the FIRST thing that looks at the sysroot on the resume
-    # path: no mount, emerge or write has happened yet. Restoring ownership is
-    # not an option (see the lib: a stage3 ships 24 non-root entries, a built
-    # image many more, and portage records no owner) — refuse, in one sentence.
-    hmr_owner_gate "${SYSROOT}" || exit 1
-    info "Sysroot populated and --resume — skipping extraction"
-else
-    # A non-resume build must start from a CLEAN sysroot. Extracting stage3 OVER a
-    # populated tree leaves stale packages (e.g. extra python slots, old kubelet)
-    # in var/db/pkg — a HYBRID db that breaks dep resolution (observed: 3 python
-    # slots surviving + libselinux[python] conflicts). Wipe first so the extract
-    # is pristine. (Warm reuse is the explicit --resume path above.)
-    if [ -f "${SYSROOT}/etc/gentoo-release" ]; then
-        warn "Non-resume build over a populated sysroot — wiping for a clean stage3 extract"
-        rm -rf "${SYSROOT}"; mkdir -p "${SYSROOT}"
-    fi
-    tar -C "${SYSROOT}" --xattrs-include='*.*' -xpf "${STAGE3_LOCAL}" 2>/dev/null || \
-        tar -C "${SYSROOT}" -xpf "${STAGE3_LOCAL}"
-    # Record which seed this build system came from, BESIDE the sysroot (the
-    # clean step and the image never see it). A later --resume restores the
-    # stripped static libraries from THIS seed, not from whatever seed is
-    # newest that day (binutils moved 2.46.1 -> 2.47 between two seeds a week
-    # apart while glibc and gcc did not; a restore from the wrong one is the
-    # silent variant of the same failure).
-    hmr_seed_marker_write "${BUILD_ROOT}" "${STAGE3_LOCAL}" || true
-fi
 
 # ── Build-only sudoers grant: removed on EVERY path, verified before packing ──
 # The block below gives the portage build user `NOPASSWD: ALL` inside the sysroot so

@@ -192,16 +192,19 @@ for st in package-stage4 image-raw image-live image-installer; do
     grep -qE "late_step_done ${st}" "${late}" && ok "${st} records done=${st}" || bad "${st} is never recorded as done"
 done
 mid="${TMPD}/real/mid"
-tail -5 "${mid}" | grep -qF 'printf '"'"'BUILD_TS=%s\nKCACHE_HIT=%s\n'"'"' "${BUILD_TS}"' \
+tail -5 "${mid}" | grep -F 'printf '"'"'BUILD_TS=%s\nKCACHE_HIT=%s\n'"'"' "${BUILD_TS}"' >/dev/null \
     && ok "the late-step record is written as the region's last statement (the sysroot is final there)" \
     || bad "the late-step record is not written at the end of the skippable region"
 pre="${TMPD}/real/pre"
-awk '/^if \[ -n "\$\{FROM_STEP\}" \]; then$/{f=1} f&&/^else$/{e=1} e&&/rm -f "\$\{LATE_STATE\}"/{print "hit"; exit}' "${pre}" | grep -qx hit \
+awk '/^if \[ -n "\$\{FROM_STEP\}" \]; then$/{f=1} f&&/^else$/{e=1} e&&/rm -f "\$\{LATE_STATE\}"/{print "hit"; exit}' "${pre}" | grep -x hit >/dev/null \
     && ok "a full run removes the old record before it changes anything" \
     || bad "a full run does not remove an old late-step record first (a run that dies early would leave a stale one)"
-grep -qE '^    hmr_owner_gate "\$\{SYSROOT\}" \|\| exit 1$' "${pre}" \
-    && ok "a rerun checks the build system's ownership (hmr_owner_gate) like --resume does" \
-    || bad "a rerun skips the ownership gate"
+# The extraction block (owner gate on its --resume branch) stays BEFORE the region, so
+# a rerun — always --resume — passes the same ownership gate and extracts nothing.
+grep -qxF 'if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then' "${pre}" \
+    && grep -qE '^    hmr_owner_gate "\$\{SYSROOT\}" \|\| exit 1$' "${pre}" \
+    && ok "a rerun passes the extraction block's --resume owner gate (it sits before the skipped region)" \
+    || bad "the extraction block (and its owner gate) is no longer ahead of the skipped region"
 
 echo
 echo "x86 --from-step guards: ${P} passed, ${F} failed"
