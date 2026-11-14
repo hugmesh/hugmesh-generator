@@ -75,7 +75,7 @@ from ...core.worklist_driver import WorklistDriver
 from ._device_table import DeviceTable
 from ._gating import (clear_unsupported, gate_widgets, gate_widgets_role_class,
                       platform_supports, unsupported_note)
-from ._widgets import _file_picker, _row, collapsible
+from ._widgets import _file_picker, _row, collapsible, hold_thread
 from .packages_dialog import PackagesDialog
 
 # mesh roles whose image carries a GPU stack (the summary "GPU" chip).
@@ -1790,9 +1790,13 @@ class BuildPage(QtWidgets.QWizardPage):
             self._on_preflight_done([f"cannot assemble the build: {e}"], False,
                                     self._recompute_gen)
             return
-        self._preflight_worker = _PreflightWorker(
+        # hold_thread: held for exactly as long as it runs, so neither a dropped page
+        # nor the test suite's end-of-session drain (which waits on that registry)
+        # can leave it running when its wrapper is collected (a qFatal). The debounce
+        # timer can fire it from ANY event pump, the drain's own included.
+        self._preflight_worker = hold_thread(_PreflightWorker(
             self.wiz.generator_dir, worklist, self.wiz.host, self._backend(),
-            self.wiz.driver, self._recompute_gen)
+            self.wiz.driver, self._recompute_gen))
         self._preflight_worker.done.connect(self._on_preflight_done)
         self._preflight_worker.start()
 
