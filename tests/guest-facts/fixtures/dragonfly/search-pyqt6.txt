@@ -1,0 +1,2 @@
+$ pkg search -q qt6-pyqt
+rc=1

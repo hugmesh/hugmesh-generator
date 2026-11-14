@@ -6026,16 +6026,33 @@ live_root_gate() {
 # live_label_gate <squashfs.img> — refuse to ship a live root without SELinux labels
 # (#503). Reads the PACKED image: a full unsquashfs into a scratch dir (13 s for the
 # 1.9 GB backend squashfs), then slx_label_gate's exact-type probes and its >= 99%
-# census. Unlike live_root_gate this has NO "cannot look, return 0" branch: with no
-# unsquashfs on the host it FAILS — an unverified label set is the exact state that
+# census. Unlike live_root_gate this has NO "cannot look, return 0" branch: with
+# neither unsquashfs nor rdsquashfs on the host it FAILS — an unverified label set is the exact state that
 # shipped every live ISO before this gate existed (1,124 labelled of 159,376).
 live_label_gate() {
     local sq="$1" tmp rc=0
     [ -s "${sq}" ] || { err "live-label gate: ${sq} is missing or empty"; return 1; }
-    command -v unsquashfs >/dev/null || { err "live-label gate: no unsquashfs on this host — cannot read ${sq}'s labels, refusing to ship it unverified"; return 1; }
+    # unsquashfs (squashfs-tools) restores xattrs by default; rdsquashfs
+    # (squashfs-tools-ng, the only one on a host that packs with tar2sqfs) needs -X,
+    # or every label is dropped and the census below fails the image, never passes it.
+    local unpack
+    if command -v unsquashfs >/dev/null; then
+        unpack=(unsquashfs -no-progress -f -d)
+    elif command -v rdsquashfs >/dev/null; then
+        unpack=(rdsquashfs -q -X -u / -p)
+    else
+        err "live-label gate: neither unsquashfs nor rdsquashfs on this host — cannot read ${sq}'s labels, refusing to ship it unverified"; return 1
+    fi
     tmp="$(mktemp -d "${BUILD_ROOT}/live-label-gate.XXXXXX")" || return 1
-    if ! unsquashfs -no-progress -f -d "${tmp}" "${sq}" >/dev/null; then
-        err "live-label gate: unsquashfs could not extract ${sq}"; rm -rf "${tmp}"; return 1
+    if ! "${unpack[@]}" "${tmp}" "${sq}" >/dev/null; then
+        err "live-label gate: ${unpack[0]} could not extract ${sq}"; rm -rf "${tmp}"; return 1
+    fi
+    # rdsquashfs -u / labels everything below the unpack dir but not the dir itself,
+    # so the image root's label is copied across (unsquashfs -f sets it already).
+    if [ "${unpack[0]}" = rdsquashfs ]; then
+        local rootlab
+        rootlab="$(rdsquashfs -x / "${sq}" 2>/dev/null | sed -n 's/^security\.selinux=//p' | head -1)" || rootlab=""
+        [ -z "${rootlab}" ] || setfattr -h -n security.selinux -v "${rootlab}" "${tmp}" 2>/dev/null || true
     fi
     slx_label_gate "${tmp}" squashfs "${SLX_PROBE_TABLE}" --census || rc=1
     rm -rf "${tmp}"

@@ -1,0 +1,5 @@
+kind	path	bytes	sha256
+action	vmactions/netbsd-vm@5957cf330aef2e6ddc63c604364c99ce2e02b91d		
+release	11.1		
+image	netbsd/v2.2.9/netbsd-11.1.qcow2	1541865472	1cc4ed02266d92c488b031ecc56d4c54173386322ca55a9dbab44d4ebd99bd1a
+anyvm.py	anyvm.py	624113	c192b299b9bf1b9f07b1d5e5b3977b518f8f24a9af9c20da259cdca22271d9f5

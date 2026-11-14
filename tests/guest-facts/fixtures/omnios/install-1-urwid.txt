@@ -1,0 +1,10 @@
+$ as_root sh -c pkg install library/python/urwid-313
+ Startup: Refreshing catalog 'extra.omnios' ... Done
+ Startup: Refreshing catalog 'omnios' ... Done
+ Startup: Caching catalogs ... Done
+
+pkg install: The following pattern(s) did not match any allowable packages.  Try
+using a different matching pattern, or refreshing publisher information:
+
+	library/python/urwid-313
+rc=1

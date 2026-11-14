@@ -1,0 +1,38 @@
+$ /tmp/guest-facts.693/venv/bin/python -m pip install pytest PyYAML
+Collecting pytest
+  Downloading pytest-9.2.0-py3-none-any.whl.metadata (7.9 kB)
+Collecting PyYAML
+  Downloading pyyaml-6.0.3.tar.gz (130 kB)
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Collecting iniconfig>=2 (from pytest)
+  Downloading iniconfig-2.3.1-py3-none-any.whl.metadata (2.8 kB)
+Collecting packaging>=24 (from pytest)
+  Downloading packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+Collecting pluggy<2,>=1.6 (from pytest)
+  Downloading pluggy-1.7.0-py3-none-any.whl.metadata (5.0 kB)
+Collecting pygments>=2.15 (from pytest)
+  Downloading pygments-2.21.0-py3-none-any.whl.metadata (2.5 kB)
+Downloading pytest-9.2.0-py3-none-any.whl (411 kB)
+Downloading pluggy-1.7.0-py3-none-any.whl (27 kB)
+Downloading iniconfig-2.3.1-py3-none-any.whl (7.6 kB)
+Downloading packaging-26.3-py3-none-any.whl (129 kB)
+Downloading pygments-2.21.0-py3-none-any.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 47.6 MB/s  0:00:00
+Building wheels for collected packages: PyYAML
+  Building wheel for PyYAML (pyproject.toml): started
+  Building wheel for PyYAML (pyproject.toml): finished with status 'done'
+  Created wheel for PyYAML: filename=pyyaml-6.0.3-cp313-cp313-solaris_2_11_i86pc_64bit.whl size=45471 sha256=41de0a2994c41c5335bd4a7485dbeb7e1a78187d75dcf5fc1d6636bf67517a5a
+  Stored in directory: /root/.cache/pip/wheels/aa/29/40/b2d39adcf3d4ad62005bbc244cbeb5cc01d37ffd17fdc79a4a
+Successfully built PyYAML
+Installing collected packages: PyYAML, pygments, pluggy, packaging, iniconfig, pytest
+
+Successfully installed PyYAML-6.0.3 iniconfig-2.3.1 packaging-26.3 pluggy-1.7.0 pygments-2.21.0 pytest-9.2.0
+
+[notice] A new release of pip is available: 26.2.1 -> 26.3
+[notice] To update, run: /tmp/guest-facts.693/venv/bin/python -m pip install --upgrade pip
+rc=0

@@ -1,0 +1,3 @@
+$ uname -s
+NetBSD
+rc=0

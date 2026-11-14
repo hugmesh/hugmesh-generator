@@ -60,6 +60,7 @@ FULL_ROW = dict(
     # every field says something, or the battery is blind to it (_differences
     # compares None == None for a key the row does not carry)
     github_org="shop-org",
+    signin_methods=["password", "discord"],
     # per-domain identity-provider settings (2026-10-21)
     idp_settings={"provider": "oidc", "issuer": "https://id.shop.example",
                   "client_id": "shop-app", "jwks": "https://id.shop.example/keys"},

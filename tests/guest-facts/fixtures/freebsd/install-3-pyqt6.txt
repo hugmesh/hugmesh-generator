@@ -1,0 +1,1162 @@
+$ as_root sh -c pkg install -y py312-qt6-pyqt
+Updating FreeBSD-ports repository catalogue...
+FreeBSD-ports repository is up to date.
+Updating FreeBSD-ports-kmods repository catalogue...
+FreeBSD-ports-kmods repository is up to date.
+Updating FreeBSD-base repository catalogue...
+FreeBSD-base repository is up to date.
+All repositories are up to date.
+The following 230 package(s) will be affected (of 0 checked):
+
+New packages to be INSTALLED:
+	Imath: 3.2.3_1 [FreeBSD-ports]
+	abseil: 20250127.1_2 [FreeBSD-ports]
+	adwaita-icon-theme: 47.0 [FreeBSD-ports]
+	adwaita-icon-theme-legacy: 46.2 [FreeBSD-ports]
+	aom: 3.15.3 [FreeBSD-ports]
+	assimp: 6.0.5 [FreeBSD-ports]
+	at-spi2-core: 2.60.4 [FreeBSD-ports]
+	avahi-app: 0.8_6 [FreeBSD-ports]
+	bash: 5.3.20 [FreeBSD-ports]
+	binutils: 2.44_1,1 [FreeBSD-ports]
+	boost-libs: 1.92.0 [FreeBSD-ports]
+	brotli: 1.2.1,1 [FreeBSD-ports]
+	cairo: 1.18.6,3 [FreeBSD-ports]
+	colord: 1.4.8_2 [FreeBSD-ports]
+	consolekit2: 2.0.0_2 [FreeBSD-ports]
+	cups: 2.4.20 [FreeBSD-ports]
+	curl: 8.23.0 [FreeBSD-ports]
+	dav1d: 1.5.4_1 [FreeBSD-ports]
+	dbus: 1.16.2_4,1 [FreeBSD-ports]
+	dbus-glib: 0.116 [FreeBSD-ports]
+	dotconf: 1.4.1_1 [FreeBSD-ports]
+	double-conversion: 3.4.0 [FreeBSD-ports]
+	duktape-lib: 2.7.0_1 [FreeBSD-ports]
+	ebur128: 0.1.11 [FreeBSD-ports]
+	espeak-ng: 1.52.0_1 [FreeBSD-ports]
+	ffmpeg: 9.0.2_3,1 [FreeBSD-ports]
+	fftw3: 3.3.11 [FreeBSD-ports]
+	fftw3-float: 3.3.11 [FreeBSD-ports]
+	flac: 1.5.0,1 [FreeBSD-ports]
+	fontconfig: 2.18.3,1 [FreeBSD-ports]
+	freetype2: 2.14.3 [FreeBSD-ports]
+	fribidi: 1.0.18 [FreeBSD-ports]
+	gcc14: 14.2.0_7 [FreeBSD-ports]
+	gdbm: 1.26 [FreeBSD-ports]
+	gdk-pixbuf2: 2.44.1 [FreeBSD-ports]
+	giflib: 6.1.3 [FreeBSD-ports]
+	glib-networking: 2.90.0 [FreeBSD-ports]
+	gmp: 6.3.0 [FreeBSD-ports]
+	gnome_subr: 1.0 [FreeBSD-ports]
+	gnutls: 3.8.13 [FreeBSD-ports]
+	gobject-introspection: 1.86.0,1 [FreeBSD-ports]
+	graphene: 1.10.8_1 [FreeBSD-ports]
+	graphite2: 1.3.15_1 [FreeBSD-ports]
+	gsettings-desktop-schemas: 47.1_2 [FreeBSD-ports]
+	gstreamer1: 1.28.9 [FreeBSD-ports]
+	gstreamer1-plugins: 1.28.9 [FreeBSD-ports]
+	gstreamer1-plugins-bad: 1.28.9 [FreeBSD-ports]
+	gstreamer1-plugins-gl: 1.28.9 [FreeBSD-ports]
+	gstreamer1-plugins-good: 1.28.9 [FreeBSD-ports]
+	gstreamer1-plugins-pulse: 1.28.9 [FreeBSD-ports]
+	gstreamer1-plugins-ugly: 1.28.9 [FreeBSD-ports]
+	gtk-update-icon-cache: 3.24.42 [FreeBSD-ports]
+	gtk3: 3.24.52 [FreeBSD-ports]
+	harfbuzz: 15.0.0 [FreeBSD-ports]
+	hicolor-icon-theme: 0.18 [FreeBSD-ports]
+	highway: 1.4.0 [FreeBSD-ports]
+	hwdata: 0.413,1 [FreeBSD-ports]
+	icu: 76.1,1 [FreeBSD-ports]
+	iso-codes: 4.20.1 [FreeBSD-ports]
+	jackit: 1.9.22_3 [FreeBSD-ports]
+	jasper: 4.2.9 [FreeBSD-ports]
+	jbigkit: 2.1_3 [FreeBSD-ports]
+	jpeg-turbo: 3.1.4.1 [FreeBSD-ports]
+	json-glib: 1.10.8 [FreeBSD-ports]
+	lame: 4.0 [FreeBSD-ports]
+	lcms2: 2.19.1 [FreeBSD-ports]
+	lerc: 4.2.0 [FreeBSD-ports]
+	libICE: 1.1.2,1 [FreeBSD-ports]
+	libSM: 1.2.6,1 [FreeBSD-ports]
+	libX11: 1.8.14,1 [FreeBSD-ports]
+	libXScrnSaver: 1.2.5 [FreeBSD-ports]
+	libXau: 1.0.12 [FreeBSD-ports]
+	libXcomposite: 0.4.7,1 [FreeBSD-ports]
+	libXcursor: 1.2.3 [FreeBSD-ports]
+	libXdamage: 1.1.7 [FreeBSD-ports]
+	libXdmcp: 1.1.5 [FreeBSD-ports]
+	libXext: 1.3.7,1 [FreeBSD-ports]
+	libXfixes: 6.0.2 [FreeBSD-ports]
+	libXft: 2.3.9 [FreeBSD-ports]
+	libXi: 1.8.4,1 [FreeBSD-ports]
+	libXinerama: 1.1.6,1 [FreeBSD-ports]
+	libXrandr: 1.5.5 [FreeBSD-ports]
+	libXrender: 0.9.13 [FreeBSD-ports]
+	libXres: 1.2.3 [FreeBSD-ports]
+	libXtst: 1.2.6 [FreeBSD-ports]
+	libXv: 1.0.13,1 [FreeBSD-ports]
+	libass: 0.17.5 [FreeBSD-ports]
+	libb2: 0.98.1_1 [FreeBSD-ports]
+	libbluray: 1.5.1,1 [FreeBSD-ports]
+	libdaemon: 0.14_1 [FreeBSD-ports]
+	libdatrie: 0.2.14_1 [FreeBSD-ports]
+	libdeflate: 1.26 [FreeBSD-ports]
+	libdrm: 2.4.134,1 [FreeBSD-ports]
+	libdvdnav: 7.0.0 [FreeBSD-ports]
+	libdvdread: 7.1.1 [FreeBSD-ports]
+	libedit: 3.1.20260512,1 [FreeBSD-ports]
+	libepoll-shim: 0.0.20240608 [FreeBSD-ports]
+	libepoxy: 1.5.10 [FreeBSD-ports]
+	libevdev: 1.13.2 [FreeBSD-ports]
+	libevent: 2.1.13 [FreeBSD-ports]
+	libgcrypt: 1.12.4 [FreeBSD-ports]
+	libglvnd: 1.7.0 [FreeBSD-ports]
+	libgpg-error: 1.61 [FreeBSD-ports]
+	libgudev: 237 [FreeBSD-ports]
+	libgusb: 0.4.9_1 [FreeBSD-ports]
+	libidn2: 2.3.8 [FreeBSD-ports]
+	libinotify: 20240724_3 [FreeBSD-ports]
+	libinput: 1.31.1_1 [FreeBSD-ports]
+	libjxl: 0.12.0 [FreeBSD-ports]
+	libltdl: 2.6.2 [FreeBSD-ports]
+	libmng: 2.0.3_3 [FreeBSD-ports]
+	libmtdev: 1.1.7 [FreeBSD-ports]
+	libnghttp2: 1.70.0 [FreeBSD-ports]
+	libogg: 1.3.6,4 [FreeBSD-ports]
+	libpaper: 1.1.28_1 [FreeBSD-ports]
+	libpciaccess: 0.19 [FreeBSD-ports]
+	libplacebo: 7.387.0 [FreeBSD-ports]
+	libproxy: 0.5.10_1 [FreeBSD-ports]
+	libpsl: 0.23.3 [FreeBSD-ports]
+	librsvg2-rust: 2.63.4 [FreeBSD-ports]
+	libsamplerate: 0.2.2_1 [FreeBSD-ports]
+	libsndfile: 1.2.2.20251216 [FreeBSD-ports]
+	libsoup3: 3.7.3 [FreeBSD-ports]
+	libsoxr: 0.1.3_3 [FreeBSD-ports]
+	libssh2: 1.11.1_1,3 [FreeBSD-ports]
+	libsysinfo: 0.0.3_3 [FreeBSD-ports]
+	libtasn1: 4.21.0 [FreeBSD-ports]
+	libthai: 0.1.30 [FreeBSD-ports]
+	libudev-devd: 0.7.0 [FreeBSD-ports]
+	libudfread: 1.2.0 [FreeBSD-ports]
+	libunibreak: 7.0,1 [FreeBSD-ports]
+	libunistring: 1.4.2 [FreeBSD-ports]
+	libunwind: 20250904 [FreeBSD-ports]
+	libv4l: 1.23.0_5 [FreeBSD-ports]
+	libva: 2.24.1 [FreeBSD-ports]
+	libvdpau: 1.5 [FreeBSD-ports]
+	libvorbis: 1.3.7_2,3 [FreeBSD-ports]
+	libvpx: 1.17.0 [FreeBSD-ports]
+	libwacom: 2.19.1 [FreeBSD-ports]
+	libx264: 0.165.3223_1 [FreeBSD-ports]
+	libxcb: 1.17.0 [FreeBSD-ports]
+	libxkbcommon: 1.13.2 [FreeBSD-ports]
+	libxkbfile: 1.2.0 [FreeBSD-ports]
+	libxml2: 2.15.4 [FreeBSD-ports]
+	libxshmfence: 1.3.3 [FreeBSD-ports]
+	libxslt: 1.1.45 [FreeBSD-ports]
+	libyaml: 0.2.5 [FreeBSD-ports]
+	llvm19: 19.1.7_5 [FreeBSD-ports]
+	lua53: 5.3.6_1 [FreeBSD-ports]
+	lua54: 5.4.8 [FreeBSD-ports]
+	lzo2: 2.10_2 [FreeBSD-ports]
+	minizip: 1.3.2_1 [FreeBSD-ports]
+	mpc: 1.4.1 [FreeBSD-ports]
+	mpfr: 4.2.2,1 [FreeBSD-ports]
+	mpg123: 1.33.7 [FreeBSD-ports]
+	nettle: 3.10.2 [FreeBSD-ports]
+	nspr: 4.39 [FreeBSD-ports]
+	nss: 3.133 [FreeBSD-ports]
+	openblas: 0.3.34_1,2 [FreeBSD-ports]
+	openexr: 3.4.17 [FreeBSD-ports]
+	openjpeg: 2.5.4_2 [FreeBSD-ports]
+	openjph: 0.32.0 [FreeBSD-ports]
+	opus: 1.6.1 [FreeBSD-ports]
+	orc: 0.4.44 [FreeBSD-ports]
+	p11-kit: 0.26.5_1 [FreeBSD-ports]
+	pango: 1.58.2 [FreeBSD-ports]
+	pcaudiolib: 1.3 [FreeBSD-ports]
+	pcsc-lite: 2.5.2_1,2 [FreeBSD-ports]
+	perl5: 5.42.3 [FreeBSD-ports]
+	pipewire: 1.6.9 [FreeBSD-ports]
+	pixman: 0.46.4 [FreeBSD-ports]
+	png: 1.6.59_1 [FreeBSD-ports]
+	polkit: 128 [FreeBSD-ports]
+	pulseaudio: 17.0_6 [FreeBSD-ports]
+	py312-PyQt6-sip: 13.11.1 [FreeBSD-ports]
+	py312-boost-libs: 1.92.0 [FreeBSD-ports]
+	py312-dbus: 1.4.0_1 [FreeBSD-ports]
+	py312-libevdev: 0.11_2 [FreeBSD-ports]
+	py312-numpy: 2.4.6_1,1 [FreeBSD-ports]
+	py312-pycairo: 1.29.1 [FreeBSD-ports]
+	py312-pygobject: 3.58.0 [FreeBSD-ports]
+	py312-pyudev: 0.24.1_1 [FreeBSD-ports]
+	py312-pyyaml: 6.0.3_1 [FreeBSD-ports]
+	py312-qt6-pyqt: 6.11.0 [FreeBSD-ports]
+	py312-setuptools: 63.1.0_3 [FreeBSD-ports]
+	py312-six: 1.17.0 [FreeBSD-ports]
+	pygobject-common: 3.58.0 [FreeBSD-ports]
+	qt6-base: 6.11.3_1 [FreeBSD-ports]
+	qt6-base_sqldriver-sqlite: 6.11.3 [FreeBSD-ports]
+	qt6-connectivity: 6.11.3 [FreeBSD-ports]
+	qt6-declarative: 6.11.3 [FreeBSD-ports]
+	qt6-imageformats: 6.11.3 [FreeBSD-ports]
+	qt6-multimedia: 6.11.3 [FreeBSD-ports]
+	qt6-pdf: 6.11.3 [FreeBSD-ports]
+	qt6-positioning: 6.11.3 [FreeBSD-ports]
+	qt6-quick3d: 6.11.3 [FreeBSD-ports]
+	qt6-quicktimeline: 6.11.3 [FreeBSD-ports]
+	qt6-remoteobjects: 6.11.3 [FreeBSD-ports]
+	qt6-scxml: 6.11.3 [FreeBSD-ports]
+	qt6-sensors: 6.11.3 [FreeBSD-ports]
+	qt6-serialport: 6.11.3 [FreeBSD-ports]
+	qt6-shadertools: 6.11.3 [FreeBSD-ports]
+	qt6-speech: 6.11.3 [FreeBSD-ports]
+	qt6-svg: 6.11.3 [FreeBSD-ports]
+	qt6-tools: 6.11.3 [FreeBSD-ports]
+	qt6-translations: 6.11.3 [FreeBSD-ports]
+	qt6-webchannel: 6.11.3 [FreeBSD-ports]
+	qt6-websockets: 6.11.3 [FreeBSD-ports]
+	shaderc: 2026.4_1 [FreeBSD-ports]
+	shared-mime-info: 2.4_2 [FreeBSD-ports]
+	speech-dispatcher: 0.12.1_1 [FreeBSD-ports]
+	speexdsp: 1.2.1 [FreeBSD-ports]
+	sqlite3: 3.54.1,1 [FreeBSD-ports]
+	srt: 1.5.7_1 [FreeBSD-ports]
+	svt-av1: 4.3.0 [FreeBSD-ports]
+	tiff: 4.7.2 [FreeBSD-ports]
+	vmaf: 3.2.1 [FreeBSD-ports]
+	vulkan-loader: 1.4.368 [FreeBSD-ports]
+	wayland: 1.26.0 [FreeBSD-ports]
+	webp: 1.6.0 [FreeBSD-ports]
+	webrtc-audio-processing: 1.3_1 [FreeBSD-ports]
+	x265: 4.3 [FreeBSD-ports]
+	xcb-util: 0.4.1,1 [FreeBSD-ports]
+	xcb-util-cursor: 0.1.6 [FreeBSD-ports]
+	xcb-util-image: 0.4.1 [FreeBSD-ports]
+	xcb-util-keysyms: 0.4.1 [FreeBSD-ports]
+	xcb-util-renderutil: 0.3.10 [FreeBSD-ports]
+	xcb-util-wm: 0.4.2 [FreeBSD-ports]
+	xkeyboard-config: 2.49 [FreeBSD-ports]
+	xorgproto: 2026.1 [FreeBSD-ports]
+
+Number of packages to be installed: 230
+
+The process will require 4 GiB more space.
+678 MiB to be downloaded.
+[  1/230] Fetching libsndfile-1.2.2.20251216: .......... done
+[  2/230] Fetching gstreamer1-plugins-pulse-1.28.9: ....... done
+[  3/230] Fetching libXfixes-6.0.2: .. done
+[  4/230] Fetching libxshmfence-1.3.3: . done
+[  5/230] Fetching libepoxy-1.5.10: .......... done
+[  6/230] Fetching webrtc-audio-processing-1.3_1: .......... done
+[  7/230] Fetching libXtst-1.2.6: ... done
+[  8/230] Fetching gdbm-1.26: .......... done
+[  9/230] Fetching pango-1.58.2: .......... done
+[ 10/230] Fetching hicolor-icon-theme-0.18: ... done
+[ 11/230] Fetching libmtdev-1.1.7: ... done
+[ 12/230] Fetching libxslt-1.1.45: .......... done
+[ 13/230] Fetching qt6-base_sqldriver-sqlite-6.11.3: ...... done
+[ 14/230] Fetching libltdl-2.6.2: ...... done
+[ 15/230] Fetching pygobject-common-3.58.0: ... done
+[ 16/230] Fetching qt6-pdf-6.11.3: .......... done
+[ 17/230] Fetching gdk-pixbuf2-2.44.1: .......... done
+[ 18/230] Fetching curl-8.23.0: .......... done
+[ 19/230] Fetching qt6-positioning-6.11.3: .......... done
+[ 20/230] Fetching duktape-lib-2.7.0_1: .......... done
+[ 21/230] Fetching libgudev-237: ....... done
+[ 22/230] Fetching dbus-1.16.2_4,1: .......... done
+[ 23/230] Fetching libunwind-20250904: .......... done
+[ 24/230] Fetching jbigkit-2.1_3: .......... done
+[ 25/230] Fetching qt6-sensors-6.11.3: .......... done
+[ 26/230] Fetching libvpx-1.17.0: .......... done
+[ 27/230] Fetching lua53-5.3.6_1: .......... done
+[ 28/230] Fetching libpaper-1.1.28_1: .... done
+[ 29/230] Fetching libgcrypt-1.12.4: .......... done
+[ 30/230] Fetching libxml2-2.15.4: .......... done
+[ 31/230] Fetching libsoxr-0.1.3_3: .......... done
+[ 32/230] Fetching assimp-6.0.5: .......... done
+[ 33/230] Fetching qt6-remoteobjects-6.11.3: .......... done
+[ 34/230] Fetching libXrandr-1.5.5: ..... done
+[ 35/230] Fetching libXdmcp-1.1.5: ... done
+[ 36/230] Fetching qt6-base-6.11.3_1: .......... done
+[ 37/230] Fetching libplacebo-7.387.0: .......... done
+[ 38/230] Fetching Imath-3.2.3_1: .......... done
+[ 39/230] Fetching libXdamage-1.1.7: . done
+[ 40/230] Fetching gstreamer1-plugins-1.28.9: .......... done
+[ 41/230] Fetching nss-3.133: .......... done
+[ 42/230] Fetching png-1.6.59_1: .......... done
+[ 43/230] Fetching polkit-128: .......... done
+[ 44/230] Fetching libssh2-1.11.1_1,3: .......... done
+[ 45/230] Fetching libdatrie-0.2.14_1: ...... done
+[ 46/230] Fetching vmaf-3.2.1: .......... done
+[ 47/230] Fetching libXinerama-1.1.6,1: .. done
+[ 48/230] Fetching jasper-4.2.9: .......... done
+[ 49/230] Fetching qt6-translations-6.11.3: .......... done
+[ 50/230] Fetching speexdsp-1.2.1: .......... done
+[ 51/230] Fetching avahi-app-0.8_6: .......... done
+[ 52/230] Fetching fribidi-1.0.18: .......... done
+[ 53/230] Fetching fftw3-3.3.11: .......... done
+[ 54/230] Fetching json-glib-1.10.8: .......... done
+[ 55/230] Fetching gobject-introspection-1.86.0,1: .......... done
+[ 56/230] Fetching libXcomposite-0.4.7,1: .. done
+[ 57/230] Fetching lzo2-2.10_2: .......... done
+[ 58/230] Fetching libunistring-1.4.2: .......... done
+[ 59/230] Fetching mpg123-1.33.7: .......... done
+[ 60/230] Fetching gstreamer1-plugins-ugly-1.28.9: .......... done
+[ 61/230] Fetching libdrm-2.4.134,1: .......... done
+[ 62/230] Fetching vulkan-loader-1.4.368: .......... done
+[ 63/230] Fetching libxcb-1.17.0: .......... done
+[ 64/230] Fetching libdaemon-0.14_1: ..... done
+[ 65/230] Fetching x265-4.3: .......... done
+[ 66/230] Fetching qt6-quick3d-6.11.3: .......... done
+[ 67/230] Fetching gstreamer1-plugins-gl-1.28.9: .......... done
+[ 68/230] Fetching qt6-connectivity-6.11.3: .......... done
+[ 69/230] Fetching jpeg-turbo-3.1.4.1: .......... done
+[ 70/230] Fetching lcms2-2.19.1: .......... done
+[ 71/230] Fetching libthai-0.1.30: .......... done
+[ 72/230] Fetching libpsl-0.23.3: ......... done
+[ 73/230] Fetching at-spi2-core-2.60.4: .......... done
+[ 74/230] Fetching sqlite3-3.54.1,1: .......... done
+[ 75/230] Fetching qt6-serialport-6.11.3: ......... done
+[ 76/230] Fetching mpfr-4.2.2,1: .......... done
+[ 77/230] Fetching cups-2.4.20: .......... done
+[ 78/230] Fetching libpciaccess-0.19: ... done
+[ 79/230] Fetching bash-5.3.20: .......... done
+[ 80/230] Fetching gnutls-3.8.13: .......... done
+[ 81/230] Fetching highway-1.4.0: .......... done
+[ 82/230] Fetching libXv-1.0.13,1: ..... done
+[ 83/230] Fetching py312-six-1.17.0: .... done
+[ 84/230] Fetching flac-1.5.0,1: .......... done
+[ 85/230] Fetching abseil-20250127.1_2: .......... done
+[ 86/230] Fetching svt-av1-4.3.0: .......... done
+[ 87/230] Fetching tiff-4.7.2: .......... done
+[ 88/230] Fetching xcb-util-cursor-0.1.6: .. done
+[ 89/230] Fetching qt6-tools-6.11.3: .......... done
+[ 90/230] Fetching webp-1.6.0: .......... done
+[ 91/230] Fetching libva-2.24.1: .......... done
+[ 92/230] Fetching libXrender-0.9.13: ..... done
+[ 93/230] Fetching mpc-1.4.1: .......... done
+[ 94/230] Fetching py312-pyudev-0.24.1_1: .......... done
+[ 95/230] Fetching qt6-imageformats-6.11.3: .......... done
+[ 96/230] Fetching gmp-6.3.0: .......... done
+[ 97/230] Fetching graphite2-1.3.15_1: .......... done
+[ 98/230] Fetching libunibreak-7.0,1: .... done
+[ 99/230] Fetching gnome_subr-1.0: . done
+[100/230] Fetching consolekit2-2.0.0_2: .......... done
+[101/230] Fetching libdeflate-1.26: .......... done
+[102/230] Fetching libdvdnav-7.0.0: ........ done
+[103/230] Fetching libXext-1.3.7,1: .......... done
+[104/230] Fetching fontconfig-2.18.3,1: .......... done
+[105/230] Fetching py312-pyyaml-6.0.3_1: .......... done
+[106/230] Fetching libXi-1.8.4,1: .......... done
+[107/230] Fetching libudfread-1.2.0: .... done
+[108/230] Fetching libjxl-0.12.0: .......... done
+[109/230] Fetching xcb-util-renderutil-0.3.10: .. done
+[110/230] Fetching libvdpau-1.5: ......... done
+[111/230] Fetching xcb-util-keysyms-0.4.1: .. done
+[112/230] Fetching qt6-multimedia-6.11.3: .......... done
+[113/230] Fetching openjph-0.32.0: .......... done
+[114/230] Fetching aom-3.15.3: .......... done
+[115/230] Fetching boost-libs-1.92.0: .......... done
+[116/230] Fetching openblas-0.3.34_1,2: .......... done
+[117/230] Fetching libnghttp2-1.70.0: .......... done
+[118/230] Fetching minizip-1.3.2_1: ....... done
+[119/230] Fetching libXau-1.0.12: .. done
+[120/230] Fetching nettle-3.10.2: .......... done
+[121/230] Fetching dav1d-1.5.4_1: .......... done
+[122/230] Fetching glib-networking-2.90.0: .......... done
+[123/230] Fetching py312-libevdev-0.11_2: ..... done
+[124/230] Fetching py312-numpy-2.4.6_1,1: .......... done
+[125/230] Fetching jackit-1.9.22_3: .......... done
+[126/230] Fetching adwaita-icon-theme-47.0: .......... done
+[127/230] Fetching libwacom-2.19.1: .......... done
+[128/230] Fetching libudev-devd-0.7.0: ... done
+[129/230] Fetching xcb-util-wm-0.4.2: ...... done
+[130/230] Fetching perl5-5.42.3: .......... done
+[131/230] Fetching libtasn1-4.21.0: .......... done
+[132/230] Fetching libsoup3-3.7.3: .......... done
+[133/230] Fetching espeak-ng-1.52.0_1: .......... done
+[134/230] Fetching brotli-1.2.1,1: .......... done
+[135/230] Fetching xkeyboard-config-2.49: .......... done
+[136/230] Fetching lame-4.0: .......... done
+[137/230] Fetching py312-pycairo-1.29.1: .......... done
+[138/230] Fetching srt-1.5.7_1: .......... done
+[139/230] Fetching llvm19-19.1.7_5: .......... done
+[140/230] Fetching giflib-6.1.3: .......... done
+[141/230] Fetching libglvnd-1.7.0: .......... done
+[142/230] Fetching speech-dispatcher-0.12.1_1: .......... done
+[143/230] Fetching py312-setuptools-63.1.0_3: .......... done
+[144/230] Fetching hwdata-0.413,1: .......... done
+[145/230] Fetching gcc14-14.2.0_7: .......... done
+[146/230] Fetching libsysinfo-0.0.3_3: .... done
+[147/230] Fetching libgpg-error-1.61: .......... done
+[148/230] Fetching libinput-1.31.1_1: .......... done
+[149/230] Fetching pipewire-1.6.9: .......... done
+[150/230] Fetching dotconf-1.4.1_1: ...... done
+[151/230] Fetching pcsc-lite-2.5.2_1,2: .......... done
+[152/230] Fetching wayland-1.26.0: .......... done
+[153/230] Fetching iso-codes-4.20.1: .......... done
+[154/230] Fetching adwaita-icon-theme-legacy-46.2: .......... done
+[155/230] Fetching libx264-0.165.3223_1: .......... done
+[156/230] Fetching py312-boost-libs-1.92.0: .......... done
+[157/230] Fetching libxkbfile-1.2.0: .......... done
+[158/230] Fetching py312-PyQt6-sip-13.11.1: ........ done
+[159/230] Fetching libXres-1.2.3: .. done
+[160/230] Fetching dbus-glib-0.116: .......... done
+[161/230] Fetching libedit-3.1.20260512,1: .......... done
+[162/230] Fetching libSM-1.2.6,1: .... done
+[163/230] Fetching lerc-4.2.0: .......... done
+[164/230] Fetching gstreamer1-1.28.9: .......... done
+[165/230] Fetching libmng-2.0.3_3: .......... done
+[166/230] Fetching py312-dbus-1.4.0_1: .......... done
+[167/230] Fetching libv4l-1.23.0_5: .......... done
+[168/230] Fetching graphene-1.10.8_1: .......... done
+[169/230] Fetching nspr-4.39: .......... done
+[170/230] Fetching gstreamer1-plugins-bad-1.28.9: .......... done
+[171/230] Fetching qt6-scxml-6.11.3: .......... done
+[172/230] Fetching libevent-2.1.13: .......... done
+[173/230] Fetching qt6-svg-6.11.3: .......... done
+[174/230] Fetching libidn2-2.3.8: .......... done
+[175/230] Fetching libsamplerate-0.2.2_1: .......... done
+[176/230] Fetching librsvg2-rust-2.63.4: .......... done
+[177/230] Fetching libXScrnSaver-1.2.5: .. done
+[178/230] Fetching shared-mime-info-2.4_2: .......... done
+[179/230] Fetching shaderc-2026.4_1: .......... done
+[180/230] Fetching libXft-2.3.9: .......... done
+[181/230] Fetching libXcursor-1.2.3: ...... done
+[182/230] Fetching pulseaudio-17.0_6: .......... done
+[183/230] Fetching qt6-speech-6.11.3: .......... done
+[184/230] Fetching cairo-1.18.6,3: .......... done
+[185/230] Fetching qt6-declarative-6.11.3: .......... done
+[186/230] Fetching gstreamer1-plugins-good-1.28.9: .......... done
+[187/230] Fetching gtk3-3.24.52: .......... done
+[188/230] Fetching lua54-5.4.8: .......... done
+[189/230] Fetching pcaudiolib-1.3: ... done
+[190/230] Fetching pixman-0.46.4: .......... done
+[191/230] Fetching ebur128-0.1.11: .......... done
+[192/230] Fetching gtk-update-icon-cache-3.24.42: .......... done
+[193/230] Fetching libX11-1.8.14,1: .......... done
+[194/230] Fetching colord-1.4.8_2: .......... done
+[195/230] Fetching libbluray-1.5.1,1: .......... done
+[196/230] Fetching libevdev-1.13.2: ........ done
+[197/230] Fetching icu-76.1,1: .......... done
+[198/230] Fetching libdvdread-7.1.1: .......... done
+[199/230] Fetching py312-pygobject-3.58.0: .......... done
+[200/230] Fetching ffmpeg-9.0.2_3,1: .......... done
+[201/230] Fetching binutils-2.44_1,1: .......... done
+[202/230] Fetching libxkbcommon-1.13.2: .......... done
+[203/230] Fetching p11-kit-0.26.5_1: .......... done
+[204/230] Fetching fftw3-float-3.3.11: .......... done
+[205/230] Fetching freetype2-2.14.3: .......... done
+[206/230] Fetching libproxy-0.5.10_1: .......... done
+[207/230] Fetching libogg-1.3.6,4: .......... done
+[208/230] Fetching libinotify-20240724_3: .... done
+[209/230] Fetching qt6-shadertools-6.11.3: .......... done
+[210/230] Fetching openexr-3.4.17: .......... done
+[211/230] Fetching xcb-util-image-0.4.1: ... done
+[212/230] Fetching opus-1.6.1: .......... done
+[213/230] Fetching libICE-1.1.2,1: .......... done
+[214/230] Fetching qt6-websockets-6.11.3: .......... done
+[215/230] Fetching qt6-webchannel-6.11.3: .......... done
+[216/230] Fetching gsettings-desktop-schemas-47.1_2: .......... done
+[217/230] Fetching double-conversion-3.4.0: ....... done
+[218/230] Fetching harfbuzz-15.0.0: .......... done
+[219/230] Fetching libvorbis-1.3.7_2,3: .......... done
+[220/230] Fetching py312-qt6-pyqt-6.11.0: .......... done
+[221/230] Fetching xcb-util-0.4.1,1: .. done
+[222/230] Fetching libyaml-0.2.5: .......... done
+[223/230] Fetching xorgproto-2026.1: .......... done
+[224/230] Fetching libepoll-shim-0.0.20240608: ... done
+[225/230] Fetching qt6-quicktimeline-6.11.3: .......... done
+[226/230] Fetching orc-0.4.44: .......... done
+[227/230] Fetching libass-0.17.5: .......... done
+[228/230] Fetching libgusb-0.4.9_1: .......... done
+[229/230] Fetching openjpeg-2.5.4_2: .......... done
+[230/230] Fetching libb2-0.98.1_1: ...... done
+Checking integrity... done (0 conflicting)
+[  1/230] Installing bash-5.3.20...
+[  1/230] Extracting bash-5.3.20: .......... done
+[  2/230] Installing binutils-2.44_1,1...
+[  2/230] Extracting binutils-2.44_1,1: .......... done
+[  3/230] Installing gcc14-14.2.0_7...
+[  3/230] Extracting gcc14-14.2.0_7: .......... done
+[  4/230] Installing gmp-6.3.0...
+[  4/230] Extracting gmp-6.3.0: .......... done
+[  5/230] Installing mpc-1.4.1...
+[  5/230] Extracting mpc-1.4.1: .......... done
+[  6/230] Installing mpfr-4.2.2,1...
+[  6/230] Extracting mpfr-4.2.2,1: .......... done
+[  7/230] Installing abseil-20250127.1_2...
+[  7/230] Extracting abseil-20250127.1_2: .......... done
+[  8/230] Installing brotli-1.2.1,1...
+[  8/230] Extracting brotli-1.2.1,1: .......... done
+[  9/230] Installing dav1d-1.5.4_1...
+[  9/230] Extracting dav1d-1.5.4_1: .......... done
+[ 10/230] Installing dotconf-1.4.1_1...
+[ 10/230] Extracting dotconf-1.4.1_1: .......... done
+[ 11/230] Installing double-conversion-3.4.0...
+[ 11/230] Extracting double-conversion-3.4.0: .......... done
+[ 12/230] Installing duktape-lib-2.7.0_1...
+[ 12/230] Extracting duktape-lib-2.7.0_1: ......... done
+[ 13/230] Installing ebur128-0.1.11...
+[ 13/230] Extracting ebur128-0.1.11: ......... done
+[ 14/230] Installing fribidi-1.0.18...
+[ 14/230] Extracting fribidi-1.0.18: .......... done
+[ 15/230] Installing gdbm-1.26...
+[ 15/230] Extracting gdbm-1.26: .......... done
+[ 16/230] Installing giflib-6.1.3...
+[ 16/230] Extracting giflib-6.1.3: .......... done
+[ 17/230] Installing gnome_subr-1.0...
+[ 17/230] Extracting gnome_subr-1.0: .... done
+[ 18/230] Installing graphite2-1.3.15_1...
+[ 18/230] Extracting graphite2-1.3.15_1: .......... done
+[ 19/230] Installing gsettings-desktop-schemas-47.1_2...
+[ 19/230] Extracting gsettings-desktop-schemas-47.1_2: .......... done
+[ 20/230] Installing hicolor-icon-theme-0.18...
+[ 20/230] Extracting hicolor-icon-theme-0.18: . done
+[ 21/230] Installing highway-1.4.0...
+[ 21/230] Extracting highway-1.4.0: .......... done
+[ 22/230] Installing hwdata-0.413,1...
+[ 22/230] Extracting hwdata-0.413,1: .......... done
+[ 23/230] Installing icu-76.1,1...
+[ 23/230] Extracting icu-76.1,1: .......... done
+[ 24/230] Installing boost-libs-1.92.0...
+[ 24/230] Extracting boost-libs-1.92.0: .......... done
+[ 25/230] Installing iso-codes-4.20.1...
+[ 25/230] Extracting iso-codes-4.20.1: .......... done
+[ 26/230] Installing jbigkit-2.1_3...
+[ 26/230] Extracting jbigkit-2.1_3: .......... done
+[ 27/230] Installing jpeg-turbo-3.1.4.1...
+[ 27/230] Extracting jpeg-turbo-3.1.4.1: .......... done
+[ 28/230] Installing jasper-4.2.9...
+[ 28/230] Extracting jasper-4.2.9: .......... done
+[ 29/230] Installing lerc-4.2.0...
+[ 29/230] Extracting lerc-4.2.0: ........ done
+[ 30/230] Installing libICE-1.1.2,1...
+[ 30/230] Extracting libICE-1.1.2,1: .......... done
+[ 31/230] Installing libSM-1.2.6,1...
+[ 31/230] Extracting libSM-1.2.6,1: .......... done
+[ 32/230] Installing libXau-1.0.12...
+[ 32/230] Extracting libXau-1.0.12: .......... done
+[ 33/230] Installing libdaemon-0.14_1...
+[ 33/230] Extracting libdaemon-0.14_1: .......... done
+[ 34/230] Installing libdatrie-0.2.14_1...
+[ 34/230] Extracting libdatrie-0.2.14_1: .......... done
+[ 35/230] Installing libdeflate-1.26...
+[ 35/230] Extracting libdeflate-1.26: .......... done
+[ 36/230] Installing libdvdread-7.1.1...
+[ 36/230] Extracting libdvdread-7.1.1: .......... done
+[ 37/230] Installing libdvdnav-7.0.0...
+[ 37/230] Extracting libdvdnav-7.0.0: .......... done
+[ 38/230] Installing libedit-3.1.20260512,1...
+[ 38/230] Extracting libedit-3.1.20260512,1: .......... done
+[ 39/230] Installing libepoll-shim-0.0.20240608...
+[ 39/230] Extracting libepoll-shim-0.0.20240608: .......... done
+[ 40/230] Installing libevdev-1.13.2...
+[ 40/230] Extracting libevdev-1.13.2: .......... done
+[ 41/230] Installing libevent-2.1.13...
+[ 41/230] Extracting libevent-2.1.13: .......... done
+[ 42/230] Installing libgpg-error-1.61...
+[ 42/230] Extracting libgpg-error-1.61: .......... done
+[ 43/230] Installing libgcrypt-1.12.4...
+[ 43/230] Extracting libgcrypt-1.12.4: .......... done
+[ 44/230] Installing libinotify-20240724_3...
+[ 44/230] Extracting libinotify-20240724_3: .......... done
+[ 45/230] Installing libltdl-2.6.2...
+[ 45/230] Extracting libltdl-2.6.2: .......... done
+[ 46/230] Installing libmtdev-1.1.7...
+[ 46/230] Extracting libmtdev-1.1.7: .......... done
+[ 47/230] Installing libnghttp2-1.70.0...
+[ 47/230] Extracting libnghttp2-1.70.0: .......... done
+[ 48/230] Installing libogg-1.3.6,4...
+[ 48/230] Extracting libogg-1.3.6,4: .......... done
+[ 49/230] Installing flac-1.5.0,1...
+[ 49/230] Extracting flac-1.5.0,1: .......... done
+[ 50/230] Installing libpaper-1.1.28_1...
+[ 50/230] Extracting libpaper-1.1.28_1: .......... done
+[ 51/230] Installing libpciaccess-0.19...
+[ 51/230] Extracting libpciaccess-0.19: ......... done
+[ 52/230] Installing libdrm-2.4.134,1...
+[ 52/230] Extracting libdrm-2.4.134,1: .......... done
+[ 53/230] Installing libsoxr-0.1.3_3...
+[ 53/230] Extracting libsoxr-0.1.3_3: .......... done
+[ 54/230] Installing libssh2-1.11.1_1,3...
+[ 54/230] Extracting libssh2-1.11.1_1,3: .......... done
+[ 55/230] Installing libsysinfo-0.0.3_3...
+[ 55/230] Extracting libsysinfo-0.0.3_3: ......... done
+[ 56/230] Installing libtasn1-4.21.0...
+[ 56/230] Extracting libtasn1-4.21.0: .......... done
+[ 57/230] Installing libthai-0.1.30...
+[ 57/230] Extracting libthai-0.1.30: .......... done
+[ 58/230] Installing libudev-devd-0.7.0...
+[ 58/230] Extracting libudev-devd-0.7.0: ........ done
+[ 59/230] Installing libgudev-237...
+[ 59/230] Extracting libgudev-237: .......... done
+[ 60/230] Installing libudfread-1.2.0...
+[ 60/230] Extracting libudfread-1.2.0: .......... done
+[ 61/230] Installing libunibreak-7.0,1...
+[ 61/230] Extracting libunibreak-7.0,1: .......... done
+[ 62/230] Installing libunistring-1.4.2...
+[ 62/230] Extracting libunistring-1.4.2: .......... done
+[ 63/230] Installing libidn2-2.3.8...
+[ 63/230] Extracting libidn2-2.3.8: .......... done
+[ 64/230] Installing libpsl-0.23.3...
+[ 64/230] Extracting libpsl-0.23.3: .......... done
+[ 65/230] Installing curl-8.23.0...
+[ 65/230] Extracting curl-8.23.0: .......... done
+[ 66/230] Installing libunwind-20250904...
+[ 66/230] Extracting libunwind-20250904: .......... done
+[ 67/230] Installing gstreamer1-1.28.9...
+[ 67/230] Extracting gstreamer1-1.28.9: .......... done
+[ 68/230] Installing libv4l-1.23.0_5...
+[ 68/230] Extracting libv4l-1.23.0_5: .......... done
+[ 69/230] Installing libvorbis-1.3.7_2,3...
+[ 69/230] Extracting libvorbis-1.3.7_2,3: .......... done
+[ 70/230] Installing libvpx-1.17.0...
+[ 70/230] Extracting libvpx-1.17.0: .......... done
+[ 71/230] Installing libx264-0.165.3223_1...
+[ 71/230] Extracting libx264-0.165.3223_1: ........ done
+[ 72/230] Installing libxml2-2.15.4...
+[ 72/230] Extracting libxml2-2.15.4: .......... done
+[ 73/230] Installing libxshmfence-1.3.3...
+[ 73/230] Extracting libxshmfence-1.3.3: ......... done
+[ 74/230] Installing libxslt-1.1.45...
+[ 74/230] Extracting libxslt-1.1.45: .......... done
+[ 75/230] Installing libyaml-0.2.5...
+[ 75/230] Extracting libyaml-0.2.5: ......... done
+[ 76/230] Installing lua53-5.3.6_1...
+[ 76/230] Extracting lua53-5.3.6_1: .......... done
+[ 77/230] Installing lua54-5.4.8...
+[ 77/230] Extracting lua54-5.4.8: .......... done
+[ 78/230] Installing lzo2-2.10_2...
+[ 78/230] Extracting lzo2-2.10_2: .......... done
+[ 79/230] Installing minizip-1.3.2_1...
+[ 79/230] Extracting minizip-1.3.2_1: .......... done
+[ 80/230] Installing assimp-6.0.5...
+[ 80/230] Extracting assimp-6.0.5: .......... done
+[ 81/230] Installing mpg123-1.33.7...
+[ 81/230] Extracting mpg123-1.33.7: .......... done
+[ 82/230] Installing lame-4.0...
+[ 82/230] Extracting lame-4.0: .......... done
+[ 83/230] Installing nettle-3.10.2...
+[ 83/230] Extracting nettle-3.10.2: .......... done
+[ 84/230] Installing nspr-4.39...
+[ 84/230] Extracting nspr-4.39: .......... done
+[ 85/230] Installing opus-1.6.1...
+[ 85/230] Extracting opus-1.6.1: .......... done
+[ 86/230] Installing libsndfile-1.2.2.20251216...
+[ 86/230] Extracting libsndfile-1.2.2.20251216: .......... done
+[ 87/230] Installing libsamplerate-0.2.2_1...
+[ 87/230] Extracting libsamplerate-0.2.2_1: .......... done
+[ 88/230] Installing orc-0.4.44...
+[ 88/230] Extracting orc-0.4.44: .......... done
+[ 89/230] Installing p11-kit-0.26.5_1...
+[ 89/230] Extracting p11-kit-0.26.5_1: .......... done
+[ 90/230] Installing gnutls-3.8.13...
+[ 90/230] Extracting gnutls-3.8.13: .......... done
+[ 91/230] Installing pcaudiolib-1.3...
+[ 91/230] Extracting pcaudiolib-1.3: ........ done
+[ 92/230] Installing espeak-ng-1.52.0_1...
+[ 92/230] Extracting espeak-ng-1.52.0_1: .......... done
+[ 93/230] Installing perl5-5.42.3...
+[ 93/230] Extracting perl5-5.42.3: .......... done
+[ 94/230] Installing llvm19-19.1.7_5...
+[ 94/230] Extracting llvm19-19.1.7_5: .......... done
+[ 95/230] Installing fftw3-3.3.11...
+[ 95/230] Extracting fftw3-3.3.11: .......... done
+[ 96/230] Installing fftw3-float-3.3.11...
+[ 96/230] Extracting fftw3-float-3.3.11: .......... done
+[ 97/230] Installing libb2-0.98.1_1...
+[ 97/230] Extracting libb2-0.98.1_1: ........ done
+[ 98/230] Installing openblas-0.3.34_1,2...
+[ 98/230] Extracting openblas-0.3.34_1,2: .......... done
+[ 99/230] Installing pixman-0.46.4...
+[ 99/230] Extracting pixman-0.46.4: ......... done
+[100/230] Installing png-1.6.59_1...
+[100/230] Extracting png-1.6.59_1: .......... done
+[101/230] Installing freetype2-2.14.3...
+[101/230] Extracting freetype2-2.14.3: .......... done
+[102/230] Installing fontconfig-2.18.3,1...
+[102/230] Extracting fontconfig-2.18.3,1: .......... done
+[103/230] Installing gstreamer1-plugins-1.28.9...
+[103/230] Extracting gstreamer1-plugins-1.28.9: .......... done
+[104/230] Installing gstreamer1-plugins-ugly-1.28.9...
+[104/230] Extracting gstreamer1-plugins-ugly-1.28.9: .......... done
+[105/230] Installing harfbuzz-15.0.0...
+[105/230] Extracting harfbuzz-15.0.0: .......... done
+[106/230] Installing libass-0.17.5...
+[106/230] Extracting libass-0.17.5: .......... done
+[107/230] Installing libbluray-1.5.1,1...
+[107/230] Extracting libbluray-1.5.1,1: .......... done
+[108/230] Installing py312-PyQt6-sip-13.11.1...
+[108/230] Extracting py312-PyQt6-sip-13.11.1: .......... done
+[109/230] Installing py312-boost-libs-1.92.0...
+[109/230] Extracting py312-boost-libs-1.92.0: .......... done
+[110/230] Installing py312-libevdev-0.11_2...
+[110/230] Extracting py312-libevdev-0.11_2: .......... done
+[111/230] Installing libwacom-2.19.1...
+[111/230] Extracting libwacom-2.19.1: .......... done
+[112/230] Installing py312-numpy-2.4.6_1,1...
+[112/230] Extracting py312-numpy-2.4.6_1,1: .......... done
+[113/230] Installing Imath-3.2.3_1...
+[113/230] Extracting Imath-3.2.3_1: .......... done
+[114/230] Installing py312-pyyaml-6.0.3_1...
+[114/230] Extracting py312-pyyaml-6.0.3_1: .......... done
+[115/230] Installing py312-setuptools-63.1.0_3...
+[115/230] Extracting py312-setuptools-63.1.0_3: .......... done
+[116/230] Installing gobject-introspection-1.86.0,1...
+[116/230] Extracting gobject-introspection-1.86.0,1: .......... done
+[117/230] Installing json-glib-1.10.8...
+[117/230] Extracting json-glib-1.10.8: .......... done
+[118/230] Installing libgusb-0.4.9_1...
+[118/230] Extracting libgusb-0.4.9_1: .......... done
+[119/230] Installing libproxy-0.5.10_1...
+[119/230] Extracting libproxy-0.5.10_1: .......... done
+[120/230] Installing glib-networking-2.90.0...
+[120/230] Extracting glib-networking-2.90.0: .......... done
+[121/230] Installing py312-six-1.17.0...
+[121/230] Extracting py312-six-1.17.0: .......... done
+[122/230] Installing py312-pyudev-0.24.1_1...
+[122/230] Extracting py312-pyudev-0.24.1_1: .......... done
+[123/230] Installing libinput-1.31.1_1...
+[123/230] Extracting libinput-1.31.1_1: .......... done
+[124/230] Installing pygobject-common-3.58.0...
+[124/230] Extracting pygobject-common-3.58.0: ....... done
+[125/230] Installing qt6-translations-6.11.3...
+[125/230] Extracting qt6-translations-6.11.3: .......... done
+[126/230] Installing shaderc-2026.4_1...
+[126/230] Extracting shaderc-2026.4_1: .......... done
+[127/230] Installing shared-mime-info-2.4_2...
+[127/230] Extracting shared-mime-info-2.4_2: ......... done
+[128/230] Installing speexdsp-1.2.1...
+[128/230] Extracting speexdsp-1.2.1: .......... done
+[129/230] Installing sqlite3-3.54.1,1...
+[129/230] Extracting sqlite3-3.54.1,1: .......... done
+[130/230] Installing libsoup3-3.7.3...
+[130/230] Extracting libsoup3-3.7.3: .......... done
+[131/230] Installing gstreamer1-plugins-good-1.28.9...
+[131/230] Extracting gstreamer1-plugins-good-1.28.9: .......... done
+[132/230] Installing nss-3.133...
+[132/230] Extracting nss-3.133: .......... done
+[133/230] Installing srt-1.5.7_1...
+[133/230] Extracting srt-1.5.7_1: .......... done
+[134/230] Installing svt-av1-4.3.0...
+[134/230] Extracting svt-av1-4.3.0: .......... done
+[135/230] Installing tiff-4.7.2...
+[135/230] Extracting tiff-4.7.2: .......... done
+[136/230] Installing gdk-pixbuf2-2.44.1...
+[136/230] Extracting gdk-pixbuf2-2.44.1: .......... done
+[137/230] Installing gtk-update-icon-cache-3.24.42...
+[137/230] Extracting gtk-update-icon-cache-3.24.42: .......... done
+[138/230] Installing adwaita-icon-theme-legacy-46.2...
+[138/230] Extracting adwaita-icon-theme-legacy-46.2: .......... done
+[139/230] Installing adwaita-icon-theme-47.0...
+[139/230] Extracting adwaita-icon-theme-47.0: .......... done
+[140/230] Installing lcms2-2.19.1...
+[140/230] Extracting lcms2-2.19.1: .......... done
+[141/230] Installing libmng-2.0.3_3...
+[141/230] Extracting libmng-2.0.3_3: ......... done
+[142/230] Installing openjpeg-2.5.4_2...
+[142/230] Extracting openjpeg-2.5.4_2: .......... done
+[143/230] Installing openjph-0.32.0...
+[143/230] Extracting openjph-0.32.0: .......... done
+[144/230] Installing openexr-3.4.17...
+[144/230] Extracting openexr-3.4.17: .......... done
+[145/230] Installing libjxl-0.12.0...
+[145/230] Extracting libjxl-0.12.0: .......... done
+[146/230] Installing vmaf-3.2.1...
+[146/230] Extracting vmaf-3.2.1: .......... done
+[147/230] Installing aom-3.15.3...
+[147/230] Extracting aom-3.15.3: .......... done
+[148/230] Installing wayland-1.26.0...
+[148/230] Extracting wayland-1.26.0: .......... done
+[149/230] Installing webp-1.6.0...
+[149/230] Extracting webp-1.6.0: .......... done
+[150/230] Installing webrtc-audio-processing-1.3_1...
+[150/230] Extracting webrtc-audio-processing-1.3_1: .......... done
+[151/230] Installing x265-4.3...
+[151/230] Extracting x265-4.3: .......... done
+[152/230] Installing xkeyboard-config-2.49...
+[152/230] Extracting xkeyboard-config-2.49: .......... done
+[153/230] Installing xorgproto-2026.1...
+[153/230] Extracting xorgproto-2026.1: .......... done
+[154/230] Installing libXdmcp-1.1.5...
+[154/230] Extracting libXdmcp-1.1.5: ......... done
+[155/230] Installing libxcb-1.17.0...
+[155/230] Extracting libxcb-1.17.0: .......... done
+[156/230] Installing libX11-1.8.14,1...
+[156/230] Extracting libX11-1.8.14,1: .......... done
+[157/230] Installing dbus-1.16.2_4,1...
+===> Creating groups
+Creating group 'messagebus' with gid '556'
+===> Creating users
+Creating user 'messagebus' with uid '556'
+[157/230] Extracting dbus-1.16.2_4,1: ......... done
+[158/230] Installing dbus-glib-0.116...
+[158/230] Extracting dbus-glib-0.116: .......... done
+[159/230] Installing avahi-app-0.8_6...
+===> Creating groups
+Creating group 'avahi' with gid '558'
+===> Creating users
+Creating user 'avahi' with uid '558'
+[159/230] Extracting avahi-app-0.8_6: .......... done
+[160/230] Installing cups-2.4.20...
+===> Creating groups
+Creating group 'cups' with gid '193'
+===> Creating users
+Creating user 'cups' with uid '193'
+[160/230] Extracting cups-2.4.20: .......... done
+[161/230] Installing libXext-1.3.7,1...
+[161/230] Extracting libXext-1.3.7,1: .......... done
+[162/230] Installing libXScrnSaver-1.2.5...
+[162/230] Extracting libXScrnSaver-1.2.5: .......... done
+[163/230] Installing libXfixes-6.0.2...
+[163/230] Extracting libXfixes-6.0.2: .......... done
+[164/230] Installing libXcomposite-0.4.7,1...
+[164/230] Extracting libXcomposite-0.4.7,1: .......... done
+[165/230] Installing libXdamage-1.1.7...
+[165/230] Extracting libXdamage-1.1.7: ......... done
+[166/230] Installing libXi-1.8.4,1...
+[166/230] Extracting libXi-1.8.4,1: .......... done
+[167/230] Installing libXinerama-1.1.6,1...
+[167/230] Extracting libXinerama-1.1.6,1: .......... done
+[168/230] Installing libXrender-0.9.13...
+[168/230] Extracting libXrender-0.9.13: .......... done
+[169/230] Installing cairo-1.18.6,3...
+[169/230] Extracting cairo-1.18.6,3: .......... done
+[170/230] Installing libXcursor-1.2.3...
+[170/230] Extracting libXcursor-1.2.3: .......... done
+[171/230] Installing libXft-2.3.9...
+[171/230] Extracting libXft-2.3.9: .......... done
+[172/230] Installing libXrandr-1.5.5...
+[172/230] Extracting libXrandr-1.5.5: .......... done
+[173/230] Installing libXres-1.2.3...
+[173/230] Extracting libXres-1.2.3: .......... done
+[174/230] Installing libXtst-1.2.6...
+[174/230] Extracting libXtst-1.2.6: .......... done
+[175/230] Installing at-spi2-core-2.60.4...
+[175/230] Extracting at-spi2-core-2.60.4: .......... done
+[176/230] Installing libXv-1.0.13,1...
+[176/230] Extracting libXv-1.0.13,1: .......... done
+[177/230] Installing libglvnd-1.7.0...
+[177/230] Extracting libglvnd-1.7.0: .......... done
+[178/230] Installing libepoxy-1.5.10...
+[178/230] Extracting libepoxy-1.5.10: .......... done
+[179/230] Installing libva-2.24.1...
+[179/230] Extracting libva-2.24.1: .......... done
+[180/230] Installing libvdpau-1.5...
+[180/230] Extracting libvdpau-1.5: .......... done
+[181/230] Installing libxkbcommon-1.13.2...
+[181/230] Extracting libxkbcommon-1.13.2: .......... done
+[182/230] Installing libxkbfile-1.2.0...
+[182/230] Extracting libxkbfile-1.2.0: .......... done
+[183/230] Installing pango-1.58.2...
+[183/230] Extracting pango-1.58.2: .......... done
+[184/230] Installing gstreamer1-plugins-bad-1.28.9...
+[184/230] Extracting gstreamer1-plugins-bad-1.28.9: .......... done
+[185/230] Installing librsvg2-rust-2.63.4...
+[185/230] Extracting librsvg2-rust-2.63.4: .......... done
+[186/230] Installing polkit-128...
+===> Creating groups
+Creating group 'polkitd' with gid '565'
+===> Creating users
+Creating user 'polkitd' with uid '565'
+[186/230] Extracting polkit-128: ......... done
+[187/230] Installing colord-1.4.8_2...
+===> Creating groups
+Creating group 'colord' with gid '970'
+===> Creating users
+Creating user 'colord' with uid '970'
+[187/230] Extracting colord-1.4.8_2: .......... done
+[188/230] Installing consolekit2-2.0.0_2...
+[188/230] Extracting consolekit2-2.0.0_2: .......... done
+[189/230] Installing gtk3-3.24.52...
+[189/230] Extracting gtk3-3.24.52: .......... done
+[190/230] Installing pcsc-lite-2.5.2_1,2...
+[190/230] Extracting pcsc-lite-2.5.2_1,2: .......... done
+[191/230] Installing pulseaudio-17.0_6...
+===> Creating groups
+Creating group 'pulse' with gid '563'
+Creating group 'pulse-access' with gid '564'
+Creating group 'pulse-rt' with gid '557'
+===> Creating users
+Creating user 'pulse' with uid '563'
+[191/230] Extracting pulseaudio-17.0_6: .......... done
+[192/230] Installing gstreamer1-plugins-pulse-1.28.9...
+[192/230] Extracting gstreamer1-plugins-pulse-1.28.9: ..... done
+[193/230] Installing py312-pycairo-1.29.1...
+[193/230] Extracting py312-pycairo-1.29.1: .......... done
+[194/230] Installing py312-pygobject-3.58.0...
+[194/230] Extracting py312-pygobject-3.58.0: .......... done
+[195/230] Installing graphene-1.10.8_1...
+[195/230] Extracting graphene-1.10.8_1: .......... done
+[196/230] Installing gstreamer1-plugins-gl-1.28.9...
+[196/230] Extracting gstreamer1-plugins-gl-1.28.9: .......... done
+[197/230] Installing py312-dbus-1.4.0_1...
+[197/230] Extracting py312-dbus-1.4.0_1: .......... done
+[198/230] Installing jackit-1.9.22_3...
+[198/230] Extracting jackit-1.9.22_3: .......... done
+[199/230] Installing pipewire-1.6.9...
+[199/230] Extracting pipewire-1.6.9: .......... done
+[200/230] Installing speech-dispatcher-0.12.1_1...
+[200/230] Extracting speech-dispatcher-0.12.1_1: .......... done
+[201/230] Installing vulkan-loader-1.4.368...
+[201/230] Extracting vulkan-loader-1.4.368: .......... done
+[202/230] Installing libplacebo-7.387.0...
+[202/230] Extracting libplacebo-7.387.0: .......... done
+[203/230] Installing ffmpeg-9.0.2_3,1...
+[203/230] Extracting ffmpeg-9.0.2_3,1: .......... done
+[204/230] Installing xcb-util-0.4.1,1...
+[204/230] Extracting xcb-util-0.4.1,1: .......... done
+[205/230] Installing xcb-util-image-0.4.1...
+[205/230] Extracting xcb-util-image-0.4.1: .......... done
+[206/230] Installing xcb-util-keysyms-0.4.1...
+[206/230] Extracting xcb-util-keysyms-0.4.1: ......... done
+[207/230] Installing xcb-util-renderutil-0.3.10...
+[207/230] Extracting xcb-util-renderutil-0.3.10: ......... done
+[208/230] Installing xcb-util-cursor-0.1.6...
+[208/230] Extracting xcb-util-cursor-0.1.6: ......... done
+[209/230] Installing xcb-util-wm-0.4.2...
+[209/230] Extracting xcb-util-wm-0.4.2: .......... done
+[210/230] Installing qt6-base-6.11.3_1...
+[210/230] Extracting qt6-base-6.11.3_1: .......... done
+[211/230] Installing qt6-base_sqldriver-sqlite-6.11.3...
+[211/230] Extracting qt6-base_sqldriver-sqlite-6.11.3: .......... done
+[212/230] Installing qt6-connectivity-6.11.3...
+[212/230] Extracting qt6-connectivity-6.11.3: .......... done
+[213/230] Installing qt6-imageformats-6.11.3...
+[213/230] Extracting qt6-imageformats-6.11.3: .......... done
+[214/230] Installing qt6-serialport-6.11.3...
+[214/230] Extracting qt6-serialport-6.11.3: .......... done
+[215/230] Installing qt6-shadertools-6.11.3...
+[215/230] Extracting qt6-shadertools-6.11.3: .......... done
+[216/230] Installing qt6-svg-6.11.3...
+[216/230] Extracting qt6-svg-6.11.3: .......... done
+[217/230] Installing qt6-declarative-6.11.3...
+[217/230] Extracting qt6-declarative-6.11.3: .......... done
+[218/230] Installing qt6-positioning-6.11.3...
+[218/230] Extracting qt6-positioning-6.11.3: .......... done
+[219/230] Installing qt6-quicktimeline-6.11.3...
+[219/230] Extracting qt6-quicktimeline-6.11.3: .......... done
+[220/230] Installing qt6-quick3d-6.11.3...
+[220/230] Extracting qt6-quick3d-6.11.3: .......... done
+[221/230] Installing qt6-multimedia-6.11.3...
+[221/230] Extracting qt6-multimedia-6.11.3: .......... done
+[222/230] Installing qt6-remoteobjects-6.11.3...
+[222/230] Extracting qt6-remoteobjects-6.11.3: .......... done
+[223/230] Installing qt6-scxml-6.11.3...
+[223/230] Extracting qt6-scxml-6.11.3: .......... done
+[224/230] Installing qt6-sensors-6.11.3...
+[224/230] Extracting qt6-sensors-6.11.3: .......... done
+[225/230] Installing qt6-speech-6.11.3...
+[225/230] Extracting qt6-speech-6.11.3: .......... done
+[226/230] Installing qt6-tools-6.11.3...
+[226/230] Extracting qt6-tools-6.11.3: .......... done
+[227/230] Installing qt6-pdf-6.11.3...
+[227/230] Extracting qt6-pdf-6.11.3: .......... done
+[228/230] Installing qt6-webchannel-6.11.3...
+[228/230] Extracting qt6-webchannel-6.11.3: .......... done
+[229/230] Installing qt6-websockets-6.11.3...
+[229/230] Extracting qt6-websockets-6.11.3: .......... done
+[230/230] Installing py312-qt6-pyqt-6.11.0...
+[230/230] Extracting py312-qt6-pyqt-6.11.0: .......... done
+==> Running trigger: gio-modules.ucl
+Generating GIO modules cache
+==> Running trigger: glib-schemas.ucl
+Compiling glib schemas
+Warning: Schema “org.gnome.system.locale” has path “/system/locale/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy” has path “/system/proxy/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.http” has path “/system/proxy/http/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.https” has path “/system/proxy/https/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.ftp” has path “/system/proxy/ftp/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.socks” has path “/system/proxy/socks/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+==> Running trigger: shared-mime-info.ucl
+Building the Shared MIME-Info database cache
+==> Running trigger: fontconfig.ucl
+Running fc-cache to build fontconfig cache...
+==> Running trigger: gdk-pixbuf-query-loaders.ucl
+Generating gdk-pixbuf modules cache
+==> Running trigger: gtk-update-icon-cache.ucl
+Generating GTK icon cache for /usr/local/share/icons/hicolor
+Generating GTK icon cache for /usr/local/share/icons/AdwaitaLegacy
+Generating GTK icon cache for /usr/local/share/icons/Adwaita
+=====
+Message from gcc14-14.2.0_7:
+
+--
+To ensure binaries built with this toolchain find appropriate versions
+of the necessary run-time libraries, you may want to link using
+
+  -Wl,-rpath=/usr/local/lib/gcc14
+
+For ports leveraging USE_GCC, USES=compiler, or USES=fortran this happens
+transparently.
+=====
+Message from boost-libs-1.92.0:
+
+--
+You have built the Boost library with thread support.
+
+Don't forget to add -pthread to your linker options when
+linking your code.
+=====
+Message from libinotify-20240724_3:
+
+--
+You might want to consider increasing the kern.maxfiles tunable if you plan
+to use this library for applications that need to monitor activity of a lot
+of files.
+=====
+Message from freetype2-2.14.3:
+
+--
+The 2.7.x series now uses the new subpixel hinting mode (V40 port's option) as
+the default, emulating a modern version of ClearType. This change inevitably
+leads to different rendering results, and you might change port's options to
+adapt it to your taste (or use the new "FREETYPE_PROPERTIES" environment
+variable).
+
+The environment variable "FREETYPE_PROPERTIES" can be used to control the
+driver properties. Example:
+
+FREETYPE_PROPERTIES=truetype:interpreter-version=35 \
+	cff:no-stem-darkening=1 \
+	autofitter:warping=1
+
+This allows to select, say, the subpixel hinting mode at runtime for a given
+application.
+
+If LONG_PCF_NAMES port's option was enabled, the PCF family names may include
+the foundry and information whether they contain wide characters. For example,
+"Sony Fixed" or "Misc Fixed Wide", instead of "Fixed". This can be disabled at
+run time with using pcf:no-long-family-names property, if needed. Example:
+
+FREETYPE_PROPERTIES=pcf:no-long-family-names=1
+
+How to recreate fontconfig cache with using such environment variable,
+if needed:
+# env FREETYPE_PROPERTIES=pcf:no-long-family-names=1 fc-cache -fsv
+
+The controllable properties are listed in the section "Controlling FreeType
+Modules" in the reference's table of contents
+(/usr/local/share/doc/freetype2/reference/index.html, if documentation was installed).
+=====
+Message from py312-boost-libs-1.92.0:
+
+--
+You have built the Boost library with thread support.
+
+Don't forget to add -pthread to your linker options when
+linking your code.
+=====
+Message from libjxl-0.12.0:
+
+--
+Additional packages recommended for new users:
+- imlib2-jxl (e.g., feh, scrot)
+- kf5-kimageformats (e.g., nomacs, flameshot, skanlite)
+- gimp-jxl-plugin
+=====
+Message from wayland-1.26.0:
+
+--
+Wayland requires XDG_RUNTIME_DIR to be defined to a path that will
+contain "wayland-%d" unix(4) sockets. This is usually handled by
+consolekit2 (via ck-launch-session) or pam_xdg (via login).
+=====
+Message from libxkbcommon-1.13.2:
+
+--
+If arrow keys don't work under X11 switch to legacy rules e.g.,
+
+For sh/bash/ksh/zsh run and (optionally) add into ~/.profile:
+  export XKB_DEFAULT_RULES=xorg
+
+For csh/tcsh run and (optionally) add into ~/.login:
+  setenv XKB_DEFAULT_RULES xorg
+=====
+Message from pcsc-lite-2.5.2_1,2:
+
+--
+PC/SC-Lite has been installed.
+
+You need to install a driver for your smartcard reader e.g.,
+- devel/libccid
+
+For cardreaders connected to the serial port: After installing the driver,
+please update the pcscd configuration file:
+/usr/local/etc/reader.conf
+
+For USB cardreaders add the following lines to /etc/devd.conf to enable
+hotplugging:
+
+attach 100 {
+        device-name "ugen[0-9]+";
+        action "/usr/local/sbin/pcscd -H";
+};
+
+detach 100 {
+        device-name "ugen[0-9]+";
+        action "/usr/local/sbin/pcscd -H";
+};
+=====
+Message from pulseaudio-17.0_6:
+
+--
+Pulseaudio tries to determine default values for FreeBSD OSS driver at first
+start, based on /dev/sndstat output. The hw.snd.default_unit sysctl may affect
+these values, but restart of the Pulseaudio might be needed to rescan it again,
+e.g. `pacmd exit`.
+
+Pulseaudio has separate input and output configure lines. You can change them
+with using following commands:
+
+To change the default sink (output):
+# pacmd set-default-sink 3
+To change the default source (input):
+# pacmd set-default-source 3
+
+This can also be set in /usr/local/etc/pulse/default.pa
+
+Replace the number '3' with the new default you want to set.
+
+The audio/freedesktop-sound-theme is needed if the default sound files
+are uncommented in the /usr/local/etc/pulse/default.pa file.
+=====
+Message from jackit-1.9.22_3:
+
+--
+The new JACK server comes with a DBUS control interface:
+
+$ jack_control help
+$ jack_control ds oss
+$ jack_control dp
+$ jack_control dps rate 48000
+$ jack_control dps wordlength 16
+$ jack_control dps capture /dev/dsp0
+$ jack_control dps playback /dev/dsp0
+$ jack_control eps realtime False
+$ jack_control start
+
+To use real-time priority for JACK server and clients, load the mac_priority(4)
+module and add the JACK user to the realtime group.
+
+Memory locking has to be allowed in /etc/login.conf or ~/.login_conf. Set the
+resource limit ":memorylocked=unlimited:" and don't forget to run
+
+# cap_mkdb /etc/login.conf
+
+It's still possible to start JACK server as an RC service for a dedicated user.
+Note that only one JACK server can be run at a time. An /etc/rc.conf example:
+
+jackd_enable="YES"
+jackd_user="joe"
+jackd_args="--no-realtime -doss -r48000 -p1024 -w16 \
+            --capture /dev/dsp0 --playback /dev/dsp0"
+
+Official JACK example clients and tools are available as jack-example-tools.
+
+JACK 1.9.22 introduces a latency correction fix.
+Latency correction parameters have to be measured again after an update.
+rc=0

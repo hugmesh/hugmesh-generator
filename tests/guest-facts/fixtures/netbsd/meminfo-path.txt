@@ -1,0 +1,3 @@
+$ ls -l /proc/meminfo
+-r--r--r--  1 root  wheel  0 Nov 13 18:18 /proc/meminfo
+rc=0

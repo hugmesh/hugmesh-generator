@@ -1,0 +1,25 @@
+$ sysctl hw
+hw.machine=amd64
+hw.model=INTEL(R) XEON(R) PLATINUM 8573C
+hw.ncpu=4
+hw.byteorder=1234
+hw.pagesize=4096
+hw.disknames=cd0:,sd0:5b6555294f204530,fd0:
+hw.diskcount=3
+hw.sensors.pvclock0.timedelta0=-0.000219 secs, OK, Fri Nov 13 18:17:54.709
+hw.sensors.viomb0.raw0=0 (desired)
+hw.sensors.viomb0.raw1=0 (current)
+hw.cpuspeed=2300
+hw.vendor=QEMU
+hw.product=Standard PC (i440FX + PIIX, 1996)
+hw.version=pc-i440fx-10.2
+hw.physmem=6425522176
+hw.usermem=6425518080
+hw.ncpufound=4
+hw.allowpowerdown=1
+hw.smt=0
+hw.ncpuonline=4
+hw.power=1
+hw.ucomnames=
+hw.blockcpu=SL
+rc=0

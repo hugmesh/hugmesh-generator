@@ -1,0 +1,5 @@
+$ as_root sh -c pkgin -y install py312-pyside6
+py312-pyside6 is not available in the repository
+calculating dependencies...done.
+nothing to do.
+rc=1

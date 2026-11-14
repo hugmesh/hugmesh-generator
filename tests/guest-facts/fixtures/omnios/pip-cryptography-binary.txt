@@ -1,0 +1,8 @@
+$ /tmp/guest-facts.693/venv/bin/python -m pip install --only-binary=:all: cryptography
+Requirement already satisfied: cryptography in /usr/lib/python3.13/vendor-packages (50.0.2)
+Requirement already satisfied: cffi>=2.0.0 in /usr/lib/python3.13/vendor-packages (from cryptography) (2.1.1)
+Requirement already satisfied: pycparser in /usr/lib/python3.13/vendor-packages (from cffi>=2.0.0->cryptography) (3.0)
+
+[notice] A new release of pip is available: 26.2.1 -> 26.3
+[notice] To update, run: /tmp/guest-facts.693/venv/bin/python -m pip install --upgrade pip
+rc=0

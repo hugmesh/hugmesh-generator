@@ -1,0 +1,11 @@
+component	kind	install_rc	imports	line
+python	preinstalled	0	yes	/usr/local/bin/python3.11
+urwid	static	1	no	pkg install -y py311-urwid
+urwid	search	0	no	pkg install -y py312-urwid-3.0.3
+urwid	search	0	no	pkg install -y py312-urwid-readline-0.15.1
+urwid	search	0	no	pkg install -y py312-urwidgets-0.2.1_1
+urwid	search	0	no	pkg install -y py312-urwidtrees-1.0.3_1
+pyside6	static	1	no	pkg install -y py311-pyside6
+pyqt6	static	1	no	pkg install -y py311-qt6-pyqt
+pyqt6	static	1	no	pkg install -y py311-pyqt6
+urwid	pip	0	yes	python3.11 -m venv --system-site-packages VENV && VENV/bin/python -m pip install urwid

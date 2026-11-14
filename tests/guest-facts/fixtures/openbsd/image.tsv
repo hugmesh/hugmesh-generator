@@ -1,0 +1,5 @@
+kind	path	bytes	sha256
+action	vmactions/openbsd-vm@f1ca8bc8ecc5b6ef7218e5b914836e067e1546d3		
+release	8.0		
+image	openbsd/v2.1.1/openbsd-8.0.qcow2	2496659456	4cc498bc3d8f205c0468c436f59ee102557257618c5d8e83dad4e100da4d74a4
+anyvm.py	anyvm.py	622861	a1471b3238f367e10b92a47cb42a2ee868835d94a136c0fa9a02dee415b4db03

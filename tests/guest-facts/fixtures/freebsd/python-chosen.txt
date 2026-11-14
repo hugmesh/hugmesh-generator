@@ -1,0 +1,4 @@
+$ sh -c echo '/usr/local/bin/python3.12'; /usr/local/bin/python3.12 -VV
+/usr/local/bin/python3.12
+Python 3.12.15 (main, Nov  5 2026, 01:06:01) [Clang 19.1.7 (https://github.com/llvm/llvm-project.git llvmorg-19.1.7-0-gcd7080
+rc=0

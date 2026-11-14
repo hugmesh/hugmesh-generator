@@ -1,0 +1,24 @@
+$ as_root sh -c PKG_PATH=https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$(uname -m)/$(uname -r)/All pkg_add pkgin && pkgin -y update && pkgin -y install python312
+pkgin-26.4.0: copying /usr/pkg/share/examples/pkgin/repositories.conf.example to /usr/pkg/etc/pkgin/repositories.conf
+processing remote summary (https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/x86_64/11.0/All)...
+downloading pkg_summary.bz2 done.
+calculating dependencies...done.
+
+4 packages to install:
+  expat-2.10.0 libuuid-2.42.3 python312-3.12.14 readline-8.3nb1
+
+0 to remove, 0 to refresh, 0 to upgrade, 4 to install
+23M to download, 156M of additional disk space will be used
+
+[1/4] downloading expat-2.10.0.tgz done.
+[2/4] downloading libuuid-2.42.3.tgz done.
+[3/4] downloading python312-3.12.14.tgz done.
+[4/4] downloading readline-8.3nb1.tgz done.
+[1/4] installing libuuid-2.42.3...
+[2/4] installing expat-2.10.0...
+[3/4] installing readline-8.3nb1...
+[4/4] installing python312-3.12.14...
+pkg_install warnings: 0, errors: 0
+reading local summary...
+processing local summary...
+rc=0

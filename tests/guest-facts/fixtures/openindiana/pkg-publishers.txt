@@ -1,0 +1,4 @@
+$ pkg publisher
+PUBLISHER                   TYPE     STATUS P LOCATION
+openindiana.org              origin   online F https://pkg.openindiana.org/hipster/
+rc=0

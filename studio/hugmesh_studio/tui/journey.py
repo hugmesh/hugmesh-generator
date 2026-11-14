@@ -39,6 +39,7 @@ import copy
 import os
 
 from ..core.config import (
+    SIGNIN_HANDLES_NOT_APPLIED, user_signin_handle_warnings,
     IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, ROLE_CHOICES,
     UNAFFILIATED_ROLE, VAULT_FIELDS, WIZARD_PAGE_SLUGS,
     ImageConfig, ca_cert_error, derive_hostname, describe_ca_cert,
@@ -1120,11 +1121,19 @@ class UsersScreen:
         if j.cfg.users:
             # roles: the FULL set (issue #228), primary first — the GUI RoleCell's
             # checked boxes, joined; a one-role account renders exactly as before.
-            headers = ["#", "username", "domain", "roles", "registration"]
+            # the other sign-in handles (#1107): "google:<email> discord:<name>"
+            headers = ["#", "username", "domain", "roles", "registration",
+                       "other sign-ins"]
             rows = [[str(i), u.username, u.domain, ", ".join(u.roles),
-                     u.registration or "-"]
+                     u.registration or "-",
+                     " ".join(f"{p}:{h}" for p, h in
+                              (getattr(u, "signin_handles", None) or {}).items()) or "-"]
                     for i, u in enumerate(j.cfg.users, 1)]
             out += model.format_table(headers, rows)
+            if any(getattr(u, "signin_handles", None) for u in j.cfg.users):
+                out += ["", SIGNIN_HANDLES_NOT_APPLIED]
+            for u in j.cfg.users:
+                out += [w[:1].upper() + w[1:] + "." for w in user_signin_handle_warnings(u)]
         else:
             out.append("(no user accounts configured)")
         out.append("")

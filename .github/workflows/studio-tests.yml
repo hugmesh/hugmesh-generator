@@ -477,6 +477,11 @@ jobs:
           tests/test_windows_view_doors_pid.py
           tests/test_view_doors.py
           tests/test_org_export_speed.py
+          tests/test_conftest_qt_binding.py
+          tests/test_build_preflight_worker_held.py
+          tests/test_walkthrough_build_titles.py
+          tests/test_domains_row_checks_saved_door.py
+          tests/test_client_ca_inheritance.py
 
   macos:
     # The macOS app: "HugMesh Image Studio.app" in a .dmg, for Apple silicon and Intel.

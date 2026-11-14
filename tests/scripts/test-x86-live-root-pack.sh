@@ -40,7 +40,7 @@
 #      owned by another uid still lists; bundle_source_gate refuses each key shape;
 #      and the real repository's tracked set must bundle and pass the gate.
 #
-# No root, no network, no chroot. Checks 1–9 below (4b: a pack that dies mid-way).
+# No root, no network, no chroot. Checks 1–10 below (4b: a pack that dies mid-way).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -618,6 +618,80 @@ else
   d="$(mkr certs)"; mkdir -p "${d}/usr/src/linux-6.0-gentoo/certs"; echo x > "${d}/usr/src/linux-6.0-gentoo/certs/signing_key.x509"; mksq "${d}" "${TMPD}/r-certs.sqfs"
   out="$(rgate "${TMPD}/r-certs.sqfs")" && bad "rdsquashfs arm PASSED a live root carrying usr/src/linux-*/certs/ (its listing has no leading slash)" \
     || { case "${out}" in *"module-signing PRIVATE key"*) ok "rdsquashfs arm refuses a kernel certs/ dir without signing_key.pem" ;; *) bad "rdsquashfs arm: certs dir refused with the wrong message: ${out}" ;; esac; }
+fi
+
+# ── live_label_gate's rdsquashfs arm (squashfs-tools-ng hosts), EXECUTED ─────
+# 2026-11-13: a live build on a host with squashfs-tools-ng only (tar2sqfs packs,
+# rdsquashfs reads, no unsquashfs) died at "live-label gate: no unsquashfs on this
+# host" right after a clean label pass. The gate now unpacks with `rdsquashfs -X`
+# there. Without -X rdsquashfs drops every xattr, so the static check pins it and
+# the executed cases prove that the labels come back, that a build missing -X
+# fails, and that an unlabelled image still fails. Writing security.selinux needs
+# root or an unprivileged user namespace; CI containers often have neither (the
+# SLX_TAR_CENSUS_XATTR note in _selinux-policy-lib.sh), so there it is a NOTE.
+echo "-- 10) live_label_gate, rdsquashfs arm --"
+llg="$(awk '/^live_label_gate\(\) \{/{f=1} f{print} f&&/^}/{exit}' "${TMPD}/helpers.sh" | grep -vE '^[[:space:]]*#')"
+grep -qE 'rdsquashfs[^|;]* -X( |$)' <<<"${llg}" && grep -q 'command -v rdsquashfs' <<<"${llg}" \
+  && ok "live_label_gate has an rdsquashfs arm that restores xattrs (-X)" \
+  || bad "live_label_gate has no rdsquashfs arm, or it unpacks without -X (every label would be dropped)"
+cat > "${TMPD}/llg-cases.sh" <<'CASES'
+# runs as (namespace) root on a tmpfs: $1 = TMPD, $2 = repo
+set -uo pipefail
+T="$1"; R="$2"; W="${T}/llg"; mkdir -p "${W}"
+mount -t tmpfs llg "${W}" 2>/dev/null || true
+cd "${W}" || exit 9
+probe="$(mktemp -p "${W}")"
+setfattr -n security.selinux -v system_u:object_r:etc_t:s0 "${probe}" 2>/dev/null || { echo "SKIP cannot write security.selinux here"; exit 77; }
+mkfix() { # $1 = dir, $2 = 1 to label
+  mkdir -p "$1/etc" "$1/usr/bin" "$1/proc" "$1/sys" "$1/dev" "$1/run"
+  echo s > "$1/etc/shadow"; echo i > "$1/usr/bin/init"; echo f > "$1/etc/fstab"
+  [ "$2" = 1 ] || return 0
+  find "$1" -exec setfattr -h -n security.selinux -v system_u:object_r:etc_t:s0 {} +
+  setfattr -n security.selinux -v system_u:object_r:shadow_t:s0 "$1/etc/shadow"
+  setfattr -n security.selinux -v system_u:object_r:init_exec_t:s0 "$1/usr/bin/init"
+}
+pack() { tar --xattrs --xattrs-include='*.*' -C "$1" -cf - . | tar2sqfs -q -f "$2" >/dev/null 2>&1; }
+mkfix good 1; pack good good.sqfs
+mkfix bare 0; pack bare bare.sqfs
+printf 'etc/shadow\tshadow_t\nusr/bin/init\tinit_exec_t\n' > probes.tsv
+RBIN="${W}/bin"; mkdir -p "${RBIN}"
+for t in rdsquashfs getfattr setfattr sed head find xargs grep wc cut tr mktemp rm cat bash; do ln -sf "$(command -v "${t}")" "${RBIN}/${t}"; done
+mkrun() { # $1 = runner, $2 = helpers file
+  { echo 'err(){ echo "ERROR: $*" >&2; }; info(){ echo "INFO: $*"; }; warn(){ echo "WARN: $*"; }'
+    echo "source '${R}/scripts/_selinux-policy-lib.sh'"
+    cat "$2"
+    echo 'command -v unsquashfs >/dev/null && { echo "unsquashfs still on PATH — not the rdsquashfs arm"; exit 3; }'
+    echo 'live_label_gate "$1"'; } > "$1"
+}
+mkrun run "${T}/helpers.sh"
+sed 's/rdsquashfs -q -X /rdsquashfs -q /' "${T}/helpers.sh" > helpers-nox.sh
+cmp -s "${T}/helpers.sh" helpers-nox.sh && echo "FAIL the -X mutation did not apply (pattern drifted)"
+mkrun run-nox helpers-nox.sh
+g() { env -i PATH="${RBIN}" BUILD_ROOT="${W}" SLX_PROBE_TABLE="${W}/probes.tsv" "${BASH}" "$1" "$2" 2>&1; }
+out="$(g run good.sqfs)" && case "${out}" in *"PASS (2 probe"*) echo "PASS rdsquashfs arm passes a labelled live root (probes + census)";; *) echo "FAIL rdsquashfs arm passed without its probes: ${out}";; esac \
+  || echo "FAIL rdsquashfs arm FAILS a labelled live root: ${out}"
+out="$(g run bare.sqfs)" && echo "FAIL rdsquashfs arm PASSED an unlabelled live root" || echo "PASS rdsquashfs arm refuses an unlabelled live root"
+out="$(g run-nox good.sqfs)" && echo "FAIL a gate that unpacks without -X PASSED (the executed case cannot tell -X matters)" \
+  || echo "PASS mutation: without -X the labelled root fails (labels dropped), so -X is what restores them"
+rm -f "${RBIN}/rdsquashfs"
+out="$(g run good.sqfs)" && echo "FAIL gate PASSED with neither unsquashfs nor rdsquashfs" \
+  || case "${out}" in *"neither unsquashfs nor rdsquashfs"*) echo "PASS gate refuses when neither unpacker is on the host, and says so";; *) echo "FAIL no-unpacker refusal with the wrong message: ${out}";; esac
+cd / && umount "${W}" 2>/dev/null || true
+CASES
+if ! command -v rdsquashfs >/dev/null || ! command -v tar2sqfs >/dev/null || ! command -v setfattr >/dev/null || ! command -v getfattr >/dev/null; then
+  note "rdsquashfs/tar2sqfs/setfattr/getfattr not all on this host — skipping the executed rdsquashfs label-gate cases"
+else
+  # A private mount namespace either way, so the case script's tmpfs never outlives it.
+  if [ "$(id -u)" = 0 ]; then ns=(unshare -m); else ns=(unshare -rm); fi
+  llg_rc=0; llg_out="$("${ns[@]}" bash "${TMPD}/llg-cases.sh" "${TMPD}" "${REPO}" 2>&1)" || llg_rc=$?
+  case "${llg_rc}" in
+    0|77) ;;
+    *) grep -qE '^(PASS|FAIL) ' <<<"${llg_out}" || llg_out="SKIP no private mount namespace here (${ns[*]} rc=${llg_rc}): ${llg_out}" ;;
+  esac
+  while IFS= read -r l; do
+    case "${l}" in PASS\ *) ok "${l#PASS }" ;; FAIL\ *) bad "${l#FAIL }" ;; SKIP\ *) note "executed label-gate cases skipped: ${l#SKIP }" ;; esac
+  done <<<"${llg_out}"
+  grep -qE '^(PASS|FAIL|SKIP) ' <<<"${llg_out}" || bad "the executed label-gate cases printed nothing: ${llg_out}"
 fi
 
 echo
