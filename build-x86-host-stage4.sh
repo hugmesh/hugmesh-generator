@@ -4647,6 +4647,43 @@ late_step_runs() {
     return 1
 }
 late_step_done() { printf 'done=%s\n' "$1" >> "${LATE_STATE}"; }
+# late_entry_kept_check — every step this rerun KEEPS must have finished in the earlier
+# run: its done=<step> line in the record, or (a build from before the record) its
+# artifact. The stage4 is also read whole (xz -t): the installer ISO copies it. A kept
+# step that never finished would otherwise end a green rerun with that artifact missing.
+late_entry_kept_check() {
+    local st base="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}" rec=false missing="" have
+    # a record a FULL run wrote is the evidence; one a rerun of an older build started
+    # (LEGACY=1) holds only what that rerun finished, so there an artifact counts too
+    if [ -s "${LATE_STATE}" ] && ! grep -qx 'LEGACY=1' "${LATE_STATE}"; then rec=true; fi
+    for st in "${X86_LATE_STEPS[@]}"; do
+        late_step_runs "${st}" && break
+        case "${st}" in
+            image-raw)  ${BUILD_IMG} || continue ;;
+            image-live) ${LIVE_ISO} || continue ;;
+        esac
+        have=false
+        grep -qx "done=${st}" "${LATE_STATE}" 2>/dev/null && have=true
+        if ! ${rec} && ! ${have}; then
+            case "${st}" in
+                package-stage4) [ -s "${base}.stage4.tar.xz" ] && have=true ;;
+                image-raw)      { [ -s "${base}.img.xz" ] || [ -s "${base}.img" ]; } && have=true ;;
+                image-live)     [ -s "${base}.live.iso" ] && have=true ;;
+            esac
+        fi
+        ${have} || missing="${missing} ${st}"
+    done
+    if [ -n "${missing}" ]; then
+        err "--from-step ${FROM_STEP}: the earlier run ${BUILD_TS} never finished:${missing} — rerun from the first of those"
+        return 1
+    fi
+    if ! late_step_runs package-stage4; then
+        info "Checking the kept stage4 reads whole (xz -t)..."
+        xz -t "${base}.stage4.tar.xz" \
+            || { err "--from-step ${FROM_STEP}: the kept stage4 ${base}.stage4.tar.xz is damaged — rerun from package-stage4"; return 1; }
+    fi
+    return 0
+}
 # late_kept <path>... — the first earlier artifact that exists, or "(not built)".
 late_kept() { local f; for f in "$@"; do [ -s "${f}" ] && { printf '%s' "${f}"; return 0; }; done; printf '(not built)'; }
 
@@ -4660,9 +4697,20 @@ if [ -n "${FROM_STEP}" ]; then
     if ${ROLE_CLIENT} && branding_requested; then brand_grub_staged_scan; fi
     KCACHE_HIT="$(late_state_get KCACHE_HIT)"
     case "${KCACHE_HIT}" in true|false) ;; *) KCACHE_HIT=false ;; esac
+    late_entry_kept_check || exit 1
+    # The live step is not read-only: its dracut chroot writes boot/initramfs-live.img
+    # into the sysroot (and relabels it). A full run packs the stage4 and the .img
+    # BEFORE that, so a rerun that repacks them must not carry it either.
+    if late_step_runs package-stage4 || late_step_runs image-raw; then
+        if [ -e "${SYSROOT}/boot/initramfs-live.img" ]; then
+            rm -f "${SYSROOT}/boot/initramfs-live.img"
+            info "Removed the earlier live step's boot/initramfs-live.img (the stage4 and .img never carry it)"
+        fi
+    fi
     if [ ! -s "${LATE_STATE}" ]; then
-        # A build from before the record existed: start one, so the steps run now are recorded.
-        printf 'BUILD_TS=%s\nKCACHE_HIT=%s\n' "${BUILD_TS}" "${KCACHE_HIT}" > "${LATE_STATE}"
+        # A build from before the record existed: start one, so the steps run now are
+        # recorded (LEGACY=1: the earlier run's steps are not in it).
+        printf 'BUILD_TS=%s\nKCACHE_HIT=%s\nLEGACY=1\n' "${BUILD_TS}" "${KCACHE_HIT}" > "${LATE_STATE}"
     fi
 else
     rm -f "${LATE_STATE}"

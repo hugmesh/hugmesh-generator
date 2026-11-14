@@ -455,6 +455,9 @@ class StudioWizard(QtWidgets.QWizard):
         the config pages to edit. The eventual Build mints a FRESH session id/workdir
         (pending_session_id is cleared here)."""
         wl = worklist_mod.WorklistConfig.from_dict(data)
+        # a rerun point belongs to the session it was taken in: a build edited as new
+        # has no earlier run to continue (core/rerun_step.py)
+        wl.base.extra_flags = rerun_step.strip_from_step(wl.base.extra_flags)
         self.cfg = wl.base
         self.worklist = wl
         self.pending_session_id = None

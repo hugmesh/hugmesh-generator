@@ -3055,6 +3055,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         pend, self._rerun_pending = self._rerun_pending, None
         self.rerun_box.setVisible(False)
         self.rerun_cancel_btn.setEnabled(True)
+        self._sync_all_rerun()             # the icons come back if nothing is dispatched
         if pend is None or self._session is None:
             return
         i, j = pend

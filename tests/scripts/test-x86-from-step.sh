@@ -110,10 +110,12 @@ fx() { awk -v f="$1" '$0 ~ "^"f"\\(\\) *\\{" {p=1} p {print} p && /^}/ {exit}' "
     grep -E '^late_kept\(\)' "${BUILDER}"
     fx late_entry_build_ts
     fx late_step_runs
+    fx late_entry_kept_check
     awk '/^X86_LATE_STEPS=\(/{print; exit}' "${BUILDER}"
-    echo 'case "$1" in ts) late_entry_build_ts ;; runs) late_step_runs "$2" ;; esac'
+    echo 'info(){ :; }'
+    echo 'case "$1" in ts) late_entry_build_ts ;; runs) late_step_runs "$2" ;; kept) BUILD_TS="$2"; late_entry_kept_check ;; esac'
 } > "${TMPD}/fns.sh"
-for f in late_state_get late_entry_build_ts late_step_runs late_step_done late_kept; do
+for f in late_state_get late_entry_build_ts late_step_runs late_step_done late_kept late_entry_kept_check; do
     grep -q "^${f}()" "${TMPD}/fns.sh" || bad "could not extract ${f}() from the builder"
 done
 W="${TMPD}/w"; BR="${W}/wl-x"; S4P="${W}/gentoo-x86-amd64-standalone-unaffiliated-prod"
@@ -122,7 +124,7 @@ ts_of() { # $1 = FROM_STEP — prints the stamp (rc 0) or the refusal (rc 1)
     env -i PATH="${PATH}" WORK_DIR="${W}" BUILD_ROOT="${BR}" BRAND=gentoo ROLE_TAG=standalone-unaffiliated \
         ENV=prod FROM_STEP="$1" bash "${TMPD}/fns.sh" ts 2>&1
 }
-T1=20261113T104325Z; T2=20261114T000000Z
+T1=20990101T000000Z; T2=20990102T000000Z
 reset_tree
 out="$(ts_of image-live)" && bad "a tree with no record and no lock was continued: ${out}" \
     || { case "${out}" in *"holds no earlier run"*) ok "no record, no lock: refused, and says so" ;; *) bad "no-record refusal reads wrong: ${out}" ;; esac; }
@@ -146,6 +148,27 @@ out="$(ts_of image-live)" && bad "image-live continued with no stage4 for the re
     || ok "from image-live the recorded run's stage4 must exist (the installer ISO and the kept artifacts need it)"
 echo x > "${S4P}-${T2}.stage4.tar.xz"
 out="$(ts_of image-installer)" && [ "${out}" = "${T2}" ] && ok "record + its stage4: image-installer continues ${T2}" || bad "record run not continued: ${out}"
+# every KEPT step must have finished in the earlier run
+kept() { # $1 = FROM_STEP, $2 = BUILD_IMG, $3 = LIVE_ISO — prints the refusal (rc 1) or nothing
+    env -i PATH="${PATH}" WORK_DIR="${W}" BUILD_ROOT="${BR}" BRAND=gentoo ROLE_TAG=standalone-unaffiliated \
+        ENV=prod FROM_STEP="$1" BUILD_IMG="$2" LIVE_ISO="$3" bash "${TMPD}/fns.sh" kept "${T2}" 2>&1
+}
+reset_tree; echo x | xz > "${S4P}-${T2}.stage4.tar.xz"; echo i > "${S4P}-${T2}.img.xz"
+printf 'BUILD_TS=%s\nKCACHE_HIT=false\ndone=package-stage4\ndone=image-raw\n' "${T2}" > "${BR}/late-steps.state"
+out="$(kept image-live true true)" && ok "record: stage4 + .img done -> a rerun from image-live keeps them" || bad "record with both steps done refused: ${out}"
+printf 'BUILD_TS=%s\nKCACHE_HIT=false\ndone=package-stage4\n' "${T2}" > "${BR}/late-steps.state"
+out="$(kept image-live true true)" && bad "a rerun kept an .img step the record says never finished" \
+    || { case "${out}" in *"never finished: image-raw"*) ok "record without done=image-raw: refused, naming image-raw (the .img file alone does not count)" ;; *) bad "missing image-raw refused wrongly: ${out}" ;; esac; }
+out="$(kept image-live false true)" && ok "with --no-img the .img step is not required" || bad "--no-img rerun refused: ${out}"
+out="$(kept package-stage4 true true)" && ok "from package-stage4 nothing is kept, nothing required" || bad "package-stage4 rerun refused: ${out}"
+printf 'BUILD_TS=%s\nKCACHE_HIT=false\nLEGACY=1\n' "${T2}" > "${BR}/late-steps.state"
+out="$(kept image-live true true)" && ok "a record a legacy rerun started (LEGACY=1): the earlier run's artifacts count" || bad "legacy record refused with artifacts present: ${out}"
+rm -f "${S4P}-${T2}.img.xz"
+out="$(kept image-live true true)" && bad "legacy: a rerun kept an .img that does not exist" \
+    || ok "legacy: a missing .img is refused (no green rerun with an artifact missing)"
+echo i > "${S4P}-${T2}.img.xz"; echo "not xz" > "${S4P}-${T2}.stage4.tar.xz"
+out="$(kept image-installer true false)" && bad "a damaged kept stage4 was accepted" \
+    || { case "${out}" in *"is damaged"*) ok "a kept stage4 that does not read whole (xz -t) is refused" ;; *) bad "damaged stage4 refused wrongly: ${out}" ;; esac; }
 # step order
 runs() { env -i PATH="${PATH}" FROM_STEP="$1" bash "${TMPD}/fns.sh" runs "$2"; }
 exp_ok=true
@@ -196,7 +219,7 @@ tail -5 "${mid}" | grep -F 'printf '"'"'BUILD_TS=%s\nKCACHE_HIT=%s\n'"'"' "${BUI
     && ok "the late-step record is written as the region's last statement (the sysroot is final there)" \
     || bad "the late-step record is not written at the end of the skippable region"
 pre="${TMPD}/real/pre"
-awk '/^if \[ -n "\$\{FROM_STEP\}" \]; then$/{f=1} f&&/^else$/{e=1} e&&/rm -f "\$\{LATE_STATE\}"/{print "hit"; exit}' "${pre}" | grep -x hit >/dev/null \
+awk '/^    banner "Rerunning from step /{f=1} f&&/^else$/{e=1} e&&/^fi$/{exit} e&&/^    rm -f "\$\{LATE_STATE\}"$/{print "hit"; exit}' "${pre}" | grep -x hit >/dev/null \
     && ok "a full run removes the old record before it changes anything" \
     || bad "a full run does not remove an old late-step record first (a run that dies early would leave a stale one)"
 # The extraction block (owner gate on its --resume branch) stays BEFORE the region, so
@@ -205,6 +228,16 @@ grep -qxF 'if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then' "${pre}
     && grep -qE '^    hmr_owner_gate "\$\{SYSROOT\}" \|\| exit 1$' "${pre}" \
     && ok "a rerun passes the extraction block's --resume owner gate (it sits before the skipped region)" \
     || bad "the extraction block (and its owner gate) is no longer ahead of the skipped region"
+
+# the live step writes boot/initramfs-live.img into the sysroot; a rerun that repacks
+# the stage4 or the .img must drop it first (a full run packs both before it exists)
+awk '/^    banner "Rerunning from step /{f=1} f&&/^else$/{exit} f' "${pre}" > "${TMPD}/entry.sh"
+grep -F 'if late_step_runs package-stage4 || late_step_runs image-raw; then' "${TMPD}/entry.sh" >/dev/null \
+    && grep -F 'rm -f "${SYSROOT}/boot/initramfs-live.img"' "${TMPD}/entry.sh" >/dev/null \
+    && ok "a rerun from package-stage4 or image-raw removes the earlier live step's initramfs-live.img" \
+    || bad "a rerun that repacks the stage4/.img would carry the live step's initramfs-live.img"
+grep -F 'late_entry_kept_check || exit 1' "${TMPD}/entry.sh" >/dev/null \
+    && ok "a rerun checks every kept step before anything runs" || bad "the rerun entry never calls late_entry_kept_check"
 
 echo
 echo "x86 --from-step guards: ${P} passed, ${F} failed"

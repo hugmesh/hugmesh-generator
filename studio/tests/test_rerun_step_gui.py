@@ -75,17 +75,18 @@ def assert_inside(container, widget, what):
 
 class Session:
     def __init__(self, kind="wizard"):
-        self.id = "20261113-024113-df7e91"
+        self.id = "20991231-000000-abcdef"
         self.kind = kind
 
 
-def _page(wiz, rows=(("standalone-unaffiliated.x86", "x86"),), session=Session()):
+def _page(wiz, rows=(("standalone-thick.x86", "x86"),), session=Session()):
+    # the real order (initializePage): the session record first, then the rows; no
+    # hand-made sync — the icons must follow from the page's own rendering
     page = progress_mod.ProgressPage(wiz)
     page._reset()
+    page._session = session
     for i, (label, platform) in enumerate(rows):
         page._build_row(i, label, platform)
-    page._session = session
-    page._sync_all_rerun()
     return page
 
 
@@ -137,12 +138,12 @@ def test_confirming_a_late_step_dispatches_from_that_step(wiz, qapp, dispatched)
     k = _run_until(page, 0, "image-live")
     page._rows[0].rerun_btns[k].click()
     assert not page.rerun_box.isHidden()
-    assert "Rerun standalone-unaffiliated.x86 from “Build LIVE image”?" in page.rerun_note.text()
+    assert "Rerun standalone-thick.x86 from “Build LIVE image”?" in page.rerun_note.text()
     assert page.rerun_go_btn.text() == "Rerun from here"
     assert dispatched == []                                             # asking dispatches nothing
     page.rerun_go_btn.click()
     settle(qapp)
-    assert dispatched == [(("loaded", "20261113-024113-df7e91.json"), True, "image-live")]
+    assert dispatched == [(("loaded", "20991231-000000-abcdef.json"), True, "image-live")]
     assert page.rerun_box.isHidden()
 
 
