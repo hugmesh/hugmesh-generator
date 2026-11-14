@@ -3648,6 +3648,87 @@ def brand_header_fields(brand: str, brand_title: str, org: str, cluster_domain: 
     return out
 
 
+# ── a person's other sign-in handles (hugmesh-generator#1107) ─────────────────────────
+#: The providers a user can be invited through, in display order.
+SIGNIN_HANDLE_PROVIDERS: tuple[str, ...] = ("google", "discord")
+SIGNIN_HANDLE_LABELS = {"google": "Google account", "discord": "Discord username"}
+_HANDLE_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+")
+# Discord's current usernames: 2-32 characters, lowercase letters, digits, "_" and
+# ".", never two dots in a row.
+_HANDLE_DISCORD_RE = re.compile(r"[a-z0-9_.]{2,32}")
+#: What the Users screens say beside the handles until provisioning reads them.
+SIGNIN_HANDLES_NOT_APPLIED = (
+    "Google and Discord handles are kept with this configuration, not applied yet: "
+    "they become invites when provisioning seeds them and the Google/Discord sign-in "
+    "lands (hugmesh-generator#1107).")
+
+
+def clean_signin_handle(provider: str, value) -> str:
+    """The stored form of one handle: trimmed; an email or a Discord name lowercased
+    (both compare case-insensitively where they are checked)."""
+    return str(value or "").strip().lower()
+
+
+def signin_handle_problem(provider: str, value) -> str:
+    """Why ``value`` is not a usable handle for ``provider`` ("" when it is, or when
+    it is empty: no handle)."""
+    if provider not in SIGNIN_HANDLE_PROVIDERS:
+        return (f"unknown sign-in provider {provider!r} (known: "
+                f"{', '.join(SIGNIN_HANDLE_PROVIDERS)})")
+    if value is not None and not isinstance(value, str):
+        return f"the {SIGNIN_HANDLE_LABELS[provider]} must be text, got {value!r}"
+    v = clean_signin_handle(provider, value)
+    if not v:
+        return ""
+    if provider == "google":
+        if not _HANDLE_EMAIL_RE.fullmatch(v) or len(v) > 254:
+            return f"the Google account must be an email address, got {v!r}"
+    elif not _HANDLE_DISCORD_RE.fullmatch(v) or ".." in v:
+        return (f"the Discord username must be 2-32 lowercase letters, digits, '_' or "
+                f"'.' with no two dots in a row, got {v!r}")
+    return ""
+
+
+def signin_handles_problem(handles) -> str:
+    """Why a whole ``User.signin_handles`` value is unusable ("" when it is): None or
+    {} is none; otherwise a mapping of known providers to valid handles."""
+    if handles is None:
+        return ""
+    if not isinstance(handles, dict):
+        return f"signin_handles must be an object, got {handles!r}"
+    for prov, v in handles.items():
+        problem = signin_handle_problem(prov, v)
+        if problem:
+            return problem
+    return ""
+
+
+def clean_signin_handles(handles) -> dict[str, str]:
+    """The stored form: known providers in display order, empty handles dropped."""
+    h = handles if isinstance(handles, dict) else {}
+    out = {p: clean_signin_handle(p, h.get(p)) for p in SIGNIN_HANDLE_PROVIDERS}
+    return {p: v for p, v in out.items() if v}
+
+
+#: ``User.registration`` values that name a provider, and the handle each needs.
+_REGISTRATION_HANDLE = {"gmail": "google", "discord": "discord"}
+
+
+def user_signin_handle_warnings(user) -> list[str]:
+    """Advice (never a refusal) about one user's handles: a first-login registration
+    through a provider with no handle recorded for it."""
+    reg = (getattr(user, "registration", "") or "").strip()
+    prov = _REGISTRATION_HANDLE.get(reg)
+    if not prov:
+        return []
+    if (getattr(user, "signin_handles", None) or {}).get(prov):
+        return []
+    name = (getattr(user, "username", "") or "").strip() or "a user"
+    return [f"{name} registers with {reg} at first login, but no "
+            f"{SIGNIN_HANDLE_LABELS[prov]} is recorded for them, so there is nothing "
+            "to invite"]
+
+
 @dataclass
 class User:
     username: str = ""
@@ -3667,6 +3748,13 @@ class User:
     # secret is ever stored on the User (so it is safe to serialize/save like the other
     # User fields — nothing to blank).
     registration: str = ""
+    # The person's OTHER sign-in handles (hugmesh-generator#1107, operator request
+    # 2026-11-13): {"google": <email>, "discord": <username>}, each optional. Each
+    # becomes an invite in its provider's allowlist at provisioning; the account is
+    # then linked by the provider's immutable id at first sign-in, never by the
+    # handle. OMIT-WHEN-EMPTY in to_dict (both manifests and the saved config), so
+    # every earlier row keeps its bytes. Never a secret.
+    signin_handles: dict[str, str] = field(default_factory=dict)
     # ALL the roles this account holds (issue #228 — "should a person be assignable to
     # multiple roles"): the union of ``roles`` and ``role`` as constructed, normalized by
     # normalize_user_roles (deduped, precedence order, ``user`` floor). Serialized by
@@ -3694,6 +3782,8 @@ class User:
         d = asdict(self)
         if self.roles == [self.role]:
             del d["roles"]
+        if not d.get("signin_handles"):
+            d.pop("signin_handles", None)
         return d
 
 
@@ -4236,6 +4326,13 @@ class ImageConfig:
             kw.pop("roles", None)
         if not isinstance(kw.get("role", ""), str):
             kw.pop("role")
+        # the other sign-in handles (#1107): absent/null is none; junk fails loudly at
+        # load, never kept as an invite nobody could redeem
+        h = kw.get("signin_handles")
+        problem = signin_handles_problem(h)
+        if problem:
+            raise ValueError(f"user {kw.get('username', '')!r}: {problem}")
+        kw["signin_handles"] = clean_signin_handles(h or {})
         return User(**kw)
 
     @classmethod
