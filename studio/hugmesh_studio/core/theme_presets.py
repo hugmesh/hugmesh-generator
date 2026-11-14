@@ -140,11 +140,24 @@ class ThemePreset:
     stripes: Tuple[str, ...] = ()   # the flag, top-to-bottom, verbatim
     note: str = ""                  # one-liner shown under the card label
     effect: str = ""                # optional theme.BG_EFFECTS value; "" = undeclared
+    #: Optional fonts.FONT_PRESETS name: the face this preset sets when the operator has
+    #: not chosen one. An explicit font choice always wins (see preset_font()).
+    font: str = ""
 
 
-def _p(pid, label, group, primary, secondary, stripes=(), note="", effect=""):
+def _p(pid, label, group, primary, secondary, stripes=(), note="", effect="", font=""):
     return ThemePreset(pid, label, group, primary, secondary, tuple(stripes), note,
-                       effect)
+                       effect, font)
+
+
+def preset_font(preset_id: str, chosen: str = "") -> str:
+    """The font to compose with: the operator's explicit ``chosen`` font, else the
+    preset's own, else "" (no font tokens at all, the shipped face)."""
+    if chosen:
+        return chosen
+    if not preset_id:
+        return ""
+    return by_id(preset_id).font
 
 
 # ── the catalogue ────────────────────────────────────────────────────────────
@@ -320,7 +333,8 @@ def _stripe_gradient(stripes: Tuple[str, ...]) -> str:
     return "linear-gradient(180deg, " + ", ".join(parts) + ")"
 
 
-def compose_tokens(preset_id: str, mode: str = "dark") -> Dict[str, str]:
+def compose_tokens(preset_id: str, mode: str = "dark", *,
+                   primary: str = "", secondary: str = "") -> Dict[str, str]:
     """The full token map for a preset+mode. Starts from :func:`theme.derive`
     (accent-text WCAG derivation included), then applies the mode's neutral
     ramp, re-anchors the one bg-targeted derived token for light mode, and adds
@@ -341,7 +355,11 @@ def compose_tokens(preset_id: str, mode: str = "dark") -> Dict[str, str]:
     # both change. Deriving it inside the base call would rank and tint every colour
     # against the DARK shell's bg/text and then have the light neutrals land on top,
     # giving a light theme panes computed for a dark one.
-    tokens = theme.derive(p.primary, p.secondary)
+    # A caller's own brand colours (a per-domain selection's primary/secondary) replace
+    # the preset's; the ramp, stripes and effect still come from the preset.
+    primary = primary or p.primary
+    secondary = secondary or p.secondary
+    tokens = theme.derive(primary, secondary)
     ramp = RAMPS.get(mode) or {}
     if ramp:
         tokens.update(ramp)
@@ -357,8 +375,12 @@ def compose_tokens(preset_id: str, mode: str = "dark") -> Dict[str, str]:
     # that looks perfectly reasonable. Only "dark" is the bg it was solved against, so
     # only "dark" may keep it unchanged.
     tokens["--sd-accent-soft"] = (
-        _soft_for_text_on_light(p.secondary, tokens["--sd-bg-0"]) if light_ramp
-        else theme.soft_for_text(p.secondary, tokens["--sd-bg-0"]))
+        _soft_for_text_on_light(secondary, tokens["--sd-bg-0"]) if light_ramp
+        else theme.soft_for_text(secondary, tokens["--sd-bg-0"]))
+    # The ramp is settled: re-solve the surface-dependent role tokens (field edges,
+    # warning/code/success/error text, colour scheme) against ITS surfaces, not the
+    # dark shell's that theme.derive() solved them for.
+    tokens.update(theme.state_tokens(tokens))
     if p.stripes:
         bg = tokens["--sd-bg-0"]
         tokens.update(theme.palette_tokens(

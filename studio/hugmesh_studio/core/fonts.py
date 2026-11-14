@@ -67,6 +67,32 @@ FONT_PRESETS: dict[str, str] = {
         'Rockwell, "Rockwell Nova", "Roboto Slab", "DejaVu Serif", '
         '"Sitka Small", serif'
     ),
+    # Cross-platform SYSTEM stacks (each names faces that ship with Windows, macOS,
+    # common Linux distros or Android, then a generic family), so a theme can change the
+    # face of the page with zero bytes and nothing fetched.
+    "Transitional serif": 'Charter, "Bitstream Charter", "Sitka Text", Cambria, serif',
+    "Old style serif": (
+        '"Iowan Old Style", "Palatino Linotype", "URW Palladio L", P052, serif'
+    ),
+    "Didone": (
+        'Didot, "Bodoni MT", "Noto Serif Display", "URW Palladio L", P052, Sylfaen, serif'
+    ),
+    "Antique": (
+        'Superclarendon, "Bookman Old Style", "URW Bookman", "URW Bookman L", '
+        '"Georgia Pro", Georgia, serif'
+    ),
+    "Rounded": (
+        'ui-rounded, "Hiragino Maru Gothic ProN", Quicksand, Comfortaa, Manjari, '
+        '"Arial Rounded MT", "Arial Rounded MT Bold", Calibri, source-sans-pro, sans-serif'
+    ),
+    "Neo-grotesque": (
+        'Inter, Roboto, "Helvetica Neue", "Arial Nova", "Nimbus Sans", Arial, sans-serif'
+    ),
+    "Industrial": (
+        'Bahnschrift, "DIN Alternate", "Franklin Gothic Medium", "Nimbus Sans Narrow", '
+        "sans-serif-condensed, sans-serif"
+    ),
+    "Handwritten": '"Segoe Print", "Bradley Hand", Chilanka, TSCu_Comic, casual, cursive',
     "Monospace": (
         'ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, '
         '"DejaVu Sans Mono", monospace'

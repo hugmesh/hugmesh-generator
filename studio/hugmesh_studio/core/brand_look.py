@@ -437,8 +437,11 @@ def look_css(look: Mapping[str, Any], *, enforce_budget: bool = True) -> str:
             secondary = secondary or preset.secondary
             delta = theme_presets.delta_css(eff["preset"], eff["mode"])
         font_bytes, family = _font_bytes(eff)
+        # A preset may carry its own face; a font the look chose still wins.
+        font_choice = eff["font"] or (
+            theme_presets.preset_font(eff["preset"]) if eff.get("preset") else "")
         css = theme.compose_login_css(
-            primary, secondary, font_preset=eff["font"], font_family=family,
+            primary, secondary, font_preset=font_choice, font_family=family,
             font_bytes=font_bytes)
         if delta:
             css = (css + "\n" if css else "") + delta
