@@ -153,6 +153,10 @@ pp_gate_chain() {
 # teaches MESH_PROFILE about it deliberately.
 gate_reached() {
     local h="$1" cond v tok scan assigns="" k
+    # The x86 builder's skippable region (build-x86-host-stage4.sh --from-step): a full
+    # build always enters it; only a rerun from a late step skips it, and that rerun
+    # keeps the sysroot the full run already baked (tests/scripts/test-x86-from-step.sh).
+    [ "${h}" = 'if [ -z "${FROM_STEP}" ]; then' ] && return 0
     case "${h}" in
         "if "*"; then") cond="${h#if }"; cond="${cond%; then}" ;;
         *) return 2 ;;

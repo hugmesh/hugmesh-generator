@@ -604,3 +604,45 @@ def test_delete_all_finished_prunes_but_keeps_running(monkeypatch, qapp, wiz, tm
     assert [r.id for r in bs.load_all()] == [running.id]   # only the active one kept
     assert info and "skipped 1" in info[0]
     assert w.table.rowCount() == 1                  # list refreshed to the survivor
+
+
+# ── (e) RERUN FROM A STEP (core/rerun_step.py) — the REAL dispatch path ──────────────
+def _dispatched_argv(page):
+    """The builder argv the driver would run for the page's (single) image."""
+    (_entry, cfg), = page.driver.worklist.materialize()
+    return cfg.to_cli_args()
+
+
+def test_rerun_from_a_step_dispatches_resume_and_from_step(monkeypatch, qapp, wiz, tmp_path):
+    _install_fake_builddriver(monkeypatch)
+    ok, _bad = _seed_sessions(tmp_path)
+    os.makedirs(ok.workdir, exist_ok=True)
+    wiz.start_build_from_session(bs.load(ok.path()), resume=True, from_step="image-live")
+    page = _progress_page(wiz)
+    _run_to_completion(qapp, page)
+    argv = _dispatched_argv(page)
+    assert "--resume" in argv
+    i = argv.index("--from-step")
+    assert argv[i + 1] == "image-live" and argv.count("--from-step") == 1
+    assert page.driver.workdir == ok.workdir            # the SAME session dir
+
+
+def test_a_plain_restart_after_a_rerun_starts_from_the_top(monkeypatch, qapp, wiz, tmp_path):
+    _install_fake_builddriver(monkeypatch)
+    ok, _bad = _seed_sessions(tmp_path)
+    os.makedirs(ok.workdir, exist_ok=True)
+    wiz.start_build_from_session(bs.load(ok.path()), resume=True, from_step="image-live")
+    _run_to_completion(qapp, _progress_page(wiz))
+    assert "--from-step image-live" in bs.load(ok.path()).config["base"]["extra_flags"]  # the bait
+    wiz.start_build_from_session(bs.load(ok.path()), resume=True)
+    page = _progress_page(wiz)
+    _run_to_completion(qapp, page)
+    assert "--from-step" not in _dispatched_argv(page)
+
+
+def test_redo_drops_a_rerun_point(qapp, wiz, tmp_path):
+    ok, _bad = _seed_sessions(tmp_path)
+    cfg = dict(ok.config)
+    cfg["base"] = dict(cfg["base"], extra_flags="--no-tar --from-step image-live")
+    wiz.load_session(cfg)
+    assert wiz.cfg.extra_flags == "--no-tar"

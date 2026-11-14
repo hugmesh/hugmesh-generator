@@ -15,6 +15,7 @@ from .qt import BINDING, QtCore, QtGui, QtWidgets
 from .branding_icon import brand_icon
 from .. import __version__
 from ..core import crashlog
+from ..core import rerun_step
 from ..core.build_driver import BuildDriver
 from ..core.config import ImageConfig, MODE_SKIPPED_PAGES, WIZARD_PAGE_SLUGS
 from ..core.platform_info import detect
@@ -454,12 +455,15 @@ class StudioWizard(QtWidgets.QWizard):
         the config pages to edit. The eventual Build mints a FRESH session id/workdir
         (pending_session_id is cleared here)."""
         wl = worklist_mod.WorklistConfig.from_dict(data)
+        # a rerun point belongs to the session it was taken in: a build edited as new
+        # has no earlier run to continue (core/rerun_step.py)
+        wl.base.extra_flags = rerun_step.strip_from_step(wl.base.extra_flags)
         self.cfg = wl.base
         self.worklist = wl
         self.pending_session_id = None
         self.restart()
 
-    def start_build_from_session(self, session, resume=False):
+    def start_build_from_session(self, session, resume=False, from_step=""):
         """RESTART: re-dispatch a session's exact recorded config into the SAME
         per-session workdir. Restores the recorded dispatch params (backend /
         generate-keys), optionally sets --resume on the base config (the builders'
@@ -474,6 +478,10 @@ class StudioWizard(QtWidgets.QWizard):
         # re-snapshots resume=true into the persisted record, so an UNCHECKED box
         # must actively clear it or --resume ratchets on for every later restart.
         wl.base.resume = bool(resume)
+        # The progress page's rerun icon (core/rerun_step.py): exactly the requested
+        # --from-step rides extra_flags, and any earlier one is dropped — so a plain
+        # Restart of a session that was once rerun from a step starts from the top.
+        wl.base.extra_flags = rerun_step.with_from_step(wl.base.extra_flags, from_step)
         self.cfg = wl.base
         self.worklist = wl
         self.build_backend = session.backend
