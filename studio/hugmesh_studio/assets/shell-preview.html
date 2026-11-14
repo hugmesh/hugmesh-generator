@@ -3,8 +3,8 @@
   GENERATED SNAPSHOT — do not hand-edit.
   The REAL hugmesh-host-shell chrome (/about, signed out): rendered DOM + every
   stylesheet's rules captured from the production Angular build at
-    hugmesh-host-shell commit 68fb792b114c01a82d3b6c36d3673327116dd3d1 (PR #181 head;
-    the squash merge 885009c carries the same tree)
+    hugmesh-host-shell commit a39e185e7b0ab28d50b48444c4c83671edefba49 (PR #184 head:
+    light-ramp backpane and brand text)
   with scripts, preloads and the WebGL canvas stripped (a frozen VISUAL snapshot).
   The wordmark face is inlined as a data: URI so the file renders offline.
   Studio substitutes the derived theme into the __SNAP_THEME_CSS__ marker
@@ -2796,15 +2796,15 @@ html, body { max-width: 100%; overflow-wrap: anywhere; }
 #maincontent { display: block; }
 #maincontent:focus, #maincontent:focus-visible { outline: none; box-shadow: none; }
 header, footer { position: relative; z-index: 1; }
-router-outlet + * { display: block; position: relative; z-index: 1; background: rgba(10, 10, 10, 0.82); border: var(--sd-border-width, var(--hug-border-width, 1px)) var(--sd-border-style, var(--hug-border-style, solid)) rgba(232,232,232,.18); border-radius: var(--sd-radius-lg, var(--hug-radius-lg, 1.5rem)); margin: clamp(0.5rem, 1.5vw, 1.25rem) auto; padding: clamp(0.75rem, 2.5vw, 1.75rem); max-width: 90rem; }
+router-outlet + * { display: block; position: relative; z-index: 1; background: rgba(var(--hug-bg-0-rgb, 10, 10, 10),.82); border: var(--sd-border-width, var(--hug-border-width, 1px)) var(--sd-border-style, var(--hug-border-style, solid)) rgba(232,232,232,.18); border-radius: var(--sd-radius-lg, var(--hug-radius-lg, 1.5rem)); margin: clamp(0.5rem, 1.5vw, 1.25rem) auto; padding: clamp(0.75rem, 2.5vw, 1.75rem); max-width: 90rem; }
 @supports (backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px)) {
   router-outlet + * { backdrop-filter: blur(10px) saturate(120%); }
 }
 @media (prefers-contrast: more) {
-  router-outlet + * { background: rgb(10, 10, 10); backdrop-filter: none; border-color: rgb(232, 232, 232); }
+  router-outlet + * { background: rgb(var(--hug-bg-0-rgb, 10, 10, 10)); backdrop-filter: none; border-color: rgb(232, 232, 232); }
 }
 @media (prefers-reduced-motion: reduce) {
-  router-outlet + * { background: rgba(10, 10, 10, 0.92); }
+  router-outlet + * { background: rgba(var(--hug-bg-0-rgb, 10, 10, 10),.92); }
 }
 [menu] { position: relative; z-index: 5; }
 h1, .h1 { font-size: clamp(1.4rem, 0.5rem + 4vw, 3rem); }
@@ -2936,7 +2936,7 @@ nav.navbar[_ngcontent-ng-c1539699053] { background: rgba(var(--hug-charcoal-rgb,
   .home-services-nav[_ngcontent-ng-c1539699053] .service-card[_ngcontent-ng-c1539699053] { margin: 2rem; min-height: 12rem; min-width: 12rem; }
 }
 .home-services-nav[_ngcontent-ng-c1539699053] .service-card__link[_ngcontent-ng-c1539699053] { color: var(--hug-text); display: flex; flex-direction: column; gap: 0.25rem; transition: color 0.2s, filter 0.2s; }
-.home-services-nav[_ngcontent-ng-c1539699053] .service-card__link[_ngcontent-ng-c1539699053]:hover, .home-services-nav[_ngcontent-ng-c1539699053] .service-card__link[_ngcontent-ng-c1539699053]:focus-visible { color: gold; filter: drop-shadow(rgba(255, 215, 0, 0.7) 0px 0px 6px); }
+.home-services-nav[_ngcontent-ng-c1539699053] .service-card__link[_ngcontent-ng-c1539699053]:hover, .home-services-nav[_ngcontent-ng-c1539699053] .service-card__link[_ngcontent-ng-c1539699053]:focus-visible { color: var(--hug-primary-soft, #ffd700); filter: drop-shadow(rgba(255, 215, 0, 0.7) 0px 0px 6px); }
 .home-services-nav[_ngcontent-ng-c1539699053] .service-card__link--disabled[_ngcontent-ng-c1539699053] { color: rgba(187, 187, 187, 0.35); cursor: not-allowed; text-decoration: none; }
 .home-services-nav[_ngcontent-ng-c1539699053] .service-card__link--disabled[_ngcontent-ng-c1539699053]:hover, .home-services-nav[_ngcontent-ng-c1539699053] .service-card__link--disabled[_ngcontent-ng-c1539699053]:focus-visible { color: rgba(187, 187, 187, 0.35); filter: none; }
 .home-services-nav[_ngcontent-ng-c1539699053] .service-card__label[_ngcontent-ng-c1539699053] { font-family: "More Sugar", Arial, Helvetica, sans-serif; font-style: italic; font-weight: 600; font-size: 1.25rem; }
@@ -2964,8 +2964,8 @@ nav.navbar[_ngcontent-ng-c1539699053] { background: rgba(var(--hug-charcoal-rgb,
 .status-gate__detail[_ngcontent-ng-c1114270462] { margin: 0px 0px 0.5rem; color: rgb(232, 232, 232); }
 .status-gate__reason[_ngcontent-ng-c1114270462] { margin: 0px 0px 0.5rem; color: rgb(187, 187, 187); word-break: break-word; overflow-wrap: anywhere; }
 .status-gate__reason-label[_ngcontent-ng-c1114270462] { color: rgb(232, 232, 232); font-weight: 600; }
-.status-gate__appeal[_ngcontent-ng-c1114270462] { display: inline-block; color: gold; text-decoration: underline; font-weight: 600; }
-.status-gate__appeal[_ngcontent-ng-c1114270462]:hover, .status-gate__appeal[_ngcontent-ng-c1114270462]:focus-visible { color: rgb(255, 229, 102); }
+.status-gate__appeal[_ngcontent-ng-c1114270462] { display: inline-block; color: var(--hug-primary-soft, #ffd700); text-decoration: underline; font-weight: 600; }
+.status-gate__appeal[_ngcontent-ng-c1114270462]:hover, .status-gate__appeal[_ngcontent-ng-c1114270462]:focus-visible { color: var(--hug-primary-soft, #ffe566); }
 .status-gate__dismiss[_ngcontent-ng-c1114270462] { flex: 0 0 auto; background: transparent; border: 1px solid rgba(255, 107, 107, 0.38); border-radius: 0.5rem; color: rgb(232, 232, 232); font-size: 1.25rem; line-height: 1; width: 2rem; height: 2rem; cursor: pointer; transition: 0.2s; }
 .status-gate__dismiss[_ngcontent-ng-c1114270462]:hover, .status-gate__dismiss[_ngcontent-ng-c1114270462]:focus-visible { box-shadow: rgba(255, 107, 107, 0.4) 0px 0px 8px, rgba(255, 107, 107, 0.15) 0px 0px 20px; color: rgb(255, 107, 107); }
 @media (pointer: coarse) {
@@ -2988,9 +2988,9 @@ a[_ngcontent-ng-c637387436]:hover, a[_ngcontent-ng-c637387436]:focus-visible { c
 .profile-modal__dialog[_ngcontent-ng-c4191266727] { background: rgba(var(--hug-charcoal-rgb, 17, 17, 17),.82); backdrop-filter: blur(var(--sd-surface-blur, var(--hug-surface-blur, 16px))) saturate(1.5); border-radius: var(--sd-radius-lg, var(--hug-radius-lg, 1.5rem)); border: var(--sd-border-width, var(--hug-border-width, 1px)) var(--sd-border-style, var(--hug-border-style, solid)) rgba(var(--hug-primary-rgb, 255, 215, 0),.2); box-shadow: var(--sd-shadow, var(--hug-shadow, inset 0 1px 0 rgba(255, 255, 255, .18), inset 0 -1px 0 rgba(0, 0, 0, .3), 0 0 0 1px rgba(var(--hug-primary-rgb, 255, 215, 0), .06), 0 12px 40px rgba(0, 0, 0, .3), 0 4px 12px rgba(0, 0, 0, .15))); width: min(40rem, 100%); max-height: calc(-4rem + 100vh); display: flex; flex-direction: column; padding: 1.5rem; outline: none; }
 .profile-modal__dialog[_ngcontent-ng-c4191266727]:focus-visible { box-shadow: rgba(255, 215, 0, 0.4) 0px 0px 8px, rgba(255, 215, 0, 0.15) 0px 0px 20px; }
 .profile-modal__header[_ngcontent-ng-c4191266727] { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
-.profile-modal__title[_ngcontent-ng-c4191266727] { color: gold; font-size: 1.5rem; margin: 0px; }
+.profile-modal__title[_ngcontent-ng-c4191266727] { color: var(--hug-primary-soft, #ffd700); font-size: 1.5rem; margin: 0px; }
 .profile-modal__close[_ngcontent-ng-c4191266727] { background: none; border: 0px; color: rgb(187, 187, 187); cursor: pointer; font-size: 1.75rem; line-height: 1; padding: 0.25rem 0.5rem; }
-.profile-modal__close[_ngcontent-ng-c4191266727]:hover, .profile-modal__close[_ngcontent-ng-c4191266727]:focus-visible { color: gold; }
+.profile-modal__close[_ngcontent-ng-c4191266727]:hover, .profile-modal__close[_ngcontent-ng-c4191266727]:focus-visible { color: var(--hug-primary-soft, #ffd700); }
 .profile-modal__body[_ngcontent-ng-c4191266727] { overflow-y: auto; }
 .profile-modal__status[_ngcontent-ng-c4191266727] { color: rgb(187, 187, 187); }
 .profile-modal__error[_ngcontent-ng-c4191266727] { color: rgb(255, 214, 165); }
@@ -3027,7 +3027,7 @@ a[_ngcontent-ng-c637387436]:hover, a[_ngcontent-ng-c637387436]:focus-visible { c
 }
 [_nghost-ng-c1355886097] { border-radius: var(--sd-radius-lg, var(--hug-radius-lg, 1.5rem)); display: block; }
 .content[_ngcontent-ng-c734865202] { font-family: "More Sugar", Arial, Helvetica, sans-serif; font-style: italic; font-weight: 700; padding: 0.5rem; }
-h2[_ngcontent-ng-c734865202] { text-align: center; color: gold; padding-top: 1rem; }
+h2[_ngcontent-ng-c734865202] { text-align: center; color: var(--hug-primary-soft, #ffd700); padding-top: 1rem; }
 .section-backpane[_ngcontent-ng-c734865202] { background: linear-gradient(135deg,rgba(var(--hug-surface-rgb, 28, 28, 28),.85),rgba(var(--hug-mid-rgb, 58, 58, 58),.4)); border: var(--sd-border-width, var(--hug-border-width, 1px)) var(--sd-border-style, var(--hug-border-style, solid)) rgba(var(--hug-primary-rgb, 255, 215, 0),.18); border-radius: var(--sd-radius, var(--hug-radius, .75rem)); backdrop-filter: blur(var(--sd-surface-blur, var(--hug-surface-blur, 6px))); box-shadow: var(--sd-shadow-sm, var(--hug-shadow-sm, 0 0 12px rgba(var(--hug-primary-rgb, 255, 215, 0), .07))); font-family: "More Sugar", Arial, Helvetica, sans-serif; font-weight: 400; }</style>
 <style id="snap-theme">/*__SNAP_THEME_CSS__*/</style>
 </head><body>
