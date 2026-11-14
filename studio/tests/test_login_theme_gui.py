@@ -130,7 +130,7 @@ def test_preview_button_rewrites_the_artifact_with_the_new_font(qapp, tmp_path,
     ed.preview_btn.click()
     assert opened[1] == opened[0]                    # same artifact, rewritten
     text = open(opened[1], encoding="utf-8").read()
-    assert text.count("--sd-font-sans: Rockwell") == 2   # outer page + iframe srcdoc
+    assert text.count("--sd-font-sans: Rockwell") == 3  # outer page + login + shell srcdocs
     assert "Avenir" not in text                      # old font family is GONE
     assert opened[1].endswith(platform_preview.PLATFORM_PREVIEW_BASENAME)
 
