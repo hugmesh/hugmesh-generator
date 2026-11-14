@@ -41,9 +41,9 @@ def test_marker_substitution_reaches_all_panes(themed_page):
     # The login pane is a SEPARATE document (iframe srcdoc), so the outer rule
     # cannot reach it — it must carry its own substituted copy. The srcdoc escape
     # leaves the token text itself untouched, so the substituted primary appears
-    # exactly twice: once outer, once inside the escaped snapshot.
-    assert themed_page.count("--sd-primary: #e91e63;") == 2
-    assert themed_page.count("id=&quot;snap-theme&quot;") == 1
+    # once outer and once inside each escaped snapshot (login, host shell).
+    assert themed_page.count("--sd-primary: #e91e63;") == 3  # outer page + login + shell frames
+    assert themed_page.count("id=&quot;snap-theme&quot;") == 2  # login + shell srcdocs
     # And the pane styles actually consume the tokens (a hardcoded-hex pane would
     # pass the counts above while ignoring the theme).
     for token in ("var(--sd-primary)", "var(--sd-secondary)", "var(--sd-accent-soft)",
@@ -79,7 +79,8 @@ def test_page_is_inert_and_self_contained(themed_page):
     assert "<script" not in themed_page          # frozen visual preview: no JS
     assert 'href="http' not in themed_page       # no external fetches
     assert 'src="http' not in themed_page
-    assert themed_page.count("<iframe") == 1     # srcdoc only — no linked files
+    assert themed_page.count("<iframe") == 2     # login + shell, srcdoc only — no linked files
+    assert "script-src" not in themed_page.split("</head>")[0]  # no effect, no scripts allowed
 
 
 def test_sample_content_is_deterministic_and_neutral():
@@ -135,7 +136,7 @@ def test_preview_artifact_is_rewritten_with_the_new_font_family(tmp_path):
     p2 = platform_preview.write_platform_preview(second, str(tmp_path))
     assert p2 == p1                                  # rewritten, not a second file
     text = open(p2, encoding="utf-8").read()
-    assert text.count("--sd-font-sans: Rockwell") == 2   # outer page + iframe srcdoc
+    assert text.count("--sd-font-sans: Rockwell") == 3   # outer page + login + shell srcdocs
     assert "Avenir" not in text                      # the old font family is GONE
 
 
@@ -145,7 +146,7 @@ def test_chosen_font_reaches_the_login_forms_controls(themed_page):
     silently ignore the chosen font — the observed half of issue #225."""
     assert theme.FORM_FONT_RESET.strip() in THEMED_CSS
     # present in both documents: the outer style#snap-theme and the escaped iframe copy
-    assert themed_page.count(theme.FORM_FONT_RESET.strip()) == 2
+    assert themed_page.count(theme.FORM_FONT_RESET.strip()) == 3
 
 
 def test_the_header_explainer_paragraph_is_gone():
@@ -166,3 +167,56 @@ def test_asset_intact_guard_mirrors_the_login_one(tmp_path, monkeypatch):
     monkeypatch.setattr(login_preview, "_ASSET", str(broken))
     with pytest.raises(RuntimeError, match="substitution marker"):
         platform_preview.platform_preview_html(THEMED_CSS)
+
+
+# ── the host-shell pane (operator ask: "render the host shell so we can see the background")
+import base64 as _b64  # noqa: E402
+import hashlib as _hashlib  # noqa: E402
+import html as _html_mod  # noqa: E402
+import re as _re  # noqa: E402
+
+from hugmesh_studio.core import theme_presets  # noqa: E402
+
+
+def _shell_srcdoc(page: str) -> str:
+    m = _re.search(r'<iframe class="shell-frame"[^>]*srcdoc="([^"]*)"', page)
+    assert m, "the page carries a shell frame"
+    return _html_mod.unescape(m.group(1))
+
+
+def test_shell_asset_is_intact():
+    with open(platform_preview.SHELL_ASSET, encoding="utf-8") as fh:
+        tpl = fh.read()
+    assert platform_preview.MARKER in tpl and "<!--__SHELL_EFFECT__-->" in tpl
+    assert 'data-testid="background-stage"' in tpl     # the stage the effect mounts on
+    assert "<script" not in tpl                          # the capture is script-stripped
+    assert "personal-header" in tpl and "personal-footer" in tpl
+
+
+def test_shell_frame_is_themed_and_sandboxed_without_same_origin(themed_page):
+    assert 'sandbox="allow-scripts"' in themed_page
+    assert "allow-same-origin" not in themed_page
+    assert "--sd-primary: #e91e63;" in _shell_srcdoc(themed_page)
+
+
+def test_a_vanta_theme_ships_exactly_its_hashed_scripts():
+    css = theme_presets.compose_css("aurora-net", "dark")
+    page = platform_preview.platform_preview_html(css)
+    doc = _shell_srcdoc(page)
+    bodies = _re.findall(r"<script>(.*?)</script>", doc, _re.S)
+    assert len(bodies) == 3 and "VANTA" in bodies[2] and "'net'" in bodies[2]
+    head = page.split("</head>")[0]
+    for body in bodies:
+        digest = _b64.b64encode(_hashlib.sha256(body.encode("utf-8")).digest()).decode()
+        assert f"'sha256-{digest}'" in head
+    assert page == platform_preview.platform_preview_html(css)   # deterministic
+
+
+def test_vendored_effect_libraries_cannot_end_their_script_element():
+    import os
+    vendor = os.path.join(os.path.dirname(platform_preview.SHELL_ASSET), "vendor")
+    for name in ("three.min.js", "vanta.fog.min.js", "vanta.waves.min.js",
+                 "vanta.net.min.js", "vanta.globe.min.js"):
+        with open(os.path.join(vendor, name), encoding="utf-8") as fh:
+            assert "</script" not in fh.read().lower(), name
+
