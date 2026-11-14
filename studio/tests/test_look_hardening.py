@@ -184,10 +184,6 @@ def test_the_board_verdict_follows_the_measured_ratio_at_4_5(monkeypatch):
         assert f"{ratio:.1f}:1" in text, text
     # one of the three measured pairs failing is enough, whichever it is
     tokens = bl._board_tokens(eff)
-    # Freeze the derivation: it calls theme.contrast_ratio too (state_tokens lifts accent
-    # text that measures short), so a patched ratio would otherwise move the very token
-    # this test is trying to measure as failing.
-    monkeypatch.setattr(bl, "_board_tokens", lambda _e, _t=tokens: _t)
     pairs = {"text": (tokens["--sd-text"], tokens["--sd-bg-0"]),
              "accent": (tokens["--sd-accent-soft"], tokens["--sd-bg-0"]),
              "button": (tokens["--sd-primary-on"], tokens["--sd-primary"])}

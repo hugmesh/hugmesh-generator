@@ -213,93 +213,6 @@ def soft_for_text(accent_hex: str, bg: str = SHELL_BG, target: float = 4.5) -> s
     return "#ffffff"
 
 
-# ── state tokens: solved against the theme's OWN surfaces ─────────────────────
-# The shell styles form-field edges, warnings, inline code and native widgets from
-# tokens (hugmesh-host-shell #169/#175) with dark-shell literals as fallbacks. A theme
-# that never sets them leaves those literals in force on EVERY ramp, and measured on a
-# live mesh across 38 presets x 4 ramps they failed only where the ramp is light:
-# warning #ffb74d 1.49:1, code #ff8ac4 2.03:1, hover edge #b4b4d0 1.74:1, and the
-# ramp-less --sd-success #4caf50 2.50:1 on morning. So every theme now carries its own
-# values, derived the one way this module derives everything: start from the brand
-# colour and move it the minimal step toward the readable pole until it clears.
-
-#: The hues the shell ships for these roles; a theme keeps the hue and only moves its
-#: lightness until it reads on that theme's surfaces.
-WARNING_BASE = "#ffb74d"
-CODE_BASE = "#ff8ac4"
-#: Form-field edges. WCAG 1.4.11 asks 3:1 of a component boundary; these clear 4.5:1
-#: because "I cannot see where the box is" was the reported failure, not a near miss.
-FIELD_EDGE_TARGET = 4.5
-#: The literals hugmesh-host-shell compiles as the unthemed fallbacks (styles.scss).
-DEFAULT_FIELD_BORDER = "#8a8aa8"
-DEFAULT_FIELD_BORDER_HOVER = "#b4b4d0"
-FIELD_EDGE_HOVER_TARGET = 7.0
-
-
-def is_light(bg: str) -> bool:
-    """Does black read better than white on ``bg``? The property every ramp-dependent
-    derivation actually turns on (a ramp's NAME is not)."""
-    return contrast_ratio("#000000", bg) > contrast_ratio("#ffffff", bg)
-
-
-def _toward(color: str, pole: str, surfaces: Sequence[str], target: float) -> str:
-    """Lerp ``color`` toward ``pole`` in 256 steps; the first step that clears ``target``
-    against EVERY surface, else the pole itself."""
-    r0, g0, b0 = _parse(color)
-    r1, g1, b1 = _parse(pole)
-    for i in range(0, 257):
-        t = i / 256.0
-        cand = _fmt((r0 + (r1 - r0) * t, g0 + (g1 - g0) * t, b0 + (b1 - b0) * t))
-        if all(contrast_ratio(cand, s) >= target for s in surfaces):
-            return cand
-    return pole
-
-
-def text_on(base: str, surfaces: Sequence[str], target: float = 4.5) -> str:
-    """``base`` moved the minimal step toward the readable pole (black on a light
-    surface, white on a dark one) until it reads as TEXT on every surface."""
-    pole = "#000000" if is_light(surfaces[0]) else "#ffffff"
-    return _toward(base, pole, surfaces, target)
-
-
-def state_tokens(tokens: dict[str, str]) -> dict[str, str]:
-    """The surface-dependent role tokens for a SETTLED token map (its ramp applied).
-
-    Call it after the neutrals are final: every value is a function of the map's own
-    ``--sd-bg-0`` / ``--sd-bg-1`` / ``--sd-text``. Also re-solves success/error (a ramp
-    that does not override them inherits the dark shell's) and refreshes their ``-rgb``
-    twins whenever a value moves."""
-    bg0 = tokens.get("--sd-bg-0", SHELL_BG)
-    bg1 = tokens.get("--sd-bg-1", _NEUTRALS["--sd-bg-1"])
-    text = tokens.get("--sd-text", _NEUTRALS["--sd-text"])
-    surfaces = (bg0, bg1)
-    edge = _toward(bg1, text, surfaces, FIELD_EDGE_TARGET)
-    out = {
-        # Fields: from the card surface toward the body text, so the edge is the
-        # theme's own neutral rather than a foreign grey.
-        "--sd-field-border": edge,
-        "--sd-field-border-hover": _toward(edge, text, surfaces, FIELD_EDGE_HOVER_TARGET),
-        "--sd-warning": text_on(WARNING_BASE, surfaces),
-        "--sd-code": text_on(CODE_BASE, surfaces),
-        # Native widgets (select popups, date pickers, scrollbars) follow the ramp.
-        "--sd-color-scheme": "light" if is_light(bg0) else "dark",
-    }
-    # Accent text (links, active nav) was solved against bg-0 only, and on CARDS (bg-1)
-    # it measured 4.13-4.38:1 in 164 of 304 preset x ramp pairs. Lift it the minimal
-    # step that clears both surfaces; a value that already does is left untouched.
-    if "--sd-accent-soft" in tokens:
-        out["--sd-accent-soft"] = text_on(tokens["--sd-accent-soft"], surfaces)
-    for name in ("--sd-success", "--sd-error"):
-        if name in tokens:
-            solved = text_on(tokens[name], surfaces)
-            out[name] = solved
-            # ALWAYS re-spell the twin: a ramp that overrides the colour but not its
-            # -rgb (the light ramp's #c62828 error kept the dark 255,107,107) makes
-            # every rgba(var(--hug-error-rgb), a) paint the other theme's red.
-            out[f"{name}-rgb"] = _rgb_triple(solved)
-    return out
-
-
 def _rgb_triple(hex_str: str) -> str:
     r, g, b = _parse(hex_str)
     return f"{r},{g},{b}"
@@ -508,10 +421,6 @@ def derive(primary: str, secondary: str = "",
     # No new maths: --sd-accent IS secondary, so the correct value is the one already
     # computed for --sd-secondary-on. This only stops throwing it away.
     tokens["--sd-accent-on"] = on_color(secondary)
-    # Field edges, warning/code text and the native colour scheme for THIS map's
-    # surfaces (see state_tokens). Callers that then swap the neutrals for a ramp
-    # (theme_presets.compose_tokens) re-run it against the settled ramp.
-    tokens.update(state_tokens(tokens))
     if palette:
         tokens.update(palette_tokens(
             palette,
@@ -534,13 +443,6 @@ def default_tokens() -> dict[str, str]:
     tokens["--sd-accent"] = _DEFAULT_SECONDARY
     tokens["--sd-accent-soft"] = _DEFAULT_SECONDARY_SOFT
     tokens["--sd-accent-on"] = on_color(_DEFAULT_SECONDARY)
-    # Same key set as derive() (pinned by test_derive_key_set_is_exactly_the_default_key_set).
-    # On the dark shell every derived value equals the shell's compiled fallback except
-    # the field edges, where the shell ships hand-picked literals; pin those, so an
-    # unthemed page and the default theme draw the same edge.
-    tokens.update(state_tokens(tokens))
-    tokens["--sd-field-border"] = DEFAULT_FIELD_BORDER
-    tokens["--sd-field-border-hover"] = DEFAULT_FIELD_BORDER_HOVER
     return tokens
 
 

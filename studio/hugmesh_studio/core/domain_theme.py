@@ -205,18 +205,9 @@ def render_css(selection: ThemeSelection) -> str:
     ramp's neutral pass.
     """
     selection.validate()
-    # The selection's own colours were validated and sent to the BFF but never rendered:
-    # a domain admin who typed a primary/secondary saw the preset's instead.
-    tokens = theme_presets.compose_tokens(
-        selection.preset, selection.ramp,
-        primary=selection.primary_hex, secondary=selection.secondary_hex)
+    tokens = theme_presets.compose_tokens(selection.preset, selection.ramp)
     tokens.update(theme.style_tokens(selection.style))
     tokens.update(theme.decor_tokens(selection.decor))
-    font = theme_presets.preset_font(selection.preset)
-    if font:
-        from . import fonts as _fonts
-        tokens.update(_fonts.font_tokens(_fonts.FONT_PRESETS[font]))
-        return theme.css_root(tokens) + theme.FORM_FONT_RESET
     return theme.css_root(tokens)
 
 

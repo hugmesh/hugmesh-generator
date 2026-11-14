@@ -33,7 +33,7 @@ def test_bootstrap_preset_is_the_real_bootstrap5_stack_not_an_invented_list():
 
 
 def test_all_presets_are_nonempty_and_csp_safe():
-    assert len(fonts.FONT_PRESETS) == 15  # 7 originals + 8 system stacks (theme fonts)
+    assert len(fonts.FONT_PRESETS) == 7
     for name, stack in fonts.FONT_PRESETS.items():
         assert stack.strip(), name
         assert "http" not in stack and "url(" not in stack, name

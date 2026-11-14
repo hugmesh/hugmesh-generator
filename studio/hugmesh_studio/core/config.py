@@ -4511,14 +4511,9 @@ class ImageConfig:
             primary, secondary = preset.primary, preset.secondary
             delta = _presets.delta_css(
                 self.login_theme_preset, self.login_theme_mode or "dark")
-        # A preset may carry its own face; the operator's explicit font still wins.
-        font_choice = self.login_font
-        if self.login_theme_preset and not self.login_font:
-            from . import theme_presets as _presets
-            font_choice = _presets.preset_font(self.login_theme_preset)
         css = _theme.compose_login_css(
             primary, secondary,
-            font_preset=font_choice, font_family=family, font_bytes=font_bytes)
+            font_preset=self.login_font, font_family=family, font_bytes=font_bytes)
         if delta:
             # Later :root:root block wins at equal specificity — the delta lands
             # after the base tokens without touching the shared composer.
