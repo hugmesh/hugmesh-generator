@@ -176,7 +176,12 @@ def _package_data_files() -> set[tuple[str, str]]:
         pkg_dir = os.path.join(STUDIO_ROOT, *package.split("."))
         for pattern in patterns:
             for hit in glob.glob(os.path.join(pkg_dir, pattern)):
-                out.add((os.path.relpath(hit, STUDIO_ROOT).replace(os.sep, "/"), package.replace(".", "/")))
+                # The bundle directory is the FILE's own directory, which differs from the
+                # package directory for a nested pattern ("vendor/*"): the preview opens
+                # assets/vendor/three.min.js, so a frozen app that flattened it into
+                # assets/ would lose the animated background without failing to start.
+                out.add((os.path.relpath(hit, STUDIO_ROOT).replace(os.sep, "/"),
+                         os.path.relpath(os.path.dirname(hit), STUDIO_ROOT).replace(os.sep, "/")))
     return out
 
 
