@@ -10,8 +10,8 @@ process (real stdin pipe, real argv parsing) that first installs an audit hook, 
 every process the Studio tries to start is written to OUTDIR/argv-log.jsonl with the
 step that caused it:
 
-  1. tui     ``python -m hugmesh_studio.tui --plain`` fed the standalone walk (eight
-             Enters, ``s CONFIG``, ``q``), the same script test_tui_journey.py
+  1. tui     ``python -m hugmesh_studio.tui --plain`` fed the standalone walk (Enters to
+             the build page, counted on the checkout, then ``s CONFIG``, ``q``), the same script test_tui_journey.py
              drives in-process;
   2. print   ``python -m hugmesh_studio --print-command --config CONFIG --backend docker``,
              the printed command a person hands to a Linux build host.
@@ -33,7 +33,38 @@ import time
 AUDITED = ("subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.spawn",
            "os.startfile", "os.fork", "os.forkpty")
 
-STANDALONE_WALK = ["", "", "", "", "", "", "", ""]
+# The walk grows when a page is added (the Desktop step made it nine Enters on
+# 2026-11-11, and a fixed list of eight then saved nothing), so its length is measured
+# against the checkout's own journey, as test_standalone_walk_skips_every_admin_plane_page
+# walks it: Enter until the build page, where ``s PATH`` saves.
+FALLBACK_ENTERS = 9
+MAX_ENTERS = 40
+
+
+def standalone_walk(repo: str) -> list[str]:
+    """The Enters that take a fresh plain-text-UI journey from welcome to the build page."""
+    probe = (
+        "import sys\n"
+        "from hugmesh_studio.tui import journey\n"
+        f"j = journey.Journey(sys.argv[1])\n"
+        f"for n in range({MAX_ENTERS} + 1):\n"
+        "    if j.slug == 'build':\n"
+        "        print(n); break\n"
+        "    j.feed('')\n"
+        "else:\n"
+        "    sys.exit(3)\n"
+    )
+    env = dict(os.environ)
+    studio = os.path.join(repo, "studio")
+    env["PYTHONPATH"] = studio + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env.setdefault("NO_TUI", "1")
+    try:
+        proc = subprocess.run([sys.executable, "-c", probe, repo], capture_output=True,
+                              text=True, cwd=studio, env=env, timeout=120)
+        n = int(proc.stdout.strip().splitlines()[-1]) if proc.returncode == 0 else None
+    except (subprocess.TimeoutExpired, ValueError, IndexError):
+        n = None
+    return [""] * (n if n is not None else FALLBACK_ENTERS)
 
 
 def _child(step: str, log_path: str, repo: str, out: str, module: str, argv: list[str]) -> None:
@@ -115,7 +146,10 @@ def main(argv: list[str] | None = None) -> int:
     os.makedirs(out, exist_ok=True)
     open(os.path.join(out, "argv-log.jsonl"), "w").close()
     config = os.path.join(out, "standalone.json")
-    script = "\n".join(STANDALONE_WALK + [f"s {config}", "q"]) + "\n"
+    walk = standalone_walk(repo)
+    with open(os.path.join(out, "walk.txt"), "w", encoding="utf-8") as fh:
+        fh.write(f"{len(walk)} Enters to the build page\n")
+    script = "\n".join(walk + [f"s {config}", "q"]) + "\n"
     steps = [
         ("tui", "hugmesh_studio.tui", ["--plain", "--generator-dir", repo], script),
         ("print", "hugmesh_studio", ["--print-command", "--config", config,

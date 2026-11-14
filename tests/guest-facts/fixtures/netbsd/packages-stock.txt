@@ -1,0 +1,13 @@
+$ pkg_info
+tree-1.8.0          Print a text or HTML tree diagram of a directory structure
+bash-5.3.20         The GNU Bourne Again Shell
+lz4-1.10.0          Extremely Fast Compression algorithm
+popt-1.19           Command line option parsing library
+xxhash-0.8.3        Extremely fast non-cryptographic hash algorithm
+zstd-1.5.7          Fast real-time compression algorithm
+rsync-3.5.0         Network file distribution/synchronisation utility
+libffi-3.8.0        Foreign function interface
+pcre2-10.49         Perl Compatible Regular Expressions library (major version 2)
+glib2-2.88.3nb1     Some useful routines for C programming (glib2)
+fuse-sshfs-3.7.5nb2 File system client based on the SFTP protocol
+rc=0

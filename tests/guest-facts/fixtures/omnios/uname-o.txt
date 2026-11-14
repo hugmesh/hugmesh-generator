@@ -1,0 +1,3 @@
+$ uname -o
+illumos
+rc=0

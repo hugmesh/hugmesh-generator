@@ -48,7 +48,8 @@ from typing import NamedTuple
 from . import (brand_model, domain_reach, look_serving, own_casdoor, platform_info,
                reach_apply, theme)
 from .config import DOMAIN_FIELDS, IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
-    domain_signin_problems, effective_signin, github_org_problem, has_external_signin, \
+    clean_signin_methods, domain_signin_problems, effective_signin, github_org_problem, \
+    has_external_signin, signin_methods_problem, \
     idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
 from .local_services import (
@@ -215,6 +216,13 @@ def _domain_record(x: dict) -> dict:
         elif k == "images":
             if isinstance(v, (list, tuple)) and v:
                 rec["images"] = [str(s) for s in v]
+        elif k == "signin_methods":
+            # the ways the domain offers to sign in (#1107): only a list the one
+            # writer would accept, in its stored (canonical, default-empty) form
+            if not signin_methods_problem(v):
+                clean = clean_signin_methods(v or [])
+                if clean:
+                    rec["signin_methods"] = clean
         elif k == "issuer_port":
             if isinstance(v, int) and not isinstance(v, bool) and v > 0:
                 rec["issuer_port"] = v

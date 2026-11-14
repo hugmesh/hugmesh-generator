@@ -1,0 +1,2 @@
+$ pkg search -H -o pkg.name *urwid*
+rc=1

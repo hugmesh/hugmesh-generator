@@ -54,6 +54,7 @@ import html
 
 from ..qt import QtCore, QtWidgets, Signal
 from ...core import domain_reach, plain_words
+from ...core.config import SIGNIN_METHOD_LABELS, SIGNIN_METHODS
 from ...tui import brand_step
 from ._lookeditor import LookEditor
 from ._widgets import collapsible
@@ -197,6 +198,25 @@ class BrandSettingsTabs(QtCore.QObject):
         sl.addLayout(row_apply)
         self.signin_note = _wrapped("", name="brand_signin_note")
         sl.addWidget(self.signin_note)
+        # ── the ways this domain offers to sign in (hugmesh-generator#1107) ─────────
+        self.methods_title = _wrapped("Ways to sign in", name="brand_methods_title")
+        sl.addWidget(self.methods_title)
+        self.methods_row = QtWidgets.QWidget()
+        self.methods_row.setObjectName("brand_methods_row")
+        mr = QtWidgets.QHBoxLayout(self.methods_row)
+        mr.setContentsMargins(0, 0, 0, 0)
+        self.method_boxes: dict[str, QtWidgets.QCheckBox] = {}
+        for key in SIGNIN_METHODS:
+            box = QtWidgets.QCheckBox(SIGNIN_METHOD_LABELS[key])
+            box.setObjectName(f"brand_method_{key}")
+            box.clicked.connect(self._method_clicked)
+            mr.addWidget(box)
+            self.method_boxes[key] = box
+        mr.addStretch(1)
+        sl.addWidget(self.methods_row)
+        # the refusal, or what the list does on this build (kept, not applied yet)
+        self.methods_note = _wrapped("", name="brand_methods_note")
+        sl.addWidget(self.methods_note)
         il.addWidget(self.signin_box)
 
         # ── Look: the override editor, or a read-only summary ───────────────────────
@@ -552,7 +572,58 @@ class BrandSettingsTabs(QtCore.QObject):
                         + brand_step.SIGNIN_MESH_EDIT[1:] + ".")
             self.signin_note.setText(note)
         finally:
+            self._fill_methods()
             self._loading = False
+
+    def _fill_methods(self, note: str = "", error: bool = False) -> None:
+        """The ways this domain offers to sign in: the boxes, or the reason there is no
+        choice. Called with ``_loading`` set, so setting a box writes nothing. Never
+        raises."""
+        try:
+            v = self.view
+            if v is None:
+                return
+            was = self._loading
+            self._loading = True
+            try:
+                why = v.signin_methods_refusal()
+                on = set(v.signin_methods())
+                for key, box in self.method_boxes.items():
+                    box.setChecked(key in on)
+                self.methods_row.setVisible(not why)
+                if why:
+                    self.methods_note.setStyleSheet(_MUTED)
+                    self.methods_note.setText(
+                        "Now: " + v.signin_methods_words() + ". " + why + ".")
+                    return
+                if error:
+                    self.methods_note.setStyleSheet("color: #b00020;")
+                    self.methods_note.setText(note)
+                    return
+                self.methods_note.setStyleSheet("color: #a65d00;")
+                self.methods_note.setText(
+                    (note + " " if note else "") + v.signin_methods_note())
+            finally:
+                self._loading = was
+        except Exception:                       # noqa: BLE001
+            self._swallow("_fill_methods")
+
+    def _method_clicked(self, *_args) -> None:
+        """A box was ticked or cleared: write the whole set through the one writer; a
+        refusal (no way left, an external provider) puts the boxes back and says why.
+        Never raises."""
+        try:
+            if self._loading or self.view is None:
+                return
+            chosen = [k for k, b in self.method_boxes.items() if b.isChecked()]
+            problems = self.view.set_signin_methods(chosen)
+            if problems:
+                self._fill_methods("Not changed: " + problems[0], error=True)
+                return
+            self._fill_methods("Saved: " + self.view.signin_methods_words() + ".")
+            self.row_changed.emit()
+        except Exception:                       # noqa: BLE001
+            self._swallow("_method_clicked")
 
     def _show_signin_fields(self) -> None:
         ext = self.signin_choice.currentData() in brand_step.SIGNIN_EXTERNAL

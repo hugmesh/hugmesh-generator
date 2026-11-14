@@ -1,0 +1,20 @@
+$ pkg_info
+bzip2-1.0.8p0       block-sorting file compressor, unencumbered
+gettext-runtime-1.0 GNU gettext runtime libraries and programs
+glib2-2.88.3p1      low level core library
+libffi-3.8.0        Foreign Function Interface
+libiconv-1.19       character set conversion library
+lz4-1.10.0          fast BSD-licensed data compression
+pcre2-10.48         perl-compatible regular expression library, version 2
+py3-packaging-26.3  core utilities for Python packaging
+python-3.14.7p0     interpreted object-oriented programming language
+quirks-7.227        exceptions to pkg_add rules
+rsync-3.5.1         mirroring/synchronization over low bandwidth links
+sqlite3-3.53.2      embedded SQL implementation
+sshfs-fuse-2.10     mount remote directories over ssh
+tree-0.62           print ascii formatted tree of a directory structure
+updatedb-0p0        pkg_add speed up cache
+vmm-firmware-1.16.3p12 SeaBIOS and EDK II binary images for vmd(8)
+xz-5.8.4            library and tools for XZ and LZMA compressed files
+zstd-1.5.7p0        zstandard fast real-time compression algorithm
+rc=0

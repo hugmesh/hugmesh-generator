@@ -1,0 +1,9 @@
+$ sh -c for m in urwid PySide6 PyQt6 pytest yaml jsonschema cryptography; do if /tmp/guest-facts.1835/venv/bin/python -c "import $m" >/dev/null 2>&1; then echo "$m yes"; else echo "$m no"; fi; done
+urwid yes
+PySide6 no
+PyQt6 yes
+pytest yes
+yaml yes
+jsonschema yes
+cryptography no
+rc=0

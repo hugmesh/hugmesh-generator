@@ -1,0 +1,3 @@
+$ uname -s
+OpenBSD
+rc=0

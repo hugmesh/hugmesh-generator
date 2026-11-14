@@ -1,0 +1,5 @@
+kind	path	bytes	sha256
+action	vmactions/solaris-vm@1c166978f5a2c1f87f1c9d4d8dd85ae3d1eff6f7		
+release	11.4		
+image	solaris/v2.0.8/solaris-11.4.qcow2	4501405696	57c9454d4f6d9a12a5be69f6b62f44975a9fdfe8fbbb3c0d3a4d02e0b91cdb5a
+anyvm.py	anyvm.py	622861	a1471b3238f367e10b92a47cb42a2ee868835d94a136c0fa9a02dee415b4db03

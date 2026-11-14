@@ -1,0 +1,6 @@
+$ pkg_info -Q pyside6
+debug-pyside6-6.11.2
+debug-pyside6-tools-6.11.2
+pyside6-6.11.2
+pyside6-tools-6.11.2
+rc=0

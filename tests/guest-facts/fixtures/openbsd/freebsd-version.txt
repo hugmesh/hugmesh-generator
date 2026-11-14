@@ -1,0 +1,3 @@
+$ freebsd-version -ku
+tests/guest-facts/collect.sh[97]: freebsd-version: not found
+rc=127

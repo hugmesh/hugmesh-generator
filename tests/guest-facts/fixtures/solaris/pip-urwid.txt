@@ -1,0 +1,19 @@
+$ /tmp/guest-facts.995/venv/bin/python -m pip install urwid
+Collecting urwid
+  Downloading urwid-5.1.3-py3-none-any.whl.metadata (13 kB)
+Collecting wcwidth!=0.9.0,!=0.9.1,>=0.4 (from urwid)
+  Downloading wcwidth-0.9.4-py3-none-any.whl.metadata (23 kB)
+Downloading urwid-5.1.3-py3-none-any.whl (601 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 601.3/601.3 kB 16.9 MB/s  0:00:00
+Downloading wcwidth-0.9.4-py3-none-any.whl (301 kB)
+Installing collected packages: wcwidth, urwid
+  Attempting uninstall: wcwidth
+    Found existing installation: wcwidth 0.2.14
+    Not uninstalling wcwidth at /usr/lib/python3.13/vendor-packages, outside environment /tmp/guest-facts.995/venv
+    Can't uninstall 'wcwidth'. No files were found to uninstall.
+
+Successfully installed urwid-5.1.3 wcwidth-0.9.4
+
+[notice] A new release of pip is available: 25.2 -> 26.3
+[notice] To update, run: /tmp/guest-facts.995/venv/bin/python -m pip install --upgrade pip
+rc=0

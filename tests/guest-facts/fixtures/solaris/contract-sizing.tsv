@@ -1,0 +1,209 @@
+file	rc	verdict	passed	failed	skipped	errors	seconds	summary
+tests/test_agent_context.py	1	red	5	1	0	5	0.8	1 failed, 5 passed, 5 errors in 0.54s
+tests/test_ansi.py	0	green	21	0	0	0	0.5	21 passed in 0.22s
+tests/test_anubis_tristate.py	0	green	32	0	0	0	1.3	32 passed in 1.06s
+tests/test_askpass.py	1	red	41	2	0	0	1.7	2 failed, 41 passed in 1.42s
+tests/test_assistant_catalogue.py	0	green	8	0	0	0	0.6	8 passed in 0.32s
+tests/test_assistant_context.py	0	green	14	0	0	0	1.2	14 passed in 0.95s
+tests/test_assistant_docs.py	0	green	201	0	0	0	3.5	201 passed, 1 warning in 3.29s
+tests/test_assistant_privacy.py	0	green	163	0	0	0	11.7	163 passed in 11.42s
+tests/test_assistant_prompt.py	0	green	58	0	0	0	4.0	58 passed in 3.69s
+tests/test_assistant_tips.py	0	green	7	0	0	0	0.6	7 passed in 0.33s
+tests/test_bat_bootstrap.py	0	green	11	0	0	0	0.5	11 passed in 0.22s
+tests/test_bootstrap_cancel_event.py	0	green	4	0	0	0	0.4	4 passed in 0.20s
+tests/test_brand_docker_route_text.py	0	green	15	0	0	0	0.8	15 passed in 0.50s
+tests/test_brand_images.py	0	green	21	0	0	0	1.2	21 passed in 0.89s
+tests/test_brand_record_cli.py	0	green	17	0	0	0	0.6	17 passed in 0.33s
+tests/test_brand_record_copy_sites.py	0	green	30	0	0	0	12.4	30 passed in 12.11s
+tests/test_brand_record_model.py	0	green	62	0	0	0	0.7	62 passed in 0.43s
+tests/test_brand_record_round2.py	0	green	29	0	0	0	0.6	29 passed in 0.31s
+tests/test_brand_record_round3.py	0	green	35	0	0	0	0.7	35 passed in 0.44s
+tests/test_brand_record_words.py	0	green	4	0	0	0	0.4	4 passed in 0.20s
+tests/test_branding_themes.py	1	red	38	16	2	0	18.1	16 failed, 38 passed, 2 skipped in 17.79s
+tests/test_build_disk_space_guard.py	0	green	89	0	2	0	0.8	89 passed, 2 skipped in 0.59s
+tests/test_build_driver.py	0	green	52	0	0	0	0.6	52 passed in 0.33s
+tests/test_build_driver_cancel.py	0	green	9	0	0	0	0.4	9 passed in 0.20s
+tests/test_build_driver_elevation.py	0	green	37	0	0	0	0.5	37 passed in 0.30s
+tests/test_build_driver_host_tools.py	0	green	9	0	0	0	0.4	9 passed in 0.19s
+tests/test_build_driver_workdir.py	0	green	6	0	0	0	0.4	6 passed in 0.20s
+tests/test_build_memory_guard.py	1	red	17	2	1	0	0.6	2 failed, 17 passed, 1 skipped in 0.30s
+tests/test_build_sessions.py	0	green	31	0	0	0	0.6	31 passed in 0.36s
+tests/test_builder_compress_level.py	0	green	8	0	0	0	0.5	8 passed in 0.21s
+tests/test_builder_default_drift.py	0	green	40	0	0	0	0.7	40 passed in 0.44s
+tests/test_builder_host_gpep517.py	0	green	21	0	0	0	0.7	21 passed in 0.47s
+tests/test_builder_mo_collision.py	0	green	21	0	0	0	0.5	21 passed in 0.24s
+tests/test_casdoor_choice_surfaces.py	0	green	8	0	0	0	0.5	8 passed in 0.21s
+tests/test_catalog_doc_truth.py	0	green	11	0	0	0	0.5	11 passed in 0.21s
+tests/test_chroot_heredoc_hygiene.py	0	green	13	0	0	0	0.5	13 passed in 0.21s
+tests/test_cli_args.py	0	green	442	0	0	0	1.8	442 passed in 1.57s
+tests/test_cloud_deploy_cli.py	0	green	14	0	0	0	0.8	14 passed in 0.55s
+tests/test_code_folders.py	0	green	33	0	0	0	0.6	33 passed in 0.37s
+tests/test_credentials_truth_kind.py	1	red	7	15	0	0	0.6	15 failed, 7 passed in 0.38s
+tests/test_css_safety.py	0	green	138	0	0	0	0.7	138 passed in 0.46s
+tests/test_default_local_user.py	0	green	13	0	0	0	0.5	13 passed in 0.20s
+tests/test_desktop_pretend.py	1	red	36	3	0	0	1.1	3 failed, 36 passed in 0.81s
+tests/test_desktop_spec.py	0	green	49	0	0	0	1.0	49 passed in 0.75s
+tests/test_device_catalog.py	0	green	17	0	0	0	0.5	17 passed in 0.24s
+tests/test_device_catalog_channels.py	0	green	23	0	0	0	1.4	23 passed in 1.12s
+tests/test_devops_halt_already_halted.py	0	green	6	0	0	0	0.4	6 passed in 0.20s
+tests/test_devops_preflight.py	0	green	29	0	0	0	0.5	29 passed in 0.25s
+tests/test_docker_asset_mounts.py	0	green	38	0	0	0	0.7	38 passed in 0.46s
+tests/test_domain_ca_keys.py	0	green	46	0	1	0	1.2	46 passed, 1 skipped in 0.95s
+tests/test_domain_ca_keys_root_invariant.py	0	green	15	0	1	0	0.9	15 passed, 1 skipped in 0.60s
+tests/test_domain_ca_keys_shared_secret.py	0	green	41	0	0	0	5.3	41 passed in 5.08s
+tests/test_domain_idp_schema.py	0	green	14	0	0	0	0.5	14 passed in 0.23s
+tests/test_domain_services_tor.py	1	red	89	6	1	0	49.1	6 failed, 89 passed, 1 skipped in 48.78s
+tests/test_domain_theme_push.py	0	green	49	0	0	0	0.7	49 passed in 0.40s
+tests/test_domain_workspaces.py	0	green	67	0	20	0	0.9	67 passed, 20 skipped in 0.58s
+tests/test_e2e_environments.py	0	green	31	0	0	0	1.4	31 passed in 1.08s
+tests/test_e2e_evidence.py	0	green	17	0	0	0	0.5	17 passed in 0.23s
+tests/test_e2e_spec_arg_guard.py	0	green	4	0	0	0	0.5	4 passed in 0.25s
+tests/test_egress_conf.py	0	green	5	0	0	0	0.4	5 passed in 0.18s
+tests/test_emerge_packages_parallel.py	0	green	31	0	3	0	0.6	31 passed, 3 skipped in 0.36s
+tests/test_emulation.py	0	green	45	0	0	0	0.7	45 passed in 0.41s
+tests/test_emulation_boot_from_save.py	0	green	28	0	1	0	0.8	28 passed, 1 skipped in 0.54s
+tests/test_emulation_save.py	0	green	23	0	0	0	0.5	23 passed in 0.29s
+tests/test_entry_bootstrap.py	0	green	9	0	0	0	2.5	9 passed in 2.22s
+tests/test_flash_flavors_unknown_platform.py	0	green	8	0	0	0	0.5	8 passed in 0.20s
+tests/test_flatpak_generator_seed.py	0	skipped	0	0	14	0	0.3	14 skipped in 0.10s
+tests/test_fleet_driver_nvd.py	0	green	10	0	0	0	0.5	10 passed in 0.23s
+tests/test_fleet_tor.py	1	red	22	2	0	0	1.3	2 failed, 22 passed in 1.04s
+tests/test_font_family_injection.py	0	green	23	0	0	0	0.5	23 passed in 0.24s
+tests/test_fonts.py	0	green	21	0	0	0	0.5	21 passed in 0.22s
+tests/test_generator_dir_lazy.py	0	green	10	0	0	0	0.5	10 passed in 0.25s
+tests/test_golive_docs_emulated.py	0	green	24	0	0	0	0.8	24 passed in 0.50s
+tests/test_golive_driver.py	0	green	24	0	0	0	1.1	24 passed in 0.82s
+tests/test_golive_registry.py	0	green	3	0	0	0	0.5	3 passed in 0.24s
+tests/test_host_resources.py	0	green	35	0	0	0	0.5	35 passed in 0.27s
+tests/test_identity_inline_refusal_core.py	0	green	30	0	0	0	0.5	30 passed in 0.24s
+tests/test_identity_validation.py	0	green	77	0	0	0	0.6	77 passed in 0.35s
+tests/test_images_mesh.py	1	red	51	12	1	35	4.4	12 failed, 51 passed, 1 skipped, 35 errors in 4.10s
+tests/test_instance.py	0	green	11	0	0	0	0.5	11 passed in 0.24s
+tests/test_kernel_reconfig.py	1	red	45	1	0	0	0.8	1 failed, 45 passed in 0.50s
+tests/test_keys_provision_certs.py	1	red	3	10	0	0	0.5	10 failed, 3 passed in 0.28s
+tests/test_keyzip_roles_manifest.py	0	green	21	0	0	0	0.5	21 passed in 0.24s
+tests/test_keyzip_scope_injection.py	0	green	6	0	0	0	0.5	6 passed in 0.21s
+tests/test_local_agent.py	1	red	58	0	1	54	5.3	58 passed, 1 skipped, 54 errors in 5.04s
+tests/test_local_ai_cli.py	0	green	24	0	0	0	10.0	24 passed in 9.75s
+tests/test_local_ai_flatpak_bridge.py	0	green	11	0	0	0	0.5	11 passed in 0.22s
+tests/test_local_ai_models.py	0	green	36	0	0	0	12.4	36 passed in 12.18s
+tests/test_local_ai_tui.py	1	red	93	9	0	0	4.2	9 failed, 93 passed in 3.80s
+tests/test_local_ai_tui_context.py	0	green	13	0	0	0	2.5	13 passed in 2.25s
+tests/test_local_ai_tui_windows_note.py	0	green	5	0	0	0	0.7	5 passed in 0.43s
+tests/test_local_login_agent.py	1	red	12	19	1	0	10.6	19 failed, 12 passed, 1 skipped in 10.32s
+tests/test_local_mesh_bootstrap_config_roundtrip.py	1	red	29	3	0	0	0.8	3 failed, 29 passed in 0.51s
+tests/test_local_mesh_domains_core.py	0	green	16	0	0	0	0.5	16 passed in 0.23s
+tests/test_local_mesh_tor.py	0	green	17	0	0	0	0.5	17 passed in 0.23s
+tests/test_local_pass_off_argv.py	0	skipped	0	0	6	0	0.3	6 skipped in 0.11s
+tests/test_local_services.py	0	green	22	0	0	0	0.5	22 passed in 0.26s
+tests/test_local_stack_preflight.py	0	green	27	0	0	0	1.1	27 passed in 0.81s
+tests/test_login_field_reaches_firstboot.py	1	red	3	4	0	0	1.2	4 failed, 3 passed in 0.92s
+tests/test_login_preview.py	0	green	13	0	0	0	0.5	13 passed in 0.21s
+tests/test_login_theme_pipeline.py	0	green	26	0	0	0	2.6	26 passed in 2.34s
+tests/test_look_edits.py	0	green	26	0	0	0	0.7	26 passed in 0.45s
+tests/test_look_hardening.py	0	green	19	0	0	0	0.5	19 passed in 0.30s
+tests/test_look_model.py	0	green	31	0	0	0	0.7	31 passed in 0.45s
+tests/test_look_served.py	0	green	43	0	0	0	0.8	43 passed in 0.54s
+tests/test_look_writer.py	0	green	24	0	0	0	0.5	24 passed in 0.21s
+tests/test_macos_docker_cpus.py	0	green	24	0	0	0	0.6	24 passed in 0.29s
+tests/test_macos_host.py	0	green	23	0	4	0	0.6	23 passed, 4 skipped in 0.29s
+tests/test_macos_stock_texts.py	0	green	39	0	0	0	2.7	39 passed in 2.43s
+tests/test_macos_terminals.py	0	green	6	0	0	0	0.4	6 passed in 0.18s
+tests/test_mainline_evidence.py	1	red	13	1	0	0	0.6	1 failed, 13 passed in 0.31s
+tests/test_managed_generator.py	0	skipped	0	0	25	0	0.4	25 skipped in 0.13s
+tests/test_managed_services.py	0	green	35	0	0	0	0.5	35 passed in 0.29s
+tests/test_mesh_emulation.py	0	green	25	0	0	0	0.8	25 passed in 0.54s
+tests/test_mesh_node.py	0	green	6	0	3	0	0.4	6 passed, 3 skipped in 0.18s
+tests/test_mesh_pod_controls.py	0	green	22	0	0	0	0.6	22 passed in 0.35s
+tests/test_mesh_pod_domains_attribution.py	0	green	14	0	0	0	0.5	14 passed in 0.28s
+tests/test_mesh_token.py	0	green	65	0	1	0	2.5	65 passed, 1 skipped in 2.20s
+tests/test_mesh_token_onion.py	0	green	40	0	0	0	0.7	40 passed in 0.46s
+tests/test_no_console.py	0	green	5	0	1	0	0.4	5 passed, 1 skipped in 0.18s
+tests/test_note_once.py	0	green	7	0	0	0	0.5	7 passed in 0.21s
+tests/test_nvd_key_cli.py	0	green	26	0	0	0	0.9	26 passed in 0.65s
+tests/test_nvd_key_core.py	0	green	51	0	0	0	0.6	51 passed in 0.35s
+tests/test_nvd_key_round2_core.py	0	green	7	0	1	0	0.8	7 passed, 1 skipped in 0.51s
+tests/test_org_export.py	1	red	111	1	1	244	32.1	1 failed, 111 passed, 1 skipped, 244 errors in 31.72s
+tests/test_org_export_neutrality.py	1	red	30	1	0	0	0.6	1 failed, 30 passed in 0.36s
+tests/test_org_export_speed.py	1	red	15	2	0	0	0.6	2 failed, 15 passed in 0.35s
+tests/test_org_export_windows.py	0	green	46	0	5	0	0.6	46 passed, 5 skipped in 0.37s
+tests/test_package_catalog.py	0	green	59	0	0	0	0.7	59 passed in 0.44s
+tests/test_package_resolution_report.py	0	green	20	0	0	0	0.5	20 passed in 0.24s
+tests/test_per_domain_model.py	0	green	42	0	0	0	0.6	42 passed in 0.32s
+tests/test_platform_macos.py	0	green	40	0	2	0	9.1	40 passed, 2 skipped in 8.89s
+tests/test_platform_preview.py	0	green	15	0	0	0	0.5	15 passed in 0.24s
+tests/test_platform_targets.py	0	green	55	0	0	0	1.0	55 passed in 0.75s
+tests/test_portage_user_patches.py	1	red	9	2	0	0	0.5	2 failed, 9 passed in 0.28s
+tests/test_prebuild_union.py	0	green	24	0	0	0	0.5	24 passed in 0.24s
+tests/test_preflight_disk_probe.py	0	green	5	0	1	0	0.4	5 passed, 1 skipped in 0.18s
+tests/test_probe_env_is_read_only.py	0	green	6	0	0	0	0.4	6 passed in 0.19s
+tests/test_progress_parse.py	0	green	35	0	0	0	0.6	35 passed in 0.31s
+tests/test_progress_uniformity.py	0	green	122	0	10	0	0.9	122 passed, 10 skipped in 0.59s
+tests/test_qemu_matrix_e2e.py	1	red	14	2	1	0	12.6	2 failed, 14 passed, 1 skipped in 12.35s
+tests/test_qemu_tests.py	0	green	54	0	9	0	0.7	54 passed, 9 skipped in 0.39s
+tests/test_qemu_windows.py	1	red	54	4	0	0	0.8	4 failed, 54 passed in 0.54s
+tests/test_reach_applied.py	1	red	13	4	0	0	0.6	4 failed, 13 passed in 0.37s
+tests/test_release_studio_script.py	1	red	17	3	1	0	3.3	3 failed, 17 passed, 1 skipped in 3.09s
+tests/test_repo_hygiene.py	0	skipped	0	0	1	0	0.5	1 skipped in 0.20s
+tests/test_resource_limits.py	0	green	50	0	0	0	0.6	50 passed in 0.33s
+tests/test_roles_lib_packaging.py	0	green	13	0	0	0	1.6	13 passed in 1.30s
+tests/test_root_size_floor.py	0	green	5	0	0	0	0.5	5 passed in 0.20s
+tests/test_route_access_env.py	1	red	16	6	0	0	0.7	6 failed, 16 passed in 0.43s
+tests/test_saved_meshes_current.py	0	green	14	0	0	0	0.7	14 passed in 0.37s
+tests/test_scope_violations.py	0	green	16	0	0	0	0.5	16 passed in 0.22s
+tests/test_secret_files.py	0	green	18	0	0	0	0.6	18 passed in 0.31s
+tests/test_seeded_credentials_annotate.py	0	green	15	0	0	0	0.5	15 passed in 0.24s
+tests/test_self_check_windows.py	0	green	3	0	0	0	6.1	3 passed in 5.89s
+tests/test_session_locations.py	0	green	27	0	3	0	0.8	27 passed, 3 skipped in 0.54s
+tests/test_shared_build_assets.py	0	green	17	0	0	0	0.5	17 passed in 0.22s
+tests/test_stack_db_read_env.py	1	red	15	5	0	0	0.6	5 failed, 15 passed in 0.31s
+tests/test_stage_tracker.py	0	green	10	0	0	0	0.4	10 passed in 0.20s
+tests/test_standalone_login_rule.py	0	green	9	0	0	0	0.4	9 passed in 0.19s
+tests/test_studio_beta_version.py	1	red	72	4	0	0	73.0	4 failed, 72 passed in 72.73s (0:01:12)
+tests/test_studio_installers_doc.py	0	green	4	0	0	0	0.5	4 passed in 0.30s
+tests/test_studio_release_cut.py	1	red	29	3	0	0	3.1	3 failed, 29 passed in 2.79s
+tests/test_studio_tests_push_paths.py	0	green	9	0	0	0	0.8	9 passed in 0.56s
+tests/test_theme.py	0	green	32	0	0	0	1.3	32 passed in 1.06s
+tests/test_theme_boundary.py	0	green	5	0	3	0	0.5	5 passed, 3 skipped in 0.21s
+tests/test_theme_palette.py	0	green	23	0	0	0	0.7	23 passed in 0.46s
+tests/test_theme_presets.py	0	green	12	0	0	0	2.4	12 passed in 2.14s
+tests/test_theme_ramps.py	0	green	26	0	0	0	1.2	26 passed in 0.92s
+tests/test_theme_styles.py	0	green	18	0	0	0	0.5	18 passed in 0.21s
+tests/test_tor_onion_e2e.py	0	skipped	0	0	2	0	0.3	2 skipped in 0.07s
+tests/test_tui_code_folders.py	0	green	10	0	0	0	0.7	10 passed in 0.38s
+tests/test_tui_command_words.py	0	green	10	0	1	0	0.5	10 passed, 1 skipped in 0.20s
+tests/test_tui_desktop.py	0	green	10	0	0	0	0.6	10 passed in 0.33s
+tests/test_tui_domain_services.py	0	green	20	0	0	0	0.6	20 passed in 0.36s
+tests/test_tui_domains_ca.py	0	green	9	0	0	0	0.6	9 passed in 0.31s
+tests/test_tui_domains_idp.py	0	green	10	0	0	0	0.6	10 passed in 0.31s
+tests/test_tui_e2e.py	0	green	21	0	0	0	0.6	21 passed in 0.34s
+tests/test_tui_go_live_prompts.py	0	green	10	0	0	0	1.0	10 passed in 0.70s
+tests/test_tui_journey.py	0	green	39	0	0	0	0.7	39 passed in 0.44s
+tests/test_tui_localcloud.py	0	green	22	0	0	0	0.6	22 passed in 0.39s
+tests/test_tui_localmesh_domains.py	0	green	15	0	0	0	0.6	15 passed in 0.34s
+tests/test_tui_meshemu.py	0	green	20	0	0	0	0.8	20 passed in 0.53s
+tests/test_tui_meshemu_whpx.py	0	green	21	0	0	0	0.7	21 passed in 0.40s
+tests/test_tui_qemu.py	0	green	34	0	0	0	0.7	34 passed in 0.44s
+tests/test_tui_sessions.py	0	green	43	0	0	0	0.8	43 passed in 0.56s
+tests/test_tui_themes.py	0	green	4	0	0	0	0.5	4 passed in 0.29s
+tests/test_tui_urwid.py	0	green	41	0	0	0	1.0	41 passed in 0.74s
+tests/test_tui_vault.py	0	green	20	0	0	0	0.7	20 passed in 0.40s
+tests/test_tui_ways_go_live.py	0	green	28	0	0	0	6.0	28 passed in 5.74s
+tests/test_vault_config.py	1	red	32	22	7	0	1.4	22 failed, 32 passed, 7 skipped in 1.16s
+tests/test_web_locales.py	0	green	15	0	0	0	0.5	15 passed in 0.24s
+tests/test_windows_binary_writes.py	1	red	2	1	0	0	0.5	1 failed, 2 passed in 0.21s
+tests/test_windows_measure_tree.py	1	red	1	1	0	0	0.4	1 failed, 1 passed in 0.19s
+tests/test_windows_nul_stdin.py	0	green	5	0	2	0	0.4	5 passed, 2 skipped in 0.18s
+tests/test_windows_sentences.py	0	green	6	0	6	0	0.4	6 passed, 6 skipped in 0.20s
+tests/test_windows_sweep_c1.py	0	green	16	0	3	0	0.5	16 passed, 3 skipped in 0.26s
+tests/test_windows_sweep_c3.py	0	green	11	0	6	0	0.5	11 passed, 6 skipped in 0.23s
+tests/test_windows_sweep_c6.py	0	green	20	0	0	0	0.5	20 passed in 0.22s
+tests/test_windows_sweep_c8.py	0	green	25	0	8	0	0.5	25 passed, 8 skipped in 0.27s
+tests/test_windows_sweep_c9.py	1	red	33	1	6	0	0.7	1 failed, 33 passed, 6 skipped in 0.41s
+tests/test_windows_text_io.py	0	green	9	0	0	0	0.5	9 passed in 0.27s
+tests/test_windows_view_doors_pid.py	0	green	2	0	1	0	0.4	2 passed, 1 skipped in 0.17s
+tests/test_wizard_subtitle_budget.py	0	green	3	0	0	0	2.6	3 passed in 2.31s
+tests/test_worklist.py	0	green	99	0	0	0	0.9	99 passed in 0.59s
+tests/test_worklist_driver.py	0	green	27	0	0	0	0.6	27 passed in 0.31s
+tests/test_worklist_infra_services.py	0	green	11	0	0	0	0.4	11 passed in 0.20s
+tests/test_worklist_tor_fold.py	0	green	13	0	0	0	0.5	13 passed in 0.21s

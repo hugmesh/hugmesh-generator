@@ -1,0 +1,7 @@
+$ /tmp/guest-facts.1835/venv/bin/python -m pip install --only-binary=:all: cryptography
+ERROR: Could not find a version that satisfies the requirement cryptography (from versions: none)
+
+[notice] A new release of pip is available: 25.0.1 -> 26.3
+[notice] To update, run: /tmp/guest-facts.1835/venv/bin/python -m pip install --upgrade pip
+ERROR: No matching distribution found for cryptography
+rc=1

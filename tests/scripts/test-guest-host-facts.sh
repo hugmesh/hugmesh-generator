@@ -40,6 +40,8 @@
 #   7a. argv_session.py, run against a fake studio package, logs the argv of the
 #      processes each step starts, under that step's name, with the checkout path
 #      scrubbed;
+#   7b. argv_session.py counts the standalone walk's Enters on the checkout's own
+#      journey (a fake one that needs eleven), so `s PATH` reaches the build page;
 #   8. size_contract.py `candidates` drops a test file that names a Qt binding, a Qt
 #      module, the qtbot fixture or the GUI package and keeps one that does not;
 #   9. runner_side.py `summarize` reports a guest with no fixtures as missing (never a
@@ -365,6 +367,49 @@ PY
   if [ $? -eq 0 ]; then ok "argv_session logs each step's child argv (subprocess and os.system) under its step, scrubbed, argv only"
   else while IFS= read -r line; do bad "argv_session: ${line}"; done < "${A}/check.out"; fi
 else bad "argv_session failed: $(head -1 "${A}/run.out")"; fi
+
+# ── 7b: the standalone walk is measured on the checkout, not a fixed count ──
+# A fixed list of eight Enters stopped one page short once the Desktop step was added
+# (2026-11-11): `s PATH` landed on the desktop page, no config was saved and the
+# print step failed on every guest. The fake journey below reaches its build page
+# after ELEVEN Enters; the fake text UI records how many Enters came before `s PATH`.
+echo "== argv_session.py walk length =="
+W="${TMP}/walk"; mkdir -p "${W}/repo/studio/hugmesh_studio/tui"
+: > "${W}/repo/studio/hugmesh_studio/__init__.py"
+: > "${W}/repo/studio/hugmesh_studio/tui/__init__.py"
+cat > "${W}/repo/studio/hugmesh_studio/tui/journey.py" <<'PY'
+class Journey:
+    def __init__(self, generator_dir):
+        self.n = 0
+        self.slug = "welcome"
+    def feed(self, line):
+        self.n += 1
+        self.slug = "build" if self.n >= 11 else f"page{self.n}"
+PY
+cat > "${W}/repo/studio/hugmesh_studio/tui/__main__.py" <<'PY'
+import os, sys
+enters = 0
+for ln in sys.stdin.read().split("\n"):
+    if ln == "":
+        enters += 1
+        continue
+    if ln.startswith("s "):
+        open(ln[2:], "w").write("{}")
+        open(os.path.join(os.path.dirname(ln[2:]), "enters-seen.txt"), "w").write(str(enters))
+    break
+PY
+cat > "${W}/repo/studio/hugmesh_studio/__main__.py" <<'PY'
+import sys
+sys.exit(0 if open(sys.argv[sys.argv.index("--config") + 1]).read() == "{}" else 2)
+PY
+if python3 "${GF}/argv_session.py" --repo "${W}/repo" --out "${W}/out" --timeout 60 > "${W}/run.out" 2>&1; then
+  seen=$(cat "${W}/out/enters-seen.txt" 2>/dev/null || echo none)
+  walk=$(cat "${W}/out/walk.txt" 2>/dev/null || echo none)
+  prc=$(awk -F'\t' '$1=="print"{print $2}' "${W}/out/steps.tsv")
+  if [ "${seen}" = 11 ] && [ "${walk}" = "11 Enters to the build page" ] && [ "${prc}" = 0 ]; then
+    ok "argv_session measures the walk on the checkout's journey (11 Enters to build), so the save lands and print finds the config"
+  else bad "argv_session walk: the text UI saw ${seen} Enters before 's PATH' (want 11), walk.txt '${walk}', print rc ${prc}"; fi
+else bad "argv_session (walk) failed: $(head -1 "${W}/run.out")"; fi
 
 # ── 8: contract candidates ───────────────────────────────────────────────────
 echo "== size_contract.py candidates =="

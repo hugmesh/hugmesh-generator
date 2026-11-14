@@ -1,0 +1,5 @@
+$ sh -c cd studio && exec '/tmp/guest-facts.1412/venv/bin/python' -m hugmesh_studio --self-check --generator-dir ..
+generator dir: ..
+paths checked: 109, scripts parsed: 30, make targets: 12
+ok
+rc=0

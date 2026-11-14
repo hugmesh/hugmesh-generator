@@ -1,0 +1,3 @@
+$ as_root sh -c pkg_add -I py3-urwid
+quirks-7.227 signed on 2026-11-12T17:48:00Z
+rc=0
