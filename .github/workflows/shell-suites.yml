@@ -728,6 +728,7 @@ jobs:
               tests/scripts/test-mesh-control-onion.sh
               tests/scripts/test-db-connection-budget.sh
               tests/scripts/test-kind-local-domains.sh
+              tests/scripts/test-bff-hpa-sizing.sh
               tests/scripts/test-deeplink-remote-coverage.sh
               tests/desktop-governance/test-sso-greeter.sh
               tests/scripts/test-e2e-shell-nav-entry.sh

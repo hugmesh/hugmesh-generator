@@ -81,14 +81,13 @@ def test_a_malformed_colour_is_refused_with_the_windows_sentence_and_changes_not
     assert t.model.get("primary") == ""
 
 
-def test_the_vanta_rows_are_listed_and_refused_with_the_dependency_named():
+def test_the_vanta_rows_are_listed_and_selectable():
     t = _text()
     listing = t.feed("e")
-    assert listing.count(brand_look.VANTA_UNSELECTABLE) == 4
-    out = t.feed("e vanta-fog")
-    assert out.startswith("vanta-fog is saved but not selectable")
-    assert theme.VANTA_DEPENDENCY_NOTE in out
-    assert t.model.get("bg_effect") == theme.BG_EFFECT_DEFAULT
+    assert "not selectable" not in listing
+    for effect in theme.VANTA_EFFECTS:
+        assert brand_look.EFFECT_LABELS[effect] in listing
+        assert t.feed(f"e {effect}") == "" and t.model.get("bg_effect") == effect
     assert t.feed("e none") == "" and t.model.get("bg_effect") == "none"
 
 

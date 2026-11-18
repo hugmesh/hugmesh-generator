@@ -94,7 +94,7 @@ def test_synonyms_map_words_to_slugs():
     ("look.font", "Humanist", "Comic"),
     ("look.style", "sharp", "round"),
     ("look.decor", "sparkle", "glitter"),
-    ("look.bg_effect", "none", "vanta-fog"),
+    ("look.bg_effect", "vanta-fog", "vanta-spaghetti"),
     ("env", "prod", "staging"),
     ("with_tor", True, "later"),
     ("web_locales", ["de", "fr"], None),

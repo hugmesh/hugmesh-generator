@@ -111,11 +111,10 @@ def look_choices() -> dict:
     from . import brand_look, fonts, theme, theme_presets
     presets = tuple(p.preset_id for p in theme_presets.PRESETS)
     effects = tuple(theme.BG_EFFECTS)
-    vanta = tuple(getattr(theme, "VANTA_EFFECTS", ()))
     return {
         "preset": presets, "mode": tuple(theme_presets.MODES),
         "style": tuple(theme.STYLE_VARIANTS), "decor": tuple(theme.DECOR_VARIANTS),
-        "bg_effect": tuple(e + (" (not selectable yet)" if e in vanta else "") for e in effects),
+        "bg_effect": effects,
         "font": tuple(fonts.FONT_PRESETS),
         "_defaults": dict(brand_look.LOOK_DEFAULTS),
     }
