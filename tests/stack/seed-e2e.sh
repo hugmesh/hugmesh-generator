@@ -56,7 +56,7 @@
 # controls) render.
 #
 # ENV (all optional; defaults target the compose stack):
-#   FRONT_DOOR            default http://localhost:8088   (fe-gateway)
+#   FRONT_DOOR            default http://localhost:${PUBLIC_HOST_PORT:-8088}   (fe-gateway)
 #   CASDOOR_URL           default http://localhost:8000
 #   CASDOOR_ADMIN_USER    default admin
 #   CASDOOR_ADMIN_PASS    NO DEFAULT VALUE (NEW-15). Unset, it is this checkout's
@@ -116,7 +116,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GEN_DIR="$(cd "${HERE}/../.." && pwd)"
 SEED_ACCOUNTS="${GEN_DIR}/tests/qemu/seed-accounts.sh"
 
-FRONT_DOOR="${FRONT_DOOR:-http://localhost:8088}"
+# The front door the stack is published on: FRONT_DOOR when given, else the port the stack was
+# started with (PUBLIC_HOST_PORT, which `make stack-up` and `make stack-seed` both take), else
+# 8088. Without the middle step `make stack-seed PUBLIC_HOST_PORT=18088` waited 180 s on
+# :8088 for a door that was never there (the Studio sets FRONT_DOOR itself and never hit it).
+FRONT_DOOR="${FRONT_DOOR:-http://localhost:${PUBLIC_HOST_PORT:-8088}}"
 CASDOOR_URL="${CASDOOR_URL:-http://localhost:8000}"
 CASDOOR_ADMIN_USER="${CASDOOR_ADMIN_USER:-admin}"
 # No literal default (NEW-15): resolved below, once die() exists, from the exported
