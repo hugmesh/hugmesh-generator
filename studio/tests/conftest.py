@@ -120,6 +120,26 @@ def _no_save_posture_ssh(monkeypatch):
                         lambda dev: unread.as_record())
 
 
+def _qt_module(name: str):
+    """``QtWidgets`` / ``QtCore`` of the binding the Studio loaded, or None when this
+    run has not imported one. Never imports anything.
+
+    The binding is the one ``hugmesh_studio.gui.qt`` chose (PySide6 first, as the MSI,
+    the tarball and CI ship it). This used to look up ``PyQt6.*`` only, so under
+    PySide6 every hook below was silently a no-op: the end-of-session drain waited on
+    nothing, and a probe still running at exit aborted the interpreter with
+    ``QThread: Destroyed while thread is still running`` after the tests had passed
+    (found 2026-11-13 on Windows 11: tests/test_domains_row_checks_saved_door.py, 10
+    of 18 runs under load, exit 0xC0000409)."""
+    shim = sys.modules.get("hugmesh_studio.gui.qt")
+    order = [getattr(shim, "BINDING", "")] if shim is not None else []
+    for binding in [*order, "PySide6", "PyQt6"]:
+        mod = sys.modules.get(f"{binding}.{name}") if binding else None
+        if mod is not None:
+            return mod
+    return None
+
+
 def _live_qapplication():
     """The process's QApplication, or None — without ever raising, and without
     importing Qt into a run that has not already imported it.
@@ -134,7 +154,7 @@ def _live_qapplication():
     ``pytest_sessionfinish``. Measured 2026-09-04 on tests/test_pages_build.py, which
     is green on origin/main.
     """
-    qtw = sys.modules.get("PyQt6.QtWidgets")
+    qtw = _qt_module("QtWidgets")
     if qtw is None:                              # no toolkit in this run
         return None
     try:
@@ -185,8 +205,8 @@ def _drain_probe_threads(deadline_s: float = 60.0) -> None:
     Qt is touched ONLY if the run already imported it — the core-only CI lane must
     stay free of a PyQt import.
     """
-    qtw = sys.modules.get("PyQt6.QtWidgets")
-    qtc = sys.modules.get("PyQt6.QtCore")
+    qtw = _qt_module("QtWidgets")
+    qtc = _qt_module("QtCore")
     if qtw is None or qtc is None:
         return
     app = _live_qapplication()
