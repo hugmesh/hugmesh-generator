@@ -1183,6 +1183,7 @@ lint:kind-tor:
     - apt-get update -qq && apt-get install -y --no-install-recommends git make >/dev/null
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - bash tests/scripts/test-kind-tor.sh
+    - bash tests/scripts/test-kind-local-domains.sh
 
 # A hardware node's .onion admitted at the ingress edge (hugmesh-generator#614): the
 # node agent specs/usr/sbin/hugmesh-tor-ingress-admit (plan + apply against a stub

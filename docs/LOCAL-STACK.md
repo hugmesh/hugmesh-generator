@@ -319,11 +319,34 @@ seeds two:
   re-issued under the SAME CA (what a browser was told to trust does not change) by the next
   `make stack-certs`; `tests/stack/gen-certs.sh` refuses any extra name the CA would not vouch
   for (`SNAP_EXTRA_SANS`, only `*.localhost` and `*.<domain>` names).
-- **Not on every lane.** The kind (DevOps) lane has one look per mesh and no per-domain host
-  routing: the sample domains are a Docker-lane feature.
+- **The kind (DevOps) lane has them too.** `make kind-up` runs `make kind-domains` once the
+  bootstrap succeeds (skip with `KIND_DOMAINS=0`; a failure there is reported and does not fail
+  the bring-up). It reads the same `tests/stack/.looks/` folder (seeding the same two samples
+  when nothing is recorded) and applies a small nginx **look door** to namespace
+  `hugmesh-frontend`: it answers a stylesheet by Host and `/hug-domains.json`, and passes
+  everything else to the fe-gateway, exactly like the Docker door. **Sign in** at
+  `https://acme.localhost:8443/login/` and `https://example.localhost:8443/login/` (ingress-nginx's
+  `:443`, mapped to 8443 by `kind-local.yaml`; accept the cluster's self-signed certificate). The
+  same names answer on `http://…:8080` (no forced https redirect on these hosts) for the look
+  and the list, but the session cookie is `Secure`, so sign in on https. Measured: the seeded
+  `e2e-admin` signs in on `acme.localhost` and `/bff/session` answers 200 with roles `admin`,
+  `user`. The
+  mesh's own names (`hugmesh.net`, `*.hugmesh.net`) keep going straight to the gateway, except
+  that `/hug-domains.json` is answered there too, so the sign-in page on the mesh's own name
+  lists the other domains. `make kind-domains-status` probes every domain through the real
+  ingress (https and http) and exits non-zero when one does not answer; `make kind-domains-down` removes exactly
+  the objects labelled `hugmesh.net/local-domains=true`. These objects are applied by the
+  script, not by ArgoCD: the domains are a local choice, like the Vault seeds the bootstrap writes.
+  **Not done on kind:** a separate `.onion` per domain (`make kind-tor` still publishes one for
+  the mesh), a certificate that covers the `.localhost` names (the ingress serves its own
+  self-signed one), and a domain recorded
+  in the Studio reaching the kind lane (it writes `.looks/` only on the Docker start; the kind
+  script uses whatever that folder holds).
 
-Where it lives: `studio/hugmesh_studio/core/look_serving.py` (`seed_samples`),
-`tests/stack/tls-front/default.conf` (`/hug-domains.json`), `tests/stack/gen-certs.sh`.
+Where it lives: `studio/hugmesh_studio/core/look_serving.py` (`seed_samples`, `kind_bundle`),
+`tests/stack/tls-front/default.conf` (`/hug-domains.json`), `tests/stack/gen-certs.sh`,
+`scripts/kind-local-domains.sh` (kind). Guards: `studio/tests/test_look_kind_bundle.py`,
+`tests/scripts/test-kind-local-domains.sh`.
 
 ## Alternative social backends — `PHPBB=1` / `AKKOMA=1`
 
