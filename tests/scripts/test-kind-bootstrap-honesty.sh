@@ -1670,6 +1670,137 @@ DNSDOCKER
 
 fi
 
+# ── #657: a re-run must SAY why an ArgoCD effect did not happen, and re-request one that never will ──
+# On 2026-09-30 a `make kind-up` re-run died at the 600 s pki gate with "the vault-pki PostSync
+# hook never succeeded" and no pod to read. The truth was on the Application: (1) the repo
+# credential copy in Secret devops/hugmesh-generator-repo had been revoked by a `gh auth login`
+# ("authentication required"), and (2) vault-pki was Synced with its last operation Failed, so
+# ArgoCD would never run the hook again. These run the REAL helpers out of the real script
+# against a kubectl stub that models each Application field independently.
+echo
+echo "== #657: ArgoCD effect diagnosis, credential re-check, one-shot sync request =="
+CRED_FN="$(awk '/^argocd_credential_rejected\(\) \{/,/^\}/' "${BOOTSTRAP}")"
+REQ_FN="$(awk '/^require_working_repo_credential\(\) \{/,/^\}/' "${BOOTSTRAP}")"
+DIAG_FN="$(awk '/^argocd_app_diagnosis\(\) \{/,/^\}/' "${BOOTSTRAP}")"
+RERUN_FN="$(awk '/^argocd_rerun_failed_sync\(\) \{/,/^\}/' "${BOOTSTRAP}")"
+for pair in "argocd_credential_rejected:${CRED_FN}" "require_working_repo_credential:${REQ_FN}" \
+            "argocd_app_diagnosis:${DIAG_FN}" "argocd_rerun_failed_sync:${RERUN_FN}"; do
+  [ -n "${pair#*:}" ] || bad "bootstrap-kind.sh has no ${pair%%:*}() — #657's behaviour is missing"
+done
+if [ -n "${CRED_FN}" ] && [ -n "${REQ_FN}" ] && [ -n "${DIAG_FN}" ] && [ -n "${RERUN_FN}" ]; then
+  A657="${TMP}/a657"; mkdir -p "${A657}/bin"
+  cat > "${A657}/bin/kubectl" <<'KSTUB'
+#!/usr/bin/env bash
+args="$*"
+echo "kubectl ${args}" >> "${STUB_LOG}"
+case "${args}" in
+  *"patch application"*) exit 0 ;;
+  *"custom-columns=MSG:"*)
+    # a counter, so a test can model "rejected on the first look, fine on the second"
+    n="$(cat "${STUB_COUNT}" 2>/dev/null || echo 0)"; n=$((n + 1)); echo "${n}" > "${STUB_COUNT}"
+    if [ "${n}" -le "${STUB_REJECT_FIRST:-0}" ]; then printf '%s\n' "${STUB_APP_CONDS:-}"
+    elif [ -n "${STUB_REJECT_FIRST:-}" ]; then printf '\n'
+    else printf '%s\n' "${STUB_APP_CONDS:-}"; fi ;;
+  *"{.status.sync.status}"*)             printf '%s' "${STUB_SYNC:-}" ;;
+  *"{.status.operationState.phase}"*)    printf '%s' "${STUB_PHASE:-}" ;;
+  *"{.status.operationState.message}"*)  printf '%s' "${STUB_OPMSG:-}" ;;
+  *"{range .status.conditions"*)         printf '%s' "${STUB_COND_TEXT:-}" ;;
+  *"{.operation}"*)                      printf '%s' "${STUB_PENDING:-}" ;;
+  *"{.status.sync.revision}"*)           printf '%s' "${STUB_REV:-}" ;;
+esac
+exit 0
+KSTUB
+  chmod +x "${A657}/bin/kubectl"
+  run657() { # <function-call> [env...] -> A657/out (stdout) A657/err, RC657
+    local call="$1"; shift
+    : > "${A657}/log"; rm -f "${A657}/count"
+    ( export PATH="${A657}/bin:${PATH}" STUB_LOG="${A657}/log" STUB_COUNT="${A657}/count" CRED_RECHECK_SLEEP=0
+      for kv in "$@"; do export "${kv?}"; done
+      bash -c 'set -uo pipefail
+        log() { echo "==> $*"; }
+        warn() { echo "    WARN: $*" >&2; }
+        ARGOCD_NS=devops; REV=main
+        '"${CRED_FN}"'
+        '"${REQ_FN}"'
+        '"${DIAG_FN}"'
+        '"${RERUN_FN}"'
+        '"${call}" ) > "${A657}/out" 2> "${A657}/err"
+    RC657=$?
+  }
+  AUTH='Failed to load target state: failed to generate manifest: rpc error: authentication required: Invalid username or token.'
+
+  # (1) the credential re-check
+  run657 'require_working_repo_credential "the test wait"' "STUB_APP_CONDS=${AUTH}"
+  if [ "${RC657}" -eq 1 ] && grep -q "FATAL" "${A657}/err" && grep -q 'ARGOCD_REPO_TOKEN=' "${A657}/err" \
+     && grep -q 'hugmesh-generator-repo' "${A657}/err" && grep -q 'gh auth login' "${A657}/err" && grep -q 'the test wait' "${A657}/err"; then
+    ok "#657: a dead repo credential stops the run BEFORE the long wait, names the Secret holding the copy and prints the repair command"
+  else
+    bad "#657: a rejected credential did not stop the run with the repair command (rc=${RC657}): $(head -3 "${A657}/err" | tr '\n' ' ')"
+  fi
+  run657 'require_working_repo_credential "the test wait"' "STUB_APP_CONDS="
+  [ "${RC657}" -eq 0 ] && ok "#657: a healthy credential passes the re-check silently" || bad "#657: the re-check stopped a healthy cluster (rc=${RC657})"
+  run657 'require_working_repo_credential "the test wait"' "STUB_APP_CONDS=${AUTH}" STUB_REJECT_FIRST=1
+  [ "${RC657}" -eq 0 ] && ok "#657: a rejection that clears on the second look (a token still reaching the repo-server) does not stop a fresh bring-up" \
+                       || bad "#657: a transient rejection stopped the run (rc=${RC657})"
+
+  # (2) the diagnosis names the Application's own words
+  run657 'argocd_app_diagnosis vault-pki' STUB_SYNC=Synced STUB_PHASE=Failed \
+         "STUB_OPMSG=one or more synchronization tasks completed unsuccessfully (retried 5 times)" "STUB_COND_TEXT=ComparisonError: ${AUTH}; "
+  if grep -q 'sync=Synced' "${A657}/out" && grep -q 'last operation=Failed' "${A657}/out" \
+     && grep -q 'retried 5 times' "${A657}/out" && grep -q 'ComparisonError' "${A657}/out" \
+     && grep -q 'EXPIRED or was revoked' "${A657}/out" && grep -q 'ARGOCD_REPO_TOKEN=' "${A657}/out"; then
+    ok "#657: the diagnosis prints the Application's sync state, last operation and conditions, and calls an authentication error an expired credential in those words"
+  else
+    bad "#657: the diagnosis did not carry the Application's own words: $(tr '\n' ' ' < "${A657}/out" | cut -c1-300)"
+  fi
+  run657 'argocd_app_diagnosis vault-pki' STUB_SYNC=Synced STUB_PHASE=Failed "STUB_OPMSG=hook failed" "STUB_COND_TEXT="
+  if grep -q 'last operation=Failed (hook failed)' "${A657}/out" && ! grep -q 'EXPIRED' "${A657}/out"; then
+    ok "#657: with no authentication error the diagnosis still shows the last operation and does NOT blame the credential"
+  else
+    bad "#657: the diagnosis blamed the credential without evidence, or dropped the operation: $(tr '\n' ' ' < "${A657}/out" | cut -c1-200)"
+  fi
+
+  # (3) the one-shot sync request
+  run657 'argocd_rerun_failed_sync vault-pki' STUB_SYNC=Synced STUB_PHASE=Failed STUB_REV=0123abcd
+  patches="$(grep -c 'patch application vault-pki' "${A657}/log")"
+  if [ "${RC657}" -eq 0 ] && [ "${patches}" -eq 1 ] && grep -q '"operation"' "${A657}/log" && grep -q '"revision":"0123abcd"' "${A657}/log" \
+     && grep -q '"hook":{}' "${A657}/log" && grep -q 'requesting one sync' "${A657}/out"; then
+    ok "#657: a Synced Application whose last operation Failed gets exactly ONE sync request (the supported operation field, at its own revision), and the run says so"
+  else
+    bad "#657: the failed-hook sync request was not made once as specified (rc=${RC657}, patches=${patches}): $(tail -2 "${A657}/log" | tr '\n' ' ' | cut -c1-200)"
+  fi
+  run657 'argocd_rerun_failed_sync vault-pki' STUB_SYNC=Synced STUB_PHASE=Error
+  [ "${RC657}" -eq 0 ] && grep -q 'patch application' "${A657}/log" && ok "#657: an Error last operation is treated like Failed" || bad "#657: an Error operation was not re-requested"
+  for combo in "STUB_SYNC=Synced STUB_PHASE=Succeeded|a Succeeded last operation" \
+               "STUB_SYNC=OutOfSync STUB_PHASE=Failed|an OutOfSync Application (ArgoCD will sync it itself)" \
+               "STUB_SYNC=Synced STUB_PHASE=Failed STUB_PENDING=sync-pending|an operation already pending" \
+               "STUB_SYNC=Synced STUB_PHASE=|no operation yet"; do
+    run657 'argocd_rerun_failed_sync vault-pki' ${combo%%|*}
+    if [ "${RC657}" -eq 1 ] && ! grep -q 'patch application' "${A657}/log"; then
+      ok "#657: no sync is requested for ${combo#*|}"
+    else
+      bad "#657: a sync was requested for ${combo#*|} (rc=${RC657})"
+    fi
+  done
+
+  # (4) they are actually USED at the gate, in the right order
+  GATE="$(awk '/^require_working_repo_credential "the wait for vault-pki-init/,/^log "  pki_int is bootstrapped/' "${BOOTSTRAP}")"
+  if printf '%s\n' "${GATE}" | awk '/require_working_repo_credential/{a=NR} /argocd_rerun_failed_sync vault-pki/{b=NR} /^until pki_ready/{c=NR} END{exit !(a && b && c && a<b && b<c)}'; then
+    ok "#657: the pki gate re-checks the credential, then requests the failed hook's sync, BEFORE it starts waiting"
+  else
+    bad "#657: the pki gate does not run require_working_repo_credential then argocd_rerun_failed_sync before its wait"
+  fi
+  case "${GATE}" in
+    *'argocd_app_diagnosis vault-pki >&2'*) ok "#657: the 600 s FATAL prints the Application's own state" ;;
+    *) bad "#657: the pki gate's FATAL does not call argocd_app_diagnosis" ;;
+  esac
+  if awk '/^require_working_repo_credential "the wait for vault-0"/{a=NR} /^wait_for_vault_pod \|\| exit 1/{b=NR} END{exit !(a && b && a<b)}' "${BOOTSTRAP}"; then
+    ok "#657: the credential is re-checked right before the vault-0 wait as well, not only at the start of the run"
+  else
+    bad "#657: no credential re-check before the vault-0 wait"
+  fi
+fi
+
 echo
 echo "== kind SSO harness honesty: ${pass} passed, ${fail} failed =="
 [ "${fail}" -eq 0 ]
