@@ -167,7 +167,11 @@ def test_journey_mode_cards_are_reachable_by_paging_at_80x24(tmp_path):
 def test_journey_sessions_entry_swaps_in_the_review_and_back(tmp_path):
     _finished(tmp_path, session_id="20260106-000001-ffffff")
     app = urwid_ui.JourneyApp(str(tmp_path))
-    _typed(app, "2")                                   # Review prior sessions (card 2 of 2)
+    # By ID, not by ordinal: the menu was cut once already (the localmesh card went), and a typed
+    # number then silently picked a different card (or none). A cut that removes THIS entry now
+    # fails at the lookup, which names it.
+    pick = [cid for cid, _label, _desc in journey.WELCOME_CHOICES].index("sessions") + 1
+    _typed(app, str(pick))                             # Review prior sessions
     assert app.sessions is not None
     assert "previous builds" in _screen_text(app.root)
     assert "20260106-000001-ffffff" in _screen_text(app.root)

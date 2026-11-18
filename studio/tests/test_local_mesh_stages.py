@@ -221,11 +221,17 @@ def test_module_imports_no_qt():
 
 
 # ── 3. the GUI: tree, filtering, terminal settle ────────────────────────────────────
-pytest.importorskip("hugmesh_studio.gui.qt",
-                    reason="no Qt binding (PySide6/PyQt6) installed")
-
-from hugmesh_studio.gui.pages import localmesh as localmesh_mod     # noqa: E402
-from hugmesh_studio.gui.qt import QtCore, QtWidgets                 # noqa: E402
+# GUI half: the studio-tests job installs NO Qt binding on purpose, so these imports fail there.
+# They must not skip the whole module (a module-level pytest.importorskip skipped the Qt-free tests
+# above it too, hugmesh-generator#537): only the tests below that need Qt are marked.
+try:
+    from hugmesh_studio.gui.pages import localmesh as localmesh_mod
+    from hugmesh_studio.gui.qt import QtCore, QtWidgets
+    _HAVE_QT = True
+except ImportError:
+    localmesh_mod = QtCore = QtWidgets = None
+    _HAVE_QT = False
+needs_qt = pytest.mark.skipif(not _HAVE_QT, reason="no Qt binding (PySide6/PyQt6) installed")
 
 
 def _join_page_threads(dlg):
@@ -290,6 +296,7 @@ def _states(page, i=0):
     return [it.text(localmesh_mod._ST_COL_STATE) for it in run.stage_items]
 
 
+@needs_qt
 def test_the_flat_log_is_gone_and_a_stage_tree_hosts_it(qapp):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
@@ -304,6 +311,7 @@ def test_the_flat_log_is_gone_and_a_stage_tree_hosts_it(qapp):
     assert page.stage_tree.topLevelItemCount() == 0      # nothing has run yet
 
 
+@needs_qt
 def test_a_launched_verb_builds_its_whole_ladder_up_front(qapp):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
@@ -317,6 +325,7 @@ def test_a_launched_verb_builds_its_whole_ladder_up_front(qapp):
     _drain(qapp, page)
 
 
+@needs_qt
 def test_streamed_banners_advance_the_tree_and_the_log_follows_the_selection(qapp):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
@@ -359,6 +368,7 @@ def test_streamed_banners_advance_the_tree_and_the_log_follows_the_selection(qap
     _drain(qapp, page)
 
 
+@needs_qt
 def test_the_selected_running_stage_keeps_receiving_the_live_stream(qapp):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
@@ -375,6 +385,7 @@ def test_the_selected_running_stage_keeps_receiving_the_live_stream(qapp):
     _drain(qapp, page)
 
 
+@needs_qt
 def test_a_failed_verb_fails_the_running_stage_and_selects_it(qapp):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
@@ -396,6 +407,7 @@ def test_a_failed_verb_fails_the_running_stage_and_selects_it(qapp):
     assert page._runs[0].status == "failed"
 
 
+@needs_qt
 def test_a_cancelled_verb_marks_the_running_stage_stopped_not_failed(qapp):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
@@ -410,6 +422,7 @@ def test_a_cancelled_verb_marks_the_running_stage_stopped_not_failed(qapp):
     assert FAILED not in _states(page)          # an operator stop is never a red failure
 
 
+@needs_qt
 def test_a_clean_run_marks_reached_stages_done_and_the_rest_skipped(qapp):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
@@ -429,6 +442,7 @@ def test_a_clean_run_marks_reached_stages_done_and_the_rest_skipped(qapp):
     assert page._runs[0].status == "ok"
 
 
+@needs_qt
 def test_each_verb_gets_its_own_row_and_the_older_log_stays_reachable(qapp):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     page = dlg.page
@@ -447,6 +461,7 @@ def test_each_verb_gets_its_own_row_and_the_older_log_stays_reachable(qapp):
     _drain(qapp, page)
 
 
+@needs_qt
 def test_a_verb_with_no_banners_gets_no_stages_and_still_shows_its_log(qapp):
     """The readiness check / stack-down print no ``==> `` banners. An honest empty
     ladder — plus the raw log — beats a fabricated one-stage bar."""
@@ -462,6 +477,7 @@ def test_a_verb_with_no_banners_gets_no_stages_and_still_shows_its_log(qapp):
     assert page._runs[0].status == "ok"
 
 
+@needs_qt
 def test_the_handlers_pre_flight_lines_belong_to_the_run_they_announce(qapp, monkeypatch):
     """`_bootstrap_up` prints "[bootstrap] generating credentials …" BEFORE launching.
     That line must survive into the run's raw log — selecting the run row used to be
@@ -481,6 +497,7 @@ def test_the_handlers_pre_flight_lines_belong_to_the_run_they_announce(qapp, mon
     _join_page_threads(dlg)
 
 
+@needs_qt
 def test_a_declined_confirmation_does_not_donate_its_line_to_the_next_run(qapp,
                                                                           monkeypatch):
     """A note that announces NO run must not be queued. `_bootstrap_clean` prints
@@ -506,6 +523,7 @@ def test_a_declined_confirmation_does_not_donate_its_line_to_the_next_run(qapp,
     _drain(qapp, page)
 
 
+@needs_qt
 def test_control_bytes_never_reach_the_log_widget(qapp):
     """compose/maven colour their output unconditionally; Qt paints a BOX for every
     escape byte, so the line is sanitised in the ONE per-line slot."""

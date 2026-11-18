@@ -101,9 +101,17 @@ def test_tui_fields_the_new_knobs_and_refuses_inline():
 
 
 # ── GUI face: the widgets exist, are visible/enabled/sized, and refuse inline ─────────
-pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding installed")
-from hugmesh_studio.gui.pages import fleet as fleet_mod             # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets                         # noqa: E402
+# GUI half: the studio-tests job installs NO Qt binding on purpose, so these imports fail there.
+# They must not skip the whole module (a module-level pytest.importorskip skipped the Qt-free tests
+# above it too, hugmesh-generator#537): only the tests below that need Qt are marked.
+try:
+    from hugmesh_studio.gui.pages import fleet as fleet_mod
+    from hugmesh_studio.gui.qt import QtWidgets
+    _HAVE_QT = True
+except ImportError:
+    fleet_mod = QtWidgets = None
+    _HAVE_QT = False
+needs_qt = pytest.mark.skipif(not _HAVE_QT, reason="no Qt binding (PySide6/PyQt6) installed")
 
 
 @pytest.fixture(scope="session")
@@ -128,6 +136,7 @@ def _to_roles_step(p):
     assert p.stack.currentIndex() == fleet_mod.STEP_ROLES
 
 
+@needs_qt
 def test_new_controls_are_visible_enabled_and_sized(page):
     page.orangepi5.setChecked(True)
     page.orangepi4lts.setChecked(True)
@@ -144,6 +153,7 @@ def test_new_controls_are_visible_enabled_and_sized(page):
     assert page.ram_group.isHidden()
 
 
+@needs_qt
 def test_gui_emits_and_round_trips(page):
     page.orangepi5.setChecked(True)
     page.orangepi5_roles.setText("pki omnibus")
@@ -158,6 +168,7 @@ def test_gui_emits_and_round_trips(page):
     other.deleteLater()
 
 
+@needs_qt
 def test_omnibus_without_ram_is_refused_inline(page):
     page.rpi_roles.setText("omnibus")
     page.refresh_preview()
@@ -177,6 +188,7 @@ def test_omnibus_without_ram_is_refused_inline(page):
     assert "RAM_GB=16" in page.cmd.toPlainText()
 
 
+@needs_qt
 def test_render_png(page, tmp_path):
     """Render the Roles & boards step offscreen (the operator LOOKS at it). The PNG
     lands in $HUGMESH_RENDER_DIR when set, else a temp dir; it must not be blank."""

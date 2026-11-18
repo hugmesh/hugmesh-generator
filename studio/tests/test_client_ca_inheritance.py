@@ -153,15 +153,23 @@ def test_the_tui_domains_step_says_where_a_client_inherits_its_ca():
 
 
 # ── the GUI face ─────────────────────────────────────────────────────────────────────
-gui = pytest.importorskip("hugmesh_studio.gui.qt",
-                          reason="no Qt binding (PySide6/PyQt6) installed")
+# GUI half: the studio-tests job installs NO Qt binding on purpose, so these imports fail there.
+# They must not skip the whole module (a module-level pytest.importorskip skipped the Qt-free tests
+# above it too, hugmesh-generator#537): only the tests below that need Qt are marked.
+from hugmesh_studio.core.platform_info import HostInfo       # Qt-free: stays outside the guard
+try:
+    import importlib
+    gui = importlib.import_module("hugmesh_studio.gui.qt")
+    from hugmesh_studio.gui import wizard as wizard_mod
+    from hugmesh_studio.gui.pages.domains import _COL_CA
+    from hugmesh_studio.gui.qt import QtWidgets
 
-from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
-from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
-from hugmesh_studio.gui.pages.domains import _COL_CA                   # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets                            # noqa: E402
-
-from _helpers import advance_to, check_worklist_rows, enable_additional_domains, pick_mode  # noqa: E402
+    from _helpers import advance_to, check_worklist_rows, enable_additional_domains, pick_mode
+    _HAVE_QT = True
+except ImportError:
+    gui = wizard_mod = _COL_CA = QtWidgets = advance_to = check_worklist_rows = enable_additional_domains = pick_mode = None
+    _HAVE_QT = False
+needs_qt = pytest.mark.skipif(not _HAVE_QT, reason="no Qt binding (PySide6/PyQt6) installed")
 
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
                 has_kvm=False, is_root=False, builder_image="hugmesh-builder")
@@ -169,6 +177,8 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch, tmp_path):
+    if wizard_mod is None:               # no Qt binding: only the Qt-free tests run, they need no pin
+        return
     monkeypatch.setattr(wizard_mod, "detect",
                         lambda builder_image="hugmesh-builder": HOST)
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
@@ -189,6 +199,7 @@ def wiz(qapp):
     w.deleteLater()
 
 
+@needs_qt
 def test_the_cloud_domains_step_shows_the_note_and_keeps_the_column_hidden(wiz):
     pick_mode(wiz, "cloud")
     dom = advance_to(wiz, wizard_mod.DomainsPage)
@@ -201,6 +212,7 @@ def test_the_cloud_domains_step_shows_the_note_and_keeps_the_column_hidden(wiz):
     assert not any(isinstance(p, wizard_mod.VaultPage) for p in walked)
 
 
+@needs_qt
 def test_the_mesh_domains_step_does_not(wiz):
     pick_mode(wiz, "mesh")
     wl = advance_to(wiz, wizard_mod.WorklistPage)
@@ -222,6 +234,7 @@ def _walk_to_build(wiz):
     return seen
 
 
+@needs_qt
 def test_a_cloud_walk_keeps_a_loaded_domain_ca_record_pruned_to_live_domains(wiz):
     """The hidden column used to be rebuilt from pickers that only offer
     cfg.base_ca_certs — which the skipped Secrets store never fills in cloud — so a

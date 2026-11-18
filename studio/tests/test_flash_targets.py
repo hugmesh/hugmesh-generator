@@ -521,12 +521,18 @@ def test_flash_disk_sh_no_longer_refuses_an_explicit_compressed_artifact(tmp_pat
 
 
 # ── the ProgressPage flash hook: session workdir + the ONE OK/Cancel warning ──────────
-pytest.importorskip("hugmesh_studio.gui.qt",
-                    reason="no Qt binding (PySide6/PyQt6) installed")
-
-from types import SimpleNamespace                                       # noqa: E402
-from hugmesh_studio.gui.pages import progress as pg                     # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets                             # noqa: E402
+# GUI half: the studio-tests job installs NO Qt binding on purpose, so these imports fail there.
+# They must not skip the whole module (a module-level pytest.importorskip skipped the Qt-free tests
+# above it too, hugmesh-generator#537): only the tests below that need Qt are marked.
+from types import SimpleNamespace
+try:
+    from hugmesh_studio.gui.pages import progress as pg
+    from hugmesh_studio.gui.qt import QtWidgets
+    _HAVE_QT = True
+except ImportError:
+    pg = QtWidgets = None
+    _HAVE_QT = False
+needs_qt = pytest.mark.skipif(not _HAVE_QT, reason="no Qt binding (PySide6/PyQt6) installed")
 
 
 @pytest.fixture
@@ -592,6 +598,7 @@ def _page(monkeypatch, *, session_workdir="", output_dir="", sets=None, queue=()
     return page
 
 
+@needs_qt
 def test_work_dir_is_the_session_dir_the_build_actually_writes_into(monkeypatch,
                                                                     tmp_path):
     """THE #337 root cause. The page hands the driver workdir=<out>/sessions/<id>/ at
@@ -609,6 +616,7 @@ def test_work_dir_is_the_session_dir_the_build_actually_writes_into(monkeypatch,
     assert pg.ProgressPage._work_dir(page) == str(tmp_path / "out")
 
 
+@needs_qt
 def test_the_snapshot_diff_sees_the_build_output_once_work_dir_is_right(monkeypatch,
                                                                         tmp_path):
     """Non-vacuous pin of the same fix: with the session dir in play, the entry-start
@@ -625,6 +633,7 @@ def test_the_snapshot_diff_sees_the_build_output_once_work_dir_is_right(monkeypa
         (str(session / f"{_REAL}.img.xz"),)
 
 
+@needs_qt
 def test_the_flash_warning_is_a_module_level_seam(qapp):
     """The gate must be monkeypatchable by name, or the suite can only test it by
     stubbing _start_flash — which tests nothing. It is also the ONE call site: the
@@ -642,6 +651,7 @@ def test_the_flash_warning_is_a_module_level_seam(qapp):
             assert "confirm_flash" not in seg and "QMessageBox" not in seg
 
 
+@needs_qt
 def test_ok_flashes_and_the_warning_names_the_device_and_the_image(monkeypatch, qapp,
                                                                    tmp_path):
     session = tmp_path / "sessions" / "s1"
@@ -671,6 +681,7 @@ def test_ok_flashes_and_the_warning_names_the_device_and_the_image(monkeypatch, 
     assert seen["buttons"] == pg.FLASH_OK | pg.FLASH_CANCEL    # exactly OK / Cancel
 
 
+@needs_qt
 def test_cancel_writes_nothing(monkeypatch, qapp, tmp_path):
     session = tmp_path / "sessions" / "s1"
     session.mkdir(parents=True)
@@ -688,6 +699,7 @@ def test_cancel_writes_nothing(monkeypatch, qapp, tmp_path):
     assert FAKE.path in page.log.toPlainText()
 
 
+@needs_qt
 def test_cancelling_one_device_still_offers_the_next(monkeypatch, qapp, tmp_path):
     """Cancel means "not THIS device", not "abandon the plan": a two-device plan whose
     first row is declined must still reach the second."""
@@ -714,6 +726,7 @@ def test_cancelling_one_device_still_offers_the_next(monkeypatch, qapp, tmp_path
     assert other.path in launched[0]
 
 
+@needs_qt
 def test_nothing_recorded_falls_back_to_the_work_dir_and_says_so(monkeypatch, qapp,
                                                                  tmp_path):
     """The #337 dead end, replaced. A run that recorded no artifact for the entry used
@@ -743,6 +756,7 @@ def test_nothing_recorded_falls_back_to_the_work_dir_and_says_so(monkeypatch, qa
     assert "arch (x86)" in seen["text"] and "role (standalone-thick)" in seen["text"]
 
 
+@needs_qt
 def test_the_fallback_never_overrides_a_recorded_set_missing_the_flavour(monkeypatch,
                                                                          qapp,
                                                                          tmp_path):
@@ -777,6 +791,7 @@ def test_the_fallback_never_overrides_a_recorded_set_missing_the_flavour(monkeyp
     assert os.path.basename(str(live)) in page.log.toPlainText()   # says what it DID build
 
 
+@needs_qt
 def test_the_fallback_is_skipped_when_the_recorded_set_lacks_an_installer(monkeypatch,
                                                                           qapp,
                                                                           tmp_path):
@@ -796,6 +811,7 @@ def test_the_fallback_is_skipped_when_the_recorded_set_lacks_an_installer(monkey
     assert "no 'installer' artifact" in page.log.toPlainText()
 
 
+@needs_qt
 def test_a_truly_empty_work_dir_still_skips_with_the_reason(monkeypatch, qapp,
                                                             tmp_path):
     """Fail-safe kept: nothing recorded AND nothing findable is still a skip, never a
@@ -831,6 +847,7 @@ def _uncompressed_size_expr():
     return snippet
 
 
+@needs_qt
 @pytest.mark.skipif(not os.path.exists(_FLASH_SH), reason="flash-disk.sh not present")
 def test_the_fit_check_measures_the_UNCOMPRESSED_size_of_an_xz_artifact(tmp_path):
     """The size that must fit on the stick is the size that gets WRITTEN.
@@ -860,6 +877,7 @@ def test_the_fit_check_measures_the_UNCOMPRESSED_size_of_an_xz_artifact(tmp_path
         f"actually get written")
 
 
+@needs_qt
 @pytest.mark.skipif(not os.path.exists(_FLASH_SH), reason="flash-disk.sh not present")
 def test_an_unreadable_xz_skips_the_fit_check_instead_of_dying(tmp_path):
     """Fail-OPEN is the pre-existing contract for the fit check (a stat failure has
@@ -877,6 +895,7 @@ def test_an_unreadable_xz_skips_the_fit_check_instead_of_dying(tmp_path):
     assert r.stdout == "0"
 
 
+@needs_qt
 def test_the_post_build_auto_flash_is_gated_by_the_same_one_warning(monkeypatch, qapp,
                                                                     tmp_path):
     """MAJOR from the refutation: _maybe_auto_flash reaches a modal from a NON-click
@@ -903,6 +922,7 @@ def test_the_post_build_auto_flash_is_gated_by_the_same_one_warning(monkeypatch,
     assert "cancelled" in page.log.toPlainText().lower()
 
 
+@needs_qt
 def test_a_declined_flash_leaves_no_caveat_on_the_next_devices_warning(monkeypatch,
                                                                       qapp, tmp_path):
     """A caveat ("matched by arch+role only") belongs to ONE assignment. _start_flash
@@ -938,6 +958,7 @@ def _run_flash_worker(monkeypatch, argv, tmp_path):
     return lines, done, popen_calls
 
 
+@needs_qt
 def test_flash_worker_refuses_to_spawn_sudo_under_the_no_elevation_knob(monkeypatch, tmp_path):
     """The operator's production knob: `flash_argv` is `sudo -A .../flash-disk.sh ...`;
     the worker must refuse BEFORE the Popen, say why, and end non-zero through `done`
@@ -951,6 +972,7 @@ def test_flash_worker_refuses_to_spawn_sudo_under_the_no_elevation_knob(monkeypa
                for ln in lines), lines
 
 
+@needs_qt
 def test_flash_worker_refuses_under_pytest_even_without_the_knob(monkeypatch, tmp_path):
     monkeypatch.delenv("HUGMESH_STUDIO_NO_ELEVATION", raising=False)
     lines, done, popen_calls = _run_flash_worker(
@@ -959,6 +981,7 @@ def test_flash_worker_refuses_under_pytest_even_without_the_knob(monkeypatch, tm
     assert any("pytest is running this process" in ln for ln in lines), lines
 
 
+@needs_qt
 def test_flash_worker_still_launches_a_non_elevating_argv(monkeypatch, tmp_path):
     """The guard must not break the root-host path (argv without sudo)."""
     monkeypatch.setenv("HUGMESH_STUDIO_NO_ELEVATION", "1")
