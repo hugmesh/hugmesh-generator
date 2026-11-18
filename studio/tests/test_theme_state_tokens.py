@@ -47,10 +47,25 @@ def test_colour_scheme_follows_the_ramp(preset, mode):
 
 @pytest.mark.parametrize("preset,mode", MATRIX)
 def test_rgb_twins_match_their_colours(preset, mode):
+    """Every -rgb twin spells its colour's FINAL value: the shell composes its glass,
+    backpane and card surfaces as rgba(var(--hug-*-rgb), a)."""
     t = theme_presets.compose_tokens(preset, mode)
-    for name in ("--sd-success", "--sd-error"):
+    twins = [k for k in t if k.endswith("-rgb") and k[:-4] in t]
+    assert {"--sd-bg-0-rgb", "--sd-charcoal-rgb", "--sd-surface-rgb", "--sd-error-rgb"} <= set(twins)
+    for twin in twins:
+        name = twin[:-4]
+        if not theme.HEX_RE.match(t[name]):
+            continue
         r, g, b = (int(t[name][i:i + 2], 16) for i in (1, 3, 5))
-        assert t[f"{name}-rgb"] == f"{r},{g},{b}", (preset, mode, name)
+        assert t[twin] == f"{r},{g},{b}", (preset, mode, name)
+
+
+@pytest.mark.parametrize("preset,mode", MATRIX)
+def test_brand_text_twins_read_on_both_surfaces(preset, mode):
+    t = theme_presets.compose_tokens(preset, mode)
+    for name in ("--sd-primary-soft", "--sd-secondary-soft"):
+        for s in _surfaces(t):
+            assert theme.contrast_ratio(t[name], s) >= 4.5, (preset, mode, name, t[name], s)
 
 
 def test_the_tokens_reach_the_stylesheet_with_hug_twins():

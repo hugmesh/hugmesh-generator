@@ -57,7 +57,6 @@ OWN_TEXT = brand_look.OWN_TEXT
 USE_SUPERBRAND = brand_look.USE_SUPERBRAND
 USE_SUPERBRAND_ARMED = brand_look.USE_SUPERBRAND_ARMED
 DOCKER_ONLY_SENTENCE = brand_look.DOCKER_ONLY_SENTENCE
-VANTA_UNSELECTABLE = brand_look.VANTA_UNSELECTABLE
 
 EFFECT_LABELS = brand_look.EFFECT_LABELS
 STYLE_LABELS = brand_look.STYLE_LABELS
@@ -363,24 +362,11 @@ class LookEditor(QtWidgets.QWidget):
         v = QtWidgets.QVBoxLayout(box)
         self.bg_effect = NoWheelComboBox()
         for effect in theme.BG_EFFECTS:
-            label = EFFECT_LABELS.get(effect, effect)
-            if effect in theme.VANTA_EFFECTS:
-                label += f" — {VANTA_UNSELECTABLE}"
-            self.bg_effect.addItem(label, effect)
-            if effect in theme.VANTA_EFFECTS:
-                # listed, greyed, and the reason is one tooltip and one label away
-                item = self.bg_effect.model().item(self.bg_effect.count() - 1)
-                item.setEnabled(False)
-                item.setToolTip(theme.VANTA_DEPENDENCY_NOTE)
+            self.bg_effect.addItem(EFFECT_LABELS.get(effect, effect), effect)
         self.bg_effect.currentIndexChanged.connect(
             lambda _i: self._write("bg_effect", self.bg_effect.currentData()
                                    or theme.BG_EFFECT_DEFAULT))
         v.addWidget(self._field_row("bg_effect", "Background effect", self.bg_effect))
-        self.vanta_note = QtWidgets.QLabel(
-            f"The four Vanta effects are {VANTA_UNSELECTABLE}: " + theme.VANTA_DEPENDENCY_NOTE)
-        self.vanta_note.setWordWrap(True)
-        self.vanta_note.setStyleSheet("color: gray;")
-        v.addWidget(self.vanta_note)
         return box
 
     def _pictures_group(self) -> QtWidgets.QGroupBox:

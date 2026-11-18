@@ -121,7 +121,7 @@
   },
   "platforms": {
     "x86": {
-      "banner_callsites": 29,
+      "banner_callsites": 32,
       "not_applicable": {
               "bootloader": "GRUB-EFI is installed inside the raw .img stage (UEFI GPT ESP), not as a separate bootloader stage",
               "boot-tree": "the raw .img / ISO stages write the boot tree directly; there is no separate staged boot tree"
@@ -153,7 +153,7 @@
         {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching amd64 hardened stage3 seed"]},
         {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
         {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"]},
-        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files", "Rerunning from step"]},
         {"id": "brand-desktop", "label": "Brand desktop image", "any": ["Branding desktop image"]},
         {"id": "stage-egress-vpn", "label": "Stage egress VPN", "any": ["Staging egress VPN"]},
         {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
@@ -164,8 +164,8 @@
         {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel", "Emerge group: dependencies"], "compat": ["Building Gentoo hardened kernel", "Kernel SKIPPED"]},
         {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean", "CACHED image: embedding the shared binpkg pool"]},
         {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
-        {"id": "image-raw", "label": "Build raw .img", "any": ["Building raw .img", "SKIPPED raw .img"], "compat": ["SKIPPED .img (--no-img)"]},
-        {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image"], "compat": ["Building bootable LIVE ISO"]},
+        {"id": "image-raw", "label": "Build raw .img", "any": ["Building raw .img", "SKIPPED raw .img", "SKIPPED raw .img (kept from the earlier run"], "compat": ["SKIPPED .img (--no-img)"]},
+        {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image", "SKIPPED LIVE image"], "compat": ["Building bootable LIVE ISO"]},
         {"id": "image-installer", "label": "Build INSTALLER image", "any": ["Building INSTALLER image"], "compat": ["Building installer ISO"]}
       ]
     },

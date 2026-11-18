@@ -158,7 +158,7 @@ from ...tui.superbrand_step import CREATE_KEY, MeshWrites, session_for
 from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
 from .domain_services import DomainServicesWidget
-from .domains import DomainsTableWidget
+from .domains import DomainsTableWidget, InternalDomainEntry
 from ._mesh_monitor_widget import (MeshDomainWorker, MeshMonitorProbe,
                                    MeshMonitorWidget, MeshScaleWorker,
                                    open_in_tor_browser)
@@ -1392,6 +1392,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.domains_help.setWordWrap(True)
         self.domains_help.setStyleSheet("color: gray;")
         lay.addWidget(self.domains_help)
+        # the internal domain's own entry, above the table (prod only)
+        self.internal_entry = InternalDomainEntry()
+        lay.addWidget(self.internal_entry)
         self.domains_table = DomainsTableWidget(
             cfg=lambda: self.mesh_domains,
             own_name_editable=lambda: self.env_prod.isChecked())
@@ -1437,6 +1440,24 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             return typed
         return typed or LocalMeshBootstrapConfig().resolved_domain()
 
+    def _internal_root_name(self) -> str:
+        """The internal root name the Domains step shows as the internal domain's own
+        entry: a PROD mesh only ("" on a test mesh, which publishes nothing). It is the
+        superbrand's internal root, which every node of the mesh joins; display only, so
+        nothing recorded or started changes."""
+        if not self.env_prod.isChecked():
+            return ""
+        s = self.brand_session()
+        if s is None:
+            return ""
+        try:
+            return s.sb.effective_internal_root()
+        except Exception:                       # noqa: BLE001 — called from a slot
+            return ""
+
+    def _refresh_internal_entry(self) -> None:
+        self.internal_entry.set_name(self._internal_root_name())
+
     def _seed_domains(self) -> None:
         """Enter the Domains step: make row 0 the mesh's own domain and fill the table.
 
@@ -1459,6 +1480,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # a renamed own domain is a domain nobody has reviewed under that name
             record_reviewed(md, md.domain_services_reviewed)
         self.domains_table.fill(md.domains, md.own_name)
+        self._refresh_internal_entry()
         # a fresh entry drops the last Next's refusals, but a blank prod apex is said
         # NOW, not after a Next that moves on past it (GUI-21)
         self._domains_problems = []
@@ -2976,6 +2998,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         md.own_name = loaded.own_name
         md.domain_services_reviewed = list(loaded.domain_services_reviewed)
         self.domains_table.fill(md.domains, md.own_name)
+        self._refresh_internal_entry()
         # The stepper's working copy belongs to the rows it was seeded from. The rows
         # were just REPLACED under it, so re-seed it from them: otherwise the next
         # time the Domain services step records (Next or Back out of it) it writes

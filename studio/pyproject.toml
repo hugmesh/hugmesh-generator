@@ -89,4 +89,7 @@ include = ["hugmesh_studio*"]
 [tool.setuptools.package-data]
 "hugmesh_studio.core" = ["device-catalog.json", "progress-tables.json", "_roles-lib.sh",
                          "desktop_apps.json"]
-"hugmesh_studio.assets" = ["*.html"]
+# assets/vendor/ holds the three.js + vanta builds the platform preview inlines into its
+# host-shell frame when a theme declares a WebGL background (and their licences): without
+# it an installed Studio's preview has the shell pane but no animated background.
+"hugmesh_studio.assets" = ["*.html", "vendor/*"]

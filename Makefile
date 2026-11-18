@@ -1442,8 +1442,23 @@ kind-images: stack-clone stack-m2-bootstrap ## build + `kind load` the SSO-slice
 # "no selection" means. `none` is the spelling for "none of them".
 _KIND_ADDONS_ENV := $(if $(strip $(KIND_ADDONS)),KIND_ADDONS='$(strip $(KIND_ADDONS))',)
 
-kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled; KIND_ADDONS=<slug,...>|none selects infra add-ons; SKIP_EGRESS_PREFLIGHT=1 for an air-gapped host)
+# KIND_DOMAINS=0 skips the per-domain look door (scripts/kind-local-domains.sh) that
+# `make kind-up` adds once the bootstrap succeeds. A failure there is REPORTED and
+# does not fail the bring-up (the mesh is up without it); `make kind-domains` retries.
+KIND_DOMAINS ?= 1
+
+kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled; KIND_ADDONS=<slug,...>|none selects infra add-ons; SKIP_EGRESS_PREFLIGHT=1 for an air-gapped host; KIND_DOMAINS=0 skips the sample domains)
 	KIND_PROFILE=sso MFA='$(MFA)' $(_KIND_ADDONS_ENV) bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh
+	$(if $(filter 0,$(KIND_DOMAINS)),@echo "==> KIND_DOMAINS=0: the per-domain look door is skipped",bash scripts/kind-local-domains.sh up || echo "WARN: the per-domain look door did not come up (the mesh itself is up): see the message above, then run \`make kind-domains\`")
+
+kind-domains: ## give the kind lane the Docker lane's domains: a per-Host look door + /hug-domains.json, with sample domains acme.localhost and example.localhost when none are recorded (idempotent; run after kind-up)
+	bash scripts/kind-local-domains.sh up
+
+kind-domains-down: ## remove the kind lane's look door and domain Ingresses (only the objects labelled hugmesh.net/local-domains)
+	bash scripts/kind-local-domains.sh down
+
+kind-domains-status: ## read-only: is the look door there, and does it answer for every domain? (non-zero when not)
+	bash scripts/kind-local-domains.sh status
 
 kind-e2e: playwright-deps ## run the native-login e2e (spec 27) against the kind cluster
 	cd tests/e2e && \
@@ -2034,8 +2049,29 @@ STACK_TOR_ANUBIS_UPSTREAM := hugmesh-anubis:8923
 # ANUBIS_COOKIE_SECURE wins, like TOR_ONION_UPSTREAM.
 STACK_TOR_ANUBIS_COOKIE_ENV := $(if $(strip $(ANUBIS_COOKIE_SECURE)),, ANUBIS_COOKIE_SECURE='false')
 STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)'$(if $(strip $(ANUBIS)),$(if $(strip $(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='$(STACK_TOR_ANUBIS_UPSTREAM)')$(STACK_TOR_ANUBIS_COOKIE_ENV),),)
+# SAMPLE DOMAINS — a local lane always has a second name to sign in on. When `make stack-up`
+# runs and nobody recorded a domain (the Studio writes tests/stack/.looks/by-host/ only for
+# domains it recorded), studio/hugmesh_studio/core/look_serving.py seeds two,
+# acme.localhost and example.localhost: each with its OWN look (colour and wordmark, served
+# by Host through the HTTPS door) and a `make view` row, both on the superbrand's tenant
+# (`default`: same people, same admins). `.localhost` names resolve to this machine in a
+# browser with no /etc/hosts edit and no root, and the door's certificate covers
+# *.localhost (tests/stack/gen-certs.sh). STACK_SAMPLE_DOMAINS=0 turns it off and removes
+# the samples an earlier start left; domains the Studio recorded are never touched.
+#
+# It is a $(shell) at PARSE time, and only when stack-up is a goal, because the looks gate
+# below (STACK_LOOKS_FLAGS) is a parse-time $(wildcard): a prerequisite target would run
+# after that line was already expanded and the first start would come up without the
+# mount. Every other goal (and `make -n`/`-p` of any other target) writes nothing; a
+# `make -n stack-up` parses the Makefile like any run, so it seeds too (the files are
+# gitignored generated state, the same the Studio writes). The
+# ids it prints are also the per-domain Tor list (STACK_TOR_DOMAINS below), so TOR=1 gives
+# each sample its own .onion exactly as it does a recorded domain.
+STACK_SAMPLE_DOMAINS ?= 1
+STACK_SAMPLES := $(if $(filter stack-up,$(MAKECMDGOALS)),$(strip $(shell cd studio && python3 -m hugmesh_studio.core.look_serving seed-samples --generator-dir $(CURDIR) $(if $(filter 0,$(STACK_SAMPLE_DOMAINS)),--off,))),)
 # #582 — per-domain onions. STACK_TOR_DOMAINS is the list a TOR=1 stack mints: the
-# caller's TOR_ONION_DOMAINS plus brand B's when BRAND_B=1; EMPTY without TOR=1. When
+# caller's TOR_ONION_DOMAINS (or, when it names none, the sample domains above, each on
+# the `default` tenant) plus brand B's when BRAND_B=1; EMPTY without TOR=1. When
 # it is non-empty — and only then — two things are added, together:
 #   * TOR_ONION_DOMAINS='<the list>' in the stack env (STACK_TOR_DOMAINS_ENV);
 #   * `-f tests/stack/compose.tor-domains.yaml` on the `up` (STACK_TOR_DOMAINS_FLAGS),
@@ -2048,7 +2084,7 @@ STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_POR
 # STACK_ENV on its first line, so STACK_TOR_ENV above and the STACK_ENV tail keep the
 # exact spelling tests/stack/test-tor-flip-wiring.sh's mutators anchor on.
 STACK_TOR_DOMAINS_COMPOSE := tests/stack/compose.tor-domains.yaml
-STACK_TOR_DOMAINS := $(if $(strip $(TOR)),$(strip $(TOR_ONION_DOMAINS) $(if $(strip $(BRAND_B)),brandb=brandb,)),)
+STACK_TOR_DOMAINS := $(if $(strip $(TOR)),$(strip $(TOR_ONION_DOMAINS) $(if $(strip $(TOR_ONION_DOMAINS)),,$(foreach s,$(STACK_SAMPLES),$(s)=default)) $(if $(strip $(BRAND_B)),brandb=brandb,)),)
 STACK_TOR_DOMAINS_ENV := $(if $(STACK_TOR_DOMAINS), TOR_ONION_DOMAINS='$(STACK_TOR_DOMAINS)',)
 STACK_TOR_DOMAINS_FLAGS := $(if $(STACK_TOR_DOMAINS), -f $(STACK_TOR_DOMAINS_COMPOSE),)
 # MFA OPERATIONAL FLIP, opt-in per run — issue #47, following the PHPBB=1/AKKOMA=1
@@ -2348,12 +2384,24 @@ stack-m2-bootstrap: ## COLD-BUILD prereq: build the private systems.hugmesh mave
 # operator may have imported into a browser trust store) is never silently
 # rotated out from under them. ENV=prod with DOMAIN set also puts the real
 # domain in the SANs; localhost/127.0.0.1 are ALWAYS included (gen-certs.sh).
+# The host names the sample domains answer on (studio look_serving.SAMPLE_DOMAINS; a test
+# pins the two lists together). A leaf minted before they existed lacks them: stack-certs
+# re-issues it under the SAME CA (what a browser was told to trust does not change).
+STACK_CERT_SAN_HOSTS := acme.localhost example.localhost
 stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (idempotent; rm -rf tests/stack/.tls-front to re-mint)
 	@if [ ! -f '$(STACK_TLS_DIR)/server.crt' ]; then \
 	  SNAP_DOMAIN='$(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.net)' \
 	    bash tests/stack/gen-certs.sh '$(STACK_TLS_DIR)'; \
 	else \
-	  echo "==> stack-certs: $(STACK_TLS_DIR)/server.crt present - keeping it (rm -rf $(STACK_TLS_DIR) to re-mint)"; \
+	  miss=""; san="$$(openssl x509 -in '$(STACK_TLS_DIR)/server.crt' -noout -ext subjectAltName 2>/dev/null || true)"; \
+	  for h in $(STACK_CERT_SAN_HOSTS); do printf '%s' "$$san" | grep -q "DNS:$$h" || miss="$$miss $$h"; done; \
+	  if [ -n "$$miss" ] && [ -f '$(STACK_TLS_DIR)/ca.key' ] && [ -f '$(STACK_TLS_DIR)/ca.crt' ]; then \
+	    echo "==> stack-certs: the leaf in $(STACK_TLS_DIR) lacks$$miss - re-issuing it under the same CA (trust unchanged)"; \
+	    LEAF_ONLY=1 SNAP_DOMAIN='$(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.net)' \
+	      bash tests/stack/gen-certs.sh '$(STACK_TLS_DIR)'; \
+	  else \
+	    echo "==> stack-certs: $(STACK_TLS_DIR)/server.crt present - keeping it (rm -rf $(STACK_TLS_DIR) to re-mint)"; \
+	  fi; \
 	fi
 
 .PHONY: stack-mesh-token-key

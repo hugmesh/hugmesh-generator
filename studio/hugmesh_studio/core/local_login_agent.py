@@ -514,7 +514,8 @@ def peer_check_policy(*, osname: str | None = None, platform: str | None = None,
 
 
 def local_login_unavailable_reason(**host) -> str:
-    """The reason to grey local login with, or ``""`` where it is offered."""
+    """The reason to grey local login with, or ``""`` where it is offered (a Mac that
+    fails open included: its warning is the agent's startup log line)."""
     policy = peer_check_policy(**host)
     return policy.reason if policy.refused else ""
 

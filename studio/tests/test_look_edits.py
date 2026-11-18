@@ -127,11 +127,12 @@ def test_try_set_refuses_what_check_value_refuses_and_changes_nothing():
     for field, value in (("primary", "blue"), ("style", "wobbly"), ("decor", "glitter"),
                          ("header_size", "huge"), ("font", "Comic"), ("mode", "noon"),
                          ("preset", "nope"), ("bg_effect", "lava"),
-                         ("bg_effect", "vanta-net"), ("logo_image", "url(https://x)")):
+                         ("bg_effect", "vanta-spaghetti"), ("logo_image", "url(https://x)")):
         out = m.try_set(field, value)
         assert not out.ok and out.text, (field, value)
     assert m.record() == {"style": "sharp"}
     assert m.try_set("bg_effect", "none").ok
+    assert m.try_set("bg_effect", "vanta-net").ok
 
 
 def test_a_picture_field_takes_only_the_re_encoders_data_uri():

@@ -285,11 +285,6 @@ def test_effect_labels_match_the_gui_editor():
     assert themes.EFFECT_LABELS == _lookeditor.EFFECT_LABELS
 
 
-def test_vanta_dependency_note_matches_the_gui_editor():
-    # the LookEditor shows the core sentence on its greyed vanta rows and its note
-    assert themes.VANTA_DEPENDENCY_NOTE == _lookeditor.theme.VANTA_DEPENDENCY_NOTE
-
-
 # ── the secrets store (#224): one trio, one rule, both faces ────────────────────────
 def test_vault_step_edits_the_same_trio_on_both_faces(wiz):
     """The GUI page's widget map and the TUI screen's command vocabulary are BOTH
