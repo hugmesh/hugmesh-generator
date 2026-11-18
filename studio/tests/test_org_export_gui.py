@@ -44,6 +44,12 @@ from _helpers import (                                                  # noqa: 
 from _org_export_helpers import (  # noqa: E402
     bare_log, make_world, parse_terminal_line, saved_mesh_naming_the_org)
 
+#: The offline "GitHub" answers through a fake `gh` that is a bash script
+#: (_org_export_helpers.FAKE_GH): native Windows cannot run it, and the helpers' runner
+#: refuses any other gh, so a test that creates repositories is skipped there.
+_FAKE_GH_IS_BASH = pytest.mark.skipif(os.name == "nt",
+                                      reason="the fake gh is a bash script")
+
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 SHOTS = os.environ.get("HUGMESH_SHOTS_DIR", "")
@@ -427,12 +433,17 @@ def test_the_export_step_appears_when_a_saved_mesh_names_an_org(golive, world):
     assert page.source.count() == 1
     assert page.source.currentText().startswith("mesh.example -> exampleorg")
     assert page.source_dir.text() == world["src"]           # the record's checkouts
-    assert page.cmd.text().startswith("python3 -m hugmesh_studio --org-export PLAN")
+    # on Windows the line is PowerShell's: & '<python.exe>' -m hugmesh_studio ...
+    if os.name != "nt":
+        assert page.cmd.text().startswith("python3 -m hugmesh_studio --org-export PLAN")
+    else:
+        assert "-m hugmesh_studio --org-export PLAN" in page.cmd.text()
     assert not page.apply_btn.isEnabled()
     # Next from here is the verify step, as before the step existed
     assert golive.nextId() == golive._page_ids["verify"]
 
 
+@_FAKE_GH_IS_BASH
 def test_plan_then_typed_org_arms_apply_and_the_run_goes_through_the_runner(
         golive, world, qapp, tmp_path):
     saved_mesh_naming_the_org(world)
@@ -555,6 +566,7 @@ def test_the_mesh_wide_services_step_reaches_the_steps_plan(golive, world, qapp,
     assert "exampleorg/example-forum-api" in targets, targets
 
 
+@_FAKE_GH_IS_BASH
 def test_the_terminal_line_plans_the_same_repositories_as_the_steps_table(
         golive, world, qapp, tmp_path, monkeypatch, capsys):
     """The Terminal field's claim — 'The same export from a terminal' — run back
@@ -824,6 +836,7 @@ def _created(world) -> list[str]:
     return [c for c in world["runner"].gh_calls() if c.startswith("repo create")]
 
 
+@_FAKE_GH_IS_BASH
 def test_flipping_the_visibility_picker_after_plan_disarms_apply_and_creates_nothing(
         golive, world, qapp, tmp_path):
     """Plan as public, flip the picker back to private, type the org, click Apply:
@@ -970,6 +983,7 @@ def test_a_name_typed_for_a_private_plan_does_not_arm_a_later_public_plan(
     assert _created(world) == []
 
 
+@_FAKE_GH_IS_BASH
 def test_one_apply_per_plan_retyping_the_name_after_an_apply_does_not_arm_it_again(
         golive, world, qapp, tmp_path):
     """After an Apply the plan is spent: the name can be retyped (or edited and

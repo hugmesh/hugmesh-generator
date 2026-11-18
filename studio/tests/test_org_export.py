@@ -1810,6 +1810,10 @@ _KEY_SHAPES = {
     "env-escaped-blank-line": "K=" + PEM_HEADER + "\\n\\n" + _KEY_BODY + "\n",
     "column-zero": PEM_HEADER + "\n" + _KEY_BODY + "\n",
     "crlf-file": "x\r\n" + PEM_HEADER + "\r\n" + _KEY_BODY + "\r\n",
+    # CRLF text saved again through a text-mode file on Windows: every line ends \r\r\n
+    "double-cr-file": "x\r\r\n" + PEM_HEADER + "\r\r\n" + _KEY_BODY + "\r\r\n",
+    "double-cr-proc-type": PEM_HEADER + "\r\r\nProc-Type: 4,ENCRYPTED\r\r\n"
+                           "DEK-Info: AES-128-CBC,BF25\r\r\n\r\r\n" + _KEY_BODY + "\r\r\n",
     # a passphrase-protected traditional OpenSSL key: RFC 1421 header lines and a blank
     # line sit between the BEGIN line and the base64 (the 32-character floor alone
     # stopped refusing these)
@@ -1850,7 +1854,9 @@ def test_a_private_key_is_found_wherever_it_is_written(tmp_path, shape):
     JSON file or a one-line env value (the shapes Kubernetes, Helm and cloud files
     give a key) was published."""
     f = tmp_path / "file.txt"
-    f.write_text(_KEY_SHAPES[shape], encoding="utf-8")
+    # the exact bytes on every OS: write_text() on Windows turns each \n into \r\n, so
+    # the CRLF shapes were tested as \r\r\n there and LF shapes as CRLF
+    f.write_bytes(_KEY_SHAPES[shape].encode("utf-8"))
     labels, _text, _clean = oe._scan_file(str(f))
     assert labels == ["private key header"], (shape, labels)
 

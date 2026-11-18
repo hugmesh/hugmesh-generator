@@ -167,8 +167,11 @@ _CO_AUTHOR = "Co-Authored" + "-By"
 _TOOL_FOOTER = "Generated with"            # the footer's case; prose is lower-case
 _SESSION_URL = "claude" + ".ai/"
 #: A line break as a key is written in text: a real one, or the two characters
-#: backslash-n (one backslash, or two when the text was escaped twice).
-_KEY_NEWLINE = r"(?:\r?\n|\\{1,2}(?:r\\{1,2})?n)"
+#: backslash-n (one backslash, or two when the text was escaped twice). Any number of
+#: carriage returns may come before a real one: CRLF text written again through a
+#: text-mode file on Windows (Python's ``write_text``, an editor's save) ends its lines
+#: ``\r\r\n``, and such a key was published.
+_KEY_NEWLINE = r"(?:\r*\n|\\{1,2}(?:r\\{1,2})?n)"
 #: What may sit between the lines of a key: white space, an escaped line break, and the
 #: punctuation of a quoted, concatenated or commented line.
 _KEY_FILLER = r"(?:\s|\\{1,2}[rn]|[\"'`+#*,/])*"

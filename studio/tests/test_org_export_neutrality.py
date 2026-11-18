@@ -78,6 +78,7 @@ OWNED = (
     "studio/tests/test_org_export_tui.py",
     "studio/tests/test_org_export_neutrality.py",
     "studio/tests/_org_export_helpers.py",
+    "studio/tests/test_org_export_fake_gh_guard.py",
     "studio/tests/fixtures/org_export",
     "studio/tests/test_worklist_driver.py",
     "studio/tests/test_golive_wizard.py",
@@ -121,7 +122,8 @@ def forbidden_hits(path: str, needles=None) -> list[str]:
 
 
 def test_the_owned_files_exist_and_the_list_is_not_vacuous():
-    files = owned_files()
+    # one separator on every OS: os.walk gives backslashes on Windows
+    files = [f.replace(os.sep, "/") for f in owned_files()]
     assert len(files) >= 20, files
     assert any(f.endswith("core/org_export.py") for f in files)
     assert any("fixtures/org_export/sources" in f for f in files)
