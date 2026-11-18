@@ -290,6 +290,41 @@ ingress-exposed. Casdoor and the social tier publish ports as dev conveniences
 
 ---
 
+## More than one domain on the local mesh — the sample domains
+
+A local mesh always has a second name to sign in on. When `make stack-up` runs and no domain was
+recorded (HugMesh Studio writes `tests/stack/.looks/by-host/` only for domains you added), it
+seeds two:
+
+| Name | Wordmark | Look |
+|---|---|---|
+| `acme.localhost` | Acme | green and amber |
+| `example.localhost` | Example | violet and pink |
+
+- **Reach them** at `https://acme.localhost:8488/` and `https://example.localhost:8488/` (the
+  HTTPS door; port from `PUBLIC_HTTPS_PORT`). `.localhost` names resolve to this machine in
+  every browser: no `/etc/hosts` edit, no root. `make view` also lists a row for each.
+- **Sign in** with the same account on every domain: they are the superbrand's tenant
+  (`default`), so the people and the admins are the same, and each domain is a name and a look.
+  A domain with its own sign-in is a Studio-recorded one (`idp='own'`), not a sample.
+- **The list.** The door serves the mesh's domains at `/hug-domains.json` (names and titles
+  only, no-store, 404 when there is nothing to list) for a sign-in page to offer.
+- **Tor.** With `TOR=1` and no `TOR_ONION_DOMAINS` of your own, each sample gets its own `.onion`
+  (`acme=default example=default`), besides the mesh's own. Name your own list and that list is
+  used as given. Recorded domains that ask for Tor get theirs as before.
+- **Your own domains win.** Record a domain in the Studio and the samples are replaced by it;
+  the Studio never leaves the samples beside your domains. `STACK_SAMPLE_DOMAINS=0 make stack-up`
+  turns the samples off and removes the ones an earlier start left.
+- **The certificate.** The door's leaf lists both names. A leaf minted before they existed is
+  re-issued under the SAME CA (what a browser was told to trust does not change) by the next
+  `make stack-certs`; `tests/stack/gen-certs.sh` refuses any extra name the CA would not vouch
+  for (`SNAP_EXTRA_SANS`, only `*.localhost` and `*.<domain>` names).
+- **Not on every lane.** The kind (DevOps) lane has one look per mesh and no per-domain host
+  routing: the sample domains are a Docker-lane feature.
+
+Where it lives: `studio/hugmesh_studio/core/look_serving.py` (`seed_samples`),
+`tests/stack/tls-front/default.conf` (`/hug-domains.json`), `tests/stack/gen-certs.sh`.
+
 ## Alternative social backends — `PHPBB=1` / `AKKOMA=1`
 
 Two third-party servers are **options** alongside the first-party

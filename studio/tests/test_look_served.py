@@ -307,8 +307,11 @@ def test_the_overlay_mounts_the_folder_where_the_conf_reads_it():
     # nothing about the looks is read only at start (a map or an include would go
     # stale on a running door: the round-1 blocker)
     live = look_serving._live(conf)
+    # the two per-request reads: the theme location's by-host root, and the domain list's
+    # root (location = /hug-domains.json, a plain `root` + try_files, also read per request)
     assert "hugmesh-looks" not in live.replace(
-        f"root {look_serving.MOUNT_POINT}/by-host/$host;", "")
+        f"root {look_serving.MOUNT_POINT}/by-host/$host;", "").replace(
+        f"root {look_serving.MOUNT_POINT};", "")
     assert not re.search(r"^\s*(map|include)\b.*hugmesh-looks", live, re.M)
     assert re.search(r"location @gateway \{\s*proxy_pass http://\$fe_gateway:8080"
                      r"\$request_uri;", conf)
