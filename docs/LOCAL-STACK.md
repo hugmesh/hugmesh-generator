@@ -243,7 +243,15 @@ selects the identity issuer the whole stack trusts:
 | creds | **dev placeholders** (committed: `gateway`/`federation`/`adminbff` DB passwords, dev Casdoor client ids) | **real** — sourced from **your env / the keys USB**, NOT committed |
 | domain-ish env (host MATRIX_URL/MASTODON_URL) | `http://localhost:…` | real `https://…` domain |
 
-**Prod creds source:** `make stack-up ENV=prod` only flips the issuer URL. You
+**Casdoor follows the issuer.** Under `ENV=prod` the local Casdoor stamps the same issuer
+the services require (`https://id.<DOMAIN>`: its `origin` reads `CASDOOR_ISSUER_URI`, the
+variable the Makefile hands every service). It used to stay `http://localhost:8000`, so sign-in
+answered 200 and every authenticated call then returned 401 (`The iss claim is not valid`).
+Guard: `tests/stack/test-casdoor-origin-follows-issuer.sh`. The issuer name still does not
+resolve on this machine, so a browser cannot reach Casdoor itself in prod mode; the sign-in
+form talks to the BFF, which does, in-network.
+
+**Prod creds source:** `make stack-up ENV=prod` flips the issuer URL (and Casdoor's own). You
 must inject the real Casdoor client secrets, DB passwords and social-tier secrets
 at run time (e.g. `CASDOOR_ISSUER=…`, and edit
 `tests/stack/.mastodon.env` / a Casdoor app for the fragment-sync + actions

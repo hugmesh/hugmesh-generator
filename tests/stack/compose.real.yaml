@@ -51,7 +51,15 @@ services:
       # forever. Casdoor's conf.GetConfigString falls back to the environment when the
       # app.conf key is empty, so setting `origin` here makes EVERY token — however it
       # was requested — carry the one issuer the services already trust.
-      origin: "http://localhost:8000"
+      #
+      # "The one issuer the services trust" is CASDOOR_ISSUER_URI, which the Makefile derives
+      # from ENV (test: http://localhost:8000, prod: https://id.<DOMAIN>) and hands to every
+      # service. This line used to be the literal test value, so under ENV=prod Casdoor still
+      # stamped iss=http://localhost:8000 while the gateways and BFFs required
+      # https://id.<DOMAIN>: sign-in answered 200 and then every authenticated call was 401
+      # ("The iss claim is not valid"). It follows the same variable now; unset it is the old
+      # literal, so a test-mode stack is byte-identical.
+      origin: "${CASDOOR_ISSUER_URI:-http://localhost:8000}"
     # LOOPBACK BY DEFAULT (NEW-15). The host publish carries a host IP, so this
     # Casdoor (the local mesh's identity provider; its admin API can create admins,
     # rewrite applications and set user properties) answers on this machine only.
