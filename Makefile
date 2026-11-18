@@ -1442,8 +1442,23 @@ kind-images: stack-clone stack-m2-bootstrap ## build + `kind load` the SSO-slice
 # "no selection" means. `none` is the spelling for "none of them".
 _KIND_ADDONS_ENV := $(if $(strip $(KIND_ADDONS)),KIND_ADDONS='$(strip $(KIND_ADDONS))',)
 
-kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled; KIND_ADDONS=<slug,...>|none selects infra add-ons; SKIP_EGRESS_PREFLIGHT=1 for an air-gapped host)
+# KIND_DOMAINS=0 skips the per-domain look door (scripts/kind-local-domains.sh) that
+# `make kind-up` adds once the bootstrap succeeds. A failure there is REPORTED and
+# does not fail the bring-up (the mesh is up without it); `make kind-domains` retries.
+KIND_DOMAINS ?= 1
+
+kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled; KIND_ADDONS=<slug,...>|none selects infra add-ons; SKIP_EGRESS_PREFLIGHT=1 for an air-gapped host; KIND_DOMAINS=0 skips the sample domains)
 	KIND_PROFILE=sso MFA='$(MFA)' $(_KIND_ADDONS_ENV) bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh
+	$(if $(filter 0,$(KIND_DOMAINS)),@echo "==> KIND_DOMAINS=0: the per-domain look door is skipped",bash scripts/kind-local-domains.sh up || echo "WARN: the per-domain look door did not come up (the mesh itself is up): see the message above, then run \`make kind-domains\`")
+
+kind-domains: ## give the kind lane the Docker lane's domains: a per-Host look door + /hug-domains.json, with sample domains acme.localhost and example.localhost when none are recorded (idempotent; run after kind-up)
+	bash scripts/kind-local-domains.sh up
+
+kind-domains-down: ## remove the kind lane's look door and domain Ingresses (only the objects labelled hugmesh.net/local-domains)
+	bash scripts/kind-local-domains.sh down
+
+kind-domains-status: ## read-only: is the look door there, and does it answer for every domain? (non-zero when not)
+	bash scripts/kind-local-domains.sh status
 
 kind-e2e: playwright-deps ## run the native-login e2e (spec 27) against the kind cluster
 	cd tests/e2e && \
