@@ -3994,11 +3994,10 @@ class ImageConfig:
     login_footer_size: str = ""
     login_footer_bg: str = ""
     login_footer_text: str = ""
-    # Background effect — the generator-side persistence anchor for host-shell
-    # PR #20's deferred vanta catalog. "gradient" (the shipped theme-driven moving
-    # gradient) is the default and emits no token; "none" flattens the backdrop;
-    # "vanta-<effect>" (theme.VANTA_EFFECTS) is persisted but not yet selectable in
-    # the UI — the effect loader ships only in hugmesh-login-ui today.
+    # Background effect. "gradient" (the shipped theme-driven moving gradient) is the
+    # default and emits no token; "none" flattens the backdrop; "vanta-<effect>"
+    # (theme.VANTA_EFFECTS) is an animated WebGL effect the host shell and login-ui
+    # both render.
     login_bg_effect: str = "gradient"  # theme.BG_EFFECTS
     # ── the superbrand's shape and menu decoration (#654, D5/D6) — the two look
     # axes the Themes editor had no field for. The same NON-argv plane as the

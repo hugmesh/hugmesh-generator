@@ -50,7 +50,7 @@ __all__ = [
     "SUPERBRAND", "OWN", "Resolved", "LookError", "LookBudgetError",
     "INHERITED_TEXT", "OWN_TEXT", "USE_SUPERBRAND", "USE_SUPERBRAND_ARMED",
     "PATHS_WITH_OWN_LOOK", "DOCKER_ONLY_SENTENCE", "DOCKER_SERVED_SENTENCE",
-    "DOCKER_NOT_SERVED_SENTENCE", "VANTA_UNSELECTABLE",
+    "DOCKER_NOT_SERVED_SENTENCE",
     "normalise", "effective_look", "resolve", "look_css",
     "LOOK_CSS_BUDGET", "ENV_ENTRY_LIMIT", "ENV_VALUE_LIMIT", "CONFIGMAP_LIMIT",
     "Budget", "budget", "picture_cost", "picture_fits", "fits_configmap",
@@ -131,8 +131,8 @@ PICTURE_FIELDS: dict[str, str] = {"logo_image": "logo", "login_bg_image": "backg
 SUPERBRAND = "superbrand"
 OWN = "own"
 
-#: The sentences both faces show, defined ONCE here (the VANTA_DEPENDENCY_NOTE
-#: lesson: a copy in each face is how they stopped agreeing). tests/test_look_text.py pins
+#: The sentences both faces show, defined ONCE here (a copy in each face is how they
+#: stopped agreeing). tests/test_look_text.py pins
 #: that the window and the text screen read these and nothing of their own.
 INHERITED_TEXT = "inherited from the superbrand"
 OWN_TEXT = "this brand's own"
@@ -160,9 +160,6 @@ DOCKER_SERVED_SENTENCE = ("On the Docker mesh this domain's own look is served a
 DOCKER_NOT_SERVED_SENTENCE = ("Recorded only: this checkout's Docker front door does not "
                               "serve a domain's own look, so every domain shows the "
                               "mesh's own look.")
-#: The four vanta effects are kept in the record but cannot be picked (D6).
-VANTA_UNSELECTABLE = "saved but not selectable"
-
 #: Fields that must be #RRGGBB (or empty).
 HEX_FIELDS: tuple[str, ...] = ("primary", "secondary", "header_bg", "footer_bg",
                                "accent_color")
@@ -273,8 +270,6 @@ def check_value(field: str, value: Any) -> str:
     if field == "bg_effect":
         if text not in theme.BG_EFFECTS:
             return f"no such effect “{text}” — one of {', '.join(theme.BG_EFFECTS)}"
-        if text in theme.VANTA_EFFECTS:
-            return f"{text} is {VANTA_UNSELECTABLE}: {theme.VANTA_DEPENDENCY_NOTE}"
     if field in PICTURE_FIELDS:
         try:
             _check_picture_uri(field, text)
