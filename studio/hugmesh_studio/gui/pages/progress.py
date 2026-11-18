@@ -265,7 +265,8 @@ _LOG_MAX_BLOCKS = 20000
 # (only package rows write flag text there). Same one-way latch as the package button:
 # created disabled, enabled once THIS job's kernel stage is DONE (_sync_kernel_btn).
 _KERNEL_BTN_TEXT = "Kernel config…"
-_RERUN_BTN_TEXT = "↻ Rerun"
+_RERUN_BTN_TEXT = "↻"      # icon only: the stage row also holds "Kernel config…" in a 180px cell; the
+                            # accessible name and tooltip say "Rerun from <stage>"
 _KERNEL_BTN_HINT = "available once this image's Build kernel step has finished"
 _KERNEL_BTN_READY_HINT = ("Open menuconfig for this image's kernel in its own terminal "
                           "window, then rebuild + re-sign + repackage with the change")
