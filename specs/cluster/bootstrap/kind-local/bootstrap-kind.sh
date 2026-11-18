@@ -1007,6 +1007,86 @@ ensure_repo_access() {
   log "  repoURL -> ${REPO}"
   log "  targetRevision -> ${REV} (git daemon serves committed objects only: a dirty/mid-build tree syncs its last COMMIT — stale but consistent)"
 }
+# ── ArgoCD effects: say why one did not happen, and re-request one that never will ──
+# (hugmesh-generator#657, measured 2026-09-30 on a re-run of `make kind-up`.)
+#
+# The cluster keeps a COPY of the GitHub token in Secret devops/hugmesh-generator-repo.
+# `gh auth login` revokes the token it replaces, so a copy made earlier goes dead while a
+# bootstrap is waiting, and ArgoCD reports it ON THE APPLICATION (ComparisonError ...
+# "authentication required"), not as a failed hook pod. A gate that waits for an EFFECT
+# (pki_int issuing roles) then reports "the hook never succeeded" with no hook to read.
+# These three helpers keep that from reading as a mystery. They READ the Application and,
+# in one case, request a sync through the supported `operation` field; none recreates a
+# hook Job (the owner of that object is ArgoCD: see the pki gate's comment).
+#
+# Deliberately NOT `grep -q` on a pipe below: under `set -o pipefail` a -q match closes
+# the pipe, kubectl dies of SIGPIPE and a FOUND error reports 141. Plain grep drains.
+
+# argocd_credential_rejected: rc 0 when ANY Application reports the authentication
+# ComparisonError of #48 (the credential this cluster holds is dead), else rc 1.
+argocd_credential_rejected() {
+  kubectl -n "${ARGOCD_NS}" get applications --no-headers \
+       -o custom-columns='MSG:.status.conditions[*].message' 2>/dev/null \
+    | grep -Fi 'authentication required' >/dev/null
+}
+
+# require_working_repo_credential <what-is-about-to-wait>: stop BEFORE a long wait when the
+# credential is already dead, with the repair command, instead of burning the wait first.
+require_working_repo_credential() {
+  argocd_credential_rejected || return 0
+  # On a brand-new cluster the error can show for a moment while a just-registered token
+  # reaches the repo-server: only a rejection that PERSISTS stops the run.
+  sleep "${CRED_RECHECK_SLEEP:-10}"
+  argocd_credential_rejected || return 0
+  echo "FATAL: ArgoCD is rejecting the repo credential this cluster holds ('authentication required'), so ${1:-the next wait} cannot succeed." >&2
+  echo "       The cluster keeps a COPY of the token in Secret ${ARGOCD_NS}/hugmesh-generator-repo; every \`gh auth login\` revokes the token it replaced," >&2
+  echo "       which leaves that copy dead. Re-register a live one and re-run:" >&2
+  echo "         ARGOCD_REPO_TOKEN=\"\$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token)\" make kind-up" >&2
+  echo "       (or run from a full clone, where the tokenless local sync needs no token at all)." >&2
+  exit 1
+}
+
+# argocd_app_diagnosis <app>: print the Application's own conditions and last operation
+# (stdout; callers redirect), and say "expired repo credential" in those words when the
+# signature is present.
+argocd_app_diagnosis() {
+  local app="$1" sync phase msg conds
+  sync="$(kubectl -n "${ARGOCD_NS}" get application "${app}" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+  phase="$(kubectl -n "${ARGOCD_NS}" get application "${app}" -o jsonpath='{.status.operationState.phase}' 2>/dev/null || true)"
+  msg="$(kubectl -n "${ARGOCD_NS}" get application "${app}" -o jsonpath='{.status.operationState.message}' 2>/dev/null || true)"
+  conds="$(kubectl -n "${ARGOCD_NS}" get application "${app}" -o jsonpath='{range .status.conditions[*]}{.type}: {.message}{"; "}{end}' 2>/dev/null || true)"
+  echo "         Application ${app}: sync=${sync:-unknown}, last operation=${phase:-none}${msg:+ (${msg})}"
+  [ -z "${conds}" ] || echo "         conditions: ${conds}"
+  case "${conds}${msg}" in
+    *"authentication required"*|*"Invalid username or token"*)
+      echo "         => the repo credential this cluster holds has EXPIRED or was revoked (a \`gh auth login\` revokes the token it replaced)."
+      echo "            Repair: ARGOCD_REPO_TOKEN=\"\$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token)\" make kind-up" ;;
+  esac
+}
+
+# argocd_rerun_failed_sync <app>: a hook that failed once is never run again by a
+# re-bootstrap. ArgoCD starts no sync for an Application that is in sync, so when the
+# Application is Synced but its LAST operation is Failed/Error (a PostSync hook that ran
+# while Vault was not yet initialised), the effect it owns will never appear. Request ONE
+# sync through the supported `operation` field and say that it was done. rc 0 only when a
+# sync was requested; rc 1 when nothing needed doing (or an operation is already pending).
+argocd_rerun_failed_sync() {
+  local app="$1" sync phase pending rev
+  pending="$(kubectl -n "${ARGOCD_NS}" get application "${app}" -o jsonpath='{.operation}' 2>/dev/null || true)"
+  [ -z "${pending}" ] || return 1
+  sync="$(kubectl -n "${ARGOCD_NS}" get application "${app}" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+  phase="$(kubectl -n "${ARGOCD_NS}" get application "${app}" -o jsonpath='{.status.operationState.phase}' 2>/dev/null || true)"
+  [ "${sync}" = "Synced" ] || return 1
+  case "${phase}" in Failed|Error) ;; *) return 1 ;; esac
+  rev="$(kubectl -n "${ARGOCD_NS}" get application "${app}" -o jsonpath='{.status.sync.revision}' 2>/dev/null || true)"
+  [ -n "${rev}" ] || rev="${REV}"
+  log "Application ${app} is Synced but its last operation ${phase}: ArgoCD will not re-run its hook by itself, so requesting one sync (once)"
+  kubectl -n "${ARGOCD_NS}" patch application "${app}" --type merge \
+    -p "{\"operation\":{\"initiatedBy\":{\"username\":\"kind-up-rerun\"},\"sync\":{\"revision\":\"${rev}\",\"syncStrategy\":{\"hook\":{}}}}}" >/dev/null \
+    || { warn "could not request a sync of ${app}"; return 1; }
+  return 0
+}
+
 ensure_repo_access
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1487,6 +1567,7 @@ wait_for_vault_pod() {
   echo "  Diagnose: kubectl -n ${ARGOCD_NS} get applications; kubectl -n vault get events --sort-by=.lastTimestamp | tail -20" >&2
   return 1
 }
+require_working_repo_credential "the wait for vault-0"
 wait_for_vault_pod || exit 1
 
 VEXEC=(kubectl -n vault exec vault-0 -c vault --)
@@ -1705,6 +1786,8 @@ unset GEN_TOKEN
 # survives ArgoCD deleting and recreating the hook mid-check, and is exactly the
 # precondition the KV seed below actually needs. Waiting on an actor you do not own is
 # a race; waiting on the effect is not.
+require_working_repo_credential "the wait for vault-pki-init's effect"
+argocd_rerun_failed_sync vault-pki || true
 log "Waiting for vault-pki-init's EFFECT (pki_int + issuing roles), not for the Job object"
 pki_ready() {
   local tok
@@ -1725,6 +1808,8 @@ until pki_ready; do
     echo "       read the POD by label instead of the job by name:" >&2
     echo "         kubectl -n vault logs -l job-name=vault-pki-init --tail=50" >&2
     echo "         kubectl -n devops get application vault-pki -o jsonpath='{.status.operationState.message}'" >&2
+    echo "       What the Application itself says:" >&2
+    argocd_app_diagnosis vault-pki >&2
     exit 1
   fi
   sleep 5

@@ -339,6 +339,31 @@ export ARGOCD_REPO_TOKEN="$(GH_TOKEN= gh auth token)"   # or any PAT with read a
 ./bootstrap-kind.sh
 ```
 
+**The cluster keeps a COPY of that token** in Secret `devops/hugmesh-generator-repo`, made when
+`ARGOCD_REPO_TOKEN` was exported. It is not the token in your keyring, it is a copy, and it
+goes stale on its own: every `gh auth login` **revokes the token it replaces**, so a second
+login (even in another terminal) leaves the cluster's copy dead while the cluster looks fine.
+ArgoCD then reports it on each Application (`ComparisonError ... authentication required:
+Invalid username or token`), not as a failing pod. A re-run now says so: before it starts a
+long wait it re-checks the credential and, when ArgoCD is rejecting it, stops at once with
+the repair command (it takes two looks a few seconds apart, so a token that is still reaching
+the repo-server on a fresh cluster is not mistaken for a dead one):
+
+```bash
+ARGOCD_REPO_TOKEN="$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token)" make kind-up   # re-registers the copy
+```
+
+A re-run also repairs **a hook that failed once**: if the `vault-pki` Application is `Synced`
+but its last operation `Failed`/`Error` (a PostSync hook that ran while Vault was not yet
+initialised), ArgoCD starts no sync for an Application that is in sync, so the hook would
+never run again. The script requests **one** sync through the Application's `operation` field
+and prints that it did. If the 600 s gate still expires, it prints the Application's own sync
+state, last operation and conditions (and calls an authentication error an expired
+credential in those words). Tell-tale before waiting ten minutes:
+`kubectl -n devops get applications -o custom-columns=N:.metadata.name,S:.status.sync.status,OP:.status.operationState.phase`
+(`vault-pki   Synced   Failed`). Offline coverage: `tests/scripts/test-kind-bootstrap-honesty.sh`
+(section "#657").
+
 **Fail-closed under `KIND_PROFILE=sso`:** if neither path is available (no
 token, and the local sync can't serve — missing mount or worktree checkout),
 the script **exits non-zero naming exactly what is missing** instead of
