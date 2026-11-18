@@ -177,9 +177,10 @@ conf_cache_violations() { # <conf> -> one matched line per violation
     | grep -viE '^[[:space:]]*#' \
     | grep -iE '(proxy_hide_header|add_header)[[:space:]]+"?(cache-control|pragma|expires)([^a-z-]|$)|^[[:space:]]*expires([[:space:]]|;)|proxy_cache|proxy_store'
 }
-# The ONE deliberate exception (studio core/look_serving.py, theme survey item B):
-# the location that answers hug-theme.css / snap-theme.css FROM DISK for a domain
-# with its own look may say `add_header Cache-Control "no-store" always;`, the
+# The deliberate exceptions (studio core/look_serving.py, theme survey item B): the
+# location that answers hug-theme.css / snap-theme.css FROM DISK for a domain with its own
+# look, and `location = /hug-domains.json` (the sign-in page's list of the mesh's other
+# domains, from the same mount), may each say `add_header Cache-Control "no-store" always;`, the
 # posture login-ui's own nginx gives that file. It is not a proxied response, so
 # it cannot weaken the gateway's trio. The block is dropped from the scan ONLY
 # when it never proxies (no proxy_pass) and that exact line is its only cache
@@ -188,7 +189,7 @@ conf_minus_look_location() { # <conf> -> the conf, minus a conforming theme loca
   python3 - "$1" <<'PY'
 import re, sys
 lines = open(sys.argv[1], encoding="utf-8").read().splitlines()
-head = re.compile(r'^\s*location\s+~\s+.*-theme\\\.css\$"?\s*\{\s*$')
+head = re.compile(r'^\s*location\s+(?:~\s+.*-theme\\\.css\$"?|=\s+/hug-domains\.json)\s*\{\s*$')
 cache = re.compile(r'(proxy_hide_header|add_header)\s+"?(cache-control|pragma|expires)([^a-z-]|$)'
                    r'|^\s*expires(\s|;)|proxy_cache|proxy_store', re.I)
 allowed = re.compile(r'^\s*add_header\s+Cache-Control\s+"no-store"\s+always;\s*$')

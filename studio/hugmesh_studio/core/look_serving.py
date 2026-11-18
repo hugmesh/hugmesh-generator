@@ -39,9 +39,12 @@ Qt-free; nothing here starts a container.
 """
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import re
 import shutil
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
@@ -73,6 +76,24 @@ VIEW_ROW_PREFIX = "compose-brand-"
 #: the front door and with it the per-Host look.
 VIEW_UPSTREAM = "https://127.0.0.1:${PUBLIC_HTTPS_PORT:-8488}"
 VIEW_PATH = "/login/"
+#: The list the sign-in page's "another domain" choice reads (the front door serves it as
+#: /hug-domains.json, see tls-front/default.conf). Written beside the looks.
+DOMAINS_JSON = "domains.json"
+#: Present in ``.looks/`` while the folder holds the SAMPLE domains (:func:`seed_samples`)
+#: and not domains a person recorded. :func:`write` and :func:`clear` remove it, so a mesh
+#: the Studio starts with real domains replaces the samples and never sits beside them.
+SAMPLES_MARKER = "samples"
+#: What a local lane shows when nobody recorded a domain, so there is always a second
+#: name to sign in on. ``.localhost`` names resolve to this machine in every browser with
+#: no /etc/hosts edit and no root, and the front door's certificate covers ``*.localhost``
+#: (tests/stack/gen-certs.sh). Each has a look of its OWN (a colour and a wordmark), so the
+#: front door answers its stylesheet by Host and the shell and sign-in page say its name.
+SAMPLE_DOMAINS: tuple[dict, ...] = (
+    {"name": "acme.localhost", "id": "acme",
+     "look": {"primary": "#0b6e4f", "secondary": "#f2a900", "header_text": "Acme"}},
+    {"name": "example.localhost", "id": "example",
+     "look": {"primary": "#5b3cc4", "secondary": "#e0457b", "header_text": "Example"}},
+)
 
 _DNS_NAME_RE = re.compile(
     r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+\Z")
@@ -149,6 +170,19 @@ def view_rows_text(brands: Iterable[ServedBrand]) -> str:
     return _GENERATED_HEADER + "".join(r + "\n" for r in rows)
 
 
+def brand_title(brand: ServedBrand) -> str:
+    """What a person calls this domain: its wordmark when its look sets one, else its name."""
+    return str((brand.look or {}).get("header_text") or "").strip() or brand.name
+
+
+def domains_json_text(brands: Iterable[ServedBrand]) -> str:
+    """The sign-in page's list of the other domains this mesh serves, one object per
+    domain with its host name and the name to show. Names and titles only: nothing in it is
+    secret, and the page asks for it from the door before anyone has signed in."""
+    rows = [{"name": b.name, "title": brand_title(b)} for b in brands]
+    return json.dumps({"schema": 1, "domains": rows}, indent=2, ensure_ascii=False) + "\n"
+
+
 def looks_dir(generator_dir: str) -> str:
     return os.path.join(generator_dir, LOOKS_RELDIR)
 
@@ -160,7 +194,7 @@ def clear(generator_dir: str) -> None:
     d = looks_dir(generator_dir)
     if not os.path.isdir(d):
         return
-    for name in (LEGACY_MAP_NAME, VIEW_NAME):
+    for name in (LEGACY_MAP_NAME, VIEW_NAME, DOMAINS_JSON, SAMPLES_MARKER):
         p = os.path.join(d, name)
         if os.path.isfile(p):
             os.remove(p)
@@ -227,6 +261,13 @@ def write(generator_dir: str, superbrand_look: Mapping[str, Any] | None,
     with open(p, "w", encoding="utf-8") as fh:
         fh.write(view_rows_text(brands))
     written.append(p)
+    p = os.path.join(d, DOMAINS_JSON)
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(domains_json_text(brands))
+    written.append(p)
+    marker = os.path.join(d, SAMPLES_MARKER)
+    if os.path.isfile(marker):          # a real write replaces the samples
+        os.remove(marker)
     _readable_by_the_door(d)
     return written
 
@@ -263,6 +304,63 @@ def theme_location_regex(conf_text: str) -> "re.Pattern[str] | None":
     if not m:
         return None
     return re.compile(m.group(1).replace("(?<", "(?P<"))
+
+
+def sample_brands() -> list[ServedBrand]:
+    """The sample domains as the front door sees them."""
+    return served_brands(SAMPLE_DOMAINS)
+
+
+def seed_samples(generator_dir: str, *, enabled: bool = True) -> list[str]:
+    """Give a local lane two named domains when nobody recorded any, so a person can
+    always sign in somewhere else. Returns the sample brand ids now in place (their
+    ``<id>=default`` is also the per-domain Tor list when Tor is on).
+
+    * ``by-host/`` there with no marker: the Studio recorded real domains (or a person
+      made the folder). Nothing is touched and ``[]`` comes back.
+    * no folder, or the folder is the samples': (re)write them. Idempotent.
+    * ``enabled`` false: remove samples left by an earlier start, touch nothing else.
+
+    The samples are always the superbrand's tenant (``default``): the same people, the
+    same admins, a different name and look. Never raises for a missing folder."""
+    d = looks_dir(generator_dir)
+    hosts = os.path.join(d, HOSTS_DIRNAME)
+    marker = os.path.join(d, SAMPLES_MARKER)
+    if not enabled:
+        if os.path.isfile(marker):
+            clear(generator_dir)
+        return []
+    if os.path.isdir(hosts) and not os.path.isfile(marker):
+        return []
+    brands = sample_brands()
+    write(generator_dir, {}, brands)
+    with open(os.path.join(generator_dir, LOOKS_RELDIR, SAMPLES_MARKER), "w",
+              encoding="utf-8") as fh:
+        fh.write("The domains in this folder are the SAMPLES a local lane shows when no "
+                 "domain was recorded. Recording a domain in the Studio replaces them.\n")
+    return [b.bid for b in brands]
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python3 -m hugmesh_studio.core.look_serving seed-samples [--off] [--generator-dir D]``:
+    what ``make stack-up`` runs. Prints the sample ids on stdout (space separated, empty
+    when none) and nothing else there; every message goes to stderr. A failure is reported
+    and exits 0 with an empty list: the stack must still come up without its samples."""
+    ap = argparse.ArgumentParser(prog="look_serving")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sp = sub.add_parser("seed-samples", help="seed the sample domains when none are recorded")
+    sp.add_argument("--off", action="store_true", help="remove samples an earlier start left")
+    sp.add_argument("--generator-dir", default=default_generator_dir())
+    args = ap.parse_args(argv)
+    try:
+        ids = seed_samples(args.generator_dir, enabled=not args.off)
+    except Exception as exc:                      # noqa: BLE001 - never block make
+        print(f"look_serving: sample domains not seeded: {exc}", file=sys.stderr)
+        return 0
+    if ids:
+        print("look_serving: sample domains " + ", ".join(ids), file=sys.stderr)
+    print(" ".join(ids))
+    return 0
 
 
 # ── measured truth: does THIS checkout's front door serve a domain's own look? ──────
@@ -316,3 +414,9 @@ def own_look_sentence(path: str, generator_dir: str = "") -> str:
     if door_serves_looks(generator_dir or default_generator_dir()):
         return brand_look.DOCKER_SERVED_SENTENCE
     return brand_look.DOCKER_NOT_SERVED_SENTENCE
+
+
+if __name__ == "__main__":
+    from .entry import bootstrap as _bootstrap   # the Mac PATH hook: core/entry.py
+    _bootstrap()
+    raise SystemExit(main())
