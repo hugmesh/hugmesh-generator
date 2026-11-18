@@ -1804,12 +1804,16 @@ lint:service-env-contract:
     - pip install --quiet pyyaml
     - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
     - mkdir -p "${SERVICE_SRC_ROOT}"
-    # Blobless + sparse: only src/main/resources is ever materialised, which is all
-    # the checker reads. --depth 1 keeps it to the tip of the default branch.
+    # Blobless + sparse: src/main/resources (application.yml) AND src/main/java, because a
+    # packaged default can live in either (hugmesh-generator#507, finding 26: an EMPTY yaml
+    # default fell back to a stale host in Java that this job never checked out). The
+    # checker refuses (INCOMPLETE, rc 3) a service tree without src/main/java, so dropping
+    # it here would turn the job red, never silently green. --depth 1 keeps it to the tip
+    # of the default branch.
     - |
       for r in $(python3 tests/scripts/service_env_contract.py specs/cluster --list-repos); do
         git clone --depth 1 --filter=blob:none --sparse "${ORG_BASE}/${r}.git" "${SERVICE_SRC_ROOT}/${r}"
-        git -C "${SERVICE_SRC_ROOT}/${r}" sparse-checkout set src/main/resources
+        git -C "${SERVICE_SRC_ROOT}/${r}" sparse-checkout set src/main/resources src/main/java
       done
   script:
     # bash is required: the negative controls stage a copy of specs/cluster AND of

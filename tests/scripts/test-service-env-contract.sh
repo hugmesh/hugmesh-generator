@@ -96,6 +96,12 @@ stage_pristine_sources() {
     local repo; repo="${src#"${SRC_ROOT}"/}"; repo="${repo%%/*}"
     mkdir -p "${dest}/${repo}/src/main/resources"
     cp "${src}" "${dest}/${repo}/src/main/resources/application.yml"
+    # The Java half of the packaged defaults (finding 26): the checker reads src/main/java too
+    # and refuses (INCOMPLETE) a service tree that lacks it, so the staged copy carries it.
+    if [ -d "${SRC_ROOT}/${repo}/src/main/java" ]; then
+      mkdir -p "${dest}/${repo}/src/main"
+      cp -r "${SRC_ROOT}/${repo}/src/main/java" "${dest}/${repo}/src/main/java"
+    fi
     ymls=$((ymls+1))
   done
   # ANTI-VACUITY: an empty stage makes every control below fail as "injection failed"
@@ -141,6 +147,26 @@ expect_catch_fn() {
   else
     neg_bad "${label} NOT caught (rc=${rc}); wanted ${want}. Output:"
     sed 's/^/        /' <<<"${out}" | tail -25
+  fi
+}
+
+# The inverse of expect_catch_fn: the injected change must leave the gate GREEN (rc 0, no
+# failure line). Without it a rule that over-fires on every Java string would still pass
+# every "must be caught" control above; this is what keeps the Java rules narrow.
+expect_clean_fn() {
+  local label="$1" fn="$2"
+  local T="${WORK}/tree" S="${WORK}/src"
+  rm -rf "${T}" "${S}"
+  cp -r "${REPO}/specs/cluster" "${T}"
+  cp -r "${WORK}/src-pristine" "${S}"
+  "${fn}" "${T}" "${S}" || { neg_bad "${label} (injection itself failed)"; return; }
+  local out rc
+  out="$(SERVICE_SRC_ROOT="${S}" python3 "${CHECKER}" "${T}" 2>&1)"; rc=$?
+  if [ "${rc}" -eq 0 ] && ! grep -q "^  FAIL" <<<"${out}"; then
+    neg_ok "${label} -> stays green"
+  else
+    neg_bad "${label} went RED (rc=${rc}) when it must stay green. Output:"
+    grep -E "^  FAIL|INCOMPLETE" <<<"${out}" | sed 's/^/        /' | head -8
   fi
 }
 
@@ -384,7 +410,7 @@ expect_catch_fn "a namespace is removed from specs/cluster while manifests still
 #      classification check — carrying a stale default of its own. Both must bite: the
 #      derived check on its packaged default, and coverage on the missing classification.
 inject_new_bff() {   # $1 = staged specs/cluster, $2 = staged service sources
-  mkdir -p "$1/manifests/newthing-bff-api" "$2/hugmesh-newthing-bff-api/src/main/resources"
+  mkdir -p "$1/manifests/newthing-bff-api" "$2/hugmesh-newthing-bff-api/src/main/resources" "$2/hugmesh-newthing-bff-api/src/main/java"
   cat > "$1/manifests/newthing-bff-api/deployment.yaml" <<'YAML'
 apiVersion: apps/v1
 kind: Deployment
@@ -543,6 +569,192 @@ if [ "${WRC}" -eq 3 ] && grep -q "INCOMPLETE" <<<"${OUT}"; then
   neg_ok "a COPY of a worktree (back-pointer names another path) stays INCOMPLETE (rc 3)"
 else
   neg_bad "a COPY of a worktree inherited the main checkout's siblings (rc=${WRC})"
+  sed 's/^/        /' <<<"${OUT}" | tail -10
+fi
+
+# (19) THE JAVA HALF OF THE PACKAGED DEFAULTS (hugmesh-generator#507, finding 26). The
+#      yaml-only gate let admin-bff's SessionExchangeConfig.DEFAULT_SELF_HOST (a
+#      pre-rebrand host, NXDOMAIN) through because the yaml default was EMPTY and the
+#      stale value sat in src/main/java, which the CI job never even checked out. These
+#      plant that exact shape, and the neighbouring ones that must NOT trip the rule.
+echo "-- the Java half: a stale default in src/main/java must be seen --"
+J_ADMIN='hugmesh-admin-bff-api/src/main/java/net/hugmesh/adminbff'
+plant_java() {   # <staged service sources> <repo> <relative path under src/<main|test>/java> <body from stdin>
+  local f="$1/$2/$3"; mkdir -p "$(dirname "${f}")"; cat > "${f}"
+}
+# finding 26's exact shape: an EMPTY yaml default, a stale in-cluster FQDN in a Java constant
+inject_java_constant() {   # $1 = staged specs/cluster, $2 = staged service sources
+  cat >> "$2/hugmesh-admin-bff-api/src/main/resources/application.yml" <<'YAML'
+
+federation-session-exchange:
+  self-host: "${FEDERATION_SESSION_EXCHANGE_SELF_HOST:}"
+YAML
+  plant_java "$2" hugmesh-admin-bff-api src/main/java/net/hugmesh/adminbff/federation/SessionExchangeConfig.java <<'JAVA'
+package net.hugmesh.adminbff.federation;
+public class SessionExchangeConfig {
+    private static final String DEFAULT_SELF_HOST =
+            "hugmesh-admin-bff-api.hugmesh-nowhere.svc.cluster.local";
+    private final String selfHost;
+    public SessionExchangeConfig(String selfHost) { this.selfHost = selfHost; }
+    public String selfHost() { return (selfHost == null || selfHost.isBlank()) ? DEFAULT_SELF_HOST : selfHost; }
+}
+JAVA
+}
+expect_catch_fn "finding 26: a stale FQDN in a Java constant behind an EMPTY yaml default is caught, naming the file" \
+  "SessionExchangeConfig.java:4" inject_java_constant
+expect_catch_fn "finding 26: ... and naming the stale host itself" \
+  "hugmesh-admin-bff-api.hugmesh-nowhere.svc.cluster.local" inject_java_constant
+expect_catch_fn "finding 26: ... and saying the property cannot be derived, so a declaration or a source fix is needed" \
+  "javaDefaults entry of service-env-contract.yaml" inject_java_constant
+
+# a @ConfigurationProperties field default: the env var is DERIVED (prefix + nested field + field)
+inject_java_configprops() {   # $1 = staged specs/cluster, $2 = staged service sources
+  plant_java "$2" hugmesh-wiki-bff-api src/main/java/net/hugmesh/wikibff/planted/PlantedProperties.java <<'JAVA'
+package net.hugmesh.wikibff.planted;
+@ConfigurationProperties(prefix = "app.planted")
+public class PlantedProperties {
+    private Peer peer = new Peer();
+    public static class Peer {
+        private String baseUrl = "http://peer.nowhere-ns.svc.cluster.local:8080";
+    }
+}
+JAVA
+}
+expect_catch_fn "a stale @ConfigurationProperties field default is caught and the env var to set is DERIVED" \
+  "the property app.planted.peer.base-url feeds it, so set APP_PLANTED_PEER_BASEURL" inject_java_configprops
+inject_java_configprops_overridden() {
+  inject_java_configprops "$1" "$2"
+  python3 -c "${PY_ENV}" "$1/manifests/wiki-bff-api/deployment.yaml" hugmesh-wiki-bff-api \
+    'env.append({"name": "APP_PLANTED_PEER_BASEURL", "value": "http://peer.hugmesh-backend.svc.cluster.local:8080"})'
+}
+inject_java_configprops_empty() {
+  inject_java_configprops "$1" "$2"
+  python3 -c "${PY_ENV}" "$1/manifests/wiki-bff-api/deployment.yaml" hugmesh-wiki-bff-api \
+    'env.append({"name": "APP_PLANTED_PEER_BASEURL", "value": ""})'
+}
+expect_catch_fn "an EMPTY value does not override a stale Java default (same rule as the yaml half)" \
+  "[java-default] hugmesh-wiki-bff-api:" inject_java_configprops_empty
+expect_clean_fn "the derived env var, set to a real address, overrides it (the rule is not over-firing)" \
+  inject_java_configprops_overridden
+
+# the real finding this gate surfaced: PhoneLockProperties' defaults name namespaces that never existed
+inject_phonelock_override_removed() {   # $1 = staged specs/cluster
+  python3 -c "${PY_ENV}" "$1/manifests/admin-bff-api/deployment.yaml" hugmesh-admin-bff-api \
+    'env[:] = [e for e in env if e["name"] != "APP_PHONELOCK_HEADWIND_BASEURL"]'
+}
+expect_catch_fn "the real tree: without APP_PHONELOCK_HEADWIND_BASEURL the Headwind default (ns hmdm, never created) is caught" \
+  "set APP_PHONELOCK_HEADWIND_BASEURL" inject_phonelock_override_removed
+inject_phonelock_meshdeny_removed() {
+  python3 -c "${PY_ENV}" "$1/manifests/admin-bff-api/deployment.yaml" hugmesh-admin-bff-api \
+    'env[:] = [e for e in env if e["name"] != "APP_PHONELOCK_MESHDENY_BASEURL"]'
+}
+expect_catch_fn "the real tree: without APP_PHONELOCK_MESHDENY_BASEURL the headscale default (ns headscale) is caught" \
+  "set APP_PHONELOCK_MESHDENY_BASEURL" inject_phonelock_meshdeny_removed
+
+# what must NOT trip it: comments, test sources, property-key strings, a non-address field
+inject_java_comment_only() {
+  plant_java "$2" hugmesh-wiki-bff-api src/main/java/net/hugmesh/wikibff/planted/Commented.java <<'JAVA'
+package net.hugmesh.wikibff.planted;
+/** Once pointed at http://old.nowhere-ns.svc.cluster.local:8080 (pre-rebrand); now overridden. */
+public class Commented {
+    // private static final String DEFAULT_HOST = "http://old.nowhere-ns.svc.cluster.local:8080";
+    /* private String baseUrl = "http://old.nowhere-ns.svc.cluster.local:8080"; */
+    private static final String NOT_A_COMMENT = "//a-string-with-slashes";
+}
+JAVA
+}
+expect_clean_fn "a stale host that only appears in a COMMENT is not a default" inject_java_comment_only
+inject_java_test_source_only() {
+  plant_java "$2" hugmesh-wiki-bff-api src/test/java/net/hugmesh/wikibff/planted/FixtureTest.java <<'JAVA'
+package net.hugmesh.wikibff.planted;
+class FixtureTest { private static final String BASE_URL = "http://fixture.nowhere-ns.svc.cluster.local:8080"; }
+JAVA
+}
+expect_clean_fn "a stale host in src/test/java (a fixture, not what the pod falls back to) is not read" inject_java_test_source_only
+inject_java_property_key_strings() {
+  plant_java "$2" hugmesh-wiki-bff-api src/main/java/net/hugmesh/wikibff/planted/Keys.java <<'JAVA'
+package net.hugmesh.wikibff.planted;
+class Keys {
+    static final String ISSUERS_PROPERTY = "app.tenancy.issuers";
+    static final String BASE_URL_KEY = "spring.liquibase.url";
+    static final String EVENT = "wiki.page.publish";
+}
+JAVA
+}
+expect_clean_fn "property keys and event names that merely look like hosts are not read as hosts" inject_java_property_key_strings
+inject_java_non_address_field() {
+  plant_java "$2" hugmesh-wiki-bff-api src/main/java/net/hugmesh/wikibff/planted/Greeting.java <<'JAVA'
+package net.hugmesh.wikibff.planted;
+class Greeting { static final String WELCOME = "https://stranger.example.org/welcome"; }
+JAVA
+}
+expect_clean_fn "a foreign URL in a field NOT named like an address is out of scope (J2 is name-gated)" inject_java_non_address_field
+
+# a foreign URL in an ADDRESS-named field must be declared, and the declaration is itself gated
+inject_java_foreign_url() {
+  plant_java "$2" hugmesh-wiki-bff-api src/main/java/net/hugmesh/wikibff/planted/Partner.java <<'JAVA'
+package net.hugmesh.wikibff.planted;
+class Partner { static final String PARTNER_BASE_URL = "https://api.partner.example.org/v2"; }
+JAVA
+}
+expect_catch_fn "a foreign URL in an address-named Java field is caught and the externalIntegrations route is named" \
+  "property 'Partner.java#PARTNER_BASE_URL'" inject_java_foreign_url
+inject_java_foreign_url_declared() {
+  inject_java_foreign_url "$1" "$2"
+  contract_edit "$1" 'c["externalIntegrations"].append({"repo": "hugmesh-wiki-bff-api", "property": "Partner.java#PARTNER_BASE_URL", "default": "https://api.partner.example.org/v2", "reason": "the partner API is the point"})'
+}
+expect_clean_fn "... and declaring it (repo, File#field, exact default, a reason) makes it pass" inject_java_foreign_url_declared
+inject_java_declared_but_gone() {   # a Java entry whose hit no longer exists
+  contract_edit "$1" 'c["externalIntegrations"].append({"repo": "hugmesh-wiki-bff-api", "property": "Gone.java#X_URL", "default": "https://gone.example.org", "reason": "was an integration"})'
+}
+expect_catch_fn "a Java externalIntegrations entry that matches nothing is itself drift" \
+  "[external-allowlist]" inject_java_declared_but_gone
+inject_java_dangling_allowlisted() {   # the allowlist must never excuse a dangling namespace, in Java either
+  inject_java_configprops "$1" "$2"
+  contract_edit "$1" 'c["externalIntegrations"].append({"repo": "hugmesh-wiki-bff-api", "property": "PlantedProperties.java#baseUrl", "default": "http://peer.nowhere-ns.svc.cluster.local:8080", "reason": "trying to excuse it"})'
+}
+expect_catch_fn "the allowlist cannot excuse a dangling-namespace Java default" \
+  "[java-default] hugmesh-wiki-bff-api:" inject_java_dangling_allowlisted
+inject_real_google_entry_removed() {
+  contract_edit "$1" 'c["externalIntegrations"] = [e for e in c["externalIntegrations"] if "GoogleConnectService" not in str(e.get("property"))]'
+}
+expect_catch_fn "the real tree: without its declaration the Google OAuth endpoint is flagged, not waved through" \
+  "GoogleConnectService.java#AUTH_ENDPOINT" inject_real_google_entry_removed
+
+# javaDefaults: the explicit declaration for a default the source cannot derive (a constant)
+inject_java_declared_env_set() {
+  inject_java_constant "$1" "$2"
+  contract_edit "$1" 'c["javaDefaults"] = [{"repo": "hugmesh-admin-bff-api", "file": "SessionExchangeConfig.java", "default": "hugmesh-admin-bff-api.hugmesh-nowhere.svc.cluster.local", "env": "FEDERATION_SESSION_EXCHANGE_SELF_HOST", "reason": "the constant is the fallback for federation-session-exchange.self-host"}]'
+  python3 -c "${PY_ENV}" "$1/manifests/admin-bff-api/deployment.yaml" hugmesh-admin-bff-api \
+    'env.append({"name": "FEDERATION_SESSION_EXCHANGE_SELF_HOST", "value": "hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local"})'
+}
+expect_clean_fn "a javaDefaults entry whose env var the Deployment really sets covers a constant" inject_java_declared_env_set
+inject_java_declared_env_unset() {
+  inject_java_constant "$1" "$2"
+  contract_edit "$1" 'c["javaDefaults"] = [{"repo": "hugmesh-admin-bff-api", "file": "SessionExchangeConfig.java", "default": "hugmesh-admin-bff-api.hugmesh-nowhere.svc.cluster.local", "env": "FEDERATION_SESSION_EXCHANGE_SELF_HOST", "reason": "claims an override that is not there"}]'
+}
+expect_catch_fn "a javaDefaults entry that names an env var the Deployment does NOT set is not believed" \
+  "[java-default] hugmesh-admin-bff-api:" inject_java_declared_env_unset
+inject_java_declaration_stale() {
+  contract_edit "$1" 'c["javaDefaults"] = [{"repo": "hugmesh-admin-bff-api", "file": "Nothing.java", "default": "http://x.y.svc.cluster.local", "env": "X", "reason": "stale"}]'
+}
+expect_catch_fn "a javaDefaults entry that matches nothing any more is drift" "[java-allowlist]" inject_java_declaration_stale
+inject_java_declaration_no_reason() {
+  inject_java_constant "$1" "$2"
+  contract_edit "$1" 'c["javaDefaults"] = [{"repo": "hugmesh-admin-bff-api", "file": "SessionExchangeConfig.java", "default": "hugmesh-admin-bff-api.hugmesh-nowhere.svc.cluster.local", "env": "", "reason": ""}]'
+}
+expect_catch_fn "a javaDefaults entry without a reason is refused" "[java-allowlist]" inject_java_declaration_no_reason
+
+# GUARD HONESTY for the Java half: a service tree whose src/main/java is absent (the old CI
+# sparse checkout) must be INCOMPLETE, never a quiet pass over sources nobody read.
+echo "-- guard honesty: absent src/main/java must be INCOMPLETE, not green --"
+rm -rf "${WORK}/src-nojava"; cp -r "${WORK}/src-pristine" "${WORK}/src-nojava"
+rm -rf "${WORK}/src-nojava/hugmesh-admin-bff-api/src/main/java"
+OUT="$(SERVICE_SRC_ROOT="${WORK}/src-nojava" python3 "${WORK}/fakerepo/tests/scripts/$(basename "${CHECKER}")" "${REPO}/specs/cluster" 2>&1)"; JRC=$?
+if [ "${JRC}" -eq 3 ] && grep -q "INCOMPLETE" <<<"${OUT}" && grep -q "src/main/java" <<<"${OUT}"; then
+  neg_ok "a service tree with no src/main/java is INCOMPLETE (rc 3), naming src/main/java"
+else
+  neg_bad "a missing src/main/java did NOT force INCOMPLETE (rc=${JRC})"
   sed 's/^/        /' <<<"${OUT}" | tail -10
 fi
 

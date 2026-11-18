@@ -596,6 +596,18 @@ spec:
             # unpinned base-url is a dud that would only surface the day that flag flips
             # — pin it now, exactly as APPSTORE_SCAFFOLD_HEADSCALE_URL above.
             - { name: APP_REGISTRY_HEADSCALE_ACL_BASE_URL, value: "http://headscale.hugmesh-pki.svc.cluster.local:8080" }
+            # app.phone-lock.headwind.base-url and app.phone-lock.mesh-deny.base-url — the SAME
+            # defect, one layer down: these two defaults are not in application.yml at all but
+            # in PhoneLockProperties.java (field initialisers), so no yaml-only reading could
+            # see them (hugmesh-generator#507, finding 26; [java-default] in
+            # tests/scripts/service_env_contract.py derives the env names from the prefix and
+            # field path). Their packaged defaults name namespaces `hmdm` and `headscale`, which
+            # have never existed here: Headwind and headscale both live in hugmesh-pki
+            # (manifests/headwind, manifests/headscale). Both legs ship DARK
+            # (APP_PHONELOCK_*_ENABLED is false), so an unpinned base-url is a dud that would
+            # only surface the day a flag flips — pin them now, like the keys above.
+            - { name: APP_PHONELOCK_HEADWIND_BASEURL, value: "http://headwind.hugmesh-pki.svc.cluster.local:8080" }
+            - { name: APP_PHONELOCK_MESHDENY_BASEURL, value: "http://headscale.hugmesh-pki.svc.cluster.local:8080" }
             # (ROUTE_MIRROR_CASSANDRA — app.mirror.cassandra.contact-point — is set ONCE,
             # in the Cassandra block above. #543 added a second, identical entry here;
             # two entries of the same name in one container are not a redundancy, they

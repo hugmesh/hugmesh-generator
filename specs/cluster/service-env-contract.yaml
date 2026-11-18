@@ -227,3 +227,35 @@ externalIntegrations:
       The service exists to call the real GitHub REST API (registration github-org-admin
       evaluation); GITHUB_API_BASE_URL is only an override for GitHub Enterprise or a test
       double. api.github.com is correct, not a leftover.
+
+  # ── Java defaults (finding 26): third-party URLs held as String fields in src/main/java. The
+  # `property` of a Java entry is `<File>.java#<field>`; the same rules apply (one exact default,
+  # foreign-domain only, a reason, and the gate fails once it matches nothing).
+  - repo: hugmesh-admin-bff-api
+    property: "PhoneLockProperties.java#graphBaseUrl"
+    default: "https://graph.microsoft.com/v1.0"
+    reason: >-
+      The Azure Intune phone-lock leg exists to call Microsoft Graph; app.phone-lock.azure-intune.graph-base-url
+      is only an override (a sovereign cloud, a test double). The leg ships dark.
+  - repo: hugmesh-admin-bff-api
+    property: "PhoneLockProperties.java#authBaseUrl"
+    default: "https://login.microsoftonline.com"
+    reason: >-
+      Microsoft's real OAuth authority for the same Intune leg (app.phone-lock.azure-intune.auth-base-url
+      overrides it for a sovereign cloud). Correct, not a leftover.
+  - repo: hugmesh-tube-bff-api
+    property: "DefaultGoogleApiClient.java#TOKEN_URI"
+    default: "https://oauth2.googleapis.com/token"
+    reason: "Google's real OAuth token endpoint: the tube BFF's whole purpose is the YouTube connect flow."
+  - repo: hugmesh-tube-bff-api
+    property: "DefaultGoogleApiClient.java#REVOKE_URI"
+    default: "https://oauth2.googleapis.com/revoke"
+    reason: "Google's real OAuth revocation endpoint (disconnecting a YouTube account)."
+  - repo: hugmesh-tube-bff-api
+    property: "DefaultGoogleApiClient.java#SUBSCRIPTIONS_URI"
+    default: "https://www.googleapis.com/youtube/v3/subscriptions"
+    reason: "The YouTube Data API v3 subscriptions list, the data the tube BFF exists to read."
+  - repo: hugmesh-tube-bff-api
+    property: "GoogleConnectService.java#AUTH_ENDPOINT"
+    default: "https://accounts.google.com/o/oauth2/v2/auth"
+    reason: "Google's real OAuth consent endpoint for the YouTube connect flow."
