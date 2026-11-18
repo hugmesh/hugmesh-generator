@@ -1297,6 +1297,79 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         return not problems
 
 
+#: What the internal domain's entry says it IS, in the words the table's own cells use
+#: for the facts that do not apply to it. Kept as module text so the entry, its tooltip
+#: and the tests read one source.
+INTERNAL_ENTRY_TITLE = "Internal domain"
+INTERNAL_ENTRY_ROLE = ("The {plain} every node of this mesh joins under on its own "
+                       "network. It starts first and is never public.")
+INTERNAL_ENTRY_SERVICES = ("Services: the mesh's own infrastructure (Tor, the egress "
+                           "VPN, Anubis, the AI services, the wiki) — chosen once for the "
+                           "whole mesh on the Services step. It has no service page of "
+                           "its own.")
+INTERNAL_ENTRY_SIGNIN = ("Sign-in: none. It is not a domain you serve, so it has no "
+                         "sign-in, no certificate authority choice and no export "
+                         "organisation. The table below lists the domains you do serve.")
+
+
+class InternalDomainEntry(QtWidgets.QFrame):
+    """The mesh's INTERNAL domain as an entry of its own, above the Domains table.
+
+    On a prod mesh the table's first row is the public apex the operator types, and the
+    internal root name every node joins under on the mesh's own network had no place on
+    the page at all: the mesh's own infrastructure (chosen once for the whole mesh) read
+    as that apex's services, next to the services of the domains added below it. This
+    entry names the internal domain, says it starts first, and says its services are the
+    mesh's infrastructure, so the table beneath is only the domains the mesh SERVES.
+
+    Display only, and deliberately NOT a table row: the table's rows are numbered and
+    the Domains/Domain-services sentences, the saved-mesh record and the gate are built
+    on its first row being the mesh's own (public) domain. Nothing here is ever
+    collected, so it changes no manifest, argv or record. Hidden while it has no name
+    (a test mesh, which publishes nothing and keeps the table alone)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("internal_domain_entry")
+        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        lay = QtWidgets.QVBoxLayout(self)
+        head = QtWidgets.QHBoxLayout()
+        self.title = QtWidgets.QLabel(f"<b>{INTERNAL_ENTRY_TITLE}</b>")
+        self.name = QtWidgets.QLabel("")
+        self.name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        head.addWidget(self.title)
+        head.addWidget(self.name)
+        head.addStretch(1)
+        lay.addLayout(head)
+        self.role = QtWidgets.QLabel(
+            INTERNAL_ENTRY_ROLE.format(plain=plain_words.term("internal_root")))
+        self.services = QtWidgets.QLabel(INTERNAL_ENTRY_SERVICES)
+        self.signin = QtWidgets.QLabel(INTERNAL_ENTRY_SIGNIN)
+        for lab in (self.role, self.services, self.signin):
+            lab.setWordWrap(True)
+            lab.setStyleSheet(muted())
+            lay.addWidget(lab)
+        self.setToolTip(_INTERNAL_TIP)
+        self._shown = ""
+        self.setVisible(False)
+
+    def set_name(self, name: str) -> None:
+        """Show the entry for ``name`` (bold, selectable), or hide it for ""."""
+        self._shown = (name or "").strip()
+        self.name.setText(f"<b>{html.escape(self._shown)}</b>" if self._shown else "")
+        self.setVisible(bool(self._shown))
+
+    def shown_name(self) -> str:
+        """The name the entry was last given ("" when it is hidden)."""
+        return self._shown
+
+
+_INTERNAL_TIP = ("This mesh's INTERNAL domain: the root name every node joins under on "
+                 "its own network. It is not listed in the table below, which holds the "
+                 "domains the mesh serves — its own (public) domain first, then the "
+                 "ones you add.")
+
+
 class DomainsTableWidget(QtWidgets.QWidget, DomainsTableBody):
     """The SAME table as a plain widget, for a host that is not the image flow's
     wizard page — the generate-a-new-local-mesh route embeds it on its ‘Domains’ step
