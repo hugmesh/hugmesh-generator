@@ -928,31 +928,18 @@ CHROME_SIZES: dict[str, str] = {
     "tall": "6rem",
 }
 
-#: The page BACKGROUND EFFECT — the persistence anchor for hugmesh-host-shell PR #20's
-#: deferred vanta catalog. "gradient" is the shipped default (host-shell's theme-driven
-#: moving CSS gradient — PR #20's tier chain), so it emits NO token; "none" asks the
-#: shell to render a flat themed background; "vanta-<effect>" names an animated WebGL
-#: effect from the proven catalog (the four Vanta effects that render against the
-#: three.js 0.185 login-ui already ships). The vanta values are PLACEHOLDERS today:
-#: the loader lives only in hugmesh-login-ui and porting it to the host shell was
-#: deferred by PR #20 — the Studio therefore persists them but keeps them unselectable
-#: until the shell can render them. Emitted as ``--sd-bg-effect`` (PR #20's named
+#: The page BACKGROUND EFFECT. "gradient" is the shipped default (host-shell's
+#: theme-driven moving CSS gradient), so it emits NO token; "none" asks the shell to
+#: render a flat themed background; "vanta-<effect>" names an animated WebGL effect from
+#: the proven catalog (the four Vanta effects that render against the three.js 0.185
+#: that login-ui and the host shell both ship). All of them are selectable: the host
+#: shell (background.types.ts / background.component.ts) and login-ui both read
+#: ``--sd-bg-effect`` and start the effect, and either one degrades to the gradient
+#: where WebGL is missing. Emitted as ``--sd-bg-effect`` (host-shell PR #20's named
 #: contract: "emit the selection as a literal token (e.g. --sd-bg-effect: fog)").
 BG_EFFECT_DEFAULT = "gradient"
 VANTA_EFFECTS: tuple[str, ...] = ("vanta-fog", "vanta-waves", "vanta-net", "vanta-globe")
 BG_EFFECTS: tuple[str, ...] = (BG_EFFECT_DEFAULT, "none") + VANTA_EFFECTS
-
-#: Why the vanta rows cannot be picked yet. ONE definition, here, because both
-#: front ends must say the same thing and a copy in each is how they stopped:
-#: tui/themes.py named this and the GUI editor did not, so a GUI user could choose
-#: a vanta effect and be told nothing about why it would not render.
-#: test_tui_gui_parity.py pins the equality; importing from one place makes it hold
-#: by construction rather than by two authors remembering.
-VANTA_DEPENDENCY_NOTE = (
-    "Vanta effects need the three.js + vanta effect loader that today ships only "
-    "in hugmesh-login-ui; porting it to the host shell was deferred by "
-    "hugmesh-host-shell PR #20. The choice is already persisted by the theme "
-    "model, and these rows unlock once the login-ui loader lands in the shell.")
 
 
 def css_string(text: str) -> str:

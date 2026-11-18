@@ -16,11 +16,7 @@ from ..core import (brand_images, brand_look, fonts as _fonts, login_preview,
                     plain_words, theme, theme_presets)
 from ..core.branding_themes import PREMADE_THEMES, THEME_SPECS
 
-__all__ = ["EFFECT_LABELS", "VANTA_DEPENDENCY_NOTE"]
-
-#: Re-exported from core.theme, which is the single definition. Kept in __all__
-#: because callers and the GUI/TUI parity test both read it from this module.
-from hugmesh_studio.core.theme import VANTA_DEPENDENCY_NOTE  # noqa: E402,F401
+__all__ = ["EFFECT_LABELS"]
 
 #: effect id -> human label: the one table in core, the same object the window's
 #: LookEditor shows (tests/test_tui_gui_parity.py pins it).
@@ -105,9 +101,7 @@ def _look_choices(field: str) -> list[tuple[str, str]]:
         return [("", "Shipped size")] + [(n, f"{n.capitalize()} ({v})")
                                          for n, v in theme.CHROME_SIZES.items()]
     if field == "bg_effect":
-        return [(e, brand_look.EFFECT_LABELS[e] + (
-            f" — {brand_look.VANTA_UNSELECTABLE}" if e in theme.VANTA_EFFECTS else ""))
-            for e in theme.BG_EFFECTS]
+        return [(e, brand_look.EFFECT_LABELS[e]) for e in theme.BG_EFFECTS]
     if field == "theme":
         return [("", "No premade theme (stock look)")] + [
             (n, THEME_SPECS[n].title) for n in PREMADE_THEMES]
@@ -189,9 +183,6 @@ class LookText:
                 out.append(f"   {cmd:<11} {_LABELS[field]:<26} {self._value_text(field, eff)}{src}")
             if title == "Font":
                 out += ["   ! " + need for need in m.requirements()]
-            if title.startswith("Page background"):
-                out.append("   " + f"The four Vanta effects are {brand_look.VANTA_UNSELECTABLE}: "
-                           + theme.VANTA_DEPENDENCY_NOTE)
             if title.startswith("Pictures"):
                 out.append("   " + self._picture_intro())
                 out.append("   " + self._meter_text())

@@ -147,20 +147,16 @@ def test_a_picture_past_the_budget_is_refused_with_the_numbers(qapp, tmp_path):
     assert ed.model.get("logo_image") == ""
 
 
-def test_the_vanta_effects_are_listed_greyed_with_the_reason(qapp):
+def test_the_vanta_effects_are_selectable_and_saved(qapp):
     ed = LookEditor(brand_look.Look(), path="docker")
     combo = ed.bg_effect
     assert combo.count() == len(theme.BG_EFFECTS)
     for i in range(combo.count()):
-        effect = combo.itemData(i)
-        item = combo.model().item(i)
-        if effect in theme.VANTA_EFFECTS:
-            assert not item.isEnabled()
-            assert brand_look.VANTA_UNSELECTABLE in combo.itemText(i)
-            assert item.toolTip() == theme.VANTA_DEPENDENCY_NOTE
-        else:
-            assert item.isEnabled()
-    assert theme.VANTA_DEPENDENCY_NOTE in ed.vanta_note.text()
+        assert combo.model().item(i).isEnabled(), combo.itemData(i)
+        assert "not selectable" not in combo.itemText(i)
+    assert not hasattr(ed, "vanta_note")
+    combo.setCurrentIndex(combo.findData("vanta-waves"))
+    assert ed.model.get("bg_effect") == "vanta-waves"
 
 
 def test_the_font_requirement_sentence_shows_until_licence_and_source_are_given(
@@ -396,7 +392,7 @@ def test_look_the_design_step_is_drawn_whole(qapp, tmp_path, style, pt, size):
             assert_whole(ed.error_note, f"{what}: the refusal sentence")
             assert ed.error_note.geometry().right() <= ed.width()
             for w in (ed.meter, ed.meter_label, ed.contrast_line, ed.preview_btn,
-                      ed.vanta_note, *ed.picture_thumbs.values()):
+                      ed.bg_effect, *ed.picture_thumbs.values()):
                 _scroll_to(ed, w, qapp)
                 assert w.isVisible(), f"{what}: {w.objectName() or type(w).__name__} hidden"
                 _inside_viewport(ed, w, f"{what}: {w.objectName() or type(w).__name__}")

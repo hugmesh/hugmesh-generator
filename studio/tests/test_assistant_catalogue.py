@@ -41,8 +41,8 @@ def test_choices_come_from_the_code_tables():
     assert d["look.mode"].choices == tuple(theme_presets.MODES)
     assert d["look.style"].choices == tuple(theme.STYLE_VARIANTS)
     assert d["look.decor"].choices == tuple(theme.DECOR_VARIANTS)
-    assert [c.split(" (")[0] for c in d["look.bg_effect"].choices] == list(theme.BG_EFFECTS)
-    assert any("not selectable yet" in c for c in d["look.bg_effect"].choices)
+    assert list(d["look.bg_effect"].choices) == list(theme.BG_EFFECTS)
+    assert not any("not selectable" in c for c in d["look.bg_effect"].choices)
     assert d["tailnet"].choices == ("inherit", "on", "off") and d["egress"].choices == ("inherit", "vpn", "direct")
     assert d["look.primary"].kind == "colour" and d["tor"].kind == "bool"
     m = {o.key: o for o in cat.catalogue("mesh")}

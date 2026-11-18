@@ -297,9 +297,6 @@ def normalise_value(key: str, to: Any) -> "tuple[Any, str]":
                 cand = low[cand.lower()]
             if cand not in plain:
                 return None, f"Valid values for {key}: {', '.join(plain)}."
-            if any(c.startswith(cand) and "not selectable" in c for c in opt.choices):
-                return None, f"{cand} is saved but not selectable yet. Valid values for {key}: " + \
-                    ", ".join(c for c in plain if not any(x.startswith(c) and "not selectable" in x for x in opt.choices)) + "."
             to = cand
         why = brand_look.check_value(fld, to)
         if why:
