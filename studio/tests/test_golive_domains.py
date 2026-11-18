@@ -583,10 +583,17 @@ def test_the_tui_plan_says_the_per_domain_onions_cannot_be_listed(device, monkey
     assert "domain slug" not in text and "not minted" not in text
 
 
-pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding (PySide6/PyQt6) installed")
-
-from hugmesh_studio.gui.pages import golive as golive_mod                # noqa: E402
-from hugmesh_studio.gui.qt import QtCore, QtWidgets                      # noqa: E402
+# GUI half: the studio-tests job installs NO Qt binding on purpose, so these imports fail there.
+# They must not skip the whole module (a module-level pytest.importorskip skipped the Qt-free tests
+# above it too, hugmesh-generator#537): only the tests below that need Qt are marked.
+try:
+    from hugmesh_studio.gui.pages import golive as golive_mod
+    from hugmesh_studio.gui.qt import QtCore, QtWidgets
+    _HAVE_QT = True
+except ImportError:
+    golive_mod = QtCore = QtWidgets = None
+    _HAVE_QT = False
+needs_qt = pytest.mark.skipif(not _HAVE_QT, reason="no Qt binding (PySide6/PyQt6) installed")
 
 
 @pytest.fixture(scope="session")
@@ -612,6 +619,7 @@ def _to_inputs(wiz, provider="cloudflare-tunnel"):
     return page
 
 
+@needs_qt
 def test_the_inputs_picker_offers_the_baked_domains_and_fills_the_field(wiz, device):
     page = _to_inputs(wiz)
     data = [page.domain_pick.itemData(i) for i in range(page.domain_pick.count())]
@@ -624,6 +632,7 @@ def test_the_inputs_picker_offers_the_baked_domains_and_fills_the_field(wiz, dev
     assert page.validatePage() and wiz.opts.domain == "typed.example"
 
 
+@needs_qt
 def test_picking_the_entry_the_combo_already_shows_refills_the_field(wiz, device):
     """After typing another domain, picking the entry the combo ALREADY shows changes
     no index, so ``currentIndexChanged`` never fires (the post-merge review of #645,
@@ -636,6 +645,7 @@ def test_picking_the_entry_the_combo_already_shows_refills_the_field(wiz, device
     assert page.domain_hint.text() == "picked from the domains baked on this device"
 
 
+@needs_qt
 def test_re_entering_the_inputs_page_keeps_a_typed_domain(wiz, device):
     """A Back-and-Next re-entry refills the picker; the refill must not fire the pick
     handler and overwrite what the operator typed (the picker's signals are blocked
@@ -647,6 +657,7 @@ def test_re_entering_the_inputs_page_keeps_a_typed_domain(wiz, device):
     assert page.domain_pick.currentIndex() == 0       # no baked entry matches it
 
 
+@needs_qt
 def test_a_bare_node_picker_is_the_cluster_domain_and_says_why(wiz, bare_node):
     page = _to_inputs(wiz)
     assert page.domain_pick.count() == 1
@@ -654,6 +665,7 @@ def test_a_bare_node_picker_is_the_cluster_domain_and_says_why(wiz, bare_node):
     assert page.domain_list_note.text() == NO_EXTRA_DOMAINS_NOTE
 
 
+@needs_qt
 def test_the_generate_step_shows_the_same_lines_as_the_tui(wiz, device):
     page = _to_inputs(wiz)
     page.domain_pick.setCurrentIndex(1)
@@ -666,6 +678,7 @@ def test_the_generate_step_shows_the_same_lines_as_the_tui(wiz, device):
     assert any("mesh.example" in ln and "not exposed by this run" in ln for ln in want)
 
 
+@needs_qt
 def test_the_generate_exposure_pane_wraps_so_a_rows_remedy_is_read_whole(wiz, device,
                                                                         monkeypatch):
     """The unreadable-export row carries its remedy at the end of a long sentence; the
@@ -696,6 +709,7 @@ def test_the_generate_exposure_pane_wraps_so_a_rows_remedy_is_read_whole(wiz, de
     wiz.close()
 
 
+@needs_qt
 def test_the_generate_exposure_pane_fits_six_rows_and_grows_with_the_window(wiz, device,
                                                                            monkeypatch):
     """Six rows at the wizard's default size — three baked domains, the node's onion,
@@ -743,6 +757,7 @@ def test_the_generate_exposure_pane_fits_six_rows_and_grows_with_the_window(wiz,
 
 
 # ── a go-live TARGET's files, read by its ssh probe (core.golive_target) ────────────
+@needs_qt
 def test_baked_domains_reads_injected_text_and_never_the_host_file(tmp_path, monkeypatch):
     host = tmp_path / "host-domains"
     host.write_text("host-only.example\n")
@@ -754,6 +769,7 @@ def test_baked_domains_reads_injected_text_and_never_the_host_file(tmp_path, mon
     assert bd("example.org") == ["example.org", "host-only.example"]     # default unchanged
 
 
+@needs_qt
 def test_onion_scan_reads_injected_files_and_ignores_the_host_override(tmp_path, monkeypatch):
     from hugmesh_studio.core.golive_domains import onion_export_scan, onion_exports
     monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(tmp_path / "absent"))

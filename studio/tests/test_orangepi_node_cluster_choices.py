@@ -93,13 +93,22 @@ def test_rpi5_keeps_tor():
 # ---------------------------------------------------------------- the page, looked at
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-_qt = pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding installed")
+# GUI half: the studio-tests job installs NO Qt binding on purpose, so these imports fail there.
+# They must not skip the whole module (a module-level pytest.importorskip skipped the Qt-free tests
+# above it too, hugmesh-generator#537): only the tests below that need Qt are marked.
+from hugmesh_studio.core.platform_info import HostInfo       # Qt-free: stays outside the guard
+try:
+    import importlib
+    _qt = importlib.import_module("hugmesh_studio.gui.qt")
+    from hugmesh_studio.gui import wizard as wizard_mod
+    from hugmesh_studio.gui.pages.network import NetworkPage
+    _HAVE_QT = True
+except ImportError:
+    _qt = wizard_mod = NetworkPage = None
+    _HAVE_QT = False
+needs_qt = pytest.mark.skipif(not _HAVE_QT, reason="no Qt binding (PySide6/PyQt6) installed")
 
-from hugmesh_studio.core.platform_info import HostInfo          # noqa: E402
-from hugmesh_studio.gui import wizard as wizard_mod             # noqa: E402
-from hugmesh_studio.gui.pages.network import NetworkPage        # noqa: E402
-
-QtWidgets = _qt.QtWidgets
+QtWidgets = _qt.QtWidgets if _qt is not None else None
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
@@ -109,6 +118,8 @@ PNG_DIR = os.environ.get("HUGMESH_STUDIO_PNG_DIR", "")
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
+    if wizard_mod is None:               # no Qt binding: only the Qt-free tests run, they need no pin
+        return
     monkeypatch.setattr(wizard_mod, "detect",
                         lambda builder_image="hugmesh-builder": HOST)
 
@@ -151,6 +162,7 @@ def _usable(w, min_w=60):
     return w.isVisible() and w.isEnabled() and w.width() >= min_w and w.height() >= 10
 
 
+@needs_qt
 def test_node_row_page_shows_release_state_and_the_services(wiz):
     page = _net(wiz, mode="mesh", platform="orangepi5", role="pki", ram_gb="8")
     QtWidgets.QApplication.processEvents()
@@ -176,6 +188,7 @@ def _build(wiz, **cfg_kw):
     return page
 
 
+@needs_qt
 @pytest.mark.parametrize("platform,role,ram", [("orangepi5", "pki", "8"),
                                                ("orangepi4-lts", "frontend", "4")])
 def test_node_row_build_page_offers_and_emits_the_release_tag(wiz, platform, role, ram):
@@ -188,6 +201,7 @@ def test_node_row_build_page_offers_and_emits_the_release_tag(wiz, platform, rol
     assert args[args.index("--release-tag") + 1] == "2026.07-rc1"
 
 
+@needs_qt
 @pytest.mark.parametrize("platform", ["orangepi5", "orangepi4-lts"])
 def test_desktop_row_build_page_hides_the_release_tag(wiz, platform):
     page = _build(wiz, mode="mesh", platform=platform, role=platform)
@@ -199,6 +213,7 @@ def test_desktop_row_build_page_hides_the_release_tag(wiz, platform):
     assert "--release-tag" not in wiz.cfg.to_cli_args()
 
 
+@needs_qt
 def test_desktop_row_page_does_not_offer_release_state(wiz):
     page = _net(wiz, mode="mesh", platform="orangepi5", role="orangepi5")
     _grab(page, "network-orangepi5-desktop.png")
