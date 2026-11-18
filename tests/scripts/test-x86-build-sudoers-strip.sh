@@ -72,11 +72,18 @@ awk '/^# Portage pkg_postinst calls sudo internally/ {f=1}
      f && /^# ── 4\. Install spec files/ {exit}
      f {print}' "${BUILDER}" > "${TMPD}/write.sh"
 # The chroot phase's EXIT trap: the first col-0 `trap` after umount_chroot's body.
-awk '/^umount_chroot\(\) \{$/ {u=1} u && /^\}$/ {d=1; next} d && /^trap / {print; exit}' \
+# (the first top-level trap after umount_chroot() that names it: the definition moved
+# ahead of the --from-step region, the chroot phase's trap did not)
+awk '/^umount_chroot\(\) \{$/ {u=1} u && /^\}$/ {d=1; next} d && /^trap .*umount_chroot/ {print; exit}' \
     "${BUILDER}" > "${TMPD}/chroot-trap.sh"
-# The Clean phase and everything after it up to the stage4 banner (exclusive).
+# The Clean phase and everything after it up to the stage4 banner (exclusive). The two
+# --from-step plumbing lines at the end of the skippable region (the late-step record
+# and the region's closing `fi`; tests/scripts/test-x86-from-step.sh owns them) are left
+# out: this fixture runs the Clean phase alone, outside that region.
 awk '/^# ── 8\. Clean/ {f=1}
      f && /^banner "Packaging stage4 tarball"$/ {exit}
+     f && /^fi   # ── end of the skippable region ──$/ {next}
+     f && /^printf .BUILD_TS=%s.*> "\$\{LATE_STATE\}"$/ {next}
      f {print}' "${BUILDER}" > "${TMPD}/clean.sh"
 
 echo "-- 0) extraction --"
@@ -144,6 +151,8 @@ flow() {
         echo 'set -euo pipefail'
         printf "SYSROOT='%s'; BUILD_ROOT='%s'; SHARED_SPECS='%s'; SKIP_CLEAN=%s\n" "${sr}" "${TMPD}/br" "${SS}" "${skip}"
         echo 'ISO_CACHED=false; X86_POOL_DIR=""; ROLE_CLIENT=false; GPU=false; UNAFFILIATED=false'
+        # set ahead of the --from-step region in the builder, so not in the Clean text
+        echo 'SLX_PROBE_TABLE="${BUILD_ROOT}/selinux-label-probes.tsv"'
         # a SYSROOT outside this suite's scratch dir would point the Clean phase's
         # rm -rf at real paths: refuse before anything runs
         printf "case \"\${SYSROOT}\" in '%s'/sr-*) ;; *) echo 'refusing: SYSROOT outside the scratch dir' >&2; exit 98 ;; esac\n" "${TMPD}"
