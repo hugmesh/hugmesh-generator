@@ -237,7 +237,7 @@ spec:
             initialDelaySeconds: 45
             periodSeconds: 15
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
+            requests: { cpu: 100m, memory: 512Mi }  # idle JVM ~420Mi: see tests/scripts/test-bff-hpa-sizing.sh
             limits:   { cpu: "1",  memory: 768Mi }
           volumeMounts:
             - { name: tmp,    mountPath: /tmp }

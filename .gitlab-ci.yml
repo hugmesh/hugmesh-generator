@@ -165,6 +165,7 @@ lint:db-connection-budget:
     - pip install --quiet pyyaml
   script:
     - bash tests/scripts/test-db-connection-budget.sh
+    - bash tests/scripts/test-bff-hpa-sizing.sh
 
 # The stop in front of the PG_TLS_ENABLED flip (docs/DB-HARDENING-RUNBOOK.md). Each
 # dedicated Postgres mounts <db>-mtls with `optional: true` and runs `strategy:

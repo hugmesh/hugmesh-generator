@@ -4,10 +4,15 @@
 #
 # REQUIRES metrics-server (apps/01-metrics-server.yaml, already live). Until the
 # metrics API answers, this HPA stays inert and the Deployment's replicas floor
-# governs. CPU 70% + memory 80% — both Resource targets read the
-# resources.requests the Deployment already declares (cpu:100m, memory:256Mi). The replicaCount
+# governs. CPU 70% — the Resource target reads the
+# resources.requests the Deployment already declares (cpu:100m). The replicaCount
 # floor is held at the Deployment's current value (NOT raised here); min/max only
 # widen the band the HPA may move within (min 2 keeps an HA pair).
+# CPU ONLY, on purpose: this is a JVM. Its heap grows to what it is given and is not
+# handed back, so memory utilisation reads high at idle (about 420Mi against the old
+# 256Mi request) and says nothing about load. A memory target made the autoscaler go
+# 2 -> 6 at idle on the kind cluster (hugmesh-generator#685). Guarded by
+# tests/scripts/test-bff-hpa-sizing.sh.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -26,7 +31,3 @@ spec:
       resource:
         name: cpu
         target: { type: Utilization, averageUtilization: 70 }
-    - type: Resource
-      resource:
-        name: memory
-        target: { type: Utilization, averageUtilization: 80 }
