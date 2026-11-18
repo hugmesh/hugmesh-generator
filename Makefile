@@ -2047,7 +2047,9 @@ STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_POR
 # It is a $(shell) at PARSE time, and only when stack-up is a goal, because the looks gate
 # below (STACK_LOOKS_FLAGS) is a parse-time $(wildcard): a prerequisite target would run
 # after that line was already expanded and the first start would come up without the
-# mount. Every other goal (and `make -n`/`-p` of any other target) writes nothing. The
+# mount. Every other goal (and `make -n`/`-p` of any other target) writes nothing; a
+# `make -n stack-up` parses the Makefile like any run, so it seeds too (the files are
+# gitignored generated state, the same the Studio writes). The
 # ids it prints are also the per-domain Tor list (STACK_TOR_DOMAINS below), so TOR=1 gives
 # each sample its own .onion exactly as it does a recorded domain.
 STACK_SAMPLE_DOMAINS ?= 1
