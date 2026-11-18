@@ -40,6 +40,9 @@ from __future__ import annotations
 
 import html as _html
 import os
+import re
+import base64
+import hashlib
 
 from . import fonts, login_preview, theme
 
@@ -77,6 +80,95 @@ raw_text_safe = login_preview.raw_text_safe
 # can be fetched under `default-src 'none'` regardless of what the base URI is.)
 PREVIEW_CSP = ("default-src 'none'; style-src 'unsafe-inline'; font-src data:; "
                "img-src data:; form-action 'none'")
+
+# ── the SHELL pane: the real host-shell chrome and its background ─────────────
+# Operator ask (2026-11-13): "the preview of the themes should render the host shell so
+# we can see the background". The pane is a captured snapshot of the real production
+# shell (assets/shell-preview.html, provenance in its header) themed through the same
+# marker as the login pane, so the header, menubar, backpane, footer and the background
+# gradient are what production paints. A theme that declares a Vanta background gets the
+# real three.js + vanta effect started on the captured background stage.
+#
+# SCRIPTS: the page CSP has no script-src, and a srcdoc frame inherits it. The effect
+# runs ONLY inside the shell frame, which is sandboxed WITHOUT allow-same-origin (an
+# opaque origin that can touch nothing of this page or the disk), and the CSP allows
+# exactly those script bodies by their SHA-256 (deterministic, so the page stays
+# byte-reproducible, and stricter than a nonce). A theme with no Vanta effect gets no
+# script and no script-src at all.
+_ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+SHELL_ASSET = os.path.join(_ASSETS, "shell-preview.html")
+_VENDOR = os.path.join(_ASSETS, "vendor")
+_SHELL_SLOT = "__SHELL_SRCDOC__"
+_EFFECT_SLOT = "<!--__SHELL_EFFECT__-->"
+SHELL_PANE_LABEL = ("captured copy of the real host shell — themed with the exact css that "
+                    "ships, background included")
+_EFFECT_RE = re.compile(r"--sd-bg-effect:\s*\"?vanta-(fog|waves|net|globe)\"?\s*;")
+
+# Mirrors hugmesh-host-shell background.types.ts vantaOptionsFor()/commonOptions() and
+# theme-tokens.ts (palette token -> fallback), so the preview starts the effect with the
+# options production uses. Reduced motion: never started, as in the shell.
+_EFFECT_BOOT = """(function () {
+  var effect = %(effect)s;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  var stage = document.querySelector('[data-testid="background-stage"]');
+  if (!stage || !window.VANTA || !window.THREE) return;
+  var cs = getComputedStyle(document.documentElement);
+  function tok(name, fallback) {
+    var v = cs.getPropertyValue(name).trim();
+    return parseInt((/^#[0-9a-f]{6}$/i.test(v) ? v : fallback).slice(1), 16);
+  }
+  var p = { bg0: tok('--hug-bg-0', '#0a0a12'), primary: tok('--hug-primary', '#ffd700'),
+            secondary: tok('--hug-secondary', '#7c4dff'), accent: tok('--hug-accent', '#7c4dff'),
+            accentSoft: tok('--hug-accent-soft', '#b388ff') };
+  var base = { el: stage, THREE: window.THREE, mouseControls: true, touchControls: false,
+               gyroControls: false, minHeight: 200, minWidth: 200, scale: 1, scaleMobile: 1 };
+  var o = {
+    fog: { highlightColor: p.primary, midtoneColor: p.secondary, lowlightColor: p.accent,
+           baseColor: p.bg0, blurFactor: 0.55, speed: 0.9, zoom: 0.9 },
+    waves: { color: p.accent, shininess: 30, waveHeight: 12, waveSpeed: 0.6, zoom: 0.85 },
+    net: { color: p.primary, backgroundColor: p.bg0, points: 8, maxDistance: 22, spacing: 17,
+           showDots: true },
+    globe: { color: p.primary, color2: p.accentSoft, backgroundColor: p.bg0, size: 0.9,
+             points: 8, maxDistance: 22, spacing: 17 }
+  }[effect];
+  try { window.VANTA[effect.toUpperCase()](Object.assign(base, o)); } catch (e) { /* stays on the gradient */ }
+})();"""
+
+
+def _vendor(name: str) -> str:
+    with open(os.path.join(_VENDOR, name), encoding="utf-8") as fh:
+        text = fh.read()
+    # A script element ends at the first "</script"; the vendored builds carry none
+    # (pinned by the tests), and this keeps a future update from silently truncating.
+    return text.replace("</script", "<\\/script")
+
+
+def _effect_scripts(theme_css: str) -> list:
+    """The inline script bodies a theme's Vanta background needs, or [] for none."""
+    m = _EFFECT_RE.search(theme_css or "")
+    if not m:
+        return []
+    effect = m.group(1)
+    return [_vendor("three.min.js"), _vendor(f"vanta.{effect}.min.js"),
+            _EFFECT_BOOT % {"effect": repr(effect)}]
+
+
+def script_hashes(theme_css: str) -> list:
+    """CSP source expressions ('sha256-...') for exactly the scripts this theme ships."""
+    return ["'sha256-%s'" % base64.b64encode(hashlib.sha256(b.encode("utf-8")).digest()).decode()
+            for b in _effect_scripts(theme_css)]
+
+
+def shell_preview_html(theme_css: str) -> str:
+    """The captured shell snapshot with ``theme_css`` substituted, plus (only when the
+    theme declares a Vanta background) the effect scripts."""
+    with open(SHELL_ASSET, encoding="utf-8") as fh:
+        tpl = fh.read()
+    if MARKER not in tpl or _EFFECT_SLOT not in tpl:
+        raise RuntimeError("shell preview asset lost a substitution marker — regenerate it")
+    doc = tpl.replace(MARKER, raw_text_safe(theme_css), 1)
+    scripts = "".join(f"<script>{body}</script>\n" for body in _effect_scripts(theme_css))
+    return doc.replace(_EFFECT_SLOT, scripts, 1)
 
 
 # persona -> avatar/name colour classes. Fixed mapping (not hashed) so the same
@@ -229,6 +321,19 @@ def _forum_pane(content: dict) -> str:
         f'\n</div>\n<p class="pane-honesty">{_e(HONESTY_LABEL)}</p>\n</section>')
 
 
+def _shell_pane() -> str:
+    # sandbox="allow-scripts" WITHOUT allow-same-origin: the frame is an opaque origin,
+    # so the effect scripts (nonce-gated, present only for a Vanta theme) can reach
+    # nothing outside it.
+    return (
+        '<section class="pane pane-wide" id="pane-shell">\n'
+        '<div class="pane-head"><h2>Host shell</h2>'
+        '<span class="surface">host-shell (captured)</span></div>\n'
+        f'<iframe class="shell-frame" title="HugMesh host shell — captured real chrome" '
+        f'sandbox="allow-scripts" srcdoc="{_SHELL_SLOT}"></iframe>\n'
+        f'<p class="pane-honesty real">{_e(SHELL_PANE_LABEL)}</p>\n</section>')
+
+
 def _login_pane() -> str:
     # sandbox="": the snapshot is already script-stripped (pinned by
     # tests/test_login_preview.py), the empty sandbox just makes that structural —
@@ -332,6 +437,8 @@ body { margin: 0; background: var(--sd-bg-0); color: var(--sd-text);
 .fm-pages .cur { background: var(--sd-accent); color: var(--sd-secondary-on);
                  border-color: var(--sd-accent); }
 /* login */
+.pane-wide { grid-column: 1 / -1; }
+.shell-frame { display: block; width: 100%; height: 40rem; border: 0; }
 .login-frame { display: block; width: 100%; height: 34rem; border: 0;
                background: var(--sd-bg-0); }
 """
@@ -346,6 +453,9 @@ def platform_preview_html(theme_css: str) -> str:
     asset-intact guard: a snapshot that lost its marker raises rather than silently
     previewing the unthemed page)."""
     login_doc = login_preview.preview_html(theme_css)
+    shell_doc = shell_preview_html(theme_css)
+    hashes = script_hashes(theme_css)
+    csp = PREVIEW_CSP + ("; script-src " + " ".join(hashes) if hashes else "")
     content = sample_content()
     shell = (
         "<!DOCTYPE html>\n"
@@ -356,7 +466,7 @@ def platform_preview_html(theme_css: str) -> str:
         '<html lang="en"><head>\n'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        f'<meta http-equiv="Content-Security-Policy" content="{PREVIEW_CSP}">\n'
+        f'<meta http-equiv="Content-Security-Policy" content="{csp}">\n'
         "<title>HugMesh platform preview</title>\n"
         f'<style id="compiled-default-tokens">{_fallback_root_css()}</style>\n'
         f'<style id="snap-theme">{MARKER}</style>\n'
@@ -366,6 +476,7 @@ def platform_preview_html(theme_css: str) -> str:
         "<h1>HugMesh platform preview</h1>\n"
         "</header>\n"
         '<main class="pp-grid">\n'
+        + _shell_pane() + "\n"
         + _login_pane() + "\n"
         + _matrix_pane(content) + "\n"
         + _akkoma_pane(content) + "\n"
@@ -376,6 +487,7 @@ def platform_preview_html(theme_css: str) -> str:
     # marker (and an unthemed one carries an empty style block), so the top-level
     # replace can never eat the iframe's copy.
     page = shell.replace(MARKER, raw_text_safe(theme_css), 1)
+    page = page.replace(_SHELL_SLOT, _html.escape(shell_doc, quote=True), 1)
     return page.replace(_LOGIN_SLOT, _html.escape(login_doc, quote=True), 1)
 
 
