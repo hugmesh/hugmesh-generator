@@ -1810,6 +1810,28 @@ docker-build: ## DEPRECATED: builds now default to Docker — just run `make bui
 # affected. Guards: tests/scripts/test-stack-idp-exposure.sh (static + stub) and
 # tests/stack/test-stack-idp-exposure-live.sh (a throwaway Casdoor).
 STACK_COMPOSE   := tests/stack/compose.local.yaml
+
+# BRAND=<name> on a stack-* goal: run the Docker stack AS that brand. `make stack-up BRAND=acme`
+# used to ignore the brand (only the image builders read brands/<name>.{yaml,conf}), so a
+# brand's mesh still called itself HugMesh on hugmesh.net. studio core/brand_profile.py reads
+# the profile with a strict allowlist (never `source`s it); on stack-up it writes the stack's
+# OWN look, tests/stack/.theme.css, with the brand's title as the header text and its login
+# colours/font (what the shell and sign-in page say), and it supplies DOMAIN from the
+# profile's first domain when the caller named none (DOMAIN=... on the command line wins).
+# Every other stack-* goal only READS the profile, so stack-seed / stack-down see the same
+# DOMAIN (in ENV=prod it sets the Casdoor issuer) and never rewrite the look. A profile that
+# cannot be used STOPS make, naming why. The look file persists like any other: delete
+# tests/stack/.theme.css to go back to the shipped look. Guard: studio/tests/test_brand_profile.py.
+STACK_BRAND_GOAL := $(if $(filter stack-%,$(MAKECMDGOALS)),1,)
+ifneq ($(and $(strip $(BRAND)),$(STACK_BRAND_GOAL)),)
+STACK_BRAND_OUT := $(shell cd studio && python3 -m hugmesh_studio.core.brand_profile $(if $(filter stack-up,$(MAKECMDGOALS)),apply,show) --brand '$(BRAND)' --generator-dir '$(CURDIR)')
+ifeq ($(strip $(STACK_BRAND_OUT)),)
+$(error BRAND=$(BRAND) cannot be used for the stack: see the brand_profile message above (profiles live in brands/<name>.yaml or brands/<name>.conf))
+endif
+ifeq ($(strip $(DOMAIN)),)
+DOMAIN := $(patsubst DOMAIN=%,%,$(filter DOMAIN=%,$(STACK_BRAND_OUT)))
+endif
+endif
 STACK_SRC       ?= $(CURDIR)/.stack-src
 PUBLIC_HOST_PORT ?= 8088
 # HTTPS twin of the front door (the https-front TLS terminator in the compose

@@ -290,6 +290,40 @@ ingress-exposed. Casdoor and the social tier publish ports as dev conveniences
 
 ---
 
+## Run the stack as a brand — `make stack-up BRAND=<name>`
+
+`brands/<name>.yaml` (or `.conf`) describes a brand, and until now only the image builders read it:
+`make stack-up BRAND=acme` brought up a mesh that still called itself HugMesh on `hugmesh.net`. It
+now runs the stack as that brand:
+
+```bash
+make stack-up BRAND=acme            # title "Acme Arcade", domain acme.games (brands/acme.yaml)
+make stack-up BRAND=example         # title "Example Corp", domain example.test
+make stack-up BRAND=acme DOMAIN=mine.example   # your DOMAIN wins; the title and colours still apply
+```
+
+- **The name.** The profile's title (`title:` in a `.yaml`, `BRAND_TITLE=` in a `.conf`) is written
+  as the header text of the stack's own look, `tests/stack/.theme.css`, which the shell and the
+  sign-in page already read for the name they show. A `login_theme:` block (`primary`, `secondary`,
+  `font`) in a `.yaml` colours it too.
+- **The domain.** When you name no `DOMAIN`, it is the profile's first domain (`CLUSTER_DOMAIN=` in a
+  `.conf`). It is what the door's certificate covers and, with `ENV=prod`, what the Casdoor issuer
+  is built from (`https://id.<domain>`). The other `stack-*` goals (`stack-seed`, `stack-down`, ...)
+  read the same profile so they agree on it, and never rewrite the look.
+- **Only `stack-up` writes.** It replaces `tests/stack/.theme.css` (the Studio writes the same file
+  from its own model). The file persists like any other: delete it to go back to the shipped look.
+  A dry run (`make -n`) writes it too, as it does for the sample domains.
+- **A profile is read, never run.** The reader takes `BRAND`, `BRAND_TITLE` and `CLUSTER_DOMAIN` off
+  plain `NAME="value"` lines and nothing else, so `$(...)` or backticks in a title are text, not
+  commands. A title is one line of at most 60 characters; a domain must be a DNS name; a bad colour
+  or font is refused. Any of these stops `make` with the reason, and no file is written.
+- **Not done:** the kind lane's own look (one per mesh) does not read a brand profile; a brand's
+  images built by the generator carry the brand already. The pages say the name only with the
+  host-shell and login-ui versions that read the theme's header text.
+
+Where it lives: `studio/hugmesh_studio/core/brand_profile.py`, the `STACK_BRAND_*` block in the
+`Makefile`. Guard: `studio/tests/test_brand_profile.py`.
+
 ## More than one domain on the local mesh — the sample domains
 
 A local mesh always has a second name to sign in on. When `make stack-up` runs and no domain was
