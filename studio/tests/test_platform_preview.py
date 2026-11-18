@@ -203,7 +203,7 @@ def test_a_vanta_theme_ships_exactly_its_hashed_scripts():
     css = theme_presets.compose_css("aurora-net", "dark")
     page = platform_preview.platform_preview_html(css)
     doc = _shell_srcdoc(page)
-    bodies = _re.findall(r"<script>(.*?)</script>", doc, _re.S)
+    bodies = _re.findall(r"<script>(.*?)</script>", doc, _re.S | _re.I)
     assert len(bodies) == 3 and "VANTA" in bodies[2] and "'net'" in bodies[2]
     head = page.split("</head>")[0]
     for body in bodies:

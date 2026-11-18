@@ -46,6 +46,18 @@ HUG_THEME_CSS="$(cat theme.css)" make stack-up
 scripts/tooling/derive-theme.py --preset nord --configmap | kubectl apply -f -
 ```
 
+## The catalogue for consumers outside this repo
+
+`hugmesh-admin-ui`'s per-domain theme editor offers the presets by name, but the catalogue lives
+in `studio/hugmesh_studio/core/theme_presets.py`. `scripts/tooling/export-theme-catalogue.py`
+prints it as the TypeScript module admin-ui vendors:
+
+```
+python3 scripts/tooling/export-theme-catalogue.py > ../hugmesh-admin-ui/src/app/themes/theme-catalogue.ts
+```
+
+Re-run it and re-vendor the output whenever the presets or the ramps change.
+
 ## Pictures, shape, and what the writer refuses (#654)
 
 The Studio's look editor adds two web pictures and two shape settings to the
