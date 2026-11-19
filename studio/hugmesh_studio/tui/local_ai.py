@@ -123,6 +123,10 @@ def _help_lines(windows: bool, kind: str = "windows") -> list[str]:
     return [start if ln.startswith("  start ") else ln for ln in _HELP]
 
 
+#: the Brand settings section number -> the assistant's tab key (brand_step.SECTIONS)
+_SECTION_TABS = {1: "identity", 2: "users", 3: "look", 4: "services", 5: "ways"}
+
+
 class LocalAIScreen:
     """Status, work list and a prompt line — the terminal twin of the dock."""
 
@@ -192,7 +196,7 @@ class LocalAIScreen:
         domain = str(getattr(row, "name", "") or "") if row is not None else ""
         tab = ""
         if step is not None:
-            tab = {1: "identity", 2: "look", 3: "services", 4: "ways"}.get(
+            tab = _SECTION_TABS.get(
                 getattr(step, "section", 0), "")
         domains = actxt.domain_rows_from(getattr(cfg, "domains", ()) or ()) if cfg is not None else ()
         brand = actxt.brand_rows_from({"id": getattr(cfg, "brand", "")}) if cfg is not None else ()
@@ -279,7 +283,7 @@ class LocalAIScreen:
         """The page half only (no file reads): for the tip line."""
         slug = str(getattr(j, "slug", "") or "")
         step, row = self._step_and_row(j)
-        tab = {1: "identity", 2: "look", 3: "services", 4: "ways"}.get(
+        tab = _SECTION_TABS.get(
             getattr(step, "section", 0), "") if step is not None else ""
         return actxt.Where(face="tui", slug=slug, domain=str(getattr(row, "name", "") or ""), tab=tab)
 

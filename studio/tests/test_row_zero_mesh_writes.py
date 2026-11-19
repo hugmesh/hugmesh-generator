@@ -307,7 +307,7 @@ def test_the_text_docker_route_says_where_row_zero_is_set(tmp_path):
     sc.feed(j, "open 1")
     sc.feed(j, f"signin entra {ENTRA} c")
     assert j.status.startswith("Not changed: The local mesh's own sign-in")
-    sc.feed(j, "open 4")
+    sc.feed(j, "open 5")
     sc.feed(j, "tor on")
     assert j.status.startswith("Not changed: The local mesh's own sign-in, Tor")
 
@@ -328,7 +328,7 @@ def test_the_text_image_route_writes_the_same_mesh_fields(tmp_path):
     assert (cfg.idp, cfg.idp_issuer, cfg.idp_client_id) == ("entra", ENTRA, "mesh-client")
     sc.feed(j, "signin mesh")
     assert j.status.startswith("Not changed") and cfg.idp == "entra"
-    sc.feed(j, "open 4")
+    sc.feed(j, "open 5")
     sc.feed(j, "tor on")
     assert cfg.tor_onion_service is True
     sc.feed(j, "egress vpn /etc/wireguard/mesh.conf")

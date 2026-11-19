@@ -327,6 +327,7 @@ ClusterSecretStore **`hugmesh-vault`** (provider `vault`, token auth from the
 | `harbor-robots` (`pull_name`/`pull_secret`) | `hugmesh-registry-pull` (`.dockerconfigjson`) — same cred, **different Secret name**: the Harbor chart is released into this namespace and already owns `harbor-registry` (its own `REGISTRY_HTTP_SECRET`, template `registry/registry-secret.yaml`) | `hugmesh-pki` |
 | `harbor-robots` (`push_name`/`push_secret`) | `image-builder-registry` (`.dockerconfigjson`, **push**) | `hugmesh-image-builds` (opt-in) |
 | `casdoor-apps` (`fragment-sync`) | `fragment-sync-casdoor` (`clientId`=`app-fragment-sync`/`clientSecret`) | `hugmesh-frontend` |
+| `casdoor-apps` (`test-ingest`) | `test-ingest-casdoor` (`clientId`=`app-test-ingest`/`clientSecret`) | `hugmesh-backend` |
 
 The table shows the first set only: `manifests/external-secrets/` holds many more
 (108 `ExternalSecret` objects on origin/main, 2026-10-07).

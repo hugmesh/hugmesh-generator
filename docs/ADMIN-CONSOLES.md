@@ -42,8 +42,10 @@ Three ways today:
 * **Admin → Roles** (`/admin/roles`, `ROLE_ADMIN`) — grant or revoke a role from a closed
   list of grantable roles. On a stack that reports `casdoorAdminEnabled:false` the grant
   is recorded locally but does not reach Casdoor, and the page says so.
-* **Studio → Local mesh → "Add user…"** — creates an account with chosen roles by
-  re-running the idempotent seeder.
+* **Studio → Local mesh → "Add user…"**, and each domain's **Users** tab in Brand
+  settings — create an account with chosen roles straight through Casdoor's admin API
+  (`studio/hugmesh_studio/core/mesh_accounts.py`): no seeder runs and no other account is
+  touched. `make stack-seed` keeps such accounts' roles (it manages only its own personas).
 * `POST` / `DELETE /bff/admin/roles/{roleName}/{user}` (`ROLE_ADMIN`) — the API behind the Roles page.
 
 ---

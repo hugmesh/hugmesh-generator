@@ -141,7 +141,7 @@ def test_the_brand_settings_door_gets_the_b_back_usage_line():
             break
         j.feed("")
     assert j.slug == "domain_services"
-    j.feed("open 4")                               # Brand settings: Ways to reach it
+    j.feed("open 5")                               # Brand settings: Ways to reach it
     j.feed("go-live")
     gl = j.overlay
     assert isinstance(gl, GoLiveScreen)
