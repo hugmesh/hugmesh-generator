@@ -84,7 +84,7 @@ host tools.
 | Package | The hugmesh-generator build scripts | On first start |
 |---|---|---|
 | Flatpak, x86_64 and aarch64 (0.4.4-beta.1 and later) | **Included.** The bundle carries the tree of its own release (`share/hugmesh-studio/generator-seed.tar.gz`). | Studio places that copy in `~/.local/share/hugmesh-studio/generator` and uses it. There is nothing to clone. |
-| Windows MSI, Linux tarball, macOS .dmg | **Not included yet.** | Studio shows *Choose your hugmesh-generator folder*. Clone `hugmesh-generator` (`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and Studio remembers it. |
+| Windows MSI, Linux tarball, macOS .dmg | **Not included yet**. | Studio shows *Choose your hugmesh-generator folder*. Clone `hugmesh-generator` (`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and Studio remembers it. |
 
 How the copy works and what overrides it:
 
