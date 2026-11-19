@@ -64,12 +64,18 @@ elif command -v podman >/dev/null 2>&1; then RT="podman"; fi
 [ -n "${RT}" ] || guard_require_capability \
   "no docker or podman on PATH — this guard needs a container runtime to start casdoor"
 
+# This Casdoor runs with its upstream factory admin (admin/123, used below), so it must not outlive the
+# run: remove the containers by NAME as well as by id (a crash between `run -d` and the CID assignment
+# leaves a container with no id in hand), and turn INT/TERM into an exit so the EXIT trap always runs.
 cleanup(){
   [ -n "${CID}" ]   && ${RT} rm -f "${CID}"   >/dev/null 2>&1 || true
   [ -n "${PGCID}" ] && ${RT} rm -f "${PGCID}" >/dev/null 2>&1 || true
+  ${RT} rm -f casdoor-jwtcustom-test casdoor-pg >/dev/null 2>&1 || true
   ${RT} network rm "${NET}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "== D6+D8 JWT-Custom held-until-live: minting against ${IMG} =="
 
@@ -113,7 +119,7 @@ CONF
 # suffix relabels for SELinux hosts (no-op elsewhere).
 chmod 0644 "${CONF}"
 
-CID="$(${RT} run -d --name casdoor-jwtcustom-test --network "${NET}" -p "${HOSTPORT}:8000" \
+CID="$(${RT} run -d --name casdoor-jwtcustom-test --network "${NET}" -p "127.0.0.1:${HOSTPORT}:8000" \
   -e RUNNING_IN_DOCKER=true \
   -v "${CONF}:/conf/app.conf:ro,z" \
   "${IMG}" 2>/tmp/casdoor-run.err)" || {
