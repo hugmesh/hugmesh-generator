@@ -61,7 +61,7 @@ def test_the_image_routes_ways_section_opens_go_live_with_its_domain():
     j = _image_ways("shop.example")
     under = j.screen()
     _go_live_and_back(j, "shop.example", under)
-    assert j.slug == "domain_services" and under.section == 4
+    assert j.slug == "domain_services" and under.section == 5
 
 
 def test_the_picked_domain_carries_to_the_go_live_domain_step():

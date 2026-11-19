@@ -150,6 +150,7 @@ from ...core.local_services import (
 from ...core.progress_parse import ProgressParser
 from ...core import credentials_truth
 from ...core import kind_seed
+from ...core import mesh_accounts
 from ...core.seeded_credentials import Roster, annotate, load_roster
 from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
@@ -786,11 +787,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             wiz.localmesh_page = self
         except Exception:                    # noqa: BLE001 — read-only host shim
             pass
-        # Users added via the Add-user verb THIS session, as seeder specs
-        # ("name:ROLES:PW_ENV"). The FULL list rides every Add-user re-seed:
-        # apply-systems-roles.sh writes EXACT role member sets, so a spec that
-        # drops out of a later render loses its role memberships.
-        self._added_user_specs: list[str] = []
+        # a password the Add-user apply generated, for the status line once (never
+        # the log); cleared as soon as it is shown
+        self._add_user_secret = ""
         self._running = False
         self._running_label = ""
         # Generate && start pressed from a page outside the local-mesh steps (the panel
@@ -2231,16 +2230,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         brow.addWidget(self.devops_down_btn)
         self.add_user_btn = QtWidgets.QPushButton("Add user…")
         self.add_user_btn.setToolTip(
-            "Create a NEW named account on the RUNNING mesh (username, password, "
-            "roles) through that lane's OWN seeder — never a bespoke Casdoor call, "
-            "so the account is created by the machinery that created every other "
-            "persona. On the docker mesh that is the idempotent `make stack-seed` "
-            "with EXTRA_ROLE_USERS (registration stage 2 included); on the kind "
-            "lane it is seed-accounts.sh --roles + apply-systems-roles.sh against "
-            "the live Casdoor, exactly as bootstrap-kind.sh step 10 does, applied "
-            "through the `make view LANE=kind-svc` casdoor door. Either way the "
-            "identity is READ BACK from the mesh afterwards: the seeder's own exit "
-            "code is not evidence. A mesh must be up (it says plainly if not).")
+            "Create a NEW named account on the RUNNING mesh (username, email, "
+            "password, roles) straight through Casdoor's admin API: no e2e seeder, "
+            "and no other account is touched. On the docker mesh it goes to the "
+            "central sign-in with this checkout's Casdoor admin password; on the "
+            "kind lane through the `make view LANE=kind-svc` casdoor door with the "
+            "admin password from Vault. Either way the account and its roles are "
+            "READ BACK afterwards. A domain's own people are added on that "
+            "domain's Users tab (Brand settings). A mesh must be up (it says "
+            "plainly if not).")
         self.add_user_btn.clicked.connect(self._add_user)
         brow.addWidget(self.add_user_btn)
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
@@ -3189,7 +3187,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # run's filename, a perfect misattribution chain.
             self._drain_lines()
         if ok:
-            self.status.setText("Done." + (f"  Log: {saved}" if saved else ""))
+            self.status.setText("Done." + (f"  Log: {saved}" if saved else "")
+                                + (getattr(self, "_add_user_secret", "") or ""))
+            self._add_user_secret = ""
         else:
             self.status.setText(
                 ("FAILED — see the log below; a copy is saved at " + saved)
@@ -4333,7 +4333,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         boot = self.boot = LocalMeshBootstrap(self.generator_dir, cfg)
         node = boot._stack_node()
         gen = self.generator_dir
-        users = list(self._added_user_specs)
+        # the accounts the Add-user verb created this session, read back (name and
+        # roles; the record never holds a password), in the record's spec shape
+        users = [f"{n}:{','.join(r)}:" for n, r in self._added_users_ok]
         form = self.theme_form()
         kind_up = self._kind_lane_running()
         mesh_up = self._mesh_up
@@ -5206,74 +5208,65 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _add_user(self):
         """Add ONE named user to the RUNNING mesh — on EITHER lane (#540).
 
-        The dialog is the same on both: username, roles, password. What differs is
-        the APPLY, because the two lanes seed differently and neither may be driven
-        with the other's seeder:
+        The dialog is the same on both: username, email, password, roles. The APPLY is
+        ``core.mesh_accounts`` on both — Casdoor's admin API, never the e2e seeder
+        (2026-11-19, the operator: "adding users should work without the e2e
+        scripts"). What differs is the door and the admin password:
 
-          * COMPOSE — re-run the idempotent seeder with EXTRA_ROLE_USERS appended
-            (``make stack-seed``, seed-accounts.sh's additive door);
-          * KIND — render with ``seed-accounts.sh --roles`` and apply
-            ``roles/apply-systems-roles.sh`` against the live Casdoor, which is what
-            bootstrap-kind.sh step 10 does (``core/kind_seed``).
+          * COMPOSE — the central Casdoor on loopback, signed in with this checkout's
+            ``CASDOOR_ADMIN_PASSWORD`` (``tests/stack/.env``); the account is the mesh's
+            own domain's (a domain's own people are added on its Users tab);
+          * KIND — the ``casdoor`` view door, with the admin password from Vault
+            (``core/kind_seed``), read back from the cluster's own database.
 
-        Neither is a bespoke Casdoor call: the account is created by exactly the
-        machinery that created every other persona on its lane. The FULL spec list
-        is re-rendered in both cases, because apply-systems-roles.sh sets each
-        role's members to EXACTLY the rendered list — a single-user render would
-        wipe every other persona's memberships.
-
-        The lane is decided in the WORKER (``stack.status()`` is blocking), never
-        here."""
-        # Both lanes' seeders are bash (`make stack-seed`, seed-accounts.sh), so on
-        # native Windows the account can never be created: refuse BEFORE the dialog
-        # asks for a username and password.
-        blocker = platform_info.native_windows_blocker("Adding a user")
-        if blocker:
-            self._refuse(blocker)
-            return
+        One account is created and added to its roles; no other account is touched,
+        so nothing has to be re-rendered. A generated password is shown once on the
+        status line and never written to the log. The lane is decided in the WORKER
+        (``stack.status()`` is blocking), never here."""
         dlg = AddUserDialog(self.generator_dir, parent=self)
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
-        spec, pw_env, password = dlg.result_spec()
-        uname = spec.split(":", 1)[0]
-        self._added_user_specs = [s for s in self._added_user_specs
-                                  if s.split(":", 1)[0] != uname]
-        self._added_user_specs.append(spec)
-        # E2E_PASSWORD_KEEP=1: `make stack-seed` STARTS a run and would mint a new
-        # shared password (tests/stack/e2e-password.sh) — re-passwording every
-        # persona already on this mesh just to add one account. Keep the run's.
-        env = {"EXTRA_ROLE_USERS": " ".join(self._added_user_specs),
-               "E2E_PASSWORD_KEEP": "1"}
-        if password:
-            env[pw_env] = password          # env-only — never argv, never logged
+        uname, roles, password, email = dlg.result_values()
         stack = self.boot._stack_node()
-        roles = tuple(r for r in spec.split(":")[1].split(",") if r) \
-            if spec.count(":") >= 2 else ()
+        self._add_user_secret = ""
 
-        def _seed(on_line, cancel):
+        def _create(on_line, cancel):           # noqa: ARG001 — one bounded apply
             try:
                 compose_up = bool(stack.status().running)
             except Exception:               # docker absent: not a compose mesh
                 compose_up = False
             if compose_up:
-                ok, msg = stack.seed(env, on_line=on_line, cancel=cancel)
+                own = (getattr(self.boot.cfg, "cluster_domain", "") or "").strip()
+                target, why = mesh_accounts.target_for(own, None, self.generator_dir,
+                                                       own=True)
+                out = mesh_accounts.create_account(
+                    target, self.generator_dir, uname, password, roles, email=email,
+                    on_line=on_line)
+                ok, msg, generated = out.ok, out.message, out.password
+                granted = tuple(out.accounts[0].roles) if out.ok else ()
             else:
-                ok, msg = self._add_user_kind(uname, roles, pw_env, password,
-                                              stack, on_line)
+                ok, msg, generated, granted = self._add_user_kind(
+                    uname, roles, password, email, on_line)
+            on_line(f"[add-user] {msg}")
             if ok:
                 # Runs on the worker thread; a plain list swap under the GIL, read
                 # on the GUI thread only at the next credentials press. Name and
-                # roles ONLY — the password went to the seeder's env and is gone.
+                # roles ONLY — the password is in the GUI's status line once, at most.
                 self._added_users_ok = [u for u in self._added_users_ok
-                                        if u[0] != uname] + [(uname, roles)]
-            return ok, msg
+                                        if u[0] != uname] + [(uname, granted)]
+                if generated:
+                    self._add_user_secret = (
+                        f"  {uname}'s password, shown this once (not kept anywhere): "
+                        f"{generated}")
+            return ok, ("" if ok else msg)
 
-        self._note(f"[add-user] re-seeding with '{uname}' appended (idempotent; "
-                   "existing personas re-applied unchanged) …")
-        self._launch(f"Adding user {uname}", _seed, stream=True, cancellable=True)
+        self._note(f"[add-user] creating '{uname}' through Casdoor's admin API (no "
+                   "seeder; no other account is touched) …")
+        self._launch(f"Adding user {uname}", _create, stream=True, cancellable=False)
 
-    def _add_user_kind(self, uname, roles, pw_env, password, stack, on_line):
+    def _add_user_kind(self, uname, roles, password, email, on_line):
         """The kind-lane apply. Runs on the WORKER thread (blocking by contract).
+        Returns (ok, message, generated password, granted roles).
 
         Refuses rather than guessing when no kind cluster is there either: "the
         casdoor door is not up" would be a true sentence about the wrong problem."""
@@ -5284,16 +5277,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 "No mesh is running to add a user to: the compose stack is down and "
                 + (f"there is no kind cluster named {cluster}." if up is False else
                    "docker did not answer about the kind cluster.")
-                + " Start one first.")
-        try:
-            env = stack._build_env(write_overlays=False)      # an add READS the env
-        except Exception:
-            env = None
+                + " Start one first."), "", ()
         outcome = kind_seed.add_user_kind(
-            generator_dir=self.generator_dir, cluster=cluster,
-            specs=self._added_user_specs, username=uname, roles=roles,
-            password=password, password_env=pw_env, env=env, on_line=on_line)
-        return outcome.ok, outcome.message
+            generator_dir=self.generator_dir, cluster=cluster, username=uname,
+            roles=roles, password=password, email=email, on_line=on_line)
+        return outcome.ok, outcome.message, outcome.password, outcome.granted
 
     def _copy_onion(self):
         """Copy the published .onion address to the clipboard. A normal browser
