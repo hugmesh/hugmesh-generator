@@ -406,8 +406,8 @@ def _page(gen, cfg=None):
 def test_the_four_tabs_are_in_the_designs_order_and_services_is_open(qapp, gen):
     w, page = _page(gen)
     tabs = page.brand_tabs
-    assert [tabs.tabText(i) for i in range(5)] == list(TAB_TITLES) == [
-        "Identity", "Users", "Look", "Services", "Ways to reach it"]
+    assert [tabs.tabText(i) for i in range(4)] == list(TAB_TITLES) == [
+        "Identity", "Look", "Services", "Ways to reach it"]
     assert tabs.currentIndex() == TAB_SERVICES
     assert (TAB_IDENTITY, TAB_LOOK, TAB_SERVICES, TAB_WAYS) == (0, 1, 2, 3)
     # the Services tab IS the body: its widgets stay in the body's layout, under the

@@ -265,17 +265,14 @@ class DomainServicesScreen:
         return brand_step.brand_view(session, d.name, own=d.name == _own_name(self.cfg(j)))
 
     def _section_lines(self, j, view) -> list[str]:
-        """Every section but Services as text (Services is the screen below)."""
+        """Sections 1, 2 and 4 as text (3 is the services screen below)."""
         n = self.section
-        if n == brand_step.SECTION_IDENTITY:
+        if n == 1:
             out = brand_step.identity_lines(view)
-        elif n == brand_step.SECTION_USERS:
-            out = brand_step.people_lines(view)
         elif n == brand_step.SECTION_LOOK:
             out = brand_step.look_section_lines(view, self.route)
             if self._look_editable(view):
-                out = [f"{brand_step.SECTION_LOOK}. Look — " + view.label(),
-                       ""] + self._look(view).lines()
+                out = ["2. Look — " + view.label(), ""] + self._look(view).lines()
         else:
             out = brand_step.ways_lines(view)
         return out
@@ -299,7 +296,7 @@ class DomainServicesScreen:
 
     def _open_section(self, j, view, n: int) -> None:
         if n not in dict(brand_step.SECTIONS):
-            j.status = f"no such section: {n} (1 to {len(brand_step.SECTIONS)})"
+            j.status = f"no such section: {n} (1 to 4)"
             return
         if self.section == brand_step.SECTION_LOOK:
             view.commit_look()
@@ -329,16 +326,11 @@ class DomainServicesScreen:
                 out += self._section_lines(j, view)
                 out += ["", "commands: open N=another section · n=next brand · "
                         "p=previous brand"
-                        + (" · look commands as listed"
-                           if self.section == brand_step.SECTION_LOOK
+                        + (" · look commands as listed" if self.section == 2
                            and self._look_editable(view) else "")
-                        + (" · signin … as listed"
-                           if self.section == brand_step.SECTION_IDENTITY
+                        + (" · signin … as listed" if self.section == 1
                            and not (view.own and view.signin_refusal()) else "")
-                        + (" · add/remove/accounts/create as listed"
-                           if self.section == brand_step.SECTION_USERS else "")
-                        + (" · tor/vpn/egress … as listed"
-                           if self.section == brand_step.SECTION_WAYS
+                        + (" · tor/vpn/egress … as listed" if self.section == 4
                            and not (view.own and view.own_way_refusal("tor")
                                     and view.own_way_refusal("egress")) else "")
                         + " · Enter=continue"]
@@ -428,7 +420,7 @@ class DomainServicesScreen:
         view = self._brand(j)
         if view is not None:
             word, _, arg = verb.partition(" ")
-            names = brand_step.SECTION_WORDS
+            names = {"identity": 1, "look": 2, "services": 3, "ways": 4}
             if word == "open" and arg.strip().isdigit():
                 self._open_section(j, view, int(arg))
                 return
@@ -443,16 +435,11 @@ class DomainServicesScreen:
                     j.status = ("Not editable on this route. "
                                 + brand_step.brand_look.DOCKER_ONLY_SENTENCE)
                 return
-            if self.section == brand_step.SECTION_USERS and verb not in ("n", "p"):
-                # the domain's people (the window's Users tab controls)
-                j.status = brand_step.feed_people(view, line)
-                return
-            if self.section == brand_step.SECTION_IDENTITY and verb not in ("n", "p"):
+            if self.section == 1 and verb not in ("n", "p"):
                 # the domain's own sign-in (the window's Identity tab controls)
                 j.status = brand_step.feed_identity(view, line)
                 return
-            if (self.section == brand_step.SECTION_WAYS
-                    and verb == brand_step.WAYS_GO_LIVE_COMMAND
+            if (self.section == 4 and verb == brand_step.WAYS_GO_LIVE_COMMAND
                     and not view.client_image()):
                 # the window's 'Set up ways to reach this brand' button: the Go-Live
                 # screen over this one, with this domain picked; b on its first
@@ -462,7 +449,7 @@ class DomainServicesScreen:
                 j.open_overlay(screen)
                 screen.opts.domain = view.name.strip().lower()
                 return
-            if self.section == brand_step.SECTION_WAYS and verb not in ("n", "p"):
+            if self.section == 4 and verb not in ("n", "p"):
                 # its Tor address, VPN and egress (the window's Ways tab controls)
                 j.status = brand_step.feed_ways(view, line)
                 return

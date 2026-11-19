@@ -175,9 +175,6 @@ API_RE = re.compile(r"^/api/(get|add|update)-([a-z-]+)$")
 # The OAuth token endpoint is public by definition — the pre-mint and the
 # machine-client self-check both call it with no cookie jar.
 PUBLIC = {"/api/health", "/api/login", "/api/login/oauth/access_token"}
-# The list reads (studio core/mesh_accounts.py lists a domain's people): plural noun
-# -> the stored noun. A plural with no ?owner= stays an ordinary (empty) get.
-LIST_NOUNS = {"users": "user", "roles": "role"}
 
 
 def _journal(entry):
@@ -399,16 +396,6 @@ class Handler(BaseHTTPRequestHandler):
         return self._ok()
 
     def _crud(self, verb, noun, query, body):
-        if verb == "get" and noun in LIST_NOUNS and "owner" in query:
-            # casdoor's list reads (GetUsers / GetRoles ?owner=): every stored object
-            # of that noun the owner holds. Denied after a write in readback-denied,
-            # like every other read.
-            if MODE == "readback-denied" and _wrote[0]:
-                return self._error("Unauthorized operation")
-            owner = (query.get("owner") or [""])[0]
-            with _lock:
-                return self._ok([dict(o) for k, o in sorted(_store.items())
-                                 if k.startswith(f"{LIST_NOUNS[noun]}:{owner}/")])
         if verb == "get":
             if MODE == "readback-denied" and _wrote[0]:
                 # The verification read after the write is denied. casdoor's own

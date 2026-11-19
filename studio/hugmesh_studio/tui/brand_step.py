@@ -1,13 +1,11 @@
-"""The Brand settings screen — one brand, five numbered sections (hugmesh-generator#654,
-decision D9; operator decision 71 = A: the window's tabs and these sections are the
-same things, in the same order).
+"""The Brand settings screen — one brand, four numbered sections (hugmesh-generator#654,
+decision D9; operator decision 71 = A: the window's four tabs and these four sections
+are the same four things, in the same order).
 
     1. Identity        public name, title, id, sign-in, applies-to, certificate authority
-    2. Users           the domain's people: the ones this image plans for it, and the
-                       accounts on the running local mesh (created here, no e2e script)
-    3. Look            the brand's override of the superbrand's look, field by field
-    4. Services        the per-domain service catalogue (the existing step, unchanged)
-    5. Ways to reach it  internal name, Tor address, public name through a provider
+    2. Look            the brand's override of the superbrand's look, field by field
+    3. Services        the per-domain service catalogue (the existing step, unchanged)
+    4. Ways to reach it  internal name, Tor address, public name through a provider
 
 EACH SETTING HAS EXACTLY ONE EDITING HOME. This is the rule the screen is built on, and
 what each section does about it:
@@ -26,14 +24,6 @@ what each section does about it:
   "Themes" group, the Branding page's "Web login theme" and the TUI's "t. Themes") are
   gone; a saved configuration's ``login_*`` values still load, because the look model
   reads them.
-* USERS (2026-11-19, the operator: "users should be creatable and assignable by domain
-  in another tab after identity in the domain configuration and adding users should
-  work without the e2e scripts") has two halves. The PLANNED people are the image
-  wizard's ``cfg.users`` rows whose domain is this one: the same list as the Users
-  step's table, which shows every domain at once; adding one here assigns it to this
-  domain (a superadmin to the mesh's root domain, the table's rule). The LIVE half is
-  the accounts on the local mesh running now, in the Casdoor this domain signs in
-  through, created by ``core.mesh_accounts`` straight through Casdoor's admin API.
 * SERVICES is the existing screen, untouched, and stays what is on screen when the step
   opens, so every command that worked before still does.
 * WAYS is a read-only summary with one button in the window; the Go-Live wizard
@@ -50,19 +40,16 @@ from __future__ import annotations
 
 import dataclasses
 
-from ..core import (brand_look, brand_model, domain_reach, mesh_accounts, plain_words,
-                    platform_info, reach_apply)
+from ..core import (brand_look, brand_model, domain_reach, plain_words, platform_info,
+                    reach_apply)
 from ..core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, SIGNIN_FROM_MESH,
-                           USER_ROLE_CHOICES, User, users_table_applies,
                            SIGNIN_METHOD_LABELS, SIGNIN_METHODS, SIGNIN_METHODS_EXTERNAL,
                            SIGNIN_METHODS_NOT_APPLIED, SIGNIN_SOURCE_WORDS, Domain,
                            effective_signin, effective_signin_methods, set_domain_signin,
                            set_domain_signin_methods)
 from .superbrand_step import MESH_SIGNIN_CHOICES, BrandSession
 
-__all__ = ["SECTIONS", "SECTION_IDENTITY", "SECTION_USERS", "SECTION_LOOK",
-           "SECTION_SERVICES", "SECTION_WAYS", "SECTION_WORDS", "BrandView", "brand_view",
-           "people_lines", "feed_people", "live_role", "PEOPLE_COMMANDS",
+__all__ = ["SECTIONS", "SECTION_LOOK", "SECTION_SERVICES", "BrandView", "brand_view",
            "section_menu", "identity_lines", "ways_lines", "summary_line",
            "IDENTITY_HOME", "WAYS_BUTTON", "LOOK_HOME", "LOOK_POINTER",
            "SIGNIN_CHOICES", "SIGNIN_EXTERNAL", "SIGNIN_MESH_HOME", "PROVIDER_WORDS",
@@ -72,18 +59,11 @@ __all__ = ["SECTIONS", "SECTION_IDENTITY", "SECTION_USERS", "SECTION_LOOK",
            "CLIENT_WAYS_NOTE", "CLIENT_REACH_EFFECT", "WAYS_HOME", "WAYS_HOME_NO_BUTTON",
            "WAYS_GO_LIVE_COMMAND", "WAYS_TUI_LINE"]
 
-#: (number, title) — the window's tabs, in the window's order.
+#: (number, title) — the window's four tabs, in the window's order.
 SECTIONS: tuple[tuple[int, str], ...] = (
-    (1, "Identity"), (2, "Users"), (3, "Look"), (4, "Services"), (5, "Ways to reach it"))
-SECTION_IDENTITY = 1
-SECTION_USERS = 2
-SECTION_LOOK = 3
-SECTION_SERVICES = 4
-SECTION_WAYS = 5
-#: the words ‘open WORD’ takes, beside ‘open N’
-SECTION_WORDS = {"identity": SECTION_IDENTITY, "users": SECTION_USERS,
-                 "people": SECTION_USERS, "look": SECTION_LOOK,
-                 "services": SECTION_SERVICES, "ways": SECTION_WAYS}
+    (1, "Identity"), (2, "Look"), (3, "Services"), (4, "Ways to reach it"))
+SECTION_LOOK = 2
+SECTION_SERVICES = 3
 
 #: Where each read-only mirror says the setting is changed.
 IDENTITY_HOME = "change it in the brands table (the Domains step)"
@@ -217,7 +197,7 @@ WAYS_HOME = ("the internal name and the public name are chosen in the Go-Live wi
 WAYS_HOME_NO_BUTTON = ("the internal name and the public name are chosen in the Go-Live "
                        "wizard: run it with the --go-live option (Tor, VPN and egress "
                        "are chosen above, per domain)")
-#: The text face's twin of the button: typed in section 5, it opens the Go-Live screen
+#: The text face's twin of the button: typed in section 4, it opens the Go-Live screen
 #: with this domain already picked.
 WAYS_GO_LIVE_COMMAND = "go-live"
 WAYS_TUI_LINE = ("here: type ‘" + WAYS_GO_LIVE_COMMAND + "’ to open the Go-Live screen "
@@ -585,117 +565,7 @@ class BrandView:
                      for k, v in words.items()}
         return words
 
-    # ── 2. Users ──────────────────────────────────────────────────────────────────
-    def people_config(self):
-        """The configuration whose ``users`` this route plans (ImageConfig), or None."""
-        try:
-            return self.session.host.people_config()
-        except Exception:                       # noqa: BLE001 — screens never raise
-            return None
-
-    def _people_domains(self, cfg) -> set[str]:
-        """The ``User.domain`` values that mean this domain. The mesh's own row also
-        holds the mesh-wide people: the superadmins (the root domain) and a row with no
-        domain."""
-        names = {self.name}
-        if self.own:
-            names |= {"", (cfg.effective_superdomain() or "").strip()}
-        return names
-
-    def people(self) -> list:
-        cfg = self.people_config()
-        if cfg is None:
-            return []
-        names = self._people_domains(cfg)
-        return [u for u in (cfg.users or []) if (u.domain or "").strip() in names]
-
-    def person_roles(self) -> tuple[str, ...]:
-        """The roles a planned person can be given here: superadmin only on the mesh's
-        own row (a superadmin belongs to the root domain, never a tenant domain)."""
-        return tuple(r for r in USER_ROLE_CHOICES if self.own or r != "superadmin")
-
-    def people_refusal(self) -> str:
-        """Why this route plans no people ("" = it does)."""
-        if self.people_config() is not None:
-            return ""
-        route = getattr(self.session.host, "route", "")
-        if route == "docker":
-            return ("The Docker mesh keeps no list of planned people: its people are the "
-                    "accounts on the running mesh, below.")
-        return ("This route keeps no list of planned people: create accounts on the "
-                "running mesh instead.")
-
-    def people_note(self) -> str:
-        """What this route does with the planned list."""
-        cfg = self.people_config()
-        if cfg is None:
-            return ""
-        if not users_table_applies(cfg) and (cfg.users or []):
-            return ("This image does not carry a people list (its kind of image takes "
-                    "none), so the people here are kept with the configuration only.")
-        return ("These are the people this image names for this domain: the same list as "
-                "the Users step's table, which shows every domain at once. A superadmin "
-                "belongs to the mesh's root domain, so it is listed on the mesh's own "
-                "domain.")
-
-    def add_person(self, username: str, roles=(), email: str = "") -> list[str]:
-        """Add a planned person to this domain. Returns the problems; nothing is written
-        while there is one."""
-        cfg = self.people_config()
-        if cfg is None:
-            return [self.people_refusal()]
-        username = (username or "").strip()
-        email = (email or "").strip()
-        problems = []
-        why = mesh_accounts.username_problem(username)
-        if why:
-            problems.append(why)
-        clash = next((u for u in (cfg.users or []) if u.username == username), None)
-        if username and clash is not None:
-            problems.append(f"{username} is already a person of "
-                            f"{clash.domain or 'the mesh'}: one name, one person.")
-        bad = [r for r in roles or () if r not in self.person_roles()]
-        if bad:
-            problems.append(f"Not a role a person of this domain can have: "
-                            f"{', '.join(bad)}.")
-        if email and ("@" not in email or " " in email):
-            problems.append("That email address is not one.")
-        if problems:
-            return problems
-        roles = list(roles or ()) or ["user"]
-        domain = (cfg.effective_superdomain() if "superadmin" in roles else self.name)
-        cfg.users = list(cfg.users or []) + [User(username=username, domain=domain,
-                                                  roles=roles, email=email)]
-        if getattr(cfg, "mode", "") == "mesh":
-            # the users choice's 'configure them' card: without it the mesh flow drops
-            # the table (users_table_applies) and these rows would never ship
-            cfg.configure_users = True
-        return []
-
-    def remove_person(self, username: str) -> list[str]:
-        cfg = self.people_config()
-        if cfg is None:
-            return [self.people_refusal()]
-        mine = {u.username for u in self.people()}
-        if username not in mine:
-            return [f"{username} is not a person of this domain."]
-        cfg.users = [u for u in (cfg.users or []) if u.username != username]
-        return []
-
-    def live_offered(self) -> bool:
-        """Does this screen offer the running local mesh's accounts? On the image and
-        Docker routes (the fleet builds for machines elsewhere; a client image serves
-        no domain)."""
-        return (getattr(self.session.host, "route", "") in ("image", "docker")
-                and not self.client_image())
-
-    def live_target(self):
-        """(mesh_accounts.Target, "") for the Casdoor this domain's people live in on
-        the running mesh, or (None, why not)."""
-        gd = getattr(self.session.host, "generator_dir", "") or ""
-        return mesh_accounts.target_for(self.name, self.row, gd, own=self.own)
-
-    # ── 3. Look ───────────────────────────────────────────────────────────────────
+    # ── 2. Look ───────────────────────────────────────────────────────────────────
     def look_model(self) -> brand_look.Look | None:
         """The brand's override model; for the superbrand's own row, the superbrand's
         look itself (design mode — the session's own model, which the route binds to
@@ -764,7 +634,7 @@ class BrandView:
             out.append(f"   {k:<12}{v or '(shipped)':<24}{src}")
         return out
 
-    # ── 5. Ways ───────────────────────────────────────────────────────────────────
+    # ── 4. Ways ───────────────────────────────────────────────────────────────────
     def ways(self) -> list[tuple[str, str, str, str]]:
         """(way, value, path, effect) for every way on every start path."""
         return brand_model.way_effects(self.session.record(),
@@ -890,7 +760,7 @@ def feed_identity(view: BrandView, line: str) -> str:
 
 
 def ways_lines(view: BrandView) -> list[str]:
-    out = [f"{SECTION_WAYS}. Ways to reach it — {view.label()}", ""]
+    out = [f"4. Ways to reach it — {view.label()}", ""]
     if view.client_image():
         out += [CLIENT_WAYS_NOTE, ""]
     if view.own:
@@ -931,7 +801,7 @@ def ways_lines(view: BrandView) -> list[str]:
 
 
 def feed_ways(view: BrandView, line: str) -> str:
-    """One command of section 5 (the window's Ways controls, as text)."""
+    """One command of section 4 (the window's Ways controls, as text)."""
     words = line.split(None, 2)
     verb = words[0].lower() if words else ""
     arg = words[1].lower() if len(words) > 1 else ""
@@ -955,91 +825,10 @@ def feed_ways(view: BrandView, line: str) -> str:
 
 
 def look_section_lines(view: BrandView, route: str) -> list[str]:
-    """Section 3 as text: the look screen for a brand that can be edited, the read-only
+    """Section 2 as text: the look screen for a brand that can be edited, the read-only
     values where it cannot."""
-    out = [f"{SECTION_LOOK}. Look — {view.label()}", ""]
+    out = [f"2. Look — {view.label()}", ""]
     if view.client_image():
         out += [CLIENT_LOOK_NOTE, ""]
     out += view.look_lines(route)
     return out
-
-
-# ── 2. Users, as text ────────────────────────────────────────────────────────────────
-PEOPLE_COMMANDS = ("add NAME [ROLE,ROLE] [EMAIL] · remove NAME (the planned people) · "
-                   "accounts · create NAME [ROLE,ROLE] (the running mesh)")
-
-
-def live_role(word: str) -> str:
-    """A typed role ('admin', 'role_matrix', 'ROLE_MATRIX') as the Casdoor role name."""
-    w = (word or "").strip().upper().replace("-", "_")
-    return w if w.startswith("ROLE_") else f"ROLE_{w}"
-
-
-def people_lines(view: BrandView) -> list[str]:
-    out = [f"{SECTION_USERS}. Users — {view.label()}", ""]
-    refusal = view.people_refusal()
-    if refusal:
-        out += ["   " + refusal, ""]
-    else:
-        people = view.people()
-        out.append("   Planned people of this domain:")
-        if not people:
-            out.append("      (none yet)")
-        for u in people:
-            out.append(f"      {u.username:<20}{', '.join(u.roles):<26}{u.email}")
-        out += ["", "   " + view.people_note(),
-                "   roles: " + ", ".join(view.person_roles()), ""]
-    if view.live_offered():
-        target, why = view.live_target()
-        out.append("   On the mesh running on this computer:")
-        out.append("      " + (f"accounts go to {target.words}" if target else why))
-        out.append("      roles: " + ", ".join(
-            r[len("ROLE_"):].lower() for r in mesh_accounts.GRANTABLE_ROLES)
-            + " (member is always given)")
-        out.append("")
-    out.append("commands: " + PEOPLE_COMMANDS)
-    return out
-
-
-def feed_people(view: BrandView, line: str) -> str:
-    """One command of section 2. Returns the status sentence (a generated password is
-    in it once, for the operator to hand on; it is never stored)."""
-    words = line.split()
-    verb = words[0].lower() if words else ""
-    if verb == "add" and len(words) >= 2:
-        roles = [r for r in (words[2].split(",") if len(words) > 2 else []) if r]
-        email = words[3] if len(words) > 3 else ""
-        if len(words) == 3 and "@" in words[2]:
-            roles, email = [], words[2]
-        problems = view.add_person(words[1], [r.lower() for r in roles], email)
-        return ("Not added: " + problems[0]) if problems else (
-            f"{words[1]} is now a planned person of {view.name}.")
-    if verb == "remove" and len(words) == 2:
-        problems = view.remove_person(words[1])
-        return ("Not removed: " + problems[0]) if problems else (
-            f"{words[1]} is no longer a planned person of {view.name}.")
-    if verb in ("accounts", "create") and not view.live_offered():
-        return "This route does not reach a running mesh."
-    if verb in ("accounts", "create"):
-        target, why = view.live_target()
-        if target is None:
-            return why
-        gd = getattr(view.session.host, "generator_dir", "") or ""
-        if verb == "accounts":
-            got = mesh_accounts.list_accounts(target, gd)
-            if not got.ok:
-                return got.message
-            mine = [a for a in got.accounts
-                    if not target.central or a.domain == view.name
-                    or (view.own and not a.domain)]
-            if not mine:
-                return f"No accounts for {view.name} on the running mesh yet."
-            return "; ".join(f"{a.name} ({', '.join(a.roles) or 'no roles'})" for a in mine)
-        if len(words) < 2:
-            return "create needs a name: create NAME [ROLE,ROLE]"
-        roles = [live_role(r) for r in (words[2].split(",") if len(words) > 2 else []) if r]
-        got = mesh_accounts.create_account(target, gd, words[1], "", roles)
-        if not got.ok:
-            return "Not created: " + got.message
-        return got.message + f" Its password, shown this once: {got.password}"
-    return "commands: " + PEOPLE_COMMANDS
