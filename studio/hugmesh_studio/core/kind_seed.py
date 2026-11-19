@@ -1,15 +1,16 @@
-"""Add ONE named account to the RUNNING **kind** mesh (#540), through the kind lane's
-own seeding machinery — never a bespoke Casdoor call.
+"""Add ONE named account to the RUNNING **kind** mesh (#540) — through Casdoor's admin
+API (``core.mesh_accounts``), not the seeder scripts.
 
-WHY A SECOND PATH AT ALL. ``localmesh._add_user`` applies by re-running the COMPOSE
-seeder (``make stack-seed`` with ``EXTRA_ROLE_USERS`` appended). The kind lane seeds
-differently: ``bootstrap-kind.sh`` step 10 renders with ``tests/qemu/seed-accounts.sh
---roles`` into a temp dir and applies ``roles/apply-systems-roles.sh`` against the live
-Casdoor, with the Casdoor admin password read back from Vault. So on a kind mesh the
-compose verb either is not offered or drives the wrong seeder. This module is the kind
-half, and it deliberately runs the SAME two scripts in the same order, so an account
-added here is created by exactly the machinery that created every other persona and
-cannot drift from it.
+WHY THE KIND LANE HAS ITS OWN MODULE. The compose lane's Casdoor is on loopback with this
+checkout's admin password in ``tests/stack/.env``; the kind lane's is a ClusterIP whose
+admin password lives in Vault. This module supplies those two things — the door and the
+password — and hands the apply to the same ``mesh_accounts.create_account`` the compose
+lane and every domain's Users tab use (2026-11-19, the operator: "adding users should
+work without the e2e scripts"). It used to render with ``tests/qemu/seed-accounts.sh
+--roles`` and apply ``roles/apply-systems-roles.sh``; that needed the test scripts, the
+cluster's shared seed password (or it would rotate every persona), and the FULL spec
+list of every account added this session (the apply set each role to exactly its
+render). The native apply adds one account and ADDS it to its roles; nothing else moves.
 
 THE STUDIO STILL NEVER SPAWNS A ``kubectl port-forward`` OF ITS OWN. bootstrap-kind.sh
 reaches the ClusterIP Casdoor with a short-lived forward of its own; this module does
@@ -17,45 +18,29 @@ NOT copy that part, because ``core/view_doors`` states the rule plainly — hugm
 owns a session-owner guard (one ``up`` per state dir) and a sweep of its own children,
 and a second forwarder started from the GUI would fight it. Instead this ASKS
 (``view_doors.live_doors``) for the ``casdoor`` door that ``make view LANE=kind-svc``
-already publishes, and REFUSES with that exact remedy when it is not up. The Studio
-already has the button that starts it. A refusal here is a refusal, never a fallback
-into spawning one.
+already publishes, and REFUSES with that exact remedy when it is not up. The door
+serves HTTPS under the view session's own CA, which the apply verifies against.
 
-THE PASSWORD THE RENDER USES IS THE CLUSTER'S, NOT THIS CHECKOUT'S. seed-accounts.sh
-resolves ``E2E_PASSWORD`` from an explicit override, else the run-state credentials
-file, else it MINTS A FRESH ONE — and ``apply-systems-roles.sh`` reconciles EVERY
-persona's stored password to whatever it was handed. So letting it mint would rotate
-the whole cluster's roster as a side effect of adding one user, and every existing
-sign-in would start 401ing. This module therefore takes the value the bring-up
-recorded in the ``test-seed-passwords`` Secret, falls back to the local run-state file,
-and REFUSES when it has neither. The value travels in the subprocess env only — never
-argv, never a log line, never a returned string.
-
-SUCCESS IS READ BACK, NOT REPORTED. Casdoor answers a DENIED call with HTTP 200 +
-``{"status":"error"}``, which is how an earlier seeding run "succeeded" while entirely
-unauthenticated. apply-systems-roles.sh now checks that envelope itself — and that is
-still the hook reporting on its own work. The post-condition here is independent: the
-account must be present in the cluster's own Casdoor database (``credentials_truth.
-gather_kind_identities``, the #539 reader) AND hold every role it was granted. A user
-created with ROLE_MOD on a cluster whose ROLE_MOD has no members afterwards is a FAILED
-add, not a successful one.
+SUCCESS IS READ BACK, NOT REPORTED. The apply reads its own writes back, and the
+post-condition here is independent of it: the account must be present in the cluster's
+own Casdoor database (``credentials_truth.gather_kind_identities``, the #539 reader) AND
+hold every role it was granted. A user created with ROLE_MOD on a cluster whose ROLE_MOD
+has no members afterwards is a FAILED add, not a successful one.
 
 Qt-free by construction. Every external effect goes through an injected override point
-(``runner`` / ``doors`` / ``identities``), which is how the whole path is exercised
-against a fake cluster without seeding anything anywhere.
+(``runner`` / ``doors`` / ``identities`` / ``opener``), which is how the whole path is
+exercised against a fake cluster without touching one.
 """
 from __future__ import annotations
 
 import base64
 import os
-import shutil
 import subprocess
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from . import credentials_truth as _truth
-from . import view_doors
+from . import mesh_accounts, view_doors
 
 #: The view catalog row that publishes the kind Casdoor, and the lane that carries it
 #: (scripts/hugmesh-view.tsv: ``casdoor  kind-svc  -  k8s+http://hugmesh-pki/casdoor:8000``).
@@ -68,13 +53,8 @@ VIEW_LANE = "kind-svc"
 #: indistinguishable from one talking to something else entirely.
 CA_REL = os.path.join("tls", "ca.crt")
 
-#: The scripts, repo-relative. Both are the kind lane's own — this module adds no
-#: seeding logic of its own, it sequences theirs.
-SEED_ACCOUNTS_REL = os.path.join("tests", "qemu", "seed-accounts.sh")
-APPLY_ROLES_REL = os.path.join("roles", "apply-systems-roles.sh")
-
-#: Where bootstrap-kind.sh records the password its seed used, and where the Vault
-#: bootstrap token lives — the same two reads that script makes.
+#: Where bootstrap-kind.sh records the password its seed used (read by the credentials
+#: view, not by an add any more), and where the Vault bootstrap token lives.
 SEED_SECRET_NS = _truth.KIND_SEED_SECRET_NS
 SEED_SECRET = _truth.KIND_SEED_SECRET
 SEED_SECRET_KEY = _truth.KIND_SEED_SECRET_KEY
@@ -82,15 +62,11 @@ VAULT_NS = "vault"
 VAULT_POD = "vault-0"
 VAULT_BOOTSTRAP_SECRET = "vault-bootstrap"
 
-RENDER_TIMEOUT_S = 180
-APPLY_TIMEOUT_S = 300
 READ_TIMEOUT_S = 30
 
 #: Stage ids, so a caller (and a test) can say WHERE it stopped without matching prose.
 STAGE_DOOR = "door"
-STAGE_PASSWORD = "password"
 STAGE_ADMIN = "admin-password"
-STAGE_RENDER = "render"
 STAGE_APPLY = "apply"
 STAGE_READBACK = "read-back"
 STAGE_OK = "ok"
@@ -98,7 +74,9 @@ STAGE_OK = "ok"
 
 @dataclass(frozen=True)
 class AddUserOutcome:
-    """What the verb did, in terms a page can render. Password-free by contract."""
+    """What the verb did, in terms a page can render. ``password`` is set only when the
+    apply GENERATED one (shown once by the page, never logged); ``message`` never
+    carries a password."""
     ok: bool
     stage: str
     message: str
@@ -106,6 +84,7 @@ class AddUserOutcome:
     granted: tuple[str, ...] = field(default=())
     #: Roles it was asked for that the cluster does NOT grant it.
     missing: tuple[str, ...] = field(default=())
+    password: str = ""
 
 
 def _run(cmd, *, env=None, cwd=None, timeout=60) -> tuple[int, str]:
@@ -205,26 +184,22 @@ def _door_url(generator_dir: str, env, doors) -> tuple[str, str]:
         f"'Open the browser door' with that lane — then try again.")
 
 
-def add_user_kind(*, generator_dir: str, cluster: str, specs, username: str,
-                  roles, password: str = "", password_env: str = "",
-                  brand: str = "hugmesh", env: Mapping[str, str] | None = None,
-                  runner=_run, doors=view_doors.live_doors,
-                  identities=None, on_line=None) -> AddUserOutcome:
-    """Add ``username`` to the running kind mesh through the kind lane's seeders.
+def add_user_kind(*, generator_dir: str, cluster: str, username: str, roles,
+                  password: str = "", email: str = "", brand: str = "hugmesh",
+                  env: Mapping[str, str] | None = None, runner=_run,
+                  doors=view_doors.live_doors, identities=None, opener=None,
+                  on_line=None) -> AddUserOutcome:
+    """Add ``username`` with ``roles`` to the running kind mesh, through its casdoor
+    door and ``mesh_accounts.create_account``. An empty ``password`` is generated and
+    returned in ``AddUserOutcome.password``.
 
-    ``specs`` is the FULL ``EXTRA_ROLE_USERS`` list this session has accumulated, not
-    just the new one — apply-systems-roles.sh sets each role's members to EXACTLY the
-    rendered list, so a single-user render would wipe every other persona's
-    memberships. That is the same reason the compose verb re-seeds wholesale.
-
-    Override points: ``runner`` (every subprocess), ``doors`` (the live view doors) and
-    ``identities`` (the read-back; defaults to the #539 kind reader). A test supplies
-    all three and nothing touches a cluster."""
+    Override points: ``runner`` (every subprocess), ``doors`` (the live view doors),
+    ``opener`` (every HTTP call) and ``identities`` (the read-back; defaults to the #539
+    kind reader). A test supplies them and nothing touches a cluster."""
     def note(line: str):
         if on_line:
             on_line(line)
 
-    src = dict(env if env is not None else os.environ)
     ctx = f"kind-{cluster}"
     kubectl = _kubectl(generator_dir)
 
@@ -234,73 +209,31 @@ def add_user_kind(*, generator_dir: str, cluster: str, specs, username: str,
         return AddUserOutcome(False, STAGE_DOOR, why)
     note(f"[add-user/kind] applying through the '{DOOR_NAME}' view door")
 
-    # 2. THE CLUSTER'S OWN SEED PASSWORD. Never let the seeder mint a fresh one:
-    #    apply-systems-roles.sh reconciles EVERY persona to whatever it is handed.
-    shared, why = cluster_seed_password(runner, kubectl, ctx)
-    if not shared:
-        shared = str(src.get(_truth.SHARED_PASSWORD_ENV) or "") or \
-            _truth.read_values(generator_dir, env).get(_truth.SHARED_PASSWORD_ENV, "")
-        if not shared:
-            return AddUserOutcome(
-                False, STAGE_PASSWORD,
-                f"Refusing to add a user: {why}, and no shared password is on disk "
-                f"either. Rendering without one makes seed-accounts.sh MINT a fresh "
-                f"value, and apply-systems-roles.sh would then reconcile every "
-                f"existing persona to it — every current sign-in would start "
-                f"failing. Re-run the identity seed first.")
-        note("[add-user/kind] the cluster's recorded seed password is unreadable; "
-             "using the run-state file's value (they must agree, or every persona "
-             "would be rotated)")
-
-    # 3. THE CASDOOR ADMIN PASSWORD, from Vault — bootstrap-kind.sh's own read.
+    # 2. THE CASDOOR ADMIN PASSWORD, from Vault — bootstrap-kind.sh's own read.
     admin_pw, why = casdoor_admin_password(runner, kubectl, ctx, brand=brand)
     if not admin_pw:
         return AddUserOutcome(False, STAGE_ADMIN,
-                              f"Cannot authenticate to Casdoor: {why}. Without it "
-                              f"apply-systems-roles.sh would be rejected — and a "
-                              f"rejection is HTTP 200 with a status=error envelope, "
-                              f"so it must not be attempted without authenticating first.")
+                              f"Cannot authenticate to Casdoor: {why}. A denied admin "
+                              f"call is HTTP 200 with a status=error envelope, so "
+                              f"nothing is attempted without authenticating first.")
 
-    # 4. RENDER, with the FULL spec list (see the docstring).
-    work = tempfile.mkdtemp(prefix="hugmesh-studio-kind-seed-")
-    try:
-        render_env = dict(src)
-        render_env["EXTRA_ROLE_USERS"] = " ".join(specs)
-        render_env[_truth.SHARED_PASSWORD_ENV] = shared
-        if password and password_env:
-            render_env[password_env] = password        # env-only, never argv
-        note("[add-user/kind] rendering the role matrix (seed-accounts.sh --roles) …")
-        rc, out = runner(["bash", os.path.join(generator_dir, SEED_ACCOUNTS_REL),
-                          "--roles", work],
-                         env=render_env, cwd=generator_dir, timeout=RENDER_TIMEOUT_S)
-        if rc != 0:
-            return AddUserOutcome(False, STAGE_RENDER,
-                                  f"seed-accounts.sh --roles failed: "
-                                  f"{(out or '').strip()[-400:] or 'no output'}")
-        apply_sh = os.path.join(work, APPLY_ROLES_REL)
-        if not os.path.exists(apply_sh):
-            return AddUserOutcome(False, STAGE_RENDER,
-                                  f"seed-accounts.sh --roles rendered no "
-                                  f"{APPLY_ROLES_REL}")
+    # 3. APPLY, through the door, verifying it against the view session's own CA.
+    ca = os.path.join(view_doors.state_dir(generator_dir, env), CA_REL)
+    target = mesh_accounts.Target(url, "", True, "the kind mesh's Casdoor",
+                                  cafile=ca if os.path.exists(ca) else "")
+    note(f"[add-user/kind] creating {username} through Casdoor's admin API …")
+    applied = mesh_accounts.create_account(
+        target, generator_dir, username, password, roles, email=email,
+        env={"CASDOOR_ADMIN_PASS": admin_pw}, opener=opener, on_line=on_line)
+    if not applied.ok:
+        return AddUserOutcome(False, STAGE_APPLY, applied.message)
+    out = applied.message
+    generated = applied.password
+    roles = (mesh_accounts.FLOOR_ROLE,) + tuple(
+        r for r in (roles or ()) if r and r != mesh_accounts.FLOOR_ROLE)
 
-        # 5. APPLY, through the door, with the door's own CA so curl verifies.
-        apply_env = dict(src)
-        apply_env["CASDOOR_URL"] = url
-        apply_env["CASDOOR_ADMIN_PASS"] = admin_pw     # env-only, never argv
-        apply_env[_truth.SHARED_PASSWORD_ENV] = shared
-        if password and password_env:
-            apply_env[password_env] = password
-        ca = os.path.join(view_doors.state_dir(generator_dir, env), CA_REL)
-        if os.path.exists(ca):
-            apply_env["CURL_CA_BUNDLE"] = ca
-        note("[add-user/kind] applying (apply-systems-roles.sh) …")
-        rc, out = runner(["bash", apply_sh], env=apply_env, cwd=generator_dir,
-                         timeout=APPLY_TIMEOUT_S)
-        applied_ok = rc == 0 and '"status":"error"' not in (out or "").replace(" ", "")
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
-
-    # 6. READ THE IDENTITY BACK. The seeder's own success line is not evidence.
+    # 4. READ THE IDENTITY BACK from the cluster's own database, independently of the
+    #    apply's own read-back.
     if identities is None:
         def identities(_gd=generator_dir, _c=cluster):
             class _N:
@@ -315,17 +248,15 @@ def add_user_kind(*, generator_dir: str, cluster: str, specs, username: str,
     if found.users is None:
         return AddUserOutcome(
             False, STAGE_READBACK,
-            ("The seeder reported success, but the identity could NOT be read back "
-             if applied_ok else "The seeder failed, and the identity could not be "
-             "read back either ")
-            + f"({found.reason or 'the cluster did not answer'}), so this add is "
-            f"unproven. Nothing here will call it a success on the seeder's own word.")
+            "Casdoor's admin API reported the account created, but the cluster's "
+            f"identity store could NOT be read back ({found.reason or 'the cluster did '
+            'not answer'}), so this add is unproven. Nothing here will call it a "
+            "success on the apply's own word.", password=generated)
     if username not in found.users:
         return AddUserOutcome(
             False, STAGE_READBACK,
-            f"'{username}' is NOT in the cluster's identity store after the seed"
-            + (", although apply-systems-roles.sh exited 0" if applied_ok else "")
-            + f". {(out or '').strip()[-300:]}")
+            f"'{username}' is NOT in the cluster's identity store, although Casdoor's "
+            f"admin API said: {out}", password=generated)
 
     wanted = tuple(r for r in (roles or ()) if r)
     granted = tuple(r for r in wanted
@@ -336,7 +267,8 @@ def add_user_kind(*, generator_dir: str, cluster: str, specs, username: str,
             True, STAGE_READBACK,
             f"'{username}' exists in the cluster's identity store. Its ROLE "
             f"memberships could not be read ({found.reason or 'no reason given'}), "
-            f"so they are unverified — check them before relying on them.")
+            f"so they are unverified — check them before relying on them.",
+            password=generated)
     missing = tuple(r for r in wanted if r not in granted)
     if missing:
         return AddUserOutcome(
@@ -344,10 +276,11 @@ def add_user_kind(*, generator_dir: str, cluster: str, specs, username: str,
             f"'{username}' was created but the cluster grants it none of: "
             f"{', '.join(missing)}. An account in none of its roles signs in on the "
             f"gateway floor and then 403s on every page, so this is a failed add, "
-            f"not a successful one.", granted=granted, missing=missing)
+            f"not a successful one.", granted=granted, missing=missing,
+            password=generated)
     return AddUserOutcome(
         True, STAGE_OK,
         f"'{username}' exists in the cluster's identity store and holds "
         f"{', '.join(granted) if granted else 'no roles (none were requested)'} — "
-        f"read back from Casdoor's own database, not from the seeder's exit code.",
-        granted=granted)
+        f"read back from Casdoor's own database, not from the apply's own word.",
+        granted=granted, password=generated)

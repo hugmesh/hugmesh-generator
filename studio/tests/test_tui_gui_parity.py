@@ -1254,17 +1254,17 @@ def _feed_all(j, *lines):
     return j.lines()
 
 
-def test_the_four_tabs_and_the_four_text_sections_are_the_same_four_in_the_same_order(
+def test_the_tabs_and_the_text_sections_are_the_same_in_the_same_order(
         qapp, tmp_path):
     from hugmesh_studio.gui.pages.brand_screen import TAB_TITLES
     from hugmesh_studio.gui.pages import domain_services as gui_ds
     from hugmesh_studio.tui import brand_step
     assert TAB_TITLES == tuple(t for _n, t in brand_step.SECTIONS) == (
-        "Identity", "Look", "Services", "Ways to reach it")
+        "Identity", "Users", "Look", "Services", "Ways to reach it")
     w = _mesh_image_wiz(tmp_path)
     page = gui_ds.DomainServicesPage(w)
     page.initializePage()
-    assert [page.brand_tabs.tabText(i) for i in range(4)] == list(TAB_TITLES)
+    assert [page.brand_tabs.tabText(i) for i in range(5)] == list(TAB_TITLES)
     # both faces open on Services, the step every older flow walked
     assert page.brand_tabs.currentIndex() == brand_step.SECTION_SERVICES - 1
     j = journey.Journey(w.generator_dir)
@@ -1272,7 +1272,7 @@ def test_the_four_tabs_and_the_four_text_sections_are_the_same_four_in_the_same_
     j.cfg.domains = list(w.cfg.domains)
     j.goto("domain_services")
     top = "\n".join(j.lines())
-    assert "*3. Services" in top
+    assert "*4. Services" in top
     for n, title in brand_step.SECTIONS:
         assert f"{n}. {title}" in top.replace("*", "")
 
@@ -1296,7 +1296,7 @@ def test_every_setting_has_one_editing_home_and_both_faces_say_where(qapp, tmp_p
     identity = "\n".join(j.lines())
     assert tabs.identity_home.text() == brand_step.IDENTITY_HOME
     assert brand_step.IDENTITY_HOME in identity
-    j.feed("open 4")
+    j.feed("open 5")
     ways = "\n".join(j.lines())
     assert brand_step.WAYS_HOME in ways and tabs.ways_note.text() == brand_step.WAYS_HOME
     assert tabs.ways_btn.text() == brand_step.WAYS_BUTTON

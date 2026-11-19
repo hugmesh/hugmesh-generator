@@ -348,6 +348,13 @@ class BrandHost:
         """Row 0's writers for this route (:class:`MeshWrites`); the base refuses all."""
         return MeshWrites()
 
+    def people_config(self):
+        """The configuration whose ``users`` list names the people this route plans per
+        domain (the image wizard's ``ImageConfig``), or None when the route keeps no
+        such list (the Docker mesh's people are its running accounts; the fleet keeps
+        none)."""
+        return None
+
     # the rows, as fresh Domain objects (a snapshot the record can hold)
     def rows(self) -> list[Domain]:
         return [Domain(**dataclasses.asdict(d)) for d in self._live_rows()]
@@ -397,6 +404,9 @@ class ImageHost(BrandHost):
         return list(self.cfg.domains or [])
 
     def mesh(self):
+        return self.cfg
+
+    def people_config(self):
         return self.cfg
 
     def mesh_writes(self) -> MeshWrites:

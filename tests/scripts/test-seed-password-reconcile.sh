@@ -337,6 +337,38 @@ if stub_up adduser-droppw ok "${WORK}/seed-roles-drop.json"; then
         || bad "(3b) the add path did not report repairing the dropped credential: $(grep 'add-user' "${WORK}/out" | head -3)"
 fi
 
+# ═════ 3c. THE SEED KEEPS MEMBERS IT DOES NOT RENDER ═══════════════════════════
+# A person the Studio added through Casdoor's admin API (studio core/mesh_accounts.py)
+# is in no render. The hook used to set every role to EXACTLY its rendered members,
+# which stripped such a person's roles at the next `make stack-seed`. Now only the
+# rendered accounts are managed: an outside member stays, and a RENDERED persona
+# still loses a role the render no longer gives it (e2e-user is not an admin).
+jq '."role:hugmesh/ROLE_ADMIN".users = ["hugmesh/studio-person", "hugmesh/e2e-user"]' \
+    "${WORK}/seed-roles-drop.json" > "${WORK}/seed-roles-outside.json"
+role_members() { # <role> -> its members, one per line, read as an admin
+    local jar="${WORK}/rm.jar"
+    curl -s -c "${jar}" -b "${jar}" "${CASDOOR}/api/login" -H 'content-type: application/json' \
+        -d '{"application":"app-built-in","organization":"built-in","username":"admin","password":"123","type":"login"}' >/dev/null
+    curl -s -b "${jar}" "${CASDOOR}/api/get-role?id=hugmesh/$1" | jq -r '.data.users[]?'
+    rm -f "${jar}"
+}
+if stub_up ok ok "${WORK}/seed-roles-outside.json"; then
+    run_hook
+    [ "${RC}" -eq 0 ] \
+        && ok "(3c) apply hook exits 0 with an outside member in a role" \
+        || bad "(3c) apply hook failed (rc=${RC}): $(tail -3 "${WORK}/out")"
+    members="$(role_members ROLE_ADMIN)"
+    printf '%s\n' "${members}" | grep -x "hugmesh/studio-person" >/dev/null \
+        && ok "(3c) a member the render does not manage KEEPS its role" \
+        || bad "(3c) the seed stripped an outside member's role (ROLE_ADMIN now: $(echo ${members}))"
+    printf '%s\n' "${members}" | grep -x "hugmesh/e2e-admin" >/dev/null \
+        && ok "(3c) the rendered admin persona is in the role" \
+        || bad "(3c) the rendered admin is missing from ROLE_ADMIN: $(echo ${members})"
+    printf '%s\n' "${members}" | grep -x "hugmesh/e2e-user" >/dev/null \
+        && bad "(3c) a rendered persona KEPT a role the render no longer gives it" \
+        || ok "(3c) a rendered persona loses a role the render no longer gives it"
+fi
+
 # ═════ 4. ZERO-MINT ATTRIBUTION: grant config vs wrong credentials ═══════════
 seed_roles_only "${WORK}/seed-roles.json"
 if stub_up ok unsupported "${WORK}/seed-roles.json"; then

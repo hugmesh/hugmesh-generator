@@ -1,6 +1,6 @@
-"""BrandSettingsTabs — the per-brand screen's four tabs (hugmesh-generator#654, D9).
+"""BrandSettingsTabs — the per-brand screen's tabs (hugmesh-generator#654, D9).
 
-    Identity | Look | Services | Ways to reach it
+    Identity | Users | Look | Services | Ways to reach it
 
 The Domain services step IS this screen (the page slug and order stay), retitled
 "Brand settings". Its three hosts — the image page, the Docker route's step and the Fleet
@@ -19,6 +19,11 @@ EACH SETTING HAS EXACTLY ONE EDITING HOME (the rule the screen is built on):
   through ``superbrand_step.MeshWrites``, into the one place the route keeps it (the
   Identity provider step's fields, or the Docker page's controls), so the step and
   row 0 are two doors on one value; a route that keeps none says so (2026-10-21).
+* Users (2026-11-19) is the domain's people (``_people_tab.PeopleTab``): the people
+  this image plans for the domain (``cfg.users`` rows, assigned to it here; the Users
+  step's table is the same list for every domain at once) and the accounts on the local
+  mesh running now, created straight through Casdoor's admin API
+  (``core.mesh_accounts``), with no e2e script involved.
 * Look is edited here: a :class:`~._lookeditor.LookEditor` over the brand's override model
   (every setting says 'inherited from the superbrand' or 'this brand's own'; 'Use the
   superbrand's value' is an inline second click). On every route but the Docker mesh the
@@ -37,7 +42,7 @@ EACH SETTING HAS EXACTLY ONE EDITING HOME (the rule the screen is built on):
   saying the client keeps the choice with its configuration only
   (``brand_step.CLIENT_*_NOTE``).
 
-LAYOUT. This is a tab BAR with the four tabs' content in the body's own layout, not a
+LAYOUT. This is a tab BAR with the tabs' content in the body's own layout, not a
 QTabWidget: the services body (two checkbox tables, their state line, the honesty banner,
 the help and the read-only table) is many widgets that tests and the #647 looks pin to
 one parent and one top-to-bottom order, and a QTabWidget would have put them in a page
@@ -57,12 +62,14 @@ from ...core import domain_reach, plain_words
 from ...core.config import SIGNIN_METHOD_LABELS, SIGNIN_METHODS
 from ...tui import brand_step
 from ._lookeditor import LookEditor
+from ._people_tab import PeopleTab
 from ._widgets import collapsible
 
-__all__ = ["BrandSettingsTabs", "TAB_TITLES"]
+__all__ = ["BrandSettingsTabs", "TAB_TITLES", "TAB_IDENTITY", "TAB_USERS", "TAB_LOOK",
+           "TAB_SERVICES", "TAB_WAYS"]
 
 TAB_TITLES = tuple(t for _n, t in brand_step.SECTIONS)
-(TAB_IDENTITY, TAB_LOOK, TAB_SERVICES, TAB_WAYS) = range(4)
+(TAB_IDENTITY, TAB_USERS, TAB_LOOK, TAB_SERVICES, TAB_WAYS) = range(5)
 _MUTED = "color: gray;"
 #: the provider-file box's hint: a brand may fall back on the mesh's file; row 0 IS it
 _BRAND_CONF_HINT = "/absolute/path/provider.conf — empty: the mesh's own provider file"
@@ -103,7 +110,7 @@ def _set_items(combo: QtWidgets.QComboBox, choices) -> None:
 
 
 class BrandSettingsTabs(QtCore.QObject):
-    """The four tabs. ``mount(layout)`` puts the tab bar and the three pages in the
+    """The tabs. ``mount(layout)`` puts the tab bar and the four pages in the
     body's layout; ``adopt_services(widgets)`` names the widgets that are the Services
     tab."""
 
@@ -117,6 +124,9 @@ class BrandSettingsTabs(QtCore.QObject):
     #: the Ways tab's Tor tick was clicked: the host's front door owns the working
     #: value (the Services tab's row), so it applies it and calls show_tor back
     tor_changed = Signal(bool)
+    #: the Users tab changed the planned people (``cfg.users``): the host tells the
+    #: wizard's Users step, whose table would otherwise write its old rows back
+    people_changed = Signal()
 
     def __init__(self, route: str = "image", parent=None):
         super().__init__(parent)
@@ -219,6 +229,10 @@ class BrandSettingsTabs(QtCore.QObject):
         sl.addWidget(self.methods_note)
         il.addWidget(self.signin_box)
 
+        # ── Users: the domain's people (planned, and on the running mesh) ───────────
+        self.people_page = PeopleTab()
+        self.people_page.people_changed.connect(self.people_changed)
+
         # ── Look: the override editor, or a read-only summary ───────────────────────
         self.look_page = QtWidgets.QWidget()
         self.look_page.setObjectName("brand_tab_look")
@@ -315,8 +329,8 @@ class BrandSettingsTabs(QtCore.QObject):
             page.layout().insertWidget(0, note)
             self.client_notes[tab] = note
 
-        self._pages = {TAB_IDENTITY: self.identity_page, TAB_LOOK: self.look_page,
-                       TAB_WAYS: self.ways_page}
+        self._pages = {TAB_IDENTITY: self.identity_page, TAB_USERS: self.people_page,
+                       TAB_LOOK: self.look_page, TAB_WAYS: self.ways_page}
         for pg in self._pages.values():
             pg.setVisible(False)
         # the screen opens on Services: the step every older flow walked, unchanged
@@ -364,7 +378,7 @@ class BrandSettingsTabs(QtCore.QObject):
         return self._pages.get(self.bar.currentIndex())
 
     def set_active(self, on: bool) -> None:
-        """Show the four tabs (a brand record is on offer) or only the services body,
+        """Show the tabs (a brand record is on offer) or only the services body,
         exactly as the page was before the tabs existed (a host with no record)."""
         self._active = bool(on)
         self.bar.setVisible(self._active)
@@ -387,6 +401,8 @@ class BrandSettingsTabs(QtCore.QObject):
             self._on_services = want_services
             for i, pg in self._pages.items():
                 pg.setVisible(self._active and i == index)
+            if self._active and index == TAB_USERS:
+                self.people_page.shown()
             self.currentChanged.emit(index)
         except Exception:                       # noqa: BLE001 — PyQt6 qFatal guard
             import sys
@@ -406,6 +422,7 @@ class BrandSettingsTabs(QtCore.QObject):
                 note.setVisible(client)
             self._fill_identity()
             self._fill_signin()
+            self.people_page.set_view(view)
             self._fill_look()
             self._fill_ways()
             self._fill_reach()

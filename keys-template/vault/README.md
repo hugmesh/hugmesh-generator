@@ -134,7 +134,7 @@ secret/<brand>/casdoor    : google_client_id, google_client_secret,
 secret/<brand>/casdoor-apps : one key per Casdoor OAuth2 application = that app's
                             client_secret (pki-gateway, be-gateway, fe-gateway,
                             api, admin-bff, user-bff, matrix, mastodon,
-                            fragment-sync, signup-gate, harbor, headscale), plus
+                            fragment-sync, signup-gate, test-ingest, harbor, headscale), plus
                             the signup-gate-webhook shared secret.
                             fragment-sync = the app-fragment-sync machine account
                             the remote-fragment sync sidecar uses (client_credentials
@@ -143,6 +143,11 @@ secret/<brand>/casdoor-apps : one key per Casdoor OAuth2 application = that app'
                             (dataFrom extract) AND, for the sidecar, the
                             fragment-sync-casdoor ExternalSecret (ns
                             hugmesh-frontend, clientId pinned to app-fragment-sync).
+                            test-ingest = the app-test-ingest machine account of the
+                            in-cluster test-runner Job (client_credentials -> a token
+                            bound to the NARROW ROLE_TEST_INGEST, valid only for admin-bff's
+                            POST /bff/admin/test-reports/{id}/ingest); materialized by the
+                            test-ingest-casdoor ExternalSecret (ns hugmesh-backend).
 secret/<brand>/clickhouse : password
 secret/<brand>/uptrace    : pg_password, project_token
 secret/<brand>/cloudflared: tunnel_token     (PROD go-live ONLY — read-if-present)

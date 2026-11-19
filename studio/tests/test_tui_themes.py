@@ -1,6 +1,6 @@
 """tui — where the web look is chosen in the text interface, after the theme move.
 
-On 2026-10-21 the look moved to section 2 (Look) of each domain's Brand settings on
+On 2026-10-21 the look moved to section 3 (Look) of each domain's Brand settings on
 the Domain services step (the operator: "the theme selection should be there instead
 of where it is now"). The Branding step stopped offering ``t``, and the cfg-bound
 Themes screen it used to open became dead code: nothing but its own tests opened it.
@@ -30,7 +30,7 @@ def test_branding_step_no_longer_offers_themes_and_says_where_the_look_is():
     assert j.slug == "branding"
     text = "\n".join(j.lines())
     assert "t opens the Themes screen" not in text and "t. Themes" not in text
-    assert "section 2 (Look)" in text
+    assert "section 3 (Look)" in text
     j.feed("t")
     assert j.overlay is None
 

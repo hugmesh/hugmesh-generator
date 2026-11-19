@@ -148,7 +148,7 @@ class TextFace:
         return refusals
 
     def colour(self, hexvalue):
-        # section 2 (Look) of the mesh's own domain on the Domain services step
+        # section 3 (Look) of the mesh's own domain on the Domain services step
         # (2026-10-21); the superbrand screen only says where it went
         self.j.feed("look")
         assert "not chosen here" in self.j.status
