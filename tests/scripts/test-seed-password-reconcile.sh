@@ -358,13 +358,13 @@ if stub_up ok ok "${WORK}/seed-roles-outside.json"; then
         && ok "(3c) apply hook exits 0 with an outside member in a role" \
         || bad "(3c) apply hook failed (rc=${RC}): $(tail -3 "${WORK}/out")"
     members="$(role_members ROLE_ADMIN)"
-    printf '%s\n' "${members}" | grep -qx "hugmesh/studio-person" \
+    printf '%s\n' "${members}" | grep -x "hugmesh/studio-person" >/dev/null \
         && ok "(3c) a member the render does not manage KEEPS its role" \
         || bad "(3c) the seed stripped an outside member's role (ROLE_ADMIN now: $(echo ${members}))"
-    printf '%s\n' "${members}" | grep -qx "hugmesh/e2e-admin" \
+    printf '%s\n' "${members}" | grep -x "hugmesh/e2e-admin" >/dev/null \
         && ok "(3c) the rendered admin persona is in the role" \
         || bad "(3c) the rendered admin is missing from ROLE_ADMIN: $(echo ${members})"
-    printf '%s\n' "${members}" | grep -qx "hugmesh/e2e-user" \
+    printf '%s\n' "${members}" | grep -x "hugmesh/e2e-user" >/dev/null \
         && bad "(3c) a rendered persona KEPT a role the render no longer gives it" \
         || ok "(3c) a rendered persona loses a role the render no longer gives it"
 fi
