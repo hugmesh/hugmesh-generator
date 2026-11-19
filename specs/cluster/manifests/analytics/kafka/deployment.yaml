@@ -37,6 +37,11 @@ spec:
             - { name: KAFKA_CFG_CONTROLLER_QUORUM_VOTERS, value: "0@kafka:9093" }
             - { name: KAFKA_CFG_CONTROLLER_LISTENER_NAMES, value: "CONTROLLER" }
             - { name: KAFKA_CFG_ADVERTISED_LISTENERS, value: "PLAINTEXT://kafka:9092" }
+            # Java4Shell (CVE-2026-114938): this image's JVM is 17.0.13, which is vulnerable,
+            # and bitnamilegacy images are frozen, so no fixed build will come. Disabling the
+            # Base64 intrinsic is the vendors' complete mitigation (this pod runs on amd64,
+            # where the bug lives). Keep it until Kafka moves to an image on Java 17.0.21.1+.
+            - { name: KAFKA_OPTS, value: "-XX:-UseBASE64Intrinsics" }
           volumeMounts: [{ name: data, mountPath: /bitnami/kafka }]
       volumes: [{ name: data, persistentVolumeClaim: { claimName: kafka-data } }]
 ---
