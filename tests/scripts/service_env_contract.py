@@ -11,6 +11,15 @@ Asserts, offline, against a specs/cluster tree PLUS the first-party service sour
                   specs/cluster (see service_env_defaults.ClusterFacts). A new stale
                   default in any service repo fails this on the next run with no edit
                   to any list.
+  [java-default]  THE JAVA HALF (hugmesh-generator#507, finding 26). A packaged default can
+                  live in src/main/java too (a `@ConfigurationProperties` field, a
+                  `DEFAULT_*` constant), and an EMPTY yaml default hands the value straight
+                  to it, which no yaml-only reading can see. Every in-cluster FQDN literal in
+                  a namespace this cluster lacks, and every address-named String field holding
+                  a URL under a domain this cluster does not serve, must be overridden by the
+                  Deployment (for a `@ConfigurationProperties` field the env var is DERIVED
+                  from the prefix and field path), or be a declared external integration, or a
+                  `javaDefaults` entry in the contract. See service_env_defaults.java_stale_literals.
   [env-startup]   every placeholder with NO default at all is set — unset is not a
                   degraded feature, it is a pod that never starts (finding #15).
   [env-required]  the extra keys specs/cluster/service-env-contract.yaml pins for
@@ -59,7 +68,8 @@ except ImportError:  # pragma: no cover - guarded by the shell wrapper too
     sys.exit(2)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from service_env_defaults import ClusterFacts, classify, required_placeholders, stale_defaults  # noqa: E402
+from service_env_defaults import (  # noqa: E402
+    ClusterFacts, JavaStale, classify, java_stale_literals, required_placeholders, stale_defaults)
 
 
 # ── failure/exit plumbing ────────────────────────────────────────────────────
@@ -346,6 +356,7 @@ class CasdoorSource:
 #: (`ghcr.io/hugmesh/...` included).
 IMAGE_PREFIX = "hugmesh/"
 #: every Spring service in this fleet keeps its packaged config here
+JAVA_SRC = "src/main/java"
 APPLICATION_YML = "src/main/resources/application.yml"
 #: first-party Spring services that are NOT `*-bff-api` but ship the same packaged-default
 #: hazard and must be checked the same way (hugmesh-generator#410: `hugmesh/actions`, the
@@ -459,13 +470,18 @@ def resolve_service_src(repo_root: Path, explicit: str | None, repos: set[str]) 
         if not cand.is_dir():
             tried.append(f"{cand} (absent)")
             continue
-        missing = sorted(r for r in repos if not (cand / r / APPLICATION_YML).is_file())
+        # BOTH halves of a service's packaged defaults must be on disk: the yaml AND the Java
+        # (finding 26). A sparse checkout that carries only src/main/resources would otherwise
+        # let the Java check "pass" over sources it never read.
+        missing = sorted(r for r in repos if not (cand / r / APPLICATION_YML).is_file()
+                         or not (cand / r / JAVA_SRC).is_dir())
         if not missing:
             return cand
         tried.append(f"{cand} (missing {len(missing)}: {', '.join(missing[:4])}…)")
     raise Incomplete(
         "no service-source tree carries every first-party BFF's "
-        f"{APPLICATION_YML}. Needed: {', '.join(sorted(repos))}. Tried: " + "; ".join(tried)
+        f"{APPLICATION_YML} AND {JAVA_SRC}/ (the Java defaults are read too: a CI sparse checkout "
+        f"must include both). Needed: {', '.join(sorted(repos))}. Tried: " + "; ".join(tried)
     )
 
 
@@ -552,6 +568,79 @@ def check_derived(svc: ServiceContainer, src_root: Path, facts: ClusterFacts,
             f"{svc.label}: {'/'.join(names)} has NO default in {svc.repo} ({prop}) and is not set — "
             "the container cannot start (\"Could not resolve placeholder\"), it does not degrade",
         )
+
+
+def allowed_java_external(svc: ServiceContainer, hit: JavaStale, allow: list[dict], used: set[int]) -> bool:
+    """True if a foreign-domain Java default is a written-down external integration (the same
+    `externalIntegrations` list the yaml check uses; `property` is `<File>.java#<field>`).
+    A dangling namespace can never be allowlisted here, exactly as in the yaml check."""
+    if hit.rule != "foreign-domain":
+        return False
+    for i, entry in enumerate(allow):
+        if (entry.get("repo"), entry.get("property"), entry.get("default")) == (svc.repo, hit.external_key, hit.literal):
+            used.add(i)
+            return True
+    return False
+
+
+def declared_java_default(svc: ServiceContainer, hit: JavaStale, decl: list[dict], used: set[int]):
+    """The `javaDefaults` entry for this hit, marked used, or None. It covers a default whose
+    feeding property cannot be derived from the source (a constant, a custom binder): the entry
+    names the env var that overrides it, and the Deployment must really set it."""
+    for i, entry in enumerate(decl):
+        if (entry.get("repo"), entry.get("file"), entry.get("default")) == (svc.repo, hit.rel.rsplit("/", 1)[-1], hit.literal):
+            used.add(i)
+            return entry
+    return None
+
+
+def check_java_defaults(svc: ServiceContainer, src_root: Path, facts: ClusterFacts,
+                        allow: list[dict], decl: list[dict], used_allow: set[int], used_decl: set[int]) -> None:
+    """[java-default] — a stale default hiding in src/main/java must be overridden or declared."""
+    hits = java_stale_literals(src_root / svc.repo, facts)
+    covered = 0
+    for hit in hits:
+        where = f"{svc.label}: {svc.repo}/{JAVA_SRC}/{hit.rel}:{hit.line}"
+        if allowed_java_external(svc, hit, allow, used_allow):
+            covered += 1
+            ok("java-default", f"{where} {hit.field} = {hit.literal!r} is a declared external integration")
+            continue
+        entry = declared_java_default(svc, hit, decl, used_decl)
+        env = (entry or {}).get("env") or hit.env
+        if env and _overrides_with_something(svc, env):
+            covered += 1
+            continue
+        if entry and not (entry.get("env") or "").strip():
+            covered += 1                      # a declared acceptance (it carries a reason, checked below)
+            ok("java-default", f"{where} {hit.field} = {hit.literal!r} is a declared Java default: {entry.get('reason')!s:.80}")
+            continue
+        feed = (f"the property {hit.prop} feeds it, so set {env}" if env else
+                "the property that feeds it cannot be derived from the source, so either override it "
+                "and name the env var in a javaDefaults entry of service-env-contract.yaml, or fix the source")
+        if hit.rule == "foreign-domain":
+            feed += (f"; if calling that third party is the point, declare it in externalIntegrations "
+                     f"(repo {svc.repo}, property '{hit.external_key}', default {hit.literal!r}, with a reason)")
+        fail(
+            "java-default",
+            f"{where}: {hit.field or 'a literal'} = {hit.literal!r} is a packaged JAVA default and the "
+            f"Deployment does not override it — {hit.detail}. {feed}",
+        )
+    if hits and covered == len(hits):
+        ok("java-default", f"{svc.label}: all {len(hits)} stale Java defaults in {svc.repo} are overridden or declared")
+    elif not hits:
+        ok("java-default", f"{svc.label}: no stale Java default in {svc.repo}")
+
+
+def check_java_declarations(decl: list[dict], used: set[int]) -> None:
+    """The `javaDefaults` list is itself gated: every entry needs repo, file, default and a
+    reason, and must still match a hit (a stale declaration is drift)."""
+    for i, entry in enumerate(decl):
+        where = f"javaDefaults[{i}] ({entry.get('repo')}/{entry.get('file')})"
+        missing = [k for k in ("repo", "file", "default", "reason") if not str(entry.get(k) or "").strip()]
+        if missing:
+            fail("java-allowlist", f"{where} is missing {', '.join(missing)}")
+        elif i not in used:
+            fail("java-allowlist", f"{where} matches no stale Java default any more — a stale declaration is itself drift; remove it")
 
 
 def check_org_agreement(src: CasdoorSource) -> None:
@@ -808,9 +897,13 @@ def main(argv: list[str]) -> int:
         eso = load_external_secrets(cluster / contract["externalSecretsDir"])
         allow = contract.get("externalIntegrations") or []
         used: set[int] = set()
+        decl = contract.get("javaDefaults") or []
+        used_decl: set[int] = set()
         for svc_container in containers:
             check_derived(svc_container, src_root, facts, allow, used)
+            check_java_defaults(svc_container, src_root, facts, allow, decl, used, used_decl)
         check_external_allowlist(allow, used)
+        check_java_declarations(decl, used_decl)
         for svc in contract.get("services") or []:
             check_service(cluster, casdoor, svc, eso)
         check_emitted_values(cluster, facts)

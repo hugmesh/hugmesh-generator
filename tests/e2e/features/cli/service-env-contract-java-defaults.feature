@@ -3,25 +3,25 @@
 # yaml default is EMPTY can still resolve to a hardcoded stale host in JAVA:
 # that is exactly how admin-bff's SessionExchangeConfig.DEFAULT_SELF_HOST
 # (pre-rebrand, NXDOMAIN) survived the gate and 503'd every /bff/session. The
-# blind spot is structural: the CI job sparse-checks `src/main/resources` only,
-# so `src/main/java` is never on disk for the checker to read. Measured on
-# origin/main@9f4d6d30: `grep -n 'src/main/java\|\.java' tests/scripts/
-# service_env_contract.py tests/scripts/service_env_defaults.py` -> no match.
+# blind spot was structural: the CI job sparse-checked `src/main/resources`
+# only, so `src/main/java` was never on disk for the checker to read.
 #
-# Findings 20 (Playwright apiRequestContext ignores --host-resolver-rules) and
-# 25 (four non-Spring callers never got the mTLS wave) are the same card but
-# are fixes to the harness and to test-job TLS plumbing with no persona-facing
-# or terminal-facing acceptance shape; they are not covered here.
+# CLOSED. The checker now reads src/main/java too ([java-default] in
+# tests/scripts/service_env_contract.py; the rules are J1/J2 in
+# tests/scripts/service_env_defaults.py), the CI job fetches it, and a service tree
+# without it is INCOMPLETE (rc 3), never a quiet pass. Its first run found two REAL
+# stale Java defaults in PhoneLockProperties (namespaces `hmdm` and `headscale`, which
+# have never existed here), now pinned in the admin-bff Deployment.
 #
-# The @fixme scenario stages the defect's exact shape into a COPY of the
-# service sources (as the gate's own negative controls do — the real checkouts
-# are never written) and runs the real checker over it. Its assertions name
-# the artefacts a Java-aware checker would report: the stale host it found and
-# the file it found it in. The checker resolves service sources from
-# SERVICE_SRC_ROOT, else the siblings of this repo (CI clones them). In a linked
-# `git worktree` the siblings are the ones beside the MAIN checkout, and the
-# checker looks there last; a COPY of a worktree (no back-pointer from git's
-# worktree metadata) gets no such fallback and stays INCOMPLETE.
+# The second scenario stages the defect's exact shape into a COPY of the service
+# sources (as the gate's own negative controls do — the real checkouts are never
+# written) and runs the real checker over it. Its assertions name the artefacts a
+# Java-aware checker reports: the stale host it found and the file it found it in.
+# The checker resolves service sources from SERVICE_SRC_ROOT, else the siblings of
+# this repo (CI clones them). In a linked `git worktree` the siblings are the ones
+# beside the MAIN checkout, and the checker looks there last; a COPY of a worktree
+# (no back-pointer from git's worktree metadata) gets no such fallback and stays
+# INCOMPLETE.
 @interface:cli @issue:generator-507
 Feature: the service env-contract gate sees a stale Java hardcode hiding behind an empty yaml default
 
@@ -34,7 +34,6 @@ Feature: the service env-contract gate sees a stale Java hardcode hiding behind 
     And the command output contains "0 failed"
     And the command output does not contain "INCOMPLETE"
 
-  @fixme
   Scenario: a Java DEFAULT_SELF_HOST behind an empty yaml default goes red, naming the file and the stale host
     When I run the shell script:
       """
@@ -51,6 +50,9 @@ Feature: the service env-contract gate sees a stale Java hardcode hiding behind 
         repo="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$y")")")")")"
         mkdir -p "$staged/$repo/src/main/resources"
         cp "$y" "$staged/$repo/src/main/resources/application.yml"
+        # the checker reads src/main/java too and refuses a tree without it (INCOMPLETE)
+        main="$(dirname "$(dirname "$y")")"
+        [ -d "$main/java" ] && cp -r "$main/java" "$staged/$repo/src/main/java"
         n=$((n + 1))
       done
       [ "$n" -gt 0 ] || { echo "no first-party service sources under $src (set SERVICE_SRC_ROOT)"; exit 3; }

@@ -40,6 +40,26 @@ Spring semantics this relies on, verified against upstream docs:
     IllegalArgumentException to be thrown" (resolveRequiredPlaceholders) — which is
     finding #15 verbatim ("Could not resolve placeholder 'SVC_PASSWORD'").
 
+THE JAVA HALF (hugmesh-generator#507, finding 26). application.yml is not the whole of
+what a service falls back to: a `@ConfigurationProperties` field initialiser or a
+`DEFAULT_*` constant in src/main/java is a packaged default too, and a yaml default that
+is EMPTY hands the value straight to it. admin-bff's `SessionExchangeConfig.DEFAULT_SELF_HOST`
+(a pre-rebrand host, NXDOMAIN) survived the yaml-only gate exactly that way, and the
+same class of default is still in `PhoneLockProperties` today (see java_stale_literals).
+Two rules, deliberately narrow, because a Java file is full of strings that merely look
+like hosts (property keys such as `app.tenancy.issuers`, event names such as `wiki.ban`):
+
+  J1 dangling-namespace   ANY string literal naming <svc>.<ns>.svc.cluster.local where <ns>
+                          is not a namespace this cluster has (R1's rule, anywhere).
+  J2 foreign-domain       a String FIELD or CONSTANT whose NAME says it is an address
+                          (HOST/URL/URI/ENDPOINT/BASE/ADDRESS/ISSUER/SERVER/DOMAIN/ORIGIN) and
+                          whose literal is a `scheme://host` URL under a domain this cluster
+                          does not serve (R3's rule). A bare dotted string is never read as a
+                          host here: that is where the property-key false positives live.
+
+Comments are blanked first (a javadoc that explains a stale host is not a default), and only
+src/main is read: a test's fixture host is not what the pod falls back to.
+
 Usable as a CLI for humans:
     service_env_defaults.py <specs/cluster> <application.yml> [...]
 """
@@ -48,6 +68,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 try:
@@ -322,6 +343,155 @@ def classify(names: list[str], default: str, prop: str, facts: ClusterFacts) -> 
                 f"{sorted(facts.domains)} — the pod would talk to someone else's domain",
             )
     return None
+
+
+# ── the Java half of a service's packaged defaults ───────────────────────────────────
+_ADDRESSY_NAME = re.compile(r"(HOST|URL|URI|ENDPOINT|BASE|ADDRESS|ISSUER|SERVER|DOMAIN|ORIGIN)", re.I)
+_URL_LITERAL = re.compile(r"^[a-z][a-z0-9+.-]*://[A-Za-z0-9._-]+")
+_FIELD_BEFORE = re.compile(r"\bString\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*$")
+_CLASS_HEAD = re.compile(r"\b(?:class|record|enum|interface)\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+_CONFIG_PROPS = re.compile(r'@ConfigurationProperties\s*\(\s*(?:(?:prefix|value)\s*=\s*)?"([^"]+)"')
+
+
+@dataclass(frozen=True)
+class JavaStale:
+    """One stale literal in a service's Java source."""
+    rel: str            # path under src/main/java, with forward slashes
+    line: int
+    field: str          # the String field/constant it initialises, "" when it is a bare literal
+    literal: str
+    rule: str           # dangling-namespace | foreign-domain
+    detail: str
+    prop: str = ""      # the property key that feeds it, when it can be derived (else "")
+    env: str = ""       # the env var that overrides that property (Spring's canonical form)
+
+    @property
+    def external_key(self) -> str:
+        """What an externalIntegrations entry's `property` names for a Java default."""
+        return f"{self.rel.rsplit('/', 1)[-1]}#{self.field}" if self.field else self.rel.rsplit("/", 1)[-1]
+
+
+def _scan_java(text: str):
+    """(code, literals): the source with every comment BLANKED (newlines kept, so line
+    numbers hold) and each string literal as (start, end, value). Text blocks, char
+    literals and escapes are handled: a `//` inside a string is not a comment."""
+    out: list[str] = []
+    lits: list[tuple[int, int, str]] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        two = text[i:i + 2]
+        if two == "//":
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(" " * (j - i)); i = j
+        elif two == "/*":
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("".join("\n" if ch == "\n" else " " for ch in text[i:j])); i = j
+        elif text.startswith('"""', i):
+            j = text.find('"""', i + 3)
+            j = n if j < 0 else j + 3
+            out.append(text[i:j]); i = j          # a text block: kept as code, not scanned
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"' and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            end = min(j + 1, n)
+            lits.append((i, end, text[i + 1:j]))
+            out.append(text[i:end]); i = end
+        elif c == "'":
+            j = i + 1
+            while j < n and text[j] != "'" and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:min(j + 1, n)]); i = min(j + 1, n)
+        else:
+            out.append(c); i += 1
+    return "".join(out), lits
+
+
+def _kebab(name: str) -> str:
+    return re.sub(r"(?<=[a-z0-9])([A-Z])", r"-\1", name).lower()
+
+
+def _class_chain(code: str, pos: int) -> list[str]:
+    """The names of the classes enclosing offset `pos`, outermost first."""
+    stack: list[tuple[str | None, int]] = []     # (class name or None for a plain block, depth)
+    depth = 0
+    pending: str | None = None
+    for m in re.finditer(r"[{};]|\b(?:class|record|enum|interface)\s+[A-Za-z_][A-Za-z0-9_]*", code[:pos]):
+        tok = m.group(0)
+        head = _CLASS_HEAD.match(tok)
+        if head:
+            pending = head.group(1)
+        elif tok == "{":
+            depth += 1
+            stack.append((pending, depth)); pending = None
+        elif tok == "}":
+            if stack:
+                stack.pop()
+            depth -= 1
+        elif tok == ";":
+            pending = None
+    return [name for name, _ in stack if name]
+
+
+def _derive_property(code: str, field: str, pos: int) -> str:
+    """The Spring property key a `@ConfigurationProperties` field is bound to, or "".
+
+    prefix + the kebab-cased name of each outer FIELD that holds a nested class +
+    the kebab-cased field. Only the plain shape is derived (`private Nested nested = new
+    Nested();`); anything else returns "" rather than a guess, and the caller then asks for
+    an explicit declaration instead of pretending it knows what feeds the field."""
+    m = _CONFIG_PROPS.search(code)
+    chain = _class_chain(code, pos)
+    if not m or not chain or not field:
+        return ""
+    segments: list[str] = []
+    outer_body = code
+    for nested in chain[1:]:
+        holder = re.search(rf"\b{re.escape(nested)}\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*new\s+{re.escape(nested)}\s*\(|;)", outer_body)
+        if not holder:
+            return ""
+        segments.append(_kebab(holder.group(1)))
+    return ".".join([m.group(1)] + segments + [_kebab(field)])
+
+
+def _env_for(prop: str) -> str:
+    """Spring Boot's canonical environment-variable form of a property key: dots become
+    underscores, dashes are REMOVED, upper case (the documented binding rule)."""
+    return prop.replace(".", "_").replace("-", "").upper() if prop else ""
+
+
+def java_stale_literals(repo_dir: Path, facts: ClusterFacts) -> list[JavaStale]:
+    """Every stale literal under <repo_dir>/src/main/java (rules J1 and J2 above)."""
+    base = repo_dir / "src" / "main" / "java"
+    found: list[JavaStale] = []
+    for path in sorted(base.rglob("*.java")):
+        code, lits = _scan_java(path.read_text(encoding="utf-8", errors="replace"))
+        rel = path.relative_to(base).as_posix()
+        for start, _end, value in lits:
+            if len(value) < 4:
+                continue
+            field = ""
+            fm = _FIELD_BEFORE.search(code[max(0, start - 200):start])
+            if fm:
+                field = fm.group(1)
+            hit = None
+            if _IN_CLUSTER_FQDN.search(value):                                    # J1
+                hit = classify(["<java>"], value, field or "<literal>", facts)
+                if hit is not None and hit.rule != "dangling-namespace":
+                    hit = None
+            if hit is None and field and _ADDRESSY_NAME.search(field) and _URL_LITERAL.match(value):   # J2
+                hit = classify(["<java>"], value, field, facts)
+                if hit is not None and hit.rule != "foreign-domain":
+                    hit = None
+            if hit is None:
+                continue
+            prop = _derive_property(code, field, start)
+            found.append(JavaStale(rel, code.count("\n", 0, start) + 1, field, value, hit.rule, hit.detail,
+                                   prop, _env_for(prop)))
+    return found
 
 
 #: an env-var-shaped chain member — the only kind a Deployment can actually set.
