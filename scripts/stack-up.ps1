@@ -452,6 +452,40 @@ if ($Social) {
   }
 }
 
+# ── 1c. A LAN bind is refused while a Casdoor still has the factory admin (#1034) ──
+# Same rule as tests/stack/lan-bind-preflight.sh (`make stack-up`): STACK_BIND_ADDR other than loopback
+# publishes Casdoor on the LAN, and a fresh Casdoor's built-in admin signs in with upstream's public
+# factory password until the seed moves it. Probe every Casdoor on loopback; refuse on an accepted
+# factory login, on no usable answer, or on the throttle (a refusal that says nothing about the password).
+$LanBind = $env:STACK_BIND_ADDR
+if ($LanBind -and ($LanBind -notmatch '^(127\.|localhost$|::1$|\[::1\]$)')) {
+  $casdoorPorts = @(8000)
+  $ownOverlay = Join-Path $StackDir '.compose.own-domains.yaml'
+  if (Test-Path $ownOverlay) {
+    $casdoorPorts += @(Select-String -Path $ownOverlay -Pattern ':(\d+):8000"' | ForEach-Object { [int]$_.Matches[0].Groups[1].Value })
+  }
+  if ($env:BRAND_B -and $env:BRAND_B -ne '0') { $casdoorPorts += 8001 }
+  $lanProblems = @()
+  foreach ($port in ($casdoorPorts | Sort-Object -Unique)) {
+    $probeUrl = "http://127.0.0.1:$port"
+    $probeBody = @{ application = 'app-built-in'; organization = 'built-in'; username = 'admin'; password = '123'; type = 'login'; autoSignin = $true } | ConvertTo-Json -Compress
+    $probe = $null
+    try { $probe = Invoke-RestMethod -Method Post -Uri "$probeUrl/api/login" -ContentType 'application/json' -Body $probeBody -TimeoutSec 10 } catch { $probe = $null }
+    if ($null -eq $probe -or -not ($probe.PSObject.Properties.Name -contains 'status')) {
+      $lanProblems += "${probeUrl}: no usable answer, so nothing proves its admin was moved (bring the stack up on loopback first)"
+    } elseif ($probe.status -eq 'ok') {
+      $lanProblems += "${probeUrl}: STILL ACCEPTS THE FACTORY ADMIN LOGIN"
+    } elseif ("$($probe.msg)" -match 'too many times') {
+      $lanProblems += "${probeUrl}: its sign-in throttle refused the probe, which says nothing about the password (wait, then retry)"
+    }
+  }
+  if ($lanProblems.Count -gt 0) {
+    throw ("Refusing STACK_BIND_ADDR=$LanBind: $($lanProblems.Count) Casdoor(s) cannot be shown to have left the factory admin.`n  - " +
+           ($lanProblems -join "`n  - ") +
+           "`n  Bring the stack up on loopback (unset STACK_BIND_ADDR), run the seed (make stack-seed) so the admin moves, then set STACK_BIND_ADDR again.")
+  }
+}
+
 # ── 2. Build every first-party service ─────────────────────────────────────
 Write-Host '==> Building all services (docker compose build)'
 docker compose -f $Compose @profileArgs build
