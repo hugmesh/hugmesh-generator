@@ -89,7 +89,7 @@ render() {
     body="$(sed -n '1,/^# ── Kubernetes kernel modules/p' "${TMPL}")"
     tail_line="$(grep -E 'rm -f /etc/local.d/01-firstboot.start$' "${TMPL}")"
     printf '%s\n%s\n' "${body}" "${tail_line}" \
-      | sed -e "s|@@STANDALONE@@|${sa}|g" -e 's|@@DEFAULT_USER@@|magus|g' \
+      | sed -e "s|@@STANDALONE@@|${sa}|g" -e 's|@@DEFAULT_USER@@|alex|g' \
             -e "s|@@LOCAL_ADMIN@@|${admin}|g" \
             -e "s|@@LOCAL_PASSHASH@@|${hash}|g" -e 's|@@[A-Z_]*@@|x|g' \
             -e "s|/var/lib/keys-provision|${r}/var/lib/keys-provision|g" \
@@ -151,8 +151,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = probe ]; then
     [ "${4:-false}" = true ] && keys_provisioned "${PR}"
     render "${PR}" "${3:-}" "${2:-false}" "${5:-false}"
     run_fb "${PR}"
-    if [ -n "${3:-}" ] && [ "$(cat "${PR}/shadow.hash" 2>/dev/null)" = "magus:${3}" ]; then h=applied; else h=absent; fi
-    w=n; grep -q 'wheel' "${PR}/groups.magus" 2>/dev/null && w=y
+    if [ -n "${3:-}" ] && [ "$(cat "${PR}/shadow.hash" 2>/dev/null)" = "alex:${3}" ]; then h=applied; else h=absent; fi
+    w=n; grep -q 'wheel' "${PR}/groups.alex" 2>/dev/null && w=y
     sd=n; [ -n "$(ls -A "${PR}/etc/sudoers.d" 2>/dev/null)" ] && sd=y
     rl=n; grep -q '^passwd -l root' "${PR}/log" && rl=y
     kb=n; grep -q 'KEYLESS BOOT' "${PR}/out" && kb=y

@@ -7,7 +7,7 @@
 # virtio-GPU, and assert the boot + first-boot provisioning milestones on the
 # serial console (the same approach that console-proved the Pi fleet).
 #
-# Non-root: launch-x86.sh uses /dev/kvm (magus in the kvm group) and a qcow2
+# Non-root: launch-x86.sh uses /dev/kvm (the user in the kvm group) and a qcow2
 # overlay; the KEYS disk is built with mtools (mcopy), no loop-mount. Use
 # --dry-run to validate args + render the KEYS payload without booting.
 #
@@ -79,7 +79,7 @@ if [ -z "${IMG}" ] || [ ! -f "${IMG}" ]; then
 fi
 
 # Scratch defaults under WORK_DIR, but WORK_DIR is often root-owned (a sudo build
-# made it), so allow --test-dir to point at a magus-writable location for non-root runs.
+# made it), so allow --test-dir to point at a user-writable location for non-root runs.
 [ -n "${TEST_DIR}" ] || TEST_DIR="${WORK_DIR}/qemu-verify-client"
 RUN_DIR="${TEST_DIR}/run"
 KEYS_DIR="${TEST_DIR}/keys"

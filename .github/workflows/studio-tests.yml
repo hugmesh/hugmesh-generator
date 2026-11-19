@@ -381,7 +381,7 @@ jobs:
     # (os.kill(pid, 0) is not a probe on Windows), local-mesh and DevOps verbs failing
     # with "make is required", every CLI flag printing nothing (a windowed exe has
     # no stdout), and --print-specs itself exiting 2 because the default image login
-    # was the raw Windows account name ("Magus"), which the login allowlist refuses.
+    # was the raw Windows account name ("Alex"), which the login allowlist refuses.
     #
     # NAMED FILES, NOT THE SUITE. The suite assumes POSIX throughout (bash fixtures,
     # mode bits, os.geteuid at import) and does not finish on Windows: a test that calls

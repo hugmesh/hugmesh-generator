@@ -83,7 +83,7 @@ _NODE_CREDS_REASON = (
 # build-rpi5-stage4.sh:1329, build-jetson-stage4.sh:597, build-frite-stage4.sh:594,
 # build-orangepi5-stage4.sh:625 and the four orangepi-zero/lts builders). On those
 # images the operator typed one account twice and the argv carried both
-# "--local-user magus" and "--user magus" — and an operator who never opened this page
+# "--local-user alex" and "--user alex" — and an operator who never opened this page
 # emitted no -u at all, i.e. merely WALKING the wizard added a redundant flag.
 #
 # WHERE --local-user IS ACTUALLY EMITTED — the half the first cut of this rule assumed
@@ -619,7 +619,7 @@ class SystemPage(QtWidgets.QWizardPage):
 
         This is the hostname field's guard, applied to the field that was missing it.
         Seeding off the BASE config (which the WorklistPage pins to x86) resolved to
-        cfg.local_user and then rode `-u magus` onto every row — a be.rpi5 row that
+        cfg.local_user and then rode `-u alex` onto every row — a be.rpi5 row that
         emitted nothing before, and whose builder defaults to 'pi', silently changed
         account. derive_default_user's own docstring says the ARM builders "keep the
         platform account otherwise"; that is only true while nothing bakes -u."""

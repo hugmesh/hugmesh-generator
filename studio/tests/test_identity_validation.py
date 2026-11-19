@@ -40,7 +40,7 @@ def test_clean_defaults_pass():
 
 def test_clean_custom_brand_passes():
     cfg = ImageConfig(brand="acme", org="Acme-Corp", brand_title="Acme Corp",
-                      cluster_domain="acme.test", local_user="magus")
+                      cluster_domain="acme.test", local_user="alex")
     args = cfg.to_cli_args()
     assert "--brand" in args and "acme" in args
 
@@ -107,7 +107,7 @@ def test_injection_local_user_rejected(user):
 
 
 def test_clean_local_user_passes():
-    for u in ("snap", "magus", "_svc", "user-1"):
+    for u in ("snap", "alex", "_svc", "user-1"):
         ImageConfig(local_user=u).to_cli_args()   # must not raise
 
 

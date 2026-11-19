@@ -42,7 +42,7 @@ def test_standalone_login_required_matches_the_builder_posture(cfg_kw, required)
 
 def test_problem_text_names_the_missing_piece():
     c = ImageConfig(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86",
-                    local_user="magus", local_pass="")
+                    local_user="alex", local_pass="")
     assert "Login Password" in standalone_login_problem(c)
     c.local_pass = PW
     assert standalone_login_problem(c) == ""
@@ -55,7 +55,7 @@ def test_problem_text_names_the_missing_piece():
 def test_build_preflight_refuses_a_standalone_image_with_no_password():
     drv = BuildDriver(GENERATOR_DIR, HOST)
     c = ImageConfig(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86",
-                    local_user="magus", local_pass="")
+                    local_user="alex", local_pass="")
     msg = standalone_login_problem(c)
     assert msg and msg in drv.preflight(c, backend="native")
     c.local_pass = PW

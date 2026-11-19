@@ -54,7 +54,7 @@ def _combos():
             for platform in platforms:
                 for box in (False, True):
                     cfg = ImageConfig(mode=mode, role=role, platform=platform,
-                                      standalone=box, local_user="magus",
+                                      standalone=box, local_user="alex",
                                       local_pass=THROWAWAY)
                     if box and not field_in_scope("standalone", cfg):
                         continue
@@ -178,7 +178,7 @@ def test_admin_is_opt_in_on_every_shape(standalone, keys):
 
 def test_admin_box_is_what_emits_local_admin():
     # The box rides the Login Password (no password => no local account to elevate).
-    base = dict(mode="standalone", role="chromebook", platform="x86", local_user="magus")
+    base = dict(mode="standalone", role="chromebook", platform="x86", local_user="alex")
     assert "--local-admin" not in ImageConfig(**base, local_pass=THROWAWAY).to_cli_args()
     assert "--local-admin" in ImageConfig(**base, local_pass=THROWAWAY,
                                           local_admin=True).to_cli_args()

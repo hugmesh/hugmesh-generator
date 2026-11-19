@@ -309,7 +309,7 @@ cites commits.
 | 9 | Fixed in the manifests | `da6d970a`, `668d386e`; `casdoor-init` only: `reconcile_admin_password()` in `casdoor/init-job.yaml` applies the ESO value via `/api/set-password` and re-logs in. `init-data-configmap.yaml` declares no admin user and no password. The live IdP behind a given cluster is not measured. |
 | 10 | Fixed | `da6d970a`; `casdoor/init-job.yaml` reads response bodies; `test-casdoor-init-honesty.sh`: 67 passed, 0 failed. |
 | 11-13 | Fixed | `7742bde3`; `user-bff-api/deployment.yaml:168` (`CASDOOR_ORG`), `:496` (client id), `:508` (redirect URI). |
-| 14 | Fixed | `7742bde3`; `test-service-env-contract.sh` PASS with 27 negative controls. It reads the BFF source checkouts it finds next to this repo (here: `SERVICE_SRC_ROOT=/home/magus/Github`, whose HEADs are not all `origin/main`), so treat that run as indicative; CI clones the services itself. |
+| 14 | Fixed | `7742bde3`; `test-service-env-contract.sh` PASS with 27 negative controls. It reads the BFF source checkouts it finds next to this repo (here: `SERVICE_SRC_ROOT=/home/<user>/Github`, whose HEADs are not all `origin/main`), so treat that run as indicative; CI clones the services itself. |
 | 15 | Fixed | `7742bde3`; `admin-bff-api/deployment.yaml:769-773` takes `SVC_PASSWORD` from `user-bff-hs-token` / `svc-password`. |
 | 16 | Fixed in source | `0cb9221` is an ancestor of `hugmesh-admin-bff-api` `origin/main` (`b51e02af`); that tree has 0 `TO admin_bff` and 169 `adminbff_app` under `src/main/resources`; `admin-bff-api/deployment.yaml:273-274` connects as `adminbff_app`. Whether the `:main` image a cluster pulls was rebuilt after it is not verified. |
 

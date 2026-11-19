@@ -284,9 +284,9 @@ def test_a_windows_key_with_a_too_open_acl_is_narrowed_and_rechecked(monkeypatch
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
     monkeypatch.setattr(mt, "_sign", sign)
-    monkeypatch.setattr(mt.getpass, "getuser", lambda: "magus")
+    monkeypatch.setattr(mt.getpass, "getuser", lambda: "alex")
     mt._self_check("k", "ssh-keygen", "nt", runner=runner)
-    assert icacls == [["icacls", "k", "/inheritance:r", "/grant:r", "magus:F"]]
+    assert icacls == [["icacls", "k", "/inheritance:r", "/grant:r", "alex:F"]]
     assert signs == [mt._SELF_CHECK_NAMESPACE] * 2 and mt.NAMESPACE not in signs
 
 

@@ -156,7 +156,7 @@
 # suites run inside a git worktree. That number was WRONG and a skeptic pass
 # caught it. Half of these suites change verdict with their checkout's POSITION:
 # they look for a sibling checkout at ${REPO}/.., or for ${REPO}/.stack-src, and
-# a worktree under /home/magus/.hugmesh-wt-* has neither, so they report
+# a worktree under /home/<user>/.hugmesh-wt-* has neither, so they report
 # INCOMPLETE there and pass in the real tree. tests/stack/test-gateway-auth-flag-parity.sh
 # was named as one of the three reds and is GREEN in the real position — it was
 # a measurement artefact, not a defect. Do not re-measure this list from a

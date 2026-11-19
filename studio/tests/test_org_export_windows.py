@@ -491,7 +491,7 @@ def test_the_powershell_line_hands_over_exactly_its_words(tmp_path):
     """Run the line in real PowerShell against python, and read back what it got."""
     import subprocess
     words = ["-c", "import sys, json; print(json.dumps(sys.argv[1:]))",
-             "brand\u2019; Write-Host INJECTED; \u2019x", "Magus\u2019 projects", "a'b"]
+             "brand\u2019; Write-Host INJECTED; \u2019x", "Alex\u2019 projects", "a'b"]
     line = oe._terminal_line([sys.executable, *words], osname="nt")
     script = tmp_path / "line.ps1"
     script.write_text("[Console]::OutputEncoding = [Text.Encoding]::UTF8\n" + line + "\n",

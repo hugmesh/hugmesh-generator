@@ -1,7 +1,7 @@
 """The default image login is the invoking account FOLDED into a legal unix login.
 
 On Windows 11 the 0.3.0-beta.1 MSI's own smoke command, ``--print-specs``, exited 2 with
-"invalid local_user: 'Magus' — rejected by the identity allowlist": the default was
+"invalid local_user: 'Alex' — rejected by the identity allowlist": the default was
 the raw account name, and Windows account names are capitalised or contain spaces.
 The release job never saw it because the runner's account is ``runneradmin``.
 """
@@ -14,9 +14,9 @@ from hugmesh_studio.core.validate import validate_username
 
 
 @pytest.mark.parametrize("account,login", [
-    ("magus", "magus"),                    # already legal: unchanged (Linux, the CI runner)
+    ("alex", "alex"),                    # already legal: unchanged (Linux, the CI runner)
     ("runneradmin", "runneradmin"),
-    ("Magus", "magus"),                    # the measured Windows failure
+    ("Alex", "alex"),                    # the measured Windows failure
     ("Jane Doe", "janedoe"),
     ("O'Brien", "obrien"),
     ("2fast", "fast"),                     # a login must not start with a digit
@@ -41,7 +41,7 @@ def test_a_missing_account_is_user(monkeypatch):
 
 
 def test_a_default_config_with_a_windows_account_validates(monkeypatch):
-    monkeypatch.setattr(config.getpass, "getuser", lambda: "Magus")
+    monkeypatch.setattr(config.getpass, "getuser", lambda: "Alex")
     cfg = config.ImageConfig()
-    assert cfg.local_user == "magus"
+    assert cfg.local_user == "alex"
     cfg.validate_identity()
