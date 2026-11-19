@@ -9,6 +9,9 @@
 # consume — see specs/etc/keys-provision):
 #   /keys/tailscale/authkey   one-time pre-auth key (or /keys/authkey)
 #   /keys/login-server        headscale control URL (optional; else $SNAP_LOGIN_SERVER)
+#   /keys/certs/*.crt|*.pem   the mesh CA (the KEYS USB carries it as certs/cluster-ca.crt). Installed
+#                             into the container trust store BEFORE the join and the Casdoor login. A mesh
+#                             whose headscale/Casdoor are served over its own CA cannot be joined without it.
 #   /keys/casdoor.json        { "issuer": "...", "client_id": "...", "domain": "..." }  (optional)
 #   /keys/role                user|mod|admin|superadmin  (or $SNAP_ROLE; default user)
 set -euo pipefail
@@ -31,6 +34,60 @@ done
 LOGIN_SERVER="${SNAP_LOGIN_SERVER:-}"
 [ -z "${LOGIN_SERVER}" ] && [ -f "${KEYS}/login-server" ] && LOGIN_SERVER="$(tr -d ' \n' < "${KEYS}/login-server")"
 
+# ── The mesh CA (hugmesh-generator#1040) ────────────────────────────
+# A private mesh serves headscale and Casdoor over its OWN CA, which the stock Tailscale image's public root
+# store does not hold. Install every certificate under ${KEYS}/certs/ (the KEYS USB layout the appliance's
+# provision.sh reads) before anything speaks TLS. A file there that is not a certificate (a key put in the
+# wrong folder, a truncated copy) is refused by name and never copied into the trust store. There is no
+# insecure switch anywhere in this client: an untrusted control server is a refusal, not a flag.
+CA_SRC_DIR="${KEYS}/certs"
+CA_INSTALL_DIR="${SNAP_CA_INSTALL_DIR:-/usr/local/share/ca-certificates}"
+UPDATE_CA="${SNAP_UPDATE_CA_CMD:-update-ca-certificates}"
+CA_WANTED="${CA_SRC_DIR}/cluster-ca.crt"
+CA_INSTALLED=0
+install_mesh_ca() {
+    local f n=0
+    shopt -s nullglob
+    local files=("${CA_SRC_DIR}"/*.crt "${CA_SRC_DIR}"/*.pem)
+    shopt -u nullglob
+    for f in "${files[@]}"; do
+        openssl x509 -in "${f}" -noout >/dev/null 2>&1 \
+            || { log "FATAL: ${f} is not a PEM certificate, so it cannot be the mesh CA (the KEYS folder carries it as ${CA_WANTED})"; exit 1; }
+    done
+    [ "${#files[@]}" -gt 0 ] || return 0
+    mkdir -p "${CA_INSTALL_DIR}"
+    for f in "${files[@]}"; do
+        n=$((n + 1))
+        install -m 0644 "${f}" "${CA_INSTALL_DIR}/hugmesh-mesh-ca-${n}.crt"
+    done
+    "${UPDATE_CA}" >/dev/null 2>&1 \
+        || { log "FATAL: ${UPDATE_CA} failed, so the ${n} mesh CA certificate(s) from ${CA_SRC_DIR} are not in the trust store"; exit 1; }
+    CA_INSTALLED="${n}"
+    log "installed ${n} mesh CA certificate(s) from ${CA_SRC_DIR} into the trust store"
+}
+install_mesh_ca
+
+# tls_untrusted <url> — 0 when <url> is https and its certificate fails verification against the trust
+# store (curl: 35 handshake, 51/60 peer certificate, 58/59/77 CA material, 83 issuer). Any other
+# failure (server down, no route yet, an http URL) is NOT a trust verdict: the caller carries on.
+tls_untrusted() {
+    case "$1" in https://*|HTTPS://*) ;; *) return 1 ;; esac
+    local rc=0
+    curl -sS --max-time 15 -o /dev/null "$1" >/dev/null 2>&1 || rc=$?
+    case "${rc}" in 35|51|58|59|60|77|83) return 0 ;; *) return 1 ;; esac
+}
+tls_hint() {
+    if [ "${CA_INSTALLED}" -gt 0 ]; then
+        printf 'the %s CA file(s) in %s do not verify it (wrong mesh, or its CA was re-issued)' "${CA_INSTALLED}" "${CA_SRC_DIR}"
+    else
+        printf 'this container has no mesh CA: put it at %s (mount the KEYS folder with its certs/ directory)' "${CA_WANTED}"
+    fi
+}
+if [ -n "${LOGIN_SERVER}" ] && tls_untrusted "${LOGIN_SERVER}"; then
+    log "FATAL: the control server ${LOGIN_SERVER} presents a certificate this container does not trust: $(tls_hint)."
+    exit 1
+fi
+
 # ── TUN vs userspace networking ─────────────────────────────────────
 # Kernel TUN gives full mesh routing; without /dev/net/tun (common on Docker
 # Desktop / locked-down hosts) fall back to userspace-networking, which still
@@ -45,10 +102,11 @@ fi
 
 mkdir -p "${STATE_DIR}"
 log "starting tailscaled (state=${STATE_DIR}, role=${ROLE}, hostname=${HOSTNAME_TS})"
-tailscaled --state="${STATE_DIR}/tailscaled.state" --socket=/var/run/tailscale/tailscaled.sock "${TS_TUN_ARGS[@]}" &
+TS_SOCKET="${SNAP_TS_SOCKET:-/var/run/tailscale/tailscaled.sock}"
+tailscaled --state="${STATE_DIR}/tailscaled.state" --socket="${TS_SOCKET}" "${TS_TUN_ARGS[@]}" &
 TSD_PID=$!
 # Wait for the daemon socket.
-for _ in $(seq 1 30); do [ -S /var/run/tailscale/tailscaled.sock ] && break; sleep 0.5; done
+for _ in $(seq 1 30); do [ -S "${TS_SOCKET}" ] && break; sleep 0.5; done
 
 # ── Join the mesh (register; one-time authkey per SEC-08) ───────────
 UP=(tailscale up --authkey "${AUTHKEY}" --hostname "${HOSTNAME_TS}" --ssh --accept-dns=true)
@@ -73,6 +131,10 @@ casdoor_login() {
     client_id="$(jq -r '.client_id // empty' "${cj}")"
     domain="$(jq -r '.domain // empty' "${cj}")"
     [ -n "${issuer}" ] && [ -n "${client_id}" ] || { log "casdoor.json missing issuer/client_id — skipping"; return 0; }
+    if tls_untrusted "${issuer}"; then
+        log "Casdoor: ${issuer} presents a certificate this container does not trust: $(tls_hint). Skipping the Casdoor login (mesh join only)."
+        return 0
+    fi
     local disc dae te
     disc="$(curl -fsS "${issuer%/}/.well-known/openid-configuration" 2>/dev/null || true)"
     dae="$(printf '%s' "${disc}" | jq -r '.device_authorization_endpoint // empty' 2>/dev/null)"

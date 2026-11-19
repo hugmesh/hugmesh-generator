@@ -3,8 +3,10 @@
 # Base = the upstream Tailscale image (ships tailscaled + tailscale, Alpine).
 FROM tailscale/tailscale:stable
 
-# bash for the entrypoint, curl+jq for the OIDC device-code Casdoor login.
-RUN apk add --no-cache bash curl jq ca-certificates
+# bash for the entrypoint, curl+jq for the OIDC device-code Casdoor login, openssl to check that
+# the files in /keys/certs really are certificates, ca-certificates for update-ca-certificates (the mesh CA is
+# installed into the trust store at start; see entrypoint.sh).
+RUN apk add --no-cache bash curl jq openssl ca-certificates
 
 COPY entrypoint.sh /usr/local/bin/hugmesh-mesh-node
 RUN chmod +x /usr/local/bin/hugmesh-mesh-node

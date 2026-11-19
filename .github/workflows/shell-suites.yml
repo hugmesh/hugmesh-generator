@@ -615,6 +615,7 @@ jobs:
             tests/scripts/test-stack-e2e-argv.sh
             tests/scripts/test-stack-fetch-repos.sh
             tests/scripts/test-stack-idp-exposure.sh
+            tests/docker-mesh-node/test-mesh-ca.sh
             tests/stack/test-casdoor-origin-follows-issuer.sh
             tests/scripts/test-stage4-pack-ownership.sh
             tests/scripts/test-studio-launch.sh
