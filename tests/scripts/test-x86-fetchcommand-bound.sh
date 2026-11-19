@@ -197,6 +197,9 @@ import http.server, socketserver, sys, time, re
 MODE, LOG = sys.argv[1], sys.argv[2]
 BODY = bytes(range(256)) * 64            # 16 KiB, every byte value, incompressible-ish
 def log(line):
+    # Called BEFORE the response bytes are written: curl exits the moment it has the last byte,
+    # and a line appended after the write could land after the test had already counted the log
+    # (d5 read "1 request(s)" on CI while the log printed a moment later held both).
     with open(LOG, "a") as fh: fh.write(line + "\n")
 class H(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -205,17 +208,17 @@ class H(http.server.BaseHTTPRequestHandler):
         rng = self.headers.get("Range", "-")
         if MODE == "ok" or MODE == "norange":       # norange: a Range request gets 200 + the whole body (GitHub archives)
             self.send_response(200); self.send_header("Content-Length", str(len(BODY))); self.end_headers()
-            self.wfile.write(BODY); log(f"GET {self.path} RANGE={rng} SENT={len(BODY)} STATUS=200")
+            log(f"GET {self.path} RANGE={rng} SENT={len(BODY)} STATUS=200"); self.wfile.write(BODY)
         elif MODE == "range":
             m = re.match(r"bytes=(\d+)-$", rng)
             if m:
                 start = int(m.group(1)); tail = BODY[start:]
                 self.send_response(206); self.send_header("Content-Range", f"bytes {start}-{len(BODY)-1}/{len(BODY)}")
-                self.send_header("Content-Length", str(len(tail))); self.end_headers(); self.wfile.write(tail)
-                log(f"GET {self.path} RANGE={rng} SENT={len(tail)} STATUS=206")
+                self.send_header("Content-Length", str(len(tail))); self.end_headers()
+                log(f"GET {self.path} RANGE={rng} SENT={len(tail)} STATUS=206"); self.wfile.write(tail)
             else:
                 self.send_response(200); self.send_header("Content-Length", str(len(BODY))); self.end_headers()
-                self.wfile.write(BODY); log(f"GET {self.path} RANGE={rng} SENT={len(BODY)} STATUS=200")
+                log(f"GET {self.path} RANGE={rng} SENT={len(BODY)} STATUS=200"); self.wfile.write(BODY)
         elif MODE == "trickle":                     # data IS arriving, so a read timeout never fires
             log(f"GET {self.path} RANGE={rng} TRICKLE")
             self.send_response(200); self.send_header("Content-Length", "1000000"); self.end_headers()
@@ -231,7 +234,7 @@ class H(http.server.BaseHTTPRequestHandler):
         elif MODE == "notfound":
             body = b"<html><title>404 Not Found</title></html>"
             self.send_response(404); self.send_header("Content-Length", str(len(body))); self.end_headers()
-            self.wfile.write(body); log(f"GET {self.path} RANGE={rng} STATUS=404")
+            log(f"GET {self.path} RANGE={rng} STATUS=404"); self.wfile.write(body)
 class S(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True; allow_reuse_address = True
 srv = S(("127.0.0.1", 0), H)
