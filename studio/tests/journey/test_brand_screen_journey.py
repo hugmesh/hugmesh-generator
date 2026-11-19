@@ -216,7 +216,7 @@ class TextFace:
             self.ds.feed(self.j, "n")
 
     def override(self, primary, font):
-        self.ds.feed(self.j, "open 3")
+        self.ds.feed(self.j, "open 2")
         self.ds.feed(self.j, f"1 {primary}")
         self.ds.feed(self.j, f"font {font}")
         assert "this brand's own" in "\n".join(self.ds.lines(self.j))
@@ -229,7 +229,7 @@ class TextFace:
         return armed
 
     def ways(self):
-        self.ds.feed(self.j, "open 5")
+        self.ds.feed(self.j, "open 4")
         text = "\n".join(self.ds.lines(self.j))
         # the names are the wizard's: a name typed here is not a command of this
         # section (its commands are the domain's own Tor, VPN and egress)
@@ -238,7 +238,7 @@ class TextFace:
         return text, ["shop.example"]
 
     def look_tab(self):
-        self.ds.feed(self.j, "open 3")
+        self.ds.feed(self.j, "open 2")
 
     def leave(self):
         self.ds.feed(self.j, "")
