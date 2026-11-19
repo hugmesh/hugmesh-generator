@@ -91,6 +91,9 @@ LAST_GOOD="${CACHE_DIR}/last-good-generation"
 TOR_ETC="${R}/etc/hugmesh/tor"
 UPSTREAM_FILE="${TOR_ETC}/upstream"
 DOMAINS_FILE="${TOR_ETC}/domains"
+# "<slug> <count>" per Tor domain a new address was asked for (#652); the reconcile
+# agent rotates a domain whose count is above the one it last applied.
+ROTATIONS_FILE="${TOR_ETC}/rotations"
 EXPORT_DIR="${R}/var/lib/hugmesh/tor"
 RECONCILE="${HUGMESH_TOR_RECONCILE:-/usr/sbin/hugmesh-tor-reconcile}"
 LOG_TAG="hugmesh-tor-export-sync"
@@ -236,6 +239,31 @@ export_step() {
         fi
     fi
 
+    # 3b. rotation requests (#652): each names a domain of THIS export with a positive
+    # count; anything else refuses the whole export (nothing changed), like a bad slug.
+    rots="$(tor_rotations "${fetched}")" || rots=""
+    if [ -n "${rots}" ]; then
+        if [ "${dm}" != true ]; then
+            warn "export gen=${gen} asks for a new Tor address but does not manage the domains — REFUSED, nothing changed"
+            rm -f "${fetched}"; EXPORT_RESULT="refused: rotation without domains"; return 0
+        fi
+        n=0
+        while IFS= read -r line || [ -n "${line}" ]; do
+            [ -n "${line}" ] || continue
+            n=$((n + 1))
+            rs="${line% *}"; rc_="${line##* }"
+            if ! [[ "${rs}" =~ ${_SLUG_RE} ]] || ! [[ "${rc_}" =~ ^[1-9][0-9]{0,8}$ ]] \
+               || ! printf '%s\n' "${slugs}" | grep -F -x -- "${rs}" >/dev/null; then
+                warn "export gen=${gen} carries an invalid rotation request '${line}' — REFUSED, nothing changed"
+                rm -f "${fetched}"; EXPORT_RESULT="refused: invalid rotation"; return 0
+            fi
+        done <<<"${rots}"
+        if [ "${n}" != "$(jq -r '(.body.rotations // []) | length' "${fetched}" 2>/dev/null)" ]; then
+            warn "export gen=${gen}: the rotation list does not read as one entry per line — REFUSED, nothing changed"
+            rm -f "${fetched}"; EXPORT_RESULT="refused: rotation list shape"; return 0
+        fi
+    fi
+
     # 4. apply, each file atomically; honour the managed flags exactly.
     changed=false; failed=false
     if [ "${um}" = true ]; then
@@ -281,6 +309,26 @@ export_step() {
         fi
     else
         log "domains not managed by the export — ${DOMAINS_FILE#"${R}"} left alone"
+    fi
+    if [ "${dm}" = true ]; then
+        if [ -z "${rots}" ]; then
+            if [ -e "${ROTATIONS_FILE}" ]; then
+                if rm -f "${ROTATIONS_FILE}" 2>/dev/null; then changed=true; log "removed ${ROTATIONS_FILE#"${R}"} (no rotation requested)"
+                else failed=true; warn "could not remove ${ROTATIONS_FILE#"${R}"}"; fi
+            fi
+        else
+            cand="$(mktemp "${CACHE_DIR}/cand.XXXXXX" 2>/dev/null)" || { failed=true; cand=""; }
+            if [ -n "${cand}" ]; then
+                printf '%s\n' "${rots}" > "${cand}"
+                atomic_install "${ROTATIONS_FILE}" "${cand}"; rc=$?
+                rm -f "${cand}"
+                case "${rc}" in
+                    0) changed=true; log "wrote ${ROTATIONS_FILE#"${R}"} ($(printf '%s\n' "${rots}" | wc -l | tr -d ' ') rotation request(s))" ;;
+                    2) ;;
+                    *) failed=true; warn "could not write ${ROTATIONS_FILE#"${R}"} (old file kept)" ;;
+                esac
+            fi
+        fi
     fi
 
     if ${failed}; then
