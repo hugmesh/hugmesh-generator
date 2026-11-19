@@ -132,6 +132,12 @@ data:
         # See manifests/signup-gate/. Bound to ROLE_SERVICE in init_data.json so the
         # minted token satisfies the endpoint's INTERNAL/ROLE_SERVICE gate.
         "signup-gate": "ROLE_SERVICE",
+        # client-credentials machine app for the in-cluster test-runner Job (hugmesh-generator#507,
+        # finding 25): its reporter mints a token to POST live run/suite events to admin-bff's
+        # /bff/admin/test-reports/{id}/ingest. Bound to the NARROW ROLE_TEST_INGEST (declared in
+        # init_data.json; admin-bff admits it on that one endpoint only), NOT to ROLE_ADMIN: a CI Job
+        # must not hold the admin surface to report its own results.
+        "test-ingest": "ROLE_TEST_INGEST",
         # Harbor registry web UI/API login — reuses ROLE_ADMIN rather than a
         # narrow ROLE_REGISTRY: Harbor is an internal devops tool (same posture
         # as GitLab, which is also admin-only/no-public-signup), and once a

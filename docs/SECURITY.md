@@ -184,9 +184,10 @@ category-isolated volumes.
 - *Casdoor user / role.* `manifests/casdoor/init-data-configmap.yaml` seeds only
   `svc-pki-gateway`, `svc-be-gateway`, `svc-fe-gateway` (`ROLE_GATEWAY`),
   `svc-api` (`ROLE_API`), `svc-admin-bff` (`ROLE_ADMIN_API`) and `svc-signup-gate`
-  (`ROLE_SERVICE`). The `casdoor-init` job also creates client-credentials
+  (`ROLE_SERVICE`) and `svc-test-ingest` (`ROLE_TEST_INGEST`, the test-runner Job's
+  ingest-only machine role). The `casdoor-init` job also creates client-credentials
   machine apps for `user-bff` (`ROLE_API`), `matrix` / `mastodon` / `fragment-sync`
-  (`ROLE_USER`), `harbor` and `headscale`. The users and roles shown for the other
+  (`ROLE_USER`), `test-ingest` (`ROLE_TEST_INGEST`), `harbor` and `headscale`. The users and roles shown for the other
   rows (`svc-gateway-superadmin`, `svc-federation`, `svc-mod-bff`, `svc-user-bff`,
   `svc-forum-bff`, `svc-wiki-bff`, `svc-service-catalog-ui`,
   `svc-character-forge-bff`, `ROLE_FEDERATION`, `ROLE_MOD_API`, `ROLE_USER_API`,
