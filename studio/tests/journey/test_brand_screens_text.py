@@ -194,7 +194,7 @@ def test_the_superbrands_own_row_is_labelled_and_points_at_its_step(gen):
 def test_the_ways_section_edits_tor_vpn_and_egress_and_names_the_wizard(gen):
     j, sc = _services_screen(gen)
     sc.feed(j, "n")
-    sc.feed(j, "open 4")
+    sc.feed(j, "open 5")
     text = _text(sc, j)
     assert "internal name: shop-example." in text
     assert "Docker mesh:" in text and "kind cluster:" in text and "node image:" in text
@@ -222,7 +222,7 @@ def test_the_look_section_edits_a_brand_on_the_docker_mesh_and_gives_it_back(gen
     sess = session_for(j, "image", j.cfg, gen)
     sess.look.try_set("primary", "#336699")
     sc.feed(j, "n")
-    sc.feed(j, "open 2")
+    sc.feed(j, "open 3")
     assert "inherited from the superbrand" in _text(sc, j)
     sc.feed(j, "1 #aa0000")
     assert j.cfg.domains[0].look == {"primary": "#aa0000"}
@@ -239,7 +239,7 @@ def test_the_look_section_edits_a_brand_on_the_docker_mesh_and_gives_it_back(gen
 def test_off_the_docker_mesh_the_look_is_shown_with_the_reason_and_not_editable(gen):
     j, sc = _services_screen(gen, route="image")
     sc.feed(j, "n")
-    sc.feed(j, "open 2")
+    sc.feed(j, "open 3")
     text = _text(sc, j)
     assert "Not applied on this route yet" in text
     sc.feed(j, "1 #aa0000")
@@ -254,7 +254,7 @@ def test_leaving_the_step_writes_the_brand_record_once_something_changed(gen):
     assert not os.path.exists(brand_model.record_path())
     sess.set_identity("title", "Acme Mesh")
     sc.feed(j, "n")
-    sc.feed(j, "open 2")
+    sc.feed(j, "open 3")
     sc.feed(j, "1 #aa0000")
     sc.feed(j, "")
     saved = json.loads(open(brand_model.record_path(), encoding="utf-8").read())
@@ -271,7 +271,7 @@ def test_a_host_with_no_session_shows_the_screen_exactly_as_before(gen):
     plain.enter(j)
     text = "\n".join(plain.lines(j))
     assert "Brand settings" not in text and "Ways to reach it" not in text
-    plain.feed(j, "open 2")
+    plain.feed(j, "open 3")
     assert "unrecognised" in j.status
 
 

@@ -705,7 +705,7 @@ it (12.12).
 
 Every question carries the page the person is on (`core/assistant_context.Where`):
 the face (window, terminal, command line), the page title and its step number for
-the mode, the domain on screen and which of its tabs (Identity, Look, Services, Ways)
+the mode, the domain on screen and which of its tabs (Identity, Users, Look, Services, Ways)
 is open, the brand, one line per domain (services, sign-in, Tor, VPN and egress
 choices), whether the local mesh is up and which verb runs, the running build or the
 last failed one with its last error lines (redacted), the model and context size, and

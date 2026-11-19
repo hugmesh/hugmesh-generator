@@ -23,6 +23,23 @@ if _STUDIO_ROOT not in sys.path:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_casdoor(monkeypatch):
+    """Point EVERY test's mesh sign-in at a closed loopback port.
+
+    The Brand settings screen's Users tab lists the running mesh's accounts when it
+    is opened (core/mesh_accounts.py), and the default central Casdoor is
+    127.0.0.1:8000 — the operator's live one when a mesh is up. A test that clicks
+    through the tabs would sign in there as admin with a throwaway checkout's
+    password, and every refused admin sign-in counts toward Casdoor's throttle on
+    the operator's real mesh (seen while this was written). A test that wants a
+    Casdoor starts the stub and sets ``CASDOOR_URL`` itself; theirs runs later and
+    wins. ``CASDOOR_ADMIN_PASS`` is dropped so an exported operator value is never
+    sent anywhere by a test."""
+    monkeypatch.setenv("CASDOOR_URL", "http://127.0.0.1:9")
+    monkeypatch.delenv("CASDOOR_ADMIN_PASS", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_studio_state_dir(monkeypatch, tmp_path):
     """Point EVERY test at a throwaway Studio state dir.
 

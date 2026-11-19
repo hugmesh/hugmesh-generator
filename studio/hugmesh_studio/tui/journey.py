@@ -1156,8 +1156,8 @@ class BrandingScreen:
 
     The THEMES entry (``t``) is gone (2026-10-21, the operator: "the theme selection
     should be there instead of where it is now"): a domain's look is chosen in section
-    2 (Look) of that domain's Brand settings on the Domain services step, and the mesh's
-    own look in its own domain's section 2 — the window's Look tab, the same model."""
+    3 (Look) of that domain's Brand settings on the Domain services step, and the mesh's
+    own look in its own domain's section 3 — the window's Look tab, the same model."""
 
     slug = "branding"
     title = "Branding"
@@ -1179,7 +1179,7 @@ class BrandingScreen:
                     f"‘Create a new {sb}’, or one you made before; design it",
                     ""]
         out += ["  The web sign-in look (themes, colours, header/footer) is chosen per "
-                "domain: section 2 (Look) of each domain's Brand settings on the Domain "
+                "domain: section 3 (Look) of each domain's Brand settings on the Domain "
                 "services step; the mesh's own look is its own domain's.",
                 "", "(Enter continues"
                 + ("; s opens the Superbrand step)" if self._superbrand_offered(j)

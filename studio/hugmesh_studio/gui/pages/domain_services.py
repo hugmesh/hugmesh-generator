@@ -400,6 +400,7 @@ class DomainServicesBody:
         # and each control shows what the other set.
         self.brand_tabs.tor_changed.connect(self._on_tabs_tor)
         self.brand_tabs.row_changed.connect(self._on_tabs_row_changed)
+        self.brand_tabs.people_changed.connect(self._on_tabs_people_changed)
         # The Ways tab's 'Set up ways to reach this brand': opens the Go-Live wizard
         # with this domain filled in, on every host (each says where its checkout is:
         # ``_golive_generator_dir``). It had no receiver at all before 2026-10-21.
@@ -857,6 +858,25 @@ class DomainServicesBody:
         login the domain's onion opens, so it is repainted."""
         try:
             self._paint_tor_note()
+        except Exception:                      # noqa: BLE001
+            pass
+
+    def _on_tabs_people_changed(self) -> None:
+        """The Users tab wrote ``cfg.users`` (and, in mesh mode, ``configure_users``).
+        The Users step's table writes its OWN rows back whenever the wizard collects
+        (``validatePage``), and the users choice clears the list when its 'generated
+        accounts' card is the one ticked, so each is told: the table forgets its rows
+        (``forget_rows``, the import's rule) and the choice re-reads the flag. Looked
+        up by slug, so a wizard without either page is not a crash."""
+        try:
+            wiz = getattr(self, "wiz", None)
+            ids = getattr(wiz, "_page_ids", None) or {}
+            for slug, method in (("users", "forget_rows"),
+                                 ("users_choice", "sync_from_config")):
+                page = wiz.page(ids[slug]) if slug in ids else None
+                fn = getattr(page, method, None)
+                if fn is not None:
+                    fn()
         except Exception:                      # noqa: BLE001
             pass
 
