@@ -482,26 +482,6 @@ class BrandView:
         r = self.row
         return bool(getattr(r, "tor", False)) if r is not None else False
 
-    def onion_renew_refusal(self) -> str:
-        """Why this screen cannot give this domain a new Tor address ("" = it can): only
-        on the Docker route (the one path the Studio reaches a running Tor of), never for
-        the mesh's own address, and only for a domain with its own Tor address
-        (hugmesh-generator#652; core.onion_renew does the work)."""
-        if self.own:
-            return "The mesh's own Tor address is not replaced from here."
-        if getattr(self.session.host, "route", "") != "docker":
-            return ("A new Tor address is made on the running Docker mesh only; on other "
-                    "paths it is the web console's.")
-        if not self.tor_on():
-            return f"{self.name} has no Tor address of its own (tick Tor first)."
-        return ""
-
-    def renew_onion(self):
-        """Give this domain a new Tor address on the running Docker mesh. Blocking."""
-        from ..core import onion_renew
-        return onion_renew.renew_domain_onion(
-            self.name, str(getattr(self.row, "id", "") or ""))
-
     def set_tor(self, on: bool) -> list[str]:
         if self.own:
             why = self.own_way_refusal("tor")
@@ -938,9 +918,7 @@ def ways_lines(view: BrandView) -> list[str]:
                 f"{words.get(domain_reach.WAY_EGRESS, '')}",
                 ""] + ["   " + p for p in view.reach_effect().split("\n")] + ["",
                 "commands: tor on|off · vpn inherit|on|off · "
-                "egress inherit|direct|vpn [PROVIDER-FILE]"
-                + ("" if view.onion_renew_refusal() else " · tor new (a new Tor address)"),
-                ""]
+                "egress inherit|direct|vpn [PROVIDER-FILE]", ""]
     last = ""
     for way, value, path, effect in view.ways():
         if way != last:
@@ -957,18 +935,6 @@ def feed_ways(view: BrandView, line: str) -> str:
     words = line.split(None, 2)
     verb = words[0].lower() if words else ""
     arg = words[1].lower() if len(words) > 1 else ""
-    if verb == "tor" and arg == "new":
-        # a new address for this domain's onion (#652): asked first, done on 'yes'
-        why = view.onion_renew_refusal()
-        if why:
-            return "Not changed: " + why
-        from ..core import onion_renew
-        if len(words) < 3 or words[2].strip().lower() != "yes":
-            return onion_renew.CONFIRM_SENTENCE + " Type ‘tor new yes’ to go ahead."
-        r = view.renew_onion()
-        if not r.ok:
-            return "Not changed: " + r.message
-        return f"{r.message} New: https://{r.new}/  (retired {r.old})"
     if verb == "tor" and arg in ("on", "off"):
         problems = view.set_tor(arg == "on")
     elif verb == "vpn" and arg:
@@ -979,7 +945,6 @@ def feed_ways(view: BrandView, line: str) -> str:
     else:
         return ("commands: tor on|off · vpn inherit|on|off · "
                 "egress inherit|direct|vpn [PROVIDER-FILE]"
-                + ("" if view.onion_renew_refusal() else " · tor new (a new Tor address)")
                 + ("" if view.client_image() else " · " + WAYS_GO_LIVE_COMMAND))
     if problems:
         return "Not changed: " + problems[0]
