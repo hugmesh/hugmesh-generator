@@ -2854,8 +2854,9 @@ stack-e2e-bdd-guards: ## OFFLINE: the Gherkin lane's axis + Studio-GUI guards (m
 # node_modules: bare node + python3, ~4s).
 .PHONY: e2e-reporter-check
 
-e2e-reporter-check: ## OFFLINE: verify the e2e reporter emits a per-spec/per-test/attachment/skip-reason summary.json
+e2e-reporter-check: ## OFFLINE: verify the e2e reporter emits a per-spec/per-test/attachment/skip-reason summary.json AND streams its live events to admin-bff's ingest (route, contract, bearer, mTLS)
 	bash tests/scripts/test-e2e-reporter-shape.sh
+	bash tests/scripts/test-e2e-reporter-ingest.sh
 
 # LIVE lane. Same preconditions as stack-e2e (stack-up + stack-seed; once:
 # make playwright-deps) when BDD_ENV=docker. SNAP_PLATFORM=rpi5|x86 narrows the

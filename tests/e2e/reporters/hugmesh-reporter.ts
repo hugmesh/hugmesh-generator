@@ -16,7 +16,8 @@
 //      PVC (SNAP_REPORT_DIR), which the admin-bff TestReportsController serves
 //      and hugmesh_studio/core/e2e_catalogue.py parses.
 //   5. Best-effort POST per-test events to the admin-bff ingest endpoint
-//      (SNAP_INGEST_URL) so the console streams live. A POST failure NEVER fails
+//      (SNAP_INGEST_BASE_URL + SNAP_RUN_ID; see ./ingest.ts for the contract, the
+//      credential and mTLS) so the console streams live. A POST failure NEVER fails
 //      the run (the durable summary.json is the source of truth).
 //
 // ── THE SHAPE, AND WHY IT IS THIS SHAPE ──────────────────────────────────────
@@ -47,7 +48,7 @@
 // UNKNOWN_SKIP_REASON plus skipReasonKnown:false, so a surface can tell "skipped
 // because LIVE_GATEWAY is unset" from "skipped, nobody knows why".
 //
-// Pure Node (fs + global fetch); no extra deps. Referenced by playwright.config.ts.
+// Pure Node builtins (fs, http(s)); no extra deps. Erasable TypeScript only: it runs under bare node. Referenced by playwright.config.ts.
 // Kept to ERASABLE TypeScript (no enums, no parameter properties) so that
 // tests/scripts/test-e2e-reporter-shape.sh can replay it under bare `node`, with
 // no node_modules installed at all.
@@ -58,6 +59,7 @@ import type {
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseTags } from '../specs/report-tags';
+import { IngestClient } from './ingest';
 
 /** Bump when the SHAPE changes in a way a consumer must notice. */
 export const SUMMARY_SCHEMA_VERSION = 2;
@@ -150,7 +152,7 @@ export default class HugMeshReporter implements Reporter {
   private dir = process.env['SNAP_REPORT_DIR'] || 'test-results';
   private tier = process.env['SNAP_REPORT_TIER'] || 'LEAN';
   private runId = process.env['SNAP_RUN_ID'] || 'dev';
-  private ingest = process.env['SNAP_INGEST_URL'] || '';
+  private ingest: IngestClient | null = IngestClient.fromEnv();
   private rootDir = '';
   private totals = emptyCounter();
   private perRole = new Map<string, Counter>();
@@ -304,6 +306,13 @@ export default class HugMeshReporter implements Reporter {
     );
     this.post('run-end', summary);
     await Promise.allSettled(this.pending);
+    // The summary on disk is authoritative, but "the console never saw this run" must not be
+    // silent: it was silent for the life of the old wiring (hugmesh-generator#507, finding 25).
+    const st = this.ingest ? this.ingest.stats : null;
+    if (st && st.failed > 0) {
+      process.stderr.write(`[hugmesh-reporter] ingest: ${st.failed} of ${st.attempted} live events were NOT accepted `
+        + `(first: ${st.firstFailure}). summary.json is complete; fix the ingest wiring to stream to the console.\n`);
+    }
   }
 
   /** The spec file, relative to rootDir — the spelling report.json uses. */
@@ -328,17 +337,11 @@ export default class HugMeshReporter implements Reporter {
     return id ? `id:${id}` : `path:${specFile} ${titlePath.join(' ')}`;
   }
 
-  /** Best-effort live event POST (never throws into the run). */
+  /** Best-effort live event POST (never throws into the run). Failures are COUNTED, not hidden. */
   private post(event: string, payload: Record<string, unknown>): void {
-    if (!this.ingest || typeof fetch !== 'function') return;
+    if (!this.ingest) return;
     const body = scrub(JSON.stringify({ event, ...payload }));
-    this.pending.push(
-      fetch(this.ingest, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body,
-      }).catch(() => { /* console is best-effort; summary.json is authoritative */ }),
-    );
+    this.pending.push(this.ingest.send(event, JSON.parse(body) as Record<string, unknown>));
   }
 }
 
