@@ -173,7 +173,7 @@ cp brands/example.conf brands/acme.conf
 | `MAIL_PROVIDER` | `protonmail` | SMTP preset; `none` disables mail (see §2d) |
 | `TIMEZONE` | `UTC` | image timezone |
 | `HEADSCALE_VERSION` / `TAILSCALE_VERSION` | pinned | mesh binary versions |
-| `VAULT_ADDR` / `VAULT_KV_MOUNT` | empty / `secret` | online secret push (empty = offline/USB-only). `VAULT_KV_MOUNT` is the writer side only: the reader is pinned at mount `secret` with the literal `hugmesh/<service>` key prefix, so a non-`hugmesh` brand writes where the cluster does not read (pre-existing; #285) |
+| `VAULT_ADDR` / `VAULT_KV_MOUNT` | empty / `secret` | online secret push (empty = offline/USB-only). `VAULT_KV_MOUNT` is the writer side only: the reader is pinned at mount `secret` with the literal `hugmesh/<service>` key prefix, so a non-`hugmesh` brand writes where the cluster does not read |
 | `CA_CERT` / `CA_KEY` / `CA_KEY_PASS` | unset | use an **existing** CA as the issuer instead of a self-signed root |
 
 > **Never put secrets in a committed `brands/*.conf`.** Real SMTP/OAuth/Vault/CA
@@ -295,7 +295,7 @@ urwid is entirely optional (see `studio/README.md`).
 ### 3·cli. Headless Studio faces — hardware scan + build-session history
 
 Two Qt-free `python -m hugmesh_studio` faces close the last GUI-only gaps
-(issue #49: everything the GUI can do must be a documented command). Each has a
+(everything the GUI can do is also a documented command). Each has a
 `make` front (listed in `make help`) and needs no display and no Qt binding:
 
 ```bash
@@ -361,9 +361,9 @@ Common `make` overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`, `HEADSCALE_URL=`,
 > **Ownership after a native build:** a native (root) build through `make` hands its
 > artifacts — the `.img`/`.iso`/`.fs.tar.xz`, logs, keys, `sessions/`, `shared/` — back
 > to your user so host-side qemu and flash need no sudo. It leaves the build system
-> (`<work dir>/snap-build-*/sysroot`) root's on purpose: it used to `chown -R` the whole
-> work directory, and the next `--resume` then built an image whose every directory was
-> yours, with sshd and tor refusing to start (hugmesh-generator#659). Never `chown -R` a
+> (`<work dir>/snap-build-*/sysroot`) root's on purpose: a `--resume` from a build system
+> you own builds an image whose every directory is yours, and sshd and tor refuse to start
+> on it. Never `chown -R` a
 > work directory yourself; to reown artifacts by hand, prune the build system:
 > `sudo find <work dir> -type d -name sysroot -prune -o -exec chown -h $(id -u):$(id -g) {} +`.
 >
@@ -715,9 +715,28 @@ never locked out.
 
 ## 8. Bring up the cluster
 
-Boot the **pki** node first. It is the Kubernetes control plane. If its KEYS
-`provision.json` sets `hugmesh.gitops.enabled=true`, `keys-provision` runs
-`kubeadm init` + the GitOps bootstrap automatically. Otherwise do it by hand:
+Boot the **pki** node first. It is the Kubernetes control plane. Two keys in its
+KEYS `provision.json` decide what `keys-provision` does at first boot, in this order:
+
+1. **`kubernetes.bootstrap`** decides whether it runs `kubeadm init` (on the first
+   control plane; an additional one runs `kubeadm join`). The shipped template
+   (`keys-template/provision.json`) sets it to `false`, so the node stages the
+   kubeadm configuration and logs
+   `K8s config staged; skipping live bootstrap (set kubernetes.bootstrap=true to run kubeadm)`.
+2. **`hugmesh.gitops.enabled`** decides whether it then runs the GitOps bootstrap
+   (ArgoCD and the root app-of-apps). The template sets it to `true`, but the bootstrap
+   needs a cluster: on a control-plane node with no `/etc/kubernetes/admin.conf` it logs
+   `WARNING: No kubeconfig yet — run cluster bootstrap after kubeadm init` and skips.
+   It is skipped, with a line naming why, on a node that is not a control plane
+   (`Not a control-plane — skipping GitOps bootstrap`), when the image carries no GitOps
+   payload (`WARNING: GitOps payload not baked into image`), and when the key is off
+   (`HugMesh GitOps disabled`). A bootstrap that fails logs
+   `WARNING: GitOps bootstrap returned non-zero` and provisioning carries on.
+
+Every line is prefixed `[keys-provision <UTC time>]` in the node's provisioning log.
+So with the template as shipped, nothing starts by itself: set
+`kubernetes.bootstrap` to `true` on the pki node's stick for a hands-off bring-up, or
+do it by hand:
 
 ```bash
 # On the pki node, after kubeadm init:
@@ -844,7 +863,8 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
 - **x86 build prints `[build-x86] WARN: PRE-FETCH SKIPPED`** → portage could not *resolve*
   the payload at that point (a keyword/mask/USE/slot wall), so nothing was downloaded and
   the build continues without the pre-fetch floor. This is not a network problem and
-  retrying does not help. Read the named wall, and expect the payload-plan gate (#223) to judge it.
+  retrying does not help. Read the named wall; the payload-plan gate then judges the build
+  against it.
 - **The x86 build spends 30-55 minutes downloading before compiling anything** → expected
   on a cold `DISTDIR`. That is the pre-fetch; it costs almost nothing on a warm one. A
   `PORTAGE_RO_DISTDIRS` fleet cache removes almost all of it.
@@ -891,8 +911,8 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
   GPG-checked, and the file's SHA512 compared. The seed cache (`shared/seed/amd64`) is a
   directory `make` hands to your user, so "verified when it was fetched" is not "verified
   now"; root never extracts from a cached file nobody checked. The refusal also fires when
-  the mirror no longer serves that seed's `DIGESTS` (old releases rotate off: measured on
-  2026-10-07, `distfiles.gentoo.org/releases/amd64/autobuilds/` held six weekly releases, so
+  the mirror no longer serves that seed's `DIGESTS` (old releases rotate off:
+  `distfiles.gentoo.org/releases/amd64/autobuilds/` keeps about six weekly releases, so
   a build system whose seed is older than about six weeks cannot be resumed even though
   the tarball is still cached) or the host is offline: fail-closed, at the cost of a
   rebuild without `--resume`. No other cached seed is substituted for the one that failed. The current seed
@@ -902,7 +922,7 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
   watching three packages fail with compiler errors minutes in.
 - **A build refuses to start with `mounts are still attached under <sysroot>`** → an
   earlier run was killed with its bind mounts up, or an older builder left its
-  `distfiles-ro` bind behind (every x86 run did, until #659). The message lists EVERY
+  `distfiles-ro` bind behind (older x86 builders always did). The message lists EVERY
   mount under the build system as the `umount` command that removes it, deepest first
   and once per stacked layer (a bind stacked three times is listed, and needs
   unmounting, three times). Read the list — it includes anything you mounted there on
