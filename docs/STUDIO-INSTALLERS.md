@@ -90,13 +90,10 @@ How the copy works and what overrides it:
 
 - **Upgrades.** Each Flatpak upgrade refreshes the placed copy to the new release. It
   keeps your `out/`, `keys-out/` and `tests/stack/.env`.
-- **What takes precedence.** `--generator-dir <path>` is used as given: it is not a
-  fallback, and when that folder is not a checkout the window asks for one (*Choose your
-  hugmesh-generator folder*) instead of looking further. Without it, the Studio uses the
-  first of these that is a real checkout: `$HUGMESH_GENERATOR_DIR`, the checkout it is
-  running from, the working directory, a folder you picked in an earlier start, and only
-  then the copy a package carries. So a clone you name or pick still wins over the
-  package's copy.
+- **What takes precedence.** The Studio uses the first of these that is a real checkout:
+  `--generator-dir <path>`, `$HUGMESH_GENERATOR_DIR`, the checkout it is running from,
+  the working directory, a folder you picked in an earlier start, and only then the copy a
+  package carries. So a clone you name or pick still wins over the package's copy.
 - **Checking it.** `flatpak run org.hugmesh.ImageStudio --self-check` says which tree it
   resolved and whether every script the Studio runs is there.
 - **The release data.** `releases.json` records per file whether that file carries the tree
