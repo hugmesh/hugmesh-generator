@@ -72,7 +72,7 @@ stop_stub() { [ -n "${STUB_PID}" ] && kill "${STUB_PID}" 2>/dev/null; wait "${ST
 replay() {
   local out="$1" reporter="$2"; shift 2
   ERR="${WORK}/replay.err"
-  ( env "$@" node "${REPLAY}" "${FIXTURE}" "${out}" "${reporter}" >"${WORK}/replay.out" 2>"${ERR}" ); RC=$?
+  ( env "$@" node "${REPLAY}" "${RFIXTURE:-${FIXTURE}}" "${out}" "${reporter}" >"${WORK}/replay.out" 2>"${ERR}" ); RC=$?
 }
 REPORTER="${E2E}/reporters/hugmesh-reporter.ts"
 
@@ -175,6 +175,39 @@ import json, sys
 st = json.loads(sys.argv[1])["stats"]
 assert st["attempted"] == 1 and st["failed"] == 1 and "SNAP_RUN_ID" in st["firstFailure"]
 PY
+
+echo "-- 6b. a TLS file that cannot be read: counted and said, never a crash of the run --"
+# the client is built while Playwright builds its reporters: a throw there failed the whole run
+U="$(node "${HERE}/e2e-ingest-unit.mjs" missing-tls 2>/dev/null)"
+python3 - "${U}" <<'PY' && ok "a missing client certificate is recorded as the reason, and nothing throws" || bad "missing-tls handling: ${U}"
+import json, sys
+st = json.loads(sys.argv[1])["stats"]
+assert st["attempted"] == 1 and st["failed"] == 1 and "SNAP_INGEST_TLS" in st["firstFailure"], st
+PY
+
+echo "-- 6c. a failing test whose error quotes a password: scrubbed, sent, and the run survives --"
+# The reporter used to scrub the serialised JSON text: `password=\"x\"` lost its backslash, the
+# text stopped being JSON, and JSON.parse threw inside onTestEnd.
+python3 - "${FIXTURE}" "${WORK}/quoted.json" <<'PY' || { echo "  FAIL could not build the quoted-password fixture"; exit 2; }
+import json, sys
+d = json.load(open(sys.argv[1]))
+n = 0
+for ev in d["events"]:
+    err = ((ev.get("result") or {}).get("error")) if isinstance(ev, dict) else None
+    if isinstance(err, dict) and "message" in err:
+        err["message"] = 'locator.fill: password="hunter2-quoted" was refused'
+        n += 1
+assert n > 0, "the fixture has no failed test to quote a password in"
+json.dump(d, open(sys.argv[2], "w"))
+PY
+start_stub case6c --tls "${WORK}/cert.pem" "${WORK}/key.pem" "${WORK}/cert.pem"
+RFIXTURE="${WORK}/quoted.json" happy "${REPORTER}" "${WORK}/out6c"
+total="$(logq total)"; acc="$(logq accepted)"
+[ "${RC}" -eq 0 ] && ok "the replay ran (rc 0)" || bad "the replay crashed (rc=${RC}): $(tail -3 "${ERR}" | tr '\n' ' ')"
+[ "${total}" -ge 3 ] && [ "${acc}" = "${total}" ] && ok "every event (${total}) still reached the endpoint and was accepted" \
+  || bad "accepted ${acc} of ${total} events: $(tail -3 "${ERR}" | tr '\n' ' ')"
+grep -q "hunter2-quoted" "${LOG}" && bad "the quoted password reached the endpoint" || ok "the quoted password was scrubbed from what was sent"
+stop_stub
 
 # ── 7. NEGATIVE CONTROLS ────────────────────────────────────────────────────────────────
 echo "-- 7. negative controls: each mutation of the ingest client must turn the happy path red --"

@@ -145,6 +145,7 @@ export class IngestClient {
   private attempted = 0;
   private failed = 0;
   private firstFailure = '';
+  private tlsError = '';
 
   private cfg: IngestConfig;
 
@@ -152,11 +153,18 @@ export class IngestClient {
   // accepts erasable syntax (no parameter properties, no enums).
   constructor(cfg: IngestConfig) {
     this.cfg = cfg;
-    if (cfg.tlsCert && cfg.tlsKey) {
-      this.tls.cert = fs.readFileSync(cfg.tlsCert);
-      this.tls.key = fs.readFileSync(cfg.tlsKey);
+    // A file that cannot be read must not throw: this runs while Playwright builds its
+    // reporters, so a throw here failed the whole test run before one test started. Each
+    // event is then counted as not accepted, with this reason, and reported at the end.
+    try {
+      if (cfg.tlsCert && cfg.tlsKey) {
+        this.tls.cert = fs.readFileSync(cfg.tlsCert);
+        this.tls.key = fs.readFileSync(cfg.tlsKey);
+      }
+      if (cfg.tlsCa) this.tls.ca = fs.readFileSync(cfg.tlsCa);
+    } catch (e) {
+      this.tlsError = `cannot read the TLS files (SNAP_INGEST_TLS_CERT/KEY/CA): ${(e as Error).message}`;
     }
-    if (cfg.tlsCa) this.tls.ca = fs.readFileSync(cfg.tlsCa);
   }
 
   /** The client the environment describes, or null when live ingest is not configured. */
@@ -234,6 +242,7 @@ export class IngestClient {
     if (!body) return;
     this.attempted++;
     if (!this.cfg.runId) return this.note('SNAP_RUN_ID is not set, so there is no run id to post to');
+    if (this.tlsError) return this.note(this.tlsError);
     const url = `${this.cfg.baseUrl}/${encodeURIComponent(this.cfg.runId)}/ingest`;
     const json = JSON.stringify(body);
     try {
