@@ -178,8 +178,8 @@ def test_the_text_screen_prints_the_same_client_sentences(gen):
         owner, "image", cfg, gen), route="image")
     sc.enter(j)
     sc.feed(j, "n")
-    for n, text in ((1, brand_step.CLIENT_SIGNIN_NOTE), (2, brand_step.CLIENT_LOOK_NOTE),
-                    (4, brand_step.CLIENT_WAYS_NOTE)):
+    for n, text in ((1, brand_step.CLIENT_SIGNIN_NOTE), (3, brand_step.CLIENT_LOOK_NOTE),
+                    (5, brand_step.CLIENT_WAYS_NOTE)):
         sc.feed(j, f"open {n}")
         assert text in sc.lines(j), f"section {n} lacks the client sentence"
     sc.feed(j, "open 5")
