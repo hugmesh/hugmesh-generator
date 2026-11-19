@@ -80,6 +80,18 @@ function scrub(s: string | undefined): string {
     .replace(/(token"?\s*[:=]\s*"?)[A-Za-z0-9._-]{8,}/gi, '$1REDACTED');
 }
 
+/** scrub() applied to every string inside a value (objects and arrays walked). */
+function scrubValues(v: unknown): unknown {
+  if (typeof v === 'string') return scrub(v);
+  if (Array.isArray(v)) return v.map(scrubValues);
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = scrubValues(x);
+    return out;
+  }
+  return v;
+}
+
 interface Counter { passed: number; failed: number; skipped: number; }
 function emptyCounter(): Counter { return { passed: 0, failed: 0, skipped: 0 }; }
 
@@ -340,8 +352,10 @@ export default class HugMeshReporter implements Reporter {
   /** Best-effort live event POST (never throws into the run). Failures are COUNTED, not hidden. */
   private post(event: string, payload: Record<string, unknown>): void {
     if (!this.ingest) return;
-    const body = scrub(JSON.stringify({ event, ...payload }));
-    this.pending.push(this.ingest.send(event, JSON.parse(body) as Record<string, unknown>));
+    // Scrub each STRING VALUE, never the serialised JSON text: the patterns would cut an escaped
+    // quote in half (`password=\"x\"` lost its backslash), the text stopped being JSON, and the
+    // parse threw inside onTestEnd for any failing test whose error quoted a password.
+    this.pending.push(this.ingest.send(event, scrubValues({ event, ...payload }) as Record<string, unknown>));
   }
 }
 

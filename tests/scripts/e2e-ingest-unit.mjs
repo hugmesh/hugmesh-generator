@@ -16,6 +16,12 @@ if (which === 'legacy-url') {
   const c = IngestClient.fromEnv({ SNAP_INGEST_BASE_URL: 'http://127.0.0.1:9/bff/admin/test-reports', SNAP_RUN_ID: '' }, warn);
   await c.send('run-begin', { tier: 'LEAN' });
   console.log(JSON.stringify({ stats: c.stats }));
+} else if (which === 'missing-tls') {
+  // building the client must not throw on a TLS file that is not there; the event is counted
+  const c = IngestClient.fromEnv({ SNAP_INGEST_BASE_URL: 'https://127.0.0.1:9/bff/admin/test-reports', SNAP_RUN_ID: 'r',
+    SNAP_INGEST_TLS_CERT: '/nonexistent/cert.pem', SNAP_INGEST_TLS_KEY: '/nonexistent/key.pem' }, warn);
+  await c.send('run-begin', { tier: 'LEAN' });
+  console.log(JSON.stringify({ stats: c.stats }));
 } else {
   console.error('unknown case'); process.exit(2);
 }
