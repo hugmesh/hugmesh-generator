@@ -392,7 +392,7 @@ def test_the_text_screen_and_the_window_write_the_same_rows(qapp, gen):
     sc.feed(j, "n")
     sc.feed(j, "open 1")
     sc.feed(j, "signin aws https://cognito-idp.eu-west-1.amazonaws.com/p c")
-    sc.feed(j, "open 5")
+    sc.feed(j, "open 4")
     sc.feed(j, "vpn on")
     sc.feed(j, "egress direct")
     a, b = st_w.by_name("shop.example"), st_t.by_name("shop.example")

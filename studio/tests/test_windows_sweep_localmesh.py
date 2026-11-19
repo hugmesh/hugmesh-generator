@@ -163,22 +163,14 @@ def test_on_native_windows_each_press_is_refused_before_anything(
     assert page.launched == [] and page.notes == []
 
 
-def test_on_native_windows_add_user_is_offered(monkeypatch, as_native_windows):
-    """Adding a user no longer runs a bash seeder on either lane (core/mesh_accounts.py
-    applies in Python), so native Windows gets the dialog instead of a refusal."""
-    opened = []
-
-    class _Dialog:
-        def __init__(self, *a, **k):
-            opened.append(1)
-
-        def exec(self):
-            return 0                            # cancelled: nothing is launched
-
-    monkeypatch.setattr(localmesh, "AddUserDialog", _Dialog)
+def test_on_native_windows_add_user_refuses_before_its_dialog(monkeypatch, as_native_windows):
+    def _boom(*a, **k):
+        raise AssertionError("the dialog must not ask for a username and password")
+    monkeypatch.setattr(localmesh, "AddUserDialog", _boom)
     page = _Page()
     localmesh.LocalMeshPage._add_user(page)
-    assert opened == [1] and page.refused == [] and page.launched == []
+    assert page.refused == [_REAL_BLOCKER("Adding a user", osname="nt")]
+    assert "WSL2" in page.refused[0] and page.launched == []
 
 
 def _readiness(monkeypatch):

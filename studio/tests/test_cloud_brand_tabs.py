@@ -83,7 +83,7 @@ def test_the_cloud_step_draws_the_four_tabs_with_the_client_sentence(qapp, gen):
     tabs = page.brand_tabs
     _usable(tabs.bar, "the tab bar", min_w=200)
     assert [tabs.tabText(i) for i in range(tabs.count())] == [
-        "Identity", "Users", "Look", "Services", "Ways to reach it"]
+        "Identity", "Look", "Services", "Ways to reach it"]
     expect = {bs_mod.TAB_IDENTITY: brand_step.CLIENT_SIGNIN_NOTE,
               bs_mod.TAB_LOOK: brand_step.CLIENT_LOOK_NOTE,
               bs_mod.TAB_WAYS: brand_step.CLIENT_WAYS_NOTE}
@@ -182,7 +182,7 @@ def test_the_text_screen_prints_the_same_client_sentences(gen):
                     (4, brand_step.CLIENT_WAYS_NOTE)):
         sc.feed(j, f"open {n}")
         assert text in sc.lines(j), f"section {n} lacks the client sentence"
-    sc.feed(j, "open 5")
+    sc.feed(j, "open 4")
     assert brand_step.WAYS_HOME not in sc.lines(j)
     # a sign-in typed on the text screen lands on the same row the window writes
     sc.feed(j, "open 1")

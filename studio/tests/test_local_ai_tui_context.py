@@ -91,7 +91,7 @@ def test_where_names_the_page_domain_and_tab():
     assert w.face == "tui" and w.slug == "domain_services" and w.title == "Domain services"
     assert w.domain == "shop.example" and w.tab == "services" and w.mode == "mesh"
     assert any("shop.example" in k for k, _v in w.domains)
-    j.step.section = 3
+    j.step.section = 2
     assert s.where_page_only(j).tab == "look"
 
 

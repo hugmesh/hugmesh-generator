@@ -2092,7 +2092,7 @@ class LocalAIDock(QtWidgets.QFrame):
                 own = bool(getattr(view, "own", False)) if view is not None else False
                 bar = getattr(getattr(body, "brand_tabs", None), "bar", None)
                 if bar is not None:
-                    tab = {0: "identity", 1: "users", 2: "look", 3: "services", 4: "ways"}.get(bar.currentIndex(), "")
+                    tab = {0: "identity", 1: "look", 2: "services", 3: "ways"}.get(bar.currentIndex(), "")
             except Exception:                   # noqa: BLE001
                 pass
         brand, domains, activity = (), (), []

@@ -188,16 +188,6 @@ class UsersChoicePage(QtWidgets.QWizardPage):
         self._buttons["generated"].set_description(default_accounts_summary(self.wiz))
         self._buttons["table" if c.configure_users else "generated"].setChecked(True)
 
-    def sync_from_config(self) -> None:
-        """Tick the card ``cfg.configure_users`` says: another screen (a domain's Users
-        tab) turned it on, and this page's next ``validatePage`` must not read a stale
-        tick and clear the people that screen added."""
-        try:
-            self._buttons["table" if self.wiz.cfg.configure_users
-                          else "generated"].setChecked(True)
-        except Exception:                     # noqa: BLE001
-            _log_swallowed("sync_from_config")
-
     def validatePage(self):
         c = self.wiz.cfg
         c.configure_users = (self._selected() == "table")

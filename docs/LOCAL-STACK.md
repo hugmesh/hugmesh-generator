@@ -501,11 +501,8 @@ through `sudo -E` / the containerized route (`docker run -e E2E_PASSWORD_KEEP=1 
 All lanes share the one file, so a run started in one lane (`make kind-up`,
 `make e2e`) re-passwords the file that a still-running compose mesh was seeded
 from. Re-run `make stack-seed`, which reconciles, or start the other run with
-`E2E_PASSWORD_KEEP=1`. The Studio's saved-mesh **restore** passes
-`E2E_PASSWORD_KEEP=1` itself. The Studio's **Add user** (and each domain's **Users** tab)
-does not run the seeder at all: it creates the one account through Casdoor's admin API with
-this checkout's `CASDOOR_ADMIN_PASSWORD`, so nothing else is re-passworded, and a later
-`make stack-seed` keeps that account's roles (the seed manages only the personas it renders).
+`E2E_PASSWORD_KEEP=1`. The Studio's **Add user** and saved-mesh **restore** pass
+`E2E_PASSWORD_KEEP=1` themselves: adding one account does not re-password the others.
 
 Once its Casdoor leg is verified (and again when it finishes), `make stack-seed`
 writes a **seed stamp** beside the file, `.e2e-credentials.seeded` (mode 600): the

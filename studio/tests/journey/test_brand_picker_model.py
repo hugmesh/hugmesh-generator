@@ -300,7 +300,7 @@ def test_the_summary_says_where_each_setting_lives():
     assert "Go-Live wizard" in brand_step.WAYS_HOME
     assert brand_step.WAYS_BUTTON == "Set up ways to reach this brand"
     assert [t for _n, t in brand_step.SECTIONS] == [
-        "Identity", "Users", "Look", "Services", "Ways to reach it"]
+        "Identity", "Look", "Services", "Ways to reach it"]
 
 
 # ── a design edit is checked against every brand's finished stylesheet ───────────────

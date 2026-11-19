@@ -457,7 +457,7 @@ class Where:
 
     @property
     def tab_word(self) -> str:
-        return {"identity": "Identity", "users": "Users", "look": "Look", "services": "Services",
+        return {"identity": "Identity", "look": "Look", "services": "Services",
                 "ways": "Ways"}.get(self.tab, "")
 
 
