@@ -130,16 +130,11 @@ else
 fi
 
 # ── the run ─────────────────────────────────────────────────────────────────────
-# The look tests (`test_look_*`, #647/#656) never run in this shared process: they skip
-# unless tests/test_look.py starts them in a fresh interpreter (tests/_look.py
-# child_only, because switching the Qt style after other wizard tests takes minutes).
-# Left in, they were four skips that the no-skip rule above turned into a red suite
-# (#691). So they are deselected here and run by test_look.py below, one child per file.
 LOG="$(mktemp "${TMPDIR:-/tmp}/studio-pins.XXXXXX")"
 trap 'rm -f "${LOG}"' EXIT
 (cd "${STUDIO}" && env -u DISPLAY -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE \
     QT_QPA_PLATFORM=offscreen HUGMESH_STUDIO_NO_ELEVATION=1 PYTHONDONTWRITEBYTECODE=1 \
-    "${PY}" -m pytest -q -p no:cacheprovider -rsf -k 'not test_look_' "${FILES[@]}") >"${LOG}" 2>&1
+    "${PY}" -m pytest -q -p no:cacheprovider -rs "${FILES[@]}") >"${LOG}" 2>&1
 rc=$?
 tail -n 25 "${LOG}" | sed 's/^/    | /'
 
@@ -160,36 +155,6 @@ if [ "${STRICT_QT}" = "1" ] && [ "${skips}" -gt 0 ]; then
   bad "${skips} test(s) SKIPPED with a Qt binding present — every pin here must run (see -rs above)"
 elif [ "${STRICT_QT}" = "0" ] && [ "${skips}" -gt 0 ]; then
   echo "  NOTE ${skips} Qt-bound test(s) skipped on this Qt-free interpreter — run locally with the venv for the full set"
-fi
-
-# ── the look tests of the pin files, each in the fresh interpreter it needs ─────────
-LOOKED=()
-for f in "${FILES[@]}"; do
-  grep -E '^def test_look_' "${STUDIO}/${f}" >/dev/null 2>&1 && LOOKED+=("$(basename "${f}" .py)")
-done
-if [ "${#LOOKED[@]}" -eq 0 ]; then
-  ok "no pin file carries a look test"
-elif [ "${STRICT_QT}" = "0" ]; then
-  echo "  NOTE ${#LOOKED[@]} pin file(s) carry look tests; they need a Qt binding and run with the venv"
-else
-  sel="$(printf ' or %s' "${LOOKED[@]}")"; sel="${sel# or }"
-  LOOKLOG="$(mktemp "${TMPDIR:-/tmp}/studio-pins-look.XXXXXX")"
-  trap 'rm -f "${LOG}" "${LOOKLOG}"' EXIT
-  (cd "${STUDIO}" && env -u DISPLAY -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE \
-      QT_QPA_PLATFORM=offscreen HUGMESH_STUDIO_NO_ELEVATION=1 PYTHONDONTWRITEBYTECODE=1 \
-      "${PY}" -m pytest -q -p no:cacheprovider -rs tests/test_look.py -k "${sel}") \
-      >"${LOOKLOG}" 2>&1
-  lrc=$?
-  tail -n 8 "${LOOKLOG}" | sed 's/^/    | /'
-  lsum="$(grep -aE '^(=+ )?[0-9]+ (passed|failed|error|skipped)' "${LOOKLOG}" | tail -n 1)"
-  lpassed="$(sed -n 's/.*\b\([0-9][0-9]*\) passed.*/\1/p' <<<"${lsum}")"
-  lskips="$(sed -n 's/.*\b\([0-9][0-9]*\) skipped.*/\1/p' <<<"${lsum}")"
-  lpassed="${lpassed:-0}"; lskips="${lskips:-0}"
-  if [ "${lrc}" -eq 0 ] && [ "${lpassed}" -eq "${#LOOKED[@]}" ] && [ "${lskips}" -eq 0 ]; then
-    ok "look tests of ${LOOKED[*]} pass in a fresh interpreter (tests/test_look.py)"
-  else
-    bad "look tests of ${LOOKED[*]}: tests/test_look.py exited ${lrc} with ${lpassed} of ${#LOOKED[@]} passed, ${lskips} skipped (a pin file's look case missing from tests/_look_files.py runs nowhere)"
-  fi
 fi
 
 echo "== studio tor/domain pins: ${P} passed, ${F} failed =="
