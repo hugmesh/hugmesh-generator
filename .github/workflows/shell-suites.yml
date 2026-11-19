@@ -969,6 +969,7 @@ jobs:
             tests/scripts/test-e2e-docker-base-url-parity.sh
             tests/scripts/test-e2e-enumeration-without-credentials.sh
             tests/scripts/test-e2e-reporter-shape.sh
+            tests/scripts/test-e2e-reporter-ingest.sh
             tests/scripts/test-e2e-toolchain-readiness.sh
             tests/scripts/test-fe-template-route-parity.sh
           "

@@ -187,6 +187,7 @@ for M in $(python3 "${MUTATE}" --list); do
   mkdir -p "${CTRL}/reporters" "${CTRL}/specs"
   cp "${REPORTER}" "${CTRL}/reporters/hugmesh-reporter.ts"
   cp "${E2E}/specs/report-tags.ts" "${CTRL}/specs/report-tags.ts"
+  cp "${E2E}/reporters/ingest.ts" "${CTRL}/reporters/ingest.ts"   # the reporter imports it
   DECL="$(python3 "${MUTATE}" --apply "${M}" "${CTRL}/reporters/hugmesh-reporter.ts" 2>"${SCRATCH}/mut-${M}.err")"
   if [ $? -ne 0 ]; then
     bad "CONTROL ${M}: could not be applied — it is not controlling anything:"
