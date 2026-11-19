@@ -81,7 +81,8 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # created 2026-10-29..2026-11-10 hold 137 failed jobs (latest attempt of each run).
 # 56 of them, on 44 branches, carry that FAIL line, all in the alpine job, which is
 # 56 of its 96 failures. Re-run attempts are not counted, so 56 is a lower bound.
-# shell-suites runs only on pull_request, so main itself was recorded red by it
+# shell-suites ran only on pull_request then (it runs on every push to main since
+# #946, check 7c), so main itself was recorded red by it
 # ("232 of 274 against the recorded 216", below) and nothing on main said so. The
 # history below is that hand-bump treadmill. Its doctrine, "measure, never
 # compute", still holds for anyone who raises the number.
@@ -1608,9 +1609,27 @@ PREMERGE_UNGATED=(
 if [ -n "${GUARD_PREMERGE_UNGATED+x}" ]; then UNGATED_TEXT="${GUARD_PREMERGE_UNGATED}"
 else UNGATED_TEXT="$(printf '%s\n' "${PREMERGE_UNGATED[@]}")"; fi
 
+# Check 7c (hugmesh-generator#946): pull-request-gated suites that NO workflow runs on a
+# push to main without a paths filter. A merge collision (two PRs, each green alone)
+# then turns nothing red on main. Each entry says why it is exempt; a stale entry (the
+# suite now runs on main, or is no longer gated at all) is itself a finding.
+MAIN_LANE_EXEMPT=(
+  # Gated by studio-tests.yml's pytest job, which is path-filtered on pull requests and
+  # runs on main only for the release files. It pins the Studio's Tor domain wiring, so
+  # it moves only with studio/** changes, and studio-tests.yml is where it belongs.
+  tests/scripts/test-studio-tor-domain-pins.sh
+  # Gated by qemu-bdd-spike.yml, path-filtered to its own three files (the workflow, the
+  # feature and this runner): it boots a pinned Alpine ISO under KVM and reads nothing
+  # else in the tree, so a merge can break it only by changing one of those files, and
+  # that change runs it. Booting an ISO on every merge would buy nothing.
+  tests/qemu/actions-kvm-smoke_test.sh
+)
+if [ -n "${GUARD_MAIN_EXEMPT+x}" ]; then MAIN_EXEMPT_TEXT="${GUARD_MAIN_EXEMPT}"
+else MAIN_EXEMPT_TEXT="$(printf '%s\n' "${MAIN_LANE_EXEMPT[@]}")"; fi
+
 echo "== guard integrity: every guard can fail, and something runs it =="
 
-REPO="${GUARD_ROOT}" ALLOW_UNWIRED="${ALLOW_TEXT}" PREMERGE_BASELINE="${PREMERGE_BASELINE}" PREMERGE_UNGATED="${UNGATED_TEXT}" python3 - <<'PY'
+REPO="${GUARD_ROOT}" ALLOW_UNWIRED="${ALLOW_TEXT}" PREMERGE_BASELINE="${PREMERGE_BASELINE}" PREMERGE_UNGATED="${UNGATED_TEXT}" MAIN_EXEMPT="${MAIN_EXEMPT_TEXT}" python3 - <<'PY'
 import os, re, sys
 
 repo = os.environ["REPO"]
@@ -2147,6 +2166,7 @@ print("-- 7) how many suites actually gate a pull request --")
 PREMERGE_BASELINE = int(os.environ.get("PREMERGE_BASELINE", "0"))
 wf_dir = os.path.join(repo, ".github", "workflows")
 pr_wf, wf_text = [], ""
+main_wf, main_text = [], ""   # check 7c: workflows that run on EVERY push to main
 if os.path.isdir(wf_dir):
     for fn in sorted(os.listdir(wf_dir)):
         if not fn.endswith((".yml", ".yaml")):
@@ -2165,6 +2185,33 @@ if os.path.isdir(wf_dir):
                 if line.strip() and not line.startswith((" ", "\t")):
                     break
                 on_block.append(line)
+        # Check 7c's half: a `push` trigger that fires on main with no paths filter
+        # (the inline `on: [push, …]` form counts; `branches` must name main).
+        push_lines, in_push, push_indent = [], False, 0
+        for line in on_block[1:]:
+            m = re.match(r"^(\s+)push\s*:", line)
+            if m:
+                in_push, push_indent = True, len(m.group(1))
+                push_lines.append(line)
+                continue
+            if in_push:
+                ind = len(line) - len(line.lstrip())
+                if line.strip() and not line.lstrip().startswith("#") and ind <= push_indent:
+                    in_push = False
+                    continue
+                push_lines.append(line)
+        push_body = "\n".join(l for l in push_lines if not l.lstrip().startswith("#"))
+        inline_push = bool(on_block) and re.search(r"\bpush\b", on_block[0])
+        on_main = bool(inline_push) or (
+            bool(push_lines)
+            and not re.search(r"^\s+paths(-ignore)?\s*:", push_body, re.M)
+            and (not re.search(r"^\s+branches(-ignore)?\s*:", push_body, re.M)
+                 or (re.search(r"^\s+branches\s*:", push_body, re.M)
+                     and re.search(r"(?<![\w/-])main(?![\w/-])", push_body))))
+        if on_main:
+            main_wf.append(fn)
+            main_text += "\n".join(
+                l for l in t.split("\n") if not l.lstrip().startswith("#")) + "\n"
         if re.search(r"\bpull_request\b", "\n".join(on_block)):
             pr_wf.append(fn)
             # Comment lines are STRIPPED before matching. A workflow that documents
@@ -2244,6 +2291,41 @@ else:
     else:
         ok("the ungated SET matches its pin exactly (%d suite(s)) — a one-for-one "
            "swap cannot hide a delisting behind an unchanged count" % len(pinned_ungated))
+
+# ── 7c) the gated suites ALSO run on main (hugmesh-generator#946) ────────────
+# A pull request is checked against the main it branched from. Two PRs that are each
+# green alone can merge into a main that is red, and when the suites run only on
+# pull_request nothing says so until the next PR inherits the red: eight such
+# collisions landed in one afternoon before this. So every gated suite must also be
+# named by a workflow that runs on EVERY push to main (no paths filter), unless
+# MAIN_EXEMPT records why not. A stale exemption is a finding too.
+exempt = sorted(l.strip() for l in os.environ.get("MAIN_EXEMPT", "").splitlines()
+                if l.strip())
+on_main_set = {s for s in gated
+               if s in main_text or (os.path.dirname(s) + "/*.sh") in main_text}
+not_on_main = sorted(set(gated) - on_main_set)
+if not pr_wf:
+    ok("no pull_request workflow in this tree — nothing is gated, so nothing has to "
+       "run on main either")
+else:
+    print("         push-to-main workflows (unfiltered): %s"
+          % (", ".join(main_wf) if main_wf else "NONE"))
+    unexplained = [s for s in not_on_main if s not in exempt]
+    stale = [s for s in exempt if s not in not_on_main]
+    if unexplained:
+        bad("gated suite(s) that NO workflow runs on a push to main — a merge "
+            "collision that breaks them turns nothing red on main (add the suite to a "
+            "push-to-main workflow, or record why not in MAIN_LANE_EXEMPT):")
+        for s in unexplained:
+            print("         %s" % s)
+    if stale:
+        bad("MAIN_LANE_EXEMPT names suite(s) that run on main now, or are not gated "
+            "at all — drop the entry:")
+        for s in stale:
+            print("         %s" % s)
+    if not unexplained and not stale:
+        ok("%d of %d gated suites also run on every push to main; %d exempt, each "
+           "with its reason" % (len(on_main_set), len(gated), len(exempt)))
 
 # ── 8) `| grep -q` UNDER pipefail IS A COIN FLIP ─────────────────────────────
 # `grep -q` exits the instant it matches and closes its end of the pipe. If the
@@ -2485,13 +2567,13 @@ echo "== ${P} passed, ${F} failed =="
     printf 'echo third\nexit 0\n'  > "${NEG}/tree/tests/probe/test-third.sh"
     printf 'probe-job:\n  script:\n    - bash tests/probe/test-probe.sh\n    - bash tests/probe/test-second.sh\n    - bash tests/probe/test-third.sh\n' \
       > "${NEG}/tree/.gitlab-ci.yml"
-    printf 'name: pr\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n' \
+    printf 'name: pr\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n' \
       > "${NEG}/tree/.github/workflows/pr.yml"
     local s
     for s in $1; do printf '      - run: bash %s\n' "${s}" >> "${NEG}/tree/.github/workflows/pr.yml"; done
   }
   floor_tree "tests/probe/test-probe.sh"
-  drop_out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_PREMERGE=2 \
+  drop_out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_MAIN_EXEMPT="" GUARD_PREMERGE=2 \
               GUARD_PREMERGE_UNGATED="$(printf '%s\n' tests/probe/test-second.sh tests/probe/test-third.sh)" \
               bash "${SELF}" 2>&1)"; drop_rc=$?
   if [ "${drop_rc}" -ne 0 ] \
@@ -2503,7 +2585,7 @@ echo "== ${P} passed, ${F} failed =="
     printf '%s\n' "${drop_out}" | sed 's/^/           /'
   fi
   floor_tree "tests/probe/test-probe.sh tests/probe/test-second.sh"
-  rise_out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_PREMERGE=1 \
+  rise_out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_MAIN_EXEMPT="" GUARD_PREMERGE=1 \
               GUARD_PREMERGE_UNGATED="tests/probe/test-third.sh" \
               bash "${SELF}" 2>&1)"; rise_rc=$?
   if [ "${rise_rc}" -eq 0 ] \
@@ -2514,6 +2596,44 @@ echo "== ${P} passed, ${F} failed =="
     bad "positive control FAILED (rc=${rise_rc}): gated suites rising above the floor must pass with a notice (GEN-3)"
     printf '%s\n' "${rise_out}" | sed 's/^/           /'
   fi
+
+  # (k) check 7c (hugmesh-generator#946): every gated suite must ALSO run on a push to
+  #     main. One floor_tree gates two suites; pr.yml's trigger is then rewritten.
+  #     (k1) pull_request only: both gated suites are named as not running on main.
+  #     (k2) push to main WITH a paths filter: still not every push, still red.
+  #     (k3) an exemption for a suite that does run on main is stale, and red.
+  #     (k4) the inline `on: [pull_request, push]` form counts as running on main.
+  main_case() { # main_case NAME TRIGGER_BLOCK EXEMPT WANT_RC MUST_CONTAIN
+    floor_tree "tests/probe/test-probe.sh tests/probe/test-second.sh"
+    python3 - "${NEG}/tree/.github/workflows/pr.yml" "$2" <<'PYK'
+import re, sys
+p, trig = sys.argv[1], sys.argv[2]
+t = open(p).read()
+t = re.sub(r"^on:\n(?:  .*\n)+", trig.replace("\\n", "\n") + "\n", t, count=1, flags=re.M)
+open(p, "w").write(t)
+PYK
+    local out rc
+    out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_PREMERGE=2 \
+           GUARD_PREMERGE_UNGATED="tests/probe/test-third.sh" GUARD_MAIN_EXEMPT="$3" \
+           bash "${SELF}" 2>&1)"; rc=$?
+    if { [ "$4" = 0 ] && [ "${rc}" -eq 0 ]; } || { [ "$4" != 0 ] && [ "${rc}" -ne 0 ]; }; then
+      if printf '%s' "${out}" | grep -F "$5" >/dev/null; then
+        ok "check 7c control: $1"; return
+      fi
+    fi
+    bad "check 7c control FAILED (rc=${rc}, want ${4}): $1"
+    printf '%s\n' "${out}" | sed 's/^/           /'
+  }
+  main_case "pull_request only: the gated suites are named as not running on main" \
+    'on:\n  pull_request:' "" 1 "gated suite(s) that NO workflow runs on a push to main"
+  main_case "push to main with a paths filter does not count" \
+    "on:\n  pull_request:\n  push:\n    branches: [main]\n    paths:\n      - 'studio/**'" \
+    "" 1 "gated suite(s) that NO workflow runs on a push to main"
+  main_case "an exemption for a suite that runs on main is stale" \
+    'on:\n  pull_request:\n  push:\n    branches: [main]' "tests/probe/test-second.sh" 1 \
+    "MAIN_LANE_EXEMPT names suite(s) that run on main now"
+  main_case "the inline form on: [pull_request, push] runs on main" \
+    'on: [pull_request, push]' "" 0 "2 of 2 gated suites also run on every push to main"
 
   # (j) THE BLIND SPOT ITSELF: an orphaned suite named in the OTHER convention.
   #     Until 2026-08-26 the census walked for `test-*.sh` only, so a file called
@@ -2611,7 +2731,7 @@ echo "== ${P} passed, ${F} failed =="
   printf 'all:\n\t@true\n' > "${NEG}/tree/Makefile"
   printf 'name: pr\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash tests/probe/test-probe.sh\n      - run: bash tests/probe/test-third.sh\n' \
     > "${NEG}/tree/.github/workflows/pr.yml"
-  swap_out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" \
+  swap_out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_MAIN_EXEMPT="" \
               GUARD_PREMERGE=2 GUARD_PREMERGE_UNGATED="tests/probe/test-third.sh" \
               bash "${SELF}" 2>&1)"; swap_rc=$?
   if [ "${swap_rc}" -ne 0 ] \

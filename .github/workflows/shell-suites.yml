@@ -290,8 +290,18 @@
 # leaving them out means any red it shows is a NEW regression.
 name: shell-suites
 
+# ON MAIN TOO (hugmesh-generator#946). A pull request is checked against the main it
+# branched from, so two PRs that are each green alone can merge into a red main, and
+# with this workflow on pull_request only nothing said so until the next PR inherited
+# the red (eight such collisions landed on one day). Every push to main now runs the
+# same suites; the concurrency group below is keyed on the ref, so a newer merge
+# cancels an older run of main. tests/scripts/test-guard-integrity.sh check 7c fails
+# when a gated suite is run by no push-to-main workflow, and
+# tests/scripts/test-shell-syntax-all.sh parses every tracked script in seconds.
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -759,6 +769,7 @@ jobs:
               tests/scripts/test-run-ungated-lane.sh
               tests/scripts/test-url-embedded-credentials.sh
               tests/scripts/test-docs-command-coverage.sh
+              tests/scripts/test-shell-syntax-all.sh
               tests/scripts/test-x86-artifact-integrity.sh
               tests/scripts/test-x86-build-sudoers-strip.sh
               tests/scripts/test-x86-from-step.sh
