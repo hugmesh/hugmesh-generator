@@ -2348,7 +2348,7 @@ STACK_M2_FLAGS    = $(if $(wildcard $(STACK_M2_ENV)),--env-file $(STACK_M2_ENV) 
 # #1034: STACK_BIND_ADDR other than loopback is refused while any Casdoor (the central :8000, the Studio's
 # per-domain :8001+, brand-b's :8001) still accepts the factory admin login. A no-op for the default bind.
 .PHONY: stack-lan-bind-check
-stack-lan-bind-check:
+stack-lan-bind-check: ## refuse a non-loopback STACK_BIND_ADDR while a Casdoor still has the factory admin (stack-up runs it first)
 	@bash tests/stack/lan-bind-preflight.sh
 
 stack-m2-check: ## verify the private maven registry container is live and self-heal it
