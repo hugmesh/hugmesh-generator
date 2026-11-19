@@ -34,6 +34,14 @@
 #                                      Qt-free GitHub job, where the Qt-free half is
 #                                      still a real gate and the skip count is printed.
 #
+# LOOK TESTS. A `test_look_*` case skips in any ordinary run by design (`_look.child_only`):
+# it only runs in the fresh interpreter tests/test_look.py starts for each file listed
+# in tests/_look_files.py. In this one-process run it would always skip, and the
+# no-skip rule above would turn that into a red that says nothing about a pin
+# (hugmesh-generator#691). So this run DESELECTS them (`-k 'not test_look_'`), and a
+# pin file that carries a look test but is missing from LOOK_FILES is RED here, because
+# that look test would then run nowhere.
+#
 # SAFETY. Studio tests have spawned REAL `sudo -A` build launchers that wedge on the
 # askpass dialog (60 found once, 0 authenticated). So: HUGMESH_STUDIO_NO_ELEVATION=1,
 # QT_QPA_PLATFORM=offscreen, and DISPLAY/WAYLAND_DISPLAY/XDG_SESSION_TYPE unset so the
@@ -106,6 +114,18 @@ if [ "${F}" -gt 0 ]; then
 fi
 ok "${#FILES[@]} pin files resolved (${#NAMED[@]} named + the domain families)"
 
+# ── look tests: deselected here, so each must be one tests/test_look.py runs ────
+LOOK_LIST="${STUDIO}/tests/_look_files.py"
+look_unowned=0
+for f in "${FILES[@]}"; do
+  grep -qE '^[[:space:]]*def test_look_' "${STUDIO}/${f}" || continue
+  if ! grep -qF "\"$(basename "${f}")\"" "${LOOK_LIST}"; then
+    bad "studio/${f} has test_look_* cases but is not in tests/_look_files.py — deselected here, they would run nowhere"
+    look_unowned=$((look_unowned+1))
+  fi
+done
+[ "${look_unowned}" -eq 0 ] && ok "every look test in the pin set is run by tests/test_look.py (deselected here)"
+
 # ── the interpreter ─────────────────────────────────────────────────────────────
 PY=""
 for cand in "${HUGMESH_STUDIO_PYTHON:-}" "${STUDIO}/.venv/bin/python" "${SNAP_STUDIO_PYTHON:-}"; do
@@ -134,7 +154,7 @@ LOG="$(mktemp "${TMPDIR:-/tmp}/studio-pins.XXXXXX")"
 trap 'rm -f "${LOG}"' EXIT
 (cd "${STUDIO}" && env -u DISPLAY -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE \
     QT_QPA_PLATFORM=offscreen HUGMESH_STUDIO_NO_ELEVATION=1 PYTHONDONTWRITEBYTECODE=1 \
-    "${PY}" -m pytest -q -p no:cacheprovider -rs "${FILES[@]}") >"${LOG}" 2>&1
+    "${PY}" -m pytest -q -p no:cacheprovider -rs -k 'not test_look_' "${FILES[@]}") >"${LOG}" 2>&1
 rc=$?
 tail -n 25 "${LOG}" | sed 's/^/    | /'
 
