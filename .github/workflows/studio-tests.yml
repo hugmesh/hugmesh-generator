@@ -430,6 +430,8 @@ jobs:
           tests/test_generator_dir.py
           tests/test_windows_sentences.py
           tests/test_org_export_windows.py
+          tests/test_org_export_fake_gh_guard.py
+          tests/test_org_export_neutrality.py
           tests/test_windows_fleet.py
           tests/test_docker_asset_mounts.py
           tests/test_windows_sweep_c1.py

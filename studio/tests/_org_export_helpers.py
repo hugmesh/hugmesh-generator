@@ -103,6 +103,22 @@ def make_source_repo(root: str, name: str, extra_files: dict | None = None,
 RUNNER_IDENTITY = ("Test Exporter", "exporter@example.invalid")
 
 
+def gh_that_is_not_the_fake(fake_bin: str, path: str) -> str:
+    """Why ``gh`` on ``path`` must not be run, or "" when it is the fake in ``fake_bin``.
+
+    The host check in :class:`RecordingRunner` only sees arguments, and
+    ``gh repo create exampleorg/x`` names no host. On Windows the fake (a bash script)
+    cannot run, so the lookup fell through to the real ``gh.exe``: with a signed-in gh
+    the suite would have created repositories on GitHub (found 2026-11-18 on Windows 11,
+    where it failed only because the isolated home had no gh login)."""
+    if os.name == "nt":
+        return "the fake gh is a bash script Windows cannot run"
+    found = shutil.which("gh", path=path)
+    if not found or os.path.dirname(os.path.abspath(found)) != os.path.abspath(fake_bin):
+        return f"gh on PATH is {found!r}, not the fake"
+    return ""
+
+
 class RecordingRunner(oe.SubprocessRunner):
     """The real runner with the fake gh first on PATH, every call recorded, a
     pinned git identity for the runner (see :data:`RUNNER_IDENTITY`), and a hard
@@ -127,6 +143,10 @@ class RecordingRunner(oe.SubprocessRunner):
         full.setdefault("GIT_AUTHOR_EMAIL", RUNNER_IDENTITY[1])
         full.setdefault("GIT_COMMITTER_NAME", RUNNER_IDENTITY[0])
         full.setdefault("GIT_COMMITTER_EMAIL", RUNNER_IDENTITY[1])
+        if argv[:1] == ["gh"]:
+            why = gh_that_is_not_the_fake(self.fake_bin, full["PATH"])
+            if why:          # answered as a gh that is not there: never the real one
+                return oe.RunResult(127, b"", ("refused: " + why).encode())
         return super().run(argv, cwd=cwd, env=full, timeout=timeout)
 
     def gh_calls(self) -> list[str]:

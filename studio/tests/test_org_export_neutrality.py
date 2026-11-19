@@ -78,6 +78,7 @@ OWNED = (
     "studio/tests/test_org_export_tui.py",
     "studio/tests/test_org_export_neutrality.py",
     "studio/tests/_org_export_helpers.py",
+    "studio/tests/test_org_export_fake_gh_guard.py",
     "studio/tests/fixtures/org_export",
     "studio/tests/test_worklist_driver.py",
     "studio/tests/test_golive_wizard.py",
@@ -121,7 +122,8 @@ def forbidden_hits(path: str, needles=None) -> list[str]:
 
 
 def test_the_owned_files_exist_and_the_list_is_not_vacuous():
-    files = owned_files()
+    # one separator on every OS: os.walk gives backslashes on Windows
+    files = [f.replace(os.sep, "/") for f in owned_files()]
     assert len(files) >= 20, files
     assert any(f.endswith("core/org_export.py") for f in files)
     assert any("fixtures/org_export/sources" in f for f in files)
@@ -265,6 +267,16 @@ def tracked_files() -> list[str]:
     return [os.path.join(REPO_ROOT, p) for p in out.decode("utf-8").split("\0") if p]
 
 
+def _shown(path: str) -> str:
+    """``path`` relative to the repository, or as given when it cannot be: on Windows
+    relpath raises for a path on another drive (CI's checkout is on D:, its temp
+    folder on C:)."""
+    try:
+        return os.path.relpath(path, REPO_ROOT)
+    except ValueError:
+        return path
+
+
 def repo_hits(paths) -> list[str]:
     stems = [s.encode() for s in FORBIDDEN]
     cores = [c.encode() for s in FORBIDDEN for c in _b64_cores(s)]
@@ -278,10 +290,10 @@ def repo_hits(paths) -> list[str]:
         low = data.lower()
         for stem in stems:
             if stem in low:
-                hits.append(f"{os.path.relpath(path, REPO_ROOT)}: plain")
+                hits.append(f"{_shown(path)}: plain")
         for core in cores:
             if core in data:
-                hits.append(f"{os.path.relpath(path, REPO_ROOT)}: base64")
+                hits.append(f"{_shown(path)}: base64")
     return hits
 
 
@@ -311,3 +323,15 @@ def test_the_repository_scan_catches_plain_and_base64_plants(tmp_path):
     clean = tmp_path / "clean.txt"
     clean.write_text("snap dragon snapper dragonfly " + base64.b64encode(b"hugmesh-dev").decode())
     assert repo_hits([str(clean)]) == []
+
+
+def test_a_plant_on_another_drive_is_still_reported(tmp_path, monkeypatch):
+    """CI's Windows runner keeps the checkout on D: and the temp folder on C:, where
+    relpath raises ValueError: the scan must report the plant, not crash."""
+    plant = tmp_path / "plain.txt"
+    plant.write_text("host: registry." + _A + ".example\n")
+
+    def other_drive(path, start=None):
+        raise ValueError("path is on mount 'C:', start on mount 'D:'")
+    monkeypatch.setattr(os.path, "relpath", other_drive)
+    assert repo_hits([str(plant)]) == [f"{plant}: plain"]
