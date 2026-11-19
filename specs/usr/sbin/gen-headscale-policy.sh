@@ -386,6 +386,13 @@ headscale_ready() {
 # Restart headscale so a policy.mode:file policy is re-read. rc-service is the
 # OpenRC entry point provision.sh uses for the same job.
 restart_headscale() {
+    # keys-provision refused headscale's configuration and said so with this marker (hugmesh-generator#1036):
+    # a restart would START a stopped headscale onto it. Do not restart; the caller treats this as a failed
+    # restart (nothing reloaded), as it does when rc-service itself fails.
+    if [ -e "${HEADSCALE_REFUSED_MARK:-/run/hugmesh/headscale.refused}" ]; then
+        warn "headscale was refused by keys-provision (${HEADSCALE_REFUSED_MARK:-/run/hugmesh/headscale.refused}): not restarting it"
+        return 1
+    fi
     have rc-service && rc-service headscale restart >/dev/null 2>&1
 }
 

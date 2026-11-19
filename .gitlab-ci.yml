@@ -3742,6 +3742,27 @@ lint:seed-password-reconcile:
     - bash tests/stack/test-casdoor-origin-follows-issuer.sh
     - bash tests/scripts/stack_idp_exposure_mutations.sh
 
+# The docker mesh-node client carries the mesh CA (hugmesh-generator#1040): keys/certs/*.crt|*.pem is
+# installed into the container trust store before the join and the Casdoor login, an untrusted control
+# server is a refusal that names certs/cluster-ca.crt (never a TLS error or an insecure flag). The suite
+# runs the REAL entrypoint against a real HTTPS endpoint signed by a throwaway CA; tailscale/tailscaled
+# are argv-recording fakes. No docker, no network beyond 127.0.0.1.
+lint:mesh-node-ca:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash coreutils curl jq openssl python3
+    - for t in bash curl jq openssl python3; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t"; exit 1; }; done
+  script:
+    - bash tests/docker-mesh-node/test-mesh-ca.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - clients/docker-mesh-node/**/*
+        - tests/docker-mesh-node/**/*
+        - .gitlab-ci.yml
+
 # The e2e password ROTATES per run (2026-10-15): the contract said "random per
 # run", but nothing ever started a new value — the operator's credentials file
 # was dated 2026-08-27 and served every run since. The suite pins the run

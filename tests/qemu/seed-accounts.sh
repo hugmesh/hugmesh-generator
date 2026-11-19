@@ -837,9 +837,15 @@ while IFS= read -r u; do
 done < <(jq -c '.users[]' "${ROLES_JSON}")
 log "users: ${added} added, ${already} already present, ${rotated} password(s) reconciled to this run's rendered credentials (${users_total} declared)"
 
-# ── 3. Set each role's member set to EXACTLY the seeded list ────────────────
+# ── 3. Set each role's SEEDED members to exactly the rendered list ──────────
 # Round-trip the existing role object so other fields survive. ROLE_GAMES_ADMIN
 # is sent EMPTY on purpose (the games-admin-sync Job derives it).
+# The seed manages ONLY the accounts it renders: a member that is not one of them
+# (a person the Studio added through Casdoor's admin API, core/mesh_accounts.py,
+# or a derived member a reconcile Job wrote) is KEPT. Setting the whole list used
+# to strip every such person's roles at the next `make stack-seed`. A rendered
+# persona still loses a role the render no longer gives it.
+MANAGED="$(jq -c --arg org "${ORG}" '[.users[] | "\($org)/\(.name)"]' "${ROLES_JSON}")"
 roles_done=0
 while IFS= read -r r; do
   [ -n "${r}" ] || continue
@@ -852,7 +858,8 @@ while IFS= read -r r; do
   # fully-unseeded run used to report success.
   [ -n "${cur}" ] && [ "${cur}" != "null" ] \
     || die "role ${ORG}/${rname} does not exist in Casdoor — declare it in manifests/casdoor init_data.json (roles[]) and re-run casdoor-init. Refusing to report success with an unapplied role matrix."
-  upd="$(printf '%s' "${cur}" | jq -c --argjson members "${want}" '.users = $members')"
+  upd="$(printf '%s' "${cur}" | jq -c --argjson members "${want}" --argjson managed "${MANAGED}" \
+          '.users = ((((.users // []) - $managed) + $members) | unique)')"
   casdoor_call POST "/api/update-role?id=${ORG}/${rname}" "${upd}" >/dev/null
   # READ BACK rather than trust the write's own status. Casdoor has a
   # LIVE-VERIFIED history of answering {"status":"ok","data":"Affected"} to a

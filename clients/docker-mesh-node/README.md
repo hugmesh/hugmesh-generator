@@ -14,6 +14,17 @@ out a copy-paste `docker run` to onboard a remote box.
 ## What it does
 
 1. Reads keys from a local folder you point it at (mounted read-only at `/keys`).
+   - `tailscale/authkey` (or `authkey`): the one-time pre-auth key.
+   - `login-server`: the headscale control URL (or `SNAP_LOGIN_SERVER`).
+   - `casdoor.json`, `role`: optional, see `keys.example/`.
+   - `certs/cluster-ca.crt` (any `certs/*.crt` or `certs/*.pem`): **the mesh CA**, the same file the
+     KEYS USB carries. A private mesh serves headscale and Casdoor over its own CA, which the stock
+     Tailscale image does not trust. The container installs every certificate in `certs/` into its
+     trust store before it joins or logs in. If the control server's certificate does not verify, the
+     container stops with a message naming `certs/cluster-ca.crt`, not a TLS error; if only the
+     Casdoor issuer is untrusted, the Casdoor login is skipped with the same message and the join
+     goes ahead. A file in `certs/` that is not a certificate is refused by name. There is no
+     insecure or skip-verify option. A mesh served by a publicly trusted certificate needs no `certs/`.
 2. Starts `tailscaled` and runs `tailscale up` with the one-time pre-auth key,
    registering this machine on the HugMesh tailnet (Tailscale SSH enabled).
    - If the node is registered but **not yet approved**, it stays up and keeps
