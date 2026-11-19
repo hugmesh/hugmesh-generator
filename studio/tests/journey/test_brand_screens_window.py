@@ -20,7 +20,7 @@ from hugmesh_studio.gui import wizard as wizard_mod                           # 
 from hugmesh_studio.gui.pages import domain_services as ds_mod                # noqa: E402
 from hugmesh_studio.gui.pages import domains as dom_mod                       # noqa: E402
 from hugmesh_studio.gui.pages.brand_picker import BrandPicker                 # noqa: E402
-from hugmesh_studio.gui.pages.brand_screen import (TAB_TITLES, TAB_IDENTITY,  # noqa: E402
+from hugmesh_studio.gui.pages.brand_screen import (TAB_TITLES, TAB_IDENTITY, TAB_USERS,  # noqa: E402
                                                    TAB_LOOK, TAB_SERVICES, TAB_WAYS)
 from hugmesh_studio.gui.pages.superbrand import SuperbrandStep                # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                                   # noqa: E402
@@ -409,7 +409,7 @@ def test_the_four_tabs_are_in_the_designs_order_and_services_is_open(qapp, gen):
     assert [tabs.tabText(i) for i in range(5)] == list(TAB_TITLES) == [
         "Identity", "Users", "Look", "Services", "Ways to reach it"]
     assert tabs.currentIndex() == TAB_SERVICES
-    assert (TAB_IDENTITY, TAB_LOOK, TAB_SERVICES, TAB_WAYS) == (0, 1, 2, 3)
+    assert (TAB_IDENTITY, TAB_USERS, TAB_LOOK, TAB_SERVICES, TAB_WAYS) == (0, 1, 2, 3, 4)
     # the Services tab IS the body: its widgets stay in the body's layout, under the
     # page's own content widget, below the tab bar
     assert page.brand_tabs.bar.parentWidget() is page.table.parentWidget()

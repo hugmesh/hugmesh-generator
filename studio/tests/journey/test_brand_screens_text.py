@@ -142,8 +142,8 @@ def _text(screen, j):
 def test_the_sections_are_numbered_and_the_services_one_is_open(gen):
     j, sc = _services_screen(gen)
     text = _text(sc, j)
-    assert "1. Identity" in text and "2. Look" in text
-    assert "*3. Services" in text and "4. Ways to reach it" in text
+    assert "1. Identity" in text and "2. Users" in text and "3. Look" in text
+    assert "*4. Services" in text and "5. Ways to reach it" in text
     assert "Tor front door" in text, "the services screen is the one that opens"
 
 
