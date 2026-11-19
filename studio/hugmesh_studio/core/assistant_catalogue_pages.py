@@ -206,8 +206,6 @@ PAGES = {
   "role"
  ],
  "users": [
-  "brand_screen",
-  "domain_services",
   "localcloud_nodes",
   "mesh_emulation",
   "mode",

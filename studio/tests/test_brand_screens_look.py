@@ -293,7 +293,7 @@ def test_geom_the_services_tab_still_holds_what_it_held_above_the_fold(qapp, sty
         page = _tabs_page(qapp, size)
         try:
             what = f"services tab {style} {pt:g}pt {size[0]}x{size[1]}"
-            assert page.brand_tabs.currentIndex() == 3
+            assert page.brand_tabs.currentIndex() == 2
             for w, name in ((page.brand_tabs.tabBar(), "the tab bar"),
                             (page.front_door_table, "the front door row"),
                             (page.tor_note, "the front door's state line")):

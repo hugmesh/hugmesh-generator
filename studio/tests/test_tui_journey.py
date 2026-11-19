@@ -525,7 +525,7 @@ def test_the_domain_services_step_carries_the_brand_sections_on_a_mesh(tmp_path)
     j = _mesh_journey(tmp_path)
     j.goto("domain_services")
     top = "\n".join(j.lines())
-    assert "Brand settings:" in top and "*4. Services" in top
+    assert "Brand settings:" in top and "*3. Services" in top
     j.feed("open 5")
     assert "Ways to reach it" in "\n".join(j.lines())
     j.feed("open 4")
