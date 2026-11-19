@@ -443,11 +443,18 @@ def test_fleet_domain_fields_hands_out_copies_of_the_rows():
 
 
 # ── the GUI face ─────────────────────────────────────────────────────────────────────
-pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding (PySide6/PyQt6) installed")
-
-from hugmesh_studio.gui.pages import fleet as fleet_mod                  # noqa: E402
-from hugmesh_studio.gui.pages.domains import _COL_IDP                    # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets                              # noqa: E402
+# GUI half: the studio-tests job installs NO Qt binding on purpose, so these imports fail there.
+# They must not skip the whole module (a module-level pytest.importorskip skipped the Qt-free tests
+# above it too, hugmesh-generator#537): only the tests below that need Qt are marked.
+try:
+    from hugmesh_studio.gui.pages import fleet as fleet_mod
+    from hugmesh_studio.gui.pages.domains import _COL_IDP
+    from hugmesh_studio.gui.qt import QtWidgets
+    _HAVE_QT = True
+except ImportError:
+    fleet_mod = _COL_IDP = QtWidgets = None
+    _HAVE_QT = False
+needs_qt = pytest.mark.skipif(not _HAVE_QT, reason="no Qt binding (PySide6/PyQt6) installed")
 
 
 @pytest.fixture(scope="session")
@@ -477,6 +484,7 @@ def _to_domains(page, cluster_domain="mesh.example"):
     return page
 
 
+@needs_qt
 def test_the_domains_step_row_zero_and_no_sign_in_column(page):
     _to_domains(page)
     assert page.stack.currentIndex() == fleet_mod.STEP_DOMAINS
@@ -484,6 +492,7 @@ def test_the_domains_step_row_zero_and_no_sign_in_column(page):
     assert page.domains_table.table.isColumnHidden(_COL_IDP)
 
 
+@needs_qt
 def test_an_unwalked_domain_is_refused_before_build_all_roles_runs(page):
     _to_domains(page)
     page.domains_table._add("acme.example", "Acme")
@@ -500,6 +509,7 @@ def test_an_unwalked_domain_is_refused_before_build_all_roles_runs(page):
     assert page.runs == [] and page.worker is None
 
 
+@needs_qt
 def test_walking_every_domain_clears_the_gate(page):
     _to_domains(page)
     page.domains_table._add("acme.example", "Acme")
@@ -512,6 +522,7 @@ def test_walking_every_domain_clears_the_gate(page):
     assert fleet_gate_reason(cfg) == ""
 
 
+@needs_qt
 def test_a_junk_row_keeps_the_operator_on_the_domains_step_inline(page):
     _to_domains(page)
     page.domains_table._add("Not A Domain", "")
@@ -521,6 +532,7 @@ def test_a_junk_row_keeps_the_operator_on_the_domains_step_inline(page):
     assert "not a domain name" in page.domains_note.text()
 
 
+@needs_qt
 def test_a_restart_of_an_incompletely_walked_record_is_refused_at_review(page, tmp_path):
     s = bs.new_fleet_session(_cfg(output_dir=str(tmp_path / "out")), GENERATOR_DIR,
                              backend="native")
@@ -535,6 +547,7 @@ def test_a_restart_of_an_incompletely_walked_record_is_refused_at_review(page, t
     assert page.runs == [] and page.worker is None
 
 
+@needs_qt
 def test_with_tor_and_optional_services_survive_apply_and_collect(page):
     page.apply(FleetConfig(with_tor=True, optional_services="akkoma tuwunel"))
     cfg = page.collect()
@@ -542,6 +555,7 @@ def test_with_tor_and_optional_services_survive_apply_and_collect(page):
     assert cfg.to_env()["WITH_TOR"] == "1"
 
 
+@needs_qt
 def test_the_services_step_says_what_the_fleet_does_with_the_rows(page):
     _to_domains(page)
     page.next_btn.click()
@@ -549,6 +563,7 @@ def test_the_services_step_says_what_the_fleet_does_with_the_rows(page):
     assert not page.domain_services.lane_note.isHidden()
 
 
+@needs_qt
 def test_back_from_the_domains_step_records_a_typed_row(page):
     """Back records too (never refuses): a row typed on Domains must reach the state
     whichever way the operator leaves, and be in the table when they come back."""
@@ -563,6 +578,7 @@ def test_back_from_the_domains_step_records_a_typed_row(page):
     assert page.domains_table.table.rowCount() == 2
 
 
+@needs_qt
 def test_removing_a_walked_domain_on_the_gui_prunes_its_marker(page):
     """Leaving the Domains step rebuilds the reviewed markers from the rows that still
     exist (``commit_fleet_domains``): a domain walked, then removed, leaves nothing
@@ -584,6 +600,7 @@ def test_removing_a_walked_domain_on_the_gui_prunes_its_marker(page):
     assert page.collect().domain_services_reviewed == ["mesh.example"]
 
 
+@needs_qt
 def test_the_gui_shows_an_unbalanced_quote_inline_and_refuses_to_build(page):
     """The GUI twin of the TUI apostrophe case: the Review preview says INVALID with
     the remedy, inline, and "Build fleet now" refuses without reaching the driver."""
@@ -601,6 +618,7 @@ def test_the_gui_shows_an_unbalanced_quote_inline_and_refuses_to_build(page):
     assert page.runs == [] and page.worker is None
 
 
+@needs_qt
 def test_the_gui_jobs_spin_box_is_bounded_by_the_same_range_validate_enforces(page):
     """One range on both faces: the spin box's bounds ARE ``JOBS_RANGE`` (what
     ``FleetConfig.validate`` refuses outside of, for the TUI's ``set jobs N``), not a
@@ -624,6 +642,7 @@ class _DamagedSession:
         self.config = config
 
 
+@needs_qt
 @pytest.mark.parametrize("pin", [True, False])
 def test_restarting_a_damaged_record_shows_the_refusal_inline_and_pins_nothing(page, pin):
     """RESTART (pin) and REDO of a damaged record: no exception leaves the slot (PyQt6
@@ -649,6 +668,7 @@ def test_restarting_a_damaged_record_shows_the_refusal_inline_and_pins_nothing(p
     assert page.runs == [] and page.worker is None
 
 
+@needs_qt
 @pytest.mark.parametrize("damage, field", [
     # the robustness skeptic's measurement (round 6): each of these passed from_dict
     # and raised out of load_from_session — ValueError from the row builder, TypeError
@@ -688,6 +708,7 @@ def test_restarting_a_record_with_a_wrong_typed_scalar_or_idp_typo_is_refused_in
     assert page.runs == [] and page.worker is None
 
 
+@needs_qt
 def test_a_refusal_from_dict_does_not_name_yet_still_stays_inside_the_slot(page, monkeypatch):
     """The last line: a ValueError or TypeError that no from_dict check names (a future
     field, a Qt setter in apply refusing a value) is shown in the same pane, nothing is
@@ -703,6 +724,7 @@ def test_a_refusal_from_dict_does_not_name_yet_still_stays_inside_the_slot(page,
     assert page.runs == [] and page.worker is None
 
 
+@needs_qt
 @pytest.mark.parametrize("backend", [5, ["docker"], {"b": "docker"}, 1.5])
 def test_restarting_a_record_whose_backend_is_not_text_is_refused_inline(page, backend):
     """The session record's OWN ``backend`` field (the same JSON file as the config;
@@ -725,6 +747,7 @@ def test_restarting_a_record_whose_backend_is_not_text_is_refused_inline(page, b
     assert page.runs == [] and page.worker is None
 
 
+@needs_qt
 @pytest.mark.parametrize("backend", [None, ""])
 def test_a_record_with_no_backend_still_loads_as_auto(page, backend):
     """The lenient case stays lenient: an absent backend (an old record) is ‘auto’,
@@ -738,6 +761,7 @@ def test_a_record_with_no_backend_still_loads_as_auto(page, backend):
     assert page.pending_session_id == "fleet-damaged-1"
 
 
+@needs_qt
 def test_an_overflow_from_a_setter_inside_apply_stays_inside_the_slot(page, monkeypatch):
     """The last line for the shape that measured as the real abort: a number past the
     C int ``QSpinBox.setValue`` takes raises OverflowError, an ArithmeticError that is
@@ -764,6 +788,7 @@ def test_an_overflow_from_a_setter_inside_apply_stays_inside_the_slot(page, monk
     assert page.runs == [] and page.worker is None
 
 
+@needs_qt
 def test_a_setter_refusing_a_value_inside_apply_stays_inside_the_slot(page, monkeypatch):
     """``apply`` is INSIDE the guarded region: a record from_dict accepts but a widget
     refuses (the exact way the five shapes used to abort the Studio) is shown inline

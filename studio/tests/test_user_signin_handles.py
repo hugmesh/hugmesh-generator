@@ -130,15 +130,20 @@ def test_the_text_users_table_shows_the_handles_the_note_and_the_advice():
 
 
 # ── the window ──────────────────────────────────────────────────────────────────────
-qt = pytest.importorskip("hugmesh_studio.gui.qt",
-                         reason="no Qt binding (PySide6/PyQt6) installed")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+# The skip lives in the fixture, not at module level: the studio-tests job installs no Qt binding on
+# purpose, and a module-level importorskip would skip the Qt-free tests above (hugmesh-generator#537).
 @pytest.fixture(scope="module")
-def qapp():
-    from hugmesh_studio.gui.qt import QtWidgets
-    return QtWidgets.QApplication.instance() or QtWidgets.QApplication(
+def qt():
+    return pytest.importorskip("hugmesh_studio.gui.qt",
+                               reason="no Qt binding (PySide6/PyQt6) installed")
+
+
+@pytest.fixture(scope="module")
+def qapp(qt):
+    return qt.QtWidgets.QApplication.instance() or qt.QtWidgets.QApplication(
         ["hugmesh-studio-signin-handles"])
 
 
@@ -207,7 +212,7 @@ def test_registering_through_a_provider_with_no_handle_warns_live(qapp):
     assert not page.warn.isVisible()
 
 
-def test_the_editor_under_the_table_edits_the_selected_row_and_is_visible(qapp):
+def test_the_editor_under_the_table_edits_the_selected_row_and_is_visible(qapp, qt):
     wiz, page, m = _page(qapp, [User(username="alice"),
                                 User(username="bob", signin_handles={"discord": "bob_2"})])
     for prov, edit in page.handle_edits.items():
@@ -228,7 +233,7 @@ def test_the_editor_under_the_table_edits_the_selected_row_and_is_visible(qapp):
     assert wiz.cfg.users[1].signin_handles == {"discord": "bob_2"}
 
 
-def test_add_user_selects_the_new_row_for_the_editor(qapp):
+def test_add_user_selects_the_new_row_for_the_editor(qapp, qt):
     wiz, page, m = _page(qapp, [User(username="alice")])
     btn = [b for b in page.findChildren(qt.QtWidgets.QPushButton) if b.text() == "Add user"][0]
     btn.click()
