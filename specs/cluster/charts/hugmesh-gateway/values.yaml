@@ -182,9 +182,15 @@ vanityDomains: []
 
 # Downstream routes rendered into an application-routes.yml ConfigMap and
 # loaded via SPRING_CONFIG_ADDITIONAL_LOCATION. id/uri/path per route.
+#
+# https://, not http://: hugmesh-api serves TLS on :8080 with client-auth=need, and the gateway
+# presents its client identity to routed peers (the mTLS wave). apps/20-gateway-be.yaml's own
+# `hugmesh-api` route already says so; this default had been left on http:// and would die as
+# "Connection prematurely closed BEFORE response" the moment a gateway ran on it
+# (hugmesh-generator#507, finding 25; tests/scripts/test-outbound-mtls-client.sh rule 4).
 routes:
   - id: api-default
-    uri: http://hugmesh-api.hugmesh-backend.svc.cluster.local:8080
+    uri: https://hugmesh-api.hugmesh-backend.svc.cluster.local:8080
     path: /api/**
 
 # Extra raw environment variables. SPRING_PROFILES_ACTIVE=routes is now set

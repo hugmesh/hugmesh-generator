@@ -120,6 +120,142 @@ n="$(grep -c -F '${STACK_BIND_ADDR:-127.0.0.1}:' "${OVERLAY}" || true)"
 [ "${n}" -eq 2 ] && ok "the own-Casdoor overlay publishes both domains on \${STACK_BIND_ADDR:-127.0.0.1}" \
   || bad "the own-Casdoor overlay has ${n} STACK_BIND_ADDR publish(es), expected 2"
 
+# ═════ 1b) the SHIPPED stack and the shell tests (hugmesh-generator#1032, #1033) ═════
+echo "-- 1b) the compose file shipped into the images, and docker/podman run -p in shell tests --"
+SHIP="${REPO}/specs/usr/share/hugmesh/stack"
+SHSCAN="${HERE}/shell_published_ports.py"
+[ -r "${SHSCAN}" ] && [ -r "${SHIP}/docker-compose.yml" ] && [ -r "${SHIP}/hugmesh-stack" ] \
+  || { echo "  FAIL the shipped stack or shell_published_ports.py is missing"; exit 2; }
+sargs=("${SHIP}/docker-compose.yml=specs/usr/share/hugmesh/stack/docker-compose.yml"
+       "${SHIP}/docker-compose.mesh.yml=specs/usr/share/hugmesh/stack/docker-compose.mesh.yml")
+out="$(python3 "${SCAN}" --count "${sargs[@]}" 2>&1)"; rc=$?
+summary="$(tail -1 <<<"${out}")"
+[ "${rc}" -eq 0 ] && ok "the shipped compose publishes only on a loopback-default host IP (${summary})" \
+  || { bad "the shipped compose publishes a port on every interface (rc=${rc}):"; sed 's/^/         /' <<<"${out}"; }
+n="$(sed -n 's/.*published=\([0-9]*\).*/\1/p' <<<"${summary}")"
+[ "${n:-0}" -ge 4 ] && ok "vacuity floor: ${n} shipped publishes read (postgres, casdoor, admin-bff, login-ui)" \
+  || bad "only ${n:-0} shipped publishes read (expected >= 4): the scanner is not seeing the file"
+n="$(grep -c -F '${STACK_BIND_ADDR:-127.0.0.1}:' "${SHIP}/docker-compose.yml" || true)"
+[ "${n}" -ge 4 ] && ok "every shipped publish spells \${STACK_BIND_ADDR:-127.0.0.1} (${n})" \
+  || bad "only ${n} shipped publishes spell \${STACK_BIND_ADDR:-127.0.0.1}, expected >= 4"
+# MUTATION: the shipped Postgres back on a bare 5432:5432 must turn the scan red.
+mkdir -p "${WORK}/shipmut"
+sed 's|"${STACK_BIND_ADDR:-127.0.0.1}:5432:5432"|"5432:5432"|' "${SHIP}/docker-compose.yml" > "${WORK}/shipmut/docker-compose.yml"
+if cmp -s "${SHIP}/docker-compose.yml" "${WORK}/shipmut/docker-compose.yml"; then bad "mut shipped-postgres-bare: the copy did not change"
+else
+  o="$(python3 "${SCAN}" "${WORK}/shipmut/docker-compose.yml=specs/usr/share/hugmesh/stack/docker-compose.yml" 2>&1)"; r=$?
+  [ "${r}" -eq 1 ] && grep -F -q 'postgres' <<<"${o}" && ok "mut shipped-postgres-bare: caught" \
+    || bad "mut shipped-postgres-bare: NOT caught (rc=${r}): ${o:-<no output>}"
+fi
+sed 's|"${STACK_BIND_ADDR:-127.0.0.1}:8000:8000"|"8000:8000"|' "${SHIP}/docker-compose.yml" > "${WORK}/shipmut/docker-compose.yml"
+o="$(python3 "${SCAN}" "${WORK}/shipmut/docker-compose.yml=shipped" 2>&1)"; r=$?
+[ "${r}" -eq 1 ] && grep -F -q 'casdoor' <<<"${o}" && ok "mut shipped-casdoor-bare: caught" || bad "mut shipped-casdoor-bare: NOT caught (rc=${r}): ${o:-<no output>}"
+# No literal password fallback anywhere in the shipped stack; the variable is REQUIRED.
+if grep -rnE 'HUGMESH_DB_PASS:-[^}]|changeme' "${SHIP}" >/dev/null 2>&1; then
+  bad "the shipped stack still defaults HUGMESH_DB_PASS to a literal: $(grep -rnE 'HUGMESH_DB_PASS:-[^}]|changeme' "${SHIP}" | head -2 | tr '\n' ' ')"
+else ok "no literal HUGMESH_DB_PASS default and no 'changeme' in the shipped stack"; fi
+n="$(grep -c -F 'HUGMESH_DB_PASS:?' "${SHIP}/docker-compose.yml" || true)"
+[ "${n}" -ge 2 ] && ok "HUGMESH_DB_PASS is required (\${...:?}) in postgres and admin-bff (${n})" \
+  || bad "HUGMESH_DB_PASS is required in ${n} places, expected >= 2"
+
+# ./hugmesh-stack, run against a stub docker that only records its arguments.
+SW="${WORK}/ship"; mkdir -p "${SW}" "${WORK}/fakebin"
+cp "${SHIP}/hugmesh-stack" "${SHIP}/docker-compose.yml" "${SHIP}/docker-compose.mesh.yml" "${SW}/"
+cat > "${WORK}/fakebin/docker" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FAKE_DOCKER_LOG}"
+exit 0
+STUB
+chmod +x "${WORK}/fakebin/docker"
+export FAKE_DOCKER_LOG="${WORK}/docker.log"; : > "${FAKE_DOCKER_LOG}"
+stackrun() { (cd "${SW}" && env -u HUGMESH_DB_PASS -u STACK_BIND_ADDR PATH="${WORK}/fakebin:${PATH}" "$@" bash ./hugmesh-stack up 2>&1); }
+o="$(stackrun STACK_BIND_ADDR=0.0.0.0)"; rc=$?
+[ "${rc}" -ne 0 ] && [ ! -e "${SW}/.env" ] && [ ! -s "${FAKE_DOCKER_LOG}" ] && ok "STACK_BIND_ADDR=0.0.0.0 is refused before any .env or docker call" \
+  || bad "a non-loopback bind was not refused cleanly (rc=${rc}, env=$([ -e "${SW}/.env" ] && echo yes || echo no), docker calls=$(wc -l < "${FAKE_DOCKER_LOG}"))"
+# (an EMPTY value is not a hole: compose's :- treats it as unset, so the bind stays 127.0.0.1)
+for b in 192.168.1.5 10.0.0.1 ::; do
+  o="$(stackrun STACK_BIND_ADDR="${b}")"; rc=$?
+  [ "${rc}" -ne 0 ] && ok "STACK_BIND_ADDR='${b}' is refused" || bad "STACK_BIND_ADDR='${b}' was accepted"
+done
+: > "${FAKE_DOCKER_LOG}"; rm -f "${SW}/.env"
+o="$(stackrun X=1)"; rc=$?
+mode="$(stat -c %a "${SW}/.env" 2>/dev/null || echo none)"
+pw="$(sed -n 's/^HUGMESH_DB_PASS=//p' "${SW}/.env" 2>/dev/null)"
+[ "${rc}" -eq 0 ] && [ "${mode}" = 600 ] && [[ "${pw}" =~ ^[0-9a-f]{48}$ ]] && ok "up on a fresh directory generates a 48-hex password into a 0600 .env" \
+  || bad "fresh up: rc=${rc} mode=${mode} password-shape=$([[ "${pw}" =~ ^[0-9a-f]{48}$ ]] && echo ok || echo bad)"
+grep -F -q -- "${pw:-no-password}" <<<"${o}" && bad "the generated password was printed" || ok "the generated password is not printed"
+grep -q -- 'up -d' "${FAKE_DOCKER_LOG}" && ok "compose was then invoked with 'up -d'" || bad "compose was not invoked: $(cat "${FAKE_DOCKER_LOG}")"
+o="$(stackrun X=1)"; pw2="$(sed -n 's/^HUGMESH_DB_PASS=//p' "${SW}/.env")"
+[ "${pw}" = "${pw2}" ] && [ "$(grep -c '^HUGMESH_DB_PASS=' "${SW}/.env")" = 1 ] && ok "a second up keeps the password (one line)" || bad "the password changed or was duplicated on a second up"
+rm -f "${SW}/.env"; printf 'OTHER=keepme\n' > "${SW}/.env"
+o="$(stackrun X=1)"
+grep -q '^OTHER=keepme$' "${SW}/.env" && grep -Eq '^HUGMESH_DB_PASS=[0-9a-f]{48}$' "${SW}/.env" && [ "$(stat -c %a "${SW}/.env")" = 600 ] \
+  && ok "an existing .env keeps its lines, gains the key, ends 0600" || bad "an existing .env was mishandled: $(sed 's/=.*/=.../' "${SW}/.env" | tr '\n' ' ')"
+rm -f "${SW}/.env"
+o="$(cd "${SW}" && env -u STACK_BIND_ADDR PATH="${WORK}/fakebin:${PATH}" HUGMESH_DB_PASS=fromenv bash ./hugmesh-stack up 2>&1)"
+[ ! -e "${SW}/.env" ] && ok "an exported HUGMESH_DB_PASS is used and nothing is written" || bad "an exported password still wrote a .env"
+# compose itself must refuse a missing password (parse the REAL file with real docker compose when present).
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  o="$(cd "${SW}" && env -u HUGMESH_DB_PASS docker compose -f docker-compose.yml --profile infra --profile app config 2>&1)"; rc=$?
+  [ "${rc}" -ne 0 ] && grep -q 'HUGMESH_DB_PASS' <<<"${o}" && ok "docker compose itself refuses a missing HUGMESH_DB_PASS" \
+    || bad "docker compose accepted a missing HUGMESH_DB_PASS (rc=${rc})"
+  # With a password the file must PARSE and compose's own rendering must put every publish on 127.0.0.1.
+  o="$(cd "${SW}" && env -u STACK_BIND_ADDR HUGMESH_DB_PASS=x docker compose -f docker-compose.yml --profile infra --profile app config 2>&1)"; rc=$?
+  hips="$(grep -E '^ +host_ip:' <<<"${o}" | awk '{print $2}' | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
+  [ "${rc}" -eq 0 ] && [ "${hips}" = " 4 127.0.0.1;" ] && ok "docker compose renders the shipped stack with all 4 publishes on 127.0.0.1" \
+    || bad "docker compose render: rc=${rc} host_ips='${hips}': $(head -2 <<<"${o}" | cut -c1-160)"
+else echo "  skip docker compose is not available: the :? requirement is only checked textually"; fi
+
+# The shell side (#1033): every `docker|podman run -p` in a test or script names a loopback host IP.
+shopt -s globstar nullglob
+shfiles=()
+for f in "${REPO}"/tests/**/*.sh "${REPO}"/scripts/**/*.sh; do
+  [ "${f}" = "${HERE}/test-stack-idp-exposure.sh" ] && continue   # this file holds the scanner's bad-example lines
+  shfiles+=("${f}")
+done
+shopt -u globstar nullglob
+shargs=(); for f in "${shfiles[@]}"; do shargs+=("${f}=${f#"${REPO}/"}"); done
+out="$(python3 "${SHSCAN}" --count "${shargs[@]}" 2>&1)"; rc=$?
+summary="$(tail -1 <<<"${out}")"
+[ "${rc}" -eq 0 ] && ok "no shell test or script publishes a container port on every interface (${#shfiles[@]} files; ${summary})" \
+  || { bad "shell publishes that bind every interface (rc=${rc}):"; sed 's/^/         /' <<<"${out}"; }
+n="$(sed -n 's/.*published=\([0-9]*\).*/\1/p' <<<"${summary}")"
+[ "${n:-0}" -ge 2 ] && ok "vacuity floor: ${n} shell publishes judged (>= 2: test-jwt-custom-token.sh, the M7 control-plane)" \
+  || bad "only ${n:-0} shell publishes judged (expected >= 2): the scanner is not seeing the scripts"
+# The two scripts that DO publish must each be read (a scanner that skips them reads 0 and passes).
+for f in tests/casdoor/test-jwt-custom-token.sh tests/scripts/test-e2e-env-interface-dimensions.sh; do
+  o="$(python3 "${SHSCAN}" --count "${REPO}/${f}=${f}" 2>&1 | tail -1)"
+  [[ "${o}" == "published=0 "* ]] && bad "${f}: the scanner reads NO publish from it (${o})" || ok "${f}: ${o}"
+done
+# MUTATION: the real line 116 with its loopback IP removed must turn the scan red.
+JW="${REPO}/tests/casdoor/test-jwt-custom-token.sh"
+mkdir -p "${WORK}/shmut"; sed 's|-p "127.0.0.1:${HOSTPORT}:8000"|-p "${HOSTPORT}:8000"|' "${JW}" > "${WORK}/shmut/jwt.sh"
+if cmp -s "${JW}" "${WORK}/shmut/jwt.sh"; then bad "mut jwt-bare-publish: the copy did not change (anchor gone)"
+else o="$(python3 "${SHSCAN}" "${WORK}/shmut/jwt.sh=tests/casdoor/test-jwt-custom-token.sh" 2>&1)"; r=$?
+  [ "${r}" -eq 1 ] && grep -F -q 'names no host IP' <<<"${o}" && ok "mut jwt-bare-publish: caught" || bad "mut jwt-bare-publish: NOT caught (rc=${r}): ${o:-<no output>}"; fi
+sc() { # sc <name> <want-rc> <fragment|-> <line>
+  printf '%s\n' "$4" > "${WORK}/shmut/c.sh"
+  local o r; o="$(python3 "${SHSCAN}" --count "${WORK}/shmut/c.sh=c.sh" 2>&1)"; r=$?
+  [ "${r}" -eq "$2" ] && { [ "$3" = - ] || grep -F -q -- "$3" <<<"${o}"; } && ok "scanner control ${1}" || bad "scanner control ${1}: rc=${r} (want $2): ${o}"
+}
+sc bare-p            1 'names no host IP' 'docker run -d -p 8000:8000 img'
+sc podman-rt-bare    1 'names no host IP' '${RT} run -d --name x -p "18000:8000" img'
+sc publish-eq        1 'names no host IP' 'docker run --publish=8000:8000 img'
+sc glued-p           1 'names no host IP' 'docker run -p8000:8000 img'
+sc publish-all       1 'every exposed port' 'docker run -P img'
+sc wildcard-ip       1 'not loopback' 'docker run -p 0.0.0.0:80:80 img'
+sc var-no-default    1 'no loopback default' 'docker run -p "${BIND}:80:80" img'
+sc continuation      1 'names no host IP' $'docker run -d \\\n  --name x \\\n  -p 9000:9000 \\\n  img'
+sc container-create  1 'names no host IP' 'docker container create -p 80:80 img'
+sc loopback-ok       0 - 'docker run -p 127.0.0.1:8000:8000 img'
+sc loopback-random   0 - 'docker run -p 127.0.0.1::80 img'
+sc loopback-var-ok   0 - 'docker run -p "${BIND:-127.0.0.1}:80:80" img'
+sc loopback-v6-ok    0 - 'docker run -p "[::1]:80:80" img'
+sc mkdir-p-ignored   0 - 'docker run --rm img mkdir -p /a/b'
+sc ssh-p-ignored     0 - 'ssh -p 2222 host'
+sc comment-ignored   0 - '# docker run -p 8000:8000 img'
+sc no-run-ignored    0 - 'echo docker -p 8000:8000'
+
 # ═════ 2) scanner controls ═══════════════════════════════════════════════════
 echo "-- 2) negative and positive controls for the port scanner --"
 neg() { # neg <name> <compose-file-basename> <yaml body> <expected-fragment>
