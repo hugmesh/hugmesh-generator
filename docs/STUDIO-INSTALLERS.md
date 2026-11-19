@@ -58,12 +58,12 @@ The release notes print the same commands for each release, including the identi
 an anchored regular expression for `--certificate-identity-regexp`.
 
 > **`0.3.0-beta.1` does not verify with its own printed commands.** Its files were
-> replaced by a run on a since-deleted tag `studio-v0.3.1-beta.1` (the
+> replaced on 2026-10-23 by a run on a since-deleted tag `studio-v0.3.1-beta.1` (the
 > tag-must-match gate had been removed by hand), so the certificate in its
 > `SHA256SUMS.sigstore.json` names
 > `...studio-release.yml@refs/tags/studio-v0.3.1-beta.1` and its attestations carry
 > that source ref, while the notes and `releases.json` say `studio-v0.3.0-beta.1`.
-> Anyone who downloaded it before the replacement holds different bytes again. Verify that release
+> Anyone who downloaded on 10-22 holds different bytes again. Verify that release
 > with `--certificate-identity ...@refs/tags/studio-v0.3.1-beta.1` and
 > `--source-ref refs/tags/studio-v0.3.1-beta.1`, or install `0.3.0-beta.2` or later,
 > which this page's procedure cuts correctly. A third set of bytes under the
@@ -84,7 +84,7 @@ host tools.
 | Package | The hugmesh-generator build scripts | On first start |
 |---|---|---|
 | Flatpak, x86_64 and aarch64 (0.4.4-beta.1 and later) | **Included.** The bundle carries the tree of its own release (`share/hugmesh-studio/generator-seed.tar.gz`). | Studio places that copy in `~/.local/share/hugmesh-studio/generator` and uses it. There is nothing to clone. |
-| Windows MSI, Linux tarball, macOS .dmg | **Not included yet**. | Studio shows *Choose your hugmesh-generator folder*. Clone `hugmesh-generator` (`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and Studio remembers it. |
+| Windows MSI, Linux tarball, macOS .dmg | **Not included yet** ([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). | Studio shows *Choose your hugmesh-generator folder*. Clone `hugmesh-generator` (`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and Studio remembers it. |
 
 How the copy works and what overrides it:
 
@@ -120,7 +120,8 @@ refuses a machine the app runs on only teaches people to switch checks off.
 The MSI installs **per-user**, under `%LOCALAPPDATA%\HugMesh\Image Studio`. It needs
 no administrator rights and shows no UAC prompt.
 
-It does not include the hugmesh-generator build scripts yet. So on first start the
+It does not include the hugmesh-generator build scripts yet
+([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). So on first start the
 Studio shows *Choose your hugmesh-generator folder*. Clone the repository
 (`git clone https://github.com/hugmesh/hugmesh-generator`), pick that folder, and the
 Studio remembers it for later starts. The Start Menu shortcut passes no arguments, so this
@@ -134,10 +135,10 @@ least check its SHA-256 against `SHA256SUMS`:
 Get-FileHash .\hugmesh-studio-0.3.0-beta.1-x64.msi -Algorithm SHA256
 ```
 
-> **Windows and WSL.** `core/platform_info.py` records that
+> **Windows and WSL.** `core/platform_info.py` records a decision (2026-08-14) that
 > **WSL2 is the recommended way to run the Studio on Windows**. WSL2 is a real Linux
-> kernel, so `bash`, `make`, `docker` and process-group signalling work unchanged. The
-> native MSI sits beside it, for configuring, previewing and
+> kernel, so `bash`, `make`, `docker` and process-group signalling work unchanged. That
+> still stands. The native MSI sits beside it, for configuring, previewing and
 > monitoring from the Windows desktop, and it drives builds through Docker Desktop.
 > For heavy build work, WSL2 is still the better place. A WSL2 VM also sees no USB
 > devices unless they are attached with `usbipd-win`, so device flashing needs that
@@ -168,7 +169,8 @@ tar -xzf hugmesh-studio-<version>-linux-x86_64.tar.gz
 ./hugmesh-studio-<version>-linux-x86_64/hugmesh-studio
 ```
 
-It does not include the hugmesh-generator build scripts yet. On first start it asks
+It does not include the hugmesh-generator build scripts yet
+([#977](https://github.com/hugmesh/hugmesh-generator/issues/977)). On first start it asks
 for the folder you cloned `hugmesh-generator` into, and remembers your pick.
 
 The Flatpak bundle needs the `org.kde.Platform` 6.11 runtime. The app is Qt, and the KDE
@@ -191,7 +193,7 @@ job also starts Qt offscreen inside the installed bundle, because `--print-specs
 Qt-free path and would pass with the wrong architecture's wheels inside.
 
 The first command asks before it adds the remote (`-y` or `--noninteractive` answers
-yes for you). With flatpak 1.18.4 the question is asked whenever
+yes for you). Measured on flatpak 1.18.4 (2026-10-29): the question is asked whenever
 no remote with that URL exists, even when the runtime is already installed, and
 answering no fails the install with `Remote "flathub" not found`. So installing this
 bundle means having Flathub as a remote in that installation. To add it yourself first,
@@ -205,7 +207,8 @@ flatpak install --user ./hugmesh-studio-<version>-x86_64.flatpak
 **The published `0.3.0-beta.1` bundle** was exported before this change: it carries no
 runtime hint and was built on `org.kde.Platform` 6.8, a branch Flathub now flags
 end-of-life (it still installs). On a machine without that runtime it stops with
-`requires the runtime org.kde.Platform/x86_64/6.8 which was not found`. Install the runtime by hand first, then the bundle:
+`requires the runtime org.kde.Platform/x86_64/6.8 which was not found` (reproduced
+2026-10-29). Install the runtime by hand first, then the bundle:
 
 ```bash
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -377,8 +380,8 @@ download" for why its signature material names another tag).
 `git tag -a studio-v0.3.0-beta.3 -m "Studio 0.3.0-beta.3" && git push origin
 studio-v0.3.0-beta.3` still publishes through the `push` trigger, but only when
 `__version__` at that commit **equals** the tag's version; otherwise the version job
-refuses in seconds (without that gate a pushed tag can publish under another
-release's name: the `0.3.0-beta.1` note above is what that looks like). The version bump
+refuses in seconds (that gate was missing on 2026-10-23, which is how a push of
+`studio-v0.3.1-beta.1` published under the `0.3.0-beta.1` name). The version bump
 then has to be merged to `main` by hand first, so this is more steps than the
 script, not fewer.
 
@@ -392,11 +395,13 @@ refreshes within the hour; `scripts/release-studio.sh ... --site` runs
 ask for it now. The publish job also sends the `releases-updated` dispatch itself
 when the secret `SITE_DISPATCH_TOKEN` exists (a fine-grained token with resource owner
 `hugmesh`, only `hugmesh/hugmesh.github.io`, Contents: read and write; approved, if the
-organization requires approval for fine-grained tokens). It is set as an organization
-secret. Without it the step prints a notice. **The step is never fatal**: it
+organization requires approval for fine-grained tokens). It is an organization secret
+since 2026-11-10. Without it the step prints a notice. **The step is never fatal**: it
 runs after the release is published, so any answer but `204` (a refused or unapproved
 token, a GitHub error, no connection) is a `::warning::` that quotes GitHub's message,
-and the run stays green. To re-send the notice, run `gh workflow run pages.yml --repo
+and the run stays green. The first Studio release with the secret set
+(`studio-v0.4.4-beta.1`, run 42882326209) went red on a 403 from `curl -fsS` before this
+was changed. To re-send the notice, run `gh workflow run pages.yml --repo
 hugmesh/hugmesh.github.io`; never re-run the release for it (a re-run is a republish).
 
 ### Where the guard lives
