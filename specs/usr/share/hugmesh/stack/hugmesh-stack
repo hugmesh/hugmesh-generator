@@ -17,15 +17,43 @@ cd "${HERE}"
 
 compose(){ if docker compose version >/dev/null 2>&1; then docker compose "$@"; else docker-compose "$@"; fi; }
 
+# The stack is for THIS machine. Every published port binds ${STACK_BIND_ADDR:-127.0.0.1}, and the
+# infra's Casdoor ships the upstream factory admin (nothing here changes it), so a bind that is not
+# loopback would put an identity provider with a known admin login on the LAN: refuse it.
+loopback_only(){
+    case "${STACK_BIND_ADDR:-127.0.0.1}" in
+        127.*|localhost|::1|\[::1\]) return 0 ;;
+    esac
+    echo "hugmesh-stack: refusing STACK_BIND_ADDR='${STACK_BIND_ADDR}': the stack's Casdoor runs with its factory admin," >&2
+    echo "  so it may only listen on this machine. Unset STACK_BIND_ADDR (the default is 127.0.0.1)." >&2
+    return 1
+}
+
+# The database password: compose REQUIRES HUGMESH_DB_PASS (no literal default). Generate one into ./.env
+# (0600, compose reads it) the first time, keep it after that, never print it. An exported value wins and
+# is not written. A .env that exists without the key gets the key appended (its other lines are kept).
+ensure_env(){
+    [ -n "${HUGMESH_DB_PASS:-}" ] && return 0
+    if [ -f .env ] && grep -Eq '^HUGMESH_DB_PASS=.+' .env; then return 0; fi
+    local pass
+    if command -v openssl >/dev/null 2>&1; then pass="$(openssl rand -hex 24)"
+    else pass="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"; fi
+    [ "${#pass}" -ge 32 ] || { echo "hugmesh-stack: could not generate a database password" >&2; exit 1; }
+    ( umask 077; touch .env; printf 'HUGMESH_DB_PASS=%s\n' "${pass}" >> .env )
+    chmod 600 .env
+    echo "hugmesh-stack: generated a database password into ${HERE}/.env (kept; not printed)"
+    echo "  (an existing pgdata volume from before keeps ITS old password: run './hugmesh-stack down -v' to start clean)"
+}
+
 case "${1:-help}" in
     # `[ -x f ] && f || echo` would turn a FAILED fetch into the "no fetch-repos.sh"
     # message and exit 0 — the failure has to reach the console and the exit status.
     fetch)   if [ -x ./fetch-repos.sh ]; then ./fetch-repos.sh; else echo "no fetch-repos.sh (repos may be bundled already)"; fi;;
-    up)      compose -f docker-compose.yml --profile infra --profile app up -d "${@:2}";;
-    mesh-up) compose -f docker-compose.yml -f docker-compose.mesh.yml --profile infra --profile mesh up -d "${@:2}";;
-    down)    compose -f docker-compose.yml -f docker-compose.mesh.yml down "${@:2}";;
-    ps)      compose -f docker-compose.yml ps;;
-    logs)    compose -f docker-compose.yml logs -f "${@:2}";;
-    pull)    compose -f docker-compose.yml pull;;
+    up)      loopback_only; ensure_env; compose -f docker-compose.yml --profile infra --profile app up -d "${@:2}";;
+    mesh-up) loopback_only; ensure_env; compose -f docker-compose.yml -f docker-compose.mesh.yml --profile infra --profile mesh up -d "${@:2}";;
+    down)    ensure_env; compose -f docker-compose.yml -f docker-compose.mesh.yml down "${@:2}";;
+    ps)      ensure_env; compose -f docker-compose.yml ps;;
+    logs)    ensure_env; compose -f docker-compose.yml logs -f "${@:2}";;
+    pull)    ensure_env; compose -f docker-compose.yml pull;;
     *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//';;
 esac
