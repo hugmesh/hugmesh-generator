@@ -709,6 +709,7 @@ jobs:
             suites: |
               tests/auto-update/test-builder-opt-in.sh
               tests/device-registry/test-headscale-policy-fallback.sh
+              tests/device-registry/test-headscale-refusal-race.sh
               tests/device-registry/test-headscale-security-tag-owners.sh
               tests/egress-vpn/test-vpn-reconcile-verify.sh
               tests/keystores/test-keystores-multidomain.sh
