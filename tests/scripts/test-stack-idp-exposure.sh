@@ -62,7 +62,9 @@ done
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-stack-idp-exposure.XXXXXX")"
 STUB_PID=""
 stub_down() { if [ -n "${STUB_PID}" ]; then kill "${STUB_PID}" 2>/dev/null; wait "${STUB_PID}" 2>/dev/null; STUB_PID=""; fi; }
-trap 'stub_down; rm -rf "${WORK}"' EXIT
+XPIDS=()
+xstubs_down() { local p; for p in "${XPIDS[@]:-}"; do [ -n "${p}" ] && { kill "${p}" 2>/dev/null; wait "${p}" 2>/dev/null; }; done; XPIDS=(); }
+trap 'stub_down; xstubs_down; rm -rf "${WORK}"' EXIT
 ALLOUT="${WORK}/all-output.log"; : > "${ALLOUT}"
 
 # The real checkout's tests/stack/.env must be exactly as it was when we are done.
@@ -641,6 +643,140 @@ if stub_up ok "${DESIRED}"; then
     || bad "unset with a file: ok=$(logins ok) wrong=$(logins wrong) set-password=$(setpws) rc=${rc}"
   stub_down
 fi
+
+# ═════ 8b) a LAN bind is refused while a Casdoor still has the factory admin (#1034) ═════
+echo "-- 8b) lan-bind-preflight.sh and the per-domain admin move, against stub Casdoors --"
+PF="${STACK}/lan-bind-preflight.sh"
+[ -r "${PF}" ] || { echo "  FAIL ${PF} is missing"; exit 2; }
+# xstub <slot> <mode> <admin-password> [env...] -> XURL[slot]; several stubs at once (the per-domain Casdoors).
+declare -A XURL=()
+xstub() {
+  local n="$1" mode="$2" pw="$3" i; shift 3
+  rm -f "${WORK}/xport${n}" "${WORK}/xjournal${n}"
+  env STUB_MODE="${mode}" STUB_ADMIN_PASSWORD="${pw}" STUB_ADMIN_USER=admin \
+      STUB_PORT_FILE="${WORK}/xport${n}" STUB_JOURNAL="${WORK}/xjournal${n}" "$@" \
+      python3 "${STUB}" >"${WORK}/xstub${n}.log" 2>&1 &
+  XPIDS+=($!)
+  for i in $(seq 1 100); do
+    [ -s "${WORK}/xport${n}" ] && { XURL[$n]="http://127.0.0.1:$(cat "${WORK}/xport${n}")"; return 0; }
+    sleep 0.1
+  done
+  bad "stub Casdoor ${n} did not come up: $(head -3 "${WORK}/xstub${n}.log")"; return 1
+}
+xlogins() { [ -s "${WORK}/xjournal$1" ] && jq -r 'select(.path=="/api/login") | .result' "${WORK}/xjournal$1" | grep -c . || echo 0; }
+xraw() { # xraw <url> <password> -> 0 when that Casdoor accepts it as the admin
+  STUB_PW="$2" jq -nc '{application:"app-built-in",organization:"built-in",username:"admin",password:env.STUB_PW,type:"login",autoSignin:true}' \
+    | curl -s --max-time 5 "$1/api/login" -H 'content-type: application/json' --data-binary @- | jq -e '.status=="ok"' >/dev/null 2>&1
+}
+pf() { # pf <bind> <urls> [extra env...] -> PFOUT, PFRC
+  local bind="$1" urls="$2"; shift 2
+  PFOUT="$(env -u STACK_BIND_ADDR -u BRAND_B STACK_BIND_ADDR="${bind}" LAN_GUARD_CASDOOR_URLS="${urls}" "$@" timeout 60 bash "${PF}" 2>&1)"; PFRC=$?
+  printf '%s\n' "${PFOUT}" >> "${ALLOUT}"
+}
+
+# (a) loopback and unset: nothing is probed, nothing is refused.
+xstub 1 ok 123
+for b in "" 127.0.0.1 127.0.0.5 localhost ::1 "[::1]"; do
+  pf "${b}" "${XURL[1]}"
+  [ "${PFRC}" -eq 0 ] && [ "$(xlogins 1)" = 0 ] && ok "bind '${b:-<unset>}': allowed, no request sent to a factory-admin Casdoor" \
+    || bad "bind '${b}': rc=${PFRC}, logins=$(xlogins 1): ${PFOUT}"
+done
+# (b) RED: a non-loopback bind and a Casdoor that still accepts the factory login.
+for b in 0.0.0.0 192.168.1.5 "::" "10.1.2.3"; do
+  pf "${b}" "${XURL[1]}"
+  [ "${PFRC}" -eq 1 ] && grep -F -q "${XURL[1]}: STILL ACCEPTS THE FACTORY ADMIN LOGIN" <<<"${PFOUT}" \
+    && ok "bind ${b} + a factory-admin Casdoor: refused, and the Casdoor is named" \
+    || bad "bind ${b} + factory admin: rc=${PFRC} (want 1): ${PFOUT}"
+done
+grep -F -q 'make stack-seed' <<<"${PFOUT}" && ok "the refusal says what to do (stack-up on loopback, stack-seed, then the bind)" || bad "the refusal does not name the way through"
+# (c) GREEN once moved: the factory login is refused.
+xstub 2 ok "${DESIRED}"
+pf 0.0.0.0 "${XURL[2]}"
+[ "${PFRC}" -eq 0 ] && ok "bind 0.0.0.0 + a Casdoor whose admin was moved: allowed" || bad "moved Casdoor refused: rc=${PFRC}: ${PFOUT}"
+grep -F -q -- "${DESIRED}" <<<"${PFOUT}" && bad "the generated admin password appeared in the output" || ok "no admin password in the output"
+# (d) several: one factory-fresh among moved ones is named, the moved ones are not.
+pf 0.0.0.0 "${XURL[2]} ${XURL[1]}"
+[ "${PFRC}" -eq 1 ] && grep -F -q "${XURL[1]}: STILL" <<<"${PFOUT}" && ! grep -F -q "${XURL[2]}: " <<<"${PFOUT}" \
+  && ok "moved + factory-fresh: refused, only the factory-fresh one named" || bad "mixed set: rc=${PFRC}: ${PFOUT}"
+# (e) not provable is not safe.
+pf 0.0.0.0 "http://127.0.0.1:1"
+[ "${PFRC}" -eq 1 ] && grep -F -q 'no usable answer' <<<"${PFOUT}" && ok "an unreachable Casdoor: refused (nothing proves its admin moved)" || bad "unreachable: rc=${PFRC}: ${PFOUT}"
+xstub 3 lockout "${DESIRED}" STUB_LOCKOUT_AFTER=0
+pf 0.0.0.0 "${XURL[3]}"
+[ "${PFRC}" -eq 1 ] && grep -F -q 'throttle' <<<"${PFOUT}" && ok "a throttled Casdoor: refused as unproven, not read as 'password changed'" || bad "throttle: rc=${PFRC}: ${PFOUT}"
+# (f) which Casdoors it probes when no list is given: central, overlay ports, BRAND_B.
+PFD="${WORK}/pfd"; mkdir -p "${PFD}"; cp "${PF}" "${PFD}/lan-bind-preflight.sh"
+printf '    ports:\n      - "${STACK_BIND_ADDR:-127.0.0.1}:8002:8000"\n      - "${STACK_BIND_ADDR:-127.0.0.1}:8003:8000"\n' > "${PFD}/.compose.own-domains.yaml"
+o="$(env -u LAN_GUARD_CASDOOR_URLS STACK_BIND_ADDR=0.0.0.0 BRAND_B=1 LAN_GUARD_LIST_ONLY=1 bash "${PFD}/lan-bind-preflight.sh" 2>&1)"
+for u in 8000 8001 8002 8003; do grep -F -q "http://127.0.0.1:${u}" <<<"${o}" && ok "default probe list includes :${u}" || bad "default probe list lacks :${u}: ${o}"; done
+[ "$(grep -o 'http://127.0.0.1:8001' <<<"${o}" | wc -l)" = 1 ] && ok "a port named twice is probed once" || bad "duplicate probe: ${o}"
+o="$(env -u LAN_GUARD_CASDOOR_URLS -u BRAND_B STACK_BIND_ADDR=0.0.0.0 LAN_GUARD_LIST_ONLY=1 bash "${PFD}/lan-bind-preflight.sh" 2>&1)"
+grep -F -q ':8001' <<<"${o}" && grep -F -q 'http://127.0.0.1:8000 http://127.0.0.1:8002 http://127.0.0.1:8003' <<<"${o}" \
+  && bad "BRAND_B unset still probed :8001: ${o}" || ok "BRAND_B unset: :8001 is not probed unless the overlay publishes it"
+
+# (g) the per-domain admin move: seed-e2e.sh's LEG 0 block, lifted from the real file, then the pre-flight.
+L0="${WORK}/leg0.sh"
+{ cat "${LIFT}"
+  awk '/^http_up\(\) \{/,/^}/' "${SEED}"
+  awk '/^# ══ LEG 0:/{f=1} /^# ══ LEG 1:/{f=0} f' "${SEED}"
+} > "${L0}"
+grep -q '^OWN_URLS=()' "${L0}" && grep -q 'casdoor_admin_session "${_u}"' "${L0}" && grep -q '^http_up() ' "${L0}" \
+  && ok "lifted LEG 0 (per-domain admin move) and http_up() from the real seed-e2e.sh" || bad "seed-e2e.sh has no LEG 0 block / http_up()"
+cat > "${WORK}/drive0.sh" <<'EOF'
+set -euo pipefail
+log() { echo "[seed-e2e] $*"; }
+die() { echo "seed-e2e.sh: UNMET DEPENDENCY: $*" >&2; exit 2; }
+CASDOOR_ADMIN_USER=admin
+CJ="$(mktemp "${TMPDIR:-/tmp}/drive0-cj.XXXXXX")"
+HERE="${LEG0_HERE}"
+. "${L0}"
+echo "DRIVE0: done"
+EOF
+drive0() { # drive0 <central-url> <extra env...> -> D0OUT, D0RC
+  local central="$1"; shift
+  D0OUT="$(env L0="${L0}" CASDOOR_URL="${central}" CASDOOR_ADMIN_PASS="${DESIRED}" LEG0_HERE="${WORK}/leg0here" "$@" timeout 90 bash "${WORK}/drive0.sh" 2>&1)"; D0RC=$?
+  printf '%s\n' "${D0OUT}" >> "${ALLOUT}"
+}
+mkdir -p "${WORK}/leg0here"
+xstub 4 ok 123; xstub 5 ok 123; xstub 6 ok "${DESIRED}"      # two factory-fresh per-domain Casdoors, one central that is already moved
+# RED before the seed: a LAN bind over those per-domain Casdoors is refused, both named.
+pf 0.0.0.0 "${XURL[6]} ${XURL[4]} ${XURL[5]}"
+[ "${PFRC}" -eq 1 ] && grep -F -q "${XURL[4]}: STILL" <<<"${PFOUT}" && grep -F -q "${XURL[5]}: STILL" <<<"${PFOUT}" \
+  && ok "before the seed: both per-domain Casdoors are named, the bind is refused" || bad "before the seed: rc=${PFRC}: ${PFOUT}"
+drive0 "${XURL[6]}" CASDOOR_OWN_URLS="${XURL[4]} ${XURL[5]} http://127.0.0.1:1"
+[ "${D0RC}" -eq 0 ] && grep -q 'DRIVE0: done' <<<"${D0OUT}" && ok "LEG 0 ran over two per-domain Casdoors and one that is not running (rc 0)" \
+  || bad "LEG 0: rc=${D0RC}: $(tail -3 <<<"${D0OUT}")"
+grep -F -q 'http://127.0.0.1:1 is not answering' <<<"${D0OUT}" && ok "a per-domain Casdoor that is not running is skipped with a note" || bad "no skip note for the dead Casdoor: ${D0OUT}"
+for n in 4 5; do
+  ! xraw "${XURL[$n]}" 123 && xraw "${XURL[$n]}" "${DESIRED}" \
+    && ok "per-domain Casdoor ${n}: the factory login is refused and the generated value signs in" \
+    || bad "per-domain Casdoor ${n} was not moved onto the generated value"
+done
+grep -F -q -- "${DESIRED}" <<<"${D0OUT}" && bad "LEG 0 printed the admin password" || ok "LEG 0 never printed the admin password"
+# GREEN after the seed.
+pf 0.0.0.0 "${XURL[6]} ${XURL[4]} ${XURL[5]}"
+[ "${PFRC}" -eq 0 ] && ok "after the seed: the same LAN bind is allowed" || bad "after the seed: rc=${PFRC}: ${PFOUT}"
+# The overlay-derived list (no CASDOOR_OWN_URLS): the Studio's overlay names the ports.
+xstub 7 ok 123
+printf '    ports:\n      - "${STACK_BIND_ADDR:-127.0.0.1}:%s:8000"\n' "${XURL[7]##*:}" > "${WORK}/leg0here/.compose.own-domains.yaml"
+drive0 "${XURL[6]}"
+xraw "${XURL[7]}" 123 && bad "the overlay-derived per-domain Casdoor kept the factory admin" || ok "the overlay-derived per-domain Casdoor (no list given) was moved too"
+# MUTATION: LEG 0 without its casdoor_admin_session call must leave the Casdoor factory-fresh and the pre-flight red.
+xstub 8 ok 123
+sed 's|casdoor_admin_session "${_u}"|true|' "${L0}" > "${WORK}/leg0-mut.sh"
+cmp -s "${L0}" "${WORK}/leg0-mut.sh" && bad "mut leg0-no-move: the copy did not change" || {
+  D0OUT="$(env L0="${WORK}/leg0-mut.sh" CASDOOR_URL="${XURL[6]}" CASDOOR_ADMIN_PASS="${DESIRED}" LEG0_HERE="${WORK}/leg0here" CASDOOR_OWN_URLS="${XURL[8]}" timeout 90 bash "${WORK}/drive0.sh" 2>&1)"
+  pf 0.0.0.0 "${XURL[8]}"
+  [ "${PFRC}" -eq 1 ] && xraw "${XURL[8]}" 123 && ok "mut leg0-no-move: the Casdoor keeps the factory admin and the pre-flight stays red" \
+    || bad "mut leg0-no-move: NOT caught (preflight rc=${PFRC})"; }
+# The real Makefile and the PowerShell twin both run the check before `up`.
+grep -Eq '^stack-up:.* stack-lan-bind-check' "${REPO}/Makefile" && ok "make stack-up depends on stack-lan-bind-check" || bad "stack-up does not run the LAN-bind check"
+[[ "$(grep -A1 '^stack-lan-bind-check:' "${REPO}/Makefile")" == *lan-bind-preflight.sh* ]] && ok "stack-lan-bind-check runs tests/stack/lan-bind-preflight.sh" || bad "stack-lan-bind-check does not run the pre-flight"
+PS1="${REPO}/scripts/stack-up.ps1"
+l1="$(grep -n "ConvertTo-Json" "${PS1}" | head -1 | cut -d: -f1)"; l2="$(grep -n "docker compose -f \$Compose @profileArgs build" "${PS1}" | head -1 | cut -d: -f1)"
+[ -n "${l1}" ] && [ -n "${l2}" ] && [ "${l1}" -lt "${l2}" ] && grep -q "STILL ACCEPTS THE FACTORY ADMIN LOGIN" "${PS1}" \
+  && ok "stack-up.ps1 probes the factory admin login before it builds or starts anything" || bad "stack-up.ps1 has no LAN-bind probe ahead of the build"
+for pid in "${XPIDS[@]}"; do kill "${pid}" 2>/dev/null; wait "${pid}" 2>/dev/null; done; XPIDS=()
 
 # ═════ 9) secrets and side effects ═══════════════════════════════════════════
 echo "-- 9) no password in any output; the checkout's tests/stack/.env untouched --"

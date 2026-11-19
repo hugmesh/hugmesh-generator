@@ -478,6 +478,30 @@ ensure_fragment_sync_client() { # <base-url> <org>
   log "machine app ${FRAGMENT_SYNC_CLIENT_ID} mint self-check OK"
 }
 
+# ══ LEG 0: the per-domain Casdoors' admins (hugmesh-generator#1034) ═════════════
+# The Studio starts one Casdoor per own-idp domain on :8001+ (core/own_casdoor.py, published
+# in tests/stack/.compose.own-domains.yaml). Each is a fresh Casdoor whose built-in admin
+# has the upstream factory password; this seed used to move only the central one (and the
+# brand-b one below). Move every one of them onto this checkout's generated value (the
+# same tests/stack/.env password the central Casdoor gets; never printed). Only the admin is
+# touched here: no org, no personas. CASDOOR_OWN_URLS overrides the list (space separated);
+# a listed Casdoor that is not running is skipped with a note (a stale overlay, or a
+# profile that is off), and lan-bind-preflight.sh refuses a LAN bind for one it cannot reach.
+# Done BEFORE the central session so ${CJ} ends on the central Casdoor, which leg 1 uses.
+OWN_URLS=()
+if [ -n "${CASDOOR_OWN_URLS:-}" ]; then
+  # shellcheck disable=SC2206  # a space-separated list by contract
+  OWN_URLS=(${CASDOOR_OWN_URLS})
+elif [ -r "${HERE}/.compose.own-domains.yaml" ]; then
+  while IFS= read -r _p; do [ -n "${_p}" ] && OWN_URLS+=("http://localhost:${_p}"); done \
+    < <(sed -n 's/.*:\([0-9][0-9]*\):8000".*/\1/p' "${HERE}/.compose.own-domains.yaml" | sort -un)
+fi
+for _u in "${OWN_URLS[@]}"; do
+  [ "${_u}" = "${CASDOOR_URL}" ] && continue
+  if http_up "${_u}/"; then casdoor_admin_session "${_u}"
+  else log "per-domain Casdoor ${_u} is not answering: its admin was NOT moved (start it, then re-run make stack-seed)"; fi
+done
+
 # ══ LEG 1: Casdoor personas (reuses seed-accounts.sh --roles + its apply hook) ══
 log "leg 1: Casdoor personas at ${CASDOOR_URL} (org ${CASDOOR_ORG})"
 casdoor_admin_session "${CASDOOR_URL}"

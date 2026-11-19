@@ -1807,7 +1807,9 @@ docker-build: ## DEPRECATED: builds now default to Docker — just run `make bui
 # off the upstream factory-default password onto this checkout's generated
 # CASDOOR_ADMIN_PASSWORD (tests/stack/.env, tests/stack/gen-casdoor-admin-env.sh).
 # The front door (PUBLIC_HOST_PORT / PUBLIC_HTTPS_PORT / ANUBIS_HOST_PORT) is not
-# affected. Guards: tests/scripts/test-stack-idp-exposure.sh (static + stub) and
+# affected. A non-loopback STACK_BIND_ADDR is REFUSED by `make stack-up` while any Casdoor still
+# accepts the factory admin (tests/stack/lan-bind-preflight.sh): stack-up on loopback, stack-seed, then
+# the bind. Guards: tests/scripts/test-stack-idp-exposure.sh (static + stub) and
 # tests/stack/test-stack-idp-exposure-live.sh (a throwaway Casdoor).
 STACK_COMPOSE   := tests/stack/compose.local.yaml
 
@@ -2343,6 +2345,12 @@ STACK_M2_FLAGS    = $(if $(wildcard $(STACK_M2_ENV)),--env-file $(STACK_M2_ENV) 
 # This target re-derives the truth and SELF-HEALS by re-running the bootstrap, which
 # is idempotent and skips every already-cached artifact (seconds, not a rebuild).
 .PHONY: stack-m2-check
+# #1034: STACK_BIND_ADDR other than loopback is refused while any Casdoor (the central :8000, the Studio's
+# per-domain :8001+, brand-b's :8001) still accepts the factory admin login. A no-op for the default bind.
+.PHONY: stack-lan-bind-check
+stack-lan-bind-check: ## refuse a non-loopback STACK_BIND_ADDR while a Casdoor still has the factory admin (stack-up runs it first)
+	@bash tests/stack/lan-bind-preflight.sh
+
 stack-m2-check: ## verify the private maven registry container is live and self-heal it
 	@[ -f $(STACK_M2_ENV) ] || exit 0
 	@live=$$(docker inspect -f '{{.State.Running}}' $(M2_REGISTRY_NAME) 2>/dev/null || echo false); \
@@ -2480,7 +2488,7 @@ stack-build: stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_
 # would otherwise send the seed to that server and leave this table stale.
 # stack-halt -> stack-up is the resume path, so this covers it (and the Studio,
 # which shells out to `make stack-up`). Guard: tests/stack/test-route-access-reconcile.sh.
-stack-up: stack-route-access-env stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
+stack-up: stack-lan-bind-check stack-route-access-env stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
