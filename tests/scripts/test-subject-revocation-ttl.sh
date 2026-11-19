@@ -33,6 +33,8 @@
 #           disabling the Casdoor user — there, once any key lapses, a fresh login or
 #           refresh works again whatever this TTL is. That residual is the Casdoor admin
 #           client's flip, not this guard's.
+#   (Names are compared the way Spring Boot's relaxed binding does: uppercase, "_" and "-" removed, so
+#   BROKER_GATEWAYREVOCATION_ENABLED is BROKER_GATEWAY_REVOCATION_ENABLED. hugmesh-generator#1035.)
 #   RULE 2  the admin-bff Deployment sets BROKER_GATEWAY_REVOCATION_SUBJECT_CUTOFF_TTL_SECONDS
 #           to an integer >= max(expireInHours) x 3600, and nothing else under specs/
 #           sets it (an overlay that lowered it would be invisible to rule 2 otherwise).
@@ -118,24 +120,35 @@ ok("rule1: %d expireInHours literal(s) across %s; longest %dh at %s"
 # ── RULE 2..4: the admin-bff Deployment env ──────────────────────────────────
 dep_rel = "specs/cluster/manifests/admin-bff-api/deployment.yaml"
 dep = os.path.join(root, dep_rel)
+# Spring Boot's relaxed binding reads BROKER_GATEWAYREVOCATION_ENABLED, BROKER_GATEWAY_REVOCATION_ENABLED
+# and BROKER_GATEWAY-REVOCATION_ENABLED as the same property, so every name is compared in Spring's
+# own canonical form: uppercase, with "_" and "-" removed (hugmesh-generator#1035). An exact-name lookup
+# let a relaxed spelling turn the flag on, or lower the TTL, past rules 2 and 3 while the property bound.
+def norm(name):
+    return re.sub(r"[_\-]", "", str(name).upper())
+
 env = None
+names = {}
 for d in yaml.safe_load_all(open(dep, encoding="utf-8")):
     if d and d.get("kind") == "Deployment":
         for c in d["spec"]["template"]["spec"]["containers"]:
             if c.get("name") == "hugmesh-admin-bff-api":
                 env = {}
                 for e in c.get("env", []) or []:
-                    if e.get("name") in env:
-                        bad("rule2: env %s is set twice in the admin-bff container (last wins, "
-                            "the first reads like the value)" % e["name"])
-                    env[e.get("name")] = e
+                    key = norm(e.get("name"))
+                    if key in env:
+                        bad("rule2: env %s is set twice in the admin-bff container, as %s and %s "
+                            "(Spring binds both spellings to one property; last wins, the first "
+                            "reads like the value)" % (e["name"], names[key], e["name"]))
+                    env[key] = e
+                    names[key] = e["name"]
 if env is None:
     bad("rule2: no hugmesh-admin-bff-api container in %s" % dep_rel)
     print("  %d failure(s)" % fails)
     sys.exit(1)
 
 def literal(name):
-    e = env.get(name)
+    e = env.get(norm(name))
     if e is None:
         return None
     if "valueFrom" in e or "value" not in e:
@@ -161,7 +174,7 @@ others = []
 for path in glob.glob(os.path.join(root, "specs/**/*"), recursive=True):
     if os.path.isfile(path) and os.path.abspath(path) != os.path.abspath(dep):
         try:
-            if CUTOFF in open(path, encoding="utf-8", errors="replace").read():
+            if norm(CUTOFF) in norm(open(path, encoding="utf-8", errors="replace").read()):
                 others.append(os.path.relpath(path, root))
         except OSError:
             pass
@@ -305,6 +318,20 @@ for spelling in on yes 1 TRUE; do
   D="$(stage "n13-${spelling}")"; neg "N13 the revocation flag turned on as \"${spelling}\"" "${D}" "${DEP_REL}" \
     'BROKER_GATEWAY_REVOCATION_ENABLED, value: "false"' "BROKER_GATEWAY_REVOCATION_ENABLED, value: \"${spelling}\""
 done
+# Spring relaxed binding (#1035): the same property under a spelling an exact-name lookup never saw.
+D="$(stage n14)"; neg "N14 the revocation flag turned on as BROKER_GATEWAYREVOCATION_ENABLED" "${D}" "${DEP_REL}" \
+  'BROKER_GATEWAY_REVOCATION_ENABLED, value: "false"' 'BROKER_GATEWAYREVOCATION_ENABLED, value: "true"'
+D="$(stage n15)"; neg "N15 the cut-off TTL lowered under BROKER_GATEWAYREVOCATION_SUBJECTCUTOFFTTLSECONDS" "${D}" "${DEP_REL}" \
+  "${CUT}, value: \"604800\"" 'BROKER_GATEWAYREVOCATION_SUBJECTCUTOFFTTLSECONDS, value: "3600"'
+D="$(stage n16)"; neg "N16 a lower TTL duplicate under a relaxed spelling after the real one" "${D}" "${DEP_REL}" \
+  "${CUT}, value: \"604800\" }"$'\n' \
+  "${CUT}, value: \"604800\" }"$'\n'"            - { name: BROKER_GATEWAYREVOCATION_SUBJECTCUTOFFTTLSECONDS, value: \"3600\" }"$'\n'
+D="$(stage n17)"; neg "N17 the revocation flag turned on as BROKER_GATEWAY-REVOCATION_ENABLED" "${D}" "${DEP_REL}" \
+  'BROKER_GATEWAY_REVOCATION_ENABLED, value: "false"' 'BROKER_GATEWAY-REVOCATION_ENABLED, value: "on"'
+D="$(stage n18)"
+mkdir -p "${D}/specs/cluster/overlays/y"
+printf 'env:\n  - { name: BROKER_GATEWAYREVOCATION_SUBJECTCUTOFFTTLSECONDS, value: "60" }\n' > "${D}/specs/cluster/overlays/y/patch.yaml"
+verdict "N18 an overlay lowers the TTL under a relaxed spelling" "${D}"
 D="$(stage n11)"
 mkdir -p "${D}/specs/cluster/overlays/x"
 printf 'env:\n  - { name: %s, value: "60" }\n' "${CUT}" > "${D}/specs/cluster/overlays/x/patch.yaml"
