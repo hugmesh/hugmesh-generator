@@ -154,6 +154,13 @@
 # rows of its own — it exists so the federation availability endpoint can require
 # ROLE_SERVICE and the minted client-credentials token satisfies that gate.
 #
+# ROLE_TEST_INGEST ("Test-run event ingest") is the NARROW machine role of the in-cluster
+# test-runner Job (hugmesh-generator#507, finding 25): its client-credentials token may POST live
+# run/suite events to admin-bff's /bff/admin/test-reports/{id}/ingest and NOTHING else (admin-bff
+# admits it on exactly that one path; every other /bff/admin/** path stays ADMIN/SUPERADMIN). Its
+# only seeded member is svc-test-ingest (the app-test-ingest machine account, see the casdoor-init
+# APPS map). It grants no route-access rows: the Job calls admin-bff in-cluster, not via the gateway.
+#
 # ⚠️ WHY THERE IS AN "applications" BLOCK BELOW, AND WHY IT MUST STAY.
 # CASDOOR REFUSES TO CREATE A USER IN AN ORGANIZATION THAT HAS NO APPLICATION.
 # Verbatim, from the pinned casbin/casdoor:3.80.0 (deployment.yaml) source:
@@ -288,7 +295,8 @@ data:
         { "owner": "hugmesh", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["hugmesh/svc-pki-gateway","hugmesh/svc-be-gateway","hugmesh/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "hugmesh", "name": "ROLE_API",       "displayName": "API service",     "users": ["hugmesh/svc-api"], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "hugmesh", "name": "ROLE_ADMIN_API", "displayName": "Admin API",       "users": ["hugmesh/svc-admin-bff"], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "hugmesh", "name": "ROLE_SERVICE",   "displayName": "Internal service-to-service", "users": ["hugmesh/svc-signup-gate"], "roles": [], "domains": [], "isEnabled": true }
+        { "owner": "hugmesh", "name": "ROLE_SERVICE",   "displayName": "Internal service-to-service", "users": ["hugmesh/svc-signup-gate"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_TEST_INGEST", "displayName": "Test-run event ingest (machine, ingest-only)", "users": ["hugmesh/svc-test-ingest"], "roles": [], "domains": [], "isEnabled": true }
       ],
       "users": [
         { "owner": "hugmesh", "name": "svc-pki-gateway", "displayName": "svc-pki-gateway", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
@@ -296,6 +304,7 @@ data:
         { "owner": "hugmesh", "name": "svc-fe-gateway",  "displayName": "svc-fe-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
         { "owner": "hugmesh", "name": "svc-api",         "displayName": "svc-api",         "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
         { "owner": "hugmesh", "name": "svc-admin-bff",   "displayName": "svc-admin-bff",   "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
-        { "owner": "hugmesh", "name": "svc-signup-gate", "displayName": "svc-signup-gate", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false }
+        { "owner": "hugmesh", "name": "svc-signup-gate", "displayName": "svc-signup-gate", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-test-ingest", "displayName": "svc-test-ingest", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false }
       ]
     }
