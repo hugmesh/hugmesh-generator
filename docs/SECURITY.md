@@ -495,12 +495,19 @@ headscale so the rewritten file is the one in force.
   headscale 0.23.0, a line-by-line read of `config.yaml` is not enough to know the
   answer (case-variant and dotted keys, `<<:` merges, CR/NEL/U+2028 line breaks, a
   quoted scalar that swallows a later `policy:` block, a second YAML document, a
-  `config.json` beside the yaml). The boundary: a `HEADSCALE_*` variable in the
-  daemon's own environment is not visible to the check; the image's init script sets
-  none and the stick cannot.
+  `config.json` beside the yaml). The boundary: the check runs `headscale dumpConfig`
+  with every `HEADSCALE_*` variable unset, so it reads the configuration FILES only.
+  headscale also reads `HEADSCALE_*` variables from the daemon's own environment
+  (for example `HEADSCALE_POLICY_MODE`, `HEADSCALE_POLICY_PATH`), and those override the
+  file. What is known: `specs/etc/init.d/headscale` sets none, as of this writing. What
+  is NOT checked, by this check or by any guard: that no variable reaches the daemon
+  after the gate has passed (an `/etc/conf.d/headscale` that exports one, a later init
+  step, a host environment). Such a variable could point the daemon at a different
+  policy file, or at database mode, after the check approved the config. This is a
+  residual risk, not a closed one.
   `specs/etc/headscale/policy.hujson` is a reference copy that the builders no
   longer bake; neither it nor `keys-template/headscale/policy.hujson` carries the
-  any-to-any rule.
+  any-to-any rule (their header comments say it was dropped).
 - **Pods/services as one LAN.** Each node advertises the cluster pod
   (`10.244.0.0/16`) and service (`10.96.0.0/12`) CIDRs
   (`--advertise-routes=...`) and accepts approved routes (`--accept-routes`).
