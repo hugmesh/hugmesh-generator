@@ -232,7 +232,7 @@ Probe, verbatim (identical runs, only `entries[0].role` differs):
 ```
 === NODE-FIRST  (mesh, base role='pki') ===
   HOME login group visible=True title='Your login & standalone account'
-  HOME standalone visible=False local_user visible=True text='magus'
+  HOME standalone visible=False local_user visible=True text='alex'
   HOME media_data visible=True no_vaults visible=True
   HOME home_box mode enabled=True visible=False
   NET  egress_row visible=False egress_section visible=False
@@ -250,7 +250,7 @@ Probe, verbatim (identical runs, only `entries[0].role` differs):
 | # | field | file:line | current gating | why it fails |
 |---|---|---|---|---|
 | L1 | **`login` group "Your login & standalone account"** (ask 11) | `home.py:145-174` | **NONE on the group.** Only the inner `standalone` checkbox is gated (`home.py:323-325`) | The group is a bare `QGroupBox`; nothing ever calls `setVisible` on it. Its title literally says "standalone account" and it is on screen for **every** mesh node — probe `visible=True` in BOTH runs. |
-| L2 | `local_user` / `local_pass` | `home.py:168-173` | none | `local_user` defaults to `"magus"` (`config.py:1459`) and x86 emits `--local-user` **unconditionally**. Probe: bare mesh x86 pki argv = `--role pki --env test --local-user magus --with-tailscale --with-sso --superdomain hugmesh.internal --snort --installer-ui all --uncached --live-toram --bundle-source`. Not merely visible — live. |
+| L2 | `local_user` / `local_pass` | `home.py:168-173` | none | `local_user` defaults to the original operator's account name (`config.py:1459`) and x86 emits `--local-user` **unconditionally**. Probe: bare mesh x86 pki argv = `--role pki --env test --local-user <that name> --with-tailscale --with-sso --superdomain hugmesh.internal --snort --installer-ui all --uncached --live-toram --bundle-source`. Not merely visible — live. |
 | L3 | `standalone` checkbox (ask 21 removes it here) | `home.py:156-161` | `scope_allows("standalone", cfg)` hide (`home.py:323-325`); scope `classes=("desktop",)` + `class_platforms` (`config.py:843-844`) | Correct for node-first; **opens** when `entries[0]` is `rpi5-desktop`/`jetson-desktop`. |
 | L4 | Home provisioning group (`home_box`) | `home.py:58-119`, gated `:301-309` | `home_options_allowed` = `image_class == "desktop"` (`config.py:949-952`) — **no mode axis** | Deliberate ("desktop-class images in any mode"), so a mesh flow with a desktop base role gets home mode/device/backup/eCryptfs/seed. |
 | L5 | **External media-data device** (Steam library + gocryptfs Vaults) | `home.py:127-139` | **platform only** (`home.py:279+`; `media_data`/`media_label`/`no_vaults` are `_X86`) | Base platform is forced `x86` in mesh, so the platform gate always passes. There is **no** role-class or mode gate — `visible=True` in BOTH probe runs. `_FIELD_SCOPE_OVERRIDES` has no entry for `media_data`. |

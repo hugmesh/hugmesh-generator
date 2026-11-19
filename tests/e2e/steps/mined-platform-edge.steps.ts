@@ -32,7 +32,7 @@
 //
 // EVERYTHING BELOW READS A FILE COMMITTED TO THIS REPO. That constraint is the
 // same one uncovered-services.steps.ts states and it is load-bearing: a step
-// that reached into a sibling checkout (/home/magus/Github/hugmesh-gateway,
+// that reached into a sibling checkout (/home/<user>/Github/hugmesh-gateway,
 // .../hugmesh-host-shell) would pass on the box where those clones happen to
 // exist and fail in CI, which is strictly worse than not asserting at all. It
 // is also why several mined claims about the gateway's Java source and about

@@ -193,7 +193,7 @@ the Role and confirming the check goes red.
 
 ## 4. Cross-repo change specification (NOT applied here)
 
-`/home/magus/Github/hugmesh-admin-bff-api` and `…-admin-ui` are **shared checkouts**. They
+`/home/<user>/Github/hugmesh-admin-bff-api` and `…-admin-ui` are **shared checkouts**. They
 were read and **not modified**. The work below belongs there and is specified, not done.
 
 ### 4a. `hugmesh-admin-bff-api`

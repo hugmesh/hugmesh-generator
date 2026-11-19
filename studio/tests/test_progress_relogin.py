@@ -98,7 +98,7 @@ def _fake_builddriver(monkeypatch, seen):
 def _restarted(wiz, tmp_path, **kw):
     """A FAILED record whose dispatch carried a Login Password, reloaded the way
     StudioWizard.start_build_from_session does (the password comes back empty)."""
-    cfg = ImageConfig(output_dir=str(tmp_path / "out"), local_user="magus",
+    cfg = ImageConfig(output_dir=str(tmp_path / "out"), local_user="alex",
                       local_pass=PW, **kw)
     s = build_sessions.new_session(synthesize(cfg), GENERATOR_DIR)
     assert s.blanked_secrets == ["local_pass"]
@@ -183,7 +183,7 @@ def test_restart_without_a_prior_password_does_not_ask(monkeypatch, qapp, wiz, t
     seen: list[str] = []
     _fake_builddriver(monkeypatch, seen)
     cfg = ImageConfig(mode="mesh", role="laptop", platform="x86",
-                      output_dir=str(tmp_path / "out"), local_user="magus",
+                      output_dir=str(tmp_path / "out"), local_user="alex",
                       # the pki node's fixed LAN address (core/pki_lan.py) a mesh build refuses without
                       pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True)
     s = build_sessions.new_session(synthesize(cfg), GENERATOR_DIR)
@@ -206,7 +206,7 @@ def test_loaded_standalone_config_without_password_asks_instead_of_dead_end(
     seen: list[str] = []
     _fake_builddriver(monkeypatch, seen)
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
-                      output_dir=str(tmp_path / "out"), local_user="magus")
+                      output_dir=str(tmp_path / "out"), local_user="alex")
     wl = synthesize(cfg)
     wiz.worklist, wiz.cfg, wiz.build_backend, wiz.pending_session_id = wl, wl.base, None, None
     wiz.setCurrentId(wiz._page_ids["progress"])

@@ -79,7 +79,7 @@ Output, verbatim. It matches the log except the ROOT path, which the builder con
 bind-mounts at `/out`:
 
 ```
-emerge: there are no ebuilds built with USE flags to satisfy ">=dev-libs/glib-2.82.0:2[introspection]" for /home/magus/GitHub/hugmesh-generator/out/sessions/20260730-210421-a6d331/wl-pki.rpi5/sysroot/.
+emerge: there are no ebuilds built with USE flags to satisfy ">=dev-libs/glib-2.82.0:2[introspection]" for /home/<user>/GitHub/hugmesh-generator/out/sessions/20260730-210421-a6d331/wl-pki.rpi5/sysroot/.
 !!! One of the following packages is required to complete your request:
 - dev-libs/glib-2.88.2::gentoo (Change USE: +introspection)
 (dependency required by "dev-libs/gobject-introspection-1.86.0::gentoo" [ebuild])
@@ -351,7 +351,7 @@ traceback and re-raise** → `copyfile` catches it and falls back to `shutil.cop
 which succeeds. One traceback per merged file. The copy always completes.
 
 The filesystem pair: the destination is the sysroot under the operator's **eCryptfs**
-home (`df -T /home/magus/GitHub` → `ecryptfs` over `/home/magus/.Private`). The source
+home (`df -T /home/<user>/GitHub` → `ecryptfs` over `/home/<user>/.Private`). The source
 is the chroot's `/var/tmp/portage` image dir, which build-x86-host-stage4.sh:4378-4416
 deliberately bind-mounts onto host **xfs** scratch. That is the older workaround for
 eCryptfs's 143-character filename limit, so the builder already knows the sysroot is
@@ -455,7 +455,7 @@ COMMITTED `package.use/firewalld-introspection`. Same invocation as §1
 Baseline wall (identical on all three, ROOT path being the only difference):
 
 ```
-emerge: there are no ebuilds built with USE flags to satisfy ">=dev-libs/glib-2.82.0:2[introspection]" for /home/magus/GitHub/hugmesh-generator/out/sessions/20260730-210421-a6d331/wl-pki.rpi5/sysroot/.
+emerge: there are no ebuilds built with USE flags to satisfy ">=dev-libs/glib-2.82.0:2[introspection]" for /home/<user>/GitHub/hugmesh-generator/out/sessions/20260730-210421-a6d331/wl-pki.rpi5/sysroot/.
 !!! One of the following packages is required to complete your request:
 - dev-libs/glib-2.88.2::gentoo (Change USE: +introspection)
 (dependency required by "dev-libs/gobject-introspection-1.86.0::gentoo" [ebuild])

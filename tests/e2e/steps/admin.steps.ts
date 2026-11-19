@@ -25,7 +25,7 @@
 // (soft-disable only, by design), which the feature header says out loud.
 //
 // STEP HYGIENE. Every step text below was grepped against tests/e2e/steps/ and
-// every sibling lane worktree under /home/magus/.hugmesh-wt-sonnet/bdd-*/ before
+// every sibling lane worktree under /home/<user>/.hugmesh-wt-sonnet/bdd-*/ before
 // it was written; none duplicates an existing definition.
 
 import * as fs from 'node:fs';

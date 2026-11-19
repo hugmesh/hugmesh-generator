@@ -66,7 +66,7 @@ def _gen_dir(tmp_path, cfg: ImageConfig) -> str:
     dict(mode="cloud", role="rpi5-desktop", platform="rpi5"),
 ])
 def test_native_build_argv_never_carries_the_password(tmp_path, monkeypatch, cfg_kw):
-    cfg = ImageConfig(**cfg_kw, local_user="magus", local_pass=THROWAWAY)
+    cfg = ImageConfig(**cfg_kw, local_user="alex", local_pass=THROWAWAY)
     assert ("--local-pass", THROWAWAY) in zip(cfg.to_cli_args(), cfg.to_cli_args()[1:])
     probe = tmp_path / "probe"
     probe.mkdir()
@@ -106,7 +106,7 @@ def test_native_build_argv_never_carries_the_password(tmp_path, monkeypatch, cfg
 
 def test_failed_build_still_removes_the_password_file(tmp_path, monkeypatch):
     cfg = ImageConfig(mode="mesh", role="laptop", platform="x86",
-                      local_user="magus", local_pass=THROWAWAY)
+                      local_user="alex", local_pass=THROWAWAY)
     gen = tmp_path / "gen"
     gen.mkdir()
     script = gen / cfg.builder_script
@@ -124,7 +124,7 @@ def test_failed_build_still_removes_the_password_file(tmp_path, monkeypatch):
 
 def test_docker_argv_mounts_the_file_and_never_carries_the_password(tmp_path):
     cfg = ImageConfig(mode="cloud", role="desktop", platform="x86",
-                      local_user="magus", local_pass=THROWAWAY)
+                      local_user="alex", local_pass=THROWAWAY)
     pw_file = tmp_path / "local-pass"
     pw_file.write_text(THROWAWAY)
     pw_file.chmod(0o600)

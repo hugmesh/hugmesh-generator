@@ -119,16 +119,16 @@ def test_mismatched_confirmation_is_refused_and_nothing_collected(wiz):
 
 def test_matching_password_is_collected_and_reaches_the_argv(wiz):
     home = _home_on(wiz, UNAFFILIATED_ROLE)
-    home.local_user.setText("magus")
+    home.local_user.setText("alex")
     home.local_pass.setText(PW)
     home.local_pass_confirm.setText(PW)
     assert home.validatePage() is True
     assert not home.login_err.isVisibleTo(home)
     c = wiz.cfg
-    assert c.local_user == "magus" and c.local_pass == PW
+    assert c.local_user == "alex" and c.local_pass == PW
     args = c.to_cli_args()
     pairs = list(zip(args, args[1:]))
-    assert ("--local-user", "magus") in pairs
+    assert ("--local-user", "alex") in pairs
     assert ("--local-pass", PW) in pairs
 
 
@@ -195,7 +195,7 @@ def test_administrator_box_is_opt_in_and_says_what_unticked_means(wiz, tmp_path,
     assert home.local_admin_note.text() == LOCAL_ADMIN_NOTE[True]
     _visible_box(home.local_admin_note, login)
 
-    home.local_user.setText("magus")
+    home.local_user.setText("alex")
     home.local_pass.setText(PW)
     home.local_pass_confirm.setText(PW)
     assert home.validatePage() is True
@@ -205,7 +205,7 @@ def test_administrator_box_is_opt_in_and_says_what_unticked_means(wiz, tmp_path,
 
 def test_administrator_unticked_emits_no_local_admin(wiz):
     home = _home_on(wiz, UNAFFILIATED_ROLE)
-    home.local_user.setText("magus")
+    home.local_user.setText("alex")
     home.local_pass.setText(PW)
     home.local_pass_confirm.setText(PW)
     assert home.validatePage() is True

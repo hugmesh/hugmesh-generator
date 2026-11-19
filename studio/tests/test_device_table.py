@@ -46,7 +46,7 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
 
 # two canned attached devices: a mounted, labelled USB stick and a bare (unmounted) SD
 SDB = FlashTarget("/dev/sdb", 16 * GIB, "SanDisk Ultra", "usb", True, "usb",
-                  fs_label="KEYS", mountpoints=("/run/media/magus/KEYS",))
+                  fs_label="KEYS", mountpoints=("/run/media/user/KEYS",))
 MMC = FlashTarget("/dev/mmcblk0", 32 * GIB, "SD32G", "", False, "mmc")
 
 
@@ -141,7 +141,7 @@ def test_table_lists_devices_with_columns(wiz):
     assert _cell(t, 0, 1) == "SanDisk Ultra · KEYS"      # model + fs label, both shown
     assert _cell(t, 0, 2) == "16.0 GiB"
     assert _cell(t, 0, 3) == "usb"
-    assert _cell(t, 0, 4) == "mounted: /run/media/magus/KEYS"
+    assert _cell(t, 0, 4) == "mounted: /run/media/user/KEYS"
     assert _cell(t, 1, 0) == "/dev/mmcblk0"
     assert _cell(t, 1, 3) == "mmc"
     assert _cell(t, 1, 4) == "—"                          # unmounted indicator
@@ -378,9 +378,9 @@ def test_keys_assignment_sets_cfg_keys_usb_and_preview_shows_flag(wiz):
     _populate(build.device_table, [SDB, MMC])
     _set_role(build.device_table, 0, dt_mod.ROLE_KEYS)
     # written THROUGH the existing widget -> cfg -> the pre-existing --keys-usb emission
-    assert build.keys_usb.text() == "/run/media/magus/KEYS"
-    assert wiz.cfg.keys_usb == "/run/media/magus/KEYS"
-    assert "--keys-usb /run/media/magus/KEYS" in build.cmd.toPlainText()
+    assert build.keys_usb.text() == "/run/media/user/KEYS"
+    assert wiz.cfg.keys_usb == "/run/media/user/KEYS"
+    assert "--keys-usb /run/media/user/KEYS" in build.cmd.toPlainText()
     ka = build.device_table.keys_assignment()
     assert ka is not None and ka[0].path == "/dev/sdb"
     # un-assigning clears the field (it still equals the assigned dir)
@@ -401,16 +401,16 @@ def test_keys_unassign_never_clobbers_a_hand_typed_path(wiz):
 def test_keys_role_is_exclusive_across_rows(wiz):
     build = advance_to(wiz, wizard_mod.BuildPage)
     sdb2 = FlashTarget("/dev/sdc", 8 * GIB, "Cruzer", "usb", True, "usb",
-                       mountpoints=("/run/media/magus/OTHER",))
+                       mountpoints=("/run/media/user/OTHER",))
     _populate(build.device_table, [SDB, sdb2])
     _set_role(build.device_table, 0, dt_mod.ROLE_KEYS)
-    assert build.keys_usb.text() == "/run/media/magus/KEYS"
+    assert build.keys_usb.text() == "/run/media/user/KEYS"
     _set_role(build.device_table, 1, dt_mod.ROLE_KEYS)   # reassign on the other row
     t = build.device_table
     assert t.table.cellWidget(0, 5).currentData() == dt_mod.ROLE_NONE  # row A cleared
     ka = t.keys_assignment()
     assert ka is not None and ka[0].path == "/dev/sdc"
-    assert build.keys_usb.text() == "/run/media/magus/OTHER"
+    assert build.keys_usb.text() == "/run/media/user/OTHER"
 
 
 def test_keys_role_disabled_when_device_not_mounted(wiz):

@@ -387,7 +387,7 @@ def test_worklist_restriction_holds_in_validate_too(wiz):
     wl = advance_to(wiz, wizard_mod.WorklistPage)
     check_worklist_rows(wl, "omnibus.x86", "laptop.x86", "desktop.x86")
     # name the laptop's person so the laptop entry itself is valid
-    wl._desktop_people["laptop.x86"] = ("magus", "user")
+    wl._desktop_people["laptop.x86"] = ("alex", "user")
     wl._refresh_people_table()
     assert wl.validatePage() is True
     ids = [e.id for e in wiz.worklist.entries]
