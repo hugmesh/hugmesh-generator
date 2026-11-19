@@ -363,21 +363,35 @@ done
 # docs/KIND-SSO-E2E-FINDINGS.md; they are real defects, not false positives.
 #
 #   remote-fragment/deployment.yaml -> federation-api
-#     remote-fragment mounts NO PKCS12 stores and has no client-mTLS leg at all
-#     (zero matches for openssl pkcs12 -export / SSL_KEY_STORE / MTLS_CLIENT_ENABLED),
-#     so https:// would fail the handshake instead of the read. The fix is the whole
-#     store-building treatment, and this service is not in any profile I can run, so
-#     flipping the scheme blind would trade a visible failure for a subtler one.
+#     NOT a non-Spring caller, as this note used to say: remote-fragment is a Spring Boot
+#     WebFlux app (hugmesh-remote-fragment, FederationSyncClient on a WebClient). It has no
+#     outbound mTLS leg: nothing in its source reads hugmesh.mtls.client.* or builds an
+#     SslContext, and hugmesh-commons does not provide one (admin-bff and auth-core each
+#     carry their own). federation-api serves TLS with client-auth=need, so today the sync
+#     is cut off at the handshake. Fixing it is a SEQUENCE, in this order: (1) a client leg in
+#     the hugmesh-remote-fragment repo (the same shape as admin-bff's OutboundMtlsClient)
+#     and a released image; (2) a client identity for the pod: a pki_int role, an
+#     ExternalSecret, and the store-building init container the other BFFs have; (3) only
+#     then these two URLs flip to https://. Flipping the scheme first would trade a refused
+#     read for a handshake error, on a service that already cannot sync.
 #
 #   test-runner/test-job-{lean,heavy}.yaml -> admin-bff /bff/admin/test-reports/ingest
-#     Same story: no stores, no client identity. These are the report-ingest POSTs,
-#     so the failure mode is "results silently never ingested" rather than a broken
-#     user path — which is exactly why nobody noticed.
+#     MEASURED 2026-11-18: mTLS is the THIRD fault on this call, not the first. (1) The path
+#     is wrong: TestReportsController is mapped at /bff/admin/test-reports with POST /run and
+#     POST /{id}/ingest only, so a POST to .../test-reports/ingest (no run id) matches
+#     nothing. (2) It carries no credential: the reporter (tests/e2e/reporters/
+#     hugmesh-reporter.ts) sends no Authorization header, and the endpoint is
+#     @PreAuthorize("hasRole('ADMIN')"); the "runner-token" its javadoc mentions has no
+#     implementation. (3) TLS: admin-bff serves client-auth=need and the Job has no stores.
+#     The reporter swallows every POST failure by design, which is why results silently never
+#     ingest and nobody noticed. Making it work needs a DECISION that is not a scheme flip:
+#     which identity may post run events (an ADMIN-role service account, or a narrower
+#     ingest-only credential on the controller), and then (1)-(3) together.
 #
-#   charts/hugmesh-gateway/values.yaml -> hugmesh-api
-#     A chart DEFAULT route, overridden per-Application by the gateway apps' own
-#     route tables. Changing a default that every real deployment replaces is
-#     untestable from here and risks moving a value nothing reads.
+#   (charts/hugmesh-gateway/values.yaml -> hugmesh-api was on this list. FIXED: its `api-default`
+#     route is https:// now, exactly as apps/20-gateway-be.yaml's own `hugmesh-api` route
+#     already was. It was never a hard case: a Spring Cloud Gateway route needs no stores of
+#     its own, the gateway carries the client identity. #507, finding 25.)
 #
 # THE COMMON SHAPE, worth naming: every one of these is a NON-SPRING caller — a Job
 # or a sync sidecar — and the mTLS wave only ever reached the Spring services, which
@@ -386,7 +400,7 @@ done
 # calls to TLS-serving peers cannot succeed by any scheme. Tracked as OPEN in
 # docs/KIND-SSO-E2E-FINDINGS.md rather than papered over with a scheme flip that
 # would swap a connection error for a handshake error.
-EXEMPT_HTTP_TLS="specs/cluster/manifests/remote-fragment/deployment.yaml specs/cluster/charts/hugmesh-gateway/values.yaml specs/cluster/manifests/test-runner/test-job-lean.yaml specs/cluster/manifests/test-runner/test-job-heavy.yaml"
+EXEMPT_HTTP_TLS="specs/cluster/manifests/remote-fragment/deployment.yaml specs/cluster/manifests/test-runner/test-job-lean.yaml specs/cluster/manifests/test-runner/test-job-heavy.yaml"
 
 if [ -z "${tls_hosts// /}" ]; then
   # Child probes stage a couple of synthetic manifests and no TLS-serving service;
