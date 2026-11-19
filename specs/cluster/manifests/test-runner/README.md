@@ -102,6 +102,12 @@ a Kyverno ClusterPolicy and a RUNTIME PreSync hook Job).
 
 Known gaps:
 
+- **No image is built for these Jobs.** Both `registry.hugmesh.net/hugmesh-test-runner:dev` (the Jobs here) and
+  `registry.hugmesh.net/hugmesh/test-runner:latest` (admin-bff's `jobs/test-runner-job.yaml`) are named only by
+  manifests. As of 2026-11-19 no repo of the org has a Dockerfile, CI stage or Makefile target that produces
+  either, and `/runner/run-suite.sh` (admin-bff's template command) exists nowhere; the "generator's test-runner
+  image stage" the Job comments mention does not exist. Until one is written (Playwright base image + `tests/e2e`
+  + the reporter + `tests/qemu/seed-accounts.sh`) the Jobs cannot start. Details: `docs/KIND-SSO-E2E-FINDINGS.md`, row 25.
 - The lean and heavy Jobs use the floating `registry.hugmesh.net/hugmesh-test-runner:dev`.
   A prod build pins `:dev` tags to `RELEASE_TAG`, but it prunes this bundle first. Test
   builds keep `:dev`.
