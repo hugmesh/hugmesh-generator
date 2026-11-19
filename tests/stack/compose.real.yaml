@@ -197,9 +197,7 @@ services:
   # Mastodon and is not a platform component.
   cassandra:
     image: cassandra:5
-    # JVM_EXTRA_OPTS: Java4Shell (CVE-2026-114938) mitigation. cassandra:5 ships Temurin
-    # 17.0.21+9, which is vulnerable. Drop it once cassandra:5 is on 17.0.21.1 or later.
-    environment: { CASSANDRA_CLUSTER_NAME: HugMeshGatewayCluster, CASSANDRA_DC: dc1, MAX_HEAP_SIZE: 512M, HEAP_NEWSIZE: 128M, JVM_EXTRA_OPTS: "-XX:-UseBASE64Intrinsics" }
+    environment: { CASSANDRA_CLUSTER_NAME: HugMeshGatewayCluster, CASSANDRA_DC: dc1, MAX_HEAP_SIZE: 512M, HEAP_NEWSIZE: 128M }
     volumes: [cassandra:/var/lib/cassandra]
     healthcheck: { test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"], interval: 10s, retries: 30, start_period: 60s }
 
