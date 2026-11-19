@@ -62,7 +62,6 @@ from ...core import domain_reach, plain_words
 from ...core.config import SIGNIN_METHOD_LABELS, SIGNIN_METHODS
 from ...tui import brand_step
 from ._lookeditor import LookEditor
-from ._onion_renew_row import OnionRenewRow
 from ._people_tab import PeopleTab
 from ._widgets import collapsible
 
@@ -263,12 +262,6 @@ class BrandSettingsTabs(QtCore.QObject):
         self.tor_box.setObjectName("brand_ways_tor")
         self.tor_box.clicked.connect(self._tor_clicked)
         rl.addRow("Tor", self.tor_box)
-        # a NEW address for this domain's onion on the running Docker mesh (#652):
-        # shown only where it can act (the Docker route, a domain that is not the
-        # mesh's own, Tor ticked); the inline two-step confirm is the row's own
-        self.onion_renew = OnionRenewRow()
-        self.onion_renew.setVisible(False)
-        rl.addRow("", self.onion_renew)
         self.tailnet_combo = QtWidgets.QComboBox()
         self.tailnet_combo.setObjectName("brand_ways_vpn")
         for key, label in brand_step.TAILNET_CHOICES:
@@ -721,7 +714,6 @@ class BrandSettingsTabs(QtCore.QObject):
             self.tor_box.setVisible(True)
             self.tor_box.setText("Its own Tor address (an onion of its own)")
             self.tor_box.setChecked(v.tor_on())
-            self._fill_onion_renew()
             self.tailnet_combo.setCurrentIndex(
                 max(0, self.tailnet_combo.findData(v.tailnet_choice())))
             mode, conf = v.egress_choice()
@@ -743,7 +735,6 @@ class BrandSettingsTabs(QtCore.QObject):
         "off" even with the mesh's Tor on (domain-ui skeptic 3)."""
         tor_why = v.own_way_refusal("tor")
         egress_why = v.own_way_refusal("egress")
-        self.onion_renew.setVisible(False)     # the mesh's own address is not renewed here
         self.tor_box.setText("The mesh's own Tor address (its onion)")
         self.tor_box.setVisible(not tor_why)
         self.tor_box.setEnabled(not tor_why)
@@ -774,18 +765,6 @@ class BrandSettingsTabs(QtCore.QObject):
         self.reach_note.setStyleSheet("color: #b00020;" if error else _MUTED)
         self.reach_note.setText(" ".join(lines))
 
-    def _fill_onion_renew(self) -> None:
-        """The "New Tor address" row: the Docker route only (the one path this Studio
-        reaches a running Tor of), never the mesh's own row (its primary address is
-        the whole mesh's), and only while this domain has its own Tor address."""
-        v = self.view
-        row = v.row if v is not None and not v.own else None
-        on = bool(row is not None and self.route == "docker" and self.tor_box.isChecked()
-                  and not self.tor_box.isHidden())
-        self.onion_renew.setVisible(on)
-        if on:
-            self.onion_renew.set_domain(v.name, str(getattr(row, "id", "") or ""))
-
     def show_tor(self, available: bool, on: bool) -> None:
         """The host's front door says what the domain's Tor choice is now."""
         self._loading = True
@@ -793,7 +772,6 @@ class BrandSettingsTabs(QtCore.QObject):
             if self.view is not None and not self.view.own:
                 self.tor_box.setEnabled(bool(available))
                 self.tor_box.setChecked(bool(on))
-                self._fill_onion_renew()
         finally:
             self._loading = False
 
