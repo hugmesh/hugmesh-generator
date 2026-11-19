@@ -16,6 +16,14 @@ depend() {
 }
 
 start_pre() {
+    # keys-provision's CONFIG GATE refused this node's headscale configuration (hugmesh-generator#1036):
+    # it leaves this marker BEFORE it stops the service. `rc-service headscale restart` (the policy-sync
+    # cron every minute, an operator) is a stop and a START, so without this check a restart landing
+    # before the configuration is set aside would start headscale on the refused one.
+    if [ -e /run/hugmesh/headscale.refused ]; then
+        eerror "headscale: keys-provision refused its configuration ($(sed -n 's/^reason=//p' /run/hugmesh/headscale.refused 2>/dev/null | cut -c1-200)); not starting"
+        return 1
+    fi
     getent group  headscale >/dev/null || groupadd -r headscale
     getent passwd headscale >/dev/null || \
         useradd -r -g headscale -d /var/lib/headscale -s /sbin/nologin headscale

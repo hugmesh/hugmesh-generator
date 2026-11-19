@@ -2158,7 +2158,7 @@ provision_headscale() {
     enabled="$(jqm '.headscale.enabled // false')"
     if [ "${enabled}" != "true" ]; then
         log "headscale disabled in manifest — removing from runlevel"
-        rm -f "${HEADSCALE_DERP_STUN_MARKER}"
+        rm -f "${HEADSCALE_DERP_STUN_MARKER}" "${HEADSCALE_REFUSED_MARK:-/run/hugmesh/headscale.refused}" 2>/dev/null || true
         rc-update del headscale default 2>/dev/null || true
         rc-service headscale stop 2>/dev/null || true
         rm -f "${HEADSCALE_LAN_CONTROL_MARKER}" 2>/dev/null || true
@@ -2335,6 +2335,8 @@ provision_headscale() {
         headscale_refuse_config "${cfg_fail} (the KEYS headscale/config.yaml must keep policy.mode: file and policy.path: /etc/headscale/policy.hujson)"
         return 1
     fi
+    # A configuration passed the gate: an earlier refusal's marker (hugmesh-generator#1036) no longer applies.
+    rm -f "${HEADSCALE_REFUSED_MARK:-/run/hugmesh/headscale.refused}" 2>/dev/null || true
 
     # LAN workers dial this node's headscale port before go-live
     # (resolve_control_endpoint). Hand that port to the node firewall.
@@ -2548,8 +2550,20 @@ headscale_config_gate() {
 # the refused configuration. With no configuration headscale cannot start at all.
 # Re-provisioning with a KEYS headscale/config.yaml that keeps policy.mode: file and
 # policy.path: /etc/headscale/policy.hujson installs a configuration again.
+#
+# THE MARKER (hugmesh-generator#1036). The refusal first leaves HEADSCALE_REFUSED_MARK, THEN stops
+# the service. The Layer-A policy-sync apply leg restarts headscale every minute and OpenRC's
+# `restart` starts a stopped service, so a cron restart landing between the stop and the move
+# below would start headscale on the configuration just refused. The init script's start_pre and
+# gen-headscale-policy.sh's restart_headscale both refuse while the marker exists, so no restart
+# path can win that race. provision_headscale removes it once a configuration passes the gate.
+HEADSCALE_REFUSED_MARK="${HEADSCALE_REFUSED_MARK:-/run/hugmesh/headscale.refused}"
 headscale_refuse_config() {
     local f left=""
+    mkdir -p "$(dirname "${HEADSCALE_REFUSED_MARK:-/run/hugmesh/headscale.refused}")" 2>/dev/null || true
+    printf 'since=%s\nreason=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(printf '%s' "$1" | tr '\n' ' ')" \
+        > "${HEADSCALE_REFUSED_MARK:-/run/hugmesh/headscale.refused}" 2>/dev/null \
+        || warn "could not write ${HEADSCALE_REFUSED_MARK:-/run/hugmesh/headscale.refused}: a restart landing before the configuration is set aside could start headscale on it"
     rc-service headscale stop 2>/dev/null || true
     rc-update del headscale default 2>/dev/null || true
     for f in json toml yaml yml properties props prop hcl tfvars dotenv env ini; do
@@ -2675,10 +2689,16 @@ publish_cp_dns_record() {
     # Build a managed extra_records block and splice it into config.yaml,
     # replacing any previous managed block. headscale 0.23.x accepts an inline
     # dns.extra_records list of {name,type,value}.
-    python3 - "$cpname" "$tip" <<'PY' 2>/dev/null || { warn "Failed to write CP DNS record"; return 0; }
-import sys, re, io
+    # The edit goes to a temp file beside config.yaml and is renamed over it (hugmesh-generator#1036): a
+    # write that fails part-way (I/O error, full disk) leaves the OLD config.yaml whole instead of a
+    # truncated one. The temp name is not one headscale's config search reads (config.<ext> only).
+    # Whether or not the write landed, the config gate below still runs before anything restarts.
+    local wrote=0
+    if python3 - "$cpname" "$tip" <<'PY' 2>/dev/null
+import sys, re, os, shutil
 cpname, tip = sys.argv[1], sys.argv[2]
 p = "/etc/headscale/config.yaml"
+p = os.path.realpath(p)
 txt = open(p).read()
 block = ("  # >>> hugmesh cp dns (managed)\n"
          "  extra_records:\n"
@@ -2698,10 +2718,28 @@ for i, ln in enumerate(lines):
         out.append(block); inserted = True
 if not inserted:
     out.append("\ndns:\n  magic_dns: true\n"); out.append(block)
-open(p, "w").write("".join(out))
+tmp = p + ".hugmesh-new"
+try:
+    with open(tmp, "w") as fh:
+        fh.write("".join(out))
+        fh.flush()
+        os.fsync(fh.fileno())
+    shutil.copymode(p, tmp)
+    os.replace(tmp, p)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
 PY
+    then
+        wrote=1
+    else
+        warn "Failed to write CP DNS record: /etc/headscale/config.yaml was left as it was"
+    fi
     chown headscale:headscale /etc/headscale/config.yaml 2>/dev/null || true
-    log "Published MagicDNS CP record ${cpname} -> ${tip}"
+    [ "${wrote}" = 1 ] && log "Published MagicDNS CP record ${cpname} -> ${tip}"
     # This edit comes AFTER provision_headscale's CONFIG GATE, and the restart below
     # makes headscale read it, so the gate runs again first. The managed-block removal
     # above deletes everything between its two marker lines: a KEYS config.yaml that put
@@ -2712,6 +2750,9 @@ PY
         headscale_refuse_config "after the CP DNS record was written: ${cfg_fail}"
         return 0
     fi
+    # Nothing was written, so there is nothing for headscale to re-read: the gate above kept the old
+    # file honest, and a restart (which would drop this node's session for no change) is skipped.
+    [ "${wrote}" = 1 ] || return 0
     # headscale 0.23 reads dns.extra_records at startup only (SIGHUP reloads the
     # policy, not the config), so this is a restart, not a reload — and it happens
     # under this node's own tailscaled session. control_client_regain (called by
