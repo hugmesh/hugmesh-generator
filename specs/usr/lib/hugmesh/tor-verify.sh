@@ -23,9 +23,6 @@
 #   domains-managed=<true|false>\n
 #   domain=<slug>\n            (one per slug, in ARRAY ORDER — the server already
 #                               sorted them; we do NOT re-sort)
-#   rotate=<slug>:<count>\n    (hugmesh-generator#652: one per entry of the OPTIONAL
-#                               `rotations` array, array order; a body with no rotation
-#                               request carries none, so it is byte-identical to before)
 #
 #   nz(): a null string becomes the empty string (jq's // "" mirrors this); a null
 #   boolean is read as false; a null generation as 0.
@@ -77,9 +74,6 @@ tor_canonical_bytes() {
         + "upstream=" + (($b.upstream // "")|tostring) + "\n"
         + "domains-managed=" + (($b.domainsManaged // false)|tostring) + "\n"
         + ( ([ ($b.domains // [])[] | "domain=" + (.|tostring) + "\n" ]) | add // "" )
-        + ( ([ ($b.rotations // [])[]
-               | "rotate=" + ((.slug // "")|tostring) + ":" + ((.count // 0)|tostring) + "\n" ])
-            | add // "" )
     ' "${export_json}" 2>/dev/null
 }
 
@@ -91,8 +85,6 @@ tor_upstream()         { jq -r '.body.upstream // ""' "$1" 2>/dev/null; }
 tor_domains_managed()  { jq -r '.body.domainsManaged // false' "$1" 2>/dev/null; }
 # One slug per line, array order, nothing else (an empty list prints nothing).
 tor_domains()          { jq -r '(.body.domains // [])[] | tostring' "$1" 2>/dev/null; }
-# One "<slug> <count>" per rotation request (#652), array order (none prints nothing).
-tor_rotations()        { jq -r '(.body.rotations // [])[] | "\((.slug // "")|tostring) \((.count // 0)|tostring)"' "$1" 2>/dev/null; }
 
 # ── tor_verify_export <export.json> <pubkey-b64-file> [strict-gen-file] -> rc ───────
 # The FULL fail-closed acceptance gate: (1) signed (signed==true && signature!=null);
