@@ -42,7 +42,10 @@ app-text/xmlto text
 # neochat -> qtwebview hard-requires qtwebengine[qml] (no opt-out USE). qtwebengine
 # is a Chromium fork (bounded to -j2 in package.env so it can't OOM the host) and
 # needs icu on libxml2 (and other system-lib USE flags pulled in below).
-dev-qt/qtwebengine qml opengl
+# -jumbo-build: jumbo builds merge many sources into one translation unit; each cc1plus then peaks at
+# several GB and was what earlyoom killed on 2026-11-19 (see env/qtwebengine-lowmem.conf). Without it the
+# compile is slower but its peak stays well inside this host's memory.
+dev-qt/qtwebengine qml opengl -jumbo-build
 dev-libs/libxml2 icu
 # Further USE deps the large capable set pulls together (KDE Discover appstream
 # backend, qtwebengine's bundled minizip, libreoffice xmlsec):
