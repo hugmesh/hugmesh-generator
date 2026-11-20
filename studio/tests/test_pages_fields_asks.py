@@ -1077,6 +1077,7 @@ def test_ask10_opting_in_reveals_the_fields_and_emits(wiz):
     assert sysp.creds_fields.isVisible()
     sysp.user_password.setText("fallback-user-pw")
     sysp.root_password.setText("fallback-root-pw")
+    sysp.root_password_confirm.setText("fallback-root-pw")
     advance_to(wiz, wizard_mod.HomePage)
     got = pairs(wiz.cfg.to_cli_args())
     assert ("--user-password", "fallback-user-pw") in got
@@ -1175,9 +1176,43 @@ def test_ask10_a_populated_field_that_was_never_opted_into_emits_nothing(wiz):
     sysp.creds_optin.setChecked(True)
     sysp.user_password.setText("now-opted-in")
     sysp.root_password.setText("now-opted-in-root")
+    sysp.root_password_confirm.setText("now-opted-in-root")
     assert sysp.validatePage()
     assert wiz.cfg.user_password == "now-opted-in"
     assert ("--user-password", "now-opted-in") in pairs(wiz.cfg.to_cli_args())
+
+
+def test_ask10_the_root_password_is_typed_twice_and_a_mismatch_is_refused(wiz):
+    """The root password gets the Login Password's guard (operator, 2026-11-19): a
+    second box, a mismatch refused inline under the field, and the mistyped value never
+    written through to the config (collect_all re-runs validatePage and ignores its
+    answer, so the refusal alone would not keep it out of the argv)."""
+    mesh_flow(wiz, "pki.x86")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    sysp.creds_optin.setChecked(True)
+    assert sysp.root_password_confirm.isVisibleTo(sysp)
+    assert sysp.root_password_confirm.echoMode() == QtWidgets.QLineEdit.EchoMode.Password
+    sysp.root_password.setText("r00t-one")
+    sysp.root_password_confirm.setText("r00t-two")
+    assert not sysp.validatePage()
+    assert sysp.root_password_error.isVisibleTo(sysp)
+    assert "do not match" in sysp.root_password_error.text()
+    assert wiz.cfg.root_password == ""                         # not written through
+    assert "--root-password" not in wiz.cfg.to_cli_args()
+    sysp.root_password_confirm.setText("r00t-one")
+    assert sysp.validatePage()
+    assert not sysp.root_password_error.isVisibleTo(sysp)
+    assert ("--root-password", "r00t-one") in pairs(wiz.cfg.to_cli_args())
+
+
+def test_ask10_unticking_wipes_the_root_confirmation_too(wiz):
+    mesh_flow(wiz, "pki.x86")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    sysp.creds_optin.setChecked(True)
+    sysp.root_password.setText("abandoned")
+    sysp.root_password_confirm.setText("abandoned")
+    sysp.creds_optin.setChecked(False)
+    assert sysp.root_password_confirm.text() == ""
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
