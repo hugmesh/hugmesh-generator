@@ -314,9 +314,7 @@ def restart_handover_lines(s: build_sessions.BuildSession) -> list[str]:
     from ..core import secret_files
     out = [f"Restart session {s.id} rebuilds into {s.workdir}",
            "  existing artifacts will be reused/overwritten."]
-    if s.blanked_secrets:
-        out.append("  NOTE: these secrets were NOT saved with the session and will be "
-                   "empty: " + ", ".join(s.blanked_secrets))
+    out += ["  " + line for line in build_sessions.restart_secret_lines(s.blanked_secrets)]
     need = secret_files.missing_for_restart(getattr(s, "held_secret_files", []))
     if need:
         labels = secret_files.FIELD_LABELS

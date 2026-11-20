@@ -644,8 +644,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.relogin_confirm = QtWidgets.QLineEdit()
         self.relogin_confirm.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self.relogin_confirm.setPlaceholderText("type the same password again")
-        form.addRow("Login Password", self.relogin_pass)
-        form.addRow("Confirm Password", self.relogin_confirm)
+        self.relogin_pass_label = QtWidgets.QLabel("Login Password")
+        self.relogin_confirm_label = QtWidgets.QLabel("Confirm Password")
+        form.addRow(self.relogin_pass_label, self.relogin_pass)
+        form.addRow(self.relogin_confirm_label, self.relogin_confirm)
+        #: which never-saved secret the box asks for: "local_pass" or "root_password"
+        self._relogin_field = "local_pass"
         rl.addLayout(form)
         self.relogin_err = QtWidgets.QLabel("")
         self.relogin_err.setWordWrap(True)
@@ -1424,6 +1428,15 @@ class ProgressPage(QtWidgets.QWizardPage):
                 "account logs in with. It is never saved with a session or config, so "
                 "type it again to restart. Nothing has been dispatched yet.")
             return
+        # ...and the node images' baked ROOT password (the System step's console/rescue
+        # login), with the same two-box guard: never saved, so a restart without it
+        # would silently build a node with no root password.
+        if self._secret_needed(wl, "root_password"):
+            self._show_relogin(
+                "This build set a root password for its node images (the console/rescue "
+                "login). It is never saved with a session or config, so type it again "
+                "to restart. Nothing has been dispatched yet.", field="root_password")
+            return
         # per-session artifact dir + durable record: the id BuildPage minted for its
         # preview (pending_session_id) is consumed here so preview == dispatch; a
         # RESTART pins an existing id so the SAME record/workdir is reused. Nothing is
@@ -1497,7 +1510,13 @@ class ProgressPage(QtWidgets.QWizardPage):
         worklist has none: the password is never persisted, so without asking the
         restart would dead-end on preflight (standalone) or quietly build an image
         whose local account has no build-time password (cloud/mesh desktops)."""
-        if getattr(wl.base, "local_pass", ""):
+        return self._secret_needed(wl, "local_pass")
+
+    def _secret_needed(self, wl, field: str) -> bool:
+        """True when the pending session's PRIOR dispatch carried the never-saved secret
+        ``field`` (its record's ``blanked_secrets`` names it) and this restart's worklist
+        has none."""
+        if getattr(wl.base, field, ""):
             return False
         sid = getattr(self.wiz, "pending_session_id", None)
         if not sid:
@@ -1507,16 +1526,30 @@ class ProgressPage(QtWidgets.QWizardPage):
                 os.path.join(build_sessions.sessions_dir(), f"{sid}.json"))
         except (OSError, ValueError):
             return False
-        return "local_pass" in (getattr(prior, "blanked_secrets", None) or [])
+        return field in (getattr(prior, "blanked_secrets", None) or [])
 
-    def _show_relogin(self, why: str) -> None:
+    _RELOGIN_WORDS = {
+        "local_pass": ("Login Password needed to restart", "Login Password",
+                       "you log in with this; hashed at build time"),
+        "root_password": ("Root password needed to restart", "Root password",
+                          "the node images' root login; hashed at build time"),
+    }
+
+    def _show_relogin(self, why: str, field: str = "local_pass") -> None:
+        self._relogin_field = field
+        title, label, hint = self._RELOGIN_WORDS[field]
+        self.relogin.setTitle(title)
+        self.relogin_pass_label.setText(label)
+        self.relogin_confirm_label.setText("Confirm " + label[:1].lower() + label[1:]
+                                           if field == "root_password" else "Confirm Password")
+        self.relogin_pass.setPlaceholderText(hint)
         self.relogin_note.setText(why)
         self.relogin_err.setText("")
         self.relogin_pass.clear()
         self.relogin_confirm.clear()
         self.relogin.setVisible(True)
-        self.log.setPlainText("Waiting for the Login Password (above) — nothing has been "
-                              "dispatched.")
+        self.log.setPlainText(f"Waiting for the {self._RELOGIN_WORDS[field][1]} (above) — "
+                              "nothing has been dispatched.")
         self._all_terminal = True                  # Back stays usable while waiting
         self.completeChanged.emit()
         self._sync_back_button()
@@ -1537,9 +1570,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         wl = getattr(self.wiz, "worklist", None)
         if wl is None:
             return
-        # The login password lives on the worklist BASE (materialize copies it onto
-        # each entry — system.default_user_is_local_user's note), like the walk sets it.
-        wl.base.local_pass = a
+        # The secret lives on the worklist BASE (materialize copies it onto each entry —
+        # system.default_user_is_local_user's note), like the walk sets it.
+        setattr(wl.base, self._relogin_field, a)
         self.relogin_pass.clear()
         self.relogin_confirm.clear()
         self.relogin.setVisible(False)
