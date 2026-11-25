@@ -3952,7 +3952,7 @@ class ImageConfig:
     # to_dict and both manifests, so every pre-existing config keeps its bytes.
     cluster_domain_signin_methods: list[str] = field(default_factory=list)
     # ── hardware ──
-    gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
+    gpu_driver: str = "auto"           # one of GPU_DRIVER_CHOICES ("auto" = the builder picks per role)
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
     hw_profile: str = ""               # a hwprofiles/<id> preset — GUI-ONLY (sets gpu/wifi/bt presets; NEVER emits; G41)
     kernel_builtin: bool = False       # --kernel-builtin
