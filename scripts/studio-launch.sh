@@ -81,7 +81,9 @@ export PYTHONPATH="${STUDIO_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 . "${SCRIPT_DIR}/_first-run-lib.sh"
 
 # ── Colours (only when stderr is a TTY, matching scripts/build-menu.sh) ──────────
-if [ -t 2 ]; then
+# NO_COLOR (https://no-color.org): any value, even empty, turns colour off — checked
+# with `+x` so a set-but-empty NO_COLOR= still counts (a plain `-n` would not).
+if [ -t 2 ] && [ -z "${NO_COLOR+x}" ]; then
     C_RED=$'\033[31m'; C_YEL=$'\033[33m'; C_GRN=$'\033[32m'; C_RST=$'\033[0m'
 else
     C_RED=''; C_YEL=''; C_GRN=''; C_RST=''

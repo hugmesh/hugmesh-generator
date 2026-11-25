@@ -1238,6 +1238,77 @@ unset -f ui_menu
 
 unset -f launch_build save_conf ui_msg ui_password
 
+# ── NO_COLOR (https://no-color.org) and a clean exit with no TTY at all ─────────
+# Both checks need a REAL pty: `-t 2` is false under the test harness's own
+# redirected stderr, which would make every color/no-color case look identical.
+# python3's pty module drives one, the same technique tests/go-live/test-onion-
+# refuse.sh uses for its CLI leg.
+if python3 -c 'import pty' 2>/dev/null; then
+    _pty_source_color() {
+        # $1: extra env assignments (e.g. "NO_COLOR=1"); prints C_RED as seen right
+        # after sourcing build-menu.sh on a real pty.
+        python3 - "$1" "${MENU_SH}" <<'EOPTY'
+import os, pty, sys, time
+env_extra, menu_sh = sys.argv[1], sys.argv[2]
+pid, fd = pty.fork()
+if pid == 0:
+    # stdout only, NEVER stderr: build-menu.sh reads `-t 2` to decide on colour, so
+    # redirecting fd 2 away from the pty here would make every case look the same.
+    os.execvp("bash", ["bash", "-c",
+        f'{env_extra} NO_TUI=1 source "{menu_sh}" >/dev/null; printf "COLOR=[%s]" "$C_RED"'])
+out = b""
+deadline = time.time() + 5
+while time.time() < deadline:
+    try:
+        out += os.read(fd, 4096)
+    except OSError:
+        break
+    if b"COLOR=[" in out and out.rstrip().endswith(b"]"):
+        break
+try:
+    os.waitpid(pid, 0)
+except ChildProcessError:
+    pass
+sys.stdout.write(out.decode(errors="replace"))
+EOPTY
+    }
+    _plain="$(_pty_source_color "")"
+    _nocolor_set="$(_pty_source_color "NO_COLOR=1")"
+    _nocolor_empty="$(_pty_source_color "NO_COLOR=")"
+    case "${_plain}" in
+        *'COLOR=['$'\033''[31m]') _ok ;;
+        *) _bad "NO_COLOR: on a real tty with NO_COLOR unset, C_RED must be the escape (got: ${_plain})" ;;
+    esac
+    case "${_nocolor_set}" in
+        *'COLOR=[]') _ok ;;
+        *) _bad "NO_COLOR=1 must blank C_RED even on a real tty (got: ${_nocolor_set})" ;;
+    esac
+    case "${_nocolor_empty}" in
+        *'COLOR=[]') _ok ;;
+        *) _bad "NO_COLOR= (set but empty) must still blank C_RED (got: ${_nocolor_empty})" ;;
+    esac
+else
+    printf 'SKIP NO_COLOR checks: python3 lacks the pty module\n' >&2
+fi
+
+# No controlling terminal at ALL (setsid, piped stdin): the text-fallback main menu
+# must exit 0 with its own warning line, never bash's raw "/dev/tty: No such device
+# or address" and never a busy loop. `setsid` detaches the controlling terminal even
+# though this test's own stdin/stdout may still be a tty.
+if command -v setsid >/dev/null 2>&1; then
+    _notty_out="$(SNAP_MENU_STATE="$(mktemp -d)" NO_TUI=1 timeout 10 setsid bash "${MENU_SH}" </dev/null 2>&1)"
+    _notty_rc=$?
+    assert_eq "no-tty: build-menu.sh exits 0 (never hangs, never busy-loops)" "${_notty_rc}" "0"
+    case "${_notty_out}" in
+        *'No such device or address'*) _bad "no-tty: a raw bash I/O error leaked instead of our own message: ${_notty_out}" ;;
+        *) _ok ;;
+    esac
+    assert_grep_str() { printf '%s\n' "$2" | grep -Eq -- "$3" && _ok || _bad "$1: missing /$3/ in: $2"; }
+    assert_grep_str "no-tty: a clear message explains the exit" "${_notty_out}" 'no interactive terminal'
+else
+    printf 'SKIP no-tty clean-exit check: setsid not available\n' >&2
+fi
+
 for _d in "${REPO_DIR}"/.hugmesh-secrets/login.*; do
     [ -d "${_d}" ] || continue
     printf '%s\n' "${_SECRETS_BEFORE}" | grep -xF "${_d}" >/dev/null || rm -rf -- "${_d}"
