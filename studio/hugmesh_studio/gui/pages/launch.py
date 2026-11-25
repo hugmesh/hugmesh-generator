@@ -64,6 +64,7 @@ from ..choice_cards import ChoiceCard
 from ..qt import Qt, QtWidgets
 from ._images_mesh import ImagesMeshStrip
 from ._scroll import scrollable
+from .sessions import perform_save
 from ..styles import ERROR, muted
 from ...core import cross_dracut
 from ...core.domain_services import ACTION_IMAGE_BUILD, gate_reason
@@ -124,6 +125,25 @@ class LaunchPage(QtWidgets.QWizardPage):
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
         lay.addWidget(self.summary)
         lay.addWidget(self._muted_note())
+        # SAVE CONFIG (G49): the Load/Save door used to live ONLY on the prior-sessions
+        # screen, a main-menu detour away — this page's own menu_card text claims the
+        # operator can "save it to a file" from here, which was only true by way of
+        # that detour. A plain button, same inline-status idiom as the mesh strip's
+        # Save (never a modal: page logic, headless-test rule).
+        save_row = QtWidgets.QHBoxLayout()
+        self.save_config_btn = QtWidgets.QPushButton("Save config…")
+        self.save_config_btn.setToolTip(
+            "Save the current settings to a JSON file, exactly as the prior-sessions "
+            "screen's Save config does — before building, or instead of it.")
+        self.save_config_btn.clicked.connect(self._save_config)
+        save_row.addWidget(self.save_config_btn)
+        save_row.addStretch(1)
+        lay.addLayout(save_row)
+        self.save_config_note = QtWidgets.QLabel("")
+        self.save_config_note.setWordWrap(True)
+        self.save_config_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.save_config_note.setVisible(False)
+        lay.addWidget(self.save_config_note)
         # The gate's refusal (#495). An inline label, never a modal: this is page
         # logic, and a QMessageBox here would hang the headless suite (the repo's
         # no-modals-in-page-logic rule). Empty and hidden until something refuses.
@@ -174,6 +194,21 @@ class LaunchPage(QtWidgets.QWizardPage):
         lab.setWordWrap(True)
         lab.setStyleSheet(muted())
         return lab
+
+    def _save_config(self) -> None:
+        """Save the current config (the Review/Launch door, G49) — the one on the
+        prior-sessions screen in every other way: the same ``sessions.perform_save``,
+        the same file dialog, the same blanked-secret warning, only an inline note here
+        instead of there. Not a gate: the Continue card and ``validatePage`` are
+        untouched by it, exactly like the mesh strip's own Save button."""
+        try:
+            text, colour = perform_save(self.wiz, self)
+            if text:
+                self.save_config_note.setText(text)
+                self.save_config_note.setStyleSheet(f"color: {colour};" if colour else "")
+                self.save_config_note.setVisible(True)
+        except Exception:                     # noqa: BLE001 — see module docstring
+            _log_swallowed("_save_config")
 
     # ---- slots (guarded: PyQt6 qFatals on an exception escaping a slot) -----------
     def _continue(self) -> None:
