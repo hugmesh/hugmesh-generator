@@ -1296,6 +1296,65 @@ def test_web_ui_waits_for_the_gateway_then_tunnels_and_opens(
     assert page.tunnel_close_btn.isEnabled()
 
 
+def test_the_front_door_note_never_calls_an_untunnelled_url_ready(
+        wiz, registry, spawned, monkeypatch):
+    """#1180: the note said "Front door ready: https://127.0.0.1:<port>/" as soon as
+    the gateway's ssh was up, but nothing binds that port until the tunnel exists, so
+    the address an operator copied from the note did not load. Until a tunnel is open
+    the note is an instruction; with one open it names the tunnel and what the tunnel
+    cannot vouch for; once it closes, the instruction is back."""
+    monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
+                        staticmethod(lambda url: None))
+    page = _page(wiz)
+    registry(_device("x86/frontend", port=22357))
+    page._refresh_reality()
+    url = f"https://127.0.0.1:{page.plan.mesh.gateway.ui_port}/"
+
+    before = page.web_note.text()
+    assert "ready" not in before.lower(), before
+    assert url in before and "Open web UI" in before and "only through" in before
+
+    page.web_btn.click()
+    during = page.web_note.text()
+    assert url in during and "through the open web tunnel" in during
+    assert ":443 is not serving yet" in during
+    assert "Open web UI" not in during
+
+    page.tunnel_close_btn.click()
+    after = page.web_note.text()
+    assert "through the open web tunnel" not in after
+    assert "Open web UI" in after
+
+
+def test_a_tunnel_that_died_on_its_own_is_not_described_as_open(
+        wiz, registry, spawned, monkeypatch):
+    monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
+                        staticmethod(lambda url: None))
+    page = _page(wiz)
+    registry(_device("x86/frontend", port=22357))
+    page._refresh_reality()
+    page.web_btn.click()
+    spawned[0].terminate()                         # ssh exited behind the page's back
+    page._sync_controls()
+    assert "through the open web tunnel" not in page.web_note.text()
+    assert "Open web UI" in page.web_note.text()
+
+
+def test_a_busy_page_does_not_call_a_running_front_door_not_up(wiz, registry):
+    """While another verb runs the button greys, but the gateway is still up: the
+    note used to say "is not up yet — start the mesh", which was false."""
+    page = _page(wiz)
+    registry(_device("x86/frontend", port=22357))
+    page._refresh_reality()
+    page._set_running(True)
+    try:
+        assert not page.web_btn.isEnabled()
+        assert "not up yet" not in page.web_note.text()
+        assert "another action" in page.web_btn.toolTip()
+    finally:
+        page._set_running(False)
+
+
 def test_a_second_press_reuses_the_tunnel_and_says_so(wiz, registry, spawned,
                                                       monkeypatch):
     monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
