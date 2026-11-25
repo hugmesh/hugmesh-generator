@@ -617,6 +617,10 @@ class DomainsTableBody:
         # ("None") and name a step the route does not have.
         self.table.setColumnHidden(_COL_APPLIES, not with_applies)
         self.table.setColumnHidden(_COL_CA, not with_ca)
+        # Live, like the org cell's _on_org_edited: a bad or duplicate NAME is said
+        # inline as the operator types it, not only on Next (#631 section 2 added the
+        # check there; this closes the same gap for the name cell).
+        self.table.itemChanged.connect(self._on_name_cell_changed)
         lay.addWidget(self.table)
         btns = QtWidgets.QHBoxLayout()
         add = QtWidgets.QPushButton("Add domain")
@@ -716,6 +720,24 @@ class DomainsTableBody:
                                    and hasattr(cfg, "by_name")) else None
         if row is not None and not github_org_problem(self.own_row_github_org()):
             row.github_org = self.own_row_github_org()
+
+    def _on_name_cell_changed(self, item) -> None:
+        """A NAME cell edited (table ``itemChanged``): say INLINE (never a modal) when
+        the added rows now collide or are not domain names, live — the same check
+        ``validatePage`` makes on Next (#631 section 2), surfaced as the operator types
+        instead of only once they try to leave. Overwrites ``row_note`` exactly like
+        ``_on_org_edited`` does; the authoritative refusal on Next always re-runs this."""
+        if item.column() != _COL_NAME:
+            return
+        names = []
+        for r in range(self.table.rowCount()):
+            if self.is_own_row(r):
+                continue
+            it = self.table.item(r, _COL_NAME)
+            names.append(it.text() if it else "")
+        problems = added_row_problems(names, self.own_row_name())
+        self.row_note.setText("\n".join(problems))
+        self.row_note.setVisible(bool(problems))
 
     def row_github_org(self, r: int) -> str:
         cell = self.table.cellWidget(r, _COL_ORG)

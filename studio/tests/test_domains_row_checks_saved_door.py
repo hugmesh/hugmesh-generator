@@ -157,6 +157,39 @@ def test_cloud_refuses_junk_and_a_duplicate_of_the_prefill(wiz):
     assert "not a domain name" in dom.row_note.text()
 
 
+def test_live_edit_flags_a_bad_row_without_leaving_the_page(wiz):
+    """G49: the duplicate/invalid-row check is live on this page, not only on Next —
+    typing a bad name and committing the cell (no validatePage, no wiz.next()) must
+    flag it, with geometry, exactly like the org cell's live check already does."""
+    dom = _mesh_domains(wiz)
+    dom._add("")
+    item = dom.table.item(dom.table.rowCount() - 1, 0)
+    assert not dom.row_note.isVisible()            # a blank row is not flagged
+    item.setText("Not_A_Domain")                   # a user edit commits via itemChanged
+    assert dom.row_note.isVisible()
+    assert "not a domain name" in dom.row_note.text()
+    assert wiz.currentPage() is dom                 # still here: this is not a gate
+    item.setText("acme.example")                    # fixed: the note clears live too
+    assert not dom.row_note.isVisible()
+    item2_row = dom.table.rowCount()
+    dom._add("acme.example")                        # a live duplicate of the fixed row
+    dup_item = dom.table.item(item2_row, 0)
+    dup_item.setText("acme.example")
+    assert dom.row_note.isVisible()
+    assert "already listed: acme.example" in dom.row_note.text()
+    QtWidgets.QApplication.processEvents()
+    page = dom.rect()
+    note = dom.row_note.geometry()
+    table = dom.table.geometry()
+    assert note.width() > 0 and note.height() > 0
+    assert page.contains(note), (page, note)
+    assert note.top() >= table.bottom(), (note, table)
+    shot = os.environ.get("HUGMESH_SHOT_DIR")
+    if shot:
+        os.makedirs(shot, exist_ok=True)
+        wiz.grab().save(os.path.join(shot, "domains-row-live-check.png"))
+
+
 def test_the_note_is_inline_inside_the_page_and_clear_of_the_table(wiz, tmp_path):
     """Rendered, with geometry: the refusal is a visible label, inside the page, below
     the table, not overlapping it or the notes under it."""
