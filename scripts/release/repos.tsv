@@ -74,3 +74,5 @@
 9|hugmesh-generator|img|clients/docker-mesh-node/VERSION|mesh-node-v|mesh-node-release.yml|hugmesh-mesh-node
 9|hugmesh-akkoma|img|VERSION|v|release.yml|hugmesh-akkoma
 9|hugmesh-akkoma@web|img|web/VERSION|web-v|release-web.yml|hugmesh-akkoma-web
+9|hugmesh-tuwunel|img|VERSION|v|release.yml|hugmesh-tuwunel
+9|hugmesh-tuwunel@web|img|web/VERSION|web-v|release-web.yml|hugmesh-tuwunel-web
