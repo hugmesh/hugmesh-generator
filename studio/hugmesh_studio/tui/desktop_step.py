@@ -41,9 +41,19 @@ COMMANDS = (
 
 
 def _password_from(token: str) -> str:
+    """The first line of the FILE a ``pass=FILE`` token names. The password is never typed
+    here, so a refusal never repeats the token back: a person who types the password
+    where the file name goes would otherwise see it echoed in the status line (the
+    OSError's own text names the file), and a terminal keeps what it has shown.
+    Raises ValueError, which the screen says."""
     path = os.path.expanduser(token[5:])
-    with open(path, encoding="utf-8") as fh:
-        return fh.readline().rstrip("\r\n")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.readline().rstrip("\r\n")
+    except (OSError, UnicodeDecodeError) as exc:
+        why = (exc.strerror if isinstance(exc, OSError) else "") or "not readable as UTF-8 text"
+        raise ValueError("pass=FILE could not be read (" + why + "): the password is the "
+                         "first line of a FILE, never typed here") from None
 
 
 class DesktopScreen:
@@ -323,11 +333,12 @@ class DesktopScreen:
         if not args:
             return "login NAME [admin] [pass=FILE]"
         validate_username(args[0])
+        pw = [a for a in args[1:] if a.startswith("pass=")]
+        password = _password_from(pw[0]) if pw else None    # read first: a refusal changes nothing
         j.cfg.local_user = args[0]
         j.cfg.local_admin = "admin" in args[1:]
-        pw = [a for a in args[1:] if a.startswith("pass=")]
-        if pw:
-            j.cfg.local_pass = _password_from(pw[0])
+        if password is not None:
+            j.cfg.local_pass = password
         return (f"login account: {args[0]}" + (" (administrator)" if j.cfg.local_admin else "")
                 + ("; password read (never saved: retype it in the Studio window to build)"
                    if pw else ""))
