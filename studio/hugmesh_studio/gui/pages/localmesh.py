@@ -121,7 +121,8 @@ from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import brand_look, mesh_controls, plain_words, platform_info, saved_meshes, vaults
-from ...core.config import IDP_CHOICES, IDP_LABELS, github_org_problem, idp_effective_jwks
+from ...core.config import (IDP_CHOICES, IDP_ISSUER_HINTS, IDP_JWKS_HINTS, IDP_LABELS,
+                            github_org_problem, idp_effective_jwks)
 from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN,
                             OPTIONAL_SERVICES_CHOICES, Domain)
 from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
@@ -220,14 +221,6 @@ _DEVOPS_DOWN_CONFIRM_TEXT = (
     "it back.\n\n"
     "Delete it?"
 )
-
-# Per-provider placeholder hints — the SAME endpoint shapes gui/pages/idp.py
-# carries (one picker, two frames: the node wizard page and this bootstrap tab).
-_IDP_ISSUER_HINTS = {
-    "entra": "https://login.microsoftonline.com/<tenant-id>/v2.0",
-    "aws": "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>",
-    "oidc": "https://id.example.org (the token `iss` value, exactly)",
-}
 
 # ── the services table's column grid ────────────────────────────────────────────
 # Symbolic indices (network.py's rule): a test names the column it reads instead of
@@ -349,13 +342,6 @@ MESH_INFRA_TITLE = "The mesh's own infrastructure (chosen once for the whole mes
 PROD_APEX_NOTE = ("A prod mesh needs its public apex domain in the first row — the "
                   "minted issuer and superadmin align with it. The mesh cannot "
                   "start without it.")
-
-
-_IDP_JWKS_HINTS = {
-    "entra": "empty = <issuer>/discovery/v2.0/keys",
-    "aws": "empty = <issuer>/.well-known/jwks.json",
-    "oidc": "empty = <issuer>/.well-known/jwks",
-}
 
 
 class _StatusProbe(QtCore.QThread):
@@ -3576,10 +3562,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         for w in (self.idp_issuer, self.idp_client_id, self.idp_jwks):
             w.setEnabled(ext)
         self.idp_issuer.setPlaceholderText(
-            _IDP_ISSUER_HINTS.get(self.selected_idp(), "") if ext
+            IDP_ISSUER_HINTS.get(self.selected_idp(), "") if ext
             else "built-in Casdoor — nothing to configure")
         self.idp_jwks.setPlaceholderText(
-            _IDP_JWKS_HINTS.get(self.selected_idp(), "") if ext else "")
+            IDP_JWKS_HINTS.get(self.selected_idp(), "") if ext else "")
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         # live, never-rounded-up coverage for the existing-tree mode
         if self.src_existing.isChecked():

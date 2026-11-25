@@ -887,6 +887,27 @@ IDP_JWKS_SUFFIX = {
     "oidc": "/.well-known/jwks",
 }
 
+# The placeholder hints every provider screen shows in its issuer / client-id / JWKS
+# line edits (the providers' real endpoint shapes). ONE table: the node wizard's IdP
+# page, the provider wizard and the local mesh's bootstrap tab all read it, so a
+# provider's hint cannot read differently on two screens. The JWKS hints are built from
+# IDP_JWKS_SUFFIX, so a hint cannot promise a path the derivation does not use.
+IDP_ISSUER_HINTS = {
+    "entra": "https://login.microsoftonline.com/<tenant-id>/v2.0",
+    "aws": "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>",
+    "oidc": "https://id.example.org (the token `iss` value, exactly)",
+}
+IDP_CLIENT_HINTS = {
+    "entra": "the app registration's Application (client) ID",
+    "aws": "the Cognito app client id",
+    "oidc": "the OIDC client id registered for this mesh",
+}
+IDP_JWKS_HINTS = {
+    "entra": f"empty = <issuer>{IDP_JWKS_SUFFIX['entra']}",
+    "aws": f"empty = <issuer>{IDP_JWKS_SUFFIX['aws']}",
+    "oidc": f"empty = <issuer>{IDP_JWKS_SUFFIX['oidc']} (override if your provider differs)",
+}
+
 
 def idp_effective_jwks(idp: str, issuer: str, jwks: str) -> str:
     """The JWKS URL external mode bakes: the explicit override, else the
