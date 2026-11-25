@@ -292,30 +292,6 @@ class _StatusLine(QtWidgets.QLabel):
                 pass
 
 
-#: What a saved-mesh record's theme ``form`` holds when it carries no theme inputs:
-#: the shipped brand. Keys are ImageConfig's login_* names (the old Themes group's
-#: load/commit contract, kept so every saved record still loads) — ALL seventeen,
-#: because apply_bootstrap filters the record's form against this dict. Since
-#: 2026-10-21 the form ALSO carries ``look`` (the mesh's whole look, as the brand
-#: record writes it: shape, decoration and pictures included) and the Themes group is
-#: gone: the look is chosen on the Look tab of the mesh's own domain. Listing only
-#: the eight colour/font keys silently threw away the nine web-chrome inputs on
-#: every Load/Restore (header hidden, header/footer colours, background effect),
-#: derived a different login page, and then reported "every field applied".
-#: Chrome falls back inside load() itself, so "" / False are the shipped page.
-_THEME_FORM_DEFAULTS = {
-    "login_theme_preset": "", "login_theme_mode": "dark",
-    "login_primary_color": "", "login_secondary_color": "",
-    "login_font": "", "login_font_file": "",
-    "login_font_licence": "", "login_font_source": "",
-    "login_header_hidden": False, "login_header_size": "",
-    "login_header_bg": "", "login_header_text": "",
-    "login_footer_hidden": False, "login_footer_size": "",
-    "login_footer_bg": "", "login_footer_text": "",
-    "login_bg_effect": "",
-}
-
-
 def _migrated_services(cfg: LocalMeshBootstrapConfig) -> LocalMeshBootstrapConfig:
     """A copy of ``cfg`` whose domain services are on its domain rows: the domain
     slugs of ``services`` move into the rows (``_migrate_domain_services``, the loader's
@@ -2833,8 +2809,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         ``look``, the whole look as the brand record writes it."""
         look = self.mesh_look()
         eff = look.effective() if look is not None else brand_look.effective_look({})
-        form = {attr: eff[f] for f, attr in brand_look.CFG_FIELDS.items()
-                if attr in _THEME_FORM_DEFAULTS}
+        form = {attr: eff[f] for f, attr in brand_look.LOGIN_THEME_ATTRS.items()}
         if look is not None:
             form["look"] = dict(look.record())
         return form
@@ -2850,12 +2825,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if form and isinstance(form.get("look"), dict):
             look_in = dict(form["look"])
         elif form:
-            ns = dict(_THEME_FORM_DEFAULTS)
+            ns = dict(brand_look.LOGIN_THEME_FORM_DEFAULTS)
             ns.update({k: v for k, v in form.items() if k in ns})
             from_form = brand_look.look_from_cfg(types.SimpleNamespace(**ns))
             look_in = dict((cfg.superbrand or {}).get("look") or {})
-            look_in.update({f: from_form[f] for f, attr in brand_look.CFG_FIELDS.items()
-                            if attr in _THEME_FORM_DEFAULTS})
+            look_in.update({f: from_form[f] for f in brand_look.LOGIN_THEME_FIELDS})
         elif cfg.login_theme_css.strip():
             missing.append("login_theme_css")
         s = self.brand_session()
