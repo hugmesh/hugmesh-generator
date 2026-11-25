@@ -30,8 +30,8 @@ from ..core.config import (
     normalize_user_roles,
 )
 from ..core.local_mesh_bootstrap import (
-    LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_choice_text,
-    saved_mesh_source,
+    LocalMeshBootstrap, LocalMeshIdentity, local_k8s_running, localcloud_tor_note,
+    saved_mesh_choice_text, saved_mesh_source,
 )
 from ..core.local_mesh_domains import (
     apply_imported_domains, apply_imported_tor, imported_domains_lines,
@@ -39,8 +39,16 @@ from ..core.local_mesh_domains import (
 )
 from ..core.seeded_credentials import load_roster
 
-__all__ = ["ALLOWED_ROLES", "LocalCloudScreen", "apply_gate",
-           "local_mesh_identity"]
+__all__ = ["ALLOWED_ROLES", "K8S_RUNNING", "LocalCloudScreen", "apply_gate",
+           "local_k8s_running", "local_mesh_identity"]
+
+#: Why ``y`` is refused while the local Kubernetes (DevOps) lane is up — the window's
+#: "the lane is RUNNING … Next stays disabled until the cluster is gone", for a screen
+#: that has no button to delete it.
+K8S_RUNNING = ("The local Kubernetes (DevOps) lane is RUNNING, so nothing was committed: "
+               "node images are not configured against a live cluster. Bring it down "
+               "(`make kind-down` in this checkout; the docker mesh and its volumes are "
+               "untouched), then answer y again — this screen checks again each time.")
 
 #: The abbreviated worklist: ONLY the laptop and the cluster-node image types —
 #: DERIVED from ROLE_CHOICES x image_class (never a hand-kept list), exactly the
@@ -237,11 +245,11 @@ class LocalCloudScreen:
             "identity tier and keep working; they are simply not listed above.",
             "",
             "K8S GATE: the local Kubernetes (DevOps) stack must come down "
-            "before these node images are configured and built. THIS terminal "
-            "flow does not take it down for you — the GUI's gate page runs the "
-            "teardown itself; here, bring it down with `make kind-down` or from "
-            "the Local Docker Mesh flow's DevOps controls (the docker mesh and "
-            "its volumes are untouched).",
+            "before these node images are configured and built, and answering y "
+            "checks that it has. THIS terminal flow does not take it down for you "
+            "— the GUI's gate page runs the teardown itself; here, bring it down "
+            "with `make kind-down` or from the Local Docker Mesh flow's DevOps "
+            "controls (the docker mesh and its volumes are untouched).",
         ]
 
     def _pick_lines(self) -> list[str]:
@@ -275,6 +283,11 @@ class LocalCloudScreen:
                 j.status = f"no saved mesh numbered {n} — pick 1-{len(self._records)}"
             return                       # stay on the gate: consent is still asked
         if line.lower() in ("y", "yes"):
+            # the window's third half of isComplete(): no cluster still KNOWN to be up.
+            # Looked up on the MODULE (like local_mesh_identity) so tests can pin a host.
+            if local_k8s_running(j.generator_dir):
+                j.status = K8S_RUNNING
+                return                   # stay on the gate: consent is still asked
             apply_gate(j, self._domain, self._users, with_tor=self._with_tor,
                        mesh_domains=self._mesh_domains)
             j.advance()                  # rejoin the mesh chain: idp -> worklist
