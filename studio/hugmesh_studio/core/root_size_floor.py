@@ -83,3 +83,25 @@ def img_size_error(platform: str, mode: str, role: str, img_size: int,
             "(measured packages + headroom) — the build would abort in the .img "
             "pre-flight after the full emerge. Leave 0 for the role default, or "
             f"choose at least {floor} MiB.")
+
+
+def entry_errors(entries, cfg) -> list[tuple[str, str]]:
+    """``[(entry id, refusal), ...]``: ``cfg.img_size`` held against the floor of every
+    worklist entry, in worklist order ([] when nothing is below its floor, or when
+    ``img_size`` is 0, the role default).
+
+    THE ONE PLACE the floor is applied to a build. The wizard's Build page
+    (``validatePage``) and the headless ``--check`` both read it, so neither can accept
+    a root size the other refuses. ``entries`` are the worklist's entries and ``cfg``
+    the config they are built from: its mode, desktop and capable flag are part of the
+    floor, and an entry's own desktop wins over the config's."""
+    if not cfg.img_size:
+        return []
+    out = []
+    for entry in entries:
+        err = img_size_error(entry.platform, cfg.mode, entry.role, cfg.img_size,
+                             desktop=entry.desktop or cfg.desktop,
+                             capable=bool(cfg.capable))
+        if err:
+            out.append((entry.id, err))
+    return out
