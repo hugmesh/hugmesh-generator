@@ -139,20 +139,29 @@ def page(qapp, tmp_path, monkeypatch):
     from hugmesh_studio.gui.qt import QtWidgets
 
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
-    said = []
+
+    # G48: Load config must report INLINE, never a modal. Rather than record a modal
+    # call and assert it was not made, make one a hard failure — a mutation that
+    # brought a QMessageBox back would fail loudly here, not pass silently because
+    # nothing asserted the list stayed empty.
+    def _refuse_modal(kind):
+        def _raise(*a, **kw):
+            raise AssertionError(f"QMessageBox.{kind} must not be called (G48)")
+        return staticmethod(_raise)
     for kind in ("information", "warning", "critical"):
-        monkeypatch.setattr(QtWidgets.QMessageBox, kind,
-                            staticmethod(lambda _parent, title, text, *a, _k=kind, **kw:
-                                         said.append((_k, title, text))))
+        monkeypatch.setattr(QtWidgets.QMessageBox, kind, _refuse_modal(kind))
 
     class Wiz:
-        """The real load_config's body (wizard.py) without the rest of the wizard."""
+        """The real load_config's body (wizard.py, incl. its SECRET_FIELDS return)
+        without the rest of the wizard."""
         restarted = 0
 
         def load_config(self, path):
             from hugmesh_studio.core import worklist
+            from hugmesh_studio.core.config import SECRET_FIELDS
             self.cfg, self.worklist = worklist.load_any(path)
             self.restarted += 1
+            return [k for k in SECRET_FIELDS if getattr(self.cfg, k, "")]
 
     pg = sessions.SessionsPage(Wiz())
 
@@ -160,7 +169,7 @@ def page(qapp, tmp_path, monkeypatch):
         monkeypatch.setattr(QtWidgets.QFileDialog, "getOpenFileName",
                             staticmethod(lambda *a, **kw: (str(path), "JSON (*.json)")))
         pg._load()
-        return said
+        return pg.load_save_note
     pg.choose = choose
     return pg
 
@@ -173,17 +182,16 @@ def page(qapp, tmp_path, monkeypatch):
 def test_a_config_that_does_not_load_says_so(page, tmp_path, raw):
     bad = tmp_path / "bad.json"
     bad.write_bytes(raw)
-    said = page.choose(bad)
-    assert [(k, t) for k, t, _ in said] == [("warning", "Could not load")]
-    assert said[0][2].startswith(f"{bad} could not be loaded: ")
+    note = page.choose(bad)
+    assert note.text().startswith(f"{bad} could not be loaded: ")
     assert page.wiz.restarted == 0
 
 
 def test_a_config_in_the_ansi_code_page_is_told_how_to_fix_it(page, tmp_path):
     bad = tmp_path / "ansi.json"
     bad.write_bytes('{"hostname": "café"}'.encode("cp1252"))
-    [(_, _, text)] = page.choose(bad)
-    assert "Save it again as UTF-8" in text
+    note = page.choose(bad)
+    assert "Save it again as UTF-8" in note.text()
 
 
 def test_a_utf16_config_without_a_bom_is_not_called_not_utf16(page, tmp_path):
@@ -191,17 +199,28 @@ def test_a_utf16_config_without_a_bom_is_not_called_not_utf16(page, tmp_path):
     # its é (E9 00) breaks the decode. The dialog must not claim it is not UTF-16.
     bad = tmp_path / "utf16-no-bom.json"
     bad.write_bytes('{"hostname": "café"}'.encode("utf-16-le"))
-    [(kind, _, text)] = page.choose(bad)
-    assert kind == "warning"
-    assert "not UTF-8 text, nor UTF-16 with a byte order mark" in text
-    assert "Save it again as UTF-8" in text
+    note = page.choose(bad)
+    assert "not UTF-8 text, nor UTF-16 with a byte order mark" in note.text()
+    assert "Save it again as UTF-8" in note.text()
 
 
 def test_a_config_that_loads_still_says_loaded(page, tmp_path):
     good = tmp_path / "good.json"
     good.write_text("{}", encoding="utf-8")
-    said = page.choose(good)
-    assert said == [("information", "Loaded", f"Loaded {good}")]
+    note = page.choose(good)
+    assert note.text() == f"Loaded {good}"
+    assert page.wiz.restarted == 1
+
+
+def test_a_secret_bearing_file_loads_but_says_so_inline(page, tmp_path):
+    """G48: a foreign/hand-edited file carrying a plaintext SECRET_FIELDS value still
+    loads (refusing the whole file over one field would be its own surprise), but the
+    operator is told inline that a secret just came into memory from disk."""
+    secret = tmp_path / "secret.json"
+    secret.write_text('{"local_pass": "hunter2"}', encoding="utf-8")
+    note = page.choose(secret)
+    assert note.text().startswith(f"Loaded {secret}. This file carried plaintext "
+                                  "secret(s) (local-pass)")
     assert page.wiz.restarted == 1
 
 

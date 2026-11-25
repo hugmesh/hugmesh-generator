@@ -17,7 +17,7 @@ from .. import __version__
 from ..core import crashlog
 from ..core import rerun_step
 from ..core.build_driver import BuildDriver
-from ..core.config import ImageConfig, MODE_SKIPPED_PAGES, WIZARD_PAGE_SLUGS
+from ..core.config import ImageConfig, MODE_SKIPPED_PAGES, SECRET_FIELDS, WIZARD_PAGE_SLUGS
 from ..core.platform_info import detect
 from ..core import platform_info
 from ..core import worklist as worklist_mod
@@ -442,11 +442,19 @@ class StudioWizard(QtWidgets.QWizard):
         loader both UIs share (worklist.load_any). A flat config keeps loading
         byte-identically (the envelope is discriminated by an explicit `schema` key);
         an envelope restores self.worklist so the mesh flow re-populates. restart() so
-        each page's initializePage() re-reads the freshly loaded config."""
+        each page's initializePage() re-reads the freshly loaded config.
+
+        Returns the SECRET_FIELDS names that came out of the file non-empty (G48): a
+        foreign/hand-edited file carrying a plaintext password still loads (the field
+        is a legitimate part of the config shape, and refusing the whole file over one
+        field would be its own surprise), but the caller needs to say so — the value
+        is now in memory for this session only; ``save_config`` still blanks it on the
+        way back out, exactly as a password typed on the System page would be."""
         base, wl = worklist_mod.load_any(path)
         self.cfg = base
         self.worklist = wl
         self.restart()
+        return [k for k in SECRET_FIELDS if getattr(base, k, "")]
 
     def load_session(self, data):
         """REDO ("edit as new"): load a session record's config snapshot — the full
