@@ -129,9 +129,10 @@ MODE_DEFAULT_ROLE = {
 # built + the knobs), "launch" is the separate BUILD screen (continue the build / back
 # to the main menu), "progress" runs it. Nothing dispatches until Continue is pressed.
 #
-# Issue #50 (welcome flow): "welcome" is the three-card first screen (start building /
-# start a local mesh / review prior sessions) and "sessions" is the demoted old first
-# screen (Load/Save config + the Previous-builds manager). "sessions" sits IMMEDIATELY
+# Issue #50 (welcome flow): "welcome" is the two-card first screen (start building /
+# review prior sessions — DECISION 2(d) dropped the "start a local mesh" card the
+# screen used to carry) and "sessions" is the demoted old first screen (Load/Save
+# config + the Previous-builds manager). "sessions" sits IMMEDIATELY
 # after "welcome": only WelcomePage.nextId() ever routes INTO it (a plain Next flows
 # welcome -> mode), and its own positional next is "mode" — reviewing what you built
 # continues naturally into building. A fresh start shows "welcome" (first slug, and
