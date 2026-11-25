@@ -2249,6 +2249,61 @@ def test_look_the_display_button_is_drawn_beside_ssh(qapp, fake_generator, style
             settle(qapp)
 
 
+@pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
+def test_look_the_front_door_note_is_drawn_whole_in_every_tunnel_state(
+        qapp, fake_generator, style, pt, monkeypatch):
+    """#1180's three wordings (gateway down, no tunnel yet, tunnel open) are longer
+    than the old "Front door ready" line and share a row with three buttons: each is
+    drawn whole, inside the page, and wide enough to read — measured, then snapped."""
+    child_only()
+    monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
+                        staticmethod(lambda url: None))
+    gen, _sess, _abort = fake_generator
+    devdir = os.path.join(str(gen), qemu_tests.DEFAULT_WORK_SUBDIR, "devices")
+    with looking(qapp, style, pt):
+        w = wizard_mod.StudioWizard(str(gen))
+        w.show()
+        try:
+            page = _page(w)
+            area = page.web_note.parentWidget()
+            while area is not None and not isinstance(area, QtWidgets.QScrollArea):
+                area = area.parentWidget()
+
+            def check(state, needle):
+                settle(qapp)
+                if area is not None:
+                    area.ensureWidgetVisible(page.web_note)
+                    settle(qapp)
+                note = page.web_note
+                assert needle in note.text(), f"{state}: {note.text()!r}"
+                assert_inside(page, note, f"the front-door note ({state})")
+                assert_whole(note, f"the front-door note ({state})")
+                assert note.width() >= 200, \
+                    f"the front-door note ({state}) is squeezed to {note.width()}px"
+                snap(w, f"meshemu-frontdoor-{state}", style, pt)
+
+            check("down", "not up yet")
+            os.makedirs(devdir, exist_ok=True)
+            dev = _device("x86/frontend", port=22357)
+            with open(os.path.join(devdir, "x86_frontend.json"), "w",
+                      encoding="utf-8") as fh:
+                json.dump(dataclasses.asdict(dev), fh)
+            page._refresh_reality()
+            check("no-tunnel", "Open web UI")
+            # Popen faked for the click ONLY: the real wizard runs its own
+            # subprocesses, which a module-wide fake would break.
+            with monkeypatch.context() as m:
+                m.setattr(page_mod.subprocess, "Popen",
+                          lambda argv, **kw: _FakeProc(list(argv), kw))
+                page.web_btn.click()
+            check("tunnel-open", "through the open web tunnel")
+        finally:
+            page._close_tunnels("look test")
+            w.close()
+            w.deleteLater()
+            settle(qapp)
+
+
 # ---- go live FROM this mesh: the front door as a go-live target --------------------------
 
 @pytest.fixture
