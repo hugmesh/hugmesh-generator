@@ -1152,6 +1152,40 @@ def test_tui_and_gui_worklist_passes_agree_on_a_loaded_worklist(wiz):
     assert tui == gui == before
 
 
+def test_tui_and_gui_ask_for_a_person_on_the_same_worklist_rows(wiz):
+    """A checked desktop-class row carries a person on the window's page (a placeholder
+    until it is named, which keeps Next disabled) and on the text UI (``who N``, and Enter
+    refuses without it): the same rows, the same refusal, because both call
+    ``worklist.takes_person`` / ``person_problem``."""
+    from _helpers import pick_mode
+    from hugmesh_studio.core.worklist import person_problem
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    page.initializePage()
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("worklist")
+    screen = j.screen()
+    tui_rows = {f"{r}.{p}": i for i, (r, p, _l) in enumerate(screen._rows)}
+    assert set(tui_rows) == set(page.rows)                 # the same role x platform rows
+    asked_gui, asked_tui = set(), set()
+    for rid, item in page.rows.items():
+        item.setCheckState(0, Qt.CheckState.Checked)
+        if rid in page._desktop_people:
+            asked_gui.add(rid)
+            assert not page.isComplete()                   # Next waits for the name
+        item.setCheckState(0, Qt.CheckState.Unchecked)
+        j.worklist, j.status = None, ""
+        j.goto("worklist")
+        screen.enter(j)
+        screen.feed(j, str(tui_rows[rid] + 1))             # check the row
+        screen.feed(j, "")                                 # ... and try to continue
+        if "person's device" in j.status:
+            asked_tui.add(rid)
+            assert j.slug == "worklist" and j.status.startswith(
+                f"row {tui_rows[rid] + 1}: " + person_problem(rid.split(".")[0], ""))
+    assert asked_gui == asked_tui and asked_gui
+
+
 # ── #638 / decision 71 = A: the build-first mode picker on both faces ──────────────
 def test_the_build_first_arm_offers_the_same_three_builds_on_both_faces(wiz):
     from hugmesh_studio.core import emulation as _emu

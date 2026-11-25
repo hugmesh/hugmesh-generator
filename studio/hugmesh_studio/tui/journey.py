@@ -37,15 +37,17 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import dataclasses
 import io
 import os
 
 from ..core.config import (
     SECRET_FIELDS, SIGNIN_HANDLES_NOT_APPLIED, scope_violations, user_signin_handle_warnings,
-    IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, ROLE_CHOICES,
-    UNAFFILIATED_ROLE, VAULT_FIELDS, WIZARD_PAGE_SLUGS,
+    IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, PERSON_ROLE_CHOICES,
+    ROLE_CHOICES, UNAFFILIATED_ROLE, USER_GRANT_CHOICES, USER_ROLE_CHOICES, VAULT_FIELDS,
+    WIZARD_PAGE_SLUGS,
     ImageConfig, ca_cert_error, derive_hostname, describe_ca_cert,
-    enter_mesh_defaults, vault_field_error,
+    enter_mesh_defaults, normalize_user_roles, vault_field_error,
 )
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
@@ -53,11 +55,12 @@ from ..core import device_catalog, pki_lan, plain_words, platform_info
 from ..core import plain_words, platform_info
 from ..core.json_files import load_problem
 from ..core.desktop_spec import step_applies as desktop_step_applies
-from ..core.validate import validate_domain_name
+from ..core.validate import USERNAME_RULE, validate_domain_name, validate_username
 from ..core import roles as role_vocab
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
-    load_any, ram_problem, resolve_hostname, synthesize, takes_ram,
+    load_any, person_problem, ram_problem, resolve_hostname, synthesize, takes_person,
+    takes_ram,
 )
 from ..core.worklist_driver import WorklistDriver
 from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _LocalAIScreen
@@ -864,6 +867,9 @@ class WorklistScreen:
         self._checked: set[int] = set()
         # row index -> the board RAM (GB) typed with `ram N GB` (the GUI's RAM column)
         self._ram: dict[int, str] = {}
+        # row index -> (account name, roles) typed with `who N NAME [ROLE ...]`: the person
+        # who uses a checked desktop row (the GUI's who-uses-it popup and people table)
+        self._people: dict[int, tuple[str, list[str]]] = {}
 
     def enter(self, j: "Journey") -> None:
         allow = j.worklist_role_allow
@@ -881,6 +887,13 @@ class WorklistScreen:
         self._ram = {i: prior[entry_id(r, p)].ram_gb
                      for i, (r, p, _l) in enumerate(self._rows)
                      if entry_id(r, p) in prior and prior[entry_id(r, p)].ram_gb}
+        # a desktop row staying checked keeps the person it was given (a loaded config's, or
+        # an earlier pass through this screen)
+        self._people = {}
+        for i, (r, p, _l) in enumerate(self._rows):
+            kept = prior.get(entry_id(r, p))
+            if i in self._checked and takes_person(r) and kept is not None and kept.desktop_user:
+                self._people[i] = (kept.desktop_user, list(kept.desktop_user_roles))
 
     def lines(self, j: "Journey") -> list[str]:
         out = ["Pick every image this mesh build produces (a NUMBER toggles):", ""]
@@ -892,13 +905,30 @@ class WorklistScreen:
             mark = "x" if (i - 1) in self._checked else " "
             ram = self._ram.get(i - 1, "")
             out.append(f" [{mark}] {i:2d}. {role}.{platform} — {label}"
-                       + (f"  [RAM {ram} GB]" if ram else ""))
+                       + (f"  [RAM {ram} GB]" if ram else "") + self._who_text(i - 1))
         out.append("")
         out.append("(Enter = continue with the checked rows. `ram N GB` sets row N's "
                    "board RAM — Raspberry Pi / Orange Pi node rows; omnibus needs "
                    f"{role_vocab.min_ram_gb('omnibus')} or more, backend "
                    f"{role_vocab.min_ram_gb('backend')}; `ram N -` clears it)")
+        if any(takes_person(role) for role, _p, _l in self._rows):
+            out.append("(A checked desktop is a person's device and needs its user named: "
+                       "`who N NAME [ROLE ...]` makes the account on the mesh's internal "
+                       "domain; `who N -` clears it)")
+            out.append(f"(ROLE: one tier of {'|'.join(PERSON_ROLE_CHOICES)} — user when "
+                       f"none is given — and any grants of {'|'.join(USER_GRANT_CHOICES)})")
         return out
+
+    def _who_text(self, idx: int) -> str:
+        """The person column of a checked desktop row: who uses it, or that nobody is named
+        yet (the GUI's people table, with its "double-click to set the user" placeholder)."""
+        role, _platform, _label = self._rows[idx]
+        if idx not in self._checked or not takes_person(role):
+            return ""
+        if idx not in self._people:
+            return f"  [user not named: who {idx + 1} NAME]"
+        user, roles = self._people[idx]
+        return f"  [used by {user} ({', '.join(roles)})]"
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
         return "worklist> "
@@ -924,14 +954,60 @@ class WorklistScreen:
             self._ram.pop(idx, None)
         j.status = f"row {idx + 1} {role}.{platform}: RAM {value + ' GB' if value else 'not stated'}"
 
+    def _feed_who(self, j: "Journey", line: str) -> None:
+        """``who N NAME [ROLE ...]``: the window's who-uses-it popup as a command. The
+        name is the allowlist every other surface uses (core.validate), the roles the
+        popup's vocabulary: ONE tier plus any grants, ``user`` when no tier is named."""
+        words = line.split()
+        idx = _index(words[1], len(self._rows)) if len(words) >= 3 else None
+        if idx is None or (words[2] == "-" and len(words) > 3):
+            j.status = ("usage: who N NAME [ROLE ...] (the person who uses desktop row N), "
+                        "or who N - to clear it")
+            return
+        role, platform, _label = self._rows[idx]
+        if not takes_person(role):
+            j.status = f"row {idx + 1} ({role}.{platform}) is a cluster node: it has no person"
+            return
+        if idx not in self._checked:
+            j.status = f"row {idx + 1} ({role}.{platform}) is not checked: type {idx + 1} first"
+            return
+        if words[2] == "-":
+            self._people.pop(idx, None)
+            j.status = f"row {idx + 1} {role}.{platform}: no user named"
+            return
+        try:
+            validate_username(words[2])
+        except ValueError:
+            j.status = f"refused: {words[2]!r} is not an account name — {USERNAME_RULE}"
+            return
+        try:
+            roles = _person_roles(words[3:])
+        except ValueError as exc:
+            j.status = f"refused: {exc}"
+            return
+        self._people[idx] = (words[2], roles)
+        j.status = f"row {idx + 1} {role}.{platform}: used by {words[2]} ({', '.join(roles)})"
+
     def feed(self, j: "Journey", line: str) -> None:
         if line.startswith("ram ") or line == "ram":
             self._feed_ram(j, line)
+            return
+        if line.startswith("who ") or line == "who":
+            self._feed_who(j, line)
             return
         if line == "":
             if not self._checked:
                 j.status = "pick at least one row first (a NUMBER toggles)"
                 return
+            # the person rule, inline (the window's isComplete twin, which keeps Next
+            # disabled): a checked desktop names who uses it — the account and the image's
+            # --person-role both come from the name.
+            for i in sorted(self._checked):
+                role, _platform, _label = self._rows[i]
+                why = person_problem(role, self._people.get(i, ("", []))[0])
+                if why:
+                    j.status = f"row {i + 1}: {why} — type `who {i + 1} NAME`"
+                    return
             # the RAM rule, inline (the GUI's ram_error twin): an omnibus row on a Pi /
             # Orange Pi must say how much RAM its board has — the builder refuses it.
             for i in sorted(self._checked):
@@ -957,6 +1033,13 @@ class WorklistScreen:
                 entry = (copy.deepcopy(keep) if keep is not None
                          else WorklistEntry(role=role, platform=platform))
                 entry.ram_gb = self._ram.get(i, "")
+                if takes_person(role):
+                    # rebuilt through the constructor, which derives the tier from the set
+                    # (WorklistEntry.desktop_user_role: do not assign it afterwards)
+                    user, roles = self._people[i]
+                    entry = dataclasses.replace(entry, desktop_user=user,
+                                                desktop_user_roles=list(roles),
+                                                desktop_user_role="")
                 entries.append(entry)
             j.worklist = WorklistConfig(base=j.cfg, entries=entries)
             j.advance()
@@ -967,6 +1050,7 @@ class WorklistScreen:
             return
         if idx in self._checked:
             self._checked.discard(idx)
+            self._people.pop(idx, None)        # an unchecked row's person is forgotten
         else:
             self._checked.add(idx)
 
@@ -1436,6 +1520,23 @@ def _index(line: str, count: int) -> int | None:
     except ValueError:
         return None
     return n - 1 if 1 <= n <= count else None
+
+
+def _person_roles(words) -> list[str]:
+    """The account's roles a ``who`` line names, in the window's who-uses-it vocabulary:
+    ONE tier (``PERSON_ROLE_CHOICES`` — the one value ``--person-role`` bakes into the
+    image; ``user`` when none is named, as the popup's picker always holds one) plus any
+    grants (``USER_GRANT_CHOICES``), canonical order. Raises ValueError with the reason."""
+    given = [w.lower() for w in words]
+    for w in given:
+        if w not in USER_ROLE_CHOICES:
+            raise ValueError(f"unknown role {w!r}: a tier ({'|'.join(PERSON_ROLE_CHOICES)}) "
+                             f"and/or grants ({'|'.join(USER_GRANT_CHOICES)})")
+    tiers = [w for w in dict.fromkeys(given) if w in PERSON_ROLE_CHOICES]
+    if len(tiers) > 1:
+        raise ValueError(f"one tier only ({'|'.join(PERSON_ROLE_CHOICES)}), got "
+                         + ", ".join(tiers))
+    return normalize_user_roles(given if tiers else [*given, "user"])
 
 
 
