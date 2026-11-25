@@ -614,6 +614,17 @@ whether a Firefox source build completes for riscv64. Until then, riscv64 stays
   `OPI3LTS_*` builder vars, `orangepi3lts` Python/function stem, `orange-pi-3-lts`
   device id, and the same for `orangepi4-lts` (`ORANGEPI4LTS_*` env prefix,
   `orange-pi-4-lts` device id). A fifth spelling fails the run.
+- **Catalog agreement, in this repo and across it**:
+  `tests/scripts/test-catalog-internal-consistency.sh` holds
+  `docs/catalog/image-catalog.json` and `docs/catalog/packages-catalog.json` to the
+  same platform keys and the same role ids, per platform — the two catalogs this
+  repo owns must agree with EACH OTHER before either is vendored anywhere. The
+  cross-repo half of that contract lives outside this repo: `hugmesh-admin-bff-api`
+  vendors a copy of both files and compares them against this repo's originals in
+  its own pull-request check (`ImageCatalogDriftTest`); when either catalog changes
+  here, that vendored copy has to be re-vendored there (see "Order matters" in this
+  repo's `CLAUDE.md` and `docs/RELEASING.md`) — this repo's guard cannot see that
+  drift, only admin-bff's can.
 - **🔭 planned**: run `make matrix-check` as a fail-closed GitLab lint stage
   alongside the other `tests/scripts/*` gates (CI images need `pytest` for the GUI
   leg). Today neither `.gitlab-ci.yml` nor `.github/workflows/` names it.
