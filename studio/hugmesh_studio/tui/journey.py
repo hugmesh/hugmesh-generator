@@ -35,11 +35,13 @@ canonical order end to end, finishing with a saveable config.
 """
 from __future__ import annotations
 
+import contextlib
 import copy
+import io
 import os
 
 from ..core.config import (
-    SIGNIN_HANDLES_NOT_APPLIED, user_signin_handle_warnings,
+    SECRET_FIELDS, SIGNIN_HANDLES_NOT_APPLIED, scope_violations, user_signin_handle_warnings,
     IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, ROLE_CHOICES,
     UNAFFILIATED_ROLE, VAULT_FIELDS, WIZARD_PAGE_SLUGS,
     ImageConfig, ca_cert_error, derive_hostname, describe_ca_cert,
@@ -55,8 +57,9 @@ from ..core.validate import validate_domain_name
 from ..core import roles as role_vocab
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
-    load_any, ram_problem, resolve_hostname, takes_ram,
+    load_any, ram_problem, resolve_hostname, synthesize, takes_ram,
 )
+from ..core.worklist_driver import WorklistDriver
 from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _LocalAIScreen
 
 __all__ = [
@@ -1214,15 +1217,64 @@ class BrandingScreen:
         j.advance()
 
 
+#: What the command preview shows where a plaintext secret would ride the argv
+#: (``--local-pass``, ``--luks-pass``, ``--user-password``, ``--root-password``): the
+#: GUI's own preview channel prints them as typed, and a terminal's scrollback is no
+#: place for that — the TUI keeps none of them on screen.
+SECRET_SHOWN = "<password: typed at build time, never saved>"
+
+
+def build_projection(j: "Journey") -> tuple[WorklistDriver, list[tuple[str, object]]]:
+    """What the GUI's build would dispatch for this walk, without dispatching it:
+    ``(driver, [(image id, its flat config), ...])``.
+
+    The SAME projection the window's Build step and ``--print-commands`` make: a mesh's
+    own worklist rows, else the one image wrapped as a one-row worklist (what the wizard
+    commits at Build time), each through ``worklist.materialize()`` so the platform and
+    role-class resolvers have run. The driver is a throwaway over the fleet preview's
+    host (a native root builder: the bare command, no sudo, no docker wrapper) and is
+    never run. ``materialize`` prints a one-shot resolver note to stderr, which a screen
+    the terminal UI owns must not write to, so it is read here and dropped (the window's
+    preview drops it too). Raises ValueError for a configuration that cannot be
+    assembled (an unknown platform, two images with one hostname, ...)."""
+    from .fleet import PREVIEW_HOST             # lazy: the Journey builds its screens the same way
+    wl = j.worklist if (j.cfg.mode == "mesh" and j.worklist is not None) \
+        else synthesize(j.cfg)
+    drv = WorklistDriver(j.generator_dir, wl, host=PREVIEW_HOST, backend="native")
+    with contextlib.redirect_stderr(io.StringIO()):
+        images = [(entry.id, cfg) for entry, cfg in drv.materialize()]
+    return drv, images
+
+
+def _secrets_hidden(cfg):
+    """A copy of ``cfg`` whose plaintext secrets (``config.SECRET_FIELDS``) read as
+    :data:`SECRET_SHOWN`, so a command built from it says a flag is there without
+    saying its value. The original is not touched."""
+    shown = copy.copy(cfg)
+    for name in SECRET_FIELDS:
+        if isinstance(getattr(shown, name, None), str) and getattr(shown, name):
+            setattr(shown, name, SECRET_SHOWN)
+    return shown
+
+
 class BuildScreen:
     """The end of the TUI walk: summary + save. The TUI does not RUN builds yet
-    (launch/progress are the GUI's), and says so instead of pretending."""
+    (launch/progress are the GUI's), and says so instead of pretending.
+
+    It is the twin of the window's Review step in what that step TELLS: the gates the
+    build will refuse over (the Domain services step's, the PKI LAN address, and the
+    FieldScope ones ``BuildDriver.preflight`` raises — ``config.scope_violations``, per
+    image), the notes that do not block, and — on ``c`` — the exact command each image
+    will run, for a native root builder, with every secret hidden."""
 
     slug = "build"
     title = "Build"
 
+    def __init__(self) -> None:
+        self._show_command = False
+
     def enter(self, j: "Journey") -> None:  # noqa: ARG002
-        return None
+        self._show_command = False
 
     def lines(self, j: "Journey") -> list[str]:
         cfg = j.cfg
@@ -1264,6 +1316,8 @@ class BuildScreen:
             out.append("")
             out.append("! the GUI build will refuse this configuration: " + pki_refusal)
             out.append("  Set it on the Network step here (ip ADDR, then fixed on).")
+        problems, command = self._image_lines(j)
+        out += problems
         out.append("")
         out.append("The TUI does not run builds yet — save this configuration "
                    "and build it in the GUI (python -m hugmesh_studio) or "
@@ -1274,12 +1328,53 @@ class BuildScreen:
             saved = getattr(j, "saved_mesh_id", "")
             out.append("  saved mesh  " + (saved if saved else "not saved yet"))
             out.append("")
-            out.append("commands: s PATH=save the config · m [NAME]=save this mesh to "
-                       "Saved meshes · q=finish")
-            return out
+            out.append("commands: s PATH=save the config · c=show or hide the build "
+                       "command · m [NAME]=save this mesh to Saved meshes · q=finish")
+            return out + command
         out.append("")
-        out.append("commands: s PATH=save the config · q=finish")
-        return out
+        out.append("commands: s PATH=save the config · c=show or hide the build "
+                   "command · q=finish")
+        return out + command
+
+    def _image_lines(self, j: "Journey") -> tuple[list[str], list[str]]:
+        """``(problems, command)``: what the build of THIS configuration says about each
+        image, per :func:`build_projection`, and the command section ``c`` asked for.
+
+        The problems are whether a command can be assembled at all (the window's "Cannot
+        assemble this build") and the FieldScope refusals and notes
+        (``config.scope_violations`` — the same call, the same words, and the same
+        once-for-all-else-per-image grouping the window's problems pane uses). They sit
+        with the other refusals, above the commands line; the command section goes BELOW
+        it, so a long command pushes nothing the person needs off a short terminal."""
+        try:
+            drv, images = build_projection(j)
+        except ValueError as exc:
+            return ["", "! the GUI build cannot assemble this configuration: " + str(exc)], []
+        out: list[str] = []
+        commands: list[tuple[str, str]] = []
+        failed: list[tuple[str, list[str]]] = []
+        for iid, cfg in images:
+            try:
+                commands.append((iid, drv.command_string(_secrets_hidden(cfg))))
+            except ValueError as exc:
+                failed.append((iid, [str(exc)]))
+        for why in drv._aggregate_per_entry(failed):
+            out += ["", "! the GUI build cannot assemble this configuration: " + why]
+        pairs = [(iid, scope_violations(cfg)) for iid, cfg in images]
+        for refusal in drv._aggregate_per_entry([(i, v[0]) for i, v in pairs]):
+            out += ["", "! the GUI build will refuse this configuration: " + refusal]
+        for note in drv._aggregate_per_entry([(i, v[1]) for i, v in pairs]):
+            out += ["", "note: " + note]
+        shown: list[str] = []
+        if self._show_command and commands:
+            shown += ["", "The command each image runs (for a native root builder; a "
+                      "password, where one rides the command, is hidden):"]
+            for iid, cmd in commands:
+                shown += [f"  {iid}", f"    {cmd}"]
+            if j.cfg.mode == "mesh":
+                shown.append("  (A mesh build also generates each node's KEYS folder "
+                             "first; the GUI's Build step has the box for it.)")
+        return out, shown
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
         return "build> "
@@ -1312,12 +1407,17 @@ class BuildScreen:
                 j.saved_mesh_id = res.record.id
             j.status = ("saved mesh: " if res.ok else "mesh not saved: ") + res.message
             return
+        if verb.lower() == "c" and not arg.strip():
+            self._show_command = not self._show_command
+            return
         if line == "" or verb.lower() in ("q", "quit", "exit"):
             j.done = True
             return
-        j.status = ("commands: s PATH=save the config · m [NAME]=save this mesh · "
-                    "q=finish" if j.cfg.mode == "mesh"
-                    else "commands: s PATH=save the config · q=finish")
+        j.status = ("commands: s PATH=save the config · c=show or hide the build "
+                    "command · m [NAME]=save this mesh · q=finish"
+                    if j.cfg.mode == "mesh"
+                    else "commands: s PATH=save the config · c=show or hide the build "
+                         "command · q=finish")
 
 
 # ── the journey itself ──────────────────────────────────────────────────────────────
