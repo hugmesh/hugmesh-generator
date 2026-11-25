@@ -24,7 +24,7 @@ binding exists, so they cannot drift silently.
 """
 from __future__ import annotations
 
-from ..core import saved_meshes
+from ..core import platform_info, saved_meshes
 from ..core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, User, enter_mesh_defaults, image_class,
     normalize_user_roles,
@@ -40,7 +40,7 @@ from ..core.local_mesh_domains import (
 from ..core.seeded_credentials import load_roster
 
 __all__ = ["ALLOWED_ROLES", "K8S_RUNNING", "LocalCloudScreen", "apply_gate",
-           "local_k8s_running", "local_mesh_identity"]
+           "k8s_running_text", "local_k8s_running", "local_mesh_identity"]
 
 #: Why ``y`` is refused while the local Kubernetes (DevOps) lane is up — the window's
 #: "the lane is RUNNING … Next stays disabled until the cluster is gone", for a screen
@@ -49,6 +49,23 @@ K8S_RUNNING = ("The local Kubernetes (DevOps) lane is RUNNING, so nothing was co
                "node images are not configured against a live cluster. Bring it down "
                "(`make kind-down` in this checkout; the docker mesh and its volumes are "
                "untouched), then answer y again — this screen checks again each time.")
+
+
+def k8s_running_text(osname: str | None = None) -> str:
+    """:data:`K8S_RUNNING`, for the host this runs on. Where `make kind-down` cannot run
+    (native Windows; a Mac without Homebrew's GNU tools) the window's page says why and
+    how to get past the gate, because a button that can only fail is no way past it;
+    so does this line, from the same ``platform_info`` sentence, instead of advice that
+    fails. ``osname`` is ``os.name`` unless a test passes another."""
+    blocker = platform_info.native_windows_blocker(
+        "Deleting the local Kubernetes cluster", osname=osname)
+    if not blocker:
+        return K8S_RUNNING
+    return ("The local Kubernetes (DevOps) lane is RUNNING, so nothing was committed: "
+            f"node images are not configured against a live cluster. {blocker} Delete "
+            "the cluster where `make` runs (`make kind-down` in a hugmesh-generator "
+            "checkout there; the docker mesh and its volumes are untouched), then "
+            "answer y again — this screen checks again each time.")
 
 #: The abbreviated worklist: ONLY the laptop and the cluster-node image types —
 #: DERIVED from ROLE_CHOICES x image_class (never a hand-kept list), exactly the
@@ -286,7 +303,7 @@ class LocalCloudScreen:
             # the window's third half of isComplete(): no cluster still KNOWN to be up.
             # Looked up on the MODULE (like local_mesh_identity) so tests can pin a host.
             if local_k8s_running(j.generator_dir):
-                j.status = K8S_RUNNING
+                j.status = k8s_running_text()
                 return                   # stay on the gate: consent is still asked
             apply_gate(j, self._domain, self._users, with_tor=self._with_tor,
                        mesh_domains=self._mesh_domains)

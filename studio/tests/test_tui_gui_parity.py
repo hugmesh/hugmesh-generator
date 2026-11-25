@@ -230,6 +230,15 @@ def test_localcloud_allowed_roles_match_the_gui_derivation():
     assert tui_lc.ALLOWED_ROLES == gui_lc.LOCALCLOUD_ALLOWED_ROLES
 
 
+def test_localcloud_cluster_question_is_one_symbol_on_both_faces():
+    """The gate's third half (no local Kubernetes cluster still up) is ONE function in
+    core: the window's page and the text screen import it, neither keeps a copy — so a
+    test that pins the host pins it for both, and they cannot disagree about it."""
+    from hugmesh_studio.core import local_mesh_bootstrap as lmb
+    assert gui_lc.local_k8s_running is lmb.local_k8s_running
+    assert tui_lc.local_k8s_running is lmb.local_k8s_running
+
+
 def test_localcloud_identity_readers_agree(tmp_path):
     # both read the same on-disk override points (bootstrap config, secrets bundle,
     # seeder roster); an empty generator dir must yield the same brand-default
