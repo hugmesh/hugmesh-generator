@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # golive-verify.sh — the consumer-half verifier for the SIGNED go-live-intent
-# export (admin-bff-api GoLiveExportService, PR #200). SOURCES the shared
+# export (admin-bff-api GoLiveExportService). SOURCES the shared
 # registry-verify.sh for the IDENTICAL detached-Ed25519 verify (verify_sig) +
 # strict-monotonic rollback guard (check_monotonic) + signed-envelope check
 # (rv_signed/rv_signature/rv_gen) — the SAME bean (RegistrySigner) signs both the
@@ -11,7 +11,7 @@
 # domain-verify.sh, same idiom.
 #
 # It implements the consumer half of THE GO-LIVE EXPORT CONTRACT
-# (hugmesh-admin-bff-api GoLiveExportService.canonicalBytes, PR #200), which
+# (hugmesh-admin-bff-api GoLiveExportService.canonicalBytes), which
 # MUST match BYTE FOR BYTE:
 #
 #   canonical bytes = line-oriented UTF-8:
