@@ -49,19 +49,20 @@ from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
 from ..core import device_catalog, pki_lan, plain_words, platform_info
 from ..core import plain_words, platform_info
+from ..core.json_files import load_problem
 from ..core.desktop_spec import step_applies as desktop_step_applies
 from ..core.validate import validate_domain_name
 from ..core import roles as role_vocab
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
-    ram_problem, resolve_hostname, takes_ram,
+    load_any, ram_problem, resolve_hostname, takes_ram,
 )
 from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _LocalAIScreen
 
 __all__ = [
     "PAGE_ORDER", "SIDE_FLOW_SLUGS", "WELCOME_CHOICES", "WELCOME_TARGET",
     "MODE_CHOICES", "MODE_DEFAULT_CHOICE", "PENDING_NOTE", "Journey",
-    "README_GETTING_STARTED", "VAULT_COMMANDS", "mode_enter_choice",
+    "README_GETTING_STARTED", "VAULT_COMMANDS", "LOAD_COMMAND", "mode_enter_choice",
 ]
 
 #: The canonical page order — the GUI's OWN tuple, consumed rather than copied so
@@ -78,6 +79,11 @@ SIDE_FLOW_SLUGS = ("localmesh", "phone", "quest", "deploy", "e2e", "qemu",
 #: The README's getting-started section — the same link the GUI welcome explainer
 #: carries (rendered as selectable text here; a terminal has no anchor to click).
 README_GETTING_STARTED = "https://github.com/hugmesh/hugmesh-generator#quick-start"
+
+#: The command word that opens a saved configuration file — the sessions page's
+#: "Load config…" button as a typed line (``load PATH``). The welcome screen takes it
+#: and so does the previous-builds review, on both faces.
+LOAD_COMMAND = "load"
 
 #: The welcome screen's TWO journey entry points (issue #50 item 1 / GUI PR #67):
 #: (choice id, title, description) — ids and titles mirror gui/pages/welcome.py's
@@ -249,12 +255,20 @@ class WelcomeScreen:
             out.append(f"     {desc}")
         out.append("")
         out.append("(Enter = Start building — the default)")
+        out.append(f"{LOAD_COMMAND} PATH opens a saved configuration — one image or a "
+                   "worklist, as Save config wrote it — and walks it.")
         return out
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
         return "welcome> "
 
     def feed(self, j: "Journey", line: str) -> None:
+        verb, _, arg = line.partition(" ")
+        if verb.lower() == LOAD_COMMAND:
+            why = j.load_config(arg)
+            if why:                 # a refusal; a load leaves its own message on status
+                j.status = why
+            return
         choice = "build" if line == "" else _pick_id(WELCOME_CHOICES, line)
         if choice is None:
             j.status = f"unrecognised choice: {line!r} (a NUMBER picks; q quits)"
@@ -1463,6 +1477,34 @@ class Journey:
 
     def close_overlay(self) -> None:
         self.overlay = None
+
+    def load_config(self, path: str) -> str:
+        """Open a SAVED CONFIGURATION file — the twin of ``StudioWizard.load_config``
+        (the sessions page's "Load config…"): either a flat single-image config or a
+        worklist envelope, through the one loader both faces share
+        (``worklist.load_any``), so a file the Save config of either face wrote loads on
+        either. It lands on the first screen with every step pre-populated, like
+        :meth:`load_session`; the eventual save is a NEW configuration. Returns "" once
+        loaded (the outcome is on :attr:`status`), or why nothing was — SAID, never
+        raised, and a refusal changes nothing (the file is read before the journey is
+        touched)."""
+        path = (path or "").strip()
+        if not path:
+            return (f"{LOAD_COMMAND} needs the path of a saved configuration "
+                    "(a .json file written by Save config)")
+        path = os.path.abspath(os.path.expanduser(platform_info.unquote_pasted_path(path)))
+        try:
+            base, wl = load_any(path)
+        except Exception as exc:            # noqa: BLE001 — said, not raised (the GUI's rule)
+            return load_problem(path, exc)
+        self.cfg = base
+        self.worklist = wl
+        self.goto(PAGE_ORDER[0])
+        what = (f"a worklist of {len(wl.entries)} image(s)" if wl is not None
+                else f"a {base.mode} image ({base.role})")
+        self.status = (f"loaded {path}: {what} — Start building walks it: Enter on the "
+                       "mode menu keeps its mode (marked *)")
+        return ""
 
     def load_session(self, s) -> str:
         """REDO ("edit as new") — the twin of ``StudioWizard.load_session``: a session

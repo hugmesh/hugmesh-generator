@@ -67,7 +67,8 @@ def prompt_yes_no(inp: IO[str], out: IO[str], question: str) -> bool:
 
 # ── sessions review ────────────────────────────────────────────────────────────────
 _HELP = ("commands: NUMBER=inspect · d NUMBER=delete · w NUMBER=worklist table · "
-         "k NUMBER=kernel config · r=refresh · local-ai=the Local AI screen · q=quit")
+         "k NUMBER=kernel config · l PATH=load a saved config · r=refresh · "
+         "local-ai=the Local AI screen · q=quit")
 
 #: The GUI's other Previous-builds buttons (B-10), on a line of their own ABOVE the
 #: commands line, which keeps the Local AI status line directly under that one.
@@ -179,20 +180,36 @@ def _restart_flow(inp: IO[str], out: IO[str], row: model.SessionRow) -> bool:
     return False
 
 
-def _redo(inp: IO[str], out: IO[str], s: build_sessions.BuildSession,
-          generator_dir: str, journey) -> int | None:
-    """REDO: the recorded configuration into the journey. ``None`` keeps the review
-    open (refused); otherwise the review is over and this is its exit code — the
-    journey that opened it resumes on its first screen, or (``--sessions``, no journey
-    underneath) a journey starts here with the configuration loaded."""
+def _hand_over(inp: IO[str], out: IO[str], generator_dir: str, journey, verb: str,
+               load) -> int | None:
+    """The tail REDO and LOAD share: ``load(target)`` puts a configuration into the
+    journey and answers "" or why it did not. ``None`` keeps the review open (refused);
+    otherwise the review is over and this is its exit code — the journey that opened it
+    resumes on its first screen, or (``--sessions``, no journey underneath) a journey
+    starts here with the configuration loaded."""
     target = journey if journey is not None else journey_mod.Journey(generator_dir)
-    why = target.load_session(s)
+    why = load(target)
     if why:
-        _say(out, f"not redone: {why}")
+        _say(out, f"not {verb}: {why}")
         return None
     if journey is None:
         return run_journey(inp, out, generator_dir=generator_dir, journey=target)
     return 0
+
+
+def _redo(inp: IO[str], out: IO[str], s: build_sessions.BuildSession,
+          generator_dir: str, journey) -> int | None:
+    """REDO: the recorded configuration into the journey (see :func:`_hand_over`)."""
+    return _hand_over(inp, out, generator_dir, journey, "redone",
+                      lambda target: target.load_session(s))
+
+
+def _load(inp: IO[str], out: IO[str], path: str, generator_dir: str,
+          journey) -> int | None:
+    """LOAD: a saved configuration FILE into the journey — the GUI sessions page's
+    "Load config…" (see :func:`_hand_over`)."""
+    return _hand_over(inp, out, generator_dir, journey, "loaded",
+                      lambda target: target.load_config(path))
 
 
 def print_meshemu(out: IO[str], generator_dir: str, session_name: str) -> bool:
@@ -305,6 +322,11 @@ def run_sessions_review(inp: IO[str] | None = None, out: IO[str] | None = None, 
             if not redo and not _restart_flow(inp, out, row):
                 continue
             code = _redo(inp, out, row.session, generator_dir, journey)
+            if code is not None:
+                return code
+            continue
+        if verb.lower() in ("l", journey_mod.LOAD_COMMAND):
+            code = _load(inp, out, arg, generator_dir, journey)
             if code is not None:
                 return code
             continue
