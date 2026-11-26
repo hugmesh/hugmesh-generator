@@ -146,7 +146,7 @@ bad += check("x86 client: hugmesh-update linked in the affiliated arm (before th
 un = idx(lambda l: re.match(r"^\s+SVCS=\(.*growroot auditd local dbus elogind display-manager\)", l))
 bad += check("x86 client: the UNAFFILIATED client array exists and does NOT carry it",
              un > 0 and "hugmesh-update" not in L[un] and not re.match(r"^\s+SVCS\+=\(hugmesh-update\)", L[un+1]))
-ho = idx(lambda l: re.match(r"^    SVCS=\(.*hugmesh-go-live-reconcile containerd kubelet auditd local\)", l))
+ho = idx(lambda l: re.match(r"^    SVCS=\(.*hugmesh-go-live-reconcile( hugmesh-go-live-at-ready)? containerd kubelet auditd local\)", l))
 bad += check("x86 host: located the cluster-node SVCS array", ho > 0)
 hn = L[ho+1:ho+6] if ho > 0 else []
 bad += check("x86 host: hugmesh-update linked, gated on ${UNAFFILIATED} (no dangling link)",
