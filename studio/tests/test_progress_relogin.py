@@ -98,7 +98,7 @@ def _fake_builddriver(monkeypatch, seen):
 def _restarted(wiz, tmp_path, **kw):
     """A FAILED record whose dispatch carried a Login Password, reloaded the way
     StudioWizard.start_build_from_session does (the password comes back empty)."""
-    cfg = ImageConfig(output_dir=str(tmp_path / "out"), local_user="magus",
+    cfg = ImageConfig(output_dir=str(tmp_path / "out"), local_user="alex",
                       local_pass=PW, **kw)
     s = build_sessions.new_session(synthesize(cfg), GENERATOR_DIR)
     assert s.blanked_secrets == ["local_pass"]
@@ -183,7 +183,7 @@ def test_restart_without_a_prior_password_does_not_ask(monkeypatch, qapp, wiz, t
     seen: list[str] = []
     _fake_builddriver(monkeypatch, seen)
     cfg = ImageConfig(mode="mesh", role="laptop", platform="x86",
-                      output_dir=str(tmp_path / "out"), local_user="magus",
+                      output_dir=str(tmp_path / "out"), local_user="alex",
                       # the pki node's fixed LAN address (core/pki_lan.py) a mesh build refuses without
                       pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True)
     s = build_sessions.new_session(synthesize(cfg), GENERATOR_DIR)
@@ -206,7 +206,7 @@ def test_loaded_standalone_config_without_password_asks_instead_of_dead_end(
     seen: list[str] = []
     _fake_builddriver(monkeypatch, seen)
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
-                      output_dir=str(tmp_path / "out"), local_user="magus")
+                      output_dir=str(tmp_path / "out"), local_user="alex")
     wl = synthesize(cfg)
     wiz.worklist, wiz.cfg, wiz.build_backend, wiz.pending_session_id = wl, wl.base, None, None
     wiz.setCurrentId(wiz._page_ids["progress"])
@@ -220,3 +220,80 @@ def test_loaded_standalone_config_without_password_asks_instead_of_dead_end(
     page.relogin_btn.click()
     _settle(qapp, page)
     assert seen == [PW]
+
+
+# ── the node images' ROOT password gets the same guard (operator, 2026-11-19) ─────────
+ROOTPW = "r00t-Rescue-pw"
+
+
+def test_restart_asks_for_the_root_password_too_after_the_login_password(
+        monkeypatch, qapp, wiz, tmp_path):
+    seen: list[tuple[str, str]] = []
+    from hugmesh_studio.core.config import standalone_login_problem
+
+    class FakeBuildDriver:
+        def __init__(self, gen, host, graphical=False, workdir=None):
+            self.workdir = workdir
+
+        def run(self, cfg, backend, on_line=None):
+            seen.append((cfg.local_pass, cfg.root_password))
+            return 0
+
+        def cancel(self):
+            pass
+
+        def preflight(self, cfg, backend):
+            p = standalone_login_problem(cfg)
+            return [p] if p else []
+
+        def preflight_warnings(self, cfg, backend):
+            return []
+
+        def command_string(self, cfg, backend=None):
+            return f"cmd:{cfg.role}"
+
+    monkeypatch.setattr(wd, "BuildDriver", FakeBuildDriver)
+    cfg = ImageConfig(mode="mesh", role="laptop", platform="x86",
+                      output_dir=str(tmp_path / "out"), local_user="alex", local_pass=PW,
+                      root_password=ROOTPW, pki_lan_ip="192.168.1.10", pki_lan_ip_fixed=True)
+    s = build_sessions.new_session(synthesize(cfg), GENERATOR_DIR)
+    assert set(s.blanked_secrets) == {"local_pass", "root_password"}
+    build_sessions.start(s)
+    build_sessions.finish(s, build_sessions.FAILED)
+    wl = build_sessions.load(s.path()).worklist()
+    assert wl.base.root_password == ""                 # never persisted
+    wiz.worklist, wiz.cfg, wiz.build_backend, wiz.pending_session_id = wl, wl.base, None, s.id
+    wiz.setCurrentId(wiz._page_ids["progress"])
+    page = _page(wiz)
+    page.initializePage()
+    _settle(qapp)
+    # 1. the login password first
+    assert page.relogin.isVisible() and page.relogin.title() == "Login Password needed to restart"
+    page.relogin_pass.setText(PW)
+    page.relogin_confirm.setText(PW)
+    page.relogin_btn.click()
+    _settle(qapp)
+    # 2. then the root password, in the same place, typed twice; nothing dispatched yet
+    assert seen == [] and page.worker is None
+    assert page.relogin.isVisible() and page.relogin.title() == "Root password needed to restart"
+    assert page.relogin_pass_label.text() == "Root password"
+    assert page.relogin_confirm_label.text() == "Confirm root password"
+    assert "Waiting for the Root password" in page.log.toPlainText()
+    page.grab().save(str(tmp_path / "reroot.png"))
+    page.relogin_pass.setText(ROOTPW)
+    page.relogin_confirm.setText(ROOTPW + "x")
+    assert not page.relogin_btn.isEnabled() and "do not match" in page.relogin_err.text()
+    page.relogin_confirm.setText(ROOTPW)
+    page.relogin_btn.click()
+    _settle(qapp, page)
+    assert not page.relogin.isVisible()
+    assert seen and all(x == (PW, ROOTPW) for x in seen), seen
+
+
+def test_the_restart_confirmations_name_what_is_asked_again_and_what_stays_empty():
+    lines = build_sessions.restart_secret_lines(["local_pass", "root_password", "luks_pass"])
+    assert "asks for each again (typed twice)" in lines[0]
+    assert "Login Password" in lines[0] and "root password" in lines[0]
+    assert lines[1].endswith("will be empty: luks_pass")
+    assert build_sessions.restart_secret_lines([]) == []
+    assert len(build_sessions.restart_secret_lines(["root_password"])) == 1

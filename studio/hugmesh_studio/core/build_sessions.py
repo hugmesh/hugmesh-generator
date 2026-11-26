@@ -201,6 +201,28 @@ def _saved_form(value: Any) -> Any:
     return value
 
 
+#: The never-saved secrets a RESTART asks for again, typed twice, before anything is
+#: dispatched (gui/pages/progress.py); every other blanked secret stays empty. Read by
+#: both restart confirmations (the window's and the text UI's hand-over).
+RESTART_REASKED_SECRETS = {"local_pass": "Login Password", "root_password": "root password"}
+
+
+def restart_secret_lines(blanked) -> list[str]:
+    """What a restart does about each secret the session did not save: the ones it asks
+    for again, and the ones that stay empty (one sentence each, either may be absent)."""
+    asked = [k for k in (blanked or []) if k in RESTART_REASKED_SECRETS]
+    empty = [k for k in (blanked or []) if k not in RESTART_REASKED_SECRETS]
+    out = []
+    if asked:
+        out.append("These passwords were NOT saved with the session; the restart asks for "
+                   "each again (typed twice) before the build starts: "
+                   + ", ".join(RESTART_REASKED_SECRETS[k] for k in asked))
+    if empty:
+        out.append("NOTE: these secrets were NOT saved with the session and will be "
+                   "empty: " + ", ".join(empty))
+    return out
+
+
 @dataclass
 class BuildSession:
     """One persisted build-creation session (see the module docstring)."""

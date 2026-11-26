@@ -34,7 +34,7 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
 
 
 @pytest.mark.parametrize("value", ["Root User", "Bad User", "1abc", "", "a" * 33,
-                                   "user;rm", "Magus"])
+                                   "user;rm", "Alex"])
 def test_username_problem_refuses_what_validate_username_refuses(value):
     with pytest.raises(IdentityValidationError):
         validate_username(value)

@@ -2334,7 +2334,7 @@ def result_lines(res: Result) -> list[str]:
 #: brace, paren or @ for it to read as code).
 #: PowerShell ends a single-quoted string at ANY of these, not only the ASCII one, so
 #: each is doubled inside one: a value with a typographic apostrophe (a folder
-#: named "Magus’ projects", or a brand read from a config someone sent) could
+#: named "Alex’ projects", or a brand read from a config someone sent) could
 #: otherwise close the quote and run what followed as a command.
 _PS_QUOTE = re.compile("(['\u2018\u2019\u201a\u201b])")
 _PS_BARE = re.compile(r"[A-Za-z0-9_./\\:=+-]+")

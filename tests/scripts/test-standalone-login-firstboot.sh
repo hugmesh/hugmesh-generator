@@ -62,10 +62,10 @@ echo "== A1. standalone + password: the build-time hash lands on a real account 
 R="${WORK}/a1"; make_root "${R}"; render "${R}" "${HASH6}" true; run_fb "${R}"
 grep -q '^groupadd .*games$' "${R}/log" && ok "missing 'games' group is created before useradd" \
     || bad "no groupadd for the missing 'games' group (useradd exits 6 and creates nobody)"
-grep -qE '^magus:x:1000:' "${R}/etc/passwd" && ok "account magus created" \
-    || bad "account magus NOT created: $(grep useradd "${R}/out" | head -1)"
-[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "magus:${HASH6}" ] \
-    && ok "chpasswd -e received exactly magus:<the build-time hash>" \
+grep -qE '^alex:x:1000:' "${R}/etc/passwd" && ok "account alex created" \
+    || bad "account alex NOT created: $(grep useradd "${R}/out" | head -1)"
+[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "alex:${HASH6}" ] \
+    && ok "chpasswd -e received exactly alex:<the build-time hash>" \
     || bad "chpasswd -e did not receive the build-time hash"
 [ ! -e "${R}/shadow.plain" ] && ok "no random/plaintext password was set" \
     || bad "a plaintext (random fallback) password was set over the build-time one"
@@ -77,14 +77,14 @@ grep -q '^passwd -l root' "${R}/log" && ok "root stays locked" || bad "root not 
 grep -q 'ready (password set at build time)' "${R}/out" && ok "'ready' reported" || bad "no 'ready' line"
 [ ! -e "${R}/self" ] && ok "finaliser removed itself after success" || bad "finaliser left in place after success"
 grep -Eq '^%wheel ALL=\(ALL\) ALL$' "${R}/etc/sudoers" && ok "%wheel sudoers line written (wheel = the admin group)" || bad "no %wheel sudoers line"
-grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && bad "standalone account put in wheel WITHOUT --local-admin (admin must be opt-in)" \
+grep -q 'wheel' "${R}/groups.alex" 2>/dev/null && bad "standalone account put in wheel WITHOUT --local-admin (admin must be opt-in)" \
     || ok "standalone account is not in wheel without --local-admin"
-grep -q 'magus is NOT an administrator' "${R}/console" 2>/dev/null && ok "console says nobody local can sudo" \
+grep -q 'alex is NOT an administrator' "${R}/console" 2>/dev/null && ok "console says nobody local can sudo" \
     || bad "silent: a standalone box with no administrator, and the console never says so"
 
 echo "== A1a. standalone + password + --local-admin: the account is the administrator =="
 R="${WORK}/a1a"; make_root "${R}"; render "${R}" "${HASH6}" true true; run_fb "${R}"
-grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && ok "--local-admin puts the standalone account in wheel" \
+grep -q 'wheel' "${R}/groups.alex" 2>/dev/null && ok "--local-admin puts the standalone account in wheel" \
     || bad "--local-admin did not make the standalone account an administrator"
 [ "$(grep -c '^%wheel ALL=(ALL) ALL$' "${R}/etc/sudoers")" = 1 ] && ok "exactly one %wheel line" \
     || bad "expected exactly one %wheel line, got $(grep -c '^%wheel' "${R}/etc/sudoers")"
@@ -99,15 +99,15 @@ echo "== A2. a hash made only of word characters after its \$-segments survives 
 # expansions: '$6$salt$Word' expands to "" and silently takes the random branch.
 WEIRD='$6$abcdefgh$ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi'
 R="${WORK}/a2"; make_root "${R}"; render "${R}" "${WEIRD}" true; run_fb "${R}"
-[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "magus:${WEIRD}" ] \
+[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "alex:${WEIRD}" ] \
     && ok "word-character hash applied verbatim" \
     || bad "word-character hash was expanded away (double-quoted placeholder?)"
 
 echo "== A3. groupadd unavailable: the account is still made with the groups that exist =="
 R="${WORK}/a3"; make_root "${R}"; render "${R}" "${HASH6}" true; run_fb "${R}" GROUPADD_FAIL=1
-[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "magus:${HASH6}" ] \
+[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "alex:${HASH6}" ] \
     && ok "hash applied without 'games'" || bad "hash NOT applied when 'games' could not be created"
-grep -q ',games' "${R}/groups.magus" 2>/dev/null && bad "asked useradd for a group that does not exist" \
+grep -q ',games' "${R}/groups.alex" 2>/dev/null && bad "asked useradd for a group that does not exist" \
     || ok "useradd only asked for existing groups"
 
 echo "== A4. password could not be set: no random fallback, retry next boot =="
@@ -118,7 +118,7 @@ grep -q 'ready (password set at build time)' "${R}/out" && bad "'ready' printed 
 [ "$(grep -c '^chpasswd' "${R}/log")" = 1 ] && ok "keyless fallback did not overwrite with a random password" \
     || bad "a second (fallback) chpasswd ran: $(grep '^chpasswd' "${R}/log" | tr '\n' ' ')"
 [ -e "${R}/self" ] && ok "finaliser kept for a retry on the next boot" || bad "finaliser deleted itself after a failure"
-grep -q 'FAILED to set up local user magus' "${R}/console" 2>/dev/null && ok "failure written to the console" \
+grep -q 'FAILED to set up local user alex' "${R}/console" 2>/dev/null && ok "failure written to the console" \
     || bad "failure not written to the console"
 
 echo "== A4b. the account could not be made: still no random-password fallback =="
@@ -130,7 +130,7 @@ R="${WORK}/a4b"; make_root "${R}"; render "${R}" "${HASH6}" true; run_fb "${R}" 
 echo "== A5. no password given: the one-time password reaches the console =="
 R="${WORK}/a5"; make_root "${R}"; render "${R}" "" true; run_fb "${R}"
 [ -s "${R}/shadow.plain" ] && [ ! -e "${R}/shadow.hash" ] && ok "random password set" || bad "no random password set"
-grep -q '^chage -d 0 magus' "${R}/log" && ok "forced change at first login" || bad "no chage -d 0"
+grep -q '^chage -d 0 alex' "${R}/log" && ok "forced change at first login" || bad "no chage -d 0"
 pw="$(cut -d: -f2- "${R}/shadow.plain" 2>/dev/null)"
 [ -n "${pw}" ] && grep -qF "pass: ${pw}" "${R}/console" 2>/dev/null \
     && ok "one-time password shown on /dev/console (OpenRC local discards stdout)" \
@@ -142,23 +142,23 @@ pw="$(cut -d: -f2- "${R}/shadow.plain" 2>/dev/null)"
 # without the box; none of those sets STANDALONE=true. The hash must land there too.
 echo "== A6. STANDALONE=false + password, keyless boot: the hash lands, the account is the login =="
 R="${WORK}/a6"; make_root "${R}"; render "${R}" "${HASH6}" false; run_fb "${R}"
-[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "magus:${HASH6}" ] \
-    && ok "chpasswd -e received exactly magus:<the build-time hash>" \
+[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "alex:${HASH6}" ] \
+    && ok "chpasswd -e received exactly alex:<the build-time hash>" \
     || bad "the build-time hash was dropped on a non-standalone image"
 [ ! -e "${R}/shadow.plain" ] && ok "no random password" || bad "a random password was set although a password was given"
 grep -q 'KEYLESS BOOT' "${R}/out" && bad "keyless random-password fallback ran although a password was given" \
     || ok "keyless fallback did not run"
 grep -q '^passwd -l root' "${R}/log" && ok "root locked" || bad "root not locked"
-grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && bad "keyless boot put the local account in wheel WITHOUT --local-admin (the 2026-11-09 prover defect)" \
+grep -q 'wheel' "${R}/groups.alex" 2>/dev/null && bad "keyless boot put the local account in wheel WITHOUT --local-admin (the 2026-11-09 prover defect)" \
     || ok "keyless boot: local account is not in wheel without --local-admin"
-grep -q 'magus is NOT an administrator' "${R}/console" 2>/dev/null && ok "console says no local account can sudo" \
+grep -q 'alex is NOT an administrator' "${R}/console" 2>/dev/null && ok "console says no local account can sudo" \
     || bad "silent: keyless box with no administrator, and the console never says so"
 [ -f "${R}/var/lib/keys-provision/users.created" ] && ok "users.created marked" || bad "users.created not marked"
 [ ! -e "${R}/self" ] && ok "finaliser removed itself" || bad "finaliser left in place"
 
 echo "== A6a. STANDALONE=false + password + --local-admin, keyless boot: in wheel =="
 R="${WORK}/a6a"; make_root "${R}"; render "${R}" "${HASH6}" false true; run_fb "${R}"
-grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && ok "--local-admin on a keyless boot puts the account in wheel" \
+grep -q 'wheel' "${R}/groups.alex" 2>/dev/null && ok "--local-admin on a keyless boot puts the account in wheel" \
     || bad "--local-admin ignored on a keyless boot"
 grep -Eq '^%wheel ALL=\(ALL\) ALL$' "${R}/etc/sudoers" && ok "%wheel line present" || bad "no %wheel line"
 grep -q 'NOT an administrator' "${R}/console" 2>/dev/null && bad "false 'NOT an administrator' with --local-admin" || ok "no false no-admin line"
@@ -178,9 +178,9 @@ R="${WORK}/a7"; make_root "${R}"; keys_provisioned "${R}"; printf '%%wheel ALL=(
 sed -i 's/^%wheel/# %wheel/' "${R}/etc/sudoers"
 cp "${R}/etc/sudoers" "${R}/sudoers.before"
 render "${R}" "${HASH6}" false; run_fb "${R}"
-[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "magus:${HASH6}" ] \
+[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "alex:${HASH6}" ] \
     && ok "hash applied to the additional local account" || bad "hash not applied on a KEYS-provisioned image"
-grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && bad "additional local account was put in wheel" \
+grep -q 'wheel' "${R}/groups.alex" 2>/dev/null && bad "additional local account was put in wheel" \
     || ok "additional local account is not in wheel"
 cmp -s "${R}/etc/sudoers" "${R}/sudoers.before" && ok "/etc/sudoers untouched (governance's commented %wheel stays commented)" \
     || bad "/etc/sudoers changed on a KEYS image: $(diff "${R}/sudoers.before" "${R}/etc/sudoers" | tr '\n' ' ')"
@@ -191,11 +191,11 @@ grep -qE '^alice:' "${R}/etc/passwd" && ok "KEYS user still there" || bad "KEYS 
 grep -q 'KEYLESS BOOT' "${R}/out" && bad "keyless fallback ran on a KEYS image" || ok "keyless fallback did not run"
 
 echo "== A7b. KEYS already created an account with this NAME: KEYS wins, nothing changed =="
-R="${WORK}/a7b"; make_root "${R}"; keys_provisioned "${R}" magus
+R="${WORK}/a7b"; make_root "${R}"; keys_provisioned "${R}" alex
 render "${R}" "${HASH6}" false; run_fb "${R}"
 [ ! -e "${R}/shadow.hash" ] && [ ! -e "${R}/shadow.plain" ] && ok "KEYS account's password left alone" \
     || bad "the build-time password overwrote a KEYS-created account's password"
-grep -q 'KEYS provisioning already created magus' "${R}/console" 2>/dev/null && ok "console says why" \
+grep -q 'KEYS provisioning already created alex' "${R}/console" 2>/dev/null && ok "console says why" \
     || bad "silent skip: the console does not say the Login Password was not applied"
 [ ! -e "${R}/self" ] && ok "finaliser removed itself (nothing to retry)" || bad "finaliser kept for a skip"
 
@@ -204,13 +204,13 @@ R="${WORK}/a7c"; make_root "${R}"; keys_provisioned "${R}"
 render "${R}" "${HASH6}" false; run_fb "${R}" CHPASSWD_FAIL=1
 [ -e "${R}/self" ] && ok "kept for a retry after chpasswd failed" || bad "deleted itself after a failed chpasswd"
 render "${R}" "${HASH6}" false; run_fb "${R}"
-[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "magus:${HASH6}" ] && ok "second boot applied the hash" \
+[ "$(cat "${R}/shadow.hash" 2>/dev/null)" = "alex:${HASH6}" ] && ok "second boot applied the hash" \
     || bad "second boot treated our own account as a KEYS account and skipped it"
 
 echo "== A8. --local-admin on a KEYS image: sudo via sudoers.d, never the shared %wheel line =="
 R="${WORK}/a8"; make_root "${R}"; keys_provisioned "${R}"
 render "${R}" "${HASH6}" false true; run_fb "${R}"
-grep -qx 'magus ALL=(ALL) ALL' "${R}"/etc/sudoers.d/* 2>/dev/null && ok "sudoers.d grant for magus" \
+grep -qx 'alex ALL=(ALL) ALL' "${R}"/etc/sudoers.d/* 2>/dev/null && ok "sudoers.d grant for alex" \
     || bad "no sudoers.d grant with --local-admin"
 grep -q '%wheel' "${R}/etc/sudoers" && bad "%wheel line written on a KEYS image" || ok "no %wheel line"
 
@@ -219,17 +219,17 @@ R="${WORK}/a9"; make_root "${R}"; render "${R}" "" false; run_fb "${R}"
 grep -q 'KEYLESS BOOT' "${R}/console" 2>/dev/null && ok "keyless fallback banner on the console" \
     || bad "keyless fallback did not run with no password"
 [ -s "${R}/shadow.plain" ] && ok "random one-time password set" || bad "no random password"
-grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && bad "keyless fallback put in wheel WITHOUT --local-admin" \
+grep -q 'wheel' "${R}/groups.alex" 2>/dev/null && bad "keyless fallback put in wheel WITHOUT --local-admin" \
     || ok "keyless fallback is not in wheel without --local-admin"
-grep -q 'magus is NOT an administrator' "${R}/console" 2>/dev/null && ok "fallback banner says it is not an administrator" \
+grep -q 'alex is NOT an administrator' "${R}/console" 2>/dev/null && ok "fallback banner says it is not an administrator" \
     || bad "silent: the fallback banner does not say nobody can sudo"
 grep -q '^passwd -l root' "${R}/log" && ok "root stays locked (never unlocked to make up for it)" || bad "root not locked"
 R="${WORK}/a9a"; make_root "${R}"; render "${R}" "" false true; run_fb "${R}"
-grep -q 'wheel' "${R}/groups.magus" 2>/dev/null && ok "--local-admin: keyless fallback in wheel" \
+grep -q 'wheel' "${R}/groups.alex" 2>/dev/null && ok "--local-admin: keyless fallback in wheel" \
     || bad "--local-admin ignored by the keyless fallback"
 grep -q 'NOT an administrator' "${R}/console" 2>/dev/null && bad "false no-admin banner with --local-admin" || ok "no false no-admin banner"
 R="${WORK}/a9k"; make_root "${R}"; keys_provisioned "${R}"; render "${R}" "" false; run_fb "${R}"
-[ ! -e "${R}/shadow.plain" ] && [ ! -e "${R}/shadow.hash" ] && ! grep -qE '^magus:' "${R}/etc/passwd" \
+[ ! -e "${R}/shadow.plain" ] && [ ! -e "${R}/shadow.hash" ] && ! grep -qE '^alex:' "${R}/etc/passwd" \
     && ok "KEYS image, no password: no local account at all" || bad "KEYS image with no password got a local account"
 
 echo "== A10. hugmesh-home-setup's log() reaches the console (OpenRC local discards stdout) =="
@@ -239,8 +239,8 @@ if [ -z "${LOGFN}" ]; then
 else
     LW="${WORK}/hslog"; mkdir -p "${LW}"
     ( eval "$(printf '%s\n' "${LOGFN}" | sed "s|/dev/console|${LW}/console|g")"
-      log "run ecryptfs-migrate-home -u magus as root" ) > "${LW}/out" 2>&1
-    grep -q 'ecryptfs-migrate-home -u magus' "${LW}/console" 2>/dev/null \
+      log "run ecryptfs-migrate-home -u alex as root" ) > "${LW}/out" 2>&1
+    grep -q 'ecryptfs-migrate-home -u alex' "${LW}/console" 2>/dev/null \
         && ok "home-setup log line written to the console" || bad "home-setup log() never reaches the console"
 fi
 

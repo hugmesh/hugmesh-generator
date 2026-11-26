@@ -8072,8 +8072,8 @@ STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar
 # population). The rpi5 builder already strips it (rm /usr/src/* + --exclude); match it.
 # --exclude=./home/${DEFAULT_USER}: the LOCAL USER's home (DEFAULT_USER already
 # carries any --local-user override, :1621) is created by firstboot, so any
-# build-time content under it is host leakage — was hard-coded './home/magus',
-# which only worked when the operator WAS magus.
+# build-time content under it is host leakage — was hard-coded to one operator's home directory,
+# which only worked on that operator's own machine.
 # ONE tar, xattrs ON, failure FATAL. The old `2>/dev/null || tar ...` fallback re-ran
 # the pack WITHOUT xattrs on any error and said nothing: the stage4 (and the .img and
 # fs.tar built from it) then shipped with every security.selinux label stripped.

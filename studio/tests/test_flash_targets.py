@@ -164,7 +164,7 @@ def test_label_and_mountpoints_collected_from_children(monkeypatch):
          "children": [
              {"name": "sdb1", "path": "/dev/sdb1", "type": "part", "rm": True,
               "size": 15 * GIB, "hotplug": True, "label": "KEYS",
-              "mountpoint": "/run/media/magus/KEYS"}]},
+              "mountpoint": "/run/media/user/KEYS"}]},
         {"name": "mmcblk0", "path": "/dev/mmcblk0", "tran": None, "rm": False,
          "type": "disk", "size": 16 * GIB, "hotplug": False, "model": "SD16G",
          "vendor": None, "label": None, "mountpoint": None},
@@ -174,7 +174,7 @@ def test_label_and_mountpoints_collected_from_children(monkeypatch):
     by_path = {t.path: t for t in ft.list_targets()}
     sdb = by_path["/dev/sdb"]
     assert sdb.fs_label == "KEYS"
-    assert sdb.mountpoints == ("/run/media/magus/KEYS",)
+    assert sdb.mountpoints == ("/run/media/user/KEYS",)
     assert sdb.mounted is True
     mmc = by_path["/dev/mmcblk0"]
     assert mmc.fs_label == "" and mmc.mountpoints == () and mmc.mounted is False

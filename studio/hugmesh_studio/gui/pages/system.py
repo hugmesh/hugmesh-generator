@@ -83,7 +83,7 @@ _NODE_CREDS_REASON = (
 # build-rpi5-stage4.sh:1329, build-jetson-stage4.sh:597, build-frite-stage4.sh:594,
 # build-orangepi5-stage4.sh:625 and the four orangepi-zero/lts builders). On those
 # images the operator typed one account twice and the argv carried both
-# "--local-user magus" and "--user magus" — and an operator who never opened this page
+# "--local-user alex" and "--user alex" — and an operator who never opened this page
 # emitted no -u at all, i.e. merely WALKING the wizard added a redundant flag.
 #
 # WHERE --local-user IS ACTUALLY EMITTED — the half the first cut of this rule assumed
@@ -428,6 +428,19 @@ class SystemPage(QtWidgets.QWizardPage):
         self.root_password.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self.root_password.setPlaceholderText("hashed at build time; NOT saved to configs")
         fl.addWidget(_row("Root password", self.root_password))
+        # Typed twice, like the Home step's Login Password: a mistyped root password is
+        # baked into the image (hashed) and only found when the console login fails.
+        self.root_password_confirm = QtWidgets.QLineEdit()
+        self.root_password_confirm.setObjectName("root_password_confirm")
+        self.root_password_confirm.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.root_password_confirm.setPlaceholderText("type the same root password again")
+        fl.addWidget(_row("Confirm root password", self.root_password_confirm))
+        self.root_password_error = QtWidgets.QLabel("")
+        self.root_password_error.setObjectName("root_password_error")
+        self.root_password_error.setWordWrap(True)
+        self.root_password_error.setStyleSheet("color: #c62828;")
+        self.root_password_error.setVisible(False)
+        fl.addWidget(self.root_password_error)
         self.creds_fields.setVisible(False)          # ask 10: hidden until opted in
         cl.addWidget(self.creds_fields)
         self.creds_optin.toggled.connect(self._optin_toggled)
@@ -448,6 +461,8 @@ class SystemPage(QtWidgets.QWizardPage):
             if not on:
                 self.user_password.clear()
                 self.root_password.clear()
+                self.root_password_confirm.clear()
+                self.root_password_error.setVisible(False)
         except Exception:                    # noqa: BLE001 — see the module docstring
             _log_swallowed("_optin_toggled")
 
@@ -619,7 +634,7 @@ class SystemPage(QtWidgets.QWizardPage):
 
         This is the hostname field's guard, applied to the field that was missing it.
         Seeding off the BASE config (which the WorklistPage pins to x86) resolved to
-        cfg.local_user and then rode `-u magus` onto every row — a be.rpi5 row that
+        cfg.local_user and then rode `-u alex` onto every row — a be.rpi5 row that
         emitted nothing before, and whose builder defaults to 'pi', silently changed
         account. derive_default_user's own docstring says the ARM builders "keep the
         platform account otherwise"; that is only true while nothing bakes -u."""
@@ -685,12 +700,14 @@ class SystemPage(QtWidgets.QWizardPage):
         self._optin_toggled(self.creds_optin.isChecked())
         self.user_password.setText(c.user_password)
         self.root_password.setText(c.root_password)
+        self.root_password_confirm.setText(c.root_password)
+        self.root_password_error.setVisible(False)
         # hostname/timezone/user are all-platform (-H/-T/-u, every builder); only
         # the fallback credentials are x86-only — greyed per the capability table
         # (G10 pattern) instead of silently dropping the values from an ARM argv.
         gate_widgets(c.platform, {
             "user_password": self.user_password,
-            "root_password": self.root_password,
+            "root_password": [self.root_password, self.root_password_confirm],
         })
         # person-role: HIDE (not grey) wherever the builder would discard it — a cluster
         # node, an unaffiliated/standalone desktop, or a platform with no --person-role
@@ -764,9 +781,16 @@ class SystemPage(QtWidgets.QWizardPage):
         # ask 10: nothing about the credentials is collected unless the operator opted
         # in. Belt & braces with the wipe in _optin_toggled — the collect itself carries
         # the gate, so even a widget left populated by some other path emits nothing.
+        prior_root = c.root_password
+        root_mismatch = False
         if self.creds_optin.isChecked():
             c.user_password = self.user_password.text()
             c.root_password = self.root_password.text()
+            # the root password must be typed the same twice; a mismatch is refused
+            # below (after every other field is collected) and never written through
+            if c.root_password and c.root_password != self.root_password_confirm.text():
+                root_mismatch = True
+                c.root_password = prior_root
         else:
             c.user_password = ""
             c.root_password = ""
@@ -808,7 +832,11 @@ class SystemPage(QtWidgets.QWizardPage):
         problem = username_problem("Default user", c.user) if c.user else ""
         self.user_error.setText(problem)
         self.user_error.setVisible(bool(problem))
+        self.root_password_error.setText(
+            "The two root passwords do not match. Type the same password in both boxes."
+            if root_mismatch else "")
+        self.root_password_error.setVisible(root_mismatch)
         if problem:
             c.user = prior_user
             return False
-        return True
+        return not root_mismatch

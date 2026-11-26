@@ -57,7 +57,7 @@ casdoor=200
 cd "$WT" && ls -l .e2e-credentials | sed 's/^\(.\{10\}\) [0-9]* \([^ ]*\) \([^ ]*\) .*\(\.e2e-credentials\)$/\1 \2 \3 \4/' && PW="$(grep '^E2E_PASSWORD=' .e2e-credentials | tail -n1 | cut -d= -f2-)"; [ -n "$PW" ] && echo "password resolved, length ${#PW}" || echo 'NO PASSWORD RESOLVED - STOP'
 echo "credential-file lines: $(wc -l < .e2e-credentials)  (keys: $(cut -d= -f1 .e2e-credentials | tr '\n' ' '))"
 --- output (redacted) ---
--rw------- magus magus .e2e-credentials
+-rw------- user user .e2e-credentials
 password resolved, length 32
 credential-file lines: 1  (keys: E2E_PASSWORD )
 (script exit=0)

@@ -117,6 +117,12 @@ PIDFILE="/run/tor/tor.pid"
 EXPORT_DIR="/var/lib/hugmesh/tor"
 UPSTREAM_FILE="/etc/hugmesh/tor/upstream"
 DOMAINS_FILE="/etc/hugmesh/tor/domains"
+# "<slug> <count>" per Tor domain a new address was asked for (hugmesh-generator#652,
+# written by hugmesh-tor-export-sync from the signed export); the count this node last
+# applied per slug is kept under ROTATION_STATE (absent = 0).
+ROTATIONS_FILE="/etc/hugmesh/tor/rotations"
+ROTATION_STATE="/var/lib/hugmesh/tor-rotations"
+ROTATION_RETAIN_DAYS="${HUGMESH_TOR_ROTATE_RETAIN_DAYS:-7}"
 LOG="${R}/var/log/hugmesh-tor-reconcile.log"
 WAIT_TRIES="${HUGMESH_TOR_WAIT_TRIES:-10}"
 
@@ -489,6 +495,72 @@ for _f in "${R}${EXPORT_DIR}"/*.hostname; do
     for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do [ "${_s}" = "${_b}" ] && _keep=true; done
     ${_keep} || { rm -f "${_f}"; log "withdrew the export for unlisted Tor domain '${_b}'"; }
 done
+
+# 4b) A new address per domain on request (hugmesh-generator#652). Only with tor live
+# and never from the boot oneshot (the reload needs a running tor). For each listed
+# domain whose requested count is above the applied one: withdraw the exported name,
+# move ONLY that domain's key folder aside (kept ROTATION_RETAIN_DAYS days), reload tor
+# once (it mints a key only where key files are missing), wait for the new name, export
+# it and record the count. If no new name appears the old key is put back and exported
+# again, and the count is NOT recorded, so the next run tries again.
+_rotate_domain() {  # SLUG COUNT
+    local _slug _count _dir _old _new _aside _retired _i
+    _slug="$1"; _count="$2"
+    _dir="${R}${HS_DOMAIN_ROOT}/${_slug}"
+    _old="$(tr -d '[:space:]' < "${_dir}/hostname" 2>/dev/null)"
+    [[ "${_old}" =~ ^[a-z2-7]{56}\.onion$ ]] || { log "rotation for '${_slug}': no minted address yet — later"; return 1; }
+    _retired="${R}${HS_DOMAIN_ROOT}/.retired"
+    mkdir -p "${_retired}" && chmod 0700 "${_retired}" 2>/dev/null || true
+    _aside="${_retired}/${_slug}-$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || date +%s)"
+    rm -f "${R}${EXPORT_DIR}/${_slug}.hostname"
+    if ! mv "${_dir}" "${_aside}"; then
+        _export "${_dir}/hostname" "${R}${EXPORT_DIR}/${_slug}.hostname" "domain '${_slug}'"
+        log "rotation for '${_slug}': could not move the key folder aside — nothing changed"; return 1
+    fi
+    if ! mkdir -p "${_dir}"; then
+        mv "${_aside}" "${_dir}" 2>/dev/null || true
+        _export "${_dir}/hostname" "${R}${EXPORT_DIR}/${_slug}.hostname" "domain '${_slug}'"
+        log "rotation for '${_slug}': could not create a fresh key folder — the old key is back"; return 1
+    fi
+    chmod 0700 "${_dir}" 2>/dev/null || true
+    chown "${TOR_USER}:${TOR_USER}" "${_dir}" 2>/dev/null || true
+    _hup || log "rotation for '${_slug}': reload failed"
+    _i=0; _new=""
+    while [ "${_i}" -lt "${WAIT_TRIES}" ]; do
+        _new="$(tr -d '[:space:]' < "${_dir}/hostname" 2>/dev/null)"
+        if [[ "${_new}" =~ ^[a-z2-7]{56}\.onion$ ]] && [ "${_new}" != "${_old}" ]; then break; fi
+        _new=""; sleep 2; _i=$((_i + 1))
+    done
+    if [ -z "${_new}" ]; then
+        if [ -d "${_aside}" ]; then rm -rf "${_dir}"; mv "${_aside}" "${_dir}"; fi
+        _hup || true
+        _export "${_dir}/hostname" "${R}${EXPORT_DIR}/${_slug}.hostname" "domain '${_slug}'"
+        log "rotation for '${_slug}': tor minted no new address — the old one is served again (retried next run)"
+        return 1
+    fi
+    _export "${_dir}/hostname" "${R}${EXPORT_DIR}/${_slug}.hostname" "domain '${_slug}'"
+    mkdir -p "${R}${ROTATION_STATE}" && chmod 0700 "${R}${ROTATION_STATE}" 2>/dev/null || true
+    printf '%s\n' "${_count}" > "${R}${ROTATION_STATE}/${_slug}"
+    find "${_retired}" -mindepth 1 -maxdepth 1 -type d -mtime +"${ROTATION_RETAIN_DAYS}" -exec rm -rf {} + 2>/dev/null || true
+    log "rotation for '${_slug}' (request ${_count}): ${_old} -> ${_new}; the old key is kept ${ROTATION_RETAIN_DAYS} days"
+    return 0
+}
+if ${TOR_UP} && ! ${BOOT_ONESHOT} && [ -r "${R}${ROTATIONS_FILE}" ]; then
+    while IFS= read -r _line || [ -n "${_line}" ]; do
+        _line="$(_trim "${_line}")"
+        case "${_line}" in ''|'#'*) continue ;; esac
+        _rs="${_line%% *}"; _rc="${_line##* }"
+        if ! [[ "${_rs}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || ! [[ "${_rc}" =~ ^[1-9][0-9]{0,8}$ ]]; then
+            log "ignoring malformed rotation request '${_line}' in ${ROTATIONS_FILE}"; continue
+        fi
+        _listed=false
+        for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do [ "${_s}" = "${_rs}" ] && _listed=true; done
+        ${_listed} || { log "rotation request for unlisted Tor domain '${_rs}' ignored"; continue; }
+        _applied="$(tr -d '[:space:]' < "${R}${ROTATION_STATE}/${_rs}" 2>/dev/null)"
+        [[ "${_applied}" =~ ^[0-9]+$ ]] || _applied=0
+        [ "${_rc}" -gt "${_applied}" ] && _rotate_domain "${_rs}" "${_rc}"
+    done < "${R}${ROTATIONS_FILE}"
+fi
 
 # 5) The boot oneshot on a first boot: tor has not minted the keypair(s) yet (it
 # starts after this returns), so leave the detached export waiter behind.

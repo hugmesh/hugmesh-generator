@@ -2439,8 +2439,8 @@ _BUILDER_DEFAULT_USER = {
 def default_local_user() -> str:
     """The Studio default for ``local_user``: the INVOKING user, per call.
 
-    Was the literal ``"magus"`` — the original operator's account baked into every
-    default x86 argv (``--local-user magus``) on any machine the Studio ran on.
+    Was a literal account name — the original operator's own, baked into every
+    default x86 argv (``--local-user <that name>``) on any machine the Studio ran on.
     ``getpass.getuser()`` honours LOGNAME/USER before falling back to the uid's
     passwd entry; the except arm covers the (bare-container) case where neither
     exists. Every predicate that asks "was the account name customized off the
@@ -2453,7 +2453,7 @@ def default_local_user() -> str:
 
     FOLDED INTO A LOGIN NAME. The account name is the host's, the value is the
     IMAGE's login, and validate_username() holds it to ``[a-z_][a-z0-9_-]{0,31}``.
-    Windows account names are routinely capitalised or contain spaces ("Magus",
+    Windows account names are routinely capitalised or contain spaces ("Alex",
     "Jane Doe"), so the unfolded default failed that allowlist on every real Windows
     machine: ``--print-specs`` and every build command exited 2 before doing anything
     (measured on Windows 11 with the 0.3.0-beta.1 MSI; the CI runner's account,

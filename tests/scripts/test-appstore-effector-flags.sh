@@ -123,7 +123,7 @@ DEPLOY="${REPO}/specs/cluster/manifests/admin-bff-api/deployment.yaml"
 TMPL="${REPO}/specs/cluster/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
 # The RUNTIME template, in the sibling admin-BFF checkout. READ-ONLY, and optional:
 # absent on a machine that only has the generator cloned.
-BFF_TMPL="${APPSTORE_BFF_TMPL:-/home/magus/Github/hugmesh-admin-bff-api/src/main/resources/kaniko/service-catalog-build-job.template.yaml}"
+BFF_TMPL="${APPSTORE_BFF_TMPL:-${REPO}/../hugmesh-admin-bff-api/src/main/resources/kaniko/service-catalog-build-job.template.yaml}"
 
 PY="${PYTHON:-python3}"
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-__version__ = "0.5.0-beta.2"
+__version__ = "0.5.2-beta.1"
 
 # Opt-in expert mode. Gates power-user affordances that would only confuse someone
 # building a single personal image (the whole-release Fleet build, the Qt-binding

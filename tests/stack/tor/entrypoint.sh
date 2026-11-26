@@ -79,14 +79,29 @@ MAP_FILE="${MAP_DIR}/onion-hosts.map"
 # TRUNCATED at every start: `restart: unless-stopped` restarts the SAME container,
 # whose filesystem (and therefore an old "Bootstrapped 100%" line) survives.
 NOTICE_LOG="${DATA_DIR}/notice.log"
+# tor's PID, for `rotate` (a `docker exec` of this script cannot see the running
+# instance's TOR_PID variable).
+TOR_PIDFILE="${DATA_DIR}/hugmesh-tor.pid"
+# `entrypoint.sh rotate <slug>` (hugmesh-generator#652): give ONE Tor domain a new
+# onion address in the RUNNING container (the image's hugmesh-tor-rotate). Any other
+# invocation is the container start below.
+MODE="${1:-start}"
 
 case "${ROLE}" in
   onion|client) ;;
   *) echo "[hugmesh-tor] FATAL: HUGMESH_TOR_ROLE='${ROLE}' (expected onion|client)" >&2; exit 2 ;;
 esac
 
+case "${MODE}" in
+  start) ;;
+  rotate)
+    [ "${ROLE}" = "onion" ] || { echo "[hugmesh-tor] REFUSED: rotate needs the onion role" >&2; exit 2; } ;;
+  *) echo "[hugmesh-tor] FATAL: unknown command '${MODE}' (expected: rotate <slug>)" >&2; exit 2 ;;
+esac
+
 mkdir -p "$DATA_DIR"
-: > "$NOTICE_LOG"
+# never truncated by `rotate`: the healthcheck reads "Bootstrapped 100%" from it
+[ "${MODE}" = "rotate" ] || : > "$NOTICE_LOG"
 
 if [ "${ROLE}" = "client" ]; then
   # tor refuses a DataDirectory it cannot own once it has setuid'd to `User tor`.
@@ -140,6 +155,122 @@ done
 set +f
 if [ -n "$DOMAIN_LINES" ] && [ ! -d "$MAP_DIR" ]; then
   echo "[hugmesh-tor] NOTE: Tor domains are listed but $MAP_DIR is not mounted, so no gateway host map is written and every onion is served as the default brand (the map comes with tests/stack/compose.tor-domains.yaml)" >&2
+fi
+
+# valid_onion NAME: a v3 onion hostname — 56 base32 characters, then ".onion".
+valid_onion() {
+  case "$1" in *.onion) ;; *) return 1 ;; esac
+  _vo="${1%.onion}"
+  case "$_vo" in ''|*[!a-z2-7]*) return 1 ;; esac
+  [ "${#_vo}" -eq 56 ]
+}
+
+# write_map: the gateway host map (hugmesh-gateway#38), temp-then-rename in the SAME
+# directory. The primary as `default`, then each minted domain onion as its tenant.
+# Nothing at all when the map directory is not mounted (a stack with no Tor domain).
+# MAP_SKIP=<slug> leaves that domain out (a rotation withdrawing its old name).
+write_map() {
+  [ -d "$MAP_DIR" ] || return 0
+  primary="$(tr -d '[:space:]' < "$HS_DIR/hostname")"
+  valid_onion "$primary" || return 1
+  tmp="$MAP_DIR/.onion-hosts.map.$$"
+  {
+    echo "# written by hugmesh-tor (tests/stack/tor/entrypoint.sh), hugmesh-generator#582"
+    echo "${primary}=default"
+    printf '%s' "$DOMAIN_LINES" | while read -r slug tenant; do
+      [ -n "$slug" ] && [ "$slug" != "${MAP_SKIP:-}" ] || continue
+      [ -s "$DOMAIN_HS_ROOT/$slug/hostname" ] || continue
+      name="$(tr -d '[:space:]' < "$DOMAIN_HS_ROOT/$slug/hostname")"
+      valid_onion "$name" || continue
+      echo "${name}=${tenant}"
+    done
+  } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$MAP_FILE"
+}
+
+# ── rotate <slug>: a new onion address for ONE Tor domain (hugmesh-generator#652) ──
+# Runs inside the RUNNING container (`docker exec … hugmesh-tor-rotate <slug>`), as
+# the design's D31 order: withdraw the old name (readout and gateway map first, so the
+# edge stops admitting it), move ONLY that domain's key folder aside, reload tor once
+# (a reload mints a key only where key files are missing), wait for the new name,
+# then publish it (map, readout). The mesh's own (primary) address is never rotated
+# here. The old key folder is kept ROTATE_RETAIN_DAYS days (default 7) under
+# .retired/ and then pruned. On any failure the old key is put back and served again.
+# Exit: 0 rotated | 2 refused (not a Tor domain, bad slug) | 3 busy | 4 nothing to
+# rotate yet | 5 tor did not mint a new name (the old one is back).
+ROTATE_WAIT_S="${HUGMESH_TOR_ROTATE_WAIT_S:-120}"
+ROTATE_RETAIN_DAYS="${HUGMESH_TOR_ROTATE_RETAIN_DAYS:-7}"
+rotate_domain() {
+  slug="$1"
+  valid_key "$slug" || { echo "[hugmesh-tor] REFUSED: '${slug}' is not a Tor domain key name" >&2; return 2; }
+  tenant="$(printf '%s' "$DOMAIN_LINES" | while read -r s t; do [ "$s" = "$slug" ] && echo "$t"; done)"
+  [ -n "$tenant" ] || { echo "[hugmesh-tor] REFUSED: '${slug}' is not one of this mesh's Tor domains (TOR_ONION_DOMAINS)" >&2; return 2; }
+  dir="$DOMAIN_HS_ROOT/$slug"
+  old="$(tr -d '[:space:]' < "$dir/hostname" 2>/dev/null || true)"
+  valid_onion "$old" || { echo "[hugmesh-tor] '${slug}' has no published address yet; nothing to rotate" >&2; return 4; }
+  [ -s "$TOR_PIDFILE" ] && tpid="$(cat "$TOR_PIDFILE")" && kill -0 "$tpid" 2>/dev/null \
+    || { echo "[hugmesh-tor] tor is not running in this container; nothing was changed" >&2; return 5; }
+  lock="$DATA_DIR/.rotate.lock"
+  mkdir "$lock" 2>/dev/null || { echo "[hugmesh-tor] BUSY: another rotation is running" >&2; return 3; }
+  trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+  retired="$DOMAIN_HS_ROOT/.retired"
+  mkdir -p "$retired"
+  chmod 700 "$retired"
+  aside="$retired/${slug}-$(date -u +%Y%m%dT%H%M%SZ)"
+  # 1. withdraw the old name: no readout, and the gateway map without it
+  rm -f "$OUT_DIR/$slug.hostname"
+  MAP_SKIP="$slug" write_map || true
+  # 2. only this domain's key folder moves; tor gets an empty one to mint into.
+  # Each step is checked by hand: `set -e` does not reach into a function called
+  # from `||`, and a restore below must never remove a key that was not moved aside.
+  if ! mv "$dir" "$aside"; then
+    write_map || true
+    cp "$dir/hostname" "$OUT_DIR/$slug.hostname" 2>/dev/null && chmod 644 "$OUT_DIR/$slug.hostname" 2>/dev/null || true
+    echo "[hugmesh-tor] FAILED: could not move '${slug}' key folder aside; nothing was changed" >&2
+    return 5
+  fi
+  if ! mkdir "$dir"; then
+    mv "$aside" "$dir" 2>/dev/null || true
+    write_map || true
+    echo "[hugmesh-tor] FAILED: could not create a fresh key folder for '${slug}'; the old key is back" >&2
+    return 5
+  fi
+  chmod 700 "$dir"
+  chown tor:tor "$dir" 2>/dev/null || true
+  # 3. one reload
+  kill -HUP "$tpid"
+  i=0; new=""
+  while [ "$i" -lt "$ROTATE_WAIT_S" ]; do
+    new="$(tr -d '[:space:]' < "$dir/hostname" 2>/dev/null || true)"
+    if valid_onion "$new" && [ "$new" != "$old" ]; then break; fi
+    new=""; sleep 1; i=$((i + 1))
+  done
+  if [ -z "$new" ]; then
+    # put the old key back and serve it again (only if it really is aside)
+    if [ -d "$aside" ]; then
+      rm -rf "$dir"
+      mv "$aside" "$dir"
+    fi
+    kill -HUP "$tpid" 2>/dev/null || true
+    sleep 1
+    write_map || true
+    cp "$dir/hostname" "$OUT_DIR/$slug.hostname" 2>/dev/null && chmod 644 "$OUT_DIR/$slug.hostname" 2>/dev/null || true
+    echo "[hugmesh-tor] FAILED: tor minted no new address for '${slug}' within ${ROTATE_WAIT_S}s; the old address is served again" >&2
+    return 5
+  fi
+  # 4. publish the new name: the map, then the readout
+  write_map || echo "[hugmesh-tor] WARNING: the gateway host map could not be written to $MAP_FILE" >&2
+  cp "$dir/hostname" "$OUT_DIR/$slug.hostname"
+  chmod 644 "$OUT_DIR/$slug.hostname" 2>/dev/null || true
+  # 5. prune key folders retired longer than the retention window
+  find "$retired" -mindepth 1 -maxdepth 1 -type d -mtime +"$ROTATE_RETAIN_DAYS" -exec rm -rf {} + 2>/dev/null || true
+  echo "ROTATED ${slug} ${old} -> ${new}"
+  echo "[hugmesh-tor] domain onion '${slug}' (tenant '${tenant}') has a new address; the old key is kept ${ROTATE_RETAIN_DAYS} days in $retired"
+  return 0
+}
+if [ "${MODE}" = "rotate" ]; then
+  rc=0
+  rotate_domain "${2:-}" || rc=$?
+  exit "$rc"
 fi
 
 mkdir -p "$HS_DIR" "$OUT_DIR"
@@ -200,34 +331,6 @@ all_minted() {
   done
 }
 
-# valid_onion NAME: a v3 onion hostname — 56 base32 characters, then ".onion".
-valid_onion() {
-  case "$1" in *.onion) ;; *) return 1 ;; esac
-  _vo="${1%.onion}"
-  case "$_vo" in ''|*[!a-z2-7]*) return 1 ;; esac
-  [ "${#_vo}" -eq 56 ]
-}
-
-# write_map: the gateway host map (hugmesh-gateway#38), temp-then-rename in the SAME
-# directory. The primary as `default`, then each minted domain onion as its tenant.
-# Nothing at all when the map directory is not mounted (a stack with no Tor domain).
-write_map() {
-  [ -d "$MAP_DIR" ] || return 0
-  primary="$(tr -d '[:space:]' < "$HS_DIR/hostname")"
-  valid_onion "$primary" || return 1
-  tmp="$MAP_DIR/.onion-hosts.map.$$"
-  {
-    echo "# written by hugmesh-tor (tests/stack/tor/entrypoint.sh), hugmesh-generator#582"
-    echo "${primary}=default"
-    printf '%s' "$DOMAIN_LINES" | while read -r slug tenant; do
-      [ -n "$slug" ] && [ -s "$DOMAIN_HS_ROOT/$slug/hostname" ] || continue
-      name="$(tr -d '[:space:]' < "$DOMAIN_HS_ROOT/$slug/hostname")"
-      valid_onion "$name" || continue
-      echo "${name}=${tenant}"
-    done
-  } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$MAP_FILE"
-}
-
 # Publish the hostnames out once tor mints them (first boot ~1s; already present on a
 # restart). The hostnames are PUBLIC; only the keys stay inside the named volumes.
 # ORDER MATTERS: the host map, then every domain's readout, then the primary's LAST —
@@ -264,11 +367,12 @@ PUBLISHER_PID=$!
 # up publishes a NEW one — either way nothing reads a hostname tor is not serving.
 "$TOR_BIN" -f "$TORRC" &
 TOR_PID=$!
+echo "$TOR_PID" > "$TOR_PIDFILE"
 
 unpublish() {
   kill "$PUBLISHER_PID" 2>/dev/null || true
   wait "$PUBLISHER_PID" 2>/dev/null || true
-  rm -f "$OUT_DIR/hostname" "$OUT_DIR"/*.hostname "$MAP_FILE"
+  rm -f "$OUT_DIR/hostname" "$OUT_DIR"/*.hostname "$MAP_FILE" "$TOR_PIDFILE"
 }
 on_stop() {
   kill -TERM "$TOR_PID" 2>/dev/null || true

@@ -885,8 +885,8 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         msg = (f"Rebuild into {s.workdir}?\n"
                "Existing artifacts will be reused/overwritten.")
         if s.blanked_secrets:
-            msg += ("\n\nNOTE: these secrets were NOT saved with the session and "
-                    "will be empty: " + ", ".join(s.blanked_secrets))
+            msg += "".join("\n\n" + line for line in
+                           build_sessions.restart_secret_lines(s.blanked_secrets))
         # Held secret FILES (core/secret_files.py): forewarn here, but the actual
         # re-selection prompt is ProgressPage's dispatch gate — it fires for ANY
         # restart path, not just this button, so this text is a courtesy, never

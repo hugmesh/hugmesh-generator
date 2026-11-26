@@ -20,7 +20,7 @@
 // an error, not a silently skipped Job.
 //
 // STEP HYGIENE. Every step text below was grepped against tests/e2e/steps/ and
-// every sibling lane worktree under /home/magus/.hugmesh-wt-sonnet/bdd-*/ before
+// every sibling lane worktree under /home/<user>/.hugmesh-wt-sonnet/bdd-*/ before
 // it was written; none duplicates an existing definition. bddgen fails the whole
 // lane on an ambiguous step.
 

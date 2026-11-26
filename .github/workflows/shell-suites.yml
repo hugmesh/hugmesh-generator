@@ -635,6 +635,7 @@ jobs:
             tests/scripts/test-tools-path-lib.sh
             tests/scripts/test-tor-export-sync.sh
             tests/scripts/test-tor-node-contract.sh
+            tests/scripts/test-tor-node-rotation.sh
             tests/scripts/test-udev-coldplug-guard.sh
             tests/scripts/test-verify-artifact-neutrality-frite.sh
             tests/scripts/test-vm-display-guest.sh

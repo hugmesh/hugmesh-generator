@@ -464,7 +464,7 @@ def test_system_default_user_row_is_hidden_on_a_desktop_image(qapp, mode, role):
     """HIDDEN (not greyed) and LEAVES THE OUTPUT UNCHANGED: c.user goes back to its dataclass
     default, so the argv carries --local-user alone — exactly what an operator who never
     opened this page produced. The image is unchanged; only the duplicate flag is gone."""
-    cfg = ImageConfig(mode=mode, role=role, platform="x86", user="magus")
+    cfg = ImageConfig(mode=mode, role=role, platform="x86", user="alex")
     page = _system_page(cfg)
     page.initializePage()
     assert not page.user_row.isVisibleTo(page)
@@ -713,6 +713,7 @@ def test_system_credentials_masked_secret_and_never_saved(qapp):
     page.creds_optin.setChecked(True)
     page.user_password.setText("fallback-user-pw")
     page.root_password.setText("fallback-root-pw")
+    page.root_password_confirm.setText("fallback-root-pw")
     assert page.validatePage()
     c = page.wiz.cfg
     pairs = flag_pairs(c.to_cli_args())
@@ -793,6 +794,7 @@ def test_system_credentials_survive_desktop_first_mesh_worklist(wiz):
     sysp.creds_optin.setChecked(True)  # ask 10: opt in before typing
     sysp.user_password.setText("fleet-user-pw")
     sysp.root_password.setText("fleet-root-pw")
+    sysp.root_password_confirm.setText("fleet-root-pw")
     build = advance_to(wiz, wizard_mod.BuildPage)
     assert c.user_password == "fleet-user-pw"      # role-class clear must NOT fire
     node_argv = next(cfg.to_cli_args() for e, cfg in build._materialized
@@ -844,6 +846,7 @@ def test_system_credentials_survive_going_back_to_add_a_desktop_row(wiz):
     sysp.creds_optin.setChecked(True)              # ask 10: opt in before typing
     sysp.user_password.setText("fleet-user-pw")
     sysp.root_password.setText("fleet-root-pw")
+    sysp.root_password_confirm.setText("fleet-root-pw")
     advance_to(wiz, wizard_mod.HomePage)           # validates System -> cfg stores creds
     while not isinstance(wiz.currentPage(), wizard_mod.WorklistPage):
         wiz.back()                                 # back to the worklist...
