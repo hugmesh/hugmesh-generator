@@ -543,11 +543,13 @@ def test_the_rbac_pending_spec_drives_the_games_personas_it_now_asserts(index):
     assert {"e2e-gamesonly", "e2e-gamesadmin"} <= set(got.usernames)
 
 
-def test_the_frontpage_spec_drives_e2e_user_through_its_positive_control(index):
-    # #293 added `registerOnly(page, 'e2e-user', personaPassword('e2e-user'))` to spec
-    # 01. Pinned positively so a silent rename back to an anonymous control is caught.
+def test_the_frontpage_spec_drives_a_matrix_member_through_its_positive_control(index):
+    # #293 added a signed-in positive control to spec 01 (`registerOnly(page, <persona>, ...)`). It signs in as
+    # e2e-matrix, not the plain e2e-user: the control follows the Matrix card, which is a disabled button
+    # for a bare ROLE_USER on a stack that grants platform access explicitly. Pinned positively so a silent
+    # rename back to an anonymous control is caught.
     got = index.for_spec("01-frontpage.spec.ts")
-    assert got.usernames == ("e2e-user",) and got.drives_personas
+    assert got.usernames == ("e2e-matrix",) and got.drives_personas
     assert got.uses[0].mechanism == MECH_CALLSITE
 
 
