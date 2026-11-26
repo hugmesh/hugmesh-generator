@@ -40,7 +40,7 @@ from ...core.config import (
 )
 from ...core.worklist import (
     RAM_PLATFORM_NAMES, RAM_PLATFORMS, WORKLIST_INFRA_SERVICES, WorklistConfig,
-    WorklistEntry, entry_id,
+    WorklistEntry, entry_id, person_problem, takes_person,
 )
 from ._desktop_user_dialog import DesktopUserDialog
 
@@ -676,7 +676,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         # so the interactive flow still asks the moment the box is ticked.
         if rid in self._id_axes:
             role, _platform = self._id_axes[rid]
-            if image_class("mesh", role) == "desktop":
+            if takes_person(role):
                 if self._is_checked(item) and rid not in self._desktop_people:
                     self._desktop_people[rid] = ("", ["user"])
                     self._refresh_people_table()
@@ -885,7 +885,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         # visible reason — and an unchecked row's person is forgotten.
         for rid, item in self.rows.items():
             role, _p = self._id_axes[rid]
-            if image_class("mesh", role) != "desktop":
+            if not takes_person(role):
                 continue
             if self._is_checked(item) and rid not in self._desktop_people:
                 self._desktop_people[rid] = ("", ["user"])
@@ -1014,8 +1014,7 @@ class WorklistPage(QtWidgets.QWizardPage):
             ))
         if not entries:
             return False   # isComplete() already blocks Next; guard the collect path too
-        if any(image_class("mesh", e.role) == "desktop" and not e.desktop_user
-               for e in entries):
+        if any(person_problem(e.role, e.desktop_user) for e in entries):
             return False   # a checked desktop must name its person (isComplete mirror)
         # The RAM rule (inline, never a modal): an omnibus row on a Pi / Orange Pi must
         # say how much RAM its board has — the builder refuses it otherwise.

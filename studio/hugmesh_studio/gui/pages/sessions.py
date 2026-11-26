@@ -17,21 +17,10 @@ behind the Welcome screen's REVIEW PRIOR SESSIONS card — the same widgets unde
 from __future__ import annotations
 
 from ... import advanced_mode
+from ...core.json_files import load_problem
 from ..qt import Qt, QtWidgets
 from ._scroll import scrollable
 from .sessions_widget import PreviousBuildsWidget
-
-
-def load_problem(path: str, exc: BaseException) -> str:
-    """The sentence "Load config" shows when ``path`` did not load. A file that is not
-    UTF-8 gets a fix as well as the codec's words: Windows PowerShell 5.1's
-    ``Set-Content`` writes the ANSI code page, which a hostname with an accent breaks.
-    It names what json_files.decode accepts, not "UTF-16": a UTF-16 file without a byte
-    order mark is read as UTF-8 too, and fails here with an accent in it."""
-    if isinstance(exc, UnicodeDecodeError):
-        return (f"{path} could not be loaded: it is not UTF-8 text, nor UTF-16 with a "
-                f"byte order mark ({exc}). Save it again as UTF-8 and load it once more.")
-    return f"{path} could not be loaded: {exc}"
 
 
 class SessionsPage(QtWidgets.QWizardPage):

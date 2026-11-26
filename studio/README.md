@@ -746,6 +746,16 @@ reason and never selectable, the same words as the GUI and `--list-devices`). St
 ported yet say so and keep the config's defaults. The walk ends
 in a config you can save and build from the GUI, or pass to `--print-commands`.
 
+The guards the window has are here too, in the same words. `load PATH` on the welcome
+screen (`l PATH` in the previous-builds review, the `l` key in the urwid face) opens a
+saved config, one image or a worklist, as the window's "Load config" does. The Build screen
+refuses or notes what the window's Review step would (the Domain services and PKI LAN
+gates, and the builder's own field-scope refusals, per image), and `c` shows the command
+each image will run, with every password hidden. Answering `y` at the local-cloud gate
+checks that the local Kubernetes lane is down, as the window does. A checked desktop row
+on the worklist needs its person: `who N NAME [ROLE ...]`. No password is typed here: the
+Desktop step reads one from the first line of a file (`pass=FILE`) and never saves it.
+
 urwid is deliberately **not** in `requirements.txt`: it must never become a hard studio
 dependency, and the test suite runs without it. For the rich UI on Gentoo, where
 `dev-python/urwid` is ~arch-keyworded, accept it with one line:
