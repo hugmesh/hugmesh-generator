@@ -1,4 +1,172 @@
-#!/usr/bin/env bash
-# HugMesh Image Studio launcher (Linux/macOS). Runs the GUI from this checkout.
-here="$(cd "$(dirname "$0")" && pwd)"
-exec python3 -m hugmesh_studio "$@"
+#!/bin/sh
+# HugMesh Image Studio launcher (Linux/macOS/BSD). Runs the GUI from this checkout.
+#
+# It works from a double-click (a .desktop entry or a file manager) on nearly any distro:
+#   1. It FINDS a Python 3.10+ that can import PySide6 or PyQt6: $HUGMESH_STUDIO_PYTHON,
+#      a venv next to this script (.venv-studio, .venv), the per-user venv, then python3
+#      and the versioned pythons on PATH. A distro's python3 moving to a new version (and
+#      losing its Qt binding) is the usual reason a click stops working; the per-user venv
+#      below is immune to that.
+#   2. If none qualifies it OFFERS to build the per-user venv
+#      ($XDG_DATA_HOME/hugmesh-studio/venv, `python -m venv` + `pip install -r
+#      requirements.txt`). It asks first (terminal prompt, or a zenity/kdialog box when
+#      there is no terminal) and installs nothing without a yes. Nothing needs root.
+#   3. If it cannot ask or cannot install, it says exactly what is missing and how to fix
+#      it, in a dialog when there is no terminal, and exits 1.
+#
+#   hugmesh-studio                  run the Studio (any other argument is passed through)
+#   hugmesh-studio --detect         print the DETECT report and exit (never prompts)
+#   hugmesh-studio --install-launcher
+#                                   add an application-menu entry (clickable) for THIS
+#                                   checkout under $XDG_DATA_HOME/applications
+#   HUGMESH_STUDIO_AUTO=1           accept the venv offer without asking
+#
+# POSIX sh only: it must run on dash, busybox ash and bash alike.
+
+# Resolve symlinks so a link in ~/.local/bin still finds the checkout.
+self=$0
+while [ -h "$self" ]; do
+    dir=$(cd "$(dirname "$self")" && pwd)
+    link=$(readlink "$self")
+    case $link in /*) self=$link ;; *) self=$dir/$link ;; esac
+done
+here=$(cd "$(dirname "$self")" && pwd)
+self=$here/$(basename "$self")
+
+data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+user_venv=$data_home/hugmesh-studio/venv
+
+# True when $1 is a Python >= 3.10 that can import a Qt binding.
+usable() {
+    [ -x "$1" ] || return 1
+    "$1" -c '
+import sys
+if sys.version_info < (3, 10):
+    raise SystemExit(1)
+try:
+    import PySide6
+except ImportError:
+    import PyQt6
+' >/dev/null 2>&1
+}
+
+# Echo the first usable interpreter.
+find_python() {
+    for cand in \
+        "${HUGMESH_STUDIO_PYTHON:-}" \
+        "$here/.venv-studio/bin/python" \
+        "$here/.venv/bin/python" \
+        "$user_venv/bin/python"; do
+        [ -n "$cand" ] && usable "$cand" && { echo "$cand"; return 0; }
+    done
+    for name in python3 python python3.15 python3.14 python3.13 python3.12 python3.11 python3.10; do
+        cand=$(command -v "$name" 2>/dev/null) || continue
+        usable "$cand" && { echo "$cand"; return 0; }
+    done
+    return 1
+}
+
+# Any python3 >= 3.10 at all (to build a venv with).
+base_python() {
+    for name in python3 python3.15 python3.14 python3.13 python3.12 python3.11 python3.10; do
+        cand=$(command -v "$name" 2>/dev/null) || continue
+        "$cand" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' \
+            >/dev/null 2>&1 && { echo "$cand"; return 0; }
+    done
+    return 1
+}
+
+have_tty() { [ -t 0 ] && [ -t 2 ]; }
+
+# say TITLE MESSAGE: terminal, else a dialog, else the notification daemon, else stderr.
+say() {
+    printf '%s: %s\n' "$1" "$2" >&2
+    have_tty && return 0
+    if command -v zenity >/dev/null 2>&1; then zenity --error --title "$1" --text "$2" 2>/dev/null
+    elif command -v kdialog >/dev/null 2>&1; then kdialog --title "$1" --error "$2" 2>/dev/null
+    elif command -v notify-send >/dev/null 2>&1; then notify-send "$1" "$2" 2>/dev/null
+    fi
+    return 0
+}
+
+# ask TITLE QUESTION: 0 for yes. No way to ask means no.
+ask() {
+    [ "${HUGMESH_STUDIO_AUTO:-}" = 1 ] && return 0
+    if have_tty; then
+        printf '%s [y/N] ' "$2" >&2
+        read -r reply || return 1
+        case $reply in y | Y | yes | YES) return 0 ;; *) return 1 ;; esac
+    fi
+    if command -v zenity >/dev/null 2>&1; then
+        zenity --question --title "$1" --text "$2" --width 420 2>/dev/null
+    elif command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "$1" --yesno "$2" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+detect() {
+    py=$(find_python) && ok=yes || { py=-; ok=no; }
+    base=$(base_python) || base=-
+    printf 'DETECT python=%s\n' "$base"
+    printf 'DETECT qt-binding=%s\n' "$ok"
+    printf 'DETECT interpreter=%s\n' "$py"
+    printf 'DETECT user-venv=%s\n' "$([ -x "$user_venv/bin/python" ] && echo present || echo absent)"
+    [ "$ok" = yes ]
+}
+
+install_launcher() {
+    appdir=$data_home/applications
+    mkdir -p "$appdir" || return 1
+    out=$appdir/hugmesh-image-studio.desktop
+    {
+        printf '[Desktop Entry]\nType=Application\nName=HugMesh Image Studio\n'
+        printf 'GenericName=Mesh image builder\n'
+        printf 'Comment=Build HugMesh images with a wizard, and run a mesh from your system tray\n'
+        printf 'Exec="%s"\nIcon=applications-development\nTerminal=false\n' "$self"
+        printf 'Categories=Development;Building;\nStartupWMClass=hugmesh-studio\nStartupNotify=true\n'
+    } >"$out" || return 1
+    chmod 644 "$out"
+    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$appdir" >/dev/null 2>&1
+    echo "Installed $out (the menu entry runs this checkout)." >&2
+}
+
+# Build the per-user venv. Output goes to a log; a failure names the log.
+build_venv() {
+    base=$(base_python) || {
+        say "HugMesh Image Studio" "Python 3.10 or newer is not installed. Install it with your package manager (python3, plus python3-venv on Debian/Ubuntu), then start the Studio again."
+        return 1
+    }
+    mkdir -p "$data_home/hugmesh-studio" || return 1
+    log=$data_home/hugmesh-studio/venv-setup.log
+    echo "Setting up the Studio's Python environment (PySide6, about 200 MB). Log: $log" >&2
+    {
+        "$base" -m venv "$user_venv" &&
+            "$user_venv/bin/python" -m pip install --upgrade pip &&
+            "$user_venv/bin/python" -m pip install -r "$here/requirements.txt"
+    } >"$log" 2>&1 || {
+        rm -rf "$user_venv"
+        say "HugMesh Image Studio" "Setting up the Python environment failed. On Debian/Ubuntu install python3-venv; otherwise install PySide6 or PyQt6 with your package manager. Details: $log"
+        return 1
+    }
+}
+
+case ${1:-} in
+    --detect) detect; exit $? ;;
+    --install-launcher) install_launcher; exit $? ;;
+esac
+
+py=$(find_python) || {
+    if ask "HugMesh Image Studio" "The Studio needs the PySide6 Qt binding, which no Python on this system has. Set it up now in a private environment under $user_venv? (Downloads about 200 MB; no root needed.)"; then
+        build_venv || exit 1
+        py=$(find_python) || { say "HugMesh Image Studio" "The new environment cannot import PySide6."; exit 1; }
+    else
+        say "HugMesh Image Studio" "No Python with PySide6 or PyQt6 found. Install your distribution's python3-pyside6 (or pyqt6) package, or run: HUGMESH_STUDIO_AUTO=1 $self"
+        exit 1
+    fi
+}
+
+PYTHONPATH=$here${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONPATH
+exec "$py" -m hugmesh_studio "$@"
