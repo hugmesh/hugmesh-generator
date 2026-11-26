@@ -83,7 +83,7 @@ def test_save_config_writes_the_file_and_says_so_inline(qapp, wiz, tmp_path, mon
             QtWidgets.QMessageBox, kind,
             staticmethod(lambda *a, _k=kind, **kw:
                         (_ for _ in ()).throw(AssertionError(f"modal {_k} shown"))))
-    page._save_config()
+    page.save_config_btn.click()
     assert out.exists()
     assert page.save_config_note.isVisible()
     assert page.save_config_note.text().startswith(f"Saved {out}, but:")
