@@ -1835,6 +1835,10 @@ DOMAIN := $(patsubst DOMAIN=%,%,$(filter DOMAIN=%,$(STACK_BRAND_OUT)))
 endif
 endif
 STACK_SRC       ?= $(CURDIR)/.stack-src
+# tests/stack/.local.mk: this machine's own stack knobs (gitignored), e.g. `PUBLIC_BIND_ADDR := 127.0.0.1`
+# or `GAMES_SRC := $(HOME)/Github/hugmesh-games`. A `make stack-up` the Studio runs passes no command-line
+# variables, so a knob that must survive it lives here. Included BEFORE the `?=` defaults below.
+-include tests/stack/.local.mk
 PUBLIC_HOST_PORT ?= 8088
 # HTTPS twin of the front door (the https-front TLS terminator in the compose
 # file proxies it to the same fe-gateway). 8488 pairs with 8088; 8443 is NOT
@@ -2387,7 +2391,7 @@ STACK_BUILD_NET_FLAGS := $(if $(strip $(BUILD_NETWORK)),-f tests/stack/.compose.
 STACK_BUILD_NET_GEN = $(if $(strip $(BUILD_NETWORK)),BUILD_NETWORK='$(BUILD_NETWORK)' bash tests/stack/gen-build-network.sh tests/stack/.compose.build-network.yaml -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS)$(STACK_TOR_DOMAINS_FLAGS),@:)
 STACK_GAMES_DEP := $(if $(strip $(GAMES)),stack-games-src-check,)
 .PHONY: stack-games-src-check
-stack-games-src-check:
+stack-games-src-check: ## refuse GAMES=1 early when no hugmesh-games checkout exists (sibling or GAMES_SRC); stack-up runs it first
 	@src='$(if $(GAMES_SRC),$(GAMES_SRC),$(abspath $(CURDIR)/../hugmesh-games))'; \
 	for d in games-ui backend docker; do \
 	  [ -d "$$src/$$d" ] || { echo "stack-up GAMES=1: no games checkout at $$src (missing $$d/)." >&2; \
