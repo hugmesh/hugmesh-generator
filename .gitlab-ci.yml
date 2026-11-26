@@ -2082,28 +2082,6 @@ lint:domain-idp-flag:
         - tests/scripts/test-domain-idp-flag.sh
         - studio/hugmesh_studio/core/config.py
 
-# "Go live when ready" (#1201): --domain-go-live is accepted and threaded into
-# PLAN_DOMAIN_GO_LIVE on rpi5 + x86, every malformed value and a client role are
-# refused, the agent is baked and linked, the provider list matches the registry and
-# the Studio, and provision installs the KEYS token 0600. No root, no network.
-lint:domain-golive-flag:
-  stage: lint
-  image: python:3-slim
-  tags: [hugmesh-x86]
-  script:
-    - bash tests/scripts/test-domain-golive-flag.sh
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-    - changes:
-        - build-rpi5-stage4.sh
-        - build-x86-host-stage4.sh
-        - scripts/_domain-golive-lib.sh
-        - specs/usr/sbin/hugmesh-go-live-at-ready
-        - specs/usr/lib/hugmesh/go-live-providers.sh
-        - specs/etc/keys-provision/provision.sh
-        - tests/scripts/test-domain-golive-flag.sh
-        - studio/hugmesh_studio/core/config.py
-
 # HTTPS front door wiring (tests/stack/test-tls-front.sh): compose service /
 # nginx terminator / Makefile stack-certs cross-consistency (ports + mount
 # paths DERIVED, not assumed), the SNAP_BFF_URL same-origin mixed-content
@@ -3916,7 +3894,6 @@ orphan-guards-verify:
         tests/domain-registry/test-foreign-ingest-fuzz.sh
         tests/go-live/test-go-live-driver.sh
         tests/go-live/test-go-live-reconcile-verify.sh
-        tests/go-live/test-go-live-at-ready.sh
         tests/go-live/test-onion-refuse.sh
         tests/keystores/test-keystores.sh
         tests/keystores/test-keystores-external-ca.sh

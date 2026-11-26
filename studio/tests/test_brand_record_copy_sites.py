@@ -61,7 +61,6 @@ FULL_ROW = dict(
     # compares None == None for a key the row does not carry)
     github_org="shop-org",
     signin_methods=["password", "discord"],
-    go_live="cloudflare-tunnel",
     # per-domain identity-provider settings (2026-10-21)
     idp_settings={"provider": "oidc", "issuer": "https://id.shop.example",
                   "client_id": "shop-app", "jwks": "https://id.shop.example/keys"},

@@ -23,11 +23,6 @@
 #   temp file (--token-file), removed right after the run — they never appear in
 #   argv, on screen, or in any persisted state.
 #
-# GO LIVE WHEN READY (#1201): two entries read THIS node's own state, never a Studio
-#   session — the domains baked into /etc/hugmesh/domain-go-live and where each one is
-#   (hugmesh-go-live-at-ready --status), and a "check now" that runs that agent once.
-#   GL_AT_READY overrides its path (default: sibling script, else PATH).
-#
 # ENV SEAM: GL_DRIVER overrides the driver path (default: sibling script, else PATH).
 #           The driver's own seams (GL_ETC_HUGMESH / GL_PROVIDERS_LIB / GL_OUT_DIR)
 #           pass straight through this process's environment untouched.
@@ -209,17 +204,6 @@ run_driver() {
     return "${rc}"
 }
 
-# at_ready ARGS — hugmesh-go-live-at-ready (#1201): the sibling script, else PATH.
-at_ready() {
-    local a="${GL_AT_READY:-}"
-    if [ -z "${a}" ]; then
-        a="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/hugmesh-go-live-at-ready"
-        [ -r "${a}" ] || a="$(command -v hugmesh-go-live-at-ready 2>/dev/null)"
-    fi
-    [ -n "${a}" ] && [ -r "${a}" ] || { echo "hugmesh-go-live-at-ready is not installed on this node"; return 1; }
-    bash "${a}" "$@"
-}
-
 # ── Screens ──────────────────────────────────────────────────────────────────────
 provider_screen() {
     local -a items=(); local id desc
@@ -326,8 +310,6 @@ main_menu() {
             commit   "${commit_item}" \
             rollback "Rollback — back to internal …" \
             status   "Show go-live status" \
-            atready  "Go live when ready — the domains this node was built to take public" \
-            atreadyrun "Go live when ready — check now (runs the agent once)" \
             list     "List providers" \
             quit     "Quit")" || return 0
         case "${choice}" in
@@ -337,8 +319,6 @@ main_menu() {
             commit)   commit_screen ;;
             rollback) rollback_screen ;;
             status)   ui_msg "Status" "$(drv status 2>&1)" ;;
-            atready)  ui_msg "Go live when ready" "$(at_ready --status 2>&1)" ;;
-            atreadyrun) at_ready >/dev/null 2>&1; ui_msg "Go live when ready" "$(at_ready --status 2>&1)" ;;
             list)     ui_msg "Providers" "$(drv list 2>&1)" ;;
             quit|"")  return 0 ;;
         esac

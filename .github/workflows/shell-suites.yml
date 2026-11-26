@@ -511,7 +511,6 @@ jobs:
             tests/federation/test-federation-modules-selection.sh
             tests/go-live/test-go-live-driver.sh
             tests/go-live/test-go-live-reconcile-verify.sh
-            tests/go-live/test-go-live-at-ready.sh
             tests/keystores/test-keystores-external-ca.sh
             tests/keystores/test-keystores.sh
             tests/menu/build_menu_cmd_test.sh
@@ -565,7 +564,6 @@ jobs:
             tests/scripts/test-container-image-tags.sh
             tests/scripts/test-desktop-config-lib.sh
             tests/scripts/test-desktop-sso-bake.sh
-            tests/scripts/test-domain-golive-flag.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh
             tests/scripts/test-host-guard-rust-std.sh

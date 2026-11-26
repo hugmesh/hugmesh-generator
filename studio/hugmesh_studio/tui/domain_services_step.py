@@ -64,7 +64,6 @@ from ..core.domain_services import (
     reviewed_names, tor_row_state,
 )
 from ..core import plain_words
-from ..core import golive_ready, golive_tokens
 from . import brand_step, model
 
 __all__ = ["DomainServicesScreen", "service_table", "other_scope_table",
@@ -200,9 +199,6 @@ class DomainServicesScreen:
         #: one sentence on what THIS host's lane does with the selection (the local
         #: docker mesh: recorded, not what picks the compose profiles).
         self.lane_note = lane_note
-        #: the domain whose "Go live when ready" API key the NEXT line is (#1201), or
-        #: "" — while set, the line is hidden (secret_input) and goes to _feed_key only.
-        self._awaiting_key = ""
 
     def cfg(self, j):
         """The object this walk reads and records onto (see the module doc)."""
@@ -360,15 +356,6 @@ class DomainServicesScreen:
         out.append(f"{TOR_ROW_LABEL}: "
                    + tor_row_state(d, scope_cfg, self._entries(j), _own_name(cfg),
                                    walked=cfg, domains=doms))
-        # "Go live when ready" (#1201): the GUI's row under the front door, same words
-        # (core.golive_ready.state_line); image builds of a mesh only.
-        glr = golive_ready.applies(cfg, self.route)
-        if glr:
-            prov = golive_ready.get(cfg, d.name)
-            out.append(f"{golive_ready.ROW_LABEL}: "
-                       + golive_ready.state_line(d.name, prov))
-            out.append("  providers: " + ", ".join(
-                f"{v or 'off'} ({lbl})" for v, lbl in golive_ready.choices()))
         out.append("")
         if (getattr(cfg, "mode", "") or "") == "cloud":
             # a Mesh desktop client: no cluster, no manifest — the window's line
@@ -397,11 +384,6 @@ class DomainServicesScreen:
                        f"{'s' if len(doms) != 1 else ''} configured.")
         out.append("commands: NUMBER=toggle that service · "
                    + ("" if is_own else f"{TOR_COMMAND}=toggle the Tor front door · ")
-                   + (f"{golive_ready.GO_COMMAND} PROVIDER|off=go live when ready · "
-                      + (f"{golive_ready.KEY_COMMAND}=enter its API key (hidden) · "
-                         if golive_tokens.needs_token(golive_ready.get(cfg, d.name))
-                         else "")
-                      if glr else "")
                    + "n=next domain · "
                    "p=previous domain · "
                    + ("b=back · " if self._on_back else "") + "Enter=continue")
@@ -426,33 +408,11 @@ class DomainServicesScreen:
         wl = getattr(j, "worklist", None)
         return list(getattr(wl, "entries", None) or ())
 
-    def secret_input(self, j) -> bool:  # noqa: ARG002
-        """True while the next line is a "Go live when ready" API key (#1201): the
-        urwid face masks it, the plain face reads it with getpass."""
-        return bool(self._awaiting_key)
-
     def prompt(self, j) -> str:  # noqa: ARG002
-        if self._awaiting_key:
-            return f"API key for {self._awaiting_key} (hidden; not echoed)> "
         return "domain-services> "
-
-    def _feed_key(self, j, line: str) -> None:
-        """The hidden line after ``key``. The mode ends here whatever happens, and the
-        line is never repeated back."""
-        name, self._awaiting_key = self._awaiting_key, ""
-        if not line.strip():
-            j.status = f"{name}: API key unchanged (nothing typed)"
-            return
-        problem = golive_tokens.store().set(name, line)
-        j.status = (f"{name}: API key not kept — {problem}" if problem else
-                    f"{name}: API key entered (held in memory only; it goes onto the "
-                    "edge nodes' KEYS sticks)")
 
     # ── input ───────────────────────────────────────────────────────────────────
     def feed(self, j, line: str) -> None:
-        if self._awaiting_key:
-            self._feed_key(j, line)
-            return
         line = line.strip()
         if line == "":
             self._continue(j)
@@ -520,35 +480,6 @@ class DomainServicesScreen:
             self._mark(j)
             return
         d = self.current(j)
-        word, _, arg = verb.partition(" ")
-        if word in (golive_ready.GO_COMMAND, golive_ready.KEY_COMMAND):
-            cfg = self.cfg(j)
-            if not golive_ready.applies(cfg, self.route):
-                j.status = (f"{golive_ready.ROW_LABEL} is set on an image build of a "
-                            "mesh; this route does not bake it")
-                return
-            if word == golive_ready.KEY_COMMAND:
-                prov = golive_ready.get(cfg, d.name)
-                if not golive_tokens.needs_token(prov):
-                    j.status = (f"{d.name}: no API key to enter — "
-                                + ("go live when ready is off" if not prov else
-                                   f"{prov} needs none"))
-                    return
-                self._awaiting_key = d.name
-                j.status = f"type the {golive_ready.config.GO_LIVE_TOKEN_PROMPTS[prov]} (hidden)"
-                return
-            try:
-                prov = golive_ready.parse_provider(arg)
-                golive_ready.set_provider(cfg, d.name, prov)
-            except ValueError as e:
-                j.status = f"{d.name}: {e}"
-                return
-            j.status = (f"{d.name}: {golive_ready.ROW_LABEL} -> "
-                        + (prov or "off")
-                        + (f" — now type {golive_ready.KEY_COMMAND} to enter its API key"
-                           if golive_tokens.needs_token(prov)
-                           and not golive_tokens.store().has(d.name) else ""))
-            return
         if verb == TOR_COMMAND:
             # the Tor front door (#582): Domain.tor, never optional_services. The
             # mesh's own domain has none to toggle — its front door is the primary

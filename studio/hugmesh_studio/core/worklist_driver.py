@@ -47,7 +47,6 @@ from dataclasses import asdict, dataclass, field
 from .build_driver import (BuildDriver, disk_space_refusal, disk_space_warning,
                            dispatch_space_refusal)
 from . import domain_ca_keys
-from . import golive_tokens
 from . import mesh_control, pki_lan
 from . import roles
 from .config import (ImageConfig, User, brand_header_fields, image_class,
@@ -256,17 +255,6 @@ class WorklistDriver:
                 mint = mesh_control.mint_problem(self._output_dir())
                 if mint:
                     problems.append(mint)
-        # "Go live when ready" API keys (#1201) ride the KEYS sticks only: a provider
-        # that needs one must have it entered, and this run must make sticks.
-        base = self.worklist.base
-        needy = [n for n, p in base.go_live_domains() if golive_tokens.needs_token(p)]
-        if needy and not self.generate_keys:
-            problems.append(
-                f"{', '.join(needy)} go live when ready through a provider that needs an "
-                "API key, which reaches the node only on its KEYS stick: turn KEYS "
-                "generation on for this run")
-        elif needy:
-            problems += golive_tokens.missing_problems(base)
         per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
                         graphical=self.graphical, workdir=self.workdir)
                       .preflight(cfg, self.backend))
@@ -395,10 +383,6 @@ class WorklistDriver:
             **({"cluster_domain_signin_methods":
                 list(base.cluster_domain_signin_methods)}
                if getattr(base, "cluster_domain_signin_methods", None) else {}),
-            # the own domain's "go live when ready" provider (#1201): OMIT-WHEN-EMPTY,
-            # as the v1 shim.
-            **({"cluster_domain_go_live": base.cluster_domain_go_live}
-               if getattr(base, "cluster_domain_go_live", "") else {}),
         }
 
     def manifest_users(self) -> list[User]:
@@ -749,15 +733,6 @@ class WorklistDriver:
                         on_line(i, f"!! domain CA placement: {p}")
                 if problems:
                     code = 1
-            if code == 0:
-                # "Go live when ready" API keys (#1201): onto this stick only when its
-                # role can be the public edge. Names only in the log, never values.
-                for dom in golive_tokens.write_tokens(keys_dir_, base, entry.role,
-                                                      entry.platform):
-                    if on_line:
-                        on_line(i, f"go live when ready: this stick carries the API key "
-                                   f"for {dom} ({golive_tokens.STICK_DIR}/{dom}.token, "
-                                   "0600)")
         except domain_ca_keys.CAImportError as e:
             if on_line:
                 on_line(i, f"!! keys generation not started: domain CA: {e}")

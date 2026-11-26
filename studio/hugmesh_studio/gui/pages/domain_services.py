@@ -139,7 +139,6 @@ from ..styles import MUTED, WARN, muted
 from ._scroll import scrollable
 from .brand_screen import TAB_SERVICES, BrandSettingsTabs
 from ...core import plain_words
-from ...core import golive_ready, golive_tokens
 from ...tui.brand_step import brand_view
 from ...core.domain_services import (
     DOCKER_SERVICES_HELP, DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS,
@@ -367,10 +366,6 @@ class DomainServicesBody:
         #: mesh's own domain, whose front door IS the primary onion — no control).
         self._tor_item: QtWidgets.QTreeWidgetItem | None = None
         self._tor_box: QtWidgets.QCheckBox | None = None
-        #: domain name -> its "Go live when ready" provider ("" = off), #1201. The
-        #: working value, recorded onto Domain.go_live / cluster_domain_go_live by
-        #: _record — the _tor rule. (``self._golive`` is the Go-Live WIZARD window.)
-        self._glr: dict[str, str] = {}
 
         # ── which domain this screen is ────────────────────────────────────────────
         self.head = QtWidgets.QLabel("")
@@ -461,44 +456,6 @@ class DomainServicesBody:
         front_door_block.addWidget(self.front_door_table)
         front_door_block.addWidget(self.tor_note)
         lay.addLayout(front_door_block)
-
-        # ── "Go live when ready" (#1201) — image builds of a mesh only ─────────────
-        # Right under the front door: it is also about how the domain is REACHED. A
-        # picker (Off + the go-live providers), a MASKED field for a provider that needs
-        # an API key — held in memory only (core.golive_tokens), never in the config —
-        # and the one state sentence the TUI prints too (core.golive_ready).
-        self.glr_box = QtWidgets.QWidget()
-        glr = QtWidgets.QGridLayout(self.glr_box)
-        glr.setContentsMargins(0, 4, 0, 0)
-        self.glr_label = QtWidgets.QLabel(f"{golive_ready.ROW_LABEL}:")
-        self.glr_combo = QtWidgets.QComboBox()
-        # Never wider than the page: the labels are short, and this stops the combo
-        # sizing itself to its longest item at a large font (#647's viewport rule).
-        self.glr_combo.setSizeAdjustPolicy(
-            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.glr_combo.setMinimumContentsLength(12)
-        for value, label in golive_ready.choices():
-            self.glr_combo.addItem(label, value)
-        self.glr_combo.setToolTip(
-            "Take this domain public on its own once the mesh's nodes have booted and "
-            "every pod is ready — no confirmation. Choosing a provider is the consent.")
-        self.glr_token = QtWidgets.QLineEdit()
-        self.glr_token.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self.glr_token.setToolTip(
-            "Held in memory only. Written onto the KEYS sticks of the nodes that can be "
-            "the public edge, never into an image, a saved config or a log.")
-        self.glr_note = QtWidgets.QLabel("")
-        self.glr_note.setWordWrap(True)
-        self.glr_note.setStyleSheet(muted())
-        glr.addWidget(self.glr_label, 0, 0)
-        glr.addWidget(self.glr_combo, 0, 1)
-        glr.addWidget(self.glr_token, 1, 1)
-        glr.addWidget(self.glr_note, 2, 0, 1, 2)
-        glr.setColumnStretch(1, 1)
-        self.glr_combo.currentIndexChanged.connect(self._on_glr_changed)
-        self.glr_token.editingFinished.connect(self._on_glr_token)
-        self.glr_box.setVisible(False)
-        lay.addWidget(self.glr_box)
 
         # ── the honesty banner (#496) — on the page, not in a tooltip ──────────────
         self.enforcement = QtWidgets.QLabel(ENFORCEMENT_NOTE)
@@ -635,7 +592,6 @@ class DomainServicesBody:
             self._selection = {}
             self._reviewed = set()
             self._tor = {}
-            self._glr = {}
             self._index = 0
             self._cfg_seen = cfg
         self._names = [n for n in names if n]
@@ -667,11 +623,6 @@ class DomainServicesBody:
         self._tor = {name: (self._tor[name] if name in self._tor
                             else bool(getattr(rows.get(name), "tor", False)))
                      for name in self._names if name != self._own_name}
-        # "Go live when ready" (#1201), the _tor rule: a surviving name keeps its working
-        # answer, a new one starts from what the config carries (own domain included).
-        self._glr = {name: (self._glr[name] if name in self._glr
-                            else golive_ready.get(cfg, name))
-                     for name in self._names}
         # A config loaded from disk brings its own record of what was configured —
         # re-walking it must not be demanded twice. Names that no longer exist drop.
         self._reviewed = {n for n in (self._reviewed | reviewed_names(cfg))
@@ -716,7 +667,6 @@ class DomainServicesBody:
             self.prev_btn.setEnabled(False)
             self.next_btn.setEnabled(False)
             self.brand_tabs.set_active(False)
-            self.glr_box.setVisible(False)
             fit_table(self.table)
             fit_table(self.front_door_table)
             return
@@ -737,7 +687,6 @@ class DomainServicesBody:
         self._rebuild(name)
         self._rebuild_other_scopes()
         self._refresh_brand_tabs(name)
-        self._paint_glr(name)
         left = [n for n in self._names if n not in self._reviewed]
         if left:
             self.remaining.setText(
@@ -750,53 +699,6 @@ class DomainServicesBody:
             self.remaining.setText(
                 f"All {total} domain{'s' if total != 1 else ''} configured.")
             self.remaining.setStyleSheet(f"color: {MUTED};")
-
-    # ── "Go live when ready" (#1201) ───────────────────────────────────────────────
-    def _paint_glr(self, name: str) -> None:
-        """Show the row for ``name``, or hide it where it cannot reach a node."""
-        on = bool(name) and golive_ready.applies(self._cfg_seen, self._brand_route())
-        self.glr_box.setVisible(on)
-        if not on:
-            return
-        prov = self._glr.get(name, "")
-        i = self.glr_combo.findData(prov)
-        self.glr_combo.blockSignals(True)
-        self.glr_combo.setCurrentIndex(max(0, i))
-        self.glr_combo.blockSignals(False)
-        need = golive_tokens.needs_token(prov)
-        self.glr_token.setVisible(need)
-        self.glr_token.clear()
-        if need:
-            prompt = golive_ready.config.GO_LIVE_TOKEN_PROMPTS[prov]
-            self.glr_token.setPlaceholderText(
-                f"{prompt} — entered; type a new one to replace it"
-                if golive_tokens.store().has(name) else
-                f"{prompt} — paste it here (hidden)")
-        self.glr_note.setText(golive_ready.state_line(name, prov))
-
-    def _on_glr_changed(self, _index: int) -> None:
-        try:                                 # PyQt6 qFatals on a slot exception
-            name = self.current_domain()
-            if name:
-                self._glr[name] = self.glr_combo.currentData() or ""
-                self._paint_glr(name)
-        except Exception:                    # noqa: BLE001
-            pass
-
-    def _on_glr_token(self) -> None:
-        try:
-            name = self.current_domain()
-            text = self.glr_token.text()
-            if not name or not text:
-                return
-            problem = golive_tokens.store().set(name, text)
-            self.glr_token.clear()           # the widget never keeps the value
-            self._paint_glr(name)
-            if problem:
-                self.glr_note.setText(self.glr_note.text()
-                                      + f" The key you typed was not kept: {problem}.")
-        except Exception:                    # noqa: BLE001
-            pass
 
     # ── the Ways tab's button: the Go-Live wizard for this domain ─────────────────
     def _golive_generator_dir(self) -> str:
@@ -1139,13 +1041,6 @@ class DomainServicesBody:
                 d.optional_services = list(self._selection[name])
             if name in self._tor:
                 d.tor = bool(self._tor[name])
-        # "Go live when ready" (#1201): rows and the implicit own domain, by name.
-        if golive_ready.applies(cfg, self._brand_route()):
-            for name, prov in self._glr.items():
-                try:
-                    golive_ready.set_provider(cfg, name, prov)
-                except ValueError:
-                    pass                    # a name no longer in the config
         own = self._own_name
         if own and own in self._selection and own not in {n for _d, n in rows}:
             cfg.cluster_domain_services = list(self._selection[own])

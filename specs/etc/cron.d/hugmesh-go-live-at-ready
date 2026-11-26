@@ -1,7 +1,0 @@
-# hugmesh-go-live-at-ready (#1201) — "Go live when ready": every minute, check each
-# build-time opted-in domain (/etc/hugmesh/domain-go-live) and take it public once this
-# public-edge node's pods are ready and the domain's front door answers. Does nothing
-# without that file; acts once per domain (a later manual rollback is not overridden).
-#
-# Field order: min hour dom month dow user command
-* * * * * root /usr/sbin/hugmesh-go-live-at-ready >> /var/log/hugmesh-go-live-at-ready.log 2>&1

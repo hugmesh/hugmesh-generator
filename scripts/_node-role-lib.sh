@@ -54,7 +54,7 @@ _MGD_TIER12_IDS _MGD_TIER3_IDS _IDP_URL_RE _IDP_CLIENT_ID_RE _VAULT_PATH_RE"
 # The k8s node services every node role links into the default runlevel (the Pi
 # list, build-rpi5-stage4.sh `DEFAULT_SVCS+=(hugmesh-firewall-reconcile ...)`;
 # tests/scripts/test-role-key-spelling.sh section E asserts the two stay equal).
-NODE_ROLE_RUNLEVEL_SVCS="hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile hugmesh-go-live-at-ready containerd kubelet"
+NODE_ROLE_RUNLEVEL_SVCS="hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet"
 
 # The binaries a node's post-emerge payload assert requires (opi_assert_stage4_payload
 # in both Orange Pi builders). The Pi node floor (build-rpi5-stage4.sh `_payload_bins+=(kubelet
