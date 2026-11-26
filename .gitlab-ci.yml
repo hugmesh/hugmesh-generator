@@ -3761,7 +3761,6 @@ lint:seed-password-reconcile:
     # NEW-15: the identity provider is published on loopback only and the seed moves
     # Casdoor's admin off the factory default (stub Casdoor; no docker, no egress).
     - bash tests/scripts/test-stack-idp-exposure.sh
-    - bash tests/scripts/test-stack-golive-knobs.sh
     - bash tests/stack/test-casdoor-origin-follows-issuer.sh
     - bash tests/scripts/stack_idp_exposure_mutations.sh
 

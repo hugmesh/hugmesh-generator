@@ -1807,7 +1807,7 @@ docker-build: ## DEPRECATED: builds now default to Docker — just run `make bui
 # off the upstream factory-default password onto this checkout's generated
 # CASDOOR_ADMIN_PASSWORD (tests/stack/.env, tests/stack/gen-casdoor-admin-env.sh).
 # The front door (PUBLIC_HOST_PORT / PUBLIC_HTTPS_PORT / ANUBIS_HOST_PORT) is not
-# affected (it has its own PUBLIC_BIND_ADDR below). A non-loopback STACK_BIND_ADDR is REFUSED by `make stack-up` while any Casdoor still
+# affected. A non-loopback STACK_BIND_ADDR is REFUSED by `make stack-up` while any Casdoor still
 # accepts the factory admin (tests/stack/lan-bind-preflight.sh): stack-up on loopback, stack-seed, then
 # the bind. Guards: tests/scripts/test-stack-idp-exposure.sh (static + stub) and
 # tests/stack/test-stack-idp-exposure-live.sh (a throwaway Casdoor).
@@ -1835,21 +1835,11 @@ DOMAIN := $(patsubst DOMAIN=%,%,$(filter DOMAIN=%,$(STACK_BRAND_OUT)))
 endif
 endif
 STACK_SRC       ?= $(CURDIR)/.stack-src
-# tests/stack/.local.mk: this machine's own stack knobs (gitignored), e.g. `PUBLIC_BIND_ADDR := 127.0.0.1`
-# or `GAMES_SRC := $(HOME)/Github/hugmesh-games`. A `make stack-up` the Studio runs passes no command-line
-# variables, so a knob that must survive it lives here. Included BEFORE the `?=` defaults below.
--include tests/stack/.local.mk
 PUBLIC_HOST_PORT ?= 8088
 # HTTPS twin of the front door (the https-front TLS terminator in the compose
 # file proxies it to the same fe-gateway). 8488 pairs with 8088; 8443 is NOT
 # the default because dev boxes commonly have something else on it already.
 PUBLIC_HTTPS_PORT ?= 8488
-# PUBLIC_BIND_ADDR: the host address the front door (fe-gateway $(PUBLIC_HOST_PORT), https-front
-# $(PUBLIC_HTTPS_PORT), the Anubis gate) is published on. UNSET = every interface, as always
-# (a LAN test and the Studio's other machines rely on it). `make stack-up PUBLIC_BIND_ADDR=127.0.0.1`
-# keeps it on this machine, the setting for a stack whose only public doors are a tunnel running
-# on this host (a cloudflared reaching https://127.0.0.1:$(PUBLIC_HTTPS_PORT)) and a Tor onion.
-PUBLIC_BIND_ADDR ?=
 # Per-machine TLS material for the https front door — minted by `make
 # stack-certs` (gen-certs.sh), gitignored. NOT tests/stack/certs: those are
 # committed mock-stack fixtures whose leaf key is public in the repo.
@@ -2253,7 +2243,6 @@ STACK_ENV := $(STACK_ROUTE_ACCESS_ENV)$(STACK_DB_ENV)$(STACK_BRAND_B_ENV)$(STACK
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
-             PUBLIC_BIND_ADDR='$(PUBLIC_BIND_ADDR)' \
              HUG_WEB_LOCALES='$(STACK_WEB_LOCALES)' \
              SNAP_WEB_LOCALES='$(STACK_WEB_LOCALES)' \
              MANAGED_ADMIN_BFF_R2DBC_URL='$(MANAGED_ADMIN_BFF_R2DBC_URL)' \
@@ -2381,25 +2370,6 @@ stack-m2-check: ## verify the private maven registry container is live and self-
 # compose call so the profile renders/runs (NOT needed for the core stack).
 STACK_SOCIAL_DEP := $(if $(strip $(SOCIAL)),stack-mastodon-env,)
 
-# GAMES=1 builds from a hugmesh-games clone that stack-clone does NOT make: the sibling
-# ../hugmesh-games next to this checkout, or GAMES_SRC. Say so BEFORE the images build, not as a
-# `unable to prepare context` an hour in (a worktree has no sibling, so it always hit this).
-# BUILD_NETWORK=host: build every image on the host network (the docker bridge's MTU/DNS trap drops
-# name lookups inside builds). Compose only has a per-service build.network, so
-# tests/stack/gen-build-network.sh writes the gitignored overlay for exactly this run's file list.
-STACK_BUILD_NET_FLAGS := $(if $(strip $(BUILD_NETWORK)),-f tests/stack/.compose.build-network.yaml,)
-STACK_BUILD_NET_GEN = $(if $(strip $(BUILD_NETWORK)),BUILD_NETWORK='$(BUILD_NETWORK)' bash tests/stack/gen-build-network.sh tests/stack/.compose.build-network.yaml -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS)$(STACK_TOR_DOMAINS_FLAGS),@:)
-STACK_GAMES_DEP := $(if $(strip $(GAMES)),stack-games-src-check,)
-.PHONY: stack-games-src-check
-stack-games-src-check: ## refuse GAMES=1 early when no hugmesh-games checkout exists (sibling or GAMES_SRC); stack-up runs it first
-	@src='$(if $(GAMES_SRC),$(GAMES_SRC),$(abspath $(CURDIR)/../hugmesh-games))'; \
-	for d in games-ui backend docker; do \
-	  [ -d "$$src/$$d" ] || { echo "stack-up GAMES=1: no games checkout at $$src (missing $$d/)." >&2; \
-	    echo "  clone hugmesh/hugmesh-games there, or point GAMES_SRC at an existing checkout (read-only use is fine):" >&2; \
-	    echo "  make stack-up GAMES=1 GAMES_SRC=\$$HOME/Github/hugmesh-games" >&2; exit 2; }; \
-	done; \
-	echo "==> games source: $$src"
-
 stack-clone: ## clone/update all hugmesh repos into ./.stack-src (idempotent; STACK_NO_CLONE=1 skips)
 	@if [ -n "$(STACK_NO_CLONE)" ]; then \
 	  echo "==> stack-clone: SKIPPED (STACK_NO_CLONE=1) — building from $(STACK_SRC) as-is"; \
@@ -2505,8 +2475,7 @@ stack-db-env: ## ensure tests/stack/.env holds the local stack's per-role DB pas
 	@bash tests/stack/gen-stack-db-env.sh
 
 stack-build: stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_BUILD_NET_GEN)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_BUILD_NET_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
 
 # stack-up's LAST step reconciles gateway_route_access (the line right after
 # `up -d`, see stack-route-access-reconcile below): the volume's initdb seeds the
@@ -2519,11 +2488,10 @@ stack-build: stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_
 # would otherwise send the seed to that server and leave this table stale.
 # stack-halt -> stack-up is the resume path, so this covers it (and the Studio,
 # which shells out to `make stack-up`). Guard: tests/stack/test-route-access-reconcile.sh.
-stack-up: stack-lan-bind-check stack-route-access-env stack-db-env stack-clone stack-certs stack-m2-check $(STACK_GAMES_DEP) $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
+stack-up: stack-lan-bind-check stack-route-access-env stack-db-env stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) $(STACK_HEADSCALE_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
-	$(STACK_BUILD_NET_GEN)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_BUILD_NET_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_BUILD_NET_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE)$(STACK_HEADSCALE_PROFILE)$(STACK_HEADSCALE_FLAGS) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_LOOKS_FLAGS) $(STACK_EGRESS_FLAGS) up -d
 	$(STACK_ENV) POSTGRES_HOST= ROUTE_ACCESS_CONTAINER= COMPOSE_CMD='$(COMPOSE_CMD)' STACK_COMPOSE='$(STACK_COMPOSE)' bash tests/stack/route-access-reconcile.sh
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (Casdoor, tuwunel and Mastodon listen on $${STACK_BIND_ADDR:-127.0.0.1} only; Casdoor's admin password is CASDOOR_ADMIN_PASSWORD in tests/stack/.env once make stack-seed has run)"

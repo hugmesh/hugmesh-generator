@@ -819,14 +819,9 @@ onboard_persona() {  # <username>
     *)   warn "onboard: ${u} -> ${code}" ; rm -f "${jar}"; return 1 ;;
   esac
   # Stage 3: the platform accounts, only for the roles this persona actually holds.
-  # SEED_CASDOOR_ONLY=1 means the social tier is not up (that is what the mode is for: a
-  # stack-up without SOCIAL=1), so asking it to provision would 502 for every Matrix/Mastodon
-  # persona and fail the whole onboard leg (exit 2) for a reason the operator chose.
   roles=",$(persona_roles "${u}"),"
-  if [ "${SEED_CASDOOR_ONLY}" != "1" ]; then
-    case "${roles}" in *,ROLE_MATRIX,*)   provision_platform "${u}" matrix   "${jar}" || rc=1 ;; esac
-    case "${roles}" in *,ROLE_MASTODON,*) provision_platform "${u}" mastodon "${jar}" || rc=1 ;; esac
-  fi
+  case "${roles}" in *,ROLE_MATRIX,*)   provision_platform "${u}" matrix   "${jar}" || rc=1 ;; esac
+  case "${roles}" in *,ROLE_MASTODON,*) provision_platform "${u}" mastodon "${jar}" || rc=1 ;; esac
   rm -f "${jar}"
   return "${rc}"
 }

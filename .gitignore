@@ -62,8 +62,6 @@ tests/stack/.mesh-token/
 # (hugmesh_studio/core/stack_limits.py). Machine-specific by definition —
 # a committed core count would throttle every other operator and CI.
 tests/stack/.compose.limits.yaml
-tests/stack/.compose.build-network.yaml
-tests/stack/.local.mk
 # seed-e2e.sh workdir — rendered role JSON (deterministic test passwords) +
 # pre-minted per-persona JWTs. Runtime-only; never commit.
 tests/stack/.seed-e2e/
