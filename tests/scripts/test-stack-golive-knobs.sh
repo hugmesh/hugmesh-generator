@@ -31,6 +31,10 @@ o="$(mk stack-up ENV=local)"; rm -f tests/stack/.local.mk
 grep -qF "PUBLIC_BIND_ADDR='127.0.0.1'" <<<"${o}" && ok "tests/stack/.local.mk sets a knob with no command-line variable" || bad ".local.mk is not honoured"
 git check-ignore -q tests/stack/.local.mk && ok ".local.mk is gitignored" || bad ".local.mk is not gitignored"
 
+printf 'GAMES_SRC := /somewhere/hugmesh-games\n' > tests/stack/.local.mk
+o="$(mk stack-up ENV=local)"; rm -f tests/stack/.local.mk
+grep -qF "GAMES_SRC='/somewhere/hugmesh-games'" <<<"${o}" && ok "a GAMES_SRC set in .local.mk reaches compose (not only a command-line one)" || bad "GAMES_SRC from .local.mk is not threaded to compose"
+
 # (2)
 tmp="$(mktemp -d)"; trap 'rm -rf "${tmp}"' EXIT
 out="$(make -s stack-games-src-check GAMES=1 GAMES_SRC="${tmp}/none" 2>&1)"; rc=$?
