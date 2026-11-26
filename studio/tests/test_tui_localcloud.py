@@ -22,6 +22,22 @@ def _isolated_state_dir(tmp_path, monkeypatch):
 
 
 _REAL_IDENTITY = lc.local_mesh_identity     # the real reader, before it is canned
+_REAL_K8S = lc.local_k8s_running            # ...and the real cluster question
+
+
+@pytest.fixture(autouse=True)
+def _k8s(monkeypatch):
+    """The local Kubernetes lane, pinned (never asked of this machine's ``kind``): down
+    unless a test raises ``state["up"]`` — the GUI suite's override point, the same
+    module symbol."""
+    state = {"up": False, "asked": []}
+
+    def running(generator_dir):
+        state["asked"].append(generator_dir)
+        return state["up"]
+
+    monkeypatch.setattr(lc, "local_k8s_running", running)
+    return state
 
 
 @pytest.fixture(autouse=True)
@@ -82,6 +98,89 @@ def test_confirming_commits_the_mesh_chain_and_rejoins_at_idp():
     assert j.cfg.mode == "mesh"
     assert j.cfg.role == "omnibus"                  # mesh default, reset by id
     assert j.cfg.bundle_source is False
+
+
+# ── the k8s gate: consent is half of it, the cluster being down is the other (G37) ──
+def test_a_running_cluster_refuses_the_consent_and_commits_nothing(_k8s):
+    """The window's page is complete only with the consent AND no cluster known to be
+    up (LocalCloudNodesPage.isComplete). Before, ``y`` alone committed the chain."""
+    _k8s["up"] = True
+    j = _at_gate()
+    before = j.cfg.to_dict()
+    j.feed("y")
+    assert j.slug == "localcloud"                   # stays on the gate
+    assert j.cfg.to_dict() == before                # nothing committed, byte for byte
+    assert j.cfg.mode == "standalone" and j.cfg.users == []
+    assert j.worklist_role_allow is None and j.worklist is None
+    assert "RUNNING" in j.status and "make kind-down" in j.status
+    assert "nothing was committed" in j.status
+    assert "[y/N]" in j.prompt()                    # consent is still asked, not remembered
+
+
+def test_the_gate_asks_the_cluster_about_this_checkout(_k8s):
+    j = journey.Journey("/some/checkout")
+    j.feed("")
+    j.feed("2")
+    j.feed("y")
+    assert _k8s["asked"] == ["/some/checkout"]
+
+
+def test_the_cluster_is_asked_again_on_every_answer(_k8s):
+    """Looked up per answer, not at entry: the person brings it down and answers again
+    on the same screen (the window re-probes on entry; a prompt has no entry between)."""
+    _k8s["up"] = True
+    j = _at_gate()
+    j.feed("y")
+    assert j.slug == "localcloud"
+    j.feed("yes")
+    assert j.slug == "localcloud"                   # still up: still refused
+    _k8s["up"] = False
+    j.feed("y")
+    assert j.slug == "idp" and j.cfg.mode == "mesh"
+    assert len(_k8s["asked"]) == 3
+
+
+def test_declining_does_not_wait_on_the_cluster(_k8s):
+    """No consent, no question: n backs out with nothing committed and never probes."""
+    _k8s["up"] = True
+    j = _at_gate()
+    j.feed("n")
+    assert j.slug == "mode" and "nothing committed" in j.status
+    assert _k8s["asked"] == []
+
+
+def test_the_screen_says_that_answering_y_checks_the_cluster():
+    text = "\n".join(_at_gate().lines())
+    assert "answering y checks that it has" in text
+
+
+def test_the_refusal_names_the_way_past_it_on_the_host_it_runs_on():
+    assert "make kind-down" in lc.k8s_running_text("posix")
+    win = lc.k8s_running_text("nt")
+    assert "WSL2" in win and "make kind-down" in win and "nothing was committed" in win
+    assert lc.k8s_running_text("nt") != lc.k8s_running_text("posix")
+
+
+def test_the_cluster_question_is_the_cores_one_symbol_read_only(monkeypatch):
+    """The module symbol both faces call asks ``devops_running`` of the stack node and
+    nothing else (the read-only `kind get clusters`), so neither face keeps its own
+    opinion about what is running."""
+    from hugmesh_studio.core import local_mesh_bootstrap as lmb
+    assert _REAL_K8S is lmb.local_k8s_running
+
+    class _Node:
+        def __init__(self, up):
+            self.up, self.calls = up, []
+
+        def devops_running(self):
+            self.calls.append("devops_running")
+            return self.up
+
+    for up in (True, False):
+        node = _Node(up)
+        monkeypatch.setattr(lmb.LocalMeshBootstrap, "_stack_node", lambda self, n=node: n)
+        assert lmb.local_k8s_running(".") is up
+        assert node.calls == ["devops_running"]
 
 
 def test_import_lands_domain_and_accounts_with_the_superadmin_rule():

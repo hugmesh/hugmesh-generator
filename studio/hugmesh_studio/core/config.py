@@ -567,6 +567,32 @@ OPTIONAL_SERVICES_BY_PLATFORM = {
     "orangepi4-lts": OPTIONAL_SERVICES_CHOICES + ("workloadConsole", "anubis"),
 }
 
+# The CLOSED SET of service names. OPTIONAL_SERVICES_CHOICES above is what the wizard
+# OFFERS; these are what the builders and the registry (specs/cluster/optional-services.yaml)
+# KNOW, which is the set a hand-written config's service list is checked against
+# (core/config_check.py). A name outside REGISTRY_SERVICES is not a service anywhere: the
+# x86 builder's validate_optional_services dies on it after dispatch and the rpi5 builder
+# (which has no validator) bakes nothing, so a typo ("akoma") built an image with no
+# Akkoma and said nothing. Mirrored from the x86 builder's three lines, which
+# tests/stack/test-optional-services-exclude.sh holds equal to the registry;
+# tests/test_config_check.py holds THESE equal to the builder's, so none can go stale.
+#   REGISTRY_SERVICES             every `slug:` in the registry
+#   BUILDER_SELECTABLE_SERVICES   the subset whose `buildGate:` lists a builder, i.e. the
+#                                 ones --optional-services/--exclude-services can bake
+#                                 (the rest are runtime-only or gate: none)
+#   BUILDER_DESELECTABLE_SERVICES the subset with a real `-<slug>` / `no-<slug>` spelling
+REGISTRY_SERVICES = (
+    "akkoma", "tuwunel", "phpbb", "games", "tube", "owncast", "character-studio",
+    "character-forge", "edge-ai", "edge-ai-analysis", "edge-ai-tts", "coturn",
+    "meshbridge", "egress-vpn", "tor", "workloadConsole", "headwind",
+    "attestation-server", "anubis", "metrics-server", "keda", "kyverno",
+    "observability", "service-catalog-builder", "optional-services-operator")
+BUILDER_SELECTABLE_SERVICES = (
+    "akkoma", "tuwunel", "phpbb", "games", "tube", "owncast", "character-studio",
+    "character-forge", "edge-ai", "edge-ai-analysis", "edge-ai-tts", "egress-vpn",
+    "tor", "workloadConsole", "headwind", "attestation-server", "anubis")
+BUILDER_DESELECTABLE_SERVICES = ("anubis",)
+
 # --optional-services sentinels (mirror build-menu.sh's OPT_SERVICES + the builders):
 #   optional_services == []            -> emit nothing (builder default akkoma tuwunel phpbb)
 #   optional_services == [SERVICES_NONE] -> emit --optional-services "" (EXPLICIT none, G13)
@@ -3786,6 +3812,16 @@ class User:
         if not d.get("signin_handles"):
             d.pop("signin_handles", None)
         return d
+
+
+#: Keys ``from_dict`` still ACCEPTS though no field carries them, because it MIGRATES the
+#: spelling onto one that does (the config's ``qemu_e2e`` -> ``qemu_device_tests``, a
+#: domain row's legacy ``games`` -> ``optional_services``). Every other key it is handed
+#: and has no field for is DROPPED without a word, which is what core/config_check.py
+#: reports. Add a spelling here when ``from_dict``/``_domain_from_dict`` learns to
+#: migrate one, or ``--check`` will call a config that loads fine malformed.
+MIGRATED_CONFIG_KEYS = frozenset({"qemu_e2e"})
+MIGRATED_DOMAIN_KEYS = frozenset({"games"})
 
 
 @dataclass
