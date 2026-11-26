@@ -20,7 +20,9 @@ test('front page loads over generated certs and gates anonymous visitors to nati
   // and the sign-in region's own heading is an h2 ("Sign in to hugmesh.net").
   // Keep asserting the h1: it is the cheapest proof the host shell actually
   // mounted, as opposed to serving index.html and failing to bootstrap.
-  await expect(page.getByRole('heading', { level: 1, name: 'HugMesh' })).toBeVisible();
+  // A branded stack renders ITS brand in that h1 (the sign-in region says "Sign in to <brand>"), so the name
+  // the run expects is E2E_BRAND_TITLE; unset it is the stock "HugMesh".
+  await expect(page.getByRole('heading', { level: 1, name: process.env.E2E_BRAND_TITLE || 'HugMesh' })).toBeVisible();
   await expect(page.getByTestId('login-view')).toBeVisible();
   await expect(page.getByTestId('login-username')).toBeVisible();
 
@@ -55,7 +57,10 @@ test('the menubar is gated on the login page only: signed in and off the home pa
   // returning-user branch: POST /bff/login -> hydrate -> provision -> HARD nav to
   // '/' -> the shell cold-boots and roleHomeGuard lands a member on /user. That
   // chain is what SHELL_AFTER_PROVISION_MS is sized for (see helpers.ts).
-  await registerOnly(page, 'e2e-user', personaPassword('e2e-user'));
+  // The persona must hold the Matrix access role: the card below is a DISABLED button ("Sign in as a Matrix
+  // member to open this.") for a plain ROLE_USER, which is how a stack that grants platform access
+  // explicitly (every ENV=prod build) behaves. e2e-matrix is the seeded member with ROLE_MATRIX.
+  await registerOnly(page, 'e2e-matrix', personaPassword('e2e-matrix'));
   // /user is the signed-in HOME, and on home the shell hides the bar AGAIN and
   // renders the same entries as service CARDS instead (issue #19 comment
   // 2026-08-19, MenuComponent.homeCardsActive) — so the landing page is not

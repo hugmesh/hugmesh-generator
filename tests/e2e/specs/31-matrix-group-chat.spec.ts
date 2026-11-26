@@ -176,7 +176,11 @@ test(`three-user group room: pending invites accepted in the UI, all members see
       // The inviter rendered is the m.room.member invite event's SENDER —
       // alice's mxid (display-name resolution may fall back to it; the mxid
       // itself is the lane-portable assertion).
-      await expect(member.page.getByTestId(`invite-inviter-${roomId}`)).toContainText(alice.userId);
+      // The row names the inviter by display label (the localpart, never the full `@local:server`; see the
+      // Matrix UI's displayLabel); the full Matrix id stays reachable in the element's title.
+      const inviter = member.page.getByTestId(`invite-inviter-${roomId}`);
+      await expect(inviter).toContainText(alice.userId.replace(/^@([^:]+):.*$/, '$1'));
+      await expect(inviter).toHaveAttribute('title', alice.userId);
       await shot(member.page, `31-invite-pending-${who}`);
       await member.page.getByTestId(`btn-accept-invite-${roomId}`).click();
       // Accepting resolves the invite row and moves the room into the joined list.

@@ -44,6 +44,10 @@ SUPERADMIN_PERSONA="${CASDOOR_SUPERADMIN_USERNAME:-e2e-superadmin}"
 # asserts the absence of ROLE_ADMIN before it asserts the 403.
 #
 # e2e-banned / the @gmail.com personas / dragoneer: the ad-hoc UI-suite handles.
+# Platform access is an explicit grant (ROLE_MATRIX / ROLE_MASTODON; there is no auto-grant at registration),
+# and specs 04, 07 and 17 ("five basic users ... reach Matrix + Mastodon", the provisioned user, the APPROVED
+# identity) assert that those users reach both surfaces, so those personas carry both roles. rbac-plain,
+# rbac-login-user and rbac-pending stay bare ROLE_USER: they are the denial controls.
 # Against a real Casdoor /bff/login validates an existing account only, so each
 # must be pre-seeded as a bare ROLE_USER or the login 401s at setup and the
 # denial/role assertions never run.
@@ -52,15 +56,15 @@ ${SUPERADMIN_PERSONA}:ROLE_SUPERADMIN:E2E_SUPERADMIN_PASSWORD \
 e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD \
 e2e-fleet:ROLE_FLEET_ADMIN,ROLE_USER:E2E_FLEET_PASSWORD \
 admin@hugmesh.net:ROLE_ADMIN,ROLE_USER:E2E_PASSWORD \
-alice@gmail.com:ROLE_USER:E2E_PASSWORD \
-bob@gmail.com:ROLE_USER:E2E_PASSWORD \
-carol@gmail.com:ROLE_USER:E2E_PASSWORD \
-dave@gmail.com:ROLE_USER:E2E_PASSWORD \
-eve@gmail.com:ROLE_USER:E2E_PASSWORD \
-frank@gmail.com:ROLE_USER:E2E_PASSWORD \
-dragoneer:ROLE_USER:E2E_PASSWORD \
+alice@gmail.com:ROLE_USER,ROLE_MATRIX,ROLE_MASTODON:E2E_PASSWORD \
+bob@gmail.com:ROLE_USER,ROLE_MATRIX,ROLE_MASTODON:E2E_PASSWORD \
+carol@gmail.com:ROLE_USER,ROLE_MATRIX,ROLE_MASTODON:E2E_PASSWORD \
+dave@gmail.com:ROLE_USER,ROLE_MATRIX,ROLE_MASTODON:E2E_PASSWORD \
+eve@gmail.com:ROLE_USER,ROLE_MATRIX,ROLE_MASTODON:E2E_PASSWORD \
+frank@gmail.com:ROLE_USER,ROLE_MATRIX,ROLE_MASTODON:E2E_PASSWORD \
+dragoneer:ROLE_USER,ROLE_MATRIX,ROLE_MASTODON:E2E_PASSWORD \
 rbac-plain@gmail.com:ROLE_USER:E2E_PASSWORD \
 rbac-login-user@gmail.com:ROLE_USER:E2E_PASSWORD \
 rbac-pending@gmail.com:ROLE_USER:E2E_PASSWORD \
-rbac-approved@gmail.com:ROLE_USER:E2E_PASSWORD \
+rbac-approved@gmail.com:ROLE_USER,ROLE_MATRIX,ROLE_MASTODON:E2E_PASSWORD \
 "
