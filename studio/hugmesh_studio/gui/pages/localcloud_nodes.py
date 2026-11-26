@@ -47,8 +47,8 @@ from ...core.config import (
 )
 from ...core import platform_info, saved_meshes
 from ...core.local_mesh_bootstrap import (
-    LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_choice_text,
-    saved_mesh_source,
+    LocalMeshBootstrap, LocalMeshIdentity, local_k8s_running, localcloud_tor_note,
+    saved_mesh_choice_text, saved_mesh_source,
 )
 from ...core.local_mesh_domains import (
     apply_imported_domains, apply_imported_tor, imported_domains_lines,
@@ -157,16 +157,6 @@ def local_mesh_identity(generator_dir: str, record_id: str = "") -> LocalMeshIde
                              saved_mesh_source(rec),
                              imported_mesh_domains(boot.cfg) if rec is not None
                              else None)
-
-
-def local_k8s_running(generator_dir: str) -> bool:
-    """Is the local Kubernetes (DevOps) lane up right now?
-
-    A read-only `kind get clusters` (LocalStackNode.devops_running) behind ONE
-    module symbol, like ``local_mesh_identity`` above — the page's whole view of the
-    cluster goes through here, so a test pins the host in one place and the GUI has
-    no second opinion about what is running."""
-    return LocalMeshBootstrap(generator_dir)._stack_node().devops_running()
 
 
 def k8s_teardown_blocker(osname: str | None = None) -> str:

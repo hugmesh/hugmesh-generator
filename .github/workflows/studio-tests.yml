@@ -68,6 +68,12 @@ on:
       # options (it sources this script and runs its real handler) and reads the
       # flags the desktop builders parse. A menu change lands only here.
       - 'scripts/build-menu.sh'
+      # studio/tests/test_gpu_and_services_single_source.py holds the menu above, core's
+      # tuples and the x86 builder's own accepted --gpu-driver and service sets to one
+      # another, and the hardware profiles to the drivers the Studio offers. A preset or
+      # a service added to the builder or a profile lands only in these files.
+      - 'build-x86-host-stage4.sh'
+      - 'specs-x86/hwprofiles/profiles.json'
       # hugmesh-generator#591: the named-file pin suite below, and the scripts its
       # fleet pins run (test_fleet_tor.py executes the REAL build-all-roles.sh
       # against stub builders and reads the rpi5 builder's default service line).

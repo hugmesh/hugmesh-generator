@@ -35,33 +35,40 @@ canonical order end to end, finishing with a saveable config.
 """
 from __future__ import annotations
 
+import contextlib
 import copy
+import dataclasses
+import io
 import os
 
 from ..core.config import (
-    SIGNIN_HANDLES_NOT_APPLIED, user_signin_handle_warnings,
-    IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, ROLE_CHOICES,
-    UNAFFILIATED_ROLE, VAULT_FIELDS, WIZARD_PAGE_SLUGS,
+    SECRET_FIELDS, SIGNIN_HANDLES_NOT_APPLIED, scope_violations, user_signin_handle_warnings,
+    IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, PERSON_ROLE_CHOICES,
+    ROLE_CHOICES, UNAFFILIATED_ROLE, USER_GRANT_CHOICES, USER_ROLE_CHOICES, VAULT_FIELDS,
+    WIZARD_PAGE_SLUGS,
     ImageConfig, ca_cert_error, derive_hostname, describe_ca_cert,
-    enter_mesh_defaults, vault_field_error,
+    enter_mesh_defaults, normalize_user_roles, vault_field_error,
 )
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
 from ..core import device_catalog, pki_lan, plain_words, platform_info
 from ..core import plain_words, platform_info
+from ..core.json_files import load_problem
 from ..core.desktop_spec import step_applies as desktop_step_applies
-from ..core.validate import validate_domain_name
+from ..core.validate import USERNAME_RULE, validate_domain_name, validate_username
 from ..core import roles as role_vocab
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
-    ram_problem, resolve_hostname, takes_ram,
+    load_any, person_problem, ram_problem, resolve_hostname, synthesize, takes_person,
+    takes_ram,
 )
+from ..core.worklist_driver import WorklistDriver
 from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _LocalAIScreen
 
 __all__ = [
     "PAGE_ORDER", "SIDE_FLOW_SLUGS", "WELCOME_CHOICES", "WELCOME_TARGET",
     "MODE_CHOICES", "MODE_DEFAULT_CHOICE", "PENDING_NOTE", "Journey",
-    "README_GETTING_STARTED", "VAULT_COMMANDS", "mode_enter_choice",
+    "README_GETTING_STARTED", "VAULT_COMMANDS", "LOAD_COMMAND", "mode_enter_choice",
 ]
 
 #: The canonical page order — the GUI's OWN tuple, consumed rather than copied so
@@ -78,6 +85,11 @@ SIDE_FLOW_SLUGS = ("localmesh", "phone", "quest", "deploy", "e2e", "qemu",
 #: The README's getting-started section — the same link the GUI welcome explainer
 #: carries (rendered as selectable text here; a terminal has no anchor to click).
 README_GETTING_STARTED = "https://github.com/hugmesh/hugmesh-generator#quick-start"
+
+#: The command word that opens a saved configuration file — the sessions page's
+#: "Load config…" button as a typed line (``load PATH``). The welcome screen takes it
+#: and so does the previous-builds review, on both faces.
+LOAD_COMMAND = "load"
 
 #: The welcome screen's TWO journey entry points (issue #50 item 1 / GUI PR #67):
 #: (choice id, title, description) — ids and titles mirror gui/pages/welcome.py's
@@ -249,12 +261,20 @@ class WelcomeScreen:
             out.append(f"     {desc}")
         out.append("")
         out.append("(Enter = Start building — the default)")
+        out.append(f"{LOAD_COMMAND} PATH opens a saved configuration — one image or a "
+                   "worklist, as Save config wrote it — and walks it.")
         return out
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
         return "welcome> "
 
     def feed(self, j: "Journey", line: str) -> None:
+        verb, _, arg = line.partition(" ")
+        if verb.lower() == LOAD_COMMAND:
+            why = j.load_config(arg)
+            if why:                 # a refusal; a load leaves its own message on status
+                j.status = why
+            return
         choice = "build" if line == "" else _pick_id(WELCOME_CHOICES, line)
         if choice is None:
             j.status = f"unrecognised choice: {line!r} (a NUMBER picks; q quits)"
@@ -847,6 +867,9 @@ class WorklistScreen:
         self._checked: set[int] = set()
         # row index -> the board RAM (GB) typed with `ram N GB` (the GUI's RAM column)
         self._ram: dict[int, str] = {}
+        # row index -> (account name, roles) typed with `who N NAME [ROLE ...]`: the person
+        # who uses a checked desktop row (the GUI's who-uses-it popup and people table)
+        self._people: dict[int, tuple[str, list[str]]] = {}
 
     def enter(self, j: "Journey") -> None:
         allow = j.worklist_role_allow
@@ -864,6 +887,13 @@ class WorklistScreen:
         self._ram = {i: prior[entry_id(r, p)].ram_gb
                      for i, (r, p, _l) in enumerate(self._rows)
                      if entry_id(r, p) in prior and prior[entry_id(r, p)].ram_gb}
+        # a desktop row staying checked keeps the person it was given (a loaded config's, or
+        # an earlier pass through this screen)
+        self._people = {}
+        for i, (r, p, _l) in enumerate(self._rows):
+            kept = prior.get(entry_id(r, p))
+            if i in self._checked and takes_person(r) and kept is not None and kept.desktop_user:
+                self._people[i] = (kept.desktop_user, list(kept.desktop_user_roles))
 
     def lines(self, j: "Journey") -> list[str]:
         out = ["Pick every image this mesh build produces (a NUMBER toggles):", ""]
@@ -875,13 +905,30 @@ class WorklistScreen:
             mark = "x" if (i - 1) in self._checked else " "
             ram = self._ram.get(i - 1, "")
             out.append(f" [{mark}] {i:2d}. {role}.{platform} — {label}"
-                       + (f"  [RAM {ram} GB]" if ram else ""))
+                       + (f"  [RAM {ram} GB]" if ram else "") + self._who_text(i - 1))
         out.append("")
         out.append("(Enter = continue with the checked rows. `ram N GB` sets row N's "
                    "board RAM — Raspberry Pi / Orange Pi node rows; omnibus needs "
                    f"{role_vocab.min_ram_gb('omnibus')} or more, backend "
                    f"{role_vocab.min_ram_gb('backend')}; `ram N -` clears it)")
+        if any(takes_person(role) for role, _p, _l in self._rows):
+            out.append("(A checked desktop is a person's device and needs its user named: "
+                       "`who N NAME [ROLE ...]` makes the account on the mesh's internal "
+                       "domain; `who N -` clears it)")
+            out.append(f"(ROLE: one tier of {'|'.join(PERSON_ROLE_CHOICES)} — user when "
+                       f"none is given — and any grants of {'|'.join(USER_GRANT_CHOICES)})")
         return out
+
+    def _who_text(self, idx: int) -> str:
+        """The person column of a checked desktop row: who uses it, or that nobody is named
+        yet (the GUI's people table, with its "double-click to set the user" placeholder)."""
+        role, _platform, _label = self._rows[idx]
+        if idx not in self._checked or not takes_person(role):
+            return ""
+        if idx not in self._people:
+            return f"  [user not named: who {idx + 1} NAME]"
+        user, roles = self._people[idx]
+        return f"  [used by {user} ({', '.join(roles)})]"
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
         return "worklist> "
@@ -907,14 +954,60 @@ class WorklistScreen:
             self._ram.pop(idx, None)
         j.status = f"row {idx + 1} {role}.{platform}: RAM {value + ' GB' if value else 'not stated'}"
 
+    def _feed_who(self, j: "Journey", line: str) -> None:
+        """``who N NAME [ROLE ...]``: the window's who-uses-it popup as a command. The
+        name is the allowlist every other surface uses (core.validate), the roles the
+        popup's vocabulary: ONE tier plus any grants, ``user`` when no tier is named."""
+        words = line.split()
+        idx = _index(words[1], len(self._rows)) if len(words) >= 3 else None
+        if idx is None or (words[2] == "-" and len(words) > 3):
+            j.status = ("usage: who N NAME [ROLE ...] (the person who uses desktop row N), "
+                        "or who N - to clear it")
+            return
+        role, platform, _label = self._rows[idx]
+        if not takes_person(role):
+            j.status = f"row {idx + 1} ({role}.{platform}) is a cluster node: it has no person"
+            return
+        if idx not in self._checked:
+            j.status = f"row {idx + 1} ({role}.{platform}) is not checked: type {idx + 1} first"
+            return
+        if words[2] == "-":
+            self._people.pop(idx, None)
+            j.status = f"row {idx + 1} {role}.{platform}: no user named"
+            return
+        try:
+            validate_username(words[2])
+        except ValueError:
+            j.status = f"refused: {words[2]!r} is not an account name — {USERNAME_RULE}"
+            return
+        try:
+            roles = _person_roles(words[3:])
+        except ValueError as exc:
+            j.status = f"refused: {exc}"
+            return
+        self._people[idx] = (words[2], roles)
+        j.status = f"row {idx + 1} {role}.{platform}: used by {words[2]} ({', '.join(roles)})"
+
     def feed(self, j: "Journey", line: str) -> None:
         if line.startswith("ram ") or line == "ram":
             self._feed_ram(j, line)
+            return
+        if line.startswith("who ") or line == "who":
+            self._feed_who(j, line)
             return
         if line == "":
             if not self._checked:
                 j.status = "pick at least one row first (a NUMBER toggles)"
                 return
+            # the person rule, inline (the window's isComplete twin, which keeps Next
+            # disabled): a checked desktop names who uses it — the account and the image's
+            # --person-role both come from the name.
+            for i in sorted(self._checked):
+                role, _platform, _label = self._rows[i]
+                why = person_problem(role, self._people.get(i, ("", []))[0])
+                if why:
+                    j.status = f"row {i + 1}: {why} — type `who {i + 1} NAME`"
+                    return
             # the RAM rule, inline (the GUI's ram_error twin): an omnibus row on a Pi /
             # Orange Pi must say how much RAM its board has — the builder refuses it.
             for i in sorted(self._checked):
@@ -940,6 +1033,13 @@ class WorklistScreen:
                 entry = (copy.deepcopy(keep) if keep is not None
                          else WorklistEntry(role=role, platform=platform))
                 entry.ram_gb = self._ram.get(i, "")
+                if takes_person(role):
+                    # rebuilt through the constructor, which derives the tier from the set
+                    # (WorklistEntry.desktop_user_role: do not assign it afterwards)
+                    user, roles = self._people[i]
+                    entry = dataclasses.replace(entry, desktop_user=user,
+                                                desktop_user_roles=list(roles),
+                                                desktop_user_role="")
                 entries.append(entry)
             j.worklist = WorklistConfig(base=j.cfg, entries=entries)
             j.advance()
@@ -950,6 +1050,7 @@ class WorklistScreen:
             return
         if idx in self._checked:
             self._checked.discard(idx)
+            self._people.pop(idx, None)        # an unchecked row's person is forgotten
         else:
             self._checked.add(idx)
 
@@ -1200,15 +1301,64 @@ class BrandingScreen:
         j.advance()
 
 
+#: What the command preview shows where a plaintext secret would ride the argv
+#: (``--local-pass``, ``--luks-pass``, ``--user-password``, ``--root-password``): the
+#: GUI's own preview channel prints them as typed, and a terminal's scrollback is no
+#: place for that — the TUI keeps none of them on screen.
+SECRET_SHOWN = "<password: typed at build time, never saved>"
+
+
+def build_projection(j: "Journey") -> tuple[WorklistDriver, list[tuple[str, object]]]:
+    """What the GUI's build would dispatch for this walk, without dispatching it:
+    ``(driver, [(image id, its flat config), ...])``.
+
+    The SAME projection the window's Build step and ``--print-commands`` make: a mesh's
+    own worklist rows, else the one image wrapped as a one-row worklist (what the wizard
+    commits at Build time), each through ``worklist.materialize()`` so the platform and
+    role-class resolvers have run. The driver is a throwaway over the fleet preview's
+    host (a native root builder: the bare command, no sudo, no docker wrapper) and is
+    never run. ``materialize`` prints a one-shot resolver note to stderr, which a screen
+    the terminal UI owns must not write to, so it is read here and dropped (the window's
+    preview drops it too). Raises ValueError for a configuration that cannot be
+    assembled (an unknown platform, two images with one hostname, ...)."""
+    from .fleet import PREVIEW_HOST             # lazy: the Journey builds its screens the same way
+    wl = j.worklist if (j.cfg.mode == "mesh" and j.worklist is not None) \
+        else synthesize(j.cfg)
+    drv = WorklistDriver(j.generator_dir, wl, host=PREVIEW_HOST, backend="native")
+    with contextlib.redirect_stderr(io.StringIO()):
+        images = [(entry.id, cfg) for entry, cfg in drv.materialize()]
+    return drv, images
+
+
+def _secrets_hidden(cfg):
+    """A copy of ``cfg`` whose plaintext secrets (``config.SECRET_FIELDS``) read as
+    :data:`SECRET_SHOWN`, so a command built from it says a flag is there without
+    saying its value. The original is not touched."""
+    shown = copy.copy(cfg)
+    for name in SECRET_FIELDS:
+        if isinstance(getattr(shown, name, None), str) and getattr(shown, name):
+            setattr(shown, name, SECRET_SHOWN)
+    return shown
+
+
 class BuildScreen:
     """The end of the TUI walk: summary + save. The TUI does not RUN builds yet
-    (launch/progress are the GUI's), and says so instead of pretending."""
+    (launch/progress are the GUI's), and says so instead of pretending.
+
+    It is the twin of the window's Review step in what that step TELLS: the gates the
+    build will refuse over (the Domain services step's, the PKI LAN address, and the
+    FieldScope ones ``BuildDriver.preflight`` raises — ``config.scope_violations``, per
+    image), the notes that do not block, and — on ``c`` — the exact command each image
+    will run, for a native root builder, with every secret hidden."""
 
     slug = "build"
     title = "Build"
 
+    def __init__(self) -> None:
+        self._show_command = False
+
     def enter(self, j: "Journey") -> None:  # noqa: ARG002
-        return None
+        self._show_command = False
 
     def lines(self, j: "Journey") -> list[str]:
         cfg = j.cfg
@@ -1250,6 +1400,8 @@ class BuildScreen:
             out.append("")
             out.append("! the GUI build will refuse this configuration: " + pki_refusal)
             out.append("  Set it on the Network step here (ip ADDR, then fixed on).")
+        problems, command = self._image_lines(j)
+        out += problems
         out.append("")
         out.append("The TUI does not run builds yet — save this configuration "
                    "and build it in the GUI (python -m hugmesh_studio) or "
@@ -1260,12 +1412,53 @@ class BuildScreen:
             saved = getattr(j, "saved_mesh_id", "")
             out.append("  saved mesh  " + (saved if saved else "not saved yet"))
             out.append("")
-            out.append("commands: s PATH=save the config · m [NAME]=save this mesh to "
-                       "Saved meshes · q=finish")
-            return out
+            out.append("commands: s PATH=save the config · c=show or hide the build "
+                       "command · m [NAME]=save this mesh to Saved meshes · q=finish")
+            return out + command
         out.append("")
-        out.append("commands: s PATH=save the config · q=finish")
-        return out
+        out.append("commands: s PATH=save the config · c=show or hide the build "
+                   "command · q=finish")
+        return out + command
+
+    def _image_lines(self, j: "Journey") -> tuple[list[str], list[str]]:
+        """``(problems, command)``: what the build of THIS configuration says about each
+        image, per :func:`build_projection`, and the command section ``c`` asked for.
+
+        The problems are whether a command can be assembled at all (the window's "Cannot
+        assemble this build") and the FieldScope refusals and notes
+        (``config.scope_violations`` — the same call, the same words, and the same
+        once-for-all-else-per-image grouping the window's problems pane uses). They sit
+        with the other refusals, above the commands line; the command section goes BELOW
+        it, so a long command pushes nothing the person needs off a short terminal."""
+        try:
+            drv, images = build_projection(j)
+        except ValueError as exc:
+            return ["", "! the GUI build cannot assemble this configuration: " + str(exc)], []
+        out: list[str] = []
+        commands: list[tuple[str, str]] = []
+        failed: list[tuple[str, list[str]]] = []
+        for iid, cfg in images:
+            try:
+                commands.append((iid, drv.command_string(_secrets_hidden(cfg))))
+            except ValueError as exc:
+                failed.append((iid, [str(exc)]))
+        for why in drv._aggregate_per_entry(failed):
+            out += ["", "! the GUI build cannot assemble this configuration: " + why]
+        pairs = [(iid, scope_violations(cfg)) for iid, cfg in images]
+        for refusal in drv._aggregate_per_entry([(i, v[0]) for i, v in pairs]):
+            out += ["", "! the GUI build will refuse this configuration: " + refusal]
+        for note in drv._aggregate_per_entry([(i, v[1]) for i, v in pairs]):
+            out += ["", "note: " + note]
+        shown: list[str] = []
+        if self._show_command and commands:
+            shown += ["", "The command each image runs (for a native root builder; a "
+                      "password, where one rides the command, is hidden):"]
+            for iid, cmd in commands:
+                shown += [f"  {iid}", f"    {cmd}"]
+            if j.cfg.mode == "mesh":
+                shown.append("  (A mesh build also generates each node's KEYS folder "
+                             "first; the GUI's Build step has the box for it.)")
+        return out, shown
 
     def prompt(self, j: "Journey") -> str:  # noqa: ARG002
         return "build> "
@@ -1298,12 +1491,17 @@ class BuildScreen:
                 j.saved_mesh_id = res.record.id
             j.status = ("saved mesh: " if res.ok else "mesh not saved: ") + res.message
             return
+        if verb.lower() == "c" and not arg.strip():
+            self._show_command = not self._show_command
+            return
         if line == "" or verb.lower() in ("q", "quit", "exit"):
             j.done = True
             return
-        j.status = ("commands: s PATH=save the config · m [NAME]=save this mesh · "
-                    "q=finish" if j.cfg.mode == "mesh"
-                    else "commands: s PATH=save the config · q=finish")
+        j.status = ("commands: s PATH=save the config · c=show or hide the build "
+                    "command · m [NAME]=save this mesh · q=finish"
+                    if j.cfg.mode == "mesh"
+                    else "commands: s PATH=save the config · c=show or hide the build "
+                         "command · q=finish")
 
 
 # ── the journey itself ──────────────────────────────────────────────────────────────
@@ -1322,6 +1520,23 @@ def _index(line: str, count: int) -> int | None:
     except ValueError:
         return None
     return n - 1 if 1 <= n <= count else None
+
+
+def _person_roles(words) -> list[str]:
+    """The account's roles a ``who`` line names, in the window's who-uses-it vocabulary:
+    ONE tier (``PERSON_ROLE_CHOICES`` — the one value ``--person-role`` bakes into the
+    image; ``user`` when none is named, as the popup's picker always holds one) plus any
+    grants (``USER_GRANT_CHOICES``), canonical order. Raises ValueError with the reason."""
+    given = [w.lower() for w in words]
+    for w in given:
+        if w not in USER_ROLE_CHOICES:
+            raise ValueError(f"unknown role {w!r}: a tier ({'|'.join(PERSON_ROLE_CHOICES)}) "
+                             f"and/or grants ({'|'.join(USER_GRANT_CHOICES)})")
+    tiers = [w for w in dict.fromkeys(given) if w in PERSON_ROLE_CHOICES]
+    if len(tiers) > 1:
+        raise ValueError(f"one tier only ({'|'.join(PERSON_ROLE_CHOICES)}), got "
+                         + ", ".join(tiers))
+    return normalize_user_roles(given if tiers else [*given, "user"])
 
 
 
@@ -1463,6 +1678,34 @@ class Journey:
 
     def close_overlay(self) -> None:
         self.overlay = None
+
+    def load_config(self, path: str) -> str:
+        """Open a SAVED CONFIGURATION file — the twin of ``StudioWizard.load_config``
+        (the sessions page's "Load config…"): either a flat single-image config or a
+        worklist envelope, through the one loader both faces share
+        (``worklist.load_any``), so a file the Save config of either face wrote loads on
+        either. It lands on the first screen with every step pre-populated, like
+        :meth:`load_session`; the eventual save is a NEW configuration. Returns "" once
+        loaded (the outcome is on :attr:`status`), or why nothing was — SAID, never
+        raised, and a refusal changes nothing (the file is read before the journey is
+        touched)."""
+        path = (path or "").strip()
+        if not path:
+            return (f"{LOAD_COMMAND} needs the path of a saved configuration "
+                    "(a .json file written by Save config)")
+        path = os.path.abspath(os.path.expanduser(platform_info.unquote_pasted_path(path)))
+        try:
+            base, wl = load_any(path)
+        except Exception as exc:            # noqa: BLE001 — said, not raised (the GUI's rule)
+            return load_problem(path, exc)
+        self.cfg = base
+        self.worklist = wl
+        self.goto(PAGE_ORDER[0])
+        what = (f"a worklist of {len(wl.entries)} image(s)" if wl is not None
+                else f"a {base.mode} image ({base.role})")
+        self.status = (f"loaded {path}: {what} — Start building walks it: Enter on the "
+                       "mode menu keeps its mode (marked *)")
+        return ""
 
     def load_session(self, s) -> str:
         """REDO ("edit as new") — the twin of ``StudioWizard.load_session``: a session

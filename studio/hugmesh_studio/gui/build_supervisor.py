@@ -30,7 +30,7 @@ Cancellation still exists, but only where it is honest: :meth:`cancel_all` is wi
 builder there would be worse), never to a window close. It does not write the session
 record itself — it CALLS BACK the owner that does (``on_cancelled``), because a build
 the Studio really stopped must be recorded "stopped", not left at "running" with a dead
-pid for the build list to render forever as "running (stale?)".
+pid for the build list to render forever as "running (process gone ...)".
 
 Qt duality: PySide6 in the venv, PyQt6 for the operator. Every slot here is
 exception-guarded — an escaping exception in a PyQt6 slot calls qFatal.

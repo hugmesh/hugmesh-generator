@@ -56,6 +56,13 @@ MISSING_DIR_REASON = "The artifact directory no longer exists."
 #: How often a row greyed as running elsewhere is asked again (``_liveness``).
 LIVENESS_RECHECK_MS = 2000
 
+#: The Status column. A stale row's status reads "running (process gone — likely
+#: interrupted)", the same words the text UI prints. Sized to that text, the one cell
+#: pushed Images and Location out of view at the wizard's default width, so it wraps
+#: inside the width the other statuses need (never narrower than this floor).
+STATUS_COLUMN = 2
+STATUS_WRAP_FLOOR_PX = 130
+
 
 def redo_secrets_note(session) -> str:
     """What the page REDO lands on says about the secrets the record did not keep, or
@@ -117,7 +124,7 @@ class _RowData:
             self.status = session.status
             self.stale = build_sessions.is_stale(session)
             self.label = session.label or session.id
-            self.when = session.started or session.created
+            self.when = build_sessions.session_when(session)
             self.location = session.workdir
             self.haystack = build_sessions.session_haystack(session)
         elif kind == "unmanaged":
@@ -138,25 +145,19 @@ class _RowData:
 
     # ---- render fragments (pure, unit-testable offscreen) -----------------------
     def status_text(self) -> str:
+        """The Status cell: the glyph, then the words core's row model gives (the same
+        status text the text UI and ``--list-sessions`` print)."""
         sym, _c = _STATUS_GLYPH.get(self.status, ("?", "#888888"))
         if self.kind == "unreadable":
             return "unreadable record"
-        if self.status == "failed":
-            imgs = self.session.images if self.session else []
-            failed = sum(1 for im in imgs if im.get("status") == "failed")
-            if imgs:
-                return f"{sym} failed · {failed} of {len(imgs)} images"
-            return f"{sym} failed"
-        if self.status == "running" and self.stale:
-            return f"{sym} running (stale?)"
+        if self.kind == "session":
+            return f"{sym} {build_sessions.status_summary(self.session, stale=self.stale)}"
         return f"{sym} {self.status}"
 
     def images_text(self) -> str:
         if self.kind != "session":
             return "—"
-        imgs = self.session.images
-        ok = sum(1 for im in imgs if im.get("status") == "ok")
-        return f"{ok}/{len(imgs)} ok"
+        return build_sessions.images_summary(self.session)
 
     def visible_for(self, query: str, status_sel: str) -> bool:
         if status_sel != "all" and self.status != status_sel:
@@ -429,7 +430,7 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             item = QtWidgets.QTableWidgetItem(r.status_text())
             _sym, colour = _STATUS_GLYPH.get(r.status, ("?", "#888888"))
             item.setForeground(QtGui.QBrush(QtGui.QColor(colour)))
-            self.table.setItem(i, 2, item)
+            self.table.setItem(i, STATUS_COLUMN, item)
             nxt = QtWidgets.QTableWidgetItem(build_window.next_action(r))
             # a neutral description of the CELL — the open affordance is the
             # "Open build window" button (row activation still works too).
@@ -439,9 +440,39 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             self.table.setItem(i, 5, self._location_item(
                 r.location, is_folder=r.kind != "unreadable"))
         self.table.resizeColumnsToContents()
+        self._fit_status_column()
         self._apply_filter()
         self._update_buttons()
         self._rebind_build_windows()
+
+    def _fit_status_column(self) -> None:
+        """Keep a stale row's long status from widening the Status column.
+
+        The column is sized to the widest status that is NOT a stale one (never under
+        STATUS_WRAP_FLOOR_PX), and each stale row wraps its phrase onto as many lines as
+        that width needs, with its own row height (only those rows: resizing every row
+        to its contents would let the Location path wrap them all tall)."""
+        stale = [i for i, r in enumerate(self._row_data) if r.stale]
+        if not stale:
+            return
+        fm = self.table.fontMetrics()
+        pad = 8                                     # Qt's own cell margins
+        plain = [fm.horizontalAdvance(r.status_text()) + pad
+                 for r in self._row_data if not r.stale]
+        width = max(plain + [STATUS_WRAP_FLOOR_PX])
+        self.table.setColumnWidth(STATUS_COLUMN,
+                                  min(self.table.columnWidth(STATUS_COLUMN), width))
+        room = self.table.columnWidth(STATUS_COLUMN) - pad - 4     # text area < the cell
+        for i in stale:
+            lines, line = 1, ""
+            for word in self._row_data[i].status_text().split():
+                trial = f"{line} {word}".strip()
+                if line and fm.horizontalAdvance(trial) > room:
+                    lines, line = lines + 1, word
+                else:
+                    line = trial
+            if lines > 1:
+                self.table.setRowHeight(i, lines * fm.lineSpacing() + 10)
 
     def _rebind_build_windows(self) -> None:
         """Point every open per-build window at the FRESH row for its build.
