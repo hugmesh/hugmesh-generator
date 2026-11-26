@@ -208,6 +208,23 @@ def ram_problem(role: str, platform: str, ram_gb: str, board: str = "") -> str:
     return ""
 
 
+def takes_person(role: str) -> bool:
+    """Does a row of a MESH worklist carry a person (``desktop_user``)? The desktop-class
+    rows only — a person's own device (laptop, chromebook, ...); a cluster node never
+    does. The one predicate behind the window's who-uses-it popup and the text UI's
+    ``who``, like :func:`takes_ram` for the board RAM."""
+    return image_class("mesh", role) == "desktop"
+
+
+def person_problem(role: str, user: str) -> str:
+    """Why this row cannot be built yet for want of its person ("" = fine): a person's
+    device must say who uses it, because the account and the image's ``--person-role``
+    both come from the name (the window's Next stays disabled until it is given)."""
+    if takes_person(role) and not (user or "").strip():
+        return f"{role} is a person's device: name who uses it"
+    return ""
+
+
 def entry_id(role: str, platform: str) -> str:
     """The STABLE worklist entry id — ``f"{role}.{platform}"``. One id per role x
     platform combo; board/flavor are row ATTRIBUTES, so an id never dangles when a

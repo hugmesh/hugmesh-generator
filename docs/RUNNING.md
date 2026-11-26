@@ -314,6 +314,12 @@ make sessions-delete ID=… YES=1 [ARTIFACTS=1]
 Full contract (exit codes, `--json` schemas): `studio/README.md` → "Two more
 Qt-free headless faces".
 
+A saved config can also be checked without the GUI, with the gates the wizard's Review
+step puts in front of a build (dropped keys, names that are no service, the per-domain
+services gate, the identity allowlist, the field scope rules, the root-size floor and
+this host's preflight): `python -m hugmesh_studio --check --config FILE [--json]`. Exit
+0 nothing blocks, 1 problems, 2 no readable config (`studio/README.md` → "Config check").
+
 ### 3a. The roles
 
 | Arch | Roles | Builder |

@@ -324,9 +324,44 @@ for you. Every other harness must set it itself (`scripts/render-all-images.py` 
 The build-matrix harness (`make matrix-check` at the repo root) drives this headless path.
 It proves the GUI channel agrees with the CLI/make/menu/job channels on every matrix cell.
 
-Four more **Qt-free** headless faces ride the same flag channel (#49: everything the GUI can
+Five more **Qt-free** headless faces ride the same flag channel (#49: everything the GUI can
 do must be a documented command; repo-root `make` fronts: `scan-hardware`,
 `sessions-list/-show/-artifacts/-delete`):
+
+- **Config check** — a saved config (a flat image config or a worklist envelope) put through
+  the gates the wizard's Review step puts in front of a build, without the wizard
+  (`core/config_check.py`; the Build page reads the same functions):
+
+  ```sh
+  python -m hugmesh_studio --check --config my-image.json
+  python -m hugmesh_studio --check --config my-image.json --backend docker --json
+  ```
+
+  Every finding says which gate it came from (`check`) and, when it is about one image of a
+  worklist, which (`image`). A **problem** blocks a build; a **warning** is the
+  accepted-but-wrong tier (nothing is a problem unless the wizard would refuse it or a
+  builder dies on it). The gates: `unknown-key` (a key the loader would drop without a
+  word, a typo such as `bundle_sourc`; `qemu_e2e` and a domain's `games` are old spellings
+  it migrates and are not reported), `service` (a name in `optional_services`,
+  `exclude_services`, a domain's `optional_services`, `cluster_domain_services` or a
+  worklist entry's `infra_services` that is no service the builders and the registry
+  know), `domain-services` (every domain has had its services configured, i.e. is named in
+  `domain_services_reviewed`), `identity` (`validate_identity` and the rules that run with
+  it when images are assembled), `command` (the build command can be assembled), `scope`
+  (`scope_violations`, read on the config as written), `root-size` (an explicit
+  `img_size` below the builder's own floor), `preflight` (this host: Docker and the
+  builder image, free disk, the output folder, the paths the config names; `--backend`
+  picks the backend) and `load` (the loader refused a value, or an envelope's `schema` is
+  not `hugmesh-worklist/v1`). The preflight asks the machine it runs on, so a host that
+  cannot build says so here. A saved standalone config always carries the preflight's
+  login-password line: the password is never saved with a config.
+
+  `--json` prints `{"ok", "kind", "images", "problems", "warnings"}`, each finding
+  `{"check", "image", "message"}`. Exit status: **0** nothing blocks (warnings may
+  print), **1** at least one problem, **2** there is no config to report on (the file is
+  missing, unreadable, not JSON or not an object; the reason is on stderr and stdout stays
+  empty). `--print-command` and the other readers keep loading a config with a key they
+  do not know; `--check` is the strict one.
 
 - **Hardware scan** — the wizard HardwarePage's probe (`core/hw_scan.py`: CPU, GPUs, Wi-Fi,
   Bluetooth, and the recommended `--gpu-driver` / `--enable-wifi` / `--enable-bluetooth` /
@@ -386,6 +421,20 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   when Ollama is not installed, not answering, or has no model pulled. The command that
   starts and feeds it is `scripts/local-ai.sh` (see `docs/LOCAL-AI-ASSISTANT.md`,
   section 11).
+
+### Exit status of the headless verbs
+
+`python -m hugmesh_studio --help` ends with the same table:
+
+| Exit | Meaning |
+|---|---|
+| 0 | done, or nothing is wrong |
+| 1 | it ran and found a problem, or failed: `--check` found a problem that blocks a build; `--self-check` failed; `--local-ai-status` / `--local-ai-prompt` could not reach Ollama; `--delete-session` met a build still running; `--e2e-evidence` found its index and the disk disagree; `--login-agent` could not bind its port |
+| 2 | bad input: the `--config` file is missing, unreadable or not a JSON object; an unknown session id; `--delete-session` without `--yes`; a `--generator-dir` that is no checkout; an unknown option value |
+| 3 | refused, reason on stderr: `--login-agent` on a host that cannot check which user connects; `--kernel-config*` on an image whose kernel cannot be rebuilt; `--desktop-pretend` when the build needs changes |
+
+`--mesh-token`, `--domain-ca`, `--org-export`, `--qemu-windows` and `--go-live-target` hand
+the rest of the line to their own command and return its status.
 
 ## The Studio panel (bottom of every window)
 
@@ -745,6 +794,16 @@ architecture, then family, then device, every catalog row listed, refused rows w
 reason and never selectable, the same words as the GUI and `--list-devices`). Steps not
 ported yet say so and keep the config's defaults. The walk ends
 in a config you can save and build from the GUI, or pass to `--print-commands`.
+
+The guards the window has are here too, in the same words. `load PATH` on the welcome
+screen (`l PATH` in the previous-builds review, the `l` key in the urwid face) opens a
+saved config, one image or a worklist, as the window's "Load config" does. The Build screen
+refuses or notes what the window's Review step would (the Domain services and PKI LAN
+gates, and the builder's own field-scope refusals, per image), and `c` shows the command
+each image will run, with every password hidden. Answering `y` at the local-cloud gate
+checks that the local Kubernetes lane is down, as the window does. A checked desktop row
+on the worklist needs its person: `who N NAME [ROLE ...]`. No password is typed here: the
+Desktop step reads one from the first line of a file (`pass=FILE`) and never saves it.
 
 urwid is deliberately **not** in `requirements.txt`: it must never become a hard studio
 dependency, and the test suite runs without it. For the rich UI on Gentoo, where

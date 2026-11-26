@@ -2313,6 +2313,18 @@ def localcloud_tor_note(platforms) -> str:
     return text
 
 
+def local_k8s_running(generator_dir: str) -> bool:
+    """Is the local Kubernetes (DevOps) lane up right now?
+
+    A read-only `kind get clusters` (LocalStackNode.devops_running) behind ONE
+    module symbol — the "create nodes for local cloud" gate's whole view of the
+    cluster, on the window's page and on the text screen alike — so a test pins the
+    host in one place and the two faces have no second opinion about what is running.
+    False whenever the answer cannot be established (no ``kind``, a probe that failed):
+    unknown is never a blocker."""
+    return LocalMeshBootstrap(generator_dir)._stack_node().devops_running()
+
+
 def _read_authkey(args: argparse.Namespace) -> str:
     """Resolve the auth key from --authkey-file (preferred: off the argv/process
     table) or --authkey. Trailing whitespace/newlines stripped."""

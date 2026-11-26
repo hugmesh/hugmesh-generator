@@ -19,7 +19,8 @@ from . import model
 __all__ = ["JourneyApp", "LocalAIPanel", "SessionsReview", "SessionsWindow", "run_journey",
            "run_sessions_review", "run_worklist"]
 
-_LIST_HELP = "enter=inspect  d=delete  w=worklist  k=kernel config  r=refresh  q=quit"
+_LIST_HELP = ("enter=inspect  d=delete  w=worklist  k=kernel config  l=load a saved "
+              "config  r=refresh  q=quit")
 _SUB_HELP = "q/esc=back"
 #: The GUI's other Previous-builds buttons (B-10), on a footer line of their own.
 _LIST_HELP_BUILDS = "build actions: s=restart  e=redo (edit as new)  a=delete all finished"
@@ -63,6 +64,10 @@ class SessionsReview:
         #: screen) or why it refused. None (a bare review): ``e`` says so. The mode
         #: list above gains ``restart`` (the hand-over screen).
         self.on_redo: Callable[[build_sessions.BuildSession], str] | None = None
+        #: how LOAD reaches the journey, the same way: a saved configuration FILE's path
+        #: in, "" out once the journey owns the screen, or why nothing was loaded
+        self.on_load: Callable[[str], str] | None = None
+        self._load_edit: urwid.Edit | None = None      # the path prompt, while it is up
         #: the list's ONE numbering: rows, then unreadable records (model.list_entries)
         self.entries: list = []
         self._confirm_row = None           # a SessionRow, or an UnreadableRow
@@ -84,6 +89,7 @@ class SessionsReview:
         if not self.rows:
             items.append(urwid.Text("  (no build sessions recorded yet)"))
         self._viewing = None
+        self._load_edit = None
         self.entries = model.list_entries(self.rows, self.unreadable)
         #: (list widget, its entry), matched by identity: the placeholder line above
         #: shifts every position by one when only unreadable records exist
@@ -216,6 +222,29 @@ class SessionsReview:
             self.status.set_text(f"not redone: {why}")
             self.refresh()
 
+    # ── load a saved configuration (the GUI's "Load config…") ─────────────────
+    def start_load(self) -> None:
+        """Ask for the path of a saved configuration file — the window's file dialog as
+        an inline prompt (never a popup). Enter loads it into the journey, esc backs out."""
+        if self.on_load is None:
+            self.status.set_text("not loaded: this review has no journey to load into "
+                                 "— open it from the journey (Review prior sessions)")
+            return
+        self._load_edit = urwid.Edit("path> ")
+        self._open("load", urwid.ListBox(urwid.SimpleFocusListWalker([
+            urwid.Text("Path of a saved configuration — a single image or a worklist, "
+                       "as Save config wrote it:"),
+            urwid.Divider(),
+            urwid.AttrMap(self._load_edit, None, focus_map="reversed")])),
+            "enter=load  esc=cancel")
+
+    def load(self, path: str) -> None:
+        """Hand ``path`` to the journey (``on_load``): it takes the screen on success;
+        a refusal is said here and the prompt stays up, so a typo is one edit away."""
+        why = self.on_load(path) if self.on_load is not None else "no journey to load into"
+        if why:
+            self.status.set_text(f"not loaded: {why}")
+
     def _show_confirm(self, question: str) -> None:
         yes = urwid.Button("Yes", on_press=self._confirm_yes)
         no = urwid.Button("No", on_press=self._confirm_no)
@@ -299,6 +328,9 @@ class SessionsReview:
                 self._confirm_row = None          # a half-answered delete question is dropped
                 self._open_local_ai()
             return
+        if self.mode == "load" and key == "enter" and self._load_edit is not None:
+            self.load(self._load_edit.edit_text)
+            return
         if self.mode == "detail" and key in ("d", "D") and self._viewing is not None:
             self.start_delete_unreadable(self._viewing)       # d on its detail screen
             return
@@ -310,6 +342,9 @@ class SessionsReview:
             return
         if key in ("a", "A"):
             self.start_delete_all()
+            return
+        if key in ("l", "L"):
+            self.start_load()
             return
         if key in ("s", "S") and isinstance(entry, model.SessionRow):
             self.start_restart(entry)
@@ -522,18 +557,28 @@ class JourneyApp:
         self.sessions.review.run_external = getattr(self, "run_external", None)
         self.root.original_widget = self.sessions.root
         self.sessions.review.on_redo = self._redo_from_sessions
+        self.sessions.review.on_load = self._load_from_sessions
 
     def _redo_from_sessions(self, session) -> str:
         """The review's REDO: load into the journey and show it ("" once done)."""
-        why = self.journey.load_session(session)
+        return self._journey_took_over(self.journey.load_session(session))
+
+    def _load_from_sessions(self, path: str) -> str:
+        """The review's LOAD (a saved configuration file): into the journey, shown the
+        same way ("" once done)."""
+        return self._journey_took_over(self.journey.load_config(path))
+
+    def _journey_took_over(self, why: str) -> str:
+        """The end both loads share: ``why`` is the journey's refusal ("" = it loaded)."""
         if why:
             return why
         self.sessions_only = False          # the journey owns the terminal now
         self._close_sessions()
-        # The Redo's message ends with what was NOT loaded — a secret the record never
-        # held — which the GUI raises as a dialog. Here it is the last lines of a
-        # welcome screen taller than an 80x24 terminal, where it sat below the fold:
-        # this one screen opens at its end, so the message is read without scrolling.
+        # The load's message ends with what the person needs next — for a Redo, what was
+        # NOT loaded (a secret the record never held), which the GUI raises as a dialog.
+        # Here it is the last lines of a welcome screen taller than an 80x24 terminal,
+        # where it sat below the fold: this one screen opens at its end, so the message
+        # is read without scrolling.
         _end_in_view(self.frame.body)
         return ""
 

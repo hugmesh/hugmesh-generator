@@ -1639,27 +1639,60 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
 
     def _sync_web(self, idle: bool):
         gw = self._gateway_row()
-        tunnel_ok = idle and self._can_tunnel(gw)
-        self.web_btn.setEnabled(tunnel_ok)
+        reachable = self._can_tunnel(gw)
+        self.web_btn.setEnabled(idle and reachable)
         self.tunnel_close_btn.setEnabled(bool(self._tunnels))
         if self.plan is None:
-            self.web_note.setText("")
-        elif tunnel_ok:
-            self.web_btn.setToolTip(
-                "Start (or reuse) the ssh tunnel to the gateway's :443 and hand "
-                "the URL to your desktop browser.")
-            self.web_note.setText(
-                f"Front door ready: <tt>{self.plan.front_door}</tt>")
-        else:
+            pass
+        elif not reachable:
             self.web_btn.setToolTip(
                 "Greyed until the gateway device is up with a published ssh port — "
                 "the web tunnel rides it.")
-            self.web_note.setText(
-                f'<span style="color:{MUTED}">The front door '
-                f"(<tt>{self.plan.gateway_label or '?'}</tt>) is not up yet — start "
-                "the mesh, then Refresh.</span>")
+        elif not idle:
+            self.web_btn.setToolTip(
+                "Greyed while another action on this page runs; it comes back when "
+                "that action ends.")
+        else:
+            self.web_btn.setToolTip(
+                "Start (or reuse) the ssh tunnel to the gateway's :443 and hand "
+                "the URL to your desktop browser.")
+        self._paint_web_note()
         self._sync_tunnel_note()
         self._sync_golive(idle)
+
+    def _paint_web_note(self):
+        """The front-door line, worded by what is ACTUALLY listening (#1180).
+
+        The URL is a loopback port that only the page's ssh tunnel binds. Calling it
+        "ready" because the gateway's ssh is up sent operators to an address nothing
+        answered: until the tunnel is open, the note is an instruction, not a
+        promise. Even with the tunnel open, it says what the tunnel cannot vouch for
+        — the guest's own :443 (its ingress) may not be serving yet. Repainted on
+        every sync AND when a tunnel closes, so it never describes a tunnel that is
+        gone.
+        """
+        if self.plan is None:
+            self.web_note.setText("")
+            return
+        gw = self._gateway_row()
+        url = html.escape(self.plan.front_door)
+        if not self._can_tunnel(gw):
+            self.web_note.setText(
+                f'<span style="color:{MUTED}">The front door '
+                f"(<tt>{html.escape(self.plan.gateway_label or '?')}</tt>) is not up "
+                "yet — start the mesh, then Refresh.</span>")
+            return
+        assert gw is not None
+        proc = self._tunnels.get(gw.label)
+        if proc is not None and proc.poll() is None:
+            self.web_note.setText(
+                f"Front door: <tt>{url}</tt>, through the open web tunnel. If the "
+                "page does not load, the gateway's own :443 is not serving yet — an "
+                "emulated cluster can take many minutes to bring its web UI up.")
+        else:
+            self.web_note.setText(
+                f"Front door <tt>{url}</tt> answers only through a web tunnel — "
+                "press “Open web UI” to start one.")
 
     # ── go live FROM this mesh (core.golive_target) ─────────────────────────────
     def _golive_target(self):
@@ -2550,6 +2583,10 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                           f"[mesh] closed the {label} web tunnel ({reason})")
         self._sync_tunnel_note()
         self.tunnel_close_btn.setEnabled(bool(self._tunnels))
+        # The front-door line must stop saying "through the open web tunnel". Under
+        # QEMU for Windows the line is the native backend's own and is left alone.
+        if not self._whpx:
+            self._paint_web_note()
 
 
 def _reset_warning(label: str) -> str:

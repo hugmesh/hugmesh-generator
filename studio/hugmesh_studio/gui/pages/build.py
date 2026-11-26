@@ -2110,17 +2110,15 @@ class BuildPage(QtWidgets.QWizardPage):
         # the doom lands hours later in the .img pre-flight ("Payload NNNN MiB
         # exceeds the ... root partition"). 0 = role default, always accepted;
         # experts can still pass --img-size via Extra builder flags.
+        # root_size_floor.entry_errors is the one place the floor is applied: the
+        # headless --check reads it too, so the two cannot disagree.
         c = self.wiz.cfg
         self.img_size_err.setVisible(False)
-        if c.img_size:
-            for entry in self.wiz.worklist.entries:
-                err = root_size_floor.img_size_error(
-                    entry.platform, c.mode, entry.role, c.img_size,
-                    desktop=entry.desktop or c.desktop, capable=bool(c.capable))
-                if err:
-                    self.img_size_err.setText(err)
-                    self.img_size_err.setVisible(True)
-                    return False
+        too_small = root_size_floor.entry_errors(self.wiz.worklist.entries, c)
+        if too_small:
+            self.img_size_err.setText(too_small[0][1])
+            self.img_size_err.setVisible(True)
+            return False
         self.wiz.build_backend = self._backend()
         self.wiz.generate_node_keys = (self.gen_keys.isChecked()
                                        if self.wiz.cfg.mode == "mesh" else True)

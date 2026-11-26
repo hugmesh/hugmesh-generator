@@ -8,6 +8,11 @@
       # ...with that emulated device (e.g. rpi5/pki) preselected as the go-live target
   python -m hugmesh_studio --fleet       # fleet build dialog (scripts/build-all-roles.sh front-end)
   python -m hugmesh_studio --login-agent # headless: run the passwordless local-login loopback agent
+  python -m hugmesh_studio --check --config FILE [--backend native|docker] [--json]
+      # headless: the wizard Review step's gates over a saved config (core/config_check.py):
+      # dropped keys, unknown service names, the domain-services gate, the identity
+      # allowlist, the field scope rules, the root-size floor and this host's preflight.
+      # Exit 0 nothing blocks, 1 problems, 2 the file cannot be read (see --help)
   python -m hugmesh_studio --scan-hardware [--json]
       # headless: the wizard HardwarePage's probe (CPU/GPU/Wi-Fi/Bluetooth +
       # recommended build settings) as a terminal table, or --json for automation
@@ -214,6 +219,26 @@ def _drop_remember_roles_without_peer_check(args) -> None:
         args.remember_roles_for_passwordless_login = False
 
 
+#: What the headless verbs return, for ``--help`` (and studio/README.md, which says the
+#: same). The verbs that hand the rest of the line to their own command return its status.
+EXIT_STATUS_HELP = """\
+exit status of the headless verbs:
+  0  done, or nothing is wrong
+  1  it ran and found a problem, or failed: --check found a problem that blocks a build;
+     --self-check failed; --local-ai-status / --local-ai-prompt could not reach Ollama;
+     --delete-session met a build still running; --e2e-evidence found its index and the
+     disk disagree; --login-agent could not bind its port
+  2  bad input: the --config file is missing, unreadable or not a JSON object; an unknown
+     session id; --delete-session without --yes; a --generator-dir that is no checkout;
+     an unknown option value
+  3  refused, with the reason on stderr: --login-agent on a host that cannot check which
+     user connects; --kernel-config* on an image whose kernel cannot be rebuilt;
+     --desktop-pretend when the build needs changes
+--mesh-token, --domain-ca, --org-export, --qemu-windows and --go-live-target hand the
+rest of the line to their own command and return its status.
+"""
+
+
 def main(argv=None) -> int:
     # FIRST thing, before argparse and long before any Qt import: a crash from here
     # on leaves a file behind. Under PyQt6 an unhandled exception in a slot calls
@@ -241,7 +266,8 @@ def main(argv=None) -> int:
     # (the panel, the text UI's status line, the --local-ai-* flags) reads it from here.
     from .core import ollama_docker
     ollama_docker.host_env_defaults(os.environ)
-    ap = argparse.ArgumentParser(description="HugMesh Image Studio")
+    ap = argparse.ArgumentParser(description="HugMesh Image Studio", epilog=EXIT_STATUS_HELP,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     # default=None, resolved lazily by _generator_dir(args) on the paths that use it
     ap.add_argument("--generator-dir", default=None,
                     help="path to the hugmesh-generator checkout (default: this "
@@ -339,7 +365,18 @@ def main(argv=None) -> int:
                          "when stdin is a TTY: with stdin redirected (`</dev/null`, "
                          "`<file`, a `while read` loop) it does not prompt on the "
                          "controlling terminal and fails fast (exit 1).")
-    ap.add_argument("--config", help="config JSON (with --print-command/--print-commands/--print-specs)")
+    ap.add_argument("--config", help="config JSON (with --check/--print-command/"
+                                     "--print-commands/--print-specs)")
+    ap.add_argument("--check", action="store_true",
+                    help="headless: check the --config file the way the wizard's Review "
+                         "step does, without the GUI, and print every problem (blocks a "
+                         "build) and warning: keys the loader would drop, service names "
+                         "that are not services, the per-domain services gate, the "
+                         "identity allowlist, the field scope rules, the root image size "
+                         "floor, and the preflight of THIS host (Docker, builder image, "
+                         "disk, paths; --backend picks the backend). Exit 0 = nothing "
+                         "blocks, 1 = problems, 2 = the file cannot be read; --json for "
+                         "{ok, kind, images, problems, warnings}.")
     ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
                     help="build backend for --print-command (auto = host default)")
     ap.add_argument("--scan-hardware", action="store_true",
@@ -442,7 +479,7 @@ def main(argv=None) -> int:
                     help="with --list-devices: which build path the rows are labelled for "
                          "(a device with no image on that path is listed as refused).")
     ap.add_argument("--json", action="store_true",
-                    help="with --scan-hardware/--list-sessions/--show-session/"
+                    help="with --check/--scan-hardware/--list-sessions/--show-session/"
                          "--session-artifacts/--local-ai-status/--list-devices: "
                          "machine-readable JSON on stdout.")
     # ── the Go-Live "Export to GitHub org" step, from a terminal (Qt-free) ──────
@@ -538,6 +575,19 @@ def main(argv=None) -> int:
                                    image=args.image, as_json=args.json,
                                    apply_fixes=args.apply_portage_fixes,
                                    backend=None if args.backend == "auto" else args.backend)
+
+    if args.check:
+        # Qt-free path: the wizard's gates over a config nobody walked through the
+        # wizard (core/config_check.py). Exit 0 clean, 1 problems, 2 no readable config.
+        from .core import config_check
+        if not args.config:
+            print("error: --check needs --config FILE", file=sys.stderr)
+            return 2
+        if not _generator_dir_or_say(_generator_dir(args)):
+            return 2
+        return config_check.run_cli(
+            args.config, _generator_dir(args),
+            backend=None if args.backend == "auto" else args.backend, as_json=args.json)
 
     if args.print_command:
         # Qt-free path: core only — must work with no display and no Qt installed.
