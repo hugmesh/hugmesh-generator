@@ -889,6 +889,37 @@ X86_NODE_ROLES = ("pki", "backend", "frontend", "backend-gpu", "omnibus", "edge-
 # bake_host_firewall(); rpi5:1000). Only x86 + rpi5 parse it.
 RELEASE_STATE_CHOICES = ("internal", "public")
 
+# "Go live when ready" (hugmesh-generator#1201): the hugmesh-go-live providers a domain
+# may be taken public through, unattended, once the mesh is healthy — the go-live
+# registry's ids (specs/usr/lib/hugmesh/go-live-providers.sh) WITHOUT tor-onion, which
+# the driver refuses to commit. tests/scripts/test-domain-golive-flag.sh pins this tuple
+# against scripts/_domain-golive-lib.sh and the registry. OPERATOR DECISION
+# (2026-11-25): choosing one at build time IS consent for that domain's unattended
+# go-live. Only x86 + rpi5 node images parse --domain-go-live.
+GO_LIVE_AT_READY_PROVIDERS = ("cloudflare-tunnel", "byo-domain", "duckdns",
+                              "tailscale-funnel", "router-portforward")
+#: Providers that need an API key / token, and what the Studio's masked field asks for.
+#: The value never enters a config, a manifest or an image: it is written onto the
+#: KEYS stick of each role that can be the public edge (core/golive_tokens.py).
+GO_LIVE_TOKEN_PROMPTS = {
+    "cloudflare-tunnel": "Cloudflare Tunnel token",
+    "duckdns": "DuckDNS or Cloudflare DDNS API token",
+}
+
+
+def go_live_problem(value: Any) -> str:
+    """'' when ``value`` is a valid ``go_live`` setting ("" = off, or a provider id),
+    else the sentence a loader raises."""
+    if value in ("", None):
+        return ""
+    if value == "tor-onion":
+        return ("go_live cannot be tor-onion: a Tor address needs no public flip "
+                "(use the domain's Tor front door)")
+    if value not in GO_LIVE_AT_READY_PROVIDERS:
+        return (f"go_live must be empty (off) or one of "
+                f"{'|'.join(GO_LIVE_AT_READY_PROVIDERS)}, got {value!r}")
+    return ""
+
 # Mesh-node identity provider (I6). Casdoor is the NATIVE DEFAULT: with idp left at
 # "casdoor" every argv, sysroot byte and test outcome is IDENTICAL to today (the #1
 # invariant). External mode is a CONFIG AXIS the two mesh-node builders
@@ -3247,6 +3278,15 @@ class Domain:
     # ``set_domain_signin_methods``; read through ``effective_signin_methods``.
     # OMIT-WHEN-EMPTY, so every earlier row keeps its bytes.
     signin_methods: list[str] = field(default_factory=list)
+    # "Go live when ready" (hugmesh-generator#1201): the go-live provider this domain is
+    # taken public through, UNATTENDED, once the mesh's node has booted and its pods are
+    # ready (/usr/sbin/hugmesh-go-live-at-ready on the public-edge node). "" = off, the
+    # default: the domain goes live only when a person runs go-live. One of
+    # GO_LIVE_AT_READY_PROVIDERS otherwise. Choosing it at build time IS the consent
+    # (operator decision 2026-11-25). A provider's API key is NOT stored here — it lives
+    # only in memory (core/golive_tokens.py) until it is written onto the KEYS sticks.
+    # OMIT-WHEN-EMPTY, so every earlier row keeps its bytes.
+    go_live: str = ""
 
 
 #: Every field a brand row carries, in declaration order — THE key list every copy
@@ -3258,7 +3298,7 @@ DOMAIN_FIELDS: tuple[str, ...] = tuple(Domain.__dataclass_fields__)
 #: that does not use them is written exactly as before the field existed.
 DOMAIN_OMIT_WHEN_EMPTY: tuple[str, ...] = ("id", "tor", "look", "ways", "issuer_port",
                                            "github_org", "idp_settings",
-                                           "signin_methods")
+                                           "signin_methods", "go_live")
 
 
 # ── per-domain identity-provider settings (2026-10-21) ──────────────────────────────
@@ -3966,6 +4006,10 @@ class ImageConfig:
     # separate field, not a ``domains`` row). [] = password only; OMIT-WHEN-EMPTY in
     # to_dict and both manifests, so every pre-existing config keeps its bytes.
     cluster_domain_signin_methods: list[str] = field(default_factory=list)
+    # "Go live when ready" for the MESH'S OWN domain (``Domain.go_live`` for the implicit
+    # own domain, hugmesh-generator#1201 — the github_org precedent). "" = off;
+    # OMIT-WHEN-EMPTY in to_dict and both manifests.
+    cluster_domain_go_live: str = ""
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
@@ -4243,6 +4287,8 @@ class ImageConfig:
         # domains[] twin
         if not d.get("cluster_domain_signin_methods"):
             d.pop("cluster_domain_signin_methods", None)
+        if not d.get("cluster_domain_go_live"):
+            d.pop("cluster_domain_go_live", None)
         # the Desktop step's spec is OMIT-WHEN-EMPTY too (core/desktop_spec.py), and its
         # secret twin never appears unless a caller asked for secrets AND one was typed
         if not d.get("desktop_spec"):
@@ -4296,6 +4342,12 @@ class ImageConfig:
             t = True
             kw["optional_services"] = [x for x in svcs if x != "tor"]
         kw["tor"] = t
+        # "Go live when ready" (#1201): absent/null = off; junk fails loudly at load.
+        gl = kw.get("go_live") or ""
+        problem = go_live_problem(gl)
+        if problem:
+            raise ValueError(f"domain {kw.get('name', '')!r}: {problem}")
+        kw["go_live"] = gl
         # The brand record's keys (#654): absent/null — every pre-#654 row — is the
         # empty default; a wrong SHAPE fails loudly at load like idp and tor do, never
         # a dict field holding a string.
@@ -4452,6 +4504,13 @@ class ImageConfig:
             if problem:
                 raise ValueError(f"cluster_domain_{problem}")
             d["cluster_domain_signin_methods"] = clean_signin_methods(v or [])
+        # The own domain's "go live when ready" (#1201): absent/null = off; junk fails.
+        if "cluster_domain_go_live" in d:
+            v = d["cluster_domain_go_live"] or ""
+            problem = go_live_problem(v)
+            if problem:
+                raise ValueError(f"cluster_domain_{problem}")
+            d["cluster_domain_go_live"] = v
         # MIGRATE the pre-2026-08-26 spelling of the post-build device-test opt-in.
         # from_dict filters unknown keys, so without this a config saved under the old
         # name would load with the opt-in silently OFF — the `games` precedent above:
@@ -4926,6 +4985,38 @@ class ImageConfig:
             a += ["--org", self.org]
         return a
 
+    def go_live_domains(self) -> list[tuple[str, str]]:
+        """``[(domain, provider), ...]`` set to "Go live when ready" (#1201): the mesh's
+        own domain first (``cluster_domain_go_live``), then each ``domains`` row with a
+        ``go_live``, in order, each name once. Independent of platform and role — the
+        args and the KEYS token writer both start from it."""
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        if self.cluster_domain_go_live and self.cluster_domain:
+            out.append((self.cluster_domain, self.cluster_domain_go_live))
+            seen.add(self.cluster_domain)
+        for d in self.domains or []:
+            name = getattr(d, "name", "") or ""
+            prov = getattr(d, "go_live", "") or ""
+            if name and prov and name not in seen:
+                out.append((name, prov))
+                seen.add(name)
+        return out
+
+    def _domain_go_live_args(self) -> list[str]:
+        """``--domain-go-live <domain>=<provider>`` per "Go live when ready" domain, for
+        the two builders that bake the go-live set (x86, rpi5) and only on a NODE role:
+        a client image has no cluster to take public and its builder refuses the flag
+        (scripts/_domain-golive-lib.sh). Nothing when no domain opted in, so every
+        existing command line keeps its bytes."""
+        plat = self.platform or "x86"
+        if plat not in ("x86", "rpi5") or client_class_role(self.role, plat):
+            return []
+        a: list[str] = []
+        for name, prov in self.go_live_domains():
+            a += ["--domain-go-live", f"{name}={prov}"]
+        return a
+
     def _identity_args(self) -> list[str]:
         """Baked host identity every builder parses (-H/-T/-u). '' = the builder's own
         role-derived hostname / UTC / default account."""
@@ -5313,6 +5404,7 @@ class ImageConfig:
         # the optional-services checklist) — the other ARM builders bake no cluster tree.
         if self.release_state:
             a += ["--release-state", self.release_state]
+        a += self._domain_go_live_args()      # #1201, node roles only
         # --release-tag: the tag the builder's ENV=prod gate pins first-party :dev
         # images to (scripts/_prod-gate-lib.sh), the same flag x86 takes.
         if self.release_tag:
@@ -5732,6 +5824,7 @@ class ImageConfig:
                 a += ["--games-domain", self.games_domain]
             if self.release_state:
                 a += ["--release-state", self.release_state]
+            a += self._domain_go_live_args()  # #1201, node roles only
             if self.role not in X86_NODE_ROLES:
                 domnames = [d.name for d in self.domains if getattr(d, "name", "")]
                 if domnames:
@@ -6030,6 +6123,9 @@ class ImageConfig:
             # the own domain's sign-in methods (#1107) — OMIT-WHEN-EMPTY (password only)
             **({"cluster_domain_signin_methods": list(self.cluster_domain_signin_methods)}
                if self.cluster_domain_signin_methods else {}),
+            # the own domain's "go live when ready" provider (#1201): OMIT-WHEN-EMPTY.
+            **({"cluster_domain_go_live": self.cluster_domain_go_live}
+               if self.cluster_domain_go_live else {}),
         }
 
     def write_mesh_manifest(self, output_dir: str) -> str:

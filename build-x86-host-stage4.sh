@@ -28,6 +28,8 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # shellcheck source=scripts/_domain-idp-lib.sh
 source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
+# shellcheck source=scripts/_domain-golive-lib.sh
+source "${SCRIPT_DIR}/scripts/_domain-golive-lib.sh"
 # THE role vocabulary — canonical tokens, the permanent input aliases, the hostname
 # defaults and the keys profiles, declared ONCE for every builder and for the Studio.
 # See scripts/_roles-lib.sh for why the long spelling won and why `+`/`_` are gone.
@@ -798,6 +800,12 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             instance, superdomain = the mesh's (default; bakes nothing).
                             Only 'own' is baked: /etc/hugmesh/domain-idp. D must be in
                             --domains when given. See docs/DOMAIN-IDP.md.
+  --domain-go-live D=PROVIDER  (repeatable) Go live when ready (#1201): D goes public on
+                            its own once the mesh's pods are ready (public-edge node
+                            only) via PROVIDER (cloudflare-tunnel | byo-domain | duckdns
+                            | tailscale-funnel | router-portforward). Bakes
+                            /etc/hugmesh/domain-go-live. Node roles only; API keys ride
+                            the KEYS stick. See docs/GO-LIVE-WHEN-READY.md.
   --desktop WEIGHT          CLIENT only — thin (LXDE/openbox, default) | full (XFCE+).
   -H, --hostname NAME       Hostname. Default: derived from --role.
   -T, --timezone ZONE       Timezone. Default: ${TIMEZONE}
@@ -1271,6 +1279,7 @@ while [[ $# -gt 0 ]]; do
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
         --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
+        --domain-go-live) domain_golive_add "${2:-}"; shift 2 ;;   # repeatable <domain>=<provider> (#1201)
         --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand) BRAND="$2"; shift 2 ;;
         --brand-title) BRAND_TITLE="$2"; shift 2 ;;
@@ -2542,6 +2551,7 @@ fi
 # --domain-idp (#509): vocabulary + DNS shape were checked as each flag was read; this is
 # the cross-check against --cluster-domain and the --domains list.
 domain_idp_check "${CLUSTER_DOMAIN}" "${DOMAINS}"
+domain_golive_check "${ROLE}" "${ROLE_CLIENT}"   # #1201: node images only
 # Accent is written as ACCENT_COLOR="..." into brand.conf — which the applier reads with
 # its STRICT KEY=VALUE parser, never by dot-sourcing (specs/usr/sbin/hugmesh-branding:83).
 # Gate it with the same #RRGGBB shape the applier's _norm_accent enforces (empty = default
@@ -2871,6 +2881,7 @@ if ${PRINT_PLAN}; then
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
+    domain_golive_plan_line   # PLAN_DOMAIN_GO_LIVE=<domain>:<provider>,...; nothing when none (#1201)
     _plan HOSTNAME           "${HOSTNAME:-$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")}"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || echo "${OPTIONAL_SERVICES:-none}")"
     # Additive PLAN_ key (grep -qx consumers unaffected): what the tor NODE gates below
@@ -3656,6 +3667,13 @@ bake_host_firewall() {
     cp "${SHARED_SPECS}/etc/init.d/hugmesh-go-live-reconcile"   "${SYSROOT}/etc/init.d/hugmesh-go-live-reconcile"
     chmod +x "${SYSROOT}/etc/init.d/hugmesh-go-live-reconcile"
     cp "${SHARED_SPECS}/etc/cron.d/hugmesh-go-live-reconcile"   "${SYSROOT}/etc/cron.d/hugmesh-go-live-reconcile"
+    # "Go live when ready" (#1201): inert without /etc/hugmesh/domain-go-live; acts only
+    # on the public-edge node (hugmesh.net/backend=true), once per opted-in domain.
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-go-live-at-ready"     "${SYSROOT}/usr/sbin/hugmesh-go-live-at-ready"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-go-live-at-ready"
+    cp "${SHARED_SPECS}/etc/init.d/hugmesh-go-live-at-ready"   "${SYSROOT}/etc/init.d/hugmesh-go-live-at-ready"
+    chmod +x "${SYSROOT}/etc/init.d/hugmesh-go-live-at-ready"
+    cp "${SHARED_SPECS}/etc/cron.d/hugmesh-go-live-at-ready"   "${SYSROOT}/etc/cron.d/hugmesh-go-live-at-ready"
     info "RELEASE_STATE=${RELEASE_STATE:-internal}: baked the host nftables backstop (hugmesh-firewall-reconcile renders + loads the live ruleset at boot + every 60s) + the go-live wizard (driver/registry/CLI/ncurses front-ends) + the web-UI go-live effector (hugmesh-go-live-reconcile)"
 }
 
@@ -5816,6 +5834,8 @@ if [ -n "${SUPERDOMAIN}" ]; then
 fi
 # Per-domain IdP choice (#509): /etc/hugmesh/domain-idp, own domains only; absent otherwise.
 domain_idp_bake "${SYSROOT}/etc/hugmesh"
+# Go live when ready (#1201): /etc/hugmesh/domain-go-live; absent without --domain-go-live.
+domain_golive_bake "${SYSROOT}/etc/hugmesh"
 if ${UNAFFILIATED}; then
     info "Unaffiliated desktop: no marker tree, no cluster payload, no identity tie."
 elif ${ROLE_CLIENT}; then
@@ -5995,7 +6015,7 @@ else
     # removal note above); firewalld is shipped but deliberately NOT enabled, the
     # nftables backstop (hugmesh-firewall-reconcile) owns the host firewall
     # (tests/qemu/assertions.sh keys its firewalld gate on exactly this).
-    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet auditd local)
+    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile hugmesh-go-live-at-ready containerd kubelet auditd local)
     # Opt-in auto-update oneshot (host array): plumbing, default-off poller. Gated like
     # the bake: an --unaffiliated image carries no poller, so a link would dangle.
     ${UNAFFILIATED} || SVCS+=(hugmesh-update)

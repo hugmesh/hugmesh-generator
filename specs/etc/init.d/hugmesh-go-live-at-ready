@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+
+description="Go live when ready (#1201): take each build-time opted-in domain public once this edge node's containers are healthy"
+
+# Runs the agent ONCE at boot (a oneshot); the every-minute half is the cron.d drop-in
+# (OpenRC has no native timer), the same idiom as hugmesh-go-live-reconcile. With no
+# /etc/hugmesh/domain-go-live (every image built without --domain-go-live) the agent
+# exits 0 at once and does nothing. It never writes the posture marker itself: it runs
+# the canonical hugmesh-go-live driver's plan + commit.
+
+depend() {
+    need net
+    use dns logger
+    after keys-provision tailscaled kubelet hugmesh-firewall-reconcile
+}
+
+command="/usr/sbin/hugmesh-go-live-at-ready"
+command_background=false
+
+start() {
+    ebegin "Checking the build-time 'go live when ready' domains (acts only on the public edge node, once its pods are ready)"
+    "${command}"
+    eend $? "go-live-at-ready reported an unexpected error (posture unchanged)"
+}
+
+stop() {
+    return 0
+}
