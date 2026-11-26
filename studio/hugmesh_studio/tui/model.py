@@ -37,9 +37,9 @@ __all__ = [
     "delete_all_result",
 ]
 
-#: Render string for a running record whose recorded pid is gone on this host —
-#: the same phrase the GUI sessions list uses (crash honesty, never written back).
-STALE_STATUS = "running (process gone — likely interrupted)"
+#: Render string for a running record whose recorded pid is gone on this host: the one
+#: phrase every face uses (crash honesty, never written back), owned by core.
+STALE_STATUS = build_sessions.STALE_STATUS
 
 
 @dataclass(frozen=True)
@@ -61,10 +61,10 @@ UNREADABLE_WHY = ("could not be parsed, so it names no build and points at no bu
                   "directory — only delete (removing the file) applies")
 
 
-def display_status(s: build_sessions.BuildSession) -> str:
-    """The status string a UI should render: ``is_stale`` is a render hint, so a
-    stale "running" record reads as interrupted without ever mutating the record."""
-    return STALE_STATUS if build_sessions.is_stale(s) else s.status
+#: The status string a UI should render: ``is_stale`` is a render hint, so a stale
+#: "running" record reads as interrupted without ever mutating the record. One rule in
+#: core, shared with the GUI's table and ``--list-sessions``.
+display_status = build_sessions.display_status
 
 
 def session_rows() -> tuple[list[SessionRow], list[str]]:

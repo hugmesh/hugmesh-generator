@@ -20,19 +20,29 @@ those entries start would have run BSD sed and find.
 to go and every entry gets it. tests/test_entry_bootstrap.py reads every ``__main__``
 block in the package and fails when one does not call it.
 
-Deliberately macOS-only today. The window's other two hooks (``no_console`` for the
-MSI, ``flatpak_host`` for the sandbox) stay where they are in ``app.main``: moving them
-here would change what the text UI does on Windows and inside the Flatpak, which is a
-separate decision with its own proof.
+The PATH half is deliberately macOS-only today. The window's other two hooks
+(``no_console`` for the MSI, ``flatpak_host`` for the sandbox) stay where they are in
+``app.main``: moving them here would change what the text UI does on Windows and inside
+the Flatpak, which is a separate decision with its own proof.
+
+The other half is every host's: ``safe_stdio.install()``, so that a stdout or stderr that
+cannot encode a character (``LANG=C``, ``PYTHONIOENCODING=ascii``, a legacy code page)
+prints an ASCII look-alike instead of raising ``UnicodeEncodeError`` out of ``print()``.
+It changes only what happens to a character the stream cannot spell, never the stream's
+encoding, so it is safe in every entry. The command lines and the text UI died on their
+own "·" and "—" before it; tests/test_safe_stdio.py.
 """
 from __future__ import annotations
 
-from . import macos_host
+from . import macos_host, safe_stdio
 
 __all__ = ["bootstrap"]
 
 
 def bootstrap() -> list[str]:
-    """Run before anything looks a tool up on PATH or starts a process. Idempotent and
-    a no-op off macOS. Returns what ``macos_host.install()`` added to PATH."""
+    """Run before anything prints, looks a tool up on PATH or starts a process.
+    Idempotent. Makes stdout/stderr unable to raise on a character they cannot encode,
+    and on macOS puts Homebrew's tools on PATH. Returns what ``macos_host.install()``
+    added to PATH (empty off macOS)."""
+    safe_stdio.install()
     return macos_host.install()

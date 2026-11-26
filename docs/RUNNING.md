@@ -168,7 +168,8 @@ cp brands/example.conf brands/acme.conf
 | `OPTIONAL_SERVICES` | `akkoma tuwunel phpbb` | which optional services to bake (see §2a) |
 | `GAMES_DOMAIN` | `games.<CLUSTER_DOMAIN>` | games portal host + OIDC issuer (see §2b) |
 | `GROW_POLICY` | `fill` | first-boot root-grow policy baked into the `.img` (see §2c) |
-| `DEFAULT_USER` / `DEFAULT_USER_PASS` / `ROOT_PASS` | `pi` / `raspberry` / `gentoo` | **fallback** console accounts when no KEYS stick is present — change for real builds |
+| `DEFAULT_USER` | `pi` | name of the **fallback** console user made when no KEYS stick is present. It gets a random one-time password at first boot and is **not** an administrator unless the build passed `--local-admin` (see §7c) |
+| `DEFAULT_USER_PASS` / `ROOT_PASS` | `raspberry` / `gentoo` | **not used**: no password is baked into an image, and root is locked |
 | `ADMIN_EMAILS` | `admin@<domain>` | seeded Casdoor admin + BFF allowlist (the platform login admin; see §7d) |
 | `MAIL_PROVIDER` | `protonmail` | SMTP preset; `none` disables mail (see §2d) |
 | `TIMEZONE` | `UTC` | image timezone |
@@ -313,6 +314,12 @@ make sessions-delete ID=… YES=1 [ARTIFACTS=1]
 
 Full contract (exit codes, `--json` schemas): `studio/README.md` → "Two more
 Qt-free headless faces".
+
+A saved config can also be checked without the GUI, with the gates the wizard's Review
+step puts in front of a build (dropped keys, names that are no service, the per-domain
+services gate, the identity allowlist, the field scope rules, the root-size floor and
+this host's preflight): `python -m hugmesh_studio --check --config FILE [--json]`. Exit
+0 nothing blocks, 1 problems, 2 no readable config (`studio/README.md` → "Config check").
 
 ### 3a. The roles
 
@@ -689,15 +696,23 @@ FAT32 `KEYS` partition, mounts it read-only, and applies (all optional): users,
 SSH host keys + authorized_keys, hostname/timezone/Wi-Fi, certificates/files,
 headscale+tailscale, the Kubernetes PKI + kubeadm init/join, attached
 storage (LUKS), backups and, on the pki node, the GitOps bootstrap. With no
-KEYS stick the image still boots and creates the fallback console user, so you are
-never locked out.
+KEYS stick the image still boots and creates a fallback console user with a random
+one-time password, printed once on the console. That user can log in but **cannot
+administer** the node: it is not in `wheel` and root is locked. To administer a
+node, provision it with a KEYS stick, or build the image with `--local-admin` on
+the builder command line (the Studio offers this as the *Administrator* box on
+desktop images that have a Login Password); see [`docs/STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md).
 
 ### 7d. Operator logins after boot
 
 - **Node / SSH**: log in over SSH with the key from the KEYS stick
   (`ssh -i keys-pki/ssh/admin_ed25519 admin@<node>`); login is key-only. The
-  console fallback user (`DEFAULT_USER`/`DEFAULT_USER_PASS`, `ROOT_PASS` from
-  `brand.conf`) exists only when no KEYS stick is present.
+  console fallback user (named `DEFAULT_USER`) exists only when no KEYS stick is
+  present. Its password is random, minted at first boot and printed once on the
+  console; it must be changed at first login. `DEFAULT_USER_PASS` and `ROOT_PASS`
+  in `brand.conf` are not used: no password is baked into the image, and root is
+  locked. The fallback user is not an administrator unless the image was built
+  with `--local-admin`.
 - **ArgoCD**, the GitOps engine, over the VPN: get the initial admin password
   with the command in §8.
 - **Casdoor (the platform identity admin)**: seeded from `ADMIN_EMAILS`

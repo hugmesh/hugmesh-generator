@@ -230,6 +230,15 @@ def test_localcloud_allowed_roles_match_the_gui_derivation():
     assert tui_lc.ALLOWED_ROLES == gui_lc.LOCALCLOUD_ALLOWED_ROLES
 
 
+def test_localcloud_cluster_question_is_one_symbol_on_both_faces():
+    """The gate's third half (no local Kubernetes cluster still up) is ONE function in
+    core: the window's page and the text screen import it, neither keeps a copy — so a
+    test that pins the host pins it for both, and they cannot disagree about it."""
+    from hugmesh_studio.core import local_mesh_bootstrap as lmb
+    assert gui_lc.local_k8s_running is lmb.local_k8s_running
+    assert tui_lc.local_k8s_running is lmb.local_k8s_running
+
+
 def test_localcloud_identity_readers_agree(tmp_path):
     # both read the same on-disk override points (bootstrap config, secrets bundle,
     # seeder roster); an empty generator dir must yield the same brand-default
@@ -1141,6 +1150,40 @@ def test_tui_and_gui_worklist_passes_agree_on_a_loaded_worklist(wiz):
     screen.feed(j, "")
     tui = [e.to_dict() for e in j.worklist.entries]
     assert tui == gui == before
+
+
+def test_tui_and_gui_ask_for_a_person_on_the_same_worklist_rows(wiz):
+    """A checked desktop-class row carries a person on the window's page (a placeholder
+    until it is named, which keeps Next disabled) and on the text UI (``who N``, and Enter
+    refuses without it): the same rows, the same refusal, because both call
+    ``worklist.takes_person`` / ``person_problem``."""
+    from _helpers import pick_mode
+    from hugmesh_studio.core.worklist import person_problem
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    page.initializePage()
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("worklist")
+    screen = j.screen()
+    tui_rows = {f"{r}.{p}": i for i, (r, p, _l) in enumerate(screen._rows)}
+    assert set(tui_rows) == set(page.rows)                 # the same role x platform rows
+    asked_gui, asked_tui = set(), set()
+    for rid, item in page.rows.items():
+        item.setCheckState(0, Qt.CheckState.Checked)
+        if rid in page._desktop_people:
+            asked_gui.add(rid)
+            assert not page.isComplete()                   # Next waits for the name
+        item.setCheckState(0, Qt.CheckState.Unchecked)
+        j.worklist, j.status = None, ""
+        j.goto("worklist")
+        screen.enter(j)
+        screen.feed(j, str(tui_rows[rid] + 1))             # check the row
+        screen.feed(j, "")                                 # ... and try to continue
+        if "person's device" in j.status:
+            asked_tui.add(rid)
+            assert j.slug == "worklist" and j.status.startswith(
+                f"row {tui_rows[rid] + 1}: " + person_problem(rid.split(".")[0], ""))
+    assert asked_gui == asked_tui and asked_gui
 
 
 # ── #638 / decision 71 = A: the build-first mode picker on both faces ──────────────

@@ -129,9 +129,10 @@ MODE_DEFAULT_ROLE = {
 # built + the knobs), "launch" is the separate BUILD screen (continue the build / back
 # to the main menu), "progress" runs it. Nothing dispatches until Continue is pressed.
 #
-# Issue #50 (welcome flow): "welcome" is the three-card first screen (start building /
-# start a local mesh / review prior sessions) and "sessions" is the demoted old first
-# screen (Load/Save config + the Previous-builds manager). "sessions" sits IMMEDIATELY
+# Issue #50 (welcome flow): "welcome" is the two-card first screen (start building /
+# review prior sessions — DECISION 2(d) dropped the "start a local mesh" card the
+# screen used to carry) and "sessions" is the demoted old first screen (Load/Save
+# config + the Previous-builds manager). "sessions" sits IMMEDIATELY
 # after "welcome": only WelcomePage.nextId() ever routes INTO it (a plain Next flows
 # welcome -> mode), and its own positional next is "mode" — reviewing what you built
 # continues naturally into building. A fresh start shows "welcome" (first slug, and
@@ -566,6 +567,32 @@ OPTIONAL_SERVICES_BY_PLATFORM = {
     "orangepi4-lts": OPTIONAL_SERVICES_CHOICES + ("workloadConsole", "anubis"),
 }
 
+# The CLOSED SET of service names. OPTIONAL_SERVICES_CHOICES above is what the wizard
+# OFFERS; these are what the builders and the registry (specs/cluster/optional-services.yaml)
+# KNOW, which is the set a hand-written config's service list is checked against
+# (core/config_check.py). A name outside REGISTRY_SERVICES is not a service anywhere: the
+# x86 builder's validate_optional_services dies on it after dispatch and the rpi5 builder
+# (which has no validator) bakes nothing, so a typo ("akoma") built an image with no
+# Akkoma and said nothing. Mirrored from the x86 builder's three lines, which
+# tests/stack/test-optional-services-exclude.sh holds equal to the registry;
+# tests/test_config_check.py holds THESE equal to the builder's, so none can go stale.
+#   REGISTRY_SERVICES             every `slug:` in the registry
+#   BUILDER_SELECTABLE_SERVICES   the subset whose `buildGate:` lists a builder, i.e. the
+#                                 ones --optional-services/--exclude-services can bake
+#                                 (the rest are runtime-only or gate: none)
+#   BUILDER_DESELECTABLE_SERVICES the subset with a real `-<slug>` / `no-<slug>` spelling
+REGISTRY_SERVICES = (
+    "akkoma", "tuwunel", "phpbb", "games", "tube", "owncast", "character-studio",
+    "character-forge", "edge-ai", "edge-ai-analysis", "edge-ai-tts", "coturn",
+    "meshbridge", "egress-vpn", "tor", "workloadConsole", "headwind",
+    "attestation-server", "anubis", "metrics-server", "keda", "kyverno",
+    "observability", "service-catalog-builder", "optional-services-operator")
+BUILDER_SELECTABLE_SERVICES = (
+    "akkoma", "tuwunel", "phpbb", "games", "tube", "owncast", "character-studio",
+    "character-forge", "edge-ai", "edge-ai-analysis", "edge-ai-tts", "egress-vpn",
+    "tor", "workloadConsole", "headwind", "attestation-server", "anubis")
+BUILDER_DESELECTABLE_SERVICES = ("anubis",)
+
 # --optional-services sentinels (mirror build-menu.sh's OPT_SERVICES + the builders):
 #   optional_services == []            -> emit nothing (builder default akkoma tuwunel phpbb)
 #   optional_services == [SERVICES_NONE] -> emit --optional-services "" (EXPLICIT none, G13)
@@ -887,6 +914,27 @@ IDP_JWKS_SUFFIX = {
     "oidc": "/.well-known/jwks",
 }
 
+# The placeholder hints every provider screen shows in its issuer / client-id / JWKS
+# line edits (the providers' real endpoint shapes). ONE table: the node wizard's IdP
+# page, the provider wizard and the local mesh's bootstrap tab all read it, so a
+# provider's hint cannot read differently on two screens. The JWKS hints are built from
+# IDP_JWKS_SUFFIX, so a hint cannot promise a path the derivation does not use.
+IDP_ISSUER_HINTS = {
+    "entra": "https://login.microsoftonline.com/<tenant-id>/v2.0",
+    "aws": "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>",
+    "oidc": "https://id.example.org (the token `iss` value, exactly)",
+}
+IDP_CLIENT_HINTS = {
+    "entra": "the app registration's Application (client) ID",
+    "aws": "the Cognito app client id",
+    "oidc": "the OIDC client id registered for this mesh",
+}
+IDP_JWKS_HINTS = {
+    "entra": f"empty = <issuer>{IDP_JWKS_SUFFIX['entra']}",
+    "aws": f"empty = <issuer>{IDP_JWKS_SUFFIX['aws']}",
+    "oidc": f"empty = <issuer>{IDP_JWKS_SUFFIX['oidc']} (override if your provider differs)",
+}
+
 
 def idp_effective_jwks(idp: str, issuer: str, jwks: str) -> str:
     """The JWKS URL external mode bakes: the explicit override, else the
@@ -972,8 +1020,8 @@ SECURE_BOOT_CHOICES = ("", "on", "off")
 
 # Plaintext secrets that are NEVER persisted to a saved JSON config — they exist only
 # for the live command line (the builder hashes them at build time). user_password /
-# root_password are the x86 node FALLBACK credentials (G27); local_pass / luks_pass the
-# standalone/FDE ones.
+# root_password are the legacy x86 node FALLBACK credentials (G27), which the builders
+# now ignore; local_pass / luks_pass the standalone/FDE ones.
 SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password",
                  # the Desktop step's extra local accounts' first-login passwords
                  # (NAME:PASSWORD lines; core/desktop_spec.py) — staged to a 0600 file
@@ -3787,6 +3835,16 @@ class User:
         return d
 
 
+#: Keys ``from_dict`` still ACCEPTS though no field carries them, because it MIGRATES the
+#: spelling onto one that does (the config's ``qemu_e2e`` -> ``qemu_device_tests``, a
+#: domain row's legacy ``games`` -> ``optional_services``). Every other key it is handed
+#: and has no field for is DROPPED without a word, which is what core/config_check.py
+#: reports. Add a spelling here when ``from_dict``/``_domain_from_dict`` learns to
+#: migrate one, or ``--check`` will call a config that loads fine malformed.
+MIGRATED_CONFIG_KEYS = frozenset({"qemu_e2e"})
+MIGRATED_DOMAIN_KEYS = frozenset({"games"})
+
+
 @dataclass
 class ImageConfig:
     # ── identity / mode ──
@@ -3831,8 +3889,8 @@ class ImageConfig:
     local_user: str = field(default_factory=default_local_user)  # the INVOKING user, not a baked operator name
     local_pass: str = ""               # --local-pass (SECRET — never saved; live cmd only)
     local_admin: bool = False          # --local-admin: the local account is an administrator (sudo) on ANY image; off = not
-    user_password: str = ""            # --user-password node FALLBACK cred (SECRET; x86)
-    root_password: str = ""            # --root-password node FALLBACK cred (SECRET; x86)
+    user_password: str = ""            # --user-password (SECRET; x86; the builder ignores it)
+    root_password: str = ""            # --root-password (SECRET; x86; the builder ignores it)
     standalone: bool = False           # --standalone (arm64 only; x86 gets it via role name)
     capable: bool = False              # --capable (most-capable Plasma payload, 50GiB root; x86, composable)
     unaffiliated: bool = False         # --unaffiliated as a COMPOSABLE flag (x86; role standalone-unaffiliated presets it)
@@ -3931,7 +3989,7 @@ class ImageConfig:
     # to_dict and both manifests, so every pre-existing config keeps its bytes.
     cluster_domain_signin_methods: list[str] = field(default_factory=list)
     # ── hardware ──
-    gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
+    gpu_driver: str = "auto"           # one of GPU_DRIVER_CHOICES ("auto" = the builder picks per role)
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
     hw_profile: str = ""               # a hwprofiles/<id> preset — GUI-ONLY (sets gpu/wifi/bt presets; NEVER emits; G41)
     kernel_builtin: bool = False       # --kernel-builtin
