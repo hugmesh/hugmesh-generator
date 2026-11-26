@@ -71,6 +71,8 @@ _defaults() {
     # optional in the builder (it declares SUPERDOMAIN="" at the top) but READ
     # by the validation block, so the mirror has to carry it or `set -u` bites.
     SUPERDOMAIN=""
+    # read by domain_golive_check (#1201): the role and whether it is a client image.
+    ROLE="pki"; ROLE_CLIENT=false
 }
 # Returns 0 if the validation block ACCEPTS the current var-set, 1 if it REJECTs
 # (the slice's `exit 1` on a bad value is caught by running it in a subshell).
