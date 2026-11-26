@@ -121,7 +121,8 @@ from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import brand_look, mesh_controls, plain_words, platform_info, saved_meshes, vaults
-from ...core.config import IDP_CHOICES, IDP_LABELS, github_org_problem, idp_effective_jwks
+from ...core.config import (IDP_CHOICES, IDP_ISSUER_HINTS, IDP_JWKS_HINTS, IDP_LABELS,
+                            github_org_problem, idp_effective_jwks)
 from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN,
                             OPTIONAL_SERVICES_CHOICES, Domain)
 from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
@@ -221,14 +222,6 @@ _DEVOPS_DOWN_CONFIRM_TEXT = (
     "Delete it?"
 )
 
-# Per-provider placeholder hints — the SAME endpoint shapes gui/pages/idp.py
-# carries (one picker, two frames: the node wizard page and this bootstrap tab).
-_IDP_ISSUER_HINTS = {
-    "entra": "https://login.microsoftonline.com/<tenant-id>/v2.0",
-    "aws": "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>",
-    "oidc": "https://id.example.org (the token `iss` value, exactly)",
-}
-
 # ── the services table's column grid ────────────────────────────────────────────
 # Symbolic indices (network.py's rule): a test names the column it reads instead of
 # asserting on a magic number, and inserting a column stays one edit. MECH is this
@@ -299,30 +292,6 @@ class _StatusLine(QtWidgets.QLabel):
                 pass
 
 
-#: What a saved-mesh record's theme ``form`` holds when it carries no theme inputs:
-#: the shipped brand. Keys are ImageConfig's login_* names (the old Themes group's
-#: load/commit contract, kept so every saved record still loads) — ALL seventeen,
-#: because apply_bootstrap filters the record's form against this dict. Since
-#: 2026-10-21 the form ALSO carries ``look`` (the mesh's whole look, as the brand
-#: record writes it: shape, decoration and pictures included) and the Themes group is
-#: gone: the look is chosen on the Look tab of the mesh's own domain. Listing only
-#: the eight colour/font keys silently threw away the nine web-chrome inputs on
-#: every Load/Restore (header hidden, header/footer colours, background effect),
-#: derived a different login page, and then reported "every field applied".
-#: Chrome falls back inside load() itself, so "" / False are the shipped page.
-_THEME_FORM_DEFAULTS = {
-    "login_theme_preset": "", "login_theme_mode": "dark",
-    "login_primary_color": "", "login_secondary_color": "",
-    "login_font": "", "login_font_file": "",
-    "login_font_licence": "", "login_font_source": "",
-    "login_header_hidden": False, "login_header_size": "",
-    "login_header_bg": "", "login_header_text": "",
-    "login_footer_hidden": False, "login_footer_size": "",
-    "login_footer_bg": "", "login_footer_text": "",
-    "login_bg_effect": "",
-}
-
-
 def _migrated_services(cfg: LocalMeshBootstrapConfig) -> LocalMeshBootstrapConfig:
     """A copy of ``cfg`` whose domain services are on its domain rows: the domain
     slugs of ``services`` move into the rows (``_migrate_domain_services``, the loader's
@@ -349,13 +318,6 @@ MESH_INFRA_TITLE = "The mesh's own infrastructure (chosen once for the whole mes
 PROD_APEX_NOTE = ("A prod mesh needs its public apex domain in the first row — the "
                   "minted issuer and superadmin align with it. The mesh cannot "
                   "start without it.")
-
-
-_IDP_JWKS_HINTS = {
-    "entra": "empty = <issuer>/discovery/v2.0/keys",
-    "aws": "empty = <issuer>/.well-known/jwks.json",
-    "oidc": "empty = <issuer>/.well-known/jwks",
-}
 
 
 class _StatusProbe(QtCore.QThread):
@@ -2847,8 +2809,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         ``look``, the whole look as the brand record writes it."""
         look = self.mesh_look()
         eff = look.effective() if look is not None else brand_look.effective_look({})
-        form = {attr: eff[f] for f, attr in brand_look.CFG_FIELDS.items()
-                if attr in _THEME_FORM_DEFAULTS}
+        form = {attr: eff[f] for f, attr in brand_look.LOGIN_THEME_ATTRS.items()}
         if look is not None:
             form["look"] = dict(look.record())
         return form
@@ -2864,12 +2825,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if form and isinstance(form.get("look"), dict):
             look_in = dict(form["look"])
         elif form:
-            ns = dict(_THEME_FORM_DEFAULTS)
+            ns = dict(brand_look.LOGIN_THEME_FORM_DEFAULTS)
             ns.update({k: v for k, v in form.items() if k in ns})
             from_form = brand_look.look_from_cfg(types.SimpleNamespace(**ns))
             look_in = dict((cfg.superbrand or {}).get("look") or {})
-            look_in.update({f: from_form[f] for f, attr in brand_look.CFG_FIELDS.items()
-                            if attr in _THEME_FORM_DEFAULTS})
+            look_in.update({f: from_form[f] for f in brand_look.LOGIN_THEME_FIELDS})
         elif cfg.login_theme_css.strip():
             missing.append("login_theme_css")
         s = self.brand_session()
@@ -3576,10 +3536,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         for w in (self.idp_issuer, self.idp_client_id, self.idp_jwks):
             w.setEnabled(ext)
         self.idp_issuer.setPlaceholderText(
-            _IDP_ISSUER_HINTS.get(self.selected_idp(), "") if ext
+            IDP_ISSUER_HINTS.get(self.selected_idp(), "") if ext
             else "built-in Casdoor — nothing to configure")
         self.idp_jwks.setPlaceholderText(
-            _IDP_JWKS_HINTS.get(self.selected_idp(), "") if ext else "")
+            IDP_JWKS_HINTS.get(self.selected_idp(), "") if ext else "")
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         # live, never-rounded-up coverage for the existing-tree mode
         if self.src_existing.isChecked():

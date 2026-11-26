@@ -35,7 +35,8 @@ import traceback
 from ..qt import Qt, QtWidgets
 from ..branding_icon import brand_icon
 from ..styles import muted
-from ...core.config import IDP_LABELS, ImageConfig, idp_effective_jwks
+from ...core.config import (IDP_CLIENT_HINTS, IDP_ISSUER_HINTS, IDP_JWKS_HINTS, IDP_JWKS_SUFFIX,
+                            IDP_LABELS, ImageConfig, idp_effective_jwks)
 from ._scroll import scrollable
 from ._widgets import _row
 
@@ -53,7 +54,7 @@ PROVIDER_STEPS: dict[str, tuple[str, ...]] = {
         "Copy the Application (client) ID from the app's Overview blade — that is "
         "the Client ID below.",
         "Take the Issuer from the tenant's OpenID configuration: "
-        "https://login.microsoftonline.com/<tenant-id>/v2.0 . It must byte-match the "
+        f"{IDP_ISSUER_HINTS['entra']} . It must byte-match the "
         "`iss` claim in the tokens the tenant actually mints.",
         "Entra mints PAIRWISE per-app `sub` values and per-resource audiences — read "
         "docs/IDENTITY-PROVIDERS.md before you ship a mesh on it.",
@@ -62,7 +63,7 @@ PROVIDER_STEPS: dict[str, tuple[str, ...]] = {
         "In the AWS console, open Amazon Cognito → User pools and create (or pick) "
         "the pool this mesh will trust.",
         "Add an app client for the mesh and copy its Client ID.",
-        "The Issuer is https://cognito-idp.<region>.amazonaws.com/<user-pool-id> — "
+        f"The Issuer is {IDP_ISSUER_HINTS['aws']} — "
         "shown on the pool's overview.",
         "Cognito carries groups in the `cognito:groups` claim, which the platform's "
         "role gates do NOT read: group-based authorization will not work until the "
@@ -73,25 +74,9 @@ PROVIDER_STEPS: dict[str, tuple[str, ...]] = {
         "client id.",
         "Take the Issuer from the provider's discovery document — the `issuer` value "
         "in /.well-known/openid-configuration, exactly as written.",
-        "If the provider does not publish keys at <issuer>/.well-known/jwks, set the "
+        f"If the provider does not publish keys at <issuer>{IDP_JWKS_SUFFIX['oidc']}, set the "
         "JWKS URL override below.",
     ),
-}
-
-_ISSUER_HINTS = {
-    "entra": "https://login.microsoftonline.com/<tenant-id>/v2.0",
-    "aws": "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>",
-    "oidc": "https://id.example.org (the token `iss` value, exactly)",
-}
-_CLIENT_HINTS = {
-    "entra": "the app registration's Application (client) ID",
-    "aws": "the Cognito app client id",
-    "oidc": "the OIDC client id registered for this mesh",
-}
-_JWKS_HINTS = {
-    "entra": "empty = <issuer>/discovery/v2.0/keys",
-    "aws": "empty = <issuer>/.well-known/jwks.json",
-    "oidc": "empty = <issuer>/.well-known/jwks (override if your provider differs)",
 }
 
 _SCOPE_NOTE = (
@@ -154,13 +139,13 @@ class _EndpointsPage(QtWidgets.QWizardPage):
         lay = scrollable(self)
 
         self.issuer = QtWidgets.QLineEdit(win.issuer)
-        self.issuer.setPlaceholderText(_ISSUER_HINTS.get(win.idp, ""))
+        self.issuer.setPlaceholderText(IDP_ISSUER_HINTS.get(win.idp, ""))
         self.issuer.setToolTip(
             "The OIDC issuer URL (--idp-issuer). Must byte-match the `iss` claim.")
         lay.addWidget(_row("Issuer URL", self.issuer))
 
         self.client_id = QtWidgets.QLineEdit(win.client_id)
-        self.client_id.setPlaceholderText(_CLIENT_HINTS.get(win.idp, ""))
+        self.client_id.setPlaceholderText(IDP_CLIENT_HINTS.get(win.idp, ""))
         self.client_id.setToolTip(
             "The OIDC client id registered at the provider (--idp-client-id). A "
             "PUBLIC identifier — client SECRETS are never entered here, never baked, "
@@ -168,7 +153,7 @@ class _EndpointsPage(QtWidgets.QWizardPage):
         lay.addWidget(_row("Client ID", self.client_id))
 
         self.jwks = QtWidgets.QLineEdit(win.jwks)
-        self.jwks.setPlaceholderText(_JWKS_HINTS.get(win.idp, ""))
+        self.jwks.setPlaceholderText(IDP_JWKS_HINTS.get(win.idp, ""))
         self.jwks.setToolTip(
             "Optional JWKS (signing-keys) URL override (--idp-jwks). Leave empty to "
             "derive the provider's documented default from the issuer.")
