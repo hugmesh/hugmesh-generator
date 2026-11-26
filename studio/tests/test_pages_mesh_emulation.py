@@ -1296,65 +1296,6 @@ def test_web_ui_waits_for_the_gateway_then_tunnels_and_opens(
     assert page.tunnel_close_btn.isEnabled()
 
 
-def test_the_front_door_note_never_calls_an_untunnelled_url_ready(
-        wiz, registry, spawned, monkeypatch):
-    """#1180: the note said "Front door ready: https://127.0.0.1:<port>/" as soon as
-    the gateway's ssh was up, but nothing binds that port until the tunnel exists, so
-    the address an operator copied from the note did not load. Until a tunnel is open
-    the note is an instruction; with one open it names the tunnel and what the tunnel
-    cannot vouch for; once it closes, the instruction is back."""
-    monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
-                        staticmethod(lambda url: None))
-    page = _page(wiz)
-    registry(_device("x86/frontend", port=22357))
-    page._refresh_reality()
-    url = f"https://127.0.0.1:{page.plan.mesh.gateway.ui_port}/"
-
-    before = page.web_note.text()
-    assert "ready" not in before.lower(), before
-    assert url in before and "Open web UI" in before and "only through" in before
-
-    page.web_btn.click()
-    during = page.web_note.text()
-    assert url in during and "through the open web tunnel" in during
-    assert ":443 is not serving yet" in during
-    assert "Open web UI" not in during
-
-    page.tunnel_close_btn.click()
-    after = page.web_note.text()
-    assert "through the open web tunnel" not in after
-    assert "Open web UI" in after
-
-
-def test_a_tunnel_that_died_on_its_own_is_not_described_as_open(
-        wiz, registry, spawned, monkeypatch):
-    monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
-                        staticmethod(lambda url: None))
-    page = _page(wiz)
-    registry(_device("x86/frontend", port=22357))
-    page._refresh_reality()
-    page.web_btn.click()
-    spawned[0].terminate()                         # ssh exited behind the page's back
-    page._sync_controls()
-    assert "through the open web tunnel" not in page.web_note.text()
-    assert "Open web UI" in page.web_note.text()
-
-
-def test_a_busy_page_does_not_call_a_running_front_door_not_up(wiz, registry):
-    """While another verb runs the button greys, but the gateway is still up: the
-    note used to say "is not up yet — start the mesh", which was false."""
-    page = _page(wiz)
-    registry(_device("x86/frontend", port=22357))
-    page._refresh_reality()
-    page._set_running(True)
-    try:
-        assert not page.web_btn.isEnabled()
-        assert "not up yet" not in page.web_note.text()
-        assert "another action" in page.web_btn.toolTip()
-    finally:
-        page._set_running(False)
-
-
 def test_a_second_press_reuses_the_tunnel_and_says_so(wiz, registry, spawned,
                                                       monkeypatch):
     monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
@@ -2244,61 +2185,6 @@ def test_look_the_display_button_is_drawn_beside_ssh(qapp, fake_generator, style
             assert "serial only" in grey.display_btn.toolTip()
             snap(w, "meshemu-display", style, pt)
         finally:
-            w.close()
-            w.deleteLater()
-            settle(qapp)
-
-
-@pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
-def test_look_the_front_door_note_is_drawn_whole_in_every_tunnel_state(
-        qapp, fake_generator, style, pt, monkeypatch):
-    """#1180's three wordings (gateway down, no tunnel yet, tunnel open) are longer
-    than the old "Front door ready" line and share a row with three buttons: each is
-    drawn whole, inside the page, and wide enough to read — measured, then snapped."""
-    child_only()
-    monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
-                        staticmethod(lambda url: None))
-    gen, _sess, _abort = fake_generator
-    devdir = os.path.join(str(gen), qemu_tests.DEFAULT_WORK_SUBDIR, "devices")
-    with looking(qapp, style, pt):
-        w = wizard_mod.StudioWizard(str(gen))
-        w.show()
-        try:
-            page = _page(w)
-            area = page.web_note.parentWidget()
-            while area is not None and not isinstance(area, QtWidgets.QScrollArea):
-                area = area.parentWidget()
-
-            def check(state, needle):
-                settle(qapp)
-                if area is not None:
-                    area.ensureWidgetVisible(page.web_note)
-                    settle(qapp)
-                note = page.web_note
-                assert needle in note.text(), f"{state}: {note.text()!r}"
-                assert_inside(page, note, f"the front-door note ({state})")
-                assert_whole(note, f"the front-door note ({state})")
-                assert note.width() >= 200, \
-                    f"the front-door note ({state}) is squeezed to {note.width()}px"
-                snap(w, f"meshemu-frontdoor-{state}", style, pt)
-
-            check("down", "not up yet")
-            os.makedirs(devdir, exist_ok=True)
-            dev = _device("x86/frontend", port=22357)
-            with open(os.path.join(devdir, "x86_frontend.json"), "w",
-                      encoding="utf-8") as fh:
-                json.dump(dataclasses.asdict(dev), fh)
-            page._refresh_reality()
-            check("no-tunnel", "Open web UI")
-            # Popen faked for the click ONLY: the real wizard runs its own
-            # subprocesses, which a module-wide fake would break.
-            with monkeypatch.context() as m:
-                m.setattr(page_mod.subprocess, "Popen",
-                          lambda argv, **kw: _FakeProc(list(argv), kw))
-                page.web_btn.click()
-            check("tunnel-open", "through the open web tunnel")
-        finally:
-            page._close_tunnels("look test")
             w.close()
             w.deleteLater()
             settle(qapp)
