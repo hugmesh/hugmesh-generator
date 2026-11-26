@@ -3909,6 +3909,7 @@ orphan-guards-verify:
         tests/scripts/test-builder-resume-safety.sh
         tests/scripts/test-calamares-boost-seed.sh
         tests/scripts/test-casdoor-jwt-no-preferred-username.sh
+        tests/scripts/test-catalog-internal-consistency.sh
         tests/scripts/test-control-endpoint-lan-first.sh
         tests/scripts/test-mesh-control-onion.sh
         tests/scripts/test-edge-ai-cuda-host-compiler.sh
