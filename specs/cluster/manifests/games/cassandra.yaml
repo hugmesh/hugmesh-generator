@@ -46,17 +46,12 @@ spec:
           level: "s0:c90"
       containers:
         - name: cassandra
-          image: cassandra:5.0.9@sha256:ee178b38a2746a8e15a115bd038ad1f864391d04a84162a018cb0dd79511709a
+          image: cassandra:5.0.9@sha256:5e996210152ab03e7e4af435ea853a6657954f1d6360ef1283f56cdbd8ad5020
           ports: [{ name: cql, containerPort: 9042 }]
           env:
             - { name: MAX_HEAP_SIZE, value: 512M }
             - { name: HEAP_NEWSIZE,  value: 128M }
             - { name: CASSANDRA_CLUSTER_NAME, value: games }
-            # Java4Shell (CVE-2026-114938): this image's JVM is Temurin 17.0.20, which is
-            # vulnerable, and no fixed cassandra image exists yet. Disabling the Base64
-            # intrinsic is the vendors' complete mitigation and is safe on every arch.
-            # Remove it once the digest above moves to an image on Java 17.0.21.1 or later.
-            - { name: JVM_EXTRA_OPTS, value: "-XX:-UseBASE64Intrinsics" }
           readinessProbe:
             exec: { command: ["cqlsh", "-e", "DESCRIBE KEYSPACES"] }
             initialDelaySeconds: 40

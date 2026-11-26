@@ -249,8 +249,8 @@ def add_user_kind(*, generator_dir: str, cluster: str, username: str, roles,
         return AddUserOutcome(
             False, STAGE_READBACK,
             "Casdoor's admin API reported the account created, but the cluster's "
-            f"identity store could NOT be read back ({found.reason or 'the cluster did '
-            'not answer'}), so this add is unproven. Nothing here will call it a "
+            f"identity store could NOT be read back ({found.reason or 'the cluster did not answer'}), "
+            "so this add is unproven. Nothing here will call it a "
             "success on the apply's own word.", password=generated)
     if username not in found.users:
         return AddUserOutcome(
