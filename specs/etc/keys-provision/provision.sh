@@ -4076,6 +4076,33 @@ provision_vpn() {
     log "egress-vpn: staged ${installed} config(s) for domain ${dom} (service NOT started — default-off optional service)"
 }
 
+# ── "Go live when ready" provider tokens (#1201) ───────────────────────────────────
+# A domain opted into "Go live when ready" at build time may need a provider secret (a
+# Cloudflare tunnel token, a DuckDNS / Cloudflare-DDNS API token). The Studio writes it
+# onto the KEYS stick of each role that can be the public edge, as
+# KEYS/go-live/<domain>.token — never into an image. This installs each one root-only
+# under /etc/hugmesh/go-live-tokens/ (0700 dir, 0600 files), where
+# hugmesh-go-live-at-ready hands it to `hugmesh-go-live plan --token-file`; the driver
+# then stores it where the provider reads it. No KEYS/go-live/ = nothing to do.
+provision_go_live_tokens() {
+    local src="${BASE}/go-live" dest=/etc/hugmesh/go-live-tokens f name dom n=0
+    [ -d "${src}" ] || return 0
+    mkdir -p "${dest}" && chmod 0700 "${dest}" 2>/dev/null || true
+    for f in "${src}/"*.token; do
+        [ -f "${f}" ] || continue
+        name="$(basename "${f}")"; dom="${name%.token}"
+        if ! [[ "${dom}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]; then
+            warn "go-live: ignoring KEYS/go-live/${name} (not <domain>.token)"; continue
+        fi
+        ( umask 077; cp -f "${f}" "${dest}/${name}" ) || { warn "go-live: could not install the token for ${dom}"; continue; }
+        chmod 0600 "${dest}/${name}"; chown root:root "${dest}/${name}" 2>/dev/null || true
+        n=$((n + 1))
+        log "go-live: installed the provider token for ${dom} (0600; value not logged)"
+    done
+    [ "${n}" -gt 0 ] || log "go-live: KEYS/go-live/ carries no <domain>.token — nothing installed"
+    return 0
+}
+
 # ── Domain-registry -> brand-repo bridge (#4): enable the signed-export reconcile ──
 # The bridge ingests the signed #118 cross-domain domain-registry export and emits a
 # per-domain CA + per-brand GitOps repo into a node-local staging dir. It is a
@@ -5434,6 +5461,7 @@ main() {
     provision_truststore
     provision_storage
     provision_vpn        # egress-VPN provider configs (own-domain-only, 0600; service default-off)
+    provision_go_live_tokens   # #1201: KEYS/go-live/<domain>.token -> /etc/hugmesh/go-live-tokens (0600)
     if ! ${STANDALONE_IMG}; then
         provision_desktop_governance   # client desktops: Discover->BFF registry remote, SSO-claim sudo gate (default-deny, empty store)
         provision_mesh_control   # OPT-IN Tor fallback for the control plane (no-op on lan)

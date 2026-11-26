@@ -53,6 +53,8 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # shellcheck source=scripts/_domain-idp-lib.sh
 source "${SCRIPT_DIR}/scripts/_domain-idp-lib.sh"
+# shellcheck source=scripts/_domain-golive-lib.sh
+source "${SCRIPT_DIR}/scripts/_domain-golive-lib.sh"
 # Greeter SSO login path (desktop_sso_bake / desktop_sso_verify): the same
 # /etc/pam.d/lightdm stack and helper every desktop image bakes. See
 # scripts/_desktop-sso-lib.sh and docs/DESKTOP-LOGIN-SSO.md.
@@ -1051,6 +1053,15 @@ OPTIONS
         must be a lowercase DNS name and cannot be --cluster-domain. See
         docs/DOMAIN-IDP.md.
 
+  Go live when ready (issue #1201)
+    --domain-go-live DOMAIN=PROVIDER
+        Repeatable. DOMAIN goes public on its own once the node has booted and
+        the mesh's pods are ready (on the public-edge node only), through the
+        go-live PROVIDER: cloudflare-tunnel | byo-domain | duckdns |
+        tailscale-funnel | router-portforward. Baked as /etc/hugmesh/domain-go-live
+        and acted on by hugmesh-go-live-at-ready. Provider API keys never go here:
+        they ride the KEYS stick. Node roles only. See docs/GO-LIVE-WHEN-READY.md.
+
   General
     --print-plan
         Resolve + validate all flags, print the build plan (PLAN_KEY=VALUE
@@ -1216,6 +1227,7 @@ while [[ $# -gt 0 ]]; do
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
         --domain-idp) domain_idp_add "${2:-}"; shift 2 ;;   # repeatable <domain>=own|superdomain (#509)
+        --domain-go-live) domain_golive_add "${2:-}"; shift 2 ;;   # repeatable <domain>=<provider> (#1201)
         --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand)              BRAND="$2";              shift 2 ;;
         --brand-title)        BRAND_TITLE="$2";        shift 2 ;;
@@ -1714,6 +1726,7 @@ _require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
 # --domain-idp (#509): vocabulary + DNS shape were checked as each flag was read; this is
 # the cross-check against --cluster-domain.
 domain_idp_check "${CLUSTER_DOMAIN}" ""
+domain_golive_check "${ROLE}" "${ROLE_CLIENT}"   # #1201: node images only
 _require_match "--games-domain"  "${GAMES_DOMAIN}"   "${_RE_DNS}"
 _require_match "--hostname"      "${HOSTNAME}"       "${_RE_DNS}"
 _require_match "--user"          "${DEFAULT_USER}"   "${_RE_USER}"
@@ -2563,6 +2576,13 @@ bake_host_firewall() {
     cp "${SHARED_SPECS}/etc/init.d/hugmesh-go-live-reconcile"   "${SYSROOT}/etc/init.d/hugmesh-go-live-reconcile"
     chmod +x "${SYSROOT}/etc/init.d/hugmesh-go-live-reconcile"
     cp "${SHARED_SPECS}/etc/cron.d/hugmesh-go-live-reconcile"   "${SYSROOT}/etc/cron.d/hugmesh-go-live-reconcile"
+    # "Go live when ready" (#1201): inert without /etc/hugmesh/domain-go-live; acts only
+    # on the public-edge node (hugmesh.net/backend=true), once per opted-in domain.
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-go-live-at-ready"     "${SYSROOT}/usr/sbin/hugmesh-go-live-at-ready"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-go-live-at-ready"
+    cp "${SHARED_SPECS}/etc/init.d/hugmesh-go-live-at-ready"   "${SYSROOT}/etc/init.d/hugmesh-go-live-at-ready"
+    chmod +x "${SYSROOT}/etc/init.d/hugmesh-go-live-at-ready"
+    cp "${SHARED_SPECS}/etc/cron.d/hugmesh-go-live-at-ready"   "${SYSROOT}/etc/cron.d/hugmesh-go-live-at-ready"
     info "RELEASE_STATE=${RELEASE_STATE:-internal}: baked the host nftables backstop (hugmesh-firewall-reconcile renders + loads the live ruleset at boot + every 60s) + the go-live wizard (driver/registry/CLI/ncurses front-ends) + the web-UI go-live effector (hugmesh-go-live-reconcile)"
 }
 
@@ -2961,6 +2981,7 @@ if ${PRINT_PLAN}; then
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     domain_idp_plan_line   # PLAN_DOMAIN_IDP=<own domains>; prints nothing when none (#509)
+    domain_golive_plan_line   # PLAN_DOMAIN_GO_LIVE=<domain>:<provider>,...; nothing when none (#1201)
     _plan HOSTNAME           "${HOSTNAME}"
     _plan K8S                "$(${ROLE_CLIENT} && echo none || node_role_k8s_topology "${ROLE}")"
     # Additive keys, printed only when --ram-gb was given (every pre-existing plan
@@ -4134,6 +4155,8 @@ if [ -n "${SUPERDOMAIN}" ]; then
 fi
 # Per-domain IdP choice (#509): /etc/hugmesh/domain-idp, own domains only; absent otherwise.
 domain_idp_bake "${SYSROOT}/etc/hugmesh"
+# Go live when ready (#1201): /etc/hugmesh/domain-go-live; absent without --domain-go-live.
+domain_golive_bake "${SYSROOT}/etc/hugmesh"
 # Runtime ENV marker (test|prod). Read by bootstrap/provision; also documents
 # the image's posture. test => LAN wildcard DNS authoritative; prod => public.
 echo "${ENV}"            > "${SYSROOT}/etc/hugmesh/env"
@@ -4251,7 +4274,7 @@ if ! ${ROLE_CLIENT}; then
     # roles (bake_host_firewall() is called from inside the `! ROLE_CLIENT &&
     # -d cluster` block above) — enabling the service here too, never on the
     # desktop branch below, mirrors build-x86-host-stage4.sh's own SVCS split.
-    DEFAULT_SVCS+=(hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet)
+    DEFAULT_SVCS+=(hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile hugmesh-go-live-at-ready containerd kubelet)
 else
     # Desktop session bring-up: dbus + elogind (seat/login manager) + the
     # display-manager OpenRC service (provided by gui-libs/display-manager-init,
