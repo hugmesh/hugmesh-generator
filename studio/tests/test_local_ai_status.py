@@ -328,13 +328,6 @@ def test_active_studio_build_sessions_come_from_the_session_records(fake, env, t
     bs.save(done)
     snap = lai.read_snapshot(env)
     assert [j.id for j in snap.of_kind("build")] == [s.id]
-    # the row's time is the session row model's (started, else created, else "?")
-    assert snap.of_kind("build")[0].detail == "started ?"
-    s.created = "2026-01-02T03:04:05+00:00"
-    bs.save(s)
-    snap = lai.read_snapshot(env)
-    assert snap.of_kind("build")[0].detail == f"started {bs.session_when(s)}"
-    assert bs.session_when(s) == "2026-01-02T03:04:05+00:00"
 
 
 def test_ollama_down_names_the_fix_and_the_doc(env, monkeypatch, tmp_path):

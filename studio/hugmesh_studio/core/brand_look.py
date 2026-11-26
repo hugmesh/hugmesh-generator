@@ -113,32 +113,6 @@ CFG_FIELDS: dict[str, str] = {
     "color_scheme": "color_scheme",
 }
 
-#: The seventeen look fields a mesh's WEB login page is derived from: ImageConfig's
-#: ``login_*`` inputs (config.NON_ARGV_FIELDS), in the order the look screens show them.
-#: A saved-mesh record keeps exactly these (the stylesheet derived from them is not
-#: invertible, so the inputs are what a Load/Restore puts back). It is not the desktop
-#: fields (theme, wallpaper, login_screen_background ... ride argv), and not style,
-#: decoration or the two pictures, which only the brand record carries. Listing fewer
-#: than all seventeen silently threw away the rest on every Load/Restore: the header
-#: and footer inputs and the background effect came back as the shipped page, a
-#: different login page was derived, and the load still reported "every field applied".
-LOGIN_THEME_FIELDS: tuple[str, ...] = (
-    "preset", "mode", "primary", "secondary",
-    "font", "font_file", "font_licence", "font_source",
-    "header_hidden", "header_size", "header_bg", "header_text",
-    "footer_hidden", "footer_size", "footer_bg", "footer_text",
-    "bg_effect",
-)
-
-#: look field -> ImageConfig attribute, for LOGIN_THEME_FIELDS only.
-LOGIN_THEME_ATTRS: dict[str, str] = {f: CFG_FIELDS[f] for f in LOGIN_THEME_FIELDS}
-
-#: What a record's theme form holds when it carries no theme inputs: the shipped look,
-#: keyed by ImageConfig attribute (so it equals the dataclass defaults, which
-#: tests/test_login_theme_keys.py holds it to).
-LOGIN_THEME_FORM_DEFAULTS: dict[str, Any] = {
-    CFG_FIELDS[f]: LOOK_DEFAULTS[f] for f in LOGIN_THEME_FIELDS}
-
 #: A logo is an affiliation: an unaffiliated build refuses it (the identity-versus-look
 #: rule of 2026-08-26); every other field is LOOK and stays allowed. Hosts hide these
 #: with the reason shown inline.

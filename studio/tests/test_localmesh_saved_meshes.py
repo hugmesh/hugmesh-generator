@@ -21,7 +21,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from hugmesh_studio.core import brand_look                          # noqa: E402
 from hugmesh_studio.core import local_mesh_bootstrap as lmb          # noqa: E402
 from hugmesh_studio.core import platform_info                        # noqa: E402
 from hugmesh_studio.core import saved_meshes as sm                   # noqa: E402
@@ -258,7 +257,7 @@ def test_an_older_record_form_without_look_still_loads_its_login_inputs(qapp, pa
     g.set("footer_bg", "#101010")
     css = page.look_css_and_error()[0]
     old_form = {k: v for k, v in page.theme_form().items() if k != "look"}
-    assert set(old_form) == set(brand_look.LOGIN_THEME_FORM_DEFAULTS)
+    assert set(old_form) == set(localmesh_mod._THEME_FORM_DEFAULTS)
     g.set("primary", "")
     g.set("footer_bg", "")
     missing = page.apply_bootstrap(lmb.LocalMeshBootstrapConfig(login_theme_css=css),

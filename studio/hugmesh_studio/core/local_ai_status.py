@@ -479,7 +479,7 @@ def _studio_builds() -> list:
         from . import build_sessions
         sessions = build_sessions.load_all()
         return [Job("build", s.id, s.label or s.id, "running",
-                    f"started {build_sessions.session_when(s) or '?'}", s.workdir,
+                    f"started {s.started or s.created or '?'}", s.workdir,
                     updated=0.0)
                 for s in sessions if build_sessions.is_active(s)][:10]
     except Exception:                                        # an unreadable record is not news

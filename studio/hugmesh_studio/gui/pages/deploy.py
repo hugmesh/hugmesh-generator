@@ -44,7 +44,6 @@ import types
 from ..qt import QtCore, QtGui, QtWidgets
 from .. import console
 from ...core.cloud_deploy import CloudDeploy, CloudDeployOptions
-from ...core.config import IDP_CHOICES, IDP_ISSUER_HINTS, IDP_LABELS
 from ...core.progress_parse import ProgressParser, track_phases
 from ._scroll import scrollable
 from ._widgets import _row, label_finish_as_exit
@@ -169,8 +168,10 @@ class DeployPage(QtWidgets.QWizardPage):
         # built-in IdP is the default and adds nothing; an external choice makes
         # the plan emit idp/idp.conf beside the provider artifacts.
         self.idp = QtWidgets.QComboBox()
-        for _idp in IDP_CHOICES:                  # the built-in one posts "" (adds nothing)
-            self.idp.addItem(IDP_LABELS[_idp], "" if _idp == "casdoor" else _idp)
+        self.idp.addItem("Casdoor (built-in — default)", "")
+        self.idp.addItem("Azure Entra ID", "entra")
+        self.idp.addItem("AWS Cognito", "aws")
+        self.idp.addItem("Other OIDC provider", "oidc")
         self.idp.setToolTip(
             "Identity provider recorded in the plan's idp/idp.conf. The built-in "
             "default emits nothing; deploys of an image BUILT with external IdP "
@@ -180,8 +181,8 @@ class DeployPage(QtWidgets.QWizardPage):
 
         self.idp_issuer = QtWidgets.QLineEdit()
         self.idp_issuer.setPlaceholderText(
-            f"issuer URL — Entra: {IDP_ISSUER_HINTS['entra']} · "
-            f"Cognito: {IDP_ISSUER_HINTS['aws']}")
+            "issuer URL — Entra: https://login.microsoftonline.com/<tenant>/v2.0 · "
+            "Cognito: https://cognito-idp.<region>.amazonaws.com/<pool-id>")
         lay.addWidget(_row("IdP issuer", self.idp_issuer))
         self.idp_client_id = QtWidgets.QLineEdit()
         self.idp_client_id.setPlaceholderText("optional client id registered at the IdP")

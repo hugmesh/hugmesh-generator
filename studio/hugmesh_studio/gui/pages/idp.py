@@ -25,8 +25,7 @@ from __future__ import annotations
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..qt import QtWidgets
 from ..styles import muted
-from ...core.config import (IDP_CHOICES, IDP_CLIENT_HINTS, IDP_ISSUER_HINTS, IDP_JWKS_HINTS,
-                            IDP_LABELS, idp_effective_jwks)
+from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from . import idp_provider
 from ._scroll import scrollable
 from ._widgets import _row, page_intro
@@ -37,6 +36,23 @@ _IDP_ICONS = {
     "entra": "idp-entra",       # our wedge gesture, labelled ENTRA
     "aws": "idp-aws",           # our arc gesture, labelled AWS
     "oidc": "idp-oidc",         # globe, labelled OIDC
+}
+
+# Per-provider line-edit hints (the recon's real endpoint shapes).
+_ISSUER_HINTS = {
+    "entra": "https://login.microsoftonline.com/<tenant-id>/v2.0",
+    "aws": "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>",
+    "oidc": "https://id.example.org (the token `iss` value, exactly)",
+}
+_CLIENT_HINTS = {
+    "entra": "the app registration's Application (client) ID",
+    "aws": "the Cognito app client id",
+    "oidc": "the OIDC client id registered for this mesh",
+}
+_JWKS_HINTS = {
+    "entra": "empty = <issuer>/discovery/v2.0/keys",
+    "aws": "empty = <issuer>/.well-known/jwks.json",
+    "oidc": "empty = <issuer>/.well-known/jwks (override if your provider differs)",
 }
 
 _LIMITS_NOTE = (
@@ -177,9 +193,9 @@ class IdpPage(QtWidgets.QWizardPage):
         idp = self.selected_idp()
         # enabled IFF external (casdoor needs — and permits — nothing here)
         self.ext_box.setEnabled(ext)
-        self.issuer.setPlaceholderText(IDP_ISSUER_HINTS.get(idp, ""))
-        self.client_id.setPlaceholderText(IDP_CLIENT_HINTS.get(idp, ""))
-        self.jwks.setPlaceholderText(IDP_JWKS_HINTS.get(idp, ""))
+        self.issuer.setPlaceholderText(_ISSUER_HINTS.get(idp, ""))
+        self.client_id.setPlaceholderText(_CLIENT_HINTS.get(idp, ""))
+        self.jwks.setPlaceholderText(_JWKS_HINTS.get(idp, ""))
         if ext and not self.jwks.text().strip():
             derived = idp_effective_jwks(idp, self.issuer.text().strip(), "")
             self.jwks_preview.setText(

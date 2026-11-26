@@ -226,7 +226,7 @@ def test_mutation_rewiring_abort_to_the_window_breaks_survival(qapp, monkeypatch
 # Moving the abort off the window close took `_finalize_session(status="stopped")` with
 # it: cancel_all() stopped the builder but wrote nothing, so a Studio quit mid-build
 # left the session record at "running" with a dead pid — which the build list renders
-# as "running (process gone ...)" forever instead of the truth, "stopped".
+# as "running (stale?)" forever instead of the truth, "stopped".
 def test_a_real_quit_records_the_build_as_stopped(qapp, monkeypatch, tmp_path):
     from hugmesh_studio.core import build_sessions as bs
     wiz, page, driver = _dispatched_page(qapp, monkeypatch, session=True,

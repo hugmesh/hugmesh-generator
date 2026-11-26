@@ -1862,7 +1862,7 @@ class ProgressPage(QtWidgets.QWizardPage):
             # record must say "stopped". Without this hook the old close-abort's
             # _finalize_session was simply lost when the abort moved off the window
             # close, and a quit-interrupted build stayed "running" with a dead pid —
-            # rendered as "running (process gone ...)" in the build list forever.
+            # rendered as "running (stale?)" in the build list forever.
             on_cancelled=lambda: self._finalize_session(status="stopped"))
         # a builder is really launching now, so the per-image log files are real (or are
         # about to be — `tail -F` handles the not-yet-created case): show the paths.

@@ -21,7 +21,7 @@ die because a record could not be written, mirroring ``tray.write_build_status``
 
 Crash honesty: a SIGKILL'd/crashed Studio simply leaves the last-written record —
 status ``running`` with whatever per-image outcomes were true. :func:`load_all`
-never rewrites records; :func:`is_stale` lets a UI RENDER :data:`STALE_STATUS`
+never rewrites records; :func:`is_stale` lets a UI RENDER "running (process gone)"
 without ever mutating the record into a fake terminal state. Corrupt JSON files are
 skipped (surfaced via :func:`scan` as unreadable paths), never a crash.
 
@@ -805,53 +805,8 @@ def matches(haystack: str, query: str) -> bool:
     return all(tok in haystack for tok in query.lower().split())
 
 
-# ── shared presentation (consumed by the headless CLI flags, the TUI AND the GUI's
-#    Previous builds table — keep every formatting/listing decision HERE, never in a
-#    front-end layer) ──────────────────────────────────────────────────────────────────
-#: What a "running" record whose Studio process is gone reads as, on every face (the
-#: Previous builds table, the text UI's list, ``--list-sessions``). A RENDER hint only:
-#: :func:`is_stale` never changes the record. The three faces used to word it three
-#: ways ("running (stale?)", "running (process gone)" and this).
-STALE_STATUS = "running (process gone — likely interrupted)"
-
-
-def display_status(s: BuildSession, *, stale: bool | None = None) -> str:
-    """The crash-honest status a UI renders: the record's own status, except that a
-    ``running`` record whose process is gone reads :data:`STALE_STATUS`. ``stale`` is
-    for a caller that already asked :func:`is_stale` and must not ask again (a row
-    that cached it); omitted, it is asked here."""
-    return STALE_STATUS if (is_stale(s) if stale is None else stale) else s.status
-
-
-def session_when(s: BuildSession) -> str:
-    """The time a session row shows: when it started, else when it was created
-    (``""`` when the record has neither)."""
-    return s.started or s.created or ""
-
-
-def image_counts(s: BuildSession) -> tuple[int, int, int]:
-    """``(ok, failed, total)`` over the session's per-image outcome rows."""
-    imgs = s.images
-    return (sum(1 for im in imgs if im.get("status") == "ok"),
-            sum(1 for im in imgs if im.get("status") == "failed"),
-            len(imgs))
-
-
-def status_summary(s: BuildSession, *, stale: bool | None = None) -> str:
-    """The Status cell's words: :func:`display_status`, and for a failed session how
-    many of its images failed (``failed · 1 of 3 images``)."""
-    if s.status == "failed":
-        _ok, failed, total = image_counts(s)
-        return f"failed · {failed} of {total} images" if total else "failed"
-    return display_status(s, stale=stale)
-
-
-def images_summary(s: BuildSession) -> str:
-    """The Images cell: ``3/5 ok``."""
-    ok, _failed, total = image_counts(s)
-    return f"{ok}/{total} ok"
-
-
+# ── shared presentation (consumed by the headless CLI flags AND the TUI — keep
+#    every formatting/listing decision HERE, never in a front-end layer) ─────────────────
 def find(session_id: str) -> "BuildSession | None":
     """Load one record by id (the ``<id>.json`` under :func:`sessions_dir`);
     None when it does not exist or does not parse."""
@@ -911,11 +866,11 @@ def format_session_line(s: BuildSession) -> str:
     platform; now that one spelling is shared, ``be/x86`` and ``backend/rpi5`` are
     both ``backend`` and a role-only summary silently shows fewer entries than the
     session has images."""
-    date = session_when(s) or "-"
+    date = s.started or s.created or "-"
     roles = ",".join(dict.fromkeys(
         f"{str(img.get('role', '')) or '?'}.{str(img.get('platform', '')) or '?'}"
         for img in s.images)) or "-"
-    status = display_status(s)
+    status = s.status + (" (process gone)" if is_stale(s) else "")
     n = len(artifact_paths(s))
     return f"{s.id}  {date}  {roles}  {status}  {n} artifact(s)"
 

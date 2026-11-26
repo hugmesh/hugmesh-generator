@@ -28,7 +28,6 @@ from hugmesh_studio.core import worklist_driver as wd              # noqa: E402
 from hugmesh_studio.core.worklist import (                        # noqa: E402
     WorklistConfig, WorklistEntry, synthesize)
 from hugmesh_studio.gui import wizard as wizard_mod                # noqa: E402
-from hugmesh_studio.gui.pages import sessions_widget              # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                        # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -326,64 +325,7 @@ def test_stale_running_record_renders_as_stale_not_complete(qapp, wiz, tmp_path)
     wiz.cfg.output_dir = str(tmp_path / "no-out")
     w = _sessions_page(wiz).previous_builds
     w.refresh()
-    # the words are core's (the text UI and --list-sessions print the same ones)
-    assert w.table.item(0, 2).text() == f"● {bs.STALE_STATUS}"
-
-
-def _show_sessions_page(wiz):
-    """The wizard at its default size, on the Sessions page, laid out."""
-    wiz.show()
-    wiz.restart()
-    wiz.setCurrentId(wiz._page_ids["sessions"])
-    for _ in range(20):
-        QtWidgets.QApplication.processEvents()
-    return _sessions_page(wiz).previous_builds
-
-
-def _seed_failed_and_stale(tmp_path):
-    import subprocess, sys
-    failed = bs.new_session(synthesize(_standalone_cfg(tmp_path, "standalone-thin")),
-                            GENERATOR_DIR)
-    bs.start(failed)
-    bs.update_image(failed, 0, status="failed", exit_code=1)
-    bs.finish(failed, "failed")
-    stale = bs.new_session(synthesize(_standalone_cfg(tmp_path)), GENERATOR_DIR)
-    bs.start(stale)
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    stale.pid = proc.pid
-    bs.save(stale)
-    return failed, stale
-
-
-def test_the_stale_status_wraps_inside_the_table_instead_of_pushing_columns_out(
-        qapp, wiz, tmp_path):
-    """The stale phrase is long. Sized to its text it widened Status past the table, so
-    Images and Location sat out of view at the wizard's default width. It now wraps
-    inside the width the other statuses need, on a row tall enough to show all of it."""
-    _seed_failed_and_stale(tmp_path)
-    wiz.cfg.output_dir = str(tmp_path / "no-out")
-    w = _show_sessions_page(wiz)
-    w.refresh()
-    t = w.table
-    stale_row = next(i for i, r in enumerate(w._row_data) if r.stale)
-    text = t.item(stale_row, sessions_widget.STATUS_COLUMN).text()
-    assert text == f"● {bs.STALE_STATUS}"                 # the whole phrase, not a stub
-    # it wraps: the column is narrower than the phrase on one line ...
-    assert t.columnWidth(sessions_widget.STATUS_COLUMN) < t.fontMetrics().horizontalAdvance(text)
-    # ... and the row is tall enough for every wrapped line (Qt's own measure)
-    probe = QtWidgets.QLabel(text)
-    probe.setWordWrap(True)
-    room = t.columnWidth(sessions_widget.STATUS_COLUMN) - 8
-    assert t.rowHeight(stale_row) >= probe.heightForWidth(room)
-    # a failed row's "failed · 1 of 1 images" stays on one line (the column fits it)
-    failed_row = next(i for i, r in enumerate(w._row_data) if r.status == "failed")
-    failed_text = t.item(failed_row, sessions_widget.STATUS_COLUMN).text()
-    assert t.columnWidth(sessions_widget.STATUS_COLUMN) >= t.fontMetrics().horizontalAdvance(failed_text)
-    # at the default size every column up to Images is inside the table's viewport
-    images = 4
-    assert t.columnViewportPosition(images) + t.columnWidth(images) <= t.viewport().width()
-    w.hide()
+    assert w.table.item(0, 2).text() == "● running (stale?)"
 
 
 def test_unreadable_record_surfaced_as_row(qapp, wiz, tmp_path):
