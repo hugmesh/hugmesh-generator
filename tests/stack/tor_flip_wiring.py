@@ -144,7 +144,8 @@ def container_ports(svc: dict) -> list[tuple[str, str, str]]:
     out = []
     for spec in (svc or {}).get("ports") or []:
         text = str(spec).strip().strip('"')
-        m = re.match(r"^(?:(\d+\.\d+\.\d+\.\d+):)?(\$\{[^}]+\}|\d+):(\d+)$", text)
+        # the host IP is a literal or a ${VAR:-default} (the front door spells ${PUBLIC_BIND_ADDR:-0.0.0.0})
+        m = re.match(r"^(?:(\d+\.\d+\.\d+\.\d+|\$\{[^}]+\}):)?(\$\{[^}]+\}|\d+):(\d+)$", text)
         if m:
             out.append((m.group(1) or "", m.group(2), m.group(3)))
         else:

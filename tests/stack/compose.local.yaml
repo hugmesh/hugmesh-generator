@@ -698,7 +698,7 @@ services:
     volumes:
       - ./gateway-routes/fe:/config:ro
     ports:
-      - "${PUBLIC_HOST_PORT:-8088}:8080"
+      - "${PUBLIC_BIND_ADDR:-0.0.0.0}:${PUBLIC_HOST_PORT:-8088}:8080"
     depends_on:
       casdoor: { condition: service_started }
       cassandra: { condition: service_healthy }
@@ -736,7 +736,7 @@ services:
       - ./tls-front/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./.tls-front:/etc/hugmesh-tls:ro
     ports:
-      - "${PUBLIC_HTTPS_PORT:-8488}:8443"
+      - "${PUBLIC_BIND_ADDR:-0.0.0.0}:${PUBLIC_HTTPS_PORT:-8488}:8443"
     depends_on:
       hugmesh-fe-gateway: { condition: service_started }
     healthcheck:
@@ -1953,7 +1953,7 @@ services:
       # The PoW-gated door; 8923 is free on this stack and matches the cluster
       # gate port. The :9090 metrics/health listener stays UNPUBLISHED (the
       # cluster keeps it internal too — admin-bff-only).
-      - "${ANUBIS_HOST_PORT:-8923}:8923"
+      - "${PUBLIC_BIND_ADDR:-0.0.0.0}:${ANUBIS_HOST_PORT:-8923}:8923"
     depends_on:
       hugmesh-fe-gateway:
         condition: service_started

@@ -180,7 +180,7 @@ PY
 control N8-mgmt-published C7-mgmt-unpublished <<'PY'
 import sys
 p = sys.argv[1] + "/tests/stack/compose.local.yaml"; s = open(p).read()
-old = '      - "${ANUBIS_HOST_PORT:-8923}:8923"\n'
+old = '      - "${PUBLIC_BIND_ADDR:-0.0.0.0}:${ANUBIS_HOST_PORT:-8923}:8923"\n'
 assert s.count(old) == 1, "N8 anchor not unique: %d" % s.count(old)
 open(p, "w").write(s.replace(old, old + '      - "9090:9090"\n'))
 PY

@@ -12,7 +12,8 @@ short-syntax publish with no host IP binds 0.0.0.0 (and [::]).
 RULES
   1. DEFAULT DENY. Every published port names a host IP: "HOST_IP:HOST:CONTAINER".
      The only exceptions are the platform's own front doors in DOORS below, each with
-     its reason; a DOORS entry that no longer publishes a bare port fails as stale, so
+     its reason (bare, or through ${PUBLIC_BIND_ADDR:-0.0.0.0}); a DOORS entry that no longer
+     publishes one of those fails as stale, so
      the list cannot rot into a blanket exemption.
   2. The host IP is loopback BY DEFAULT: a literal 127.x.x.x / [::1], or
      ${VAR:-<loopback>} (an explicit opt-in such as STACK_BIND_ADDR=0.0.0.0 is the
@@ -40,6 +41,9 @@ DOORS = {
     ("compose.local.yaml", "hugmesh-anubis"):
         "the proof-of-work gate in front of the same front door (ANUBIS=1)",
 }
+
+# The one host-IP spelling a DOORS service may use instead of a bare port (see scan_file).
+DOOR_BIND = "${PUBLIC_BIND_ADDR:-0.0.0.0}"
 
 # Images and service names that are an identity provider or a homeserver/fediverse
 # server: an admin API behind them is a takeover of the mesh, so never a DOORS entry.
@@ -243,6 +247,12 @@ def scan_file(path, label):
             findings.append(f"{label}:{n}: {s}: {why}port {entry!r} names no host IP "
                             "(compose binds every interface); write "
                             "\"${STACK_BIND_ADDR:-127.0.0.1}:HOST:CONTAINER\"")
+            continue
+        # A front door may spell its bind through the one door knob, PUBLIC_BIND_ADDR (default: every
+        # interface, as a door has always been; =127.0.0.1 keeps it for a tunnel/onion-only stack).
+        # Only DOORS services, only this exact spelling, and never an identity provider.
+        if door in DOORS and not is_idp and parts[0] == DOOR_BIND:
+            door_hits.append(door)
             continue
         why = judge_host_ip(parts[0])
         if why:
