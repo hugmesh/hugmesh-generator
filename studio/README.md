@@ -253,17 +253,11 @@ They need no mesh and start nothing.
 ## Run
 
 ```sh
-# Linux, from the root of a checkout (Gentoo can build natively; others need Docker).
-# The launcher is plain sh and works from a double-click: it finds a Python 3.10+ with
-# PySide6 or PyQt6 (HUGMESH_STUDIO_PYTHON, studio/.venv-studio, studio/.venv, the per-user
-# venv, then the system pythons). If none has a Qt binding it ASKS (terminal prompt, or a
-# zenity/kdialog box) before building ~/.local/share/hugmesh-studio/venv with PySide6;
-# no root, nothing installed unasked. HUGMESH_STUDIO_AUTO=1 accepts the offer.
+# Linux, from the root of a checkout (Gentoo can build natively; others need Docker)
 cd studio
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt        # PySide6 (or use an existing PyQt6)
 ./hugmesh-studio
-./hugmesh-studio --detect              # report what it found, change nothing
-./hugmesh-studio --install-launcher    # add an application-menu entry (GNOME, KDE, ...)
-# (the Flatpak installs its own menu entry, icons and AppStream data already)
 
 # Windows — the .bat is a guided bootstrapper: just double-click (or run) it
 hugmesh-studio.bat
