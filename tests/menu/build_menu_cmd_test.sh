@@ -1303,7 +1303,7 @@ if command -v setsid >/dev/null 2>&1; then
         *'No such device or address'*) _bad "no-tty: a raw bash I/O error leaked instead of our own message: ${_notty_out}" ;;
         *) _ok ;;
     esac
-    assert_grep_str() { printf '%s\n' "$2" | grep -Eq -- "$3" && _ok || _bad "$1: missing /$3/ in: $2"; }
+    assert_grep_str() { printf '%s\n' "$2" | grep -E -- "$3" >/dev/null && _ok || _bad "$1: missing /$3/ in: $2"; }
     assert_grep_str "no-tty: a clear message explains the exit" "${_notty_out}" 'no interactive terminal'
 else
     printf 'SKIP no-tty clean-exit check: setsid not available\n' >&2
