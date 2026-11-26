@@ -210,5 +210,61 @@ else
     printf 'SKIP confirm decline/accept: a controlling /dev/tty is present\n' >&2
 fi
 
+
+# ── 8. NO_COLOR (https://no-color.org) ───────────────────────────────────────────
+# Needs a REAL pty: `-t 2` is false under this harness's own redirected stderr, so
+# every case would look alike without one. Same technique as tests/go-live/test-
+# onion-refuse.sh's CLI leg.
+if python3 -c 'import pty' 2>/dev/null; then
+    _pty_source_color() {
+        # $1: extra env assignments (e.g. "NO_COLOR=1"); prints C_RED as seen right
+        # after sourcing studio-launch.sh on a real pty.
+        python3 - "$1" "${LAUNCH}" <<'EOPTY'
+import os, pty, sys, time
+env_extra, launch_sh = sys.argv[1], sys.argv[2]
+pid, fd = pty.fork()
+if pid == 0:
+    # stdout only, NEVER stderr: studio-launch.sh reads `-t 2` to decide on colour,
+    # so redirecting fd 2 away from the pty here would make every case look alike.
+    os.execvp("bash", ["bash", "-c",
+        f'{env_extra} source "{launch_sh}" >/dev/null; printf "COLOR=[%s]" "$C_RED"'])
+out = b""
+deadline = time.time() + 5
+while time.time() < deadline:
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+    if b"COLOR=[" in out and out.rstrip().endswith(b"]"):
+        break
+try:
+    os.waitpid(pid, 0)
+except ChildProcessError:
+    pass
+sys.stdout.write(out.decode(errors="replace"))
+EOPTY
+    }
+    _plain="$(_pty_source_color "")"
+    _nocolor_set="$(_pty_source_color "NO_COLOR=1")"
+    _nocolor_empty="$(_pty_source_color "NO_COLOR=")"
+    case "${_plain}" in
+        *'COLOR=['$'\033''[31m]') _ok ;;
+        *) _bad "NO_COLOR: on a real tty with NO_COLOR unset, C_RED must be the escape (got: ${_plain})" ;;
+    esac
+    case "${_nocolor_set}" in
+        *'COLOR=[]') _ok ;;
+        *) _bad "NO_COLOR=1 must blank C_RED even on a real tty (got: ${_nocolor_set})" ;;
+    esac
+    case "${_nocolor_empty}" in
+        *'COLOR=[]') _ok ;;
+        *) _bad "NO_COLOR= (set but empty) must still blank C_RED (got: ${_nocolor_empty})" ;;
+    esac
+else
+    printf 'SKIP NO_COLOR checks: python3 lacks the pty module\n' >&2
+fi
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

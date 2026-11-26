@@ -47,7 +47,9 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 . "${SCRIPT_DIR}/_first-run-lib.sh"
 
 # ── Colours (only when stderr is a TTY, matching scripts/_download-lib.sh) ──────
-if [ -t 2 ]; then
+# NO_COLOR (https://no-color.org): any value, even empty, turns colour off — checked
+# with `+x` so a set-but-empty NO_COLOR= still counts (a plain `-n` would not).
+if [ -t 2 ] && [ -z "${NO_COLOR+x}" ]; then
     C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_CYN=$'\033[36m'
     C_BLD=$'\033[1m';  C_DIM=$'\033[2m';  C_RST=$'\033[0m'
 else
@@ -319,6 +321,13 @@ if [ -z "${NO_TUI:-}" ] && [ -t 0 ] && [ -t 1 ] \
 fi
 WT_TITLE="HugMesh Image Builder"
 
+# have_ctty — true if /dev/tty is actually openable for reading right now. A non-tty
+# stdin (piped, redirected, cron/CI) still has a controlling terminal reachable via
+# /dev/tty; a truly detached session (setsid, no controlling terminal at all) does
+# not, and opening it there is what prints bash's own "No such device or address" —
+# callers check this FIRST so they can fail with their own clear message instead.
+have_ctty() { : < /dev/tty; } 2>/dev/null
+
 # _u STRING… — return STRING with the handful of non-ASCII glyphs the menu labels
 # use (em/en dash, ellipsis, guillemets, arrows, star, box-art, bullets) folded to
 # ASCII WHEN the locale/terminal is not UTF-8 (UTF8=0). In a UTF-8 locale the string
@@ -369,11 +378,17 @@ ui_menu() {
     printf '%b\n' "${prompt}" >&2
     for i in "${!items[@]}"; do printf '  %2d) %s\n' "$((i+1))" "${items[$i]}" >&2; done
     printf '   q) back / cancel\n' >&2
+    # No controlling terminal at all (detached/setsid, or a bare headless run): the
+    # read below can never succeed, and `</dev/tty` on its own would fail the open()
+    # and print bash's own "No such device or address" instead of ours. Say so
+    # plainly and treat it as cancel (the 2>/dev/null on the read is a belt-and-
+    # braces fallback in case the terminal goes away mid-read instead of up front).
+    have_ctty || { warn "no interactive terminal (/dev/tty) available — treating as cancel"; return 1; }
     # Loop on INVALID input (a typo must not be mistaken for Cancel, which would
     # quit the program from the main menu); only 'q' / empty returns the cancel rc.
     local choice
     while true; do
-        read -r -p "choice: " choice </dev/tty || return 1
+        read -r -p "choice: " choice </dev/tty 2>/dev/null || return 1
         { [ "${choice}" = q ] || [ -z "${choice}" ]; } && return 1
         if [[ "${choice}" =~ ^[0-9]+$ ]] && [ "${choice}" -ge 1 ] && [ "${choice}" -le "${#tags[@]}" ]; then
             printf '%s' "${tags[$((choice-1))]}"; return 0
@@ -427,7 +442,7 @@ ui_checklist() {
             printf '  %2d) [%s] %s\n' "$((i+1))" "$([ "${states[$i]}" = on ] && echo x || echo ' ')" "${items[$i]}" >&2
         done
         printf '   d) done (keep this selection)   q) cancel\n' >&2
-        read -r -p "toggle: " choice </dev/tty || return 1
+        read -r -p "toggle: " choice </dev/tty 2>/dev/null || return 1
         [ "${choice}" = q ] && return 1
         if [ "${choice}" = d ] || [ -z "${choice}" ]; then
             local out=""
@@ -452,7 +467,7 @@ ui_yesno() {
         return $?
     fi
     printf '\n%b\n' "${text}" >&2          # %b so embedded \n render as line breaks
-    local a; read -r -p "[y/N]: " a </dev/tty || return 1
+    local a; read -r -p "[y/N]: " a </dev/tty 2>/dev/null || return 1
     [[ "${a}" =~ ^[Yy] ]]
 }
 
@@ -465,7 +480,7 @@ ui_input() {
             || { printf '%s' "${def}"; return 0; }
         printf '%s' "${val}"; return 0
     fi
-    read -r -e -i "${def}" -p "${text}: " val </dev/tty || val="${def}"
+    read -r -e -i "${def}" -p "${text}: " val </dev/tty 2>/dev/null || val="${def}"
     printf '%s' "${val:-${def}}"
 }
 
@@ -482,7 +497,7 @@ ui_password() {
             || { printf '%s' "${def}"; return 0; }
         printf '%s' "${val}"; return 0
     fi
-    read -r -s -p "${text}: " val </dev/tty || val="${def}"
+    read -r -s -p "${text}: " val </dev/tty 2>/dev/null || val="${def}"
     printf '\n' >&2
     printf '%s' "${val:-${def}}"
 }
@@ -551,7 +566,7 @@ ui_msg() {
     else
         printf '\n%s== %s ==%s\n' "${C_BLD}" "${title}" "${C_RST}" >&2
         printf '%b\n' "${text}" >&2          # %b so embedded \n render as line breaks
-        read -r -p "press Enter…" _ </dev/tty || true
+        read -r -p "press Enter…" _ </dev/tty 2>/dev/null || true
     fi
 }
 
@@ -1607,7 +1622,7 @@ monitor_build() {
     # (cron/CI/piped/redirected), `read … </dev/tty` returns instantly instead of
     # honouring -t, which would spin the loop at 100% CPU and spam errors. In that
     # case just print one snapshot and return.
-    if [ ! -t 1 ] || ! { : < /dev/tty; } 2>/dev/null; then
+    if [ ! -t 1 ] || ! have_ctty; then
         draw_monitor "${log}"
         return 0
     fi
@@ -1616,11 +1631,11 @@ monitor_build() {
         draw_monitor "${log}"
         if ! menu_build_alive && [ -z "$(foreign_build_pid)" ]; then
             printf '\n  %sBuild process has exited.%s Showing final state — press Enter to return.\n' "${C_YEL}" "${C_RST}"
-            read -r _ </dev/tty || true
+            read -r _ </dev/tty 2>/dev/null || true
             rm -f "${PID_FILE}"
             return 0
         fi
-        if read -rsn1 -t 2 key </dev/tty; then
+        if read -rsn1 -t 2 key </dev/tty 2>/dev/null; then
             case "${key}" in
                 q|Q) return 0 ;;
                 s|S) stop_build; return 0 ;;
@@ -2790,7 +2805,7 @@ _deploy_run() {
             if [ "${rc}" -eq 0 ]; then say "cloud-deploy ${verb}: OK"; else warn "cloud-deploy ${verb}: exit ${rc}"; fi
             # Pause so the driver's output survives the next menu redraw — but only
             # when a human is actually attached (tests call this with stdin redirected).
-            if [ -t 0 ]; then read -r -p "press Enter to return to the menu… " _ </dev/tty || true; fi
+            if [ -t 0 ]; then read -r -p "press Enter to return to the menu… " _ </dev/tty 2>/dev/null || true; fi
             ;;
         *)
             local out
@@ -3127,7 +3142,7 @@ _phone_run() {
     if [ "${rc}" -eq 0 ]; then say "phone-wizard ${verb}: OK"; else warn "phone-wizard ${verb}: exit ${rc}"; fi
     # Pause so the driver's output survives the next menu redraw — but only when a
     # human is actually attached (tests call this with stdin redirected).
-    if [ -t 0 ]; then read -r -p "press Enter to return to the menu… " _ </dev/tty || true; fi
+    if [ -t 0 ]; then read -r -p "press Enter to return to the menu… " _ </dev/tty 2>/dev/null || true; fi
     return 0
 }
 
@@ -3333,7 +3348,7 @@ _quest_run() {
     if [ "${rc}" -eq 0 ]; then say "phone-wizard ${verb} (quest): OK"; else warn "phone-wizard ${verb} (quest): exit ${rc}"; fi
     # Pause so the driver's output survives the next menu redraw — but only when a
     # human is actually attached (tests call this with stdin redirected).
-    if [ -t 0 ]; then read -r -p "press Enter to return to the menu… " _ </dev/tty || true; fi
+    if [ -t 0 ]; then read -r -p "press Enter to return to the menu… " _ </dev/tty 2>/dev/null || true; fi
     return 0
 }
 
