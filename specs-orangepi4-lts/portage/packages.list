@@ -106,3 +106,4 @@ net-fs/cifs-utils
 # NOTE: headscale + tailscale are NOT emerged here. They are installed as
 # upstream static arm64 binaries by build-orangepi4-lts-stage4.sh (the "mesh"
 # phase), identical to the Frite/RPi5 images. See --skip-mesh / --skip-tailscale.
+net-misc/chrony

@@ -94,3 +94,4 @@ net-fs/cifs-utils
 # NOTE: headscale + tailscale are NOT emerged here. They are installed as
 # upstream static arm64 binaries by build-frite-stage4.sh (the "mesh" phase),
 # identical to the RPi5 image. See --skip-mesh / --skip-tailscale.
+net-misc/chrony

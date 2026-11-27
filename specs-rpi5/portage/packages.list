@@ -114,3 +114,4 @@ sys-fs/lvm2
 # NOTE: headscale and tailscale are NOT emerged here. They are installed
 # as upstream static arm64 binaries by build-rpi5-stage4.sh (the "mesh"
 # phase), which avoids overlay/keyword churn. See --skip-mesh / --skip-tailscale.
+net-misc/chrony

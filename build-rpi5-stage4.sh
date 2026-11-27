@@ -4268,7 +4268,7 @@ mkdir -p "${SYSROOT}/etc/runlevels/default"
 # NOTE: no 'firewall' entry — that name is an OpenRC virtual and firewalld is a
 # deliberate ARM exclusion anyway (the old unconditional entry was DANGLING);
 # hugmesh-firewall-reconcile (nftables, cluster roles below) owns the firewall.
-DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision auditd local)
+DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision auditd local chrony)
 if ! ${ROLE_CLIENT}; then
     # hugmesh-firewall-reconcile's files are only ever baked for cluster-node
     # roles (bake_host_firewall() is called from inside the `! ROLE_CLIENT &&

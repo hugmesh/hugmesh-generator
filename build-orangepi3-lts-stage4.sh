@@ -1929,7 +1929,7 @@ echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
 # exactly, made PERMANENT here rather than conditional, since this board has
 # no other mode).
 mkdir -p "${SYSROOT}/etc/runlevels/default"
-DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision local)
+DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision local chrony)
 # Opt-in host-binary auto-update: link the boot oneshot into the default runlevel
 # UNCONDITIONALLY (every client image) as PLUMBING. The cadence cron is baked by
 # provision_update() at first boot, but the poller is DEFAULT-OFF — inert until a
