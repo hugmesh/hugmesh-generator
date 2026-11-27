@@ -2076,7 +2076,7 @@ echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
 
 # ── OpenRC service links ───────────────────────────────────────────
 mkdir -p "${SYSROOT}/etc/runlevels/default"
-DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision local)
+DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision local chrony)
 # Auto-update boot oneshot: baked plumbing, poller DEFAULT-OFF (see the shared note).
 DEFAULT_SVCS+=(hugmesh-update)
 if [ "${ROLE_K8S}" != "none" ]; then

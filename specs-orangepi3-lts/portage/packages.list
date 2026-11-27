@@ -105,3 +105,4 @@ net-fs/cifs-utils
 # NOTE: headscale + tailscale are NOT emerged here. They are installed as
 # upstream static arm64 binaries by build-orangepi3-lts-stage4.sh (the "mesh"
 # phase), identical to every other client image. See --skip-mesh / --skip-tailscale.
+net-misc/chrony

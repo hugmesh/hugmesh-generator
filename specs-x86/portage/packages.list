@@ -101,3 +101,4 @@ sys-fs/lvm2
 # build-x86-host-stage4.sh (mesh phase), like the RPi image. ArgoCD,
 # hugmesh.games and the backend workloads are deployed INTO the cluster
 # by ArgoCD, not emerged here.
+net-misc/chrony
