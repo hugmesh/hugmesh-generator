@@ -4,7 +4,7 @@
 # Every expected word is in local-ai/primer.md (so the question is answerable from it), and tests/scripts/test-local-ai-primer.sh
 # fails if one does not, or if the question text itself already contains it.
 id	question	expect
-kind-one-image	On the HugMesh kind lane, how do I rebuild and reload only the host shell image? Give the exact make command.	kind-images && only=
+kind-one-image	On the HugMesh kind lane, how do I rebuild and reload only the host shell image? Give the exact make command.	kind-images && ONLY=hugmesh-host-shell
 kind-order	In what order do I run the make commands to get a working kind cluster with the mesh images, and which one checks its health?	kind-up >> kind-images >> kind-doctor
 stack-src-vanish	Why can edits I make inside the .stack-src folder disappear?	stack-clone && reset
 mtu-env	Docker builds on this PC hang on npm with ETIMEDOUT behind a WireGuard tunnel. Which environment variable and value fixes the kind image build?	build_network=host
@@ -19,7 +19,7 @@ docs-rule	I added a new script under scripts/. Which guard fails until a documen
 no-modals	How should the Studio ask for a confirmation in page logic, given that dialogs hang the headless tests?	inline label || explicit second click
 guard-proof	What must be shown about a new guard before it is accepted?	negative control && mutation
 kind-pause	How do I stop the kind lane without deleting the cluster?	kind-halt
-mock-lane	Does a pass from tests/stack/up.sh prove the real gateway route tables work?	mock
+mock-lane	Does a pass from tests/stack/up.sh prove the real gateway route tables work?	mock lane || fake back-ends
 repo-source	In the Studio, which Repo source setting means my own checkouts are never fetched or reset, and what variable does it set?	stack_no_clone
 hub-repo	Which repository is the hub that holds the Makefile, the cluster manifests and the Studio?	hugmesh-generator
 pullbackoff	Kind nodes are Ready but many pods sit in ImagePullBackOff. Which make step was most likely never run?	kind-images
